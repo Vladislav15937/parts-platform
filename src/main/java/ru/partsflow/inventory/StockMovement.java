@@ -109,6 +109,19 @@ public class StockMovement {
     }
 
     /**
+     * Списание: бой, недостача, разукомплектация.
+     *
+     * <p>Отдельный тип, а не продажа с нулевой ценой: списанное не должно
+     * попадать в выручку и в отчёты по менеджерам.
+     */
+    public static StockMovement writeOff(Long partId, BigDecimal quantity, Long fromWarehouseId) {
+        StockMovement movement =
+                new StockMovement(partId, MovementType.WRITE_OFF, quantity.abs().negate());
+        movement.fromWarehouseId = fromWarehouseId;
+        return movement;
+    }
+
+    /**
      * Возврат от клиента.
      *
      * <p>Ссылается на документ возврата, а не на сделку: склад возврата не
