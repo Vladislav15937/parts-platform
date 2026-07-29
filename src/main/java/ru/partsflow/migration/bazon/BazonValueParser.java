@@ -250,6 +250,23 @@ public final class BazonValueParser {
         };
     }
 
+    /**
+     * Флаг «Выгружать» — разрешение публиковать позицию на площадках.
+     *
+     * <p>Колонка в выгрузке по умолчанию отсутствует: в Bazon она неактивна,
+     * её надо включить в настройках таблицы перед экспортом. Формат значений
+     * поэтому не подтверждён на живых данных — принимаем все обычные написания
+     * и отдаём {@code null}, когда значение непонятно, чтобы вызывающий решал
+     * сам, а не получал молчаливое «не публиковать».
+     */
+    public static Boolean parsePublishFlag(String raw) {
+        return switch (normalize(raw)) {
+            case "да", "yes", "true", "1", "+", "выгружать" -> Boolean.TRUE;
+            case "нет", "no", "false", "0", "-", "не выгружать" -> Boolean.FALSE;
+            default -> null;
+        };
+    }
+
     public static LateralSide parseLateralSide(String raw) {
         return switch (normalize(raw)) {
             case "лев.", "лев", "левый", "левая", "лево" -> LateralSide.LEFT;

@@ -269,6 +269,22 @@ class BazonValueParserTest {
     class Enums {
 
         @Test
+        void publishFlag() {
+            assertThat(BazonValueParser.parsePublishFlag("Да")).isTrue();
+            assertThat(BazonValueParser.parsePublishFlag("да")).isTrue();
+            assertThat(BazonValueParser.parsePublishFlag("+")).isTrue();
+            assertThat(BazonValueParser.parsePublishFlag("Нет")).isFalse();
+            assertThat(BazonValueParser.parsePublishFlag("0")).isFalse();
+
+            // Формат колонки не подтверждён на живых данных: её нет в выгрузке
+            // по умолчанию. Непонятное значение — null, чтобы вызывающий решал
+            // сам, а не получал молчаливое «не публиковать».
+            assertThat(BazonValueParser.parsePublishFlag("")).isNull();
+            assertThat(BazonValueParser.parsePublishFlag(null)).isNull();
+            assertThat(BazonValueParser.parsePublishFlag("возможно")).isNull();
+        }
+
+        @Test
         void steering() {
             assertThat(BazonValueParser.parseSteering("Правый руль")).isEqualTo("RIGHT");
             assertThat(BazonValueParser.parseSteering("Левый руль")).isEqualTo("LEFT");

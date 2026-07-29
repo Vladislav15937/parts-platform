@@ -356,6 +356,24 @@ public final class BazonImporter {
         return ids;
     }
 
+    /**
+     * Предупреждает, что колонки «Выгружать» в выгрузке нет.
+     *
+     * <p>Без неё ни одна позиция не будет публиковаться, и первый собранный
+     * прайс Дрома или фид Авито выйдет пустым при полностью рабочем коде —
+     * ошибка, на поиск которой уходит день. В Bazon колонка неактивна,
+     * её включают в настройках таблицы товаров перед экспортом
+     * (см. {@code docs/bazon-parity.md} §11).
+     */
+    private void warnIfPublishFlagMissing(List<String> header, ImportReport report) {
+        boolean present = header.stream().anyMatch(column -> "Выгружать".equals(column.trim()));
+        if (!present) {
+            report.problem(1, "в выгрузке нет колонки «Выгружать»: все позиции импортированы "
+                    + "без разрешения на публикацию, площадки получат пустой прайс. "
+                    + "Включите колонку в настройках таблицы товаров Bazon и повторите экспорт");
+        }
+    }
+
     // ---------- товары ----------
 
     private void importParts(Path catalogCsv, long categoryId,
@@ -367,6 +385,7 @@ public final class BazonImporter {
         try (InputStream in = Files.newInputStream(catalogCsv);
              BazonCsvReader reader = new BazonCsvReader(in)) {
             warehouseColumns = BazonWarehouseColumns.discover(reader.header());
+            warnIfPublishFlagMissing(reader.header(), report);
         } catch (Exception e) {
             throw new IllegalStateException("Не удалось прочитать заголовок выгрузки товаров", e);
         }
@@ -377,8 +396,10 @@ public final class BazonImporter {
             try (PreparedStatement insertPart = c.prepareStatement("INSERT INTO " + schema + """
                      .part (category_id, part_name_id, donor_id, supply_id, title, description,
                             note, side_lr, side_fr, condition, quality_grade, marking, manufacturer,
-                            color, section, installation_price, price, legacy_code, status)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'USED', ?, ?, ?, ?, ?, ?, ?, ?, 'IN_STOCK')
+                            color, section, installation_price, price, legacy_code, is_published,
+                            status)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'USED', ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                             'IN_STOCK')
                      ON CONFLICT (legacy_code) WHERE legacy_code IS NOT NULL DO NOTHING
                      RETURNING id""");
                  PreparedStatement insertMovement = c.prepareStatement("INSERT INTO " + schema + """
@@ -456,6 +477,14 @@ public final class BazonImporter {
         // Номер в прежней системе — естественный ключ импорта: по нему повторный
         // запуск узнаёт уже загруженное.
         ps.setString(17, row.get("Номер товара"));
+
+        // Разрешение публиковать переносится как есть: клиент выгружал эти
+        // позиции на площадки и после переноса должен продолжить. Когда колонки
+        // в выгрузке нет, публикацию не включаем — выложить чужой склад
+        // на площадку по своей инициативе нельзя. О пропаже предупреждает
+        // warnIfPublishFlagMissing.
+        Boolean publish = BazonValueParser.parsePublishFlag(row.get("Выгружать"));
+        ps.setBoolean(18, Boolean.TRUE.equals(publish));
 
         try (ResultSet rs = ps.executeQuery()) {
             return rs.next() ? rs.getLong(1) : null;
