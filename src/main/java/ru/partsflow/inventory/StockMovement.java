@@ -109,6 +109,22 @@ public class StockMovement {
     }
 
     /**
+     * Возврат от клиента.
+     *
+     * <p>Ссылается на документ возврата, а не на сделку: склад возврата не
+     * обязан совпадать со складом выдачи, и по журналу должно быть видно,
+     * каким документом деталь вернулась.
+     */
+    public static StockMovement returned(Long partId, BigDecimal quantity,
+                                        Long toWarehouseId, Long returnId) {
+        StockMovement movement = new StockMovement(partId, MovementType.RETURN, quantity.abs());
+        movement.toWarehouseId = toWarehouseId;
+        movement.refType = "RETURN";
+        movement.refId = returnId;
+        return movement;
+    }
+
+    /**
      * Перемещение между складами.
      *
      * <p>Здесь {@code qtyDelta} — перемещаемое количество, положительное:

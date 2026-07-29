@@ -26,7 +26,9 @@ LEFT JOIN (
     FROM ${tenant.schema}.deal_item di
     JOIN ${tenant.schema}.part pt ON pt.id = di.part_id
     JOIN ${tenant.schema}.deal dl ON dl.id = di.deal_id
-    WHERE dl.status IN ('PAID','SHIPPED','COMPLETED')
+    -- Статус позиции, а не только документа: при частичном возврате сделка
+    -- остаётся выданной, а возвращённая позиция выручкой быть перестаёт.
+    WHERE dl.status = 'ISSUED' AND di.status = 'ISSUED'
     GROUP BY pt.donor_id
 ) s ON s.donor_id = d.id
 LEFT JOIN (
@@ -52,7 +54,10 @@ SELECT dl.manager_id,
 FROM ${tenant.schema}.deal dl
 JOIN ${tenant.schema}.deal_item di ON di.deal_id = dl.id
 LEFT JOIN ${tenant.schema}.tenant_member tm ON tm.id = dl.manager_id
-WHERE dl.status IN ('PAID','SHIPPED','COMPLETED')
+WHERE dl.status = 'ISSUED'
+  -- Возвращённые позиции из зарплатной базы выпадают: премию платят
+  -- за проданное, а не за привезённое обратно.
+  AND di.status = 'ISSUED'
   AND dl.closed_at IS NOT NULL
 GROUP BY dl.manager_id, tm.display_name, date_trunc('month', dl.closed_at);
 --rollback DROP VIEW IF EXISTS ${tenant.schema}.v_manager_sales;

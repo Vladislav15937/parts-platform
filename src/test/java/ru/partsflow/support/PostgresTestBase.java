@@ -13,6 +13,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.io.File;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.Statement;
 
 /**
  * База для интеграционных тестов: поднимает Postgres в контейнере и накатывает
@@ -31,6 +32,14 @@ public abstract class PostgresTestBase {
                     .withPassword("app");
 
     static {
+        // Docker Engine 29 отвечает 400 на всё ниже API 1.44 (MinAPIVersion),
+        // а docker-java внутри Testcontainers ходит на 1.32 и версию не
+        // согласовывает — контейнер не поднимается вовсе. Обновление
+        // Testcontainers до 1.21.3 это не лечит, проверено. Свойство читается
+        // при создании клиента, поэтому его ставим до старта контейнера — так
+        // работает и из Maven, и из IDE.
+        System.setProperty("api.version", "1.44");
+
         POSTGRES.start();
         migrateCatalog();
     }
@@ -48,7 +57,21 @@ public abstract class PostgresTestBase {
 
     protected static void provisionTenants(String... schemas) {
         for (String schema : schemas) {
+            // Схему создаёт провижининг, а не миграции: DATABASECHANGELOG лежит
+            // внутри неё, и Liquibase создаёт его до того, как выполнит первый
+            // changeset. Тот же порядок, что в db/verify.sh.
+            createSchema(schema);
             runLiquibase("db.changelog-tenant.xml", schema, schema);
+        }
+    }
+
+    private static void createSchema(String schema) {
+        try (Connection connection = DriverManager.getConnection(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+             Statement statement = connection.createStatement()) {
+            statement.execute("CREATE SCHEMA IF NOT EXISTS " + schema);
+        } catch (Exception e) {
+            throw new IllegalStateException("Не удалось создать схему арендатора: " + schema, e);
         }
     }
 
