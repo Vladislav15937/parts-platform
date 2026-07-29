@@ -39,15 +39,34 @@ public class StockMovement {
     @Column(name = "movement_type", nullable = false)
     private MovementType movementType;
 
-    /** Со знаком: приход положительный, расход отрицательный. */
+    /**
+     * Со знаком: приход положительный, расход отрицательный.
+     * Исключение — {@link MovementType#MOVE}: там это перемещаемое количество,
+     * всегда положительное, см. {@link #move}.
+     */
     @Column(name = "qty_delta", nullable = false)
     private BigDecimal qtyDelta;
+
+    /**
+     * Склады-источник и приёмник. Именно по ним триггер раскладывает остаток
+     * в {@code part_stock}: приход указывает только {@code to}, расход только
+     * {@code from}, перемещение — оба.
+     */
+    @Column(name = "from_warehouse_id")
+    private Long fromWarehouseId;
+
+    @Column(name = "to_warehouse_id")
+    private Long toWarehouseId;
 
     @Column(name = "from_cell_id")
     private Long fromCellId;
 
     @Column(name = "to_cell_id")
     private Long toCellId;
+
+    /** Документ, проведение которого породило движение. */
+    @Column(name = "document_id")
+    private Long documentId;
 
     @Column(name = "ref_type")
     private String refType;
@@ -72,16 +91,40 @@ public class StockMovement {
         this.qtyDelta = qtyDelta;
     }
 
-    public static StockMovement intake(Long partId, BigDecimal quantity, Long toCellId) {
+    public static StockMovement intake(Long partId, BigDecimal quantity,
+                                       Long toWarehouseId, Long toCellId) {
         StockMovement movement = new StockMovement(partId, MovementType.INTAKE, quantity);
+        movement.toWarehouseId = toWarehouseId;
         movement.toCellId = toCellId;
         return movement;
     }
 
-    public static StockMovement sale(Long partId, BigDecimal quantity, Long dealId) {
+    public static StockMovement sale(Long partId, BigDecimal quantity,
+                                     Long fromWarehouseId, Long dealId) {
         StockMovement movement = new StockMovement(partId, MovementType.SALE, quantity.negate());
+        movement.fromWarehouseId = fromWarehouseId;
         movement.refType = "DEAL";
         movement.refId = dealId;
+        return movement;
+    }
+
+    /**
+     * Перемещение между складами.
+     *
+     * <p>Здесь {@code qtyDelta} — перемещаемое количество, положительное:
+     * знак не несёт смысла, потому что для одного склада это расход, а для
+     * другого приход. Триггер смотрит не на знак, а на пару складов, и общий
+     * остаток по детали в итоге не меняется.
+     */
+    public static StockMovement move(Long partId, BigDecimal quantity,
+                                     Long fromWarehouseId, Long toWarehouseId, Long toCellId) {
+        if (fromWarehouseId.equals(toWarehouseId)) {
+            throw new IllegalArgumentException("Перемещение на тот же склад бессмысленно");
+        }
+        StockMovement movement = new StockMovement(partId, MovementType.MOVE, quantity.abs());
+        movement.fromWarehouseId = fromWarehouseId;
+        movement.toWarehouseId = toWarehouseId;
+        movement.toCellId = toCellId;
         return movement;
     }
 
@@ -99,6 +142,22 @@ public class StockMovement {
 
     public BigDecimal getQtyDelta() {
         return qtyDelta;
+    }
+
+    public Long getFromWarehouseId() {
+        return fromWarehouseId;
+    }
+
+    public Long getToWarehouseId() {
+        return toWarehouseId;
+    }
+
+    public Long getDocumentId() {
+        return documentId;
+    }
+
+    public void setDocumentId(Long documentId) {
+        this.documentId = documentId;
     }
 
     public Long getFromCellId() {

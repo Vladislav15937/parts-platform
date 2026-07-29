@@ -60,17 +60,29 @@ GROUP BY dl.manager_id, tm.display_name, date_trunc('month', dl.closed_at);
 --changeset platform:tenant-082-stock-reconciliation splitStatements:false runOnChange:true
 --comment Сверка денормализованного остатка с журналом движений. Гоняется
 --comment ежесуточно; непустой результат означает баг в триггере и требует алерта.
+--comment Кэшей теперь два — part.qty_on_hand и раскладка part_stock по складам, —
+--comment и разойтись может любой из них, поэтому сверяются оба.
+--comment Перемещения из суммы журнала исключены: они не меняют общий остаток,
+--comment у них положительная дельта означает «столько-то переехало».
 CREATE OR REPLACE VIEW ${tenant.schema}.v_stock_discrepancy AS
 SELECT p.id AS part_id,
        p.public_code,
        p.qty_on_hand                       AS cached_qty,
        COALESCE(m.journal_qty, 0)          AS journal_qty,
+       COALESCE(s.warehouse_qty, 0)        AS warehouse_qty,
        p.qty_on_hand - COALESCE(m.journal_qty, 0) AS diff
 FROM ${tenant.schema}.part p
 LEFT JOIN (
     SELECT part_id, sum(qty_delta) AS journal_qty
     FROM ${tenant.schema}.stock_movement
+    WHERE movement_type <> 'MOVE'
     GROUP BY part_id
 ) m ON m.part_id = p.id
-WHERE p.qty_on_hand <> COALESCE(m.journal_qty, 0);
+LEFT JOIN (
+    SELECT part_id, sum(qty) AS warehouse_qty
+    FROM ${tenant.schema}.part_stock
+    GROUP BY part_id
+) s ON s.part_id = p.id
+WHERE p.qty_on_hand <> COALESCE(m.journal_qty, 0)
+   OR p.qty_on_hand <> COALESCE(s.warehouse_qty, 0);
 --rollback DROP VIEW IF EXISTS ${tenant.schema}.v_stock_discrepancy;

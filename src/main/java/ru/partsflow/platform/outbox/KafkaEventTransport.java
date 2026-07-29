@@ -40,8 +40,7 @@ public class KafkaEventTransport implements EventTransport {
     public void send(List<OutboxRecord> batch) {
         List<CompletableFuture<?>> futures = batch.stream()
                 .map(this::toRecord)
-                .map(kafkaTemplate::send)
-                .map(f -> (CompletableFuture<?>) f)
+                .<CompletableFuture<?>>map(kafkaTemplate::send)
                 .toList();
 
         CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();

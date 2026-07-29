@@ -31,12 +31,21 @@ public class TenantFilter extends OncePerRequestFilter {
         String header = request.getHeader(HEADER);
         try {
             if (header != null && !header.isBlank()) {
-                TenantContext.set(TenantContext.schemaFor(Long.parseLong(header.trim())));
+                try {
+                    TenantContext.set(TenantContext.schemaFor(Long.parseLong(header.trim())));
+                } catch (IllegalArgumentException e) {
+                    // Ловим только разбор заголовка. Если накрыть тем же catch и
+                    // chain.doFilter, любой IllegalArgumentException из контроллера
+                    // вернётся клиенту как «Некорректный X-Tenant-Id» и уведёт
+                    // отладку не туда.
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Некорректный " + HEADER);
+                    return;
+                }
             }
             chain.doFilter(request, response);
-        } catch (NumberFormatException | IllegalArgumentException e) {
-            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Некорректный " + HEADER);
         } finally {
+            // Освобождать ThreadLocal обязательно: пул потоков переиспользует поток,
+            // и оставленный арендатор утечёт в следующий запрос.
             TenantContext.clear();
         }
     }

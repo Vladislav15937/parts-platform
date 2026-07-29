@@ -33,11 +33,12 @@ public class PartService {
      * не уедет на площадки и просто не будет продаваться.
      */
     @Transactional
-    public Part intake(Part part, BigDecimal quantity, Long storageCellId) {
+    public Part intake(Part part, BigDecimal quantity, Long warehouseId, Long storageCellId) {
         part.setStatus(PartStatus.IN_STOCK);
         Part saved = partRepository.saveAndFlush(part);
 
-        movementRepository.save(StockMovement.intake(saved.getId(), quantity, storageCellId));
+        movementRepository.save(
+                StockMovement.intake(saved.getId(), quantity, warehouseId, storageCellId));
 
         eventPublisher.publish(DomainEvent.of(
                 "part", saved.getId(), "part.created.v1", payloadOf(saved)));
@@ -46,14 +47,14 @@ public class PartService {
     }
 
     @Transactional
-    public Part changePrice(Long partId, BigDecimal newPrice) {
+    public Part changePrice(Long partId, BigDecimal newPrice, Long changedBy) {
         Part part = partRepository.findById(partId)
                 .orElseThrow(() -> new IllegalArgumentException("Запчасть не найдена: " + partId));
 
         if (newPrice.compareTo(part.getPrice() == null ? BigDecimal.ZERO : part.getPrice()) == 0) {
             return part;
         }
-        part.setPrice(newPrice);
+        part.changePrice(newPrice, changedBy);
 
         // Ключ партиции включает id запчасти, поэтому события по одной детали
         // не переставятся местами и на площадку не уедет устаревшая цена.

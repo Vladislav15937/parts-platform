@@ -36,6 +36,10 @@ public class PartController {
         Part part = new Part(request.categoryId(), request.title(), request.price());
         part.setDescription(request.description());
         part.setDonorId(request.donorId());
+        part.setSupplyId(request.supplyId());
+        part.setManufacturer(request.manufacturer());
+        part.setQualityGrade(request.qualityGrade());
+        part.setSides(request.sideLr(), request.sideFr(), request.sideUd());
         if (request.condition() != null) {
             part.setCondition(request.condition());
         }
@@ -43,6 +47,7 @@ public class PartController {
         Part saved = partService.intake(
                 part,
                 request.quantity() == null ? BigDecimal.ONE : request.quantity(),
+                request.warehouseId(),
                 request.storageCellId());
 
         return ResponseEntity.status(HttpStatus.CREATED).body(PartView.of(saved));
@@ -64,9 +69,18 @@ public class PartController {
             @NotBlank String title,
             String description,
             Long donorId,
+            Long supplyId,
+            String manufacturer,
             PartCondition condition,
+            QualityGrade qualityGrade,
+            LateralSide sideLr,
+            LongitudinalSide sideFr,
+            VerticalSide sideUd,
             @Positive BigDecimal price,
             BigDecimal quantity,
+            // Склад обязателен: без него приход некуда положить, а остаток
+            // по складам — то, на что продавец смотрит в первую очередь.
+            @NotNull Long warehouseId,
             Long storageCellId
     ) {
     }
