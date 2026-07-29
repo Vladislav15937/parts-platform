@@ -84,8 +84,12 @@ public class DromPriceGenerator {
              WHERE p.is_published
                AND p.status IN ('IN_STOCK', 'SOLD')
                AND p.price IS NOT NULL
-             ORDER BY p.id
             """;
+
+    /** Дельта — тот же запрос по списку позиций: формат обязан совпасть с прайсом. */
+    private static final String DELTA_FILTER = " AND p.id = ANY (?)";
+
+    private static final String ORDER = " ORDER BY p.id";
 
     private final EntityManager entityManager;
     private final DromPriceWriter writer;
@@ -103,11 +107,37 @@ public class DromPriceGenerator {
      */
     @Transactional(readOnly = true)
     public int writeTo(OutputStream out) {
+        return write(out, null);
+    }
+
+    /**
+     * Пишет дельту — те же позиции в том же формате, только выбранные.
+     *
+     * <p>Формат обязан совпадать с форматом исходного прайса: Дром разбирает
+     * дельту той же настройкой, и смена формата — ошибка на их стороне.
+     * Поэтому здесь тот же писатель и тот же запрос, отличается только фильтр.
+     *
+     * <p>Проданная позиция уезжает с {@code available = false} — это и есть
+     * снятие с продажи. Отдельного метода удаления у Дрома нет.
+     */
+    @Transactional(readOnly = true)
+    public int writeDelta(OutputStream out, List<Long> partIds) {
+        if (partIds == null || partIds.isEmpty()) {
+            return 0;
+        }
+        return write(out, partIds);
+    }
+
+    private int write(OutputStream out, List<Long> partIds) {
         Session session = entityManager.unwrap(Session.class);
+        String sql = SQL + (partIds == null ? "" : DELTA_FILTER) + ORDER;
 
         return session.doReturningWork(connection -> {
-            try (PreparedStatement statement = connection.prepareStatement(SQL)) {
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 statement.setFetchSize(FETCH_SIZE);
+                if (partIds != null) {
+                    statement.setArray(1, connection.createArrayOf("bigint", partIds.toArray()));
+                }
                 try (ResultSet rs = statement.executeQuery()) {
                     return writer.write(out, new OfferCursor(rs));
                 }
