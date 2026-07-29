@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.platform.outbox.DomainEvent;
@@ -15,13 +16,16 @@ public class PartService {
     private final PartRepository partRepository;
     private final StockMovementRepository movementRepository;
     private final DomainEventPublisher eventPublisher;
+    private final EntityManager entityManager;
 
     public PartService(PartRepository partRepository,
                        StockMovementRepository movementRepository,
-                       DomainEventPublisher eventPublisher) {
+                       DomainEventPublisher eventPublisher,
+                       EntityManager entityManager) {
         this.partRepository = partRepository;
         this.movementRepository = movementRepository;
         this.eventPublisher = eventPublisher;
+        this.entityManager = entityManager;
     }
 
     /**
@@ -34,11 +38,14 @@ public class PartService {
      */
     @Transactional
     public Part intake(Part part, BigDecimal quantity, Long warehouseId, Long storageCellId) {
-        part.setStatus(PartStatus.IN_STOCK);
         Part saved = partRepository.saveAndFlush(part);
 
-        movementRepository.save(
+        movementRepository.saveAndFlush(
                 StockMovement.intake(saved.getId(), quantity, warehouseId, storageCellId));
+
+        // Статус и остаток выставил триггер по движению — перечитываем, иначе
+        // вернём карточку со старым DRAFT и нулевым остатком.
+        entityManager.refresh(saved);
 
         eventPublisher.publish(DomainEvent.of(
                 "part", saved.getId(), "part.created.v1", payloadOf(saved)));
