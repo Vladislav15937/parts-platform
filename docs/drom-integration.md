@@ -145,25 +145,28 @@ Content-Type: multipart/form-data
 
 `lr` (лево/право) · `fr` (перед/зад) · `ud` (низ/верх).
 
-У нас `part.side` — одно текстовое поле, в него три оси не укладываются.
 Это совпадает с тем, что видно в Bazon: там в списке товаров отдельные
-колонки «Передний / Задний» и «Левый / Правый». Нужны три поля, и это
-изменение схемы.
+колонки «Передний / Задний» и «Левый / Правый».
+
+> **Закрыто.** Миграция `tenant/010` разбила одно текстовое поле на три оси:
+> `part.side_lr`, `part.side_fr`, `part.side_ud` с enum'ами `LateralSide`,
+> `LongitudinalSide`, `VerticalSide`. Маппинг в русские значения прайса —
+> в `DromPriceWriter`.
 
 ### Соответствие нашей модели
 
 | Поле Дрома | Наше |
 |---|---|
 | `name` | `part.title` (генерируемый, см. `bazon-parity.md` §1) |
-| `available` | производное от `qty_on_hand > 0` |
+| `available` | производное от **свободного** остатка: `sum(part_stock.qty_available) > 0`, а не от `qty_on_hand`. Отложенную под клиента деталь площадка показывать не должна |
 | `oem_number` | `part_oem` где `is_primary` |
 | `analog_numbers` | `part_oem` остальные + `catalog.oem_cross` |
-| `manufacturer` | **нет поля** — в Bazon есть «Производитель» |
+| `manufacturer` | `part.manufacturer` — добавлено миграцией `tenant/010` |
 | `ordercode` | `part.public_code` |
 | `condition` | `part.condition` |
 | `brandcars` / `modelcars` / `bodycars` / `engine` / `year` | `part_applicability` → `catalog.*` |
-| `lr` / `fr` / `ud` | `part.side` — **нужно разбить на три** |
-| `color` | **нет поля** |
+| `lr` / `fr` / `ud` | `part.side_lr` / `side_fr` / `side_ud` — разбито миграцией `tenant/010` |
+| `color` | `part.color` — добавлено миграцией `tenant/010` |
 | `sklad` | адрес склада — **нет реквизитов складов**, см. `bazon-parity.md` §7 |
 | `supplier`, `supplier_inn`, `supplier_art` | **нет** |
 
