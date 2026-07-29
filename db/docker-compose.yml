@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: parts
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d parts"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  liquibase:
+    image: liquibase/liquibase:4.27
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./:/liquibase/workspace
+    working_dir: /liquibase/workspace
+    entrypoint: ["sleep", "infinity"]

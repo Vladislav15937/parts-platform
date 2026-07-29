@@ -1,0 +1,80 @@
+spring:
+  application:
+    name: parts-platform
+  profiles:
+    default: local
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/parts
+    username: app
+    password: app
+    hikari:
+      maximum-pool-size: 20
+      # Таймауты защищают от запроса, который встал на блокировке и держит
+      # соединение: лучше упасть быстро, чем исчерпать пул.
+      connection-init-sql: SET lock_timeout = '5s'
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      # Именно none, а не validate: при схеме-на-арендатора на старте нет
+      # контекста арендатора, и валидировать Hibernate было бы нечего —
+      # в public таблиц с данными нет. Схему проверяют миграции и тесты.
+      ddl-auto: none
+    properties:
+      hibernate:
+        # Мультиарендность включается регистрацией MultiTenantConnectionProvider
+        # в MultiTenancyConfig: в Hibernate 6 настройки multiTenancy больше нет.
+        jdbc:
+          batch_size: 100
+          time_zone: UTC
+        order_inserts: true
+        order_updates: true
+
+  # Миграции гонит отдельный оркестратор (схема на арендатора), не старт приложения.
+  liquibase:
+    enabled: false
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+      # acks=all и min.insync.replicas=2 работают только в паре.
+      # По отдельности каждая настройка бесполезна.
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 120000
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      # Коммит офсета только после успешной обработки. Никогда не true.
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+
+app:
+  cell: cell01
+  outbox:
+    relay-delay-ms: 1000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+
+logging:
+  level:
+    ru.partsflow: DEBUG
+
+---
+spring:
+  config:
+    activate:
+      on-profile: kafka
+# Профиль включает KafkaEventTransport вместо in-memory.

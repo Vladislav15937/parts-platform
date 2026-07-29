@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Общий каталог ячейки. Накатывается один раз на базу данных.
+    Запуск см. в README: liquibase с defaults-file=liquibase-catalog.properties
+-->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <property name="tsConfig" value="russian"/>
+
+    <include file="catalog/001-extensions-and-functions.sql" relativeToChangelogFile="true"/>
+    <include file="catalog/002-vehicles.sql"                 relativeToChangelogFile="true"/>
+    <include file="catalog/003-parts-taxonomy.sql"           relativeToChangelogFile="true"/>
+    <include file="catalog/004-oem.sql"                      relativeToChangelogFile="true"/>
+    <include file="catalog/005-marketplace-mapping.sql"      relativeToChangelogFile="true"/>
+    <include file="catalog/006-tenant-registry.sql"          relativeToChangelogFile="true"/>
+    <include file="catalog/007-shedlock.sql"                 relativeToChangelogFile="true"/>
+
+</databaseChangeLog>
