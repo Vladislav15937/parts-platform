@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSession } from '../auth/SessionProvider';
 import { useOutbox } from '../outbox/useOutbox';
 import { ReferencePanel } from '../reference/ReferencePanel';
 import { useReference } from '../reference/useReference';
+import { warmUpDecoder } from '../scan/decoder';
 import { useOnline } from '../shell/useOnline';
 import { IntakeScreen } from './IntakeScreen';
 import { OutboxScreen } from './OutboxScreen';
@@ -25,6 +26,10 @@ export function HomeScreen() {
   const { status } = useReference();
   const outbox = useOutbox();
   const [tab, setTab] = useState<Tab>('intake');
+
+  // Запасной распознаватель тянем сразу после входа, пока связь заведомо есть:
+  // первое сканирование случится в ангаре, где её уже не будет.
+  useEffect(warmUpDecoder, []);
 
   if (state.status !== 'authenticated') {
     return null;

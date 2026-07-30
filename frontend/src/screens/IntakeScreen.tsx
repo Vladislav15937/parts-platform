@@ -3,6 +3,8 @@ import { PhotoPicker } from '../photos/PhotoPicker';
 import type { ResizedPhoto } from '../photos/resize';
 import { suggestNames } from '../reference/reference';
 import type { Reference } from '../reference/reference';
+import { ScanOverlay } from '../scan/ScanOverlay';
+import { resolveScan } from '../scan/codes';
 import type { PendingPhoto } from '../outbox/outbox';
 
 /**
@@ -55,6 +57,8 @@ export function IntakeScreen({ reference, onSend }: Props) {
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState<Item>(emptyItem());
   const [photos, setPhotos] = useState<ResizedPhoto[]>([]);
+  const [scanning, setScanning] = useState(false);
+  const [scanNote, setScanNote] = useState<string | null>(null);
 
   const warehouse = reference.warehouses.find((w) => w.id === warehouseId);
   const suggestions = suggestNames(reference.partNames, draft.rawName);
@@ -202,6 +206,19 @@ export function IntakeScreen({ reference, onSend }: Props) {
         </label>
       </div>
 
+      <button type="button" className="button--ghost" onClick={() => setScanning(true)}>
+        Сканировать
+      </button>
+      {scanNote !== null && <p className="note">{scanNote}</p>}
+
+      {scanning && (
+        <ScanOverlay
+          hint="Код ячейки или VIN машины"
+          onScan={applyScan}
+          onClose={() => setScanning(false)}
+        />
+      )}
+
       <PhotoPicker photos={photos} onChange={setPhotos} />
 
       <button type="button" disabled={!canAdd} onClick={addItem}>
@@ -236,6 +253,44 @@ export function IntakeScreen({ reference, onSend }: Props) {
       )}
     </section>
   );
+
+  /**
+   * Применяет прочитанный код.
+   *
+   * <p>Что сканируют, приёмщик не выбирает: этикетка ячейки и VIN различаются
+   * сами, а лишний выбор режима — это лишнее действие с деталью в руках.
+   *
+   * <p>Ячейка с чужого склада меняет и склад: приёмщик стоит там, где стоит,
+   * и этикетка в руках сообщает это точнее, чем выпадающий список, выбранный
+   * час назад. Партию при этом сбрасывать нельзя — она уже набрана.
+   */
+  function applyScan(text: string) {
+    setScanning(false);
+    const match = resolveScan(reference, warehouseId, text);
+
+    if (match.kind === 'cell') {
+      if (match.warehouse.id !== warehouseId) {
+        setWarehouseId(match.warehouse.id);
+        setScanNote(`Ячейка ${match.cell.code} — склад «${match.warehouse.name}»`);
+      } else {
+        setScanNote(`Ячейка ${match.cell.code}`);
+      }
+      setDraft((d) => ({ ...d, cellId: match.cell.id }));
+      return;
+    }
+    if (match.kind === 'donor') {
+      setDonorId(match.donor.id);
+      setScanNote(`Машина ${match.donor.publicCode}`);
+      return;
+    }
+    if (match.kind === 'ambiguous') {
+      // Такой код есть на нескольких складах. Выбрать за приёмщика значит
+      // однажды положить деталь на другой конец базы.
+      setScanNote(`Код «${match.text}» есть на нескольких складах — выберите склад`);
+      return;
+    }
+    setScanNote(`Код «${match.text}» не найден в справочниках`);
+  }
 
   function addItem() {
     setItems([...items, { ...draft, key: crypto.randomUUID(), photos }]);
