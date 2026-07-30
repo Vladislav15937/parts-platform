@@ -29,10 +29,16 @@ CREATE INDEX stock_movement_ref_ix ON ${tenant.schema}.stock_movement (ref_type,
 
 --changeset platform:tenant-041-stock-immutable splitStatements:false runOnChange:true
 --comment Журнал неизменяем на уровне БД: исправление только компенсирующим движением.
+--comment
+--comment Функция общая на все журналы: её вешают ещё на deal_return и
+--comment document_event. Поэтому таблица берётся из TG_TABLE_NAME, а не пишется
+--comment строкой: с прошитым 'stock_movement' попытка стереть историю документа
+--comment отвечала «stock_movement неизменяем», и найти настоящую причину
+--comment по такому сообщению нельзя.
 CREATE OR REPLACE FUNCTION ${tenant.schema}.stock_movement_immutable()
     RETURNS trigger LANGUAGE plpgsql AS $fn$
 BEGIN
-    RAISE EXCEPTION 'stock_movement неизменяем: используйте компенсирующее движение';
+    RAISE EXCEPTION '% неизменяем: исправление только новой записью', TG_TABLE_NAME;
 END $fn$;
 --rollback DROP FUNCTION IF EXISTS ${tenant.schema}.stock_movement_immutable();
 

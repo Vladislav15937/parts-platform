@@ -382,9 +382,29 @@ public class SalesService {
     }
 
     /** Сделки, у которых вышел срок резерва. Снимать резерв автоматически нельзя. */
+    /** Сделка со всеми позициями. Для чтения из REST. */
+    @Transactional(readOnly = true)
+    public Deal require(Long dealId) {
+        Deal deal = requireDeal(dealId);
+        // Позиции подтягиваем внутри транзакции: снаружи ленивая коллекция
+        // сериализуется в исключение, а не в JSON.
+        deal.getItems().size();
+        return deal;
+    }
+
+    /** История покупок клиента, свежие сверху. */
+    @Transactional(readOnly = true)
+    public List<Deal> ofCustomer(Long customerId) {
+        List<Deal> deals = dealRepository.findByCustomerIdOrderByIdDesc(customerId);
+        deals.forEach(deal -> deal.getItems().size());
+        return deals;
+    }
+
     @Transactional(readOnly = true)
     public List<Deal> expiredReservations() {
-        return dealRepository.findExpiredReservations(Instant.now());
+        List<Deal> deals = dealRepository.findExpiredReservations(Instant.now());
+        deals.forEach(deal -> deal.getItems().size());
+        return deals;
     }
 
     @Transactional(readOnly = true)
