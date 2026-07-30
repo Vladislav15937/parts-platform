@@ -99,6 +99,16 @@ public abstract class PostgresTestBase {
         // событие раньше теста — вместе с подставленными в нём заглушками.
         // Тем, кому релей нужен, вызывают его метод напрямую.
         registry.add("app.outbox.relay-enabled", () -> "false");
+        // Накат каталога при старте контекста выключен: базовый класс уже
+        // накатил его сам, до всякого Spring.
+        //
+        // Дело не только в дублировании работы. Liquibase считает changeset
+        // по ПУТИ файла, а пути у нас разные: тест открывает changelog как
+        // `db.changelog-catalog.xml` из каталога db/changelog, приложение —
+        // как `db/changelog/db.changelog-catalog.xml` из classpath. Для
+        // Liquibase это разные changeset'ы, он не видит своей же истории
+        // и пытается создать catalog.brand второй раз.
+        registry.add("app.migrate-catalog-on-start", () -> "false");
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
