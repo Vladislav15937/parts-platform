@@ -92,7 +92,7 @@ class IntakeServiceTest extends PostgresTestBase {
                 warehouse, supply.getId(), donor.getId(),
                 List.of(item("фара левая", "8500"),
                         item("бампер передний", "12000")),
-                null));
+                null, uniqueRequestId()));
 
         assertThat(receipt.document().getStatus()).isEqualTo(StockDocument.DocumentStatus.DONE);
         assertThat(receipt.document().getNumber()).as("документ без номера").isNotNull();
@@ -115,7 +115,7 @@ class IntakeServiceTest extends PostgresTestBase {
 
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), donor.getId(),
-                List.of(item("фара левая", "8500")), null));
+                List.of(item("фара левая", "8500")), null, uniqueRequestId()));
 
         // Приёмщик заголовок не писал — он выбрал вид детали, машину и стороны.
         assertThat(receipt.parts().get(0).getTitle())
@@ -145,7 +145,7 @@ class IntakeServiceTest extends PostgresTestBase {
         Supply supply = arrivedSupply("31");
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), null,
-                List.of(item("запаска", "2000")), null));
+                List.of(item("запаска", "2000")), null, uniqueRequestId()));
 
         assertThat(receipt.parts().get(0).getTitle())
                 .as("в заголовок ушло местное написание вместо эталонного")
@@ -162,7 +162,7 @@ class IntakeServiceTest extends PostgresTestBase {
                 List.of(new IntakeService.ItemRequest("амортизатор", BigDecimal.ONE,
                         new BigDecimal("8500"), null, cell, null, null, null,
                         PartCondition.USED, null, "KYB", "334388", null, null)),
-                null));
+                null, uniqueRequestId()));
 
         Long partId = receipt.parts().get(0).getId();
         assertThat(inTenant(() -> jdbc.queryForMap(
@@ -180,7 +180,7 @@ class IntakeServiceTest extends PostgresTestBase {
 
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), null,
-                List.of(item("амортизатор", "4000")), null));
+                List.of(item("амортизатор", "4000")), null, uniqueRequestId()));
 
         Long partId = receipt.parts().get(0).getId();
         assertThat(donorOf(partId)).as("контрактной детали приписали донора").isNull();
@@ -196,7 +196,7 @@ class IntakeServiceTest extends PostgresTestBase {
 
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), null,
-                List.of(item("телевизор", "3000")), null));
+                List.of(item("телевизор", "3000")), null, uniqueRequestId()));
 
         Long partId = receipt.parts().get(0).getId();
         assertThat(qtyOf(partId)).isEqualByComparingTo("1");
@@ -237,7 +237,7 @@ class IntakeServiceTest extends PostgresTestBase {
         Supply supply = arrivedSupply("21");
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), null,
-                List.of(item("крыло", "5000")), null));
+                List.of(item("крыло", "5000")), null, uniqueRequestId()));
         Long partId = receipt.parts().get(0).getId();
 
         // Второй документ на ту же деталь оставляем черновиком.
@@ -261,10 +261,55 @@ class IntakeServiceTest extends PostgresTestBase {
         Supply supply = arrivedSupply("22");
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), null,
-                List.of(item("капот", "9000")), null));
+                List.of(item("капот", "9000")), null, uniqueRequestId()));
 
         assertThatThrownBy(() -> inTenant(() -> documents.cancel(receipt.document().getId())))
                 .hasMessageContaining("журнал движений неизменяем");
+    }
+
+    @Test
+    @DisplayName("Повтор с тем же ключом не создаёт вторую партию")
+    void repeatWithSameRequestIdIsIdempotent() {
+        Supply supply = arrivedSupply("40");
+        String requestId = uniqueRequestId();
+
+        IntakeService.Receipt first = inTenant(() -> intake.receive(
+                warehouse, supply.getId(), null,
+                List.of(item("фара левая", "8500")), null, requestId));
+
+        // Телефон отправил партию, соединение оборвалось до ответа, очередь
+        // повторила. Без ключа здесь появилась бы вторая деталь на складе.
+        IntakeService.Receipt again = inTenant(() -> intake.receive(
+                warehouse, supply.getId(), null,
+                List.of(item("фара левая", "8500")), null, requestId));
+
+        assertThat(again.document().getId()).isEqualTo(first.document().getId());
+        assertThat(again.parts()).extracting(ru.partsflow.inventory.Part::getId)
+                .containsExactlyElementsOf(
+                        first.parts().stream().map(ru.partsflow.inventory.Part::getId).toList());
+
+        Long partId = first.parts().get(0).getId();
+        assertThat(qtyOf(partId)).as("повтор удвоил остаток").isEqualByComparingTo("1");
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM stock_document WHERE client_request_id = ?",
+                Integer.class, requestId))).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Другой ключ — другая партия")
+    void differentRequestIdCreatesSecondReceipt() {
+        Supply supply = arrivedSupply("41");
+
+        IntakeService.Receipt first = inTenant(() -> intake.receive(
+                warehouse, supply.getId(), null,
+                List.of(item("бампер передний", "12000")), null, uniqueRequestId()));
+        IntakeService.Receipt second = inTenant(() -> intake.receive(
+                warehouse, supply.getId(), null,
+                List.of(item("бампер передний", "12000")), null, uniqueRequestId()));
+
+        // Приёмщик действительно принял две одинаковые детали — это не повтор.
+        assertThat(second.document().getId()).isNotEqualTo(first.document().getId());
+        assertThat(second.parts().get(0).getId()).isNotEqualTo(first.parts().get(0).getId());
     }
 
     @Test
@@ -273,7 +318,7 @@ class IntakeServiceTest extends PostgresTestBase {
         Supply supply = arrivedSupply("23");
 
         assertThatThrownBy(() -> inTenant(() ->
-                intake.receive(warehouse, supply.getId(), null, List.of(), null)))
+                intake.receive(warehouse, supply.getId(), null, List.of(), null, uniqueRequestId())))
                 .hasMessageContaining("без позиций");
     }
 
@@ -307,6 +352,11 @@ class IntakeServiceTest extends PostgresTestBase {
                 Supply.SupplyKind.CONTAINER, number, "Onteco 6", null));
         inTenant(() -> intake.markSupplyArrived(supply.getId(), LocalDate.now()));
         return supply;
+    }
+
+    /** Каждый вызов — свой ключ запроса: повторы проверяются отдельным тестом. */
+    private String uniqueRequestId() {
+        return java.util.UUID.randomUUID().toString();
     }
 
     /** Наименование карточки не передаём: его собирает PartTitleGenerator. */

@@ -20,6 +20,7 @@ import ru.partsflow.inventory.Part;
 import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.QualityGrade;
 import ru.partsflow.inventory.VerticalSide;
+import ru.partsflow.platform.security.CurrentUser;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -48,7 +49,7 @@ public class IntakeController {
     @PostMapping("/supplies")
     public ResponseEntity<SupplyView> registerSupply(@Valid @RequestBody SupplyRequest request) {
         Supply supply = intake.registerSupply(
-                request.kind(), request.number(), request.supplierName(), request.authorId());
+                request.kind(), request.number(), request.supplierName(), CurrentUser.memberId());
         return ResponseEntity.status(HttpStatus.CREATED).body(SupplyView.of(supply));
     }
 
@@ -77,7 +78,7 @@ public class IntakeController {
         donor.setTransmissionModel(request.transmissionModel());
         donor.setNote(request.note());
 
-        Donor saved = intake.registerDonor(donor, request.supplyId(), request.authorId());
+        Donor saved = intake.registerDonor(donor, request.supplyId(), CurrentUser.memberId());
         return ResponseEntity.status(HttpStatus.CREATED).body(DonorView.of(saved));
     }
 
@@ -102,7 +103,7 @@ public class IntakeController {
 
         IntakeService.Receipt receipt = intake.receive(
                 request.warehouseId(), request.supplyId(), request.donorId(),
-                items, request.authorId());
+                items, CurrentUser.memberId(), request.requestId());
 
         return ResponseEntity.status(HttpStatus.CREATED).body(ReceiptView.of(receipt));
     }
@@ -116,8 +117,7 @@ public class IntakeController {
 
     public record SupplyRequest(Supply.SupplyKind kind,
                                 @NotBlank String number,
-                                String supplierName,
-                                Long authorId) {
+                                String supplierName) {
     }
 
     public record DonorRequest(@NotNull Long brandId,
@@ -134,8 +134,7 @@ public class IntakeController {
                                Donor.TransmissionType transmissionType,
                                String transmissionModel,
                                String note,
-                               Long supplyId,
-                               Long authorId) {
+                               Long supplyId) {
     }
 
     public record ReceiptRequest(
@@ -146,7 +145,10 @@ public class IntakeController {
             /* Донор необязателен: контрактные детали приходят контейнером напрямую. */
             Long donorId,
             @NotEmpty List<@Valid ItemRequest> items,
-            Long authorId) {
+            /* Ключ запроса от клиента: повтор офлайн-очереди не должен создать
+               вторую партию. Генерируется при постановке в очередь и не меняется
+               при повторах. */
+            @NotBlank String requestId) {
     }
 
     /**

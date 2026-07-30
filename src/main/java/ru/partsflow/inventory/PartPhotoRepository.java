@@ -10,6 +10,9 @@ public interface PartPhotoRepository extends JpaRepository<PartPhoto, Long> {
 
     List<PartPhoto> findByPartIdOrderBySortOrderAscIdAsc(Long partId);
 
+    /** Повтор запроса ссылки узнаётся здесь: тот же ключ — та же фотография. */
+    Optional<PartPhoto> findByClientRequestId(String clientRequestId);
+
     Optional<PartPhoto> findByPartIdAndMainIsTrue(Long partId);
 
     /**

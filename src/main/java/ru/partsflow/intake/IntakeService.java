@@ -148,10 +148,19 @@ public class IntakeService {
      */
     @Transactional
     public Receipt receive(Long warehouseId, Long supplyId, Long donorId,
-                           List<ItemRequest> items, Long authorId) {
+                           List<ItemRequest> items, Long authorId, String requestId) {
         if (items == null || items.isEmpty()) {
             throw new IllegalArgumentException("Приёмка без позиций не имеет смысла");
         }
+
+        // Повтор офлайн-очереди: телефон отправил партию, ответ не дошёл,
+        // очередь повторила. Возвращаем то, что получилось в первый раз,
+        // а не заводим вторую партию.
+        Receipt alreadyDone = replayOf(requestId);
+        if (alreadyDone != null) {
+            return alreadyDone;
+        }
+
         if (supplyId != null) {
             requireSupply(supplyId);
         }
@@ -159,6 +168,7 @@ public class IntakeService {
 
         StockDocument document = documents.save(StockDocument.intake(warehouseId, supplyId));
         document.setCreatedBy(authorId);
+        document.setClientRequestId(requestId);
 
         // Части заголовка от машины достаются один раз на всю партию: с одного
         // донора снимают десятки деталей подряд.
@@ -252,6 +262,29 @@ public class IntakeService {
                         part.getTitle().replace("\"", "\\\""),
                         part.getPrice())
                 .getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Результат уже выполненной приёмки по тому же ключу запроса.
+     *
+     * <p>Возвращается именно результат, а не ошибка «уже сделано»: очередь
+     * не отличает «получилось только что» от «получилось в прошлый раз»,
+     * ей нужен ответ, чтобы удалить запись и идти дальше.
+     */
+    private Receipt replayOf(String requestId) {
+        if (requestId == null || requestId.isBlank()) {
+            return null;
+        }
+        return documents.findByClientRequestId(requestId)
+                .map(document -> new Receipt(document, partsOf(document)))
+                .orElse(null);
+    }
+
+    private List<Part> partsOf(StockDocument document) {
+        List<Long> partIds = document.getLines().stream()
+                .map(ru.partsflow.inventory.StockDocumentLine::getPartId)
+                .toList();
+        return parts.findAllById(partIds);
     }
 
     private Supply requireSupply(Long supplyId) {

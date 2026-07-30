@@ -51,11 +51,22 @@ public class PhotoService {
      * нет, а в списке и на площадке показывается случайная.
      */
     @Transactional
-    public Upload requestUpload(Long partId, String contentType) {
+    public Upload requestUpload(Long partId, String contentType, String requestId) {
         requirePart(partId);
+
+        // Повтор из офлайн-очереди: отдаём ту же фотографию с новой ссылкой.
+        // Ссылка обновляется намеренно — прежняя за время ожидания истекла.
+        PartPhoto existing = requestId == null || requestId.isBlank()
+                ? null
+                : photos.findByClientRequestId(requestId).orElse(null);
+        if (existing != null) {
+            return new Upload(existing.getId(), existing.getS3Key(),
+                    storage.presignUpload(existing.getS3Key(), contentType));
+        }
 
         String key = storage.newKey(partId, contentType);
         PartPhoto photo = new PartPhoto(partId, key);
+        photo.setClientRequestId(requestId);
         if (photos.findByPartIdAndMainIsTrue(partId).isEmpty()) {
             photo.makeMain();
         }

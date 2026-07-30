@@ -103,7 +103,7 @@ class PhotoServiceTest extends PostgresTestBase {
     @Test
     @DisplayName("Снимок уезжает по подписанной ссылке и подтверждается")
     void photoTravelsByPresignedUrl() throws Exception {
-        PhotoService.Upload upload = inTenant(() -> photos.requestUpload(partId, "image/jpeg"));
+        PhotoService.Upload upload = inTenant(() -> photos.requestUpload(partId, "image/jpeg", uniqueRequestId()));
 
         int status = put(upload.uploadUrl(), "image/jpeg", jpegBytes());
         assertThat(status).as("хранилище отвергло подписанную ссылку").isEqualTo(200);
@@ -120,7 +120,7 @@ class PhotoServiceTest extends PostgresTestBase {
     @Test
     @DisplayName("Подтверждение без загрузки не создаёт битую картинку")
     void confirmWithoutUploadFails() {
-        PhotoService.Upload upload = inTenant(() -> photos.requestUpload(partId, "image/jpeg"));
+        PhotoService.Upload upload = inTenant(() -> photos.requestUpload(partId, "image/jpeg", uniqueRequestId()));
 
         // Телефон сказал «загрузил», а связь оборвалась. Верить нельзя.
         assertThat(inTenant(() -> photos.confirmUpload(upload.photoId(), null, null))).isFalse();
@@ -133,9 +133,29 @@ class PhotoServiceTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Повтор запроса ссылки возвращает ту же фотографию с новой ссылкой")
+    void repeatedUploadRequestIsIdempotent() {
+        String requestId = uniqueRequestId();
+
+        PhotoService.Upload first = inTenant(
+                () -> photos.requestUpload(partId, "image/jpeg", requestId));
+        PhotoService.Upload again = inTenant(
+                () -> photos.requestUpload(partId, "image/jpeg", requestId));
+
+        // Вторая запись означала бы мусор в хранилище и лишнюю пустую картинку
+        // в карточке. А вот ссылку выдаём новую: прежняя за время ожидания
+        // очереди истекла.
+        assertThat(again.photoId()).isEqualTo(first.photoId());
+        assertThat(again.key()).isEqualTo(first.key());
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_photo WHERE part_id = ?", Integer.class, partId)))
+                .isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("Ключ объекта начинается со схемы арендатора")
     void keyIsPrefixedWithTenant() {
-        PhotoService.Upload upload = inTenant(() -> photos.requestUpload(partId, "image/jpeg"));
+        PhotoService.Upload upload = inTenant(() -> photos.requestUpload(partId, "image/jpeg", uniqueRequestId()));
 
         // Изоляция префиксом: удаление и выгрузка одного клиента — одна операция.
         assertThat(upload.key()).startsWith(TENANT + "/parts/" + partId + "/");
@@ -180,7 +200,7 @@ class PhotoServiceTest extends PostgresTestBase {
     @Test
     @DisplayName("Неподтверждённую нельзя сделать главной")
     void unconfirmedCannotBeMain() {
-        PhotoService.Upload pending = inTenant(() -> photos.requestUpload(partId, "image/jpeg"));
+        PhotoService.Upload pending = inTenant(() -> photos.requestUpload(partId, "image/jpeg", uniqueRequestId()));
 
         assertThatThrownBy(() -> inTenant(() -> {
             photos.makeMain(pending.photoId());
@@ -239,7 +259,7 @@ class PhotoServiceTest extends PostgresTestBase {
 
     /** Полный цикл: ссылка, загрузка, подтверждение. */
     private PhotoService.Upload uploaded(String contentType) throws Exception {
-        PhotoService.Upload upload = inTenant(() -> photos.requestUpload(partId, contentType));
+        PhotoService.Upload upload = inTenant(() -> photos.requestUpload(partId, contentType, uniqueRequestId()));
         put(upload.uploadUrl(), contentType, jpegBytes());
         inTenant(() -> photos.confirmUpload(upload.photoId(), 800, 600));
         return upload;
@@ -265,6 +285,10 @@ class PhotoServiceTest extends PostgresTestBase {
                 return false;
             }
         });
+    }
+
+    private static String uniqueRequestId() {
+        return java.util.UUID.randomUUID().toString();
     }
 
     private static byte[] jpegBytes() {

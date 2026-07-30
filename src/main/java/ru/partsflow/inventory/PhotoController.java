@@ -39,7 +39,8 @@ public class PhotoController {
             @PathVariable Long partId,
             @Valid @RequestBody UploadRequest request) {
 
-        PhotoService.Upload upload = photos.requestUpload(partId, request.contentType());
+        PhotoService.Upload upload = photos.requestUpload(
+                partId, request.contentType(), request.requestId());
         return ResponseEntity.status(HttpStatus.CREATED).body(upload);
     }
 
@@ -79,7 +80,10 @@ public class PhotoController {
         return ResponseEntity.noContent().build();
     }
 
-    public record UploadRequest(@NotBlank String contentType) {
+    public record UploadRequest(@NotBlank String contentType,
+                                /* Ключ запроса: повтор не создаёт вторую запись
+                                   и мусор в хранилище. */
+                                @NotBlank String requestId) {
     }
 
     public record ConfirmRequest(Integer width, Integer height) {

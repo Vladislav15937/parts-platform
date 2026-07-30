@@ -30,6 +30,12 @@ public class StockDocumentService {
         return documents.saveAndFlush(document);
     }
 
+    /** Документ по ключу запроса клиента: так узнаётся повтор офлайн-очереди. */
+    @Transactional(readOnly = true)
+    public java.util.Optional<StockDocument> findByClientRequestId(String clientRequestId) {
+        return documents.findByClientRequestId(clientRequestId);
+    }
+
     /**
      * Проводит документ: пишет движения по каждой строке и закрывает документ.
      *

@@ -59,6 +59,10 @@ public class PartPhoto {
     @Column(nullable = false)
     private PhotoStatus status = PhotoStatus.UPLOADED;
 
+    /** Ключ запроса от клиента: повтор не создаёт вторую запись и мусор в S3. */
+    @Column(name = "client_request_id")
+    private String clientRequestId;
+
     @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
 
@@ -138,6 +142,14 @@ public class PartPhoto {
 
     public PhotoStatus getStatus() {
         return status;
+    }
+
+    public String getClientRequestId() {
+        return clientRequestId;
+    }
+
+    public void setClientRequestId(String clientRequestId) {
+        this.clientRequestId = clientRequestId;
     }
 
     public Instant getCreatedAt() {

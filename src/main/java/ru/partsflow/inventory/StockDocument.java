@@ -64,6 +64,13 @@ public class StockDocument {
     @Column(name = "supply_id")
     private Long supplyId;
 
+    /**
+     * Ключ запроса от клиента: по нему повтор офлайн-очереди узнаётся как повтор,
+     * а не создаёт вторую партию. Уникален в БД.
+     */
+    @Column(name = "client_request_id")
+    private String clientRequestId;
+
     private String note;
 
     @Column(name = "created_by")
@@ -197,6 +204,14 @@ public class StockDocument {
 
     public Long getSupplyId() {
         return supplyId;
+    }
+
+    public String getClientRequestId() {
+        return clientRequestId;
+    }
+
+    public void setClientRequestId(String clientRequestId) {
+        this.clientRequestId = clientRequestId;
     }
 
     public String getNote() {

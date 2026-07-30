@@ -6,6 +6,9 @@ import java.util.List;
 
 public interface StockDocumentRepository extends JpaRepository<StockDocument, Long> {
 
+    /** Повтор офлайн-очереди узнаётся здесь: тот же ключ — тот же документ. */
+    java.util.Optional<StockDocument> findByClientRequestId(String clientRequestId);
+
     /** Реестр документов склада: свежие сверху, как в списке у кладовщика. */
     List<StockDocument> findByWarehouseIdOrderByIdDesc(Long warehouseId);
 
