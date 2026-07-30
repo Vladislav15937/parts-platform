@@ -19,5 +19,6 @@
     <include file="catalog/006-tenant-registry.sql"          relativeToChangelogFile="true"/>
     <include file="catalog/007-shedlock.sql"                 relativeToChangelogFile="true"/>
     <include file="catalog/008-tenant-login-code.sql"        relativeToChangelogFile="true"/>
+    <include file="catalog/009-vehicle-seed.sql"            relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
