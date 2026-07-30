@@ -11,6 +11,7 @@ import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
+import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -74,9 +75,17 @@ public class AuthController {
      * <p>Отдельный эндпоинт, потому что первый запрос приложения — GET, а токен
      * нужен уже для входа. Тело пустое: токен уезжает cookie, которую скрипт
      * прочитает сам.
+     *
+     * <p><b>Обращение к {@code token.getToken()} обязательно.</b> В Spring
+     * Security 6 токен ленивый: cookie записывается только когда значение
+     * действительно запросили. Метод, который просто возвращает 204, не создаёт
+     * ничего — приложение получает пустой токен, вход отбивается фильтром CSRF,
+     * а поскольку пользователь ещё анонимный, наружу это выходит как 401,
+     * то есть выглядит неверным паролем. На отладку такого уходит вечер.
      */
     @GetMapping("/csrf")
-    public ResponseEntity<Void> csrf() {
+    public ResponseEntity<Void> csrf(CsrfToken token) {
+        token.getToken();
         return ResponseEntity.noContent().build();
     }
 

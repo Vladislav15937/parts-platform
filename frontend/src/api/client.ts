@@ -85,7 +85,11 @@ interface RequestOptions {
  * @throws ApiError всегда с определённым {@link FailureKind} — вызывающий
  *         не должен разбирать коды сам
  */
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+export async function request<T>(
+  path: string,
+  options: RequestOptions = {},
+  retrying = false,
+): Promise<T> {
   const method = options.method ?? 'GET';
   const headers: Record<string, string> = {};
 
@@ -113,6 +117,23 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     throw new ApiError('transient', 0, 'Нет связи с сервером');
   }
 
+  /*
+   * 403 — не обязательно «вам нельзя».
+   *
+   * Отказ фильтра CSRF выглядит точно так же, а токен живёт в cookie сессии
+   * и за часы офлайна успевает устареть. Считать такой ответ постоянной ошибкой
+   * значит отправить всю накопленную смену в «требует внимания» вместо того,
+   * чтобы обновить токен и повторить.
+   *
+   * Поэтому один повтор с новым токеном. Если и он получил 403 — это настоящий
+   * отказ по роли, и повторять больше нечего. Лишний запрос на отказ по роли
+   * дешевле потерянной работы приёмщика.
+   */
+  if (response.status === 403 && method !== 'GET' && !retrying) {
+    await refreshCsrfToken();
+    return request<T>(path, options, true);
+  }
+
   if (!response.ok) {
     throw new ApiError(classify(response.status), response.status, await messageOf(response));
   }
@@ -124,15 +145,24 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 }
 
 /**
- * Забирает CSRF-токен перед первым изменяющим запросом.
+ * Забирает CSRF-токен, если его ещё нет.
  *
- * <p>Вызывается один раз при старте: до этого cookie с токеном нет, и вход
- * получит 403 вместо 401 — сообщение, по которому невозможно догадаться,
- * что дело в токене.
+ * <p>Вызывается при старте: до этого cookie с токеном нет, и вход получит 403 —
+ * ответ, по которому невозможно догадаться, что дело в токене, а не в пароле.
  */
 export async function ensureCsrfToken(): Promise<void> {
   if (csrfToken()) {
     return;
   }
-  await request<void>('/api/auth/csrf');
+  await refreshCsrfToken();
+}
+
+/**
+ * Забирает токен заново, даже если старый есть.
+ *
+ * <p>Нужен после 403: старый токен мог устареть вместе с сессией, пока телефон
+ * был без связи.
+ */
+export async function refreshCsrfToken(): Promise<void> {
+  await request<void>('/api/auth/csrf', {}, true);
 }
