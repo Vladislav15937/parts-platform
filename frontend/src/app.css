@@ -494,3 +494,46 @@ hr {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* Таблица отчёта. Границ по вертикали нет: колонок мало, и сетка из линий
+   мешает читать строку целиком — а читают её именно так, по менеджеру. */
+.report {
+  /* min-width, а не width: колонок в отчёте по машинам шесть, и втиснутые
+     в ширину карточки они обрезаются вместо того, чтобы прокручиваться. */
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.report th,
+.report td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.report th {
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+/* Числа выравниваются по разряду: столбцы сравнивают глазами, и «9 500»
+   под «120 000» без этого читаются как одинаковые. */
+.report .num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.report .negative {
+  color: #a12a2a;
+}
+
+/* Переключатель месяца: стрелки по краям, месяц посередине. */
+.row--between {
+  align-items: center;
+  justify-content: space-between;
+}

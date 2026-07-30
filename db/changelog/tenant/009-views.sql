@@ -44,13 +44,20 @@ LEFT JOIN (
 
 --changeset platform:tenant-081-manager-sales splitStatements:false runOnChange:true
 --comment Продажи по менеджерам: основа для расчёта зарплат.
+--comment Позиции без снимка себестоимости в наценку не идут и считаются
+--comment отдельно: COALESCE в ноль превращал незаполненную себестоимость
+--comment в «наценка равна выручке», то есть отвечал на вопрос «сколько
+--comment заработали» числом «сколько выручили». Такое приходит со складом,
+--comment загруженным из чужой таблицы: цена там есть, закупка — нет.
 CREATE OR REPLACE VIEW ${tenant.schema}.v_manager_sales AS
 SELECT dl.manager_id,
        tm.display_name,
        date_trunc('month', dl.closed_at)          AS period,
        count(DISTINCT dl.id)                      AS deals_count,
        sum(di.price * di.quantity - di.discount)  AS revenue,
-       sum((di.price - COALESCE(di.cost_price_snapshot, 0)) * di.quantity - di.discount) AS margin
+       sum((di.price - di.cost_price_snapshot) * di.quantity - di.discount)
+           FILTER (WHERE di.cost_price_snapshot IS NOT NULL) AS margin,
+       count(*) FILTER (WHERE di.cost_price_snapshot IS NULL) AS items_without_cost
 FROM ${tenant.schema}.deal dl
 JOIN ${tenant.schema}.deal_item di ON di.deal_id = dl.id
 LEFT JOIN ${tenant.schema}.tenant_member tm ON tm.id = dl.manager_id

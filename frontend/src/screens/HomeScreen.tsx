@@ -11,6 +11,7 @@ import { ImportScreen } from './ImportScreen';
 import { InventoryScreen } from './InventoryScreen';
 import { OutboxScreen } from './OutboxScreen';
 import { SellerScreen } from './SellerScreen';
+import { ReportsScreen } from './ReportsScreen';
 import { UnmatchedScreen } from './UnmatchedScreen';
 import { unmatchedNames } from '../catalog/partNames';
 
@@ -27,7 +28,10 @@ import { unmatchedNames } from '../catalog/partNames';
 /** Кто имеет право продавать. Тот же список стоит на сервере в @PreAuthorize. */
 const SELLING_ROLES = ['OWNER', 'MANAGER', 'SELLER'];
 
-/** Кто правит справочник наименований. Тот же список в @PreAuthorize. */
+/**
+ * Кто правит справочник наименований и смотрит отчёты. Тот же список
+ * в @PreAuthorize: в отчётах лежат зарплатная база смены и себестоимость.
+ */
 const NAMING_ROLES = ['OWNER', 'MANAGER'];
 
 type Tab =
@@ -38,6 +42,7 @@ type Tab =
   | 'outbox'
   | 'import'
   | 'names'
+  | 'reports'
   | 'reference';
 
 export function HomeScreen() {
@@ -148,6 +153,15 @@ export function HomeScreen() {
         >
           Наименования{unmatched > 0 && ` · ${unmatched}`}
         </button>
+        {NAMING_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
+            className={tab === 'reports' ? 'tab tab--active' : 'tab'}
+            onClick={() => setTab('reports')}
+          >
+            Отчёты
+          </button>
+        )}
         <button
           type="button"
           className={tab === 'reference' ? 'tab tab--active' : 'tab'}
@@ -243,6 +257,16 @@ export function HomeScreen() {
           <p className="note note--error">
             Нет связи. Сопоставление переписывает заголовки всех позиций под
             написанием разом — вслепую из очереди такое не отправляют.
+          </p>
+        ))}
+
+      {tab === 'reports' &&
+        (connected ? (
+          <ReportsScreen canRead={NAMING_ROLES.includes(state.me.role)} />
+        ) : (
+          <p className="note note--error">
+            Нет связи. Отчёты считает база — закэшированная зарплата хуже
+            её отсутствия.
           </p>
         ))}
 
