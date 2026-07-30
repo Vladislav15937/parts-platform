@@ -140,7 +140,11 @@ class InventoryServiceTest extends PostgresTestBase {
         inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("10"), null));
 
         // Потом продавец продаёт две. Склад работает, пересчёт его не морозит.
-        sale(partId, warehouse, 2);
+        // Время движения явное: момент подсчёта ставят часы JVM, а now()
+        // движения — часы Postgres, и их расхождение в миллисекунды делало
+        // порядок случайным. Тест при этом падал раз в десяток прогонов
+        // и выглядел как поломка расчёта.
+        saleAt(partId, warehouse, 2, countedAtOf(sessionId, partId).plusSeconds(1));
 
         inTenant(() -> inventory.finishCounting(sessionId));
 
@@ -162,7 +166,9 @@ class InventoryServiceTest extends PostgresTestBase {
         Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
 
         // Сначала продали две, потом кладовщик дошёл до полки и нашёл восемь.
-        sale(partId, warehouse, 2);
+        // Время движения явное по той же причине: иначе продажа могла оказаться
+        // позже подсчёта по часам другой машины.
+        saleAt(partId, warehouse, 2, startedAtOf(sessionId).plusMillis(1));
         inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("8"), null));
         inTenant(() -> inventory.finishCounting(sessionId));
 
@@ -383,6 +389,19 @@ class InventoryServiceTest extends PostgresTestBase {
         inTenant(() -> jdbc.update("""
                 INSERT INTO stock_movement (part_id, movement_type, qty_delta, from_warehouse_id)
                 VALUES (?, 'SALE', ?, ?)""", partId, -qty, warehouseId));
+    }
+
+    /** Когда сервер записал подсчёт строки. */
+    private Instant countedAtOf(Long sessionId, Long partId) {
+        return inTenant(() -> jdbc.queryForObject("""
+                SELECT counted_at FROM inventory_line
+                 WHERE session_id = ? AND part_id = ?""",
+                Instant.class, sessionId, partId));
+    }
+
+    private Instant startedAtOf(Long sessionId) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT started_at FROM inventory_session WHERE id = ?", Instant.class, sessionId));
     }
 
     /**

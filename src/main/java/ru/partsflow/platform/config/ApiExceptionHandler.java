@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import ru.partsflow.inventory.StockReservationRepository;
 
@@ -46,6 +47,20 @@ public class ApiExceptionHandler {
     }
 
     /** Неверные данные в запросе: количество, роль, пустое наименование. */
+    /**
+     * Ответ, который код выбрал сам.
+     *
+     * <p>Обязателен и стоит рано: перехватчик {@code Exception} иначе съедает
+     * и {@code ResponseStatusException} тоже, превращая осознанный 404 в 500.
+     * Ошибиться тут легко и заметно не сразу — сообщение об ошибке при этом
+     * выглядит правдоподобно.
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ApiError> chosenStatus(ResponseStatusException e) {
+        return ResponseEntity.status(e.getStatusCode())
+                .body(new ApiError(e.getReason() == null ? "Запрос отклонён" : e.getReason()));
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ApiError> badRequest(IllegalArgumentException e) {
         return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));

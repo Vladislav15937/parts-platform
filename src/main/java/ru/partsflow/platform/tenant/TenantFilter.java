@@ -53,6 +53,10 @@ public class TenantFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
         // Вход происходит до того, как арендатор известен: провайдер
         // аутентификации выставляет схему сам, на время запроса к реестру.
-        return path.startsWith("/actuator") || path.startsWith("/api/auth/");
+        // Прайс площадки определяет арендатора сам, по секрету в адресе:
+        // вошедшего пользователя там нет.
+        return path.startsWith("/actuator")
+                || path.startsWith("/api/auth/")
+                || path.startsWith("/feeds/");
     }
 }

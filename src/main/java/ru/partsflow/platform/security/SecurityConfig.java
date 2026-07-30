@@ -70,6 +70,10 @@ public class SecurityConfig {
                         .requestMatchers("/api/members/bootstrap").permitAll()
                         // Проверки живости нужны балансировщику до всякого входа.
                         .requestMatchers("/actuator/health/**").permitAll()
+                        // Прайс забирает сервер Дрома: cookie у него нет
+                        // и не будет. Права даёт секрет в самом адресе,
+                        // см. DromFeedController.
+                        .requestMatchers("/feeds/**").permitAll()
                         .anyRequest().authenticated())
                 .logout(l -> l.logoutUrl("/api/auth/logout")
                         .logoutSuccessHandler((req, res, a) -> res.setStatus(HttpStatus.NO_CONTENT.value())));

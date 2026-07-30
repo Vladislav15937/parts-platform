@@ -4,7 +4,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.platform.crypto.SecretCipher;
+import ru.partsflow.platform.tenant.TenantContext;
 
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
 
@@ -35,7 +38,7 @@ public class MarketplaceAccountService {
         return jdbc.query("""
                 SELECT id, marketplace, title, status, last_sync_at IS NOT NULL AS synced,
                        last_error, credentials IS NOT NULL AS has_credentials,
-                       credentials
+                       credentials, feed_token IS NOT NULL AS has_feed
                   FROM marketplace_account
                  ORDER BY marketplace, title""",
                 (rs, i) -> new Account(
@@ -48,6 +51,7 @@ public class MarketplaceAccountService {
                         // а не только в журнале: чинит это человек.
                         rs.getBoolean("has_credentials")
                                 && !SecretCipher.isEncrypted(rs.getBytes("credentials")),
+                        rs.getBoolean("has_feed"),
                         rs.getString("last_error")));
     }
 
@@ -63,6 +67,52 @@ public class MarketplaceAccountService {
         if (updated == 0) {
             throw new IllegalArgumentException("Кабинет не найден: " + accountId);
         }
+    }
+
+    /**
+     * Заводит ссылку на прайс или меняет её.
+     *
+     * <p>Смена — не косметика: старая ссылка перестаёт работать сразу, и прайс
+     * у площадки замрёт, пока новую не пропишет её техспециалист. Поэтому
+     * отдельным действием, а не автоматически при каждом сохранении настроек.
+     *
+     * @return новый токен
+     */
+    @Transactional
+    public String rotateFeedToken(long accountId) {
+        byte[] bytes = new byte[32];
+        new SecureRandom().nextBytes(bytes);
+        // Без padding: токен едет в пути URL, а '=' там лишний.
+        String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+
+        int updated = jdbc.update(
+                "UPDATE marketplace_account SET feed_token = ? WHERE id = ?", token, accountId);
+        if (updated == 0) {
+            throw new IllegalArgumentException("Кабинет не найден: " + accountId);
+        }
+        return token;
+    }
+
+    /**
+     * Путь к прайсу, который прописывают в кабинете площадки.
+     *
+     * <p>Код компании берётся из реестра по текущей схеме, а не из параметра:
+     * подставленный снаружи, он дал бы ссылку, ведущую к чужому арендатору —
+     * точнее, к отказу, но искать причину пришлось бы долго.
+     */
+    @Transactional(readOnly = true)
+    public Optional<String> feedPath(long accountId) {
+        String companyCode = jdbc.queryForObject(
+                "SELECT code FROM public.tenant_registry WHERE schema_name = ?",
+                String.class, TenantContext.require());
+        List<String> found = jdbc.query(
+                "SELECT feed_token FROM marketplace_account WHERE id = ?",
+                (rs, i) -> rs.getString("feed_token"), accountId);
+
+        if (found.isEmpty() || found.get(0) == null) {
+            return Optional.empty();
+        }
+        return Optional.of("/feeds/drom/%s/%s.xml".formatted(companyCode, found.get(0)));
     }
 
     /**
@@ -84,6 +134,7 @@ public class MarketplaceAccountService {
      * @param plaintextSecret секрет лежит незашифрованным — его надо перезаписать
      */
     public record Account(Long id, String marketplace, String title, String status,
-                          boolean hasCredentials, boolean plaintextSecret, String lastError) {
+                          boolean hasCredentials, boolean plaintextSecret, boolean hasFeed,
+                          String lastError) {
     }
 }

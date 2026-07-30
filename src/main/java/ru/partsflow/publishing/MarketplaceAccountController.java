@@ -6,8 +6,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -46,6 +49,34 @@ public class MarketplaceAccountController {
         return ResponseEntity.noContent().build();
     }
 
+    /**
+     * Заводит или меняет ссылку на прайс.
+     *
+     * <p>Возвращает полный путь — его владелец передаёт техспециалисту площадки.
+     * Смена ссылки останавливает забор прайса, пока новую не пропишут, поэтому
+     * это отдельное действие, а не побочный эффект сохранения настроек.
+     */
+    @PostMapping("/{id}/feed-url")
+    @PreAuthorize("hasRole('OWNER')")
+    public FeedUrlView rotateFeedUrl(@PathVariable Long id) {
+        accounts.rotateFeedToken(id);
+        return new FeedUrlView(feedPathOf(id));
+    }
+
+    /** Текущая ссылка на прайс. Пусто — ещё не заводили. */
+    @GetMapping("/{id}/feed-url")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public FeedUrlView feedUrl(@PathVariable Long id) {
+        return new FeedUrlView(feedPathOf(id));
+    }
+
+    private String feedPathOf(Long id) {
+        return accounts.feedPath(id).orElse(null);
+    }
+
     public record CredentialsRequest(@NotBlank String secret) {
+    }
+
+    public record FeedUrlView(String path) {
     }
 }
