@@ -74,6 +74,14 @@ public class SecurityConfig {
                         // и не будет. Права даёт секрет в самом адресе,
                         // см. DromFeedController.
                         .requestMatchers("/feeds/**").permitAll()
+                        // Сама PWA. В бою она отдаётся этим же приложением —
+                        // фронтенд и API обязаны жить на одном домене, иначе
+                        // не работают ни сессия в cookie, ни чтение CSRF-токена
+                        // скриптом. Закрывать её аутентификацией бессмысленно:
+                        // это экран входа, за ним ещё нет никого.
+                        .requestMatchers("/", "/index.html", "/assets/**",
+                                "/sw.js", "/manifest.webmanifest", "/favicon.ico")
+                        .permitAll()
                         .anyRequest().authenticated())
                 .logout(l -> l.logoutUrl("/api/auth/logout")
                         .logoutSuccessHandler((req, res, a) -> res.setStatus(HttpStatus.NO_CONTENT.value())));

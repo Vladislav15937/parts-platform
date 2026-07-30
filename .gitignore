@@ -6,3 +6,6 @@ frontend/dist/
 .vscode/
 .DS_Store
 *.log
+
+# Секреты развёртывания
+.env

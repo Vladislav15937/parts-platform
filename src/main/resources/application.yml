@@ -5,9 +5,11 @@ spring:
     default: local
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/parts
-    username: app
-    password: app
+    # Адрес и учётные данные приходят окружением: в бою база не на localhost,
+    # а пароль в репозитории — это пароль, который знают все.
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/parts}
+    username: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
     hikari:
       maximum-pool-size: 20
       # Таймауты защищают от запроса, который встал на блокировке и держит
@@ -36,7 +38,7 @@ spring:
     enabled: false
 
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: ${KAFKA_SERVERS:localhost:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
@@ -76,18 +78,23 @@ app:
 
   # Хранилище фотографий. В разработке MinIO из docker-compose, у клиентов —
   # обычный S3: протокол один, меняются только адрес и ключи.
+  # Накат общей схемы catalog при старте. Схемы арендаторов сюда не входят:
+  # их мигрирует провижининг, и гонять пятьсот схем на подъёме приложения
+  # значит держать его недоступным минуты.
+  migrate-catalog-on-start: ${MIGRATE_CATALOG:true}
+
   s3:
-    endpoint: http://localhost:9000
+    endpoint: ${S3_ENDPOINT:http://localhost:9000}
     # Адрес для подписанных ссылок. На localhost совпадает с внутренним,
     # в бою это внешнее имя: подпись включает хост, и ссылка, подписанная
     # внутренним адресом, с телефона не откроется.
-    public-endpoint: http://localhost:9000
+    public-endpoint: ${S3_PUBLIC_ENDPOINT:http://localhost:9000}
     region: us-east-1
-    access-key: minioadmin
-    secret-key: minioadmin
-    bucket: parts-photos
+    access-key: ${S3_ACCESS_KEY:minioadmin}
+    secret-key: ${S3_SECRET_KEY:minioadmin}
+    bucket: ${S3_BUCKET:parts-photos}
     # MinIO не умеет виртуальные хосты вида bucket.localhost.
-    path-style-access: true
+    path-style-access: ${S3_PATH_STYLE:true}
     upload-url-ttl: 15m
     view-url-ttl: 6h
 
@@ -102,7 +109,9 @@ management:
 
 logging:
   level:
-    ru.partsflow: DEBUG
+    # В бою переопределяется на INFO: DEBUG на пятидесяти тысячах позиций
+    # пишет журнал быстрее, чем его успевают читать.
+    ru.partsflow: ${LOG_LEVEL:DEBUG}
 
 ---
 spring:

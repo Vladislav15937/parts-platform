@@ -1,0 +1,94 @@
+# Развёртывание ячейки.
+#
+# Одна ячейка — это комплект Postgres + S3 на группу арендаторов (до ~200).
+# Отдельный кластер на клиента не делаем: при пятистах клиентах это
+# 12–22 млн ₽/мес против 150–450 ₽ на арендатора в ячейке.
+#
+#   cp .env.example .env   # заполнить секреты
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Kafka здесь нет намеренно: профиль по умолчанию работает на транспорте
+# в памяти, и первым клиентам этого достаточно. Брокер добавляется, когда
+# появляется второй экземпляр приложения — до тех пор он только усложняет
+# эксплуатацию.
+
+# Своё имя проекта, а не унаследованное от каталога. Иначе тома совпадают
+# с теми, что поднимает docker-compose.yml для разработки: Postgres
+# инициализирует пользователя только на пустом каталоге данных, и боевая
+# ячейка молча поднимается на базе с dev-паролем — либо, как здесь, не
+# поднимается вовсе с «password authentication failed».
+name: partsflow-cell
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/parts
+      DB_USER: ${DB_USER:?укажите DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD:?укажите DB_PASSWORD}
+
+      # Секрет создания арендаторов. Пустой выключает механизм — так и надо
+      # держать между подключениями клиентов.
+      APP_PROVISIONING_TOKEN: ${APP_PROVISIONING_TOKEN:-}
+
+      # Ключ шифрования секретов площадок, 32 байта в base64.
+      # Потеряете — ключи кабинетов не расшифруются, и их придётся
+      # запрашивать у площадок заново. Держите копию отдельно от бэкапа базы:
+      # вместе они дают то же, что и открытый текст.
+      APP_CRYPTO_KEY: ${APP_CRYPTO_KEY:?укажите APP_CRYPTO_KEY}
+
+      S3_ENDPOINT: http://minio:9000
+      # Внешнее имя: хост входит в подпись, и ссылка, подписанная внутренним
+      # адресом, с телефона приёмщика не откроется.
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?укажите S3_PUBLIC_ENDPOINT}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?укажите S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?укажите S3_SECRET_KEY}
+
+      LOG_LEVEL: INFO
+    ports:
+      - "${APP_PORT:-8080}:8080"
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: parts
+      POSTGRES_USER: ${DB_USER:?укажите DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?укажите DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d parts"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # Наружу не выставляется: к базе ходит только приложение. Для бэкапа
+    # и разбора — docker compose exec, а не открытый в интернет 5432.
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?укажите S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?укажите S3_SECRET_KEY}
+      # Телефон грузит снимок прямо в хранилище по подписанной ссылке,
+      # то есть из браузера и с другого источника. Без CORS браузер отбивает
+      # запрос ещё до отправки, а приложению это выглядит как обрыв связи.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${PUBLIC_ORIGIN:?укажите PUBLIC_ORIGIN}
+    volumes:
+      - miniodata:/data
+    ports:
+      # Хранилище должно быть доступно телефону напрямую: файл идёт мимо
+      # приложения намеренно.
+      - "${S3_PORT:-9000}:9000"
+
+volumes:
+  pgdata:
+  miniodata:
