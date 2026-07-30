@@ -56,6 +56,22 @@ spring:
       enable-auto-commit: false
       auto-offset-reset: earliest
 
+server:
+  # За терминатором приложение обязано знать, что запрос пришёл по https:
+  # иначе request.isSecure() ложно, cookie сессии уходит без флага Secure
+  # и утечёт в первый же http-запрос к тому же домену.
+  #
+  # В бою — native, а не framework, и это не вкусовщина. Проверено живым
+  # прогоном: с framework флаг Secure получает только CSRF-cookie, потому
+  # что фильтр Spring оборачивает запрос выше уровня, на котором Tomcat
+  # создаёт JSESSIONID. Клапан Tomcat отрабатывает раньше — и cookie сессии
+  # тоже уходит с Secure.
+  #
+  # Умолчание none: в разработке терминатора нет, и доверять X-Forwarded-Proto
+  # от кого угодно значит позволить подделать протокол тому, кто дотянулся
+  # до порта приложения.
+  forward-headers-strategy: ${FORWARD_HEADERS:none}
+
 app:
   cell: cell01
   # Секрет создания арендатора. Пустой — механизм выключен, и это верное
