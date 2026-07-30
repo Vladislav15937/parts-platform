@@ -43,6 +43,17 @@ public final class ImportReport {
         return loaded.getOrDefault(entity, 0);
     }
 
+    /**
+     * Что и сколько загружено, в порядке появления.
+     *
+     * <p>Отдаётся целиком, а не по известным заранее именам: клиент спрашивает
+     * «а всё ли перенеслось», и ответ на это — весь список, включая строку
+     * «товаров пропущено (уже есть)», по которой видно, что запуск повторный.
+     */
+    public Map<String, Integer> loaded() {
+        return Map.copyOf(loaded);
+    }
+
     public List<Problem> problems() {
         return List.copyOf(problems);
     }

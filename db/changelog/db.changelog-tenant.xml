@@ -38,6 +38,7 @@
     <include file="tenant/019-publish-by-default.sql"    relativeToChangelogFile="true"/>
     <include file="tenant/020-import-run.sql"            relativeToChangelogFile="true"/>
     <include file="tenant/021-dead-letter-retry.sql"     relativeToChangelogFile="true"/>
+    <include file="tenant/022-donor-legacy-code.sql"     relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

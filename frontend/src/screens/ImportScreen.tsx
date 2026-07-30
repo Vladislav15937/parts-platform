@@ -3,11 +3,12 @@ import { ApiError } from '../api/client';
 import {
   duplicateColumns,
   FIELDS,
+  importBazon,
   importFile,
   missingRequired,
   previewFile,
 } from '../import/warehouseImport';
-import type { FieldKey, Preview, Report } from '../import/warehouseImport';
+import type { BazonResult, FieldKey, Preview, Report } from '../import/warehouseImport';
 import type { Reference } from '../reference/reference';
 
 /**
@@ -215,6 +216,8 @@ export function ImportScreen({ reference, canImport }: Props) {
           </button>
         </>
       )}
+
+      <BazonImport />
     </section>
   );
 
@@ -261,6 +264,112 @@ export function ImportScreen({ reference, canImport }: Props) {
     setColumns({});
     setReport(null);
     setError(null);
+  }
+}
+
+/**
+ * Перенос из предыдущей системы.
+ *
+ * <p>Отдельно от загрузки таблицы: выгрузка приходит двумя файлами и несёт
+ * то, чего в таблице нет вовсе — машины, поставки, резервы по складам.
+ * Сопоставлять колонки тут не надо: формат чужой системы известен.
+ */
+function BazonImport() {
+  const [donors, setDonors] = useState<File | null>(null);
+  const [catalog, setCatalog] = useState<File | null>(null);
+  const [result, setResult] = useState<BazonResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <>
+      <hr />
+      <h3>Перенос из предыдущей системы</h3>
+      <p className="note">
+        Два файла из кабинета: выгрузка машин и выгрузка товаров. Вместе с ними
+        переедут поставки, доноры и резервы по складам — в обычную таблицу
+        это не помещается.
+      </p>
+
+      <label>
+        Выгрузка машин
+        <input
+          type="file"
+          accept=".csv"
+          onChange={(e) => setDonors(e.target.files?.[0] ?? null)}
+        />
+      </label>
+
+      <label>
+        Выгрузка товаров
+        <input
+          type="file"
+          accept=".csv"
+          onChange={(e) => setCatalog(e.target.files?.[0] ?? null)}
+        />
+      </label>
+
+      {error !== null && <p className="note note--error">{error}</p>}
+
+      <button
+        type="button"
+        disabled={busy || donors === null || catalog === null}
+        onClick={() => void run()}
+      >
+        {busy ? 'Переносим…' : 'Перенести склад'}
+      </button>
+
+      {result !== null && (
+        <>
+          <h4>Перенесено</h4>
+          <ul className="suggestions">
+            {Object.entries(result.loaded).map(([what, count]) => (
+              <li key={what}>
+                {what}: {count}
+              </li>
+            ))}
+          </ul>
+
+          {result.problemCount > 0 ? (
+            <>
+              <p className="note note--error">
+                Не перенеслось строк: {result.problemCount}. Номера — как
+                в исходном файле, искать по ним.
+              </p>
+              <ul className="suggestions">
+                {result.problems.slice(0, 20).map((problem) => (
+                  <li key={problem.line}>
+                    строка {problem.line} — {problem.message}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="note">Все строки приняты.</p>
+          )}
+
+          <p className="note">
+            Повторить перенос безопасно: уже загруженное узнаётся по номерам
+            из самой выгрузки и второй раз не заводится.
+          </p>
+        </>
+      )}
+    </>
+  );
+
+  async function run(): Promise<void> {
+    if (donors === null || catalog === null) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(await importBazon(donors, catalog));
+    } catch (cause) {
+      setError(describe(cause, 'Перенос не прошёл'));
+    } finally {
+      setBusy(false);
+    }
   }
 }
 

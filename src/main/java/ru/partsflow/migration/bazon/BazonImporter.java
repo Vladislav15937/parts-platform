@@ -240,8 +240,8 @@ public final class BazonImporter {
             try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + schema + """
                     .donor (vin, brand_id, year, color, mileage_km, note, supply_id, location,
                             steering, drive_type, transmission_type, transmission_model,
-                            color_code, equipment_code, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISMANTLED')
+                            color_code, equipment_code, legacy_code, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISMANTLED')
                     RETURNING id""")) {
 
                 forEachRow(donorsCsv, report, row -> {
@@ -252,6 +252,24 @@ public final class BazonImporter {
                         return;
                     }
                     if (ids.containsKey(number.number())) {
+                        return;
+                    }
+                    try {
+                        // Повторный запуск не заводит машину второй раз.
+                        // Раньше заводил — и оставлял её пустой: детали
+                        // пропускались по своему legacy_code и оставались
+                        // у первой. Полсотни машин-призраков в отчёте
+                        // об окупаемости выглядят чистым убытком.
+                        Long existing = selectId(c, "SELECT id FROM " + schema
+                                + ".donor WHERE legacy_code = ?", number.number());
+                        if (existing != null) {
+                            ids.put(number.number(), existing);
+                            report.count("машин пропущено (уже есть)");
+                            return;
+                        }
+                    } catch (SQLException e) {
+                        report.problem(row.lineNumber(),
+                                "не удалось проверить машину: " + e.getMessage());
                         return;
                     }
                     try {
@@ -275,6 +293,7 @@ public final class BazonImporter {
                         ps.setString(12, row.get("Модель КПП"));
                         ps.setString(13, color == null ? null : color.code());
                         ps.setString(14, row.get("Комплектация"));
+                        ps.setString(15, number.number());
 
                         ids.put(number.number(), firstLong(ps));
                         report.count("доноров");

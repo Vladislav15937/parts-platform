@@ -95,3 +95,33 @@ export function duplicateColumns(columns: Partial<Record<FieldKey, number>>): nu
   const used = Object.values(columns).filter((i): i is number => i !== undefined);
   return [...new Set(used.filter((i, at) => used.indexOf(i) !== at))];
 }
+
+/**
+ * Перенос склада из выгрузки предыдущей системы.
+ *
+ * <p>Два файла, а не один: выгрузка машин и выгрузка товаров — разные таблицы
+ * в чужом кабинете, и склеить их за клиента нельзя. Деталь ссылается на машину
+ * номером, а поставка приезжает только с машиной.
+ *
+ * <p>Ключа идемпотентности тут нет, в отличие от Excel: импортёр узнаёт уже
+ * загруженное по номерам из самой выгрузки. Повтор — обычное действие,
+ * а не авария.
+ */
+export interface BazonProblem {
+  line: number;
+  message: string;
+}
+
+export interface BazonResult {
+  /** Что и сколько перенесено. Ключи приходят с сервера словами. */
+  loaded: Record<string, number>;
+  problems: BazonProblem[];
+  problemCount: number;
+}
+
+export function importBazon(donors: File, catalog: File): Promise<BazonResult> {
+  const form = new FormData();
+  form.append('donors', donors);
+  form.append('catalog', catalog);
+  return upload<BazonResult>('/api/import/bazon', form);
+}
