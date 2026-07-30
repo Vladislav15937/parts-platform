@@ -96,10 +96,16 @@ public class PartNameService {
                 .orElse(partName.getName());
     }
 
-    /** Экран «нераспознанные» — тот самый список, который разгребают руками. */
+    /**
+     * Экран «нераспознанные» — тот самый список, который разгребают руками.
+     *
+     * <p>Сначала то, под чем больше позиций: разгребают его после импорта
+     * склада, а там все написания заведены одной секундой, и «свежие сверху»
+     * означает «в случайном порядке».
+     */
     @Transactional(readOnly = true)
     public Page<PartName> unmatched(int page, int size) {
-        return repository.findByMatchStatusOrderByCreatedAtDesc(
+        return repository.findByMatchStatusOrderByUsageCountDescCreatedAtDesc(
                 PartName.MatchStatus.UNMATCHED, PageRequest.of(page, size));
     }
 
@@ -112,6 +118,18 @@ public class PartNameService {
     @Transactional(readOnly = true)
     public List<PartKindMatcher.PartKind> suggestionsFor(Long partNameId) {
         return matcher.suggest(require(partNameId).getName());
+    }
+
+    /** Поиск эталона руками, когда подсказки мимо. */
+    @Transactional(readOnly = true)
+    public List<PartKindMatcher.PartKind> searchKinds(String query, int limit) {
+        return matcher.search(query, limit);
+    }
+
+    @Transactional(readOnly = true)
+    public PartName require(Long id) {
+        return repository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Наименование не найдено: " + id));
     }
 
     /**
@@ -140,10 +158,5 @@ public class PartNameService {
         }
         repository.flush();
         return matched;
-    }
-
-    private PartName require(Long id) {
-        return repository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Наименование не найдено: " + id));
     }
 }

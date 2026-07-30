@@ -24,6 +24,17 @@ public interface PartNameRepository extends JpaRepository<PartName, Long> {
     Page<PartName> findByMatchStatusOrderByCreatedAtDesc(PartName.MatchStatus status,
                                                          Pageable pageable);
 
+    /**
+     * То же, но сначала написания, под которыми больше позиций.
+     *
+     * <p>Порядок по времени экран не разгребает: импорт склада заводит все
+     * написания одной секундой, и внутри неё сортировка случайна. Счётчик
+     * отвечает на вопрос, который задаёт владелец, — какое написание держит
+     * двести карточек, а какое одну, заведённую вчера по ошибке.
+     */
+    Page<PartName> findByMatchStatusOrderByUsageCountDescCreatedAtDesc(
+            PartName.MatchStatus status, Pageable pageable);
+
     long countByMatchStatus(PartName.MatchStatus status);
 
     /**

@@ -225,13 +225,14 @@ class IntakeReferenceServiceTest extends PostgresTestBase {
     @Test
     @DisplayName("У наименования видно, распознано ли оно")
     void partNameCarriesMatchedFlag() {
-        Long category = jdbc.queryForObject("""
-                INSERT INTO catalog.part_category (name, slug, path)
-                VALUES ('Тест справочника', 'ref-test', 'ref_test')
-                ON CONFLICT (path) DO UPDATE SET name = excluded.name RETURNING id""", Long.class);
-        Long kind = jdbc.queryForObject("""
-                INSERT INTO catalog.part_kind (category_id, name) VALUES (?, 'Фара') RETURNING id""",
-                Long.class, category);
+        // Эталон берём из поставляемого справочника, а не заводим свою «Фару»:
+        // общий каталог один на все тесты, и вторая запись с тем же именем
+        // роняет соседний тест, который ищет эталон по имени. Здесь важно лишь
+        // то, что наименование с эталоном показано распознанным.
+        Long kind = jdbc.queryForObject(
+                "SELECT id FROM catalog.part_kind WHERE name = 'Фара'", Long.class);
+        Long category = jdbc.queryForObject(
+                "SELECT category_id FROM catalog.part_kind WHERE id = ?", Long.class, kind);
 
         inTenant(() -> {
             jdbc.update("INSERT INTO part_name (name) VALUES ('телевизор')");

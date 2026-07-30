@@ -11,6 +11,8 @@ import { ImportScreen } from './ImportScreen';
 import { InventoryScreen } from './InventoryScreen';
 import { OutboxScreen } from './OutboxScreen';
 import { SellerScreen } from './SellerScreen';
+import { UnmatchedScreen } from './UnmatchedScreen';
+import { unmatchedNames } from '../catalog/partNames';
 
 /**
  * Оболочка после входа.
@@ -25,7 +27,18 @@ import { SellerScreen } from './SellerScreen';
 /** Кто имеет право продавать. Тот же список стоит на сервере в @PreAuthorize. */
 const SELLING_ROLES = ['OWNER', 'MANAGER', 'SELLER'];
 
-type Tab = 'intake' | 'donor' | 'sales' | 'inventory' | 'outbox' | 'import' | 'reference';
+/** Кто правит справочник наименований. Тот же список в @PreAuthorize. */
+const NAMING_ROLES = ['OWNER', 'MANAGER'];
+
+type Tab =
+  | 'intake'
+  | 'donor'
+  | 'sales'
+  | 'inventory'
+  | 'outbox'
+  | 'import'
+  | 'names'
+  | 'reference';
 
 export function HomeScreen() {
   const { state, signOut } = useSession();
@@ -33,10 +46,29 @@ export function HomeScreen() {
   const { status, refresh: refreshReference } = useReference();
   const outbox = useOutbox();
   const [tab, setTab] = useState<Tab>('intake');
+  // Число на вкладке — единственное, что сообщает о накопившемся: сам список
+  // владелец не откроет, пока не узнает, что там что-то есть. После импорта
+  // склада там сразу сотня.
+  const [unmatched, setUnmatched] = useState(0);
 
   // Запасной распознаватель тянем сразу после входа, пока связь заведомо есть:
   // первое сканирование случится в ангаре, где её уже не будет.
   useEffect(warmUpDecoder, []);
+
+  const role = state.status === 'authenticated' ? state.me.role : null;
+
+  useEffect(() => {
+    // Один запрос за вход, и только тем, кто может разбирать: приёмщику
+    // это число ничего не даёт, а без связи оно и не приедет.
+    if (role === null || !NAMING_ROLES.includes(role) || !online) {
+      return;
+    }
+    void unmatchedNames(0, 1)
+      .then((page) => setUnmatched(page.total))
+      // Молча: справочник — не то, ради чего стоит показывать ошибку
+      // на весь экран сразу после входа.
+      .catch(() => setUnmatched(0));
+  }, [role, online]);
 
   if (state.status !== 'authenticated') {
     return null;
@@ -108,6 +140,13 @@ export function HomeScreen() {
           onClick={() => setTab('import')}
         >
           Загрузка
+        </button>
+        <button
+          type="button"
+          className={tab === 'names' ? 'tab tab--active' : 'tab'}
+          onClick={() => setTab('names')}
+        >
+          Наименования{unmatched > 0 && ` · ${unmatched}`}
         </button>
         <button
           type="button"
@@ -192,6 +231,19 @@ export function HomeScreen() {
           />
         ) : (
           <p className="note">Справочники не загружены — некуда класть склад.</p>
+        ))}
+
+      {tab === 'names' &&
+        (connected ? (
+          <UnmatchedScreen
+            canManage={NAMING_ROLES.includes(state.me.role)}
+            onTotalChanged={setUnmatched}
+          />
+        ) : (
+          <p className="note note--error">
+            Нет связи. Сопоставление переписывает заголовки всех позиций под
+            написанием разом — вслепую из очереди такое не отправляют.
+          </p>
         ))}
 
       {tab === 'reference' && <ReferencePanel />}

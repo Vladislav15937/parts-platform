@@ -1,8 +1,12 @@
 package ru.partsflow.inventory;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.catalog.PartName;
+import ru.partsflow.catalog.PartNameService;
 import ru.partsflow.platform.outbox.DomainEvent;
 import ru.partsflow.platform.outbox.DomainEventPublisher;
 
@@ -25,15 +29,74 @@ import java.util.Map;
 @Service
 public class PartService {
 
+    private static final Logger log = LoggerFactory.getLogger(PartService.class);
+
     private final PartRepository partRepository;
     private final DomainEventPublisher eventPublisher;
+    private final PartNameService partNames;
     private final JdbcTemplate jdbc;
 
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
-                       JdbcTemplate jdbc) {
+                       PartNameService partNames, JdbcTemplate jdbc) {
         this.partRepository = partRepository;
         this.eventPublisher = eventPublisher;
+        this.partNames = partNames;
         this.jdbc = jdbc;
+    }
+
+    /**
+     * Сопоставляет написание с эталоном и доводит уже заведённые под ним карточки.
+     *
+     * <p><b>Одним действием, а не двумя.</b> Сопоставить наименование и оставить
+     * склад как есть значит починить будущее и не починить прошлое: справочник
+     * разгребают после импорта, когда все карточки уже созданы. Ради них экран
+     * и существует — сопоставление, не меняющее ни одного заголовка, владельцу
+     * незаметно.
+     *
+     * <p>Заголовок правится подменой начала, а не пересборкой: собрать его
+     * заново значит достать донора, стороны и состояние. Условий два, и второе
+     * дороже первого.
+     *
+     * <p><b>Заголовок должен быть длиннее написания.</b> У позиции из чужой
+     * таблицы он и есть само написание, целиком: подмена «Фара левая» на эталон
+     * «Фара» стёрла бы сторону, и левая с правой стали бы одной деталью —
+     * колонки {@code side_lr} у импорта тоже нет, восстановить её будет неоткуда.
+     * Заголовок, собранный нами, длиннее: за видом детали идут машина, сторона
+     * и состояние, и они остаются на месте. Пойман живым прогоном на складе,
+     * загруженном из таблицы, — тесты на приёмочных заголовках этого не видели.
+     *
+     * <p>Карточки, чей заголовок начинается иначе (правили руками, пришли
+     * из другой системы), не трогаются вовсе: подменять в них нечего.
+     * Категорию и эталон получают все — они от заголовка не зависят.
+     *
+     * @return сколько карточек доведено
+     */
+    @Transactional
+    public MatchResult applyMatch(Long partNameId, Long partKindId) {
+        String localSpelling = partNames.require(partNameId).getName();
+        PartName matched = partNames.matchManually(partNameId, partKindId);
+        String kindName = partNames.displayNameOf(matched);
+
+        int updated = jdbc.update("""
+                UPDATE part
+                   SET category_id  = COALESCE(?, category_id),
+                       part_kind_id = ?,
+                       title = CASE WHEN left(title, length(?)) = ?
+                                     AND length(title) > length(?)
+                                    THEN ? || substr(title, length(?) + 1)
+                                    ELSE title END
+                 WHERE part_name_id = ?""",
+                matched.getCategoryId(), matched.getPartKindId(),
+                localSpelling, localSpelling, localSpelling, kindName, localSpelling,
+                partNameId);
+
+        log.info("Наименование «{}» сопоставлено с «{}», доведено карточек: {}",
+                localSpelling, kindName, updated);
+        return new MatchResult(matched, updated);
+    }
+
+    /** @param updated сколько карточек получили категорию и эталонный заголовок */
+    public record MatchResult(PartName partName, int updated) {
     }
 
     @Transactional

@@ -99,6 +99,33 @@ public class PartKindMatcher {
         return rows.stream().map(PartKindMatcher::toKind).toList();
     }
 
+    /**
+     * Поиск эталона по части названия — для ручного выбора, когда подсказок нет.
+     *
+     * <p>Подсказки идут по похожести строк, а человек ищет по смыслу: на «запаску»
+     * похожего в справочнике нет вовсе, а нужное называется «Колесо запасное».
+     * Без поиска остаётся листать почти две сотни эталонов, и разгребание
+     * нераспознанных встанет на первом же непохожем написании.
+     */
+    public List<PartKind> search(String query, int limit) {
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                        SELECT k.id, k.category_id, k.name
+                          FROM catalog.part_kind k
+                         WHERE k.is_active
+                           AND k.name ILIKE '%' || :query || '%'
+                         ORDER BY length(k.name), k.name
+                         LIMIT :limit""")
+                .setParameter("query", query.strip())
+                .setParameter("limit", limit)
+                .getResultList();
+
+        return rows.stream().map(PartKindMatcher::toKind).toList();
+    }
+
     private static PartKind toKind(Object[] row) {
         return new PartKind(
                 ((Number) row[0]).longValue(),
