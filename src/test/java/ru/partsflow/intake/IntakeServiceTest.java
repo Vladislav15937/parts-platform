@@ -8,6 +8,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
+import ru.partsflow.inventory.LateralSide;
+import ru.partsflow.inventory.LongitudinalSide;
+import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.StockDocument;
 import ru.partsflow.inventory.StockDocumentService;
 import ru.partsflow.platform.tenant.TenantContext;
@@ -87,8 +90,8 @@ class IntakeServiceTest extends PostgresTestBase {
 
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), donor.getId(),
-                List.of(item("фара левая", "Фара левая Camry V50", "8500"),
-                        item("бампер передний", "Бампер передний Camry V50", "12000")),
+                List.of(item("фара левая", "8500"),
+                        item("бампер передний", "12000")),
                 null));
 
         assertThat(receipt.document().getStatus()).isEqualTo(StockDocument.DocumentStatus.DONE);
@@ -105,6 +108,70 @@ class IntakeServiceTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Заголовок собирается сам: вид детали, машина, стороны, состояние")
+    void titleIsAssembledNotTyped() {
+        Supply supply = arrivedSupply("30");
+        Donor donor = inTenant(() -> intake.registerDonor(camry(), supply.getId(), null));
+
+        IntakeService.Receipt receipt = inTenant(() -> intake.receive(
+                warehouse, supply.getId(), donor.getId(),
+                List.of(item("фара левая", "8500")), null));
+
+        // Приёмщик заголовок не писал — он выбрал вид детали, машину и стороны.
+        assertThat(receipt.parts().get(0).getTitle())
+                .contains("фара левая")
+                .contains("Toyota")
+                .contains("перед. лев.")
+                .contains("(б/у)");
+    }
+
+    @Test
+    @DisplayName("Сопоставленное наименование даёт эталонный заголовок, а не местное написание")
+    void matchedNameGivesCanonicalTitle() {
+        // Эталон с синонимом: местное «запаска» должно превратиться
+        // в «Запасное колесо», иначе однородности склада не будет.
+        Long category = jdbc.queryForObject("""
+                INSERT INTO catalog.part_category (name, slug, path)
+                VALUES ('Тест заголовка', 'title-test', 'title_test')
+                ON CONFLICT (path) DO UPDATE SET name = excluded.name
+                RETURNING id""", Long.class);
+        jdbc.update("""
+                DELETE FROM catalog.part_kind WHERE category_id = ? AND name = 'Запасное колесо'""",
+                category);
+        jdbc.update("""
+                INSERT INTO catalog.part_kind (category_id, name, synonyms)
+                VALUES (?, 'Запасное колесо', ARRAY['запаска'])""", category);
+
+        Supply supply = arrivedSupply("31");
+        IntakeService.Receipt receipt = inTenant(() -> intake.receive(
+                warehouse, supply.getId(), null,
+                List.of(item("запаска", "2000")), null));
+
+        assertThat(receipt.parts().get(0).getTitle())
+                .as("в заголовок ушло местное написание вместо эталонного")
+                .contains("Запасное колесо")
+                .doesNotContain("запаска");
+    }
+
+    @Test
+    @DisplayName("Номер производителя кладётся основным")
+    void oemNumberIsStoredAsPrimary() {
+        Supply supply = arrivedSupply("32");
+        IntakeService.Receipt receipt = inTenant(() -> intake.receive(
+                warehouse, supply.getId(), null,
+                List.of(new IntakeService.ItemRequest("амортизатор", BigDecimal.ONE,
+                        new BigDecimal("8500"), null, cell, null, null, null,
+                        PartCondition.USED, null, "KYB", "334388", null, null)),
+                null));
+
+        Long partId = receipt.parts().get(0).getId();
+        assertThat(inTenant(() -> jdbc.queryForMap(
+                "SELECT raw_number, is_primary FROM part_oem WHERE part_id = ?", partId)))
+                .containsEntry("raw_number", "334388")
+                .containsEntry("is_primary", true);
+    }
+
+    @Test
     @DisplayName("Контрактная деталь приходит поставкой без донора")
     void contractPartHasSupplyButNoDonor() {
         Supply supply = inTenant(() -> intake.registerSupply(
@@ -113,7 +180,7 @@ class IntakeServiceTest extends PostgresTestBase {
 
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), null,
-                List.of(item("амортизатор", "Амортизатор передний", "4000")), null));
+                List.of(item("амортизатор", "4000")), null));
 
         Long partId = receipt.parts().get(0).getId();
         assertThat(donorOf(partId)).as("контрактной детали приписали донора").isNull();
@@ -129,7 +196,7 @@ class IntakeServiceTest extends PostgresTestBase {
 
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), null,
-                List.of(item("телевизор", "Панель рамки радиатора", "3000")), null));
+                List.of(item("телевизор", "3000")), null));
 
         Long partId = receipt.parts().get(0).getId();
         assertThat(qtyOf(partId)).isEqualByComparingTo("1");
@@ -170,7 +237,7 @@ class IntakeServiceTest extends PostgresTestBase {
         Supply supply = arrivedSupply("21");
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), null,
-                List.of(item("крыло", "Крыло переднее правое", "5000")), null));
+                List.of(item("крыло", "5000")), null));
         Long partId = receipt.parts().get(0).getId();
 
         // Второй документ на ту же деталь оставляем черновиком.
@@ -194,7 +261,7 @@ class IntakeServiceTest extends PostgresTestBase {
         Supply supply = arrivedSupply("22");
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), null,
-                List.of(item("капот", "Капот Camry V40", "9000")), null));
+                List.of(item("капот", "9000")), null));
 
         assertThatThrownBy(() -> inTenant(() -> documents.cancel(receipt.document().getId())))
                 .hasMessageContaining("журнал движений неизменяем");
@@ -242,9 +309,12 @@ class IntakeServiceTest extends PostgresTestBase {
         return supply;
     }
 
-    private IntakeService.ItemRequest item(String rawName, String title, String price) {
-        return new IntakeService.ItemRequest(rawName, title, BigDecimal.ONE,
-                new BigDecimal(price), new BigDecimal(price).multiply(new BigDecimal("0.4")), cell);
+    /** Наименование карточки не передаём: его собирает PartTitleGenerator. */
+    private IntakeService.ItemRequest item(String rawName, String price) {
+        return new IntakeService.ItemRequest(rawName, BigDecimal.ONE,
+                new BigDecimal(price), new BigDecimal(price).multiply(new BigDecimal("0.4")),
+                cell, LateralSide.LEFT, LongitudinalSide.FRONT, null,
+                PartCondition.USED, null, "KYB", null, null, null);
     }
 
     private BigDecimal qtyOf(Long partId) {

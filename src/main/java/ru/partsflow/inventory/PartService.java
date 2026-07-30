@@ -1,6 +1,5 @@
 package ru.partsflow.inventory;
 
-import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.platform.outbox.DomainEvent;
@@ -10,47 +9,24 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
+/**
+ * Работа с уже заведёнными карточками: цена и поиск.
+ *
+ * <p><b>Приёмки здесь нет.</b> Она живёт в {@code IntakeService}: карточка
+ * создаётся не сама по себе, а складским документом, с наименованием
+ * из справочника и собранным заголовком. Второй путь «просто создать деталь
+ * и написать движение» существовал до этого и расходился с первым — заводил
+ * позицию без документа и без сопоставления наименования.
+ */
 @Service
 public class PartService {
 
     private final PartRepository partRepository;
-    private final StockMovementRepository movementRepository;
     private final DomainEventPublisher eventPublisher;
-    private final EntityManager entityManager;
 
-    public PartService(PartRepository partRepository,
-                       StockMovementRepository movementRepository,
-                       DomainEventPublisher eventPublisher,
-                       EntityManager entityManager) {
+    public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher) {
         this.partRepository = partRepository;
-        this.movementRepository = movementRepository;
         this.eventPublisher = eventPublisher;
-        this.entityManager = entityManager;
-    }
-
-    /**
-     * Приёмка запчасти: создание карточки и постановка на остаток.
-     *
-     * <p>Всё в одной транзакции — карточка, движение и событие. Именно ради этого
-     * событие пишется в outbox, а не отправляется в брокер напрямую: иначе
-     * возможен вариант «деталь сохранена, событие потеряно», при котором она
-     * не уедет на площадки и просто не будет продаваться.
-     */
-    @Transactional
-    public Part intake(Part part, BigDecimal quantity, Long warehouseId, Long storageCellId) {
-        Part saved = partRepository.saveAndFlush(part);
-
-        movementRepository.saveAndFlush(
-                StockMovement.intake(saved.getId(), quantity, warehouseId, storageCellId));
-
-        // Статус и остаток выставил триггер по движению — перечитываем, иначе
-        // вернём карточку со старым DRAFT и нулевым остатком.
-        entityManager.refresh(saved);
-
-        eventPublisher.publish(DomainEvent.of(
-                "part", saved.getId(), "part.created.v1", payloadOf(saved)));
-
-        return saved;
     }
 
     @Transactional

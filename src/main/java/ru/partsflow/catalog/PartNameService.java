@@ -76,6 +76,26 @@ public class PartNameService {
         return repository.saveAndFlush(partName);
     }
 
+    /**
+     * Название для заголовка карточки: эталонное, если наименование сопоставлено,
+     * иначе написание арендатора.
+     *
+     * <p>Смысл справочника — однородность склада. «фара лев.», «Фара левая перед»
+     * и «фара L» должны дать один и тот же заголовок, а для этого заголовок
+     * собирается из эталона. Пока эталона нет, берём написание как есть: короткий
+     * неоднородный заголовок лучше отказа в приёмке, и он выправится сам, когда
+     * наименование сопоставят.
+     */
+    @Transactional(readOnly = true)
+    public String displayNameOf(PartName partName) {
+        if (!partName.isMatched()) {
+            return partName.getName();
+        }
+        return matcher.findById(partName.getPartKindId())
+                .map(PartKindMatcher.PartKind::name)
+                .orElse(partName.getName());
+    }
+
     /** Экран «нераспознанные» — тот самый список, который разгребают руками. */
     @Transactional(readOnly = true)
     public Page<PartName> unmatched(int page, int size) {

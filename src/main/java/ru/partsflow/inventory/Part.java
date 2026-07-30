@@ -448,12 +448,13 @@ public class Part {
         this.costPrice = costPrice;
     }
 
+    /**
+     * Статус только читается: его ведёт триггер {@code stock_movement_apply}
+     * по журналу движений. Сеттера нет намеренно — записанный из кода статус
+     * разойдётся с остатком, и проданная деталь останется в поиске продавца.
+     */
     public PartStatus getStatus() {
         return status;
-    }
-
-    public void setStatus(PartStatus status) {
-        this.status = status;
     }
 
     public Long getStorageCellId() {

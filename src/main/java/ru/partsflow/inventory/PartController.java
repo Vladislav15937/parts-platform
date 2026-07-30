@@ -1,15 +1,7 @@
 package ru.partsflow.inventory;
 
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -31,28 +23,6 @@ public class PartController {
         this.partService = partService;
     }
 
-    @PostMapping
-    public ResponseEntity<PartView> intake(@Valid @RequestBody IntakeRequest request) {
-        Part part = new Part(request.categoryId(), request.title(), request.price());
-        part.setDescription(request.description());
-        part.setDonorId(request.donorId());
-        part.setSupplyId(request.supplyId());
-        part.setManufacturer(request.manufacturer());
-        part.setQualityGrade(request.qualityGrade());
-        part.setSides(request.sideLr(), request.sideFr(), request.sideUd());
-        if (request.condition() != null) {
-            part.setCondition(request.condition());
-        }
-
-        Part saved = partService.intake(
-                part,
-                request.quantity() == null ? BigDecimal.ONE : request.quantity(),
-                request.warehouseId(),
-                request.storageCellId());
-
-        return ResponseEntity.status(HttpStatus.CREATED).body(PartView.of(saved));
-    }
-
     @GetMapping("/search")
     public List<PartView> search(@RequestParam("q") String query,
                                  @RequestParam(value = "limit", defaultValue = "50") int limit) {
@@ -62,27 +32,6 @@ public class PartController {
     @GetMapping("/by-oem/{number}")
     public List<PartView> byOem(@PathVariable String number) {
         return partService.findByOem(number).stream().map(PartView::of).toList();
-    }
-
-    public record IntakeRequest(
-            @NotNull Long categoryId,
-            @NotBlank String title,
-            String description,
-            Long donorId,
-            Long supplyId,
-            String manufacturer,
-            PartCondition condition,
-            QualityGrade qualityGrade,
-            LateralSide sideLr,
-            LongitudinalSide sideFr,
-            VerticalSide sideUd,
-            @Positive BigDecimal price,
-            BigDecimal quantity,
-            // Склад обязателен: без него приход некуда положить, а остаток
-            // по складам — то, на что продавец смотрит в первую очередь.
-            @NotNull Long warehouseId,
-            Long storageCellId
-    ) {
     }
 
     public record PartView(
