@@ -116,7 +116,7 @@ class TenantMigrationsTest extends PostgresTestBase {
         jdbc.update("UPDATE public.tenant_registry SET schema_version = 'старьё' "
                 + "WHERE tenant_id = 74");
 
-        var status = migrations.status();
+        var status = migrations.status(false);
 
         assertThat(status.expectedVersion()).isNotBlank();
         assertThat(status.behind()).extracting(TenantMigrations.TenantView::schema)
@@ -124,7 +124,7 @@ class TenantMigrationsTest extends PostgresTestBase {
 
         migrations.migrateAll();
 
-        assertThat(migrations.status().behind())
+        assertThat(migrations.status(false).behind())
                 .extracting(TenantMigrations.TenantView::schema)
                 .doesNotContain(TENANT);
     }
@@ -143,7 +143,7 @@ class TenantMigrationsTest extends PostgresTestBase {
         assertThat(report.migrated()).doesNotContain("t_000075");
         assertThat(report.failures()).extracting(TenantMigrations.Failure::schema)
                 .doesNotContain("t_000075");
-        assertThat(migrations.status().behind())
+        assertThat(migrations.status(false).behind())
                 .extracting(TenantMigrations.TenantView::schema)
                 .doesNotContain("t_000075");
     }
@@ -168,6 +168,68 @@ class TenantMigrationsTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Накат чинит схему, которой отметка врёт")
+    void applyFixesTamperedSchema() {
+        // Отметка говорит «всё на месте», а объекта в схеме нет. Пока накат
+        // верил отметке, он пропускал ровно того клиента, ради которого его
+        // и запускали: оператор получал «пропущено», а следом «отстал».
+        jdbc.update("UPDATE public.tenant_registry SET schema_version = ? WHERE tenant_id = 74",
+                migrator.expectedVersion());
+        forget("tenant-080-donor-profitability");
+        jdbc.execute("DROP VIEW IF EXISTS %s.v_donor_profitability".formatted(TENANT));
+
+        var report = migrations.migrateAll();
+
+        assertThat(report.migrated()).contains(TENANT);
+        assertThat(viewExists("v_donor_profitability")).isTrue();
+        assertThat(migrations.status(true).behind())
+                .extracting(TenantMigrations.TenantView::schema)
+                .doesNotContain(TENANT);
+    }
+
+    @Test
+    @DisplayName("Глубокая проверка ловит схему, в которую лазили руками")
+    void deepStatusCatchesTamperedSchema() {
+        // Отметка в реестре говорит, что всё на месте, а объекта в схеме нет:
+        // так выглядит клиент, которому миграцию катали через psql. Быстрая
+        // проверка такому верит, и выкладка пройдёт на отставшей схеме.
+        jdbc.update("UPDATE public.tenant_registry SET schema_version = ? WHERE tenant_id = 74",
+                migrator.expectedVersion());
+        forget("tenant-080-donor-profitability");
+        jdbc.execute("DROP VIEW IF EXISTS %s.v_donor_profitability".formatted(TENANT));
+
+        assertThat(migrations.status(false).behind())
+                .as("быстрая проверка идёт по отметке — она и не должна это увидеть")
+                .extracting(TenantMigrations.TenantView::schema)
+                .doesNotContain(TENANT);
+
+        assertThat(migrations.status(true).behind())
+                .as("глубокая проверка поверила отметке вместо самой схемы")
+                .extracting(TenantMigrations.TenantView::schema)
+                .contains(TENANT);
+        assertThat(migrations.status(true).behind())
+                .filteredOn(t -> t.schema().equals(TENANT))
+                .singleElement()
+                .satisfies(t -> assertThat(t.pending()).isPositive());
+    }
+
+    @Test
+    @DisplayName("Непроверяемая схема попадает в отставшие с причиной")
+    void unreachableSchemaIsReported() {
+        jdbc.update("""
+                INSERT INTO public.tenant_registry
+                    (tenant_id, schema_name, company_name, code, status)
+                VALUES (75, 't_000075', 'Пропавшая', 'lostco', 'ACTIVE')""");
+
+        // Молчание про клиента, которого не удалось проверить, хуже лишней
+        // строки: выкладка прошла бы, посчитав его исправным.
+        assertThat(migrations.status(true).behind())
+                .filteredOn(t -> t.schema().equals("t_000075"))
+                .singleElement()
+                .satisfies(t -> assertThat(t.problem()).isNotBlank());
+    }
+
+    @Test
     @DisplayName("Провижининг отмечает версию сам: новый клиент не выглядит отставшим")
     void freshTenantIsNotBehind() {
         // Если провижининг версию не запишет, только что заведённый клиент
@@ -176,7 +238,7 @@ class TenantMigrationsTest extends PostgresTestBase {
         jdbc.update("UPDATE public.tenant_registry SET schema_version = ? WHERE tenant_id = 74",
                 migrator.expectedVersion());
 
-        assertThat(migrations.status().behind())
+        assertThat(migrations.status(false).behind())
                 .extracting(TenantMigrations.TenantView::schema)
                 .doesNotContain(TENANT);
     }

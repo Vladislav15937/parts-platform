@@ -25,26 +25,42 @@ APPLY="${1:-}"
 
 fail() { printf '\033[1;31m%s\033[0m\n' "$1" >&2; exit 1; }
 
+# Секрет не уходит ни в адрес, ни в аргументы curl'а: адреса пишут access-лог
+# терминатора и логи промежуточных прокси, а аргументы видит в ps любой,
+# у кого есть учётка на машине. Остаются файлы в каталоге, закрытом от чужих
+# и убираемом по выходу — в том числе по ошибке, отсюда trap.
+SECRETS=$(mktemp -d)
+trap 'rm -rf "$SECRETS"' EXIT
+chmod 700 "$SECRETS"
+printf 'X-Provisioning-Token: %s\n' "$PROVISIONING_TOKEN" > "$SECRETS/header"
+printf '{"token":"%s"}' "$PROVISIONING_TOKEN" > "$SECRETS/body"
+
+# Сколько элементов в списке ответа: с ключом, которого нет, — ноль.
+count() {
+    python3 -c "import sys, json; print(len(json.load(sys.stdin).get('$1', [])))"
+}
+
 if [ "$APPLY" = "--apply" ]; then
     echo "==> Накатываем миграции арендаторов"
     RESPONSE=$(curl -sS -X POST "$APP_URL/api/provisioning/migrations" \
         -H 'Content-Type: application/json' \
-        -d "{\"token\":\"$PROVISIONING_TOKEN\"}")
+        --data "@$SECRETS/body")
     echo "$RESPONSE" | python3 -m json.tool
 
     # Сорвавшиеся не роняют проход — но роняют шаг развёртывания: релиз,
     # оставивший клиента на старой схеме, обязан быть заметен сразу.
-    FAILED=$(echo "$RESPONSE" | python3 -c \
-        'import sys,json; print(len(json.load(sys.stdin).get("failures", [])))')
+    FAILED=$(echo "$RESPONSE" | count failures)
     [ "$FAILED" = "0" ] || fail "Не мигрировано схем: $FAILED — разбирать руками"
 fi
 
+# deep=true: спрашиваем каждую схему, а не верим отметке в реестре. Отметка
+# врёт, если в схему лазили руками — а перед выкладкой кода, рассчитывающего
+# на новую схему, ошибаться в эту сторону нельзя.
 echo "==> Кто отстал"
-STATUS=$(curl -sS "$APP_URL/api/provisioning/migrations?token=$PROVISIONING_TOKEN")
+STATUS=$(curl -sS "$APP_URL/api/provisioning/migrations?deep=true" -H "@$SECRETS/header")
 echo "$STATUS" | python3 -m json.tool
 
-BEHIND=$(echo "$STATUS" | python3 -c \
-    'import sys,json; print(len(json.load(sys.stdin).get("behind", [])))')
+BEHIND=$(echo "$STATUS" | count behind)
 
 if [ "$BEHIND" != "0" ]; then
     fail "Отставших схем: $BEHIND. Код, рассчитывающий на новую схему, выкладывать нельзя"

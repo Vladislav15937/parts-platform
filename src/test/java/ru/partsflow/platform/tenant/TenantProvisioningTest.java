@@ -129,6 +129,35 @@ class TenantProvisioningTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Состояние миграций отдаётся по секрету в заголовке")
+    void migrationStatusTakesHeader() throws Exception {
+        mvc.perform(get("/api/provisioning/migrations")
+                        .header("X-Provisioning-Token", "секрет-провижининга"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.expectedVersion").isNotEmpty());
+    }
+
+    @Test
+    @DisplayName("Секрет в адресе не принимается: адреса пишут в логи")
+    void tokenInUrlIsNotAccepted() throws Exception {
+        // Токен в query string уезжает в access-лог терминатора, в логи
+        // промежуточных прокси, в историю браузера и в Referer. Секрет,
+        // попавший в лог, перестаёт быть секретом — и узнают об этом позже.
+        mvc.perform(get("/api/provisioning/migrations?token=секрет-провижининга"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("Без заголовка и с чужим секретом — отказ, и ответ один и тот же")
+    void migrationStatusRequiresSecret() throws Exception {
+        mvc.perform(get("/api/provisioning/migrations"))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/provisioning/migrations")
+                        .header("X-Provisioning-Token", "чужой"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     @DisplayName("Без секрета арендатора не создать")
     void secretIsRequired() throws Exception {
         mvc.perform(post("/api/provisioning/tenants").with(csrf())

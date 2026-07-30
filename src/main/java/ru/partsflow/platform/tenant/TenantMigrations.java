@@ -107,18 +107,28 @@ public class TenantMigrations {
         int skipped = 0;
 
         for (Tenant tenant : tenants) {
-            // Отметка в реестре — быстрый фильтр, а не истина: истина лежит
-            // в DATABASECHANGELOG схемы, и Liquibase всё равно её перечитает.
-            // Но обходить пятьсот схем ради тех, кто заведомо на месте, незачем.
-            if (expected != null && expected.equals(tenant.version())) {
-                skipped++;
-                continue;
-            }
             try {
+                // Отметку в реестре здесь не спрашиваем. Она кэш, и она врёт,
+                // если в схему лазили руками: накат пропускал бы ровно того
+                // клиента, ради которого его и запустили, а оператор получал
+                // «пропущено» и следом «отстал» — тупик без штатного выхода.
+                // Пропускает Liquibase, по своему журналу: на актуальной схеме
+                // это один SELECT, и пятьсот таких — секунды, а не минуты.
+                int pending = migrator.pendingCount(tenant.schema());
+                if (pending == 0) {
+                    skipped++;
+                    // Отметку всё же поправим: у клиента, мигрированного
+                    // до появления оркестратора, она пуста, и без этого
+                    // он вечно висел бы в отставших у быстрой проверки.
+                    markMigrated(tenant.tenantId(), expected);
+                    continue;
+                }
+
                 migrator.migrate(tenant.schema());
                 markMigrated(tenant.tenantId(), expected);
                 migrated.add(tenant.schema());
-                log.info("Схема {} обновлена до {}", tenant.schema(), expected);
+                log.info("Схема {} обновлена до {}: не хватало {}",
+                        tenant.schema(), expected, pending);
             } catch (RuntimeException e) {
                 // Дальше идём осознанно: схемы независимы, и один сломанный
                 // клиент не повод оставить остальных на старой версии.
@@ -134,16 +144,24 @@ public class TenantMigrations {
     }
 
     /**
-     * Кто отстал — одним запросом к реестру.
+     * Кто отстал.
      *
-     * <p>Ради этого в реестре и заведена {@code schema_version}: обход всех
-     * схем ради вопроса «можно ли выкладывать код, который рассчитывает
-     * на новую колонку» превращает проверку перед деплоем в минуты ожидания.
+     * <p><b>Два режима, и это не удобство.</b> Быстрый идёт по отметкам
+     * в реестре — ради этого {@code schema_version} там и заведена: обходить
+     * пятьсот схем ради вопроса «можно ли выкладывать» значит превратить
+     * проверку в минуты ожидания. Но отметка — кэш, и она врёт, если в схему
+     * лазили руками: объекта нет, а в реестре стоит нужная версия. Поймано
+     * живым прогоном на стенде, где вьюху до появления оркестратора катали
+     * через psql.
+     *
+     * <p>Глубокий спрашивает у самого Liquibase, чего схеме не хватает.
+     * Он дорогой, поэтому не по умолчанию — но именно им проверяют перед
+     * выкладкой кода, который на новую схему рассчитывает.
      *
      * <p>Пустая версия — это «мигрировали до появления оркестратора»,
      * а не «схемы нет»: такие тоже попадают в отставшие и будут накатаны.
      */
-    public Status status() {
+    public Status status(boolean deep) {
         String expected = migrator.expectedVersion();
         List<TenantView> behind = jdbc.query("""
                 SELECT tenant_id, schema_name, schema_version
@@ -152,14 +170,47 @@ public class TenantMigrations {
                    AND (schema_version IS DISTINCT FROM ?)
                  ORDER BY tenant_id""",
                 (rs, i) -> new TenantView(rs.getLong("tenant_id"), rs.getString("schema_name"),
-                        rs.getString("schema_version")),
+                        rs.getString("schema_version"), null, null),
                 expected);
 
         Integer total = jdbc.queryForObject("""
                 SELECT count(*) FROM public.tenant_registry
                  WHERE status IN ('ACTIVE', 'SUSPENDED')""", Integer.class);
 
-        return new Status(expected, total == null ? 0 : total, behind);
+        return new Status(expected, total == null ? 0 : total,
+                deep ? verified(expected) : behind);
+    }
+
+    /**
+     * Отставшие по мнению самого Liquibase.
+     *
+     * <p>Отметка в реестре тут ни при чём: спрашивается каждая схема. Схема,
+     * которую не удалось проверить, попадает в отставшие с причиной — молчание
+     * про непроверенного клиента хуже, чем лишняя строка в отчёте.
+     */
+    private List<TenantView> verified(String expected) {
+        List<Tenant> tenants = jdbc.query("""
+                SELECT tenant_id, schema_name, schema_version
+                  FROM public.tenant_registry
+                 WHERE status IN ('ACTIVE', 'SUSPENDED')
+                 ORDER BY tenant_id""",
+                (rs, i) -> new Tenant(rs.getLong("tenant_id"), rs.getString("schema_name"),
+                        rs.getString("schema_version")));
+
+        List<TenantView> behind = new ArrayList<>();
+        for (Tenant tenant : tenants) {
+            try {
+                int pending = migrator.pendingCount(tenant.schema());
+                if (pending > 0) {
+                    behind.add(new TenantView(tenant.tenantId(), tenant.schema(),
+                            tenant.version(), pending, null));
+                }
+            } catch (RuntimeException e) {
+                behind.add(new TenantView(tenant.tenantId(), tenant.schema(),
+                        tenant.version(), null, rootMessage(e)));
+            }
+        }
+        return behind;
     }
 
     private void markMigrated(long tenantId, String version) {
@@ -199,6 +250,12 @@ public class TenantMigrations {
     public record Status(String expectedVersion, int tenants, List<TenantView> behind) {
     }
 
-    public record TenantView(long tenantId, String schema, String schemaVersion) {
+    /**
+     * @param pending скольких changeset'ов не хватает. Пусто в быстрой
+     *                проверке: она смотрит на отметку, а не на схему
+     * @param problem почему проверить не вышло. Обычно — схемы нет вовсе
+     */
+    public record TenantView(long tenantId, String schema, String schemaVersion,
+                             Integer pending, String problem) {
     }
 }

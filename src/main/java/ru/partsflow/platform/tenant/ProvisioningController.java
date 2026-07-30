@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -38,6 +39,9 @@ import java.nio.charset.StandardCharsets;
 @RestController
 @RequestMapping("/api/provisioning")
 public class ProvisioningController {
+
+    /** Тот же секрет, что в теле POST: заголовок нужен только там, где тела нет. */
+    static final String TOKEN_HEADER = "X-Provisioning-Token";
 
     private final TenantProvisioning provisioning;
     private final TenantMigrations migrations;
@@ -82,14 +86,25 @@ public class ProvisioningController {
      * Кто отстал от поставляемой схемы.
      *
      * <p>Проверка перед выкладкой: пустой {@code behind} означает, что код,
-     * рассчитывающий на новую схему, выкладывать можно. Секрет передаётся
-     * параметром, потому что тела у GET нет — запрос ничего не меняет,
-     * а список схем и версий секретом не является.
+     * рассчитывающий на новую схему, выкладывать можно.
+     *
+     * <p><b>Секрет в заголовке, а не в параметре запроса.</b> Тела у GET нет,
+     * и первым делом он уехал в адрес — а адреса пишут все: access-лог
+     * терминатора, логи промежуточных прокси, история браузера, заголовок
+     * {@code Referer} при переходе со страницы. Секрет, попавший в лог,
+     * перестаёт быть секретом, и узнают об этом сильно позже.
+     *
+     * @param deep спросить каждую схему, а не поверить отметке в реестре.
+     *             Дорого, поэтому не по умолчанию, — но перед выкладкой кода,
+     *             рассчитывающего на новую схему, проверяют именно так:
+     *             отметка врёт, если в схему лазили руками
      */
     @GetMapping("/migrations")
-    public TenantMigrations.Status migrationStatus(@RequestParam String token) {
+    public TenantMigrations.Status migrationStatus(
+            @RequestHeader(name = TOKEN_HEADER, required = false) String token,
+            @RequestParam(defaultValue = "false") boolean deep) {
         requireToken(token);
-        return migrations.status();
+        return migrations.status(deep);
     }
 
     /**
@@ -101,7 +116,7 @@ public class ProvisioningController {
     private void requireToken(String presented) {
         if (token == null || token.isBlank()) {
             throw new AccessDeniedException(
-                    "Создание арендаторов выключено: app.provisioning-token не задан");
+                    "Управляющий контур выключен: app.provisioning-token не задан");
         }
         if (presented == null || !MessageDigest.isEqual(
                 token.getBytes(StandardCharsets.UTF_8),
