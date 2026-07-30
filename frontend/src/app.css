@@ -1,0 +1,131 @@
+/*
+ * Оформление под руку в перчатке: крупные поля, крупные кнопки, ничего
+ * мелкого. Приёмщик работает стоя, одной рукой, часто в перчатках, и попасть
+ * в элемент высотой 32 px он не сможет.
+ */
+:root {
+  --ink: #1f2933;
+  --muted: #6b7280;
+  --line: #d1d5db;
+  --accent: #2563eb;
+  --danger: #b91c1c;
+  --ok: #15803d;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 18px;
+  color: var(--ink);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f9fafb;
+}
+
+.screen {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.screen--narrow {
+  max-width: 24rem;
+}
+
+.screen--center {
+  min-height: 100vh;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+input {
+  /* 48 px — минимум, в который попадают пальцем в перчатке. */
+  min-height: 48px;
+  padding: 0 0.75rem;
+  font-size: 1.05rem;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  min-height: 52px;
+  padding: 0 1.25rem;
+  font-size: 1.05rem;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+button:disabled {
+  background: var(--muted);
+}
+
+.badge {
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.badge--online {
+  color: var(--ok);
+  background: #dcfce7;
+}
+
+.badge--offline {
+  color: var(--danger);
+  background: #fee2e2;
+}
+
+.note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.todo {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+}

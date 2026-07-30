@@ -1,4 +1,6 @@
 target/
+node_modules/
+frontend/dist/
 .idea/
 *.iml
 .vscode/
