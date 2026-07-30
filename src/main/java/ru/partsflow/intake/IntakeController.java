@@ -39,9 +39,24 @@ import java.util.List;
 public class IntakeController {
 
     private final IntakeService intake;
+    private final IntakeReferenceService reference;
 
-    public IntakeController(IntakeService intake) {
+    public IntakeController(IntakeService intake, IntakeReferenceService reference) {
         this.intake = intake;
+        this.reference = reference;
+    }
+
+    /**
+     * Справочники для работы без связи: склады с ячейками, поставки, машины
+     * в разборе, наименования для подсказок.
+     *
+     * <p>Один запрос, а не пять: телефон забирает это перед выходом к стеллажам,
+     * и пять запросов по плохой связи означают пять шансов оборваться и пять
+     * частично заполненных кэшей, из которых непонятно, можно ли работать.
+     */
+    @GetMapping("/reference")
+    public IntakeReferenceService.Reference reference() {
+        return reference.load();
     }
 
     // ---------- поставки ----------

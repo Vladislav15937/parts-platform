@@ -129,3 +129,35 @@ button:disabled {
   padding-left: 1.25rem;
   color: var(--muted);
 }
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.counts,
+.suggestions {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.suggestions {
+  /* Подсказок немного по замыслу: длинный список на телефоне не читают. */
+  list-style: none;
+  padding: 0;
+}
+
+.suggestions li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+}

@@ -1,4 +1,5 @@
 import { useSession } from '../auth/SessionProvider';
+import { ReferencePanel } from '../reference/ReferencePanel';
 import { useOnline } from '../shell/useOnline';
 
 /**
@@ -17,6 +18,10 @@ export function HomeScreen() {
     return null;
   }
 
+  // Личность, восстановленная локально, — тоже признак отсутствия связи,
+  // и более достоверный, чем navigator.onLine: сервер только что не ответил.
+  const connected = online && !state.offline;
+
   return (
     <div className="screen">
       <header className="header">
@@ -24,14 +29,22 @@ export function HomeScreen() {
           <strong>{state.me.displayName}</strong>
           <span className="muted"> · {roleName(state.me.role)}</span>
         </div>
-        <span className={online ? 'badge badge--online' : 'badge badge--offline'}>
-          {online ? 'на связи' : 'без связи'}
+        <span className={connected ? 'badge badge--online' : 'badge badge--offline'}>
+          {connected ? 'на связи' : 'без связи'}
         </span>
       </header>
 
+      {state.offline && (
+        <p className="note">
+          Работаем без связи. Вход подтвердится, когда сеть появится; собранное
+          до тех пор не потеряется.
+        </p>
+      )}
+
+      <ReferencePanel />
+
       <p className="note">
-        Каркас приложения. Экраны приёмки — следующий шаг, см.
-        <code> docs/pwa-intake-plan.md §6</code>.
+        Экраны приёмки — следующие шаги, см. <code>docs/pwa-intake-plan.md §6</code>.
       </p>
 
       <ul className="todo">

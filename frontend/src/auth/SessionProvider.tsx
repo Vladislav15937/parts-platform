@@ -7,17 +7,27 @@ import type { Credentials, Me } from '../api/auth';
 /**
  * Сессия приложения.
  *
- * <p>При старте спрашиваем «кто я»: сессия могла остаться живой с прошлого
- * запуска, и заставлять приёмщика логиниться каждое утро — это минута на
- * человека в день и повод не пользоваться системой.
+ * <p><b>Приложение обязано открываться без связи.</b> Иначе приёмщик, у которого
+ * в ангаре нет сети, видит экран входа и заперт снаружи — вместе с уже собранной
+ * очередью отправки и загруженными справочниками. Работа встаёт при полностью
+ * исправной системе.
  *
- * <p>Состояние «проверяем» отделено от «не вошёл» намеренно: без него экран
- * входа мигает на каждом запуске у уже вошедшего.
+ * <p>Поэтому личность вошедшего запоминается локально, и при <b>временной</b>
+ * ошибке (нет связи, сервер не отвечает) приложение открывается на ней,
+ * пометив себя как работающее офлайн. Это не обход проверки: доступ к данным
+ * даёт cookie сессии, а офлайн никаких серверных данных и нет. Как только связь
+ * появится, запросы либо пройдут, либо вернут 401 — и тогда попросим войти
+ * заново, не теряя очередь.
+ *
+ * <p>При 401 личность стирается: сессия действительно кончилась.
  */
+const ME_KEY = 'partsflow.me';
+
 type SessionState =
   | { status: 'checking' }
   | { status: 'anonymous'; reason?: string }
-  | { status: 'authenticated'; me: Me };
+  /** @param offline личность восстановлена локально, сервер не подтверждал */
+  | { status: 'authenticated'; me: Me; offline: boolean };
 
 interface SessionApi {
   state: SessionState;
@@ -27,6 +37,31 @@ interface SessionApi {
 
 const SessionContext = createContext<SessionApi | null>(null);
 
+function rememberMe(me: Me): void {
+  try {
+    localStorage.setItem(ME_KEY, JSON.stringify(me));
+  } catch {
+    // Приватный режим может запретить запись — офлайн-старт просто не сработает.
+  }
+}
+
+function recallMe(): Me | null {
+  try {
+    const raw = localStorage.getItem(ME_KEY);
+    return raw === null ? null : (JSON.parse(raw) as Me);
+  } catch {
+    return null;
+  }
+}
+
+function forgetMe(): void {
+  try {
+    localStorage.removeItem(ME_KEY);
+  } catch {
+    // Нечего чистить — и ладно.
+  }
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<SessionState>({ status: 'checking' });
 
@@ -35,24 +70,34 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     (async () => {
       try {
-        // Токен нужен до первого изменяющего запроса, включая вход.
         await ensureCsrfToken();
         const current = await auth.me();
-        if (!cancelled) {
-          setState({ status: 'authenticated', me: current });
+        if (cancelled) {
+          return;
         }
+        rememberMe(current);
+        setState({ status: 'authenticated', me: current, offline: false });
       } catch (error) {
         if (cancelled) {
           return;
         }
-        // 401 при старте — норма: сессии просто нет. Нет связи — тоже
-        // не повод показывать ошибку: приложение обязано открываться офлайн,
-        // иначе очередь недоступна и работа приёмщика встаёт.
-        const reason =
-          error instanceof ApiError && error.kind === 'transient'
-            ? 'Нет связи. Войти можно, когда она появится.'
-            : undefined;
-        setState(reason === undefined ? { status: 'anonymous' } : { status: 'anonymous', reason });
+        const transient = error instanceof ApiError && error.kind === 'transient';
+        const remembered = transient ? recallMe() : null;
+
+        if (remembered !== null) {
+          // Связи нет, но входили здесь же — открываемся на локальной личности.
+          setState({ status: 'authenticated', me: remembered, offline: true });
+          return;
+        }
+        if (!transient) {
+          // 401: сессия кончилась по-настоящему.
+          forgetMe();
+        }
+        setState(
+          transient
+            ? { status: 'anonymous', reason: 'Нет связи. Войти можно, когда она появится.' }
+            : { status: 'anonymous' },
+        );
       }
     })();
 
@@ -64,7 +109,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(async (credentials: Credentials) => {
     await ensureCsrfToken();
     const current = await auth.login(credentials);
-    setState({ status: 'authenticated', me: current });
+    rememberMe(current);
+    setState({ status: 'authenticated', me: current, offline: false });
   }, []);
 
   const signOut = useCallback(async () => {
@@ -73,6 +119,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     } finally {
       // Даже если выход не дошёл до сервера, локально считаем себя вышедшими:
       // иначе приёмщик остаётся в чужой смене.
+      forgetMe();
       setState({ status: 'anonymous' });
     }
   }, []);
