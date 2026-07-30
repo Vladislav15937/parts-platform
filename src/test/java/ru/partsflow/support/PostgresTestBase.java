@@ -50,7 +50,15 @@ public abstract class PostgresTestBase {
         // Testcontainers до 1.21.3 это не лечит, проверено. Свойство читается
         // при создании клиента, поэтому его ставим до старта контейнера — так
         // работает и из Maven, и из IDE.
-        System.setProperty("api.version", "1.44");
+        //
+        // Значение переопределяемо: на машине со старым Docker жёсткие 1.44
+        // сломают всё ровно наоборот — движок не знает такой версии. Порядок
+        // источников — системное свойство, переменная окружения, умолчание.
+        if (System.getProperty("api.version") == null) {
+            String fromEnv = System.getenv("DOCKER_API_VERSION");
+            System.setProperty("api.version",
+                    fromEnv == null || fromEnv.isBlank() ? "1.44" : fromEnv);
+        }
 
         POSTGRES.start();
         migrateCatalog();
@@ -58,6 +66,11 @@ public abstract class PostgresTestBase {
 
     @DynamicPropertySource
     static void datasourceProperties(DynamicPropertyRegistry registry) {
+        // Фоновый релей в тестах выключен. Контекстов Spring поднимается
+        // с десяток, база у них одна, и планировщик чужого контекста заберёт
+        // событие раньше теста — вместе с подставленными в нём заглушками.
+        // Тем, кому релей нужен, вызывают его метод напрямую.
+        registry.add("app.outbox.relay-enabled", () -> "false");
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);

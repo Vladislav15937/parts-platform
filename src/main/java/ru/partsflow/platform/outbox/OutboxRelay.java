@@ -1,10 +1,8 @@
 package ru.partsflow.platform.outbox;
 
-import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
@@ -50,8 +48,14 @@ public class OutboxRelay {
         this.transactions = transactions;
     }
 
-    @Scheduled(fixedDelayString = "${app.outbox.relay-delay-ms:1000}")
-    @SchedulerLock(name = "outbox-relay", lockAtMostFor = "5m")
+    /**
+     * Один проход по всем арендаторам ячейки.
+     *
+     * <p>Расписание вынесено в {@link OutboxRelayScheduler} намеренно. Здесь
+     * его быть не должно: метод вызывают напрямую тесты, и с {@code @Scheduled}
+     * плюс {@code @SchedulerLock} на нём вызов проходил через блокировку
+     * ShedLock — то есть мог быть молча пропущен.
+     */
     public void relay() {
         for (String schema : activeTenantSchemas()) {
             try {
