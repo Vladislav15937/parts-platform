@@ -7,6 +7,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
+import ru.partsflow.platform.security.TenantAuthenticationToken;
+import ru.partsflow.platform.security.TenantPrincipal;
 
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -14,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Фильтр — единственное место, где номер арендатора превращается в схему,
+ * Фильтр — единственное место, где вошедший пользователь превращается в схему,
  * поэтому его ошибки означают либо отказ в обслуживании, либо (хуже) работу
  * не с тем клиентом.
  */
@@ -25,13 +29,14 @@ class TenantFilterTest {
     @AfterEach
     void cleanUp() {
         TenantContext.clear();
+        SecurityContextHolder.clearContext();
     }
 
     @Test
-    @DisplayName("Номер из заголовка становится схемой арендатора")
-    void setsTenantFromHeader() throws Exception {
+    @DisplayName("Схема берётся из вошедшего пользователя")
+    void setsTenantFromAuthenticatedUser() throws Exception {
+        login("t_000042");
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/parts");
-        request.addHeader("X-Tenant-Id", "42");
 
         AtomicReference<String> seen = new AtomicReference<>();
         FilterChain chain = (req, res) -> seen.set(TenantContext.getOrNull());
@@ -42,10 +47,56 @@ class TenantFilterTest {
     }
 
     @Test
-    @DisplayName("Контекст освобождается после запроса: иначе арендатор утечёт в следующий")
-    void clearsContextAfterRequest() throws Exception {
+    @DisplayName("Заголовок X-Tenant-Id больше не действует")
+    void headerIsIgnored() throws Exception {
+        // Сторожевой тест. Пока арендатор приходил заголовком, любой читал чужой
+        // склад, подставив другой номер, — а первые десять клиентов конкурируют
+        // в одном городе. Если заголовок вернут «для удобства отладки», здесь
+        // станет красно.
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/parts");
         request.addHeader("X-Tenant-Id", "42");
+
+        AtomicReference<String> seen = new AtomicReference<>();
+        FilterChain chain = (req, res) -> seen.set(TenantContext.getOrNull());
+
+        filter.doFilterInternal(request, new MockHttpServletResponse(), chain);
+
+        assertThat(seen.get()).as("заголовок снова определяет арендатора").isNull();
+    }
+
+    @Test
+    @DisplayName("Чужой заголовок не перебивает схему вошедшего пользователя")
+    void headerDoesNotOverrideSession() throws Exception {
+        login("t_000042");
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/parts");
+        request.addHeader("X-Tenant-Id", "43");
+
+        AtomicReference<String> seen = new AtomicReference<>();
+        FilterChain chain = (req, res) -> seen.set(TenantContext.getOrNull());
+
+        filter.doFilterInternal(request, new MockHttpServletResponse(), chain);
+
+        assertThat(seen.get()).isEqualTo("t_000042");
+    }
+
+    @Test
+    @DisplayName("Без вошедшего пользователя арендатор не выставляется")
+    void anonymousRequestHasNoTenant() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/parts");
+
+        AtomicReference<String> seen = new AtomicReference<>();
+        FilterChain chain = (req, res) -> seen.set(TenantContext.getOrNull());
+
+        filter.doFilterInternal(request, new MockHttpServletResponse(), chain);
+
+        assertThat(seen.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("Контекст освобождается после запроса: иначе арендатор утечёт в следующий")
+    void clearsContextAfterRequest() throws Exception {
+        login("t_000042");
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/parts");
 
         filter.doFilterInternal(request, new MockHttpServletResponse(), new MockFilterChain());
 
@@ -55,85 +106,37 @@ class TenantFilterTest {
     @Test
     @DisplayName("Контекст освобождается и когда обработка упала")
     void clearsContextWhenChainThrows() {
+        login("t_000042");
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/parts");
-        request.addHeader("X-Tenant-Id", "42");
-
         FilterChain failing = (req, res) -> {
-            throw new IllegalStateException("сломалось ниже по цепочке");
+            throw new IllegalStateException("сломалось ниже по стеку");
         };
 
-        assertThatThrownBy(() -> filter.doFilterInternal(request, new MockHttpServletResponse(), failing))
+        assertThatThrownBy(() ->
+                filter.doFilterInternal(request, new MockHttpServletResponse(), failing))
                 .isInstanceOf(IllegalStateException.class);
 
+        // Поток вернётся в пул, и оставленный арендатор достанется другому клиенту.
         assertThat(TenantContext.getOrNull()).isNull();
     }
 
     @Test
-    @DisplayName("Нечисловой заголовок — 400, запрос дальше не идёт")
-    void rejectsMalformedHeader() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/parts");
-        request.addHeader("X-Tenant-Id", "не-число");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        AtomicReference<Boolean> reached = new AtomicReference<>(false);
-        FilterChain chain = (req, res) -> reached.set(true);
-
-        filter.doFilterInternal(request, response, chain);
-
-        assertThat(response.getStatus()).isEqualTo(400);
-        assertThat(reached.get()).isFalse();
+    @DisplayName("Вход и проверки живости фильтр не трогает")
+    void skipsAuthAndActuator() {
+        assertThat(filter.shouldNotFilter(
+                new MockHttpServletRequest("POST", "/api/auth/login"))).isTrue();
+        assertThat(filter.shouldNotFilter(
+                new MockHttpServletRequest("GET", "/actuator/health"))).isTrue();
+        assertThat(filter.shouldNotFilter(
+                new MockHttpServletRequest("GET", "/api/parts"))).isFalse();
     }
 
-    @Test
-    @DisplayName("Отрицательный номер отбивается: он даёт имя схемы, не проходящее проверку")
-    void rejectsNegativeTenantId() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/parts");
-        request.addHeader("X-Tenant-Id", "-42");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        filter.doFilterInternal(request, response, new MockFilterChain());
-
-        assertThat(response.getStatus()).isEqualTo(400);
-    }
-
-    @Test
-    @DisplayName("IllegalArgumentException из контроллера не выдаётся за ошибку заголовка")
-    void doesNotDisguiseDownstreamFailureAsBadHeader() {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/parts");
-        request.addHeader("X-Tenant-Id", "42");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        FilterChain failing = (req, res) -> {
-            throw new IllegalArgumentException("цена не может быть отрицательной");
-        };
-
-        // Пока catch накрывал chain.doFilter, это возвращало клиенту 400
-        // «Некорректный X-Tenant-Id» на любую ошибку валидации ниже по стеку.
-        assertThatThrownBy(() -> filter.doFilterInternal(request, response, failing))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("цена");
-
-        assertThat(response.getStatus()).isNotEqualTo(400);
-    }
-
-    @Test
-    @DisplayName("Actuator фильтр не трогает: там нет арендатора и быть не должно")
-    void skipsActuator() {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/actuator/health");
-
-        assertThat(filter.shouldNotFilter(request)).isTrue();
-    }
-
-    @Test
-    @DisplayName("Без заголовка запрос проходит, контекст остаётся пустым")
-    void passesThroughWithoutHeader() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/parts");
-
-        AtomicReference<String> seen = new AtomicReference<>("не вызывалось");
-        FilterChain chain = (req, res) -> seen.set(TenantContext.getOrNull());
-
-        filter.doFilterInternal(request, new MockHttpServletResponse(), chain);
-
-        assertThat(seen.get()).isNull();
+    private void login(String schema) {
+        TenantPrincipal principal = new TenantPrincipal(
+                schema, 42L, 1L, "ivan", "Иван", "STOREKEEPER", true);
+        SecurityContext context = SecurityContextHolder.createEmptyContext();
+        context.setAuthentication(
+                new TenantAuthenticationToken(principal, principal.getAuthorities()));
+        SecurityContextHolder.setContext(context);
     }
 }

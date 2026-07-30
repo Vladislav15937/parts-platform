@@ -31,6 +31,7 @@
     <include file="tenant/012-stock-reservation.sql"    relativeToChangelogFile="true"/>
     <include file="tenant/013-part-status.sql"          relativeToChangelogFile="true"/>
     <include file="tenant/014-part-category-optional.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/015-member-credentials.sql"    relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

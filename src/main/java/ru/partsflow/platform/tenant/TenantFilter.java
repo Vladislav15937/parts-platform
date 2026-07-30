@@ -7,41 +7,39 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import ru.partsflow.platform.security.CurrentUser;
 
 import java.io.IOException;
 
 /**
  * Устанавливает арендатора на время запроса.
  *
- * <p>Заглушка на период до появления аутентификации: арендатор берётся из
- * заголовка {@code X-Tenant-Id}. После внедрения Spring Security источником
- * должен стать токен пользователя, а заголовок надо убрать — иначе любой
- * желающий сможет читать чужой склад, просто подставив другой номер.
+ * <p><b>Источник — сессия, а не запрос.</b> Схема берётся из вошедшего
+ * пользователя: она часть его личности, проверенной при входе паролем в этой
+ * самой схеме. Раньше здесь читался заголовок {@code X-Tenant-Id}, и подставить
+ * чужой номер мог кто угодно — при публикации API в интернет это означало
+ * чтение чужого склада, а первые десять клиентов конкурируют в одном городе.
+ *
+ * <p>Порядок фильтров важен: этот должен идти <b>после</b> цепочки Spring
+ * Security, иначе контекста безопасности ещё нет и арендатор не определится.
+ * Отсюда {@code @Order} ниже приоритета security-цепочки.
  */
 @Component
-@Order(1)
+@Order(TenantFilter.ORDER)
 public class TenantFilter extends OncePerRequestFilter {
 
-    private static final String HEADER = "X-Tenant-Id";
+    /**
+     * Цепочка Spring Security по умолчанию сидит на -100. Идём заметно позже,
+     * чтобы контекст безопасности был уже заполнен.
+     */
+    static final int ORDER = 0;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
-        String header = request.getHeader(HEADER);
         try {
-            if (header != null && !header.isBlank()) {
-                try {
-                    TenantContext.set(TenantContext.schemaFor(Long.parseLong(header.trim())));
-                } catch (IllegalArgumentException e) {
-                    // Ловим только разбор заголовка. Если накрыть тем же catch и
-                    // chain.doFilter, любой IllegalArgumentException из контроллера
-                    // вернётся клиенту как «Некорректный X-Tenant-Id» и уведёт
-                    // отладку не туда.
-                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Некорректный " + HEADER);
-                    return;
-                }
-            }
+            CurrentUser.get().ifPresent(principal -> TenantContext.set(principal.tenantSchema()));
             chain.doFilter(request, response);
         } finally {
             // Освобождать ThreadLocal обязательно: пул потоков переиспользует поток,
@@ -53,6 +51,8 @@ public class TenantFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return path.startsWith("/actuator");
+        // Вход происходит до того, как арендатор известен: провайдер
+        // аутентификации выставляет схему сам, на время запроса к реестру.
+        return path.startsWith("/actuator") || path.startsWith("/api/auth/");
     }
 }
