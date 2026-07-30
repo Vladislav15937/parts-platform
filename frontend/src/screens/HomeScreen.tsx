@@ -82,7 +82,7 @@ export function HomeScreen() {
         (status.kind === 'ready' ? (
           <IntakeScreen
             reference={status.reference}
-            onSend={(payload, title) => void outbox.add('receipt', payload, title)}
+            onSend={(payload, title, photos) => void outbox.add('receipt', payload, title, photos)}
           />
         ) : (
           <p className="note">

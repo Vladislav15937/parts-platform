@@ -1,6 +1,9 @@
 import { useState } from 'react';
+import { PhotoPicker } from '../photos/PhotoPicker';
+import type { ResizedPhoto } from '../photos/resize';
 import { suggestNames } from '../reference/reference';
 import type { Reference } from '../reference/reference';
+import type { PendingPhoto } from '../outbox/outbox';
 
 /**
  * Приёмка детали и набор партии.
@@ -16,7 +19,7 @@ import type { Reference } from '../reference/reference';
  */
 interface Props {
   reference: Reference;
-  onSend(payload: Payload, title: string): void;
+  onSend(payload: Payload, title: string, photos: PendingPhoto[]): void;
 }
 
 interface Item {
@@ -26,6 +29,7 @@ interface Item {
   cellId: number | null;
   sideLr: 'LEFT' | 'RIGHT' | null;
   sideFr: 'FRONT' | 'REAR' | null;
+  photos: ResizedPhoto[];
 }
 
 interface Payload {
@@ -50,6 +54,7 @@ export function IntakeScreen({ reference, onSend }: Props) {
   const [donorId, setDonorId] = useState<number | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState<Item>(emptyItem());
+  const [photos, setPhotos] = useState<ResizedPhoto[]>([]);
 
   const warehouse = reference.warehouses.find((w) => w.id === warehouseId);
   const suggestions = suggestNames(reference.partNames, draft.rawName);
@@ -197,6 +202,8 @@ export function IntakeScreen({ reference, onSend }: Props) {
         </label>
       </div>
 
+      <PhotoPicker photos={photos} onChange={setPhotos} />
+
       <button type="button" disabled={!canAdd} onClick={addItem}>
         Добавить в партию
       </button>
@@ -209,6 +216,9 @@ export function IntakeScreen({ reference, onSend }: Props) {
             {items.map((item) => (
               <li key={item.key}>
                 {item.rawName} · {item.price} ₽
+                {item.photos.length > 0 && (
+                  <span className="muted"> · {item.photos.length} фото</span>
+                )}
                 <button
                   type="button"
                   className="button--ghost"
@@ -228,9 +238,10 @@ export function IntakeScreen({ reference, onSend }: Props) {
   );
 
   function addItem() {
-    setItems([...items, { ...draft, key: crypto.randomUUID() }]);
+    setItems([...items, { ...draft, key: crypto.randomUUID(), photos }]);
     // Склад, поставка и машина остаются: с одного донора снимают подряд.
     setDraft(emptyItem());
+    setPhotos([]);
   }
 
   function send() {
@@ -250,7 +261,19 @@ export function IntakeScreen({ reference, onSend }: Props) {
         quantity: 1,
       })),
     };
-    onSend(payload, `Партия из ${items.length} поз. · ${describeDonor()}`);
+    // Снимки привязываются к позиции по номеру, а не по идентификатору:
+    // деталей ещё нет, их создаст сервер. Порядок позиций он сохраняет.
+    const pending: PendingPhoto[] = items.flatMap((item, itemIndex) =>
+      item.photos.map((photo) => ({
+        itemIndex,
+        blob: photo.blob,
+        contentType: photo.contentType,
+        width: photo.width,
+        height: photo.height,
+      })),
+    );
+
+    onSend(payload, `Партия из ${items.length} поз. · ${describeDonor()}`, pending);
     setItems([]);
   }
 
@@ -264,5 +287,13 @@ export function IntakeScreen({ reference, onSend }: Props) {
 }
 
 function emptyItem(): Item {
-  return { key: '', rawName: '', price: '', cellId: null, sideLr: null, sideFr: null };
+  return {
+    key: '',
+    rawName: '',
+    price: '',
+    cellId: null,
+    sideLr: null,
+    sideFr: null,
+    photos: [],
+  };
 }

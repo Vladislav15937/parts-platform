@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { dropRecord, enqueue, listOutbox, processOutbox, retryRecord } from './outbox';
-import type { OutboxKind, OutboxRecord } from './outbox';
+import type { OutboxKind, OutboxRecord, PendingPhoto } from './outbox';
 
 /**
  * Очередь отправки для экранов.
@@ -32,8 +32,8 @@ export function useOutbox() {
   }, [reload]);
 
   const add = useCallback(
-    async (kind: OutboxKind, payload: unknown, title: string) => {
-      await enqueue(kind, payload, title);
+    async (kind: OutboxKind, payload: unknown, title: string, photos?: PendingPhoto[]) => {
+      await enqueue(kind, payload, title, photos);
       await reload();
       // Пробуем сразу: если связь есть, приёмщик увидит, что работа ушла.
       void flush();

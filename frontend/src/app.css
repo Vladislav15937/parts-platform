@@ -216,3 +216,48 @@ hr {
   border: none;
   border-top: 1px solid var(--line);
 }
+
+/* Лента снимков. Миниатюры крупные: экран смотрят в перчатках и на солнце. */
+.photo-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.photo-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+}
+
+.photo-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #eee;
+}
+
+.photo-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  line-height: 1;
+  border-radius: 50%;
+  border: none;
+  background: #333;
+  color: #fff;
+}
+
+.photo-add {
+  width: 72px;
+  height: 72px;
+  border: 1px dashed #aaa;
+  border-radius: 6px;
+  background: transparent;
+  color: #555;
+}

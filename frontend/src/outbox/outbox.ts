@@ -23,14 +23,30 @@ import { getAll, put, remove, STORE_OUTBOX } from '../storage/db';
  * с того же места.
  */
 
-/** Что делает запись. Пока одна операция; фотографии добавятся следующим шагом. */
-export type OutboxKind = 'receipt';
+/**
+ * Что делает запись.
+ *
+ * <p>Фотография — отдельная операция, а не часть приёмки, потому что зависит
+ * от её результата: подписанную ссылку выдают на существующую деталь,
+ * а идентификатор детали появляется только после отправки партии.
+ */
+export type OutboxKind = 'receipt' | 'photo';
 
 export type OutboxState =
   /** Ждёт отправки. */
   | 'pending'
   /** Отклонено сервером по существу. Нужен человек. */
   | 'failed';
+
+/** Снимок, ждущий отправки вместе со своей позицией партии. */
+export interface PendingPhoto {
+  /** Номер позиции в партии: деталей ещё нет, привязываться больше не к чему. */
+  itemIndex: number;
+  blob: Blob;
+  contentType: string;
+  width: number;
+  height: number;
+}
 
 export interface OutboxRecord {
   id: string;
@@ -46,6 +62,10 @@ export interface OutboxRecord {
   nextAttemptAt: number;
   lastError?: string;
   createdAt: number;
+  /** Снимки партии. Уезжают отдельными записями после её отправки. */
+  photos?: PendingPhoto[];
+  /** Тело снимка для записи вида photo. */
+  blob?: Blob;
 }
 
 /** Итог одного прохода очереди. */
@@ -56,8 +76,14 @@ export interface ProcessResult {
   needsSignIn: boolean;
 }
 
-/** Отправка одной записи. Внедряется, чтобы очередь проверялась без сети. */
-export type Sender = (record: OutboxRecord) => Promise<void>;
+/**
+ * Отправка одной записи.
+ *
+ * <p>Внедряется, чтобы очередь проверялась без сети. Может вернуть записи-
+ * продолжения: отправленная партия порождает по записи на каждый снимок,
+ * потому что раньше идентификаторов деталей не существовало.
+ */
+export type Sender = (record: OutboxRecord) => Promise<OutboxRecord[] | void>;
 
 /**
  * Задержка перед следующей попыткой.
@@ -96,6 +122,7 @@ export async function enqueue(
   kind: OutboxKind,
   payload: unknown,
   title: string,
+  photos?: PendingPhoto[],
 ): Promise<OutboxRecord> {
   const record: OutboxRecord = {
     id: crypto.randomUUID(),
@@ -107,6 +134,7 @@ export async function enqueue(
     attempts: 0,
     nextAttemptAt: 0,
     createdAt: nextCreatedAt(),
+    ...(photos !== undefined && photos.length > 0 ? { photos } : {}),
   };
   await put(STORE_OUTBOX, record);
   return record;
@@ -172,11 +200,20 @@ export async function processOutbox(
         continue;
       }
       try {
-        await send(record);
+        const followUps = await send(record);
         // Удаляем только после ответа: обрыв до него означает повтор,
         // а не потерю.
         await remove(STORE_OUTBOX, record.id);
         result.sent += 1;
+
+        if (followUps !== undefined && followUps.length > 0) {
+          // Снимки отправляются в этом же проходе: связь только что была,
+          // и ждать следующего тика значит терять её окно.
+          for (const followUp of followUps) {
+            await put(STORE_OUTBOX, followUp);
+            records.push(followUp);
+          }
+        }
       } catch (error) {
         const kind = error instanceof ApiError ? error.kind : 'transient';
         const message = error instanceof Error ? error.message : 'Неизвестная ошибка';
@@ -217,14 +254,126 @@ export async function processOutbox(
   return result;
 }
 
+/** Ответ приёмки. Порядок карточек повторяет порядок позиций запроса. */
+interface ReceiptResponse {
+  parts: { id: number }[];
+}
+
+interface UploadResponse {
+  photoId: number;
+  key: string;
+  uploadUrl: string;
+}
+
 /** Настоящая отправка. Идемпотентность обеспечивает requestId в теле. */
-async function sendRecord(record: OutboxRecord): Promise<void> {
+async function sendRecord(record: OutboxRecord): Promise<OutboxRecord[] | void> {
   if (record.kind === 'receipt') {
-    await request('/api/intake/receipts', {
-      method: 'POST',
-      body: { ...(record.payload as object), requestId: record.requestId },
-    });
-    return;
+    return await sendReceipt(record);
+  }
+  if (record.kind === 'photo') {
+    return await sendPhoto(record);
   }
   throw new Error(`Неизвестный вид операции: ${String(record.kind)}`);
+}
+
+/**
+ * Отправляет партию и порождает записи на снимки.
+ *
+ * <p>Снимки привязываются к деталям по номеру позиции: до ответа сервера
+ * идентификаторов деталей не существует, а порядок карточек в ответе повторяет
+ * порядок позиций запроса — это контракт, закреплённый тестом
+ * {@code partsFollowRequestOrder}.
+ */
+async function sendReceipt(record: OutboxRecord): Promise<OutboxRecord[]> {
+  const response = await request<ReceiptResponse>('/api/intake/receipts', {
+    method: 'POST',
+    body: { ...(record.payload as object), requestId: record.requestId },
+  });
+
+  const photos = record.photos ?? [];
+  const followUps: OutboxRecord[] = [];
+
+  for (const photo of photos) {
+    const part = response.parts[photo.itemIndex];
+    if (part === undefined) {
+      // Позиции нет в ответе — привязать снимок не к чему. Тихо потерять его
+      // хуже, чем не создать запись: приёмщик хотя бы не увидит ложной
+      // отправки.
+      continue;
+    }
+    followUps.push({
+      id: crypto.randomUUID(),
+      requestId: crypto.randomUUID(),
+      kind: 'photo',
+      payload: {
+        partId: part.id,
+        contentType: photo.contentType,
+        width: photo.width,
+        height: photo.height,
+      },
+      title: `Фото к позиции ${photo.itemIndex + 1}`,
+      state: 'pending',
+      attempts: 0,
+      nextAttemptAt: 0,
+      createdAt: nextCreatedAt(),
+      blob: photo.blob,
+    });
+  }
+  return followUps;
+}
+
+/**
+ * Отправляет снимок в три шага: ссылка, загрузка, подтверждение.
+ *
+ * <p><b>Ссылка запрашивается здесь, а не при съёмке.</b> Она живёт пятнадцать
+ * минут, а телефон бывает без связи до вечера: полученная заранее, к моменту
+ * отправки она просрочена.
+ *
+ * <p>Загрузка идёт прямо в хранилище, минуя приложение: снимок весит сотни
+ * килобайт, и гонять его через бэкенд значит занимать его потоки на минуты.
+ */
+async function sendPhoto(record: OutboxRecord): Promise<void> {
+  const payload = record.payload as {
+    partId: number;
+    contentType: string;
+    width: number;
+    height: number;
+  };
+  if (record.blob === undefined) {
+    throw new ApiError('permanent', 0, 'Снимок потерян: тело записи пустое');
+  }
+
+  const upload = await request<UploadResponse>(`/api/parts/${payload.partId}/photos/upload-url`, {
+    method: 'POST',
+    body: { contentType: payload.contentType, requestId: record.requestId },
+  });
+
+  const put = await fetch(upload.uploadUrl, {
+    method: 'PUT',
+    // Content-Type входит в подпись: другой здесь — отказ хранилища.
+    headers: { 'Content-Type': payload.contentType },
+    body: record.blob,
+  }).catch(() => null);
+
+  if (put === null || !put.ok) {
+    // Хранилище недоступно или ссылка протухла — временная беда, повторим
+    // с новой ссылкой.
+    throw new ApiError('transient', put?.status ?? 0, 'Снимок не загрузился в хранилище');
+  }
+
+  try {
+    await request(`/api/parts/${payload.partId}/photos/${upload.photoId}/confirm`, {
+      method: 'POST',
+      body: { width: payload.width, height: payload.height },
+    });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409) {
+      // Сервер не нашёл объект в хранилище: загрузка оборвалась незаметно.
+      // Общая классификация считает 409 отказом по существу, но здесь это
+      // ровно наоборот — повод повторить. Тот же requestId вернёт ту же
+      // запись и новую ссылку, дубликата не будет.
+      throw new ApiError('transient', 409, 'Хранилище не приняло снимок, повторим');
+    }
+    throw error;
+  }
 }

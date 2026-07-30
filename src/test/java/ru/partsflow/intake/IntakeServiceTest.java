@@ -172,6 +172,27 @@ class IntakeServiceTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Карточки возвращаются в порядке позиций запроса")
+    void partsFollowRequestOrder() {
+        Supply supply = arrivedSupply("42");
+
+        IntakeService.Receipt receipt = inTenant(() -> intake.receive(
+                warehouse, supply.getId(), null,
+                List.of(item("фара левая", "8500"),
+                        item("бампер передний", "12000"),
+                        item("капот", "9000")),
+                null, uniqueRequestId()));
+
+        // Телефон привязывает снятые фотографии к деталям по номеру позиции —
+        // другого способа у него нет, идентификаторы выдаёт сервер.
+        // Перестановка означает снимки, уехавшие к чужим деталям.
+        List<String> titles = receipt.parts().stream().map(ru.partsflow.inventory.Part::getTitle).toList();
+        assertThat(titles.get(0)).startsWith("фара левая");
+        assertThat(titles.get(1)).startsWith("бампер передний");
+        assertThat(titles.get(2)).startsWith("капот");
+    }
+
+    @Test
     @DisplayName("Контрактная деталь приходит поставкой без донора")
     void contractPartHasSupplyButNoDonor() {
         Supply supply = inTenant(() -> intake.registerSupply(
