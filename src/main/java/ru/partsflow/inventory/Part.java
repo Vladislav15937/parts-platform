@@ -171,8 +171,18 @@ public class Part {
 
     private String barcode;
 
+    /**
+     * Выгружать ли позицию на площадки.
+     *
+     * <p>По умолчанию да: на разборке деталь снимают, чтобы продать, а «не
+     * выгружать» — это отметка руками для битой и отложенной под заказ.
+     *
+     * <p>Значение задано здесь, а не только умолчанием колонки: Hibernate
+     * пишет колонку в каждом INSERT явно, и умолчание базы до неё не доходит.
+     * Именно на этом прайс нового клиента и оставался пустым.
+     */
     @Column(name = "is_published", nullable = false)
-    private boolean published;
+    private boolean published = true;
 
     @Column(name = "created_by")
     private Long createdBy;

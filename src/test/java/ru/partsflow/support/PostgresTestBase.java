@@ -62,6 +62,34 @@ public abstract class PostgresTestBase {
 
         POSTGRES.start();
         migrateCatalog();
+        reserveNumberingRange();
+    }
+
+    /**
+     * Отодвигает нумерацию провижининга от схем с фиксированными именами.
+     *
+     * <p>Провижининг выводит имя схемы из «максимальный номер плюс один»,
+     * а тесты создают {@code t_000042}…{@code t_000069} сами и в реестр
+     * не пишутся. Без этой записи провижининг рано или поздно возьмёт занятое
+     * имя — и справедливо откажется его занимать, потому что молча принять
+     * чужую схему нельзя.
+     *
+     * <p>В базовом классе, а не в одном тесте: база у всех контекстов общая,
+     * и порядок классов не гарантирован.
+     */
+    private static void reserveNumberingRange() {
+        try (Connection connection = DriverManager.getConnection(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+             Statement statement = connection.createStatement()) {
+
+            statement.execute("""
+                    INSERT INTO public.tenant_registry
+                        (tenant_id, schema_name, company_name, code, status)
+                    VALUES (900000, 't_900000', 'Резерв нумерации', 'numbering-guard', 'SUSPENDED')
+                    ON CONFLICT (tenant_id) DO NOTHING""");
+        } catch (Exception e) {
+            throw new IllegalStateException("Не удалось зарезервировать диапазон номеров", e);
+        }
     }
 
     @DynamicPropertySource

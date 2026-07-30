@@ -1,6 +1,5 @@
 package ru.partsflow.platform.tenant;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,23 +41,6 @@ class TenantProvisioningTest extends PostgresTestBase {
 
     @Autowired
     private JdbcTemplate jdbc;
-
-    /**
-     * Отодвигает нумерацию от схем с фиксированными именами.
-     *
-     * <p>Провижининг выводит имя схемы из номера «максимальный плюс один»,
-     * а остальные тесты создают {@code t_000042}…{@code t_000069} сами и
-     * в реестр не пишутся. Без этого сдвига провижининг рано или поздно
-     * возьмёт занятое имя — и справедливо откажется его занимать.
-     */
-    @BeforeEach
-    void reserveHighRange() {
-        jdbc.update("""
-                INSERT INTO public.tenant_registry
-                    (tenant_id, schema_name, company_name, code, status)
-                VALUES (900000, 't_900000', 'Резерв нумерации', 'numbering-guard', 'SUSPENDED')
-                ON CONFLICT (tenant_id) DO NOTHING""");
-    }
 
     @Test
     @DisplayName("Созданный арендатор сразу рабочий: владелец входит и видит справочники")

@@ -105,6 +105,27 @@ public class PartService {
                            BigDecimal qtyAvailable) {
     }
 
+    /**
+     * Включает или выключает выгрузку позиций на площадки.
+     *
+     * <p>Пачкой, а не по одной: после импорта склада исключений набирается
+     * несколько сотен, и по одному их отмечать никто не будет.
+     *
+     * <p>Обратное действие полное: снятый флаг убирает объявление не сразу.
+     * У Дрома оно уезжает с {@code available = false} в ближайшем прайсе —
+     * удалять его нельзя, вместе с ним пропадут накопленные просмотры.
+     *
+     * @return сколько позиций изменилось
+     */
+    @Transactional
+    public int setPublished(List<Long> partIds, boolean published) {
+        if (partIds == null || partIds.isEmpty()) {
+            throw new IllegalArgumentException("Не указано ни одной позиции");
+        }
+        return jdbc.update("UPDATE part SET is_published = ? WHERE id = ANY (?)",
+                published, partIds.toArray(Long[]::new));
+    }
+
     @Transactional(readOnly = true)
     public List<Part> search(String query, int limit) {
         return partRepository.search(query, limit);

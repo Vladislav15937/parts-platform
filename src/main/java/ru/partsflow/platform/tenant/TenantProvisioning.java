@@ -77,6 +77,7 @@ public class TenantProvisioning {
             createSchema(reserved.schema());
             migrate(reserved.schema());
             createOwner(reserved.schema(), request);
+            createFirstWarehouse(reserved.schema(), request.companyName());
             activate(reserved.tenantId());
         } catch (RuntimeException e) {
             log.error("Провижининг арендатора {} ({}) сорвался, запись осталась "
@@ -185,6 +186,21 @@ public class TenantProvisioning {
                         ? "Владелец" : request.ownerName().strip(),
                 request.ownerLogin().strip(),
                 passwordEncoder.encode(request.ownerPassword()));
+    }
+
+    /**
+     * Заводит первый филиал и склад.
+     *
+     * <p>Ячейки не заводим: это физические полки, их коды знает только клиент,
+     * и придуманные за него адреса разойдутся с тем, что написано на стеллаже.
+     */
+    private void createFirstWarehouse(String schema, String companyName) {
+        Long branchId = jdbc.queryForObject(
+                "INSERT INTO %s.branch (name) VALUES (?) RETURNING id".formatted(schema),
+                Long.class, companyName.strip());
+
+        jdbc.update("INSERT INTO %s.warehouse (branch_id, name) VALUES (?, 'Основной')"
+                .formatted(schema), branchId);
     }
 
     private void activate(long tenantId) {
