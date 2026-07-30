@@ -176,3 +176,44 @@ export async function ensureCsrfToken(): Promise<void> {
 export async function refreshCsrfToken(): Promise<void> {
   await request<void>('/api/auth/csrf', {}, true);
 }
+
+/**
+ * Отправка файла.
+ *
+ * <p>Отдельно от {@link request}: у multipart свой {@code Content-Type}
+ * с границей, и задать его руками нельзя — браузер обязан сгенерировать
+ * границу сам. Поэтому заголовок не ставится вовсе, а тело уходит как
+ * {@code FormData}.
+ *
+ * <p>Повтор при 403 здесь тот же, что и у обычного запроса: просроченный
+ * CSRF-токен выглядит отказом по роли, а перезагружать многомегабайтную
+ * выгрузку из-за этого незачем.
+ */
+export async function upload<T>(path: string, form: FormData, retrying = false): Promise<T> {
+  const headers: Record<string, string> = {};
+  const token = csrfToken();
+  if (token) {
+    headers[CSRF_HEADER] = token;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: 'POST',
+      headers,
+      credentials: 'same-origin',
+      body: form,
+    });
+  } catch {
+    throw new ApiError('transient', 0, 'Нет связи с сервером');
+  }
+
+  if (response.status === 403 && !retrying) {
+    await refreshCsrfToken();
+    return await upload<T>(path, form, true);
+  }
+  if (!response.ok) {
+    throw new ApiError(classify(response.status), response.status, await messageOf(response));
+  }
+  return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
+}

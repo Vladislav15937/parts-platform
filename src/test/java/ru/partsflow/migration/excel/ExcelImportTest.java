@@ -148,7 +148,7 @@ class ExcelImportTest extends PostgresTestBase {
                         ColumnMapping.of(List.of(), Map.of(
                                 Field.NAME, 0, Field.PRICE, 1,
                                 Field.QUANTITY, 2, Field.CELL, 3)),
-                        warehouse);
+                        warehouse, java.util.UUID.randomUUID().toString());
             } catch (Exception e) {
                 throw new IllegalStateException(e);
             }
@@ -168,6 +168,53 @@ class ExcelImportTest extends PostgresTestBase {
                 SELECT count(*) FROM stock_movement
                  WHERE movement_type = 'INTAKE' AND to_warehouse_id = ?""",
                 Integer.class, warehouse))).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("Повтор с тем же ключом не заводит второй склад")
+    void repeatWithSameKeyDoesNotDouble() throws Exception {
+        byte[] book = workbook(
+                List.of("Наименование", "Цена", "Кол-во"),
+                List.of(List.of("Фара левая", "9500", "2"),
+                        List.of("Бампер", "14000", "1")));
+        String key = java.util.UUID.randomUUID().toString();
+
+        ExcelWarehouseImporter.Report first = inTenant(() -> load(book, key,
+                Map.of(Field.NAME, 0, Field.PRICE, 1, Field.QUANTITY, 2)));
+
+        // Именно так это и случилось вживую: запись прошла, ответ упал
+        // на сериализации, владелец увидел ошибку и нажал ещё раз.
+        ExcelWarehouseImporter.Report again = inTenant(() -> load(book, key,
+                Map.of(Field.NAME, 0, Field.PRICE, 1, Field.QUANTITY, 2)));
+
+        assertThat(first.imported()).isEqualTo(2);
+        assertThat(again.imported())
+                .as("повтор отдал другой итог — значит импортировал заново")
+                .isEqualTo(2);
+
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT COALESCE(sum(qty), 0) FROM part_stock WHERE warehouse_id = ?",
+                BigDecimal.class, warehouse)))
+                .as("склад удвоился: у повтора не сработал ключ")
+                .isEqualByComparingTo("3");
+    }
+
+    @Test
+    @DisplayName("Другой ключ — другая загрузка")
+    void differentKeyImportsAgain() throws Exception {
+        byte[] book = workbook(
+                List.of("Наименование", "Кол-во"), List.of(List.of("Капот", "1")));
+
+        inTenant(() -> load(book, java.util.UUID.randomUUID().toString(),
+                Map.of(Field.NAME, 0, Field.QUANTITY, 1)));
+        inTenant(() -> load(book, java.util.UUID.randomUUID().toString(),
+                Map.of(Field.NAME, 0, Field.QUANTITY, 1)));
+
+        // Тот же файл, загруженный намеренно дважды, — это две партии.
+        // Отличать их от повтора нечем, кроме ключа, и решает клиент.
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT COALESCE(sum(qty), 0) FROM part_stock WHERE warehouse_id = ?",
+                BigDecimal.class, warehouse))).isEqualByComparingTo("2");
     }
 
     @Test
@@ -243,9 +290,14 @@ class ExcelImportTest extends PostgresTestBase {
     }
 
     private ExcelWarehouseImporter.Report load(byte[] book, Map<Field, Integer> columns) {
+        return load(book, java.util.UUID.randomUUID().toString(), columns);
+    }
+
+    private ExcelWarehouseImporter.Report load(byte[] book, String key,
+                                               Map<Field, Integer> columns) {
         try {
             return importer.importInto(new ByteArrayInputStream(book),
-                    ColumnMapping.of(List.of(), columns), warehouse);
+                    ColumnMapping.of(List.of(), columns), warehouse, key);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {

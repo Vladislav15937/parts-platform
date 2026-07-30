@@ -7,6 +7,7 @@ import { warmUpDecoder } from '../scan/decoder';
 import { useOnline } from '../shell/useOnline';
 import { IntakeScreen } from './IntakeScreen';
 import { DonorScreen } from './DonorScreen';
+import { ImportScreen } from './ImportScreen';
 import { InventoryScreen } from './InventoryScreen';
 import { OutboxScreen } from './OutboxScreen';
 import { SellerScreen } from './SellerScreen';
@@ -24,7 +25,7 @@ import { SellerScreen } from './SellerScreen';
 /** Кто имеет право продавать. Тот же список стоит на сервере в @PreAuthorize. */
 const SELLING_ROLES = ['OWNER', 'MANAGER', 'SELLER'];
 
-type Tab = 'intake' | 'donor' | 'sales' | 'inventory' | 'outbox' | 'reference';
+type Tab = 'intake' | 'donor' | 'sales' | 'inventory' | 'outbox' | 'import' | 'reference';
 
 export function HomeScreen() {
   const { state, signOut } = useSession();
@@ -103,6 +104,13 @@ export function HomeScreen() {
         </button>
         <button
           type="button"
+          className={tab === 'import' ? 'tab tab--active' : 'tab'}
+          onClick={() => setTab('import')}
+        >
+          Загрузка
+        </button>
+        <button
+          type="button"
           className={tab === 'reference' ? 'tab tab--active' : 'tab'}
           onClick={() => setTab('reference')}
         >
@@ -175,6 +183,16 @@ export function HomeScreen() {
           onDrop={(id) => void outbox.drop(id)}
         />
       )}
+
+      {tab === 'import' &&
+        (status.kind === 'ready' ? (
+          <ImportScreen
+            reference={status.reference}
+            canImport={state.me.role === 'OWNER'}
+          />
+        ) : (
+          <p className="note">Справочники не загружены — некуда класть склад.</p>
+        ))}
 
       {tab === 'reference' && <ReferencePanel />}
 

@@ -8,6 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.catalog.PartName;
 import ru.partsflow.catalog.PartNameService;
 import ru.partsflow.migration.excel.ColumnMapping.Field;
+import ru.partsflow.migration.excel.ExcelWarehouseImporter.Report.Skipped;
 
 import java.io.InputStream;
 import java.math.BigDecimal;
@@ -90,25 +91,47 @@ public class ExcelWarehouseImporter {
     /**
      * Заливает склад.
      *
+     * <p><b>Повтор с тем же ключом не заводит второй склад.</b> Загрузка —
+     * самая разрушительная операция в системе: тысячи позиций, и отменить её
+     * можно только восстановлением из бэкапа. Первая же проверка это
+     * и показала: запись прошла, ответ упал на сериализации, владелец увидел
+     * ошибку и нажал ещё раз — склад стал двойным.
+     *
+     * <p>Ключ занимается вставкой в начале той же транзакции. Второй
+     * одновременный запрос упрётся в уникальный индекс, а не в проверку
+     * «нет ли уже такого», которая его пропустила бы. Сорвавшийся импорт
+     * откатит и ключ, поэтому повторить его можно.
+     *
      * @param warehouseId куда класть остаток. Один на всю таблицу: колонка
      *                    склада в чужих выгрузках встречается редко, а
      *                    раскладывать по несуществующим складам нечем
+     * @param requestId   ключ клиента: генерируется при выборе файла
+     *                    и не меняется при повторах
      */
     @Transactional
-    public Report importInto(InputStream in, ColumnMapping mapping, long warehouseId)
-            throws Exception {
+    public Report importInto(InputStream in, ColumnMapping mapping, long warehouseId,
+                             String requestId) throws Exception {
 
         List<Field> missing = mapping.missingRequired();
         if (!missing.isEmpty()) {
             throw new IllegalArgumentException("Не сопоставлены обязательные колонки: " + missing);
         }
 
+        Report already = replayOf(requestId);
+        if (already != null) {
+            log.info("Повтор загрузки по ключу {}: отдаём прежний итог", requestId);
+            return already;
+        }
+        // Занимаем ключ до работы: второй одновременный запрос упрётся сюда.
+        jdbc.update("INSERT INTO import_run (client_request_id, warehouse_id) VALUES (?, ?)",
+                requestId, warehouseId);
+
         Map<String, Long> cells = existingCells(warehouseId);
         // Наименования кэшируются: строк пятьдесят тысяч, а различных названий
         // среди них — тысячи. Ходить в справочник на каждую строку значит
         // потратить импорт на повторные запросы об одном и том же.
         Map<String, PartName> names = new HashMap<>();
-        Report report = new Report();
+        Tally report = new Tally();
         List<Row> batch = new ArrayList<>(BATCH_SIZE);
         boolean[] headerSeen = {false};
 
@@ -133,10 +156,57 @@ public class ExcelWarehouseImporter {
 
         log.info("Импорт из таблицы: заведено {} позиций, пропущено {}",
                 report.imported, report.skipped.size());
-        return report;
+
+        Report result = report.toReport();
+        jdbc.update("UPDATE import_run SET imported = ?, skipped = ?::jsonb "
+                        + "WHERE client_request_id = ?",
+                result.imported(), skippedJson(result.skipped()), requestId);
+        return result;
     }
 
-    private Row parse(ExcelSheetReader.Row row, ColumnMapping mapping, Report report) {
+    /**
+     * Итог прошлой загрузки с тем же ключом.
+     *
+     * <p>Повтор получает ответ, а не отказ: клиент не отличает «получилось
+     * только что» от «получилось в прошлый раз», а увидев ошибку — нажмёт
+     * ещё раз.
+     */
+    private Report replayOf(String requestId) {
+        List<Report> found = jdbc.query(
+                "SELECT imported, skipped FROM import_run WHERE client_request_id = ?",
+                (rs, i) -> new Report(rs.getInt("imported"), parseSkipped(rs.getString("skipped"))),
+                requestId);
+        return found.isEmpty() ? null : found.get(0);
+    }
+
+    /**
+     * Пропущенные строки в JSON.
+     *
+     * <p>Руками, без Jackson: список короткий и плоский, а тянуть сюда
+     * сериализатор ради двух полей значит связать импортёр с представлением.
+     * Кавычки в причине заменяются — причины пишем мы сами, и кавычек
+     * в них нет, но полагаться на это нельзя.
+     */
+    private static String skippedJson(List<Report.Skipped> skipped) {
+        return skipped.stream()
+                .map(s -> "{\"row\":%d,\"reason\":\"%s\"}"
+                        .formatted(s.row(), s.reason().replace('"', '\'')))
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+    }
+
+    private static List<Report.Skipped> parseSkipped(String json) {
+        List<Report.Skipped> skipped = new ArrayList<>();
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("\\{\"row\":(\\d+),\"reason\":\"([^\"]*)\"}")
+                .matcher(json == null ? "" : json);
+        while (matcher.find()) {
+            skipped.add(new Report.Skipped(
+                    Integer.parseInt(matcher.group(1)), matcher.group(2)));
+        }
+        return skipped;
+    }
+
+    private Row parse(ExcelSheetReader.Row row, ColumnMapping mapping, Tally report) {
         String name = mapping.value(row, Field.NAME).strip();
         if (name.isEmpty()) {
             report.skip(row.number(), "пустое наименование");
@@ -161,7 +231,7 @@ public class ExcelWarehouseImporter {
     }
 
     private void flush(List<Row> batch, long warehouseId, Map<String, Long> cells,
-                       Map<String, PartName> names, Report report) {
+                       Map<String, PartName> names, Tally report) {
         for (Row row : batch) {
             Long cellId = row.cell() == null ? null
                     : cells.computeIfAbsent(row.cell().toUpperCase(),
@@ -252,8 +322,22 @@ public class ExcelWarehouseImporter {
                           List<Field> missingRequired, List<List<String>> rows) {
     }
 
-    /** Итог импорта. Пропущенные строки — с номером, как их видно в Excel. */
-    public static final class Report {
+    /**
+     * Итог импорта. Пропущенные строки — с номером, как их видно в Excel.
+     *
+     * <p>Именно record, а не класс с методами в стиле record: обычный класс
+     * без getX() Jackson не сериализует, и ответ уходит пятисоткой
+     * «No acceptable representation». Тесты этого не ловят — они зовут
+     * импортёр напрямую, минуя HTTP.
+     */
+    public record Report(int imported, List<Skipped> skipped) {
+
+        public record Skipped(int row, String reason) {
+        }
+    }
+
+    /** Накопитель итога: во время разбора он меняется, наружу уходит record. */
+    private static final class Tally {
 
         private int imported;
         private final List<Skipped> skipped = new ArrayList<>();
@@ -266,15 +350,8 @@ public class ExcelWarehouseImporter {
             }
         }
 
-        public int imported() {
-            return imported;
-        }
-
-        public List<Skipped> skipped() {
-            return List.copyOf(skipped);
-        }
-
-        public record Skipped(int row, String reason) {
+        Report toReport() {
+            return new Report(imported, List.copyOf(skipped));
         }
     }
 }

@@ -50,6 +50,9 @@ public class ExcelImportController {
     }
 
     /**
+     * @param requestId ключ клиента, генерируется при выборе файла. Повтор
+     *                  с тем же ключом отдаёт прежний итог, а не заводит
+     *                  второй склад
      * @param columns подтверждённое сопоставление: имя поля → номер колонки.
      *                Присылается целиком, а не поправками к догадке: иначе
      *                непонятно, что человек подтвердил, а что не заметил
@@ -58,6 +61,7 @@ public class ExcelImportController {
     @PreAuthorize("hasRole('OWNER')")
     public ExcelWarehouseImporter.Report load(@RequestParam("file") MultipartFile file,
                                               @RequestParam("warehouseId") long warehouseId,
+                                              @RequestParam("requestId") String requestId,
                                               @RequestParam Map<String, String> columns)
             throws Exception {
 
@@ -72,7 +76,7 @@ public class ExcelImportController {
 
         try (var in = file.getInputStream()) {
             return importer.importInto(in, ColumnMapping.of(java.util.List.of(), mapped),
-                    warehouseId);
+                    warehouseId, requestId);
         }
     }
 
