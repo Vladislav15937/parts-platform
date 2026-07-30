@@ -10,19 +10,32 @@
  * чем настройка чужой.
  *
  * <p>Хранилища заводятся все сразу, а не по мере надобности: версия схемы
- * IndexedDB поднимается только в {@code onupgradeneeded}, и добавить хранилище
- * позже значит поднять версию и написать миграцию. Очередь отправки появится
- * на шаге 5, а место под неё готово уже здесь.
+ * IndexedDB поднимается только в {@code onupgradeneeded}. Первая версия завела
+ * справочники и очередь, вторая добавила лист обхода инвентаризации.
+ *
+ * <p>Повышение версии здесь безопасно: хранилища только добавляются, данные
+ * прежних не трогаются, и телефон с накопленной очередью её не теряет.
+ * Удалять или менять ключи существующего хранилища так нельзя — это уже
+ * миграция с переносом данных.
  */
 
 const DB_NAME = 'partsflow';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 /** Справочники: одна запись под фиксированным ключом. */
 export const STORE_REFERENCE = 'reference';
 
-/** Очередь отправки: по записи на операцию. Заполняется на шаге 5. */
+/** Очередь отправки: по записи на операцию. */
 export const STORE_OUTBOX = 'outbox';
+
+/**
+ * Инвентаризация: сессия, лист обхода и внесённые подсчёты.
+ *
+ * <p>Отдельным хранилищем, а не в справочниках: лист обхода склада — это
+ * десятки тысяч строк, и переписывать его при каждом обновлении справочников
+ * незачем.
+ */
+export const STORE_INVENTORY = 'inventory';
 
 let connection: Promise<IDBDatabase> | null = null;
 
@@ -37,6 +50,9 @@ function open(): Promise<IDBDatabase> {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_REFERENCE)) {
         db.createObjectStore(STORE_REFERENCE);
+      }
+      if (!db.objectStoreNames.contains(STORE_INVENTORY)) {
+        db.createObjectStore(STORE_INVENTORY);
       }
       if (!db.objectStoreNames.contains(STORE_OUTBOX)) {
         const outbox = db.createObjectStore(STORE_OUTBOX, { keyPath: 'id' });

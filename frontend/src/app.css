@@ -309,3 +309,24 @@ hr {
 .scan-error {
   color: #ff9a9a;
 }
+
+/* Лист обхода. Строки крупные: пересчитывают стоя, телефон в одной руке. */
+.count-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+}
+
+.count-row {
+  padding: 10px 0;
+  border-bottom: 1px solid #e3e3e3;
+}
+
+/* Пройденное гасим, а не прячем: кладовщик возвращается перепроверить. */
+.count-row--done {
+  opacity: 0.55;
+}
+
+.count-title {
+  margin-bottom: 6px;
+}

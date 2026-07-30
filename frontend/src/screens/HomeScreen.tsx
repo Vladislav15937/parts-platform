@@ -6,6 +6,7 @@ import { useReference } from '../reference/useReference';
 import { warmUpDecoder } from '../scan/decoder';
 import { useOnline } from '../shell/useOnline';
 import { IntakeScreen } from './IntakeScreen';
+import { InventoryScreen } from './InventoryScreen';
 import { OutboxScreen } from './OutboxScreen';
 
 /**
@@ -18,7 +19,7 @@ import { OutboxScreen } from './OutboxScreen';
  * <p>Роутера по-прежнему нет: три вкладки переключаются состоянием. Адреса
  * экранов приёмщику не нужны, ссылками он не делится.
  */
-type Tab = 'intake' | 'outbox' | 'reference';
+type Tab = 'intake' | 'inventory' | 'outbox' | 'reference';
 
 export function HomeScreen() {
   const { state, signOut } = useSession();
@@ -69,6 +70,13 @@ export function HomeScreen() {
         </button>
         <button
           type="button"
+          className={tab === 'inventory' ? 'tab tab--active' : 'tab'}
+          onClick={() => setTab('inventory')}
+        >
+          Пересчёт
+        </button>
+        <button
+          type="button"
           className={tab === 'outbox' ? 'tab tab--active' : 'tab'}
           onClick={() => setTab('outbox')}
         >
@@ -93,6 +101,25 @@ export function HomeScreen() {
           <p className="note">
             Справочники не загружены — приёмка невозможна. Откройте вкладку
             «Справочники».
+          </p>
+        ))}
+
+      {tab === 'inventory' &&
+        (status.kind === 'ready' ? (
+          <InventoryScreen
+            reference={status.reference}
+            onCount={(sessionId, line, qty, countedAt) =>
+              void outbox.add(
+                'count',
+                { sessionId, partId: line.partId, qty, countedAt },
+                `${line.title} · ${qty} шт`,
+              )
+            }
+          />
+        ) : (
+          <p className="note">
+            Справочники не загружены — сканировать ячейки будет нечем. Откройте
+            вкладку «Справочники».
           </p>
         ))}
 

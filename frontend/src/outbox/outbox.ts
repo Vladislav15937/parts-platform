@@ -30,7 +30,7 @@ import { getAll, put, remove, STORE_OUTBOX } from '../storage/db';
  * от её результата: подписанную ссылку выдают на существующую деталь,
  * а идентификатор детали появляется только после отправки партии.
  */
-export type OutboxKind = 'receipt' | 'photo';
+export type OutboxKind = 'receipt' | 'photo' | 'count';
 
 export type OutboxState =
   /** Ждёт отправки. */
@@ -273,7 +273,32 @@ async function sendRecord(record: OutboxRecord): Promise<OutboxRecord[] | void> 
   if (record.kind === 'photo') {
     return await sendPhoto(record);
   }
+  if (record.kind === 'count') {
+    return await sendCount(record);
+  }
   throw new Error(`Неизвестный вид операции: ${String(record.kind)}`);
+}
+
+/**
+ * Отправляет подсчёт полки.
+ *
+ * <p><b>Давность считается здесь, а не при постановке в очередь.</b> Запись
+ * может пролежать в ангаре полдня и уйти с третьей попытки; зафиксированная
+ * заранее давность к этому моменту врёт ровно на время лежания — то есть
+ * на всё, ради чего она нужна. Обе отметки берутся с одних часов, поэтому
+ * их смещение сокращается, а на сервер уходит только разность.
+ */
+async function sendCount(record: OutboxRecord): Promise<void> {
+  const payload = record.payload as { sessionId: number; partId: number; qty: string; countedAt: number };
+
+  await request(`/api/inventory/sessions/${payload.sessionId}/counts`, {
+    method: 'POST',
+    body: {
+      partId: payload.partId,
+      qty: payload.qty,
+      countedAgoMs: Math.max(0, Date.now() - payload.countedAt),
+    },
+  });
 }
 
 /**

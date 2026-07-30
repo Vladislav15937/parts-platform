@@ -7,8 +7,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Инвентаризация: сверка факта с учётом.
@@ -89,6 +91,19 @@ public class InventoryService {
      */
     @Transactional
     public InventorySession count(Long sessionId, Long partId, BigDecimal qty, Long authorId) {
+        return count(sessionId, partId, qty, authorId, null);
+    }
+
+    /**
+     * @param countedAgo сколько времени прошло с подсчёта до этого запроса.
+     *                   Обязателен для телефона: между подсчётом и приходом
+     *                   запроса лежит офлайн-очередь, а расхождение считается
+     *                   на момент подсчёта. Поставить время получения запроса
+     *                   значит записать всё проданное за это время в излишки
+     */
+    @Transactional
+    public InventorySession count(Long sessionId, Long partId, BigDecimal qty,
+                                  Long authorId, Duration countedAgo) {
         InventorySession session = require(sessionId);
         if (!session.isOpen()) {
             throw new IllegalStateException(
@@ -100,8 +115,38 @@ public class InventoryService {
                 .findFirst()
                 .orElseGet(() -> session.addLine(partId, BigDecimal.ZERO, null));
 
-        line.count(qty, authorId, Instant.now());
+        line.count(qty, authorId, countedAt(session, countedAgo));
         return sessions.saveAndFlush(session);
+    }
+
+    /**
+     * Восстанавливает момент подсчёта по давности, а не по времени телефона.
+     *
+     * <p><b>Абсолютное время устройства брать нельзя.</b> У телефонов врёт
+     * не ход часов, а их смещение: сброшенное устройство приходит из ангара
+     * с датой другого года, и присланный момент подсчёта окажется либо до
+     * открытия сессии, либо в будущем. Давность же измеряется на устройстве
+     * надёжно — смещение в ней сокращается, а уход хода за смену незаметен.
+     *
+     * <p>Отсчёт от времени сервера при получении запроса. Хуже точного времени
+     * подсчёта на величину сетевой задержки, то есть на секунды; ошибка часов
+     * измеряется годами.
+     */
+    private Instant countedAt(InventorySession session, Duration countedAgo) {
+        Instant now = Instant.now();
+        if (countedAgo == null || countedAgo.isNegative()) {
+            return now;
+        }
+        Instant counted = now.minus(countedAgo);
+        if (counted.isBefore(session.getStartedAt())) {
+            // Подсчёт якобы раньше открытия сессии: давность посчитана неверно.
+            // Отвергать нельзя — кладовщик уже прошёл полку, и работа пропадёт;
+            // сравним со снимком, как это делалось до появления телефона.
+            log.warn("Подсчёт в сессии {}: давность {} уводит раньше её открытия",
+                    session.getId(), countedAgo);
+            return session.getStartedAt();
+        }
+        return counted;
     }
 
     @Transactional
@@ -109,6 +154,45 @@ public class InventoryService {
         InventorySession session = require(sessionId);
         session.finishCounting();
         return sessions.saveAndFlush(session);
+    }
+
+    /**
+     * Строки сессии с наименованиями — лист обхода для телефона.
+     *
+     * <p>Отдаётся целиком, одним запросом, при открытии сессии. Пересчёт идёт
+     * по полкам в ангаре, где связи нет, поэтому подгружать строки по мере
+     * обхода нельзя: кладовщик упрётся в пустой экран ровно там, где работает.
+     * Пятьдесят тысяч позиций — это несколько мегабайт, и скачиваются они
+     * за столом, где сессию и открывают.
+     *
+     * <p>Читается напрямую, а не через сущности: строки нужны только для показа,
+     * а поднимать ради этого весь агрегат сессии в память незачем.
+     */
+    @Transactional(readOnly = true)
+    public List<Line> lines(Long sessionId) {
+        return jdbc.query("""
+                SELECT l.part_id, l.qty_expected, l.qty_counted, l.cell_id,
+                       p.title, c.code AS cell_code
+                  FROM inventory_line l
+                  JOIN part p ON p.id = l.part_id
+                  LEFT JOIN storage_cell c ON c.id = l.cell_id
+                 WHERE l.session_id = ?
+                 ORDER BY c.code NULLS LAST, p.title""",
+                (rs, i) -> new Line(
+                        rs.getLong("part_id"),
+                        rs.getString("title"),
+                        rs.getObject("cell_id") == null ? null : rs.getLong("cell_id"),
+                        rs.getString("cell_code"),
+                        rs.getBigDecimal("qty_expected"),
+                        rs.getBigDecimal("qty_counted")),
+                sessionId);
+    }
+
+    /** Открытая инвентаризация склада, если она есть. */
+    @Transactional(readOnly = true)
+    public Optional<InventorySession> openSessionOf(Long warehouseId) {
+        return sessions.findByWarehouseIdAndStatus(
+                warehouseId, InventorySession.SessionStatus.OPEN).stream().findFirst();
     }
 
     /**
@@ -221,6 +305,11 @@ public class InventoryService {
      * @param qtyExpectedAtCount учёт на момент подсчёта — с ним и сравнивают
      * @param delta              что уйдёт корректировкой: минус недостача, плюс излишек
      */
+    /** Строка листа обхода. {@code qtyCounted} пусто — до полки не дошли. */
+    public record Line(Long partId, String title, Long cellId, String cellCode,
+                       BigDecimal qtyExpected, BigDecimal qtyCounted) {
+    }
+
     public record Discrepancy(Long partId,
                               BigDecimal qtyExpectedAtOpen,
                               BigDecimal qtyExpectedAtCount,

@@ -12,6 +12,9 @@ import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -172,6 +175,74 @@ class InventoryServiceTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Подсчёт из офлайн-очереди сравнивается с моментом подсчёта, а не получения")
+    void offlineCountUsesItsOwnMoment() {
+        Long partId = partWithStock("Бампер передний", 10);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        backdateSession(sessionId, Duration.ofHours(2));
+
+        // Кладовщик посчитал десять час назад — всё сошлось. Связи в ангаре
+        // не было, запись пролежала в очереди телефона. Полчаса назад
+        // продавец выдал две: склад на разборке работает всегда.
+        saleAt(partId, warehouse, 2, Instant.now().minus(30, ChronoUnit.MINUTES));
+
+        inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("10"), null,
+                Duration.ofHours(1)));
+        inTenant(() -> inventory.finishCounting(sessionId));
+
+        // По времени получения запроса учёт даёт восемь, факт десять — излишек,
+        // и проведение вернуло бы на склад уже проданное.
+        assertThat(inTenant(() -> inventory.discrepancies(sessionId)))
+                .as("продажа за время офлайна стала излишком")
+                .isEmpty();
+        assertThat(inTenant(() -> inventory.apply(sessionId))).isZero();
+        assertThat(qtyOf(partId, warehouse)).isEqualByComparingTo("8");
+    }
+
+    @Test
+    @DisplayName("Продажа после подсчёта не прячет недостачу")
+    void saleAfterOfflineCountStaysShortage() {
+        Long partId = partWithStock("Крыло переднее левое", 10);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        backdateSession(sessionId, Duration.ofHours(2));
+
+        // Час назад кладовщик нашёл на полке восемь вместо десяти — недостача.
+        // Уже после этого продали ещё две.
+        saleAt(partId, warehouse, 2, Instant.now().minus(10, ChronoUnit.MINUTES));
+
+        inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("8"), null,
+                Duration.ofHours(1)));
+        inTenant(() -> inventory.finishCounting(sessionId));
+
+        // Без учёта давности продажа съела бы недостачу: учёт восемь, факт
+        // восемь, всё «сошлось» — и две пропавшие детали остались бы в остатке.
+        assertThat(inTenant(() -> inventory.discrepancies(sessionId)))
+                .singleElement()
+                .extracting(InventoryService.Discrepancy::delta)
+                .isEqualTo(new BigDecimal("-2.000"));
+    }
+
+    @Test
+    @DisplayName("Давность больше возраста сессии подрезается до её открытия")
+    void impossibleAgeIsClamped() {
+        Long partId = partWithStock("Радиатор основной", 10);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+
+        sale(partId, warehouse, 2);
+
+        // Подсчёт якобы за десять лет до открытия сессии: давность посчитана
+        // неверно. Отказ потерял бы уже пройденную полку, поэтому сравниваем
+        // со снимком — как это делалось до появления телефона.
+        inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("10"), null,
+                Duration.ofDays(3650)));
+        inTenant(() -> inventory.finishCounting(sessionId));
+
+        assertThat(inTenant(() -> inventory.discrepancies(sessionId)))
+                .as("подсчёт с невозможной давностью приняли как есть")
+                .isEmpty();
+    }
+
+    @Test
     @DisplayName("Перемещение на другой склад не считается недостачей дважды")
     void moveIsAccountedPerWarehouse() {
         Long partId = partWithStock("Дверь задняя левая", 4);
@@ -312,6 +383,35 @@ class InventoryServiceTest extends PostgresTestBase {
         inTenant(() -> jdbc.update("""
                 INSERT INTO stock_movement (part_id, movement_type, qty_delta, from_warehouse_id)
                 VALUES (?, 'SALE', ?, ?)""", partId, -qty, warehouseId));
+    }
+
+    /**
+     * Открывает сессию задним числом.
+     *
+     * <p>Проверки давности иначе бессмысленны: сессия, открытая мгновение
+     * назад, оставляет всё прошлое за границей окна {@code (открытие, подсчёт]},
+     * и любая реализация даёт одинаково пустой результат. На живом складе
+     * пересчёт идёт часами.
+     */
+    private void backdateSession(Long sessionId, Duration by) {
+        inTenant(() -> jdbc.update(
+                "UPDATE inventory_session SET started_at = started_at - ?::interval WHERE id = ?",
+                by.toMinutes() + " minutes", sessionId));
+    }
+
+    /**
+     * Продажа задним числом.
+     *
+     * <p>Нужна ровно для проверок давности: без явного времени все движения
+     * теста попадают в одну-две миллисекунды, и отличить «до подсчёта»
+     * от «после» становится нечем.
+     */
+    private void saleAt(Long partId, Long warehouseId, int qty, Instant when) {
+        inTenant(() -> jdbc.update("""
+                INSERT INTO stock_movement (part_id, movement_type, qty_delta,
+                                            from_warehouse_id, created_at)
+                VALUES (?, 'SALE', ?, ?, ?)""",
+                partId, -qty, warehouseId, java.sql.Timestamp.from(when)));
     }
 
     private BigDecimal qtyOf(Long partId, Long warehouseId) {
