@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -28,6 +29,10 @@ import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
  */
 @Configuration
 @EnableWebSecurity
+// Проверки роли стоят на методах (@PreAuthorize), а не путями в этом файле:
+// правило «создавать сотрудников может владелец» читается там, где создают
+// сотрудника, а не в настройках, куда никто не смотрит.
+@EnableMethodSecurity
 public class SecurityConfig {
 
     @Bean
@@ -49,6 +54,11 @@ public class SecurityConfig {
                         new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/login", "/api/auth/csrf").permitAll()
+                        // Первого владельца создавать некому: сессии ещё нет.
+                        // Механизм защищён секретом из конфигурации и работает
+                        // только пока у арендатора нет учётных записей —
+                        // см. MemberBootstrap.
+                        .requestMatchers("/api/members/bootstrap").permitAll()
                         // Проверки живости нужны балансировщику до всякого входа.
                         .requestMatchers("/actuator/health/**").permitAll()
                         .anyRequest().authenticated())

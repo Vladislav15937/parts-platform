@@ -29,7 +29,19 @@ public abstract class PostgresTestBase {
             new PostgreSQLContainer<>("postgres:16-alpine")
                     .withDatabaseName("parts")
                     .withUsername("app")
-                    .withPassword("app");
+                    .withPassword("app")
+                    // Каждый @SpringBootTest с иным набором свойств поднимает свой
+                    // кэшированный контекст, а в каждом — пул на 20 соединений
+                    // из application.yml. Десяток контекстов упирается
+                    // в max_connections=100 по умолчанию, и очередной тест падает
+                    // с «too many clients already» — причём не тот, который
+                    // виноват, а тот, что запустился последним.
+                    //
+                    // Поднимаем предел здесь, а не урезаем пул в базовом классе:
+                    // @DynamicPropertySource старше свойств @SpringBootTest,
+                    // и урезание молча отменило бы пул из одного соединения,
+                    // на котором держится TenantIsolationTest.
+                    .withCommand("postgres", "-c", "max_connections=400");
 
     static {
         // Docker Engine 29 отвечает 400 на всё ниже API 1.44 (MinAPIVersion),
