@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.platform.outbox.DomainEvent;
@@ -23,10 +24,13 @@ public class PartService {
 
     private final PartRepository partRepository;
     private final DomainEventPublisher eventPublisher;
+    private final JdbcTemplate jdbc;
 
-    public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher) {
+    public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
+                       JdbcTemplate jdbc) {
         this.partRepository = partRepository;
         this.eventPublisher = eventPublisher;
+        this.jdbc = jdbc;
     }
 
     @Transactional
@@ -45,6 +49,60 @@ public class PartService {
                 "part", part.getId(), "part.price_changed.v1", payloadOf(part)));
 
         return part;
+    }
+
+    /**
+     * Поиск для продавца: что можно продать прямо сейчас.
+     *
+     * <p><b>Отдаёт свободный остаток по складам, а не статус карточки.</b>
+     * Статус говорит про наличие, а продавать нельзя то, что обещано другому
+     * клиенту: из трёх штук одна отложена — продать можно две, и статус
+     * карточки об этом не скажет ничего.
+     *
+     * <p>Позиции без свободного остатка не прячутся. Продавцу нужно ответить
+     * «есть, но отложена до завтра», а не «нет»: клиент перезвонит, а деталь
+     * освободится. Отсортировано так, что свободное — сверху.
+     *
+     * <p>Читается напрямую, а не через сущности: экрану нужны склад, ячейка
+     * и три числа, а поднимать ради этого агрегат детали с фотографиями
+     * и OEM-номерами незачем.
+     */
+    @Transactional(readOnly = true)
+    public List<StockRow> searchAvailable(String query, int limit) {
+        return jdbc.query("""
+                SELECT p.id, p.public_code, p.title, p.price, p.status,
+                       w.id AS warehouse_id, w.name AS warehouse_name,
+                       c.code AS cell_code,
+                       s.qty, s.qty_reserved, s.qty_available
+                  FROM part p
+                  JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
+                  JOIN warehouse w ON w.id = s.warehouse_id
+                  LEFT JOIN storage_cell c ON c.id = s.cell_id
+                 WHERE p.search_vector @@ plainto_tsquery('russian', ?)
+                 ORDER BY (s.qty_available > 0) DESC,
+                          ts_rank(p.search_vector, plainto_tsquery('russian', ?)) DESC,
+                          p.id
+                 LIMIT ?""",
+                (rs, i) -> new StockRow(
+                        rs.getLong("id"),
+                        rs.getString("public_code"),
+                        rs.getString("title"),
+                        rs.getBigDecimal("price"),
+                        rs.getString("status"),
+                        rs.getLong("warehouse_id"),
+                        rs.getString("warehouse_name"),
+                        rs.getString("cell_code"),
+                        rs.getBigDecimal("qty"),
+                        rs.getBigDecimal("qty_reserved"),
+                        rs.getBigDecimal("qty_available")),
+                query, query, limit);
+    }
+
+    /** Строка выдачи продавцу: деталь на конкретном складе. */
+    public record StockRow(Long partId, String publicCode, String title, BigDecimal price,
+                           String status, Long warehouseId, String warehouseName,
+                           String cellCode, BigDecimal qty, BigDecimal qtyReserved,
+                           BigDecimal qtyAvailable) {
     }
 
     @Transactional(readOnly = true)

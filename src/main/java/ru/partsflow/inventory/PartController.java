@@ -29,6 +29,18 @@ public class PartController {
         return partService.search(query, limit).stream().map(PartView::of).toList();
     }
 
+    /**
+     * Поиск для продавца: свободный остаток по складам.
+     *
+     * <p>Отдельно от {@code /search}: тот отдаёт карточку с общим остатком,
+     * а продавать можно только то, что не обещано другому клиенту.
+     */
+    @GetMapping("/stock")
+    public List<PartService.StockRow> stock(@RequestParam("q") String query,
+                                            @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        return partService.searchAvailable(query, limit);
+    }
+
     @GetMapping("/by-oem/{number}")
     public List<PartView> byOem(@PathVariable String number) {
         return partService.findByOem(number).stream().map(PartView::of).toList();

@@ -8,6 +8,7 @@ import { useOnline } from '../shell/useOnline';
 import { IntakeScreen } from './IntakeScreen';
 import { InventoryScreen } from './InventoryScreen';
 import { OutboxScreen } from './OutboxScreen';
+import { SellerScreen } from './SellerScreen';
 
 /**
  * Оболочка после входа.
@@ -19,7 +20,10 @@ import { OutboxScreen } from './OutboxScreen';
  * <p>Роутера по-прежнему нет: три вкладки переключаются состоянием. Адреса
  * экранов приёмщику не нужны, ссылками он не делится.
  */
-type Tab = 'intake' | 'inventory' | 'outbox' | 'reference';
+/** Кто имеет право продавать. Тот же список стоит на сервере в @PreAuthorize. */
+const SELLING_ROLES = ['OWNER', 'MANAGER', 'SELLER'];
+
+type Tab = 'intake' | 'sales' | 'inventory' | 'outbox' | 'reference';
 
 export function HomeScreen() {
   const { state, signOut } = useSession();
@@ -70,6 +74,13 @@ export function HomeScreen() {
         </button>
         <button
           type="button"
+          className={tab === 'sales' ? 'tab tab--active' : 'tab'}
+          onClick={() => setTab('sales')}
+        >
+          Продажа
+        </button>
+        <button
+          type="button"
           className={tab === 'inventory' ? 'tab tab--active' : 'tab'}
           onClick={() => setTab('inventory')}
         >
@@ -101,6 +112,16 @@ export function HomeScreen() {
           <p className="note">
             Справочники не загружены — приёмка невозможна. Откройте вкладку
             «Справочники».
+          </p>
+        ))}
+
+      {tab === 'sales' &&
+        (connected ? (
+          <SellerScreen canSell={SELLING_ROLES.includes(state.me.role)} />
+        ) : (
+          <p className="note note--error">
+            Нет связи. Продажа без неё невозможна: остаток из кэша — это деталь,
+            которой уже нет, а отложенная в телефоне сделка ничего не резервирует.
           </p>
         ))}
 

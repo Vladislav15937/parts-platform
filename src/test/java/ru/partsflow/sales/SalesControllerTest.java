@@ -248,6 +248,79 @@ class SalesControllerTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.length()").value(2));
     }
 
+    @Test
+    @DisplayName("Поиск продавца показывает свободный остаток, а не статус")
+    void stockSearchShowsAvailable() throws Exception {
+        Long partId = partWithStock("Интеркулер турбины", 3);
+        MockHttpSession session = login("seller");
+
+        // Одну из трёх отложили: карточка по-прежнему IN_STOCK, но продать
+        // можно две. Статус про это не скажет ничего.
+        mvc.perform(post("/api/deals").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody(partId, 1)))
+                .andExpect(status().isCreated());
+
+        mvc.perform(get("/api/parts/stock?q=интеркулер").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].partId").value(partId))
+                .andExpect(jsonPath("$[0].status").value("IN_STOCK"))
+                .andExpect(jsonPath("$[0].qtyAvailable").value(2))
+                .andExpect(jsonPath("$[0].qtyReserved").value(1))
+                .andExpect(jsonPath("$[0].warehouseName").value("Ткацкая"));
+    }
+
+    @Test
+    @DisplayName("Полностью отложенная деталь из поиска не исчезает")
+    void fullyReservedIsStillVisible() throws Exception {
+        Long partId = partWithStock("Стартер Приора", 1);
+        MockHttpSession session = login("seller");
+
+        mvc.perform(post("/api/deals").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody(partId, 1)))
+                .andExpect(status().isCreated());
+
+        // Продавцу нужно ответить «есть, но отложена до завтра», а не «нет»:
+        // клиент перезвонит, а деталь освободится.
+        mvc.perform(get("/api/parts/stock?q=стартер").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].qtyAvailable").value(0));
+    }
+
+    @Test
+    @DisplayName("Выданная деталь из поиска пропадает")
+    void issuedPartLeavesSearch() throws Exception {
+        Long partId = partWithStock("Компрессор кондиционера", 1);
+        long dealId = createDeal(partId);
+        MockHttpSession session = login("seller");
+
+        mvc.perform(post("/api/deals/" + dealId + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+
+        // Остатка нет — предлагать её клиенту нельзя ни с какой оговоркой.
+        mvc.perform(get("/api/parts/stock?q=компрессор").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    @DisplayName("Клиент находится по телефону в любом написании")
+    void customerFoundByPhone() throws Exception {
+        MockHttpSession session = login("seller");
+
+        mvc.perform(post("/api/customers").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Пётр\",\"phone\":\"+7 (999) 123-45-67\"}"))
+                .andExpect(status().isCreated());
+
+        // Один и тот же номер записывают и с +7, и с 8, и со скобками.
+        mvc.perform(get("/api/customers?q=9991234567").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].name").value("Пётр"));
+    }
+
     /** Заводит сотрудника, если его ещё нет, и возвращает идентификатор. */
     private Long member(String login, String displayName, String role) {
         var found = jdbc.queryForList(

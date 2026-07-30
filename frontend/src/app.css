@@ -330,3 +330,23 @@ hr {
 .count-title {
   margin-bottom: 6px;
 }
+
+/* Выдача поиска продавцу. Строки просторные: читают, разговаривая по телефону. */
+.stock-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+}
+
+.stock-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e3e3e3;
+}
+
+.note--error {
+  color: #a12a2a;
+}
