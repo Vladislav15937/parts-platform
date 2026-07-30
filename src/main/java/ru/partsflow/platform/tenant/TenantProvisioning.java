@@ -1,11 +1,5 @@
 package ru.partsflow.platform.tenant;
 
-import liquibase.Contexts;
-import liquibase.Liquibase;
-import liquibase.database.Database;
-import liquibase.database.DatabaseFactory;
-import liquibase.database.jvm.JdbcConnection;
-import liquibase.resource.ClassLoaderResourceAccessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -55,16 +49,16 @@ public class TenantProvisioning {
     /** Код компании — часть будущего поддомена, отсюда и ограничения. */
     private static final Pattern CODE = Pattern.compile("[a-z0-9][a-z0-9-]{1,30}");
 
-    private static final String TENANT_CHANGELOG = "db/changelog/db.changelog-tenant.xml";
-
     private final JdbcTemplate jdbc;
     private final DataSource dataSource;
+    private final TenantSchemaMigrator migrator;
     private final PasswordEncoder passwordEncoder;
 
     public TenantProvisioning(JdbcTemplate jdbc, DataSource dataSource,
-                              PasswordEncoder passwordEncoder) {
+                              TenantSchemaMigrator migrator, PasswordEncoder passwordEncoder) {
         this.jdbc = jdbc;
         this.dataSource = dataSource;
+        this.migrator = migrator;
         this.passwordEncoder = passwordEncoder;
     }
 
@@ -75,7 +69,8 @@ public class TenantProvisioning {
         Reserved reserved = reserve(code, request.companyName());
         try {
             createSchema(reserved.schema());
-            migrate(reserved.schema());
+            migrator.migrate(reserved.schema());
+            recordVersion(reserved.tenantId());
             createOwner(reserved.schema(), request);
             createFirstWarehouse(reserved.schema(), request.companyName());
             activate(reserved.tenantId());
@@ -147,27 +142,17 @@ public class TenantProvisioning {
     }
 
     /**
-     * Накатывает миграции арендатора.
+     * Отмечает версию схемы в реестре.
      *
-     * <p>Changelog берётся из артефакта: он попадает туда сборкой из
-     * {@code db/changelog}. {@code DATABASECHANGELOG} — внутри схемы клиента,
-     * это даёт независимое версионирование и параллельные миграции.
+     * <p>Иначе только что заведённый клиент выглядит для оркестратора
+     * отставшим — а отличить «не мигрировали ни разу» от «мигрировали,
+     * но не записали» по пустой колонке нельзя.
      */
-    private void migrate(String schema) {
-        try (Connection connection = dataSource.getConnection()) {
-            Database database = DatabaseFactory.getInstance()
-                    .findCorrectDatabaseImplementation(new JdbcConnection(connection));
-            database.setLiquibaseSchemaName(schema);
-            database.setDefaultSchemaName(schema);
-
-            try (Liquibase liquibase = new Liquibase(TENANT_CHANGELOG,
-                    new ClassLoaderResourceAccessor(), database)) {
-                liquibase.setChangeLogParameter("tenant.schema", schema);
-                liquibase.update(new Contexts());
-            }
-        } catch (Exception e) {
-            throw new IllegalStateException("Миграции арендатора " + schema + " не накатились", e);
-        }
+    private void recordVersion(long tenantId) {
+        jdbc.update("""
+                UPDATE public.tenant_registry
+                   SET schema_version = ?, migrated_at = now()
+                 WHERE tenant_id = ?""", migrator.expectedVersion(), tenantId);
     }
 
     /**

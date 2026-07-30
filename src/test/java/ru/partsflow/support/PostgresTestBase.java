@@ -85,7 +85,11 @@ public abstract class PostgresTestBase {
             statement.execute("""
                     INSERT INTO public.tenant_registry
                         (tenant_id, schema_name, company_name, code, status)
-                    VALUES (900000, 't_900000', 'Резерв нумерации', 'numbering-guard', 'SUSPENDED')
+                    -- ARCHIVED, а не SUSPENDED: схемы за этой записью нет,
+                    -- она только держит номер. Оркестратор миграций обходит
+                    -- ACTIVE и SUSPENDED, и приостановленный «арендатор»
+                    -- без схемы срывал бы ему каждый проход.
+                    VALUES (900000, 't_900000', 'Резерв нумерации', 'numbering-guard', 'ARCHIVED')
                     ON CONFLICT (tenant_id) DO NOTHING""");
         } catch (Exception e) {
             throw new IllegalStateException("Не удалось зарезервировать диапазон номеров", e);
@@ -124,7 +128,13 @@ public abstract class PostgresTestBase {
             // внутри неё, и Liquibase создаёт его до того, как выполнит первый
             // changeset. Тот же порядок, что в db/verify.sh.
             createSchema(schema);
-            runLiquibase("db.changelog-tenant.xml", schema, schema);
+            // Путь тот же, что у приложения: Liquibase считает changeset
+            // по пути файла, и `db.changelog-tenant.xml` из каталога — это
+            // для него другой набор, чем `db/changelog/db.changelog-tenant.xml`
+            // из classpath. Пока пути расходились, оркестратор миграций
+            // не видел истории тестовых арендаторов и накатывал им всё заново
+            // с «relation branch already exists».
+            runLiquibase("db/changelog/db.changelog-tenant.xml", schema, schema);
         }
     }
 
@@ -149,7 +159,12 @@ public abstract class PostgresTestBase {
                 database.setDefaultSchemaName(tenantSchema);
             }
 
-            var accessor = new DirectoryResourceAccessor(new File(changelogDir()));
+            // Каталог читается из каталога проекта, схема арендатора —
+            // из classpath, как в бою. Разница намеренная: путь арендатора
+            // обязан совпасть с тем, которым ходит приложение.
+            var accessor = changelog.startsWith("db/changelog/")
+                    ? new liquibase.resource.ClassLoaderResourceAccessor()
+                    : new DirectoryResourceAccessor(new File(changelogDir()));
             try (Liquibase liquibase = new Liquibase(changelog, accessor, database)) {
                 if (tenantSchema != null) {
                     liquibase.setChangeLogParameter("tenant.schema", tenantSchema);

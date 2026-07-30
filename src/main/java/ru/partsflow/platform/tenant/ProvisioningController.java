@@ -6,7 +6,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -15,11 +17,13 @@ import java.security.MessageDigest;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Создание арендатора.
+ * Управляющий контур ячейки: создание арендатора и накат миграций на схемы
+ * уже заведённых.
  *
- * <p>Операция управляющего контура, а не клиента: она создаёт схему в базе
- * и заводит владельца. Вошедшего пользователя тут нет и быть не может —
- * арендатор ещё не существует, — поэтому запрос авторизуется секретом
+ * <p>Операции над ячейкой, а не клиента: первая создаёт схему в базе и заводит
+ * владельца, вторая проходит по всем схемам сразу. Вошедшего пользователя тут
+ * нет и быть не может — при создании арендатор ещё не существует, а миграции
+ * идут от имени развёртывания, — поэтому запрос авторизуется секретом
  * из конфигурации.
  *
  * <p><b>Пустой секрет выключает эндпоинт.</b> Верное значение по умолчанию:
@@ -36,11 +40,14 @@ import java.nio.charset.StandardCharsets;
 public class ProvisioningController {
 
     private final TenantProvisioning provisioning;
+    private final TenantMigrations migrations;
     private final String token;
 
     public ProvisioningController(TenantProvisioning provisioning,
+                                  TenantMigrations migrations,
                                   @Value("${app.provisioning-token:}") String token) {
         this.provisioning = provisioning;
+        this.migrations = migrations;
         this.token = token;
     }
 
@@ -55,6 +62,34 @@ public class ProvisioningController {
                         request.ownerLogin(), request.ownerPassword(), request.ownerName()));
 
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
+    }
+
+    /**
+     * Накатывает миграции на схемы уже заведённых арендаторов.
+     *
+     * <p>Тем же секретом и тем же контуром, что и создание арендатора: это
+     * операция над всей ячейкой, вошедшего пользователя у неё нет и быть
+     * не может. Шаг развёртывания вызывает её curl'ом — при старте приложения
+     * такое делать нельзя, пятьсот схем это минуты недоступности ячейки.
+     */
+    @PostMapping("/migrations")
+    public TenantMigrations.Report migrate(@Valid @RequestBody TokenRequest request) {
+        requireToken(request.token());
+        return migrations.migrateAll();
+    }
+
+    /**
+     * Кто отстал от поставляемой схемы.
+     *
+     * <p>Проверка перед выкладкой: пустой {@code behind} означает, что код,
+     * рассчитывающий на новую схему, выкладывать можно. Секрет передаётся
+     * параметром, потому что тела у GET нет — запрос ничего не меняет,
+     * а список схем и версий секретом не является.
+     */
+    @GetMapping("/migrations")
+    public TenantMigrations.Status migrationStatus(@RequestParam String token) {
+        requireToken(token);
+        return migrations.status();
     }
 
     /**
@@ -73,6 +108,9 @@ public class ProvisioningController {
                 presented.getBytes(StandardCharsets.UTF_8))) {
             throw new AccessDeniedException("Неверный секрет");
         }
+    }
+
+    public record TokenRequest(@NotBlank String token) {
     }
 
     public record CreateTenantRequest(@NotBlank String token,

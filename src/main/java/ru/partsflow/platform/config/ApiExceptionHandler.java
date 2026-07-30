@@ -96,6 +96,21 @@ public class ApiExceptionHandler {
     }
 
     /**
+     * Не хватает параметра запроса.
+     *
+     * <p>Это ошибка вызывающего, а не наша: без обработчика она попадала
+     * в общий {@code Exception} и уезжала пятисоткой. Шаг развёртывания,
+     * забывший передать секрет, видел «внутреннюю ошибку» и шёл искать
+     * поломку в приложении — вместо «нет параметра token».
+     */
+    @ExceptionHandler(org.springframework.web.bind.MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiError> missingParameter(
+            org.springframework.web.bind.MissingServletRequestParameterException e) {
+        return ResponseEntity.badRequest()
+                .body(new ApiError("Не указан параметр запроса: " + e.getParameterName()));
+    }
+
+    /**
      * Всё остальное — наша поломка.
      *
      * <p>Наружу уходит общая формулировка: текст исключения может содержать

@@ -40,6 +40,9 @@ class TenantProvisioningTest extends PostgresTestBase {
     private TenantProvisioning provisioning;
 
     @Autowired
+    private TenantSchemaMigrator migrator;
+
+    @Autowired
     private JdbcTemplate jdbc;
 
     @Test
@@ -81,6 +84,14 @@ class TenantProvisioningTest extends PostgresTestBase {
         assertThat(jdbc.queryForObject(
                 "SELECT migrated_at IS NOT NULL FROM public.tenant_registry WHERE tenant_id = ?",
                 Boolean.class, created.tenantId())).isTrue();
+
+        // Версию схемы провижининг отмечает сам. Без неё только что заведённый
+        // клиент выглядит для оркестратора отставшим, и шаг развёртывания
+        // откажется выкладывать код из-за самой свежей схемы в ячейке.
+        assertThat(jdbc.queryForObject(
+                "SELECT schema_version FROM public.tenant_registry WHERE tenant_id = ?",
+                String.class, created.tenantId()))
+                .isEqualTo(migrator.expectedVersion());
     }
 
     @Test
