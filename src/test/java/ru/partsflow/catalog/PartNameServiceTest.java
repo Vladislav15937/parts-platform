@@ -44,6 +44,7 @@ class PartNameServiceTest extends PostgresTestBase {
 
     private Long categoryId;
     private Long wheelKindId;
+    private Long testCategoryId;
 
     @BeforeAll
     static void migrate() {
@@ -57,26 +58,24 @@ class PartNameServiceTest extends PostgresTestBase {
             return null;
         });
 
-        // Эталоны живут в общей схеме catalog и общие для всех арендаторов,
-        // поэтому свои строки тест за собой убирает: контейнер один на весь
-        // прогон, и следующий запуск не должен видеть прошлые.
+        // Эталоны берём из поставляемого справочника, а не заводим свои:
+        // раньше он был пуст, и тесту приходилось выдумывать «Запасное колесо»
+        // с синонимом «запаска». Теперь они там есть по-настоящему, и своя
+        // копия дала бы два эталона на один синоним — то есть сопоставление,
+        // зависящее от порядка строк.
+        wheelKindId = jdbc.queryForObject(
+                "SELECT id FROM catalog.part_kind WHERE name = 'Запасное колесо'", Long.class);
+        categoryId = jdbc.queryForObject(
+                "SELECT category_id FROM catalog.part_kind WHERE id = ?", Long.class, wheelKindId);
+
+        // Своя категория нужна только для пополнения каталога по ходу теста.
         jdbc.update("""
                 DELETE FROM catalog.part_kind
                  WHERE category_id IN (SELECT id FROM catalog.part_category WHERE path = 'test_intake')""");
         jdbc.update("DELETE FROM catalog.part_category WHERE path = 'test_intake'");
-
-        categoryId = jdbc.queryForObject("""
+        testCategoryId = jdbc.queryForObject("""
                 INSERT INTO catalog.part_category (name, slug, path)
                 VALUES ('Тест приёмки', 'test-intake', 'test_intake') RETURNING id""", Long.class);
-
-        wheelKindId = jdbc.queryForObject("""
-                INSERT INTO catalog.part_kind (category_id, name, synonyms)
-                VALUES (?, 'Запасное колесо', ARRAY['запаска', 'докатка']) RETURNING id""",
-                Long.class, categoryId);
-
-        jdbc.update("""
-                INSERT INTO catalog.part_kind (category_id, name, synonyms)
-                VALUES (?, 'Фильтр топливный', ARRAY['фильтр топлива'])""", categoryId);
     }
 
     @Test
@@ -114,7 +113,9 @@ class PartNameServiceTest extends PostgresTestBase {
     @Test
     @DisplayName("Незнакомое написание не блокирует приёмку, а ждёт в нераспознанных")
     void unknownNameIsStillUsable() {
-        PartName resolved = inTenant(() -> service.resolve("телевизор", null));
+        // Слово, которого в поставляемом справочнике нет: «телевизор»
+        // теперь узнаётся как рамка радиатора.
+        PartName resolved = inTenant(() -> service.resolve("кронштейн бампера", null));
 
         assertThat(resolved.getId()).as("наименование не создано — приёмка встанет").isNotNull();
         assertThat(resolved.getMatchStatus()).isEqualTo(PartName.MatchStatus.UNMATCHED);
@@ -137,20 +138,26 @@ class PartNameServiceTest extends PostgresTestBase {
     @Test
     @DisplayName("Похожие эталоны предлагаются человеку подсказками")
     void suggestsSimilarKindsToHuman() {
-        PartName resolved = inTenant(() -> service.resolve("фильтр топливный ", null));
+        // Написание, которого нет ни в именах, ни в синонимах, но похожее
+        // на эталон. Само оно не сопоставится — и не должно: именно такая
+        // склейка уводит деталь в чужую категорию.
+        PartName resolved = inTenant(() -> service.resolve("фильтр топливный грубой очистки", null));
+        assertThat(resolved.getMatchStatus()).isEqualTo(PartName.MatchStatus.UNMATCHED);
 
         List<PartKindMatcher.PartKind> suggestions =
                 inTenant(() -> service.suggestionsFor(resolved.getId()));
 
         assertThat(suggestions).isNotEmpty();
         assertThat(suggestions).extracting(PartKindMatcher.PartKind::name)
-                .contains("Фильтр топливный");
+                .contains("Топливный фильтр");
     }
 
     @Test
     @DisplayName("Ручное сопоставление помечается вручную и пересчёту не подлежит")
     void manualMatchSurvivesRematch() {
-        PartName resolved = inTenant(() -> service.resolve("телевизор", null));
+        // Слово, которого в поставляемом справочнике нет: «телевизор»
+        // теперь узнаётся как рамка радиатора.
+        PartName resolved = inTenant(() -> service.resolve("кронштейн бампера", null));
         inTenant(() -> service.matchManually(resolved.getId(), wheelKindId));
 
         assertThat(inTenant(() -> statusOf(resolved.getId()))).isEqualTo("MANUAL");
@@ -163,13 +170,13 @@ class PartNameServiceTest extends PostgresTestBase {
     @Test
     @DisplayName("Пересчёт подхватывает наименования после пополнения каталога")
     void rematchPicksUpNewKinds() {
-        PartName resolved = inTenant(() -> service.resolve("подкрылок", null));
+        PartName resolved = inTenant(() -> service.resolve("шумоизоляция арки", null));
         assertThat(resolved.getMatchStatus()).isEqualTo(PartName.MatchStatus.UNMATCHED);
 
         // Каталог наполняется постепенно: не нашлось в марте — нашлось в мае.
         jdbc.update("""
                 INSERT INTO catalog.part_kind (category_id, name, synonyms)
-                VALUES (?, 'подкрылок', ARRAY[]::text[])""", categoryId);
+                VALUES (?, 'шумоизоляция арки', ARRAY[]::text[])""", testCategoryId);
 
         assertThat(inTenant(() -> service.rematchUnmatched(100))).isEqualTo(1);
         assertThat(inTenant(() -> statusOf(resolved.getId()))).isEqualTo("AUTO");

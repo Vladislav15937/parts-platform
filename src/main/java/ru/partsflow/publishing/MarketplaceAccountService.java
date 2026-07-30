@@ -55,6 +55,32 @@ public class MarketplaceAccountService {
                         rs.getString("last_error")));
     }
 
+    /**
+     * Заводит кабинет площадки.
+     *
+     * <p>Настройки приходят как есть: у каждой площадки они свои, и у Дрома
+     * это {@code packetId} из адреса прайс-листа в кабинете клиента. Проверять
+     * их состав здесь нечем — правильность видна только по ответу площадки,
+     * и он попадает в {@code publication_log}.
+     *
+     * <p>Ключ отдельным запросом, а не здесь: он секрет, и смешивать его
+     * с настройками значит однажды вернуть его в ответе на чтение списка.
+     */
+    @Transactional
+    public Account create(String marketplace, String title, String settingsJson) {
+        if (title == null || title.isBlank()) {
+            throw new IllegalArgumentException("Название кабинета обязательно");
+        }
+        Long id = jdbc.queryForObject("""
+                INSERT INTO marketplace_account (marketplace, title, settings)
+                VALUES (?, ?, COALESCE(?::jsonb, '{}'::jsonb))
+                RETURNING id""",
+                Long.class, marketplace, title.strip(),
+                settingsJson == null || settingsJson.isBlank() ? null : settingsJson);
+
+        return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
+    }
+
     /** Заводит или заменяет секрет кабинета. Возврата наружу у него нет. */
     @Transactional
     public void setCredentials(long accountId, String secret) {

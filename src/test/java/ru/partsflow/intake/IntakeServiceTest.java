@@ -186,10 +186,13 @@ class IntakeServiceTest extends PostgresTestBase {
         // Телефон привязывает снятые фотографии к деталям по номеру позиции —
         // другого способа у него нет, идентификаторы выдаёт сервер.
         // Перестановка означает снимки, уехавшие к чужим деталям.
+        // Регистр не фиксируем: сопоставленное с эталоном приходит с большой
+        // буквы («Капот»), несопоставленное остаётся написанием приёмщика
+        // («фара левая»). Проверяется порядок, а не заголовок.
         List<String> titles = receipt.parts().stream().map(ru.partsflow.inventory.Part::getTitle).toList();
-        assertThat(titles.get(0)).startsWith("фара левая");
-        assertThat(titles.get(1)).startsWith("бампер передний");
-        assertThat(titles.get(2)).startsWith("капот");
+        assertThat(titles.get(0)).containsIgnoringCase("фара");
+        assertThat(titles.get(1)).containsIgnoringCase("бампер");
+        assertThat(titles.get(2)).containsIgnoringCase("капот");
     }
 
     @Test
@@ -217,14 +220,15 @@ class IntakeServiceTest extends PostgresTestBase {
 
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), null,
-                List.of(item("телевизор", "3000")), null, uniqueRequestId()));
+                List.of(item("кронштейн бампера", "3000")), null, uniqueRequestId()));
 
         Long partId = receipt.parts().get(0).getId();
         assertThat(qtyOf(partId)).isEqualByComparingTo("1");
 
         // Наименование заведено и ждёт разбора, а деталь уже продаётся.
         assertThat(inTenant(() -> jdbc.queryForObject("""
-                SELECT match_status FROM part_name WHERE lower(btrim(name)) = 'телевизор'""",
+                SELECT match_status FROM part_name
+                 WHERE lower(btrim(name)) = 'кронштейн бампера'""",
                 String.class))).isEqualTo("UNMATCHED");
     }
 

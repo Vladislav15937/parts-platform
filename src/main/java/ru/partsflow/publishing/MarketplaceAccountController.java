@@ -2,6 +2,7 @@ package ru.partsflow.publishing;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -9,8 +10,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -39,6 +38,23 @@ public class MarketplaceAccountController {
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public List<MarketplaceAccountService.Account> list() {
         return accounts.list();
+    }
+
+    /**
+     * Заводит кабинет площадки.
+     *
+     * <p>До этого его можно было создать только запросом в базу — то есть
+     * подключение выгрузки требовало руки с доступом к Postgres, при том
+     * что ключ и ссылка на прайс давно заводились через API.
+     */
+    @PostMapping
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<MarketplaceAccountService.Account> create(
+            @Valid @RequestBody CreateRequest request) {
+
+        MarketplaceAccountService.Account created = accounts.create(
+                request.marketplace(), request.title(), request.settings());
+        return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
     @PutMapping("/{id}/credentials")
@@ -72,6 +88,16 @@ public class MarketplaceAccountController {
 
     private String feedPathOf(Long id) {
         return accounts.feedPath(id).orElse(null);
+    }
+
+    /**
+     * @param settings настройки площадки в JSON. Для Дрома это
+     *                 {@code {"packetId":"…"}} — номер прайс-листа из адреса
+     *                 в кабинете клиента
+     */
+    public record CreateRequest(@NotBlank String marketplace,
+                                @NotBlank String title,
+                                String settings) {
     }
 
     public record CredentialsRequest(@NotBlank String secret) {

@@ -59,10 +59,11 @@ class PublicationReachTest extends PostgresTestBase {
                 .andReturn().getResponse().getContentAsString();
 
         // Ровно то, что показал прогон пустым: <offers></offers>.
+        // Заголовок собран из эталона справочника, поэтому «Фара», а не «фара».
         assertThat(price)
                 .as("прайс снова пуст — деталь не доезжает до площадки")
                 .contains("<offer>")
-                .contains("фара");
+                .containsIgnoringCase("фара");
     }
 
     @Test
@@ -82,7 +83,7 @@ class PublicationReachTest extends PostgresTestBase {
         // Отметка руками — для битого и отложенного под заказ. Умолчание
         // обратное: деталь на разборке снимают, чтобы продать.
         assertThat(mvc.perform(get(feedOf(session))).andReturn().getResponse().getContentAsString())
-                .doesNotContain("бампер");
+                .doesNotContainIgnoringCase("бампер");
     }
 
     @Test
@@ -102,7 +103,7 @@ class PublicationReachTest extends PostgresTestBase {
         // Объявление без цены площадка не примет, а выставить её забыли —
         // это работа для экрана, а не повод слать пустое предложение.
         assertThat(mvc.perform(get(feedOf(session))).andReturn().getResponse().getContentAsString())
-                .doesNotContain("молдинг");
+                .doesNotContainIgnoringCase("молдинг");
     }
 
     private long receive(MockHttpSession session, long warehouseId, String name) throws Exception {

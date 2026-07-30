@@ -21,5 +21,6 @@
     <include file="catalog/008-tenant-login-code.sql"        relativeToChangelogFile="true"/>
     <include file="catalog/009-vehicle-seed.sql"            relativeToChangelogFile="true"/>
     <include file="catalog/010-provisioning-status.sql"      relativeToChangelogFile="true"/>
+    <include file="catalog/011-part-kinds.sql"              relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
