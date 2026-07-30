@@ -86,6 +86,38 @@ public class VehicleCatalogService {
                 modelId);
     }
 
+    /**
+     * Весь справочник одним куском — для предзагрузки на телефон.
+     *
+     * <p>Одним запросом, а не деревом по мере выбора: марку выбирают в ангаре,
+     * где связи нет. Собирать справочник по клику значит получить неработающий
+     * экран ровно там, где он нужен, а качать по модели — это четыре с половиной
+     * тысячи запросов, из которых по плохой связи оборвётся любой.
+     *
+     * <p>Порядок здесь не задаётся: раскладывает и сортирует клиент. У него это
+     * дешевле, чем гонять {@code ORDER BY} по двенадцати тысячам строк на каждое
+     * обновление кэша.
+     */
+    @Transactional(readOnly = true)
+    public Vehicles all() {
+        List<Brand> brands = jdbc.query(
+                "SELECT id, slug, name, name_ru FROM catalog.brand WHERE is_active",
+                VehicleCatalogService::brand);
+
+        List<ModelRow> models = jdbc.query(
+                "SELECT id, brand_id, slug, name FROM catalog.model WHERE is_active",
+                (rs, i) -> new ModelRow(rs.getLong("id"), rs.getLong("brand_id"),
+                        rs.getString("slug"), rs.getString("name")));
+
+        List<GenerationRow> generations = jdbc.query(
+                "SELECT id, model_id, name, year_from, year_to FROM catalog.generation",
+                (rs, i) -> new GenerationRow(rs.getLong("id"), rs.getLong("model_id"),
+                        rs.getString("name"), (Integer) rs.getObject("year_from"),
+                        (Integer) rs.getObject("year_to")));
+
+        return new Vehicles(brands, models, generations);
+    }
+
     private static Brand brand(ResultSet rs, int row) throws SQLException {
         return new Brand(rs.getLong("id"), rs.getString("slug"),
                 rs.getString("name"), rs.getString("name_ru"));
@@ -103,5 +135,17 @@ public class VehicleCatalogService {
     }
 
     public record Generation(Long id, String name, Integer yearFrom, Integer yearTo) {
+    }
+
+    /** Модель со ссылкой на марку: в пакетной выдаче дерево собирает клиент. */
+    public record ModelRow(Long id, Long brandId, String slug, String name) {
+    }
+
+    public record GenerationRow(Long id, Long modelId, String name,
+                                Integer yearFrom, Integer yearTo) {
+    }
+
+    public record Vehicles(List<Brand> brands, List<ModelRow> models,
+                           List<GenerationRow> generations) {
     }
 }

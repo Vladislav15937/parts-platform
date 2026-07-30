@@ -29,6 +29,18 @@ public class VehicleCatalogController {
         this.catalog = catalog;
     }
 
+    /**
+     * Весь справочник одним запросом — для предзагрузки на телефон.
+     *
+     * <p>То же правило, что у справочников приёмки: пять запросов по плохой
+     * связи — это пять шансов оборваться и пять частично заполненных кэшей,
+     * из которых непонятно, можно ли работать.
+     */
+    @GetMapping("/vehicles")
+    public VehicleCatalogService.Vehicles vehicles() {
+        return catalog.all();
+    }
+
     @GetMapping("/brands")
     public List<VehicleCatalogService.Brand> brands(
             @RequestParam(value = "q", required = false) String query,

@@ -10,6 +10,7 @@ import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.util.List;
+import java.util.Set;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -129,6 +130,25 @@ class VehicleCatalogTest extends PostgresTestBase {
         // приёмщик видел бы четыре одинаковых «1982—1983» и не различил бы их.
         assertThat(generations).extracting(VehicleCatalogService.Generation::name)
                 .doesNotHaveDuplicates();
+    }
+
+    @Test
+    @DisplayName("Весь справочник отдаётся одним запросом и связан по ссылкам")
+    void wholeCatalogComesAtOnce() {
+        VehicleCatalogService.Vehicles all = inTenant(() -> catalog.all());
+
+        assertThat(all.brands()).hasSizeGreaterThan(300);
+        assertThat(all.models()).hasSizeGreaterThan(4000);
+        assertThat(all.generations()).hasSizeGreaterThan(10000);
+
+        // Дерево собирает клиент, поэтому ссылки обязаны быть заполнены:
+        // без brandId модели не разложить по маркам, и экран покажет пусто.
+        assertThat(all.models()).allSatisfy(m -> assertThat(m.brandId()).isNotNull());
+        assertThat(all.generations()).allSatisfy(g -> assertThat(g.modelId()).isNotNull());
+
+        Set<Long> brandIds = all.brands().stream()
+                .map(VehicleCatalogService.Brand::id).collect(java.util.stream.Collectors.toSet());
+        assertThat(all.models()).allSatisfy(m -> assertThat(brandIds).contains(m.brandId()));
     }
 
     private Long brandId(String slug) {

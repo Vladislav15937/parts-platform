@@ -6,6 +6,7 @@ import { useReference } from '../reference/useReference';
 import { warmUpDecoder } from '../scan/decoder';
 import { useOnline } from '../shell/useOnline';
 import { IntakeScreen } from './IntakeScreen';
+import { DonorScreen } from './DonorScreen';
 import { InventoryScreen } from './InventoryScreen';
 import { OutboxScreen } from './OutboxScreen';
 import { SellerScreen } from './SellerScreen';
@@ -23,12 +24,12 @@ import { SellerScreen } from './SellerScreen';
 /** Кто имеет право продавать. Тот же список стоит на сервере в @PreAuthorize. */
 const SELLING_ROLES = ['OWNER', 'MANAGER', 'SELLER'];
 
-type Tab = 'intake' | 'sales' | 'inventory' | 'outbox' | 'reference';
+type Tab = 'intake' | 'donor' | 'sales' | 'inventory' | 'outbox' | 'reference';
 
 export function HomeScreen() {
   const { state, signOut } = useSession();
   const online = useOnline();
-  const { status } = useReference();
+  const { status, refresh: refreshReference } = useReference();
   const outbox = useOutbox();
   const [tab, setTab] = useState<Tab>('intake');
 
@@ -74,6 +75,13 @@ export function HomeScreen() {
         </button>
         <button
           type="button"
+          className={tab === 'donor' ? 'tab tab--active' : 'tab'}
+          onClick={() => setTab('donor')}
+        >
+          Машина
+        </button>
+        <button
+          type="button"
           className={tab === 'sales' ? 'tab tab--active' : 'tab'}
           onClick={() => setTab('sales')}
         >
@@ -113,6 +121,21 @@ export function HomeScreen() {
             Справочники не загружены — приёмка невозможна. Откройте вкладку
             «Справочники».
           </p>
+        ))}
+
+      {tab === 'donor' &&
+        (status.kind === 'ready' ? (
+          <DonorScreen
+            reference={status.reference}
+            online={connected}
+            onCreated={() => {
+              // Справочники приёмки перечитаются сами — новая машина должна
+              // появиться в списке на экране деталей.
+              void refreshReference();
+            }}
+          />
+        ) : (
+          <p className="note">Справочники не загружены. Откройте вкладку «Справочники».</p>
         ))}
 
       {tab === 'sales' &&
