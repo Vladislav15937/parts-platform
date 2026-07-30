@@ -1,4 +1,6 @@
-import { defineConfig } from 'vite';
+// defineConfig берётся из vitest/config, а не из vite: только он знает
+// про секцию test. Тройная ссылка на типы в vitest 4 этого не даёт.
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 /**
@@ -26,5 +28,12 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
+  },
+  test: {
+    // jsdom, а не node: клиент API читает document.cookie, а хранилище —
+    // браузерные API. В node это пришлось бы подменять руками.
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
   },
 });

@@ -130,8 +130,18 @@ export async function request<T>(
    * дешевле потерянной работы приёмщика.
    */
   if (response.status === 403 && method !== 'GET' && !retrying) {
-    await refreshCsrfToken();
-    return request<T>(path, options, true);
+    try {
+      await refreshCsrfToken();
+      return await request<T>(path, options, true);
+    } catch (error) {
+      // Если не удалось даже обновить токен, наружу должна уйти исходная
+      // ошибка запроса, а не ошибка обновления: вызывающему важно, что
+      // отклонили его операцию, а не что не пришёл токен.
+      if (error instanceof ApiError && error.status === 403) {
+        throw new ApiError('permanent', 403, await messageOf(response));
+      }
+      throw error;
+    }
   }
 
   if (!response.ok) {
