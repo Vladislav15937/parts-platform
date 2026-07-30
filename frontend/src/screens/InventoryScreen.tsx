@@ -44,6 +44,18 @@ export function InventoryScreen({ reference, onCount }: Props) {
     setSession(local.session);
     setLines(local.lines);
     setCounts(local.counts);
+
+    // Открываемся на первой ячейке маршрута, а не на «без ячейки».
+    // Позиции без адреса — редкий хвост списка, и начинать обход с него
+    // значит показать кладовщику пустой экран там, где склад полон.
+    setCellId((current) => {
+      if (current !== null) {
+        return current;
+      }
+      const route = cellsOf(local.lines);
+      const first = route.find((cell) => cell.id !== null) ?? route[0];
+      return first?.id ?? null;
+    });
   }, []);
 
   useEffect(() => {

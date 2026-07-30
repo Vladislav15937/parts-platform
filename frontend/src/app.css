@@ -342,9 +342,35 @@ hr {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
   padding: 10px 0;
   border-bottom: 1px solid #e3e3e3;
+}
+
+/* Наименование забирает остаток ширины и переносится само. Без min-width: 0
+   flex не даёт ему сжаться, и вместо переноса заголовка ломается правая
+   колонка: цена и кнопка встают в две строки каждая. */
+.stock-info {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Цена и кнопка — единый блок, который не сжимается и не переносится:
+   продавец читает их, разговаривая по телефону. */
+.stock-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.stock-price {
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-action button {
+  white-space: nowrap;
 }
 
 .note--error {

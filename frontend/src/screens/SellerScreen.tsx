@@ -83,14 +83,14 @@ export function SellerScreen({ canSell }: Props) {
           <ul className="stock-list">
             {lines.map((line, index) => (
               <li key={index} className="stock-row">
-                <div>
+                <div className="stock-info">
                   {line.row.title}
                   <span className="muted">
                     {' '}
                     · {line.quantity} шт · {line.row.warehouseName}
                   </span>
                 </div>
-                <div className="row">
+                <div className="stock-action">
                   <input
                     type="number"
                     inputMode="numeric"
@@ -200,7 +200,7 @@ function StockItem({
 
   return (
     <li className="stock-row">
-      <div>
+      <div className="stock-info">
         <strong>{row.title}</strong>
         {row.publicCode !== null && <span className="muted"> · {row.publicCode}</span>}
         <div className="muted">
@@ -209,8 +209,10 @@ function StockItem({
           {reserved > 0 && ` · отложено ${row.qtyReserved}`}
         </div>
       </div>
-      <div className="row">
-        <strong>{row.price === null ? '—' : `${Number(row.price).toLocaleString('ru-RU')} ₽`}</strong>
+      <div className="stock-action">
+        <strong className="stock-price">
+          {row.price === null ? '—' : `${Number(row.price).toLocaleString('ru-RU')} ₽`}
+        </strong>
         <button type="button" disabled={room < 1 || !canSell} onClick={onAdd}>
           {room < 1 ? 'нет свободных' : 'в сделку'}
         </button>
