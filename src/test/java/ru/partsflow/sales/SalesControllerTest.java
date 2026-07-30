@@ -321,6 +321,149 @@ class SalesControllerTest extends PostgresTestBase {
                 .andExpect(jsonPath("$[0].name").value("Пётр"));
     }
 
+    @Test
+    @DisplayName("Позиция сделки несёт наименование, а не только номер детали")
+    void itemsCarryTitle() throws Exception {
+        Long partId = partWithStock("Бачок омывателя", 1);
+        long dealId = createDeal(partId);
+
+        // Без наименования экран возврата показывает «деталь 4712», и продавец
+        // отмечает строки наугад.
+        mvc.perform(get("/api/deals/" + dealId).session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].title").value("Бачок омывателя"));
+    }
+
+    @Test
+    @DisplayName("Возврат ставит деталь обратно на склад")
+    void returnRestocksPart() throws Exception {
+        Long partId = partWithStock("Генератор", 1);
+        long dealId = createDeal(partId);
+        MockHttpSession session = login("seller");
+
+        long itemId = firstItemId(dealId, session);
+        mvc.perform(post("/api/deals/" + dealId + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+
+        // Склад возврата не обязан совпадать со складом выдачи — здесь он тот же,
+        // но приходит из тела запроса, а не подставляется из сделки.
+        mvc.perform(post("/api/deals/" + dealId + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"не подошла",
+                                 "items":[{"dealItemId":%d,"restocked":true}]}"""
+                                .formatted(warehouse, itemId)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.number").isNumber())
+                .andExpect(jsonPath("$.amount").value(5000));
+
+        assertThat(qtyOf(partId))
+                .as("возвращённая деталь не встала на склад — её нельзя продать снова")
+                .isEqualByComparingTo("1");
+
+        mvc.perform(get("/api/deals/" + dealId + "/returns").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].reason").value("не подошла"));
+    }
+
+    @Test
+    @DisplayName("Брак: деньги возвращают, а на склад деталь не ставят")
+    void brokenReturnDoesNotRestock() throws Exception {
+        Long partId = partWithStock("Турбина", 1);
+        long dealId = createDeal(partId);
+        MockHttpSession session = login("seller");
+
+        long itemId = firstItemId(dealId, session);
+        mvc.perform(post("/api/deals/" + dealId + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+
+        mvc.perform(post("/api/deals/" + dealId + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"брак",
+                                 "items":[{"dealItemId":%d,"restocked":false}]}"""
+                                .formatted(warehouse, itemId)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.amount").value(5000));
+
+        // Сломанное продать второй раз нельзя: деньги клиенту отдали,
+        // а в остатке этой детали быть не должно.
+        assertThat(qtyOf(partId))
+                .as("бракованная деталь встала в остаток — её предложат следующему клиенту")
+                .isEqualByComparingTo("0");
+    }
+
+    @Test
+    @DisplayName("Перенос уводит позицию в новую сделку, не снимая резерв")
+    void transferKeepsReservation() throws Exception {
+        Long staying = partWithStock("Коллектор впускной", 1);
+        Long moving = partWithStock("Коллектор выпускной", 1);
+        MockHttpSession session = login("seller");
+
+        var created = mvc.perform(post("/api/deals").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customerId":%d,"items":[
+                                   {"partId":%d,"quantity":1,"warehouseId":%d},
+                                   {"partId":%d,"quantity":1,"warehouseId":%d}]}"""
+                                .formatted(customer, staying, warehouse, moving, warehouse)))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        long dealId = idOf(created);
+        long movingItemId = itemIdOfPart(dealId, moving, session);
+
+        mvc.perform(post("/api/deals/" + dealId + "/transfer").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"itemIds\":[%d]}".formatted(movingItemId)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(org.hamcrest.Matchers.not((int) dealId)))
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].partId").value(moving))
+                // Новая сделка не черновик: товар на складе остался отложенным,
+                // и документ, который этого не говорит, продавец не выдаст —
+                // кнопка выдачи смотрит на статус.
+                .andExpect(jsonPath("$.status").value("RESERVED"))
+                .andExpect(jsonPath("$.reservedUntil").isNotEmpty());
+
+        // Товар сменил документ, а не освободился: он по-прежнему обещан
+        // тому же клиенту, и второму продавцу его отдавать нельзя.
+        assertThat(reservedOf(moving))
+                .as("резерв слетел при переносе — деталь уйдёт другому клиенту")
+                .isEqualByComparingTo("1");
+        assertThat(reservedOf(staying)).isEqualByComparingTo("1");
+
+        mvc.perform(get("/api/deals/" + dealId).session(session))
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].partId").value(staying));
+    }
+
+    private long firstItemId(long dealId, MockHttpSession session) throws Exception {
+        var result = mvc.perform(get("/api/deals/" + dealId).session(session))
+                .andExpect(status().isOk())
+                .andReturn();
+        return Long.parseLong(result.getResponse().getContentAsString()
+                .replaceAll("^.*\"items\":\\[\\{\"id\":(\\d+).*$", "$1"));
+    }
+
+    private long itemIdOfPart(long dealId, Long partId, MockHttpSession session) throws Exception {
+        var result = mvc.perform(get("/api/deals/" + dealId).session(session))
+                .andExpect(status().isOk())
+                .andReturn();
+        var matcher = java.util.regex.Pattern
+                .compile("\\{\"id\":(\\d+),\"partId\":" + partId + ",")
+                .matcher(result.getResponse().getContentAsString());
+        assertThat(matcher.find()).as("позиция с деталью %s не найдена", partId).isTrue();
+        return Long.parseLong(matcher.group(1));
+    }
+
+    private static long idOf(org.springframework.test.web.servlet.MvcResult result)
+            throws Exception {
+        return Long.parseLong(result.getResponse().getContentAsString()
+                .replaceAll("^\\{\"id\":(\\d+).*$", "$1"));
+    }
+
     /** Заводит сотрудника, если его ещё нет, и возвращает идентификатор. */
     private Long member(String login, String displayName, String role) {
         var found = jdbc.queryForList(

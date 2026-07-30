@@ -8,7 +8,10 @@ import ru.partsflow.platform.outbox.DomainEventPublisher;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Работа с уже заведёнными карточками: цена и поиск.
@@ -134,6 +137,26 @@ public class PartService {
     @Transactional(readOnly = true)
     public List<Part> findByOem(String number) {
         return partRepository.findByOemNumber(number);
+    }
+
+    /**
+     * Наименования по идентификаторам.
+     *
+     * <p>Нужно продажам: позиция сделки хранит только {@code part_id}, а продавец
+     * при возврате выбирает строку глазами и должен видеть «фара левая»,
+     * а не «деталь 4712». Своим репозиторием запчастей продажи не ходят —
+     * модули общаются через интерфейсы.
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, String> titlesOf(Collection<Long> partIds) {
+        if (partIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, String> titles = new HashMap<>();
+        for (Part part : partRepository.findAllById(partIds)) {
+            titles.put(part.getId(), part.getTitle());
+        }
+        return titles;
     }
 
     /**

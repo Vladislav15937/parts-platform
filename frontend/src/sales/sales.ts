@@ -44,6 +44,8 @@ export interface Customer {
 export interface DealItem {
   id: number;
   partId: number;
+  /** Пусто, если карточку удалили: строка сделки переживает запчасть. */
+  title: string | null;
   quantity: string;
   price: string;
   discount: string | null;
@@ -125,6 +127,99 @@ export function cancelDeal(dealId: number, reason: string): Promise<Deal> {
 
 export function payDeal(dealId: number, amount: string): Promise<unknown> {
   return request(`/api/deals/${dealId}/payments`, { method: 'POST', body: { amount } });
+}
+
+/** Позиция, которую возвращают. */
+export interface ReturnLine {
+  dealItemId: number;
+  /**
+   * Сколько возвращают. Пусто — вся строка целиком: у б/у детали количество
+   * почти всегда единица, и заставлять продавца писать «1» незачем.
+   */
+  quantity?: string;
+  /**
+   * Снимают для брака: деньги клиенту вернуть, а в остаток не ставить.
+   * Продать сломанное второй раз нельзя, и висеть на складе оно не должно.
+   */
+  restocked: boolean;
+}
+
+export interface ReturnDoc {
+  id: number;
+  number: number | null;
+  dealId: number;
+  warehouseId: number;
+  status: string;
+  amount: string;
+  reason: string | null;
+  createdAt: string;
+}
+
+/**
+ * Возврат выданного товара.
+ *
+ * <p>Отдельный документ со своим номером, а не отмена сделки: деталь у клиента,
+ * деньги в кассе, и оба факта надо отразить. Выданную сделку не отменяют
+ * вовсе — отменять уже нечего.
+ *
+ * <p>Возврат проводится сразу и обратно не отыгрывается: деталь принята
+ * на склад, деньги отданы. Поэтому экран спрашивает подтверждение, а кнопки
+ * «отменить возврат» у него нет — сервер такую отмену отклонит.
+ *
+ * @param warehouseId склад возврата. Не обязан совпадать со складом выдачи:
+ *                    клиент приезжает туда, куда ему удобно, а деталь встаёт
+ *                    на ту полку, где он её оставил
+ */
+export function registerReturn(
+  dealId: number,
+  warehouseId: number,
+  items: ReturnLine[],
+  reason: string,
+): Promise<ReturnDoc> {
+  return request<ReturnDoc>(`/api/deals/${dealId}/returns`, {
+    method: 'POST',
+    body: { warehouseId, items, reason, refundToAccount: false },
+  });
+}
+
+export function returnsOf(dealId: number): Promise<ReturnDoc[]> {
+  return request<ReturnDoc[]>(`/api/deals/${dealId}/returns`);
+}
+
+/**
+ * Переносит позиции в новую сделку.
+ *
+ * <p>Клиент забирает половину сейчас, остальное оставляет на потом. Резерв
+ * при этом не снимается — товар просто меняет документ, и вторая половина
+ * остаётся обещанной тому же клиенту.
+ */
+export function transferItems(dealId: number, itemIds: number[]): Promise<Deal> {
+  return request<Deal>(`/api/deals/${dealId}/transfer`, {
+    method: 'POST',
+    body: { itemIds },
+  });
+}
+
+/**
+ * Что можно перенести: только отложенное.
+ *
+ * <p>Выданное переносить нечего — оно у клиента; возвращённое и снятое тем
+ * более. Иначе продавец отметит уже возвращённую строку, а откажет ему сервер.
+ */
+export function transferable(deal: Deal): DealItem[] {
+  return deal.items.filter((item) => item.status === 'RESERVED');
+}
+
+/**
+ * Что можно вернуть: только выданное.
+ *
+ * <p><b>Возвращённое сюда не попадает.</b> При частичном возврате сделка
+ * остаётся выданной, и в ней лежат строки обоих видов; предложи мы вернуть
+ * возвращённое — деталь встала бы на склад дважды, а деньги ушли бы клиенту
+ * второй раз.
+ */
+export function returnable(deal: Deal): DealItem[] {
+  return deal.items.filter((item) => item.status === 'ISSUED');
 }
 
 export function historyOf(dealId: number): Promise<HistoryEntry[]> {

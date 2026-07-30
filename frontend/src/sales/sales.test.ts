@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { basketTotal, roomFor } from './sales';
-import type { BasketLine, StockRow } from './sales';
+import { basketTotal, returnable, roomFor, transferable } from './sales';
+import type { BasketLine, Deal, StockRow } from './sales';
 
 /**
  * Расчёты экрана продавца.
@@ -82,5 +82,57 @@ describe('итог корзины', () => {
 
   it('пустая корзина стоит ноль', () => {
     expect(basketTotal([])).toBe(0);
+  });
+});
+
+/**
+ * Что продавцу дают отметить в сделке.
+ *
+ * <p>Ошибка здесь тихая: лишняя строка в списке — это возврат уже
+ * возвращённого, то есть деталь на складе дважды и деньги клиенту дважды.
+ * Отказ придёт от сервера, но объяснять его будет продавец клиенту.
+ */
+function dealWith(...statuses: string[]): Deal {
+  return {
+    id: 1,
+    number: 7,
+    customerId: 2,
+    managerId: 3,
+    status: 'ISSUED',
+    reservedUntil: null,
+    totalAmount: '5000',
+    paidAmount: '0',
+    debt: '5000',
+    createdAt: '2026-07-30T10:00:00Z',
+    issuedAt: null,
+    items: statuses.map((status, at) => ({
+      id: at + 1,
+      partId: 100 + at,
+      title: `деталь ${at}`,
+      quantity: '1',
+      price: '5000',
+      discount: null,
+      warehouseId: 10,
+      status,
+    })),
+  };
+}
+
+describe('строки сделки, доступные к действию', () => {
+  it('переносят только отложенное', () => {
+    expect(transferable(dealWith('RESERVED', 'ISSUED', 'CANCELLED')).map((i) => i.id))
+      .toEqual([1]);
+  });
+
+  it('возвращают только выданное', () => {
+    expect(returnable(dealWith('RESERVED', 'ISSUED', 'CANCELLED')).map((i) => i.id))
+      .toEqual([2]);
+  });
+
+  it('уже возвращённое второй раз не предлагается', () => {
+    // Частичный возврат оставляет сделку выданной, и в ней лежат строки
+    // обоих видов. Попади возвращённая в список — деталь встанет на склад
+    // дважды, а деньги уйдут клиенту дважды.
+    expect(returnable(dealWith('ISSUED', 'RETURNED')).map((i) => i.id)).toEqual([1]);
   });
 });

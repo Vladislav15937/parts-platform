@@ -429,3 +429,34 @@ hr {
 .preview .mapped {
   background: #eef4ff;
 }
+
+/* Флажок и подпись — одна цель нажатия: продавец отмечает позиции пальцем,
+   а не мышью, и попасть в квадратик 13 на 13 точек он не обязан. Обычный
+   label в этом проекте — колонка, здесь нужна строка. */
+.pick {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.pick input[type='checkbox'] {
+  /* Общий input тянется во всю ширину — флажку это ни к чему. */
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  flex-shrink: 0;
+  margin: 0;
+}
+
+/* Поиск чужой сделки отделён от продажи: это другой разговор с клиентом. */
+.finder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}

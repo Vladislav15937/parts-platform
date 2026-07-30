@@ -180,6 +180,21 @@ public class Deal {
         this.reservedUntil = until;
     }
 
+    /**
+     * Принимает резерв исходной сделки при переносе.
+     *
+     * <p>Не {@link #reserve}: тот требует срок в будущем, а переносят
+     * и просроченное — тогда просроченной честно остаётся и новая сделка,
+     * и она попадёт в список для продавца. Черновиком новый документ быть
+     * не может: товар при переносе не освобождается, он обещан клиенту,
+     * а черновик не обещает ничего — и выдать его продавцу будет нечем.
+     */
+    public void inheritReservation(Instant until) {
+        requireOpen("принять резерв");
+        this.status = DealStatus.RESERVED;
+        this.reservedUntil = until;
+    }
+
     public void markReady() {
         requireOpen("пометить готовой к выдаче");
         this.status = DealStatus.READY;

@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
+import { listWarehouses } from '../organization/warehouses';
+import type { Warehouse } from '../organization/warehouses';
 import {
   basketTotal,
   cancelDeal,
@@ -8,11 +10,24 @@ import {
   dealsOf,
   issueDeal,
   payDeal,
+  registerReturn,
+  returnable,
+  returnsOf,
   roomFor,
   searchCustomers,
   searchStock,
+  transferable,
+  transferItems,
 } from '../sales/sales';
-import type { BasketLine, Customer, Deal, StockRow } from '../sales/sales';
+import type {
+  BasketLine,
+  Customer,
+  Deal,
+  DealItem,
+  ReturnDoc,
+  ReturnLine,
+  StockRow,
+} from '../sales/sales';
 
 /**
  * Рабочее место продавца.
@@ -36,6 +51,9 @@ export function SellerScreen({ canSell }: Props) {
   const [lines, setLines] = useState<BasketLine[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [deal, setDeal] = useState<Deal | null>(null);
+  // Возврат и перенос случаются не в тот же разговор, что продажа: клиент
+  // приезжает через неделю. Без поиска по клиенту до его сделки не добраться.
+  const [finding, setFinding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   return (
@@ -60,7 +78,31 @@ export function SellerScreen({ canSell }: Props) {
         </button>
       </form>
 
+      <button
+        type="button"
+        className="button--ghost"
+        onClick={() => {
+          setFinding(!finding);
+          setError(null);
+        }}
+      >
+        {finding ? 'Скрыть поиск сделки' : 'Найти сделку клиента'}
+      </button>
+
       {error !== null && <p className="note note--error">{error}</p>}
+
+      {finding && (
+        <DealFinder
+          onPick={(found) => {
+            setDeal(found);
+            setFinding(false);
+            // Корзина от прежнего разговора к чужой сделке отношения не имеет.
+            setLines([]);
+            setRows([]);
+          }}
+          onError={setError}
+        />
+      )}
 
       {rows.length > 0 && (
         <ul className="stock-list">
@@ -306,6 +348,68 @@ function CustomerPicker({
   }
 }
 
+/**
+ * Поиск сделки клиента.
+ *
+ * <p>Возврат и перенос происходят не в тот разговор, в который продали:
+ * клиент приезжает через неделю с «не подошло» или забирает половину сейчас,
+ * а половину потом. Дверь в сделку — клиент, а не номер документа: номер
+ * приезжающий не помнит, телефон называет сразу.
+ */
+function DealFinder({
+  onPick,
+  onError,
+}: {
+  onPick: (deal: Deal) => void;
+  onError: (message: string) => void;
+}) {
+  const [customer, setCustomer] = useState<Customer | null>(null);
+  const [deals, setDeals] = useState<Deal[] | null>(null);
+
+  return (
+    <div className="finder">
+      <CustomerPicker
+        customer={customer}
+        onPick={(picked) => {
+          setCustomer(picked);
+          void load(picked);
+        }}
+        onError={onError}
+      />
+
+      {deals !== null && deals.length === 0 && (
+        <p className="note">У этого клиента сделок нет</p>
+      )}
+
+      {deals !== null && deals.length > 0 && (
+        <ul className="suggestions">
+          {deals.map((d) => (
+            <li key={d.id}>
+              <button type="button" className="button--ghost" onClick={() => onPick(d)}>
+                №{d.number ?? d.id} · {statusName(d.status)}
+                <span className="muted">
+                  {' '}
+                  · {Number(d.totalAmount).toLocaleString('ru-RU')} ₽ ·{' '}
+                  {new Date(d.createdAt).toLocaleDateString('ru-RU')}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+
+  async function load(picked: Customer): Promise<void> {
+    try {
+      setDeals(await dealsOf(picked.id));
+    } catch (cause) {
+      setDeals([]);
+      onError(describe(cause, 'Сделки не загрузились'));
+    }
+  }
+}
+
 /** Оформленная сделка: что с ней можно сделать дальше. */
 function DealCard({
   deal,
@@ -319,6 +423,30 @@ function DealCard({
   onError: (message: string) => void;
 }) {
   const [amount, setAmount] = useState('');
+  const [picked, setPicked] = useState<number[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [docs, setDocs] = useState<ReturnDoc[]>([]);
+
+  const reserved = transferable(deal);
+  const issued = returnable(deal);
+  // Выбирать можно только то, с чем в этом состоянии вообще что-то делают:
+  // отложенное переносят, выданное возвращают.
+  const selectable = reserved.length > 0 ? reserved : issued;
+  // Черновик тоже открыт: так выглядит сделка, в которую перенесли позиции
+  // из старой версии сервера. Не дать её выдать — оставить продавца
+  // с товаром, который обещан клиенту и никуда не денется.
+  const open = deal.status === 'RESERVED' || deal.status === 'DRAFT';
+  const chosen = selectable.filter((item) => picked.includes(item.id));
+
+  useEffect(() => {
+    // Прежние возвраты по сделке: без них продавец оформит второй возврат
+    // на ту же деталь и узнает об отказе сервера вместо ответа клиенту.
+    void returnsOf(deal.id).then(setDocs).catch(() => setDocs([]));
+    // Сообщение и отметки — про прежнюю сделку. Оставшись на экране чужой,
+    // «Возврат №1 оформлен» читается как возврат по ней.
+    setNotice(null);
+    setPicked([]);
+  }, [deal.id]);
 
   return (
     <>
@@ -331,6 +459,39 @@ function DealCard({
         {Number(deal.paidAmount).toLocaleString('ru-RU')} ₽ · долг{' '}
         {Number(deal.debt).toLocaleString('ru-RU')} ₽
       </p>
+      {notice !== null && <p className="note">{notice}</p>}
+
+      <ul className="stock-list">
+        {deal.items.map((item) => (
+          <li key={item.id} className="stock-row">
+            <label className="stock-info pick">
+              {selectable.some((s) => s.id === item.id) && (
+                <input
+                  type="checkbox"
+                  checked={picked.includes(item.id)}
+                  onChange={(e) =>
+                    setPicked(
+                      e.target.checked
+                        ? [...picked, item.id]
+                        : picked.filter((id) => id !== item.id),
+                    )
+                  }
+                />
+              )}{' '}
+              {item.title ?? `деталь ${item.partId}`}
+              <span className="muted">
+                {' '}
+                · {Number(item.quantity)} шт · {itemStatusName(item.status)}
+              </span>
+            </label>
+            <div className="stock-action">
+              <strong className="stock-price">
+                {Number(item.price).toLocaleString('ru-RU')} ₽
+              </strong>
+            </div>
+          </li>
+        ))}
+      </ul>
 
       <div className="row">
         <input
@@ -352,7 +513,7 @@ function DealCard({
       <div className="row">
         <button
           type="button"
-          disabled={!canSell || deal.status !== 'RESERVED'}
+          disabled={!canSell || !open}
           onClick={() => void act(() => issueDeal(deal.id))}
         >
           Выдать
@@ -362,12 +523,69 @@ function DealCard({
           className="button--ghost"
           // После выдачи отменять нечего: деталь у клиента, деньги в кассе.
           // Это возврат, а он оформляется отдельным документом.
-          disabled={!canSell || deal.status !== 'RESERVED'}
+          disabled={!canSell || !open}
           onClick={() => void act(() => cancelDeal(deal.id, 'отменена продавцом'))}
         >
           Отменить
         </button>
       </div>
+
+      {reserved.length > 0 && (
+        <TransferPanel
+          chosen={chosen}
+          total={reserved.length}
+          canSell={canSell}
+          onTransfer={() =>
+            void act(async () => {
+              const created = await transferItems(
+                deal.id,
+                chosen.map((item) => item.id),
+              );
+              setPicked([]);
+              setNotice(
+                `Перенесено в сделку №${created.number ?? created.id}. `
+                  + 'Резерв сохранён — товар просто в другом документе.',
+              );
+            })
+          }
+        />
+      )}
+
+      {issued.length > 0 && (
+        <ReturnPanel
+          chosen={chosen}
+          canSell={canSell}
+          onReturn={(warehouseId, lines, reason) =>
+            void act(async () => {
+              const doc = await registerReturn(deal.id, warehouseId, lines, reason);
+              setPicked([]);
+              setNotice(
+                `Возврат №${doc.number ?? doc.id} на `
+                  + `${Number(doc.amount).toLocaleString('ru-RU')} ₽ оформлен.`,
+              );
+              setDocs(await returnsOf(deal.id));
+            })
+          }
+        />
+      )}
+
+      {docs.length > 0 && (
+        <>
+          <h4>Возвраты по сделке</h4>
+          <ul className="suggestions">
+            {docs.map((doc) => (
+              <li key={doc.id}>
+                №{doc.number ?? doc.id} · {Number(doc.amount).toLocaleString('ru-RU')} ₽
+                <span className="muted">
+                  {' '}
+                  · {new Date(doc.createdAt).toLocaleDateString('ru-RU')}
+                  {doc.reason !== null && doc.reason !== '' && ` · ${doc.reason}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </>
   );
 
@@ -385,6 +603,188 @@ function DealCard({
       onError(describe(cause, 'Операция не выполнена'));
     }
   }
+}
+
+/**
+ * Перенос отложенного в новую сделку.
+ *
+ * <p>Клиент забирает половину сейчас, остальное оставляет на потом. Резерв
+ * не снимается — товар меняет документ, и вторая половина остаётся обещанной
+ * тому же клиенту, а не уезжает на общий склад.
+ */
+function TransferPanel({
+  chosen,
+  total,
+  canSell,
+  onTransfer,
+}: {
+  chosen: DealItem[];
+  total: number;
+  canSell: boolean;
+  onTransfer: () => void;
+}) {
+  // Перенести всё — это не разделение, а пустой документ и вторая сделка
+  // с тем же составом. Сервер такое пропустит, поэтому останавливаем здесь.
+  const everything = chosen.length === total;
+
+  return (
+    <>
+      <hr />
+      <h4>Перенести в новую сделку</h4>
+      <p className="note">
+        Отметьте то, что клиент оставляет на потом. Отмеченное уедет в отдельную
+        сделку, эту выдадите сейчас.
+      </p>
+      <button
+        type="button"
+        disabled={!canSell || chosen.length === 0 || everything}
+        onClick={onTransfer}
+      >
+        {chosen.length === 0 ? 'Отметьте позиции' : `Перенести (${chosen.length})`}
+      </button>
+      {everything && (
+        <p className="note">
+          Отмечено всё — переносить нечего. Оставьте в этой сделке то, что клиент
+          забирает сейчас.
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * Возврат выданного.
+ *
+ * <p><b>Подтверждение в два нажатия, а не сразу.</b> Возврат проводится
+ * мгновенно и обратно не отыгрывается: деталь встаёт на склад, деньги уходят
+ * клиенту. Сервер отмену завершённого возврата отклонит, и исправлять ошибку
+ * придётся встречной продажей.
+ *
+ * <p>Брак — один флажок на весь документ, а не на строку. Смешанный возврат
+ * (часть на склад, часть в утиль) оформляют двумя документами: так видно,
+ * что именно списали, а сам случай редкий.
+ */
+function ReturnPanel({
+  chosen,
+  canSell,
+  onReturn,
+}: {
+  chosen: DealItem[];
+  canSell: boolean;
+  onReturn: (warehouseId: number, lines: ReturnLine[], reason: string) => void;
+}) {
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
+  const [warehouseId, setWarehouseId] = useState<number | null>(null);
+  const [reason, setReason] = useState('');
+  const [broken, setBroken] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    void listWarehouses()
+      .then((loaded) => {
+        setWarehouses(loaded);
+        setWarehouseId((current) => current ?? loaded[0]?.id ?? null);
+      })
+      .catch(() => setWarehouses([]));
+  }, []);
+
+  const ready = canSell && chosen.length > 0 && warehouseId !== null;
+
+  return (
+    <>
+      <hr />
+      <h4>Возврат</h4>
+      <p className="note">
+        Отметьте, что клиент привёз обратно. Отдельный документ со своим номером:
+        отменить выданную сделку уже нельзя — деталь была у клиента.
+      </p>
+
+      <label>
+        Склад возврата
+        <select
+          value={warehouseId ?? ''}
+          onChange={(e) => setWarehouseId(Number(e.target.value))}
+        >
+          {warehouses.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="note">
+        Не обязан совпадать со складом выдачи: клиент приезжает туда, куда ему
+        удобно, а деталь встаёт на ту полку, где он её оставил.
+      </p>
+
+      <label>
+        Причина
+        <input
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="не подошла, привёз обратно"
+        />
+      </label>
+
+      <label className="pick">
+        <input
+          type="checkbox"
+          checked={broken}
+          onChange={(e) => {
+            setBroken(e.target.checked);
+            setConfirming(false);
+          }}
+        />{' '}
+        Брак — деньги вернуть, в остаток не ставить
+      </label>
+
+      {confirming ? (
+        <div className="row">
+          <button type="button" disabled={!ready} onClick={submit}>
+            Да, оформить: {chosen.length} поз.{broken && ', в утиль'}
+          </button>
+          <button
+            type="button"
+            className="button--ghost"
+            onClick={() => setConfirming(false)}
+          >
+            Не надо
+          </button>
+        </div>
+      ) : (
+        <button type="button" disabled={!ready} onClick={() => setConfirming(true)}>
+          {chosen.length === 0 ? 'Отметьте позиции' : `Оформить возврат (${chosen.length})`}
+        </button>
+      )}
+      {confirming && (
+        <p className="note">
+          Возврат не отменяется: деталь встанет на склад, деньги уйдут клиенту.
+        </p>
+      )}
+    </>
+  );
+
+  function submit(): void {
+    if (warehouseId === null) {
+      return;
+    }
+    setConfirming(false);
+    onReturn(
+      warehouseId,
+      chosen.map((item) => ({ dealItemId: item.id, restocked: !broken })),
+      reason.trim(),
+    );
+  }
+}
+
+function itemStatusName(status: string): string {
+  const names: Record<string, string> = {
+    RESERVED: 'отложена',
+    ISSUED: 'выдана',
+    RETURNED: 'возвращена',
+    CANCELLED: 'снята',
+  };
+  return names[status] ?? status.toLowerCase();
 }
 
 function statusName(status: string): string {

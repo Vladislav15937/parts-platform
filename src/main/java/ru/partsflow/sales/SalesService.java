@@ -311,6 +311,12 @@ public class SalesService {
         dealRepository.saveAndFlush(target);
 
         List<DealItem> moved = source.transferTo(target, itemIds);
+        // Резерв переезжает вместе с позициями: на складе он не снимался,
+        // и новый документ обязан это отражать, иначе он останется черновиком,
+        // который нечем выдать.
+        if (source.getReservedUntil() != null) {
+            target.inheritReservation(source.getReservedUntil());
+        }
         dealRepository.saveAndFlush(source);
         Deal savedTarget = dealRepository.saveAndFlush(target);
 

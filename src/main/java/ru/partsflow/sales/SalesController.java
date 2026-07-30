@@ -14,12 +14,14 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import ru.partsflow.inventory.PartService;
 import ru.partsflow.platform.security.CurrentUser;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /**
  * REST продаж.
@@ -49,9 +51,11 @@ public class SalesController {
     private static final String ISSUES = "hasAnyRole('OWNER','MANAGER','SELLER','STOREKEEPER')";
 
     private final SalesService sales;
+    private final PartService parts;
 
-    public SalesController(SalesService sales) {
+    public SalesController(SalesService sales, PartService parts) {
         this.sales = sales;
+        this.parts = parts;
     }
 
     /**
@@ -75,18 +79,18 @@ public class SalesController {
                                 i.partId(), i.quantity(), i.price(), i.warehouseId()))
                         .toList());
 
-        return ResponseEntity.status(HttpStatus.CREATED).body(DealView.of(deal));
+        return ResponseEntity.status(HttpStatus.CREATED).body(view(deal));
     }
 
     @GetMapping("/{id}")
     public DealView get(@PathVariable Long id) {
-        return DealView.of(sales.require(id));
+        return view(sales.require(id));
     }
 
     /** Сделки клиента — история покупок, свежие сверху. */
     @GetMapping
     public List<DealView> byCustomer(@RequestParam Long customerId) {
-        return sales.ofCustomer(customerId).stream().map(DealView::of).toList();
+        return views(sales.ofCustomer(customerId));
     }
 
     /**
@@ -98,13 +102,13 @@ public class SalesController {
      */
     @GetMapping("/expired-reservations")
     public List<DealView> expiredReservations() {
-        return sales.expiredReservations().stream().map(DealView::of).toList();
+        return views(sales.expiredReservations());
     }
 
     @PostMapping("/{id}/issue")
     @PreAuthorize(ISSUES)
     public DealView issue(@PathVariable Long id) {
-        return DealView.of(sales.issue(id, CurrentUser.memberId()));
+        return view(sales.issue(id, CurrentUser.memberId()));
     }
 
     /** Отмена возможна, пока товар не ушёл. После выдачи — только возврат. */
@@ -112,7 +116,7 @@ public class SalesController {
     @PreAuthorize(SELLS)
     public DealView cancel(@PathVariable Long id,
                            @RequestBody(required = false) CancelRequest request) {
-        return DealView.of(sales.cancel(id, CurrentUser.memberId(),
+        return view(sales.cancel(id, CurrentUser.memberId(),
                 request == null ? null : request.reason()));
     }
 
@@ -176,13 +180,32 @@ public class SalesController {
     public ResponseEntity<DealView> transfer(@PathVariable Long id,
                                              @Valid @RequestBody TransferRequest request) {
         Deal created = sales.transferItems(id, request.itemIds(), CurrentUser.memberId());
-        return ResponseEntity.status(HttpStatus.CREATED).body(DealView.of(created));
+        return ResponseEntity.status(HttpStatus.CREATED).body(view(created));
     }
 
     /** История документа: кто что сделал и когда. */
     @GetMapping("/{id}/history")
     public List<HistoryView> history(@PathVariable Long id) {
         return sales.history(id).stream().map(HistoryView::of).toList();
+    }
+
+    /**
+     * Один запрос наименований на всю выдачу, а не на позицию.
+     *
+     * <p>История клиента — это десятки сделок; запрос на строку превратил бы
+     * её открытие в сотню запросов к базе.
+     */
+    private List<DealView> views(List<Deal> deals) {
+        Map<Long, String> titles = parts.titlesOf(deals.stream()
+                .flatMap(deal -> deal.getItems().stream())
+                .map(DealItem::getPartId)
+                .distinct()
+                .toList());
+        return deals.stream().map(deal -> DealView.of(deal, titles)).toList();
+    }
+
+    private DealView view(Deal deal) {
+        return views(List.of(deal)).getFirst();
     }
 
     public record CreateRequest(@NotNull Long customerId,
@@ -229,20 +252,26 @@ public class SalesController {
                            BigDecimal totalAmount, BigDecimal paidAmount, BigDecimal debt,
                            Instant createdAt, Instant issuedAt, List<ItemView> items) {
 
-        static DealView of(Deal deal) {
+        static DealView of(Deal deal, Map<Long, String> titles) {
             return new DealView(deal.getId(), deal.getNumber(), deal.getCustomerId(),
                     deal.getManagerId(), deal.getStatus(), deal.getReservedUntil(),
                     deal.getTotalAmount(), deal.getPaidAmount(), deal.debt(),
                     deal.getCreatedAt(), deal.getIssuedAt(),
-                    deal.getItems().stream().map(ItemView::of).toList());
+                    deal.getItems().stream().map(item -> ItemView.of(item, titles)).toList());
         }
     }
 
-    public record ItemView(Long id, Long partId, BigDecimal quantity, BigDecimal price,
-                           BigDecimal discount, Long warehouseId, DealItemStatus status) {
+    /**
+     * @param title наименование запчасти. Без него строка сделки — это номер,
+     *              а выбирать по номеру, что вернуть, продавец не станет
+     */
+    public record ItemView(Long id, Long partId, String title, BigDecimal quantity,
+                           BigDecimal price, BigDecimal discount, Long warehouseId,
+                           DealItemStatus status) {
 
-        static ItemView of(DealItem item) {
-            return new ItemView(item.getId(), item.getPartId(), item.getQuantity(),
+        static ItemView of(DealItem item, Map<Long, String> titles) {
+            return new ItemView(item.getId(), item.getPartId(),
+                    titles.get(item.getPartId()), item.getQuantity(),
                     item.getPrice(), item.getDiscount(), item.getWarehouseId(), item.getStatus());
         }
     }
