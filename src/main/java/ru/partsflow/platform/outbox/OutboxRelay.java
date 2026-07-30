@@ -6,7 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
 
 import java.util.List;
@@ -38,13 +38,16 @@ public class OutboxRelay {
     private final JdbcTemplate jdbcTemplate;
     private final OutboxRepository outboxRepository;
     private final EventTransport transport;
+    private final TransactionTemplate transactions;
 
     public OutboxRelay(JdbcTemplate jdbcTemplate,
                        OutboxRepository outboxRepository,
-                       EventTransport transport) {
+                       EventTransport transport,
+                       TransactionTemplate transactions) {
         this.jdbcTemplate = jdbcTemplate;
         this.outboxRepository = outboxRepository;
         this.transport = transport;
+        this.transactions = transactions;
     }
 
     @Scheduled(fixedDelayString = "${app.outbox.relay-delay-ms:1000}")
@@ -66,15 +69,28 @@ public class OutboxRelay {
         }
     }
 
-    @Transactional
-    protected int relayTenant() {
-        List<OutboxRecord> batch = outboxRepository.lockUnpublished(BATCH_SIZE);
-        if (batch.isEmpty()) {
-            return 0;
-        }
-        transport.send(batch);
-        batch.forEach(OutboxRecord::markPublished);
-        return batch.size();
+    /**
+     * Один заход по арендатору — в явной транзакции.
+     *
+     * <p><b>Не {@code @Transactional}.</b> Метод вызывается из {@link #relay()}
+     * того же бина, а через self-invocation прокси Spring не проходит: аннотация
+     * молча не сработает. Транзакции при этом не будет вовсе — а без неё
+     * {@code FOR UPDATE SKIP LOCKED} ничего не блокирует и, главное,
+     * {@code markPublished} не сбрасывается в базу. Событие останется
+     * неопубликованным и уедет в транспорт снова через секунду, и так вечно.
+     * {@code OutboxRelayTest.publishedEventIsMarked} это стережёт.
+     */
+    private int relayTenant() {
+        Integer sent = transactions.execute(status -> {
+            List<OutboxRecord> batch = outboxRepository.lockUnpublished(BATCH_SIZE);
+            if (batch.isEmpty()) {
+                return 0;
+            }
+            transport.send(batch);
+            batch.forEach(OutboxRecord::markPublished);
+            return batch.size();
+        });
+        return sent == null ? 0 : sent;
     }
 
     private List<String> activeTenantSchemas() {
