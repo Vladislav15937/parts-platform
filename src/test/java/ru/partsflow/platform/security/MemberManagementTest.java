@@ -32,7 +32,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * вошедший мог всё. Здесь проверяется, что продавец не заведёт себе владельца
  * и не сменит владельцу пароль.
  */
-@SpringBootTest(properties = "app.bootstrap-token=тестовый-секрет")
+@SpringBootTest
 @AutoConfigureMockMvc
 class MemberManagementTest extends PostgresTestBase {
 
@@ -220,35 +220,7 @@ class MemberManagementTest extends PostgresTestBase {
                 .andExpect(status().isConflict());
     }
 
-    @Test
-    @DisplayName("Первый владелец создаётся секретом из конфигурации")
-    void bootstrapCreatesFirstOwner() throws Exception {
-        inTenant(() -> jdbc.update("DELETE FROM tenant_member"));
 
-        mvc.perform(post("/api/members/bootstrap").with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"company":"testco","token":"тестовый-секрет",
-                                 "login":"pervyi","password":"пароль-первого","displayName":"Первый"}"""))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.role").value("OWNER"));
-    }
-
-    @Test
-    @DisplayName("Первого владельца можно создать без CSRF-токена")
-    void bootstrapWorksWithoutCsrfToken() throws Exception {
-        inTenant(() -> jdbc.update("DELETE FROM tenant_member"));
-
-        // Первый запрос к системе делают curl'ом при подключении клиента, когда
-        // ни сессии, ни токена ещё нет. CSRF тут и нечего защищать: cookie
-        // не участвуют, запрос авторизуется секретом в теле.
-        mvc.perform(post("/api/members/bootstrap")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"company":"testco","token":"тестовый-секрет",
-                                 "login":"bez-csrf","password":"пароль-подлиннее"}"""))
-                .andExpect(status().isCreated());
-    }
 
     @Test
     @DisplayName("Вход без CSRF-токена не проходит")
@@ -262,33 +234,7 @@ class MemberManagementTest extends PostgresTestBase {
                 .andExpect(status().isForbidden());
     }
 
-    @Test
-    @DisplayName("Второй раз первого владельца создать нельзя")
-    void bootstrapClosesAfterFirstAccount() throws Exception {
-        // Учётные записи у арендатора уже есть — лазейка закрыта навсегда.
-        mvc.perform(post("/api/members/bootstrap").with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"company":"testco","token":"тестовый-секрет",
-                                 "login":"zahvatchik","password":"пароль-подлиннее"}"""))
-                .andExpect(status().isForbidden());
-    }
 
-    @Test
-    @DisplayName("Неверный секрет первого владельца не создаёт")
-    void bootstrapRejectsWrongToken() throws Exception {
-        inTenant(() -> jdbc.update("DELETE FROM tenant_member"));
-
-        mvc.perform(post("/api/members/bootstrap").with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"company":"testco","token":"не-тот-секрет",
-                                 "login":"zahvatchik","password":"пароль-подлиннее"}"""))
-                .andExpect(status().isForbidden());
-
-        assertThat(inTenant(() -> jdbc.queryForObject(
-                "SELECT count(*) FROM tenant_member", Integer.class))).isZero();
-    }
 
     @Test
     @DisplayName("Без входа сотрудников не создать")

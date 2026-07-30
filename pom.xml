@@ -145,6 +145,21 @@
     </dependencyManagement>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!--
+                Миграции едут внутрь артефакта. Провижининг арендатора
+                накатывает их сам, а лежат они в db/changelog — вне classpath.
+                Без этой строки схема нового клиента создавалась бы пустой,
+                и увидели бы это на первом входе, а не при сборке.
+            -->
+            <resource>
+                <directory>db/changelog</directory>
+                <targetPath>db/changelog</targetPath>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>

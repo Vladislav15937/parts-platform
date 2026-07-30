@@ -30,11 +30,9 @@ import java.util.List;
 public class MemberController {
 
     private final MemberService members;
-    private final MemberBootstrap bootstrap;
 
-    public MemberController(MemberService members, MemberBootstrap bootstrap) {
+    public MemberController(MemberService members) {
         this.members = members;
-        this.bootstrap = bootstrap;
     }
 
     @PostMapping
@@ -89,24 +87,6 @@ public class MemberController {
         return ResponseEntity.noContent().build();
     }
 
-    /**
-     * Первый владелец арендатора.
-     *
-     * <p>Разрывает замкнутый круг: создавать сотрудников может владелец,
-     * а владельца создать некому. Работает только пока у арендатора нет ни одной
-     * учётной записи и только с настроенным секретом — см. {@link MemberBootstrap}.
-     *
-     * <p>Правильное место для этого — провижининг арендатора, но его в коде
-     * пока нет: схемы создаются скриптом. Когда появится, этот эндпоинт уйдёт.
-     */
-    @PostMapping("/bootstrap")
-    public ResponseEntity<MemberService.Member> bootstrapOwner(
-            @Valid @RequestBody BootstrapRequest request) {
-
-        return bootstrap.createFirstOwner(request)
-                .map(member -> ResponseEntity.status(HttpStatus.CREATED).body(member))
-                .orElseGet(() -> ResponseEntity.status(HttpStatus.FORBIDDEN).build());
-    }
 
     public record CreateRequest(@NotBlank String login,
                                 @NotBlank String password,
@@ -118,14 +98,4 @@ public class MemberController {
     public record PasswordRequest(@NotBlank String password) {
     }
 
-    /**
-     * Заявка на первого владельца. Код компании здесь, а не из сессии: сессии
-     * ещё нет и быть не может — входить некому.
-     */
-    public record BootstrapRequest(@NotBlank String company,
-                                   @NotBlank String token,
-                                   @NotBlank String login,
-                                   @NotBlank String password,
-                                   String displayName) {
-    }
 }

@@ -48,7 +48,7 @@ public class SecurityConfig {
         http
                 .csrf(c -> c.csrfTokenRepository(csrf)
                         .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
-                        // Создание первого владельца — единственное исключение.
+                        // Создание арендатора — единственное исключение.
                         // CSRF защищает от подделки запроса с чужими cookie,
                         // а здесь cookie не участвуют вовсе: запрос авторизуется
                         // секретом в теле. Кто секрет знает — вызовет напрямую,
@@ -56,18 +56,18 @@ public class SecurityConfig {
                         //
                         // Вход сюда не входит: там появляется сессия, и подделка
                         // входа (жертву логинят в чужой аккаунт) — реальная атака.
-                        .ignoringRequestMatchers("/api/members/bootstrap"))
+                        .ignoringRequestMatchers("/api/provisioning/**"))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 .authenticationManager(authenticationManager)
                 .exceptionHandling(e -> e.authenticationEntryPoint(
                         new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/login", "/api/auth/csrf").permitAll()
-                        // Первого владельца создавать некому: сессии ещё нет.
-                        // Механизм защищён секретом из конфигурации и работает
-                        // только пока у арендатора нет учётных записей —
-                        // см. MemberBootstrap.
-                        .requestMatchers("/api/members/bootstrap").permitAll()
+                        // Арендатора создавать некому: его самого ещё нет,
+                        // а значит нет и учётных записей, под которыми входят.
+                        // Механизм защищён секретом из конфигурации, пустой
+                        // секрет его выключает — см. ProvisioningController.
+                        .requestMatchers("/api/provisioning/**").permitAll()
                         // Проверки живости нужны балансировщику до всякого входа.
                         .requestMatchers("/actuator/health/**").permitAll()
                         // Прайс забирает сервер Дрома: cookie у него нет
