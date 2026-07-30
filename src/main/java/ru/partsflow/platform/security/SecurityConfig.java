@@ -47,7 +47,16 @@ public class SecurityConfig {
 
         http
                 .csrf(c -> c.csrfTokenRepository(csrf)
-                        .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler()))
+                        .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
+                        // Создание первого владельца — единственное исключение.
+                        // CSRF защищает от подделки запроса с чужими cookie,
+                        // а здесь cookie не участвуют вовсе: запрос авторизуется
+                        // секретом в теле. Кто секрет знает — вызовет напрямую,
+                        // кто не знает — подделкой ничего не добьётся.
+                        //
+                        // Вход сюда не входит: там появляется сессия, и подделка
+                        // входа (жертву логинят в чужой аккаунт) — реальная атака.
+                        .ignoringRequestMatchers("/api/members/bootstrap"))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 .authenticationManager(authenticationManager)
                 .exceptionHandling(e -> e.authenticationEntryPoint(

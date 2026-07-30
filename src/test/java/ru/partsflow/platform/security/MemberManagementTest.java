@@ -235,6 +235,34 @@ class MemberManagementTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Первого владельца можно создать без CSRF-токена")
+    void bootstrapWorksWithoutCsrfToken() throws Exception {
+        inTenant(() -> jdbc.update("DELETE FROM tenant_member"));
+
+        // Первый запрос к системе делают curl'ом при подключении клиента, когда
+        // ни сессии, ни токена ещё нет. CSRF тут и нечего защищать: cookie
+        // не участвуют, запрос авторизуется секретом в теле.
+        mvc.perform(post("/api/members/bootstrap")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"company":"testco","token":"тестовый-секрет",
+                                 "login":"bez-csrf","password":"пароль-подлиннее"}"""))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    @DisplayName("Вход без CSRF-токена не проходит")
+    void loginStillRequiresCsrf() throws Exception {
+        // Подделка входа — реальная атака: жертву логинят в чужой аккаунт,
+        // и дальше её действия видит владелец аккаунта.
+        mvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"company":"testco","login":"owner","password":"пароль-владельца"}"""))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     @DisplayName("Второй раз первого владельца создать нельзя")
     void bootstrapClosesAfterFirstAccount() throws Exception {
         // Учётные записи у арендатора уже есть — лазейка закрыта навсегда.
