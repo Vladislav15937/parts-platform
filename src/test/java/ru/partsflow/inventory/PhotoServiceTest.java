@@ -1,0 +1,283 @@
+package ru.partsflow.inventory;
+
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
+import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.support.PostgresTestBase;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.BucketAlreadyOwnedByYouException;
+import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.List;
+import java.util.function.Supplier;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * Фотографии запчастей против настоящего S3.
+ *
+ * <p>MinIO поднимается контейнером, и снимок действительно уезжает по
+ * подписанной ссылке. Без этого проверялась бы только форма URL — а ломается
+ * как раз подпись: в неё входят хост, метод и content-type, и любое
+ * расхождение даёт отказ уже на телефоне приёмщика.
+ */
+@SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
+class PhotoServiceTest extends PostgresTestBase {
+
+    private static final String TENANT = "t_000050";
+    private static final String BUCKET = "parts-photos-test";
+
+    @SuppressWarnings("resource")
+    private static final GenericContainer<?> MINIO =
+            new GenericContainer<>("minio/minio:latest")
+                    .withExposedPorts(9000)
+                    .withEnv("MINIO_ROOT_USER", "minioadmin")
+                    .withEnv("MINIO_ROOT_PASSWORD", "minioadmin")
+                    .withCommand("server", "/data")
+                    .waitingFor(Wait.forHttp("/minio/health/live").forPort(9000));
+
+    static {
+        MINIO.start();
+    }
+
+    @DynamicPropertySource
+    static void s3Properties(DynamicPropertyRegistry registry) {
+        String endpoint = "http://%s:%d".formatted(MINIO.getHost(), MINIO.getMappedPort(9000));
+        registry.add("app.s3.endpoint", () -> endpoint);
+        registry.add("app.s3.public-endpoint", () -> endpoint);
+        registry.add("app.s3.bucket", () -> BUCKET);
+        registry.add("app.s3.access-key", () -> "minioadmin");
+        registry.add("app.s3.secret-key", () -> "minioadmin");
+        registry.add("app.s3.path-style-access", () -> true);
+    }
+
+    @Autowired
+    private PhotoService photos;
+
+    @Autowired
+    private S3Client s3;
+
+    @Autowired
+    private JdbcTemplate jdbc;
+
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+
+    private Long partId;
+
+    @BeforeAll
+    static void migrate() {
+        provisionTenants(TENANT);
+    }
+
+    @BeforeEach
+    void fixtures() {
+        try {
+            s3.createBucket(CreateBucketRequest.builder().bucket(BUCKET).build());
+        } catch (BucketAlreadyOwnedByYouException ignored) {
+            // Контейнер один на весь прогон, бакет создаётся один раз.
+        }
+
+        partId = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price, cost_price)
+                VALUES (NULL, 'Фара левая Camry V50', 8500, 4000) RETURNING id""", Long.class));
+    }
+
+    @Test
+    @DisplayName("Снимок уезжает по подписанной ссылке и подтверждается")
+    void photoTravelsByPresignedUrl() throws Exception {
+        PhotoService.Upload upload = inTenant(() -> photos.requestUpload(partId, "image/jpeg"));
+
+        int status = put(upload.uploadUrl(), "image/jpeg", jpegBytes());
+        assertThat(status).as("хранилище отвергло подписанную ссылку").isEqualTo(200);
+
+        assertThat(inTenant(() -> photos.confirmUpload(upload.photoId(), 1920, 1080))).isTrue();
+
+        assertThat(inTenant(() -> jdbc.queryForMap(
+                "SELECT status, bytes, width FROM part_photo WHERE id = ?", upload.photoId())))
+                .containsEntry("status", "PROCESSED")
+                .containsEntry("bytes", (long) jpegBytes().length)
+                .containsEntry("width", 1920);
+    }
+
+    @Test
+    @DisplayName("Подтверждение без загрузки не создаёт битую картинку")
+    void confirmWithoutUploadFails() {
+        PhotoService.Upload upload = inTenant(() -> photos.requestUpload(partId, "image/jpeg"));
+
+        // Телефон сказал «загрузил», а связь оборвалась. Верить нельзя.
+        assertThat(inTenant(() -> photos.confirmUpload(upload.photoId(), null, null))).isFalse();
+
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT status FROM part_photo WHERE id = ?", String.class, upload.photoId())))
+                .isEqualTo("FAILED");
+        assertThat(inTenant(() -> photos.of(partId)))
+                .as("неподтверждённая фотография попала в карточку").isEmpty();
+    }
+
+    @Test
+    @DisplayName("Ключ объекта начинается со схемы арендатора")
+    void keyIsPrefixedWithTenant() {
+        PhotoService.Upload upload = inTenant(() -> photos.requestUpload(partId, "image/jpeg"));
+
+        // Изоляция префиксом: удаление и выгрузка одного клиента — одна операция.
+        assertThat(upload.key()).startsWith(TENANT + "/parts/" + partId + "/");
+        assertThat(upload.key()).endsWith(".jpg");
+    }
+
+    @Test
+    @DisplayName("Первая фотография становится главной сама")
+    void firstPhotoBecomesMain() throws Exception {
+        PhotoService.Upload first = uploaded("image/jpeg");
+        PhotoService.Upload second = uploaded("image/jpeg");
+
+        List<PhotoService.PhotoView> views = inTenant(() -> photos.of(partId));
+        assertThat(views).hasSize(2);
+        assertThat(views).filteredOn(PhotoService.PhotoView::main)
+                .extracting(PhotoService.PhotoView::photoId)
+                .containsExactly(first.photoId());
+        assertThat(second.photoId()).isNotEqualTo(first.photoId());
+    }
+
+    @Test
+    @DisplayName("Смена главной снимает признак с прежней")
+    void mainPhotoSwitches() throws Exception {
+        PhotoService.Upload first = uploaded("image/jpeg");
+        PhotoService.Upload second = uploaded("image/png");
+
+        inTenant(() -> {
+            photos.makeMain(second.photoId());
+            return null;
+        });
+
+        // В БД частичный уникальный индекс «одна главная на деталь»: если
+        // прежнюю не снять, вставка упадёт на нём.
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_photo WHERE part_id = ? AND is_main", Integer.class, partId)
+        )).isEqualTo(1);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT is_main FROM part_photo WHERE id = ?", Boolean.class, first.photoId())
+        )).isFalse();
+    }
+
+    @Test
+    @DisplayName("Неподтверждённую нельзя сделать главной")
+    void unconfirmedCannotBeMain() {
+        PhotoService.Upload pending = inTenant(() -> photos.requestUpload(partId, "image/jpeg"));
+
+        assertThatThrownBy(() -> inTenant(() -> {
+            photos.makeMain(pending.photoId());
+            return null;
+        })).hasMessageContaining("только загруженную");
+    }
+
+    @Test
+    @DisplayName("Удаление главной передаёт признак следующей")
+    void deletingMainPromotesNext() throws Exception {
+        PhotoService.Upload first = uploaded("image/jpeg");
+        PhotoService.Upload second = uploaded("image/jpeg");
+
+        inTenant(() -> {
+            photos.delete(first.photoId());
+            return null;
+        });
+
+        // Карточка без главной фотографии на площадке выглядит пустой.
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT is_main FROM part_photo WHERE id = ?", Boolean.class, second.photoId())
+        )).isTrue();
+    }
+
+    @Test
+    @DisplayName("Удаление убирает файл из хранилища, а не только запись")
+    void deleteRemovesObject() throws Exception {
+        PhotoService.Upload upload = uploaded("image/jpeg");
+        assertThat(objectExists(upload.key())).isTrue();
+
+        inTenant(() -> {
+            photos.delete(upload.photoId());
+            return null;
+        });
+
+        assertThat(objectExists(upload.key()))
+                .as("файл остался в хранилище и будет копить счёт за место").isFalse();
+    }
+
+    @Test
+    @DisplayName("Ссылка на просмотр открывается")
+    void viewUrlWorks() throws Exception {
+        uploaded("image/jpeg");
+
+        String url = inTenant(() -> photos.of(partId)).get(0).url();
+
+        HttpResponse<byte[]> response = HttpClient.newHttpClient().send(
+                HttpRequest.newBuilder(URI.create(url)).GET().build(),
+                HttpResponse.BodyHandlers.ofByteArray());
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body()).isEqualTo(jpegBytes());
+    }
+
+    // ---------- вспомогательное ----------
+
+    /** Полный цикл: ссылка, загрузка, подтверждение. */
+    private PhotoService.Upload uploaded(String contentType) throws Exception {
+        PhotoService.Upload upload = inTenant(() -> photos.requestUpload(partId, contentType));
+        put(upload.uploadUrl(), contentType, jpegBytes());
+        inTenant(() -> photos.confirmUpload(upload.photoId(), 800, 600));
+        return upload;
+    }
+
+    private int put(String url, String contentType, byte[] body) throws IOException, InterruptedException {
+        HttpResponse<Void> response = HttpClient.newHttpClient().send(
+                HttpRequest.newBuilder(URI.create(url))
+                        // Content-Type входит в подпись: другой здесь — отказ хранилища.
+                        .header("Content-Type", contentType)
+                        .PUT(HttpRequest.BodyPublishers.ofByteArray(body))
+                        .build(),
+                HttpResponse.BodyHandlers.discarding());
+        return response.statusCode();
+    }
+
+    private boolean objectExists(String key) {
+        return inTenant(() -> {
+            try {
+                s3.headObject(b -> b.bucket(BUCKET).key(key));
+                return true;
+            } catch (software.amazon.awssdk.services.s3.model.NoSuchKeyException e) {
+                return false;
+            }
+        });
+    }
+
+    private static byte[] jpegBytes() {
+        // Не настоящий JPEG: хранилищу всё равно, а тесту важен только размер.
+        return "снимок фары, 3 мегапикселя".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private <T> T inTenant(Supplier<T> action) {
+        try {
+            TenantContext.set(TENANT);
+            return transactionTemplate.execute(status -> action.get());
+        } finally {
+            TenantContext.clear();
+        }
+    }
+}

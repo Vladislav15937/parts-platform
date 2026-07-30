@@ -59,6 +59,23 @@ app:
   outbox:
     relay-delay-ms: 1000
 
+  # Хранилище фотографий. В разработке MinIO из docker-compose, у клиентов —
+  # обычный S3: протокол один, меняются только адрес и ключи.
+  s3:
+    endpoint: http://localhost:9000
+    # Адрес для подписанных ссылок. На localhost совпадает с внутренним,
+    # в бою это внешнее имя: подпись включает хост, и ссылка, подписанная
+    # внутренним адресом, с телефона не откроется.
+    public-endpoint: http://localhost:9000
+    region: us-east-1
+    access-key: minioadmin
+    secret-key: minioadmin
+    bucket: parts-photos
+    # MinIO не умеет виртуальные хосты вида bucket.localhost.
+    path-style-access: true
+    upload-url-ttl: 15m
+    view-url-ttl: 6h
+
 management:
   endpoints:
     web:
