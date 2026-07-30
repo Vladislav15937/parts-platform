@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.platform.crypto.SecretCipher;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -38,13 +39,16 @@ public class DromDeltaSender {
     private final JdbcTemplate jdbc;
     private final DromPriceGenerator priceGenerator;
     private final DromSyncClient syncClient;
+    private final SecretCipher cipher;
 
     public DromDeltaSender(JdbcTemplate jdbc,
                            DromPriceGenerator priceGenerator,
-                           DromSyncClient syncClient) {
+                           DromSyncClient syncClient,
+                           SecretCipher cipher) {
         this.jdbc = jdbc;
         this.priceGenerator = priceGenerator;
         this.syncClient = syncClient;
+        this.cipher = cipher;
     }
 
     /**
@@ -108,10 +112,9 @@ public class DromDeltaSender {
     /**
      * Активный аккаунт Дрома арендатора.
      *
-     * <p><b>Ключ читается как есть.</b> Схема обещает, что {@code credentials}
-     * шифруются приложением, но шифрования в проекте пока нет вообще. До того как
-     * туда попадёт ключ реального клиента, это надо закрыть: дамп базы сейчас
-     * даёт доступ к его кабинету на Дроме.
+     * <p>Ключ расшифровывается {@link SecretCipher}. Не расшифровался — значит
+     * ключ шифрования не тот или данные испорчены; отправлять в этом случае
+     * нечего, и молча уехать с мусором вместо ключа хуже, чем не уехать вовсе.
      */
     private Optional<Account> activeAccount() {
         List<Account> found = jdbc.query("""
@@ -120,25 +123,31 @@ public class DromDeltaSender {
                  WHERE marketplace = 'DROM' AND status = 'ACTIVE'
                  ORDER BY id
                  LIMIT 1""",
-                (rs, i) -> {
-                    byte[] credentials = rs.getBytes("credentials");
-                    return new Account(
-                            rs.getLong("id"),
-                            rs.getString("packet_id"),
-                            credentials == null ? null : new String(credentials, StandardCharsets.UTF_8));
-                });
+                (rs, i) -> new Account(
+                        rs.getLong("id"),
+                        rs.getString("packet_id"),
+                        rs.getBytes("credentials")));
 
         if (found.isEmpty()) {
             return Optional.empty();
         }
         Account account = found.get(0);
-        if (account.packetId() == null || account.cabinetKey() == null) {
+        String cabinetKey;
+        try {
+            cabinetKey = cipher.decrypt(account.credentials());
+        } catch (RuntimeException e) {
+            log.error("Дром: ключ кабинета {} не расшифровывается — выгрузка невозможна",
+                    account.id(), e);
+            return Optional.empty();
+        }
+
+        if (account.packetId() == null || cabinetKey == null) {
             // Аккаунт создан, но не донастроен: без packetId и ключа запрос
             // всё равно вернёт ERROR_REASON_EMPTY_REQUEST.
             log.warn("Дром: аккаунт {} активен, но не заполнены packetId или ключ", account.id());
             return Optional.empty();
         }
-        return Optional.of(account);
+        return Optional.of(account.withKey(cabinetKey));
     }
 
     /** Позиции, ушедшие клиенту: только они меняют доступность на площадке. */
@@ -180,6 +189,18 @@ public class DromDeltaSender {
                 result.success() ? null : result.body(), accountId);
     }
 
-    private record Account(long id, String packetId, String cabinetKey) {
+    /**
+     * @param credentials зашифрованный ключ, как он лежит в базе
+     * @param cabinetKey  расшифрованный ключ; заполняется только после проверки
+     */
+    private record Account(long id, String packetId, byte[] credentials, String cabinetKey) {
+
+        Account(long id, String packetId, byte[] credentials) {
+            this(id, packetId, credentials, null);
+        }
+
+        Account withKey(String key) {
+            return new Account(id, packetId, credentials, key);
+        }
     }
 }
