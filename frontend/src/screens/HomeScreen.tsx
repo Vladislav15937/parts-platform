@@ -11,9 +11,11 @@ import { ImportScreen } from './ImportScreen';
 import { InventoryScreen } from './InventoryScreen';
 import { OutboxScreen } from './OutboxScreen';
 import { SellerScreen } from './SellerScreen';
+import { DeliveryScreen } from './DeliveryScreen';
 import { ReportsScreen } from './ReportsScreen';
 import { UnmatchedScreen } from './UnmatchedScreen';
 import { unmatchedNames } from '../catalog/partNames';
+import { deadLetters } from '../events/deadLetters';
 
 /**
  * Оболочка после входа.
@@ -43,6 +45,7 @@ type Tab =
   | 'import'
   | 'names'
   | 'reports'
+  | 'delivery'
   | 'reference';
 
 export function HomeScreen() {
@@ -55,6 +58,9 @@ export function HomeScreen() {
   // владелец не откроет, пока не узнает, что там что-то есть. После импорта
   // склада там сразу сотня.
   const [unmatched, setUnmatched] = useState(0);
+  // То же соображение: недоставленное не всплывает само, а звонок клиента
+  // за проданной деталью — плохой способ о нём узнать.
+  const [undelivered, setUndelivered] = useState(0);
 
   // Запасной распознаватель тянем сразу после входа, пока связь заведомо есть:
   // первое сканирование случится в ангаре, где её уже не будет.
@@ -73,6 +79,9 @@ export function HomeScreen() {
       // Молча: справочник — не то, ради чего стоит показывать ошибку
       // на весь экран сразу после входа.
       .catch(() => setUnmatched(0));
+    void deadLetters()
+      .then((page) => setUndelivered(page.total))
+      .catch(() => setUndelivered(0));
   }, [role, online]);
 
   if (state.status !== 'authenticated') {
@@ -160,6 +169,15 @@ export function HomeScreen() {
             onClick={() => setTab('reports')}
           >
             Отчёты
+          </button>
+        )}
+        {NAMING_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
+            className={tab === 'delivery' ? 'tab tab--active' : 'tab'}
+            onClick={() => setTab('delivery')}
+          >
+            Доставка{undelivered > 0 && ` · ${undelivered}`}
           </button>
         )}
         <button
@@ -267,6 +285,19 @@ export function HomeScreen() {
           <p className="note note--error">
             Нет связи. Отчёты считает база — закэшированная зарплата хуже
             её отсутствия.
+          </p>
+        ))}
+
+      {tab === 'delivery' &&
+        (connected ? (
+          <DeliveryScreen
+            canManage={NAMING_ROLES.includes(state.me.role)}
+            onTotalChanged={setUndelivered}
+          />
+        ) : (
+          <p className="note note--error">
+            Нет связи. Повтор отправляет данные на площадку — вслепую
+            из очереди такое не отправляют.
           </p>
         ))}
 

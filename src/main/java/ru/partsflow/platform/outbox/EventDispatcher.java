@@ -8,6 +8,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -74,6 +75,39 @@ public class EventDispatcher {
         }
     }
 
+    /**
+     * Повторная доставка события конкретному обработчику.
+     *
+     * <p>Только тому, кто отказался: остальные подписчики этот тип уже приняли,
+     * и раздать им событие второй раз значит выдать товар дважды по кнопке
+     * «повторить».
+     *
+     * @return причина отказа; пусто — доставлено
+     */
+    public Optional<String> redeliver(String handlerName, ConsumedEvent event) {
+        EventHandler handler = byType.getOrDefault(event.eventType(), List.of()).stream()
+                .filter(h -> h.name().equals(handlerName))
+                .findFirst()
+                .orElse(null);
+
+        if (handler == null) {
+            // Обработчика больше нет в сборке — событие повторять некому,
+            // и молчать об этом нельзя: запись висела бы в разборе вечно.
+            return Optional.of("Обработчик «%s» в этой версии не подписан на %s"
+                    .formatted(handlerName, event.eventType()));
+        }
+
+        try {
+            handler.handle(event);
+            markProcessed(handler, event);
+            return Optional.empty();
+        } catch (Exception e) {
+            log.warn("Повтор не прошёл: обработчик {} снова не принял событие {}",
+                    handlerName, event.eventId(), e);
+            return Optional.of(messageOf(e));
+        }
+    }
+
     private void deliver(EventHandler handler, ConsumedEvent event) {
         if (!claim(handler, event)) {
             log.debug("Событие {} уже обработано обработчиком {}", event.eventId(), handler.name());
@@ -109,23 +143,37 @@ public class EventDispatcher {
      * в «уже обработано» и событие не получит второго шанса вовсе.
      */
     private void release(EventHandler handler, ConsumedEvent event, Exception cause) {
-        String message = cause.getMessage() == null
-                ? cause.getClass().getSimpleName()
-                : cause.getMessage();
-
         transactions.executeWithoutResult(status -> {
             jdbc.update("DELETE FROM processed_event WHERE handler = ? AND event_id = ?",
                     handler.name(), event.eventId());
             jdbc.update("""
                     INSERT INTO event_dead_letter
-                        (handler, event_id, event_type, aggregate_id, payload, error)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                        (handler, event_id, event_type, aggregate_type, aggregate_id,
+                         payload, error, next_attempt_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, now())
                     ON CONFLICT (handler, event_id) DO UPDATE
                        SET attempts = event_dead_letter.attempts + 1,
                            error = excluded.error,
-                           resolved_at = NULL""",
+                           resolved_at = NULL,
+                           resolution = NULL""",
                     handler.name(), event.eventId(), event.eventType(),
-                    event.aggregateId(), event.payload(), message);
+                    event.aggregateType(), event.aggregateId(), event.payload(),
+                    messageOf(cause));
         });
+    }
+
+    /** Отметка об обработке после удачного повтора: иначе событие можно повторить дважды. */
+    private void markProcessed(EventHandler handler, ConsumedEvent event) {
+        transactions.executeWithoutResult(status -> jdbc.update("""
+                INSERT INTO processed_event (handler, event_id, event_type)
+                VALUES (?, ?, ?)
+                ON CONFLICT (handler, event_id) DO NOTHING""",
+                handler.name(), event.eventId(), event.eventType()));
+    }
+
+    private static String messageOf(Exception cause) {
+        return cause.getMessage() == null
+                ? cause.getClass().getSimpleName()
+                : cause.getMessage();
     }
 }
