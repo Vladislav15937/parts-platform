@@ -1,18 +1,30 @@
+import { useState } from 'react';
 import { useSession } from '../auth/SessionProvider';
+import { useOutbox } from '../outbox/useOutbox';
 import { ReferencePanel } from '../reference/ReferencePanel';
+import { useReference } from '../reference/useReference';
 import { useOnline } from '../shell/useOnline';
+import { IntakeScreen } from './IntakeScreen';
+import { OutboxScreen } from './OutboxScreen';
 
 /**
  * Оболочка после входа.
  *
- * <p>Экранов приёмки здесь пока нет — это каркас. Что уже есть и должно быть
- * именно здесь: кто вошёл и есть ли связь. Признак связи виден всегда,
- * а не всплывает при ошибке: приёмщик должен понимать, уходит его работа
- * на сервер или накапливается, до того как накопит смену.
+ * <p>Признак связи и число неотправленных видны всегда, а не всплывают при
+ * ошибке: приёмщик должен понимать, уходит его работа на сервер или
+ * накапливается, — до того как накопит смену.
+ *
+ * <p>Роутера по-прежнему нет: три вкладки переключаются состоянием. Адреса
+ * экранов приёмщику не нужны, ссылками он не делится.
  */
+type Tab = 'intake' | 'outbox' | 'reference';
+
 export function HomeScreen() {
   const { state, signOut } = useSession();
   const online = useOnline();
+  const { status } = useReference();
+  const outbox = useOutbox();
+  const [tab, setTab] = useState<Tab>('intake');
 
   if (state.status !== 'authenticated') {
     return null;
@@ -21,6 +33,7 @@ export function HomeScreen() {
   // Личность, восстановленная локально, — тоже признак отсутствия связи,
   // и более достоверный, чем navigator.onLine: сервер только что не ответил.
   const connected = online && !state.offline;
+  const unsent = outbox.records.length;
 
   return (
     <div className="screen">
@@ -41,21 +54,55 @@ export function HomeScreen() {
         </p>
       )}
 
-      <ReferencePanel />
+      <nav className="tabs">
+        <button
+          type="button"
+          className={tab === 'intake' ? 'tab tab--active' : 'tab'}
+          onClick={() => setTab('intake')}
+        >
+          Приёмка
+        </button>
+        <button
+          type="button"
+          className={tab === 'outbox' ? 'tab tab--active' : 'tab'}
+          onClick={() => setTab('outbox')}
+        >
+          Очередь{unsent > 0 && ` · ${unsent}`}
+        </button>
+        <button
+          type="button"
+          className={tab === 'reference' ? 'tab tab--active' : 'tab'}
+          onClick={() => setTab('reference')}
+        >
+          Справочники
+        </button>
+      </nav>
 
-      <p className="note">
-        Экраны приёмки — следующие шаги, см. <code>docs/pwa-intake-plan.md §6</code>.
-      </p>
+      {tab === 'intake' &&
+        (status.kind === 'ready' ? (
+          <IntakeScreen
+            reference={status.reference}
+            onSend={(payload, title) => void outbox.add('receipt', payload, title)}
+          />
+        ) : (
+          <p className="note">
+            Справочники не загружены — приёмка невозможна. Откройте вкладку
+            «Справочники».
+          </p>
+        ))}
 
-      <ul className="todo">
-        <li>Выбор донора</li>
-        <li>Приёмка детали</li>
-        <li>Партия</li>
-        <li>Очередь отправки</li>
-        <li>Инвентаризация</li>
-      </ul>
+      {tab === 'outbox' && (
+        <OutboxScreen
+          records={outbox.records}
+          needsSignIn={outbox.needsSignIn}
+          onRetry={(id) => void outbox.retry(id)}
+          onDrop={(id) => void outbox.drop(id)}
+        />
+      )}
 
-      <button type="button" onClick={signOut}>
+      {tab === 'reference' && <ReferencePanel />}
+
+      <button type="button" className="button--ghost" onClick={signOut}>
         Выйти
       </button>
     </div>
