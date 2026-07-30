@@ -12,6 +12,7 @@ import { InventoryScreen } from './InventoryScreen';
 import { OutboxScreen } from './OutboxScreen';
 import { SellerScreen } from './SellerScreen';
 import { DeliveryScreen } from './DeliveryScreen';
+import { LabelsScreen } from './LabelsScreen';
 import { ReportsScreen } from './ReportsScreen';
 import { UnmatchedScreen } from './UnmatchedScreen';
 import { unmatchedNames } from '../catalog/partNames';
@@ -36,6 +37,12 @@ const SELLING_ROLES = ['OWNER', 'MANAGER', 'SELLER'];
  */
 const NAMING_ROLES = ['OWNER', 'MANAGER'];
 
+/**
+ * Кто печатает этикетки. Кладовщик здесь есть: подписывать стеллажи —
+ * его работа, и гонять за этим владельца значит не подписать их вовсе.
+ */
+const LABEL_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
+
 type Tab =
   | 'intake'
   | 'donor'
@@ -46,6 +53,7 @@ type Tab =
   | 'names'
   | 'reports'
   | 'delivery'
+  | 'labels'
   | 'reference';
 
 export function HomeScreen() {
@@ -180,6 +188,15 @@ export function HomeScreen() {
             Доставка{undelivered > 0 && ` · ${undelivered}`}
           </button>
         )}
+        {LABEL_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
+            className={tab === 'labels' ? 'tab tab--active' : 'tab'}
+            onClick={() => setTab('labels')}
+          >
+            Этикетки
+          </button>
+        )}
         <button
           type="button"
           className={tab === 'reference' ? 'tab tab--active' : 'tab'}
@@ -298,6 +315,15 @@ export function HomeScreen() {
           <p className="note note--error">
             Нет связи. Повтор отправляет данные на площадку — вслепую
             из очереди такое не отправляют.
+          </p>
+        ))}
+
+      {tab === 'labels' &&
+        (connected ? (
+          <LabelsScreen canPrint={LABEL_ROLES.includes(state.me.role)} />
+        ) : (
+          <p className="note note--error">
+            Нет связи. Коды ячеек и деталей берутся из базы — печатать нечего.
           </p>
         ))}
 

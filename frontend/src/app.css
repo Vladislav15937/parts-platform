@@ -537,3 +537,99 @@ hr {
   align-items: center;
   justify-content: space-between;
 }
+
+/* Этикетки. Экранный предпросмотр — он же то, что уйдёт в печать: отдельная
+   вёрстка для принтера разошлась бы с увиденным, и разошлась бы незаметно. */
+.label-sheet {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 1rem;
+}
+
+.label {
+  box-sizing: border-box;
+  width: 58mm;
+  height: 40mm;
+  padding: 3mm;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1mm;
+  background: #fff;
+  /* Рамка только на экране: на печати её нет, иначе принтер обведёт
+     каждую этикетку по краю рулона. */
+  border: 1px dashed var(--line);
+  color: #000;
+}
+
+.label-title {
+  font-size: 3.5mm;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.2;
+  /* Длинное наименование детали не должно выдавливать штрихкод за край. */
+  max-height: 9mm;
+  overflow: hidden;
+}
+
+/* Код ячейки читают с двух метров, стоя у стеллажа. */
+.label-title--big {
+  font-size: 7mm;
+  letter-spacing: 0.5mm;
+}
+
+.label-note {
+  font-size: 3mm;
+  color: #333;
+  text-align: center;
+}
+
+.label-barcode {
+  display: block;
+}
+
+.label-code {
+  font-size: 2.8mm;
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.3mm;
+}
+
+@media print {
+  /* Печатается только лист этикеток: интерфейс вокруг на рулон не влезает
+     и стоит впустую потраченной ленты. */
+  body * {
+    visibility: hidden;
+  }
+
+  .label-sheet,
+  .label-sheet * {
+    visibility: visible;
+  }
+
+  .label-sheet {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+    margin: 0;
+    gap: 0;
+  }
+
+  .label {
+    border: none;
+    /* Каждая этикетка — своя страница: рулон подаётся по одной. */
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .no-print {
+    display: none;
+  }
+
+  @page {
+    size: 58mm 40mm;
+    margin: 0;
+  }
+}
