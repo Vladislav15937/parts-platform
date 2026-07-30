@@ -68,8 +68,8 @@ public class StockDocumentService {
             case RETURN -> StockMovement.returned(
                     line.getPartId(), line.getQty(), document.getWarehouseId(), document.getId());
             case INVENTORY -> throw new UnsupportedOperationException(
-                    "Инвентаризация проводится своим сценарием: там сверка с пересчётом, "
-                            + "а не список движений");
+                    "Инвентаризация проводится через InventoryService: там сверка факта "
+                            + "с учётом, и движения появляются только на расхождениях");
         };
         movement.setDocumentId(document.getId());
         return movement;

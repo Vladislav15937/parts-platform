@@ -109,6 +109,31 @@ public class StockMovement {
     }
 
     /**
+     * Корректировка по инвентаризации.
+     *
+     * <p>Знак задаёт направление: минус — недостача, плюс — излишек. Сторона
+     * склада выбирается по знаку, потому что триггер остатка смотрит не на знак,
+     * а на пару складов: расход идёт по {@code from}, приход по {@code to}.
+     *
+     * @param delta расхождение, отличное от нуля — сошедшуюся позицию
+     *              корректировать нечем, и БД такое движение отвергнет
+     */
+    public static StockMovement inventoryAdjust(Long partId, BigDecimal delta, Long warehouseId) {
+        if (delta == null || delta.signum() == 0) {
+            throw new IllegalArgumentException(
+                    "Корректировка на ноль бессмысленна: позиция сошлась");
+        }
+        StockMovement movement =
+                new StockMovement(partId, MovementType.INVENTORY_ADJUST, delta);
+        if (delta.signum() < 0) {
+            movement.fromWarehouseId = warehouseId;
+        } else {
+            movement.toWarehouseId = warehouseId;
+        }
+        return movement;
+    }
+
+    /**
      * Списание: бой, недостача, разукомплектация.
      *
      * <p>Отдельный тип, а не продажа с нулевой ценой: списанное не должно
