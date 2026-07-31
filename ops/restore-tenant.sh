@@ -10,13 +10,24 @@
 # ВНИМАНИЕ: схема арендатора удаляется и создаётся заново. Всё, что появилось
 # в ней после снятия набора, будет потеряно. Скрипт спрашивает подтверждение
 # именно поэтому.
+#
+# Файл окружения выбирается переменной ENV_FILE — одинаково у всех трёх
+# скриптов. Позиция аргумента у них разная (набор, схема), и запоминать,
+# какой по счёту здесь env, — ровно тот способ однажды снять бэкап одной
+# ячейки, а проверить другой:
+#
+#   ENV_FILE=.env.cell02 ops/backup.sh
+#   ENV_FILE=.env.cell02 ops/verify-backup.sh
+#
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SCHEMA="${1:?укажите схему, например t_000042}"
-SET_DIR="${2:-$(find "${BACKUP_DIR:-./backups/${APP_CELL:-cell01}}" -maxdepth 1 -type d -name '20*' | sort | tail -1)}"
-ENV_FILE="${3:-.env}"
+ENV_FILE="${3:-${ENV_FILE:-.env}}"
 [ -f "$ENV_FILE" ] && set -a && . "$ENV_FILE" && set +a
+
+# После чтения окружения: APP_CELL приезжает оттуда.
+SET_DIR="${2:-$(find "${BACKUP_DIR:-./backups/${APP_CELL:-cell01}}" -maxdepth 1 -type d -name '20*' | sort | tail -1)}"
 
 COMPOSE="docker compose -f docker-compose.prod.yml --env-file $ENV_FILE"
 DB_USER="${DB_USER:?укажите DB_USER}"

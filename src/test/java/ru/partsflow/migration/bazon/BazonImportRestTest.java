@@ -150,6 +150,35 @@ class BazonImportRestTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Чужой формат отвергается, а не грузится частично")
+    void alienFormatIsRejected() throws Exception {
+        String code = "baz" + UUID.randomUUID().toString().substring(0, 8);
+        provisioning.provision(new TenantProvisioning.Request(
+                code, "Разборка", "vladelec", "пароль-8симв", null));
+
+        // Первые байты файла .xlsx: это zip, и прочитанный как текст
+        // он давал строки без заголовка. Часть из них доезжала до склада
+        // призрачными карточками «Без наименования» — пятнадцать штук
+        // на двухстах настоящих. Поймано прогоном инструкции по подключению.
+        byte[] xlsx = {0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00, 0x08, 0x00};
+
+        mvc.perform(multipart("/api/import/bazon")
+                        .file(csv("donors", DONORS))
+                        .file(new MockMultipartFile("catalog", "catalog.xlsx",
+                                "application/vnd.ms-excel", xlsx))
+                        .with(csrf()).session(login(code)))
+                .andExpect(status().isBadRequest());
+
+        // И машин это касается ровно так же.
+        mvc.perform(multipart("/api/import/bazon")
+                        .file(new MockMultipartFile("donors", "donors.xlsx",
+                                "application/vnd.ms-excel", xlsx))
+                        .file(csv("catalog", CATALOG))
+                        .with(csrf()).session(login(code)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     @DisplayName("Без файлов — 400, а не 500")
     void missingFilesAreRejected() throws Exception {
         String code = "baz" + UUID.randomUUID().toString().substring(0, 8);
