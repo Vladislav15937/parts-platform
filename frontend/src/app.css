@@ -202,6 +202,45 @@ button:disabled {
   width: auto;
 }
 
+/* Выбор из справочника внутри карточки выгрузки. */
+.picker {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0 0;
+  border: none;
+  border-top: 1px solid var(--line);
+}
+
+.picker legend {
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* Найденное — строкой: список из двенадцати кнопок столбиком выталкивает
+   выбранное за пределы экрана, а смотреть надо на оба сразу. */
+.picker__found {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.picker__chosen {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.picker__chosen li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+
 /* Заказ, который нечем закрыть: подтверждать площадке нечего, и увидеть
    это надо до того, как продавец начнёт читать позиции. */
 .card--alert {

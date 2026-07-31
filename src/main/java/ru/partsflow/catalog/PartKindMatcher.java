@@ -134,6 +134,29 @@ public class PartKindMatcher {
     }
 
     /** Эталонный вид запчасти из общего каталога. */
+    /**
+     * Все действующие виды деталей.
+     *
+     * <p>Без поиска и без предела: их сто семьдесят восемь, справочник
+     * наполняется миграцией и меняется с релизом. Отдавать его целиком дешевле,
+     * чем гонять поиск на каждую букву, а экрану отбора выгрузки нужны ещё
+     * и названия уже выбранных — по поиску их не восстановить.
+     */
+    public List<PartKind> all() {
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                        SELECT k.id, k.category_id, k.name
+                          FROM catalog.part_kind k
+                         WHERE k.is_active
+                         ORDER BY k.name""")
+                .getResultList();
+        return rows.stream()
+                .map(r -> new PartKind(((Number) r[0]).longValue(),
+                        r[1] == null ? null : ((Number) r[1]).longValue(),
+                        (String) r[2]))
+                .toList();
+    }
+
     public record PartKind(Long id, Long categoryId, String name) {
     }
 }

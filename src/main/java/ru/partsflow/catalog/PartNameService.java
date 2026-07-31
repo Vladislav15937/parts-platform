@@ -126,6 +126,12 @@ public class PartNameService {
         return matcher.search(query, limit);
     }
 
+    /** Все виды деталей: справочник статичный и маленький. */
+    @Transactional(readOnly = true)
+    public List<PartKindMatcher.PartKind> allKinds() {
+        return matcher.all();
+    }
+
     @Transactional(readOnly = true)
     public PartName require(Long id) {
         return repository.findById(id)

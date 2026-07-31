@@ -80,6 +80,18 @@ public class PartNameController {
      * <p>Подсказки идут по похожести строк, а «запаска» не похожа на «Колесо
      * запасное» ничем. Без поиска разбор встанет на первом же таком написании.
      */
+    /**
+     * Весь справочник видов деталей.
+     *
+     * <p>Отдельно от поиска: экрану отбора выгрузки нужны названия уже
+     * выбранных видов, а поиском их не восстановить — по идентификатору
+     * он не ищет. Справочник статичный, сто семьдесят восемь строк.
+     */
+    @GetMapping("/kinds/all")
+    public List<KindView> allKinds() {
+        return partNames.allKinds().stream().map(KindView::of).toList();
+    }
+
     @GetMapping("/kinds")
     public List<KindView> kinds(@RequestParam("q") String query) {
         return partNames.searchKinds(query, KIND_SEARCH_LIMIT).stream()

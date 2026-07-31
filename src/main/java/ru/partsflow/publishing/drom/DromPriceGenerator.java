@@ -75,6 +75,7 @@ public class DromPriceGenerator {
                    WHERE (?::bigint[] IS NULL OR warehouse_id = ANY (?::bigint[]))
                    GROUP BY part_id
               ) s ON s.part_id = p.id
+              LEFT JOIN donor d ON d.id = p.donor_id
               LEFT JOIN part_oem primary_oem
                      ON primary_oem.part_id = p.id AND primary_oem.is_primary
               LEFT JOIN (
@@ -89,6 +90,18 @@ public class DromPriceGenerator {
                AND (?::numeric IS NULL OR p.price >= ?::numeric)
                AND (?::numeric IS NULL OR p.price <= ?::numeric)
                AND (?::text[]   IS NULL OR p.condition = ANY (?::text[]))
+               -- Список в одну из двух сторон. COALESCE нужен для позиций
+               -- без вида и без донора: при «только эти» они не проходят
+               -- (мы не знаем, те ли они), при «кроме этих» — проходят,
+               -- иначе исключение одной марки выкинуло бы и контрактные.
+               AND (?::bigint[] IS NULL OR
+                    CASE WHEN ?::boolean
+                         THEN COALESCE(p.part_kind_id <> ALL (?::bigint[]), true)
+                         ELSE p.part_kind_id = ANY (?::bigint[]) END)
+               AND (?::bigint[] IS NULL OR
+                    CASE WHEN ?::boolean
+                         THEN COALESCE(d.brand_id <> ALL (?::bigint[]), true)
+                         ELSE d.brand_id = ANY (?::bigint[]) END)
             """;
 
     /** Дельта — тот же запрос по списку позиций: формат обязан совпасть с прайсом. */
@@ -150,10 +163,13 @@ public class DromPriceGenerator {
      * @param warehouseIds пусто — все склады
      */
     public record FeedFilter(BigDecimal priceFrom, BigDecimal priceTo,
-                             List<String> conditions, List<Long> warehouseIds) {
+                             List<String> conditions, List<Long> warehouseIds,
+                             List<Long> kindIds, boolean kindsExcluded,
+                             List<Long> brandIds, boolean brandsExcluded) {
 
         public static FeedFilter everything() {
-            return new FeedFilter(null, null, List.of(), List.of());
+            return new FeedFilter(null, null, List.of(), List.of(),
+                    List.of(), false, List.of(), false);
         }
     }
 
@@ -203,8 +219,24 @@ public class DromPriceGenerator {
                 statement.setArray(7, conditions);
                 statement.setArray(8, conditions);
 
+                java.sql.Array kinds = filter.kindIds() == null || filter.kindIds().isEmpty()
+                        ? null
+                        : connection.createArrayOf("bigint", filter.kindIds().toArray());
+                java.sql.Array brands = filter.brandIds() == null || filter.brandIds().isEmpty()
+                        ? null
+                        : connection.createArrayOf("bigint", filter.brandIds().toArray());
+
+                statement.setArray(9, kinds);
+                statement.setBoolean(10, filter.kindsExcluded());
+                statement.setArray(11, kinds);
+                statement.setArray(12, kinds);
+                statement.setArray(13, brands);
+                statement.setBoolean(14, filter.brandsExcluded());
+                statement.setArray(15, brands);
+                statement.setArray(16, brands);
+
                 if (partIds != null) {
-                    statement.setArray(9, connection.createArrayOf("bigint", partIds.toArray()));
+                    statement.setArray(17, connection.createArrayOf("bigint", partIds.toArray()));
                 }
                 try (ResultSet rs = statement.executeQuery()) {
                     return writer.write(out, new OfferCursor(rs));

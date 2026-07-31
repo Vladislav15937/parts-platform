@@ -242,6 +242,69 @@ class DromFeedControllerTest extends PostgresTestBase {
                 .contains("<available>false</available>");
     }
 
+    @Test
+    @DisplayName("Список марок работает в обе стороны и не выкидывает контрактные")
+    void brandListExcludesAndIncludes() throws Exception {
+        Long toyota = inTenant(TENANT, () -> {
+            Long brandId = jdbc.queryForObject(
+                    "SELECT id FROM catalog.brand ORDER BY id LIMIT 1", Long.class);
+            Long donorId = jdbc.queryForObject("""
+                    INSERT INTO donor (brand_id, note) VALUES (?, 'Донор') RETURNING id""",
+                    Long.class, brandId);
+            Long branch = jdbc.queryForObject(
+                    "INSERT INTO branch (name) VALUES ('Ф') RETURNING id", Long.class);
+            Long warehouse = jdbc.queryForObject(
+                    "INSERT INTO warehouse (branch_id, name) VALUES (?, 'С') RETURNING id",
+                    Long.class, branch);
+            Long partId = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, donor_id, title, price, is_published)
+                    VALUES (1, ?, 'Дверь с донора', 8000, true) RETURNING id""",
+                    Long.class, donorId);
+            jdbc.update("""
+                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
+                    VALUES (?, 'INTAKE', 1, ?)""", partId, warehouse);
+            return brandId;
+        });
+
+        Long excludingId = inTenant(TENANT, () -> jdbc.queryForObject("""
+                INSERT INTO marketplace_account (marketplace, title, settings,
+                                                 brand_ids, brands_excluded)
+                VALUES ('DROM', 'Дром: кроме марки', '{}'::jsonb, ARRAY[?::bigint], true)
+                RETURNING id""", Long.class, toyota));
+
+        String body = mvc.perform(get(rotate(excludingId)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(body)
+                .as("исключённая марка всё равно уехала в прайс")
+                .doesNotContain("Дверь с донора");
+        // Позиция без донора — контрактная: марки у неё нет, и исключение
+        // чужой марки не повод выкинуть её из прайса.
+        assertThat(body)
+                .as("вместе с исключённой маркой пропали позиции без донора")
+                .contains("Фара левая Camry");
+    }
+
+    @Test
+    @DisplayName("Справочник видов отдаётся целиком, а не поиском")
+    void kindsAreServedWhole() throws Exception {
+        // Экрану отбора нужны названия уже выбранных видов, а поиск
+        // по идентификатору не ищет: выбранное показывалось бы пустой строкой.
+        String body = mvc.perform(get("/api/part-names/kinds/all").session(login("owner")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // Справочник наполняется миграцией: 178 эталонов. Проверяем, что
+        // ответ не обрезан пределом поиска, а не точное число — оно растёт
+        // с релизами.
+        long rows = body.chars().filter(c -> c == '{').count();
+        assertThat(rows)
+                .as("справочник видов пришёл обрезанным — выбранное в отборе "
+                        + "покажется номером вместо названия")
+                .isGreaterThan(100);
+    }
+
     /** Кусок прайса про одну позицию: остальные предложения не мешают смотреть. */
     private String offerOf(String feed, String title) {
         int at = feed.indexOf(title);

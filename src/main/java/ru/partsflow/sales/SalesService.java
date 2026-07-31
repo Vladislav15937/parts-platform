@@ -201,7 +201,8 @@ public class SalesService {
         deal.setCreatedBy(managerId);
         deal.setDealSourceId(dealSourceId);
         deal.setDeliveryNote(deliveryNote);
-        deal.fromMarketplace(marketplace, orderNo.strip(), replyDeadline);
+        deal.fromMarketplace(marketplace, orderNo.strip(),
+                replyDeadline != null ? replyDeadline : defaultReplyDeadline());
 
         for (ItemRequest item : items) {
             Part part = requirePart(item.partId());
@@ -284,6 +285,32 @@ public class SalesService {
             }
         }
         return missing;
+    }
+
+    /**
+     * Срок ответа по умолчанию: трое рабочих суток.
+     *
+     * <p>Так у Дрома по защищённой сделке: не ответили — деньги вернулись
+     * покупателю. Пока заказ заводят руками, срок никто не вводит, а без него
+     * очередь «ждут ответа» сортировать нечем и каждая карточка пишет «срок
+     * не указан» — то есть очередь, заведённая ради срока, его и не знает.
+     *
+     * <p>Выходные пропускаются, праздники — нет. Производственный календарь
+     * пришлось бы откуда-то брать и обновлять каждый год ради того, чтобы
+     * подсказка сдвинулась на день; ошибка в эту сторону безопасна —
+     * продавца поторопят раньше, чем нужно, а не позже.
+     */
+    private Instant defaultReplyDeadline() {
+        java.time.ZonedDateTime at = Instant.now().atZone(java.time.ZoneOffset.UTC);
+        int left = 3;
+        while (left > 0) {
+            at = at.plusDays(1);
+            java.time.DayOfWeek day = at.getDayOfWeek();
+            if (day != java.time.DayOfWeek.SATURDAY && day != java.time.DayOfWeek.SUNDAY) {
+                left--;
+            }
+        }
+        return at.toInstant();
     }
 
     /**
