@@ -30,6 +30,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * там кнопки, — поэтому гонка выглядит не как «двое печатают», а как «двое
  * нажали»: один выдаёт, второй в ту же секунду отменяет.
  *
+ * <p><b>Ожидания здесь щедрые намеренно.</b> Смысл теста — в том, что обе
+ * транзакции читают сделку до того, как любая записала; сколько именно они
+ * при этом ждут друг друга, не проверяется. Жёсткие десять секунд на раннере
+ * с двумя ядрами превращают тест в лотерею: он падает не потому, что гонка
+ * не отбита, а потому, что поток не успел добраться до защёлки.
+ *
  * <p><b>Проверка статуса от этого не спасает.</b> Она читает то, что было
  * загружено в начале транзакции: обе видят {@code RESERVED}, обе проходят,
  * и обе пишут. Итог — товар списан со склада и одновременно снят с резерва,
@@ -41,8 +47,17 @@ class DealConcurrencyTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000087";
 
+    /**
+     * Верхняя граница ожидания, а не ожидаемое время: на исправной машине
+     * потоки встречаются за миллисекунды.
+     */
+    private static final int WAIT_SECONDS = 60;
+
     @Autowired
     private SalesService sales;
+
+    @Autowired
+    private DealRepository deals;
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -60,6 +75,12 @@ class DealConcurrencyTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
+        // Первое обращение к сущности поднимает метамодель Hibernate и прокси
+        // репозитория. На холодном контексте это заметные секунды, и если бы
+        // они выпали на поток внутри защёлки, тест ждал бы соседа, который
+        // ещё только просыпается.
+        inTenant(() -> deals.count());
+
         inTenant(() -> {
             jdbc.update("DELETE FROM deal_item");
             jdbc.update("DELETE FROM deal");
@@ -99,10 +120,13 @@ class DealConcurrencyTest extends PostgresTestBase {
 
         issuing.start();
         cancelling.start();
-        assertThat(loaded.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(loaded.await(WAIT_SECONDS, TimeUnit.SECONDS))
+                .as("потоки не дошли до защёлки за %d с — проверять гонку не на чем",
+                        WAIT_SECONDS)
+                .isTrue();
         go.countDown();
-        issuing.join(15_000);
-        cancelling.join(15_000);
+        issuing.join(WAIT_SECONDS * 1000L);
+        cancelling.join(WAIT_SECONDS * 1000L);
 
         // Ровно одна из двух должна была не пройти. Если прошли обе — товар
         // списан со склада и одновременно снят с резерва.
@@ -156,10 +180,13 @@ class DealConcurrencyTest extends PostgresTestBase {
 
         issuing.start();
         moving.start();
-        assertThat(loaded.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(loaded.await(WAIT_SECONDS, TimeUnit.SECONDS))
+                .as("потоки не дошли до защёлки за %d с — проверять гонку не на чем",
+                        WAIT_SECONDS)
+                .isTrue();
         go.countDown();
-        issuing.join(15_000);
-        moving.join(15_000);
+        issuing.join(WAIT_SECONDS * 1000L);
+        moving.join(WAIT_SECONDS * 1000L);
 
         // Здесь склад не спасает: перенос резерв не снимает и не ставит —
         // товар просто меняет документ. Значит обе операции проходят мимо
@@ -201,7 +228,7 @@ class DealConcurrencyTest extends PostgresTestBase {
                 sales.require(deal());
                 loaded.countDown();
                 try {
-                    go.await(10, TimeUnit.SECONDS);
+                    go.await(WAIT_SECONDS, TimeUnit.SECONDS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
