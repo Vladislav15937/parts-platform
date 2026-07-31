@@ -96,6 +96,46 @@ public class ApiExceptionHandler {
     }
 
     /**
+     * Правило, которое стережёт база.
+     *
+     * <p>Остаток, резерв и неизменяемость журнала защищены триггерами, а не
+     * проверками в коде: проверка в приложении пропускает второго продавца,
+     * пришедшего в ту же миллисекунду. Наружу такое нарушение обязано ехать
+     * как 409 — это отказ по правилу, а не поломка сервера. Пока оно ехало
+     * пятисоткой, офлайн-очередь приёмки повторяла бы его вечно, а человек
+     * шёл искать сломанный сервер.
+     *
+     * <p>Текст отдаётся только для {@code P0001} — это {@code RAISE EXCEPTION}
+     * наших триггеров, написанный по-русски и для человека. Нарушения ключей
+     * и ссылок уходят общей формулировкой: в них лежат имена таблиц
+     * и колонок, то есть подсказки тому, кто ищет способ забраться внутрь.
+     */
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    public ResponseEntity<ApiError> integrityViolation(
+            org.springframework.dao.DataIntegrityViolationException e) {
+
+        log.warn("Нарушение целостности", e);
+        String message = raiseMessage(e);
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiError(
+                message != null ? message : "Операция нарушает целостность данных"));
+    }
+
+    /** Текст нашего триггера, если это он. Иначе — пусто. */
+    private static String raiseMessage(Throwable e) {
+        for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+            if (cause instanceof java.sql.SQLException sql
+                    && "P0001".equals(sql.getSQLState())) {
+                String text = sql.getMessage();
+                // Драйвер добавляет к тексту «Где: PL/pgSQL function...» —
+                // человеку это лишнее.
+                int at = text.indexOf("\n");
+                return at < 0 ? text : text.substring(0, at);
+            }
+        }
+        return null;
+    }
+
+    /**
      * Не хватает параметра запроса.
      *
      * <p>Это ошибка вызывающего, а не наша: без обработчика она попадала
