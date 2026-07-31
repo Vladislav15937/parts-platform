@@ -248,8 +248,9 @@ public final class BazonImporter {
             try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + schema + """
                     .donor (vin, brand_id, year, color, mileage_km, note, supply_id, location,
                             steering, drive_type, transmission_type, transmission_model,
-                            color_code, equipment_code, legacy_code, model_id, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISMANTLED')
+                            color_code, equipment_code, legacy_code, model_id,
+                            body_code, engine_code, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISMANTLED')
                     RETURNING id""")) {
 
                 forEachRow(donorsCsv, report, row -> {
@@ -309,6 +310,10 @@ public final class BazonImporter {
                         ps.setString(15, number.number());
                         setLong(ps, 16, brandId == null
                                 ? null : brands.findModel(c, brandId, row.get("Модель")));
+                        // Кузов и двигатель — своими полями: по ним продавец
+                        // отличает подходящую деталь, и на витрине это колонки.
+                        ps.setString(17, row.get("Кузов"));
+                        ps.setString(18, row.get("Двигатель"));
 
                         ids.put(number.number(), firstLong(ps));
                         report.count("доноров");
