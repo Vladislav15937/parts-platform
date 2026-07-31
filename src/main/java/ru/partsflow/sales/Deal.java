@@ -135,6 +135,17 @@ public class Deal {
     private Instant closedAt;
 
     /**
+     * Услуги сделки: доставка, упаковка.
+     *
+     * <p>Отдельно от позиций намеренно — см. {@link DealService}. В сумму
+     * документа входят наравне с товаром: у заказа с площадки перевод приходит
+     * вместе с доставкой, и сойтись он должен с суммой сделки.
+     */
+    @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
+    @JoinColumn(name = "deal_id", nullable = false)
+    private List<DealService> services = new ArrayList<>();
+
+    /**
      * {@code nullable = false} обязателен: без него Hibernate вставляет позицию
      * с пустым {@code deal_id} и лишь потом проставляет ссылку отдельным UPDATE,
      * а колонка объявлена NOT NULL — вставка падает.
@@ -152,6 +163,21 @@ public class Deal {
     }
 
     // ---------- поведение ----------
+
+    /**
+     * Добавляет услугу: доставку, упаковку.
+     *
+     * <p>Склад это не двигает и двигать не может — у услуги нет детали.
+     * В сумму документа она входит наравне с товаром.
+     */
+    public DealService addService(Long serviceId, BigDecimal quantity, BigDecimal price) {
+        requireOpen("добавить услугу");
+
+        DealService service = new DealService(serviceId, quantity, price);
+        services.add(service);
+        recalculate();
+        return service;
+    }
 
     public DealItem addItem(Long partId, BigDecimal quantity, BigDecimal price, Long warehouseId) {
         requireOpen("добавить позицию");
@@ -335,12 +361,26 @@ public class Deal {
         return paidAmount.compareTo(totalAmount) >= 0;
     }
 
-    /** Сумма пересчитывается от позиций: хранить её независимо — гарантированное расхождение. */
+    /**
+     * Сумма пересчитывается от позиций: хранить её независимо — гарантированное
+     * расхождение.
+     *
+     * <p>Услуги входят наравне с товаром. Без этого сумма сделки по заказу
+     * с площадки не сходилась с переводом: Дром присылает деньги за деталь
+     * вместе с доставкой, а в документе была одна цена детали.
+     *
+     * <p>Отменённые позиции не входят, услуги отменять нечем: доставка либо
+     * оказана, либо не заведена.
+     */
     public void recalculate() {
-        this.totalAmount = items.stream()
+        BigDecimal goods = items.stream()
                 .filter(i -> i.getStatus() != DealItemStatus.CANCELLED)
                 .map(DealItem::lineTotal)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal work = services.stream()
+                .map(DealService::lineTotal)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        this.totalAmount = goods.add(work);
     }
 
     public void registerPayment(BigDecimal amount) {
@@ -428,6 +468,10 @@ public class Deal {
         this.marketplace = marketplace;
         this.externalOrderNo = orderNo;
         this.replyDeadline = replyDeadline;
+    }
+
+    public List<DealService> getServices() {
+        return List.copyOf(services);
     }
 
     public Long getDealSourceId() {

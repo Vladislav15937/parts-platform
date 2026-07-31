@@ -82,7 +82,7 @@ class MarketplaceOrderTest extends PostgresTestBase {
         var accepted = inTenant(() -> sales.registerMarketplaceOrder(
                 "DROM", "301-516-98", Instant.now().plus(Duration.ofDays(3)),
                 customerId, null, null, "ТК СДЭК, Надым", null,
-                List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId))));
+                List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId)), List.of()));
 
         assertThat(accepted.missing()).isEmpty();
         assertThat(accepted.deal().getStatus()).isEqualTo(DealStatus.RESERVED);
@@ -102,11 +102,11 @@ class MarketplaceOrderTest extends PostgresTestBase {
 
         var first = inTenant(() -> sales.registerMarketplaceOrder(
                 "DROM", "301-777-01", null, customerId, null, null, null, null,
-                List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId))));
+                List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId)), List.of()));
 
         var second = inTenant(() -> sales.registerMarketplaceOrder(
                 "DROM", "301-777-01", null, customerId, null, null, null, null,
-                List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId))));
+                List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId)), List.of()));
 
         assertThat(second.replayed()).isTrue();
         assertThat(second.deal().getId()).isEqualTo(first.deal().getId());
@@ -127,7 +127,7 @@ class MarketplaceOrderTest extends PostgresTestBase {
         var accepted = inTenant(() -> sales.registerMarketplaceOrder(
                 "DROM", "301-000-55", null, customerId, null, null, null, null,
                 List.of(new SalesService.ItemRequest(
-                        partId, new BigDecimal("3"), null, warehouseId))));
+                        partId, new BigDecimal("3"), null, warehouseId)), List.of()));
 
         // Отказать в записи нельзя: заказ уже существует у площадки, и заказ,
         // о котором знает Дром и не знает разборка, — это потерянные деньги.
@@ -154,11 +154,11 @@ class MarketplaceOrderTest extends PostgresTestBase {
         inTenant(() -> sales.registerMarketplaceOrder(
                 "DROM", "301-100-01", Instant.now().plus(Duration.ofDays(2)),
                 customerId, null, null, null, null,
-                List.of(new SalesService.ItemRequest(later, BigDecimal.ONE, null, warehouseId))));
+                List.of(new SalesService.ItemRequest(later, BigDecimal.ONE, null, warehouseId)), List.of()));
         inTenant(() -> sales.registerMarketplaceOrder(
                 "DROM", "301-100-02", Instant.now().plus(Duration.ofHours(2)),
                 customerId, null, null, null, null,
-                List.of(new SalesService.ItemRequest(urgent, BigDecimal.ONE, null, warehouseId))));
+                List.of(new SalesService.ItemRequest(urgent, BigDecimal.ONE, null, warehouseId)), List.of()));
 
         List<Deal> awaiting = inTenant(() -> sales.ordersAwaitingReply());
 
@@ -179,7 +179,7 @@ class MarketplaceOrderTest extends PostgresTestBase {
         var accepted = inTenant(() -> sales.registerMarketplaceOrder(
                 "DROM", "301-200-07", Instant.now().plus(Duration.ofDays(1)),
                 customerId, null, null, null, null,
-                List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId))));
+                List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId)), List.of()));
 
         Deal confirmed = inTenant(() -> sales.acceptOrder(accepted.deal().getId(), null));
 
@@ -200,7 +200,7 @@ class MarketplaceOrderTest extends PostgresTestBase {
         var accepted = inTenant(() -> sales.registerMarketplaceOrder(
                 "DROM", "301-300-09", Instant.now().plus(Duration.ofDays(1)),
                 customerId, null, null, null, null,
-                List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId))));
+                List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId)), List.of()));
 
         inTenant(() -> sales.cancel(accepted.deal().getId(), null, "покупатель отказался"));
 
@@ -210,6 +210,52 @@ class MarketplaceOrderTest extends PostgresTestBase {
         assertThat(inTenant(() -> sales.ordersAwaitingReply()))
                 .as("отклонённый заказ всё ещё ждёт ответа")
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("Доставка входит в деньги сделки, а не в примечание")
+    void deliveryIsMoneyNotANote() {
+        Long partId = partWithStock("Зеркало с доставкой", 1);
+        Long delivery = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM service WHERE name = 'Доставка'", Long.class));
+
+        var accepted = inTenant(() -> sales.registerMarketplaceOrder(
+                "DROM", "301-500-11", null, customerId, null, null,
+                "ТК СДЭК, Надым", null,
+                List.of(new SalesService.ItemRequest(
+                        partId, BigDecimal.ONE, new BigDecimal("4500"), warehouseId)),
+                List.of(new SalesService.ServiceRequest(
+                        delivery, BigDecimal.ONE, new BigDecimal("300")))));
+
+        // Площадка переводит деньги за деталь вместе с доставкой. Сумма
+        // документа без неё не сойдётся с переводом, и разбирать это
+        // придётся вручную по каждой сделке.
+        assertThat(accepted.deal().getTotalAmount())
+                .as("доставка не попала в сумму сделки — оплата не сойдётся с переводом")
+                .isEqualByComparingTo("4800");
+        assertThat(accepted.deal().getServices()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("Услуга не двигает склад")
+    void serviceDoesNotTouchStock() {
+        Long partId = partWithStock("Фара с упаковкой", 1);
+        Long packing = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM service WHERE name = 'Упаковка'", Long.class));
+
+        var accepted = inTenant(() -> sales.registerMarketplaceOrder(
+                "DROM", "301-500-12", null, customerId, null, null, null, null,
+                List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId)),
+                List.of(new SalesService.ServiceRequest(packing, BigDecimal.ONE, null))));
+
+        // Услуга живёт отдельной таблицей ровно затем, чтобы движение склада
+        // по ней было невозможно, а не запрещено на словах: у выдачи нет
+        // способа списать деталь, которой нет.
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM deal_item WHERE deal_id = ?", Long.class,
+                accepted.deal().getId())))
+                .isEqualTo(1);
+        assertThat(reserved(partId)).isEqualByComparingTo("1");
     }
 
     private Long partWithStock(String title, int qty) {

@@ -74,6 +74,38 @@ export interface Deal {
   orderAcceptedAt: string | null;
   deliveryNote: string | null;
   items: DealItem[];
+  /** Доставка и упаковка: деньги сделки, а не примечание к ней. */
+  services: DealServiceLine[];
+}
+
+/** Услуга в сделке. Склад не двигает — у неё нет детали. */
+export interface DealServiceLine {
+  id: number;
+  serviceId: number;
+  quantity: string;
+  price: string;
+}
+
+/** Строка справочника услуг. Цена — подсказка, а не тариф. */
+export interface ServiceKind {
+  id: number;
+  name: string;
+  price: string | null;
+}
+
+export function serviceKinds(): Promise<ServiceKind[]> {
+  return request<ServiceKind[]>('/api/deals/services');
+}
+
+/**
+ * Услуга, добавляемая в сделку.
+ *
+ * <p>Цена вводится в строке, а не берётся из справочника: доставка до Надыма
+ * и до соседней улицы стоит по-разному.
+ */
+export interface ServiceLine {
+  kind: ServiceKind;
+  price: string;
 }
 
 export interface HistoryEntry {
@@ -102,7 +134,11 @@ export interface BasketLine {
   price: string;
 }
 
-export function createDeal(customerId: number, lines: BasketLine[]): Promise<Deal> {
+export function createDeal(
+  customerId: number,
+  lines: BasketLine[],
+  services: ServiceLine[] = [],
+): Promise<Deal> {
   return request<Deal>('/api/deals', {
     method: 'POST',
     body: {
@@ -113,8 +149,17 @@ export function createDeal(customerId: number, lines: BasketLine[]): Promise<Dea
         price: line.price === '' ? null : line.price,
         warehouseId: line.row.warehouseId,
       })),
+      services: servicesBody(services),
     },
   });
+}
+
+function servicesBody(services: ServiceLine[]) {
+  return services
+    // Нулевую и пустую не отправляем: строка «Доставка 0 ₽» в документе
+    // означает, что доставку оказали бесплатно, а не что её не было.
+    .filter((s) => s.price !== '' && Number(s.price) > 0)
+    .map((s) => ({ serviceId: s.kind.id, quantity: 1, price: s.price }));
 }
 
 export function dealsOf(customerId: number): Promise<Deal[]> {
@@ -264,6 +309,7 @@ export function receiveOrder(
   lines: BasketLine[],
   replyDeadline: string | null,
   deliveryNote: string,
+  services: ServiceLine[] = [],
 ): Promise<OrderResult> {
   return request<OrderResult>('/api/deals/orders', {
     method: 'POST',
@@ -279,6 +325,7 @@ export function receiveOrder(
         price: line.price === '' ? null : line.price,
         warehouseId: line.row.warehouseId,
       })),
+      services: servicesBody(services),
     },
   });
 }
@@ -307,9 +354,17 @@ export function hoursUntilDeadline(deal: Deal, now: number = Date.now()): number
   return (new Date(deal.replyDeadline).getTime() - now) / 3_600_000;
 }
 
-/** Итого по корзине — то же число, что посчитает сервер. */
-export function basketTotal(lines: BasketLine[]): number {
-  return lines.reduce((sum, line) => sum + Number(line.price || 0) * line.quantity, 0);
+/**
+ * Итого по корзине — то же число, что посчитает сервер.
+ *
+ * <p>Услуги входят: продавец называет клиенту одну сумму, и она обязана
+ * совпасть с той, что окажется в документе, — иначе разговор про доставку
+ * начнётся после оплаты.
+ */
+export function basketTotal(lines: BasketLine[], services: ServiceLine[] = []): number {
+  const goods = lines.reduce((sum, line) => sum + Number(line.price || 0) * line.quantity, 0);
+  const work = services.reduce((sum, s) => sum + Number(s.price || 0), 0);
+  return goods + work;
 }
 
 /**

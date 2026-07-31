@@ -127,7 +127,8 @@ class SalesServiceReturnTest extends PostgresTestBase {
                     List.of(new SalesService.ItemRequest(firstPart, BigDecimal.ONE,
                                     new BigDecimal("6000"), issueWarehouseId),
                             new SalesService.ItemRequest(secondPart, BigDecimal.ONE,
-                                    new BigDecimal("4000"), issueWarehouseId)));
+                                    new BigDecimal("4000"), issueWarehouseId)),
+                    List.of());
             return salesService.issue(created.getId(), managerId);
         });
 
@@ -208,7 +209,7 @@ class SalesServiceReturnTest extends PostgresTestBase {
         Deal deal = inTenant(() -> salesService.createReserved(customerId, managerId,
                 Instant.now().plus(1, ChronoUnit.DAYS),
                 List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE,
-                        new BigDecimal("9000"), issueWarehouseId))));
+                        new BigDecimal("9000"), issueWarehouseId)), List.of()));
         Long itemId = deal.getItems().get(0).getId();
 
         assertThatThrownBy(() -> inTenant(() -> salesService.registerReturn(
@@ -252,7 +253,8 @@ class SalesServiceReturnTest extends PostgresTestBase {
         Deal created = salesService.createReserved(customerId, managerId,
                 Instant.now().plus(1, ChronoUnit.DAYS),
                 List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, price,
-                        issueWarehouseId)));
+                        issueWarehouseId)),
+                List.of());
         return salesService.issue(created.getId(), managerId);
     }
 

@@ -78,7 +78,8 @@ public class SalesController {
                 request.items().stream()
                         .map(i -> new SalesService.ItemRequest(
                                 i.partId(), i.quantity(), i.price(), i.warehouseId()))
-                        .toList());
+                        .toList(),
+                servicesOf(request.services()));
 
         return ResponseEntity.status(HttpStatus.CREATED).body(view(deal));
     }
@@ -106,7 +107,8 @@ public class SalesController {
                 request.items().stream()
                         .map(i -> new SalesService.ItemRequest(
                                 i.partId(), i.quantity(), i.price(), i.warehouseId()))
-                        .toList());
+                        .toList(),
+                servicesOf(request.services()));
 
         OrderView body = new OrderView(view(accepted.deal()), accepted.replayed(),
                 accepted.missing());
@@ -248,6 +250,28 @@ public class SalesController {
      * <p>История клиента — это десятки сделок; запрос на строку превратил бы
      * её открытие в сотню запросов к базе.
      */
+    private static List<SalesService.ServiceRequest> servicesOf(List<ServiceBody> bodies) {
+        return bodies == null ? List.of() : bodies.stream()
+                .map(b -> new SalesService.ServiceRequest(b.serviceId(), b.quantity(), b.price()))
+                .toList();
+    }
+
+    /** Справочник услуг для экрана продавца. */
+    @GetMapping("/services")
+    public List<ServiceView> services() {
+        return sales.serviceKinds().stream()
+                .map(k -> new ServiceView(k.getId(), k.getName(), k.getPrice()))
+                .toList();
+    }
+
+    public record ServiceView(Long id, String name, BigDecimal price) {
+    }
+
+    /** Строка услуги в сделке: доставка, упаковка. Склад не двигает. */
+    public record ServiceLineView(Long id, Long serviceId, BigDecimal quantity,
+                                  BigDecimal price) {
+    }
+
     private List<DealView> views(List<Deal> deals) {
         Map<Long, String> titles = parts.titlesOf(deals.stream()
                 .flatMap(deal -> deal.getItems().stream())
@@ -264,7 +288,15 @@ public class SalesController {
     public record CreateRequest(@NotNull Long customerId,
                                 /* Пусто — резерв на трое суток. */
                                 Instant reservedUntil,
-                                @NotEmpty List<ItemBody> items) {
+                                @NotEmpty List<ItemBody> items,
+                                /* Доставка и упаковка: деньги сделки, а не примечание. */
+                                List<ServiceBody> services) {
+    }
+
+    /** @param price пусто — берётся подсказка из справочника, а не ноль */
+    public record ServiceBody(@NotNull Long serviceId,
+                              BigDecimal quantity,
+                              BigDecimal price) {
     }
 
     /** Цена необязательна: по умолчанию берётся из карточки детали. */
@@ -316,7 +348,8 @@ public class SalesController {
                                Long dealSourceId,
                                String deliveryNote,
                                Instant reservedUntil,
-                               @NotEmpty List<ItemBody> items) {
+                               @NotEmpty List<ItemBody> items,
+                               List<ServiceBody> services) {
     }
 
     /**
@@ -340,7 +373,8 @@ public class SalesController {
                            Instant createdAt, Instant issuedAt,
                            String marketplace, String externalOrderNo,
                            Instant replyDeadline, Instant orderAcceptedAt,
-                           String deliveryNote, List<ItemView> items) {
+                           String deliveryNote, List<ItemView> items,
+                           List<ServiceLineView> services) {
 
         static DealView of(Deal deal, Map<Long, String> titles) {
             return new DealView(deal.getId(), deal.getNumber(), deal.getCustomerId(),
@@ -350,7 +384,11 @@ public class SalesController {
                     deal.getMarketplace(), deal.getExternalOrderNo(),
                     deal.getReplyDeadline(), deal.getOrderAcceptedAt(),
                     deal.getDeliveryNote(),
-                    deal.getItems().stream().map(item -> ItemView.of(item, titles)).toList());
+                    deal.getItems().stream().map(item -> ItemView.of(item, titles)).toList(),
+                    deal.getServices().stream()
+                            .map(s -> new ServiceLineView(s.getId(), s.getServiceId(),
+                                    s.getQuantity(), s.getPrice()))
+                            .toList());
         }
     }
 

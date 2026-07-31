@@ -38,6 +38,7 @@ public class SalesService {
     private final StockMovementRepository movementRepository;
     private final StockReservationRepository reservationRepository;
     private final DomainEventPublisher eventPublisher;
+    private final ServiceKindRepository serviceKinds;
 
     public SalesService(DealRepository dealRepository,
                         DealReturnRepository dealReturnRepository,
@@ -47,7 +48,8 @@ public class SalesService {
                         PartRepository partRepository,
                         StockMovementRepository movementRepository,
                         StockReservationRepository reservationRepository,
-                        DomainEventPublisher eventPublisher) {
+                        DomainEventPublisher eventPublisher,
+                        ServiceKindRepository serviceKinds) {
         this.dealRepository = dealRepository;
         this.dealReturnRepository = dealReturnRepository;
         this.paymentRepository = paymentRepository;
@@ -57,6 +59,19 @@ public class SalesService {
         this.movementRepository = movementRepository;
         this.reservationRepository = reservationRepository;
         this.eventPublisher = eventPublisher;
+        this.serviceKinds = serviceKinds;
+    }
+
+    /**
+     * Услуги, которые можно добавить в сделку.
+     *
+     * <p>Архивные не отдаются: справочник у клиента живёт годами, и услуга,
+     * которую перестали оказывать, не должна предлагаться продавцу — но
+     * и удалять её нельзя, она стоит в прошлых сделках.
+     */
+    @Transactional(readOnly = true)
+    public List<ServiceKind> serviceKinds() {
+        return serviceKinds.findByArchivedFalseOrderByName();
     }
 
     /**
@@ -68,7 +83,7 @@ public class SalesService {
      */
     @Transactional
     public Deal createReserved(Long customerId, Long managerId, Instant reservedUntil,
-                               List<ItemRequest> items) {
+                               List<ItemRequest> items, List<ServiceRequest> services) {
 
         Deal deal = new Deal(customerId, managerId);
         deal.setCreatedBy(managerId);
@@ -83,12 +98,39 @@ public class SalesService {
             // деталь положит в свою сделку другой продавец.
             reservationRepository.reserve(part.getId(), item.warehouseId(), item.quantity());
         }
+        addServices(deal, services);
         deal.reserve(reservedUntil);
 
-        Deal saved = dealRepository.saveAndFlush(deal);
+        Deal saved = detachable(dealRepository.saveAndFlush(deal));
         log(saved, "CREATED", "Сделка создана и зарезервирована. Позиций: "
                 + saved.getItems().size(), managerId);
         return saved;
+    }
+
+    /**
+     * Услуги в сделку — по цене из строки, а не из справочника.
+     *
+     * <p>Справочная цена только подставляется по умолчанию: доставка до Надыма
+     * и до соседней улицы стоит по-разному, и тариф был бы враньём. Пустая
+     * цена в запросе означает «взять подсказку», а не «бесплатно».
+     */
+    private void addServices(Deal deal, List<ServiceRequest> services) {
+        if (services == null) {
+            return;
+        }
+        for (ServiceRequest service : services) {
+            ServiceKind kind = serviceKinds.findById(service.serviceId())
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Услуга не найдена: " + service.serviceId()));
+            BigDecimal price = service.price() != null
+                    ? service.price()
+                    : kind.getPrice() != null ? kind.getPrice() : BigDecimal.ZERO;
+            deal.addService(kind.getId(), service.quantity(), price);
+        }
+    }
+
+    /** @param price пусто — берётся подсказка из справочника, а не ноль */
+    public record ServiceRequest(Long serviceId, BigDecimal quantity, BigDecimal price) {
     }
 
     /**
@@ -126,7 +168,8 @@ public class SalesService {
                                                   Instant replyDeadline, Long customerId,
                                                   Long managerId, Long dealSourceId,
                                                   String deliveryNote, Instant reservedUntil,
-                                                  List<ItemRequest> items) {
+                                                  List<ItemRequest> items,
+                                                  List<ServiceRequest> services) {
         if (marketplace == null || orderNo == null || orderNo.isBlank()) {
             throw new IllegalArgumentException("Не указана площадка или номер заказа");
         }
@@ -137,10 +180,7 @@ public class SalesService {
         Deal existing = dealRepository.findByMarketplaceAndExternalOrderNo(marketplace, orderNo)
                 .orElse(null);
         if (existing != null) {
-            // Позиции — внутри транзакции: наружу ленивая коллекция уходит
-            // исключением, а не JSON'ом.
-            existing.getItems().size();
-            return new AcceptedOrder(existing, true, List.of());
+            return new AcceptedOrder(detachable(existing), true, List.of());
         }
 
         Deal deal = new Deal(customerId, managerId);
@@ -154,6 +194,9 @@ public class SalesService {
             deal.addItem(part.getId(), item.quantity(),
                     item.price() != null ? item.price() : part.getPrice(), item.warehouseId());
         }
+        // Доставка входит в сумму документа: площадка переводит деньги
+        // за деталь вместе с ней, и сойтись перевод должен с суммой сделки.
+        addServices(deal, services);
 
         // Сначала смотрим, хватает ли всего, и только потом резервируем:
         // резерв половины заказа держал бы товар ради сделки, которую всё
@@ -166,7 +209,7 @@ public class SalesService {
             deal.reserve(reservedUntil != null ? reservedUntil : defaultReserveUntil(replyDeadline));
         }
 
-        Deal saved = dealRepository.saveAndFlush(deal);
+        Deal saved = detachable(dealRepository.saveAndFlush(deal));
         log(saved, "ORDER_RECEIVED", missing.isEmpty()
                         ? "Заказ %s №%s принят и зарезервирован".formatted(marketplace, orderNo)
                         : "Заказ %s №%s принят, но обеспечить нечем: %s"
@@ -189,7 +232,7 @@ public class SalesService {
         boolean wasAwaiting = deal.isAwaitingReply();
         deal.acceptOrder();
 
-        Deal saved = dealRepository.saveAndFlush(deal);
+        Deal saved = detachable(dealRepository.saveAndFlush(deal));
         if (wasAwaiting) {
             log(saved, "ORDER_ACCEPTED", "Заказ подтверждён площадке", managerId);
         }
@@ -279,7 +322,7 @@ public class SalesService {
         }
 
         deal.issue(now);
-        Deal saved = dealRepository.saveAndFlush(deal);
+        Deal saved = detachable(dealRepository.saveAndFlush(deal));
 
         log(saved, "ISSUED", "Сделка выдана клиенту", managerId);
         eventPublisher.publish(DomainEvent.of("deal", dealId, "deal.issued.v1", payloadOf(saved)));
@@ -306,7 +349,7 @@ public class SalesService {
         }
         deal.cancel(Instant.now());
 
-        Deal saved = dealRepository.saveAndFlush(deal);
+        Deal saved = detachable(dealRepository.saveAndFlush(deal));
         log(saved, "CANCELLED",
                 reason == null || reason.isBlank() ? "Сделка отменена" : "Сделка отменена: " + reason,
                 managerId);
@@ -477,7 +520,7 @@ public class SalesService {
             target.inheritReservation(source.getReservedUntil());
         }
         dealRepository.saveAndFlush(source);
-        Deal savedTarget = dealRepository.saveAndFlush(target);
+        Deal savedTarget = detachable(dealRepository.saveAndFlush(target));
 
         String parts = moved.stream().map(i -> String.valueOf(i.getPartId())).toList().toString();
         log(source, "ITEMS_MOVED_OUT",
@@ -550,11 +593,7 @@ public class SalesService {
     /** Сделка со всеми позициями. Для чтения из REST. */
     @Transactional(readOnly = true)
     public Deal require(Long dealId) {
-        Deal deal = requireDeal(dealId);
-        // Позиции подтягиваем внутри транзакции: снаружи ленивая коллекция
-        // сериализуется в исключение, а не в JSON.
-        deal.getItems().size();
-        return deal;
+        return detachable(requireDeal(dealId));
     }
 
     /** История покупок клиента, свежие сверху. */
@@ -564,19 +603,29 @@ public class SalesService {
     }
 
     /**
-     * Подтягивает позиции, пока транзакция ещё открыта.
+     * Подтягивает ленивые коллекции сделки, пока транзакция ещё открыта.
      *
-     * <p>{@code open-in-view} выключен намеренно, и коллекция позиций ленивая:
-     * контроллер, добравшийся до неё после коммита, получает
-     * {@code LazyInitializationException}, а клиент — пятисотку. Тесты, зовущие
-     * сервис изнутри своей транзакции, этого не видят вовсе — поймано живым
-     * прогоном через HTTP, как и предыдущие ошибки этого рода.
+     * <p>{@code open-in-view} выключен намеренно, а позиции и услуги ленивые:
+     * контроллер, добравшийся до них после коммита, получает
+     * {@code LazyInitializationException}, а клиент — пятисотку.
      *
-     * <p>Не {@code JOIN FETCH} в запросе: он у каждого метода свой, и забыть
-     * его в новом — то же самое, что забыть эту строку, только незаметнее.
+     * <p><b>Обе коллекции здесь, а не по одной на месте.</b> Первый раз это
+     * поймал живой прогон — на двух путях подряд; второй раз, когда появились
+     * услуги, легли шестнадцать тестов сразу, потому что подтягивались только
+     * позиции. Единственное место на все выходы наружу — чтобы третьего раза
+     * не было: новая коллекция добавляется здесь, а не в каждом методе.
+     *
+     * <p>Не {@code JOIN FETCH} в запросе: он у каждого метода свой, и две
+     * коллекции в одном запросе дают декартово произведение строк.
      */
+    private Deal detachable(Deal deal) {
+        deal.getItems().size();
+        deal.getServices().size();
+        return deal;
+    }
+
     private List<Deal> withItems(List<Deal> deals) {
-        deals.forEach(deal -> deal.getItems().size());
+        deals.forEach(this::detachable);
         return deals;
     }
 

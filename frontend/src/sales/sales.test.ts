@@ -89,6 +89,23 @@ describe('итог корзины', () => {
   it('пустая корзина стоит ноль', () => {
     expect(basketTotal([])).toBe(0);
   });
+
+  it('доставка входит в итог', () => {
+    // Продавец называет клиенту одну сумму, и она обязана совпасть с той,
+    // что окажется в документе, — иначе разговор про доставку начнётся
+    // после оплаты. У заказа с площадки хуже: перевод придёт с доставкой,
+    // а сделка будет на цену детали.
+    const delivery = { kind: { id: 1, name: 'Доставка', price: null }, price: '300' };
+
+    expect(basketTotal([line(row(), 1, '4500')], [delivery])).toBe(4800);
+  });
+
+  it('незаполненная услуга ничего не добавляет', () => {
+    // Пустое поле — «доставки не было», а не «доставка бесплатная».
+    const delivery = { kind: { id: 1, name: 'Доставка', price: '300' }, price: '' };
+
+    expect(basketTotal([line(row(), 1, '4500')], [delivery])).toBe(4500);
+  });
 });
 
 /**
@@ -116,6 +133,7 @@ function dealWith(...statuses: string[]): Deal {
     replyDeadline: null,
     orderAcceptedAt: null,
     deliveryNote: null,
+    services: [],
     items: statuses.map((status, at) => ({
       id: at + 1,
       partId: 100 + at,

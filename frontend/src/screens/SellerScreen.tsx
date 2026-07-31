@@ -8,6 +8,7 @@ import {
   createCustomer,
   createDeal,
   receiveOrder,
+  serviceKinds,
   dealsOf,
   issueDeal,
   payDeal,
@@ -21,6 +22,7 @@ import {
   transferItems,
 } from '../sales/sales';
 import type {
+  ServiceLine,
   BasketLine,
   Customer,
   Deal,
@@ -54,9 +56,20 @@ export function SellerScreen({ canSell }: Props) {
   // Заказ с площадки оформляется здесь же, а не отдельным экраном с той же
   // корзиной: продавец уже нашёл детали и выбрал клиента, и второй такой же
   // экран отличался бы двумя полями.
+  // Услуги подтягиваются один раз: справочник из двух строк, и меняется
+  // он с релизом, а не в течение дня.
+  const [services, setServices] = useState<ServiceLine[]>([]);
   const [marketplace, setMarketplace] = useState('');
   const [orderNo, setOrderNo] = useState('');
   const [note, setNote] = useState('');
+
+  useEffect(() => {
+    void serviceKinds()
+      .then((kinds) => setServices(kinds.map((kind) => ({ kind, price: '' }))))
+      // Молча: без справочника услуг продавать всё ещё можно, а красный
+      // текст на весь экран из-за доставки — это про неверные приоритеты.
+      .catch(() => setServices([]));
+  }, []);
   const [deal, setDeal] = useState<Deal | null>(null);
   // Возврат и перенос случаются не в тот же разговор, что продажа: клиент
   // приезжает через неделю. Без поиска по клиенту до его сделки не добраться.
@@ -159,7 +172,28 @@ export function SellerScreen({ canSell }: Props) {
               </li>
             ))}
           </ul>
-          <p className="note">Итого: {basketTotal(lines).toLocaleString('ru-RU')} ₽</p>
+          {services.length > 0 && (
+            <div className="services">
+              {services.map((line, index) => (
+                <label key={line.kind.id} className="field">
+                  {line.kind.name}, ₽
+                  <input
+                    inputMode="decimal"
+                    value={line.price}
+                    placeholder={line.kind.price ?? ''}
+                    onChange={(e) =>
+                      setServices(services.map((s, i) =>
+                        i === index ? { ...s, price: e.target.value } : s))
+                    }
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+
+          <p className="note">
+            Итого: {basketTotal(lines, services).toLocaleString('ru-RU')} ₽
+          </p>
 
           <CustomerPicker customer={customer} onPick={setCustomer} onError={setError} />
 
@@ -256,7 +290,7 @@ export function SellerScreen({ canSell }: Props) {
     try {
       if (marketplace !== '') {
         const result = await receiveOrder(
-          marketplace, orderNo.trim(), customer.id, lines, null, note);
+          marketplace, orderNo.trim(), customer.id, lines, null, note, services);
         setDeal(result.deal);
         if (result.replayed) {
           // Не ошибка: продавец мог завести заказ дважды. Правильный ответ —
@@ -271,9 +305,10 @@ export function SellerScreen({ canSell }: Props) {
         setOrderNo('');
         setNote('');
       } else {
-        setDeal(await createDeal(customer.id, lines));
+        setDeal(await createDeal(customer.id, lines, services));
       }
       setLines([]);
+      setServices(services.map((line) => ({ ...line, price: '' })));
       // Остаток изменился — показанный список уже врёт.
       setRows([]);
     } catch (cause) {
