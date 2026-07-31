@@ -47,6 +47,12 @@ public final class BazonImporter {
     private final PartTitleGenerator titleGenerator = new PartTitleGenerator();
     private final VehicleLookup brands = new VehicleLookup();
 
+    /** Резервы из выгрузки: оформляются одной сделкой после переноса товаров. */
+    private final List<Reservation> legacyReservations = new java.util.ArrayList<>();
+
+    private record Reservation(long partId, long warehouseId, BigDecimal qty) {
+    }
+
     public BazonImporter(DataSource dataSource, String schema) {
         if (schema == null || !SCHEMA.matcher(schema).matches()) {
             throw new IllegalArgumentException("Недопустимое имя схемы арендатора: " + schema);
@@ -77,6 +83,7 @@ public final class BazonImporter {
         Map<String, Long> warehouses = ensureWarehouses(catalogCsv, branchId, report);
 
         importParts(catalogCsv, categoryId, donorSupplies, donors, partNames, warehouses, report);
+        importReservations(report);
         return report;
     }
 
@@ -313,6 +320,79 @@ public final class BazonImporter {
             c.commit();
         }
         return ids;
+    }
+
+    /**
+     * Оформляет перенесённые резервы одной сделкой.
+     *
+     * <p><b>Резерв без документа — это обещание, о котором никто не знает.</b>
+     * Продавец видит «отложено 1» и не может выяснить, кому и до какого числа;
+     * сверка {@code v_reservation_discrepancy} при этом считает каждую такую
+     * позицию расхождением, и инвариант, который обязан быть пустым, шумит
+     * с первого дня — то есть от него перестают ждать сигнала.
+     *
+     * <p>Клиент в выгрузке не назван, поэтому сделка заводится без него.
+     * Срок недельный: перенесённое обещание надо подтвердить у клиента,
+     * а неподтверждённое обязано всплыть у продавца в просроченных,
+     * а не держать товар вечно.
+     *
+     * <p>Одна сделка на весь перенос, а не по одной на позицию: сотню
+     * документов «перенос» разобрать нельзя, а разложить одну по клиентам
+     * продавец умеет — для этого есть перенос позиций.
+     */
+    private void importReservations(ImportReport report) throws SQLException {
+        if (legacyReservations.isEmpty()) {
+            return;
+        }
+
+        try (Connection c = dataSource.getConnection()) {
+            c.setAutoCommit(false);
+
+            Long dealId;
+            try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + schema
+                    + ".deal (status, reserved_until, note)"
+                    + " VALUES ('RESERVED', now() + interval '7 days', ?) RETURNING id")) {
+                ps.setString(1, "Резервы, перенесённые из предыдущей системы. "
+                        + "Клиент в выгрузке не назван — подтвердите обещания "
+                        + "и разнесите позиции по сделкам.");
+                dealId = firstLong(ps);
+            }
+
+            try (PreparedStatement item = c.prepareStatement("INSERT INTO " + schema
+                    + ".deal_item (deal_id, part_id, quantity, price, warehouse_id, status)"
+                    + " VALUES (?, ?, ?, COALESCE((SELECT price FROM " + schema
+                    + ".part WHERE id = ?), 0), ?, 'RESERVED')");
+                 PreparedStatement reserve = c.prepareStatement(
+                         "SELECT " + schema + ".reserve_stock(?, ?, ?)")) {
+
+                for (Reservation r : legacyReservations) {
+                    java.sql.Savepoint savepoint = c.setSavepoint();
+                    try {
+                        // Через ту же функцию, что и продажа: она проверяет
+                        // свободный остаток и меняет его одной инструкцией.
+                        reserve.setLong(1, r.partId());
+                        reserve.setLong(2, r.warehouseId());
+                        reserve.setBigDecimal(3, r.qty());
+                        reserve.execute();
+
+                        item.setLong(1, dealId);
+                        item.setLong(2, r.partId());
+                        item.setBigDecimal(3, r.qty());
+                        item.setLong(4, r.partId());
+                        item.setLong(5, r.warehouseId());
+                        item.executeUpdate();
+
+                        c.releaseSavepoint(savepoint);
+                        report.count("резервов перенесено");
+                    } catch (SQLException e) {
+                        report.problem(0, "резерв не перенесён по детали "
+                                + r.partId() + ": " + e.getMessage());
+                        c.rollback(savepoint);
+                    }
+                }
+            }
+            c.commit();
+        }
     }
 
     /**
@@ -609,10 +689,11 @@ public final class BazonImporter {
                 insertMovement.executeUpdate();
             }
             if (reserved.signum() > 0) {
-                setReserved.setBigDecimal(1, reserved);
-                setReserved.setLong(2, partId);
-                setReserved.setLong(3, warehouseId);
-                setReserved.executeUpdate();
+                // Не пишем в part_stock напрямую: резерв без документа ломает
+                // сверку v_reservation_discrepancy, и она у переехавшего
+                // клиента шумит с первого дня — то есть перестаёт быть
+                // сигналом. Копим и оформляем сделкой после импорта.
+                legacyReservations.add(new Reservation(partId, warehouseId, reserved));
             }
         }
     }

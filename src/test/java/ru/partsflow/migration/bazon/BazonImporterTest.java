@@ -151,6 +151,33 @@ class BazonImporterTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Перенесённый резерв оформлен сделкой, и сверка сходится")
+    void legacyReservationBecomesADeal() throws Exception {
+        importFixture(IMPORT);
+
+        // Резерв в part_stock остался — деталь обещана, и продать её нельзя.
+        assertThat(reservedOf(IMPORT, "A-100")).isEqualByComparingTo("1");
+
+        // Но теперь у обещания есть документ. Без него продавец видел
+        // «отложено 1» и не мог выяснить, кому и до какого числа.
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM %s.deal_item di
+                  JOIN %s.deal d ON d.id = di.deal_id
+                 WHERE d.status = 'RESERVED' AND di.status = 'RESERVED'"""
+                .formatted(IMPORT, IMPORT), Integer.class))
+                .isEqualTo(1);
+
+        // И сверка резервов пуста. Пока резерв ставился мимо документа, она
+        // у переехавшего клиента шумела с первого дня — то есть переставала
+        // быть сигналом.
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM %s.v_reservation_discrepancy".formatted(IMPORT),
+                Integer.class))
+                .as("сверка резервов непуста сразу после переезда")
+                .isZero();
+    }
+
+    @Test
     @DisplayName("Склады берутся из заголовка, а не выдумываются")
     void warehousesComeFromHeader() throws Exception {
         importFixture(HEADER);
