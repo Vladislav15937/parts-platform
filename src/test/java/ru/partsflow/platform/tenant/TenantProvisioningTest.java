@@ -54,7 +54,10 @@ class TenantProvisioningTest extends PostgresTestBase {
                 new TenantProvisioning.Request(code, "Разборка на Ткацкой",
                         "vladelec", "пароль-владельца", "Владелец"));
 
-        assertThat(created.schemaName()).matches("t_\\d{6}");
+        // Шесть цифр или больше: номер ячейки стоит в старшем разряде,
+        // и у первой ячейки клиенты идут с 1 000 001. Ограничение в реестре
+        // такое же — CHECK (schema_name ~ '^t_[0-9]{6,}$').
+        assertThat(created.schemaName()).matches("t_\\d{6,}");
 
         // Вход — это и есть проверка всей цепочки: схема создана, миграции
         // накатаны, владелец заведён, запись в реестре активна.
@@ -69,6 +72,20 @@ class TenantProvisioningTest extends PostgresTestBase {
         mvc.perform(get("/api/intake/reference").session(session))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.warehouses").isArray());
+    }
+
+    @Test
+    @DisplayName("Номер арендатора начинается с номера ячейки")
+    void tenantNumberCarriesTheCell() {
+        TenantProvisioning.Result created = provisioning.provision(
+                new TenantProvisioning.Request(uniqueCode(), "Разборка",
+                        "vladelec", "пароль-владельца", "Владелец"));
+
+        // Ячейка в тестах первая, значит миллион с чем-то. У второй клиенты
+        // пойдут с 2 000 001, и дамп из неё развернётся в соседнюю
+        // без переименования схем — иначе t_000001 есть в обеих.
+        assertThat(created.tenantId()).isGreaterThan(1_000_000L);
+        assertThat(created.tenantId()).isLessThan(2_000_000L);
     }
 
     @Test

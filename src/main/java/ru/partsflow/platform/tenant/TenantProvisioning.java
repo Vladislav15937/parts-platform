@@ -6,6 +6,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import org.springframework.beans.factory.annotation.Value;
+
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.Statement;
@@ -49,17 +51,31 @@ public class TenantProvisioning {
     /** Код компании — часть будущего поддомена, отсюда и ограничения. */
     private static final Pattern CODE = Pattern.compile("[a-z0-9][a-z0-9-]{1,30}");
 
+    /**
+     * Ширина диапазона одной ячейки. Миллион при потолке в двести арендаторов —
+     * запас, который не кончится, а номер читается глазами: 2 000 003 —
+     * третий клиент второй ячейки.
+     */
+    private static final long CELL_RANGE = 1_000_000L;
+
     private final JdbcTemplate jdbc;
     private final DataSource dataSource;
     private final TenantSchemaMigrator migrator;
     private final PasswordEncoder passwordEncoder;
+    private final long cellNumber;
 
     public TenantProvisioning(JdbcTemplate jdbc, DataSource dataSource,
-                              TenantSchemaMigrator migrator, PasswordEncoder passwordEncoder) {
+                              TenantSchemaMigrator migrator, PasswordEncoder passwordEncoder,
+                              @Value("${app.cell-number:1}") long cellNumber) {
         this.jdbc = jdbc;
         this.dataSource = dataSource;
         this.migrator = migrator;
         this.passwordEncoder = passwordEncoder;
+        if (cellNumber < 1) {
+            throw new IllegalArgumentException(
+                    "Номер ячейки начинается с единицы: " + cellNumber);
+        }
+        this.cellNumber = cellNumber;
     }
 
     public Result provision(Request request) {
@@ -99,8 +115,15 @@ public class TenantProvisioning {
      * вызывается из того же бина, и аннотация прошла бы мимо прокси — молча.
      */
     private Reserved reserve(String code, String companyName) {
+        // Номер ячейки в старшем разряде: у второй ячейки арендаторы начинаются
+        // с 2 000 001, а не с единицы. Иначе схемы t_000001 есть в обеих,
+        // и дамп из одной нельзя развернуть в другую без переименования —
+        // а переносить клиента между ячейками придётся при первой же
+        // перебалансировке. Заодно по номеру видно, где искать клиента.
+        long base = cellNumber * CELL_RANGE;
         Long tenantId = jdbc.queryForObject("""
-                SELECT COALESCE(max(tenant_id), 0) + 1 FROM public.tenant_registry""", Long.class);
+                SELECT GREATEST(COALESCE(max(tenant_id), 0), ?) + 1
+                  FROM public.tenant_registry""", Long.class, base);
         String schema = "t_%06d".formatted(tenantId);
 
         try {

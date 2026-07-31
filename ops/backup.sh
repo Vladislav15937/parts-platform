@@ -24,7 +24,10 @@ ENV_FILE="${1:-.env}"
 COMPOSE="docker compose -f docker-compose.prod.yml --env-file $ENV_FILE"
 DB_USER="${DB_USER:?укажите DB_USER}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-OUT="${BACKUP_DIR:-./backups}/$STAMP"
+# Каталог свой на каждую ячейку: два комплекта дампов в одной папке
+# различались бы только временем снятия, и восстановление пошло бы не туда.
+BACKUPS="${BACKUP_DIR:-./backups/${APP_CELL:-cell01}}"
+OUT="$BACKUPS/$STAMP"
 KEEP_DAYS="${BACKUP_KEEP_DAYS:-14}"
 
 step() { printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
@@ -94,9 +97,9 @@ step "Опись"
 ok "manifest.txt"
 
 step "Уборка старше $KEEP_DAYS дней"
-find "${BACKUP_DIR:-./backups}" -maxdepth 1 -type d -name '20*' -mtime "+$KEEP_DAYS" \
+find "$BACKUPS" -maxdepth 1 -type d -name '20*' -mtime "+$KEEP_DAYS" \
     -exec rm -rf {} + 2>/dev/null || true
-ok "осталось наборов: $(find "${BACKUP_DIR:-./backups}" -maxdepth 1 -type d -name '20*' | wc -l | tr -d ' ')"
+ok "осталось наборов: $(find "$BACKUPS" -maxdepth 1 -type d -name '20*' | wc -l | tr -d ' ')"
 
 mark_success partsflow_backup_success_timestamp_seconds
 
