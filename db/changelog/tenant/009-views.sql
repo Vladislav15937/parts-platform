@@ -3,6 +3,14 @@
 --changeset platform:tenant-080-donor-profitability splitStatements:false runOnChange:true
 --comment Окупаемость донора: сколько вложено, сколько выручено, что осталось
 --comment на складе. Прямой ответ на вопрос «стоит ли брать такие машины».
+--comment
+--comment DROP перед CREATE обязателен: CREATE OR REPLACE VIEW не умеет менять
+--comment имена и порядок уже существующих колонок, а новую в середину списка
+--comment добавляют рано или поздно. На чистой базе это проходит — вьюха
+--comment создаётся с нуля, — и падает только на схеме живого клиента:
+--comment «cannot change name of view column». Поймано накатом на арендатора,
+--comment заведённого до правки.
+DROP VIEW IF EXISTS ${tenant.schema}.v_donor_profitability;
 CREATE OR REPLACE VIEW ${tenant.schema}.v_donor_profitability AS
 SELECT d.id AS donor_id,
        d.public_code,
@@ -55,6 +63,7 @@ LEFT JOIN (
 --comment в «наценка равна выручке», то есть отвечал на вопрос «сколько
 --comment заработали» числом «сколько выручили». Такое приходит со складом,
 --comment загруженным из чужой таблицы: цена там есть, закупка — нет.
+DROP VIEW IF EXISTS ${tenant.schema}.v_manager_sales;
 CREATE OR REPLACE VIEW ${tenant.schema}.v_manager_sales AS
 SELECT dl.manager_id,
        tm.display_name,
@@ -82,6 +91,7 @@ GROUP BY dl.manager_id, tm.display_name, date_trunc('month', dl.closed_at);
 --comment и разойтись может любой из них, поэтому сверяются оба.
 --comment Перемещения из суммы журнала исключены: они не меняют общий остаток,
 --comment у них положительная дельта означает «столько-то переехало».
+DROP VIEW IF EXISTS ${tenant.schema}.v_stock_discrepancy;
 CREATE OR REPLACE VIEW ${tenant.schema}.v_stock_discrepancy AS
 SELECT p.id AS part_id,
        p.public_code,
