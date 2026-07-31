@@ -3,6 +3,7 @@ package ru.partsflow.platform.config;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
@@ -37,14 +38,22 @@ public class S3BucketInitializer implements InitializingBean {
 
     private final S3Client s3;
     private final S3Properties properties;
+    private final boolean enabled;
 
-    public S3BucketInitializer(S3Client s3, S3Properties properties) {
+    public S3BucketInitializer(S3Client s3, S3Properties properties,
+                               @Value("${app.s3.ensure-bucket:true}") boolean enabled) {
         this.s3 = s3;
         this.properties = properties;
+        this.enabled = enabled;
     }
 
     @Override
     public void afterPropertiesSet() {
+        if (!enabled) {
+            // Выключается только там, где хранилища нет вовсе, — в тестах.
+            // См. src/test/resources/application.properties.
+            return;
+        }
         String bucket = properties.bucket();
         try {
             s3.headBucket(HeadBucketRequest.builder().bucket(bucket).build());

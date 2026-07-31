@@ -9,7 +9,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
 
@@ -42,6 +46,38 @@ class PhotoMigrationTest extends PostgresTestBase {
             0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3b};
 
     private static HttpServer cdn;
+
+    /**
+     * Настоящее хранилище: перенос кладёт в него файл, и проверять надо это,
+     * а не то, что метод позвался. Без своего MinIO контекст этого теста
+     * смотрит в пустой localhost:9000 — локально там оказывается хранилище
+     * из compose разработки, а на CI ничего. Ровно на этом прогон и покраснел.
+     */
+    @SuppressWarnings("resource")
+    private static final GenericContainer<?> MINIO =
+            new GenericContainer<>("minio/minio:latest")
+                    .withExposedPorts(9000)
+                    .withEnv("MINIO_ROOT_USER", "minioadmin")
+                    .withEnv("MINIO_ROOT_PASSWORD", "minioadmin")
+                    .withCommand("server", "/data")
+                    .waitingFor(Wait.forHttp("/minio/health/live").forPort(9000));
+
+    static {
+        MINIO.start();
+    }
+
+    @DynamicPropertySource
+    static void s3Properties(DynamicPropertyRegistry registry) {
+        String endpoint = "http://%s:%d".formatted(MINIO.getHost(), MINIO.getMappedPort(9000));
+        registry.add("app.s3.endpoint", () -> endpoint);
+        registry.add("app.s3.public-endpoint", () -> endpoint);
+        registry.add("app.s3.bucket", () -> "photo-migration-test");
+        registry.add("app.s3.access-key", () -> "minioadmin");
+        registry.add("app.s3.secret-key", () -> "minioadmin");
+        registry.add("app.s3.path-style-access", () -> true);
+        // Бакет заводит приложение при старте, как в бою.
+        registry.add("app.s3.ensure-bucket", () -> true);
+    }
 
     @Autowired
     private PhotoMigration migration;

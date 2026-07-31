@@ -15,8 +15,6 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
 import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.BucketAlreadyOwnedByYouException;
-import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -46,7 +44,10 @@ class PhotoServiceTest extends PostgresTestBase {
 
     @SuppressWarnings("resource")
     private static final GenericContainer<?> MINIO =
-            new GenericContainer<>("minio/minio:latest")
+            new GenericContainer<>("minio/minio:" +
+                    "" +
+                    "" +
+                    "latest")
                     .withExposedPorts(9000)
                     .withEnv("MINIO_ROOT_USER", "minioadmin")
                     .withEnv("MINIO_ROOT_PASSWORD", "minioadmin")
@@ -66,6 +67,10 @@ class PhotoServiceTest extends PostgresTestBase {
         registry.add("app.s3.access-key", () -> "minioadmin");
         registry.add("app.s3.secret-key", () -> "minioadmin");
         registry.add("app.s3.path-style-access", () -> true);
+        // Бакет заводит приложение при старте, как в бою. Здесь это
+        // единственный контекст с настоящим хранилищем, значит и проверять
+        // заведение больше негде: у остальных S3 нет вовсе.
+        registry.add("app.s3.ensure-bucket", () -> true);
     }
 
     @Autowired
@@ -87,13 +92,21 @@ class PhotoServiceTest extends PostgresTestBase {
         provisionTenants(TENANT);
     }
 
+    @Test
+    @DisplayName("Бакет заводится при старте, а не руками")
+    void bucketIsCreatedOnStartup() {
+        // До появления S3BucketInitializer его не создавал никто: свежая
+        // ячейка отдавала подписанную ссылку, телефон писал по ней файл
+        // и получал «bucket does not exist», а в логах приложения не было
+        // ничего — файл идёт мимо него намеренно. Этот тест бакет создавал
+        // сам и потому дыры не видел.
+        assertThat(s3.listBuckets().buckets())
+                .extracting(software.amazon.awssdk.services.s3.model.Bucket::name)
+                .contains(BUCKET);
+    }
+
     @BeforeEach
     void fixtures() {
-        try {
-            s3.createBucket(CreateBucketRequest.builder().bucket(BUCKET).build());
-        } catch (BucketAlreadyOwnedByYouException ignored) {
-            // Контейнер один на весь прогон, бакет создаётся один раз.
-        }
 
         partId = inTenant(() -> jdbc.queryForObject("""
                 INSERT INTO part (category_id, title, price, cost_price)
