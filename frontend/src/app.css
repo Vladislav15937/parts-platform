@@ -1100,3 +1100,73 @@ hr {
     font-size: 1.15rem;
   }
 }
+
+/*
+ * Полоса управления над таблицей — как в кабинете: всё в одну строку,
+ * поиск компактный, действия справа.
+ *
+ * Только для мыши. На телефоне поиск во всю ширину и подпись сверху —
+ * иначе в поле шириной в двадцать символов не видно, что набрано,
+ * а подпись под пальцем не прочитать.
+ */
+@media (min-width: 900px) {
+  .screen--wide .filter-row--search {
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  /* Подпись «Поиск» на десктопе лишняя: её несёт placeholder, а строка
+     от неё становится двухэтажной. */
+  .screen--wide .filter-row--search .field {
+    flex: 0 0 24rem;
+    font-size: 0;
+  }
+
+  .screen--wide .filter-row--search .field input {
+    font-size: 1rem;
+    height: 32px;
+    border-radius: var(--radius);
+  }
+
+  .screen--wide .filter-row--search button {
+    min-height: 32px;
+    padding: 0 1rem;
+  }
+
+  /* Флажки — тонкой строкой сразу под поиском, а не блоком с заголовком. */
+  .screen--wide .choices {
+    align-items: center;
+    gap: 0.35rem 1rem;
+    padding: 0;
+  }
+
+  .screen--wide .choices legend {
+    float: left;
+    margin-right: 0.75rem;
+    line-height: 32px;
+  }
+
+  /* Действия: подбор и настройка слева, скачивание прижато вправо —
+     оно завершает работу с таблицей, а не начинает её. */
+  .screen--wide .filter-row:not(.filter-row--search) {
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .screen--wide .filter-row:not(.filter-row--search) .button--ghost {
+    min-height: 32px;
+    padding: 0 0.9rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+
+  .screen--wide .filter-row:not(.filter-row--search) a.button--ghost {
+    margin-left: auto;
+    text-decoration: none;
+  }
+
+  .screen--wide .filter-row:not(.filter-row--search) .button--ghost:hover {
+    background: var(--surface-soft);
+  }
+}
