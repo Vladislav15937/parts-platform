@@ -1,5 +1,7 @@
 package ru.partsflow.inventory;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +31,8 @@ import java.util.Map;
  */
 @Service
 public class CatalogService {
+
+    private static final Logger log = LoggerFactory.getLogger(CatalogService.class);
 
     /**
      * Разрешённые сортировки: имя из запроса → выражение SQL.
@@ -220,6 +224,108 @@ public class CatalogService {
                                 String body, String engine, long parts) {
     }
 
+    /**
+     * Проставляет применимость по машинам, названным в заголовках.
+     *
+     * <p>У переехавшего клиента четверть склада без донора: это детали,
+     * подходящие к нескольким машинам, и машины перечислены прямо
+     * в наименовании — записать их было больше некуда. Подбор по машине
+     * их не находит вовсе.
+     *
+     * <p><b>Отметка `is_verified` остаётся снятой.</b> Это разобранное
+     * машиной, а не подтверждённое человеком, и различать их надо: правка
+     * в карточке ставит отметку, а повторный разбор чужого не трогает.
+     *
+     * @return сколько позиций получили применимость и сколько строк добавлено
+     */
+    @Transactional
+    public Parsed applyFromTitles() {
+        TitleApplicability.Dictionary dictionary = new TitleApplicability.Dictionary(
+                jdbc.query("SELECT id, name FROM catalog.brand",
+                        (rs, i) -> new TitleApplicability.Brand(rs.getLong(1), rs.getString(2))),
+                jdbc.query("SELECT id, brand_id, name FROM catalog.model",
+                        (rs, i) -> new TitleApplicability.Model(
+                                rs.getLong(1), rs.getLong(2), rs.getString(3))));
+
+        List<long[]> pairs = new ArrayList<>();
+        int[] parts = {0};
+        jdbc.query("SELECT id, title FROM part WHERE title IS NOT NULL", rs -> {
+            long partId = rs.getLong(1);
+            List<TitleApplicability.Vehicle> found =
+                    TitleApplicability.parse(rs.getString(2), dictionary);
+            if (!found.isEmpty()) {
+                parts[0]++;
+                for (TitleApplicability.Vehicle vehicle : found) {
+                    pairs.add(new long[]{partId, vehicle.brandId(), vehicle.modelId()});
+                }
+            }
+        });
+
+        int added = 0;
+        for (long[] pair : pairs) {
+            added += jdbc.update("""
+                    INSERT INTO part_applicability (part_id, brand_id, model_id, is_verified)
+                    VALUES (?, ?, ?, false)
+                    ON CONFLICT DO NOTHING""", pair[0], pair[1], pair[2]);
+        }
+        log.info("Применимость из заголовков: позиций {}, строк добавлено {}", parts[0], added);
+        return new Parsed(parts[0], added);
+    }
+
+    /**
+     * @param parts сколько позиций назвали машину в заголовке
+     * @param added сколько строк применимости добавлено — повтор не дублирует
+     */
+    public record Parsed(int parts, int added) {
+    }
+
+    /** Добавляет применимость руками — из карточки. Отметка подтверждения стоит. */
+    @Transactional
+    public boolean addApplicability(long partId, long brandId, Long modelId) {
+        return jdbc.update("""
+                INSERT INTO part_applicability (part_id, brand_id, model_id, is_verified)
+                VALUES (?, ?, ?, true)
+                ON CONFLICT (part_id, brand_id, model_id, generation_id, modification_id)
+                DO UPDATE SET is_verified = true""", partId, brandId, modelId) > 0;
+    }
+
+    @Transactional
+    public void removeApplicability(long partId, long applicabilityId) {
+        jdbc.update("DELETE FROM part_applicability WHERE id = ? AND part_id = ?",
+                applicabilityId, partId);
+    }
+
+    /**
+     * Заявленная применимость позиции — для карточки.
+     *
+     * <p>У переехавшего клиента она пуста: на прогонном арендаторе ноль строк
+     * при тридцати пяти тысячах позиций. Карточка это и показывает — «не
+     * задана», а не пустой список без объяснения: подбор по машине у такой
+     * позиции работает только от донора, и если донора тоже нет, найти её
+     * по машине нельзя вовсе.
+     */
+    @Transactional(readOnly = true)
+    public List<Applicability> applicabilityOf(long partId) {
+        return jdbc.query("""
+                SELECT a.id, a.is_verified, b.name AS brand, m.name AS model,
+                       g.name AS generation, a.year_from, a.year_to
+                  FROM part_applicability a
+                  JOIN catalog.brand b ON b.id = a.brand_id
+                  LEFT JOIN catalog.model m ON m.id = a.model_id
+                  LEFT JOIN catalog.generation g ON g.id = a.generation_id
+                 WHERE a.part_id = ?
+                 ORDER BY b.name, m.name""",
+                (rs, i) -> new Applicability(rs.getLong("id"), rs.getBoolean("is_verified"),
+                        rs.getString("brand"), rs.getString("model"), rs.getString("generation"),
+                        (Integer) rs.getObject("year_from"), (Integer) rs.getObject("year_to")),
+                partId);
+    }
+
+    /** Строка применимости: к какой машине заявлена деталь. */
+    public record Applicability(long id, boolean verified, String brand, String model,
+                                String generation, Integer yearFrom, Integer yearTo) {
+    }
+
     /** Машина, к которой подбирают деталь. Пустая марка — отбора нет. */
     public record Vehicle(Long brandId, Long modelId, String body, String engine) {
     }
@@ -233,7 +339,8 @@ public class CatalogService {
                   LEFT JOIN catalog.brand b ON b.id = d.brand_id
                   LEFT JOIN catalog.model m ON m.id = d.model_id
                   LEFT JOIN catalog.generation g ON g.id = d.generation_id
-                  LEFT JOIN catalog.modification mo ON mo.id = d.modification_id""";
+                  LEFT JOIN catalog.modification mo ON mo.id = d.modification_id
+                  LEFT JOIN supply s ON s.id = d.supply_id""";
 
         Long total = jdbc.queryForObject("SELECT count(*)" + joins + where, Long.class,
                 args.toArray());
@@ -256,6 +363,25 @@ public class CatalogService {
                          WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
                        (SELECT string_agg(o.raw_number, ', ') FROM part_oem o
                          WHERE o.part_id = p.id AND NOT o.is_primary) AS crosses,
+                       -- Поставка и комплектация — для карточки позиции.
+                       -- Читаются вместе со строкой: карточка открывается
+                       -- по нажатию и второй запрос ради двух полей не делает.
+                       CASE WHEN s.id IS NULL THEN NULL
+                            ELSE s.kind || ' №' || s.number
+                                 || coalesce(' | ' || to_char(s.arrived_on, 'DD.MM.YYYY'), '')
+                       END AS supply,
+                       nullif(concat_ws(', ',
+                           CASE d.steering WHEN 'RIGHT' THEN 'правый руль'
+                                           WHEN 'LEFT' THEN 'левый руль' END,
+                           CASE d.transmission_type WHEN 'AT' THEN 'АКПП'
+                                                    WHEN 'MT' THEN 'МКПП'
+                                                    WHEN 'CVT' THEN 'вариатор'
+                                                    WHEN 'AMT' THEN 'робот' END,
+                           CASE d.drive_type WHEN 'FWD' THEN 'передний'
+                                             WHEN 'RWD' THEN 'задний'
+                                             WHEN 'AWD' THEN 'полный' END,
+                           d.transmission_model,
+                           d.equipment_code), '') AS equipment,
                        (SELECT ph.s3_key FROM part_photo ph
                          WHERE ph.part_id = p.id ORDER BY ph.is_main DESC, ph.sort_order,
                                ph.id LIMIT 1) AS photo_key
@@ -276,6 +402,7 @@ public class CatalogService {
                         rs.getString("section"), rs.getString("side_lr"), rs.getString("side_fr"),
                         rs.getBigDecimal("qty_on_hand"),
                         rs.getString("oem"), rs.getString("crosses"), rs.getString("photo_key"),
+                        rs.getString("supply"), rs.getString("equipment"),
                         Map.of()),
                 pageArgs.toArray());
 
@@ -472,13 +599,14 @@ public class CatalogService {
                       String manufacturer, String marking, String section,
                       String sideLr, String sideFr, BigDecimal qty,
                       String oem, String crosses, String photoKey,
+                      String supply, String equipment,
                       Map<Long, BigDecimal> stock) {
 
         Row withStock(Map<Long, BigDecimal> found) {
             return new Row(id, code, title, qualityGrade, condition, brand, model, generation,
                     yearFrom, yearTo, body, engine, year, donorCode, price, installationPrice,
                     color, description, note, manufacturer, marking, section, sideLr, sideFr,
-                    qty, oem, crosses, photoKey, found);
+                    qty, oem, crosses, photoKey, supply, equipment, found);
         }
     }
 }

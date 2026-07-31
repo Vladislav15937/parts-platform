@@ -1,6 +1,11 @@
 package ru.partsflow.inventory;
 
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -71,6 +76,7 @@ public class CatalogController {
                 row.manufacturer(), row.marking(), row.section(), row.sideLr(), row.sideFr(),
                 row.qty(), row.oem(), row.crosses(),
                 row.photoKey() == null ? null : storage.presignView(row.photoKey()),
+                row.supply(), row.equipment(),
                 row.stock());
     }
 
@@ -92,6 +98,46 @@ public class CatalogController {
      * запятую как десятичный знак, и файл раскладывается по колонкам неверно.
      */
     /** Машины, к которым на складе что-то есть, — для подбора по применимости. */
+    /**
+     * Проставляет применимость по машинам из заголовков — всему складу разом.
+     *
+     * <p>Руками для девяти тысяч позиций это работа на месяцы. Повтор
+     * безопасен: строки не дублируются, а подтверждённое человеком
+     * не перезаписывается.
+     */
+    @PostMapping("/applicability/from-titles")
+    @PreAuthorize("hasRole('OWNER')")
+    public CatalogService.Parsed applicabilityFromTitles() {
+        return catalog.applyFromTitles();
+    }
+
+    /** Добавляет машину в применимость позиции — из карточки. */
+    @PostMapping("/{id}/applicability")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public List<CatalogService.Applicability> addApplicability(
+            @PathVariable Long id, @RequestBody VehicleRequest request) {
+        catalog.addApplicability(id, request.brandId(), request.modelId());
+        return catalog.applicabilityOf(id);
+    }
+
+    @DeleteMapping("/{id}/applicability/{applicabilityId}")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public List<CatalogService.Applicability> removeApplicability(
+            @PathVariable Long id, @PathVariable Long applicabilityId) {
+        catalog.removeApplicability(id, applicabilityId);
+        return catalog.applicabilityOf(id);
+    }
+
+    /** @param modelId пусто — «любая модель этой марки» */
+    public record VehicleRequest(Long brandId, Long modelId) {
+    }
+
+    /** Заявленная применимость позиции — для карточки. */
+    @GetMapping("/{id}/applicability")
+    public List<CatalogService.Applicability> applicability(@PathVariable Long id) {
+        return catalog.applicabilityOf(id);
+    }
+
     @GetMapping("/vehicles")
     public List<CatalogService.VehicleOption> vehicles() {
         return catalog.vehicles();
@@ -163,6 +209,7 @@ public class CatalogController {
                       String manufacturer, String marking, String section,
                       String sideLr, String sideFr, java.math.BigDecimal qty,
                       String oem, String crosses, String photoUrl,
+                      String supply, String equipment,
                       Map<Long, java.math.BigDecimal> stock) {
     }
 }

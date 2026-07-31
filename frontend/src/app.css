@@ -1232,13 +1232,13 @@ hr {
   cursor: pointer;
 }
 
-/* Карточка позиции: поля слева, снимки справа. */
+/* Карточка позиции: узкий столбец сведений слева, крупный снимок справа. */
 .card-view {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  width: min(64rem, 100%);
-  max-height: 88vh;
+  width: min(72rem, 100%);
+  height: min(86vh, 48rem);
   padding: 1rem 1.25rem;
   background: var(--surface);
   border-radius: var(--radius);
@@ -1254,22 +1254,67 @@ hr {
 
 .card-view__head h2 {
   margin: 0;
-  font-size: 1.1rem;
+  font-size: 1.15rem;
 }
 
 .card-view__body {
   display: flex;
   gap: 1.5rem;
+  flex: 1;
   min-height: 0;
-  overflow: auto;
+}
+
+.card-view__side {
+  flex: 0 0 21rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+/* Остаток по складам первым: продавец по телефону отвечает «есть, лежит
+   на Ткацкой», а не «сейчас посмотрю». */
+.card-view__stock {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.card-view__stock > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.card-view__stock span {
+  color: var(--muted);
+}
+
+.card-view__price {
+  font-size: 1.8rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.card-view__price span {
+  font-size: 1rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.card-view__note {
+  margin: 0;
+  color: var(--muted);
 }
 
 .card-view__fields {
-  flex: 0 0 22rem;
   margin: 0;
   display: grid;
-  grid-template-columns: 10rem 1fr;
-  gap: 0.35rem 0.75rem;
+  grid-template-columns: 9.5rem 1fr;
+  gap: 0.3rem 0.75rem;
   align-content: start;
 }
 
@@ -1283,6 +1328,7 @@ hr {
 
 .card-view__fields dd {
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .card-view__photos {
@@ -1293,18 +1339,58 @@ hr {
   gap: 0.5rem;
 }
 
-.card-view__main {
-  width: 100%;
-  max-height: 60vh;
-  object-fit: contain;
-  border-radius: var(--radius);
+.card-view__frame {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: var(--surface-soft);
+  border-radius: var(--radius);
+}
+
+.card-view__main {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* Стрелки поверх снимка, как в кабинете: листать, не уводя курсор вниз. */
+.card-view__arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.card-view__arrow--prev {
+  left: 0.5rem;
+}
+
+.card-view__arrow--next {
+  right: 0.5rem;
 }
 
 .card-view__strip {
   display: flex;
   gap: 0.5rem;
   overflow-x: auto;
+  flex: 0 0 auto;
+}
+
+.card-view__strip .thumb {
+  width: 64px;
+  height: 48px;
 }
 
 /* На телефоне поля и снимки идут столбиком: рядом им не хватает ширины. */
@@ -1326,4 +1412,91 @@ hr {
   .thumb-popover {
     display: none;
   }
+}
+
+/* Вкладки карточки — как в кабинете: сведения и применимость. */
+.card-tabs {
+  display: flex;
+  gap: 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.card-tab {
+  padding: 0 0 0.5rem;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  min-height: 0;
+}
+
+.card-tab--active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+/*
+ * Отметки «донор задан» и «применимость задана».
+ *
+ * Отрицательное состояние заметнее положительного намеренно: деталь, у которой
+ * нет ни донора, ни применимости, не находится подбором по машине — и узнать
+ * об этом надо в карточке, а не по тому, что покупатель не позвонил.
+ */
+.card-marks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.mark {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  color: var(--ok);
+}
+
+.mark::before {
+  content: '✓';
+}
+
+.mark--off {
+  color: var(--muted);
+}
+
+.mark--off::before {
+  content: '○';
+}
+
+.mark__link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  min-height: 0;
+}
+
+.card-view__fits ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.card-view__fits li {
+  padding: 0.15rem 0;
+}
+
+/* Добавление машины в применимость — из карточки. */
+.card-view__add {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+
+.card-view__add .field {
+  flex: 1 1 8rem;
 }
