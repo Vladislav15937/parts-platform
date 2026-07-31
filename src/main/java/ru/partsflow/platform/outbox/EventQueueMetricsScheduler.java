@@ -26,7 +26,7 @@ public class EventQueueMetricsScheduler {
         this.metrics = metrics;
     }
 
-    @Scheduled(fixedDelayString = "${app.outbox.metrics-delay-ms:15000}")
+    @Scheduled(fixedDelayString = "${app.outbox.metrics-delay-ms:30000}")
     public void refresh() {
         metrics.refresh();
     }

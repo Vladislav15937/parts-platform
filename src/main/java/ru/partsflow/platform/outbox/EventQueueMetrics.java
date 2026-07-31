@@ -11,6 +11,7 @@ import ru.partsflow.platform.tenant.TenantContext;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -74,18 +75,7 @@ public class EventQueueMetrics implements MeterBinder {
         for (String schema : activeTenantSchemas()) {
             try {
                 TenantContext.set(schema);
-                // В транзакции: search_path выставляет провайдер соединений
-                // Hibernate, и снаружи запрос уходит в public — «relation
-                // outbox does not exist». Одного TenantContext мало.
-                Counts counts = transactions.execute(status -> new Counts(
-                        count("SELECT count(*) FROM outbox WHERE published_at IS NULL"),
-                        oldestPendingSeconds(),
-                        count("SELECT count(*) FROM event_dead_letter "
-                                + "WHERE resolved_at IS NULL"),
-                        count("SELECT count(*) FROM event_dead_letter "
-                                + "WHERE resolved_at IS NULL AND attempts >= ?",
-                                DeadLetterService.AUTO_ATTEMPTS)));
-
+                Counts counts = countsOf();
                 if (counts != null) {
                     pendingTotal += counts.pending();
                     oldest = Math.max(oldest, counts.oldestSeconds());
@@ -108,28 +98,43 @@ public class EventQueueMetrics implements MeterBinder {
     }
 
     /**
-     * Возраст самого старого неотправленного события.
+     * Все четыре числа одним запросом.
      *
-     * <p>Само число «в очереди сто событий» не говорит ничего: сто событий,
-     * появившихся секунду назад, — это обычная работа. Сто событий возрастом
-     * в час — это остановившийся релей.
+     * <p><b>Именно одним, а не четырьмя.</b> В ячейке до двухсот арендаторов,
+     * и обход по четыре запроса на каждого раз в полминуты — это уже заметная
+     * доля нагрузки базы, созданная наблюдением за ней. Обход при этом
+     * последовательный: одновременные транзакции по всем арендаторам заняли бы
+     * пул соединений целиком и остановили бы работу ради метрик.
+     *
+     * <p>В транзакции: {@code search_path} выставляет провайдер соединений
+     * Hibernate, и снаружи запрос уходит в {@code public} — «relation outbox
+     * does not exist». Одного {@link TenantContext} для этого мало.
+     *
+     * <p>Возраст самого старого события считается здесь же: число «в очереди
+     * сто событий» не говорит ничего — сто событий, появившихся секунду назад,
+     * это обычная работа, а те же сто возрастом в час — остановившийся релей.
      */
-    private long oldestPendingSeconds() {
-        Instant oldest = jdbc.queryForObject(
-                "SELECT min(created_at) FROM outbox WHERE published_at IS NULL",
-                (rs, i) -> rs.getObject(1, java.time.OffsetDateTime.class) == null
-                        ? null
-                        : rs.getObject(1, java.time.OffsetDateTime.class).toInstant());
-
-        return oldest == null ? 0 : Duration.between(oldest, Instant.now()).toSeconds();
+    private Counts countsOf() {
+        return transactions.execute(status -> jdbc.queryForObject("""
+                SELECT (SELECT count(*) FROM outbox WHERE published_at IS NULL),
+                       (SELECT min(created_at) FROM outbox WHERE published_at IS NULL),
+                       (SELECT count(*) FROM event_dead_letter WHERE resolved_at IS NULL),
+                       (SELECT count(*) FROM event_dead_letter
+                         WHERE resolved_at IS NULL AND attempts >= ?)""",
+                (rs, i) -> {
+                    OffsetDateTime oldest = rs.getObject(2, OffsetDateTime.class);
+                    return new Counts(
+                            rs.getLong(1),
+                            oldest == null ? 0
+                                    : Duration.between(oldest.toInstant(), Instant.now())
+                                            .toSeconds(),
+                            rs.getLong(3),
+                            rs.getLong(4));
+                },
+                DeadLetterService.AUTO_ATTEMPTS));
     }
 
     private record Counts(long pending, long oldestSeconds, long unresolved, long attention) {
-    }
-
-    private long count(String sql, Object... args) {
-        Long found = jdbc.queryForObject(sql, Long.class, args);
-        return found == null ? 0 : found;
     }
 
     private List<String> activeTenantSchemas() {
