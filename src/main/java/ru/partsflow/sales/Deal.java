@@ -91,6 +91,37 @@ public class Deal {
     @Column(name = "delivery_note")
     private String deliveryNote;
 
+    /**
+     * Площадка, с которой пришёл заказ: {@code DROM}, {@code AVITO} или пусто
+     * у обычной продажи.
+     *
+     * <p>Машинный код, а не ссылка на {@code deal_source}: справочник источников
+     * редактирует клиент, и ключ идемпотентности, зависящий от переименованной
+     * им строки, перестаёт быть ключом. {@code deal_source} остаётся тем,
+     * по чему владелец считает, какой канал приносит деньги.
+     */
+    @Column(name = "marketplace")
+    private String marketplace;
+
+    /** Номер заказа у площадки — тот, который называет покупатель. */
+    @Column(name = "external_order_no")
+    private String externalOrderNo;
+
+    /**
+     * До какого момента площадка ждёт ответа продавца.
+     *
+     * <p>У Дрома по защищённой сделке это трое рабочих суток: не ответили —
+     * деньги вернулись покупателю, а заказ пропал. Поэтому срок хранится
+     * отдельно от срока резерва: резерв продлевают по договорённости
+     * с покупателем, а этот назначает площадка, и продлить его нельзя.
+     */
+    @Column(name = "reply_deadline")
+    private Instant replyDeadline;
+
+    /** Момент, когда продавец подтвердил заказ площадке. */
+    @Column(name = "order_accepted_at")
+    private Instant orderAcceptedAt;
+
     @Column(name = "created_by")
     private Long createdBy;
 
@@ -193,6 +224,31 @@ public class Deal {
         requireOpen("принять резерв");
         this.status = DealStatus.RESERVED;
         this.reservedUntil = until;
+    }
+
+    /**
+     * Отмечает заказ площадки принятым.
+     *
+     * <p>Это не статус сделки: для склада ничего не меняется — товар уже
+     * зарезервирован с момента, когда заказ приехал. Отметка нужна очереди
+     * «ждут ответа»: пока её нет, заказ висит у продавца, а после срока
+     * площадка вернёт деньги покупателю.
+     */
+    public void acceptOrder() {
+        if (externalOrderNo == null) {
+            throw new IllegalStateException("Это не заказ с площадки: принимать нечего");
+        }
+        if (orderAcceptedAt != null) {
+            // Повторное подтверждение — не ошибка: продавец мог нажать дважды,
+            // а очередь не отличает «принял только что» от «принял вчера».
+            return;
+        }
+        this.orderAcceptedAt = Instant.now();
+    }
+
+    /** Заказ площадки, по которому продавец ещё не ответил. */
+    public boolean isAwaitingReply() {
+        return externalOrderNo != null && orderAcceptedAt == null && status.holdsStock();
     }
 
     public void markReady() {
@@ -350,6 +406,28 @@ public class Deal {
 
     public void setWarehouseId(Long warehouseId) {
         this.warehouseId = warehouseId;
+    }
+
+    public String getMarketplace() {
+        return marketplace;
+    }
+
+    public String getExternalOrderNo() {
+        return externalOrderNo;
+    }
+
+    public Instant getReplyDeadline() {
+        return replyDeadline;
+    }
+
+    public Instant getOrderAcceptedAt() {
+        return orderAcceptedAt;
+    }
+
+    void fromMarketplace(String marketplace, String orderNo, Instant replyDeadline) {
+        this.marketplace = marketplace;
+        this.externalOrderNo = orderNo;
+        this.replyDeadline = replyDeadline;
     }
 
     public Long getDealSourceId() {

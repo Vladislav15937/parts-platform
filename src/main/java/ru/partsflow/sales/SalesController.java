@@ -1,6 +1,7 @@
 package ru.partsflow.sales;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
@@ -80,6 +81,58 @@ public class SalesController {
                         .toList());
 
         return ResponseEntity.status(HttpStatus.CREATED).body(view(deal));
+    }
+
+    /**
+     * Принимает заказ, оформленный покупателем на площадке.
+     *
+     * <p>Пока заводится руками: продавец видит заказ в кабинете Дрома
+     * и переносит его сюда. Ключ к API защищённых сделок Дром выдаёт
+     * по запросу, и до него автоматический приём написать не на чем —
+     * но модель от способа доставки заказа не зависит, и когда ключ появится,
+     * поменяется только то, кто зовёт этот метод.
+     *
+     * <p>Повтор по тому же номеру заказа возвращает прежнюю сделку и код 200
+     * вместо 201: продавец мог завести заказ дважды, а вторая сделка на тот же
+     * товар — это одна деталь, обещанная двум покупателям.
+     */
+    @PostMapping("/orders")
+    @PreAuthorize(SELLS)
+    public ResponseEntity<OrderView> receiveOrder(@Valid @RequestBody OrderRequest request) {
+        SalesService.AcceptedOrder accepted = sales.registerMarketplaceOrder(
+                request.marketplace(), request.orderNo(), request.replyDeadline(),
+                request.customerId(), CurrentUser.memberId(), request.dealSourceId(),
+                request.deliveryNote(), request.reservedUntil(),
+                request.items().stream()
+                        .map(i -> new SalesService.ItemRequest(
+                                i.partId(), i.quantity(), i.price(), i.warehouseId()))
+                        .toList());
+
+        OrderView body = new OrderView(view(accepted.deal()), accepted.replayed(),
+                accepted.missing());
+        return ResponseEntity.status(accepted.replayed() ? HttpStatus.OK : HttpStatus.CREATED)
+                .body(body);
+    }
+
+    /**
+     * Заказы площадок, по которым ещё не ответили.
+     *
+     * <p>Отдельный список, а не отметка в общем: у Дрома по защищённой сделке
+     * трое рабочих суток, после чего деньги возвращаются покупателю, — заказ,
+     * потерявшийся среди сотни сделок, это потерянные деньги и рейтинг
+     * у площадки.
+     */
+    @GetMapping("/orders/awaiting-reply")
+    @PreAuthorize(SELLS)
+    public List<DealView> ordersAwaitingReply() {
+        return views(sales.ordersAwaitingReply());
+    }
+
+    /** Подтверждает заказ площадке: убирает его из очереди «ждут ответа». */
+    @PostMapping("/orders/{id}/accept")
+    @PreAuthorize(SELLS)
+    public DealView acceptOrder(@PathVariable Long id) {
+        return view(sales.acceptOrder(id, CurrentUser.memberId()));
     }
 
     @GetMapping("/{id}")
@@ -247,16 +300,56 @@ public class SalesController {
     public record TransferRequest(@NotEmpty List<Long> itemIds) {
     }
 
+    /**
+     * @param marketplace    {@code DROM} или {@code AVITO}
+     * @param orderNo        номер заказа у площадки — тот, который называет покупатель
+     * @param replyDeadline  до какого момента площадка ждёт ответа; у Дрома
+     *                       это трое рабочих суток, потом деньги вернутся
+     * @param dealSourceId   строка справочника источников для отчётов; площадка
+     *                       и источник — разные вещи: первый машинный код,
+     *                       второй владелец переименовывает как хочет
+     */
+    public record OrderRequest(@NotBlank String marketplace,
+                               @NotBlank String orderNo,
+                               Instant replyDeadline,
+                               Long customerId,
+                               Long dealSourceId,
+                               String deliveryNote,
+                               Instant reservedUntil,
+                               @NotEmpty List<ItemBody> items) {
+    }
+
+    /**
+     * @param replayed заказ с таким номером уже был заведён — вернулась прежняя сделка
+     * @param missing  чего не хватило на складе; непусто — сделка осталась
+     *                 черновиком, товар не зарезервирован, и заказ,
+     *                 скорее всего, придётся отклонить
+     */
+    public record OrderView(DealView deal, boolean replayed, List<String> missing) {
+    }
+
+    /**
+     * @param marketplace   площадка, если сделка пришла заказом; иначе пусто
+     * @param externalOrderNo номер заказа у площадки — его называет покупатель
+     * @param replyDeadline срок ответа площадке; у Дрома пропущенный означает
+     *                      возврат денег покупателю
+     */
     public record DealView(Long id, Long number, Long customerId, Long managerId,
                            DealStatus status, Instant reservedUntil,
                            BigDecimal totalAmount, BigDecimal paidAmount, BigDecimal debt,
-                           Instant createdAt, Instant issuedAt, List<ItemView> items) {
+                           Instant createdAt, Instant issuedAt,
+                           String marketplace, String externalOrderNo,
+                           Instant replyDeadline, Instant orderAcceptedAt,
+                           String deliveryNote, List<ItemView> items) {
 
         static DealView of(Deal deal, Map<Long, String> titles) {
             return new DealView(deal.getId(), deal.getNumber(), deal.getCustomerId(),
                     deal.getManagerId(), deal.getStatus(), deal.getReservedUntil(),
                     deal.getTotalAmount(), deal.getPaidAmount(), deal.debt(),
                     deal.getCreatedAt(), deal.getIssuedAt(),
+                    deal.getMarketplace(), deal.getExternalOrderNo(),
+                    deal.getReplyDeadline(), deal.getOrderAcceptedAt(),
+                    deal.getDeliveryNote(),
                     deal.getItems().stream().map(item -> ItemView.of(item, titles)).toList());
         }
     }

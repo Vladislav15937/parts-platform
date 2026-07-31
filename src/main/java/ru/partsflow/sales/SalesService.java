@@ -15,6 +15,7 @@ import ru.partsflow.platform.outbox.contract.DealEvent;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -88,6 +89,163 @@ public class SalesService {
         log(saved, "CREATED", "Сделка создана и зарезервирована. Позиций: "
                 + saved.getItems().size(), managerId);
         return saved;
+    }
+
+    /**
+     * Принимает заказ, оформленный покупателем на площадке.
+     *
+     * <p><b>Заказ уже существует, когда мы о нём узнаём.</b> Покупатель
+     * на Дроме нажал «купить» и заплатил, деньги held площадкой, а мы узнаём
+     * последними. Поэтому метод не отказывает: он записывает заказ при любом
+     * состоянии склада, — отказ означал бы заказ, о котором знает площадка
+     * и не знает разборка.
+     *
+     * <p><b>Товар резервируется сразу, в этой же транзакции.</b> Покупатель
+     * заплатил, и незарезервированную деталь через час продадут с прилавка —
+     * а вернуть придётся деньги и репутацию у площадки.
+     *
+     * <p><b>Или не резервируется вовсе.</b> Не хватило хоть одной позиции —
+     * не резервируем ничего, сделка остаётся черновиком и попадает продавцу
+     * в «ждут ответа» с пометкой. Частичный резерв тут хуже никакого: заказ
+     * всё равно придётся отклонить целиком — покупатель платил за всё, —
+     * а до отклонения он будет держать товар, который можно продать.
+     *
+     * <p><b>Повтор безопасен.</b> Тот же номер заказа возвращает ту же сделку,
+     * а не заводит вторую: второй резерв на тот же товар — это одна деталь,
+     * обещанная двум покупателям. Уникальность стережёт индекс в БД, проверка
+     * здесь лишь избавляет от исключения на обычном повторе. Это понадобится
+     * и сейчас (продавец завёл заказ дважды), и позже, когда заказы поедут
+     * из API площадки: доставка там будет at-least-once, как и всюду.
+     *
+     * @param replyDeadline до какого момента площадка ждёт ответа; у Дрома
+     *                      по защищённой сделке это трое рабочих суток,
+     *                      после чего деньги возвращаются покупателю
+     */
+    @Transactional
+    public AcceptedOrder registerMarketplaceOrder(String marketplace, String orderNo,
+                                                  Instant replyDeadline, Long customerId,
+                                                  Long managerId, Long dealSourceId,
+                                                  String deliveryNote, Instant reservedUntil,
+                                                  List<ItemRequest> items) {
+        if (marketplace == null || orderNo == null || orderNo.isBlank()) {
+            throw new IllegalArgumentException("Не указана площадка или номер заказа");
+        }
+        if (items == null || items.isEmpty()) {
+            throw new IllegalArgumentException("В заказе нет позиций");
+        }
+
+        Deal existing = dealRepository.findByMarketplaceAndExternalOrderNo(marketplace, orderNo)
+                .orElse(null);
+        if (existing != null) {
+            // Позиции — внутри транзакции: наружу ленивая коллекция уходит
+            // исключением, а не JSON'ом.
+            existing.getItems().size();
+            return new AcceptedOrder(existing, true, List.of());
+        }
+
+        Deal deal = new Deal(customerId, managerId);
+        deal.setCreatedBy(managerId);
+        deal.setDealSourceId(dealSourceId);
+        deal.setDeliveryNote(deliveryNote);
+        deal.fromMarketplace(marketplace, orderNo.strip(), replyDeadline);
+
+        for (ItemRequest item : items) {
+            Part part = requirePart(item.partId());
+            deal.addItem(part.getId(), item.quantity(),
+                    item.price() != null ? item.price() : part.getPrice(), item.warehouseId());
+        }
+
+        // Сначала смотрим, хватает ли всего, и только потом резервируем:
+        // резерв половины заказа держал бы товар ради сделки, которую всё
+        // равно придётся отклонить.
+        List<String> missing = shortagesOf(items);
+        if (missing.isEmpty()) {
+            for (ItemRequest item : items) {
+                reservationRepository.reserve(item.partId(), item.warehouseId(), item.quantity());
+            }
+            deal.reserve(reservedUntil != null ? reservedUntil : defaultReserveUntil(replyDeadline));
+        }
+
+        Deal saved = dealRepository.saveAndFlush(deal);
+        log(saved, "ORDER_RECEIVED", missing.isEmpty()
+                        ? "Заказ %s №%s принят и зарезервирован".formatted(marketplace, orderNo)
+                        : "Заказ %s №%s принят, но обеспечить нечем: %s"
+                                .formatted(marketplace, orderNo, String.join("; ", missing)),
+                managerId);
+        return new AcceptedOrder(saved, false, missing);
+    }
+
+    /**
+     * Отмечает заказ подтверждённым площадке.
+     *
+     * <p>Склад это не двигает — товар зарезервирован с момента приёма. Отметка
+     * убирает заказ из очереди «ждут ответа»: пока её нет, продавец видит
+     * заказ в списке, а по истечении срока площадка вернёт деньги покупателю.
+     */
+    @Transactional
+    public Deal acceptOrder(Long dealId, Long managerId) {
+        Deal deal = requireDeal(dealId);
+        deal.getItems().size();
+        boolean wasAwaiting = deal.isAwaitingReply();
+        deal.acceptOrder();
+
+        Deal saved = dealRepository.saveAndFlush(deal);
+        if (wasAwaiting) {
+            log(saved, "ORDER_ACCEPTED", "Заказ подтверждён площадке", managerId);
+        }
+        return saved;
+    }
+
+    /**
+     * Заказы площадок, по которым продавец ещё не ответил.
+     *
+     * <p>Сортировка по сроку ответа, а не по дате заказа: пропущенный срок
+     * у Дрома означает возврат денег покупателю, и заказ, до которого осталось
+     * два часа, важнее вчерашнего, у которого их сутки.
+     */
+    @Transactional(readOnly = true)
+    public List<Deal> ordersAwaitingReply() {
+        return withItems(dealRepository.findAwaitingReply());
+    }
+
+    /**
+     * Чего не хватает под заказ.
+     *
+     * <p>Считается по свободному остатку, а не по наличию: деталь, отложенная
+     * другому покупателю, для этого заказа всё равно что продана.
+     */
+    private List<String> shortagesOf(List<ItemRequest> items) {
+        List<String> missing = new ArrayList<>();
+        for (ItemRequest item : items) {
+            BigDecimal available = reservationRepository.availableQuantity(
+                    item.partId(), item.warehouseId());
+            if (available.compareTo(item.quantity()) < 0) {
+                Part part = requirePart(item.partId());
+                missing.add("%s — нужно %s, свободно %s".formatted(
+                        part.getTitle(), item.quantity().stripTrailingZeros().toPlainString(),
+                        available.stripTrailingZeros().toPlainString()));
+            }
+        }
+        return missing;
+    }
+
+    /**
+     * Срок резерва по умолчанию — срок ответа площадке.
+     *
+     * <p>Держать дольше нечего: не ответили вовремя — заказа больше нет,
+     * а товар остался бы заблокированным неизвестно до какого числа.
+     */
+    private Instant defaultReserveUntil(Instant replyDeadline) {
+        return replyDeadline != null && replyDeadline.isAfter(Instant.now())
+                ? replyDeadline
+                : Instant.now().plus(java.time.Duration.ofDays(3));
+    }
+
+    /**
+     * @param replayed заказ уже был заведён раньше — вернулась прежняя сделка
+     * @param missing  чего не хватило на складе; пусто — заказ обеспечен
+     */
+    public record AcceptedOrder(Deal deal, boolean replayed, List<String> missing) {
     }
 
     /**
@@ -402,16 +560,29 @@ public class SalesService {
     /** История покупок клиента, свежие сверху. */
     @Transactional(readOnly = true)
     public List<Deal> ofCustomer(Long customerId) {
-        List<Deal> deals = dealRepository.findByCustomerIdOrderByIdDesc(customerId);
+        return withItems(dealRepository.findByCustomerIdOrderByIdDesc(customerId));
+    }
+
+    /**
+     * Подтягивает позиции, пока транзакция ещё открыта.
+     *
+     * <p>{@code open-in-view} выключен намеренно, и коллекция позиций ленивая:
+     * контроллер, добравшийся до неё после коммита, получает
+     * {@code LazyInitializationException}, а клиент — пятисотку. Тесты, зовущие
+     * сервис изнутри своей транзакции, этого не видят вовсе — поймано живым
+     * прогоном через HTTP, как и предыдущие ошибки этого рода.
+     *
+     * <p>Не {@code JOIN FETCH} в запросе: он у каждого метода свой, и забыть
+     * его в новом — то же самое, что забыть эту строку, только незаметнее.
+     */
+    private List<Deal> withItems(List<Deal> deals) {
         deals.forEach(deal -> deal.getItems().size());
         return deals;
     }
 
     @Transactional(readOnly = true)
     public List<Deal> expiredReservations() {
-        List<Deal> deals = dealRepository.findExpiredReservations(Instant.now());
-        deals.forEach(deal -> deal.getItems().size());
-        return deals;
+        return withItems(dealRepository.findExpiredReservations(Instant.now()));
     }
 
     @Transactional(readOnly = true)

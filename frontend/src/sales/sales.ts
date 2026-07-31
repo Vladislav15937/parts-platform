@@ -65,6 +65,14 @@ export interface Deal {
   debt: string;
   createdAt: string;
   issuedAt: string | null;
+  /** Площадка, если сделка пришла заказом: DROM или AVITO. Иначе пусто. */
+  marketplace: string | null;
+  /** Номер заказа у площадки — тот, который называет покупатель. */
+  externalOrderNo: string | null;
+  /** Срок ответа площадке. У Дрома пропущенный — возврат денег покупателю. */
+  replyDeadline: string | null;
+  orderAcceptedAt: string | null;
+  deliveryNote: string | null;
   items: DealItem[];
 }
 
@@ -228,6 +236,75 @@ export function historyOf(dealId: number): Promise<HistoryEntry[]> {
 
 export function expiredReservations(): Promise<Deal[]> {
   return request<Deal[]>('/api/deals/expired-reservations');
+}
+
+/**
+ * Заказ, оформленный покупателем на площадке.
+ *
+ * <p>Заводится руками: продавец видит заказ в кабинете Дрома и переносит его
+ * сюда. Ключ к API защищённых сделок Дром выдаёт по запросу; когда он появится,
+ * поменяется только то, кто зовёт этот метод.
+ *
+ * <p>Повтор по тому же номеру не создаёт вторую сделку — сервер вернёт
+ * прежнюю с {@code replayed}. Это не ошибка и показывать её как ошибку нельзя:
+ * продавец мог завести заказ дважды, и правильный ответ ему — «этот заказ
+ * уже заведён, вот он».
+ */
+export interface OrderResult {
+  deal: Deal;
+  replayed: boolean;
+  /** Чего не хватило на складе. Непусто — товар не зарезервирован. */
+  missing: string[];
+}
+
+export function receiveOrder(
+  marketplace: string,
+  orderNo: string,
+  customerId: number,
+  lines: BasketLine[],
+  replyDeadline: string | null,
+  deliveryNote: string,
+): Promise<OrderResult> {
+  return request<OrderResult>('/api/deals/orders', {
+    method: 'POST',
+    body: {
+      marketplace,
+      orderNo,
+      customerId,
+      replyDeadline,
+      deliveryNote: deliveryNote === '' ? null : deliveryNote,
+      items: lines.map((line) => ({
+        partId: line.row.partId,
+        quantity: line.quantity,
+        price: line.price === '' ? null : line.price,
+        warehouseId: line.row.warehouseId,
+      })),
+    },
+  });
+}
+
+/** Заказы площадок, по которым продавец ещё не ответил. Горящие сверху. */
+export function ordersAwaitingReply(): Promise<Deal[]> {
+  return request<Deal[]>('/api/deals/orders/awaiting-reply');
+}
+
+export function acceptOrder(dealId: number): Promise<Deal> {
+  return request<Deal>(`/api/deals/orders/${dealId}/accept`, { method: 'POST' });
+}
+
+/**
+ * Сколько осталось до срока ответа площадке.
+ *
+ * <p>Отдельная функция, потому что показывать надо не дату, а остаток: «до
+ * 4 авг» продавец сопоставит с сегодняшним числом сам и ошибётся, а «осталось
+ * 2 часа» не требует считать. Отрицательное — срок уже прошёл, и деньги
+ * покупателю площадка, скорее всего, вернула.
+ */
+export function hoursUntilDeadline(deal: Deal, now: number = Date.now()): number | null {
+  if (!deal.replyDeadline) {
+    return null;
+  }
+  return (new Date(deal.replyDeadline).getTime() - now) / 3_600_000;
 }
 
 /** Итого по корзине — то же число, что посчитает сервер. */

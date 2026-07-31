@@ -47,6 +47,28 @@ public class StockReservationRepository {
                         .formatted(partId, warehouseId, quantity));
     }
 
+    /**
+     * Свободный остаток детали на складе.
+     *
+     * <p>Именно свободный, а не общий: деталь, отложенная другому покупателю,
+     * для нового заказа всё равно что продана. Пусто — строки раскладки нет,
+     * то есть на этом складе детали не было вовсе.
+     *
+     * <p>Читается, а не считается в приложении: между чтением и решением
+     * встанет другой продавец. Поэтому ответ здесь — только для того, чтобы
+     * объяснить человеку, чего не хватает; сам резерв ставит {@link #reserve},
+     * одной инструкцией с проверкой.
+     */
+    public BigDecimal availableQuantity(Long partId, Long warehouseId) {
+        Object found = entityManager.createNativeQuery("""
+                        SELECT COALESCE(sum(qty_available), 0) FROM part_stock
+                         WHERE part_id = :part AND warehouse_id = :warehouse""")
+                .setParameter("part", partId)
+                .setParameter("warehouse", warehouseId)
+                .getSingleResult();
+        return found == null ? BigDecimal.ZERO : (BigDecimal) found;
+    }
+
     private void call(String function, Long partId, Long warehouseId,
                       BigDecimal quantity, String message) {
         try {
