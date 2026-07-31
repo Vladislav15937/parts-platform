@@ -140,6 +140,31 @@ button:disabled {
   border-radius: 10px;
 }
 
+/* Список карточек заказов: у li свои отступы, иначе карточки слипаются. */
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Номер заказа и сумма по краям строки. Без этого они шли встык —
+   «№ 301-516-984500 ₽», и продавец читал номер вместе с ценой. */
+.order-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+/* Заказ, который нечем закрыть: подтверждать площадке нечего, и увидеть
+   это надо до того, как продавец начнёт читать позиции. */
+.card--alert {
+  border-color: var(--danger, #c0392b);
+}
+
 .card h2 {
   margin: 0;
   font-size: 1.1rem;

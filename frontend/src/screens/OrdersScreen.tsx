@@ -52,48 +52,50 @@ export function OrdersScreen({ canSell }: { canSell: boolean }) {
   }
 
   if (orders === null) {
-    return <p className="hint">Загружаем заказы…</p>;
+    return <p className="note">Загружаем заказы…</p>;
   }
 
   return (
     <section className="screen">
       <h2>Заказы с площадок</h2>
-      <p className="hint">
+      <p className="note">
         Заказ уже оплачен покупателем. Не ответить вовремя — значит вернуть ему
         деньги и потерять баллы рейтинга у площадки.
       </p>
 
-      {error && <p className="error">{error}</p>}
+      {error && <p className="note note--error">{error}</p>}
 
       {orders.length === 0 && (
-        <p className="hint">Заказов, ждущих ответа, нет.</p>
+        <p className="note">Заказов, ждущих ответа, нет.</p>
       )}
 
-      <ul className="list">
+      <ul className="cards">
         {orders.map((deal) => {
           const hours = hoursUntilDeadline(deal);
           // Черновик здесь означает ровно одно: обеспечить заказ нечем.
           // Обеспеченный резервируется в момент приёма.
           const unfulfilled = deal.status === 'DRAFT';
           return (
-            <li key={deal.id} className={unfulfilled ? 'card card--warning' : 'card'}>
-              <div className="card__head">
+            <li key={deal.id} className={unfulfilled ? 'card card--alert' : 'card'}>
+              <div className="order-head">
                 <strong>
                   {deal.marketplace === 'AVITO' ? 'Авито' : 'Дром'} № {deal.externalOrderNo}
                 </strong>
-                <span>{deal.totalAmount} ₽</span>
+                <span>{Number(deal.totalAmount).toLocaleString('ru-RU')} ₽</span>
               </div>
 
-              <p className="hint">{deadlineLabel(hours)}</p>
+              <p className={hours !== null && hours < 3 ? 'note note--error' : 'note'}>
+                {deadlineLabel(hours)}
+              </p>
 
               {unfulfilled && (
-                <p className="error">
+                <p className="note note--error">
                   Обеспечить нечем: товара нет на складе. Заказ придётся отклонить
                   или найти замену.
                 </p>
               )}
 
-              <ul className="lines">
+              <ul className="counts">
                 {deal.items.map((item) => (
                   <li key={item.id}>
                     {item.title ?? `деталь ${item.partId}`} — {item.quantity} шт.
@@ -101,12 +103,11 @@ export function OrdersScreen({ canSell }: { canSell: boolean }) {
                 ))}
               </ul>
 
-              {deal.deliveryNote && <p className="hint">{deal.deliveryNote}</p>}
+              {deal.deliveryNote && <p className="muted">{deal.deliveryNote}</p>}
 
               {canSell && !unfulfilled && (
                 <button
                   type="button"
-                  className="primary"
                   disabled={busy === deal.id}
                   onClick={() => accept(deal)}
                 >
