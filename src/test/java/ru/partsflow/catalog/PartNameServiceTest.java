@@ -113,9 +113,12 @@ class PartNameServiceTest extends PostgresTestBase {
     @Test
     @DisplayName("Незнакомое написание не блокирует приёмку, а ждёт в нераспознанных")
     void unknownNameIsStillUsable() {
-        // Слово, которого в поставляемом справочнике нет: «телевизор»
-        // теперь узнаётся как рамка радиатора.
-        PartName resolved = inTenant(() -> service.resolve("кронштейн бампера", null));
+        // Написание, которого в справочнике нет намеренно: «бачок
+        // влагоудалителя» — такой детали нет ни эталоном, ни похожим
+        // (список SKIPPED в build_part_kinds_live2.py). Прежний пример,
+        // «кронштейн бампера», перестал годиться: он стал синонимом
+        // «Крепления бампера» во второй порции справочника.
+        PartName resolved = inTenant(() -> service.resolve("бачок влагоудалителя", null));
 
         assertThat(resolved.getId()).as("наименование не создано — приёмка встанет").isNotNull();
         assertThat(resolved.getMatchStatus()).isEqualTo(PartName.MatchStatus.UNMATCHED);
@@ -155,9 +158,8 @@ class PartNameServiceTest extends PostgresTestBase {
     @Test
     @DisplayName("Ручное сопоставление помечается вручную и пересчёту не подлежит")
     void manualMatchSurvivesRematch() {
-        // Слово, которого в поставляемом справочнике нет: «телевизор»
-        // теперь узнаётся как рамка радиатора.
-        PartName resolved = inTenant(() -> service.resolve("кронштейн бампера", null));
+        // Написание, которого в справочнике нет намеренно (см. соседний тест).
+        PartName resolved = inTenant(() -> service.resolve("бачок влагоудалителя", null));
         inTenant(() -> service.matchManually(resolved.getId(), wheelKindId));
 
         assertThat(inTenant(() -> statusOf(resolved.getId()))).isEqualTo("MANUAL");

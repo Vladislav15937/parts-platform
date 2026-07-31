@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /**
  * Поиск эталона в общем каталоге по написанию арендатора.
@@ -31,17 +32,60 @@ public class PartKindMatcher {
 
     private static final int MAX_SUGGESTIONS = 5;
 
+    /**
+     * Пометка о состоянии в конце написания: «Ступица (УЦЕНКА)», «Фара
+     * (уценка)», «Лента Airbag(Дефект)».
+     *
+     * <p>Это не другая деталь, а та же самая с ценником: у переехавшего
+     * клиента таких написаний пятьдесят четыре, и почти каждое — эталон,
+     * который в справочнике уже есть. Заводить под них синонимы значит
+     * дублировать половину справочника, а следующий клиент напишет
+     * «(брак)» и получит стену нераспознанных заново.
+     *
+     * <p><b>Перечень закрытый, а не «всё в скобках».</b> В скобках бывает
+     * и то, что деталь определяет: «Патрубок (верхний)» отбрасывать можно,
+     * а вот выкусывать скобки вслепую — это ставка на то, что там никогда
+     * не окажется существенного. Пометка состояния — известный список,
+     * и он проверяем.
+     */
+    private static final Pattern CONDITION_MARKER = Pattern.compile(
+            "\\s*\\(\\s*(уценк\\w*|б/?у|новый|новая|ориг\\w*|дефект\\w*|брак\\w*)"
+                    + "\\s*!*\\s*\\)\\s*$",
+            // UNICODE_CHARACTER_CLASS обязателен: без него \w в Java — это
+            // латиница, и «уценка» обрывается на «уценк», а «А)» уже не подходит
+            // под остаток выражения. Поймано тестом.
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.UNICODE_CHARACTER_CLASS);
+
     private final EntityManager entityManager;
 
     public PartKindMatcher(EntityManager entityManager) {
         this.entityManager = entityManager;
     }
 
-    /** Точное совпадение с эталоном или его синонимом. */
+    /**
+     * Точное совпадение с эталоном или его синонимом.
+     *
+     * <p>Со снятой пометкой состояния, если она есть: «Ступица (УЦЕНКА)» —
+     * это ступица, а не отдельный вид детали.
+     */
     public Optional<PartKind> findExact(String rawName) {
         if (rawName == null || rawName.isBlank()) {
             return Optional.empty();
         }
+        Optional<PartKind> direct = findVerbatim(rawName);
+        if (direct.isPresent()) {
+            return direct;
+        }
+        String stripped = withoutConditionMarker(rawName);
+        return stripped.equals(rawName) ? Optional.empty() : findVerbatim(stripped);
+    }
+
+    /** Написание без пометки состояния; без пометки возвращает как есть. */
+    public static String withoutConditionMarker(String rawName) {
+        return CONDITION_MARKER.matcher(rawName).replaceAll("").strip();
+    }
+
+    private Optional<PartKind> findVerbatim(String rawName) {
         @SuppressWarnings("unchecked")
         List<Object[]> rows = entityManager.createNativeQuery("""
                         SELECT k.id, k.category_id, k.name

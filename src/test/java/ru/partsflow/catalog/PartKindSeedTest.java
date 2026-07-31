@@ -134,6 +134,35 @@ class PartKindSeedTest extends PostgresTestBase {
         assertThat(clashes).as("синонимы, ведущие сразу к двум эталонам").isEmpty();
     }
 
+    @Test
+    @DisplayName("Пометка о состоянии в конце написания не мешает сопоставлению")
+    void conditionMarkerIsStripped() {
+        // «Ступица (УЦЕНКА)» — это ступица с ценником, а не другая деталь.
+        // У переехавшего клиента таких написаний пятьдесят четыре, и почти
+        // каждое — эталон, который в справочнике давно есть.
+        assertThat(nameOf("Ступица (УЦЕНКА)")).isEqualTo("Ступица");
+        assertThat(nameOf("Фара (уценка)")).isEqualTo("Фара");
+        assertThat(nameOf("Дверь багажника (Уценка!)")).isEqualTo("Крышка багажника");
+        assertThat(nameOf("Лента Airbag(Дефект)")).isEqualTo("Лента AIRBAG");
+        assertThat(nameOf("Капот (б/у)")).isEqualTo("Капот");
+    }
+
+    @Test
+    @DisplayName("Скобки со смыслом не выкусываются")
+    void meaningfulParenthesesSurvive() {
+        // Перечень пометок закрытый намеренно: выкусывать любые скобки —
+        // это ставка на то, что там никогда не окажется существенного.
+        // «Фара (правая)» обязана остаться несопоставленной как написание
+        // со стороной, а не превратиться в «Фару» вместе с потерянной стороной.
+        assertThat(PartKindMatcher.withoutConditionMarker("Патрубок (верхний)"))
+                .isEqualTo("Патрубок (верхний)");
+        assertThat(PartKindMatcher.withoutConditionMarker("Датчик (ABS)"))
+                .isEqualTo("Датчик (ABS)");
+        // И пометка снимается только с конца: в середине она часть названия.
+        assertThat(PartKindMatcher.withoutConditionMarker("Фара (уценка) левая"))
+                .isEqualTo("Фара (уценка) левая");
+    }
+
     private String nameOf(String raw) {
         return inTenant(() -> matcher.findExact(raw)).orElseThrow(
                 () -> new AssertionError("не сопоставилось: " + raw)).name();
