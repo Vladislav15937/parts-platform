@@ -1,0 +1,40 @@
+# Куда уходит тревога.
+#
+# Telegram, а не почта: у оператора ячейки нет ни SMTP-договора, ни привычки
+# читать почту ночью, а бот заводится за пять минут и приходит на телефон.
+# Понадобится дежурная смена — сюда встанет второй receiver, и правила
+# при этом не изменятся.
+#
+# Токен лежит файлом: печатать секрет в compose означает отправить его
+# в `docker inspect` и в историю оболочки.
+#
+# Номер чата подставляется при запуске (см. docker-compose.prod.yml).
+# Alertmanager окружение в конфигурации не разворачивает — проверено
+# `--help`, флага expand-env у него нет, в отличие от многих его ровесников.
+
+route:
+  receiver: telegram
+  # Повторять, пока не починили. Молчание после первого уведомления —
+  # это ровно тот случай, когда авария живёт до утра: одно сообщение
+  # теряется в переписке.
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 1h
+  group_by: [alertname]
+
+receivers:
+  - name: telegram
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/telegram-token
+        chat_id: CHAT_ID_ПОДСТАВЛЯЕТСЯ
+        api_url: https://api.telegram.org
+        # Иначе сообщение о починке не приходит, и приходится лезть смотреть,
+        # само ли оно прошло.
+        send_resolved: true
+        parse_mode: ''
+        message: >-
+          {{ range .Alerts }}{{ .Status | toUpper }}: {{ .Annotations.summary }}
+
+          {{ .Annotations.description }}
+
+          {{ end }}
