@@ -151,6 +151,27 @@ public class ApiExceptionHandler {
     }
 
     /**
+     * Документ изменил кто-то ещё, пока с ним работали, — 409.
+     *
+     * <p>На разборке это обычное дело: клиент звонит одному продавцу
+     * и приезжает к другому, а сделка одна. Проигравший должен прочитать,
+     * что произошло, а не «нечего снимать с резерва» — иначе он пойдёт
+     * искать поломку склада, которой нет.
+     *
+     * <p>Именно 409, а не 500: офлайн-очередь приёмки повторяет только 5xx,
+     * а повторять сюда нечего — нужно открыть документ заново и посмотреть,
+     * что с ним стало.
+     */
+    @ExceptionHandler(org.springframework.dao.OptimisticLockingFailureException.class)
+    public ResponseEntity<ApiError> concurrentChange(
+            org.springframework.dao.OptimisticLockingFailureException e) {
+        log.info("Одновременное изменение документа", e);
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiError(
+                "Документ изменил другой сотрудник, пока вы с ним работали. "
+                        + "Откройте его заново"));
+    }
+
+    /**
      * Несуществующий адрес — 404, а не 500.
      *
      * <p>Обработчик {@code Exception} иначе съедает и это: опечатка в пути

@@ -11,6 +11,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import org.hibernate.annotations.Generated;
 import org.hibernate.generator.EventType;
 
@@ -49,6 +50,26 @@ public class Deal {
     @Generated(event = EventType.INSERT)
     @Column(insertable = false, updatable = false)
     private Long number;
+
+    /**
+     * Версия документа: двое продавцов не правят одну сделку одновременно.
+     *
+     * <p>Проверка статуса от этого не спасает — она читает то, что загружено
+     * в начале транзакции, и обе операции проходят её одинаково. Часть гонок
+     * отбивает склад, но только там, где обе операции его трогают: «выдать»
+     * и «перенести позиции» проходили обе, потому что перенос резерв
+     * не снимает — деталь уезжала к клиенту и одновременно числилась
+     * обещанной в новом документе.
+     *
+     * <p>Блокировка оптимистичная, а не «документ занят Ивановым», как
+     * у Bazon. У нас экран сделки — это кнопки, а не форма, которую держат
+     * открытой: окно гонки измеряется миллисекундами, и проигравшему честнее
+     * ответить «сделку только что изменили, откройте заново», чем занимать
+     * документ. Пессимистичная блокировка вдобавок требует срока жизни —
+     * без него продавец, отошедший от прилавка, держит сделку навсегда.
+     */
+    @Version
+    private long version;
 
     @Column(name = "customer_id")
     private Long customerId;
@@ -472,6 +493,10 @@ public class Deal {
 
     public List<DealService> getServices() {
         return List.copyOf(services);
+    }
+
+    public long getVersion() {
+        return version;
     }
 
     public Long getDealSourceId() {

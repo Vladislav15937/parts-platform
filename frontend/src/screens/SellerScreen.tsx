@@ -724,6 +724,16 @@ function DealCard({
       }
     } catch (cause) {
       onError(describe(cause, 'Операция не выполнена'));
+      // Сделку изменил кто-то ещё — показываем, во что она превратилась,
+      // а не оставляем на экране состояние, которого уже нет. Иначе продавец
+      // жмёт ту же кнопку второй раз и получает тот же отказ.
+      if (cause instanceof ApiError && cause.status === 409) {
+        const deals = await dealsOf(deal.customerId).catch(() => []);
+        const fresh = deals.find((d) => d.id === deal.id);
+        if (fresh !== undefined) {
+          onChanged(fresh);
+        }
+      }
     }
   }
 }
