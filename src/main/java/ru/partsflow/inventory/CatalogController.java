@@ -69,6 +69,72 @@ public class CatalogController {
                 row.stock());
     }
 
+    /**
+     * Скачать таблицу — то же, что на экране, только целиком.
+     *
+     * <p>Пишется прямо в ответ по мере чтения из базы: тридцать пять тысяч
+     * строк, собранные в памяти перед отправкой, — сотни мегабайт на каждого
+     * скачивающего.
+     *
+     * <p><b>UTF-8 с меткой, а не windows-1251, как у прежней системы.</b>
+     * Метка нужна Excel: без неё он читает файл однобайтовой кодировкой
+     * и показывает кракозябры вместо наименований. А 1251 не умеет всего,
+     * что встречается в наименованиях, и потерянный символ в выгрузке
+     * замечают не сразу — это единственное осознанное расхождение
+     * с прежним форматом.
+     *
+     * <p>Разделитель — точка с запятой: Excel в русской локали разбирает
+     * запятую как десятичный знак, и файл раскладывается по колонкам неверно.
+     */
+    @GetMapping("/export")
+    public void export(@RequestParam(required = false) String q,
+                       @RequestParam(defaultValue = "true") boolean reserved,
+                       @RequestParam(defaultValue = "false") boolean missing,
+                       @RequestParam(required = false) List<Long> warehouses,
+                       @RequestParam(defaultValue = "code") String sort,
+                       @RequestParam(defaultValue = "true") boolean desc,
+                       jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
+
+        List<CatalogService.Warehouse> found = catalog.warehouses();
+
+        response.setContentType("text/csv");
+        response.setCharacterEncoding("UTF-8");
+        response.setHeader("Content-Disposition", "attachment; filename=\"sklad.csv\"");
+
+        var out = new java.io.BufferedWriter(
+                new java.io.OutputStreamWriter(response.getOutputStream(),
+                        java.nio.charset.StandardCharsets.UTF_8), 1 << 16);
+        // Метка порядка байтов: без неё Excel открывает файл в кодировке
+        // системы и показывает кракозябры.
+        out.write('\uFEFF');
+        writeRow(out, CatalogService.exportHeader(found));
+
+        catalog.export(q, reserved, missing, warehouses, sort, desc, found,
+                cells -> writeRow(out, cells));
+        out.flush();
+    }
+
+    private static void writeRow(java.io.Writer out, List<String> cells) {
+        try {
+            for (int at = 0; at < cells.size(); at++) {
+                if (at > 0) {
+                    out.write(';');
+                }
+                // Кавычки вокруг всего: в наименованиях встречаются и точка
+                // с запятой, и перенос строки, и сами кавычки — «фара 5"».
+                out.write('"');
+                out.write(cells.get(at).replace("\"", "\"\""));
+                out.write('"');
+            }
+            out.write('\n');
+        } catch (java.io.IOException e) {
+            // Обрыв на середине выгрузки — обычное дело: скачивающий закрыл
+            // вкладку. Заворачиваем, чтобы не тащить проверяемое исключение
+            // через обход курсора.
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
+
     public record View(long total, List<CatalogService.Warehouse> warehouses, List<Row> rows) {
     }
 

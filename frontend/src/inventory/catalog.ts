@@ -63,6 +63,29 @@ export interface CatalogQuery {
   size: number;
 }
 
+/**
+ * Адрес скачивания — с теми же отбором и сортировкой, что на экране.
+ *
+ * <p>Обычной ссылкой, а не запросом с последующим сохранением: браузер сам
+ * умеет качать двенадцать мегабайт, показывая ход, а собранный в памяти
+ * страницы файл такого размера её и уронит.
+ */
+export function exportUrl(query: CatalogQuery): string {
+  const params = new URLSearchParams({
+    reserved: String(query.reserved),
+    missing: String(query.missing),
+    sort: query.sort,
+    desc: String(query.desc),
+  });
+  if (query.q.trim() !== '') {
+    params.set('q', query.q.trim());
+  }
+  for (const id of query.warehouses) {
+    params.append('warehouses', String(id));
+  }
+  return `/api/parts/catalog/export?${params.toString()}`;
+}
+
 export function loadCatalog(query: CatalogQuery): Promise<CatalogPage> {
   const params = new URLSearchParams({
     reserved: String(query.reserved),

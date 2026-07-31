@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import {
   COLUMNS,
   loadCatalog,
+  exportUrl,
   loadVisible,
   saveVisible,
   type CatalogPage,
@@ -139,9 +140,16 @@ export function CatalogScreen() {
         ))}
       </fieldset>
 
-      <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
-        Настроить таблицу
-      </button>
+      <div className="filter-row">
+        <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
+          Настроить таблицу
+        </button>
+        {/* Ссылкой, а не кнопкой с запросом: файл на двенадцать мегабайт
+            качает браузер, показывая ход, и вкладка при этом жива. */}
+        <a className="button--ghost" href={exportUrl(query)} download>
+          Скачать таблицу
+        </a>
+      </div>
 
       {settings && (
         <fieldset className="choices">

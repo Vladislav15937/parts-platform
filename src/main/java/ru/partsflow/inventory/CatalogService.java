@@ -48,6 +48,12 @@ public class CatalogService {
             Map.entry("manufacturer", "p.manufacturer"),
             Map.entry("section", "p.section"));
 
+    private static final Map<String, String> SIDE_FR =
+            Map.of("FRONT", "Перед.", "REAR", "Задн.");
+
+    private static final Map<String, String> SIDE_LR =
+            Map.of("LEFT", "Лев.", "RIGHT", "Прав.");
+
     private final JdbcTemplate jdbc;
 
     public CatalogService(JdbcTemplate jdbc) {
@@ -69,6 +75,21 @@ public class CatalogService {
                      List<Long> warehouseIds, String sort, boolean descending,
                      int page, int size) {
 
+        Filter filter = filterOf(query, withReserved, withMissing, warehouseIds);
+        StringBuilder where = filter.where();
+        List<Object> args = filter.args();
+
+        return finish(where, args, sort, descending, page, size);
+    }
+
+    /**
+     * Условие отбора — одно на страницу и на выгрузку.
+     *
+     * <p>Разное условие означало бы, что скачанный файл не совпадает с тем,
+     * что владелец видел на экране, — а он именно это и проверяет, скачивая.
+     */
+    private Filter filterOf(String query, boolean withReserved, boolean withMissing,
+                            List<Long> warehouseIds) {
         StringBuilder where = new StringBuilder(" WHERE p.product_line = 'PART'");
         List<Object> args = new ArrayList<>();
 
@@ -108,7 +129,14 @@ public class CatalogService {
                                     AND s.warehouse_id = ANY (?))""");
             args.add(warehouseIds.toArray(Long[]::new));
         }
+        return new Filter(where, args);
+    }
 
+    private record Filter(StringBuilder where, List<Object> args) {
+    }
+
+    private Page finish(StringBuilder where, List<Object> args, String sort,
+                        boolean descending, int page, int size) {
         String joins = """
 
                   FROM part p
@@ -190,6 +218,143 @@ public class CatalogService {
         return rows.stream()
                 .map(row -> row.withStock(byPart.getOrDefault(row.id(), Map.of())))
                 .toList();
+    }
+
+    /**
+     * Пишет витрину в поток — всю, что прошла отбор.
+     *
+     * <p><b>Потоком, а не списком.</b> Тридцать пять тысяч строк с двадцатью
+     * с лишним колонками, собранные в памяти перед отправкой, — это сотни
+     * мегабайт на каждого скачивающего. Та же причина, по которой прайс
+     * площадки пишется через StAX.
+     *
+     * <p>Курсор работает только внутри транзакции: при включённом autoCommit
+     * Postgres игнорирует {@code fetchSize} и вычитывает весь склад в память.
+     *
+     * <p>Отбор тот же, что и у страницы: скачанный файл обязан совпасть с тем,
+     * что владелец видел на экране, — ради этой сверки он его и качает.
+     *
+     * <p>Идентификаторы складов подставляются в SQL текстом, и это безопасно:
+     * они пришли из нашей же таблицы, а не из запроса. Параметром колонку
+     * не задать.
+     */
+    @Transactional(readOnly = true)
+    public void export(String query, boolean withReserved, boolean withMissing,
+                       List<Long> warehouseIds, String sort, boolean descending,
+                       List<Warehouse> warehouses, RowWriter writer) {
+
+        Filter filter = filterOf(query, withReserved, withMissing, warehouseIds);
+        String order = SORTS.getOrDefault(sort, "p.id") + (descending ? " DESC" : " ASC");
+
+        StringBuilder stock = new StringBuilder();
+        for (Warehouse warehouse : warehouses) {
+            stock.append("""
+                    ,
+                           (SELECT sum(s.qty_available) FROM part_stock s
+                             WHERE s.part_id = p.id AND s.warehouse_id = %1$d) AS free_%1$d,
+                           (SELECT sum(s.qty_reserved) FROM part_stock s
+                             WHERE s.part_id = p.id AND s.warehouse_id = %1$d) AS res_%1$d"""
+                    .formatted(warehouse.id()));
+        }
+
+        String sql = """
+                SELECT p.public_code, p.title, p.quality_grade, p.condition,
+                       b.name AS brand, m.name AS model, g.year_from, g.year_to,
+                       d.body_code, d.engine_code, d.year,
+                       COALESCE(d.legacy_code, d.public_code) AS donor_code,
+                       p.side_fr, p.side_lr, p.price, p.installation_price, p.color,
+                       p.description, p.manufacturer, p.marking, p.section, p.note,
+                       (SELECT o.raw_number FROM part_oem o
+                         WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
+                       (SELECT string_agg(o.raw_number, ', ') FROM part_oem o
+                         WHERE o.part_id = p.id AND NOT o.is_primary) AS crosses"""
+                + stock + """
+
+                  FROM part p
+                  LEFT JOIN donor d ON d.id = p.donor_id
+                  LEFT JOIN catalog.brand b ON b.id = d.brand_id
+                  LEFT JOIN catalog.model m ON m.id = d.model_id
+                  LEFT JOIN catalog.generation g ON g.id = d.generation_id"""
+                + filter.where() + " ORDER BY " + order;
+
+        jdbc.query(connection -> {
+            var ps = connection.prepareStatement(sql);
+            // Курсор пачками: без этого драйвер вычитывает весь склад разом.
+            ps.setFetchSize(500);
+            for (int at = 0; at < filter.args().size(); at++) {
+                Object arg = filter.args().get(at);
+                if (arg instanceof Long[] array) {
+                    ps.setArray(at + 1, connection.createArrayOf("bigint", array));
+                } else {
+                    ps.setObject(at + 1, arg);
+                }
+            }
+            return ps;
+        }, rs -> {
+            List<String> cells = new ArrayList<>();
+            cells.add(text(rs, "public_code"));
+            cells.add(text(rs, "title"));
+            cells.add(text(rs, "quality_grade"));
+            cells.add(text(rs, "brand"));
+            cells.add(text(rs, "model"));
+            cells.add(text(rs, "year_from"));
+            cells.add(text(rs, "year_to"));
+            cells.add(text(rs, "body_code"));
+            cells.add(text(rs, "engine_code"));
+            cells.add(text(rs, "year"));
+            // Словами, а не кодами: файл открывают в Excel и читают глазами,
+            // и «REAR» там означает утечку внутреннего представления.
+            // В выгрузке прежней системы стоит ровно «Задн.» и «Лев.».
+            cells.add(SIDE_FR.getOrDefault(text(rs, "side_fr"), ""));
+            cells.add(SIDE_LR.getOrDefault(text(rs, "side_lr"), ""));
+            cells.add(text(rs, "donor_code"));
+            cells.add(number(rs, "price"));
+            cells.add(number(rs, "installation_price"));
+            cells.add(text(rs, "color"));
+            cells.add(text(rs, "description"));
+            cells.add(text(rs, "manufacturer"));
+            cells.add(text(rs, "oem"));
+            cells.add(text(rs, "crosses"));
+            cells.add(text(rs, "note"));
+            cells.add(text(rs, "marking"));
+            cells.add(text(rs, "section"));
+            for (Warehouse warehouse : warehouses) {
+                cells.add(number(rs, "free_" + warehouse.id()));
+                cells.add(number(rs, "res_" + warehouse.id()));
+            }
+            writer.write(cells);
+        });
+    }
+
+    /** Заголовок выгрузки: тот же состав и порядок, что у строк. */
+    public static List<String> exportHeader(List<Warehouse> warehouses) {
+        List<String> header = new ArrayList<>(List.of(
+                "Номер товара", "Запчасть", "Оценка состояния", "Марка", "Модель",
+                "Поколение с", "Поколение по", "Кузов", "Двигатель", "Год выпуска",
+                "Передний / Задний", "Левый / Правый", "Номер донора",
+                "Цена", "Установка", "Цвет", "Комментарий", "Производитель",
+                "Номер производителя", "Кросс-номера", "Заметка", "Маркировка", "Секция"));
+        for (Warehouse warehouse : warehouses) {
+            header.add(warehouse.name() + " (свободно)");
+            header.add(warehouse.name() + " (резерв)");
+        }
+        return header;
+    }
+
+    private static String text(java.sql.ResultSet rs, String column) throws java.sql.SQLException {
+        String value = rs.getString(column);
+        return value == null ? "" : value;
+    }
+
+    private static String number(java.sql.ResultSet rs, String column)
+            throws java.sql.SQLException {
+        java.math.BigDecimal value = rs.getBigDecimal(column);
+        return value == null ? "" : value.stripTrailingZeros().toPlainString();
+    }
+
+    /** Приёмник строки выгрузки: реализуется контроллером, пишущим в ответ. */
+    public interface RowWriter {
+        void write(List<String> cells);
     }
 
     /** Склады арендатора: из них получаются колонки остатка. */

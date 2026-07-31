@@ -113,6 +113,33 @@ class CatalogServiceTest extends PostgresTestBase {
                 "SELECT count(*) FROM part", Long.class))).isEqualTo(before);
     }
 
+    @Test
+    @DisplayName("Выгрузка отдаёт то же, что видно на экране, и словами")
+    void exportMatchesTheScreen() {
+        part("Фара выгружаемая", 2);
+
+        List<List<String>> rows = new java.util.ArrayList<>();
+        inTenant(() -> {
+            catalog.export(null, true, false, List.of(), "code", true,
+                    catalog.warehouses(), rows::add);
+            return null;
+        });
+
+        var header = CatalogService.exportHeader(inTenant(() -> catalog.warehouses()));
+        // Столько же ячеек, сколько заголовков: разъехавшись, файл открывается
+        // со сдвигом, и цена оказывается в колонке количества.
+        assertThat(rows).isNotEmpty();
+        assertThat(rows.get(0))
+                .as("ячеек в строке не столько же, сколько заголовков — "
+                        + "файл откроется со сдвигом колонок")
+                .hasSameSizeAs(header);
+
+        // Файл читают глазами в Excel: «REAR» там — утечка внутреннего
+        // представления. В выгрузке прежней системы стоит «Задн.».
+        assertThat(header).contains("Номер товара", "Запчасть", "Секция");
+        assertThat(String.join(";", rows.get(0))).doesNotContain("REAR").doesNotContain("LEFT");
+    }
+
     private CatalogService.Page catalog(boolean reserved, boolean missing) {
         return inTenant(() -> catalog.list(null, reserved, missing, List.of(), "code", true, 0, 50));
     }
