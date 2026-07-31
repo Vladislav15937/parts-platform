@@ -4,11 +4,13 @@ import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
 import {
   CONDITIONS,
+  countMatching,
   filterSummary,
   listFeeds,
   rotateFeedUrl,
   setFilter,
   type Feed,
+  type FeedFilter,
 } from '../publishing/feeds';
 
 /**
@@ -102,19 +104,41 @@ function FeedCard({
   const [warehouseIds, setWarehouseIds] = useState<number[]>(feed.warehouseIds);
   const [link, setLink] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [matching, setMatching] = useState<number | null>(null);
+
+  // Списки видов и марок правятся не здесь: выбор из справочника
+  // на четыре с половиной тысячи моделей — это отдельный экран, и до него
+  // отбор задаётся через API. Показываем то, что задано, чтобы владелец
+  // хотя бы видел, почему прайс короче склада.
+  const current = (): FeedFilter => ({
+    priceFrom: priceFrom.trim() === '' ? null : priceFrom.trim(),
+    priceTo: priceTo.trim() === '' ? null : priceTo.trim(),
+    conditions,
+    warehouseIds,
+    kindIds: feed.kindIds,
+    kindsExcluded: feed.kindsExcluded,
+    brandIds: feed.brandIds,
+    brandsExcluded: feed.brandsExcluded,
+  });
 
   async function save() {
     setBusy(true);
     try {
-      await setFilter(feed.id, {
-        priceFrom: priceFrom.trim() === '' ? null : priceFrom.trim(),
-        priceTo: priceTo.trim() === '' ? null : priceTo.trim(),
-        conditions,
-        warehouseIds,
-      });
+      await setFilter(feed.id, current());
       onChanged();
     } catch (cause) {
       onError(describe(cause, 'Отбор не сохранён'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function count() {
+    setBusy(true);
+    try {
+      setMatching((await countMatching(current())).parts);
+    } catch (cause) {
+      onError(describe(cause, 'Посчитать не удалось'));
     } finally {
       setBusy(false);
     }
@@ -197,9 +221,24 @@ function FeedCard({
         </fieldset>
       )}
 
-      <button type="button" disabled={busy} onClick={() => void save()}>
-        Сохранить отбор
-      </button>
+      <div className="filter-row">
+        <button type="button" className="button--ghost" disabled={busy}
+                onClick={() => void count()}>
+          Посчитать
+        </button>
+        <button type="button" disabled={busy} onClick={() => void save()}>
+          Сохранить отбор
+        </button>
+      </div>
+
+      {matching !== null && (
+        <p className={matching === 0 ? 'note note--error' : 'note'}>
+          {matching === 0
+            ? 'С таким отбором в прайс не попадёт ничего. Площадка примет пустой '
+              + 'прайс молча, и объявления пропадут вместе с просмотрами'
+            : `В прайс попадёт позиций: ${matching}`}
+        </p>
+      )}
 
       <details>
         <summary>Ссылка для площадки</summary>

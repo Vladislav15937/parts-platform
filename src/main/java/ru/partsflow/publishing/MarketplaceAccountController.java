@@ -84,7 +84,29 @@ public class MarketplaceAccountController {
     public MarketplaceAccountService.Account setFilter(@PathVariable Long id,
                                                        @RequestBody FilterRequest request) {
         return accounts.setFilter(id, request.priceFrom(), request.priceTo(),
-                request.conditions(), request.warehouseIds());
+                request.conditions(), request.warehouseIds(),
+                request.kindIds(), request.kindsExcluded(),
+                request.brandIds(), request.brandsExcluded());
+    }
+
+    /**
+     * Сколько позиций попадёт в выгрузку с таким отбором — до сохранения.
+     *
+     * <p>Список по видам деталей на неразобранном справочнике даёт пустой
+     * прайс, а площадка примет его молча: объявления пропадут вместе
+     * с просмотрами, и узнают об этом через сутки.
+     */
+    @PostMapping("/filter/count")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public CountView count(@RequestBody FilterRequest request) {
+        return new CountView(accounts.countMatching(
+                request.priceFrom(), request.priceTo(),
+                request.conditions(), request.warehouseIds(),
+                request.kindIds(), request.kindsExcluded(),
+                request.brandIds(), request.brandsExcluded()));
+    }
+
+    public record CountView(long parts) {
     }
 
     @PostMapping("/{id}/feed-url")
@@ -122,7 +144,11 @@ public class MarketplaceAccountController {
     public record FilterRequest(java.math.BigDecimal priceFrom,
                                 java.math.BigDecimal priceTo,
                                 List<String> conditions,
-                                List<Long> warehouseIds) {
+                                List<Long> warehouseIds,
+                                List<Long> kindIds,
+                                boolean kindsExcluded,
+                                List<Long> brandIds,
+                                boolean brandsExcluded) {
     }
 
     public record FeedUrlView(String path) {

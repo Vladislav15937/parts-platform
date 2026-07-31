@@ -118,7 +118,8 @@ public class DromFeedController {
      */
     private DromPriceGenerator.FeedFilter filterFor(String schema, String token) {
         List<Feed> feeds = jdbc.query("""
-                SELECT feed_token, price_from, price_to, conditions, warehouse_ids
+                SELECT feed_token, price_from, price_to, conditions, warehouse_ids,
+                       kind_ids, kinds_excluded, brand_ids, brands_excluded
                   FROM %s.marketplace_account
                  WHERE marketplace = 'DROM' AND status = 'ACTIVE'
                    AND feed_token IS NOT NULL""".formatted(schema),
@@ -126,7 +127,11 @@ public class DromFeedController {
                         rs.getBigDecimal("price_from"),
                         rs.getBigDecimal("price_to"),
                         textList(rs.getArray("conditions")),
-                        longList(rs.getArray("warehouse_ids"))));
+                        longList(rs.getArray("warehouse_ids")),
+                        longList(rs.getArray("kind_ids")),
+                        rs.getBoolean("kinds_excluded"),
+                        longList(rs.getArray("brand_ids")),
+                        rs.getBoolean("brands_excluded")));
 
         byte[] presented = token.getBytes(StandardCharsets.UTF_8);
         Feed found = null;
@@ -137,7 +142,9 @@ public class DromFeedController {
             }
         }
         return found == null ? null : new DromPriceGenerator.FeedFilter(
-                found.priceFrom(), found.priceTo(), found.conditions(), found.warehouseIds());
+                found.priceFrom(), found.priceTo(), found.conditions(), found.warehouseIds(),
+                found.kindIds(), found.kindsExcluded(),
+                found.brandIds(), found.brandsExcluded());
     }
 
     private static List<String> textList(java.sql.Array array) throws SQLException {
@@ -149,6 +156,8 @@ public class DromFeedController {
     }
 
     private record Feed(String token, java.math.BigDecimal priceFrom, java.math.BigDecimal priceTo,
-                        List<String> conditions, List<Long> warehouseIds) {
+                        List<String> conditions, List<Long> warehouseIds,
+                        List<Long> kindIds, boolean kindsExcluded,
+                        List<Long> brandIds, boolean brandsExcluded) {
     }
 }

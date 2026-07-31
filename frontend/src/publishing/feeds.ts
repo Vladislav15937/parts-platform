@@ -33,6 +33,10 @@ export interface Feed {
   priceTo: string | null;
   conditions: string[];
   warehouseIds: number[];
+  kindIds: number[];
+  kindsExcluded: boolean;
+  brandIds: number[];
+  brandsExcluded: boolean;
 }
 
 export interface FeedFilter {
@@ -40,6 +44,26 @@ export interface FeedFilter {
   priceTo: string | null;
   conditions: string[];
   warehouseIds: number[];
+  kindIds: number[];
+  kindsExcluded: boolean;
+  brandIds: number[];
+  brandsExcluded: boolean;
+}
+
+/**
+ * Сколько позиций попадёт в выгрузку с таким отбором.
+ *
+ * <p>Ради этого числа запрос и существует. Список по видам деталей
+ * на неразобранном справочнике даёт пустой прайс: у только что переехавшего
+ * клиента вид не заполнен ни у одной позиции, пока наименования
+ * не сопоставлены. Площадка пустой прайс примет молча, и объявления пропадут
+ * вместе с просмотрами — узнают об этом через сутки.
+ */
+export function countMatching(filter: FeedFilter): Promise<{ parts: number }> {
+  return request<{ parts: number }>('/api/marketplace-accounts/filter/count', {
+    method: 'POST',
+    body: filter,
+  });
 }
 
 export function listFeeds(): Promise<Feed[]> {
@@ -93,6 +117,16 @@ export function filterSummary(feed: Feed): string {
 
   if (feed.warehouseIds.length > 0) {
     parts.push(`складов: ${feed.warehouseIds.length}`);
+  }
+
+  // Направление списка называется словом: «наименований: 3» не отвечает
+  // на вопрос, выгружаются они или наоборот исключены, а решения
+  // это противоположные.
+  if (feed.kindIds.length > 0) {
+    parts.push(`${feed.kindsExcluded ? 'кроме' : 'только'} наименований: ${feed.kindIds.length}`);
+  }
+  if (feed.brandIds.length > 0) {
+    parts.push(`${feed.brandsExcluded ? 'кроме' : 'только'} марок: ${feed.brandIds.length}`);
   }
 
   // Не «фильтров нет»: пустой отбор — это осмысленное состояние, весь склад.

@@ -24,6 +24,10 @@ function feed(overrides: Partial<Feed> = {}): Feed {
     priceTo: null,
     conditions: [],
     warehouseIds: [],
+    kindIds: [],
+    kindsExcluded: false,
+    brandIds: [],
+    brandsExcluded: false,
     ...overrides,
   };
 }
@@ -52,6 +56,14 @@ describe('сводка отбора выгрузки', () => {
 
   it('состояние названо по-русски, а не кодом', () => {
     expect(filterSummary(feed({ conditions: ['NEW'] }))).toBe('новые');
+  });
+
+  it('направление списка названо словом, а не числом', () => {
+    // «наименований: 3» не отвечает на вопрос, выгружаются они или наоборот
+    // исключены, а решения по этому противоположные.
+    expect(filterSummary(feed({ kindIds: [1, 2, 3] }))).toContain('только наименований: 3');
+    expect(filterSummary(feed({ kindIds: [1], kindsExcluded: true })))
+      .toContain('кроме наименований: 1');
   });
 
   it('склады и цена показываются вместе', () => {

@@ -260,6 +260,30 @@ class MarketplaceOrderTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Без указанного срока ответа заказ получает трое рабочих суток")
+    void replyDeadlineDefaultsToThreeWorkingDays() {
+        Long partId = partWithStock("Радиатор без срока", 1);
+
+        var accepted = inTenant(() -> sales.registerMarketplaceOrder(
+                "DROM", "301-600-01", null, customerId, null, null, null, null,
+                List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId)),
+                List.of()));
+
+        // Пока заказ заводят руками, срок никто не вводит. Без него очередь
+        // «ждут ответа» сортировать нечем, и она перестаёт отвечать на свой
+        // единственный вопрос — что горит.
+        assertThat(accepted.deal().getReplyDeadline())
+                .as("срок ответа пуст: очередь не отличит горящий заказ от вчерашнего")
+                .isNotNull();
+
+        // Трое рабочих суток — это минимум трое календарных, а с выходными
+        // и больше. Верхняя граница держит от ошибки в другую сторону.
+        long hours = java.time.Duration.between(
+                Instant.now(), accepted.deal().getReplyDeadline()).toHours();
+        assertThat(hours).isBetween(70L, 24L * 6);
+    }
+
+    @Test
     @DisplayName("Повторная отмена отклоняется, а не пишет в историю вторую")
     void cancellingTwiceIsRejected() {
         Long partId = partWithStock("Крышка отменяемая", 1);

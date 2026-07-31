@@ -40,7 +40,8 @@ public class MarketplaceAccountService {
                 SELECT id, marketplace, title, status, last_sync_at IS NOT NULL AS synced,
                        last_error, credentials IS NOT NULL AS has_credentials,
                        credentials, feed_token IS NOT NULL AS has_feed,
-                       price_from, price_to, conditions, warehouse_ids
+                       price_from, price_to, conditions, warehouse_ids,
+                       kind_ids, kinds_excluded, brand_ids, brands_excluded
                   FROM marketplace_account
                  ORDER BY marketplace, title""",
                 (rs, i) -> new Account(
@@ -58,7 +59,11 @@ public class MarketplaceAccountService {
                         rs.getBigDecimal("price_from"),
                         rs.getBigDecimal("price_to"),
                         textList(rs.getArray("conditions")),
-                        longList(rs.getArray("warehouse_ids"))));
+                        longList(rs.getArray("warehouse_ids")),
+                        longList(rs.getArray("kind_ids")),
+                        rs.getBoolean("kinds_excluded"),
+                        longList(rs.getArray("brand_ids")),
+                        rs.getBoolean("brands_excluded")));
     }
 
     private static List<String> textList(java.sql.Array array) throws SQLException {
@@ -84,18 +89,26 @@ public class MarketplaceAccountService {
     @Transactional
     public Account setFilter(Long id, java.math.BigDecimal priceFrom,
                              java.math.BigDecimal priceTo,
-                             List<String> conditions, List<Long> warehouseIds) {
+                             List<String> conditions, List<Long> warehouseIds,
+                             List<Long> kindIds, boolean kindsExcluded,
+                             List<Long> brandIds, boolean brandsExcluded) {
         if (priceFrom != null && priceTo != null && priceFrom.compareTo(priceTo) > 0) {
             throw new IllegalArgumentException("Нижняя граница цены больше верхней");
         }
         int updated = jdbc.update("""
                 UPDATE marketplace_account
                    SET price_from = ?, price_to = ?,
-                       conditions = ?::text[], warehouse_ids = ?::bigint[]
+                       conditions = ?::text[], warehouse_ids = ?::bigint[],
+                       kind_ids = ?::bigint[], kinds_excluded = ?,
+                       brand_ids = ?::bigint[], brands_excluded = ?
                  WHERE id = ?""",
                 priceFrom, priceTo,
                 conditions == null || conditions.isEmpty() ? null : arrayLiteral(conditions),
                 warehouseIds == null || warehouseIds.isEmpty() ? null : arrayLiteral(warehouseIds),
+                kindIds == null || kindIds.isEmpty() ? null : arrayLiteral(kindIds),
+                kindsExcluded,
+                brandIds == null || brandIds.isEmpty() ? null : arrayLiteral(brandIds),
+                brandsExcluded,
                 id);
         if (updated == 0) {
             throw new IllegalArgumentException("Выгрузка не найдена: " + id);
@@ -221,6 +234,60 @@ public class MarketplaceAccountService {
                           boolean hasCredentials, boolean plaintextSecret, boolean hasFeed,
                           String lastError, java.math.BigDecimal priceFrom,
                           java.math.BigDecimal priceTo, List<String> conditions,
-                          List<Long> warehouseIds) {
+                          List<Long> warehouseIds, List<Long> kindIds, boolean kindsExcluded,
+                          List<Long> brandIds, boolean brandsExcluded) {
+    }
+
+    /**
+     * Сколько позиций попадёт в выгрузку с таким отбором.
+     *
+     * <p>Ради этого числа отдельный запрос и существует. Список по видам
+     * деталей на неразобранном справочнике даёт пустой прайс: у только что
+     * переехавшего клиента {@code part_kind_id} не заполнен ни у одной
+     * позиции, пока наименования не сопоставлены. Площадка пустой прайс
+     * примет молча, и объявления пропадут вместе с просмотрами — а узнают
+     * об этом через сутки. Поэтому владелец видит число до сохранения,
+     * как и в кабинете Bazon.
+     */
+    @Transactional(readOnly = true)
+    public long countMatching(java.math.BigDecimal priceFrom, java.math.BigDecimal priceTo,
+                              List<String> conditions, List<Long> warehouseIds,
+                              List<Long> kindIds, boolean kindsExcluded,
+                              List<Long> brandIds, boolean brandsExcluded) {
+        Long found = jdbc.queryForObject("""
+                SELECT count(*) FROM part p
+                  LEFT JOIN donor d ON d.id = p.donor_id
+                 WHERE p.is_published
+                   AND p.status IN ('IN_STOCK', 'SOLD')
+                   AND p.price IS NOT NULL
+                   AND (?::numeric IS NULL OR p.price >= ?::numeric)
+                   AND (?::numeric IS NULL OR p.price <= ?::numeric)
+                   AND (?::text[] IS NULL OR p.condition = ANY (?::text[]))
+                   AND (?::bigint[] IS NULL OR EXISTS (
+                           SELECT 1 FROM part_stock s
+                            WHERE s.part_id = p.id AND s.warehouse_id = ANY (?::bigint[])))
+                   AND (?::bigint[] IS NULL OR
+                        CASE WHEN ?::boolean
+                             THEN COALESCE(p.part_kind_id <> ALL (?::bigint[]), true)
+                             ELSE p.part_kind_id = ANY (?::bigint[]) END)
+                   AND (?::bigint[] IS NULL OR
+                        CASE WHEN ?::boolean
+                             THEN COALESCE(d.brand_id <> ALL (?::bigint[]), true)
+                             ELSE d.brand_id = ANY (?::bigint[]) END)""",
+                Long.class,
+                priceFrom, priceFrom, priceTo, priceTo,
+                text(conditions), text(conditions),
+                longs(warehouseIds), longs(warehouseIds),
+                longs(kindIds), kindsExcluded, longs(kindIds), longs(kindIds),
+                longs(brandIds), brandsExcluded, longs(brandIds), longs(brandIds));
+        return found == null ? 0 : found;
+    }
+
+    private static String text(List<String> values) {
+        return values == null || values.isEmpty() ? null : arrayLiteral(values);
+    }
+
+    private static String longs(List<Long> values) {
+        return values == null || values.isEmpty() ? null : arrayLiteral(values);
     }
 }
