@@ -1,18 +1,43 @@
 /*
- * Оформление под руку в перчатке: крупные поля, крупные кнопки, ничего
- * мелкого. Приёмщик работает стоя, одной рукой, часто в перчатках, и попасть
- * в элемент высотой 32 px он не сможет.
+ * Оформление снято с кабинета, на который клиент смотрит каждый день:
+ * серый фон страницы, белая карточка содержимого, тёмный рельс слева,
+ * плотная таблица. Палитра и радиусы взяты вычисленными стилями оригинала,
+ * а не подобраны на глаз.
+ *
+ * <b>Плотность — только для мыши.</b> В кабинете строка 13 пикселей и кнопка
+ * высотой 32: там сидят за столом. Приёмщик работает стоя, одной рукой,
+ * часто в перчатках, и в цель 32 пикселя он не попадёт. Поэтому размеры
+ * переключаются шириной экрана: на телефоне остаётся всё крупное, как было,
+ * на десктопе появляется кабинетная плотность.
  */
 :root {
-  --ink: #1f2933;
-  --muted: #6b7280;
-  --line: #d1d5db;
-  --accent: #2563eb;
+  /* Палитра оригинала. */
+  --page: #eaecf0;
+  --surface: #ffffff;
+  --surface-soft: #f9fafb;
+  --rail: #344054;
+  --rail-hover: #475467;
+  --ink: #101828;
+  --muted: #667085;
+  --line: #eaecf0;
+  --line-strong: #d0d5dd;
+  --accent: #2e90fa;
+  --accent-ink: #ffffff;
   --danger: #b91c1c;
   --ok: #15803d;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --radius: 6px;
+  --radius-sm: 3px;
+
+  font-family: 'Noto Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* Телефон: крупно. Десктоп переключает ниже. */
   font-size: 18px;
   color: var(--ink);
+}
+
+@media (min-width: 900px) {
+  :root {
+    font-size: 13px;
+  }
 }
 
 * {
@@ -21,7 +46,113 @@
 
 body {
   margin: 0;
-  background: #f9fafb;
+  background: var(--page);
+}
+
+/* Оболочка: рельс и содержимое. На телефоне рельс становится полосой
+   вкладок сверху — вертикальный съел бы половину экрана. */
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.rail {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  background: var(--rail);
+  overflow-x: auto;
+}
+
+.rail__brand {
+  display: none;
+}
+
+.rail__item {
+  flex: 0 0 auto;
+  min-height: 48px;
+  padding: 0 0.9rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: #d0d5dd;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.rail__item:hover {
+  background: var(--rail-hover);
+  color: #fff;
+}
+
+.rail__item--active,
+.rail__item--active:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.app__main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.app__content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  min-width: 0;
+}
+
+@media (min-width: 900px) {
+  .app {
+    flex-direction: row;
+  }
+
+  /* Рельс во всю высоту, как в кабинете: разделы всегда на виду,
+     а не прокручиваются вместе с содержимым. */
+  .rail {
+    flex-direction: column;
+    width: 13rem;
+    padding: 0.75rem 0.5rem;
+    overflow-x: visible;
+    overflow-y: auto;
+  }
+
+  .rail__brand {
+    display: block;
+    padding: 0.5rem 0.9rem 1rem;
+    color: #fff;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .rail__item {
+    min-height: 34px;
+    text-align: left;
+  }
+
+  /* Содержимое — одно белое полотно, а не карточки на сером: так в кабинете,
+     и так таблица на тридцать пять тысяч строк не обрастает рамками. */
+  .app__content {
+    padding: 1rem 1.25rem;
+    background: var(--surface);
+  }
 }
 
 .screen {
@@ -876,4 +1007,96 @@ hr {
 .picker-count {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+
+/* Содержимое — белая карточка на сером, как в кабинете.
+   Правки ограничены оболочкой: тот же .screen носит экран входа, у которого
+   ни рельса, ни карточки нет, — снятая с него ширина расплющила форму
+   во всю страницу. Поймано первым же взглядом. */
+@media (min-width: 900px) {
+  .app__content > .screen {
+    padding: 0;
+    background: transparent;
+  }
+
+  /* Ширину снимаем только у табличных экранов. Форма приёмки во всю ширину
+     монитора — это поле ввода длиной в метр и глаз, ищущий следующее поле
+     где-то справа. */
+  .app__content > .screen--wide {
+    max-width: none;
+  }
+
+  .card,
+  .cards > * {
+    background: var(--surface);
+  }
+
+  /* Экран входа — карточка посреди серого поля, а не полоса во всю ширину. */
+  .screen--center {
+    background: transparent;
+  }
+
+  .screen--narrow {
+    max-width: 22rem;
+    padding: 1.5rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+  }
+
+  .card {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+  }
+
+  /* Таблица кабинета: тонкие линии, приглушённая шапка, плотные строки. */
+  table {
+    background: var(--surface);
+  }
+
+  th {
+    background: var(--surface-soft);
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  th,
+  td {
+    border-bottom: 1px solid var(--line);
+    padding: 0.55rem 0.75rem;
+  }
+
+  tbody tr:hover td {
+    background: var(--surface-soft);
+  }
+
+  input,
+  select,
+  button {
+    min-height: 32px;
+  }
+
+  button {
+    border-radius: var(--radius-sm);
+  }
+}
+
+/* Название раздела слева в полосе, имя и связь — справа. */
+.topbar__title {
+  font-weight: 600;
+}
+
+.topbar > div:not(.topbar__title) {
+  margin-left: auto;
+}
+
+@media (min-width: 900px) {
+  .topbar {
+    padding: 0.6rem 1.25rem;
+  }
+
+  .topbar__title {
+    font-size: 1.15rem;
+  }
 }
