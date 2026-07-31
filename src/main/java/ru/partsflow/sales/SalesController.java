@@ -74,7 +74,7 @@ public class SalesController {
                 : Instant.now().plus(DEFAULT_RESERVATION);
 
         Deal deal = sales.createReserved(
-                request.customerId(), CurrentUser.memberId(), until,
+                request.customerId(), CurrentUser.memberId(), until, request.dealSourceId(),
                 request.items().stream()
                         .map(i -> new SalesService.ItemRequest(
                                 i.partId(), i.quantity(), i.price(), i.warehouseId()))
@@ -256,6 +256,23 @@ public class SalesController {
                 .toList();
     }
 
+    /**
+     * Справочник источников: откуда пришла продажа.
+     *
+     * <p>Отвечает на вопрос владельца «окупается ли размещение на Дроме»,
+     * и потому заполняться должен при каждой продаже, а не только у заказов
+     * с площадки.
+     */
+    @GetMapping("/sources")
+    public List<SourceView> sources() {
+        return sales.dealSources().stream()
+                .map(s -> new SourceView(s.getId(), s.getName()))
+                .toList();
+    }
+
+    public record SourceView(Long id, String name) {
+    }
+
     /** Справочник услуг для экрана продавца. */
     @GetMapping("/services")
     public List<ServiceView> services() {
@@ -286,6 +303,8 @@ public class SalesController {
     }
 
     public record CreateRequest(@NotNull Long customerId,
+                                /* Откуда пришла продажа: строка справочника источников. */
+                                Long dealSourceId,
                                 /* Пусто — резерв на трое суток. */
                                 Instant reservedUntil,
                                 @NotEmpty List<ItemBody> items,
@@ -371,6 +390,7 @@ public class SalesController {
                            DealStatus status, Instant reservedUntil,
                            BigDecimal totalAmount, BigDecimal paidAmount, BigDecimal debt,
                            Instant createdAt, Instant issuedAt,
+                           Long dealSourceId,
                            String marketplace, String externalOrderNo,
                            Instant replyDeadline, Instant orderAcceptedAt,
                            String deliveryNote, List<ItemView> items,
@@ -381,6 +401,7 @@ public class SalesController {
                     deal.getManagerId(), deal.getStatus(), deal.getReservedUntil(),
                     deal.getTotalAmount(), deal.getPaidAmount(), deal.debt(),
                     deal.getCreatedAt(), deal.getIssuedAt(),
+                    deal.getDealSourceId(),
                     deal.getMarketplace(), deal.getExternalOrderNo(),
                     deal.getReplyDeadline(), deal.getOrderAcceptedAt(),
                     deal.getDeliveryNote(),

@@ -9,6 +9,7 @@ import {
   createDeal,
   receiveOrder,
   serviceKinds,
+  dealSources,
   dealsOf,
   issueDeal,
   payDeal,
@@ -22,6 +23,7 @@ import {
   transferItems,
 } from '../sales/sales';
 import type {
+  DealSource as DealSourceRow,
   ServiceLine,
   BasketLine,
   Customer,
@@ -59,6 +61,11 @@ export function SellerScreen({ canSell }: Props) {
   // Услуги подтягиваются один раз: справочник из двух строк, и меняется
   // он с релизом, а не в течение дня.
   const [services, setServices] = useState<ServiceLine[]>([]);
+  // Откуда пришла продажа. Спрашивается при каждой сделке, а не только
+  // у заказа с площадки: отчёт по каналам, в котором половина выручки
+  // без источника, не отвечает ни на один вопрос.
+  const [sources, setSources] = useState<DealSourceRow[]>([]);
+  const [sourceId, setSourceId] = useState('');
   const [marketplace, setMarketplace] = useState('');
   const [orderNo, setOrderNo] = useState('');
   const [note, setNote] = useState('');
@@ -69,6 +76,9 @@ export function SellerScreen({ canSell }: Props) {
       // Молча: без справочника услуг продавать всё ещё можно, а красный
       // текст на весь экран из-за доставки — это про неверные приоритеты.
       .catch(() => setServices([]));
+    void dealSources()
+      .then(setSources)
+      .catch(() => setSources([]));
   }, []);
   const [deal, setDeal] = useState<Deal | null>(null);
   // Возврат и перенос случаются не в тот же разговор, что продажа: клиент
@@ -197,6 +207,20 @@ export function SellerScreen({ canSell }: Props) {
 
           <CustomerPicker customer={customer} onPick={setCustomer} onError={setError} />
 
+          {sources.length > 0 && (
+            <label className="field">
+              Откуда пришла продажа
+              <select value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+                <option value="">не указан</option>
+                {sources.map((source) => (
+                  <option key={source.id} value={source.id}>
+                    {source.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
           <label className="field">
             Заказ с площадки
             <select
@@ -290,7 +314,8 @@ export function SellerScreen({ canSell }: Props) {
     try {
       if (marketplace !== '') {
         const result = await receiveOrder(
-          marketplace, orderNo.trim(), customer.id, lines, null, note, services);
+          marketplace, orderNo.trim(), customer.id, lines, null, note, services,
+          sourceId === '' ? null : Number(sourceId));
         setDeal(result.deal);
         if (result.replayed) {
           // Не ошибка: продавец мог завести заказ дважды. Правильный ответ —
@@ -305,7 +330,8 @@ export function SellerScreen({ canSell }: Props) {
         setOrderNo('');
         setNote('');
       } else {
-        setDeal(await createDeal(customer.id, lines, services));
+        setDeal(await createDeal(customer.id, lines, services,
+          sourceId === '' ? null : Number(sourceId)));
       }
       setLines([]);
       setServices(services.map((line) => ({ ...line, price: '' })));

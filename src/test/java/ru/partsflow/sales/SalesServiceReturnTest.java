@@ -123,7 +123,7 @@ class SalesServiceReturnTest extends PostgresTestBase {
 
         Deal deal = inTenant(() -> {
             Deal created = salesService.createReserved(customerId, managerId,
-                    Instant.now().plus(2, ChronoUnit.DAYS),
+                    Instant.now().plus(2, ChronoUnit.DAYS), null,
                     List.of(new SalesService.ItemRequest(firstPart, BigDecimal.ONE,
                                     new BigDecimal("6000"), issueWarehouseId),
                             new SalesService.ItemRequest(secondPart, BigDecimal.ONE,
@@ -207,7 +207,7 @@ class SalesServiceReturnTest extends PostgresTestBase {
         Long partId = partWithStock("Капот Camry V40", 1, new BigDecimal("9000"));
 
         Deal deal = inTenant(() -> salesService.createReserved(customerId, managerId,
-                Instant.now().plus(1, ChronoUnit.DAYS),
+                Instant.now().plus(1, ChronoUnit.DAYS), null,
                 List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE,
                         new BigDecimal("9000"), issueWarehouseId)), List.of()));
         Long itemId = deal.getItems().get(0).getId();
@@ -251,7 +251,7 @@ class SalesServiceReturnTest extends PostgresTestBase {
     /** Сделка, доведённая до выдачи: остаток списан, резерв снят. */
     private Deal issued(Long partId, BigDecimal price) {
         Deal created = salesService.createReserved(customerId, managerId,
-                Instant.now().plus(1, ChronoUnit.DAYS),
+                Instant.now().plus(1, ChronoUnit.DAYS), null,
                 List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, price,
                         issueWarehouseId)),
                 List.of());

@@ -93,6 +93,16 @@ export interface ServiceKind {
   price: string | null;
 }
 
+/** Строка справочника источников: откуда пришла продажа. */
+export interface DealSource {
+  id: number;
+  name: string;
+}
+
+export function dealSources(): Promise<DealSource[]> {
+  return request<DealSource[]>('/api/deals/sources');
+}
+
 export function serviceKinds(): Promise<ServiceKind[]> {
   return request<ServiceKind[]>('/api/deals/services');
 }
@@ -138,11 +148,13 @@ export function createDeal(
   customerId: number,
   lines: BasketLine[],
   services: ServiceLine[] = [],
+  dealSourceId: number | null = null,
 ): Promise<Deal> {
   return request<Deal>('/api/deals', {
     method: 'POST',
     body: {
       customerId,
+      dealSourceId,
       items: lines.map((line) => ({
         partId: line.row.partId,
         quantity: line.quantity,
@@ -310,6 +322,7 @@ export function receiveOrder(
   replyDeadline: string | null,
   deliveryNote: string,
   services: ServiceLine[] = [],
+  dealSourceId: number | null = null,
 ): Promise<OrderResult> {
   return request<OrderResult>('/api/deals/orders', {
     method: 'POST',
@@ -317,6 +330,7 @@ export function receiveOrder(
       marketplace,
       orderNo,
       customerId,
+      dealSourceId,
       replyDeadline,
       deliveryNote: deliveryNote === '' ? null : deliveryNote,
       items: lines.map((line) => ({

@@ -39,6 +39,7 @@ public class SalesService {
     private final StockReservationRepository reservationRepository;
     private final DomainEventPublisher eventPublisher;
     private final ServiceKindRepository serviceKinds;
+    private final DealSourceRepository dealSources;
 
     public SalesService(DealRepository dealRepository,
                         DealReturnRepository dealReturnRepository,
@@ -49,7 +50,8 @@ public class SalesService {
                         StockMovementRepository movementRepository,
                         StockReservationRepository reservationRepository,
                         DomainEventPublisher eventPublisher,
-                        ServiceKindRepository serviceKinds) {
+                        ServiceKindRepository serviceKinds,
+                        DealSourceRepository dealSources) {
         this.dealRepository = dealRepository;
         this.dealReturnRepository = dealReturnRepository;
         this.paymentRepository = paymentRepository;
@@ -60,6 +62,7 @@ public class SalesService {
         this.reservationRepository = reservationRepository;
         this.eventPublisher = eventPublisher;
         this.serviceKinds = serviceKinds;
+        this.dealSources = dealSources;
     }
 
     /**
@@ -69,6 +72,12 @@ public class SalesService {
      * которую перестали оказывать, не должна предлагаться продавцу — но
      * и удалять её нельзя, она стоит в прошлых сделках.
      */
+    /** Источники сделок: откуда пришла продажа. Архивные не предлагаются. */
+    @Transactional(readOnly = true)
+    public List<DealSource> dealSources() {
+        return dealSources.findByArchivedFalseOrderByName();
+    }
+
     @Transactional(readOnly = true)
     public List<ServiceKind> serviceKinds() {
         return serviceKinds.findByArchivedFalseOrderByName();
@@ -83,10 +92,15 @@ public class SalesService {
      */
     @Transactional
     public Deal createReserved(Long customerId, Long managerId, Instant reservedUntil,
-                               List<ItemRequest> items, List<ServiceRequest> services) {
+                               Long dealSourceId, List<ItemRequest> items,
+                               List<ServiceRequest> services) {
 
         Deal deal = new Deal(customerId, managerId);
         deal.setCreatedBy(managerId);
+        // Откуда пришла продажа. Заполняется при каждой сделке, а не только
+        // у заказа с площадки: отчёт по каналам, в котором половина выручки
+        // без источника, не отвечает ни на один вопрос.
+        deal.setDealSourceId(dealSourceId);
 
         for (ItemRequest item : items) {
             Part part = requirePart(item.partId());

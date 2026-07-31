@@ -4,11 +4,13 @@ import {
   donorProfitability,
   managerSales,
   money,
+  salesBySource,
+  unknownShare,
   monthName,
   monthOf,
   shiftMonth,
 } from '../reports/reports';
-import type { DonorReport, ManagerReport } from '../reports/reports';
+import type { DonorReport, ManagerReport, SourceReport } from '../reports/reports';
 
 /**
  * Отчёты владельца.
@@ -33,12 +35,21 @@ export function ReportsScreen({ canRead }: Props) {
   const [month, setMonth] = useState(monthOf(new Date()));
   const [managers, setManagers] = useState<ManagerReport | null>(null);
   const [donors, setDonors] = useState<DonorReport | null>(null);
+  const [sources, setSources] = useState<SourceReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void managerSales(month)
       .then(setManagers)
       .catch((cause) => setError(describe(cause, 'Отчёт по продажам не загрузился')));
+  }, [month]);
+
+  useEffect(() => {
+    // Тот же месяц, что и у отчёта по менеджерам: владелец смотрит их рядом,
+    // и разные периоды на соседних таблицах сравнивать нельзя.
+    void salesBySource(month)
+      .then(setSources)
+      .catch((cause) => setError(describe(cause, 'Отчёт по каналам не загрузился')));
   }, [month]);
 
   useEffect(() => {
@@ -119,6 +130,48 @@ export function ReportsScreen({ canRead }: Props) {
           Позиций без закупочной цены: {withoutCost(managers)}. В наценку они
           не вошли — склад, загруженный из таблицы, приходит без закупок,
           и посчитанная по нему прибыль была бы завышена на всю их стоимость.
+        </p>
+      )}
+
+      <hr />
+      <h3>Откуда пришли продажи</h3>
+
+      {sources !== null && sources.rows.length === 0 && (
+        <p className="note">За этот месяц продаж нет.</p>
+      )}
+
+      {sources !== null && sources.rows.length > 0 && (
+        <div className="table-scroll">
+          <table className="report">
+            <thead>
+              <tr>
+                <th>Канал</th>
+                <th className="num">Сделок</th>
+                <th className="num">Выручка</th>
+                <th className="num">Наценка</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sources.rows.map((row) => (
+                <tr key={row.sourceId ?? 'none'}>
+                  {/* Не «прочее»: это не канал, а незаполненное поле. */}
+                  <td>{row.sourceName ?? 'источник не указан'}</td>
+                  <td className="num">{row.dealsCount}</td>
+                  <td className="num">{money(row.revenue)}</td>
+                  <td className="num">{row.margin === null ? '—' : money(row.margin)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {sources !== null && unknownShare(sources) > 0.2 && (
+        <p className="note note--error">
+          Без указанного источника прошло{' '}
+          {Math.round(unknownShare(sources) * 100)}% выручки. Пока это так,
+          сравнивать каналы между собой нельзя: «Дром принёс мало» и «продавцы
+          не отмечают Дром» отсюда выглядят одинаково.
         </p>
       )}
 
