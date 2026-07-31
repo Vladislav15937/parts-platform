@@ -1,6 +1,14 @@
 target/
+node_modules/
+frontend/dist/
 .idea/
 *.iml
 .vscode/
 .DS_Store
 *.log
+
+# Секреты развёртывания
+.env
+
+# Наборы бэкапов
+backups/

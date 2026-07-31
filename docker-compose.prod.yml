@@ -1,0 +1,203 @@
+# Развёртывание ячейки.
+#
+# Одна ячейка — это комплект Postgres + S3 на группу арендаторов (до ~200).
+# Отдельный кластер на клиента не делаем: при пятистах клиентах это
+# 12–22 млн ₽/мес против 150–450 ₽ на арендатора в ячейке.
+#
+#   cp .env.example .env   # заполнить секреты и домены
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Наружу смотрит только терминатор: 80 и 443. Приложение и хранилище портов
+# на хосте не занимают — до них можно дойти лишь через него.
+#
+# Kafka по умолчанию выключена: профиль по умолчанию работает на транспорте
+# в памяти, и первым клиентам этого достаточно. Брокер нужен, когда экземпляров
+# приложения становится больше одного — при in-memory транспорте событие
+# обрабатывается там же, где родилось, и второй экземпляр про него не узнает.
+#
+# Включается своим профилем compose, вместе с профилем Spring:
+#
+#   SPRING_PROFILES=kafka docker compose -f docker-compose.prod.yml \
+#       --profile kafka up -d
+#
+# Порядок при включении: сначала поднять брокер, потом переключить приложение.
+# Наоборот — приложение секунду за секундой не может отправить накопленное,
+# и релей крутится вхолостую до появления Kafka. Событий он при этом
+# не теряет: неопубликованное лежит в outbox, пока не уедет.
+
+# Своё имя проекта, а не унаследованное от каталога. Иначе тома совпадают
+# с теми, что поднимает docker-compose.yml для разработки: Postgres
+# инициализирует пользователя только на пустом каталоге данных, и боевая
+# ячейка молча поднимается на базе с dev-паролем — либо, как здесь, не
+# поднимается вовсе с «password authentication failed».
+name: partsflow-cell
+
+services:
+  # Терминатор: сертификаты, шифрование и ограничение управляющего контура.
+  #
+  # Без него не работает приёмка: камера в браузере доступна только
+  # в защищённом контексте. По http нет ни съёмки деталей, ни сканирования
+  # ячеек и VIN — то есть нет половины продукта, а не «нет замочка в адресе».
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+      - minio
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?укажите APP_DOMAIN}
+      S3_DOMAIN: ${S3_DOMAIN:?укажите S3_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?укажите ACME_EMAIL}
+      # Откуда разрешено ходить в /api/provisioning. Умолчание — петля,
+      # то есть «только с самой машины через docker compose exec».
+      PROVISIONING_ALLOW: ${PROVISIONING_ALLOW:-127.0.0.1/32}
+    volumes:
+      - ./ops/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Сертификаты переживают пересоздание контейнера. Без этого тома каждый
+      # перезапуск — новый выпуск, а у Let's Encrypt на это недельный предел:
+      # упрёшься в него в худший момент, во время разбора аварии.
+      - caddydata:/data
+      - caddyconfig:/config
+    ports:
+      - "80:80"
+      - "443:443"
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/parts
+      DB_USER: ${DB_USER:?укажите DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD:?укажите DB_PASSWORD}
+
+      # Секрет создания арендаторов. Пустой выключает механизм — так и надо
+      # держать между подключениями клиентов.
+      APP_PROVISIONING_TOKEN: ${APP_PROVISIONING_TOKEN:-}
+
+      # Ключ шифрования секретов площадок, 32 байта в base64.
+      # Потеряете — ключи кабинетов не расшифруются, и их придётся
+      # запрашивать у площадок заново. Держите копию отдельно от бэкапа базы:
+      # вместе они дают то же, что и открытый текст.
+      APP_CRYPTO_KEY: ${APP_CRYPTO_KEY:?укажите APP_CRYPTO_KEY}
+
+      # Транспорт событий. Пусто — профиль по умолчанию, транспорт в памяти.
+      # Значение kafka включает KafkaEventTransport и слушателя; поднимать
+      # брокер надо профилем compose (см. шапку файла).
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES:-}
+      KAFKA_SERVERS: kafka:9092
+
+      S3_ENDPOINT: http://minio:9000
+      # Внешнее имя: хост входит в подпись, и ссылка, подписанная внутренним
+      # адресом, с телефона приёмщика не откроется.
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?укажите S3_PUBLIC_ENDPOINT}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?укажите S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?укажите S3_SECRET_KEY}
+
+      # Приложение стоит за терминатором и без этого считает запрос
+      # незашифрованным: cookie сессии уйдёт без флага Secure, то есть
+      # утечёт в первый же http-запрос к тому же домену.
+      #
+      # Именно native: с framework Secure получает только CSRF-cookie —
+      # см. комментарий в application.yml.
+      #
+      # Доверять этим заголовкам можно ровно потому, что порт приложения
+      # наружу не выставлен: подделать X-Forwarded-Proto может лишь тот,
+      # кто уже внутри сети docker.
+      FORWARD_HEADERS: native
+
+      LOG_LEVEL: INFO
+    # Порт наружу не публикуется намеренно: единственный вход — терминатор.
+    # Открытый 8080 сводит на нет и сертификат, и ограничение по адресам.
+    expose:
+      - "8080"
+
+  # Брокер. Поднимается только с профилем kafka — без него приложение
+  # работает на транспорте в памяти, и лишний контейнер означал бы лишний
+  # источник отказов при одном экземпляре приложения.
+  #
+  # depends_on у приложения на него нет намеренно: compose включил бы этот
+  # профиль сам, и брокер поднимался бы всегда. Отсутствие брокера приложение
+  # переживает — неотправленное лежит в outbox.
+  kafka:
+    # Образ официальный apache/kafka, а не bitnami: последние удалены
+    # из реестра после смены политики Bitnami, и `docker compose up`
+    # переставал работать целиком, включая postgres. Ровно та же причина,
+    # что и в docker-compose.yml для разработки.
+    image: apache/kafka:3.8.1
+    restart: unless-stopped
+    profiles: [kafka]
+    environment:
+      # KRaft: без ZooKeeper. Один узел — это ячейка, а не кластер на всех.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: controller,broker
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      # Имя, по которому брокер зовут изнутри сети docker. Приложение ходит
+      # в него по имени сервиса, снаружи в брокер не ходит никто.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Топик заводится на каждый тип события, а перечислять их в конфигурации
+      # значит править её при каждом новом — слушатель подписан шаблоном.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # На одном узле реплика может быть только одна: значения по умолчанию
+      # не дадут создать ни одного служебного топика. Появится второй узел —
+      # поднимать до 3 и 2, иначе пара acks=all с min.insync.replicas
+      # у продюсера не защищает ни от чего.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+    # Наружу не выставляется: в брокер ходит только приложение.
+    expose:
+      - "9092"
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: parts
+      POSTGRES_USER: ${DB_USER:?укажите DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?укажите DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d parts"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # Наружу не выставляется: к базе ходит только приложение. Для бэкапа
+    # и разбора — docker compose exec, а не открытый в интернет 5432.
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?укажите S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?укажите S3_SECRET_KEY}
+      # Телефон грузит снимок прямо в хранилище по подписанной ссылке,
+      # то есть из браузера и с другого источника. Без CORS браузер отбивает
+      # запрос ещё до отправки, а приложению это выглядит как обрыв связи.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${PUBLIC_ORIGIN:?укажите PUBLIC_ORIGIN}
+    volumes:
+      - miniodata:/data
+    # Хранилище доступно телефону напрямую — файл идёт мимо приложения
+    # намеренно, — но через терминатор: подписанная ссылка ведёт на https,
+    # а по http браузер её и не отправит со страницы приложения.
+    expose:
+      - "9000"
+
+volumes:
+  pgdata:
+  kafkadata:
+  miniodata:
+  caddydata:
+  caddyconfig:

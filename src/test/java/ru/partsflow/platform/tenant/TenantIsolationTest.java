@@ -5,13 +5,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.math.BigDecimal;
-import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -37,6 +37,10 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.datasource.hikari.maximum-pool-size=1",
         "spring.jpa.hibernate.ddl-auto=none"
 })
+// Пробник импортируется явно: Spring Boot намеренно исключает вложенные
+// в тестовые классы компоненты из сканирования, чтобы они не протекали
+// в контексты других тестов.
+@Import(TenantIsolationTest.PartRepositoryProbe.class)
 class TenantIsolationTest extends PostgresTestBase {
 
     private static final String TENANT_A = "t_000042";
@@ -59,26 +63,35 @@ class TenantIsolationTest extends PostgresTestBase {
     @Test
     @DisplayName("Данные арендаторов не пересекаются при работе через один пул")
     void tenantsDoNotSeeEachOther() {
-        inTenant(TENANT_A, () -> parts.insert("Фара левая Camry V50", new BigDecimal("8500")));
-        inTenant(TENANT_B, () -> parts.insert("Бампер передний X-Trail", new BigDecimal("12000")));
+        String titleOfA = "Изоляция: фара левая Camry V50";
+        String titleOfB = "Изоляция: бампер передний X-Trail";
 
-        List<String> titlesOfA = inTenant(TENANT_A, parts::titles);
-        List<String> titlesOfB = inTenant(TENANT_B, parts::titles);
+        inTenant(TENANT_A, () -> parts.insert(titleOfA, new BigDecimal("8500")));
+        inTenant(TENANT_B, () -> parts.insert(titleOfB, new BigDecimal("12000")));
 
-        assertThat(titlesOfA).containsExactly("Фара левая Camry V50");
-        assertThat(titlesOfB).containsExactly("Бампер передний X-Trail");
+        assertThat(inTenant(TENANT_A, () -> parts.countByTitle(titleOfA))).isEqualTo(1);
+        assertThat(inTenant(TENANT_A, () -> parts.countByTitle(titleOfB)))
+                .as("арендатор A увидел деталь арендатора B").isZero();
+
+        assertThat(inTenant(TENANT_B, () -> parts.countByTitle(titleOfB))).isEqualTo(1);
+        assertThat(inTenant(TENANT_B, () -> parts.countByTitle(titleOfA)))
+                .as("арендатор B увидел деталь арендатора A").isZero();
     }
 
     @Test
     @DisplayName("search_path не протекает между чередующимися транзакциями")
     void searchPathDoesNotLeakBetweenTransactions() {
-        inTenant(TENANT_A, () -> parts.insert("Деталь A", BigDecimal.TEN));
+        // Считаем только свою деталь, а не все строки схемы: тесты делят один
+        // контейнер и одну схему арендатора, и общий count зависел бы от
+        // порядка запуска.
+        String title = "Утечка: деталь A";
+        inTenant(TENANT_A, () -> parts.insert(title, BigDecimal.TEN));
 
         // Чередование: A, B, A, B через одно и то же физическое соединение.
         for (int i = 0; i < 10; i++) {
-            assertThat(inTenant(TENANT_A, parts::count))
+            assertThat(inTenant(TENANT_A, () -> parts.countByTitle(title)))
                     .as("итерация %d: арендатор A", i).isEqualTo(1);
-            assertThat(inTenant(TENANT_B, parts::count))
+            assertThat(inTenant(TENANT_B, () -> parts.countByTitle(title)))
                     .as("итерация %d: арендатор B", i).isZero();
         }
     }
@@ -143,11 +156,6 @@ class TenantIsolationTest extends PostgresTestBase {
         void insert(String title, BigDecimal price) {
             jdbc.update("INSERT INTO part (category_id, title, price, status) VALUES (1, ?, ?, 'IN_STOCK')",
                     title, price);
-        }
-
-        @Transactional(readOnly = true)
-        List<String> titles() {
-            return jdbc.queryForList("SELECT title FROM part ORDER BY id", String.class);
         }
 
         @Transactional(readOnly = true)

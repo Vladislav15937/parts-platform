@@ -5,9 +5,11 @@ spring:
     default: local
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/parts
-    username: app
-    password: app
+    # Адрес и учётные данные приходят окружением: в бою база не на localhost,
+    # а пароль в репозитории — это пароль, который знают все.
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/parts}
+    username: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
     hikari:
       maximum-pool-size: 20
       # Таймауты защищают от запроса, который встал на блокировке и держит
@@ -36,7 +38,7 @@ spring:
     enabled: false
 
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: ${KAFKA_SERVERS:localhost:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
@@ -53,11 +55,73 @@ spring:
       # Коммит офсета только после успешной обработки. Никогда не true.
       enable-auto-commit: false
       auto-offset-reset: earliest
+      properties:
+        # Слушатель подписан шаблоном (топик заводится на каждый тип события),
+        # а новый топик потребитель замечает только при обновлении метаданных.
+        # С умолчанием в пять минут первое событие каждого нового типа столько
+        # и лежит: живой прогон на чистой ячейке показал 195 секунд от
+        # публикации до обработки при исправном брокере — и выглядит это как
+        # потерянное событие, а не как ожидание. Тридцать секунд стоят одного
+        # небольшого запроса к брокеру в полминуты.
+        metadata.max.age.ms: 30000
+
+server:
+  # За терминатором приложение обязано знать, что запрос пришёл по https:
+  # иначе request.isSecure() ложно, cookie сессии уходит без флага Secure
+  # и утечёт в первый же http-запрос к тому же домену.
+  #
+  # В бою — native, а не framework, и это не вкусовщина. Проверено живым
+  # прогоном: с framework флаг Secure получает только CSRF-cookie, потому
+  # что фильтр Spring оборачивает запрос выше уровня, на котором Tomcat
+  # создаёт JSESSIONID. Клапан Tomcat отрабатывает раньше — и cookie сессии
+  # тоже уходит с Secure.
+  #
+  # Умолчание none: в разработке терминатора нет, и доверять X-Forwarded-Proto
+  # от кого угодно значит позволить подделать протокол тому, кто дотянулся
+  # до порта приложения.
+  forward-headers-strategy: ${FORWARD_HEADERS:none}
 
 app:
   cell: cell01
+  # Секрет создания арендатора. Пустой — механизм выключен, и это верное
+  # значение по умолчанию: забытый включённым, он даёт любому желающему
+  # заводить схемы в базе, пока не кончится диск. Задавать переменной окружения
+  # APP_PROVISIONINGTOKEN на время подключения клиента.
+  provisioning-token: "${APP_PROVISIONING_TOKEN:}"
+
+  crypto:
+    # Ключ шифрования секретов площадок: 32 байта в base64.
+    # Пустой — механизм выключен: приложение поднимется, но завести ключ
+    # кабинета не даст, а не запишет его открытым текстом молча.
+    # В бою задавать переменной окружения APP_CRYPTO_KEY, а не здесь:
+    # ключ в репозитории равносилен отсутствию шифрования.
+    # Сгенерировать: openssl rand -base64 32
+    key: "${APP_CRYPTO_KEY:}"
+
   outbox:
     relay-delay-ms: 1000
+
+  # Хранилище фотографий. В разработке MinIO из docker-compose, у клиентов —
+  # обычный S3: протокол один, меняются только адрес и ключи.
+  # Накат общей схемы catalog при старте. Схемы арендаторов сюда не входят:
+  # их мигрирует провижининг, и гонять пятьсот схем на подъёме приложения
+  # значит держать его недоступным минуты.
+  migrate-catalog-on-start: ${MIGRATE_CATALOG:true}
+
+  s3:
+    endpoint: ${S3_ENDPOINT:http://localhost:9000}
+    # Адрес для подписанных ссылок. На localhost совпадает с внутренним,
+    # в бою это внешнее имя: подпись включает хост, и ссылка, подписанная
+    # внутренним адресом, с телефона не откроется.
+    public-endpoint: ${S3_PUBLIC_ENDPOINT:http://localhost:9000}
+    region: us-east-1
+    access-key: ${S3_ACCESS_KEY:minioadmin}
+    secret-key: ${S3_SECRET_KEY:minioadmin}
+    bucket: ${S3_BUCKET:parts-photos}
+    # MinIO не умеет виртуальные хосты вида bucket.localhost.
+    path-style-access: ${S3_PATH_STYLE:true}
+    upload-url-ttl: 15m
+    view-url-ttl: 6h
 
 management:
   endpoints:
@@ -70,7 +134,9 @@ management:
 
 logging:
   level:
-    ru.partsflow: DEBUG
+    # В бою переопределяется на INFO: DEBUG на пятидесяти тысячах позиций
+    # пишет журнал быстрее, чем его успевают читать.
+    ru.partsflow: ${LOG_LEVEL:DEBUG}
 
 ---
 spring:

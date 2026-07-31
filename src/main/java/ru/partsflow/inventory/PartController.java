@@ -1,15 +1,12 @@
 package ru.partsflow.inventory;
 
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
+import jakarta.validation.constraints.NotEmpty;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -31,27 +28,22 @@ public class PartController {
         this.partService = partService;
     }
 
-    @PostMapping
-    public ResponseEntity<PartView> intake(@Valid @RequestBody IntakeRequest request) {
-        Part part = new Part(request.categoryId(), request.title(), request.price());
-        part.setDescription(request.description());
-        part.setDonorId(request.donorId());
-        if (request.condition() != null) {
-            part.setCondition(request.condition());
-        }
-
-        Part saved = partService.intake(
-                part,
-                request.quantity() == null ? BigDecimal.ONE : request.quantity(),
-                request.storageCellId());
-
-        return ResponseEntity.status(HttpStatus.CREATED).body(PartView.of(saved));
-    }
-
     @GetMapping("/search")
     public List<PartView> search(@RequestParam("q") String query,
                                  @RequestParam(value = "limit", defaultValue = "50") int limit) {
         return partService.search(query, limit).stream().map(PartView::of).toList();
+    }
+
+    /**
+     * Поиск для продавца: свободный остаток по складам.
+     *
+     * <p>Отдельно от {@code /search}: тот отдаёт карточку с общим остатком,
+     * а продавать можно только то, что не обещано другому клиенту.
+     */
+    @GetMapping("/stock")
+    public List<PartService.StockRow> stock(@RequestParam("q") String query,
+                                            @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        return partService.searchAvailable(query, limit);
     }
 
     @GetMapping("/by-oem/{number}")
@@ -59,16 +51,25 @@ public class PartController {
         return partService.findByOem(number).stream().map(PartView::of).toList();
     }
 
-    public record IntakeRequest(
-            @NotNull Long categoryId,
-            @NotBlank String title,
-            String description,
-            Long donorId,
-            PartCondition condition,
-            @Positive BigDecimal price,
-            BigDecimal quantity,
-            Long storageCellId
-    ) {
+    /**
+     * Включить или выключить выгрузку на площадки.
+     *
+     * <p>Списком: после импорта склада исключений набирается несколько сотен.
+     * По умолчанию принятая деталь публикуется — на разборке её для того
+     * и снимают, а «не выгружать» это отметка руками для битых и отложенных
+     * под заказ.
+     */
+    @PostMapping("/publication")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER','SELLER')")
+    public PublicationResult setPublication(@Valid @RequestBody PublicationRequest request) {
+        return new PublicationResult(
+                partService.setPublished(request.partIds(), request.published()));
+    }
+
+    public record PublicationRequest(@NotEmpty List<Long> partIds, boolean published) {
+    }
+
+    public record PublicationResult(int changed) {
     }
 
     public record PartView(

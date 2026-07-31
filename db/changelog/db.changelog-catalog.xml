@@ -18,5 +18,9 @@
     <include file="catalog/005-marketplace-mapping.sql"      relativeToChangelogFile="true"/>
     <include file="catalog/006-tenant-registry.sql"          relativeToChangelogFile="true"/>
     <include file="catalog/007-shedlock.sql"                 relativeToChangelogFile="true"/>
+    <include file="catalog/008-tenant-login-code.sql"        relativeToChangelogFile="true"/>
+    <include file="catalog/009-vehicle-seed.sql"            relativeToChangelogFile="true"/>
+    <include file="catalog/010-provisioning-status.sql"      relativeToChangelogFile="true"/>
+    <include file="catalog/011-part-kinds.sql"              relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

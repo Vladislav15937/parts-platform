@@ -1,0 +1,13 @@
+{
+  "name": "Приёмка — PartsFlow",
+  "short_name": "Приёмка",
+  "description": "Приёмка запчастей на складе: камера, сканер, работа без связи",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#1f2933",
+  "lang": "ru",
+  "icons": []
+}

@@ -26,6 +26,22 @@
     <include file="tenant/006-sales.sql"                relativeToChangelogFile="true"/>
     <include file="tenant/007-publishing.sql"           relativeToChangelogFile="true"/>
     <include file="tenant/008-platform.sql"             relativeToChangelogFile="true"/>
+    <include file="tenant/010-supply-and-warehouses.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/011-sales.sql"                relativeToChangelogFile="true"/>
+    <include file="tenant/012-stock-reservation.sql"    relativeToChangelogFile="true"/>
+    <include file="tenant/013-part-status.sql"          relativeToChangelogFile="true"/>
+    <include file="tenant/014-part-category-optional.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/015-member-credentials.sql"    relativeToChangelogFile="true"/>
+    <include file="tenant/016-client-request-id.sql"     relativeToChangelogFile="true"/>
+    <include file="tenant/017-event-consumers.sql"       relativeToChangelogFile="true"/>
+    <include file="tenant/018-feed-token.sql"            relativeToChangelogFile="true"/>
+    <include file="tenant/019-publish-by-default.sql"    relativeToChangelogFile="true"/>
+    <include file="tenant/020-import-run.sql"            relativeToChangelogFile="true"/>
+    <include file="tenant/021-dead-letter-retry.sql"     relativeToChangelogFile="true"/>
+    <include file="tenant/022-donor-legacy-code.sql"     relativeToChangelogFile="true"/>
+    <include file="tenant/023-donor-brand-nullable.sql"  relativeToChangelogFile="true"/>
+
+    <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

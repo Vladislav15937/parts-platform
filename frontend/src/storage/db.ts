@@ -1,0 +1,140 @@
+/**
+ * Локальное хранилище.
+ *
+ * <p>IndexedDB, а не localStorage: справочник наименований у клиента — тысячи
+ * записей, а фотографии в очереди отправки — мегабайты. localStorage даёт
+ * 5 МБ, синхронный и хранит только строки; blob туда не положить вовсе.
+ *
+ * <p>Обёртка своя, без библиотеки. Причина не в экономии зависимости,
+ * а в объёме: нужны две операции над двумя хранилищами, и код обёртки короче,
+ * чем настройка чужой.
+ *
+ * <p>Хранилища заводятся все сразу, а не по мере надобности: версия схемы
+ * IndexedDB поднимается только в {@code onupgradeneeded}. Первая версия завела
+ * справочники и очередь, вторая добавила лист обхода инвентаризации.
+ *
+ * <p>Повышение версии здесь безопасно: хранилища только добавляются, данные
+ * прежних не трогаются, и телефон с накопленной очередью её не теряет.
+ * Удалять или менять ключи существующего хранилища так нельзя — это уже
+ * миграция с переносом данных.
+ */
+
+const DB_NAME = 'partsflow';
+const DB_VERSION = 2;
+
+/** Справочники: одна запись под фиксированным ключом. */
+export const STORE_REFERENCE = 'reference';
+
+/** Очередь отправки: по записи на операцию. */
+export const STORE_OUTBOX = 'outbox';
+
+/**
+ * Инвентаризация: сессия, лист обхода и внесённые подсчёты.
+ *
+ * <p>Отдельным хранилищем, а не в справочниках: лист обхода склада — это
+ * десятки тысяч строк, и переписывать его при каждом обновлении справочников
+ * незачем.
+ */
+export const STORE_INVENTORY = 'inventory';
+
+let connection: Promise<IDBDatabase> | null = null;
+
+function open(): Promise<IDBDatabase> {
+  if (connection !== null) {
+    return connection;
+  }
+  connection = new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE_REFERENCE)) {
+        db.createObjectStore(STORE_REFERENCE);
+      }
+      if (!db.objectStoreNames.contains(STORE_INVENTORY)) {
+        db.createObjectStore(STORE_INVENTORY);
+      }
+      if (!db.objectStoreNames.contains(STORE_OUTBOX)) {
+        const outbox = db.createObjectStore(STORE_OUTBOX, { keyPath: 'id' });
+        // Очередь разгребается по порядку постановки и фильтруется по состоянию.
+        outbox.createIndex('by-state', 'state');
+        outbox.createIndex('by-created', 'createdAt');
+      }
+    };
+
+    request.onsuccess = () => {
+      const db = request.result;
+      // Другая вкладка захотела поднять версию — отпускаем базу.
+      // Без этого старая вкладка держит соединение прошлой версии, новая
+      // получает onblocked и не открывается вовсе: приложение выглядит
+      // сломанным на исправной системе, а чинится закрытием вкладки,
+      // о которой пользователь не подозревает.
+      db.onversionchange = () => {
+        db.close();
+        connection = null;
+      };
+      resolve(db);
+    };
+    request.onerror = () => reject(request.error ?? new Error('IndexedDB недоступна'));
+    // Браузер в приватном режиме умеет отказывать в доступе молча — тогда
+    // приложение обязано работать онлайн, а не падать.
+    //
+    // Блокировка означает вкладку, которая не отпустила базу: с обработчиком
+    // versionchange выше это возможно только если она зависла. Говорим об этом
+    // прямо — «не удалось обновить справочники» отправило бы искать поломку
+    // в сети, которой нет.
+    request.onblocked = () =>
+      reject(new Error(
+        'Приложение открыто в другой вкладке со старой версией. Закройте её и обновите страницу.'));
+  });
+  return connection;
+}
+
+function run<T>(
+  store: string,
+  mode: IDBTransactionMode,
+  body: (store: IDBObjectStore) => IDBRequest<T>,
+): Promise<T> {
+  return open().then(
+    (db) =>
+      new Promise<T>((resolve, reject) => {
+        const transaction = db.transaction(store, mode);
+        const request = body(transaction.objectStore(store));
+
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error ?? new Error('Ошибка IndexedDB'));
+        transaction.onabort = () => reject(transaction.error ?? new Error('Транзакция отменена'));
+      }),
+  );
+}
+
+export function put<T>(store: string, value: T, key?: IDBValidKey): Promise<IDBValidKey> {
+  return run(store, 'readwrite', (s) => (key === undefined ? s.put(value) : s.put(value, key)));
+}
+
+export function get<T>(store: string, key: IDBValidKey): Promise<T | undefined> {
+  return run<T | undefined>(store, 'readonly', (s) => s.get(key) as IDBRequest<T | undefined>);
+}
+
+export function getAll<T>(store: string): Promise<T[]> {
+  return run<T[]>(store, 'readonly', (s) => s.getAll() as IDBRequest<T[]>);
+}
+
+export function remove(store: string, key: IDBValidKey): Promise<undefined> {
+  return run<undefined>(store, 'readwrite', (s) => s.delete(key) as IDBRequest<undefined>);
+}
+
+/**
+ * Сколько места осталось.
+ *
+ * <p>Проверять обязательно: при исчерпании квоты браузер начинает вытеснять
+ * данные молча, и приёмщик получит карточки без фотографий без единого
+ * сообщения об ошибке.
+ */
+export async function storageEstimate(): Promise<{ usedMb: number; quotaMb: number } | null> {
+  if (navigator.storage?.estimate === undefined) {
+    return null;
+  }
+  const { usage = 0, quota = 0 } = await navigator.storage.estimate();
+  return { usedMb: usage / 1024 / 1024, quotaMb: quota / 1024 / 1024 };
+}

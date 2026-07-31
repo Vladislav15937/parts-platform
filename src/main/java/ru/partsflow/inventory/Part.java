@@ -39,8 +39,19 @@ public class Part {
     @Column(name = "donor_id")
     private Long donorId;
 
+    /**
+     * Поставка, которой деталь приехала. Заполнена и когда донора нет вовсе:
+     * контрактная запчасть приходит контейнером напрямую.
+     */
+    @Column(name = "supply_id")
+    private Long supplyId;
+
     @Column(name = "part_kind_id")
     private Long partKindId;
+
+    /** Локальное наименование арендатора; через него — связь с эталоном каталога. */
+    @Column(name = "part_name_id")
+    private Long partNameId;
 
     @Column(name = "category_id", nullable = false)
     private Long categoryId;
@@ -48,15 +59,49 @@ public class Part {
     @Column(nullable = false)
     private String title;
 
+    /** Комментарий к товару; выводится в объявлении. */
     private String description;
 
-    private String side;
+    /** Заметка для своих: нигде не показывается покупателю. */
+    private String note;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "side_lr")
+    private LateralSide sideLr;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "side_fr")
+    private LongitudinalSide sideFr;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "side_ud")
+    private VerticalSide sideUd;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private PartCondition condition = PartCondition.USED;
 
+    /** Оценка состояния. Уходит на площадки, поэтому значения фиксированы. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "quality_grade")
+    private QualityGrade qualityGrade;
+
     private String marking;
+
+    private String manufacturer;
+
+    private String color;
+
+    /**
+     * Адрес хранения в номенклатуре клиента, пять уровней: {@code 01-02-02-03-01}.
+     * Дублирует {@code storage_cell} намеренно: клиенты переезжают со своей
+     * нумерацией полок и расставаться с ней не готовы.
+     */
+    private String section;
+
+    /** Цена установки детали силами разборки. */
+    @Column(name = "installation_price")
+    private BigDecimal installationPrice;
 
     @Column(nullable = false)
     private BigDecimal quantity = BigDecimal.ONE;
@@ -77,6 +122,46 @@ public class Part {
     @Column(name = "cost_price")
     private BigDecimal costPrice;
 
+    /**
+     * Кто и когда последний раз менял цену. Вопрос «почему деталь ушла за
+     * бесценок» задаётся задним числом, и ответить на него без этих двух полей
+     * невозможно: аудит по всем полям слишком тяжёл, чтобы держать его вечно.
+     */
+    @Column(name = "price_changed_at")
+    private Instant priceChangedAt;
+
+    @Column(name = "price_changed_by")
+    private Long priceChangedBy;
+
+    @Column(name = "weight_kg")
+    private BigDecimal weightKg;
+
+    @Column(name = "length_mm")
+    private Integer lengthMm;
+
+    @Column(name = "width_mm")
+    private Integer widthMm;
+
+    @Column(name = "height_mm")
+    private Integer heightMm;
+
+    /** Габариты и вес в упаковке — по ним считается доставка, а не по детали. */
+    @Column(name = "package_length_mm")
+    private Integer packageLengthMm;
+
+    @Column(name = "package_width_mm")
+    private Integer packageWidthMm;
+
+    @Column(name = "package_height_mm")
+    private Integer packageHeightMm;
+
+    @Column(name = "package_weight_kg")
+    private BigDecimal packageWeightKg;
+
+    /** Код позиции в прежней системе клиента: нужен на время переезда. */
+    @Column(name = "legacy_code")
+    private String legacyCode;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private PartStatus status = PartStatus.DRAFT;
@@ -86,8 +171,18 @@ public class Part {
 
     private String barcode;
 
+    /**
+     * Выгружать ли позицию на площадки.
+     *
+     * <p>По умолчанию да: на разборке деталь снимают, чтобы продать, а «не
+     * выгружать» — это отметка руками для битой и отложенной под заказ.
+     *
+     * <p>Значение задано здесь, а не только умолчанием колонки: Hibernate
+     * пишет колонку в каждом INSERT явно, и умолчание базы до неё не доходит.
+     * Именно на этом прайс нового клиента и оставался пустым.
+     */
     @Column(name = "is_published", nullable = false)
-    private boolean published;
+    private boolean published = true;
 
     @Column(name = "created_by")
     private Long createdBy;
@@ -151,12 +246,87 @@ public class Part {
         this.description = description;
     }
 
-    public String getSide() {
-        return side;
+    public String getNote() {
+        return note;
     }
 
-    public void setSide(String side) {
-        this.side = side;
+    public void setNote(String note) {
+        this.note = note;
+    }
+
+    public LateralSide getSideLr() {
+        return sideLr;
+    }
+
+    public LongitudinalSide getSideFr() {
+        return sideFr;
+    }
+
+    public VerticalSide getSideUd() {
+        return sideUd;
+    }
+
+    /** Стороны задаются вместе: по отдельности легко забыть одну и получить «фара левая» без «передняя». */
+    public void setSides(LateralSide lr, LongitudinalSide fr, VerticalSide ud) {
+        this.sideLr = lr;
+        this.sideFr = fr;
+        this.sideUd = ud;
+    }
+
+    public QualityGrade getQualityGrade() {
+        return qualityGrade;
+    }
+
+    public void setQualityGrade(QualityGrade qualityGrade) {
+        this.qualityGrade = qualityGrade;
+    }
+
+    public String getManufacturer() {
+        return manufacturer;
+    }
+
+    public void setManufacturer(String manufacturer) {
+        this.manufacturer = manufacturer;
+    }
+
+    public String getColor() {
+        return color;
+    }
+
+    public void setColor(String color) {
+        this.color = color;
+    }
+
+    public String getSection() {
+        return section;
+    }
+
+    public void setSection(String section) {
+        this.section = section;
+    }
+
+    public BigDecimal getInstallationPrice() {
+        return installationPrice;
+    }
+
+    public void setInstallationPrice(BigDecimal installationPrice) {
+        this.installationPrice = installationPrice;
+    }
+
+    public Long getSupplyId() {
+        return supplyId;
+    }
+
+    public void setSupplyId(Long supplyId) {
+        this.supplyId = supplyId;
+    }
+
+    public Long getPartNameId() {
+        return partNameId;
+    }
+
+    public void setPartNameId(Long partNameId) {
+        this.partNameId = partNameId;
     }
 
     public PartCondition getCondition() {
@@ -191,8 +361,85 @@ public class Part {
         return price;
     }
 
-    public void setPrice(BigDecimal price) {
-        this.price = price;
+    /**
+     * Меняет цену и одновременно фиксирует, кто это сделал.
+     *
+     * <p>Отдельного {@code setPrice} нет намеренно: цена без автора и времени
+     * изменения — это ровно та ситуация, в которой потом нельзя разобрать,
+     * почему деталь ушла за бесценок.
+     */
+    public void changePrice(BigDecimal newPrice, Long changedBy) {
+        this.price = newPrice;
+        this.priceChangedAt = Instant.now();
+        this.priceChangedBy = changedBy;
+    }
+
+    public Instant getPriceChangedAt() {
+        return priceChangedAt;
+    }
+
+    public Long getPriceChangedBy() {
+        return priceChangedBy;
+    }
+
+    public BigDecimal getWeightKg() {
+        return weightKg;
+    }
+
+    public void setWeightKg(BigDecimal weightKg) {
+        this.weightKg = weightKg;
+    }
+
+    public Integer getLengthMm() {
+        return lengthMm;
+    }
+
+    public Integer getWidthMm() {
+        return widthMm;
+    }
+
+    public Integer getHeightMm() {
+        return heightMm;
+    }
+
+    public void setDimensionsMm(Integer length, Integer width, Integer height) {
+        this.lengthMm = length;
+        this.widthMm = width;
+        this.heightMm = height;
+    }
+
+    public Integer getPackageLengthMm() {
+        return packageLengthMm;
+    }
+
+    public Integer getPackageWidthMm() {
+        return packageWidthMm;
+    }
+
+    public Integer getPackageHeightMm() {
+        return packageHeightMm;
+    }
+
+    public void setPackageDimensionsMm(Integer length, Integer width, Integer height) {
+        this.packageLengthMm = length;
+        this.packageWidthMm = width;
+        this.packageHeightMm = height;
+    }
+
+    public BigDecimal getPackageWeightKg() {
+        return packageWeightKg;
+    }
+
+    public void setPackageWeightKg(BigDecimal packageWeightKg) {
+        this.packageWeightKg = packageWeightKg;
+    }
+
+    public String getLegacyCode() {
+        return legacyCode;
+    }
+
+    public void setLegacyCode(String legacyCode) {
+        this.legacyCode = legacyCode;
     }
 
     public BigDecimal getMinPrice() {
@@ -211,12 +458,13 @@ public class Part {
         this.costPrice = costPrice;
     }
 
+    /**
+     * Статус только читается: его ведёт триггер {@code stock_movement_apply}
+     * по журналу движений. Сеттера нет намеренно — записанный из кода статус
+     * разойдётся с остатком, и проданная деталь останется в поиске продавца.
+     */
     public PartStatus getStatus() {
         return status;
-    }
-
-    public void setStatus(PartStatus status) {
-        this.status = status;
     }
 
     public Long getStorageCellId() {

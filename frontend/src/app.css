@@ -1,0 +1,635 @@
+/*
+ * Оформление под руку в перчатке: крупные поля, крупные кнопки, ничего
+ * мелкого. Приёмщик работает стоя, одной рукой, часто в перчатках, и попасть
+ * в элемент высотой 32 px он не сможет.
+ */
+:root {
+  --ink: #1f2933;
+  --muted: #6b7280;
+  --line: #d1d5db;
+  --accent: #2563eb;
+  --danger: #b91c1c;
+  --ok: #15803d;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 18px;
+  color: var(--ink);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f9fafb;
+}
+
+.screen {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.screen--narrow {
+  max-width: 24rem;
+}
+
+.screen--center {
+  min-height: 100vh;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+input {
+  /* 48 px — минимум, в который попадают пальцем в перчатке. */
+  min-height: 48px;
+  padding: 0 0.75rem;
+  font-size: 1.05rem;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  min-height: 52px;
+  padding: 0 1.25rem;
+  font-size: 1.05rem;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+button:disabled {
+  background: var(--muted);
+}
+
+.badge {
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.badge--online {
+  color: var(--ok);
+  background: #dcfce7;
+}
+
+.badge--offline {
+  color: var(--danger);
+  background: #fee2e2;
+}
+
+.note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.todo {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.counts,
+.suggestions {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.suggestions {
+  /* Подсказок немного по замыслу: длинный список на телефоне не читают. */
+  list-style: none;
+  padding: 0;
+}
+
+.suggestions li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.tab {
+  flex: 1;
+  min-height: 48px;
+  padding: 0 0.5rem;
+  font-size: 0.95rem;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+}
+
+.tab--active {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.row > label {
+  flex: 1;
+}
+
+select {
+  min-height: 48px;
+  padding: 0 0.5rem;
+  font-size: 1.05rem;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+/* Второстепенное действие: не должно спорить с основным за внимание. */
+.button--ghost {
+  min-height: 44px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--line);
+}
+
+hr {
+  width: 100%;
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--line);
+}
+
+/* Лента снимков. Миниатюры крупные: экран смотрят в перчатках и на солнце. */
+.photo-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.photo-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+}
+
+.photo-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #eee;
+}
+
+.photo-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  line-height: 1;
+  border-radius: 50%;
+  border: none;
+  background: #333;
+  color: #fff;
+}
+
+.photo-add {
+  width: 72px;
+  height: 72px;
+  border: 1px dashed #aaa;
+  border-radius: 6px;
+  background: transparent;
+  color: #555;
+}
+
+/* Видоискатель сканера. Поверх всего: наводить нужно двумя руками, и любой
+   видимый под ним элемент — это случайное нажатие. */
+.scan-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+}
+
+.scan-video {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Рамка прицела: без неё непонятно, куда наводить, и приёмщик водит телефоном
+   вплотную, где камера не фокусируется. */
+.scan-frame {
+  position: absolute;
+  top: 35%;
+  left: 8%;
+  width: 84%;
+  height: 22%;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.scan-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  /* Отступ под системную полосу жестов: кнопка «Отмена» вплотную к краю
+     не нажимается. */
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  background: #111;
+  color: #fff;
+}
+
+.scan-error {
+  color: #ff9a9a;
+}
+
+/* Лист обхода. Строки крупные: пересчитывают стоя, телефон в одной руке. */
+.count-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+}
+
+.count-row {
+  padding: 10px 0;
+  border-bottom: 1px solid #e3e3e3;
+}
+
+/* Пройденное гасим, а не прячем: кладовщик возвращается перепроверить. */
+.count-row--done {
+  opacity: 0.55;
+}
+
+.count-title {
+  margin-bottom: 6px;
+}
+
+/* Выдача поиска продавцу. Строки просторные: читают, разговаривая по телефону. */
+.stock-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+}
+
+.stock-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e3e3e3;
+}
+
+/* Наименование забирает остаток ширины и переносится само. Без min-width: 0
+   flex не даёт ему сжаться, и вместо переноса заголовка ломается правая
+   колонка: цена и кнопка встают в две строки каждая. */
+.stock-info {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Цена и кнопка — единый блок, который не сжимается и не переносится:
+   продавец читает их, разговаривая по телефону. */
+.stock-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.stock-price {
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-action button {
+  white-space: nowrap;
+}
+
+.note--error {
+  color: #a12a2a;
+}
+
+/* Сопоставление колонок. Поле и выбор в строку: их сравнивают глазами
+   сверху вниз, и колонка выбора должна быть выровнена. */
+.mapping {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mapping-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mapping-row select {
+  flex: 0 1 320px;
+}
+
+/* Предпросмотр файла. Таблица чужая и широкая — прокручивается сама,
+   а не растягивает страницу. */
+.table-scroll {
+  overflow-x: auto;
+  margin: 8px 0 16px;
+}
+
+.preview {
+  border-collapse: collapse;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.preview th,
+.preview td {
+  border: 1px solid #e3e3e3;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.preview th {
+  font-weight: 600;
+  vertical-align: top;
+}
+
+/* Сопоставленные колонки подсвечены: подмену цены и количества видно
+   на первых же строках, а не на первой продаже. */
+.preview .mapped {
+  background: #eef4ff;
+}
+
+/* Флажок и подпись — одна цель нажатия: продавец отмечает позиции пальцем,
+   а не мышью, и попасть в квадратик 13 на 13 точек он не обязан. Обычный
+   label в этом проекте — колонка, здесь нужна строка. */
+.pick {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.pick input[type='checkbox'] {
+  /* Общий input тянется во всю ширину — флажку это ни к чему. */
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  flex-shrink: 0;
+  margin: 0;
+}
+
+/* Поиск чужой сделки отделён от продажи: это другой разговор с клиентом. */
+.finder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+/* Выбор эталона раскрывается прямо в строке списка: разбирают их подряд,
+   и уход на отдельный экран за каждым превращает сотню написаний в сотню
+   переходов туда-обратно. */
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem 0 0.25rem;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Эталоны — цель нажатия, а не текст: их выбирают, а не читают. Высота
+   меньше кнопочной: в строку их влезает пять-шесть, и полноразмерные
+   вытеснили бы список. */
+.chip {
+  min-height: 40px;
+  padding: 0 0.9rem;
+  font-size: 0.95rem;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Таблица отчёта. Границ по вертикали нет: колонок мало, и сетка из линий
+   мешает читать строку целиком — а читают её именно так, по менеджеру. */
+.report {
+  /* min-width, а не width: колонок в отчёте по машинам шесть, и втиснутые
+     в ширину карточки они обрезаются вместо того, чтобы прокручиваться. */
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.report th,
+.report td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.report th {
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+/* Числа выравниваются по разряду: столбцы сравнивают глазами, и «9 500»
+   под «120 000» без этого читаются как одинаковые. */
+.report .num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.report .negative {
+  color: #a12a2a;
+}
+
+/* Переключатель месяца: стрелки по краям, месяц посередине. */
+.row--between {
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Этикетки. Экранный предпросмотр — он же то, что уйдёт в печать: отдельная
+   вёрстка для принтера разошлась бы с увиденным, и разошлась бы незаметно. */
+.label-sheet {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 1rem;
+}
+
+.label {
+  box-sizing: border-box;
+  width: 58mm;
+  height: 40mm;
+  padding: 3mm;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1mm;
+  background: #fff;
+  /* Рамка только на экране: на печати её нет, иначе принтер обведёт
+     каждую этикетку по краю рулона. */
+  border: 1px dashed var(--line);
+  color: #000;
+}
+
+.label-title {
+  font-size: 3.5mm;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.2;
+  /* Длинное наименование детали не должно выдавливать штрихкод за край. */
+  max-height: 9mm;
+  overflow: hidden;
+}
+
+/* Код ячейки читают с двух метров, стоя у стеллажа. */
+.label-title--big {
+  font-size: 7mm;
+  letter-spacing: 0.5mm;
+}
+
+.label-note {
+  font-size: 3mm;
+  color: #333;
+  text-align: center;
+}
+
+.label-barcode {
+  display: block;
+}
+
+.label-code {
+  font-size: 2.8mm;
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.3mm;
+}
+
+@media print {
+  /* Печатается только лист этикеток: интерфейс вокруг на рулон не влезает
+     и стоит впустую потраченной ленты. */
+  body * {
+    visibility: hidden;
+  }
+
+  .label-sheet,
+  .label-sheet * {
+    visibility: visible;
+  }
+
+  .label-sheet {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+    margin: 0;
+    gap: 0;
+  }
+
+  .label {
+    border: none;
+    /* Каждая этикетка — своя страница: рулон подаётся по одной. */
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .no-print {
+    display: none;
+  }
+
+  @page {
+    size: 58mm 40mm;
+    margin: 0;
+  }
+}

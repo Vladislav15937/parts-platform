@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
+import ru.partsflow.platform.tenant.TenantContext;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -40,8 +41,7 @@ public class KafkaEventTransport implements EventTransport {
     public void send(List<OutboxRecord> batch) {
         List<CompletableFuture<?>> futures = batch.stream()
                 .map(this::toRecord)
-                .map(kafkaTemplate::send)
-                .map(f -> (CompletableFuture<?>) f)
+                .<CompletableFuture<?>>map(kafkaTemplate::send)
                 .toList();
 
         CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
@@ -56,7 +56,17 @@ public class KafkaEventTransport implements EventTransport {
                 .add(new RecordHeader("event_id",
                         String.valueOf(record.getId()).getBytes(StandardCharsets.UTF_8)))
                 .add(new RecordHeader("event_type",
-                        record.getEventType().getBytes(StandardCharsets.UTF_8)));
+                        record.getEventType().getBytes(StandardCharsets.UTF_8)))
+                // Схема арендатора: потребитель обязан работать с его данными,
+                // а из тела события её не достать. Из ключа партиции достать
+                // можно, но ключ — про порядок, и завязывать на его формат
+                // разбор значит запретить его когда-либо менять.
+                .add(new RecordHeader("tenant",
+                        TenantContext.require().getBytes(StandardCharsets.UTF_8)))
+                .add(new RecordHeader("aggregate_type",
+                        record.getAggregateType().getBytes(StandardCharsets.UTF_8)))
+                .add(new RecordHeader("aggregate_id",
+                        String.valueOf(record.getAggregateId()).getBytes(StandardCharsets.UTF_8)));
         return producerRecord;
     }
 

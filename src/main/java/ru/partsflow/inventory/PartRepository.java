@@ -41,12 +41,17 @@ public interface PartRepository extends JpaRepository<Part, Long> {
 
     /**
      * Главный экран продавца: что есть на конкретную машину.
+     *
+     * <p>Фильтр по свободному остатку, а не по статусу: обещанную другому
+     * клиенту деталь продавать нельзя, а статус карточки про резерв ничего
+     * не знает — он про наличие. Условие ложится на частичный индекс
+     * {@code part_stock_available_ix}.
      */
     @Query(value = """
             SELECT DISTINCT p.* FROM part p
             JOIN part_applicability a ON a.part_id = p.id
-            WHERE p.status = 'IN_STOCK'
-              AND a.brand_id = :brandId
+            JOIN part_stock ps ON ps.part_id = p.id AND ps.qty_available > 0
+            WHERE a.brand_id = :brandId
               AND (:modelId IS NULL OR a.model_id = :modelId OR a.model_id IS NULL)
               AND (:generationId IS NULL OR a.generation_id = :generationId OR a.generation_id IS NULL)
             ORDER BY p.updated_at DESC
