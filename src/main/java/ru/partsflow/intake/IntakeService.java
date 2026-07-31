@@ -17,9 +17,10 @@ import ru.partsflow.inventory.StockDocumentService;
 import ru.partsflow.inventory.VerticalSide;
 import ru.partsflow.platform.outbox.DomainEvent;
 import ru.partsflow.platform.outbox.DomainEventPublisher;
+import ru.partsflow.platform.outbox.EventPayloads;
+import ru.partsflow.platform.outbox.contract.PartEvent;
 
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -250,18 +251,9 @@ public class IntakeService {
                 "part", part.getId(), "part.created.v1", payloadOf(part)));
     }
 
-    /**
-     * TODO: заменить на Protobuf со Schema Registry, как описано в архитектуре.
-     * Сейчас — простая сериализация, чтобы контур работал целиком.
-     */
     private byte[] payloadOf(Part part) {
-        return """
-                {"id":%d,"publicCode":"%s","title":"%s","price":%s}"""
-                .formatted(part.getId(),
-                        part.getPublicCode(),
-                        part.getTitle().replace("\"", "\\\""),
-                        part.getPrice())
-                .getBytes(StandardCharsets.UTF_8);
+        return EventPayloads.write(new PartEvent(part.getId(), part.getPublicCode(),
+                part.getTitle(), part.getPrice(), String.valueOf(part.getStatus())));
     }
 
     /**

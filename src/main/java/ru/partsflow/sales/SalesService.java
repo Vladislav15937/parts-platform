@@ -9,10 +9,11 @@ import ru.partsflow.inventory.StockReservationRepository;
 import ru.partsflow.inventory.StockMovementRepository;
 import ru.partsflow.platform.outbox.DomainEvent;
 import ru.partsflow.platform.outbox.DomainEventPublisher;
+import ru.partsflow.platform.outbox.EventPayloads;
+import ru.partsflow.platform.outbox.contract.DealEvent;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 
@@ -433,11 +434,9 @@ public class SalesService {
     }
 
     private byte[] payloadOf(Deal deal) {
-        return """
-                {"id":%d,"number":%d,"status":"%s","total":%s,"paid":%s}"""
-                .formatted(deal.getId(), deal.getNumber(), deal.getStatus(),
-                        deal.getTotalAmount(), deal.getPaidAmount())
-                .getBytes(StandardCharsets.UTF_8);
+        return EventPayloads.write(new DealEvent(deal.getId(), deal.getNumber(),
+                String.valueOf(deal.getStatus()), deal.getTotalAmount(),
+                deal.getPaidAmount()));
     }
 
     /** Заявка на позицию: цена необязательна — по умолчанию берётся из карточки. */
