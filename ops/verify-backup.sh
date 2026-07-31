@@ -13,7 +13,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SET_DIR="${1:-$(find "${BACKUP_DIR:-./backups}" -maxdepth 1 -type d -name '20*' | sort | tail -1)}"
+SET_DIR="${1:-$(find "${BACKUP_DIR:-./backups/${APP_CELL:-cell01}}" -maxdepth 1 -type d -name '20*' | sort | tail -1)}"
 ENV_FILE="${2:-.env}"
 [ -f "$ENV_FILE" ] && set -a && . "$ENV_FILE" && set +a
 

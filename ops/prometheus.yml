@@ -12,6 +12,11 @@ global:
   scrape_interval: 30s
   evaluation_interval: 30s
 
+  # Имя ячейки уезжает в тревогу. Когда ячеек две, «Релей встал» без имени
+  # не говорит, куда идти. Подставляется при запуске — см. compose.
+  external_labels:
+    cell: ЯЧЕЙКА_ПОДСТАВЛЯЕТСЯ
+
 rule_files:
   - /etc/prometheus/alerts.yml
 
