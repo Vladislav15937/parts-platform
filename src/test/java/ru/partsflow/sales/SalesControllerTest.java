@@ -34,7 +34,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * кто имеет право продавать, откуда берётся автор операции и во что
  * превращаются нарушения правил.
  */
-@SpringBootTest(properties = "app.sales-rest-test=true")
+@SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
 @AutoConfigureMockMvc
 class SalesControllerTest extends PostgresTestBase {
 

@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>Обработчик здесь свой, управляемый: настоящий ходит в Дром, а проверять
  * надо не Дром, а то, что вокруг повтора.
  */
-@SpringBootTest(properties = "app.dead-letter-test=true")
+@SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
 @Import(DeadLetterServiceTest.FlakyHandlerConfig.class)
 class DeadLetterServiceTest extends PostgresTestBase {
 

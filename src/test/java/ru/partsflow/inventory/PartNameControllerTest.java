@@ -33,7 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * склад как был: справочник разгребают после импорта, когда все позиции уже
  * заведены, и ради них экран и существует.
  */
-@SpringBootTest(properties = "app.part-names-rest-test=true")
+@SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
 @AutoConfigureMockMvc
 class PartNameControllerTest extends PostgresTestBase {
 

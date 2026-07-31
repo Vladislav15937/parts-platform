@@ -33,7 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * на статус документа, начислит менеджеру премию за деталь, которую клиент
  * привёз обратно. Ошибка тихая — расходится не отчёт, а зарплата.
  */
-@SpringBootTest(properties = "app.reports-rest-test=true")
+@SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
 @AutoConfigureMockMvc
 class ReportControllerTest extends PostgresTestBase {
 

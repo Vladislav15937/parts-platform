@@ -34,7 +34,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>Здесь же проверяется то, чего у импортёра нет и быть не может: арендатор
  * берётся из сессии, а не из запроса.
  */
-@SpringBootTest(properties = "app.bazon-rest-test=true")
+@SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
 @AutoConfigureMockMvc
 class BazonImportRestTest extends PostgresTestBase {
 

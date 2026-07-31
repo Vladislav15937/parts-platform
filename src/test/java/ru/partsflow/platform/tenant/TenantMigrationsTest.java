@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Отказ отложенный: приложение поднимается, CI зелёный, новые клиенты
  * работают, а старый падает на первом запросе к новой колонке.
  */
-@SpringBootTest(properties = "app.tenant-migrations-test=true")
+@SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
 class TenantMigrationsTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000074";

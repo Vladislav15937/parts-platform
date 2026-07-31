@@ -27,7 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * самую разрушительную ошибку в системе: ответ упал на сериализации, владелец
  * нажал ещё раз и получил вторую копию склада целиком.
  */
-@SpringBootTest(properties = "app.bazon-import-test=true")
+@SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
 class BazonImporterTest extends PostgresTestBase {
 
     /**
