@@ -49,6 +49,7 @@
     <include file="tenant/030-deal-share.sql"          relativeToChangelogFile="true"/>
     <include file="tenant/031-wheels.sql"              relativeToChangelogFile="true"/>
     <include file="tenant/032-donor-body-engine.sql"   relativeToChangelogFile="true"/>
+    <include file="tenant/033-photo-import.sql"        relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

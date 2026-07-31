@@ -54,6 +54,23 @@ public class PhotoStorage {
                 TenantContext.require(), partId, UUID.randomUUID(), extensionFor(contentType));
     }
 
+    /**
+     * Кладёт файл в хранилище напрямую.
+     *
+     * <p>В обычной работе снимки идут мимо приложения — телефон пишет их
+     * по подписанной ссылке. Здесь наоборот: фотографии переезжают с чужого
+     * CDN, телефона в этой цепочке нет вовсе, и подписывать ссылку самому
+     * себе означало бы лишний оборот.
+     */
+    public void put(String key, byte[] body, String contentType) {
+        s3.putObject(PutObjectRequest.builder()
+                        .bucket(properties.bucket())
+                        .key(key)
+                        .contentType(contentType)
+                        .build(),
+                software.amazon.awssdk.core.sync.RequestBody.fromBytes(body));
+    }
+
     /** Подписанная ссылка на загрузку. Короткоживущая — см. {@link S3Properties}. */
     public String presignUpload(String key, String contentType) {
         PutObjectRequest put = PutObjectRequest.builder()
