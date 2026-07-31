@@ -1,6 +1,7 @@
 package ru.partsflow.migration.bazon;
 
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -47,15 +48,59 @@ public class BazonImportController {
      */
     private static final int REMATCH_LIMIT = 10_000;
 
+    /**
+     * Предел пачки снимков. Двести файлов — это минуты, то есть запрос,
+     * который доживает до ответа; тысяча уже упирается в таймаут терминатора,
+     * и владелец видит ошибку там, где перенос на самом деле идёт.
+     */
+    private static final int MAX_PHOTO_BATCH = 500;
+
     private final DataSource dataSource;
     private final PartNameService partNames;
     private final PartService parts;
+    private final PhotoMigration photoMigration;
 
     public BazonImportController(DataSource dataSource, PartNameService partNames,
-                                 PartService parts) {
+                                 PartService parts, PhotoMigration photoMigration) {
         this.dataSource = dataSource;
         this.partNames = partNames;
         this.parts = parts;
+        this.photoMigration = photoMigration;
+    }
+
+    /**
+     * Переносит очередную пачку фотографий.
+     *
+     * <p><b>Пачками, а не одним запросом.</b> Сто тысяч файлов с чужого CDN —
+     * это часы; запрос столько не живёт. Владелец нажимает, видит число
+     * и нажимает снова, пока в очереди не станет пусто. Прервать можно
+     * в любой момент: перенесённое остаётся перенесённым.
+     */
+    @PostMapping("/photos")
+    @PreAuthorize("hasRole('OWNER')")
+    public PhotoMigration.Progress photos(
+            @RequestParam(defaultValue = "200") int limit) {
+        return photoMigration.migrateBatch(Math.min(Math.max(limit, 1), MAX_PHOTO_BATCH));
+    }
+
+    /** Сколько осталось и сколько не вышло — для экрана переноса. */
+    @GetMapping("/photos")
+    @PreAuthorize("hasRole('OWNER')")
+    public PhotoMigration.Progress photoStatus() {
+        return photoMigration.status();
+    }
+
+    /**
+     * Возвращает неудачные снимки в очередь.
+     *
+     * <p>Отдельным действием: CDN, лежавший десять минут, чинится повтором,
+     * а удалённый файл — нет, и вечный повтор скрывал бы второе за первым.
+     */
+    @PostMapping("/photos/retry")
+    @PreAuthorize("hasRole('OWNER')")
+    public PhotoMigration.Progress retryPhotos() {
+        photoMigration.retryFailed();
+        return photoMigration.status();
     }
 
     @PostMapping

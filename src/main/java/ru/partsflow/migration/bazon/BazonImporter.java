@@ -567,6 +567,9 @@ public final class BazonImporter {
                      .part_stock SET qty_reserved = ? WHERE part_id = ? AND warehouse_id = ?""");
                  PreparedStatement insertOem = c.prepareStatement("INSERT INTO " + schema + """
                      .part_oem (part_id, raw_number, is_primary) VALUES (?, ?, ?)
+                     ON CONFLICT DO NOTHING""");
+                 PreparedStatement insertPhoto = c.prepareStatement("INSERT INTO " + schema + """
+                     .part_photo_import (part_id, url, sort_order) VALUES (?, ?, ?)
                      ON CONFLICT DO NOTHING""")) {
 
                 int[] pending = {0};
@@ -591,6 +594,7 @@ public final class BazonImporter {
 
                         insertStock(insertMovement, setReserved, row, partId, warehouseColumns, warehouses);
                         insertNumbers(insertOem, row, partId);
+                        queuePhotos(insertPhoto, row, partId, report);
                         c.releaseSavepoint(savepoint);
 
                         report.count("товаров");
@@ -604,6 +608,37 @@ public final class BazonImporter {
                 });
             }
             c.commit();
+        }
+    }
+
+
+    /**
+     * Ставит фотографии товара в очередь переноса.
+     *
+     * <p><b>Записывает, но не качает.</b> Тридцать шесть тысяч позиций — это
+     * под сотню тысяч файлов с чужого CDN: внутри запроса импорта это часы,
+     * то есть оборванное соединение и непонятное состояние. Качает отдельный
+     * проход, который можно прервать и продолжить.
+     *
+     * <p>Колонка называется «Превью» — так она называется в настройках таблицы
+     * товаров прежней системы. Её тоже надо включить перед выгрузкой, как
+     * и «Выгружать»: невключённая колонка означает склад без единого снимка,
+     * а на разборке продаёт фотография.
+     */
+    private void queuePhotos(PreparedStatement ps, BazonCsvReader.Row row, long partId,
+                             ImportReport report) throws SQLException {
+
+        List<String> urls = BazonValueParser.parsePhotoUrls(row.get("Превью"));
+        int order = 0;
+        for (String url : urls) {
+            ps.setLong(1, partId);
+            ps.setString(2, url);
+            ps.setInt(3, order++);
+            ps.addBatch();
+        }
+        if (order > 0) {
+            ps.executeBatch();
+            report.count("фотографий в очереди", order);
         }
     }
 
