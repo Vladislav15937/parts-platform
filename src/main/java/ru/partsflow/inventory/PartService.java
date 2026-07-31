@@ -108,11 +108,13 @@ public class PartService {
      * во всей красе: наименования распознаны, а двести карточек по-прежнему
      * без категории.
      *
-     * <p>Заголовки не трогаются намеренно. У позиции из выгрузки заголовок
-     * собран из написания и машины, и массовая подмена начала стёрла бы
-     * сторону — та же беда, из-за которой в {@link #applyMatch} стоит
-     * условие про длину. Точечно это делает экран разбора, где человек видит,
-     * что меняет.
+     * <p>Заголовок правится по тому же правилу, что и в {@link #applyMatch}:
+     * начало подменяется эталоном, только если оно совпадает с написанием
+     * и в заголовке есть что-то ещё. Ради этого справочник и нужен — чтобы
+     * «мозги» и «телевизор» стали блоком управления и рамкой радиатора,
+     * а прайс перестал быть словарём чужого сленга. Позиция, у которой
+     * заголовок и есть само написание, не трогается: подмена стёрла бы
+     * сторону, и левая фара слилась бы с правой.
      *
      * @return сколько карточек доведено
      */
@@ -121,8 +123,13 @@ public class PartService {
         return jdbc.update("""
                 UPDATE part p
                    SET category_id = pn.category_id,
-                       part_kind_id = pn.part_kind_id
+                       part_kind_id = pn.part_kind_id,
+                       title = CASE WHEN left(p.title, length(pn.name)) = pn.name
+                                     AND length(p.title) > length(pn.name)
+                                    THEN k.name || substr(p.title, length(pn.name) + 1)
+                                    ELSE p.title END
                   FROM part_name pn
+                  JOIN catalog.part_kind k ON k.id = pn.part_kind_id
                  WHERE p.part_name_id = pn.id
                    AND pn.part_kind_id IS NOT NULL
                    AND p.part_kind_id IS DISTINCT FROM pn.part_kind_id""");
