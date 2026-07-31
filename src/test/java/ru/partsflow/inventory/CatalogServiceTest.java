@@ -49,8 +49,10 @@ class CatalogServiceTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
+        // По слагу, а не по имени: соседние тесты заводят свои «Toyota»
+        // со своими слагами, и справочник у всех контекстов общий.
         BRAND = jdbc.queryForObject(
-                "SELECT id FROM catalog.brand WHERE name = 'Toyota'", Long.class);
+                "SELECT id FROM catalog.brand WHERE slug = 'toyota'", Long.class);
         // Журнал движений неизменяем — его нельзя чистить между тестами,
         // и это правильно: удаление движения означало бы остаток, взявшийся
         // ниоткуда. Поэтому каждый тест заводит свои позиции с уникальными
