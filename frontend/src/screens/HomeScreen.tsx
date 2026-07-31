@@ -126,42 +126,26 @@ export function HomeScreen() {
   const unsent = outbox.records.length;
 
   return (
-    <div className="screen">
-      <header className="header">
-        <div>
-          <strong>{state.me.displayName}</strong>
-          <span className="muted"> · {roleName(state.me.role)}</span>
-        </div>
-        <span className={connected ? 'badge badge--online' : 'badge badge--offline'}>
-          {connected ? 'на связи' : 'без связи'}
-        </span>
-      </header>
-
-      {state.offline && (
-        <p className="note">
-          Работаем без связи. Вход подтвердится, когда сеть появится; собранное
-          до тех пор не потеряется.
-        </p>
-      )}
-
-      <nav className="tabs">
+    <div className="app">
+      <nav className="rail">
+        <div className="rail__brand">PartsFlow</div>
         <button
           type="button"
-          className={tab === 'intake' ? 'tab tab--active' : 'tab'}
+          className={tab === 'intake' ? 'rail__item rail__item--active' : 'rail__item'}
           onClick={() => setTab('intake')}
         >
           Приёмка
         </button>
         <button
           type="button"
-          className={tab === 'donor' ? 'tab tab--active' : 'tab'}
+          className={tab === 'donor' ? 'rail__item rail__item--active' : 'rail__item'}
           onClick={() => setTab('donor')}
         >
           Машина
         </button>
         <button
           type="button"
-          className={tab === 'sales' ? 'tab tab--active' : 'tab'}
+          className={tab === 'sales' ? 'rail__item rail__item--active' : 'rail__item'}
           onClick={() => setTab('sales')}
         >
           Продажа
@@ -169,7 +153,7 @@ export function HomeScreen() {
         {SELLING_ROLES.includes(state.me.role) && (
           <button
             type="button"
-            className={tab === 'orders' ? 'tab tab--active' : 'tab'}
+            className={tab === 'orders' ? 'rail__item rail__item--active' : 'rail__item'}
             onClick={() => setTab('orders')}
           >
             Заказы{awaitingOrders > 0 && ` · ${awaitingOrders}`}
@@ -177,42 +161,42 @@ export function HomeScreen() {
         )}
         <button
           type="button"
-          className={tab === 'catalog' ? 'tab tab--active' : 'tab'}
+          className={tab === 'catalog' ? 'rail__item rail__item--active' : 'rail__item'}
           onClick={() => setTab('catalog')}
         >
           Склад
         </button>
         <button
           type="button"
-          className={tab === 'wheels' ? 'tab tab--active' : 'tab'}
+          className={tab === 'wheels' ? 'rail__item rail__item--active' : 'rail__item'}
           onClick={() => setTab('wheels')}
         >
           Шины и диски
         </button>
         <button
           type="button"
-          className={tab === 'inventory' ? 'tab tab--active' : 'tab'}
+          className={tab === 'inventory' ? 'rail__item rail__item--active' : 'rail__item'}
           onClick={() => setTab('inventory')}
         >
           Пересчёт
         </button>
         <button
           type="button"
-          className={tab === 'outbox' ? 'tab tab--active' : 'tab'}
+          className={tab === 'outbox' ? 'rail__item rail__item--active' : 'rail__item'}
           onClick={() => setTab('outbox')}
         >
           Очередь{unsent > 0 && ` · ${unsent}`}
         </button>
         <button
           type="button"
-          className={tab === 'import' ? 'tab tab--active' : 'tab'}
+          className={tab === 'import' ? 'rail__item rail__item--active' : 'rail__item'}
           onClick={() => setTab('import')}
         >
           Загрузка
         </button>
         <button
           type="button"
-          className={tab === 'names' ? 'tab tab--active' : 'tab'}
+          className={tab === 'names' ? 'rail__item rail__item--active' : 'rail__item'}
           onClick={() => setTab('names')}
         >
           Наименования{unmatched > 0 && ` · ${unmatched}`}
@@ -220,7 +204,7 @@ export function HomeScreen() {
         {NAMING_ROLES.includes(state.me.role) && (
           <button
             type="button"
-            className={tab === 'reports' ? 'tab tab--active' : 'tab'}
+            className={tab === 'reports' ? 'rail__item rail__item--active' : 'rail__item'}
             onClick={() => setTab('reports')}
           >
             Отчёты
@@ -229,7 +213,7 @@ export function HomeScreen() {
         {NAMING_ROLES.includes(state.me.role) && (
           <button
             type="button"
-            className={tab === 'feeds' ? 'tab tab--active' : 'tab'}
+            className={tab === 'feeds' ? 'rail__item rail__item--active' : 'rail__item'}
             onClick={() => setTab('feeds')}
           >
             Выгрузки
@@ -238,7 +222,7 @@ export function HomeScreen() {
         {NAMING_ROLES.includes(state.me.role) && (
           <button
             type="button"
-            className={tab === 'delivery' ? 'tab tab--active' : 'tab'}
+            className={tab === 'delivery' ? 'rail__item rail__item--active' : 'rail__item'}
             onClick={() => setTab('delivery')}
           >
             Доставка{undelivered > 0 && ` · ${undelivered}`}
@@ -247,7 +231,7 @@ export function HomeScreen() {
         {LABEL_ROLES.includes(state.me.role) && (
           <button
             type="button"
-            className={tab === 'labels' ? 'tab tab--active' : 'tab'}
+            className={tab === 'labels' ? 'rail__item rail__item--active' : 'rail__item'}
             onClick={() => setTab('labels')}
           >
             Этикетки
@@ -255,12 +239,33 @@ export function HomeScreen() {
         )}
         <button
           type="button"
-          className={tab === 'reference' ? 'tab tab--active' : 'tab'}
+          className={tab === 'reference' ? 'rail__item rail__item--active' : 'rail__item'}
           onClick={() => setTab('reference')}
         >
           Справочники
         </button>
       </nav>
+
+      <div className="app__main">
+        <header className="topbar">
+          <div className="topbar__title">{sectionName(tab)}</div>
+          <div>
+            <strong>{state.me.displayName}</strong>
+            <span className="muted"> · {roleName(state.me.role)}</span>
+          </div>
+          <span className={connected ? 'badge badge--online' : 'badge badge--offline'}>
+            {connected ? 'на связи' : 'без связи'}
+          </span>
+        </header>
+
+        {state.offline && (
+          <p className="note">
+            Работаем без связи. Вход подтвердится, когда сеть появится; собранное
+            до тех пор не потеряется.
+          </p>
+        )}
+
+        <main className="app__content">
 
       {tab === 'intake' &&
         (status.kind === 'ready' ? (
@@ -397,11 +402,34 @@ export function HomeScreen() {
 
       {tab === 'reference' && <ReferencePanel />}
 
-      <button type="button" className="button--ghost" onClick={signOut}>
-        Выйти
-      </button>
+          <button type="button" className="button--ghost" onClick={signOut}>
+            Выйти
+          </button>
+        </main>
+      </div>
     </div>
   );
+}
+
+/** Название раздела в верхней полосе: видно, где ты, не считая вкладки. */
+function sectionName(tab: string): string {
+  switch (tab) {
+    case 'intake': return 'Приёмка';
+    case 'donor': return 'Машины';
+    case 'sales': return 'Продажа';
+    case 'orders': return 'Заказы с площадок';
+    case 'catalog': return 'Склад';
+    case 'wheels': return 'Шины и диски';
+    case 'inventory': return 'Пересчёт склада';
+    case 'outbox': return 'Очередь отправки';
+    case 'import': return 'Загрузка склада';
+    case 'names': return 'Нераспознанные наименования';
+    case 'reports': return 'Отчёты';
+    case 'feeds': return 'Выгрузки на площадки';
+    case 'delivery': return 'Доставка событий';
+    case 'labels': return 'Этикетки';
+    default: return 'Справочники';
+  }
 }
 
 function roleName(role: string): string {
