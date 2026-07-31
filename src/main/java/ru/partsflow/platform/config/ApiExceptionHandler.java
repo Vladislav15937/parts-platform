@@ -151,6 +151,22 @@ public class ApiExceptionHandler {
     }
 
     /**
+     * Несуществующий адрес — 404, а не 500.
+     *
+     * <p>Обработчик {@code Exception} иначе съедает и это: опечатка в пути
+     * превращалась во «внутреннюю ошибку сервера». Для офлайн-очереди приёмки
+     * разница не косметическая — она повторяет только 5xx, и запрос
+     * по несуществующему адресу переотправлялся бы вечно вместо того, чтобы
+     * честно лечь в «требует внимания».
+     */
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    public ResponseEntity<ApiError> notFound(
+            org.springframework.web.servlet.resource.NoResourceFoundException e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(new ApiError("Адрес не найден"));
+    }
+
+    /**
      * Всё остальное — наша поломка.
      *
      * <p>Наружу уходит общая формулировка: текст исключения может содержать

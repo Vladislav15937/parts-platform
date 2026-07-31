@@ -48,6 +48,17 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- Реестр Prometheus. Без него actuator не заводит /actuator/prometheus
+             вовсе, и метрики очереди событий существуют только внутри процесса:
+             в списке management.endpoints они при этом перечислены, то есть
+             конфигурация выглядит рабочей. Поймано живым прогоном, а не тестом —
+             тесты берут SimpleMeterRegistry и до отдачи наружу не доходят. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
