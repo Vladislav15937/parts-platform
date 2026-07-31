@@ -227,7 +227,16 @@ export function CatalogScreen() {
                 <tr key={row.id}>
                   {columns.map((column) => (
                     <td key={column.key} className={column.numeric ? 'num' : undefined}>
-                      {column.value(row)}
+                      {column.image
+                        ? column.image(row) !== null && (
+                            <img
+                              className="thumb"
+                              src={column.image(row) ?? ''}
+                              alt=""
+                              loading="lazy"
+                            />
+                          )
+                        : column.value(row)}
                     </td>
                   ))}
                   {warehouses.map((warehouse) => (

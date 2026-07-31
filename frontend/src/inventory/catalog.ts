@@ -166,6 +166,13 @@ export interface Column {
   /** Числовые прижимаются вправо: так столбец цен читается взглядом сверху вниз. */
   numeric?: boolean;
   value: (row: CatalogRow) => string;
+
+  /**
+   * Ссылка на снимок, если колонка показывает картинку, а не текст.
+   * Подписанная и короткоживущая — поэтому берётся со страницей,
+   * а не хранится.
+   */
+  image?: (row: CatalogRow) => string | null;
 }
 
 const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.' };
@@ -186,6 +193,9 @@ function money(value: number | null): string {
 
 export const COLUMNS: Column[] = [
   { key: 'code', title: 'Номер товара', sort: 'code', value: (r) => text(r.code) },
+  // Вторым столбцом, как в кабинете: по снимку деталь узнают быстрее,
+  // чем по наименованию, — особенно когда наименований на складе тысяча.
+  { key: 'photo', title: 'Превью', value: () => '', image: (r) => r.photoUrl },
   { key: 'title', title: 'Запчасть', sort: 'title', value: (r) => r.title },
   { key: 'quality', title: 'Оценка состояния',
     value: (r) => text(r.qualityGrade) || CONDITION[r.condition ?? ''] || '' },
@@ -223,7 +233,7 @@ export const COLUMNS: Column[] = [
  * включает сам и выбор запоминается.
  */
 export const DEFAULT_VISIBLE = [
-  'code', 'title', 'brand', 'model', 'year', 'sideFr', 'sideLr', 'price', 'section',
+  'code', 'photo', 'title', 'brand', 'model', 'year', 'sideFr', 'sideLr', 'price', 'section',
 ];
 
 const STORAGE_KEY = 'catalog-columns';
