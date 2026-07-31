@@ -130,18 +130,11 @@ class IntakeServiceTest extends PostgresTestBase {
     void matchedNameGivesCanonicalTitle() {
         // Эталон с синонимом: местное «запаска» должно превратиться
         // в «Запасное колесо», иначе однородности склада не будет.
-        Long category = jdbc.queryForObject("""
-                INSERT INTO catalog.part_category (name, slug, path)
-                VALUES ('Тест заголовка', 'title-test', 'title_test')
-                ON CONFLICT (path) DO UPDATE SET name = excluded.name
-                RETURNING id""", Long.class);
-        jdbc.update("""
-                DELETE FROM catalog.part_kind WHERE category_id = ? AND name = 'Запасное колесо'""",
-                category);
-        jdbc.update("""
-                INSERT INTO catalog.part_kind (category_id, name, synonyms)
-                VALUES (?, 'Запасное колесо', ARRAY['запаска'])""", category);
-
+        //
+        // Эталон берётся из поставляемого справочника, а не заводится копией:
+        // копия жила в своей категории, то есть была вторым «Запасным колесом»
+        // с другой категорией — и сопоставление зависело от того, какая строка
+        // попалась первой. Ловит это теперь уникальность имени (catalog/014).
         Supply supply = arrivedSupply("31");
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), null,
@@ -220,7 +213,7 @@ class IntakeServiceTest extends PostgresTestBase {
 
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), null,
-                List.of(item("кронштейн бампера", "3000")), null, uniqueRequestId()));
+                List.of(item("бачок влагоудалителя", "3000")), null, uniqueRequestId()));
 
         Long partId = receipt.parts().get(0).getId();
         assertThat(qtyOf(partId)).isEqualByComparingTo("1");
@@ -228,7 +221,7 @@ class IntakeServiceTest extends PostgresTestBase {
         // Наименование заведено и ждёт разбора, а деталь уже продаётся.
         assertThat(inTenant(() -> jdbc.queryForObject("""
                 SELECT match_status FROM part_name
-                 WHERE lower(btrim(name)) = 'кронштейн бампера'""",
+                 WHERE lower(btrim(name)) = 'бачок влагоудалителя'""",
                 String.class))).isEqualTo("UNMATCHED");
     }
 

@@ -23,5 +23,9 @@
     <include file="catalog/010-provisioning-status.sql"      relativeToChangelogFile="true"/>
     <include file="catalog/011-part-kinds.sql"              relativeToChangelogFile="true"/>
     <include file="catalog/012-part-kinds-live.sql"         relativeToChangelogFile="true"/>
+    <include file="catalog/013-part-kinds-live2.sql"        relativeToChangelogFile="true"/>
+    <include file="catalog/014-part-kind-name-unique.sql"   relativeToChangelogFile="true"/>
+    <include file="catalog/015-part-kinds-live3.sql"        relativeToChangelogFile="true"/>
+    <include file="catalog/016-roof-molding-synonym.sql"    relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

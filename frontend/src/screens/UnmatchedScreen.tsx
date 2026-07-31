@@ -188,16 +188,39 @@ function KindPicker({
 
   return (
     <div className="picker">
+      {partName.sampleTitle !== null && (
+        <p className="note">
+          Сейчас: <b>{partName.sampleTitle}</b>
+        </p>
+      )}
+
       {suggested.length > 0 && (
         <>
           <div className="muted">Похожие эталоны</div>
           <div className="chips">
             {suggested.map((kind) => (
-              <button key={kind.id} type="button" className="chip" onClick={() => onPick(kind)}>
+              <button
+                key={kind.id}
+                type="button"
+                className="chip"
+                title={preview(partName, kind.name)}
+                onClick={() => onPick(kind)}
+              >
                 {kind.name}
               </button>
             ))}
           </div>
+          {/* Заголовок после сопоставления — до нажатия, а не после.
+              Оно правит сотни карточек разом и назад не откатывается,
+              а разница между «тросик ручного тормоза» → «Трос ручника»
+              и «Знак аварийной остановки» → «Набор инструментов» видна
+              только в получившемся заголовке. */}
+          {suggested[0] !== undefined && partName.sampleTitle !== null && (
+            <p className="note">
+              Станет: <b>{preview(partName, suggested[0].name)}</b>
+              {suggested.length > 1 && ' — и так для каждого эталона, наведите'}
+            </p>
+          )}
         </>
       )}
 
@@ -222,13 +245,26 @@ function KindPicker({
       </label>
 
       {found.length > 0 && (
-        <div className="chips">
-          {found.map((kind) => (
-            <button key={kind.id} type="button" className="chip" onClick={() => onPick(kind)}>
-              {kind.name}
-            </button>
-          ))}
-        </div>
+        <>
+          <div className="chips">
+            {found.map((kind) => (
+              <button
+                key={kind.id}
+                type="button"
+                className="chip"
+                title={preview(partName, kind.name)}
+                onClick={() => onPick(kind)}
+              >
+                {kind.name}
+              </button>
+            ))}
+          </div>
+          {found[0] !== undefined && partName.sampleTitle !== null && (
+            <p className="note">
+              Станет: <b>{preview(partName, found[0].name)}</b>
+            </p>
+          )}
+        </>
       )}
 
       {query.trim().length >= 2 && found.length === 0 && (
@@ -264,4 +300,23 @@ function describe(cause: unknown, fallback: string): string {
     return cause.message;
   }
   return fallback;
+}
+
+/**
+ * Каким станет заголовок карточки после сопоставления.
+ *
+ * <p>Повторяет правило сервера: начало заголовка подменяется эталоном,
+ * только если оно совпадает с написанием и в заголовке есть что-то ещё.
+ * Позиция, у которой заголовок и есть само написание, не меняется —
+ * подмена стёрла бы сторону, и левая фара слилась бы с правой.
+ */
+export function preview(name: { name: string; sampleTitle: string | null }, kind: string): string {
+  const title = name.sampleTitle;
+  if (title === null) {
+    return kind;
+  }
+  if (!title.startsWith(name.name) || title.length <= name.name.length) {
+    return title;
+  }
+  return kind + title.slice(name.name.length);
 }
