@@ -85,6 +85,11 @@ public class DromPriceGenerator {
                    GROUP BY part_id
               ) analogs ON analogs.part_id = p.id
              WHERE p.is_published
+               -- Колёса в прайс запчастей не идут: у площадки для шин
+               -- и дисков свой формат со своими полями, и объявление
+               -- «Шина 195/65 R15» среди запчастей уедет в чужую категорию.
+               -- Отдельная выгрузка для них — своя задача.
+               AND p.product_line = 'PART'
                AND p.status IN ('IN_STOCK', 'SOLD')
                AND p.price IS NOT NULL
                AND (?::numeric IS NULL OR p.price >= ?::numeric)

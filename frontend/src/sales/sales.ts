@@ -122,6 +122,12 @@ export interface HistoryEntry {
   eventType: string;
   message: string;
   authorId: number | null;
+  /**
+   * Пусто — действие сделала система либо сотрудника удалили. «Автор 3»
+   * вместо имени не говорит ничего: историю разбирают через недели, когда
+   * по номеру никто никого не вспомнит.
+   */
+  authorName: string | null;
   createdAt: string;
 }
 
@@ -285,6 +291,22 @@ export function transferable(deal: Deal): DealItem[] {
  */
 export function returnable(deal: Deal): DealItem[] {
   return deal.items.filter((item) => item.status === 'ISSUED');
+}
+
+/**
+ * Ссылка на сделку для клиента.
+ *
+ * <p>Отправляет её продавец сам — в Telegram, WhatsApp или SMS со своего
+ * телефона. Своего отправителя нет намеренно: это договор с провайдером
+ * и деньги, а ссылка работает в любом канале и не требует ничего.
+ *
+ * <p>Повторный вызов возвращает прежнюю ссылку, пока она не просрочена:
+ * продавец нажимает второй раз, потому что потерял её в переписке.
+ */
+export function shareDeal(dealId: number): Promise<{ path: string; expires: string }> {
+  return request<{ path: string; expires: string }>(`/api/deals/${dealId}/share`, {
+    method: 'POST',
+  });
 }
 
 export function historyOf(dealId: number): Promise<HistoryEntry[]> {

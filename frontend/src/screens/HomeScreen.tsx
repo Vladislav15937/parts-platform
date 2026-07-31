@@ -17,6 +17,7 @@ import { ReportsScreen } from './ReportsScreen';
 import { UnmatchedScreen } from './UnmatchedScreen';
 import { OrdersScreen } from './OrdersScreen';
 import { FeedsScreen } from './FeedsScreen';
+import { WheelsScreen } from './WheelsScreen';
 import { ordersAwaitingReply } from '../sales/sales';
 import { unmatchedNames } from '../catalog/partNames';
 import { deadLetters } from '../events/deadLetters';
@@ -56,6 +57,7 @@ type Tab =
   | 'names'
   | 'reports'
   | 'orders'
+  | 'wheels'
   | 'feeds'
   | 'delivery'
   | 'labels'
@@ -173,6 +175,13 @@ export function HomeScreen() {
         )}
         <button
           type="button"
+          className={tab === 'wheels' ? 'tab tab--active' : 'tab'}
+          onClick={() => setTab('wheels')}
+        >
+          Шины и диски
+        </button>
+        <button
+          type="button"
           className={tab === 'inventory' ? 'tab tab--active' : 'tab'}
           onClick={() => setTab('inventory')}
         >
@@ -281,6 +290,10 @@ export function HomeScreen() {
             которой уже нет, а отложенная в телефоне сделка ничего не резервирует.
           </p>
         ))}
+
+      {tab === 'wheels' && (
+        <WheelsScreen canIntake={LABEL_ROLES.includes(state.me.role)} />
+      )}
 
       {tab === 'feeds' && NAMING_ROLES.includes(state.me.role) && <FeedsScreen />}
 

@@ -287,6 +287,41 @@ class DromFeedControllerTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Колесо в прайс запчастей не уезжает")
+    void wheelsStayOutOfThePartsFeed() throws Exception {
+        inTenant(TENANT, () -> {
+            Long branch = jdbc.queryForObject(
+                    "INSERT INTO branch (name) VALUES ('Ф') RETURNING id", Long.class);
+            Long warehouse = jdbc.queryForObject(
+                    "INSERT INTO warehouse (branch_id, name) VALUES (?, 'С') RETURNING id",
+                    Long.class, branch);
+            Long partId = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, is_published, product_line)
+                    VALUES (1, 'Шина 195/65 R15 Goodyear', 3500, true, 'WHEEL') RETURNING id""",
+                    Long.class);
+            jdbc.update("""
+                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
+                    VALUES (?, 'INTAKE', 4, ?)""", partId, warehouse);
+            return null;
+        });
+
+        String body = mvc.perform(get(feedPath))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // У площадки для шин и дисков свой формат со своими полями:
+        // «Шина 195/65 R15» среди запчастей уедет в чужую категорию,
+        // и объявление снимут.
+        assertThat(body)
+                .as("колесо уехало в прайс запчастей — площадка положит его "
+                        + "в чужую категорию")
+                .doesNotContain("Шина 195/65 R15");
+        // Запчасти при этом на месте: исключение по линии товара, а не отказ
+        // отдавать прайс целиком.
+        assertThat(body).contains("Фара левая Camry");
+    }
+
+    @Test
     @DisplayName("Справочник видов отдаётся целиком, а не поиском")
     void kindsAreServedWhole() throws Exception {
         // Экрану отбора нужны названия уже выбранных видов, а поиск

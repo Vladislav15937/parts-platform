@@ -17,6 +17,7 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Продажи: сделка, деньги, выдача.
@@ -39,6 +40,7 @@ public class SalesService {
     private final StockReservationRepository reservationRepository;
     private final DomainEventPublisher eventPublisher;
     private final ServiceKindRepository serviceKinds;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final DealSourceRepository dealSources;
 
     public SalesService(DealRepository dealRepository,
@@ -51,7 +53,8 @@ public class SalesService {
                         StockReservationRepository reservationRepository,
                         DomainEventPublisher eventPublisher,
                         ServiceKindRepository serviceKinds,
-                        DealSourceRepository dealSources) {
+                        DealSourceRepository dealSources,
+                        org.springframework.jdbc.core.JdbcTemplate jdbc) {
         this.dealRepository = dealRepository;
         this.dealReturnRepository = dealReturnRepository;
         this.paymentRepository = paymentRepository;
@@ -63,6 +66,7 @@ public class SalesService {
         this.eventPublisher = eventPublisher;
         this.serviceKinds = serviceKinds;
         this.dealSources = dealSources;
+        this.jdbc = jdbc;
     }
 
     /**
@@ -72,6 +76,68 @@ public class SalesService {
      * которую перестали оказывать, не должна предлагаться продавцу — но
      * и удалять её нельзя, она стоит в прошлых сделках.
      */
+    /**
+     * Выдаёт ссылку на сделку для клиента.
+     *
+     * <p>Повторный вызов возвращает прежнюю, пока она не просрочена: продавец
+     * нажимает «ссылка» второй раз, потому что потерял её в переписке,
+     * а не потому, что хочет отозвать прежнюю. Новая ссылка при каждом нажатии
+     * оставила бы у клиента мёртвый адрес.
+     *
+     * <p>Срок — две недели: столько живёт разговор про отложенную деталь.
+     * Просроченная ссылка перестаёт показывать склад тому, кто её однажды
+     * получил, — а получить её мог кто угодно, кому клиент переслал переписку.
+     */
+    @Transactional
+    public Deal share(Long dealId) {
+        Deal deal = requireDeal(dealId);
+        if (deal.getShareToken() == null
+                || deal.getShareExpires() == null
+                || deal.getShareExpires().isBefore(Instant.now())) {
+            byte[] bytes = new byte[24];
+            new java.security.SecureRandom().nextBytes(bytes);
+            deal.share(java.util.HexFormat.of().formatHex(bytes),
+                    Instant.now().plus(java.time.Duration.ofDays(14)));
+        }
+        return detachable(dealRepository.saveAndFlush(deal));
+    }
+
+    /**
+     * Сделка по ссылке — то, что видит клиент.
+     *
+     * <p>Сравнение постоянного времени: по времени ответа ссылка подбирается
+     * посимвольно, как и токен прайса площадки.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Deal> byShareToken(String token) {
+        if (token == null || token.length() < 32) {
+            return Optional.empty();
+        }
+        byte[] presented = token.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Deal found = null;
+        for (Deal candidate : dealRepository.findShared(Instant.now())) {
+            if (java.security.MessageDigest.isEqual(
+                    candidate.getShareToken().getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    presented)) {
+                found = candidate;
+            }
+        }
+        return Optional.ofNullable(found).map(this::detachable);
+    }
+
+    /**
+     * Код компании арендатора — часть публичной ссылки на сделку.
+     *
+     * <p>Схема указана явно: реестр живёт в {@code public}, а не в схеме
+     * арендатора, и правило про транзакцию сюда не относится.
+     */
+    @Transactional(readOnly = true)
+    public String companyCode() {
+        return jdbc.queryForObject(
+                "SELECT code FROM public.tenant_registry WHERE schema_name = ?",
+                String.class, ru.partsflow.platform.tenant.TenantContext.require());
+    }
+
     /** Источники сделок: откуда пришла продажа. Архивные не предлагаются. */
     @Transactional(readOnly = true)
     public List<DealSource> dealSources() {

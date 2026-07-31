@@ -143,6 +143,20 @@ public class Deal {
     @Column(name = "order_accepted_at")
     private Instant orderAcceptedAt;
 
+    /**
+     * Секрет ссылки, которую продавец отправляет клиенту.
+     *
+     * <p>У клиента нет учётной записи и не будет: он видит свою сделку
+     * по ссылке, а сама ссылка — единственное, что открывает доступ.
+     * Поэтому она живёт днями, а не вечно, и показывает только то, что клиент
+     * и так знает про свою покупку.
+     */
+    @Column(name = "share_token")
+    private String shareToken;
+
+    @Column(name = "share_expires")
+    private Instant shareExpires;
+
     @Column(name = "created_by")
     private Long createdBy;
 
@@ -475,6 +489,19 @@ public class Deal {
 
     public void setWarehouseId(Long warehouseId) {
         this.warehouseId = warehouseId;
+    }
+
+    public String getShareToken() {
+        return shareToken;
+    }
+
+    public Instant getShareExpires() {
+        return shareExpires;
+    }
+
+    void share(String token, Instant expires) {
+        this.shareToken = token;
+        this.shareExpires = expires;
     }
 
     public String getMarketplace() {
