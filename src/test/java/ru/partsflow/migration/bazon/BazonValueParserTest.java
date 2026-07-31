@@ -258,6 +258,25 @@ class BazonValueParserTest {
         }
 
         @Test
+        @DisplayName("Уменьшенная копия заменяется оригиналом")
+        void resizedBecomesOriginal() {
+            // CDN отдаёт по одному пути и превью, и оригинал: разница
+            // в отрезке /rsz/<размер>/. Превью — 49×37, оригинал — 1020×770,
+            // замерено. Перенести превью значит навсегда оставить клиента
+            // с картинками, по которым деталь не разглядеть.
+            assertThat(BazonValueParser.parsePhotoUrls(
+                    "https://cdn.baz-on.ru/rsz/thumb/pub/c2226/productphoto/0005/94/0005_94_245.jpg"))
+                    .containsExactly(
+                    "https://cdn.baz-on.ru/pub/c2226/productphoto/0005/94/0005_94_245.jpg");
+
+            // Ссылка без уменьшения не трогается.
+            assertThat(BazonValueParser.parsePhotoUrls(
+                    "http://export-content.baz-on.ru/pub/c2226/productphoto/0005/94/0005_94_118.jpg"))
+                    .containsExactly(
+                    "http://export-content.baz-on.ru/pub/c2226/productphoto/0005/94/0005_94_118.jpg");
+        }
+
+        @Test
         void emptyList() {
             assertThat(BazonValueParser.parseList("")).isEmpty();
             assertThat(BazonValueParser.parseList(null)).isEmpty();

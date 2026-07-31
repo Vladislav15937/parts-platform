@@ -1186,7 +1186,6 @@ hr {
   background: var(--surface-soft);
 }
 
-/* Миниатюра — кнопка: по ней разворачиваются снимки, как в кабинете. */
 .thumb-button {
   padding: 0;
   border: none;
@@ -1195,23 +1194,136 @@ hr {
   min-height: 0;
 }
 
+.thumb-button.is-shown .thumb {
+  outline: 2px solid var(--accent);
+}
+
 /*
- * Снимки под строкой. Высота ограничена: фотографии приезжают какие есть,
- * и полноразмерная уводит таблицу на экран вниз — а развернули её, чтобы
- * посмотреть деталь, не теряя список.
+ * Снимки по наведению — накладкой поверх таблицы, а не вставленной строкой.
+ * Вставленная сдвигает всё ниже, и строка, на которую человек вёл курсор,
+ * уезжает из-под него; при наведении это особенно заметно, потому что курсор
+ * никуда не нажимал.
  */
-.photo-row td {
-  padding: 0.5rem 0.75rem;
+.thumb-hover {
+  position: relative;
+  display: inline-block;
+}
+
+.thumb-popover {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.35rem;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.16);
+  pointer-events: none;
+}
+
+.thumb-popover img {
+  height: 200px;
+  border-radius: var(--radius-sm);
+}
+
+/* Строка склада открывает карточку — как в кабинете. */
+.row--clickable {
+  cursor: pointer;
+}
+
+/* Карточка позиции: поля слева, снимки справа. */
+.card-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: min(64rem, 100%);
+  max-height: 88vh;
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.card-view__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.card-view__head h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.card-view__body {
+  display: flex;
+  gap: 1.5rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+.card-view__fields {
+  flex: 0 0 22rem;
+  margin: 0;
+  display: grid;
+  grid-template-columns: 10rem 1fr;
+  gap: 0.35rem 0.75rem;
+  align-content: start;
+}
+
+.card-view__fields > div {
+  display: contents;
+}
+
+.card-view__fields dt {
+  color: var(--muted);
+}
+
+.card-view__fields dd {
+  margin: 0;
+}
+
+.card-view__photos {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.card-view__main {
+  width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  border-radius: var(--radius);
   background: var(--surface-soft);
 }
 
-.photo-strip {
+.card-view__strip {
   display: flex;
   gap: 0.5rem;
   overflow-x: auto;
 }
 
-.photo-strip img {
-  height: 180px;
-  border-radius: var(--radius-sm);
+/* На телефоне поля и снимки идут столбиком: рядом им не хватает ширины. */
+@media (max-width: 899px) {
+  .card-view__body {
+    flex-direction: column;
+  }
+
+  .card-view__fields {
+    flex: none;
+    grid-template-columns: 1fr;
+  }
+
+  .card-view__fields dt {
+    margin-top: 0.5rem;
+  }
+
+  /* Наведения на телефоне нет — накладка там только мешала бы. */
+  .thumb-popover {
+    display: none;
+  }
 }

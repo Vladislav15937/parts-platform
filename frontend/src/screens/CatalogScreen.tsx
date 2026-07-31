@@ -11,8 +11,10 @@ import {
   NO_VEHICLE,
   type CatalogPage,
   type CatalogQuery,
+  type CatalogRow,
   type PartPhoto,
 } from '../inventory/catalog';
+import { PartCard } from './PartCard';
 import { VehiclePicker } from './VehiclePicker';
 
 /**
@@ -50,17 +52,25 @@ export function CatalogScreen() {
   });
   const [search, setSearch] = useState('');
   const [picking, setPicking] = useState(false);
-  // Развёрнутая строка: снимки показываются под ней, как в кабинете.
-  // Одна за раз — две развёрнутые уводят таблицу вниз на два экрана.
-  const [opened, setOpened] = useState<number | null>(null);
+  // Снимки показываются по наведению, накладкой поверх таблицы.
+  // Не вставкой строки: вставленная сдвигает всё ниже, и строка, на которую
+  // человек вёл курсор, уезжает из-под него.
+  const [hovered, setHovered] = useState<number | null>(null);
+  // Где показывать накладку. Считается от миниатюры, а не задаётся стилями:
+  // таблица прокручивается по горизонтали, и absolute внутри неё обрезается
+  // контейнером — накладка превращалась в белую полоску сбоку.
+  const [at, setAt] = useState<{ left: number; top: number } | null>(null);
   const [photos, setPhotos] = useState<PartPhoto[]>([]);
+  // Карточка позиции — по нажатию на строку.
+  const [card, setCard] = useState<CatalogRow | null>(null);
 
-  function togglePhotos(id: number) {
-    if (opened === id) {
-      setOpened(null);
+  function showPhotos(id: number, target: HTMLElement) {
+    if (hovered === id) {
       return;
     }
-    setOpened(id);
+    const box = target.getBoundingClientRect();
+    setAt({ left: box.right + 8, top: box.top - 4 });
+    setHovered(id);
     setPhotos([]);
     // Ссылки подписанные и короткоживущие — берутся при показе, а не заранее
     // на все тридцать пять тысяч строк.
@@ -188,6 +198,18 @@ export function CatalogScreen() {
         </a>
       </div>
 
+      {/* Накладка со снимками — вне таблицы: внутри её обрезал бы контейнер
+          с горизонтальной прокруткой. */}
+      {hovered !== null && at !== null && photos.length > 0 && (
+        <div className="thumb-popover" style={{ left: at.left, top: at.top }}>
+          {photos.map((photo) => (
+            <img key={photo.photoId} src={photo.url} alt="" />
+          ))}
+        </div>
+      )}
+
+      {card !== null && <PartCard row={card} onClose={() => setCard(null)} />}
+
       {picking && (
         <VehiclePicker
           chosen={query.vehicle}
@@ -247,16 +269,15 @@ export function CatalogScreen() {
             <tbody>
               {page.rows.map((row) => (
                 <Fragment key={row.id}>
-                <tr>
+                <tr className="row--clickable" onClick={() => setCard(row)}>
                   {columns.map((column) => (
                     <td key={column.key} className={column.numeric ? 'num' : undefined}>
                       {column.image
                         ? column.image(row) !== null && (
-                            <button
-                              type="button"
-                              className="thumb-button"
-                              title="Показать снимки"
-                              onClick={() => togglePhotos(row.id)}
+                            <span
+                              className="thumb-hover"
+                              onMouseEnter={(e) => showPhotos(row.id, e.currentTarget)}
+                              onMouseLeave={() => setHovered(null)}
                             >
                               <img
                                 className="thumb"
@@ -264,7 +285,7 @@ export function CatalogScreen() {
                                 alt=""
                                 loading="lazy"
                               />
-                            </button>
+                            </span>
                           )
                         : column.value(row)}
                     </td>
@@ -278,21 +299,6 @@ export function CatalogScreen() {
                     </td>
                   ))}
                 </tr>
-                {opened === row.id && (
-                  <tr className="photo-row">
-                    <td colSpan={columns.length + warehouses.length}>
-                      {photos.length === 0 ? (
-                        <span className="muted">Снимков нет</span>
-                      ) : (
-                        <div className="photo-strip">
-                          {photos.map((photo) => (
-                            <img key={photo.photoId} src={photo.url} alt="" />
-                          ))}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                )}
                 </Fragment>
               ))}
             </tbody>

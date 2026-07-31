@@ -218,8 +218,25 @@ public final class BazonValueParser {
     public static List<String> parsePhotoUrls(String raw) {
         return parseList(raw).stream()
                 .map(url -> url.startsWith("//") ? "https:" + url : url)
+                .map(BazonValueParser::fullSize)
                 .toList();
     }
+
+    /**
+     * Ссылка на оригинал вместо уменьшенной копии.
+     *
+     * <p>CDN отдаёт по одному пути и превью, и оригинал: разница в отрезке
+     * {@code /rsz/<размер>/} перед {@code /pub/}. Превью — это 49×37,
+     * оригинал — 1020×770 (замерено). Перенести превью значит навсегда
+     * оставить клиента с картинками, по которым деталь не разглядеть,
+     * а исходники к тому времени останутся только в прежней системе.
+     */
+    private static String fullSize(String url) {
+        return RESIZED.matcher(url).replaceFirst("/pub/");
+    }
+
+    private static final java.util.regex.Pattern RESIZED =
+            java.util.regex.Pattern.compile("/rsz/[^/]+/pub/");
 
     public static String parseSteering(String raw) {
         return switch (normalize(raw)) {
