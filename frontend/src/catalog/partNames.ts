@@ -21,6 +21,8 @@ export interface UnmatchedName {
   categoryId: number | null;
   /** Сколько позиций заведено под этим написанием: что чинить раньше. */
   usageCount: number;
+  /** Заголовок одной из карточек — по нему видно, каким он станет. */
+  sampleTitle: string | null;
   createdAt: string;
 }
 

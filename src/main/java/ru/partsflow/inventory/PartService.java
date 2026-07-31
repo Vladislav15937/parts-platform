@@ -96,6 +96,35 @@ public class PartService {
         return new MatchResult(matched, updated);
     }
 
+    /**
+     * Заголовок одной карточки под каждым из наименований — образец для экрана
+     * разбора.
+     *
+     * <p>Сопоставление правит заголовки сотен карточек разом и назад
+     * не откатывается. Разница между «тросик ручного тормоза» → «Трос ручника»
+     * и «Знак аварийной остановки» → «Набор инструментов» видна только
+     * в получившемся заголовке, и увидеть его надо до нажатия, а не после.
+     * Кодом это не различить: «фара лев.» → «Фара» — тоже укорачивание,
+     * и там оно верное.
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, String> sampleTitles(List<Long> partNameIds) {
+        if (partNameIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, String> samples = new HashMap<>();
+        jdbc.query("""
+                SELECT DISTINCT ON (part_name_id) part_name_id, title
+                  FROM part
+                 WHERE part_name_id = ANY (?)
+                 ORDER BY part_name_id, id """,
+                rs -> {
+                    samples.put(rs.getLong("part_name_id"), rs.getString("title"));
+                },
+                (Object) partNameIds.toArray(Long[]::new));
+        return samples;
+    }
+
     /** @param updated сколько карточек получили категорию и эталонный заголовок */
     public record MatchResult(PartName partName, int updated) {
     }

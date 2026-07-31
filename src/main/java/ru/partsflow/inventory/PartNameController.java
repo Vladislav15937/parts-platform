@@ -72,8 +72,15 @@ public class PartNameController {
                                    @RequestParam(defaultValue = "20") int size) {
 
         var found = partNames.unmatched(page, size);
+        // Образец заголовка едет вместе со страницей: он нужен на каждой
+        // строке, и запрос на строку превратил бы разбор в двадцать обращений
+        // к базе на экран.
+        var samples = parts.sampleTitles(
+                found.getContent().stream().map(PartName::getId).toList());
         return new UnmatchedPage(
-                found.getContent().stream().map(NameView::of).toList(),
+                found.getContent().stream()
+                        .map(name -> NameView.of(name, samples.get(name.getId())))
+                        .toList(),
                 found.getTotalElements());
     }
 
@@ -173,13 +180,18 @@ public class PartNameController {
      *                   видно, что чинить раньше
      */
     public record NameView(Long id, String name, String matchStatus, Long partKindId,
-                           Long categoryId, int usageCount, Instant createdAt) {
+                           Long categoryId, int usageCount, Instant createdAt,
+                           String sampleTitle) {
 
         static NameView of(PartName partName) {
+            return of(partName, null);
+        }
+
+        static NameView of(PartName partName, String sampleTitle) {
             return new NameView(partName.getId(), partName.getName(),
                     partName.getMatchStatus().name(), partName.getPartKindId(),
                     partName.getCategoryId(), partName.getUsageCount(),
-                    partName.getCreatedAt());
+                    partName.getCreatedAt(), sampleTitle);
         }
     }
 
