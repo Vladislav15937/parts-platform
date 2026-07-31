@@ -45,6 +45,7 @@ public final class BazonImporter {
     private final DataSource dataSource;
     private final String schema;
     private final PartTitleGenerator titleGenerator = new PartTitleGenerator();
+    private final VehicleLookup brands = new VehicleLookup();
 
     public BazonImporter(DataSource dataSource, String schema) {
         if (schema == null || !SCHEMA.matcher(schema).matches()) {
@@ -240,8 +241,8 @@ public final class BazonImporter {
             try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + schema + """
                     .donor (vin, brand_id, year, color, mileage_km, note, supply_id, location,
                             steering, drive_type, transmission_type, transmission_model,
-                            color_code, equipment_code, legacy_code, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISMANTLED')
+                            color_code, equipment_code, legacy_code, model_id, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISMANTLED')
                     RETURNING id""")) {
 
                 forEachRow(donorsCsv, report, row -> {
@@ -277,10 +278,15 @@ public final class BazonImporter {
                         var years = BazonValueParser.parseYearRange(row.get("Год выпуска"));
 
                         ps.setString(1, row.get("VIN"));
-                        // brand_id указывает в общий каталог, которого пока нет:
-                        // марки приедут отдельной заливкой справочников, до тех пор
-                        // сохраняем текстовое имя в заметке и ставим 0.
-                        ps.setLong(2, 0);
+                        // Марка и модель ищутся в общем каталоге по имени.
+                        // Не нашлись — остаются пустыми: заводить свою марку
+                        // нельзя, через месяц в справочнике будут «Тойота»,
+                        // «тойота» и «Toyota». Раньше здесь стоял ноль —
+                        // ссылка на несуществующую марку, из-за которой
+                        // у переехавшего клиента не работали ни фильтр
+                        // по марке, ни применимость.
+                        Long brandId = brands.find(c, row.get("Марка"));
+                        setLong(ps, 2, brandId);
                         setInt(ps, 3, years == null ? null : years.from());
                         ps.setString(4, color == null ? null : color.name());
                         setInt(ps, 5, BazonValueParser.parseInteger(row.get("Пробег")));
@@ -294,6 +300,8 @@ public final class BazonImporter {
                         ps.setString(13, color == null ? null : color.code());
                         ps.setString(14, row.get("Комплектация"));
                         ps.setString(15, number.number());
+                        setLong(ps, 16, brandId == null
+                                ? null : brands.findModel(c, brandId, row.get("Модель")));
 
                         ids.put(number.number(), firstLong(ps));
                         report.count("доноров");
@@ -305,6 +313,52 @@ public final class BazonImporter {
             c.commit();
         }
         return ids;
+    }
+
+    /**
+     * Поиск марки и модели в общем каталоге.
+     *
+     * <p>С памятью: у клиента десяток марок на тысячу машин, и ходить в базу
+     * за каждой строкой выгрузки незачем. Ненайденное запоминается тоже —
+     * иначе марка, которой нет в дереве, стоит запроса на каждой машине.
+     *
+     * <p>Сравнение по имени без учёта регистра и пробелов: в выгрузке
+     * встречается и «Toyota», и «TOYOTA», и «Toyota ».
+     */
+    private static final class VehicleLookup {
+
+        private final Map<String, Long> byBrand = new HashMap<>();
+        private final Map<String, Long> byModel = new HashMap<>();
+
+        Long find(Connection c, String name) throws SQLException {
+            if (name == null || name.isBlank()) {
+                return null;
+            }
+            String key = name.strip().toLowerCase();
+            if (byBrand.containsKey(key)) {
+                return byBrand.get(key);
+            }
+            Long id = selectId(c,
+                    "SELECT id FROM catalog.brand WHERE lower(btrim(name)) = ?", key);
+            byBrand.put(key, id);
+            return id;
+        }
+
+        Long findModel(Connection c, long brandId, String name) throws SQLException {
+            if (name == null || name.isBlank()) {
+                return null;
+            }
+            String key = brandId + "/" + name.strip().toLowerCase();
+            if (byModel.containsKey(key)) {
+                return byModel.get(key);
+            }
+            Long id = selectId(c, """
+                    SELECT id FROM catalog.model
+                     WHERE brand_id = ? AND lower(btrim(name)) = ?""",
+                    brandId, name.strip().toLowerCase());
+            byModel.put(key, id);
+            return id;
+        }
     }
 
     /**

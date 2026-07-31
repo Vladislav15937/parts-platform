@@ -42,6 +42,7 @@ class BazonImporterTest extends PostgresTestBase {
     private static final String HEADER = "t_000079";
     private static final String NAMES = "t_000080";
     private static final String BAD_ROW = "t_000081";
+    private static final String UNKNOWN = "t_000082";
 
     @Autowired
     private DataSource dataSource;
@@ -54,7 +55,7 @@ class BazonImporterTest extends PostgresTestBase {
 
     @BeforeAll
     static void migrate() {
-        provisionTenants(IMPORT, REPEAT, HEADER, NAMES, BAD_ROW);
+        provisionTenants(IMPORT, REPEAT, HEADER, NAMES, BAD_ROW, UNKNOWN);
     }
 
     @Test
@@ -80,6 +81,44 @@ class BazonImporterTest extends PostgresTestBase {
         assertThat(reservedOf(IMPORT, "A-100")).isEqualByComparingTo("1");
 
         assertThat(report.problems()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Марка и модель берутся из общего каталога, а не выдумываются")
+    void vehicleComesFromCatalog() throws Exception {
+        importFixture(IMPORT);
+
+        // Раньше здесь стоял ноль — ссылка на марку, которой в каталоге нет
+        // вовсе. Внешнего ключа не было, база пропускала, и у переехавшего
+        // клиента не работали ни фильтр по марке, ни применимость.
+        var vehicle = jdbc.queryForMap("""
+                SELECT b.name AS brand, m.name AS model
+                  FROM %s.donor d
+                  JOIN catalog.brand b ON b.id = d.brand_id
+                  LEFT JOIN catalog.model m ON m.id = d.model_id
+                 WHERE d.legacy_code = 'Д-1'""".formatted(IMPORT));
+
+        assertThat(vehicle.get("brand")).isEqualTo("Toyota");
+        assertThat(vehicle.get("model")).isEqualTo("Camry");
+    }
+
+    @Test
+    @DisplayName("Неизвестная марка оставляет поле пустым, а не выдумывает своё")
+    void unknownBrandStaysEmpty() throws Exception {
+        Path donors = write("donors.csv", """
+                "Номер донора";"Марка";"Модель";"Год выпуска";"VIN";"Поставка";"Статус";\
+                "Цвет";"Пробег";"Руль";"Привод";"Тип КПП";"Модель КПП";"Комплектация"
+                "Д-9";"Марка-которой-нет";"Модель-которой-нет";"2006";"VIN9";"";"Разбор";\
+                "";"";"";"";"";"";""
+                """);
+
+        new BazonImporter(dataSource, UNKNOWN).importAll(donors, catalogFixture());
+
+        // Завести свою марку вместо ненайденной нельзя: через месяц
+        // в справочнике будут «Тойота», «тойота» и «Toyota».
+        assertThat(jdbc.queryForObject(
+                "SELECT brand_id FROM %s.donor WHERE legacy_code = 'Д-9'".formatted(UNKNOWN),
+                Long.class)).isNull();
     }
 
     @Test
