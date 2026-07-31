@@ -57,6 +57,13 @@ public final class BazonCsvReader implements AutoCloseable {
         }
     }
 
+    /**
+     * Есть ли в заголовке названная колонка. По ней узнают свою выгрузку.
+     */
+    public boolean has(String column) {
+        return columnIndex.containsKey(column.trim());
+    }
+
     public List<String> header() {
         return header;
     }

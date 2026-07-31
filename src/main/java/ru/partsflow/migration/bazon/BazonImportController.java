@@ -65,6 +65,8 @@ public class BazonImportController {
 
         requireFile(donors, "выгрузка машин");
         requireFile(catalog, "выгрузка товаров");
+        requireBazonExport(donors, "выгрузка машин", "Номер донора");
+        requireBazonExport(catalog, "выгрузка товаров", "Номер товара");
 
         // Схема берётся из сессии, как и везде: имя арендатора в запросе
         // означало бы заливку чужого склада по подставленному номеру.
@@ -147,6 +149,38 @@ public class BazonImportController {
             // Не роняем импорт из-за неудалённого временного файла: склад
             // уже перенесён, а каталог чистится системой.
             path.toFile().deleteOnExit();
+        }
+    }
+
+
+    /**
+     * Узнаёт свою выгрузку по опорной колонке.
+     *
+     * <p><b>Чужой формат обязан быть отвергнут, а не «частично загружен».</b>
+     * Выгрузка Bazon — это CSV в windows-1251, и таблица .xlsx, поданная сюда
+     * по ошибке, читается как текст: заголовка нет, строки разбираются
+     * как попало, и часть из них доезжает до склада призрачными карточками
+     * «Без наименования». Поймано прогоном инструкции по подключению —
+     * пятнадцать таких карточек на двухстах настоящих.
+     *
+     * <p>Проверяется одна колонка, а не весь заголовок: набор колонок
+     * у клиента настраивается в кабинете площадки, и требовать их все значило
+     * бы отбивать законные выгрузки. Опорная есть всегда — по ней товар
+     * и машина узнаются при повторе.
+     */
+    private static void requireBazonExport(MultipartFile file, String what, String column) {
+        try (var in = file.getInputStream()) {
+            if (!new BazonCsvReader(in).has(column)) {
+                throw new IllegalArgumentException(
+                        "Это не " + what + ": в заголовке нет колонки «" + column
+                                + "». Выгрузка прежней системы — это CSV, а не таблица Excel");
+            }
+        } catch (java.io.IOException e) {
+            throw new IllegalArgumentException("Не удалось прочитать " + what, e);
+        } catch (IllegalArgumentException e) {
+            // Пустой файл и нечитаемый заголовок приходят отсюда же.
+            throw new IllegalArgumentException(
+                    "Это не " + what + ": " + e.getMessage(), e);
         }
     }
 

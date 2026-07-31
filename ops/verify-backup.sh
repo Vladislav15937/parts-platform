@@ -10,12 +10,24 @@
 # Восстановление идёт в ОТДЕЛЬНУЮ базу, а не в ту же под другим именем схемы:
 # pg_restore кладёт схему туда, откуда её сняли, переименовать на лету нечем.
 # Заодно это ближе к настоящему восстановлению — на чистый кластер.
+#
+# Файл окружения выбирается переменной ENV_FILE — одинаково у всех трёх
+# скриптов. Позиция аргумента у них разная (набор, схема), и запоминать,
+# какой по счёту здесь env, — ровно тот способ однажды снять бэкап одной
+# ячейки, а проверить другой:
+#
+#   ENV_FILE=.env.cell02 ops/backup.sh
+#   ENV_FILE=.env.cell02 ops/verify-backup.sh
+#
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SET_DIR="${1:-$(find "${BACKUP_DIR:-./backups/${APP_CELL:-cell01}}" -maxdepth 1 -type d -name '20*' | sort | tail -1)}"
-ENV_FILE="${2:-.env}"
+ENV_FILE="${2:-${ENV_FILE:-.env}}"
 [ -f "$ENV_FILE" ] && set -a && . "$ENV_FILE" && set +a
+
+# Каталог набора берётся ПОСЛЕ чтения окружения: APP_CELL приезжает оттуда,
+# и посчитанный раньше путь указывал бы на набор чужой ячейки.
+SET_DIR="${1:-$(find "${BACKUP_DIR:-./backups/${APP_CELL:-cell01}}" -maxdepth 1 -type d -name '20*' | sort | tail -1)}"
 
 COMPOSE="docker compose -f docker-compose.prod.yml --env-file $ENV_FILE"
 DB_USER="${DB_USER:?укажите DB_USER}"
