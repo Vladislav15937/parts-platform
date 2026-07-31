@@ -2,6 +2,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
+import { allKinds } from '../catalog/partNames';
+import type { PartKind } from '../catalog/partNames';
+import { loadCached, refresh } from '../catalog/vehicles';
+import type { Brand } from '../catalog/vehicles';
 import {
   CONDITIONS,
   countMatching,
@@ -32,6 +36,11 @@ import {
 export function FeedsScreen() {
   const [feeds, setFeeds] = useState<Feed[] | null>(null);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
+  // Справочники берутся целиком: видов сто семьдесят восемь, марок триста
+  // восемь. Это не четыре тысячи моделей — те в отборе не участвуют вовсе,
+  // и городить ради этого поиск с сервера незачем.
+  const [kinds, setKinds] = useState<PartKind[]>([]);
+  const [brands, setBrands] = useState<Brand[]>([]);
   const [error, setError] = useState('');
 
   const load = useCallback(() => {
@@ -50,6 +59,14 @@ export function FeedsScreen() {
       .then(setWarehouses)
       // Молча: без списка складов отбор по цене всё ещё работает.
       .catch(() => setWarehouses([]));
+
+    void allKinds().then(setKinds).catch(() => setKinds([]));
+    // Марки уже лежат в кэше справочника машин — он предзагружен ради
+    // приёмки. Второй запрос за тем же был бы данью привычке.
+    void loadCached()
+      .then((cached) => (cached ? cached.brands : refresh().then((v) => v.brands)))
+      .then(setBrands)
+      .catch(() => setBrands([]));
   }, []);
 
   if (feeds === null) {
@@ -78,6 +95,8 @@ export function FeedsScreen() {
             key={feed.id}
             feed={feed}
             warehouses={warehouses}
+            kinds={kinds}
+            brands={brands}
             onChanged={load}
             onError={setError}
           />
@@ -90,35 +109,44 @@ export function FeedsScreen() {
 function FeedCard({
   feed,
   warehouses,
+  kinds,
+  brands,
   onChanged,
   onError,
 }: {
   feed: Feed;
   warehouses: Warehouse[];
+  kinds: PartKind[];
+  brands: Brand[];
   onChanged: () => void;
   onError: (message: string) => void;
 }) {
-  const [priceFrom, setPriceFrom] = useState(feed.priceFrom ?? '');
-  const [priceTo, setPriceTo] = useState(feed.priceTo ?? '');
+  // Через String: с сервера цена приходит числом, и `?? ''` оставил бы
+  // в состоянии число — а поле правится как строка.
+  const [priceFrom, setPriceFrom] = useState(
+    feed.priceFrom === null ? '' : String(feed.priceFrom));
+  const [priceTo, setPriceTo] = useState(
+    feed.priceTo === null ? '' : String(feed.priceTo));
   const [conditions, setConditions] = useState<string[]>(feed.conditions);
   const [warehouseIds, setWarehouseIds] = useState<number[]>(feed.warehouseIds);
   const [link, setLink] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState<number | null>(null);
 
-  // Списки видов и марок правятся не здесь: выбор из справочника
-  // на четыре с половиной тысячи моделей — это отдельный экран, и до него
-  // отбор задаётся через API. Показываем то, что задано, чтобы владелец
-  // хотя бы видел, почему прайс короче склада.
+  const [kindIds, setKindIds] = useState<number[]>(feed.kindIds);
+  const [kindsExcluded, setKindsExcluded] = useState(feed.kindsExcluded);
+  const [brandIds, setBrandIds] = useState<number[]>(feed.brandIds);
+  const [brandsExcluded, setBrandsExcluded] = useState(feed.brandsExcluded);
+
   const current = (): FeedFilter => ({
     priceFrom: priceFrom.trim() === '' ? null : priceFrom.trim(),
     priceTo: priceTo.trim() === '' ? null : priceTo.trim(),
     conditions,
     warehouseIds,
-    kindIds: feed.kindIds,
-    kindsExcluded: feed.kindsExcluded,
-    brandIds: feed.brandIds,
-    brandsExcluded: feed.brandsExcluded,
+    kindIds,
+    kindsExcluded,
+    brandIds,
+    brandsExcluded,
   });
 
   async function save() {
@@ -221,6 +249,24 @@ function FeedCard({
         </fieldset>
       )}
 
+      <Picker
+        title="Наименования"
+        options={kinds.map((k) => ({ id: k.id, name: k.name }))}
+        chosen={kindIds}
+        excluded={kindsExcluded}
+        onChosen={setKindIds}
+        onExcluded={setKindsExcluded}
+      />
+
+      <Picker
+        title="Марки"
+        options={brands.map((b) => ({ id: b.id, name: b.nameRu ?? b.name }))}
+        chosen={brandIds}
+        excluded={brandsExcluded}
+        onChosen={setBrandIds}
+        onExcluded={setBrandsExcluded}
+      />
+
       <div className="filter-row">
         <button type="button" className="button--ghost" disabled={busy}
                 onClick={() => void count()}>
@@ -254,6 +300,116 @@ function FeedCard({
         </button>
       </details>
     </li>
+  );
+}
+
+/**
+ * Выбор из справочника: что попадает в выгрузку или что из неё исключено.
+ *
+ * <p><b>Направление названо словом, а не галочкой «инвертировать».</b>
+ * «Только эти» и «кроме этих» — противоположные решения, и перепутать их
+ * значит выгрузить ровно то, что выгружать не хотели.
+ *
+ * <p>Список показывается не весь: сто семьдесят восемь строк подряд никто
+ * не читает. Поиск идёт по уже загруженному справочнику — он статичный
+ * и маленький, запрос на каждую букву тут был бы данью привычке.
+ *
+ * <p>Выбранное показывается отдельно и всегда: иначе, стерев поиск, владелец
+ * перестаёт видеть, что вообще выбрано, — а это и есть причина, по которой
+ * прайс короче склада.
+ */
+function Picker({
+  title,
+  options,
+  chosen,
+  excluded,
+  onChosen,
+  onExcluded,
+}: {
+  title: string;
+  options: Array<{ id: number; name: string }>;
+  chosen: number[];
+  excluded: boolean;
+  onChosen: (ids: number[]) => void;
+  onExcluded: (value: boolean) => void;
+}) {
+  const [query, setQuery] = useState('');
+
+  const found = query.trim() === ''
+    ? []
+    : options
+        .filter((o) => o.name.toLowerCase().includes(query.trim().toLowerCase()))
+        .slice(0, 12);
+
+  const chosenNames = chosen.map((id) => ({
+    id,
+    // Название могло исчезнуть из справочника между релизами: показываем
+    // хотя бы номер, а не пустую строку, иначе выбранное выглядит пропавшим.
+    name: options.find((o) => o.id === id)?.name ?? `№ ${id}`,
+  }));
+
+  return (
+    <fieldset className="picker">
+      <legend>{title}</legend>
+
+      {chosen.length > 0 && (
+        <label className="field">
+          Направление
+          <select
+            value={excluded ? 'exclude' : 'include'}
+            onChange={(e) => onExcluded(e.target.value === 'exclude')}
+          >
+            <option value="include">только эти</option>
+            <option value="exclude">все, кроме этих</option>
+          </select>
+        </label>
+      )}
+
+      <label className="field">
+        Найти
+        <input
+          value={query}
+          placeholder="начните вводить"
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </label>
+
+      {found.length > 0 && (
+        <ul className="picker__found">
+          {found.map((option) => (
+            <li key={option.id}>
+              <button
+                type="button"
+                className="button--ghost"
+                disabled={chosen.includes(option.id)}
+                onClick={() => onChosen([...chosen, option.id])}
+              >
+                {option.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {chosen.length === 0 ? (
+        <p className="muted">не ограничено</p>
+      ) : (
+        <ul className="picker__chosen">
+          {chosenNames.map((option) => (
+            <li key={option.id}>
+              {option.name}
+              <button
+                type="button"
+                className="button--ghost"
+                onClick={() => onChosen(chosen.filter((id) => id !== option.id))}
+              >
+                убрать
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </fieldset>
   );
 }
 

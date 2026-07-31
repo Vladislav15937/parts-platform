@@ -29,8 +29,15 @@ export interface Feed {
   plaintextSecret: boolean;
   hasFeed: boolean;
   lastError: string | null;
-  priceFrom: string | null;
-  priceTo: string | null;
+  /**
+   * Цена приходит числом, а не строкой: на сервере это {@code numeric},
+   * и Jackson отдаёт его числом JSON. Тип, объявленный строкой, компилятор
+   * не поправит — он верит объявлению, — а первый же {@code .trim()} упадёт
+   * уже в браузере. Так и вышло: кнопки отбора молча отвечали «не удалось»,
+   * потому что падали до запроса.
+   */
+  priceFrom: number | null;
+  priceTo: number | null;
   conditions: string[];
   warehouseIds: number[];
   kindIds: number[];
@@ -39,6 +46,7 @@ export interface Feed {
   brandsExcluded: boolean;
 }
 
+/** Отправляем строками: сервер разберёт их в numeric сам. */
 export interface FeedFilter {
   priceFrom: string | null;
   priceTo: string | null;

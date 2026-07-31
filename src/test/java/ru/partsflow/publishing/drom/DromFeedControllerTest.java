@@ -286,6 +286,25 @@ class DromFeedControllerTest extends PostgresTestBase {
                 .contains("Фара левая Camry");
     }
 
+    @Test
+    @DisplayName("Справочник видов отдаётся целиком, а не поиском")
+    void kindsAreServedWhole() throws Exception {
+        // Экрану отбора нужны названия уже выбранных видов, а поиск
+        // по идентификатору не ищет: выбранное показывалось бы пустой строкой.
+        String body = mvc.perform(get("/api/part-names/kinds/all").session(login("owner")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // Справочник наполняется миграцией: 178 эталонов. Проверяем, что
+        // ответ не обрезан пределом поиска, а не точное число — оно растёт
+        // с релизами.
+        long rows = body.chars().filter(c -> c == '{').count();
+        assertThat(rows)
+                .as("справочник видов пришёл обрезанным — выбранное в отборе "
+                        + "покажется номером вместо названия")
+                .isGreaterThan(100);
+    }
+
     /** Кусок прайса про одну позицию: остальные предложения не мешают смотреть. */
     private String offerOf(String feed, String title) {
         int at = feed.indexOf(title);

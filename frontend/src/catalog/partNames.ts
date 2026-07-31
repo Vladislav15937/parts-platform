@@ -51,6 +51,18 @@ export function suggestionsFor(partNameId: number): Promise<PartKind[]> {
  * <p>Подсказки идут по похожести строк, а «запаска» не похожа на «Колесо
  * запасное» ничем. Без поиска разбор встанет на первом же таком написании.
  */
+/**
+ * Весь справочник видов деталей.
+ *
+ * <p>Отдельно от поиска: экрану отбора выгрузки нужны названия уже выбранных
+ * видов, а поиск по идентификатору не ищет. Строк сто семьдесят восемь,
+ * справочник меняется с релизом — брать его целиком дешевле, чем гонять
+ * запрос на каждую букву.
+ */
+export function allKinds(): Promise<PartKind[]> {
+  return request<PartKind[]>('/api/part-names/kinds/all');
+}
+
 export function searchKinds(query: string): Promise<PartKind[]> {
   return request<PartKind[]>(`/api/part-names/kinds?q=${encodeURIComponent(query)}`);
 }
