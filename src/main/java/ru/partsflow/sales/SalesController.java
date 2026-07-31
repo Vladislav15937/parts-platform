@@ -53,10 +53,13 @@ public class SalesController {
 
     private final SalesService sales;
     private final PartService parts;
+    private final ru.partsflow.platform.security.MemberService members;
 
-    public SalesController(SalesService sales, PartService parts) {
+    public SalesController(SalesService sales, PartService parts,
+                           ru.partsflow.platform.security.MemberService members) {
         this.sales = sales;
         this.parts = parts;
+        this.members = members;
     }
 
     /**
@@ -239,9 +242,42 @@ public class SalesController {
     }
 
     /** История документа: кто что сделал и когда. */
+    /**
+     * История документа: кто и что сделал со сделкой.
+     *
+     * <p>Имена сотрудников идут одним запросом на всю выдачу — как
+     * и наименования в строках. Без имени строка читается «автор 3»,
+     * а разбирают историю через недели, когда по номеру никто никого
+     * не вспомнит.
+     */
+    /**
+     * Ссылка на сделку для клиента: продавец отправляет её сам.
+     *
+     * <p>Своего отправителя SMS или Telegram нет намеренно — это договор
+     * с провайдером и деньги, а интерфейс, написанный раньше договора,
+     * повторит форму воображаемого провайдера. Ссылка работает в любом канале
+     * и не требует ничего.
+     */
+    @PostMapping("/{id}/share")
+    @PreAuthorize(SELLS)
+    public ShareView share(@PathVariable Long id) {
+        Deal deal = sales.share(id);
+        // Код компании в адресе: он говорит, у какого арендатора искать,
+        // а доступ открывает токен. Сам по себе код не даёт ничего —
+        // то же устройство, что у ссылки на прайс площадки.
+        return new ShareView("/s/%s/%s".formatted(sales.companyCode(), deal.getShareToken()),
+                deal.getShareExpires());
+    }
+
+    public record ShareView(String path, Instant expires) {
+    }
+
     @GetMapping("/{id}/history")
     public List<HistoryView> history(@PathVariable Long id) {
-        return sales.history(id).stream().map(HistoryView::of).toList();
+        List<DocumentEvent> events = sales.history(id);
+        Map<Long, String> names = members.namesOf(
+                events.stream().map(DocumentEvent::getAuthorId).toList());
+        return events.stream().map(event -> HistoryView.of(event, names)).toList();
     }
 
     /**
@@ -448,11 +484,19 @@ public class SalesController {
         }
     }
 
-    public record HistoryView(String eventType, String message, Long authorId, Instant createdAt) {
+    /**
+     * @param authorName пусто — действие сделала система (робот повторной
+     *                   доставки, накат) либо сотрудника удалили. «Автор 3»
+     *                   вместо этого не говорит ничего
+     */
+    public record HistoryView(String eventType, String message, Long authorId,
+                              String authorName, Instant createdAt) {
 
-        static HistoryView of(DocumentEvent event) {
+        static HistoryView of(DocumentEvent event, Map<Long, String> names) {
             return new HistoryView(event.getEventType(), event.getMessage(),
-                    event.getAuthorId(), event.getCreatedAt());
+                    event.getAuthorId(),
+                    event.getAuthorId() == null ? null : names.get(event.getAuthorId()),
+                    event.getCreatedAt());
         }
     }
 }

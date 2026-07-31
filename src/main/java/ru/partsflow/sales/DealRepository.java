@@ -56,4 +56,17 @@ public interface DealRepository extends JpaRepository<Deal, Long> {
             ORDER BY d.replyDeadline NULLS LAST, d.id
             """)
     List<Deal> findAwaitingReply();
+
+    /**
+     * Сделки с действующей ссылкой.
+     *
+     * <p>Просроченные не отдаются вовсе: ссылка, которую однажды переслали
+     * в переписке, после срока перестаёт показывать склад. Список короткий —
+     * ссылку выдают под конкретный разговор с клиентом.
+     */
+    @Query("""
+            SELECT d FROM Deal d
+            WHERE d.shareToken IS NOT NULL AND d.shareExpires > :now
+            """)
+    List<Deal> findShared(@Param("now") Instant now);
 }

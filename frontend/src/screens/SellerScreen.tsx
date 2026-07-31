@@ -7,6 +7,8 @@ import {
   cancelDeal,
   createCustomer,
   createDeal,
+  historyOf,
+  shareDeal,
   receiveOrder,
   serviceKinds,
   dealSources,
@@ -23,6 +25,7 @@ import {
   transferItems,
 } from '../sales/sales';
 import type {
+  HistoryEntry,
   DealSource as DealSourceRow,
   ServiceLine,
   BasketLine,
@@ -549,6 +552,10 @@ function DealCard({
   const [picked, setPicked] = useState<number[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [docs, setDocs] = useState<ReturnDoc[]>([]);
+  // История подтягивается по раскрытию, а не с карточкой: на неё смотрят
+  // при разборе спора, а не при каждой продаже.
+  const [history, setHistory] = useState<HistoryEntry[] | null>(null);
+  const [share, setShare] = useState<string | null>(null);
 
   const reserved = transferable(deal);
   const issued = returnable(deal);
@@ -565,6 +572,10 @@ function DealCard({
     // Прежние возвраты по сделке: без них продавец оформит второй возврат
     // на ту же деталь и узнает об отказе сервера вместо ответа клиенту.
     void returnsOf(deal.id).then(setDocs).catch(() => setDocs([]));
+    // История — про прежнюю сделку: оставшись на экране, она приписала бы
+    // этой сделке чужие действия.
+    setHistory(null);
+    setShare(null);
     // Сообщение и отметки — про прежнюю сделку. Оставшись на экране чужой,
     // «Возврат №1 оформлен» читается как возврат по ней.
     setNotice(null);
@@ -692,6 +703,42 @@ function DealCard({
         />
       )}
 
+      <button type="button" className="button--ghost" onClick={() => void makeShare()}>
+        Ссылка клиенту
+      </button>
+      {share !== null && (
+        <p className="note">
+          {/* Полный адрес: продавец копирует его в переписку целиком,
+              а не собирает из куска и домена в голове. */}
+          {window.location.origin}{share}
+        </p>
+      )}
+
+      <details onToggle={(e) => e.currentTarget.open && void showHistory()}>
+        <summary>История документа</summary>
+        {history === null ? (
+          <p className="note">Загружаем…</p>
+        ) : history.length === 0 ? (
+          <p className="note">Записей нет.</p>
+        ) : (
+          <ul className="suggestions">
+            {history.map((entry, at) => (
+              <li key={at}>
+                {entry.message}
+                <span className="muted">
+                  {' · '}
+                  {/* Автор словом, а не номером: историю разбирают через
+                      недели, когда «автор 3» не говорит ничего. */}
+                  {entry.authorName ?? 'система'}
+                  {' · '}
+                  {new Date(entry.createdAt).toLocaleString('ru-RU')}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </details>
+
       {docs.length > 0 && (
         <>
           <h4>Возвраты по сделке</h4>
@@ -711,6 +758,25 @@ function DealCard({
       )}
     </>
   );
+
+  async function makeShare(): Promise<void> {
+    try {
+      setShare((await shareDeal(deal.id)).path);
+    } catch (cause) {
+      onError(describe(cause, 'Ссылка не выдана'));
+    }
+  }
+
+  async function showHistory(): Promise<void> {
+    if (history !== null) {
+      return;
+    }
+    try {
+      setHistory(await historyOf(deal.id));
+    } catch (cause) {
+      onError(describe(cause, 'История не загрузилась'));
+    }
+  }
 
   async function act(operation: () => Promise<unknown>): Promise<void> {
     try {

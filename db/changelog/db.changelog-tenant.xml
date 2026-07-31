@@ -46,6 +46,7 @@
     <include file="tenant/027-feed-filters.sql"        relativeToChangelogFile="true"/>
     <include file="tenant/028-deal-version.sql"        relativeToChangelogFile="true"/>
     <include file="tenant/029-feed-lists.sql"          relativeToChangelogFile="true"/>
+    <include file="tenant/030-deal-share.sql"          relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>
