@@ -172,6 +172,21 @@ public class ApiExceptionHandler {
     }
 
     /**
+     * Файл больше предела — 413, а не 500.
+     *
+     * <p>Владелец, переносящий склад, получал «внутреннюю ошибку» и не мог
+     * узнать, что дело в размере: ни в ответе, ни на экране про это ничего
+     * не было. Предел назван в сообщении — иначе следующий шаг непонятен.
+     */
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiError> tooLarge(
+            org.springframework.web.multipart.MaxUploadSizeExceededException e) {
+        log.warn("Загрузка превысила предел", e);
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(new ApiError(
+                "Файл больше допустимого: предел — 64 МБ на файл и 128 МБ на запрос"));
+    }
+
+    /**
      * Несуществующий адрес — 404, а не 500.
      *
      * <p>Обработчик {@code Exception} иначе съедает и это: опечатка в пути
