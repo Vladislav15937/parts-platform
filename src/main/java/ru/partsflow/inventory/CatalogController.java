@@ -39,12 +39,17 @@ public class CatalogController {
                      @RequestParam(defaultValue = "true") boolean reserved,
                      @RequestParam(defaultValue = "false") boolean missing,
                      @RequestParam(required = false) List<Long> warehouses,
+                     @RequestParam(required = false) Long brandId,
+                     @RequestParam(required = false) Long modelId,
+                     @RequestParam(required = false) String body,
+                     @RequestParam(required = false) String engine,
                      @RequestParam(defaultValue = "code") String sort,
                      @RequestParam(defaultValue = "true") boolean desc,
                      @RequestParam(defaultValue = "0") int page,
                      @RequestParam(defaultValue = "50") int size) {
 
         CatalogService.Page found = catalog.list(q, reserved, missing, warehouses,
+                new CatalogService.Vehicle(brandId, modelId, body, engine),
                 sort, desc, Math.max(page, 0), Math.min(Math.max(size, 1), MAX_SIZE));
 
         return new View(found.total(), catalog.warehouses(),
@@ -86,11 +91,21 @@ public class CatalogController {
      * <p>Разделитель — точка с запятой: Excel в русской локали разбирает
      * запятую как десятичный знак, и файл раскладывается по колонкам неверно.
      */
+    /** Машины, к которым на складе что-то есть, — для подбора по применимости. */
+    @GetMapping("/vehicles")
+    public List<CatalogService.VehicleOption> vehicles() {
+        return catalog.vehicles();
+    }
+
     @GetMapping("/export")
     public void export(@RequestParam(required = false) String q,
                        @RequestParam(defaultValue = "true") boolean reserved,
                        @RequestParam(defaultValue = "false") boolean missing,
                        @RequestParam(required = false) List<Long> warehouses,
+                       @RequestParam(required = false) Long brandId,
+                       @RequestParam(required = false) Long modelId,
+                       @RequestParam(required = false) String body,
+                       @RequestParam(required = false) String engine,
                        @RequestParam(defaultValue = "code") String sort,
                        @RequestParam(defaultValue = "true") boolean desc,
                        jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
@@ -109,7 +124,8 @@ public class CatalogController {
         out.write('\uFEFF');
         writeRow(out, CatalogService.exportHeader(found));
 
-        catalog.export(q, reserved, missing, warehouses, sort, desc, found,
+        catalog.export(q, reserved, missing, warehouses,
+                new CatalogService.Vehicle(brandId, modelId, body, engine), sort, desc, found,
                 cells -> writeRow(out, cells));
         out.flush();
     }

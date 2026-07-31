@@ -52,8 +52,45 @@ export interface CatalogPage {
   rows: CatalogRow[];
 }
 
+/** Машина, к которой подбирают деталь. Пустая марка — подбора нет. */
+export interface VehicleFilter {
+  brandId: number | null;
+  brandName: string;
+  modelId: number | null;
+  modelName: string;
+  body: string;
+  engine: string;
+}
+
+export const NO_VEHICLE: VehicleFilter = {
+  brandId: null, brandName: '', modelId: null, modelName: '', body: '', engine: '',
+};
+
+/** Подбор словами — то, что видно на экране рядом с кнопкой. */
+export function vehicleLabel(vehicle: VehicleFilter): string {
+  return [vehicle.brandName, vehicle.modelName, vehicle.body, vehicle.engine]
+    .filter((part) => part !== '')
+    .join(' ');
+}
+
+/** Разобранная машина: марка, модель, кузов, двигатель и сколько от неё лежит. */
+export interface VehicleOption {
+  brandId: number;
+  brand: string;
+  modelId: number | null;
+  model: string | null;
+  body: string | null;
+  engine: string | null;
+  parts: number;
+}
+
+export function loadVehicleOptions(): Promise<VehicleOption[]> {
+  return request<VehicleOption[]>('/api/parts/catalog/vehicles');
+}
+
 export interface CatalogQuery {
   q: string;
+  vehicle: VehicleFilter;
   reserved: boolean;
   missing: boolean;
   warehouses: number[];
@@ -71,6 +108,17 @@ export interface CatalogQuery {
  * страницы файл такого размера её и уронит.
  */
 export function exportUrl(query: CatalogQuery): string {
+  return `/api/parts/catalog/export?${paramsOf(query).toString()}`;
+}
+
+/**
+ * Общие параметры страницы и выгрузки.
+ *
+ * <p>Одни на оба: скачанный файл обязан совпасть с тем, что на экране, —
+ * ради этой сверки его и качают, и разъехавшиеся наборы параметров
+ * разошлись бы молча.
+ */
+function paramsOf(query: CatalogQuery): URLSearchParams {
   const params = new URLSearchParams({
     reserved: String(query.reserved),
     missing: String(query.missing),
@@ -83,24 +131,25 @@ export function exportUrl(query: CatalogQuery): string {
   for (const id of query.warehouses) {
     params.append('warehouses', String(id));
   }
-  return `/api/parts/catalog/export?${params.toString()}`;
+  if (query.vehicle.brandId !== null) {
+    params.set('brandId', String(query.vehicle.brandId));
+    if (query.vehicle.modelId !== null) {
+      params.set('modelId', String(query.vehicle.modelId));
+    }
+    if (query.vehicle.body !== '') {
+      params.set('body', query.vehicle.body);
+    }
+    if (query.vehicle.engine !== '') {
+      params.set('engine', query.vehicle.engine);
+    }
+  }
+  return params;
 }
 
 export function loadCatalog(query: CatalogQuery): Promise<CatalogPage> {
-  const params = new URLSearchParams({
-    reserved: String(query.reserved),
-    missing: String(query.missing),
-    sort: query.sort,
-    desc: String(query.desc),
-    page: String(query.page),
-    size: String(query.size),
-  });
-  if (query.q.trim() !== '') {
-    params.set('q', query.q.trim());
-  }
-  for (const id of query.warehouses) {
-    params.append('warehouses', String(id));
-  }
+  const params = paramsOf(query);
+  params.set('page', String(query.page));
+  params.set('size', String(query.size));
   return request<CatalogPage>(`/api/parts/catalog?${params.toString()}`);
 }
 

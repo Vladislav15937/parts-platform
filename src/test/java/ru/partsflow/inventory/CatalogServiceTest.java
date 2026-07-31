@@ -34,6 +34,9 @@ class CatalogServiceTest extends PostgresTestBase {
     @Autowired
     private JdbcTemplate jdbc;
 
+    /** Марка из поставляемого справочника: свою заводить нельзя, дерево из миграции. */
+    private Long BRAND;
+
     @Autowired
     private TransactionTemplate transactionTemplate;
 
@@ -46,6 +49,8 @@ class CatalogServiceTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
+        BRAND = jdbc.queryForObject(
+                "SELECT id FROM catalog.brand WHERE name = 'Toyota'", Long.class);
         // Журнал движений неизменяем — его нельзя чистить между тестами,
         // и это правильно: удаление движения означало бы остаток, взявшийся
         // ниоткуда. Поэтому каждый тест заводит свои позиции с уникальными
@@ -103,7 +108,7 @@ class CatalogServiceTest extends PostgresTestBase {
         long before = inTenant(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM part", Long.class));
 
-        var page = inTenant(() -> catalog.list(null, true, false, List.of(),
+        var page = inTenant(() -> catalog.list(null, true, false, List.of(), null,
                 "id; DROP TABLE part", false, 0, 50));
 
         // Запрос отработал, таблица на месте: неизвестное имя стало
@@ -120,7 +125,7 @@ class CatalogServiceTest extends PostgresTestBase {
 
         List<List<String>> rows = new java.util.ArrayList<>();
         inTenant(() -> {
-            catalog.export(null, true, false, List.of(), "code", true,
+            catalog.export(null, true, false, List.of(), null, "code", true,
                     catalog.warehouses(), rows::add);
             return null;
         });
@@ -141,7 +146,97 @@ class CatalogServiceTest extends PostgresTestBase {
     }
 
     private CatalogService.Page catalog(boolean reserved, boolean missing) {
-        return inTenant(() -> catalog.list(null, reserved, missing, List.of(), "code", true, 0, 50));
+        return inTenant(() -> catalog.list(null, reserved, missing, List.of(), null, "code", true, 0, 50));
+    }
+
+    @Test
+    void vehicleFilterFindsPartsByTheirDonor() {
+        Long prius = donor("Prius", "NHW20", "1NZ-FXE");
+        Long corolla = donor("Corolla", "ZZE120", "3ZZ-FE");
+        onDonor("Фара Prius", prius);
+        onDonor("Фара Corolla", corolla);
+
+        assertThat(titles(byVehicle(BRAND, model("Prius"), null, null)))
+                .containsExactly("Фара Prius");
+    }
+
+    /**
+     * Переехавшему клиенту применимость никто не заполнял: у него на складе
+     * двадцать шесть тысяч деталей с машиной и ноль строк применимости.
+     * Подбор, смотрящий только в применимость, показал бы ему пустоту.
+     */
+    @Test
+    void vehicleFilterAlsoUsesDeclaredApplicability() {
+        Long corolla = donor("Corolla", "ZZE120", "3ZZ-FE");
+        Long universal = onDonor("Стартер подходящий и к Vitz", corolla);
+        Long vitz = model("Vitz");
+        inTenant(() -> jdbc.update(
+                "INSERT INTO part_applicability (part_id, brand_id, model_id) VALUES (?, ?, ?)",
+                universal, BRAND, vitz));
+
+        assertThat(titles(byVehicle(BRAND, vitz, null, null)))
+                .containsExactly("Стартер подходящий и к Vitz");
+    }
+
+    /**
+     * Кузов сравнивается по вхождению: у одной машины в поле «ACV40»,
+     * у другой той же модели — «ACV40L», и точное равенство отсекло бы вторую.
+     */
+    @Test
+    void bodyAndEngineNarrowByPart() {
+        Long first = donor("Mark II", "GX100", "1G-FE");
+        Long second = donor("Mark II", "JZX110 Tourer V", "1JZ-GTE");
+        onDonor("Фара GX100", first);
+        onDonor("Фара JZX110", second);
+        Long markTwo = model("Mark II");
+
+        assertThat(titles(byVehicle(BRAND, markTwo, "GX100", null)))
+                .containsExactly("Фара GX100");
+        assertThat(titles(byVehicle(BRAND, markTwo, null, "1JZ")))
+                .containsExactly("Фара JZX110");
+        // В поле у клиента «JZX110 Tourer V», а ищут по «JZX110»: точное
+        // равенство не нашло бы ничего, а деталь подходит.
+        assertThat(titles(byVehicle(BRAND, markTwo, "JZX110", null)))
+                .containsExactly("Фара JZX110");
+    }
+
+    @Test
+    void vehicleListCountsPartsOnTheShelf() {
+        Long rav4 = donor("RAV4", "ACA31", "2AZ-FE");
+        onDonor("Фара RAV4", rav4);
+        onDonor("Бампер RAV4", rav4);
+
+        assertThat(inTenant(catalog::vehicles))
+                .filteredOn(option -> "ACA31".equals(option.body()))
+                .singleElement()
+                .satisfies(option -> {
+                    assertThat(option.model()).isEqualTo("RAV4");
+                    assertThat(option.parts()).isEqualTo(2);
+                });
+    }
+
+    private CatalogService.Page byVehicle(Long brandId, Long modelId, String body, String engine) {
+        return inTenant(() -> catalog.list(null, true, false, List.of(),
+                new CatalogService.Vehicle(brandId, modelId, body, engine), "code", true, 0, 50));
+    }
+
+    private Long model(String name) {
+        return jdbc.queryForObject(
+                "SELECT id FROM catalog.model WHERE brand_id = ? AND name = ? LIMIT 1",
+                Long.class, BRAND, name);
+    }
+
+    private Long donor(String modelName, String body, String engine) {
+        return inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO donor (brand_id, model_id, body_code, engine_code, status)
+                VALUES (?, ?, ?, ?, 'DISMANTLING') RETURNING id""",
+                Long.class, BRAND, model(modelName), body, engine));
+    }
+
+    private Long onDonor(String title, Long donorId) {
+        Long id = part(title, 1);
+        inTenant(() -> jdbc.update("UPDATE part SET donor_id = ? WHERE id = ?", donorId, id));
+        return id;
     }
 
     private List<String> titles(CatalogService.Page page) {

@@ -72,10 +72,10 @@ public class CatalogService {
      */
     @Transactional(readOnly = true)
     public Page list(String query, boolean withReserved, boolean withMissing,
-                     List<Long> warehouseIds, String sort, boolean descending,
+                     List<Long> warehouseIds, Vehicle vehicle, String sort, boolean descending,
                      int page, int size) {
 
-        Filter filter = filterOf(query, withReserved, withMissing, warehouseIds);
+        Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle);
         StringBuilder where = filter.where();
         List<Object> args = filter.args();
 
@@ -90,6 +90,26 @@ public class CatalogService {
      */
     private Filter filterOf(String query, boolean withReserved, boolean withMissing,
                             List<Long> warehouseIds) {
+        return filterOf(query, withReserved, withMissing, warehouseIds, null);
+    }
+
+    /**
+     * Отбор по машине: «покажи, что подходит к этой».
+     *
+     * <p><b>Ищется по двум признакам сразу.</b> Первый — машина, с которой
+     * деталь снята: у переехавшего клиента это единственное, что есть, —
+     * заявленной применимости у него ноль строк на двадцать шесть тысяч
+     * деталей с донором. Второй — сама применимость, если её заполнили
+     * в приёмке. Искать только по второму значило бы показать переехавшему
+     * пустоту, только по первому — потерять деталь, которая подходит
+     * не только к своей машине.
+     *
+     * <p>Кузов и двигатель сравниваются по вхождению: у клиента в этих полях
+     * лежит «ACA33», а у другой машины той же модели — «ACA38», и точное
+     * равенство отсекло бы половину подходящего.
+     */
+    private Filter filterOf(String query, boolean withReserved, boolean withMissing,
+                            List<Long> warehouseIds, Vehicle vehicle) {
         StringBuilder where = new StringBuilder(" WHERE p.product_line = 'PART'");
         List<Object> args = new ArrayList<>();
 
@@ -129,10 +149,79 @@ public class CatalogService {
                                     AND s.warehouse_id = ANY (?))""");
             args.add(warehouseIds.toArray(Long[]::new));
         }
+
+        if (vehicle != null && vehicle.brandId() != null) {
+            StringBuilder donor = new StringBuilder("d.brand_id = ?");
+            List<Object> donorArgs = new ArrayList<>();
+            donorArgs.add(vehicle.brandId());
+            if (vehicle.modelId() != null) {
+                donor.append(" AND d.model_id = ?");
+                donorArgs.add(vehicle.modelId());
+            }
+            if (vehicle.body() != null && !vehicle.body().isBlank()) {
+                donor.append(" AND d.body_code ILIKE ?");
+                donorArgs.add("%" + vehicle.body().strip() + "%");
+            }
+            if (vehicle.engine() != null && !vehicle.engine().isBlank()) {
+                donor.append(" AND d.engine_code ILIKE ?");
+                donorArgs.add("%" + vehicle.engine().strip() + "%");
+            }
+
+            StringBuilder declared = new StringBuilder("a.brand_id = ?");
+            List<Object> declaredArgs = new ArrayList<>();
+            declaredArgs.add(vehicle.brandId());
+            if (vehicle.modelId() != null) {
+                declared.append(" AND a.model_id = ?");
+                declaredArgs.add(vehicle.modelId());
+            }
+
+            where.append("\n AND ((").append(donor)
+                    .append(") OR EXISTS (SELECT 1 FROM part_applicability a")
+                    .append(" WHERE a.part_id = p.id AND ").append(declared).append("))");
+            args.addAll(donorArgs);
+            args.addAll(declaredArgs);
+        }
         return new Filter(where, args);
     }
 
     private record Filter(StringBuilder where, List<Object> args) {
+    }
+
+    /**
+     * Машины, к которым на складе что-то есть, — с числом деталей.
+     *
+     * <p><b>Список свой, а не весь справочник.</b> В каталоге четыре с половиной
+     * тысячи моделей, из них на складе лежат детали от полутора сотен: подбор
+     * по общему справочнику — это выбрать модель и получить пустую таблицу,
+     * ничего не сказав о том, почему пусто. Число рядом отвечает сразу.
+     *
+     * <p>Строк тут по числу разобранных машин, то есть сотни, — уровни кузова
+     * и двигателя экран складывает сам, вторым запросом их брать незачем.
+     */
+    @Transactional(readOnly = true)
+    public List<VehicleOption> vehicles() {
+        return jdbc.query("""
+                SELECT b.id AS brand_id, b.name AS brand, m.id AS model_id, m.name AS model,
+                       d.body_code, d.engine_code, count(*) AS parts
+                  FROM part p
+                  JOIN donor d ON d.id = p.donor_id
+                  JOIN catalog.brand b ON b.id = d.brand_id
+                  LEFT JOIN catalog.model m ON m.id = d.model_id
+                 GROUP BY b.id, b.name, m.id, m.name, d.body_code, d.engine_code
+                 ORDER BY b.name, m.name""",
+                (rs, i) -> new VehicleOption(rs.getLong("brand_id"), rs.getString("brand"),
+                        (Long) rs.getObject("model_id"), rs.getString("model"),
+                        rs.getString("body_code"), rs.getString("engine_code"),
+                        rs.getLong("parts")));
+    }
+
+    /** Марка, модель, кузов и двигатель одной разобранной машины. */
+    public record VehicleOption(Long brandId, String brand, Long modelId, String model,
+                                String body, String engine, long parts) {
+    }
+
+    /** Машина, к которой подбирают деталь. Пустая марка — отбора нет. */
+    public record Vehicle(Long brandId, Long modelId, String body, String engine) {
     }
 
     private Page finish(StringBuilder where, List<Object> args, String sort,
@@ -240,10 +329,10 @@ public class CatalogService {
      */
     @Transactional(readOnly = true)
     public void export(String query, boolean withReserved, boolean withMissing,
-                       List<Long> warehouseIds, String sort, boolean descending,
+                       List<Long> warehouseIds, Vehicle vehicle, String sort, boolean descending,
                        List<Warehouse> warehouses, RowWriter writer) {
 
-        Filter filter = filterOf(query, withReserved, withMissing, warehouseIds);
+        Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle);
         String order = SORTS.getOrDefault(sort, "p.id") + (descending ? " DESC" : " ASC");
 
         StringBuilder stock = new StringBuilder();

@@ -6,9 +6,12 @@ import {
   exportUrl,
   loadVisible,
   saveVisible,
+  vehicleLabel,
+  NO_VEHICLE,
   type CatalogPage,
   type CatalogQuery,
 } from '../inventory/catalog';
+import { VehiclePicker } from './VehiclePicker';
 
 /**
  * Витрина склада: таблица товаров, как её видит владелец.
@@ -34,6 +37,7 @@ export function CatalogScreen() {
   const [settings, setSettings] = useState(false);
   const [query, setQuery] = useState<CatalogQuery>({
     q: '',
+    vehicle: NO_VEHICLE,
     reserved: true,
     missing: false,
     warehouses: [],
@@ -43,6 +47,7 @@ export function CatalogScreen() {
     size: SIZE,
   });
   const [search, setSearch] = useState('');
+  const [picking, setPicking] = useState(false);
 
   const load = useCallback((next: CatalogQuery) => {
     loadCatalog(next)
@@ -141,6 +146,18 @@ export function CatalogScreen() {
       </fieldset>
 
       <div className="filter-row">
+        <button type="button" className="button--ghost" onClick={() => setPicking(true)}>
+          Подбор по машине
+        </button>
+        {query.vehicle.brandId !== null && (
+          <button
+            type="button"
+            className="crumb"
+            onClick={() => change({ vehicle: NO_VEHICLE })}
+          >
+            {vehicleLabel(query.vehicle)} ✕
+          </button>
+        )}
         <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
           Настроить таблицу
         </button>
@@ -150,6 +167,17 @@ export function CatalogScreen() {
           Скачать таблицу
         </a>
       </div>
+
+      {picking && (
+        <VehiclePicker
+          chosen={query.vehicle}
+          onPick={(vehicle) => {
+            setPicking(false);
+            change({ vehicle });
+          }}
+          onClose={() => setPicking(false)}
+        />
+      )}
 
       {settings && (
         <fieldset className="choices">
