@@ -16,6 +16,7 @@ import { LabelsScreen } from './LabelsScreen';
 import { ReportsScreen } from './ReportsScreen';
 import { UnmatchedScreen } from './UnmatchedScreen';
 import { OrdersScreen } from './OrdersScreen';
+import { FeedsScreen } from './FeedsScreen';
 import { ordersAwaitingReply } from '../sales/sales';
 import { unmatchedNames } from '../catalog/partNames';
 import { deadLetters } from '../events/deadLetters';
@@ -55,6 +56,7 @@ type Tab =
   | 'names'
   | 'reports'
   | 'orders'
+  | 'feeds'
   | 'delivery'
   | 'labels'
   | 'reference';
@@ -209,6 +211,15 @@ export function HomeScreen() {
         {NAMING_ROLES.includes(state.me.role) && (
           <button
             type="button"
+            className={tab === 'feeds' ? 'tab tab--active' : 'tab'}
+            onClick={() => setTab('feeds')}
+          >
+            Выгрузки
+          </button>
+        )}
+        {NAMING_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
             className={tab === 'delivery' ? 'tab tab--active' : 'tab'}
             onClick={() => setTab('delivery')}
           >
@@ -270,6 +281,8 @@ export function HomeScreen() {
             которой уже нет, а отложенная в телефоне сделка ничего не резервирует.
           </p>
         ))}
+
+      {tab === 'feeds' && NAMING_ROLES.includes(state.me.role) && <FeedsScreen />}
 
       {tab === 'orders' && (
         <OrdersScreen canSell={SELLING_ROLES.includes(state.me.role)} />

@@ -73,7 +73,7 @@ async function messageOf(response: Response): Promise<string> {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
   /** Ключ идемпотентности: тот же при повторах, иначе появится вторая партия. */
   requestId?: string;
