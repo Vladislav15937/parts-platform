@@ -33,7 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * по чужому токену, по одному коду компании, и — главное — отдавать склад
  * одного арендатора по ссылке другого.
  */
-@SpringBootTest(properties = "app.drom-feed-test=true")
+@SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
 @AutoConfigureMockMvc
 class DromFeedControllerTest extends PostgresTestBase {
 
