@@ -62,13 +62,13 @@ class BazonImportRestTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 // Итог обязан приехать полями, а не пятисоткой
                 // о несериализуемом ответе.
-                .andExpect(jsonPath("$.loaded['товаров']").value(2))
+                .andExpect(jsonPath("$.loaded['товаров']").value(3))
                 .andExpect(jsonPath("$.loaded['доноров']").value(1))
                 .andExpect(jsonPath("$.problemCount").value(0));
 
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM %s.part".formatted(tenant.schemaName()), Integer.class))
-                .isEqualTo(2);
+                .isEqualTo(3);
 
         // Повтор — ровно то, что делает владелец, увидев ошибку или просто
         // не поняв, прошло ли. Склад не должен удвоиться.
@@ -77,17 +77,68 @@ class BazonImportRestTest extends PostgresTestBase {
                         .file(csv("catalog", CATALOG))
                         .with(csrf()).session(session))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.loaded['товаров пропущено (уже есть)']").value(2));
+                .andExpect(jsonPath("$.loaded['товаров пропущено (уже есть)']").value(3));
 
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM %s.part".formatted(tenant.schemaName()), Integer.class))
                 .as("повтор завёл вторую копию склада")
-                .isEqualTo(2);
+                .isEqualTo(3);
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM %s.donor".formatted(tenant.schemaName()), Integer.class))
                 .as("повтор завёл вторую копию машин — деталей у них не будет, "
                         + "и в отчёте об окупаемости они выглядят чистым убытком")
                 .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("После переноса наименования сопоставлены, а счётчик заполнен")
+    void namesAreMatchedAfterImport() throws Exception {
+        String code = "baz" + UUID.randomUUID().toString().substring(0, 8);
+        TenantProvisioning.Result tenant = provisioning.provision(new TenantProvisioning.Request(
+                code, "Разборка", "vladelec", "пароль-8симв", null));
+
+        mvc.perform(multipart("/api/import/bazon")
+                        .file(csv("donors", DONORS))
+                        .file(csv("catalog", CATALOG))
+                        .with(csrf()).session(login(code)))
+                .andExpect(status().isOk());
+
+        // «Фара» дословно есть в поставляемом справочнике эталонов. Пока
+        // импорт не звал общий сопоставитель, весь склад переехавшего клиента
+        // ложился в «Не разобрано» — включая написания, совпадающие точно.
+        assertThat(jdbc.queryForObject("""
+                SELECT match_status FROM %s.part_name WHERE name = 'Стартер'"""
+                .formatted(tenant.schemaName()), String.class))
+                .as("написание, совпадающее с эталоном дословно, осталось "
+                        + "нераспознанным — весь склад ляжет в «Не разобрано»")
+                .isEqualTo("AUTO");
+
+        assertThat(jdbc.queryForObject("""
+                SELECT match_status FROM %s.part_name WHERE name = 'Фара левая'"""
+                .formatted(tenant.schemaName()), String.class))
+                .as("«Фара левая» сопоставляться и не должна: сторона живёт "
+                        + "отдельным полем, это разбирают руками")
+                .isEqualTo("UNMATCHED");
+
+        // А счётчик обязан быть заполнен у всех: без него экран разбора
+        // показывает «позиций пока нет» под написанием с сотней карточек.
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM %s.part_name WHERE usage_count = 0"""
+                .formatted(tenant.schemaName()), Integer.class))
+                .as("счётчик использований не посчитан — экран разбора "
+                        + "остался без единственного ориентира")
+                .isZero();
+
+        // И карточки обязаны догнать наименование: сопоставить написание
+        // и оставить весь склад в «Не разобрано» значит починить будущее
+        // и не починить прошлое.
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM %s.part p
+                  JOIN %s.part_name pn ON pn.id = p.part_name_id
+                 WHERE pn.part_kind_id IS NOT NULL AND p.part_kind_id IS NULL"""
+                .formatted(tenant.schemaName(), tenant.schemaName()), Integer.class))
+                .as("наименование распознано, а карточка осталась без вида детали")
+                .isZero();
     }
 
     @Test
@@ -159,6 +210,7 @@ class BazonImportRestTest extends PostgresTestBase {
             "Хорошее";"";"";"9500";"81150-33670";"2";"1";"0";"да"
             "A-200";"Бампер передний";"";"";"";"";"";"";"";"";"";"";"";"";"";"12000";"";\
             "1";"0";"0";"да"
+            "A-300";"Стартер";"";"";"";"";"";"";"";"";"";"";"";"";"";"6800";"";"1";"0";"0";"да"
             """;
 
     private MockHttpSession login(String code) throws Exception {

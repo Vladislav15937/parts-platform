@@ -99,6 +99,35 @@ public class PartService {
     public record MatchResult(PartName partName, int updated) {
     }
 
+    /**
+     * Доводит карточки по уже сопоставленным наименованиям — пакетом.
+     *
+     * <p>Нужно после переноса из чужой системы: карточки там создаются раньше,
+     * чем наименования сопоставляются с эталонами, и категория у всего склада
+     * остаётся заглушкой «Не разобрано». Прогон на чистой ячейке показал это
+     * во всей красе: наименования распознаны, а двести карточек по-прежнему
+     * без категории.
+     *
+     * <p>Заголовки не трогаются намеренно. У позиции из выгрузки заголовок
+     * собран из написания и машины, и массовая подмена начала стёрла бы
+     * сторону — та же беда, из-за которой в {@link #applyMatch} стоит
+     * условие про длину. Точечно это делает экран разбора, где человек видит,
+     * что меняет.
+     *
+     * @return сколько карточек доведено
+     */
+    @Transactional
+    public int applyMatchedNames() {
+        return jdbc.update("""
+                UPDATE part p
+                   SET category_id = pn.category_id,
+                       part_kind_id = pn.part_kind_id
+                  FROM part_name pn
+                 WHERE p.part_name_id = pn.id
+                   AND pn.part_kind_id IS NOT NULL
+                   AND p.part_kind_id IS DISTINCT FROM pn.part_kind_id""");
+    }
+
     @Transactional
     public Part changePrice(Long partId, BigDecimal newPrice, Long changedBy) {
         Part part = partRepository.findById(partId)

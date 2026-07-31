@@ -6,6 +6,12 @@
 CREATE OR REPLACE VIEW ${tenant.schema}.v_donor_profitability AS
 SELECT d.id AS donor_id,
        d.public_code,
+       -- Номер из предыдущей системы и заметка с маркой: своим внутренним
+       -- кодом владелец машину не знает. Переехавший клиент зовёт её «Д-100»,
+       -- а до переезда — «Toyota Camry 2007», и отчёт обязан отвечать на том
+       -- же языке. Поймано прогоном на чистой ячейке.
+       d.legacy_code,
+       d.note,
        d.vin,
        d.year,
        COALESCE(c.total_cost, 0)                          AS total_cost,

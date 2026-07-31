@@ -153,8 +153,15 @@ export function ReportsScreen({ canRead }: Props) {
               {donors.rows.map((row) => (
                 <tr key={row.donorId}>
                   <td>
-                    {row.publicCode ?? row.donorId}
+                    {/* Сначала то, чем машину зовёт владелец: марка с моделью
+                        или номер из предыдущей системы. Наш внутренний код
+                        ему ничего не говорит — прогон на чистой ячейке
+                        показал таблицу из одних шестнадцатеричных кодов. */}
+                    <strong>{row.note ?? row.legacyCode ?? row.publicCode ?? row.donorId}</strong>
                     {row.year !== null && <span className="muted"> · {row.year}</span>}
+                    {row.legacyCode !== null && row.note !== null && (
+                      <span className="muted"> · {row.legacyCode}</span>
+                    )}
                     {row.vin !== null && <div className="muted">{row.vin}</div>}
                     {/* Продано — не колонка: пять числовых столбцов не влезают
                         в ширину экрана, а без этой доли строка не читается

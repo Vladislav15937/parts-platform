@@ -38,6 +38,22 @@ public interface PartNameRepository extends JpaRepository<PartName, Long> {
     long countByMatchStatus(PartName.MatchStatus status);
 
     /**
+     * Пересчитывает счётчик по карточкам склада.
+     *
+     * <p>Нужен после переноса из чужой системы: тот заводит карточки пакетом
+     * мимо {@link PartNameService#resolve}, и счётчик остаётся нулевым.
+     * Экран разбора при этом показывает «позиций пока нет» под написанием,
+     * за которым висит две сотни карточек, — и теряет единственный ориентир,
+     * что чинить раньше.
+     */
+    @Modifying
+    @Query(value = """
+            UPDATE part_name pn
+               SET usage_count = (SELECT count(*) FROM part p WHERE p.part_name_id = pn.id)""",
+            nativeQuery = true)
+    int recountUsage();
+
+    /**
      * Счётчик использований ведётся в БД инкрементом, а не чтением-записью
      * в приложении: приёмка идёт с нескольких телефонов одновременно, и два
      * приёмщика с одним наименованием затрут друг другу счёт.

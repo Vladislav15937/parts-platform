@@ -6,6 +6,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import ru.partsflow.catalog.PartNameService;
+import ru.partsflow.inventory.PartService;
 import ru.partsflow.platform.tenant.TenantContext;
 
 import javax.sql.DataSource;
@@ -39,10 +41,21 @@ import java.util.Map;
 @RequestMapping("/api/import/bazon")
 public class BazonImportController {
 
-    private final DataSource dataSource;
+    /**
+     * Сколько наименований пересчитывать после переноса. Своих написаний
+     * у клиента — тысячи, но не десятки тысяч: справочник склада конечен.
+     */
+    private static final int REMATCH_LIMIT = 10_000;
 
-    public BazonImportController(DataSource dataSource) {
+    private final DataSource dataSource;
+    private final PartNameService partNames;
+    private final PartService parts;
+
+    public BazonImportController(DataSource dataSource, PartNameService partNames,
+                                 PartService parts) {
         this.dataSource = dataSource;
+        this.partNames = partNames;
+        this.parts = parts;
     }
 
     @PostMapping
@@ -69,11 +82,43 @@ public class BazonImportController {
             ImportReport report = new BazonImporter(dataSource, schema)
                     .importAll(donorsFile, catalogFile);
 
-            return new Result(report.loaded(), report.problems(), report.problemCount());
+            Map<String, Integer> loaded = new java.util.LinkedHashMap<>(report.loaded());
+            loaded.put("наименований сопоставлено", finishNames());
+            // Сопоставить наименование и оставить склад в «Не разобрано» —
+            // значит починить будущее и не починить прошлое. Ровно ради
+            // этих карточек клиент и переезжает.
+            loaded.put("карточек получили категорию", parts.applyMatchedNames());
+
+            return new Result(loaded, report.problems(), report.problemCount());
         } finally {
             delete(donorsFile);
             delete(catalogFile);
         }
+    }
+
+    /**
+     * Доводит справочник наименований после переноса.
+     *
+     * <p>Импортёр заводит написания как есть, а сопоставляет их с эталонами
+     * тот же {@code PartNameService}, что и приёмка: второй путь означал бы
+     * второй справочник, расходящийся с первым. Живой прогон показал, чем
+     * это кончалось — «Фара», «Бампер», «Стартер» дословно совпадают
+     * с эталонами и всё равно оставались нераспознанными, то есть весь склад
+     * переехавшего клиента ложился в «Не разобрано».
+     *
+     * <p>Счётчик использований считается здесь же. Без него экран разбора
+     * показывает «позиций пока нет» у написания, под которым висит две сотни
+     * карточек, — и теряет единственный ориентир, ради которого он и нужен:
+     * что чинить раньше.
+     *
+     * @return сколько наименований удалось сопоставить
+     */
+    private int finishNames() {
+        // Через сервис, а не своим JdbcTemplate: search_path выставляет
+        // провайдер соединений Hibernate внутри транзакции, и запрос отсюда
+        // уходил в public — «relation part_name does not exist».
+        partNames.recountUsage();
+        return partNames.rematchUnmatched(REMATCH_LIMIT);
     }
 
     /**

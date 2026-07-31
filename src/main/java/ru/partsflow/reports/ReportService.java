@@ -74,7 +74,8 @@ public class ReportService {
     @Transactional(readOnly = true)
     public List<DonorRow> donorProfitability(int limit) {
         return jdbc.query("""
-                SELECT donor_id, public_code, vin, year, total_cost, revenue, profit,
+                SELECT donor_id, public_code, legacy_code, note, vin, year,
+                       total_cost, revenue, profit,
                        parts_total, parts_sold, stock_value
                   FROM v_donor_profitability
                  ORDER BY profit, donor_id
@@ -82,6 +83,8 @@ public class ReportService {
                 (rs, i) -> new DonorRow(
                         rs.getLong("donor_id"),
                         rs.getString("public_code"),
+                        rs.getString("legacy_code"),
+                        rs.getString("note"),
                         rs.getString("vin"),
                         rs.getObject("year", Integer.class),
                         rs.getBigDecimal("total_cost"),
@@ -131,10 +134,14 @@ public class ReportService {
     }
 
     /**
+     * @param legacyCode номер машины в предыдущей системе. Переехавший клиент
+     *                   зовёт её именно так, а не нашим внутренним кодом
+     * @param note марка и модель, пока каталог не сопоставлен
      * @param stockValue во сколько оценено то, что с машины ещё не продано:
      *                   без него свежий донор неотличим от убыточного
      */
-    public record DonorRow(Long donorId, String publicCode, String vin, Integer year,
+    public record DonorRow(Long donorId, String publicCode, String legacyCode, String note,
+                           String vin, Integer year,
                            BigDecimal totalCost, BigDecimal revenue, BigDecimal profit,
                            int partsTotal, int partsSold, BigDecimal stockValue) {
     }

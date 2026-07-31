@@ -36,6 +36,10 @@ export interface ManagerReport {
 export interface DonorRow {
   donorId: number;
   publicCode: string | null;
+  /** Номер машины в предыдущей системе: переехавший клиент зовёт её так. */
+  legacyCode: string | null;
+  /** Марка и модель, пока каталог не сопоставлен. */
+  note: string | null;
   vin: string | null;
   year: number | null;
   totalCost: string;
