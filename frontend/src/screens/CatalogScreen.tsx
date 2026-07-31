@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
   COLUMNS,
   loadCatalog,
+  loadPhotos,
   exportUrl,
   loadVisible,
   saveVisible,
@@ -10,6 +11,7 @@ import {
   NO_VEHICLE,
   type CatalogPage,
   type CatalogQuery,
+  type PartPhoto,
 } from '../inventory/catalog';
 import { VehiclePicker } from './VehiclePicker';
 
@@ -48,6 +50,22 @@ export function CatalogScreen() {
   });
   const [search, setSearch] = useState('');
   const [picking, setPicking] = useState(false);
+  // Развёрнутая строка: снимки показываются под ней, как в кабинете.
+  // Одна за раз — две развёрнутые уводят таблицу вниз на два экрана.
+  const [opened, setOpened] = useState<number | null>(null);
+  const [photos, setPhotos] = useState<PartPhoto[]>([]);
+
+  function togglePhotos(id: number) {
+    if (opened === id) {
+      setOpened(null);
+      return;
+    }
+    setOpened(id);
+    setPhotos([]);
+    // Ссылки подписанные и короткоживущие — берутся при показе, а не заранее
+    // на все тридцать пять тысяч строк.
+    void loadPhotos(id).then(setPhotos).catch(() => setPhotos([]));
+  }
 
   const load = useCallback((next: CatalogQuery) => {
     loadCatalog(next)
@@ -81,7 +99,9 @@ export function CatalogScreen() {
     change(query.sort === sort ? { desc: !query.desc } : { sort, desc: false });
   }
 
-  const columns = COLUMNS.filter((c) => visible.includes(c.key));
+  // Постоянные колонки не зависят от сохранённого выбора: настройка могла
+  // быть записана до их появления.
+  const columns = COLUMNS.filter((c) => c.fixed === true || visible.includes(c.key));
   const warehouses = page?.warehouses ?? [];
   const pages = page === null ? 0 : Math.ceil(page.total / SIZE);
 
@@ -182,7 +202,9 @@ export function CatalogScreen() {
       {settings && (
         <fieldset className="choices">
           <legend>Колонки</legend>
-          {COLUMNS.map((column) => (
+          {/* Постоянные колонки в список не идут: отключить их нельзя,
+              а флажок, который не работает, хуже отсутствующего. */}
+          {COLUMNS.filter((c) => c.fixed !== true).map((column) => (
             <label key={column.key}>
               <input
                 type="checkbox"
@@ -224,17 +246,25 @@ export function CatalogScreen() {
             </thead>
             <tbody>
               {page.rows.map((row) => (
-                <tr key={row.id}>
+                <Fragment key={row.id}>
+                <tr>
                   {columns.map((column) => (
                     <td key={column.key} className={column.numeric ? 'num' : undefined}>
                       {column.image
                         ? column.image(row) !== null && (
-                            <img
-                              className="thumb"
-                              src={column.image(row) ?? ''}
-                              alt=""
-                              loading="lazy"
-                            />
+                            <button
+                              type="button"
+                              className="thumb-button"
+                              title="Показать снимки"
+                              onClick={() => togglePhotos(row.id)}
+                            >
+                              <img
+                                className="thumb"
+                                src={column.image(row) ?? ''}
+                                alt=""
+                                loading="lazy"
+                              />
+                            </button>
                           )
                         : column.value(row)}
                     </td>
@@ -248,6 +278,22 @@ export function CatalogScreen() {
                     </td>
                   ))}
                 </tr>
+                {opened === row.id && (
+                  <tr className="photo-row">
+                    <td colSpan={columns.length + warehouses.length}>
+                      {photos.length === 0 ? (
+                        <span className="muted">Снимков нет</span>
+                      ) : (
+                        <div className="photo-strip">
+                          {photos.map((photo) => (
+                            <img key={photo.photoId} src={photo.url} alt="" />
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>

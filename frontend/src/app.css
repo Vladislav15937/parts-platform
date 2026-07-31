@@ -1185,3 +1185,33 @@ hr {
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
 }
+
+/* Миниатюра — кнопка: по ней разворачиваются снимки, как в кабинете. */
+.thumb-button {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  min-height: 0;
+}
+
+/*
+ * Снимки под строкой. Высота ограничена: фотографии приезжают какие есть,
+ * и полноразмерная уводит таблицу на экран вниз — а развернули её, чтобы
+ * посмотреть деталь, не теряя список.
+ */
+.photo-row td {
+  padding: 0.5rem 0.75rem;
+  background: var(--surface-soft);
+}
+
+.photo-strip {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+}
+
+.photo-strip img {
+  height: 180px;
+  border-radius: var(--radius-sm);
+}

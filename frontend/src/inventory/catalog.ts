@@ -84,6 +84,18 @@ export interface VehicleOption {
   parts: number;
 }
 
+/** Снимок карточки: подписанная ссылка живёт минуты, поэтому берётся при показе. */
+export interface PartPhoto {
+  photoId: number;
+  main: boolean;
+  url: string;
+}
+
+/** Все снимки позиции — для развёрнутой строки склада. */
+export function loadPhotos(partId: number): Promise<PartPhoto[]> {
+  return request<PartPhoto[]>(`/api/parts/${partId}/photos`);
+}
+
 export function loadVehicleOptions(): Promise<VehicleOption[]> {
   return request<VehicleOption[]>('/api/parts/catalog/vehicles');
 }
@@ -168,6 +180,14 @@ export interface Column {
   value: (row: CatalogRow) => string;
 
   /**
+   * Колонку нельзя отключить. Так в кабинете, и это верно: снимок —
+   * не сведение о детали, а способ её узнать. Спрятанный, он превращает
+   * настройку таблицы в способ случайно остаться без картинок и не понять,
+   * куда они делись.
+   */
+  fixed?: boolean;
+
+  /**
    * Ссылка на снимок, если колонка показывает картинку, а не текст.
    * Подписанная и короткоживущая — поэтому берётся со страницей,
    * а не хранится.
@@ -195,7 +215,7 @@ export const COLUMNS: Column[] = [
   { key: 'code', title: 'Номер товара', sort: 'code', value: (r) => text(r.code) },
   // Вторым столбцом, как в кабинете: по снимку деталь узнают быстрее,
   // чем по наименованию, — особенно когда наименований на складе тысяча.
-  { key: 'photo', title: 'Превью', value: () => '', image: (r) => r.photoUrl },
+  { key: 'photo', title: 'Превью', value: () => '', image: (r) => r.photoUrl, fixed: true },
   { key: 'title', title: 'Запчасть', sort: 'title', value: (r) => r.title },
   { key: 'quality', title: 'Оценка состояния',
     value: (r) => text(r.qualityGrade) || CONDITION[r.condition ?? ''] || '' },
