@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Приём заказа, оформленного покупателем на площадке.
@@ -256,6 +257,32 @@ class MarketplaceOrderTest extends PostgresTestBase {
                 accepted.deal().getId())))
                 .isEqualTo(1);
         assertThat(reserved(partId)).isEqualByComparingTo("1");
+    }
+
+    @Test
+    @DisplayName("Повторная отмена отклоняется, а не пишет в историю вторую")
+    void cancellingTwiceIsRejected() {
+        Long partId = partWithStock("Крышка отменяемая", 1);
+        var accepted = inTenant(() -> sales.registerMarketplaceOrder(
+                "DROM", "301-400-11", null, customerId, null, null, null, null,
+                List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId)),
+                List.of()));
+
+        inTenant(() -> sales.cancel(accepted.deal().getId(), null, "передумал"));
+
+        // Молчаливое согласие тут хуже отказа: история документа получала
+        // вторую отмену, то есть говорила о действии, которого не было.
+        // Разбирают её через недели, когда вспомнить некому.
+        assertThatThrownBy(() -> inTenant(() ->
+                sales.cancel(accepted.deal().getId(), null, "ещё раз")))
+                .hasMessageContaining("уже закрыта");
+
+        assertThat(inTenant(() -> jdbc.queryForObject("""
+                SELECT count(*) FROM document_event
+                 WHERE document_type = 'DEAL' AND document_id = ? AND event_type = 'CANCELLED'""",
+                Long.class, accepted.deal().getId())))
+                .as("в истории документа две отмены вместо одной")
+                .isEqualTo(1);
     }
 
     private Long partWithStock(String title, int qty) {
