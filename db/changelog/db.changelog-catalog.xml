@@ -22,5 +22,6 @@
     <include file="catalog/009-vehicle-seed.sql"            relativeToChangelogFile="true"/>
     <include file="catalog/010-provisioning-status.sql"      relativeToChangelogFile="true"/>
     <include file="catalog/011-part-kinds.sql"              relativeToChangelogFile="true"/>
+    <include file="catalog/012-part-kinds-live.sql"         relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

@@ -40,6 +40,15 @@ public class PartNameController {
 
     private static final String MANAGES = "hasAnyRole('OWNER','MANAGER')";
 
+    /**
+     * Сколько написаний пересопоставляем за раз.
+     *
+     * <p>У переехавшего клиента их больше тысячи, и обход всех в одном
+     * запросе держал бы соединение минуты. Предел означает «повторите,
+     * если осталось», а не «остальные пропали».
+     */
+    private static final int REMATCH_LIMIT = 5_000;
+
     /** Больше не помещается на экран телефона, а разгребают список по одному. */
     private static final int KIND_SEARCH_LIMIT = 20;
 
@@ -87,6 +96,35 @@ public class PartNameController {
      * выбранных видов, а поиском их не восстановить — по идентификатору
      * он не ищет. Справочник статичный, сто семьдесят восемь строк.
      */
+    /**
+     * Пересопоставить нераспознанные по нынешнему справочнику.
+     *
+     * <p>Справочник видов деталей растёт с релизом, а написания клиента
+     * заведены раньше: наименование, не нашедшее эталон в марте, находит его
+     * в мае. До этого дотянуться до пересчёта можно было только импортом,
+     * то есть у клиента, который уже переехал, пополнение справочника
+     * не меняло ничего — он продолжал видеть ту же стену нераспознанных.
+     *
+     * <p>Ручные сопоставления не трогаются: человек уже решил, и его решение
+     * важнее совпадения строк.
+     *
+     * <p>Следом доводятся карточки: сопоставление, не тронувшее ни одной,
+     * чинит будущее и оставляет склад как был.
+     */
+    @PostMapping("/rematch")
+    @PreAuthorize(MANAGES)
+    public RematchResult rematch() {
+        int matched = partNames.rematchUnmatched(REMATCH_LIMIT);
+        return new RematchResult(matched, parts.applyMatchedNames());
+    }
+
+    /**
+     * @param matched сколько написаний нашли эталон
+     * @param updated сколько карточек получили категорию и эталонный заголовок
+     */
+    public record RematchResult(int matched, int updated) {
+    }
+
     @GetMapping("/kinds/all")
     public List<KindView> allKinds() {
         return partNames.allKinds().stream().map(KindView::of).toList();
