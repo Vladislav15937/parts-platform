@@ -87,4 +87,14 @@ done
 
 [ "$FAILED" = 0 ] || fail "восстановленные данные расходятся с живыми"
 
+# Отметка ставится только здесь, после сверки: «дамп открылся» и «клиента
+# можно вернуть» — разные утверждения, и тревога должна следить за вторым.
+if ! printf '# TYPE partsflow_backup_verified_timestamp_seconds gauge\npartsflow_backup_verified_timestamp_seconds %s\n' \
+    "$(date -u +%s)" \
+    | curl -sf --max-time 10 --data-binary @- \
+        "${PUSHGATEWAY_URL:-http://localhost:9091}/metrics/job/backup" > /dev/null
+then
+    printf '\033[1;33m    Отметка в наблюдение не ушла — проверьте pushgateway\033[0m\n'
+fi
+
 printf '\n\033[1;32mБэкап проверен восстановлением.\033[0m\n'

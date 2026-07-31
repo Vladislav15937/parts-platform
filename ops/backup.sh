@@ -33,6 +33,28 @@ fail() { printf '\033[1;31m    ОШИБКА: %s\033[0m\n' "$1"; exit 1; }
 
 psql_() { $COMPOSE exec -T postgres psql -U "$DB_USER" -d parts -v ON_ERROR_STOP=1 "$@"; }
 
+# Отметка об успехе для наблюдения.
+#
+# Бэкап, который тихо перестал сниматься, обнаруживается в день, когда
+# он понадобился. Опрашивать задачу по расписанию нельзя — между запусками
+# процесса нет, — поэтому она сама кладёт время последнего успеха, а тревога
+# смотрит на его возраст.
+#
+# Отметка ставится ПОСЛЕ всех шагов: поставленная в начале, она означала бы
+# «запускался», а знать надо «получилось».
+mark_success() {
+    local metric="$1"
+    local url="${PUSHGATEWAY_URL:-http://localhost:9091}"
+    if ! printf '# TYPE %s gauge\n%s %s\n' "$metric" "$metric" "$(date -u +%s)" \
+        | curl -sf --max-time 10 --data-binary @- "$url/metrics/job/backup" > /dev/null
+    then
+        # Не «выход с ошибкой»: бэкап-то снялся, и валить его из-за
+        # недоступного наблюдения значит терять данные ради метрики.
+        printf '\033[1;33m    Отметка в наблюдение не ушла — проверьте pushgateway\033[0m\n'
+    fi
+}
+
+
 mkdir -p "$OUT"
 
 step "Общие схемы: реестр арендаторов и справочники"
@@ -75,6 +97,8 @@ step "Уборка старше $KEEP_DAYS дней"
 find "${BACKUP_DIR:-./backups}" -maxdepth 1 -type d -name '20*' -mtime "+$KEEP_DAYS" \
     -exec rm -rf {} + 2>/dev/null || true
 ok "осталось наборов: $(find "${BACKUP_DIR:-./backups}" -maxdepth 1 -type d -name '20*' | wc -l | tr -d ' ')"
+
+mark_success partsflow_backup_success_timestamp_seconds
 
 printf '\n\033[1;32mБэкап снят: %s\033[0m\n' "$OUT"
 printf 'Проверить восстановлением: ops/verify-backup.sh %s\n' "$OUT"

@@ -195,9 +195,82 @@ services:
     expose:
       - "9000"
 
+  # Наблюдение. Три маленьких контейнера, и все три обязательны, а не
+  # «на будущее»: без сборщика метрики просто отдаются в пустоту, а без
+  # адресата тревога никуда не уходит — то есть об остановившемся релее
+  # оператор узнаёт от клиента.
+  #
+  # Наружу ни один порт не выставлен. Смотреть их снаружи незачем: правила
+  # лежат в репозитории, а состояние приходит в Telegram.
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    restart: unless-stopped
+    depends_on:
+      - app
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      # Двух недель хватает, чтобы разобрать аварию выходных: истории «как
+      # было в прошлом квартале» тут не место, для этого нужен внешний сбор.
+      - --storage.tsdb.retention.time=14d
+    volumes:
+      - ./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - promdata:/prometheus
+    expose:
+      - "9090"
+
+  alertmanager:
+    image: quay.io/prometheus/alertmanager:v0.27.0
+    restart: unless-stopped
+    environment:
+      ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:?укажите ALERT_TELEGRAM_CHAT_ID}
+    # Окружение в конфигурацию Alertmanager не разворачивает, поэтому номер
+    # чата подставляется здесь. Пустая переменная валит запуск намеренно:
+    # тревога, уходящая в никуда, хуже отсутствия тревог — она создаёт
+    # уверенность, что за ячейкой смотрят.
+    # Своя точка входа: у образа она /bin/alertmanager, и команда уехала бы
+    # ему аргументами — «unexpected /bin/sh».
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - >-
+        sed "s/CHAT_ID_ПОДСТАВЛЯЕТСЯ/$$ALERT_TELEGRAM_CHAT_ID/"
+        /etc/alertmanager/alertmanager.yml > /tmp/alertmanager.yml &&
+        exec /bin/alertmanager --config.file=/tmp/alertmanager.yml
+        --storage.path=/alertmanager
+    volumes:
+      - ./ops/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Токен бота отдельным файлом, а не переменной: в переменной он виден
+      # в `docker inspect` любому, кто дошёл до хоста.
+      - ${ALERT_TELEGRAM_TOKEN_FILE:?укажите ALERT_TELEGRAM_TOKEN_FILE}:/etc/alertmanager/telegram-token:ro
+      - amdata:/alertmanager
+    expose:
+      - "9093"
+
+  # Отметки о бэкапе. Бэкап — задача по расписанию, между запусками процесса
+  # нет, и опрашивать нечего: он сам кладёт сюда время последнего успеха,
+  # а Prometheus читает это отсюда.
+  pushgateway:
+    image: prom/pushgateway:v1.9.0
+    restart: unless-stopped
+    command:
+      # Иначе отметка исчезает при перезапуске контейнера, и тревога
+      # «бэкап не снимался» приходит на ровном месте.
+      - --persistence.file=/data/pushgateway.store
+    volumes:
+      - pushdata:/data
+    # На петлю, а не наружу: бэкап запускается на хосте по cron, а не
+    # в контейнере, и дотянуться до отметки ему больше неоткуда. С других
+    # машин порт при этом закрыт — 127.0.0.1 в привязке не украшение.
+    ports:
+      - "127.0.0.1:9091:9091"
+
 volumes:
   pgdata:
   kafkadata:
   miniodata:
   caddydata:
   caddyconfig:
+  promdata:
+  amdata:
+  pushdata:
