@@ -169,18 +169,19 @@ public class BazonImportController {
      * и машина узнаются при повторе.
      */
     private static void requireBazonExport(MultipartFile file, String what, String column) {
+        boolean found;
         try (var in = file.getInputStream()) {
-            if (!new BazonCsvReader(in).has(column)) {
-                throw new IllegalArgumentException(
-                        "Это не " + what + ": в заголовке нет колонки «" + column
-                                + "». Выгрузка прежней системы — это CSV, а не таблица Excel");
-            }
-        } catch (java.io.IOException e) {
-            throw new IllegalArgumentException("Не удалось прочитать " + what, e);
-        } catch (IllegalArgumentException e) {
-            // Пустой файл и нечитаемый заголовок приходят отсюда же.
+            found = new BazonCsvReader(in).has(column);
+        } catch (java.io.IOException | IllegalArgumentException e) {
+            // Пустой файл и нечитаемый заголовок приходят отсюда же — и это
+            // тот же ответ: файл не похож на выгрузку.
+            found = false;
+        }
+        if (!found) {
             throw new IllegalArgumentException(
-                    "Это не " + what + ": " + e.getMessage(), e);
+                    "Это не " + what + ": в заголовке нет колонки «" + column
+                            + "». Выгрузка прежней системы — это CSV в windows-1251,"
+                            + " а не таблица Excel");
         }
     }
 
