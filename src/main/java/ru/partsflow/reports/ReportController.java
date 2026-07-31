@@ -44,6 +44,18 @@ public class ReportController {
         return new ManagerReport(period.toString(), reports.managerSales(period));
     }
 
+    /**
+     * Продажи по каналам за месяц.
+     *
+     * <p>Месяц тот же, что и у отчёта по менеджерам: владелец смотрит их
+     * рядом, и разные периоды на соседних вкладках сравнивать нельзя.
+     */
+    @GetMapping("/sources")
+    public SourceReport sources(@RequestParam(required = false) String month) {
+        YearMonth period = month == null ? YearMonth.now() : YearMonth.parse(month);
+        return new SourceReport(period.toString(), reports.salesBySource(period));
+    }
+
     @GetMapping("/donors")
     public DonorReport donors() {
         return new DonorReport(reports.donorProfitability(DONOR_LIMIT), reports.donorTotals());
@@ -63,6 +75,9 @@ public class ReportController {
     }
 
     public record ManagerReport(String month, List<ReportService.ManagerRow> rows) {
+    }
+
+    public record SourceReport(String month, List<ReportService.SourceRow> rows) {
     }
 
     public record DonorReport(List<ReportService.DonorRow> rows,

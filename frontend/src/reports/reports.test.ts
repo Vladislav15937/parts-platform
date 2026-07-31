@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { money, monthName, monthOf, shiftMonth } from './reports';
+import { money, monthName, monthOf, shiftMonth,
+  unknownShare,
+} from './reports';
 
 /**
  * Переключатель месяца в отчётах.
@@ -49,5 +51,40 @@ describe('подписи отчёта', () => {
     // Разряды toLocaleString разделяет неразрывным пробелом, и сравнивать
     // с обычным нельзя: тест падает на невидимой разнице.
     expect(money('9500.00').replace(/\u00a0/g, ' ')).toBe('9 500 ₽');
+  });
+});
+
+/**
+ * Доля выручки без указанного источника.
+ *
+ * <p>Пока она велика, сравнивать каналы нельзя: «Дром принёс мало» и «продавцы
+ * не отмечают Дром» с экрана выглядят одинаково, а решение по ним разное —
+ * снять размещение или поговорить с продавцами.
+ */
+describe('доля продаж без источника', () => {
+  const report = (rows: Array<[number | null, string]>) => ({
+    month: '2026-07',
+    rows: rows.map(([sourceId, revenue]) => ({
+      sourceId,
+      sourceName: sourceId === null ? null : 'Канал',
+      dealsCount: 1,
+      revenue,
+      margin: null,
+      itemsWithoutCost: 0,
+    })),
+  });
+
+  it('считает долю безымянной выручки, а не число сделок', () => {
+    // Десять мелких продаж без источника и одна крупная с ним — это
+    // хороший отчёт, а не плохой. Считать надо деньги.
+    expect(unknownShare(report([[1, '9000'], [null, '1000']]))).toBeCloseTo(0.1);
+  });
+
+  it('всё без источника — единица', () => {
+    expect(unknownShare(report([[null, '5000']]))).toBe(1);
+  });
+
+  it('пустой месяц не даёт деления на ноль', () => {
+    expect(unknownShare(report([]))).toBe(0);
   });
 });

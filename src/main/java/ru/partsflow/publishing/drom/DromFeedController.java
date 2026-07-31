@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.sql.SQLException;
 import java.util.List;
 
 /**
@@ -59,7 +60,8 @@ public class DromFeedController {
                      HttpServletResponse response) throws IOException {
 
         String schema = schemaOf(company);
-        if (schema == null || !tokenMatches(schema, token)) {
+        DromPriceGenerator.FeedFilter filter = schema == null ? null : filterFor(schema, token);
+        if (filter == null) {
             // Неверный код и неверный токен неразличимы: иначе по коду ответа
             // ссылка работает справочником действующих компаний.
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
@@ -75,7 +77,7 @@ public class DromFeedController {
 
         TenantContext.set(schema);
         try (OutputStream out = response.getOutputStream()) {
-            int offers = generator.writeTo(out);
+            int offers = generator.writeTo(out, filter);
             log.info("Дром забрал прайс арендатора {}: {} позиций", schema, offers);
         } finally {
             TenantContext.clear();
@@ -102,25 +104,51 @@ public class DromFeedController {
     }
 
     /**
-     * Совпадает ли токен с тем, что лежит у арендатора.
+     * Отбор той выгрузки, чей токен предъявили; {@code null} — токен не подошёл.
+     *
+     * <p>Выгрузок у арендатора несколько, и токен не просто открывает дверь,
+     * а говорит, за каким прайсом пришли: «Дром: низкая цена» и «Дром: новые»
+     * отдают разный товар по разным ссылкам.
      *
      * <p>Сравнение постоянного времени: обычное {@code equals} прекращает
      * сравнивать на первом несовпавшем байте, и по времени ответа токен
-     * подбирается посимвольно.
+     * подбирается посимвольно. По той же причине цикл проходит все строки
+     * без раннего выхода — иначе «совпал первый кабинет» и «совпал третий»
+     * отвечают за разное время.
      */
-    private boolean tokenMatches(String schema, String token) {
-        List<String> stored = jdbc.queryForList("""
-                SELECT feed_token FROM %s.marketplace_account
-                 WHERE marketplace = 'DROM' AND status = 'ACTIVE' AND feed_token IS NOT NULL"""
-                .formatted(schema), String.class);
+    private DromPriceGenerator.FeedFilter filterFor(String schema, String token) {
+        List<Feed> feeds = jdbc.query("""
+                SELECT feed_token, price_from, price_to, conditions, warehouse_ids
+                  FROM %s.marketplace_account
+                 WHERE marketplace = 'DROM' AND status = 'ACTIVE'
+                   AND feed_token IS NOT NULL""".formatted(schema),
+                (rs, i) -> new Feed(rs.getString("feed_token"),
+                        rs.getBigDecimal("price_from"),
+                        rs.getBigDecimal("price_to"),
+                        textList(rs.getArray("conditions")),
+                        longList(rs.getArray("warehouse_ids"))));
 
         byte[] presented = token.getBytes(StandardCharsets.UTF_8);
-        boolean matched = false;
-        for (String candidate : stored) {
-            // Без раннего выхода из цикла: он вернул бы разное время для
-            // «первый кабинет совпал» и «совпал третий».
-            matched |= MessageDigest.isEqual(candidate.getBytes(StandardCharsets.UTF_8), presented);
+        Feed found = null;
+        for (Feed candidate : feeds) {
+            if (MessageDigest.isEqual(
+                    candidate.token().getBytes(StandardCharsets.UTF_8), presented)) {
+                found = candidate;
+            }
         }
-        return matched;
+        return found == null ? null : new DromPriceGenerator.FeedFilter(
+                found.priceFrom(), found.priceTo(), found.conditions(), found.warehouseIds());
+    }
+
+    private static List<String> textList(java.sql.Array array) throws SQLException {
+        return array == null ? List.of() : List.of((String[]) array.getArray());
+    }
+
+    private static List<Long> longList(java.sql.Array array) throws SQLException {
+        return array == null ? List.of() : List.of((Long[]) array.getArray());
+    }
+
+    private record Feed(String token, java.math.BigDecimal priceFrom, java.math.BigDecimal priceTo,
+                        List<String> conditions, List<Long> warehouseIds) {
     }
 }

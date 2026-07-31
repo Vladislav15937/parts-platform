@@ -65,7 +65,57 @@ export interface Deal {
   debt: string;
   createdAt: string;
   issuedAt: string | null;
+  /** Площадка, если сделка пришла заказом: DROM или AVITO. Иначе пусто. */
+  marketplace: string | null;
+  /** Номер заказа у площадки — тот, который называет покупатель. */
+  externalOrderNo: string | null;
+  /** Срок ответа площадке. У Дрома пропущенный — возврат денег покупателю. */
+  replyDeadline: string | null;
+  orderAcceptedAt: string | null;
+  deliveryNote: string | null;
   items: DealItem[];
+  /** Доставка и упаковка: деньги сделки, а не примечание к ней. */
+  services: DealServiceLine[];
+}
+
+/** Услуга в сделке. Склад не двигает — у неё нет детали. */
+export interface DealServiceLine {
+  id: number;
+  serviceId: number;
+  quantity: string;
+  price: string;
+}
+
+/** Строка справочника услуг. Цена — подсказка, а не тариф. */
+export interface ServiceKind {
+  id: number;
+  name: string;
+  price: string | null;
+}
+
+/** Строка справочника источников: откуда пришла продажа. */
+export interface DealSource {
+  id: number;
+  name: string;
+}
+
+export function dealSources(): Promise<DealSource[]> {
+  return request<DealSource[]>('/api/deals/sources');
+}
+
+export function serviceKinds(): Promise<ServiceKind[]> {
+  return request<ServiceKind[]>('/api/deals/services');
+}
+
+/**
+ * Услуга, добавляемая в сделку.
+ *
+ * <p>Цена вводится в строке, а не берётся из справочника: доставка до Надыма
+ * и до соседней улицы стоит по-разному.
+ */
+export interface ServiceLine {
+  kind: ServiceKind;
+  price: string;
 }
 
 export interface HistoryEntry {
@@ -94,19 +144,34 @@ export interface BasketLine {
   price: string;
 }
 
-export function createDeal(customerId: number, lines: BasketLine[]): Promise<Deal> {
+export function createDeal(
+  customerId: number,
+  lines: BasketLine[],
+  services: ServiceLine[] = [],
+  dealSourceId: number | null = null,
+): Promise<Deal> {
   return request<Deal>('/api/deals', {
     method: 'POST',
     body: {
       customerId,
+      dealSourceId,
       items: lines.map((line) => ({
         partId: line.row.partId,
         quantity: line.quantity,
         price: line.price === '' ? null : line.price,
         warehouseId: line.row.warehouseId,
       })),
+      services: servicesBody(services),
     },
   });
+}
+
+function servicesBody(services: ServiceLine[]) {
+  return services
+    // Нулевую и пустую не отправляем: строка «Доставка 0 ₽» в документе
+    // означает, что доставку оказали бесплатно, а не что её не было.
+    .filter((s) => s.price !== '' && Number(s.price) > 0)
+    .map((s) => ({ serviceId: s.kind.id, quantity: 1, price: s.price }));
 }
 
 export function dealsOf(customerId: number): Promise<Deal[]> {
@@ -230,9 +295,90 @@ export function expiredReservations(): Promise<Deal[]> {
   return request<Deal[]>('/api/deals/expired-reservations');
 }
 
-/** Итого по корзине — то же число, что посчитает сервер. */
-export function basketTotal(lines: BasketLine[]): number {
-  return lines.reduce((sum, line) => sum + Number(line.price || 0) * line.quantity, 0);
+/**
+ * Заказ, оформленный покупателем на площадке.
+ *
+ * <p>Заводится руками: продавец видит заказ в кабинете Дрома и переносит его
+ * сюда. Ключ к API защищённых сделок Дром выдаёт по запросу; когда он появится,
+ * поменяется только то, кто зовёт этот метод.
+ *
+ * <p>Повтор по тому же номеру не создаёт вторую сделку — сервер вернёт
+ * прежнюю с {@code replayed}. Это не ошибка и показывать её как ошибку нельзя:
+ * продавец мог завести заказ дважды, и правильный ответ ему — «этот заказ
+ * уже заведён, вот он».
+ */
+export interface OrderResult {
+  deal: Deal;
+  replayed: boolean;
+  /** Чего не хватило на складе. Непусто — товар не зарезервирован. */
+  missing: string[];
+}
+
+export function receiveOrder(
+  marketplace: string,
+  orderNo: string,
+  customerId: number,
+  lines: BasketLine[],
+  replyDeadline: string | null,
+  deliveryNote: string,
+  services: ServiceLine[] = [],
+  dealSourceId: number | null = null,
+): Promise<OrderResult> {
+  return request<OrderResult>('/api/deals/orders', {
+    method: 'POST',
+    body: {
+      marketplace,
+      orderNo,
+      customerId,
+      dealSourceId,
+      replyDeadline,
+      deliveryNote: deliveryNote === '' ? null : deliveryNote,
+      items: lines.map((line) => ({
+        partId: line.row.partId,
+        quantity: line.quantity,
+        price: line.price === '' ? null : line.price,
+        warehouseId: line.row.warehouseId,
+      })),
+      services: servicesBody(services),
+    },
+  });
+}
+
+/** Заказы площадок, по которым продавец ещё не ответил. Горящие сверху. */
+export function ordersAwaitingReply(): Promise<Deal[]> {
+  return request<Deal[]>('/api/deals/orders/awaiting-reply');
+}
+
+export function acceptOrder(dealId: number): Promise<Deal> {
+  return request<Deal>(`/api/deals/orders/${dealId}/accept`, { method: 'POST' });
+}
+
+/**
+ * Сколько осталось до срока ответа площадке.
+ *
+ * <p>Отдельная функция, потому что показывать надо не дату, а остаток: «до
+ * 4 авг» продавец сопоставит с сегодняшним числом сам и ошибётся, а «осталось
+ * 2 часа» не требует считать. Отрицательное — срок уже прошёл, и деньги
+ * покупателю площадка, скорее всего, вернула.
+ */
+export function hoursUntilDeadline(deal: Deal, now: number = Date.now()): number | null {
+  if (!deal.replyDeadline) {
+    return null;
+  }
+  return (new Date(deal.replyDeadline).getTime() - now) / 3_600_000;
+}
+
+/**
+ * Итого по корзине — то же число, что посчитает сервер.
+ *
+ * <p>Услуги входят: продавец называет клиенту одну сумму, и она обязана
+ * совпасть с той, что окажется в документе, — иначе разговор про доставку
+ * начнётся после оплаты.
+ */
+export function basketTotal(lines: BasketLine[], services: ServiceLine[] = []): number {
+  const goods = lines.reduce((sum, line) => sum + Number(line.price || 0) * line.quantity, 0);
+  const work = services.reduce((sum, s) => sum + Number(s.price || 0), 0);
+  return goods + work;
 }
 
 /**

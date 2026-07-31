@@ -15,6 +15,7 @@ import ru.partsflow.platform.outbox.contract.DealEvent;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -37,6 +38,8 @@ public class SalesService {
     private final StockMovementRepository movementRepository;
     private final StockReservationRepository reservationRepository;
     private final DomainEventPublisher eventPublisher;
+    private final ServiceKindRepository serviceKinds;
+    private final DealSourceRepository dealSources;
 
     public SalesService(DealRepository dealRepository,
                         DealReturnRepository dealReturnRepository,
@@ -46,7 +49,9 @@ public class SalesService {
                         PartRepository partRepository,
                         StockMovementRepository movementRepository,
                         StockReservationRepository reservationRepository,
-                        DomainEventPublisher eventPublisher) {
+                        DomainEventPublisher eventPublisher,
+                        ServiceKindRepository serviceKinds,
+                        DealSourceRepository dealSources) {
         this.dealRepository = dealRepository;
         this.dealReturnRepository = dealReturnRepository;
         this.paymentRepository = paymentRepository;
@@ -56,6 +61,26 @@ public class SalesService {
         this.movementRepository = movementRepository;
         this.reservationRepository = reservationRepository;
         this.eventPublisher = eventPublisher;
+        this.serviceKinds = serviceKinds;
+        this.dealSources = dealSources;
+    }
+
+    /**
+     * Услуги, которые можно добавить в сделку.
+     *
+     * <p>Архивные не отдаются: справочник у клиента живёт годами, и услуга,
+     * которую перестали оказывать, не должна предлагаться продавцу — но
+     * и удалять её нельзя, она стоит в прошлых сделках.
+     */
+    /** Источники сделок: откуда пришла продажа. Архивные не предлагаются. */
+    @Transactional(readOnly = true)
+    public List<DealSource> dealSources() {
+        return dealSources.findByArchivedFalseOrderByName();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ServiceKind> serviceKinds() {
+        return serviceKinds.findByArchivedFalseOrderByName();
     }
 
     /**
@@ -67,10 +92,15 @@ public class SalesService {
      */
     @Transactional
     public Deal createReserved(Long customerId, Long managerId, Instant reservedUntil,
-                               List<ItemRequest> items) {
+                               Long dealSourceId, List<ItemRequest> items,
+                               List<ServiceRequest> services) {
 
         Deal deal = new Deal(customerId, managerId);
         deal.setCreatedBy(managerId);
+        // Откуда пришла продажа. Заполняется при каждой сделке, а не только
+        // у заказа с площадки: отчёт по каналам, в котором половина выручки
+        // без источника, не отвечает ни на один вопрос.
+        deal.setDealSourceId(dealSourceId);
 
         for (ItemRequest item : items) {
             Part part = requirePart(item.partId());
@@ -82,12 +112,197 @@ public class SalesService {
             // деталь положит в свою сделку другой продавец.
             reservationRepository.reserve(part.getId(), item.warehouseId(), item.quantity());
         }
+        addServices(deal, services);
         deal.reserve(reservedUntil);
 
-        Deal saved = dealRepository.saveAndFlush(deal);
+        Deal saved = detachable(dealRepository.saveAndFlush(deal));
         log(saved, "CREATED", "Сделка создана и зарезервирована. Позиций: "
                 + saved.getItems().size(), managerId);
         return saved;
+    }
+
+    /**
+     * Услуги в сделку — по цене из строки, а не из справочника.
+     *
+     * <p>Справочная цена только подставляется по умолчанию: доставка до Надыма
+     * и до соседней улицы стоит по-разному, и тариф был бы враньём. Пустая
+     * цена в запросе означает «взять подсказку», а не «бесплатно».
+     */
+    private void addServices(Deal deal, List<ServiceRequest> services) {
+        if (services == null) {
+            return;
+        }
+        for (ServiceRequest service : services) {
+            ServiceKind kind = serviceKinds.findById(service.serviceId())
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Услуга не найдена: " + service.serviceId()));
+            BigDecimal price = service.price() != null
+                    ? service.price()
+                    : kind.getPrice() != null ? kind.getPrice() : BigDecimal.ZERO;
+            deal.addService(kind.getId(), service.quantity(), price);
+        }
+    }
+
+    /** @param price пусто — берётся подсказка из справочника, а не ноль */
+    public record ServiceRequest(Long serviceId, BigDecimal quantity, BigDecimal price) {
+    }
+
+    /**
+     * Принимает заказ, оформленный покупателем на площадке.
+     *
+     * <p><b>Заказ уже существует, когда мы о нём узнаём.</b> Покупатель
+     * на Дроме нажал «купить» и заплатил, деньги held площадкой, а мы узнаём
+     * последними. Поэтому метод не отказывает: он записывает заказ при любом
+     * состоянии склада, — отказ означал бы заказ, о котором знает площадка
+     * и не знает разборка.
+     *
+     * <p><b>Товар резервируется сразу, в этой же транзакции.</b> Покупатель
+     * заплатил, и незарезервированную деталь через час продадут с прилавка —
+     * а вернуть придётся деньги и репутацию у площадки.
+     *
+     * <p><b>Или не резервируется вовсе.</b> Не хватило хоть одной позиции —
+     * не резервируем ничего, сделка остаётся черновиком и попадает продавцу
+     * в «ждут ответа» с пометкой. Частичный резерв тут хуже никакого: заказ
+     * всё равно придётся отклонить целиком — покупатель платил за всё, —
+     * а до отклонения он будет держать товар, который можно продать.
+     *
+     * <p><b>Повтор безопасен.</b> Тот же номер заказа возвращает ту же сделку,
+     * а не заводит вторую: второй резерв на тот же товар — это одна деталь,
+     * обещанная двум покупателям. Уникальность стережёт индекс в БД, проверка
+     * здесь лишь избавляет от исключения на обычном повторе. Это понадобится
+     * и сейчас (продавец завёл заказ дважды), и позже, когда заказы поедут
+     * из API площадки: доставка там будет at-least-once, как и всюду.
+     *
+     * @param replyDeadline до какого момента площадка ждёт ответа; у Дрома
+     *                      по защищённой сделке это трое рабочих суток,
+     *                      после чего деньги возвращаются покупателю
+     */
+    @Transactional
+    public AcceptedOrder registerMarketplaceOrder(String marketplace, String orderNo,
+                                                  Instant replyDeadline, Long customerId,
+                                                  Long managerId, Long dealSourceId,
+                                                  String deliveryNote, Instant reservedUntil,
+                                                  List<ItemRequest> items,
+                                                  List<ServiceRequest> services) {
+        if (marketplace == null || orderNo == null || orderNo.isBlank()) {
+            throw new IllegalArgumentException("Не указана площадка или номер заказа");
+        }
+        if (items == null || items.isEmpty()) {
+            throw new IllegalArgumentException("В заказе нет позиций");
+        }
+
+        Deal existing = dealRepository.findByMarketplaceAndExternalOrderNo(marketplace, orderNo)
+                .orElse(null);
+        if (existing != null) {
+            return new AcceptedOrder(detachable(existing), true, List.of());
+        }
+
+        Deal deal = new Deal(customerId, managerId);
+        deal.setCreatedBy(managerId);
+        deal.setDealSourceId(dealSourceId);
+        deal.setDeliveryNote(deliveryNote);
+        deal.fromMarketplace(marketplace, orderNo.strip(), replyDeadline);
+
+        for (ItemRequest item : items) {
+            Part part = requirePart(item.partId());
+            deal.addItem(part.getId(), item.quantity(),
+                    item.price() != null ? item.price() : part.getPrice(), item.warehouseId());
+        }
+        // Доставка входит в сумму документа: площадка переводит деньги
+        // за деталь вместе с ней, и сойтись перевод должен с суммой сделки.
+        addServices(deal, services);
+
+        // Сначала смотрим, хватает ли всего, и только потом резервируем:
+        // резерв половины заказа держал бы товар ради сделки, которую всё
+        // равно придётся отклонить.
+        List<String> missing = shortagesOf(items);
+        if (missing.isEmpty()) {
+            for (ItemRequest item : items) {
+                reservationRepository.reserve(item.partId(), item.warehouseId(), item.quantity());
+            }
+            deal.reserve(reservedUntil != null ? reservedUntil : defaultReserveUntil(replyDeadline));
+        }
+
+        Deal saved = detachable(dealRepository.saveAndFlush(deal));
+        log(saved, "ORDER_RECEIVED", missing.isEmpty()
+                        ? "Заказ %s №%s принят и зарезервирован".formatted(marketplace, orderNo)
+                        : "Заказ %s №%s принят, но обеспечить нечем: %s"
+                                .formatted(marketplace, orderNo, String.join("; ", missing)),
+                managerId);
+        return new AcceptedOrder(saved, false, missing);
+    }
+
+    /**
+     * Отмечает заказ подтверждённым площадке.
+     *
+     * <p>Склад это не двигает — товар зарезервирован с момента приёма. Отметка
+     * убирает заказ из очереди «ждут ответа»: пока её нет, продавец видит
+     * заказ в списке, а по истечении срока площадка вернёт деньги покупателю.
+     */
+    @Transactional
+    public Deal acceptOrder(Long dealId, Long managerId) {
+        Deal deal = requireDeal(dealId);
+        deal.getItems().size();
+        boolean wasAwaiting = deal.isAwaitingReply();
+        deal.acceptOrder();
+
+        Deal saved = detachable(dealRepository.saveAndFlush(deal));
+        if (wasAwaiting) {
+            log(saved, "ORDER_ACCEPTED", "Заказ подтверждён площадке", managerId);
+        }
+        return saved;
+    }
+
+    /**
+     * Заказы площадок, по которым продавец ещё не ответил.
+     *
+     * <p>Сортировка по сроку ответа, а не по дате заказа: пропущенный срок
+     * у Дрома означает возврат денег покупателю, и заказ, до которого осталось
+     * два часа, важнее вчерашнего, у которого их сутки.
+     */
+    @Transactional(readOnly = true)
+    public List<Deal> ordersAwaitingReply() {
+        return withItems(dealRepository.findAwaitingReply());
+    }
+
+    /**
+     * Чего не хватает под заказ.
+     *
+     * <p>Считается по свободному остатку, а не по наличию: деталь, отложенная
+     * другому покупателю, для этого заказа всё равно что продана.
+     */
+    private List<String> shortagesOf(List<ItemRequest> items) {
+        List<String> missing = new ArrayList<>();
+        for (ItemRequest item : items) {
+            BigDecimal available = reservationRepository.availableQuantity(
+                    item.partId(), item.warehouseId());
+            if (available.compareTo(item.quantity()) < 0) {
+                Part part = requirePart(item.partId());
+                missing.add("%s — нужно %s, свободно %s".formatted(
+                        part.getTitle(), item.quantity().stripTrailingZeros().toPlainString(),
+                        available.stripTrailingZeros().toPlainString()));
+            }
+        }
+        return missing;
+    }
+
+    /**
+     * Срок резерва по умолчанию — срок ответа площадке.
+     *
+     * <p>Держать дольше нечего: не ответили вовремя — заказа больше нет,
+     * а товар остался бы заблокированным неизвестно до какого числа.
+     */
+    private Instant defaultReserveUntil(Instant replyDeadline) {
+        return replyDeadline != null && replyDeadline.isAfter(Instant.now())
+                ? replyDeadline
+                : Instant.now().plus(java.time.Duration.ofDays(3));
+    }
+
+    /**
+     * @param replayed заказ уже был заведён раньше — вернулась прежняя сделка
+     * @param missing  чего не хватило на складе; пусто — заказ обеспечен
+     */
+    public record AcceptedOrder(Deal deal, boolean replayed, List<String> missing) {
     }
 
     /**
@@ -121,7 +336,7 @@ public class SalesService {
         }
 
         deal.issue(now);
-        Deal saved = dealRepository.saveAndFlush(deal);
+        Deal saved = detachable(dealRepository.saveAndFlush(deal));
 
         log(saved, "ISSUED", "Сделка выдана клиенту", managerId);
         eventPublisher.publish(DomainEvent.of("deal", dealId, "deal.issued.v1", payloadOf(saved)));
@@ -148,7 +363,7 @@ public class SalesService {
         }
         deal.cancel(Instant.now());
 
-        Deal saved = dealRepository.saveAndFlush(deal);
+        Deal saved = detachable(dealRepository.saveAndFlush(deal));
         log(saved, "CANCELLED",
                 reason == null || reason.isBlank() ? "Сделка отменена" : "Сделка отменена: " + reason,
                 managerId);
@@ -319,7 +534,7 @@ public class SalesService {
             target.inheritReservation(source.getReservedUntil());
         }
         dealRepository.saveAndFlush(source);
-        Deal savedTarget = dealRepository.saveAndFlush(target);
+        Deal savedTarget = detachable(dealRepository.saveAndFlush(target));
 
         String parts = moved.stream().map(i -> String.valueOf(i.getPartId())).toList().toString();
         log(source, "ITEMS_MOVED_OUT",
@@ -392,26 +607,45 @@ public class SalesService {
     /** Сделка со всеми позициями. Для чтения из REST. */
     @Transactional(readOnly = true)
     public Deal require(Long dealId) {
-        Deal deal = requireDeal(dealId);
-        // Позиции подтягиваем внутри транзакции: снаружи ленивая коллекция
-        // сериализуется в исключение, а не в JSON.
-        deal.getItems().size();
-        return deal;
+        return detachable(requireDeal(dealId));
     }
 
     /** История покупок клиента, свежие сверху. */
     @Transactional(readOnly = true)
     public List<Deal> ofCustomer(Long customerId) {
-        List<Deal> deals = dealRepository.findByCustomerIdOrderByIdDesc(customerId);
-        deals.forEach(deal -> deal.getItems().size());
+        return withItems(dealRepository.findByCustomerIdOrderByIdDesc(customerId));
+    }
+
+    /**
+     * Подтягивает ленивые коллекции сделки, пока транзакция ещё открыта.
+     *
+     * <p>{@code open-in-view} выключен намеренно, а позиции и услуги ленивые:
+     * контроллер, добравшийся до них после коммита, получает
+     * {@code LazyInitializationException}, а клиент — пятисотку.
+     *
+     * <p><b>Обе коллекции здесь, а не по одной на месте.</b> Первый раз это
+     * поймал живой прогон — на двух путях подряд; второй раз, когда появились
+     * услуги, легли шестнадцать тестов сразу, потому что подтягивались только
+     * позиции. Единственное место на все выходы наружу — чтобы третьего раза
+     * не было: новая коллекция добавляется здесь, а не в каждом методе.
+     *
+     * <p>Не {@code JOIN FETCH} в запросе: он у каждого метода свой, и две
+     * коллекции в одном запросе дают декартово произведение строк.
+     */
+    private Deal detachable(Deal deal) {
+        deal.getItems().size();
+        deal.getServices().size();
+        return deal;
+    }
+
+    private List<Deal> withItems(List<Deal> deals) {
+        deals.forEach(this::detachable);
         return deals;
     }
 
     @Transactional(readOnly = true)
     public List<Deal> expiredReservations() {
-        List<Deal> deals = dealRepository.findExpiredReservations(Instant.now());
-        deals.forEach(deal -> deal.getItems().size());
-        return deals;
+        return withItems(dealRepository.findExpiredReservations(Instant.now()));
     }
 
     @Transactional(readOnly = true)

@@ -7,6 +7,9 @@ import {
   cancelDeal,
   createCustomer,
   createDeal,
+  receiveOrder,
+  serviceKinds,
+  dealSources,
   dealsOf,
   issueDeal,
   payDeal,
@@ -20,6 +23,8 @@ import {
   transferItems,
 } from '../sales/sales';
 import type {
+  DealSource as DealSourceRow,
+  ServiceLine,
   BasketLine,
   Customer,
   Deal,
@@ -50,6 +55,31 @@ export function SellerScreen({ canSell }: Props) {
   const [searching, setSearching] = useState(false);
   const [lines, setLines] = useState<BasketLine[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
+  // Заказ с площадки оформляется здесь же, а не отдельным экраном с той же
+  // корзиной: продавец уже нашёл детали и выбрал клиента, и второй такой же
+  // экран отличался бы двумя полями.
+  // Услуги подтягиваются один раз: справочник из двух строк, и меняется
+  // он с релизом, а не в течение дня.
+  const [services, setServices] = useState<ServiceLine[]>([]);
+  // Откуда пришла продажа. Спрашивается при каждой сделке, а не только
+  // у заказа с площадки: отчёт по каналам, в котором половина выручки
+  // без источника, не отвечает ни на один вопрос.
+  const [sources, setSources] = useState<DealSourceRow[]>([]);
+  const [sourceId, setSourceId] = useState('');
+  const [marketplace, setMarketplace] = useState('');
+  const [orderNo, setOrderNo] = useState('');
+  const [note, setNote] = useState('');
+
+  useEffect(() => {
+    void serviceKinds()
+      .then((kinds) => setServices(kinds.map((kind) => ({ kind, price: '' }))))
+      // Молча: без справочника услуг продавать всё ещё можно, а красный
+      // текст на весь экран из-за доставки — это про неверные приоритеты.
+      .catch(() => setServices([]));
+    void dealSources()
+      .then(setSources)
+      .catch(() => setSources([]));
+  }, []);
   const [deal, setDeal] = useState<Deal | null>(null);
   // Возврат и перенос случаются не в тот же разговор, что продажа: клиент
   // приезжает через неделю. Без поиска по клиенту до его сделки не добраться.
@@ -152,16 +182,89 @@ export function SellerScreen({ canSell }: Props) {
               </li>
             ))}
           </ul>
-          <p className="note">Итого: {basketTotal(lines).toLocaleString('ru-RU')} ₽</p>
+          {services.length > 0 && (
+            <div className="services">
+              {services.map((line, index) => (
+                <label key={line.kind.id} className="field">
+                  {line.kind.name}, ₽
+                  <input
+                    inputMode="decimal"
+                    value={line.price}
+                    placeholder={line.kind.price ?? ''}
+                    onChange={(e) =>
+                      setServices(services.map((s, i) =>
+                        i === index ? { ...s, price: e.target.value } : s))
+                    }
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+
+          <p className="note">
+            Итого: {basketTotal(lines, services).toLocaleString('ru-RU')} ₽
+          </p>
 
           <CustomerPicker customer={customer} onPick={setCustomer} onError={setError} />
 
+          {sources.length > 0 && (
+            <label className="field">
+              Откуда пришла продажа
+              <select value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+                <option value="">не указан</option>
+                {sources.map((source) => (
+                  <option key={source.id} value={source.id}>
+                    {source.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          <label className="field">
+            Заказ с площадки
+            <select
+              value={marketplace}
+              onChange={(e) => setMarketplace(e.target.value)}
+            >
+              <option value="">нет, обычная продажа</option>
+              <option value="DROM">Дром</option>
+              <option value="AVITO">Авито</option>
+            </select>
+          </label>
+
+          {marketplace !== '' && (
+            <>
+              <label className="field">
+                Номер заказа у площадки
+                <input
+                  value={orderNo}
+                  onChange={(e) => setOrderNo(e.target.value)}
+                  placeholder="301-516-98"
+                />
+              </label>
+              <label className="field">
+                Доставка
+                <input
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="ТК СДЭК, адрес и получатель"
+                />
+              </label>
+              <p className="note">
+                Заказ уже оплачен покупателем. Ответить площадке нужно
+                в её срок — иначе деньги вернутся ему.
+              </p>
+            </>
+          )}
+
           <button
             type="button"
-            disabled={customer === null || !canSell}
+            disabled={customer === null || !canSell
+              || (marketplace !== '' && orderNo.trim() === '')}
             onClick={() => void submit()}
           >
-            Оформить и отложить
+            {marketplace === '' ? 'Оформить и отложить' : 'Принять заказ'}
           </button>
           {!canSell && <p className="note">Ваша роль не позволяет продавать</p>}
         </>
@@ -209,9 +312,29 @@ export function SellerScreen({ canSell }: Props) {
     }
     setError(null);
     try {
-      const created = await createDeal(customer.id, lines);
-      setDeal(created);
+      if (marketplace !== '') {
+        const result = await receiveOrder(
+          marketplace, orderNo.trim(), customer.id, lines, null, note, services,
+          sourceId === '' ? null : Number(sourceId));
+        setDeal(result.deal);
+        if (result.replayed) {
+          // Не ошибка: продавец мог завести заказ дважды. Правильный ответ —
+          // «этот заказ уже заведён, вот он», а не красный текст про отказ.
+          setError('Этот заказ уже был заведён — открыта прежняя сделка');
+        } else if (result.missing.length > 0) {
+          // Товара нет: подтверждать площадке нечего, и узнать об этом
+          // продавец должен сейчас, а не когда придёт время отгружать.
+          setError('Обеспечить нечем: ' + result.missing.join('; '));
+        }
+        setMarketplace('');
+        setOrderNo('');
+        setNote('');
+      } else {
+        setDeal(await createDeal(customer.id, lines, services,
+          sourceId === '' ? null : Number(sourceId)));
+      }
       setLines([]);
+      setServices(services.map((line) => ({ ...line, price: '' })));
       // Остаток изменился — показанный список уже врёт.
       setRows([]);
     } catch (cause) {
@@ -601,6 +724,16 @@ function DealCard({
       }
     } catch (cause) {
       onError(describe(cause, 'Операция не выполнена'));
+      // Сделку изменил кто-то ещё — показываем, во что она превратилась,
+      // а не оставляем на экране состояние, которого уже нет. Иначе продавец
+      // жмёт ту же кнопку второй раз и получает тот же отказ.
+      if (cause instanceof ApiError && cause.status === 409) {
+        const deals = await dealsOf(deal.customerId).catch(() => []);
+        const fresh = deals.find((d) => d.id === deal.id);
+        if (fresh !== undefined) {
+          onChanged(fresh);
+        }
+      }
     }
   }
 }

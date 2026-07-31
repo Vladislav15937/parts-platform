@@ -61,6 +61,48 @@ export interface DonorReport {
   };
 }
 
+/**
+ * Строка отчёта по каналам.
+ *
+ * <p>{@code sourceName} пустой — источник у сделки не указан. Не «прочее»:
+ * это не канал, а незаполненное поле, и лечится оно привычкой продавца,
+ * а не переименованием строки в отчёте.
+ */
+export interface SourceRow {
+  sourceId: number | null;
+  sourceName: string | null;
+  dealsCount: number;
+  revenue: string | null;
+  margin: string | null;
+  itemsWithoutCost: number;
+}
+
+export interface SourceReport {
+  month: string;
+  rows: SourceRow[];
+}
+
+export function salesBySource(month: string): Promise<SourceReport> {
+  return request<SourceReport>(`/api/reports/sources?month=${month}`);
+}
+
+/**
+ * Какая доля выручки пришла без указанного источника.
+ *
+ * <p>Пока она велика, остальным строкам отчёта верить нельзя: «Дром принёс
+ * мало» и «продавцы не отмечают Дром» с экрана выглядят одинаково.
+ */
+export function unknownShare(report: SourceReport): number {
+  const total = report.rows.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
+  if (total === 0) {
+    return 0;
+  }
+  const unknown = report.rows
+    .filter((row) => row.sourceId === null)
+    .reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
+  return unknown / total;
+}
+
 export function managerSales(month: string): Promise<ManagerReport> {
   return request<ManagerReport>(`/api/reports/managers?month=${month}`);
 }

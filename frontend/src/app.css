@@ -140,6 +140,74 @@ button:disabled {
   border-radius: 10px;
 }
 
+/* Список карточек заказов: у li свои отступы, иначе карточки слипаются. */
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Номер заказа и сумма по краям строки. Без этого они шли встык —
+   «№ 301-516-984500 ₽», и продавец читал номер вместе с ценой. */
+.order-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+/* Две границы цены рядом: диапазон читается как диапазон, а не как
+   два независимых поля друг под другом. */
+.filter-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.filter-row .field {
+  flex: 1;
+}
+
+/* Флажки отбора в строку: три состояния детали и десяток складов
+   столбиком растянули бы карточку выгрузки на экран. */
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin: 0;
+  padding: 0.5rem 0 0;
+  border: none;
+}
+
+.choices legend {
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* Флажок и подпись в строку. Глобальное правило для label ставит
+   flex-direction: column — оно для полей ввода, где подпись сверху,
+   а у флажка подпись обязана быть рядом, иначе непонятно, что к чему. */
+.choices label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.choices input {
+  width: auto;
+}
+
+/* Заказ, который нечем закрыть: подтверждать площадке нечего, и увидеть
+   это надо до того, как продавец начнёт читать позиции. */
+.card--alert {
+  border-color: var(--danger, #c0392b);
+}
+
 .card h2 {
   margin: 0;
   font-size: 1.1rem;

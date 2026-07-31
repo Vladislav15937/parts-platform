@@ -11,6 +11,7 @@ import ru.partsflow.inventory.VerticalSide;
 
 import javax.xml.stream.XMLStreamException;
 import java.io.OutputStream;
+import java.math.BigDecimal;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -71,6 +72,7 @@ public class DromPriceGenerator {
               LEFT JOIN (
                   SELECT part_id, sum(qty_available) AS qty_available
                     FROM part_stock
+                   WHERE (?::bigint[] IS NULL OR warehouse_id = ANY (?::bigint[]))
                    GROUP BY part_id
               ) s ON s.part_id = p.id
               LEFT JOIN part_oem primary_oem
@@ -84,6 +86,9 @@ public class DromPriceGenerator {
              WHERE p.is_published
                AND p.status IN ('IN_STOCK', 'SOLD')
                AND p.price IS NOT NULL
+               AND (?::numeric IS NULL OR p.price >= ?::numeric)
+               AND (?::numeric IS NULL OR p.price <= ?::numeric)
+               AND (?::text[]   IS NULL OR p.condition = ANY (?::text[]))
             """;
 
     /** Дельта — тот же запрос по списку позиций: формат обязан совпасть с прайсом. */
@@ -107,7 +112,49 @@ public class DromPriceGenerator {
      */
     @Transactional(readOnly = true)
     public int writeTo(OutputStream out) {
-        return write(out, null);
+        return write(out, null, FeedFilter.everything());
+    }
+
+    /**
+     * Пишет прайс одной выгрузки: только то, что проходит её отбор.
+     *
+     * <p>Выгрузок на одну площадку бывает несколько — у живого клиента пять
+     * на Дром, разложенные по ценовым диапазонам, у каждой свой прайс-лист
+     * в кабинете и своя цена размещения. Какая именно пришла за прайсом,
+     * определяет токен в ссылке.
+     */
+    @Transactional(readOnly = true)
+    public int writeTo(OutputStream out, FeedFilter filter) {
+        return write(out, null, filter);
+    }
+
+    /**
+     * Отбор товара в выгрузку.
+     *
+     * <p><b>Пусто в любом поле — «без ограничения», а не «ничего».</b>
+     * Выгрузка, у которой не заполнили цену, обязана отдавать весь склад:
+     * пустой прайс площадка примет молча, и объявления пропадут вместе
+     * с накопленными просмотрами, за которые и платят.
+     *
+     * <p><b>Склад меняет и остаток, а не только состав.</b> Выгрузка филиала
+     * должна показывать то, что лежит в этом филиале: иначе покупатель
+     * приедет за деталью, которая числится на другом конце города.
+     *
+     * <p>Переключателя «выгружать резерв» здесь нет намеренно. У нас
+     * отложенная деталь и так уезжает с {@code available = false}, а убрать
+     * её из прайса значит потерять объявление вместе с просмотрами — по той же
+     * причине, по которой в прайсе остаётся проданное.
+     *
+     * @param conditions   {@code NEW}, {@code USED}, {@code REFURBISHED};
+     *                     пусто — любое
+     * @param warehouseIds пусто — все склады
+     */
+    public record FeedFilter(BigDecimal priceFrom, BigDecimal priceTo,
+                             List<String> conditions, List<Long> warehouseIds) {
+
+        public static FeedFilter everything() {
+            return new FeedFilter(null, null, List.of(), List.of());
+        }
     }
 
     /**
@@ -125,18 +172,39 @@ public class DromPriceGenerator {
         if (partIds == null || partIds.isEmpty()) {
             return 0;
         }
-        return write(out, partIds);
+        return write(out, partIds, FeedFilter.everything());
     }
 
-    private int write(OutputStream out, List<Long> partIds) {
+    private int write(OutputStream out, List<Long> partIds, FeedFilter filter) {
         Session session = entityManager.unwrap(Session.class);
         String sql = SQL + (partIds == null ? "" : DELTA_FILTER) + ORDER;
 
         return session.doReturningWork(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 statement.setFetchSize(FETCH_SIZE);
+
+                // Параметры идут в порядке появления в SQL: сначала склады
+                // в подзапросе остатка, потом цена и состояние.
+                java.sql.Array warehouses = filter.warehouseIds() == null
+                        || filter.warehouseIds().isEmpty()
+                        ? null
+                        : connection.createArrayOf("bigint", filter.warehouseIds().toArray());
+                java.sql.Array conditions = filter.conditions() == null
+                        || filter.conditions().isEmpty()
+                        ? null
+                        : connection.createArrayOf("text", filter.conditions().toArray());
+
+                statement.setArray(1, warehouses);
+                statement.setArray(2, warehouses);
+                statement.setBigDecimal(3, filter.priceFrom());
+                statement.setBigDecimal(4, filter.priceFrom());
+                statement.setBigDecimal(5, filter.priceTo());
+                statement.setBigDecimal(6, filter.priceTo());
+                statement.setArray(7, conditions);
+                statement.setArray(8, conditions);
+
                 if (partIds != null) {
-                    statement.setArray(1, connection.createArrayOf("bigint", partIds.toArray()));
+                    statement.setArray(9, connection.createArrayOf("bigint", partIds.toArray()));
                 }
                 try (ResultSet rs = statement.executeQuery()) {
                     return writer.write(out, new OfferCursor(rs));

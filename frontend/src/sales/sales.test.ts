@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { basketTotal, returnable, roomFor, transferable } from './sales';
+import {
+  basketTotal,
+  hoursUntilDeadline,
+  returnable,
+  roomFor,
+  transferable,
+} from './sales';
 import type { BasketLine, Deal, StockRow } from './sales';
 
 /**
@@ -83,6 +89,23 @@ describe('итог корзины', () => {
   it('пустая корзина стоит ноль', () => {
     expect(basketTotal([])).toBe(0);
   });
+
+  it('доставка входит в итог', () => {
+    // Продавец называет клиенту одну сумму, и она обязана совпасть с той,
+    // что окажется в документе, — иначе разговор про доставку начнётся
+    // после оплаты. У заказа с площадки хуже: перевод придёт с доставкой,
+    // а сделка будет на цену детали.
+    const delivery = { kind: { id: 1, name: 'Доставка', price: null }, price: '300' };
+
+    expect(basketTotal([line(row(), 1, '4500')], [delivery])).toBe(4800);
+  });
+
+  it('незаполненная услуга ничего не добавляет', () => {
+    // Пустое поле — «доставки не было», а не «доставка бесплатная».
+    const delivery = { kind: { id: 1, name: 'Доставка', price: '300' }, price: '' };
+
+    expect(basketTotal([line(row(), 1, '4500')], [delivery])).toBe(4500);
+  });
 });
 
 /**
@@ -105,6 +128,12 @@ function dealWith(...statuses: string[]): Deal {
     debt: '5000',
     createdAt: '2026-07-30T10:00:00Z',
     issuedAt: null,
+    marketplace: null,
+    externalOrderNo: null,
+    replyDeadline: null,
+    orderAcceptedAt: null,
+    deliveryNote: null,
+    services: [],
     items: statuses.map((status, at) => ({
       id: at + 1,
       partId: 100 + at,
@@ -134,5 +163,39 @@ describe('строки сделки, доступные к действию', ()
     // обоих видов. Попади возвращённая в список — деталь встанет на склад
     // дважды, а деньги уйдут клиенту дважды.
     expect(returnable(dealWith('ISSUED', 'RETURNED')).map((i) => i.id)).toEqual([1]);
+  });
+});
+
+/**
+ * Срок ответа площадке.
+ *
+ * <p>У Дрома по защищённой сделке это трое рабочих суток: не ответили —
+ * деньги вернулись покупателю. Поэтому экран показывает остаток времени,
+ * а не дату: «до 4 авг» продавец сопоставляет с сегодняшним числом сам
+ * и ошибается.
+ */
+describe('срок ответа площадке', () => {
+  const now = Date.parse('2026-07-31T12:00:00Z');
+
+  it('считает остаток в часах', () => {
+    const deal = dealWith();
+    deal.replyDeadline = '2026-07-31T14:00:00Z';
+
+    expect(hoursUntilDeadline(deal, now)).toBeCloseTo(2);
+  });
+
+  it('просроченный срок даёт отрицательное, а не ноль', () => {
+    // Ноль или пустое значение здесь означали бы «срок не задан», и заказ,
+    // по которому площадка уже вернула деньги, выглядел бы как обычный.
+    const deal = dealWith();
+    deal.replyDeadline = '2026-07-31T09:00:00Z';
+
+    expect(hoursUntilDeadline(deal, now)).toBeLessThan(0);
+  });
+
+  it('без срока — ничего, а не ноль', () => {
+    // Ноль прочитался бы как «время вышло»: у обычной продажи срока ответа
+    // нет вовсе, и торопить продавца по ней не с чем.
+    expect(hoursUntilDeadline(dealWith(), now)).toBeNull();
   });
 });

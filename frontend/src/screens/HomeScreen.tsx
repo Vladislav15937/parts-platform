@@ -15,6 +15,9 @@ import { DeliveryScreen } from './DeliveryScreen';
 import { LabelsScreen } from './LabelsScreen';
 import { ReportsScreen } from './ReportsScreen';
 import { UnmatchedScreen } from './UnmatchedScreen';
+import { OrdersScreen } from './OrdersScreen';
+import { FeedsScreen } from './FeedsScreen';
+import { ordersAwaitingReply } from '../sales/sales';
 import { unmatchedNames } from '../catalog/partNames';
 import { deadLetters } from '../events/deadLetters';
 
@@ -52,6 +55,8 @@ type Tab =
   | 'import'
   | 'names'
   | 'reports'
+  | 'orders'
+  | 'feeds'
   | 'delivery'
   | 'labels'
   | 'reference';
@@ -69,6 +74,10 @@ export function HomeScreen() {
   // То же соображение: недоставленное не всплывает само, а звонок клиента
   // за проданной деталью — плохой способ о нём узнать.
   const [undelivered, setUndelivered] = useState(0);
+  // И то же самое про заказы: у Дрома трое суток на ответ, после чего деньги
+  // возвращаются покупателю. Заказ, о котором продавец не узнал, — это
+  // не просто несделанная работа, а потерянные деньги и баллы рейтинга.
+  const [awaitingOrders, setAwaitingOrders] = useState(0);
 
   // Запасной распознаватель тянем сразу после входа, пока связь заведомо есть:
   // первое сканирование случится в ангаре, где её уже не будет.
@@ -90,6 +99,17 @@ export function HomeScreen() {
     void deadLetters()
       .then((page) => setUndelivered(page.total))
       .catch(() => setUndelivered(0));
+  }, [role, online]);
+
+  useEffect(() => {
+    // Заказы — продавцу, а не разбирающему справочник: у ролей разный список
+    // вкладок, и число на чужой вкладке только мешает.
+    if (role === null || !SELLING_ROLES.includes(role) || !online) {
+      return;
+    }
+    void ordersAwaitingReply()
+      .then((found) => setAwaitingOrders(found.length))
+      .catch(() => setAwaitingOrders(0));
   }, [role, online]);
 
   if (state.status !== 'authenticated') {
@@ -142,6 +162,15 @@ export function HomeScreen() {
         >
           Продажа
         </button>
+        {SELLING_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
+            className={tab === 'orders' ? 'tab tab--active' : 'tab'}
+            onClick={() => setTab('orders')}
+          >
+            Заказы{awaitingOrders > 0 && ` · ${awaitingOrders}`}
+          </button>
+        )}
         <button
           type="button"
           className={tab === 'inventory' ? 'tab tab--active' : 'tab'}
@@ -177,6 +206,15 @@ export function HomeScreen() {
             onClick={() => setTab('reports')}
           >
             Отчёты
+          </button>
+        )}
+        {NAMING_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
+            className={tab === 'feeds' ? 'tab tab--active' : 'tab'}
+            onClick={() => setTab('feeds')}
+          >
+            Выгрузки
           </button>
         )}
         {NAMING_ROLES.includes(state.me.role) && (
@@ -243,6 +281,12 @@ export function HomeScreen() {
             которой уже нет, а отложенная в телефоне сделка ничего не резервирует.
           </p>
         ))}
+
+      {tab === 'feeds' && NAMING_ROLES.includes(state.me.role) && <FeedsScreen />}
+
+      {tab === 'orders' && (
+        <OrdersScreen canSell={SELLING_ROLES.includes(state.me.role)} />
+      )}
 
       {tab === 'inventory' &&
         (status.kind === 'ready' ? (

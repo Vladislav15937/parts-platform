@@ -72,6 +72,21 @@ public class MarketplaceAccountController {
      * Смена ссылки останавливает забор прайса, пока новую не пропишут, поэтому
      * это отдельное действие, а не побочный эффект сохранения настроек.
      */
+    /**
+     * Меняет отбор товара в выгрузку.
+     *
+     * <p>Выгрузок на одну площадку бывает несколько, и различаются они именно
+     * отбором: у живого клиента пять прайсов на Дром по ценовым диапазонам,
+     * у каждого своя цена размещения в кабинете площадки.
+     */
+    @PutMapping("/{id}/filter")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public MarketplaceAccountService.Account setFilter(@PathVariable Long id,
+                                                       @RequestBody FilterRequest request) {
+        return accounts.setFilter(id, request.priceFrom(), request.priceTo(),
+                request.conditions(), request.warehouseIds());
+    }
+
     @PostMapping("/{id}/feed-url")
     @PreAuthorize("hasRole('OWNER')")
     public FeedUrlView rotateFeedUrl(@PathVariable Long id) {
@@ -101,6 +116,13 @@ public class MarketplaceAccountController {
     }
 
     public record CredentialsRequest(@NotBlank String secret) {
+    }
+
+    /** Пустое поле — «без ограничения», а не «ничего». */
+    public record FilterRequest(java.math.BigDecimal priceFrom,
+                                java.math.BigDecimal priceTo,
+                                List<String> conditions,
+                                List<Long> warehouseIds) {
     }
 
     public record FeedUrlView(String path) {

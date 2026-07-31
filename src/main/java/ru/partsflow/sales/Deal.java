@@ -11,6 +11,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import org.hibernate.annotations.Generated;
 import org.hibernate.generator.EventType;
 
@@ -49,6 +50,26 @@ public class Deal {
     @Generated(event = EventType.INSERT)
     @Column(insertable = false, updatable = false)
     private Long number;
+
+    /**
+     * Версия документа: двое продавцов не правят одну сделку одновременно.
+     *
+     * <p>Проверка статуса от этого не спасает — она читает то, что загружено
+     * в начале транзакции, и обе операции проходят её одинаково. Часть гонок
+     * отбивает склад, но только там, где обе операции его трогают: «выдать»
+     * и «перенести позиции» проходили обе, потому что перенос резерв
+     * не снимает — деталь уезжала к клиенту и одновременно числилась
+     * обещанной в новом документе.
+     *
+     * <p>Блокировка оптимистичная, а не «документ занят Ивановым», как
+     * у Bazon. У нас экран сделки — это кнопки, а не форма, которую держат
+     * открытой: окно гонки измеряется миллисекундами, и проигравшему честнее
+     * ответить «сделку только что изменили, откройте заново», чем занимать
+     * документ. Пессимистичная блокировка вдобавок требует срока жизни —
+     * без него продавец, отошедший от прилавка, держит сделку навсегда.
+     */
+    @Version
+    private long version;
 
     @Column(name = "customer_id")
     private Long customerId;
@@ -91,6 +112,37 @@ public class Deal {
     @Column(name = "delivery_note")
     private String deliveryNote;
 
+    /**
+     * Площадка, с которой пришёл заказ: {@code DROM}, {@code AVITO} или пусто
+     * у обычной продажи.
+     *
+     * <p>Машинный код, а не ссылка на {@code deal_source}: справочник источников
+     * редактирует клиент, и ключ идемпотентности, зависящий от переименованной
+     * им строки, перестаёт быть ключом. {@code deal_source} остаётся тем,
+     * по чему владелец считает, какой канал приносит деньги.
+     */
+    @Column(name = "marketplace")
+    private String marketplace;
+
+    /** Номер заказа у площадки — тот, который называет покупатель. */
+    @Column(name = "external_order_no")
+    private String externalOrderNo;
+
+    /**
+     * До какого момента площадка ждёт ответа продавца.
+     *
+     * <p>У Дрома по защищённой сделке это трое рабочих суток: не ответили —
+     * деньги вернулись покупателю, а заказ пропал. Поэтому срок хранится
+     * отдельно от срока резерва: резерв продлевают по договорённости
+     * с покупателем, а этот назначает площадка, и продлить его нельзя.
+     */
+    @Column(name = "reply_deadline")
+    private Instant replyDeadline;
+
+    /** Момент, когда продавец подтвердил заказ площадке. */
+    @Column(name = "order_accepted_at")
+    private Instant orderAcceptedAt;
+
     @Column(name = "created_by")
     private Long createdBy;
 
@@ -102,6 +154,17 @@ public class Deal {
 
     @Column(name = "closed_at")
     private Instant closedAt;
+
+    /**
+     * Услуги сделки: доставка, упаковка.
+     *
+     * <p>Отдельно от позиций намеренно — см. {@link DealService}. В сумму
+     * документа входят наравне с товаром: у заказа с площадки перевод приходит
+     * вместе с доставкой, и сойтись он должен с суммой сделки.
+     */
+    @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
+    @JoinColumn(name = "deal_id", nullable = false)
+    private List<DealService> services = new ArrayList<>();
 
     /**
      * {@code nullable = false} обязателен: без него Hibernate вставляет позицию
@@ -121,6 +184,21 @@ public class Deal {
     }
 
     // ---------- поведение ----------
+
+    /**
+     * Добавляет услугу: доставку, упаковку.
+     *
+     * <p>Склад это не двигает и двигать не может — у услуги нет детали.
+     * В сумму документа она входит наравне с товаром.
+     */
+    public DealService addService(Long serviceId, BigDecimal quantity, BigDecimal price) {
+        requireOpen("добавить услугу");
+
+        DealService service = new DealService(serviceId, quantity, price);
+        services.add(service);
+        recalculate();
+        return service;
+    }
 
     public DealItem addItem(Long partId, BigDecimal quantity, BigDecimal price, Long warehouseId) {
         requireOpen("добавить позицию");
@@ -195,6 +273,31 @@ public class Deal {
         this.reservedUntil = until;
     }
 
+    /**
+     * Отмечает заказ площадки принятым.
+     *
+     * <p>Это не статус сделки: для склада ничего не меняется — товар уже
+     * зарезервирован с момента, когда заказ приехал. Отметка нужна очереди
+     * «ждут ответа»: пока её нет, заказ висит у продавца, а после срока
+     * площадка вернёт деньги покупателю.
+     */
+    public void acceptOrder() {
+        if (externalOrderNo == null) {
+            throw new IllegalStateException("Это не заказ с площадки: принимать нечего");
+        }
+        if (orderAcceptedAt != null) {
+            // Повторное подтверждение — не ошибка: продавец мог нажать дважды,
+            // а очередь не отличает «принял только что» от «принял вчера».
+            return;
+        }
+        this.orderAcceptedAt = Instant.now();
+    }
+
+    /** Заказ площадки, по которому продавец ещё не ответил. */
+    public boolean isAwaitingReply() {
+        return externalOrderNo != null && orderAcceptedAt == null && status.holdsStock();
+    }
+
     public void markReady() {
         requireOpen("пометить готовой к выдаче");
         this.status = DealStatus.READY;
@@ -255,6 +358,14 @@ public class Deal {
                     "Выданную сделку не отменяют, а оформляют возвратом: иначе товар "
                             + "вернётся на склад без документа и без возврата денег");
         }
+        // Закрытую отменять нечем, и молчаливое согласие тут хуже отказа:
+        // повторное нажатие отвечало успехом и писало в историю документа
+        // вторую отмену — то есть история говорила о действии, которого
+        // не было. Разбирают её через недели, когда вспомнить некому.
+        if (!status.holdsStock()) {
+            throw new IllegalStateException(
+                    "Сделка уже закрыта (%s), отменять нечего".formatted(status));
+        }
         items.forEach(DealItem::cancel);
         this.status = DealStatus.CANCELLED;
         this.closedAt = when;
@@ -279,12 +390,26 @@ public class Deal {
         return paidAmount.compareTo(totalAmount) >= 0;
     }
 
-    /** Сумма пересчитывается от позиций: хранить её независимо — гарантированное расхождение. */
+    /**
+     * Сумма пересчитывается от позиций: хранить её независимо — гарантированное
+     * расхождение.
+     *
+     * <p>Услуги входят наравне с товаром. Без этого сумма сделки по заказу
+     * с площадки не сходилась с переводом: Дром присылает деньги за деталь
+     * вместе с доставкой, а в документе была одна цена детали.
+     *
+     * <p>Отменённые позиции не входят, услуги отменять нечем: доставка либо
+     * оказана, либо не заведена.
+     */
     public void recalculate() {
-        this.totalAmount = items.stream()
+        BigDecimal goods = items.stream()
                 .filter(i -> i.getStatus() != DealItemStatus.CANCELLED)
                 .map(DealItem::lineTotal)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal work = services.stream()
+                .map(DealService::lineTotal)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        this.totalAmount = goods.add(work);
     }
 
     public void registerPayment(BigDecimal amount) {
@@ -350,6 +475,36 @@ public class Deal {
 
     public void setWarehouseId(Long warehouseId) {
         this.warehouseId = warehouseId;
+    }
+
+    public String getMarketplace() {
+        return marketplace;
+    }
+
+    public String getExternalOrderNo() {
+        return externalOrderNo;
+    }
+
+    public Instant getReplyDeadline() {
+        return replyDeadline;
+    }
+
+    public Instant getOrderAcceptedAt() {
+        return orderAcceptedAt;
+    }
+
+    void fromMarketplace(String marketplace, String orderNo, Instant replyDeadline) {
+        this.marketplace = marketplace;
+        this.externalOrderNo = orderNo;
+        this.replyDeadline = replyDeadline;
+    }
+
+    public List<DealService> getServices() {
+        return List.copyOf(services);
+    }
+
+    public long getVersion() {
+        return version;
     }
 
     public Long getDealSourceId() {

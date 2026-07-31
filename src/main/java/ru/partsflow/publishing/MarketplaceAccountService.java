@@ -8,6 +8,7 @@ import ru.partsflow.platform.tenant.TenantContext;
 
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Optional;
 
@@ -38,7 +39,8 @@ public class MarketplaceAccountService {
         return jdbc.query("""
                 SELECT id, marketplace, title, status, last_sync_at IS NOT NULL AS synced,
                        last_error, credentials IS NOT NULL AS has_credentials,
-                       credentials, feed_token IS NOT NULL AS has_feed
+                       credentials, feed_token IS NOT NULL AS has_feed,
+                       price_from, price_to, conditions, warehouse_ids
                   FROM marketplace_account
                  ORDER BY marketplace, title""",
                 (rs, i) -> new Account(
@@ -52,7 +54,58 @@ public class MarketplaceAccountService {
                         rs.getBoolean("has_credentials")
                                 && !SecretCipher.isEncrypted(rs.getBytes("credentials")),
                         rs.getBoolean("has_feed"),
-                        rs.getString("last_error")));
+                        rs.getString("last_error"),
+                        rs.getBigDecimal("price_from"),
+                        rs.getBigDecimal("price_to"),
+                        textList(rs.getArray("conditions")),
+                        longList(rs.getArray("warehouse_ids"))));
+    }
+
+    private static List<String> textList(java.sql.Array array) throws SQLException {
+        return array == null ? List.of() : List.of((String[]) array.getArray());
+    }
+
+    private static List<Long> longList(java.sql.Array array) throws SQLException {
+        return array == null ? List.of() : List.of((Long[]) array.getArray());
+    }
+
+    /**
+     * Меняет отбор товара в выгрузку.
+     *
+     * <p>Пустое значение — «без ограничения», а не «ничего»: выгрузка,
+     * у которой стёрли цену, обязана вернуться к отдаче всего склада.
+     * Пустой прайс площадка примет молча, и объявления пропадут вместе
+     * с накопленными просмотрами.
+     *
+     * <p>Отдельным действием от смены ссылки: смена ссылки останавливает
+     * выгрузку до тех пор, пока техспециалист площадки не пропишет новую,
+     * а правка отбора применяется к следующему забору сама.
+     */
+    @Transactional
+    public Account setFilter(Long id, java.math.BigDecimal priceFrom,
+                             java.math.BigDecimal priceTo,
+                             List<String> conditions, List<Long> warehouseIds) {
+        if (priceFrom != null && priceTo != null && priceFrom.compareTo(priceTo) > 0) {
+            throw new IllegalArgumentException("Нижняя граница цены больше верхней");
+        }
+        int updated = jdbc.update("""
+                UPDATE marketplace_account
+                   SET price_from = ?, price_to = ?,
+                       conditions = ?::text[], warehouse_ids = ?::bigint[]
+                 WHERE id = ?""",
+                priceFrom, priceTo,
+                conditions == null || conditions.isEmpty() ? null : arrayLiteral(conditions),
+                warehouseIds == null || warehouseIds.isEmpty() ? null : arrayLiteral(warehouseIds),
+                id);
+        if (updated == 0) {
+            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+        }
+        return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
+    }
+
+    private static String arrayLiteral(List<?> values) {
+        return values.stream().map(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(",", "{", "}"));
     }
 
     /**
@@ -159,8 +212,15 @@ public class MarketplaceAccountService {
     /**
      * @param plaintextSecret секрет лежит незашифрованным — его надо перезаписать
      */
+    /**
+     * @param priceFrom   пусто — без нижней границы, а не «ноль»
+     * @param conditions  пусто — любое состояние детали
+     * @param warehouseIds пусто — все склады
+     */
     public record Account(Long id, String marketplace, String title, String status,
                           boolean hasCredentials, boolean plaintextSecret, boolean hasFeed,
-                          String lastError) {
+                          String lastError, java.math.BigDecimal priceFrom,
+                          java.math.BigDecimal priceTo, List<String> conditions,
+                          List<Long> warehouseIds) {
     }
 }

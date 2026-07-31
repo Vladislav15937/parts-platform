@@ -64,6 +64,45 @@ public class ReportService {
     }
 
     /**
+     * Продажи по каналам за месяц: откуда пришли деньги.
+     *
+     * <p>Отвечает на вопрос владельца «стоит ли платить за размещение»:
+     * без разреза по каналам счёт от площадки не с чем сравнить.
+     *
+     * <p><b>Сделки без источника не выбрасываются, а идут строкой с пустым
+     * каналом.</b> Невидимая часть выручки делает отчёт бесполезным: по нему
+     * нельзя понять, Дром не приносит денег или продавцы не отмечают источник.
+     * Пока эта строка большая, остальным цифрам верить нельзя, и владелец
+     * должен это видеть.
+     */
+    @Transactional(readOnly = true)
+    public List<SourceRow> salesBySource(YearMonth month) {
+        return jdbc.query("""
+                SELECT deal_source_id, source_name, deals_count, revenue, margin,
+                       items_without_cost
+                  FROM v_sales_by_source
+                 WHERE period = ?::date
+                 ORDER BY revenue DESC NULLS LAST, source_name NULLS LAST""",
+                (rs, i) -> new SourceRow(
+                        rs.getObject("deal_source_id", Long.class),
+                        rs.getString("source_name"),
+                        rs.getInt("deals_count"),
+                        rs.getBigDecimal("revenue"),
+                        rs.getBigDecimal("margin"),
+                        rs.getInt("items_without_cost")),
+                month.atDay(1));
+    }
+
+    /**
+     * @param sourceName пусто — источник у сделки не указан. Не «прочее»:
+     *                   это не канал, а незаполненное поле, и лечится оно
+     *                   не переименованием, а привычкой продавца
+     */
+    public record SourceRow(Long sourceId, String sourceName, int dealsCount,
+                            BigDecimal revenue, BigDecimal margin, int itemsWithoutCost) {
+    }
+
+    /**
      * Окупаемость доноров: сколько вложено, сколько выручено, сколько ещё лежит.
      *
      * <p>Убыточные сверху — это то, на что владелец смотрит. Но «убыток»

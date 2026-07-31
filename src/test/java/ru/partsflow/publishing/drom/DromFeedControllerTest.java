@@ -166,6 +166,113 @@ class DromFeedControllerTest extends PostgresTestBase {
                 .andExpect(status().isForbidden());
     }
 
+    @Test
+    @DisplayName("Две выгрузки одной площадки отдают разный товар")
+    void feedsAreFilteredIndependently() throws Exception {
+        // Ровно то, что делает живой клиент: пять прайсов на Дром, разложенных
+        // по ценовым диапазонам, у каждого свой прайс-лист в кабинете
+        // и своя цена размещения.
+        Long cheapId = inTenant(TENANT, () -> {
+            pricedPart("Заглушка бампера", 500);
+            pricedPart("Двигатель в сборе", 90000);
+            return jdbc.queryForObject("""
+                    INSERT INTO marketplace_account (marketplace, title, settings,
+                                                     price_from, price_to)
+                    VALUES ('DROM', 'Дром: дешёвое', '{}'::jsonb, 0, 1000)
+                    RETURNING id""", Long.class);
+        });
+        String cheapFeed = rotate(cheapId);
+
+        String cheap = mvc.perform(get(cheapFeed))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(cheap).contains("Заглушка бампера");
+        assertThat(cheap)
+                .as("в прайс дешёвого диапазона попал товар за 90 000 — "
+                        + "разложить склад по прайс-листам не получится")
+                .doesNotContain("Двигатель в сборе");
+
+        // Прежняя выгрузка без фильтра продолжает отдавать всё: пустой фильтр
+        // означает «без ограничения», а не «ничего».
+        String all = mvc.perform(get(feedPath))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(all).contains("Двигатель в сборе").contains("Заглушка бампера");
+    }
+
+    @Test
+    @DisplayName("Выгрузка склада показывает остаток этого склада")
+    void warehouseFeedShowsItsOwnStock() throws Exception {
+        Long feedId = inTenant(TENANT, () -> {
+            Long branch = jdbc.queryForObject(
+                    "INSERT INTO branch (name) VALUES ('Второй филиал') RETURNING id", Long.class);
+            Long far = jdbc.queryForObject(
+                    "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Дальний') RETURNING id",
+                    Long.class, branch);
+            Long partId = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, cost_price, is_published)
+                    VALUES (1, 'Дверь на дальнем складе', 7000, 3000, true) RETURNING id""",
+                    Long.class);
+            jdbc.update("""
+                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
+                    VALUES (?, 'INTAKE', 1, ?)""", partId, far);
+
+            return jdbc.queryForObject("""
+                    INSERT INTO marketplace_account (marketplace, title, settings, warehouse_ids)
+                    VALUES ('DROM', 'Дром: дальний склад', '{}'::jsonb, ARRAY[?::bigint])
+                    RETURNING id""", Long.class, far);
+        });
+
+        String body = mvc.perform(get(rotate(feedId)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // Деталь этого склада — доступна. Деталь соседнего склада в прайс
+        // попадает (объявление живёт и копит просмотры), но доступной
+        // числиться не должна: иначе покупатель приедет за ней на другой
+        // конец города, а её там нет.
+        assertThat(body).contains("Дверь на дальнем складе");
+        assertThat(offerOf(body, "Дверь на дальнем складе"))
+                .as("остаток склада выгрузки потерялся")
+                .contains("<available>true</available>");
+        assertThat(offerOf(body, "Фара левая Camry"))
+                .as("остаток посчитан по всем складам: покупателю обещана "
+                        + "деталь, которой на этом складе нет")
+                .contains("<available>false</available>");
+    }
+
+    /** Кусок прайса про одну позицию: остальные предложения не мешают смотреть. */
+    private String offerOf(String feed, String title) {
+        int at = feed.indexOf(title);
+        assertThat(at).as("позиции «%s» в прайсе нет вовсе", title).isGreaterThan(0);
+        int end = feed.indexOf("</offer>", at);
+        return feed.substring(at, end < 0 ? feed.length() : end);
+    }
+
+    private void pricedPart(String title, int price) {
+        Long branch = jdbc.queryForObject(
+                "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class);
+        Long warehouse = jdbc.queryForObject(
+                "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Склад') RETURNING id",
+                Long.class, branch);
+        Long partId = jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price, cost_price, is_published)
+                VALUES (1, ?, ?, 100, true) RETURNING id""", Long.class, title, price);
+        jdbc.update("""
+                INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
+                VALUES (?, 'INTAKE', 1, ?)""", partId, warehouse);
+    }
+
+    private String rotate(Long id) throws Exception {
+        String body = mvc.perform(post("/api/marketplace-accounts/" + id + "/feed-url")
+                        .with(csrf()).session(login("owner")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        return body.replaceAll("^\\{\"path\":\"(.*)\"\\}$", "$1");
+    }
+
     private String rotate() throws Exception {
         String body = mvc.perform(post("/api/marketplace-accounts/" + accountId + "/feed-url")
                         .with(csrf()).session(login("owner")))

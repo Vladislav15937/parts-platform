@@ -1,6 +1,7 @@
 package ru.partsflow.sales;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
@@ -73,13 +74,67 @@ public class SalesController {
                 : Instant.now().plus(DEFAULT_RESERVATION);
 
         Deal deal = sales.createReserved(
-                request.customerId(), CurrentUser.memberId(), until,
+                request.customerId(), CurrentUser.memberId(), until, request.dealSourceId(),
                 request.items().stream()
                         .map(i -> new SalesService.ItemRequest(
                                 i.partId(), i.quantity(), i.price(), i.warehouseId()))
-                        .toList());
+                        .toList(),
+                servicesOf(request.services()));
 
         return ResponseEntity.status(HttpStatus.CREATED).body(view(deal));
+    }
+
+    /**
+     * Принимает заказ, оформленный покупателем на площадке.
+     *
+     * <p>Пока заводится руками: продавец видит заказ в кабинете Дрома
+     * и переносит его сюда. Ключ к API защищённых сделок Дром выдаёт
+     * по запросу, и до него автоматический приём написать не на чем —
+     * но модель от способа доставки заказа не зависит, и когда ключ появится,
+     * поменяется только то, кто зовёт этот метод.
+     *
+     * <p>Повтор по тому же номеру заказа возвращает прежнюю сделку и код 200
+     * вместо 201: продавец мог завести заказ дважды, а вторая сделка на тот же
+     * товар — это одна деталь, обещанная двум покупателям.
+     */
+    @PostMapping("/orders")
+    @PreAuthorize(SELLS)
+    public ResponseEntity<OrderView> receiveOrder(@Valid @RequestBody OrderRequest request) {
+        SalesService.AcceptedOrder accepted = sales.registerMarketplaceOrder(
+                request.marketplace(), request.orderNo(), request.replyDeadline(),
+                request.customerId(), CurrentUser.memberId(), request.dealSourceId(),
+                request.deliveryNote(), request.reservedUntil(),
+                request.items().stream()
+                        .map(i -> new SalesService.ItemRequest(
+                                i.partId(), i.quantity(), i.price(), i.warehouseId()))
+                        .toList(),
+                servicesOf(request.services()));
+
+        OrderView body = new OrderView(view(accepted.deal()), accepted.replayed(),
+                accepted.missing());
+        return ResponseEntity.status(accepted.replayed() ? HttpStatus.OK : HttpStatus.CREATED)
+                .body(body);
+    }
+
+    /**
+     * Заказы площадок, по которым ещё не ответили.
+     *
+     * <p>Отдельный список, а не отметка в общем: у Дрома по защищённой сделке
+     * трое рабочих суток, после чего деньги возвращаются покупателю, — заказ,
+     * потерявшийся среди сотни сделок, это потерянные деньги и рейтинг
+     * у площадки.
+     */
+    @GetMapping("/orders/awaiting-reply")
+    @PreAuthorize(SELLS)
+    public List<DealView> ordersAwaitingReply() {
+        return views(sales.ordersAwaitingReply());
+    }
+
+    /** Подтверждает заказ площадке: убирает его из очереди «ждут ответа». */
+    @PostMapping("/orders/{id}/accept")
+    @PreAuthorize(SELLS)
+    public DealView acceptOrder(@PathVariable Long id) {
+        return view(sales.acceptOrder(id, CurrentUser.memberId()));
     }
 
     @GetMapping("/{id}")
@@ -195,6 +250,45 @@ public class SalesController {
      * <p>История клиента — это десятки сделок; запрос на строку превратил бы
      * её открытие в сотню запросов к базе.
      */
+    private static List<SalesService.ServiceRequest> servicesOf(List<ServiceBody> bodies) {
+        return bodies == null ? List.of() : bodies.stream()
+                .map(b -> new SalesService.ServiceRequest(b.serviceId(), b.quantity(), b.price()))
+                .toList();
+    }
+
+    /**
+     * Справочник источников: откуда пришла продажа.
+     *
+     * <p>Отвечает на вопрос владельца «окупается ли размещение на Дроме»,
+     * и потому заполняться должен при каждой продаже, а не только у заказов
+     * с площадки.
+     */
+    @GetMapping("/sources")
+    public List<SourceView> sources() {
+        return sales.dealSources().stream()
+                .map(s -> new SourceView(s.getId(), s.getName()))
+                .toList();
+    }
+
+    public record SourceView(Long id, String name) {
+    }
+
+    /** Справочник услуг для экрана продавца. */
+    @GetMapping("/services")
+    public List<ServiceView> services() {
+        return sales.serviceKinds().stream()
+                .map(k -> new ServiceView(k.getId(), k.getName(), k.getPrice()))
+                .toList();
+    }
+
+    public record ServiceView(Long id, String name, BigDecimal price) {
+    }
+
+    /** Строка услуги в сделке: доставка, упаковка. Склад не двигает. */
+    public record ServiceLineView(Long id, Long serviceId, BigDecimal quantity,
+                                  BigDecimal price) {
+    }
+
     private List<DealView> views(List<Deal> deals) {
         Map<Long, String> titles = parts.titlesOf(deals.stream()
                 .flatMap(deal -> deal.getItems().stream())
@@ -209,9 +303,19 @@ public class SalesController {
     }
 
     public record CreateRequest(@NotNull Long customerId,
+                                /* Откуда пришла продажа: строка справочника источников. */
+                                Long dealSourceId,
                                 /* Пусто — резерв на трое суток. */
                                 Instant reservedUntil,
-                                @NotEmpty List<ItemBody> items) {
+                                @NotEmpty List<ItemBody> items,
+                                /* Доставка и упаковка: деньги сделки, а не примечание. */
+                                List<ServiceBody> services) {
+    }
+
+    /** @param price пусто — берётся подсказка из справочника, а не ноль */
+    public record ServiceBody(@NotNull Long serviceId,
+                              BigDecimal quantity,
+                              BigDecimal price) {
     }
 
     /** Цена необязательна: по умолчанию берётся из карточки детали. */
@@ -247,17 +351,65 @@ public class SalesController {
     public record TransferRequest(@NotEmpty List<Long> itemIds) {
     }
 
+    /**
+     * @param marketplace    {@code DROM} или {@code AVITO}
+     * @param orderNo        номер заказа у площадки — тот, который называет покупатель
+     * @param replyDeadline  до какого момента площадка ждёт ответа; у Дрома
+     *                       это трое рабочих суток, потом деньги вернутся
+     * @param dealSourceId   строка справочника источников для отчётов; площадка
+     *                       и источник — разные вещи: первый машинный код,
+     *                       второй владелец переименовывает как хочет
+     */
+    public record OrderRequest(@NotBlank String marketplace,
+                               @NotBlank String orderNo,
+                               Instant replyDeadline,
+                               Long customerId,
+                               Long dealSourceId,
+                               String deliveryNote,
+                               Instant reservedUntil,
+                               @NotEmpty List<ItemBody> items,
+                               List<ServiceBody> services) {
+    }
+
+    /**
+     * @param replayed заказ с таким номером уже был заведён — вернулась прежняя сделка
+     * @param missing  чего не хватило на складе; непусто — сделка осталась
+     *                 черновиком, товар не зарезервирован, и заказ,
+     *                 скорее всего, придётся отклонить
+     */
+    public record OrderView(DealView deal, boolean replayed, List<String> missing) {
+    }
+
+    /**
+     * @param marketplace   площадка, если сделка пришла заказом; иначе пусто
+     * @param externalOrderNo номер заказа у площадки — его называет покупатель
+     * @param replyDeadline срок ответа площадке; у Дрома пропущенный означает
+     *                      возврат денег покупателю
+     */
     public record DealView(Long id, Long number, Long customerId, Long managerId,
                            DealStatus status, Instant reservedUntil,
                            BigDecimal totalAmount, BigDecimal paidAmount, BigDecimal debt,
-                           Instant createdAt, Instant issuedAt, List<ItemView> items) {
+                           Instant createdAt, Instant issuedAt,
+                           Long dealSourceId,
+                           String marketplace, String externalOrderNo,
+                           Instant replyDeadline, Instant orderAcceptedAt,
+                           String deliveryNote, List<ItemView> items,
+                           List<ServiceLineView> services) {
 
         static DealView of(Deal deal, Map<Long, String> titles) {
             return new DealView(deal.getId(), deal.getNumber(), deal.getCustomerId(),
                     deal.getManagerId(), deal.getStatus(), deal.getReservedUntil(),
                     deal.getTotalAmount(), deal.getPaidAmount(), deal.debt(),
                     deal.getCreatedAt(), deal.getIssuedAt(),
-                    deal.getItems().stream().map(item -> ItemView.of(item, titles)).toList());
+                    deal.getDealSourceId(),
+                    deal.getMarketplace(), deal.getExternalOrderNo(),
+                    deal.getReplyDeadline(), deal.getOrderAcceptedAt(),
+                    deal.getDeliveryNote(),
+                    deal.getItems().stream().map(item -> ItemView.of(item, titles)).toList(),
+                    deal.getServices().stream()
+                            .map(s -> new ServiceLineView(s.getId(), s.getServiceId(),
+                                    s.getQuantity(), s.getPrice()))
+                            .toList());
         }
     }
 

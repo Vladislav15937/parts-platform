@@ -19,6 +19,7 @@ import ru.partsflow.support.PostgresTestBase;
 import java.time.YearMonth;
 import java.util.function.Supplier;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -238,7 +239,43 @@ class ReportControllerTest extends PostgresTestBase {
         return login(login);
     }
 
+    @Test
+    @DisplayName("Продажи разложены по каналам, а безымянные видны отдельной строкой")
+    void salesAreSplitBySource() throws Exception {
+        MockHttpSession session = login("vladelec");
+        Long drom = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM deal_source WHERE name = 'Дром'", Long.class));
+
+        Long fromDrom = partWithStock("Фара с Дрома", 1);
+        Long noSource = partWithStock("Фара без источника", 1);
+
+        issuedDealFrom(session, drom, fromDrom);
+        issuedDealFrom(session, null, noSource);
+
+        var response = mvc.perform(get("/api/reports/sources")
+                        .param("month", java.time.YearMonth.now().toString())
+                        .session(session))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // Канал назван — по нему и считают счёт от площадки. Сверяемся
+        // по идентификатору, а не по названию: MockMvc отдаёт тело
+        // в ISO-8859-1, и кириллица в сравнении превращается в кашу.
+        assertThat(response).contains("\"sourceId\":" + drom);
+        // Сделка без источника не выброшена: невидимая часть выручки делает
+        // отчёт бесполезным — по нему нельзя понять, канал не приносит денег
+        // или продавцы не отмечают источник.
+        assertThat(response)
+                .as("выручка без источника растворилась — отчёт врёт молча")
+                .contains("\"sourceName\":null");
+    }
+
     private long issuedDeal(MockHttpSession session, Long... partIds) throws Exception {
+        return issuedDealFrom(session, null, partIds);
+    }
+
+    private long issuedDealFrom(MockHttpSession session, Long sourceId, Long... partIds)
+            throws Exception {
         String items = java.util.Arrays.stream(partIds)
                 .map(id -> "{\"partId\":%d,\"quantity\":1,\"warehouseId\":%d}"
                         .formatted(id, warehouse))
@@ -247,7 +284,8 @@ class ReportControllerTest extends PostgresTestBase {
 
         var created = mvc.perform(post("/api/deals").with(csrf()).session(session)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"customerId\":%d,\"items\":[%s]}".formatted(customer, items)))
+                        .content("{\"customerId\":%d,\"dealSourceId\":%s,\"items\":[%s]}"
+                                .formatted(customer, sourceId, items)))
                 .andExpect(status().isCreated())
                 .andReturn();
 
