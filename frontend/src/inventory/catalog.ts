@@ -324,3 +324,19 @@ export function saveVisible(keys: string[]): void {
     // но таблица работать не перестанет.
   }
 }
+
+/**
+ * Списание: деталь ушла со склада, но не покупателю.
+ *
+ * <p>Причина обязательна — это единственная операция, уносящая товар без
+ * покупателя и без денег, и «почему» через месяц не восстановить ни по
+ * журналу, ни по документу.
+ */
+export function writeOffPart(
+  warehouseId: number, partId: number, quantity: number, reason: string,
+): Promise<unknown> {
+  return request<unknown>('/api/stock/write-offs', {
+    method: 'POST',
+    body: { warehouseId, reason, items: [{ partId, quantity }] },
+  });
+}

@@ -117,6 +117,47 @@ class InventoryServiceTest extends PostgresTestBase {
         assertThat(qtyOf(partId, warehouse)).isEqualByComparingTo("3");
     }
 
+    /**
+     * Недостача, обнулившая остаток, закрывает карточку.
+     *
+     * <p>Прежде она оставалась «в наличии» с нулём — то есть врала про самое
+     * важное, про наличие. Списать её было нечем: остаток уже ноль, списывать
+     * нечего, а правило «разбирается руками» рук не имело. Причина при этом
+     * не теряется: в журнале стоит корректировка, а не списание, и «не нашли
+     * при пересчёте» отличимо от «разбили при разборе».
+     */
+    @Test
+    @DisplayName("Недостача до нуля закрывает карточку, а не оставляет её в наличии")
+    void shortageToZeroClosesThePart() {
+        Long partId = partWithStock("Фара, которой не нашли", 1);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+
+        inTenant(() -> inventory.count(sessionId, partId, BigDecimal.ZERO, null));
+        inTenant(() -> inventory.finishCounting(sessionId));
+        inTenant(() -> inventory.apply(sessionId));
+
+        assertThat(qtyOf(partId, warehouse)).isEqualByComparingTo("0");
+        assertThat(statusOf(partId)).isEqualTo("WRITTEN_OFF");
+        assertThat(movementTypes(partId))
+                .as("причина недостачи потеряна: в журнале должно остаться INVENTORY_ADJUST")
+                .contains("INVENTORY_ADJUST")
+                .doesNotContain("WRITE_OFF");
+    }
+
+    // Частичная недостача остаток оставляет — карточка остаётся в наличии.
+    @Test
+    @DisplayName("Частичная недостача карточку не закрывает")
+    void partialShortageKeepsThePart() {
+        Long partId = partWithStock("Стартер, недосчитались одного", 3);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+
+        inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("2"), null));
+        inTenant(() -> inventory.finishCounting(sessionId));
+        inTenant(() -> inventory.apply(sessionId));
+
+        assertThat(statusOf(partId)).isEqualTo("IN_STOCK");
+    }
+
     @Test
     @DisplayName("Излишек приходуется корректировкой")
     void surplusIsAdded() {
@@ -447,6 +488,12 @@ class InventoryServiceTest extends PostgresTestBase {
                 SELECT count(*) FROM stock_movement
                  WHERE part_id = ? AND movement_type = 'INVENTORY_ADJUST'""",
                 Integer.class, partId));
+    }
+
+    private java.util.List<String> movementTypes(Long partId) {
+        return inTenant(() -> jdbc.queryForList(
+                "SELECT movement_type FROM stock_movement WHERE part_id = ?",
+                String.class, partId));
     }
 
     private String statusOf(Long partId) {

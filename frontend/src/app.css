@@ -1500,3 +1500,16 @@ hr {
 .card-view__add .field {
   flex: 1 1 8rem;
 }
+
+/* Списание в карточке: форма разворачивается на месте кнопки, а не в новом
+   окне поверх окна — решение принимают, глядя на ту же карточку. */
+.card-view__writeoff {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  margin-top: 12px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}

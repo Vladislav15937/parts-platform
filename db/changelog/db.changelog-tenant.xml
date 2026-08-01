@@ -51,6 +51,7 @@
     <include file="tenant/032-donor-body-engine.sql"   relativeToChangelogFile="true"/>
     <include file="tenant/033-photo-import.sql"        relativeToChangelogFile="true"/>
     <include file="tenant/034-applicability-unique.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/035-shortage-writes-off.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

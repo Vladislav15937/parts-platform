@@ -34,7 +34,7 @@ import { VehiclePicker } from './VehiclePicker';
  */
 const SIZE = 50;
 
-export function CatalogScreen() {
+export function CatalogScreen({ role }: { role: string }) {
   const [page, setPage] = useState<CatalogPage | null>(null);
   const [error, setError] = useState('');
   const [visible, setVisible] = useState<string[]>(loadVisible);
@@ -209,7 +209,16 @@ export function CatalogScreen() {
       )}
 
       {card !== null && (
-        <PartCard row={card} warehouses={warehouses} onClose={() => setCard(null)} />
+        <PartCard
+          row={card}
+          warehouses={warehouses}
+          role={role}
+          onClose={() => setCard(null)}
+          onWrittenOff={() => {
+            setCard(null);
+            load(query);
+          }}
+        />
       )}
 
       {picking && (
