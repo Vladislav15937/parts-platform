@@ -132,7 +132,10 @@ class InventoryHttpTest extends PostgresTestBase {
         mvc.perform(post("/api/inventory/sessions/%d/apply".formatted(sessionId))
                         .with(csrf()).session(session))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.adjusted").value(1));
+                .andExpect(jsonPath("$.adjusted").value(1))
+                // Пустой список — не украшение: экран по нему решает, показывать
+                // ли кладовщику, что часть строк осталась непроведённой.
+                .andExpect(jsonPath("$.blocked.length()").value(0));
     }
 
     @Test

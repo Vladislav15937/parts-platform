@@ -53,6 +53,7 @@
     <include file="tenant/034-applicability-unique.sql" relativeToChangelogFile="true"/>
     <include file="tenant/035-shortage-writes-off.sql" relativeToChangelogFile="true"/>
     <include file="tenant/036-zero-stock-status.sql"   relativeToChangelogFile="true"/>
+    <include file="tenant/037-inventory-line-applied.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

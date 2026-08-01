@@ -51,6 +51,18 @@ public class InventoryLine {
     @Column(name = "counted_at")
     private Instant countedAt;
 
+    /**
+     * Когда строка проведена. Пусто — корректировка ещё не записана.
+     *
+     * <p>Отметка на строке, а не только на сессии: недостачу по детали,
+     * обещанной покупателю, списать нельзя, и из-за одной такой строки
+     * не должна ждать вся инвентаризация. Проведённая строка второй
+     * корректировки не породит, поэтому повтор после снятия резерва
+     * безопасен.
+     */
+    @Column(name = "applied_at")
+    private Instant appliedAt;
+
     protected InventoryLine() {
     }
 
@@ -75,6 +87,15 @@ public class InventoryLine {
 
     public boolean isCounted() {
         return qtyCounted != null;
+    }
+
+    /** Проведённая строка второй корректировки не породит. */
+    public boolean isApplied() {
+        return appliedAt != null;
+    }
+
+    void markApplied(Instant when) {
+        this.appliedAt = when;
     }
 
     public Long getId() {
@@ -103,5 +124,9 @@ public class InventoryLine {
 
     public Instant getCountedAt() {
         return countedAt;
+    }
+
+    public Instant getAppliedAt() {
+        return appliedAt;
     }
 }

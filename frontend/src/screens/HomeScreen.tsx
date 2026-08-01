@@ -11,6 +11,7 @@ import { IntakeScreen } from './IntakeScreen';
 import { DonorScreen } from './DonorScreen';
 import { ImportScreen } from './ImportScreen';
 import { InventoryScreen } from './InventoryScreen';
+import { InventoryReconcile } from './InventoryReconcile';
 import { OutboxScreen } from './OutboxScreen';
 import { SellerScreen } from './SellerScreen';
 import { DeliveryScreen } from './DeliveryScreen';
@@ -357,6 +358,14 @@ export function HomeScreen() {
             вкладку «Справочники».
           </p>
         ))}
+
+      {/* Сведение расхождений — владельцу и менеджеру: списанная недостача
+          это убыток, и решение принимает тот, кто отвечает за склад.
+          Кладовщик обходит полки и вносит факт. */}
+      {tab === 'inventory' && status.kind === 'ready'
+        && ['OWNER', 'MANAGER'].includes(state.me.role) && (
+          <InventoryReconcile reference={status.reference} />
+        )}
 
       {tab === 'outbox' && (
         <OutboxScreen

@@ -10,7 +10,9 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -227,13 +229,58 @@ public class InventoryService {
      * показать кладовщику, дать пересчитать спорные полки и посмотреть снова.
      */
     @Transactional(readOnly = true)
-    public List<Discrepancy> discrepancies(Long sessionId) {
+    public List<DiscrepancyLine> discrepancies(Long sessionId) {
         InventorySession session = require(sessionId);
 
-        return session.countedLines().stream()
-                .map(line -> discrepancyOf(session, line))
-                .filter(d -> d.delta().signum() != 0)
+        List<InventoryLine> lines = session.countedLines().stream()
+                .filter(line -> discrepancyOf(session, line).delta().signum() != 0)
                 .toList();
+        // Наименования одним запросом на всю выдачу, а не по строке:
+        // «деталь 4» отправит кладовщика искать её самому, а расхождений
+        // на большом складе бывают десятки.
+        Map<Long, String> titles = titlesOf(lines.stream().map(InventoryLine::getPartId).toList());
+
+        return lines.stream()
+                .map(line -> {
+                    Discrepancy d = discrepancyOf(session, line);
+                    return new DiscrepancyLine(d.partId(), titles.get(d.partId()),
+                            d.qtyExpectedAtOpen(), d.qtyExpectedAtCount(), d.qtyCounted(),
+                            d.delta(), d.isShortage(), line.isApplied());
+                })
+                .toList();
+    }
+
+    private Map<Long, String> titlesOf(List<Long> partIds) {
+        if (partIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, String> titles = new HashMap<>();
+        // Числа подставляются в текст запроса, а не параметрами: они пришли
+        // из базы как long, а не из запроса пользователя, и списки бывают
+        // в сотни позиций — на каждую по параметру Postgres не обязан
+        // готовить свой план.
+        String in = partIds.stream().map(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(","));
+        jdbc.query("SELECT id, title FROM part WHERE id IN (" + in + ")",
+                rs -> {
+                    titles.put(rs.getLong("id"), rs.getString("title"));
+                });
+        return titles;
+    }
+
+    /**
+     * Строка расхождения для человека.
+     *
+     * @param applied проведена ли строка. После проведения расхождение
+     *                не исчезает — оно считается на момент подсчёта,
+     *                а корректировка записана позже, — и без этой отметки
+     *                экран показывает «скорректировано» рядом с той же
+     *                минусовой строкой
+     */
+    public record DiscrepancyLine(Long partId, String title,
+                                  BigDecimal qtyExpectedAtOpen, BigDecimal qtyExpectedAtCount,
+                                  BigDecimal qtyCounted, BigDecimal delta,
+                                  boolean shortage, boolean applied) {
     }
 
     /**
@@ -242,72 +289,65 @@ public class InventoryService {
      * <p>Сошедшиеся позиции движений не порождают — движение на ноль БД
      * отвергнет, да и журнал не должен пухнуть от записей «всё в порядке».
      *
-     * @return сколько позиций скорректировано
+     * <p><b>Построчно, а не «всё или ничего».</b> Недостачу по детали,
+     * обещанной покупателю, списать нельзя: остаток уйдёт ниже резерва,
+     * и это отобьёт триггер склада. Останавливать из-за неё всю
+     * инвентаризацию значит держать сорок посчитанных полок непроведёнными,
+     * пока продавец говорит с покупателем, — а кладовщик, который считал,
+     * снять резерв не может по роли.
+     *
+     * <p>Поэтому проводится всё, что можно, застрявшие строки остаются
+     * непроведёнными и возвращаются списком, а сессия не закрывается.
+     * Повтор после снятия резерва допишет только их: проведённая строка
+     * второй корректировки не породит.
      */
     @Transactional
-    public int apply(Long sessionId) {
+    public Applied apply(Long sessionId) {
         InventorySession session = require(sessionId);
-        List<Discrepancy> found = session.countedLines().stream()
-                .map(line -> discrepancyOf(session, line))
-                .filter(d -> d.delta().signum() != 0)
-                .toList();
+        Instant now = Instant.now();
 
-        requireShortagesNotPromised(session, found);
+        int adjusted = 0;
+        List<String> blocked = new ArrayList<>();
 
-        for (Discrepancy d : found) {
+        for (InventoryLine line : session.countedLines()) {
+            if (line.isApplied()) {
+                continue;
+            }
+            Discrepancy d = discrepancyOf(session, line);
+            if (d.delta().signum() == 0) {
+                line.markApplied(now);
+                continue;
+            }
+            if (d.delta().signum() < 0) {
+                BigDecimal available = reservations.availableQuantity(
+                        d.partId(), session.getWarehouseId());
+                if (available.compareTo(d.delta().abs()) < 0) {
+                    blocked.add(describePromised(d.partId(), available, d.delta().abs()));
+                    continue;
+                }
+            }
             movements.save(StockMovement.inventoryAdjust(
                     d.partId(), d.delta(), session.getWarehouseId()));
+            line.markApplied(now);
+            adjusted++;
         }
-        session.apply(Instant.now());
+
+        session.apply(now);
         sessions.saveAndFlush(session);
 
-        if (!found.isEmpty()) {
-            log.info("Инвентаризация {} на складе {}: скорректировано {} позиций",
-                    sessionId, session.getWarehouseId(), found.size());
+        if (adjusted > 0 || !blocked.isEmpty()) {
+            log.info("Инвентаризация {} на складе {}: скорректировано {}, застряло {}",
+                    sessionId, session.getWarehouseId(), adjusted, blocked.size());
         }
-        return found.size();
+        return new Applied(adjusted, blocked);
     }
 
     /**
-     * Недостача по детали, обещанной покупателю, останавливает проведение —
-     * целиком, а не частично.
-     *
-     * <p>Списать такую недостачу нельзя: остаток уйдёт ниже резерва, и это
-     * отобьёт триггер склада. Пока проверки не было, проведение падало
-     * с «Операция нарушает целостность данных» — кладовщик получал непонятный
-     * отказ на всю инвентаризацию и не знал, что делать. Случай не редкий:
-     * деталь обещали, а на полке её нет, — и узнать об этом важнее всего
-     * именно тогда, потому что покупателю надо звонить.
-     *
-     * <p><b>Всё или ничего, а не пропуск проблемных позиций.</b> Пропустив
-     * их, пришлось бы оставить сессию непроведённой ради повтора — а её
-     * корректировки к тому моменту уже записаны, и повтор списал бы всё
-     * второй раз. Отказ до первой записи оставляет базу нетронутой, и повтор
-     * безопасен.
-     *
-     * <p>Резерв при этом не снимается сам: обещание отменяет продавец,
-     * говоря с покупателем, а не пересчёт за его спиной.
+     * @param adjusted сколько позиций скорректировано
+     * @param blocked  что не проведено и почему: недостача по детали, которую
+     *                 держит резерв. Снимет продавец — повтор допишет
      */
-    private void requireShortagesNotPromised(InventorySession session,
-                                             List<Discrepancy> found) {
-        List<String> blocked = new ArrayList<>();
-        for (Discrepancy d : found) {
-            if (d.delta().signum() >= 0) {
-                continue;
-            }
-            BigDecimal available = reservations.availableQuantity(
-                    d.partId(), session.getWarehouseId());
-            if (available.compareTo(d.delta().abs()) < 0) {
-                blocked.add(describePromised(d.partId(), available, d.delta().abs()));
-            }
-        }
-        if (!blocked.isEmpty()) {
-            throw new IllegalStateException(
-                    "Провести пересчёт нельзя: недостача по деталям, обещанным покупателям. "
-                            + String.join("; ", blocked)
-                            + ". Снимите резерв — отмените или перенесите позицию в сделке — "
-                            + "и проведите заново");
-        }
+    public record Applied(int adjusted, List<String> blocked) {
     }
 
     /** Называет деталь и сделку: «деталь 4» отправит кладовщика искать самому. */
