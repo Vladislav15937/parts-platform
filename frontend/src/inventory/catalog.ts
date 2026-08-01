@@ -340,3 +340,33 @@ export function writeOffPart(
     body: { warehouseId, reason, items: [{ partId, quantity }] },
   });
 }
+
+/**
+ * Перемещение между складами.
+ *
+ * <p>Создаётся и проводится одним запросом: черновик тут не нужен, в отличие
+ * от приёмки — обходить со списком нечего, деталь уже посчитана, её просто
+ * переносят. Промежуточное состояние означало бы деталь, которой нет ни
+ * на одном складе.
+ *
+ * <p>Ячейка на складе-приёмнике необязательна, но без неё деталь ложится
+ * на склад без адреса, и найти её можно только глазами.
+ */
+export function movePart(
+  fromWarehouseId: number,
+  toWarehouseId: number,
+  partId: number,
+  quantity: number,
+  toCellId: number | null,
+  note: string | null,
+): Promise<{ number: number }> {
+  return request<{ number: number }>('/api/stock/moves', {
+    method: 'POST',
+    body: {
+      fromWarehouseId,
+      toWarehouseId,
+      note,
+      items: [{ partId, quantity, toCellId }],
+    },
+  });
+}

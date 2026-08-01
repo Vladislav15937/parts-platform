@@ -4,6 +4,7 @@ import {
   addApplicability,
   loadApplicability,
   loadPhotos,
+  movePart,
   removeApplicability,
   writeOffPart,
   type Applicability,
@@ -12,6 +13,7 @@ import {
   type Warehouse,
 } from '../inventory/catalog';
 import { loadCached, modelsOf, type VehicleCatalog } from '../catalog/vehicles';
+import { listCells, type Cell } from '../organization/warehouses';
 
 /**
  * Карточка позиции — как в кабинете, на который клиент смотрит каждый день:
@@ -26,12 +28,13 @@ import { loadCached, modelsOf, type VehicleCatalog } from '../catalog/vehicles';
  * колонок, включая скрытые в таблице. Второй запрос делается только
  * за снимками — их ссылки подписанные и короткоживущие.
  */
-export function PartCard({ row, warehouses, role, onClose, onWrittenOff }: {
+export function PartCard({ row, warehouses, role, onClose, onChanged }: {
   row: CatalogRow;
   warehouses: Warehouse[];
   role: string;
   onClose: () => void;
-  onWrittenOff: () => void;
+  /** Склад изменился: списали или перевезли — витрину надо перечитать. */
+  onChanged: () => void;
 }) {
   // Списывает тот, кто отвечает за деньги: списанная деталь — это убыток,
   // а не запись в журнале. Кладовщик находит недостачу, решение не его.
@@ -40,6 +43,16 @@ export function PartCard({ row, warehouses, role, onClose, onWrittenOff }: {
   const [writeOffAt, setWriteOffAt] = useState<number | null>(null);
   const [writeOffQty, setWriteOffQty] = useState('1');
   const [writeOffError, setWriteOffError] = useState('');
+
+  // Перевозит кладовщик наравне с владельцем: деталь у него в руках,
+  // и решение «переставить на другой склад» — это работа, а не расход.
+  const [moving, setMoving] = useState(false);
+  const [moveFrom, setMoveFrom] = useState<number | null>(null);
+  const [moveTo, setMoveTo] = useState<number | null>(null);
+  const [moveQty, setMoveQty] = useState('1');
+  const [moveCells, setMoveCells] = useState<Cell[]>([]);
+  const [moveCell, setMoveCell] = useState<number | null>(null);
+  const [moveError, setMoveError] = useState('');
   const [photos, setPhotos] = useState<PartPhoto[]>([]);
   const [shown, setShown] = useState(0);
   const [tab, setTab] = useState<'about' | 'fits'>('about');
@@ -106,6 +119,30 @@ export function PartCard({ row, warehouses, role, onClose, onWrittenOff }: {
 
   const main = photos[shown];
 
+  /** Ячейки склада-приёмника: без адреса деталь находится только глазами. */
+  async function chooseTarget(id: number | null): Promise<void> {
+    setMoveTo(id);
+    setMoveCell(null);
+    setMoveCells(id === null ? [] : await listCells(id).catch(() => []));
+  }
+
+  async function move(): Promise<void> {
+    if (moveFrom === null || moveTo === null) {
+      return;
+    }
+    setMoveError('');
+    try {
+      await movePart(moveFrom, moveTo, row.id, Number(moveQty), moveCell, null);
+      onChanged();
+    } catch (cause) {
+      // 409 — «столько не лежит» или «обещано покупателю», и текст оттуда
+      // называет числа.
+      setMoveError(cause instanceof ApiError && cause.message !== ''
+        ? cause.message
+        : 'Перевезти не вышло');
+    }
+  }
+
   async function writeOff(): Promise<void> {
     if (writeOffAt === null) {
       return;
@@ -113,7 +150,7 @@ export function PartCard({ row, warehouses, role, onClose, onWrittenOff }: {
     setWriteOffError('');
     try {
       await writeOffPart(writeOffAt, row.id, Number(writeOffQty), reason.trim());
-      onWrittenOff();
+      onChanged();
     } catch (cause) {
       // 409 — «обещано покупателю» или «столько не лежит», и текст оттуда
       // называет числа: без них человек идёт искать поломку сервера.
@@ -278,6 +315,96 @@ export function PartCard({ row, warehouses, role, onClose, onWrittenOff }: {
                 глядя на карточку — что это за деталь, сколько её и где она
                 лежит. Недостача из пересчёта обнуляет остаток, но карточку
                 оставляет «в наличии»: закрыть её можно только отсюда. */}
+            {/* Перевозит и кладовщик: деталь у него в руках, а перестановка
+                между складами — работа, а не расход. Списывает только тот,
+                кто отвечает за деньги. */}
+            {['OWNER', 'MANAGER', 'STOREKEEPER'].includes(role) && (
+              moving ? (
+                <div className="card-view__writeoff">
+                  <label className="field">
+                    Откуда
+                    <select
+                      value={moveFrom ?? ''}
+                      onChange={(e) => setMoveFrom(
+                        e.target.value === '' ? null : Number(e.target.value))}
+                    >
+                      <option value="">—</option>
+                      {warehouses
+                        .filter((w) => Number(row.stock[String(w.id)] ?? 0) > 0)
+                        .map((w) => (
+                          <option key={w.id} value={w.id}>
+                            {w.name} · {row.stock[String(w.id)]}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    Куда
+                    <select
+                      value={moveTo ?? ''}
+                      onChange={(e) => void chooseTarget(
+                        e.target.value === '' ? null : Number(e.target.value))}
+                    >
+                      <option value="">—</option>
+                      {warehouses.filter((w) => w.id !== moveFrom).map((w) => (
+                        <option key={w.id} value={w.id}>{w.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    Сколько
+                    <input
+                      inputMode="decimal"
+                      value={moveQty}
+                      onChange={(e) => setMoveQty(e.target.value.replace(',', '.'))}
+                    />
+                  </label>
+                  {/* Без адреса деталь ложится на склад и находится только
+                      глазами — но требовать ячейку нельзя: у клиента без
+                      полок их нет вовсе. */}
+                  <label className="field">
+                    Ячейка на новом складе
+                    <select
+                      value={moveCell ?? ''}
+                      onChange={(e) => setMoveCell(
+                        e.target.value === '' ? null : Number(e.target.value))}
+                      disabled={moveTo === null}
+                    >
+                      <option value="">без адреса</option>
+                      {moveCells.map((cell) => (
+                        <option key={cell.id} value={cell.id}>{cell.code}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {moveError !== '' && <p className="note note--error">{moveError}</p>}
+                  <div className="filter-row">
+                    <button
+                      type="button"
+                      disabled={moveFrom === null || moveTo === null}
+                      onClick={() => void move()}
+                    >
+                      Перевезти
+                    </button>
+                    <button
+                      type="button"
+                      className="button--ghost"
+                      onClick={() => setMoving(false)}
+                    >
+                      Отмена
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="button--ghost"
+                  onClick={() => setMoving(true)}
+                >
+                  Перевезти
+                </button>
+              )
+            )}
+
             {(role === 'OWNER' || role === 'MANAGER') && (
               writingOff ? (
                 <div className="card-view__writeoff">

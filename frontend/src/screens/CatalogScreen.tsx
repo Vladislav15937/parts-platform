@@ -214,7 +214,7 @@ export function CatalogScreen({ role }: { role: string }) {
           warehouses={warehouses}
           role={role}
           onClose={() => setCard(null)}
-          onWrittenOff={() => {
+          onChanged={() => {
             setCard(null);
             load(query);
           }}
