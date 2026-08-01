@@ -146,3 +146,42 @@ function parse(month: string): [number, number] {
 export function money(value: string | null): string {
   return `${Math.round(Number(value ?? 0)).toLocaleString('ru-RU')} ₽`;
 }
+
+/**
+ * Расчёты с клиентами: у кого наши деньги и кто должен нам.
+ *
+ * <p>Сверка едет вместе с итогом намеренно: число обязательств, рядом
+ * с которым не сказано, сходится ли оно, — спокойствие без основания.
+ * У склада такая сверка есть с самого начала, у денег не было ни одной.
+ */
+export interface SettlementRow {
+  customerId: number;
+  customerName: string | null;
+  phone: string | null;
+  accountBalance: number;
+  debt: number;
+  unpaidDeals: number;
+}
+
+export interface SettlementProblem {
+  customerId: number | null;
+  entryId: number | null;
+  dealId: number | null;
+  problem: string;
+  amount: number;
+}
+
+export interface SettlementReport {
+  rows: SettlementRow[];
+  totals: {
+    advances: number;
+    debts: number;
+    withAdvance: number;
+    withDebt: number;
+    problems: SettlementProblem[];
+  };
+}
+
+export function customerSettlements(): Promise<SettlementReport> {
+  return request<SettlementReport>('/api/reports/customers');
+}

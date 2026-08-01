@@ -136,6 +136,91 @@ public class ReportService {
     }
 
     /**
+     * Расчёты с клиентами: у кого наши деньги и кто должен нам.
+     *
+     * <p>Владелец не видел своих обязательств перед клиентами ни одним
+     * числом: авансы на лицевых счетах есть, а сколько их всего — узнать
+     * было негде.
+     *
+     * <p>Долг — по выданным сделкам: пока товар не отдан, это не долг,
+     * а обещание, и требовать по нему нечего.
+     */
+    @Transactional(readOnly = true)
+    public List<SettlementRow> customerSettlements(int limit) {
+        return jdbc.query("""
+                SELECT customer_id, customer_name, phone,
+                       account_balance, debt, unpaid_deals
+                  FROM v_customer_settlement
+                 ORDER BY debt DESC, account_balance DESC, customer_id
+                 LIMIT ?""",
+                (rs, i) -> new SettlementRow(
+                        rs.getLong("customer_id"),
+                        rs.getString("customer_name"),
+                        rs.getString("phone"),
+                        rs.getBigDecimal("account_balance"),
+                        rs.getBigDecimal("debt"),
+                        rs.getInt("unpaid_deals")),
+                limit);
+    }
+
+    /**
+     * Итог по расчётам и сверка.
+     *
+     * <p>Расхождения идут вместе с итогом намеренно: число обязательств,
+     * рядом с которым не сказано, сходится ли оно, — это спокойствие
+     * без основания. У склада такая сверка есть с самого начала, у денег
+     * не было ни одной.
+     */
+    @Transactional(readOnly = true)
+    public SettlementTotals settlementTotals() {
+        SettlementTotals totals = jdbc.queryForObject("""
+                SELECT COALESCE(sum(account_balance) FILTER (WHERE account_balance > 0), 0) AS advances,
+                       COALESCE(sum(debt), 0)                                               AS debts,
+                       count(*) FILTER (WHERE account_balance > 0)                          AS with_advance,
+                       count(*) FILTER (WHERE debt > 0)                                     AS with_debt
+                  FROM v_customer_settlement""",
+                (rs, i) -> new SettlementTotals(
+                        rs.getBigDecimal("advances"),
+                        rs.getBigDecimal("debts"),
+                        rs.getInt("with_advance"),
+                        rs.getInt("with_debt"),
+                        List.of()));
+
+        return new SettlementTotals(
+                totals.advances(), totals.debts(), totals.withAdvance(), totals.withDebt(),
+                discrepancies());
+    }
+
+    /** Нарушенные инварианты расчётов. Пусто — деньги сходятся. */
+    @Transactional(readOnly = true)
+    public List<Discrepancy> discrepancies() {
+        return jdbc.query("""
+                SELECT customer_id, entry_id, deal_id, problem, amount
+                  FROM v_account_discrepancy
+                 ORDER BY customer_id, problem""",
+                (rs, i) -> new Discrepancy(
+                        rs.getObject("customer_id", Long.class),
+                        rs.getObject("entry_id", Long.class),
+                        rs.getObject("deal_id", Long.class),
+                        rs.getString("problem"),
+                        rs.getBigDecimal("amount")));
+    }
+
+    public record SettlementRow(Long customerId, String customerName, String phone,
+                                BigDecimal accountBalance, BigDecimal debt, int unpaidDeals) {
+    }
+
+    /** @param problems нарушенные инварианты. Непусто — деньги не сходятся */
+    public record SettlementTotals(BigDecimal advances, BigDecimal debts,
+                                   int withAdvance, int withDebt,
+                                   List<Discrepancy> problems) {
+    }
+
+    public record Discrepancy(Long customerId, Long entryId, Long dealId,
+                              String problem, BigDecimal amount) {
+    }
+
+    /**
      * Итог по всем донорам.
      *
      * <p>Отдельным запросом по всей выборке, а не суммой показанных строк:
