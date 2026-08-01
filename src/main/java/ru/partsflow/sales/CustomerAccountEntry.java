@@ -67,6 +67,24 @@ public class CustomerAccountEntry {
         this.amount = signedAmount;
     }
 
+    /**
+     * Сумма со знаком: пополнение и возврат прибавляют, оплата и выдача
+     * вычитают.
+     *
+     * <p>Знак живёт здесь, а не в базе: там суммы положительные, иначе
+     * «минус тысяча» и «тысяча со знаком минус» перестают различаться
+     * при чтении журнала глазами.
+     */
+    public java.math.BigDecimal signedAmount() {
+        return switch (entryType) {
+            case TOP_UP, DEAL_REFUND -> amount;
+            case DEAL_PAYMENT, WITHDRAW -> amount.negate();
+            // Ручная правка кладётся со знаком в самой сумме: она и заводится
+            // затем, чтобы поправить остаток в любую сторону.
+            case CORRECTION -> amount;
+        };
+    }
+
     public Long getId() { return id; }
     public Long getCustomerId() { return customerId; }
     public AccountEntryType getEntryType() { return entryType; }

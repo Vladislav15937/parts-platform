@@ -188,6 +188,25 @@ public class SalesController {
     }
 
     /**
+     * Зачёт с лицевого счёта клиента.
+     *
+     * <p>Отдельным путём, а не флагом в обычной оплате: платежа в кассу здесь
+     * не создаётся — деньги получены раньше, тогда же записан приход.
+     * Второй платёж на зачёте задвоил бы выручку.
+     */
+    @PostMapping("/{id}/payments/from-account")
+    @PreAuthorize(SELLS)
+    public DealView payFromAccount(@PathVariable Long id,
+                                   @Valid @RequestBody FromAccountRequest request) {
+        return view(sales.payFromAccount(id, request.amount(), CurrentUser.memberId()));
+    }
+
+    public record FromAccountRequest(
+            @jakarta.validation.constraints.NotNull
+            @jakarta.validation.constraints.Positive java.math.BigDecimal amount) {
+    }
+
+    /**
      * Возврат выданного товара.
      *
      * <p>Отдельный документ со своим номером, а не отмена: деталь у клиента,

@@ -6,6 +6,7 @@ import jakarta.validation.constraints.Positive;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -15,6 +16,7 @@ import ru.partsflow.platform.security.CurrentUser;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Лицевой счёт клиента.
@@ -28,14 +30,33 @@ import java.time.Instant;
 @RequestMapping("/api/customers/{customerId}/account")
 public class CustomerAccountController {
 
+    /** Счётом распоряжается тот, кто продаёт: это деньги в сделке. */
+    private static final String SELLS = "hasAnyRole('OWNER','MANAGER','SELLER')";
+
     private final SalesService sales;
 
     public CustomerAccountController(SalesService sales) {
         this.sales = sales;
     }
 
+    /**
+     * Остаток и журнал операций.
+     *
+     * <p>Пока читать счёт было нечем, переплата уходила на него молча:
+     * деньги клиента в системе есть, а увидеть их продавец не мог — то есть
+     * при следующем приезде клиент про свою тысячу помнил, а система нет.
+     */
+    @GetMapping
+    @PreAuthorize(SELLS)
+    public AccountView account(@PathVariable Long customerId) {
+        return new AccountView(
+                customerId,
+                sales.accountBalance(customerId),
+                sales.accountEntries(customerId).stream().map(EntryView::of).toList());
+    }
+
     @PostMapping("/top-up")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER','SELLER')")
+    @PreAuthorize(SELLS)
     public ResponseEntity<EntryView> topUp(@PathVariable Long customerId,
                                            @Valid @RequestBody TopUpRequest request) {
         CustomerAccountEntry entry = sales.topUpAccount(
@@ -43,15 +64,28 @@ public class CustomerAccountController {
         return ResponseEntity.status(HttpStatus.CREATED).body(EntryView.of(entry));
     }
 
+    /**
+     * @param balance остаток. Считается по журналу, а не хранится полем:
+     *                хранимый разъедется с журналом на первой же правке
+     */
+    public record AccountView(Long customerId, BigDecimal balance, List<EntryView> entries) {
+    }
+
     public record TopUpRequest(@NotNull @Positive BigDecimal amount, Long paymentSourceId) {
     }
 
+    /**
+     * @param signedAmount сумма со знаком: журнал читают глазами, и «−500»
+     *                     понятнее, чем «500, тип DEAL_PAYMENT»
+     */
     public record EntryView(Long id, Long customerId, AccountEntryType entryType,
-                            BigDecimal amount, Instant createdAt) {
+                            BigDecimal amount, BigDecimal signedAmount,
+                            String comment, Instant createdAt) {
 
         static EntryView of(CustomerAccountEntry entry) {
             return new EntryView(entry.getId(), entry.getCustomerId(), entry.getEntryType(),
-                    entry.getAmount(), entry.getCreatedAt());
+                    entry.getAmount(), entry.signedAmount(),
+                    entry.getComment(), entry.getCreatedAt());
         }
     }
 }

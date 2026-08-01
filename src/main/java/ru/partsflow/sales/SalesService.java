@@ -688,6 +688,83 @@ public class SalesService {
         return savedPayment;
     }
 
+    /**
+     * Остаток на лицевом счёте клиента.
+     *
+     * <p>Считается по журналу операций, а не хранится полем: хранимый остаток
+     * разъедется с журналом на первой же правке, и разбирать это придётся
+     * с клиентом, который помнит свою тысячу лучше нас.
+     *
+     * <p>Знак задаёт тип операции, а не сумма: в записях лежат положительные
+     * числа, иначе «минус тысяча» и «тысяча со знаком минус» перестают
+     * различаться при чтении глазами.
+     */
+    @Transactional(readOnly = true)
+    public BigDecimal accountBalance(Long customerId) {
+        return accountRepository.findByCustomerIdOrderByIdDesc(customerId).stream()
+                .map(CustomerAccountEntry::signedAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    @Transactional(readOnly = true)
+    public List<CustomerAccountEntry> accountEntries(Long customerId) {
+        return accountRepository.findByCustomerIdOrderByIdDesc(customerId);
+    }
+
+    /**
+     * Оплата сделки с лицевого счёта.
+     *
+     * <p><b>Платежа в кассу при этом не создаётся, и это главное.</b> Деньги
+     * уже получены — тогда, когда клиент их оставил, и тогда же записан
+     * приход. Второй платёж на зачёте задвоил бы выручку: в отчёте появилась
+     * бы тысяча, которую никто не приносил.
+     *
+     * <p>Больше остатка зачесть нельзя: счёт — это обязательство перед
+     * клиентом, и уйдя в минус, оно превращается в долг клиента, о котором
+     * он не договаривался.
+     */
+    @Transactional
+    public Deal payFromAccount(Long dealId, BigDecimal amount, Long managerId) {
+        Deal deal = requireDeal(dealId);
+        if (deal.getCustomerId() == null) {
+            throw new IllegalStateException(
+                    "У сделки нет клиента: списывать не с чего");
+        }
+        if (amount == null || amount.signum() <= 0) {
+            throw new IllegalArgumentException("Сумма зачёта должна быть больше нуля");
+        }
+
+        BigDecimal balance = accountBalance(deal.getCustomerId());
+        if (balance.compareTo(amount) < 0) {
+            throw new IllegalStateException(
+                    "На счёте клиента %s ₽, а зачесть просят %s ₽"
+                            .formatted(balance.stripTrailingZeros().toPlainString(),
+                                    amount.stripTrailingZeros().toPlainString()));
+        }
+        BigDecimal debt = deal.debt();
+        if (debt.compareTo(amount) < 0) {
+            throw new IllegalStateException(
+                    "Долг по сделке %s ₽, а зачесть просят %s ₽: лишнее осталось бы "
+                            .formatted(debt.stripTrailingZeros().toPlainString(),
+                                    amount.stripTrailingZeros().toPlainString())
+                            + "переплатой поверх уже оплаченной сделки");
+        }
+
+        CustomerAccountEntry entry = new CustomerAccountEntry(
+                deal.getCustomerId(), AccountEntryType.DEAL_PAYMENT, amount);
+        entry.setDealId(dealId);
+        entry.setComment("Оплата сделки " + deal.getNumber() + " с лицевого счёта");
+        entry.setCreatedBy(managerId);
+        accountRepository.save(entry);
+
+        deal.registerPayment(amount);
+        Deal saved = dealRepository.saveAndFlush(deal);
+
+        log(saved, "PAYMENT",
+                "Зачтено с лицевого счёта %s ₽".formatted(amount.toPlainString()), managerId);
+        return detachable(saved);
+    }
+
     /** Пополнение лицевого счёта без привязки к сделке. */
     @Transactional
     public CustomerAccountEntry topUpAccount(Long customerId, BigDecimal amount,
