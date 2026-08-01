@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import { ApiError } from '../api/client';
 import {
   addApplicability,
   loadApplicability,
   loadPhotos,
   removeApplicability,
+  writeOffPart,
   type Applicability,
   type CatalogRow,
   type PartPhoto,
@@ -24,11 +26,20 @@ import { loadCached, modelsOf, type VehicleCatalog } from '../catalog/vehicles';
  * колонок, включая скрытые в таблице. Второй запрос делается только
  * за снимками — их ссылки подписанные и короткоживущие.
  */
-export function PartCard({ row, warehouses, onClose }: {
+export function PartCard({ row, warehouses, role, onClose, onWrittenOff }: {
   row: CatalogRow;
   warehouses: Warehouse[];
+  role: string;
   onClose: () => void;
+  onWrittenOff: () => void;
 }) {
+  // Списывает тот, кто отвечает за деньги: списанная деталь — это убыток,
+  // а не запись в журнале. Кладовщик находит недостачу, решение не его.
+  const [writingOff, setWritingOff] = useState(false);
+  const [reason, setReason] = useState('');
+  const [writeOffAt, setWriteOffAt] = useState<number | null>(null);
+  const [writeOffQty, setWriteOffQty] = useState('1');
+  const [writeOffError, setWriteOffError] = useState('');
   const [photos, setPhotos] = useState<PartPhoto[]>([]);
   const [shown, setShown] = useState(0);
   const [tab, setTab] = useState<'about' | 'fits'>('about');
@@ -94,6 +105,23 @@ export function PartCard({ row, warehouses, onClose }: {
   add('Заметка', row.note);
 
   const main = photos[shown];
+
+  async function writeOff(): Promise<void> {
+    if (writeOffAt === null) {
+      return;
+    }
+    setWriteOffError('');
+    try {
+      await writeOffPart(writeOffAt, row.id, Number(writeOffQty), reason.trim());
+      onWrittenOff();
+    } catch (cause) {
+      // 409 — «обещано покупателю» или «столько не лежит», и текст оттуда
+      // называет числа: без них человек идёт искать поломку сервера.
+      setWriteOffError(cause instanceof ApiError && cause.message !== ''
+        ? cause.message
+        : 'Списать не вышло');
+    }
+  }
 
   async function addVehicle(): Promise<void> {
     if (brandId === null) {
@@ -245,6 +273,77 @@ export function PartCard({ row, warehouses, onClose }: {
               {row.price === null ? '—' : row.price.toLocaleString('ru-RU')}
               <span> ₽</span>
             </div>
+
+            {/* Списание здесь, а не на отдельном экране: решение принимают,
+                глядя на карточку — что это за деталь, сколько её и где она
+                лежит. Недостача из пересчёта обнуляет остаток, но карточку
+                оставляет «в наличии»: закрыть её можно только отсюда. */}
+            {(role === 'OWNER' || role === 'MANAGER') && (
+              writingOff ? (
+                <div className="card-view__writeoff">
+                  <label className="field">
+                    Со склада
+                    <select
+                      value={writeOffAt ?? ''}
+                      onChange={(e) => setWriteOffAt(
+                        e.target.value === '' ? null : Number(e.target.value))}
+                    >
+                      <option value="">—</option>
+                      {warehouses
+                        .filter((w) => Number(row.stock[String(w.id)] ?? 0) > 0)
+                        .map((w) => (
+                          <option key={w.id} value={w.id}>
+                            {w.name} · {row.stock[String(w.id)]}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    Сколько
+                    <input
+                      inputMode="decimal"
+                      value={writeOffQty}
+                      onChange={(e) => setWriteOffQty(e.target.value.replace(',', '.'))}
+                    />
+                  </label>
+                  <label className="field">
+                    Причина
+                    <input
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      placeholder="разбита при разборе"
+                    />
+                  </label>
+                  {writeOffError !== '' && (
+                    <p className="note note--error">{writeOffError}</p>
+                  )}
+                  <div className="filter-row">
+                    <button
+                      type="button"
+                      disabled={writeOffAt === null || reason.trim() === ''}
+                      onClick={() => void writeOff()}
+                    >
+                      Списать
+                    </button>
+                    <button
+                      type="button"
+                      className="button--ghost"
+                      onClick={() => setWritingOff(false)}
+                    >
+                      Отмена
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="button--ghost"
+                  onClick={() => setWritingOff(true)}
+                >
+                  Списать
+                </button>
+              )
+            )}
 
             {row.description !== null && row.description !== '' && (
               <p className="card-view__note">{row.description}</p>

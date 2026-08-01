@@ -8,6 +8,8 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.Generated;
+import org.hibernate.generator.EventType;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -33,6 +35,10 @@ public class Part {
      * посчитает клиенту весь склад и темп поступлений.
      * Генерируется дефолтом в БД.
      */
+    // @Generated обязателен, а не для порядка: без него Hibernate не вычитывает
+    // сгенерированный базой код после INSERT, и приёмка отвечает карточкой
+    // с пустым кодом при заполненном в базе. Та же ловушка, что с deal.number.
+    @Generated(event = EventType.INSERT)
     @Column(name = "public_code", insertable = false, updatable = false)
     private String publicCode;
 

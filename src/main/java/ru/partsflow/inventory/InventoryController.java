@@ -83,13 +83,14 @@ public class InventoryController {
      * полки и посмотреть снова.
      */
     @GetMapping("/sessions/{id}/discrepancies")
-    public List<InventoryService.Discrepancy> discrepancies(@PathVariable Long id) {
+    public List<InventoryService.DiscrepancyLine> discrepancies(@PathVariable Long id) {
         return inventory.discrepancies(id);
     }
 
     @PostMapping("/sessions/{id}/apply")
     public AppliedView apply(@PathVariable Long id) {
-        return new AppliedView(id, inventory.apply(id));
+        InventoryService.Applied applied = inventory.apply(id);
+        return new AppliedView(id, applied.adjusted(), applied.blocked());
     }
 
     @PostMapping("/sessions/{id}/cancel")
@@ -124,7 +125,15 @@ public class InventoryController {
         }
     }
 
-    /** Сколько позиций скорректировано: сошедшиеся движений не порождают. */
-    public record AppliedView(Long sessionId, int adjusted) {
+    /**
+     * @param adjusted сколько позиций скорректировано: сошедшиеся движений
+     *                 не порождают
+     * @param blocked  что не проведено и почему. Недостачу по детали,
+     *                 обещанной покупателю, списать нельзя — остаток уйдёт
+     *                 ниже резерва. Строка остаётся непроведённой, сессия
+     *                 не закрывается, и повтор после снятия резерва допишет
+     *                 только её
+     */
+    public record AppliedView(Long sessionId, int adjusted, java.util.List<String> blocked) {
     }
 }

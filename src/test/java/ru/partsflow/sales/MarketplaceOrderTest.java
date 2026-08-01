@@ -247,7 +247,11 @@ class MarketplaceOrderTest extends PostgresTestBase {
         var accepted = inTenant(() -> sales.registerMarketplaceOrder(
                 "DROM", "301-500-12", null, customerId, null, null, null, null,
                 List.of(new SalesService.ItemRequest(partId, BigDecimal.ONE, null, warehouseId)),
-                List.of(new SalesService.ServiceRequest(packing, BigDecimal.ONE, null))));
+                // Цена названа: услуга без цены нигде — ни в запросе,
+                // ни в справочнике — отвергается, чтобы в документе клиента
+                // не появилась строка «Упаковка 0 ₽».
+                List.of(new SalesService.ServiceRequest(
+                        packing, BigDecimal.ONE, new BigDecimal("300")))));
 
         // Услуга живёт отдельной таблицей ровно затем, чтобы движение склада
         // по ней было невозможно, а не запрещено на словах: у выдачи нет

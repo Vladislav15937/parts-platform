@@ -258,6 +258,11 @@ public class MarketplaceAccountService {
                 SELECT count(*) FROM part p
                   LEFT JOIN donor d ON d.id = p.donor_id
                  WHERE p.is_published
+                   -- Колёса из прайса запчастей исключает генератор, и счётчик
+                   -- обязан исключать их тем же условием. Пока он их считал,
+                   -- он обещал вдвое больше, чем уезжало, — то есть врал ровно
+                   -- в ту сторону, ради которой заведён: успокаивал числом.
+                   AND p.product_line = 'PART'
                    AND p.status IN ('IN_STOCK', 'SOLD')
                    AND p.price IS NOT NULL
                    AND (?::numeric IS NULL OR p.price >= ?::numeric)

@@ -103,10 +103,41 @@ public class MemberService {
      */
     @Transactional
     public void setActive(Long memberId, boolean active) {
+        if (!active) {
+            requireNotLastOwner(memberId);
+        }
         int updated = jdbc.update("UPDATE tenant_member SET is_active = ? WHERE id = ?",
                 active, memberId);
         if (updated == 0) {
             throw new IllegalArgumentException("Сотрудник не найден: " + memberId);
+        }
+    }
+
+    /**
+     * Последнего владельца выключить нельзя.
+     *
+     * <p>Иначе компания запирается снаружи: сотрудников, выгрузки, ключи
+     * кабинетов и списание видит только владелец, а включить его обратно
+     * может тоже только владелец. Выход остаётся один — провижининг, то есть
+     * разработчик с секретом управляющего контура.
+     *
+     * <p>Правило стоит здесь, а не на экране: экран прячет кнопку у строки
+     * с ролью «владелец», но это одна из двух дверей — запрос к API открыт
+     * так же. Пока проверки не было, компания могла запереть себя одним
+     * нажатием, и обнаружилось бы это при следующем входе.
+     */
+    private void requireNotLastOwner(Long memberId) {
+        Integer others = jdbc.queryForObject("""
+                SELECT count(*) FROM tenant_member
+                 WHERE role = 'OWNER' AND is_active AND login IS NOT NULL AND id <> ?""",
+                Integer.class, memberId);
+        String role = jdbc.query("SELECT role FROM tenant_member WHERE id = ?",
+                rs -> rs.next() ? rs.getString(1) : null, memberId);
+
+        if ("OWNER".equals(role) && (others == null || others == 0)) {
+            throw new IllegalStateException(
+                    "Это единственный владелец: выключив его, в компанию нельзя будет войти "
+                            + "как владелец. Сначала заведите второго");
         }
     }
 

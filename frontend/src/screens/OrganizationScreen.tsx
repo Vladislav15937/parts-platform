@@ -205,7 +205,12 @@ export function OrganizationScreen() {
     }
     setBusy(true);
     try {
-      setCells(await createCells(opened, wanted, null));
+      // Эндпоинт отвечает только заведёнными, а не всем списком: уже
+      // существующие он пропускает. Показать этот ответ как список ячеек
+      // склада значит стереть с экрана прежние — и счётчик в таблице
+      // разойдётся с тем, что видно под ней.
+      await createCells(opened, wanted, null);
+      setCells(await listCells(opened));
       setCodes('');
       reload();
     } catch (cause) {

@@ -11,6 +11,7 @@ import { IntakeScreen } from './IntakeScreen';
 import { DonorScreen } from './DonorScreen';
 import { ImportScreen } from './ImportScreen';
 import { InventoryScreen } from './InventoryScreen';
+import { InventoryReconcile } from './InventoryReconcile';
 import { OutboxScreen } from './OutboxScreen';
 import { SellerScreen } from './SellerScreen';
 import { DeliveryScreen } from './DeliveryScreen';
@@ -73,7 +74,11 @@ export function HomeScreen() {
   const { state, signOut } = useSession();
   const online = useOnline();
   const { status, refresh: refreshReference } = useReference();
-  const outbox = useOutbox();
+  // Локальные данные принадлежат компании: IndexedDB — хранилище браузера,
+  // а не арендатора, и войдя другой компанией на том же устройстве кладовщик
+  // видел бы её лист обхода и справочники.
+  const company = state.status === 'authenticated' ? state.me.companySchema : undefined;
+  const outbox = useOutbox(company);
   const [tab, setTab] = useState<Tab>('intake');
   // Число на вкладке — единственное, что сообщает о накопившемся: сам список
   // владелец не откроет, пока не узнает, что там что-то есть. После импорта
@@ -327,7 +332,7 @@ export function HomeScreen() {
           </p>
         ))}
 
-      {tab === 'catalog' && <CatalogScreen />}
+      {tab === 'catalog' && <CatalogScreen role={state.me.role} />}
 
       {tab === 'wheels' && (
         <WheelsScreen canIntake={LABEL_ROLES.includes(state.me.role)} />
@@ -357,6 +362,14 @@ export function HomeScreen() {
             вкладку «Справочники».
           </p>
         ))}
+
+      {/* Сведение расхождений — владельцу и менеджеру: списанная недостача
+          это убыток, и решение принимает тот, кто отвечает за склад.
+          Кладовщик обходит полки и вносит факт. */}
+      {tab === 'inventory' && status.kind === 'ready'
+        && ['OWNER', 'MANAGER'].includes(state.me.role) && (
+          <InventoryReconcile reference={status.reference} />
+        )}
 
       {tab === 'outbox' && (
         <OutboxScreen

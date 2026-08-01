@@ -105,13 +105,30 @@ public class InventorySession {
         this.status = SessionStatus.COUNTED;
     }
 
+    /**
+     * Закрывает пересчёт — но только когда проведены все посчитанные строки.
+     *
+     * <p>Строка, которую нельзя провести (недостача по детали, обещанной
+     * покупателю), оставляет сессию в состоянии «посчитана»: продавец снимет
+     * резерв, и проведение допишет остаток. Закрыв сессию раньше, мы отняли бы
+     * у кладовщика возможность довести пересчёт до конца — а расхождение
+     * никуда не делось бы.
+     */
     public void apply(Instant when) {
         if (status != SessionStatus.COUNTED) {
             throw new IllegalStateException(
                     "Проводят завершённый пересчёт, а сессия в состоянии " + status);
         }
+        if (hasUnapplied()) {
+            return;
+        }
         this.status = SessionStatus.APPLIED;
         this.appliedAt = when;
+    }
+
+    /** Есть ли посчитанные строки, которые ещё не проведены. */
+    public boolean hasUnapplied() {
+        return countedLines().stream().anyMatch(line -> !line.isApplied());
     }
 
     /** Отменяет сессию. Проведённую отменить нельзя — журнал неизменяем. */

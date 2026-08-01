@@ -65,7 +65,7 @@ class BazonImporterTest extends PostgresTestBase {
 
         assertThat(count(IMPORT, "donor")).isEqualTo(1);
         assertThat(count(IMPORT, "supply")).isEqualTo(1);
-        assertThat(count(IMPORT, "part")).isEqualTo(2);
+        assertThat(count(IMPORT, "part")).isEqualTo(3);
 
         // Остаток появляется движением, а не записью в part.qty_on_hand:
         // иначе кэш разъедется с журналом на первой же продаже.
@@ -81,6 +81,26 @@ class BazonImporterTest extends PostgresTestBase {
         assertThat(reservedOf(IMPORT, "A-100")).isEqualByComparingTo("1");
 
         assertThat(report.problems()).isEmpty();
+    }
+
+    /**
+     * Позиция, которой в выгрузке нет ни на одном складе, не должна числиться
+     * «в наличии»: за ней ничего не лежит и движения у неё нет вовсе.
+     *
+     * <p>Импортёр ставил статус при вставке, и у позиций с остатком его через
+     * мгновение переписывал триггер прихода — а у этих переписывать было
+     * нечему. У переехавшего клиента таких нашлось десять: карточка обещает
+     * наличие, а склад пуст.
+     */
+    @Test
+    @DisplayName("Позиция без остатка в выгрузке не числится «в наличии»")
+    void itemWithoutStockIsNotInStock() throws Exception {
+        importFixture(IMPORT);
+
+        assertThat(qtyOf(IMPORT, "A-400")).isEqualByComparingTo("0");
+        assertThat(statusOf(IMPORT, "A-400")).isEqualTo("DRAFT");
+        // А у позиции с остатком статус ставит триггер прихода.
+        assertThat(statusOf(IMPORT, "A-100")).isEqualTo("IN_STOCK");
     }
 
     @Test
@@ -130,7 +150,7 @@ class BazonImporterTest extends PostgresTestBase {
         assertThat(count(REPEAT, "part"))
                 .as("склад загрузился второй раз — отменяется это только "
                         + "восстановлением из бэкапа")
-                .isEqualTo(2);
+                .isEqualTo(3);
         assertThat(count(REPEAT, "donor")).isEqualTo(1);
         assertThat(count(REPEAT, "supply")).isEqualTo(1);
         assertThat(qtyOf(REPEAT, "A-100"))
@@ -138,7 +158,7 @@ class BazonImporterTest extends PostgresTestBase {
                 .isEqualByComparingTo("3");
         assertThat(second.loaded("товаров пропущено (уже есть)"))
                 .as("повтор не отчитался о пропуске — значит он что-то создал заново")
-                .isEqualTo(2);
+                .isEqualTo(3);
         assertThat(second.loaded("машин пропущено (уже есть)")).isEqualTo(1);
 
         // Без этой строки проверка сходится и по неверной причине: машину
@@ -198,7 +218,7 @@ class BazonImporterTest extends PostgresTestBase {
         // должна встать рядом с нашей приёмкой, а не остаться строкой.
         assertThat(jdbc.queryForList(
                 "SELECT name FROM " + NAMES + ".part_name", String.class))
-                .containsExactlyInAnyOrder("Фара левая", "Бампер передний");
+                .containsExactlyInAnyOrder("Фара левая", "Бампер передний", "Стартер");
 
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM " + NAMES + ".part WHERE part_name_id IS NULL",
@@ -255,6 +275,8 @@ class BazonImporterTest extends PostgresTestBase {
                 "Хорошее";"";"";"9500";"81150-33670";"2";"1";"0";"0";"0";"0";"да"
                 "A-200";"Бампер передний";"";"";"";"";"";"";"";"";"";"";"";"";"";"12000";"";\
                 "0";"0";"0";"1";"0";"0";"да"
+                "A-400";"Стартер";"";"";"";"";"";"";"";"";"";"";"";"";"";"3500";"";\
+                "0";"0";"0";"0";"0";"0";"да"
                 """);
     }
 
@@ -281,6 +303,12 @@ class BazonImporterTest extends PostgresTestBase {
         Integer found = jdbc.queryForObject(
                 "SELECT count(*) FROM " + schema + "." + table, Integer.class);
         return found == null ? 0 : found;
+    }
+
+    private String statusOf(String schema, String legacyCode) {
+        return jdbc.queryForObject(
+                "SELECT status FROM " + schema + ".part WHERE legacy_code = ?",
+                String.class, legacyCode);
     }
 
     private BigDecimal qtyOf(String schema, String legacyCode) {

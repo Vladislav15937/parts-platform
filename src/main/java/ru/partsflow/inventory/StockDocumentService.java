@@ -18,11 +18,14 @@ public class StockDocumentService {
 
     private final StockDocumentRepository documents;
     private final StockMovementRepository movements;
+    private final StockReservationRepository stock;
 
     public StockDocumentService(StockDocumentRepository documents,
-                               StockMovementRepository movements) {
+                               StockMovementRepository movements,
+                               StockReservationRepository stock) {
         this.documents = documents;
         this.movements = movements;
+        this.stock = stock;
     }
 
     @Transactional
@@ -48,6 +51,7 @@ public class StockDocumentService {
         Instant now = Instant.now();
 
         for (StockDocumentLine line : document.getLines()) {
+            requireAvailable(document, line);
             movements.save(movementFor(document, line));
         }
         document.complete(now);
@@ -60,6 +64,36 @@ public class StockDocumentService {
         StockDocument document = require(documentId);
         document.cancel();
         return documents.saveAndFlush(document);
+    }
+
+    /**
+     * Проверяет, что уносимое со склада там есть и не обещано другому.
+     *
+     * <p>Сторожем остаётся база: между этой проверкой и записью движения
+     * встанет продавец с резервом, и правым окажется ограничение схемы.
+     * Проверка нужна не вместо него, а ради текста: без неё попытка перевезти
+     * пять из одной отвечала «Операция нарушает целостность данных», по которой
+     * кладовщик идёт искать поломку сервера вместо того, чтобы посмотреть
+     * на полку.
+     *
+     * <p>Свободный, а не общий остаток: деталь, отложенная покупателю, уже
+     * обещана, и увезти её на другой склад значит сорвать сделку молча.
+     */
+    private void requireAvailable(StockDocument document, StockDocumentLine line) {
+        if (document.getDocType() != StockDocument.DocumentType.MOVE
+                && document.getDocType() != StockDocument.DocumentType.WRITE_OFF) {
+            return;
+        }
+        java.math.BigDecimal available =
+                stock.availableQuantity(line.getPartId(), document.getWarehouseId());
+        if (available.compareTo(line.getQty()) < 0) {
+            throw new StockReservationRepository.InsufficientStockException(
+                    "На складе свободно %s, а требуется %s: деталь %d"
+                            .formatted(available.stripTrailingZeros().toPlainString(),
+                                    line.getQty().stripTrailingZeros().toPlainString(),
+                                    line.getPartId()),
+                    null);
+        }
     }
 
     private StockMovement movementFor(StockDocument document, StockDocumentLine line) {

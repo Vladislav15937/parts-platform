@@ -83,16 +83,16 @@ export function MembersScreen() {
                   >
                     Сменить пароль
                   </button>
-                  {member.role !== 'OWNER' && (
-                    <button
-                      type="button"
-                      className="button--ghost"
-                      disabled={busy}
-                      onClick={() => void toggle(member)}
-                    >
-                      {member.active ? 'Выключить' : 'Включить'}
-                    </button>
-                  )}
+                  {/* Кнопка есть и у владельца: последнего отобьёт сервер
+                      с объяснением, а второго выключить — обычное дело. */}
+                  <button
+                    type="button"
+                    className="button--ghost"
+                    disabled={busy}
+                    onClick={() => void toggle(member)}
+                  >
+                    {member.active ? 'Выключить' : 'Включить'}
+                  </button>
                 </td>
               </tr>
             ))}
@@ -127,8 +127,12 @@ export function MembersScreen() {
           </label>
           <label className="field">
             Роль
+            {/* Владелец в списке есть: компания с одним владельцем запирается
+                снаружи, если он потеряет доступ, а завести второго можно было
+                только провижинингом — то есть через разработчика. Выключить
+                последнего владельца сервер не даёт. */}
             <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-              {ROLES.filter((r) => r.role !== 'OWNER').map((r) => (
+              {ROLES.map((r) => (
                 <option key={r.role} value={r.role}>{r.title}</option>
               ))}
             </select>

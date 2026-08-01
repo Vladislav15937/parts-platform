@@ -551,13 +551,18 @@ public final class BazonImporter {
         try (Connection c = dataSource.getConnection()) {
             c.setAutoCommit(false);
 
+            // Статус при вставке — DRAFT, а не IN_STOCK: у позиции с остатком
+            // его через мгновение перепишет триггер прихода, а у позиции,
+            // которой в выгрузке нет ни на одном складе, движения не будет
+            // вовсе — и «в наличии» осталось бы у карточки, за которой ничего
+            // не лежит. У переехавшего клиента таких оказалось десять.
             try (PreparedStatement insertPart = c.prepareStatement("INSERT INTO " + schema + """
                      .part (category_id, part_name_id, donor_id, supply_id, title, description,
                             note, side_lr, side_fr, condition, quality_grade, marking, manufacturer,
                             color, section, installation_price, price, legacy_code, is_published,
                             status)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'USED', ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                             'IN_STOCK')
+                             'DRAFT')
                      ON CONFLICT (legacy_code) WHERE legacy_code IS NOT NULL DO NOTHING
                      RETURNING id""");
                  PreparedStatement insertMovement = c.prepareStatement("INSERT INTO " + schema + """

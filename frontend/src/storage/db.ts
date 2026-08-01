@@ -120,6 +120,11 @@ export function getAll<T>(store: string): Promise<T[]> {
   return run<T[]>(store, 'readonly', (s) => s.getAll() as IDBRequest<T[]>);
 }
 
+/** Очищает хранилище целиком: смена компании делает кэш чужим. */
+export function clear(store: string): Promise<undefined> {
+  return run<undefined>(store, 'readwrite', (s) => s.clear() as IDBRequest<undefined>);
+}
+
 export function remove(store: string, key: IDBValidKey): Promise<undefined> {
   return run<undefined>(store, 'readwrite', (s) => s.delete(key) as IDBRequest<undefined>);
 }

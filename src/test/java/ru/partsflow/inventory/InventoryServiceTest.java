@@ -93,7 +93,7 @@ class InventoryServiceTest extends PostgresTestBase {
         inTenant(() -> inventory.finishCounting(sessionId));
 
         assertThat(inTenant(() -> inventory.discrepancies(sessionId))).isEmpty();
-        assertThat(inTenant(() -> inventory.apply(sessionId))).isZero();
+        assertThat(inTenant(() -> inventory.apply(sessionId)).adjusted()).isZero();
         assertThat(adjustments(partId)).isZero();
         assertThat(qtyOf(partId, warehouse)).isEqualByComparingTo("2");
     }
@@ -110,11 +110,130 @@ class InventoryServiceTest extends PostgresTestBase {
         assertThat(inTenant(() -> inventory.discrepancies(sessionId))).singleElement()
                 .satisfies(d -> {
                     assertThat(d.delta()).isEqualByComparingTo("-2");
-                    assertThat(d.isShortage()).isTrue();
+                    assertThat(d.shortage()).isTrue();
+                    // Наименование, а не «деталь 4»: расхождение разбирает
+                    // человек, стоя у полки.
+                    assertThat(d.title()).isEqualTo("Стартер 1NZ-FE");
+                    assertThat(d.applied()).isFalse();
                 });
 
-        assertThat(inTenant(() -> inventory.apply(sessionId))).isEqualTo(1);
+        assertThat(inTenant(() -> inventory.apply(sessionId)).adjusted()).isEqualTo(1);
         assertThat(qtyOf(partId, warehouse)).isEqualByComparingTo("3");
+    }
+
+    /**
+     * Недостача, обнулившая остаток, закрывает карточку.
+     *
+     * <p>Прежде она оставалась «в наличии» с нулём — то есть врала про самое
+     * важное, про наличие. Списать её было нечем: остаток уже ноль, списывать
+     * нечего, а правило «разбирается руками» рук не имело. Причина при этом
+     * не теряется: в журнале стоит корректировка, а не списание, и «не нашли
+     * при пересчёте» отличимо от «разбили при разборе».
+     */
+    @Test
+    @DisplayName("Недостача до нуля закрывает карточку, а не оставляет её в наличии")
+    void shortageToZeroClosesThePart() {
+        Long partId = partWithStock("Фара, которой не нашли", 1);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+
+        inTenant(() -> inventory.count(sessionId, partId, BigDecimal.ZERO, null));
+        inTenant(() -> inventory.finishCounting(sessionId));
+        inTenant(() -> inventory.apply(sessionId));
+
+        assertThat(qtyOf(partId, warehouse)).isEqualByComparingTo("0");
+        assertThat(statusOf(partId)).isEqualTo("WRITTEN_OFF");
+        assertThat(movementTypes(partId))
+                .as("причина недостачи потеряна: в журнале должно остаться INVENTORY_ADJUST")
+                .contains("INVENTORY_ADJUST")
+                .doesNotContain("WRITE_OFF");
+    }
+
+    // Частичная недостача остаток оставляет — карточка остаётся в наличии.
+    @Test
+    @DisplayName("Частичная недостача карточку не закрывает")
+    void partialShortageKeepsThePart() {
+        Long partId = partWithStock("Стартер, недосчитались одного", 3);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+
+        inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("2"), null));
+        inTenant(() -> inventory.finishCounting(sessionId));
+        inTenant(() -> inventory.apply(sessionId));
+
+        assertThat(statusOf(partId)).isEqualTo("IN_STOCK");
+    }
+
+    /**
+     * Недостача по обещанной детали не проводится, но и не держит остальные.
+     *
+     * <p>Списать её нельзя — остаток уйдёт ниже резерва, и это отобьёт триггер
+     * склада. Останавливать из-за неё всю инвентаризацию значит держать
+     * посчитанный склад непроведённым, пока продавец говорит с покупателем,
+     * — а кладовщик, который считал, снять резерв не может по роли.
+     */
+    @Test
+    @DisplayName("Обещанная деталь не блокирует проведение остальных позиций")
+    void promisedShortageDoesNotBlockOthers() {
+        Long promised = partWithStock("Фара, обещанная покупателю", 1);
+        Long other = partWithStock("Стартер, просто пропавший", 1);
+        inTenant(() -> jdbc.queryForObject(
+                "SELECT reserve_stock(?, ?, 1)", Object.class, promised, warehouse));
+
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        inTenant(() -> inventory.count(sessionId, promised, BigDecimal.ZERO, null));
+        inTenant(() -> inventory.count(sessionId, other, BigDecimal.ZERO, null));
+        inTenant(() -> inventory.finishCounting(sessionId));
+
+        var applied = inTenant(() -> inventory.apply(sessionId));
+
+        assertThat(applied.adjusted())
+                .as("непроведённая обещанная деталь остановила и остальные")
+                .isEqualTo(1);
+        assertThat(applied.blocked()).singleElement()
+                .asString().contains("Фара, обещанная покупателю");
+
+        assertThat(qtyOf(other, warehouse)).isEqualByComparingTo("0");
+        assertThat(qtyOf(promised, warehouse))
+                .as("обещанное списалось, хотя резерв на месте")
+                .isEqualByComparingTo("1");
+        // Сессия не закрыта: пересчёт доведут после снятия резерва.
+        assertThat(statusOfSession(sessionId)).isEqualTo("COUNTED");
+    }
+
+    /**
+     * Повтор после снятия резерва дописывает только застрявшее.
+     *
+     * <p>Ради этого отметка о проведении стоит на строке, а не на сессии:
+     * без неё второй проход списал бы уже проведённое ещё раз, то есть
+     * испортил бы склад ровно тем действием, которым его чинят.
+     */
+    @Test
+    @DisplayName("Повтор после снятия резерва не проводит уже проведённое дважды")
+    void repeatedApplyAdjustsOnlyBlocked() {
+        Long promised = partWithStock("Фара, снятая с резерва", 1);
+        Long other = partWithStock("Стартер, пропавший рядом", 2);
+        inTenant(() -> jdbc.queryForObject(
+                "SELECT reserve_stock(?, ?, 1)", Object.class, promised, warehouse));
+
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        inTenant(() -> inventory.count(sessionId, promised, BigDecimal.ZERO, null));
+        inTenant(() -> inventory.count(sessionId, other, BigDecimal.ONE, null));
+        inTenant(() -> inventory.finishCounting(sessionId));
+        inTenant(() -> inventory.apply(sessionId));
+
+        inTenant(() -> jdbc.queryForObject(
+                "SELECT release_stock(?, ?, 1)", Object.class, promised, warehouse));
+        var second = inTenant(() -> inventory.apply(sessionId));
+
+        assertThat(second.adjusted()).isEqualTo(1);
+        assertThat(second.blocked()).isEmpty();
+        assertThat(qtyOf(promised, warehouse)).isEqualByComparingTo("0");
+        assertThat(qtyOf(other, warehouse))
+                .as("проведённая строка списалась второй раз — склад испорчен")
+                .isEqualByComparingTo("1");
+        assertThat(adjustments(other))
+                .as("на одну строку записано больше одной корректировки")
+                .isEqualTo(1);
+        assertThat(statusOfSession(sessionId)).isEqualTo("APPLIED");
     }
 
     @Test
@@ -154,7 +273,7 @@ class InventoryServiceTest extends PostgresTestBase {
         assertThat(inTenant(() -> inventory.discrepancies(sessionId)))
                 .as("продажа во время пересчёта попала в расхождения")
                 .isEmpty();
-        assertThat(inTenant(() -> inventory.apply(sessionId))).isZero();
+        assertThat(inTenant(() -> inventory.apply(sessionId)).adjusted()).isZero();
         assertThat(qtyOf(partId, warehouse))
                 .as("корректировка затёрла продажу").isEqualByComparingTo("8");
     }
@@ -201,7 +320,7 @@ class InventoryServiceTest extends PostgresTestBase {
         assertThat(inTenant(() -> inventory.discrepancies(sessionId)))
                 .as("продажа за время офлайна стала излишком")
                 .isEmpty();
-        assertThat(inTenant(() -> inventory.apply(sessionId))).isZero();
+        assertThat(inTenant(() -> inventory.apply(sessionId)).adjusted()).isZero();
         assertThat(qtyOf(partId, warehouse)).isEqualByComparingTo("8");
     }
 
@@ -224,7 +343,7 @@ class InventoryServiceTest extends PostgresTestBase {
         // восемь, всё «сошлось» — и две пропавшие детали остались бы в остатке.
         assertThat(inTenant(() -> inventory.discrepancies(sessionId)))
                 .singleElement()
-                .extracting(InventoryService.Discrepancy::delta)
+                .extracting(InventoryService.DiscrepancyLine::delta)
                 .isEqualTo(new BigDecimal("-2.000"));
     }
 
@@ -359,14 +478,18 @@ class InventoryServiceTest extends PostgresTestBase {
         inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("4"), null));
         inTenant(() -> inventory.finishCounting(sessionId));
 
-        List<InventoryService.Discrepancy> before = inTenant(() -> inventory.discrepancies(sessionId));
+        List<InventoryService.DiscrepancyLine> before = inTenant(() -> inventory.discrepancies(sessionId));
         inTenant(() -> inventory.apply(sessionId));
-        List<InventoryService.Discrepancy> after = inTenant(() -> inventory.discrepancies(sessionId));
+        List<InventoryService.DiscrepancyLine> after = inTenant(() -> inventory.discrepancies(sessionId));
 
         // Считается по неизменяемому журналу, поэтому ответ не зависит от того,
         // когда спросили: кладовщику можно показать итог и после проведения.
         assertThat(after).hasSameSizeAs(before);
         assertThat(after.get(0).delta()).isEqualByComparingTo(before.get(0).delta());
+        // Но проведённая строка помечена: иначе экран показывает
+        // «скорректировано» рядом с той же минусовой строкой.
+        assertThat(before.get(0).applied()).isFalse();
+        assertThat(after.get(0).applied()).isTrue();
     }
 
     // ---------- фикстуры ----------
@@ -447,6 +570,17 @@ class InventoryServiceTest extends PostgresTestBase {
                 SELECT count(*) FROM stock_movement
                  WHERE part_id = ? AND movement_type = 'INVENTORY_ADJUST'""",
                 Integer.class, partId));
+    }
+
+    private java.util.List<String> movementTypes(Long partId) {
+        return inTenant(() -> jdbc.queryForList(
+                "SELECT movement_type FROM stock_movement WHERE part_id = ?",
+                String.class, partId));
+    }
+
+    private String statusOfSession(Long sessionId) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT status FROM inventory_session WHERE id = ?", String.class, sessionId));
     }
 
     private String statusOf(Long partId) {

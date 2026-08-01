@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { ApiError, ensureCsrfToken } from '../api/client';
 import * as auth from '../api/auth';
 import type { Credentials, Me } from '../api/auth';
+import { scopeTo } from '../storage/tenantScope';
 
 /**
  * Сессия приложения.
@@ -76,6 +77,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           return;
         }
         rememberMe(current);
+        // Кэши принадлежат компании: войдя другой на том же устройстве,
+        // кладовщик видел бы её лист обхода, ячейки и машины. Очередь
+        // при этом не трогаем — в ней несделанная работа приёмщика.
+        await scopeTo(current.companySchema);
         setState({ status: 'authenticated', me: current, offline: false });
       } catch (error) {
         if (cancelled) {
@@ -110,6 +115,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     await ensureCsrfToken();
     const current = await auth.login(credentials);
     rememberMe(current);
+    await scopeTo(current.companySchema);
     setState({ status: 'authenticated', me: current, offline: false });
   }, []);
 

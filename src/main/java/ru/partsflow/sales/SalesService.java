@@ -202,9 +202,17 @@ public class SalesService {
             ServiceKind kind = serviceKinds.findById(service.serviceId())
                     .orElseThrow(() -> new IllegalArgumentException(
                             "Услуга не найдена: " + service.serviceId()));
-            BigDecimal price = service.price() != null
-                    ? service.price()
-                    : kind.getPrice() != null ? kind.getPrice() : BigDecimal.ZERO;
+            BigDecimal price = service.price() != null ? service.price() : kind.getPrice();
+            // Ни в запросе, ни в справочнике цены нет — значит её никто
+            // не называл. Ноль здесь превратился бы в строку «Доставка 0 ₽»
+            // в документе клиента, то есть в утверждение, которого не делали:
+            // пустое поле означает «услуги не было», а не «оказали бесплатно».
+            if (price == null) {
+                throw new IllegalArgumentException(
+                        "Цена услуги «%s» не указана и в справочнике её нет: доставка до Надыма "
+                                .formatted(kind.getName())
+                                + "и до соседней улицы стоит по-разному");
+            }
             deal.addService(kind.getId(), service.quantity(), price);
         }
     }

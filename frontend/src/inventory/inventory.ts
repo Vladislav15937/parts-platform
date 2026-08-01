@@ -146,3 +146,49 @@ export function cellsOf(lines: InventoryLine[]): { id: number | null; code: stri
     a.code.localeCompare(b.code, 'ru'),
   );
 }
+
+/**
+ * Сведение расхождений — не с телефона.
+ *
+ * <p>Кладовщик обходит полки, а завершает пересчёт и проводит его тот, кто
+ * отвечает за склад: списанная недостача — это убыток. До появления этих
+ * вызовов завершить и провести можно было только запросом к API, то есть
+ * с разработчиком.
+ */
+export interface Discrepancy {
+  partId: number;
+  title: string | null;
+  qtyExpectedAtOpen: number;
+  qtyExpectedAtCount: number;
+  qtyCounted: number;
+  delta: number;
+  shortage: boolean;
+  /** Проведена ли строка: расхождение считается на момент подсчёта и после
+   *  проведения никуда не девается. */
+  applied: boolean;
+}
+
+export interface Applied {
+  sessionId: number;
+  adjusted: number;
+  /** Что не проведено: недостача по детали, которую держит резерв. */
+  blocked: string[];
+}
+
+export function finishCounting(sessionId: number): Promise<InventorySession> {
+  return request<InventorySession>(`/api/inventory/sessions/${sessionId}/finish`, {
+    method: 'POST',
+  });
+}
+
+export function discrepanciesOf(sessionId: number): Promise<Discrepancy[]> {
+  return request<Discrepancy[]>(`/api/inventory/sessions/${sessionId}/discrepancies`);
+}
+
+export function applySession(sessionId: number): Promise<Applied> {
+  return request<Applied>(`/api/inventory/sessions/${sessionId}/apply`, { method: 'POST' });
+}
+
+export function linesOfSession(sessionId: number): Promise<InventoryLine[]> {
+  return request<InventoryLine[]>(`/api/inventory/sessions/${sessionId}/lines`);
+}

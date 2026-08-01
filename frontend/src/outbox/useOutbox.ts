@@ -16,7 +16,12 @@ import type { OutboxKind, OutboxRecord, PendingPhoto } from './outbox';
  */
 const TICK_MS = 15_000;
 
-export function useOutbox() {
+/**
+ * @param company схема вошедшей компании. Записи, поставленные в другой,
+ *                не отправляются: в теле лежат идентификаторы её складов
+ *                и ячеек
+ */
+export function useOutbox(company?: string) {
   const [records, setRecords] = useState<OutboxRecord[]>([]);
   const [needsSignIn, setNeedsSignIn] = useState(false);
 
@@ -25,20 +30,20 @@ export function useOutbox() {
   }, []);
 
   const flush = useCallback(async () => {
-    const result = await processOutbox();
+    const result = await processOutbox(undefined, Date.now(), company);
     setNeedsSignIn(result.needsSignIn);
     await reload();
     return result;
-  }, [reload]);
+  }, [reload, company]);
 
   const add = useCallback(
     async (kind: OutboxKind, payload: unknown, title: string, photos?: PendingPhoto[]) => {
-      await enqueue(kind, payload, title, photos);
+      await enqueue(kind, payload, title, photos, company);
       await reload();
       // Пробуем сразу: если связь есть, приёмщик увидит, что работа ушла.
       void flush();
     },
-    [flush, reload],
+    [flush, reload, company],
   );
 
   const retry = useCallback(
