@@ -7,6 +7,8 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -40,10 +42,16 @@ public class IntakeController {
 
     private final IntakeService intake;
     private final IntakeReferenceService reference;
+    private final DonorCostService costs;
+    private final DonorDirectory donorDirectory;
 
-    public IntakeController(IntakeService intake, IntakeReferenceService reference) {
+    public IntakeController(IntakeService intake, IntakeReferenceService reference,
+                            DonorCostService costs,
+                            DonorDirectory donorDirectory) {
         this.intake = intake;
         this.reference = reference;
+        this.costs = costs;
+        this.donorDirectory = donorDirectory;
     }
 
     /**
@@ -95,6 +103,52 @@ public class IntakeController {
 
         Donor saved = intake.registerDonor(donor, request.supplyId(), CurrentUser.memberId());
         return ResponseEntity.status(HttpStatus.CREATED).body(DonorView.of(saved));
+    }
+
+    /**
+     * Все машины, включая ещё не поставленные в разбор.
+     *
+     * <p>Справочник приёмки отдаёт только те, что в разборе, — и правильно
+     * делает. Но заведённая машина должна быть видна тому, кто её завёл:
+     * иначе она пропадает из системы до тех пор, пока кто-то не догадается
+     * поставить её в разбор запросом к API.
+     */
+    @GetMapping("/donors")
+    public List<DonorDirectory.Entry> donors() {
+        return donorDirectory.all();
+    }
+
+    /**
+     * Затраты по машине: сколько в неё вложено и из чего это сложилось.
+     *
+     * <p>Отсюда считает отчёт окупаемости. Пока писать сюда было нечем,
+     * он честно показывал «вложено 0 ₽» — ему нечего было читать.
+     */
+    @GetMapping("/donors/{id}/costs")
+    public List<DonorCostService.Cost> costs(@PathVariable Long id) {
+        return costs.of(id);
+    }
+
+    @PostMapping("/donors/{id}/costs")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public List<DonorCostService.Cost> addCost(@PathVariable Long id,
+                                               @Valid @RequestBody CostRequest request) {
+        return costs.add(id, request.type(), request.amount(), request.incurredOn(),
+                request.note(), CurrentUser.memberId());
+    }
+
+    @DeleteMapping("/donors/{id}/costs/{costId}")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public List<DonorCostService.Cost> removeCost(@PathVariable Long id,
+                                                  @PathVariable Long costId) {
+        return costs.remove(id, costId);
+    }
+
+    /** @param incurredOn пусто — сегодня */
+    public record CostRequest(@jakarta.validation.constraints.NotBlank String type,
+                              @jakarta.validation.constraints.NotNull java.math.BigDecimal amount,
+                              java.time.LocalDate incurredOn,
+                              String note) {
     }
 
     /** Локация в логистической цепочке. Стадию разбора не двигает. */
