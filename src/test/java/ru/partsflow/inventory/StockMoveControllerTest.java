@@ -71,6 +71,7 @@ class StockMoveControllerTest extends PostgresTestBase {
         inTenant(() -> {
             member("vladelec", "Владелец", "OWNER");
             member("prodavets", "Продавец", "SELLER");
+            member("kladovshchik", "Кладовщик", "STOREKEEPER");
 
             Long branch = jdbc.queryForObject(
                     "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class);
@@ -120,12 +121,38 @@ class StockMoveControllerTest extends PostgresTestBase {
                                 {"fromWarehouseId":%d,"toWarehouseId":%d,
                                  "items":[{"partId":%d,"quantity":5}]}"""
                                 .formatted(fromWarehouse, toWarehouse, partId)))
-                .andExpect(status().isConflict());
+                .andExpect(status().isConflict())
+                // Отказ обязан называть числа: «Операция нарушает целостность
+                // данных» отправляет кладовщика искать поломку сервера вместо
+                // того, чтобы посмотреть на полку.
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("свободно 1")));
 
         assertThat(qtyAt(partId, fromWarehouse))
                 .as("остаток поехал в минус: склад после этого не сходится ни с чем")
                 .isEqualByComparingTo("1");
         assertThat(qtyAt(partId, toWarehouse)).isEqualByComparingTo("0");
+    }
+
+    /**
+     * Перевозит и кладовщик: деталь у него в руках, а перестановка между
+     * складами — работа, а не расход. Списывает при этом только тот, кто
+     * отвечает за деньги.
+     */
+    @Test
+    @DisplayName("Кладовщик перевозит товар")
+    void storekeeperMovesStock() throws Exception {
+        Long partId = partWithStock("Стартер для кладовщика", 2);
+
+        mvc.perform(post("/api/stock/moves").with(csrf()).session(login("kladovshchik"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fromWarehouseId":%d,"toWarehouseId":%d,
+                                 "items":[{"partId":%d,"quantity":1}]}"""
+                                .formatted(fromWarehouse, toWarehouse, partId)))
+                .andExpect(status().isCreated());
+
+        assertThat(qtyAt(partId, toWarehouse)).isEqualByComparingTo("1");
     }
 
     @Test
