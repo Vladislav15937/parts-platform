@@ -307,9 +307,9 @@ export function HomeScreen() {
           <DonorScreen
             reference={status.reference}
             online={connected}
-            onCreated={() => {
-              // Справочники приёмки перечитаются сами — новая машина должна
-              // появиться в списке на экране деталей.
+            onChanged={() => {
+              // Справочники приёмки перечитаются сами: машина попадает
+              // в список на экране деталей, когда её ставят в разбор.
               void refreshReference();
             }}
           />

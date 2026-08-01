@@ -12,6 +12,14 @@ import {
 } from '../catalog/vehicles';
 import type { Brand, Generation, Model, VehicleCatalog } from '../catalog/vehicles';
 import type { Reference } from '../reference/reference';
+import { DonorCosts } from './DonorCosts';
+import {
+  donorTitle,
+  listDonors,
+  startDismantling,
+  statusTitle,
+  type DonorEntry,
+} from '../intake/donors';
 import { ScanOverlay } from '../scan/ScanOverlay';
 
 /**
@@ -30,10 +38,17 @@ import { ScanOverlay } from '../scan/ScanOverlay';
 interface Props {
   reference: Reference;
   online: boolean;
-  onCreated: (code: string) => void;
+  /** Машины изменились: справочник приёмки надо перечитать. */
+  onChanged: () => void;
 }
 
-export function DonorScreen({ reference, online, onCreated }: Props) {
+export function DonorScreen({ reference, online, onChanged }: Props) {
+  // Затраты вносятся по уже заведённой машине: до её появления вкладывать
+  // не во что, а после — покупка, эвакуатор и разбор идут отдельными
+  // платежами и в разные дни.
+  const [costsOf, setCostsOf] = useState<number | null>(null);
+  const [donors, setDonors] = useState<DonorEntry[]>([]);
+  const [busy, setBusy] = useState(false);
   const [catalog, setCatalog] = useState<VehicleCatalog | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -49,6 +64,12 @@ export function DonorScreen({ reference, online, onCreated }: Props) {
 
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  // Список машин — с сервера, а не из офлайн-справочника: там только те,
+  // что в разборе, и только что заведённой машины в нём нет.
+  useEffect(() => {
+    void reloadDonors();
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -239,6 +260,63 @@ export function DonorScreen({ reference, online, onCreated }: Props) {
           onClose={() => setScanning(false)}
         />
       )}
+
+      <hr />
+
+      <h3>Машины</h3>
+      {donors.length === 0 ? (
+        <p className="note">Машин пока нет.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Машина</th>
+              <th>Состояние</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {donors.map((donor) => (
+              <tr key={donor.id}>
+                <td>{donorTitle(donor)}</td>
+                <td>{statusTitle(donor.status)}</td>
+                <td className="filter-row">
+                  {donor.status === 'PURCHASED' && (
+                    <button
+                      type="button"
+                      className="button--ghost"
+                      disabled={busy || !online}
+                      onClick={() => void toDismantling(donor.id)}
+                    >
+                      В разбор
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="button--ghost"
+                    onClick={() => setCostsOf(costsOf === donor.id ? null : donor.id)}
+                  >
+                    {costsOf === donor.id ? 'Свернуть' : 'Затраты'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p className="note">
+        Деталь принимают только на машину в разборе: снятая с той, которую ещё
+        везут, — ошибка выбора, а не работа. Поэтому купленную машину надо
+        поставить в разбор, и до этого на приёмке её нет.
+      </p>
+
+      {costsOf !== null && donors.some((donor) => donor.id === costsOf) && (
+        <DonorCosts
+          donorId={costsOf}
+          title={donorTitle(donors.find((donor) => donor.id === costsOf)!)}
+        />
+      )}
+
     </section>
   );
 
@@ -286,6 +364,29 @@ export function DonorScreen({ reference, online, onCreated }: Props) {
     return matched?.id ?? null;
   }
 
+  async function reloadDonors(): Promise<void> {
+    try {
+      setDonors(await listDonors());
+    } catch {
+      // Машины не догрузились — форма заведения от этого не ломается.
+    }
+  }
+
+  async function toDismantling(id: number): Promise<void> {
+    setBusy(true);
+    try {
+      await startDismantling(id);
+      await reloadDonors();
+      // Справочник приёмки берёт машины по состоянию: без обновления
+      // поставленной в разбор машины на приёмке не появится.
+      onChanged();
+    } catch (cause) {
+      setMessage(describe(cause, 'Машина не поставлена в разбор'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submit(): Promise<void> {
     if (brand === null) {
       return;
@@ -307,7 +408,8 @@ export function DonorScreen({ reference, online, onCreated }: Props) {
       });
 
       setMessage(`Машина заведена: ${created.publicCode}`);
-      onCreated(created.publicCode);
+      onChanged();
+      void reloadDonors();
       // Марку оставляем: партию однотипных машин заводят подряд.
       setModelId(null);
       setGenerationId(null);

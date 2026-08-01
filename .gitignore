@@ -1,6 +1,8 @@
 target/
 node_modules/
 frontend/dist/
+# Кэш предсборки Vite: содержимое зависит от версии node и от машины.
+frontend/.vite/
 .idea/
 *.iml
 .vscode/
