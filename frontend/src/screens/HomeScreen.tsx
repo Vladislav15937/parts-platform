@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useSession } from '../auth/SessionProvider';
 import { useOutbox } from '../outbox/useOutbox';
+import { MembersScreen } from './MembersScreen';
+import { OrganizationScreen } from './OrganizationScreen';
 import { ReferencePanel } from '../reference/ReferencePanel';
 import { useReference } from '../reference/useReference';
 import { warmUpDecoder } from '../scan/decoder';
@@ -63,6 +65,8 @@ type Tab =
   | 'feeds'
   | 'delivery'
   | 'labels'
+  | 'members'
+  | 'organization'
   | 'reference';
 
 export function HomeScreen() {
@@ -237,6 +241,24 @@ export function HomeScreen() {
             Этикетки
           </button>
         )}
+        {state.me.role === 'OWNER' && (
+          <button
+            type="button"
+            className={tab === 'members' ? 'rail__item rail__item--active' : 'rail__item'}
+            onClick={() => setTab('members')}
+          >
+            Сотрудники
+          </button>
+        )}
+        {state.me.role === 'OWNER' && (
+          <button
+            type="button"
+            className={tab === 'organization' ? 'rail__item rail__item--active' : 'rail__item'}
+            onClick={() => setTab('organization')}
+          >
+            Склады
+          </button>
+        )}
         <button
           type="button"
           className={tab === 'reference' ? 'rail__item rail__item--active' : 'rail__item'}
@@ -400,6 +422,10 @@ export function HomeScreen() {
           </p>
         ))}
 
+      {tab === 'members' && <MembersScreen />}
+
+      {tab === 'organization' && <OrganizationScreen />}
+
       {tab === 'reference' && <ReferencePanel />}
 
           <button type="button" className="button--ghost" onClick={signOut}>
@@ -428,6 +454,8 @@ function sectionName(tab: string): string {
     case 'feeds': return 'Выгрузки на площадки';
     case 'delivery': return 'Доставка событий';
     case 'labels': return 'Этикетки';
+    case 'members': return 'Сотрудники';
+    case 'organization': return 'Филиалы и склады';
     default: return 'Справочники';
   }
 }
