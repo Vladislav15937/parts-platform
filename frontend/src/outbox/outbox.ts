@@ -66,6 +66,15 @@ export interface OutboxRecord {
   photos?: PendingPhoto[];
   /** Тело снимка для записи вида photo. */
   blob?: Blob;
+  /**
+   * Схема компании, в которой запись поставлена в очередь.
+   *
+   * <p>Уехав в сессию другой компании, приёмка создала бы детали на чужом
+   * складе: идентификаторы складов, ячеек и машин в теле относятся к той,
+   * где работали. Поэтому запись не отправляется, пока не войдут обратно, —
+   * и не удаляется: в ней несделанная работа приёмщика.
+   */
+  company?: string;
 }
 
 /** Итог одного прохода очереди. */
@@ -74,6 +83,8 @@ export interface ProcessResult {
   failed: number;
   /** Обработка остановлена: сессия кончилась, нужен вход. */
   needsSignIn: boolean;
+  /** Пропущено записей другой компании: они ждут возврата в свою. */
+  foreign: number;
 }
 
 /**
@@ -123,6 +134,7 @@ export async function enqueue(
   payload: unknown,
   title: string,
   photos?: PendingPhoto[],
+  company?: string,
 ): Promise<OutboxRecord> {
   const record: OutboxRecord = {
     id: crypto.randomUUID(),
@@ -135,6 +147,7 @@ export async function enqueue(
     nextAttemptAt: 0,
     createdAt: nextCreatedAt(),
     ...(photos !== undefined && photos.length > 0 ? { photos } : {}),
+    ...(company !== undefined ? { company } : {}),
   };
   await put(STORE_OUTBOX, record);
   return record;
@@ -185,18 +198,28 @@ let running = false;
 export async function processOutbox(
   send: Sender = sendRecord,
   now: number = Date.now(),
+  company?: string,
 ): Promise<ProcessResult> {
   if (running) {
-    return { sent: 0, failed: 0, needsSignIn: false };
+    return { sent: 0, failed: 0, needsSignIn: false, foreign: 0 };
   }
   running = true;
 
-  const result: ProcessResult = { sent: 0, failed: 0, needsSignIn: false };
+  const result: ProcessResult = { sent: 0, failed: 0, needsSignIn: false, foreign: 0 };
   try {
     const records = await listOutbox();
 
     for (const record of records) {
       if (record.state !== 'pending' || record.nextAttemptAt > now) {
+        continue;
+      }
+      // Запись другой компании не уходит и не удаляется: в теле лежат
+      // идентификаторы складов и ячеек той компании, где работали, и уехав
+      // в текущую сессию, она создала бы детали на чужом складе. Вернутся
+      // в свою — уйдёт своим чередом.
+      if (company !== undefined && record.company !== undefined
+          && record.company !== company) {
+        result.foreign += 1;
         continue;
       }
       try {

@@ -74,7 +74,11 @@ export function HomeScreen() {
   const { state, signOut } = useSession();
   const online = useOnline();
   const { status, refresh: refreshReference } = useReference();
-  const outbox = useOutbox();
+  // Локальные данные принадлежат компании: IndexedDB — хранилище браузера,
+  // а не арендатора, и войдя другой компанией на том же устройстве кладовщик
+  // видел бы её лист обхода и справочники.
+  const company = state.status === 'authenticated' ? state.me.companySchema : undefined;
+  const outbox = useOutbox(company);
   const [tab, setTab] = useState<Tab>('intake');
   // Число на вкладке — единственное, что сообщает о накопившемся: сам список
   // владелец не откроет, пока не узнает, что там что-то есть. После импорта
