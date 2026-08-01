@@ -86,6 +86,31 @@ public class CustomerAccountController {
         return ResponseEntity.status(HttpStatus.CREATED).body(EntryView.of(entry));
     }
 
+    /**
+     * Ручная правка остатка — владельцу и менеджеру, не продавцу.
+     *
+     * <p>Остальные операции по счёту продавец делает сам: они опираются
+     * на факт — принял деньги, выдал, зачёл в сделку. Правка ни на что
+     * не опирается, кроме решения, и отвечать за неё должен тот, кто отвечает
+     * за деньги.
+     */
+    @PostMapping("/correct")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<EntryView> correct(@PathVariable Long customerId,
+                                             @Valid @RequestBody CorrectionRequest request) {
+        CustomerAccountEntry entry = sales.correctAccount(
+                customerId, request.amount(), request.reason(), CurrentUser.memberId());
+        return ResponseEntity.status(HttpStatus.CREATED).body(EntryView.of(entry));
+    }
+
+    /**
+     * @param amount со знаком: правка бывает в обе стороны
+     * @param reason почему. Без неё через месяц правку не отличить от ошибки
+     */
+    public record CorrectionRequest(@NotNull BigDecimal amount,
+                                    @jakarta.validation.constraints.NotBlank String reason) {
+    }
+
     public record TopUpRequest(@NotNull @Positive BigDecimal amount, Long paymentSourceId) {
     }
 

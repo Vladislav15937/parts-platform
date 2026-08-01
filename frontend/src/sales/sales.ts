@@ -475,3 +475,19 @@ export function topUpAccount(customerId: number, amount: string): Promise<unknow
     body: { amount },
   });
 }
+
+/**
+ * Ручная правка остатка — со знаком и с обязательной причиной.
+ *
+ * <p>Только для того, что случилось вне системы: деньги приняли мимо кассы,
+ * старый долг простили, при переезде остаток приехал не тем. Расхождения,
+ * растущие из самой системы, лечатся в ней.
+ */
+export function correctAccount(
+  customerId: number, amount: string, reason: string,
+): Promise<unknown> {
+  return request(`/api/customers/${customerId}/account/correct`, {
+    method: 'POST',
+    body: { amount, reason },
+  });
+}

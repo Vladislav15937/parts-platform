@@ -462,6 +462,7 @@ public class SalesService {
                         item.getPartId(), item.getWarehouseId(), item.getQuantity());
             }
         }
+        refundOnCancel(deal, managerId);
         deal.cancel(Instant.now());
 
         Deal saved = detachable(dealRepository.saveAndFlush(deal));
@@ -470,6 +471,45 @@ public class SalesService {
                 managerId);
         eventPublisher.publish(DomainEvent.of("deal", dealId, "deal.cancelled.v1", payloadOf(saved)));
         return saved;
+    }
+
+    /**
+     * Отмена оплаченной сделки возвращает деньги на лицевой счёт клиента.
+     *
+     * <p><b>Пока этого не было, деньги пропадали.</b> Клиент оставил аванс,
+     * продавец зачёл его в отложенную сделку, клиент передумал — сделка
+     * отменена, товар на складе, а полторы тысячи не числятся ни за сделкой
+     * (она закрыта), ни на счёте (их оттуда списали). Ровно из таких
+     * расхождений и растёт нужда в ручной правке остатка: правка лечит
+     * симптом, а деньги теряются дальше.
+     *
+     * <p><b>На счёт, а не наличными.</b> Отмена — это решение продавца
+     * в системе, а не открытая касса: клиент может стоять у прилавка,
+     * а может позвонить. Запись на счёте не утверждает, что деньги отдали,
+     * — она фиксирует, что мы их должны. Захочет забрать сейчас — продавец
+     * нажмёт «Выдать», и расход появится в кассе.
+     *
+     * <p>Сделку без клиента, но с оплатой, отменить нельзя: возвращать
+     * некому, и молча оставить деньги себе — худший из возможных ответов.
+     */
+    private void refundOnCancel(Deal deal, Long managerId) {
+        BigDecimal paid = deal.getPaidAmount();
+        if (paid == null || paid.signum() <= 0) {
+            return;
+        }
+        if (deal.getCustomerId() == null) {
+            throw new IllegalStateException(
+                    "Сделка оплачена на %s ₽, а клиент не указан: вернуть деньги некому. "
+                            .formatted(paid.stripTrailingZeros().toPlainString())
+                            + "Укажите клиента или оформите возврат денег из кассы");
+        }
+
+        CustomerAccountEntry entry = new CustomerAccountEntry(
+                deal.getCustomerId(), AccountEntryType.DEAL_REFUND, paid);
+        entry.setDealId(deal.getId());
+        entry.setComment("Отмена сделки " + deal.getNumber() + ": оплата возвращена на счёт");
+        entry.setCreatedBy(managerId);
+        accountRepository.save(entry);
     }
 
     /**
@@ -800,6 +840,55 @@ public class SalesService {
                 new CustomerAccountEntry(customerId, AccountEntryType.WITHDRAW, amount);
         entry.setPaymentId(savedPayment.getId());
         entry.setComment("Выдача наличными");
+        entry.setCreatedBy(managerId);
+        return accountRepository.save(entry);
+    }
+
+    /**
+     * Ручная правка остатка.
+     *
+     * <p><b>Только то, что нельзя закрыть кодом.</b> Расхождения, растущие
+     * из самой системы, лечатся в системе: отмена оплаченной сделки теперь
+     * возвращает деньги на счёт, зачёт не создаёт лишнего платежа, выдача
+     * создаёт нужный. Правка остаётся для того, что случилось вне её: деньги
+     * приняли мимо кассы, старый долг простили, при переезде из прежней
+     * системы остаток приехал не тем.
+     *
+     * <p><b>Причина обязательна и в комментарий не прячется.</b> Правка —
+     * единственная операция, меняющая деньги клиента ничем не подтверждённым
+     * решением; без «почему» через месяц её не отличить от ошибки, а спорить
+     * о ней придётся с клиентом.
+     *
+     * <p><b>Правка со знаком, и это осознанно.</b> Остальные операции знак
+     * получают от типа, а тут он в сумме: правка бывает в обе стороны, и два
+     * типа ради этого («правка вверх», «правка вниз») читались бы в журнале
+     * как разные события, хотя это одно и то же действие.
+     *
+     * <p>В минус остаток не уводит: отрицательный счёт — это долг клиента,
+     * а такого договора нет.
+     */
+    @Transactional
+    public CustomerAccountEntry correctAccount(Long customerId, BigDecimal amount,
+                                               String reason, Long managerId) {
+        if (amount == null || amount.signum() == 0) {
+            throw new IllegalArgumentException("Правка на ноль ничего не меняет");
+        }
+        if (reason == null || reason.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Правка остатка без причины: через месяц её не отличить от ошибки");
+        }
+        BigDecimal balance = accountBalance(customerId);
+        if (balance.add(amount).signum() < 0) {
+            throw new IllegalStateException(
+                    "На счёте %s ₽, правка на %s уводит остаток в минус: "
+                            .formatted(balance.stripTrailingZeros().toPlainString(),
+                                    amount.stripTrailingZeros().toPlainString())
+                            + "отрицательный счёт — это долг клиента, а такого договора нет");
+        }
+
+        CustomerAccountEntry entry =
+                new CustomerAccountEntry(customerId, AccountEntryType.CORRECTION, amount);
+        entry.setComment(reason.strip());
         entry.setCreatedBy(managerId);
         return accountRepository.save(entry);
     }

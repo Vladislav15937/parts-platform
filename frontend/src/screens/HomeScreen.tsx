@@ -324,7 +324,7 @@ export function HomeScreen() {
 
       {tab === 'sales' &&
         (connected ? (
-          <SellerScreen canSell={SELLING_ROLES.includes(state.me.role)} />
+          <SellerScreen canSell={SELLING_ROLES.includes(state.me.role)} role={state.me.role} />
         ) : (
           <p className="note note--error">
             Нет связи. Продажа без неё невозможна: остаток из кэша — это деталь,

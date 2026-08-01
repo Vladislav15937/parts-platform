@@ -15,6 +15,7 @@ import {
   dealsOf,
   issueDeal,
   accountOf,
+  correctAccount,
   payDeal,
   topUpAccount,
   withdrawFromAccount,
@@ -54,9 +55,11 @@ import type { CustomerAccount,
  */
 interface Props {
   canSell: boolean;
+  /** Роль вошедшего: правку остатка делает не продавец. */
+  role: string;
 }
 
-export function SellerScreen({ canSell }: Props) {
+export function SellerScreen({ canSell, role }: Props) {
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState<StockRow[]>([]);
   const [searching, setSearching] = useState(false);
@@ -130,6 +133,7 @@ export function SellerScreen({ canSell }: Props) {
 
       {finding && (
         <DealFinder
+          role={role}
           onPick={(found) => {
             setDeal(found);
             setFinding(false);
@@ -489,9 +493,11 @@ function CustomerPicker({
 function DealFinder({
   onPick,
   onError,
+  role,
 }: {
   onPick: (deal: Deal) => void;
   onError: (message: string) => void;
+  role: string;
 }) {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [deals, setDeals] = useState<Deal[] | null>(null);
@@ -499,6 +505,11 @@ function DealFinder({
   // деньгами и без покупки — «верните, что осталось».
   const [account, setAccount] = useState<CustomerAccount | null>(null);
   const [cash, setCash] = useState('');
+  // Правка — отдельно от денег: она ни на что не опирается, кроме решения,
+  // и отвечает за неё тот, кто отвечает за деньги.
+  const [fixing, setFixing] = useState(false);
+  const [fixAmount, setFixAmount] = useState('');
+  const [fixReason, setFixReason] = useState('');
 
   return (
     <div className="finder">
@@ -545,6 +556,47 @@ function DealFinder({
               Выдать
             </button>
           </div>
+
+          {/* Правка остатка — владельцу и менеджеру. Продавец делает
+              операции, опирающиеся на факт: принял, выдал, зачёл. Правка
+              не опирается ни на что, кроме решения. */}
+          {['OWNER', 'MANAGER'].includes(role) && (
+            fixing ? (
+              <div className="row">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  value={fixAmount}
+                  placeholder="+ или −"
+                  onChange={(e) => setFixAmount(e.target.value)}
+                />
+                <input
+                  value={fixReason}
+                  placeholder="почему правим"
+                  onChange={(e) => setFixReason(e.target.value)}
+                />
+                <button
+                  type="button"
+                  disabled={fixAmount.trim() === '' || fixReason.trim() === ''}
+                  onClick={() => void money(async () => {
+                    await correctAccount(account.customerId, fixAmount.trim(), fixReason.trim());
+                    setFixing(false);
+                    setFixAmount('');
+                    setFixReason('');
+                  })}
+                >
+                  Поправить
+                </button>
+                <button type="button" className="button--ghost" onClick={() => setFixing(false)}>
+                  Отмена
+                </button>
+              </div>
+            ) : (
+              <button type="button" className="button--ghost" onClick={() => setFixing(true)}>
+                Поправить остаток
+              </button>
+            )
+          )}
 
           {account.entries.length > 0 && (
             <ul className="suggestions">
