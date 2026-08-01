@@ -416,3 +416,41 @@ export function roomFor(row: StockRow, lines: BasketLine[]): number {
     .reduce((sum, line) => sum + line.quantity, 0);
   return Math.max(0, Number(row.qtyAvailable) - taken);
 }
+
+/**
+ * Лицевой счёт клиента: остаток и журнал операций.
+ *
+ * <p>Переплата ложится на него сама, а увидеть её продавцу было негде —
+ * и при следующем приезде про свою тысячу помнил только клиент.
+ */
+export interface AccountEntry {
+  id: number;
+  entryType: string;
+  amount: number;
+  signedAmount: number;
+  comment: string | null;
+  createdAt: string;
+}
+
+export interface CustomerAccount {
+  customerId: number;
+  balance: number;
+  entries: AccountEntry[];
+}
+
+export function accountOf(customerId: number): Promise<CustomerAccount> {
+  return request<CustomerAccount>(`/api/customers/${customerId}/account`);
+}
+
+/**
+ * Зачёт с лицевого счёта в оплату сделки.
+ *
+ * <p>Отдельно от обычной оплаты: платежа в кассу не создаётся — деньги
+ * получены раньше, тогда же записан приход. Второй платёж задвоил бы выручку.
+ */
+export function payDealFromAccount(dealId: number, amount: string): Promise<unknown> {
+  return request(`/api/deals/${dealId}/payments/from-account`, {
+    method: 'POST',
+    body: { amount },
+  });
+}

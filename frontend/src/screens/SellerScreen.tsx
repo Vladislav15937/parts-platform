@@ -14,7 +14,9 @@ import {
   dealSources,
   dealsOf,
   issueDeal,
+  accountOf,
   payDeal,
+  payDealFromAccount,
   registerReturn,
   returnable,
   returnsOf,
@@ -24,7 +26,7 @@ import {
   transferable,
   transferItems,
 } from '../sales/sales';
-import type {
+import type { CustomerAccount,
   HistoryEntry,
   DealSource as DealSourceRow,
   ServiceLine,
@@ -556,6 +558,10 @@ function DealCard({
   // при разборе спора, а не при каждой продаже.
   const [history, setHistory] = useState<HistoryEntry[] | null>(null);
   const [share, setShare] = useState<string | null>(null);
+  // Остаток лицевого счёта: переплата ложится на него сама, и без показа
+  // деньги клиента остаются в системе невидимыми — при следующем приезде
+  // про свою тысячу помнит только он.
+  const [account, setAccount] = useState<CustomerAccount | null>(null);
 
   const reserved = transferable(deal);
   const issued = returnable(deal);
@@ -580,7 +586,13 @@ function DealCard({
     // «Возврат №1 оформлен» читается как возврат по ней.
     setNotice(null);
     setPicked([]);
-  }, [deal.id]);
+
+    // Счёт принадлежит клиенту, а не сделке: у сделки без клиента его нет.
+    setAccount(null);
+    if (deal.customerId !== null) {
+      void accountOf(deal.customerId).then(setAccount).catch(() => setAccount(null));
+    }
+  }, [deal.id, deal.customerId]);
 
   return (
     <>
@@ -643,6 +655,32 @@ function DealCard({
           Оплата
         </button>
       </div>
+
+      {/* Зачёт с лицевого счёта — отдельной кнопкой, а не галочкой в оплате:
+          денег в кассу при нём не поступает, они получены раньше. Сумма
+          предлагается наименьшая из остатка и долга: зачесть больше нельзя
+          ни того, ни другого. */}
+      {account !== null && account.balance > 0 && (
+        <div className="row">
+          <span className="muted">
+            На счету клиента {account.balance.toLocaleString('ru-RU')} ₽
+          </span>
+          {Number(deal.debt) > 0 && (
+            <button
+              type="button"
+              className="button--ghost"
+              disabled={!canSell}
+              onClick={() => void act(async () => {
+                const take = Math.min(account.balance, Number(deal.debt));
+                await payDealFromAccount(deal.id, String(take));
+                setAccount(await accountOf(account.customerId));
+              })}
+            >
+              Зачесть {Math.min(account.balance, Number(deal.debt)).toLocaleString('ru-RU')} ₽
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="row">
         <button
