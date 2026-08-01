@@ -42,6 +42,9 @@ export interface CatalogRow {
   oem: string | null;
   crosses: string | null;
   photoUrl: string | null;
+  /** Поставка и комплектация показываются в карточке, но не в таблице. */
+  supply: string | null;
+  equipment: string | null;
   /** Остаток по складам: ключ — идентификатор склада, число колонок = число складов. */
   stock: Record<string, number>;
 }
@@ -89,6 +92,39 @@ export interface PartPhoto {
   photoId: number;
   main: boolean;
   url: string;
+}
+
+/** Строка заявленной применимости: к какой машине деталь подходит. */
+export interface Applicability {
+  id: number;
+  /** Подтверждено человеком, а не разобрано из наименования. */
+  verified: boolean;
+  brand: string;
+  model: string | null;
+  generation: string | null;
+  yearFrom: number | null;
+  yearTo: number | null;
+}
+
+/** Заявленная применимость позиции. Пустой список — «не задана». */
+export function loadApplicability(partId: number): Promise<Applicability[]> {
+  return request<Applicability[]>(`/api/parts/catalog/${partId}/applicability`);
+}
+
+/** Добавляет машину в применимость позиции. Отметка подтверждения ставится. */
+export function addApplicability(
+  partId: number, brandId: number, modelId: number | null,
+): Promise<Applicability[]> {
+  return request<Applicability[]>(`/api/parts/catalog/${partId}/applicability`, {
+    method: 'POST',
+    body: { brandId, modelId },
+  });
+}
+
+export function removeApplicability(partId: number, id: number): Promise<Applicability[]> {
+  return request<Applicability[]>(`/api/parts/catalog/${partId}/applicability/${id}`, {
+    method: 'DELETE',
+  });
 }
 
 /** Все снимки позиции — для развёрнутой строки склада. */

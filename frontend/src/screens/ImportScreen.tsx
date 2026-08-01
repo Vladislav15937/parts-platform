@@ -1,14 +1,25 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
   duplicateColumns,
   FIELDS,
+  applicabilityFromTitles,
   importBazon,
   importFile,
+  migratePhotos,
+  photoStatus,
+  retryPhotos,
   missingRequired,
   previewFile,
 } from '../import/warehouseImport';
-import type { BazonResult, FieldKey, Preview, Report } from '../import/warehouseImport';
+import type {
+  BazonResult,
+  FieldKey,
+  ParsedApplicability,
+  PhotoProgress,
+  Preview,
+  Report,
+} from '../import/warehouseImport';
 import type { Reference } from '../reference/reference';
 
 /**
@@ -218,6 +229,7 @@ export function ImportScreen({ reference, canImport }: Props) {
       )}
 
       <BazonImport />
+      <AfterImport />
     </section>
   );
 
@@ -274,6 +286,119 @@ export function ImportScreen({ reference, canImport }: Props) {
  * то, чего в таблице нет вовсе — машины, поставки, резервы по складам.
  * Сопоставлять колонки тут не надо: формат чужой системы известен.
  */
+/**
+ * Что доделывается после переноса склада.
+ *
+ * <p>Оба шага отделены от самого переноса намеренно. Фотографии — это сотня
+ * тысяч файлов с чужого CDN, часы работы: внутри запроса импорта соединение
+ * оборвётся. Применимость — проход по всем заголовкам, и запускать её надо
+ * после того, как справочник наименований разобран, иначе часть машин ещё
+ * не будет узнана.
+ */
+function AfterImport() {
+  const [photos, setPhotos] = useState<PhotoProgress | null>(null);
+  const [fits, setFits] = useState<ParsedApplicability | null>(null);
+  const [busy, setBusy] = useState<'photos' | 'fits' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void photoStatus().then(setPhotos).catch(() => setPhotos(null));
+  }, []);
+
+  return (
+    <>
+      <h2>После переноса</h2>
+
+      {error !== null && <p className="note note--error">{error}</p>}
+
+      <div className="card">
+        <h3>Фотографии</h3>
+        {photos === null ? (
+          <p className="muted">Состояние неизвестно</p>
+        ) : (
+          <p className="note">
+            Перенесено {photos.total}, ждёт {photos.pending}
+            {photos.broken > 0 && `, не вышло ${photos.broken}`}.
+          </p>
+        )}
+        <div className="filter-row">
+          <button type="button" disabled={busy !== null} onClick={() => void pullPhotos()}>
+            {busy === 'photos' ? 'Переносим…' : 'Перенести пачку'}
+          </button>
+          {photos !== null && photos.broken > 0 && (
+            <button
+              type="button"
+              className="button--ghost"
+              disabled={busy !== null}
+              onClick={() => void retry()}
+            >
+              Вернуть неудачные в очередь
+            </button>
+          )}
+        </div>
+        <p className="note">
+          Пачками, потому что сотня тысяч файлов с чужого CDN — это часы,
+          а запрос столько не живёт. Нажимать, пока в очереди не станет пусто;
+          прервать можно в любой момент.
+        </p>
+      </div>
+
+      <div className="card">
+        <h3>Применимость из наименований</h3>
+        {fits !== null && (
+          <p className="note">
+            Разобрано позиций: {fits.parts}, добавлено строк: {fits.added}.
+          </p>
+        )}
+        <button type="button" disabled={busy !== null} onClick={() => void parseTitles()}>
+          {busy === 'fits' ? 'Разбираем…' : 'Проставить применимость'}
+        </button>
+        <p className="note">
+          Деталь, подходящая к нескольким машинам, донора не имеет — машины
+          у неё названы прямо в наименовании. Без этого прохода подбор
+          по машине её не находит вовсе. Разбираются только марки и модели
+          из справочника; повтор ничего не дублирует.
+        </p>
+      </div>
+    </>
+  );
+
+  async function pullPhotos(): Promise<void> {
+    setBusy('photos');
+    setError(null);
+    try {
+      setPhotos(await migratePhotos());
+    } catch (cause) {
+      setError(describe(cause, 'Перенос фотографий не прошёл'));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function retry(): Promise<void> {
+    setBusy('photos');
+    try {
+      setPhotos(await retryPhotos());
+    } catch (cause) {
+      setError(describe(cause, 'Не удалось вернуть в очередь'));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function parseTitles(): Promise<void> {
+    setBusy('fits');
+    setError(null);
+    try {
+      setFits(await applicabilityFromTitles());
+    } catch (cause) {
+      setError(describe(cause, 'Разбор применимости не прошёл'));
+    } finally {
+      setBusy(null);
+    }
+  }
+}
+
 function BazonImport() {
   const [donors, setDonors] = useState<File | null>(null);
   const [catalog, setCatalog] = useState<File | null>(null);

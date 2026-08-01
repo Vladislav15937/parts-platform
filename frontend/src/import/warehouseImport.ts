@@ -1,4 +1,4 @@
-import { upload } from '../api/client';
+import { request, upload } from '../api/client';
 
 /**
  * Перенос склада из таблицы клиента.
@@ -124,4 +124,44 @@ export function importBazon(donors: File, catalog: File): Promise<BazonResult> {
   form.append('donors', donors);
   form.append('catalog', catalog);
   return upload<BazonResult>('/api/import/bazon', form);
+}
+
+/** Сколько фотографий перенесено, сколько не вышло и сколько ждёт. */
+export interface PhotoProgress {
+  done: number;
+  failed: number;
+  pending: number;
+  total: number;
+  broken: number;
+}
+
+export function photoStatus(): Promise<PhotoProgress> {
+  return request<PhotoProgress>('/api/import/bazon/photos');
+}
+
+export function migratePhotos(limit = 200): Promise<PhotoProgress> {
+  return request<PhotoProgress>(`/api/import/bazon/photos?limit=${limit}`, { method: 'POST' });
+}
+
+export function retryPhotos(): Promise<PhotoProgress> {
+  return request<PhotoProgress>('/api/import/bazon/photos/retry', { method: 'POST' });
+}
+
+/** @param parts позиций, назвавших машину в заголовке; added — строк добавлено */
+export interface ParsedApplicability {
+  parts: number;
+  added: number;
+}
+
+/**
+ * Проставляет применимость по машинам из наименований.
+ *
+ * <p>У переехавшего клиента четверть склада без донора — это детали,
+ * подходящие к нескольким машинам, и машины названы прямо в наименовании.
+ * Без этого прохода подбор по машине их не находит вовсе.
+ */
+export function applicabilityFromTitles(): Promise<ParsedApplicability> {
+  return request<ParsedApplicability>('/api/parts/catalog/applicability/from-titles', {
+    method: 'POST',
+  });
 }

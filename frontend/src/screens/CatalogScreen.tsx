@@ -208,7 +208,9 @@ export function CatalogScreen() {
         </div>
       )}
 
-      {card !== null && <PartCard row={card} onClose={() => setCard(null)} />}
+      {card !== null && (
+        <PartCard row={card} warehouses={warehouses} onClose={() => setCard(null)} />
+      )}
 
       {picking && (
         <VehiclePicker

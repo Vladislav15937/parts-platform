@@ -15,7 +15,7 @@ function row(overrides: Partial<CatalogRow> = {}): CatalogRow {
     body: null, engine: null, year: null, donorCode: null,
     price: null, installationPrice: null, color: null, description: null, note: null,
     manufacturer: null, marking: null, section: null, sideLr: null, sideFr: null,
-    qty: 1, oem: null, crosses: null, photoUrl: null, stock: {},
+    qty: 1, oem: null, crosses: null, photoUrl: null, supply: null, equipment: null, stock: {},
     ...overrides,
   };
 }
