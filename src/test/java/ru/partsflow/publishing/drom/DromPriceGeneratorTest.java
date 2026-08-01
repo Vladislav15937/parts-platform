@@ -38,6 +38,9 @@ class DromPriceGeneratorTest extends PostgresTestBase {
     private DromPriceGenerator generator;
 
     @Autowired
+    private ru.partsflow.publishing.MarketplaceAccountService accounts;
+
+    @Autowired
     private JdbcTemplate jdbc;
 
     @Autowired
@@ -199,6 +202,32 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         // Соединение берётся из сессии Hibernate: взятое напрямую из пула
         // смотрело бы в public, и прайс собрался бы пустым или не тем.
         assertThat(price()).contains(name).startsWith("<?xml");
+    }
+
+    /**
+     * Счётчик обещает ровно то, что уедет.
+     *
+     * <p>Он для того и заведён: владелец видит число до сохранения, и ноль
+     * показывается ошибкой. Но считал он колёса, которых в прайсе запчастей
+     * нет, — то есть врал в ту самую сторону, ради которой существует:
+     * успокаивал числом. Поймано прогоном на арендаторе с комплектом резины.
+     */
+    @Test
+    @DisplayName("Счётчик выгрузки считает то же, что уезжает в прайс")
+    void counterMatchesTheFeed() {
+        Long part = part("Прайс: запчасть для счётчика", new BigDecimal("2000"), true);
+        intake(part, warehouse, 1);
+        Long wheel = part("Прайс: шина для счётчика", new BigDecimal("3000"), true);
+        inTenant(() -> jdbc.update("UPDATE part SET product_line = 'WHEEL' WHERE id = ?", wheel));
+        intake(wheel, warehouse, 1);
+
+        long counted = inTenant(() -> accounts.countMatching(
+                null, null, null, null, null, false, null, false));
+        long offers = price().split("<offer>", -1).length - 1;
+
+        assertThat(counted)
+                .as("счётчик обещает не то число, которое уедет площадке")
+                .isEqualTo(offers);
     }
 
     // ---------- фикстуры ----------

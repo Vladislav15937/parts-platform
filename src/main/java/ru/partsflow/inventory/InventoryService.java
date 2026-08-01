@@ -79,7 +79,7 @@ public class InventoryService {
                 },
                 warehouseId);
 
-        return sessions.saveAndFlush(session);
+        return detachable(sessions.saveAndFlush(session));
     }
 
     /**
@@ -116,7 +116,7 @@ public class InventoryService {
                 .orElseGet(() -> session.addLine(partId, BigDecimal.ZERO, null));
 
         line.count(qty, authorId, countedAt(session, countedAgo));
-        return sessions.saveAndFlush(session);
+        return detachable(sessions.saveAndFlush(session));
     }
 
     /**
@@ -153,7 +153,26 @@ public class InventoryService {
     public InventorySession finishCounting(Long sessionId) {
         InventorySession session = require(sessionId);
         session.finishCounting();
-        return sessions.saveAndFlush(session);
+        return detachable(sessions.saveAndFlush(session));
+    }
+
+    /**
+     * Подтягивает строки перед выходом сессии за границу транзакции.
+     *
+     * <p>{@code open-in-view} выключен намеренно, а представление сессии
+     * считает строки и посчитанные из них: сессия, отданная контроллеру
+     * с ленивой коллекцией, превращается в {@code LazyInitializationException},
+     * то есть в пятисотку — а офлайн-очередь повторяет 5xx вечно.
+     *
+     * <p>Тесты, зовущие сервис изнутри своей транзакции, этого не видят вовсе:
+     * там коллекция инициализируется сама. Нужен прогон через HTTP, и
+     * {@code InventoryHttpTest} заведён именно для этого. Поймано живым
+     * прогоном на «завершить подсчёт»: открытие и подсчёт проходили, потому
+     * что оба трогают строки по делу, а завершение — нет.
+     */
+    private InventorySession detachable(InventorySession session) {
+        session.getLines().size();
+        return session;
     }
 
     /**
@@ -192,7 +211,9 @@ public class InventoryService {
     @Transactional(readOnly = true)
     public Optional<InventorySession> openSessionOf(Long warehouseId) {
         return sessions.findByWarehouseIdAndStatus(
-                warehouseId, InventorySession.SessionStatus.OPEN).stream().findFirst();
+                warehouseId, InventorySession.SessionStatus.OPEN).stream()
+                .findFirst()
+                .map(this::detachable);
     }
 
     /**
@@ -245,7 +266,7 @@ public class InventoryService {
     public InventorySession cancel(Long sessionId) {
         InventorySession session = require(sessionId);
         session.cancel();
-        return sessions.saveAndFlush(session);
+        return detachable(sessions.saveAndFlush(session));
     }
 
     /**
