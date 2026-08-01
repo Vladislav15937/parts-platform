@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -39,13 +40,16 @@ public class InventoryService {
     private final InventorySessionRepository sessions;
     private final StockMovementRepository movements;
     private final JdbcTemplate jdbc;
+    private final StockReservationRepository reservations;
 
     public InventoryService(InventorySessionRepository sessions,
                             StockMovementRepository movements,
-                            JdbcTemplate jdbc) {
+                            JdbcTemplate jdbc,
+                            StockReservationRepository reservations) {
         this.sessions = sessions;
         this.movements = movements;
         this.jdbc = jdbc;
+        this.reservations = reservations;
     }
 
     /**
@@ -248,6 +252,8 @@ public class InventoryService {
                 .filter(d -> d.delta().signum() != 0)
                 .toList();
 
+        requireShortagesNotPromised(session, found);
+
         for (Discrepancy d : found) {
             movements.save(StockMovement.inventoryAdjust(
                     d.partId(), d.delta(), session.getWarehouseId()));
@@ -260,6 +266,66 @@ public class InventoryService {
                     sessionId, session.getWarehouseId(), found.size());
         }
         return found.size();
+    }
+
+    /**
+     * Недостача по детали, обещанной покупателю, останавливает проведение —
+     * целиком, а не частично.
+     *
+     * <p>Списать такую недостачу нельзя: остаток уйдёт ниже резерва, и это
+     * отобьёт триггер склада. Пока проверки не было, проведение падало
+     * с «Операция нарушает целостность данных» — кладовщик получал непонятный
+     * отказ на всю инвентаризацию и не знал, что делать. Случай не редкий:
+     * деталь обещали, а на полке её нет, — и узнать об этом важнее всего
+     * именно тогда, потому что покупателю надо звонить.
+     *
+     * <p><b>Всё или ничего, а не пропуск проблемных позиций.</b> Пропустив
+     * их, пришлось бы оставить сессию непроведённой ради повтора — а её
+     * корректировки к тому моменту уже записаны, и повтор списал бы всё
+     * второй раз. Отказ до первой записи оставляет базу нетронутой, и повтор
+     * безопасен.
+     *
+     * <p>Резерв при этом не снимается сам: обещание отменяет продавец,
+     * говоря с покупателем, а не пересчёт за его спиной.
+     */
+    private void requireShortagesNotPromised(InventorySession session,
+                                             List<Discrepancy> found) {
+        List<String> blocked = new ArrayList<>();
+        for (Discrepancy d : found) {
+            if (d.delta().signum() >= 0) {
+                continue;
+            }
+            BigDecimal available = reservations.availableQuantity(
+                    d.partId(), session.getWarehouseId());
+            if (available.compareTo(d.delta().abs()) < 0) {
+                blocked.add(describePromised(d.partId(), available, d.delta().abs()));
+            }
+        }
+        if (!blocked.isEmpty()) {
+            throw new IllegalStateException(
+                    "Провести пересчёт нельзя: недостача по деталям, обещанным покупателям. "
+                            + String.join("; ", blocked)
+                            + ". Снимите резерв — отмените или перенесите позицию в сделке — "
+                            + "и проведите заново");
+        }
+    }
+
+    /** Называет деталь и сделку: «деталь 4» отправит кладовщика искать самому. */
+    private String describePromised(Long partId, BigDecimal available, BigDecimal needed) {
+        String title = jdbc.query("SELECT title FROM part WHERE id = ?",
+                rs -> rs.next() ? rs.getString(1) : null, partId);
+        List<Long> deals = jdbc.queryForList("""
+                SELECT DISTINCT d.number FROM deal_item i
+                  JOIN deal d ON d.id = i.deal_id
+                 WHERE i.part_id = ? AND i.status = 'RESERVED'
+                 ORDER BY d.number""", Long.class, partId);
+
+        return "«%s»: не хватает %s, свободно %s%s".formatted(
+                title == null ? "деталь " + partId : title,
+                needed.stripTrailingZeros().toPlainString(),
+                available.stripTrailingZeros().toPlainString(),
+                deals.isEmpty() ? "" : ", обещана по сделке " + deals.stream()
+                        .map(String::valueOf).collect(java.util.stream.Collectors.joining(", ")));
     }
 
     @Transactional

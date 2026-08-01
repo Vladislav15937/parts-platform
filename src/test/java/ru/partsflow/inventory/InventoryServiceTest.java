@@ -158,6 +158,60 @@ class InventoryServiceTest extends PostgresTestBase {
         assertThat(statusOf(partId)).isEqualTo("IN_STOCK");
     }
 
+    /**
+     * Недостача по обещанной детали останавливает проведение целиком.
+     *
+     * <p>Списать её нельзя — остаток уйдёт ниже резерва, и это отобьёт триггер
+     * склада. Пока проверки не было, кладовщик получал «Операция нарушает
+     * целостность данных» на всю инвентаризацию и не знал, что делать.
+     * Случай не редкий: деталь обещали, а на полке её нет, — и узнать
+     * об этом важнее всего именно тогда.
+     *
+     * <p>Ничего не записывается: повтор после снятия резерва обязан быть
+     * безопасным, а частично проведённая сессия списала бы всё второй раз.
+     */
+    @Test
+    @DisplayName("Недостача по обещанной детали не проводится, и отказ называет сделку")
+    void promisedShortageBlocksApply() {
+        Long partId = partWithStock("Фара, обещанная покупателю", 1);
+        inTenant(() -> jdbc.queryForObject(
+                "SELECT reserve_stock(?, ?, 1)", Object.class, partId, warehouse));
+
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        inTenant(() -> inventory.count(sessionId, partId, BigDecimal.ZERO, null));
+        inTenant(() -> inventory.finishCounting(sessionId));
+
+        assertThatThrownBy(() -> inTenant(() -> inventory.apply(sessionId)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("обещанным покупателям")
+                .hasMessageContaining("Фара, обещанная покупателю");
+
+        // Ни одной корректировки: иначе повтор спишет то же самое второй раз.
+        assertThat(adjustments(partId)).isZero();
+        assertThat(qtyOf(partId, warehouse)).isEqualByComparingTo("1");
+    }
+
+    // Снятый резерв разблокирует проведение — это и есть выход, который
+    // предлагает сообщение об отказе.
+    @Test
+    @DisplayName("После снятия резерва пересчёт проводится")
+    void applyPassesAfterReservationReleased() {
+        Long partId = partWithStock("Фара, снятая с резерва", 1);
+        inTenant(() -> jdbc.queryForObject(
+                "SELECT reserve_stock(?, ?, 1)", Object.class, partId, warehouse));
+
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        inTenant(() -> inventory.count(sessionId, partId, BigDecimal.ZERO, null));
+        inTenant(() -> inventory.finishCounting(sessionId));
+
+        inTenant(() -> jdbc.queryForObject(
+                "SELECT release_stock(?, ?, 1)", Object.class, partId, warehouse));
+
+        assertThat(inTenant(() -> inventory.apply(sessionId))).isEqualTo(1);
+        assertThat(qtyOf(partId, warehouse)).isEqualByComparingTo("0");
+        assertThat(statusOf(partId)).isEqualTo("WRITTEN_OFF");
+    }
+
     @Test
     @DisplayName("Излишек приходуется корректировкой")
     void surplusIsAdded() {
