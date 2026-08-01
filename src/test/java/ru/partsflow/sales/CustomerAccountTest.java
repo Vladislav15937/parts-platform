@@ -320,6 +320,33 @@ class CustomerAccountTest extends PostgresTestBase {
         assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("300");
     }
 
+    /**
+     * У заказа с площадки клиент необязателен, а назначить его задним числом
+     * нечем. Отказ в отмене запер бы продавца в сделке, которую не отменить
+     * и не выдать, поэтому деньги уходят расходом из кассы — так же,
+     * как пришли.
+     */
+    @Test
+    @DisplayName("Оплаченная сделка без клиента отменяется, деньги уходят из кассы")
+    void cancellingPaidDealWithoutCustomerRefundsCash() {
+        Long partId = partWithStock("Фара с площадки", new BigDecimal("2500"));
+        var accepted = inTenant(() -> sales.registerMarketplaceOrder(
+                "DROM", "301-000-77", null, null, null, null, null, null,
+                List.of(new SalesService.ItemRequest(
+                        partId, BigDecimal.ONE, new BigDecimal("2500"), warehouseId)),
+                List.of()));
+        Long dealId = accepted.deal().getId();
+        inTenant(() -> sales.takePayment(dealId, new BigDecimal("2500"), null, managerId));
+
+        inTenant(() -> sales.cancel(dealId, managerId, "покупатель отказался"));
+
+        assertThat(inTenant(() -> jdbc.queryForObject("""
+                SELECT COALESCE(sum(amount), 0) FROM payment
+                 WHERE deal_id = ? AND direction = 'OUT'""", BigDecimal.class, dealId)))
+                .as("деньги остались у нас: отмена прошла, а расхода нет")
+                .isEqualByComparingTo("2500");
+    }
+
     private int payments() {
         Integer found = inTenant(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM payment WHERE customer_id = ?", Integer.class, customerId));

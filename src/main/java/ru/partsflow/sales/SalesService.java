@@ -489,19 +489,28 @@ public class SalesService {
      * — она фиксирует, что мы их должны. Захочет забрать сейчас — продавец
      * нажмёт «Выдать», и расход появится в кассе.
      *
-     * <p>Сделку без клиента, но с оплатой, отменить нельзя: возвращать
-     * некому, и молча оставить деньги себе — худший из возможных ответов.
+     * <p><b>Сделке без клиента деньги возвращаются расходом из кассы.</b>
+     * Счёта у неё нет, а запретить отмену нельзя: у заказа с площадки клиент
+     * необязателен, назначить его задним числом нечем, и отказ запер бы
+     * продавца в сделке, которую не отменить и не выдать. Деньги уходят так же,
+     * как пришли, — наличными.
      */
     private void refundOnCancel(Deal deal, Long managerId) {
         BigDecimal paid = deal.getPaidAmount();
         if (paid == null || paid.signum() <= 0) {
             return;
         }
+        // Без клиента счёта не существует, а запретить отмену нельзя: у заказа
+        // с площадки клиент необязателен, назначить его задним числом нечем,
+        // и отказ запер бы продавца в сделке, которую не отменить и не выдать.
+        // Поэтому деньги уходят расходом из кассы — так же, как их и приняли.
         if (deal.getCustomerId() == null) {
-            throw new IllegalStateException(
-                    "Сделка оплачена на %s ₽, а клиент не указан: вернуть деньги некому. "
-                            .formatted(paid.stripTrailingZeros().toPlainString())
-                            + "Укажите клиента или оформите возврат денег из кассы");
+            Payment refund = new Payment(PaymentDirection.OUT, paid, null);
+            refund.setDealId(deal.getId());
+            refund.setComment("Отмена сделки " + deal.getNumber() + ": оплата возвращена");
+            refund.setCreatedBy(managerId);
+            paymentRepository.save(refund);
+            return;
         }
 
         CustomerAccountEntry entry = new CustomerAccountEntry(
