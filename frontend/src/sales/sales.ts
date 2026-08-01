@@ -454,3 +454,24 @@ export function payDealFromAccount(dealId: number, amount: string): Promise<unkn
     body: { amount },
   });
 }
+
+/**
+ * Выдача со счёта наличными.
+ *
+ * <p>В отличие от зачёта создаёт расход в кассе: там деньги остаются у нас
+ * и меняют назначение, здесь уходят клиенту.
+ */
+export function withdrawFromAccount(customerId: number, amount: string): Promise<unknown> {
+  return request(`/api/customers/${customerId}/account/withdraw`, {
+    method: 'POST',
+    body: { amount },
+  });
+}
+
+/** Пополнение счёта: клиент оставил деньги авансом. */
+export function topUpAccount(customerId: number, amount: string): Promise<unknown> {
+  return request(`/api/customers/${customerId}/account/top-up`, {
+    method: 'POST',
+    body: { amount },
+  });
+}

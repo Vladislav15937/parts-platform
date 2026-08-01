@@ -16,6 +16,8 @@ import {
   issueDeal,
   accountOf,
   payDeal,
+  topUpAccount,
+  withdrawFromAccount,
   payDealFromAccount,
   registerReturn,
   returnable,
@@ -493,6 +495,10 @@ function DealFinder({
 }) {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [deals, setDeals] = useState<Deal[] | null>(null);
+  // Счёт показывается здесь, а не только в сделке: клиент приходит за своими
+  // деньгами и без покупки — «верните, что осталось».
+  const [account, setAccount] = useState<CustomerAccount | null>(null);
+  const [cash, setCash] = useState('');
 
   return (
     <div className="finder">
@@ -504,6 +510,60 @@ function DealFinder({
         }}
         onError={onError}
       />
+
+      {account !== null && (
+        <div className="card">
+          <h4>Лицевой счёт</h4>
+          <p className="note">
+            Остаток {account.balance.toLocaleString('ru-RU')} ₽
+          </p>
+
+          <div className="row">
+            <input
+              type="number"
+              inputMode="numeric"
+              value={cash}
+              placeholder="сумма"
+              onChange={(e) => setCash(e.target.value)}
+            />
+            <button
+              type="button"
+              disabled={cash.trim() === ''}
+              onClick={() => void money(() => topUpAccount(account.customerId, cash.trim()))}
+            >
+              Положить
+            </button>
+            {/* Выдача уносит деньги из кассы, поэтому она отдельной кнопкой,
+                а не знаком минус в той же сумме: перепутать их значит выдать
+                клиенту то, что он собирался оставить. */}
+            <button
+              type="button"
+              className="button--ghost"
+              disabled={cash.trim() === '' || account.balance <= 0}
+              onClick={() => void money(() => withdrawFromAccount(account.customerId, cash.trim()))}
+            >
+              Выдать
+            </button>
+          </div>
+
+          {account.entries.length > 0 && (
+            <ul className="suggestions">
+              {account.entries.slice(0, 8).map((entry) => (
+                <li key={entry.id}>
+                  <span className={entry.signedAmount < 0 ? 'muted' : undefined}>
+                    {entry.signedAmount > 0 ? '+' : ''}
+                    {entry.signedAmount.toLocaleString('ru-RU')} ₽
+                    {' · '}
+                    {entry.comment ?? entryName(entry.entryType)}
+                    {' · '}
+                    {new Date(entry.createdAt).toLocaleDateString('ru-RU')}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {deals !== null && deals.length === 0 && (
         <p className="note">У этого клиента сделок нет</p>
@@ -535,6 +595,33 @@ function DealFinder({
       setDeals([]);
       onError(describe(cause, 'Сделки не загрузились'));
     }
+    // Счёт грузим отдельно: сделок может не быть вовсе, а деньги на счету
+    // при этом лежать — за ними и пришли.
+    setAccount(await accountOf(picked.id).catch(() => null));
+  }
+
+  async function money(action: () => Promise<unknown>): Promise<void> {
+    if (customer === null) {
+      return;
+    }
+    try {
+      await action();
+      setCash('');
+      setAccount(await accountOf(customer.id));
+    } catch (cause) {
+      onError(describe(cause, 'Операция по счёту не прошла'));
+    }
+  }
+}
+
+/** Название операции, когда комментария нет. */
+function entryName(type: string): string {
+  switch (type) {
+    case 'TOP_UP': return 'пополнение';
+    case 'WITHDRAW': return 'выдача';
+    case 'DEAL_PAYMENT': return 'оплата сделки';
+    case 'DEAL_REFUND': return 'возврат по сделке';
+    default: return 'правка';
   }
 }
 

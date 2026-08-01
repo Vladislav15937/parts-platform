@@ -765,6 +765,45 @@ public class SalesService {
         return detachable(saved);
     }
 
+    /**
+     * Выдача денег со счёта наличными.
+     *
+     * <p><b>Платёж здесь создаётся, в отличие от зачёта.</b> Разница
+     * не формальная: при зачёте деньги остаются у нас и просто меняют
+     * назначение, а тут физически уходят из кассы клиенту, и касса, в которой
+     * этого расхода нет, к вечеру не сойдётся.
+     *
+     * <p>Больше остатка не выдать: счёт — обязательство перед клиентом,
+     * а не кредит ему.
+     */
+    @Transactional
+    public CustomerAccountEntry withdrawFromAccount(Long customerId, BigDecimal amount,
+                                                    Long paymentSourceId, Long managerId) {
+        if (amount == null || amount.signum() <= 0) {
+            throw new IllegalArgumentException("Сумма выдачи должна быть больше нуля");
+        }
+        BigDecimal balance = accountBalance(customerId);
+        if (balance.compareTo(amount) < 0) {
+            throw new IllegalStateException(
+                    "На счёте клиента %s ₽, а выдать просят %s ₽"
+                            .formatted(balance.stripTrailingZeros().toPlainString(),
+                                    amount.stripTrailingZeros().toPlainString()));
+        }
+
+        Payment payment = new Payment(PaymentDirection.OUT, amount, customerId);
+        payment.setPaymentSourceId(paymentSourceId);
+        payment.setComment("Выдача с лицевого счёта");
+        payment.setCreatedBy(managerId);
+        Payment savedPayment = paymentRepository.saveAndFlush(payment);
+
+        CustomerAccountEntry entry =
+                new CustomerAccountEntry(customerId, AccountEntryType.WITHDRAW, amount);
+        entry.setPaymentId(savedPayment.getId());
+        entry.setComment("Выдача наличными");
+        entry.setCreatedBy(managerId);
+        return accountRepository.save(entry);
+    }
+
     /** Пополнение лицевого счёта без привязки к сделке. */
     @Transactional
     public CustomerAccountEntry topUpAccount(Long customerId, BigDecimal amount,

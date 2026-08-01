@@ -71,6 +71,21 @@ public class CustomerAccountController {
     public record AccountView(Long customerId, BigDecimal balance, List<EntryView> entries) {
     }
 
+    /**
+     * Выдача со счёта наличными.
+     *
+     * <p>Отдельно от зачёта: там деньги остаются у нас и меняют назначение,
+     * здесь уходят из кассы — и платёж создаётся, иначе касса не сойдётся.
+     */
+    @PostMapping("/withdraw")
+    @PreAuthorize(SELLS)
+    public ResponseEntity<EntryView> withdraw(@PathVariable Long customerId,
+                                              @Valid @RequestBody TopUpRequest request) {
+        CustomerAccountEntry entry = sales.withdrawFromAccount(
+                customerId, request.amount(), request.paymentSourceId(), CurrentUser.memberId());
+        return ResponseEntity.status(HttpStatus.CREATED).body(EntryView.of(entry));
+    }
+
     public record TopUpRequest(@NotNull @Positive BigDecimal amount, Long paymentSourceId) {
     }
 

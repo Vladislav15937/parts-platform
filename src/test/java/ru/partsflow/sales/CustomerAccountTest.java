@@ -165,6 +165,51 @@ class CustomerAccountTest extends PostgresTestBase {
         assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("2500");
     }
 
+    /**
+     * У выдачи и зачёта разная природа, и видно это по кассе.
+     *
+     * <p>Зачёт денег не двигает — они уже у нас и просто меняют назначение.
+     * Выдача уносит их из кассы клиенту, и расход, которого в кассе нет,
+     * к вечеру не сойдётся с ящиком.
+     */
+    @Test
+    @DisplayName("Выдача со счёта создаёт расход в кассе, в отличие от зачёта")
+    void withdrawalCreatesPayment() {
+        inTenant(() -> sales.topUpAccount(customerId, new BigDecimal("3000"), null, managerId));
+        int before = payments();
+
+        inTenant(() -> sales.withdrawFromAccount(
+                customerId, new BigDecimal("1200"), null, managerId));
+
+        assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("1800");
+        assertThat(payments())
+                .as("выдача не отразилась в кассе — деньги ушли, а расхода нет")
+                .isEqualTo(before + 1);
+        assertThat(outgoing())
+                .as("выдача записана приходом: касса вырастет на сумму, которую отдали")
+                .isEqualByComparingTo("1200");
+    }
+
+    @Test
+    @DisplayName("Больше остатка со счёта не выдать")
+    void cannotWithdrawMoreThanBalance() {
+        inTenant(() -> sales.topUpAccount(customerId, new BigDecimal("700"), null, managerId));
+
+        assertThatThrownBy(() -> inTenant(() -> sales.withdrawFromAccount(
+                customerId, new BigDecimal("1000"), null, managerId)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("700");
+
+        assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("700");
+    }
+
+    private BigDecimal outgoing() {
+        return inTenant(() -> jdbc.queryForObject("""
+                SELECT COALESCE(sum(amount), 0) FROM payment
+                 WHERE customer_id = ? AND direction = 'OUT'""",
+                BigDecimal.class, customerId));
+    }
+
     private int payments() {
         Integer found = inTenant(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM payment WHERE customer_id = ?", Integer.class, customerId));
