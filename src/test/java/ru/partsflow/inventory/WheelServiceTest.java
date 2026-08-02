@@ -13,6 +13,7 @@ import ru.partsflow.support.PostgresTestBase;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -112,7 +113,7 @@ class WheelServiceTest extends PostgresTestBase {
     void listCarriesEveryProperty() {
         var created = inTenant(() -> wheels.createSet(tyre(), 2, warehouseId, null));
 
-        var row = inTenant(() -> wheels.list(null, null, false, "set", true, 50)).stream()
+        var row = inTenant(() -> wheels.list(null, null, false, Map.of(), "set", true, 50)).stream()
                 .filter(w -> created.partIds().contains(w.id()))
                 .findFirst()
                 .orElseThrow();
@@ -145,16 +146,16 @@ class WheelServiceTest extends PostgresTestBase {
 
         // Размер попадает в поиск сам: он собран в заголовок, а покупатель
         // называет именно его.
-        var found = inTenant(() -> wheels.list("195/65", null, false, "set", true, 500));
+        var found = inTenant(() -> wheels.list("195/65", null, false, Map.of(), "set", true, 500));
         assertThat(ids(found)).contains(tyreId).doesNotContain(discId);
 
         // «Покажи только диски» — первое, что делает кладовщик, когда ищет
         // комплект железа: половина колонок у второго вида пуста.
-        var discs = inTenant(() -> wheels.list(null, "DISC", false, "set", true, 500));
+        var discs = inTenant(() -> wheels.list(null, "DISC", false, Map.of(), "set", true, 500));
         assertThat(ids(discs)).contains(discId).doesNotContain(tyreId);
         assertThat(discs).allSatisfy(row -> assertThat(row.kind()).isEqualTo("DISC"));
 
-        var all = inTenant(() -> wheels.list(null, null, false, "set", true, 500));
+        var all = inTenant(() -> wheels.list(null, null, false, Map.of(), "set", true, 500));
         assertThat(ids(all)).contains(tyreId, discId);
     }
 
@@ -166,7 +167,7 @@ class WheelServiceTest extends PostgresTestBase {
         // ORDER BY не принимает параметр, и подстановка пришедшего текста —
         // это внедрение SQL. Неизвестное имя молча становится умолчанием.
         assertThat(ids(inTenant(() -> wheels.list(
-                null, null, false, "p.id; DROP TABLE part", true, 500))))
+                null, null, false, Map.of(), "p.id; DROP TABLE part", true, 500))))
                 .contains(created.partIds().get(0));
     }
 
@@ -174,7 +175,7 @@ class WheelServiceTest extends PostgresTestBase {
     @DisplayName("Неизвестный вид товара отвергается, а не ищется")
     void unknownKindIsRejected() {
         assertThatThrownBy(() -> inTenant(() ->
-                wheels.list(null, "КОЛЕСО", false, "set", true, 50)))
+                wheels.list(null, "КОЛЕСО", false, Map.of(), "set", true, 50)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -190,7 +191,7 @@ class WheelServiceTest extends PostgresTestBase {
         var found = inTenant(() -> catalog.warehouses());
         List<List<String>> rows = new java.util.ArrayList<>();
         inTenant(() -> {
-            wheels.export(null, "TYRE", false, "set", true, found, rows::add);
+            wheels.export(null, "TYRE", false, Map.of(), "set", true, found, rows::add);
             return null;
         });
 
@@ -235,6 +236,113 @@ class WheelServiceTest extends PostgresTestBase {
                 .isEqualTo("Диск Литой 6x15 5x100 ET45 Toyota");
     }
 
+    /**
+     * Отбор колонками, как в кабинете: значение выбирается из списка того,
+     * что есть на складе, а не набирается руками.
+     */
+    @Test
+    @DisplayName("Колонка отбирается по значению, показанному на экране")
+    void columnsAreFilteredByShownValue() {
+        var tyre = inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+        var disc = inTenant(() -> wheels.createSet(disc(), 1, warehouseId, null));
+
+        // «Шина», а не TYRE, и «летняя», а не SUMMER: владелец выбирает
+        // из списка то, что видит в таблице, и отбор обязан понимать ровно это.
+        assertThat(ids(inTenant(() -> wheels.list(null, null, false,
+                Map.of("kind", "Шина"), "set", true, 500))))
+                .contains(tyre.partIds().get(0)).doesNotContain(disc.partIds().get(0));
+        assertThat(ids(inTenant(() -> wheels.list(null, null, false,
+                Map.of("season", "летняя"), "set", true, 500))))
+                .contains(tyre.partIds().get(0));
+    }
+
+    @Test
+    @DisplayName("Число в отборе сравнивается так же, как показано: 15, а не 15.0")
+    void numbersAreComparedAsShown() {
+        var created = inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+
+        // В базе диаметр лежит как 15.0, в таблице стоит «15», и выбранное
+        // из списка «15» обязано находить эту шину.
+        assertThat(ids(inTenant(() -> wheels.list(null, null, false,
+                Map.of("diameter", "15"), "set", true, 500))))
+                .contains(created.partIds().get(0));
+    }
+
+    @Test
+    @DisplayName("Список значений колонки — то, что есть на складе, и в том же виде")
+    void valuesComeFromTheStock() {
+        inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+        inTenant(() -> wheels.createSet(disc(), 1, warehouseId, null));
+
+        assertThat(inTenant(() -> wheels.values("kind"))).contains("Шина", "Диск");
+        assertThat(inTenant(() -> wheels.values("diameter"))).contains("15");
+        assertThat(inTenant(() -> wheels.values("season"))).contains("летняя");
+        // Пустых значений в списке нет: «— пусто —» это отдельный пункт,
+        // а пустая строка среди марок выглядела бы промахом мыши.
+        assertThat(inTenant(() -> wheels.values("tyreBrand"))).doesNotContain("", (String) null);
+    }
+
+    @Test
+    @DisplayName("«Пусто» и «не пусто» — тоже отбор")
+    void emptinessIsAFilter() {
+        var tyre = inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+        var disc = inTenant(() -> wheels.createSet(disc(), 1, warehouseId, null));
+
+        // У диска сезона нет вовсе, у шины он летний. Вопрос «где не заполнено»
+        // задают, когда разгребают склад после переезда.
+        assertThat(ids(inTenant(() -> wheels.list(null, null, false,
+                Map.of("season", WheelService.EMPTY), "set", true, 500))))
+                .contains(disc.partIds().get(0)).doesNotContain(tyre.partIds().get(0));
+        assertThat(ids(inTenant(() -> wheels.list(null, null, false,
+                Map.of("season", WheelService.PRESENT), "set", true, 500))))
+                .contains(tyre.partIds().get(0)).doesNotContain(disc.partIds().get(0));
+    }
+
+    @Test
+    @DisplayName("Несколько фильтров складываются, а не заменяют друг друга")
+    void filtersAddUp() {
+        var tyre = inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+        var disc = inTenant(() -> wheels.createSet(disc(), 1, warehouseId, null));
+
+        // Диаметр у обоих пятнадцатый, вид разный: вместе они обязаны
+        // оставить одну строку.
+        var found = ids(inTenant(() -> wheels.list(null, null, false,
+                Map.of("diameter", "15", "kind", "Диск"), "set", true, 500)));
+        assertThat(found).contains(disc.partIds().get(0))
+                .doesNotContain(tyre.partIds().get(0));
+    }
+
+    @Test
+    @DisplayName("Неизвестная колонка отвергается, а не подставляется в SQL")
+    void unknownColumnIsRejected() {
+        assertThatThrownBy(() -> inTenant(() -> wheels.list(null, null, false,
+                Map.of("p.price = 0 OR true", "1"), "set", true, 50)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> inTenant(() -> wheels.values("p.price; DROP TABLE part")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("Отбор колонками действует и на выгрузку")
+    void exportUsesTheSameColumns() {
+        var tyres = inTenant(() -> wheels.createSet(tyre(), 2, warehouseId, null));
+        var disc = inTenant(() -> wheels.createSet(disc(), 1, warehouseId, null));
+
+        var found = inTenant(() -> catalog.warehouses());
+        List<List<String>> rows = new java.util.ArrayList<>();
+        inTenant(() -> {
+            wheels.export(null, null, false, Map.of("kind", "Шина"), "set", true, found, rows::add);
+            return null;
+        });
+
+        // Скачанный файл обязан совпасть с экраном: диск под отбор шины
+        // не подходит и в файл не попал.
+        var codes = rows.stream().map(row -> row.get(0)).toList();
+        assertThat(codes).containsAll(codesOf(tyres.partIds()))
+                .doesNotContainAnyElementsOf(codesOf(disc.partIds()));
+        assertThat(rows).allSatisfy(row -> assertThat(row.get(2)).isEqualTo("Шина"));
+    }
+
     private static List<Long> ids(List<WheelService.WheelRow> rows) {
         return rows.stream().map(WheelService.WheelRow::id).toList();
     }
@@ -246,9 +354,13 @@ class WheelServiceTest extends PostgresTestBase {
     }
 
     private WheelService.WheelRequest disc() {
+        return disc("5x100");
+    }
+
+    private WheelService.WheelRequest disc(String boltPattern) {
         return new WheelService.WheelRequest("DISC", new BigDecimal("15"),
                 null, null, null, null, null, null, null,
-                "Литой", new BigDecimal("6.0"), 45, "5x100", new BigDecimal("54.1"),
+                "Литой", new BigDecimal("6.0"), 45, boltPattern, new BigDecimal("54.1"),
                 "Enkei", null,
                 null, null, null, null, null, null,
                 new BigDecimal("6750"), null, null);

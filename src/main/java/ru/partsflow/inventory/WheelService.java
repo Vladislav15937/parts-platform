@@ -110,8 +110,9 @@ public class WheelService {
      */
     @Transactional(readOnly = true)
     public List<WheelRow> list(String query, String kind, boolean withMissing,
-                               String sort, boolean descending, int limit) {
-        Filter filter = filterOf(query, kind, withMissing);
+                               Map<String, String> columns, String sort, boolean descending,
+                               int limit) {
+        Filter filter = filterOf(query, kind, withMissing, columns);
         List<Object> args = new java.util.ArrayList<>(filter.args());
         args.add(limit);
 
@@ -196,7 +197,8 @@ public class WheelService {
      * и диски: половина колонок у второго вида пуста, и «покажи только диски»
      * — первое, что делает кладовщик, когда ищет комплект железа.
      */
-    private Filter filterOf(String query, String kind, boolean withMissing) {
+    private Filter filterOf(String query, String kind, boolean withMissing,
+                            Map<String, String> columns) {
         StringBuilder where = new StringBuilder(" WHERE p.product_line = 'WHEEL'");
         List<Object> args = new java.util.ArrayList<>();
 
@@ -218,26 +220,132 @@ public class WheelService {
         if (!withMissing) {
             where.append(" AND p.qty_on_hand > 0");
         }
+
+        // Отбор колонками, как в кабинете: у каждой колонки свой список
+        // значений, встречающихся на складе, и владелец выбирает из него,
+        // а не набирает руками. Свободный ввод тут хуже: набрав «16» там,
+        // где на складе только пятнадцатые, человек получает пустую таблицу
+        // и не понимает, ошибся он или товара нет.
+        if (columns != null) {
+            for (var entry : columns.entrySet()) {
+                String expression = FILTERS.get(entry.getKey());
+                if (expression == null) {
+                    throw new IllegalArgumentException(
+                            "По этой колонке отбор не делается: " + entry.getKey());
+                }
+                String value = entry.getValue();
+                if (EMPTY.equals(value)) {
+                    // «Пустые значения» — это вопрос «где не заполнено»,
+                    // и он нужен: незаполненный сезон у шины видно только так.
+                    where.append(" AND coalesce(").append(expression).append(", '') = ''");
+                } else if (PRESENT.equals(value)) {
+                    where.append(" AND coalesce(").append(expression).append(", '') <> ''");
+                } else {
+                    where.append(" AND ").append(expression).append(" = ?");
+                    args.add(value);
+                }
+            }
+        }
         return new Filter(where.toString(), args);
     }
 
     private record Filter(String where, List<Object> args) {
     }
 
+    /** Незаполненное поле и «заполнено хоть чем-то» — тоже ответы на вопрос. */
+    public static final String EMPTY = "\u2014пусто\u2014";
+    public static final String PRESENT = "\u2014не пусто\u2014";
+
     /**
-     * Сортировка берётся из белого списка.
+     * Различные значения колонки — то, из чего владелец выбирает отбор.
      *
-     * <p>{@code ORDER BY} не принимает параметр, и подстановка пришедшего
-     * из запроса текста — это внедрение SQL. Неизвестное имя молча становится
-     * сортировкой по умолчанию.
+     * <p>Считаются по всему складу колёс, а не по текущей выдаче: список,
+     * который сужается от уже поставленных фильтров, не даёт снять один
+     * и поставить другой — выбранного значения в нём уже нет.
+     *
+     * <p>Выражение колонки то же, что и в отборе: список показывает «Шина»
+     * и «летняя», а не {@code TYRE} и {@code SUMMER}, и отбирает по ним же.
+     * Разойдись они — выбранное из списка значение не находило бы ничего.
      */
-    private static String orderOf(String sort, boolean descending) {
-        String column = SORTS.get(sort);
-        if (column == null) {
-            return " ORDER BY w.set_no DESC NULLS LAST, p.id DESC";
+    @Transactional(readOnly = true)
+    public List<String> values(String column) {
+        String expression = FILTERS.get(column);
+        if (expression == null) {
+            throw new IllegalArgumentException("По этой колонке отбор не делается: " + column);
         }
-        return " ORDER BY " + column + (descending ? " DESC" : " ASC") + " NULLS LAST, p.id DESC";
+        return jdbc.queryForList("""
+                SELECT DISTINCT %s AS value
+                  FROM part p
+                  JOIN part_wheel w ON w.part_id = p.id
+                  LEFT JOIN part_name pn ON pn.id = p.part_name_id
+                  LEFT JOIN donor d ON d.id = p.donor_id
+                  LEFT JOIN supply s ON s.id = p.supply_id
+                 WHERE p.product_line = 'WHEEL' AND %s IS NOT NULL AND %s <> ''
+                 ORDER BY value""".formatted(expression, expression, expression),
+                String.class);
     }
+
+    /**
+     * Колонка → выражение, дающее ровно то, что видно на экране.
+     *
+     * <p>Белый список, а не подстановка пришедшего имени: это и защита
+     * от внедрения SQL, и единственный способ не разойтись со списком
+     * значений.
+     *
+     * <p>Числа приводятся через {@code trim_scale}: в базе диаметр лежит
+     * как {@code 15.0}, а в таблице стоит «15», и отбор по «15.0» не нашёл бы
+     * ничего.
+     */
+    private static final Map<String, String> FILTERS = Map.ofEntries(
+            Map.entry("code", "p.public_code"),
+            Map.entry("set", "trim_scale(w.set_no)::text"),
+            Map.entry("kind", "CASE w.kind WHEN 'TYRE' THEN 'Шина' ELSE 'Диск' END"),
+            Map.entry("diameter", "trim_scale(w.diameter)::text"),
+            Map.entry("tyreType", "w.tyre_type"),
+            Map.entry("tyreWidth", "trim_scale(w.tyre_width)::text"),
+            Map.entry("markingType", "CASE w.marking_type WHEN 'METRIC' THEN 'Метрическая'"
+                    + " WHEN 'INCH' THEN 'Дюймовая' WHEN 'FLOTATION' THEN 'Флотационная' END"),
+            Map.entry("treadType", "CASE w.tread_type WHEN 'STANDARD' THEN 'Стандартный'"
+                    + " WHEN 'ASYMMETRIC' THEN 'Асимметричный'"
+                    + " WHEN 'DIRECTIONAL' THEN 'Направленный' END"),
+            Map.entry("construction", "w.construction"),
+            Map.entry("tyreHeight", "trim_scale(w.tyre_height)::text"),
+            Map.entry("wear", "trim_scale(w.wear_mm)::text"),
+            Map.entry("tyreBrand", "CASE WHEN w.kind = 'TYRE' THEN w.brand END"),
+            Map.entry("tyreModel", "CASE WHEN w.kind = 'TYRE' THEN w.model END"),
+            Map.entry("season", "CASE w.season WHEN 'SUMMER' THEN 'летняя'"
+                    + " WHEN 'WINTER' THEN 'зимняя' WHEN 'ALL_SEASON' THEN 'всесезонная' END"),
+            Map.entry("madeYear", "trim_scale(w.made_year)::text"),
+            Map.entry("discType", "w.disc_type"),
+            Map.entry("discWidth", "trim_scale(w.disc_width)::text"),
+            Map.entry("offset", "trim_scale(w.offset_mm)::text"),
+            Map.entry("bolt", "w.bolt_pattern"),
+            Map.entry("hub", "trim_scale(w.hub_bore)::text"),
+            Map.entry("discBrand", "CASE WHEN w.kind = 'DISC' THEN w.brand END"),
+            Map.entry("discModel", "CASE WHEN w.kind = 'DISC' THEN w.model END"),
+            Map.entry("oem", "(SELECT o.raw_number FROM part_oem o"
+                    + " WHERE o.part_id = p.id AND o.is_primary LIMIT 1)"),
+            Map.entry("price", "trim_scale(p.price)::text"),
+            Map.entry("description", "p.description"),
+            Map.entry("note", "p.note"),
+            Map.entry("section", "p.section"),
+            Map.entry("supply", "CASE WHEN s.id IS NULL THEN NULL"
+                    + " ELSE s.kind || ' №' || s.number END"),
+            Map.entry("partName", "pn.name"),
+            Map.entry("condition", "CASE p.condition WHEN 'NEW' THEN 'новая'"
+                    + " WHEN 'USED' THEN 'б/у' WHEN 'REFURBISHED' THEN 'восстановленная' END"),
+            Map.entry("runFlat", "CASE WHEN w.run_flat THEN 'да' END"),
+            Map.entry("lightTruck", "CASE WHEN w.light_truck THEN 'да' END"),
+            Map.entry("speedIndex", "w.speed_index"),
+            Map.entry("loadIndex", "trim_scale(w.load_index)::text"),
+            Map.entry("donor", "coalesce(d.legacy_code, d.public_code)"),
+            Map.entry("published", "CASE WHEN p.is_published THEN 'Везде' ELSE 'Нет' END"),
+            Map.entry("legacy", "p.legacy_code"),
+            Map.entry("barcode", "p.barcode"),
+            Map.entry("updatedBy", "(SELECT tm.display_name FROM tenant_member tm"
+                    + " WHERE tm.id = p.updated_by)"),
+            Map.entry("priceChangedBy", "(SELECT tm.display_name FROM tenant_member tm"
+                    + " WHERE tm.id = p.price_changed_by)"));
 
     /**
      * Пишет вкладку колёс в поток — всю, что прошла отбор.
@@ -255,11 +363,11 @@ public class WheelService {
      */
     @Transactional(readOnly = true)
     public void export(String query, String kind, boolean withMissing,
-                       String sort, boolean descending,
+                       Map<String, String> columns, String sort, boolean descending,
                        List<CatalogService.Warehouse> warehouses,
                        CatalogService.RowWriter writer) {
 
-        Filter filter = filterOf(query, kind, withMissing);
+        Filter filter = filterOf(query, kind, withMissing, columns);
 
         StringBuilder stock = new StringBuilder();
         for (CatalogService.Warehouse warehouse : warehouses) {
@@ -422,6 +530,21 @@ public class WheelService {
                 .ofPattern("dd.MM.yyyy")
                 .withZone(java.time.ZoneId.systemDefault())
                 .format(value.toInstant());
+    }
+
+    /**
+     * Сортировка берётся из белого списка.
+     *
+     * <p>{@code ORDER BY} не принимает параметр, и подстановка пришедшего
+     * из запроса текста — это внедрение SQL. Неизвестное имя молча становится
+     * сортировкой по умолчанию.
+     */
+    private static String orderOf(String sort, boolean descending) {
+        String column = SORTS.get(sort);
+        if (column == null) {
+            return " ORDER BY w.set_no DESC NULLS LAST, p.id DESC";
+        }
+        return " ORDER BY " + column + (descending ? " DESC" : " ASC") + " NULLS LAST, p.id DESC";
     }
 
     private static final Map<String, String> SORTS = Map.ofEntries(

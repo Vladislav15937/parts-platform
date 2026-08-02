@@ -5,8 +5,12 @@ import type { Warehouse } from '../organization/warehouses';
 import {
   createSet,
   EMPTY_WHEEL_QUERY,
+  hasWheelFilters,
   listWheels,
   wheelExportUrl,
+  wheelValues,
+  FILTER_EMPTY,
+  FILTER_PRESENT,
   rowOfWheel,
   wheelFields,
   loadWheelVisible,
@@ -39,6 +43,13 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
   // Набранное в поле и отправленное на сервер — разные вещи: искать
   // на каждой букве значит слать запрос за запросом на весь склад.
   const [typed, setTyped] = useState('');
+  // Какая колонка сейчас показывает список значений: открытых больше одной
+  // быть не может — они перекрывают друг друга.
+  const [picking, setPicking] = useState<string | null>(null);
+  // Координаты заголовка: список значений рисуется вне таблицы, иначе его
+  // обрезает контейнер с горизонтальной прокруткой — и от списка остаётся
+  // белая полоска. Та же ловушка, что с накладкой снимков на витрине.
+  const [pickAt, setPickAt] = useState<{ left: number; top: number } | null>(null);
   // Карточка та же, что у запчасти: цена, списание и перемещение написаны
   // на складе, а не на виде товара. Пока карточки не было, колесо нельзя
   // было ни поправить, ни списать, ни перевезти — витрина склада показывает
@@ -142,6 +153,15 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
           />
           Показывать отсутствующие
         </label>
+        {hasWheelFilters(query) && (
+          <button
+            type="button"
+            className="button--ghost"
+            onClick={() => { setQuery(EMPTY_WHEEL_QUERY); setTyped(''); }}
+          >
+            Сбросить отбор
+          </button>
+        )}
       </div>
 
       <div className="filter-row">
@@ -187,14 +207,40 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
                 {columns.map((column) => (
                   <th
                     key={column.key}
-                    className={column.numeric ? 'num' : undefined}
-                    onClick={() => column.sort !== undefined && sortBy(column.sort)}
-                    style={column.sort === undefined ? undefined : { cursor: 'pointer' }}
+                    className={
+                      [column.numeric ? 'num' : '',
+                       query.columns[column.key] === undefined ? '' : 'th--filtered']
+                        .filter((c) => c !== '').join(' ') || undefined
+                    }
                   >
-                    {column.title}
-                    {/* Стрелка только там, где сортировка есть: на колонке
-                        без неё она обманывала бы. */}
-                    {column.sort === query.sort && (query.desc ? ' ↓' : ' ↑')}
+                    {/* Нажатие на заголовок открывает отбор, как в кабинете;
+                        сортировка — на стрелке рядом. Одно нажатие на два
+                        действия пришлось бы разводить по половинкам ячейки,
+                        и промах менял бы не то. */}
+                    <span
+                      className="th__title"
+                      onClick={(e) => {
+                        if (column.filter === false) return;
+                        const box = e.currentTarget.getBoundingClientRect();
+                        setPickAt({ left: box.left, top: box.bottom });
+                        setPicking(picking === column.key ? null : column.key);
+                      }}
+                      style={column.filter === false ? undefined : { cursor: 'pointer' }}
+                    >
+                      {column.title}
+                    </span>
+                    {column.sort !== undefined && (
+                      <button
+                        type="button"
+                        className="th__sort"
+                        onClick={() => sortBy(column.sort ?? '')}
+                      >
+                        {column.sort === query.sort ? (query.desc ? '↓' : '↑') : '⇅'}
+                      </button>
+                    )}
+                    {query.columns[column.key] !== undefined && (
+                      <div className="th__value">«{query.columns[column.key]}»</div>
+                    )}
                   </th>
                 ))}
                 {page.warehouses.map((warehouse) => (
@@ -235,6 +281,22 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         </div>
       )}
 
+      {picking !== null && pickAt !== null && (
+        <ValuePicker
+          column={picking}
+          at={pickAt}
+          chosen={query.columns[picking]}
+          onPick={(value) => {
+            const columns = { ...query.columns };
+            if (value === null) delete columns[picking];
+            else columns[picking] = value;
+            setQuery({ ...query, columns });
+            setPicking(null);
+          }}
+          onClose={() => setPicking(null)}
+        />
+      )}
+
       {card !== null && (
         <PartCard
           row={rowOfWheel(card)}
@@ -250,6 +312,92 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         />
       )}
     </section>
+  );
+}
+
+/**
+ * Список значений колонки — то, из чего выбирают отбор.
+ *
+ * <p>Значения тянутся по нажатию, а не вместе со страницей: колонок сорок
+ * с лишним, и считать все списки на каждую страницу значит сорок запросов
+ * там, где нужен один, и то не всегда.
+ *
+ * <p>Поиск внутри списка обязателен: моделей шин у живого клиента под сотню,
+ * и глазами по ним не пробежать.
+ */
+function ValuePicker({ column, at, chosen, onPick, onClose }: {
+  column: string;
+  at: { left: number; top: number };
+  chosen: string | undefined;
+  onPick: (value: string | null) => void;
+  onClose: () => void;
+}) {
+  const [values, setValues] = useState<string[] | null>(null);
+  const [typed, setTyped] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    void wheelValues(column)
+      .then((found) => { if (alive) setValues(found); })
+      .catch(() => { if (alive) setValues([]); });
+    return () => { alive = false; };
+  }, [column]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const shown = (values ?? []).filter(
+    (value) => value.toLowerCase().includes(typed.trim().toLowerCase()),
+  );
+
+  return (
+    <div className="value-picker" style={{ left: at.left, top: at.top }}>
+      <input
+        autoFocus
+        value={typed}
+        placeholder="поиск"
+        onChange={(e) => setTyped(e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+      />
+      <ul>
+        <li>
+          <button type="button" className={chosen === undefined ? 'is-chosen' : ''}
+                  onClick={() => onPick(null)}>
+            — все —
+          </button>
+        </li>
+        {values === null ? (
+          <li className="muted">Читаем…</li>
+        ) : (
+          shown.map((value) => (
+            <li key={value}>
+              <button type="button" className={chosen === value ? 'is-chosen' : ''}
+                      onClick={() => onPick(value)}>
+                {value}
+              </button>
+            </li>
+          ))
+        )}
+        {/* «Где не заполнено» — вопрос, который задают, разгребая склад
+            после переезда. Отдельными пунктами, а не значением: пустая
+            строка в списке выглядела бы промахом мыши. */}
+        <li>
+          <button type="button" className={chosen === FILTER_PRESENT ? 'is-chosen' : ''}
+                  onClick={() => onPick(FILTER_PRESENT)}>
+            {FILTER_PRESENT}
+          </button>
+        </li>
+        <li>
+          <button type="button" className={chosen === FILTER_EMPTY ? 'is-chosen' : ''}
+                  onClick={() => onPick(FILTER_EMPTY)}>
+            {FILTER_EMPTY}
+          </button>
+        </li>
+      </ul>
+    </div>
   );
 }
 

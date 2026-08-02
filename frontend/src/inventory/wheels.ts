@@ -96,20 +96,48 @@ export interface WheelQuery {
   /** Пусто — оба вида: у шины и диска половина колонок разная. */
   kind: '' | 'TYRE' | 'DISC';
   missing: boolean;
+  /**
+   * Отбор колонками, как в кабинете: ключ колонки → выбранное значение.
+   * Значение выбирается из списка того, что есть на складе, а не набирается
+   * руками — набрав «16» там, где на складе только пятнадцатые, человек
+   * получает пустую таблицу и не понимает, ошибся он или товара нет.
+   */
+  columns: Record<string, string>;
   sort: string;
   desc: boolean;
 }
 
+/** Незаполненное поле и «заполнено хоть чем-то» — тоже ответы на вопрос. */
+export const FILTER_EMPTY = '\u2014пусто\u2014';
+export const FILTER_PRESENT = '\u2014не пусто\u2014';
+
 export const EMPTY_WHEEL_QUERY: WheelQuery = {
-  q: '', kind: '', missing: false, sort: 'set', desc: true,
+  q: '', kind: '', missing: false, columns: {}, sort: 'set', desc: true,
 };
+
+/** Задан ли хоть один отбор: по этому экран решает, показывать ли «Сбросить». */
+export function hasWheelFilters(query: WheelQuery): boolean {
+  return query.q.trim() !== '' || query.kind !== '' || query.missing
+    || Object.keys(query.columns).length > 0;
+}
+
+/** Значения колонки — по нажатию на заголовок, а не вместе со страницей. */
+export function wheelValues(column: string): Promise<string[]> {
+  return request<string[]>(`/api/wheels/values?column=${encodeURIComponent(column)}`);
+}
 
 /** Параметры отбора одни и у страницы, и у выгрузки: файл обязан совпасть. */
 export function wheelParams(query: WheelQuery): URLSearchParams {
   const params = new URLSearchParams();
+  // Пустой отбор — «без ограничения», а не «ничего».
   if (query.q.trim() !== '') params.set('q', query.q.trim());
   if (query.kind !== '') params.set('kind', query.kind);
   if (query.missing) params.set('missing', 'true');
+  // Пара на каждый фильтр: «колонка:значение». Одним параметром их не свести —
+  // значение может содержать что угодно, включая запятую.
+  for (const [column, value] of Object.entries(query.columns)) {
+    params.append('filter', `${column}:${value}`);
+  }
   params.set('sort', query.sort);
   params.set('desc', String(query.desc));
   return params;
@@ -203,6 +231,8 @@ export interface WheelColumn {
   title: string;
   /** Имя сортировки на сервере. Нет — по этой колонке не сортируют. */
   sort?: string;
+  /** false — по колонке не отбирают: у превью значений нет. */
+  filter?: false;
   numeric?: boolean;
   fixed?: boolean;
   value: (w: Wheel) => string;
@@ -249,7 +279,7 @@ export const WHEEL_COLUMNS: WheelColumn[] = [
   { key: 'code', title: 'Номер товара', sort: 'code', value: (w) => text(w.publicCode) },
   // Вторым столбцом, как в кабинете: колесо узнают по картинке — диски
   // различаются только рисунком, и словами его не опишешь.
-  { key: 'photo', title: 'Превью', fixed: true, value: () => '',
+  { key: 'photo', title: 'Превью', fixed: true, filter: false, value: () => '',
     image: (row) => row.photoUrl },
   { key: 'set', title: 'Номер комплекта', sort: 'set', numeric: true, value: (w) => text(w.setNo) },
   { key: 'kind', title: 'Товар', sort: 'kind', value: (w) => (w.kind === 'TYRE' ? 'Шина' : 'Диск') },
@@ -286,8 +316,8 @@ export const WHEEL_COLUMNS: WheelColumn[] = [
   { key: 'description', title: 'Комментарий', value: (w) => text(w.description) },
   { key: 'note', title: 'Заметка', value: (w) => text(w.note) },
   { key: 'section', title: 'Секция', sort: 'section', value: (w) => text(w.section) },
-  { key: 'created', title: 'Создан', sort: 'created', value: (w) => day(w.createdAt) },
-  { key: 'updated', title: 'Изменён', value: (w) => day(w.updatedAt) },
+  { key: 'created', filter: false, title: 'Создан', sort: 'created', value: (w) => day(w.createdAt) },
+  { key: 'updated', filter: false, title: 'Изменён', value: (w) => day(w.updatedAt) },
   { key: 'updatedBy', title: 'Кто изменил', value: (w) => text(w.updatedByName) },
   { key: 'supply', title: 'Поставка', value: (w) => text(w.supply) },
   { key: 'partName', title: 'Наименование', value: (w) => text(w.partName) },
@@ -301,11 +331,11 @@ export const WHEEL_COLUMNS: WheelColumn[] = [
   { key: 'loadIndex', title: 'Индекс нагрузки', numeric: true, value: (w) => text(w.loadIndex) },
   { key: 'donor', title: 'Номер донора', value: (w) => text(w.donorCode) },
   { key: 'published', title: 'Выгружать', value: (w) => (w.published ? 'Везде' : 'Нет') },
-  { key: 'photoCount', title: 'Количество фото', numeric: true,
+  { key: 'photoCount', filter: false, title: 'Количество фото', numeric: true,
     value: (w) => (w.photoCount === 0 ? '' : String(w.photoCount)) },
   { key: 'legacy', title: 'Старые данные', value: (w) => text(w.legacyCode) },
   { key: 'barcode', title: 'Ст. баркод', value: (w) => text(w.barcode) },
-  { key: 'priceChanged', title: 'Цена изменена в', value: (w) => day(w.priceChangedAt) },
+  { key: 'priceChanged', filter: false, title: 'Цена изменена в', value: (w) => day(w.priceChangedAt) },
   { key: 'priceChangedBy', title: 'Кто изменил цену', value: (w) => text(w.priceChangedByName) },
 ];
 

@@ -8,6 +8,8 @@ import {
   wheelParams,
   wheelExportUrl,
   EMPTY_WHEEL_QUERY,
+  hasWheelFilters,
+  FILTER_EMPTY,
   type Wheel,
 } from './wheels';
 
@@ -183,29 +185,57 @@ describe('карточка колеса', () => {
 
 describe('отбор вкладки колёс', () => {
   it('пустой отбор не шлёт лишних параметров', () => {
-    // Пустой фильтр — «без ограничения», а не «ничего».
     const params = wheelParams(EMPTY_WHEEL_QUERY);
-    expect(params.get('q')).toBeNull();
-    expect(params.get('kind')).toBeNull();
-    expect(params.get('missing')).toBeNull();
-    expect(params.get('sort')).toBe('set');
+    expect([...params.keys()].sort()).toEqual(['desc', 'sort']);
   });
 
   it('у страницы и выгрузки отбор общий', () => {
     // Скачанный файл обязан совпасть с тем, что владелец видел на экране, —
     // ради этой сверки он его и качает.
-    const query = { q: '195/65', kind: 'TYRE' as const, missing: true, sort: 'price', desc: false };
-    const url = wheelExportUrl(query);
-    const inUrl = new URLSearchParams(url.split('?')[1] ?? '');
-    expect([...inUrl.entries()].sort())
-      .toEqual([...wheelParams(query).entries()].sort());
-    expect(url.startsWith('/api/wheels/export?')).toBe(true);
+    const query = {
+      ...EMPTY_WHEEL_QUERY,
+      q: '195/65', kind: 'TYRE' as const, missing: true,
+      columns: { diameter: '15', season: 'зимняя' },
+      sort: 'price', desc: false,
+    };
+    const inUrl = new URLSearchParams(wheelExportUrl(query).split('?')[1] ?? '');
+    expect([...inUrl.entries()].sort()).toEqual([...wheelParams(query).entries()].sort());
+    expect(wheelExportUrl(query).startsWith('/api/wheels/export?')).toBe(true);
   });
 
   it('пробелы в запросе не считаются поиском', () => {
     // Иначе «найти» по пустой строке отсекает весь склад условием ILIKE '% %'.
     expect(wheelParams({ ...EMPTY_WHEEL_QUERY, q: '   ' }).get('q')).toBeNull();
     expect(wheelParams({ ...EMPTY_WHEEL_QUERY, q: ' 195 ' }).get('q')).toBe('195');
+  });
+
+  it('каждый фильтр уезжает своей парой «колонка:значение»', () => {
+    // Одним параметром их не свести: значение может содержать что угодно,
+    // включая запятую — «Контейнер №7, Владивосток».
+    const params = wheelParams({
+      ...EMPTY_WHEEL_QUERY,
+      columns: { diameter: '15', tyreBrand: 'Nokian' },
+    });
+    expect(params.getAll('filter').sort()).toEqual(['diameter:15', 'tyreBrand:Nokian']);
+  });
+
+  it('видит заданный отбор — иначе сбросить его нечем', () => {
+    expect(hasWheelFilters(EMPTY_WHEEL_QUERY)).toBe(false);
+    // Сортировка отбором не считается: она задана всегда, и «Сбросить»
+    // висело бы на экране постоянно.
+    expect(hasWheelFilters({ ...EMPTY_WHEEL_QUERY, sort: 'price', desc: false })).toBe(false);
+    expect(hasWheelFilters({ ...EMPTY_WHEEL_QUERY, columns: { diameter: '15' } })).toBe(true);
+    expect(hasWheelFilters({ ...EMPTY_WHEEL_QUERY, kind: 'DISC' })).toBe(true);
+    expect(hasWheelFilters({ ...EMPTY_WHEEL_QUERY, missing: true })).toBe(true);
+  });
+
+  it('«пусто» и «не пусто» уезжают как значения', () => {
+    // Отдельными пунктами списка, а не пустой строкой: пустая строка среди
+    // марок выглядела бы промахом мыши.
+    const params = wheelParams({
+      ...EMPTY_WHEEL_QUERY, columns: { season: FILTER_EMPTY },
+    });
+    expect(params.getAll('filter')).toEqual([`season:${FILTER_EMPTY}`]);
   });
 
   it('сортируемые колонки названы теми же именами, что знает сервер', () => {
@@ -216,5 +246,13 @@ describe('отбор вкладки колёс', () => {
       'wear', 'season', 'madeYear', 'tyreBrand', 'discBrand', 'price', 'section', 'created'];
     const mine = WHEEL_COLUMNS.map((c) => c.sort).filter((s): s is string => s !== undefined);
     expect(mine.filter((s) => !SERVER.includes(s))).toEqual([]);
+  });
+
+  it('колонки без отбора помечены', () => {
+    // По превью отбирать нечего, а даты сервер в отбор не пускает: список
+    // из тридцати пяти тысяч дат — это не список.
+    const noFilter = WHEEL_COLUMNS.filter((c) => c.filter === false).map((c) => c.key);
+    expect(noFilter).toContain('photo');
+    expect(noFilter).toContain('created');
   });
 });
