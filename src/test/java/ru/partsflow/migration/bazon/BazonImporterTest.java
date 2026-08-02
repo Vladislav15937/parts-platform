@@ -104,6 +104,19 @@ class BazonImporterTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Нулевая цена установки — это незаполненное поле, а не бесплатно")
+    void zeroInstallationPriceIsNotAPromise() throws Exception {
+        importFixture(IMPORT);
+
+        // В карточке товара «Цена установки 0 ₽» — обещание покупателю,
+        // а в выгрузке прежней системы ноль стоит там, где поле не заполняли:
+        // у живого клиента таких строк 367 из 381.
+        assertThat(installationPriceOf(IMPORT, "A-200")).isNull();
+        assertThat(installationPriceOf(IMPORT, "A-400")).isNull();
+        assertThat(installationPriceOf(IMPORT, "A-100")).isEqualByComparingTo("1500");
+    }
+
+    @Test
     @DisplayName("Марка и модель берутся из общего каталога, а не выдумываются")
     void vehicleComesFromCatalog() throws Exception {
         importFixture(IMPORT);
@@ -238,8 +251,8 @@ class BazonImporterTest extends PostgresTestBase {
         // Цена буквами сюда не годится — разборщик приводит её к пустой,
         // и до базы такая строка доезжает целой.
         Path catalog = write("catalog.csv", CATALOG_HEADER + """
-                "A-100";"Фара левая";"Д-1";"";"";"";"";"";"";"";"";"";"";"";"";"9500";"";"2";"1";"0";"0";"0";"0";"да"
-                "A-300";"Дверь";"";"";"";"";"";"";"";"";"";"";"";"";"";"-500";"";"1";"0";"0";"0";"0";"0";"да"
+                "A-100";"Фара левая";"Д-1";"";"";"";"";"";"";"";"";"";"";"";"";"9500";"";"2";"1";"0";"0";"0";"0";"да";""
+                "A-300";"Дверь";"";"";"";"";"";"";"";"";"";"";"";"";"";"-500";"";"1";"0";"0";"0";"0";"0";"да";""
                 """);
 
         ImportReport report = new BazonImporter(dataSource, BAD_ROW)
@@ -266,17 +279,17 @@ class BazonImporterTest extends PostgresTestBase {
             "Передний / Задний";"Оценка состояния";"Маркировка";"Производитель";"Цена";\
             "Номер производителя";"Ткацкая (свободно)";"Ткацкая (резерв)";\
             "Ткацкая (ожидается)";"Ангар (свободно)";"Ангар (резерв)";\
-            "Ангар (ожидается)";"Выгружать"
+            "Ангар (ожидается)";"Выгружать";"Установка"
             """;
 
     private Path catalogFixture() throws Exception {
         return write("catalog.csv", CATALOG_HEADER + """
                 "A-100";"Фара левая";"Д-1";"Toyota";"Camry";"2006";"";"";"";"";"Левый";"Передний";\
-                "Хорошее";"";"";"9500";"81150-33670";"2";"1";"0";"0";"0";"0";"да"
+                "Хорошее";"";"";"9500";"81150-33670";"2";"1";"0";"0";"0";"0";"да";"1500"
                 "A-200";"Бампер передний";"";"";"";"";"";"";"";"";"";"";"";"";"";"12000";"";\
-                "0";"0";"0";"1";"0";"0";"да"
+                "0";"0";"0";"1";"0";"0";"да";"0"
                 "A-400";"Стартер";"";"";"";"";"";"";"";"";"";"";"";"";"";"3500";"";\
-                "0";"0";"0";"0";"0";"0";"да"
+                "0";"0";"0";"0";"0";"0";"да";""
                 """);
     }
 
@@ -309,6 +322,12 @@ class BazonImporterTest extends PostgresTestBase {
         return jdbc.queryForObject(
                 "SELECT status FROM " + schema + ".part WHERE legacy_code = ?",
                 String.class, legacyCode);
+    }
+
+    private BigDecimal installationPriceOf(String schema, String legacyCode) {
+        return jdbc.queryForObject(
+                "SELECT installation_price FROM " + schema + ".part WHERE legacy_code = ?",
+                BigDecimal.class, legacyCode);
     }
 
     private BigDecimal qtyOf(String schema, String legacyCode) {

@@ -2,14 +2,17 @@ package ru.partsflow.inventory;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.PositiveOrZero;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import ru.partsflow.platform.security.CurrentUser;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -64,6 +67,91 @@ public class PartController {
     public PublicationResult setPublication(@Valid @RequestBody PublicationRequest request) {
         return new PublicationResult(
                 partService.setPublished(request.partIds(), request.published()));
+    }
+
+    /**
+     * Карточка для правки: все поля формы, включая те, которых нет на витрине.
+     *
+     * <p><b>Форма не собирается из витринной строки.</b> Себестоимости
+     * и минимальной цены там нет и быть не должно — витрину читают все
+     * вошедшие, включая продавца и кладовщика, а закупочная цена не их дело.
+     * Собери форму из того, что отдаёт витрина, — и сохранение стёрло бы
+     * себестоимость у каждой правленой позиции. А она снимком уходит в сделку
+     * и в отчёт окупаемости, то есть терялась бы навсегда.
+     */
+    @GetMapping("/{id}/editable")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public UpdateRequest editable(@PathVariable Long id) {
+        return UpdateRequest.of(partService.require(id));
+    }
+
+    /**
+     * Правка карточки товара.
+     *
+     * <p><b>Роль — владелец или менеджер.</b> Здесь цена, минимальная цена
+     * и себестоимость: продавец, торгующийся с покупателем, не должен уметь
+     * подвинуть себе нижнюю границу. Кладовщику править нечего — адрес полки
+     * он меняет перемещением, а не карточкой.
+     *
+     * <p>PUT, а не PATCH: приходит вся форма разом, и пустое поле означает
+     * «очищено». Патч, в котором отсутствие ключа значит «не трогать»,
+     * не даёт стереть заметку.
+     */
+    @PutMapping("/{id}")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public PartView update(@PathVariable Long id, @Valid @RequestBody UpdateRequest request) {
+        return PartView.of(partService.update(id, request.toUpdate(), CurrentUser.memberId()));
+    }
+
+    /**
+     * Тело правки карточки.
+     *
+     * <p>Заголовка, стороны и состояния тут нет намеренно: заголовок
+     * собирается из них справочником, и правка руками разошлась бы с ним
+     * при первом же пересопоставлении.
+     */
+    public record UpdateRequest(@PositiveOrZero BigDecimal price,
+                                @PositiveOrZero BigDecimal minPrice,
+                                @PositiveOrZero BigDecimal costPrice,
+                                @PositiveOrZero BigDecimal installationPrice,
+                                QualityGrade qualityGrade,
+                                String description,
+                                String note,
+                                String textBlock,
+                                String videoUrl,
+                                String marking,
+                                String manufacturer,
+                                String color,
+                                String section,
+                                String barcode,
+                                @PositiveOrZero BigDecimal weightKg,
+                                @PositiveOrZero Integer lengthMm,
+                                @PositiveOrZero Integer widthMm,
+                                @PositiveOrZero Integer heightMm,
+                                @PositiveOrZero Integer packageLengthMm,
+                                @PositiveOrZero Integer packageWidthMm,
+                                @PositiveOrZero Integer packageHeightMm,
+                                @PositiveOrZero BigDecimal packageWeightKg,
+                                Long storageCellId,
+                                boolean published) {
+
+        static UpdateRequest of(Part part) {
+            return new UpdateRequest(part.getPrice(), part.getMinPrice(), part.getCostPrice(),
+                    part.getInstallationPrice(), part.getQualityGrade(), part.getDescription(),
+                    part.getNote(), part.getTextBlock(), part.getVideoUrl(), part.getMarking(),
+                    part.getManufacturer(), part.getColor(), part.getSection(), part.getBarcode(),
+                    part.getWeightKg(), part.getLengthMm(), part.getWidthMm(), part.getHeightMm(),
+                    part.getPackageLengthMm(), part.getPackageWidthMm(), part.getPackageHeightMm(),
+                    part.getPackageWeightKg(), part.getStorageCellId(), part.isPublished());
+        }
+
+        PartService.PartUpdate toUpdate() {
+            return new PartService.PartUpdate(price, minPrice, costPrice, installationPrice,
+                    qualityGrade, description, note, textBlock, videoUrl, marking, manufacturer,
+                    color, section, barcode, weightKg, lengthMm, widthMm, heightMm,
+                    packageLengthMm, packageWidthMm, packageHeightMm, packageWeightKg,
+                    storageCellId, published);
+        }
     }
 
     public record PublicationRequest(@NotEmpty List<Long> partIds, boolean published) {

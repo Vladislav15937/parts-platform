@@ -1513,3 +1513,40 @@ hr {
   border: 1px solid var(--line);
   border-radius: 6px;
 }
+
+/* Форма правки карточки. Поля парами: два десятка полей столбиком — это
+   форма высотой в четыре экрана, а правят обычно одно. */
+.card-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  margin-top: 12px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.card-edit h4 {
+  margin: 8px 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.card-edit__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.card-edit textarea {
+  resize: vertical;
+}
+
+/* Флажок рядом с подписью, а не над ней: подпись «Выгружать на площадки»
+   над пустым квадратом читается как заголовок раздела. */
+.field--check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}

@@ -36,9 +36,24 @@ class NotFoundMappingTest extends PostgresTestBase {
     @Test
     @DisplayName("Неизвестный путь под /api — 404")
     void unknownApiPathIsNotFound() throws Exception {
-        mvc.perform(post("/api/parts/opechatka").with(csrf()).with(user("priyomshchik"))
+        mvc.perform(post("/api/parts/opechatka/net-takoy-operacii").with(csrf())
+                        .with(user("priyomshchik"))
                         .contentType("application/json").content("{}"))
                 .andExpect(status().isNotFound());
+    }
+
+    /**
+     * Адрес есть, а метод не тот — 405, и это не мелочь: очередь приёмки
+     * повторяет только 5xx, и пятисотка на неверный метод переотправлялась бы
+     * вечно. Всплыло появлением {@code PUT /api/parts/{id}} — до него этот
+     * путь был неизвестен вовсе.
+     */
+    @Test
+    @DisplayName("Верный адрес неверным методом — 405, а не пятисотка")
+    void wrongMethodIsNotAServerError() throws Exception {
+        mvc.perform(post("/api/parts/42").with(csrf()).with(user("priyomshchik"))
+                        .contentType("application/json").content("{}"))
+                .andExpect(status().isMethodNotAllowed());
     }
 
     @Test

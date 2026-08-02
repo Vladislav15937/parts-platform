@@ -253,7 +253,7 @@ export interface Column {
 
 const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.' };
 const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.' };
-const CONDITION: Record<string, string> = {
+export const CONDITION: Record<string, string> = {
   NEW: 'новая',
   USED: 'б/у',
   REFURBISHED: 'восстановленная',
@@ -434,5 +434,65 @@ export function movePart(
       note,
       items: [{ partId, quantity, toCellId }],
     },
+  });
+}
+
+/**
+ * Поля карточки, которые правит человек.
+ *
+ * <p>Заголовка, стороны и состояния тут нет: заголовок собирается из них
+ * справочником, и правка руками разошлась бы с ним при первом же
+ * пересопоставлении наименований.
+ */
+export interface PartEdit {
+  price: number | null;
+  minPrice: number | null;
+  costPrice: number | null;
+  installationPrice: number | null;
+  qualityGrade: string | null;
+  description: string | null;
+  note: string | null;
+  textBlock: string | null;
+  videoUrl: string | null;
+  marking: string | null;
+  manufacturer: string | null;
+  color: string | null;
+  section: string | null;
+  barcode: string | null;
+  weightKg: number | null;
+  lengthMm: number | null;
+  widthMm: number | null;
+  heightMm: number | null;
+  packageLengthMm: number | null;
+  packageWidthMm: number | null;
+  packageHeightMm: number | null;
+  packageWeightKg: number | null;
+  storageCellId: number | null;
+  published: boolean;
+}
+
+/**
+ * Карточка для правки: все поля формы, включая те, которых нет на витрине.
+ *
+ * <p>Отдельным запросом, а не из уже загруженной строки: себестоимости
+ * и минимальной цены на витрине нет — её читают все вошедшие, включая
+ * продавца. Собери форму из строки — и сохранение стёрло бы закупочную цену,
+ * которая снимком уходит в сделку и в отчёт окупаемости.
+ */
+export function loadEditable(partId: number): Promise<PartEdit> {
+  return request<PartEdit>(`/api/parts/${partId}/editable`);
+}
+
+/**
+ * Сохранение карточки.
+ *
+ * <p>Форма целиком, а не изменённые поля: пустое поле означает «очищено».
+ * Иначе стереть заметку с экрана невозможно — пустое неотличимо
+ * от непереданного.
+ */
+export function savePart(partId: number, edit: PartEdit): Promise<{ price: number | null }> {
+  return request<{ price: number | null }>(`/api/parts/${partId}`, {
+    method: 'PUT',
+    body: edit as unknown as Record<string, unknown>,
   });
 }

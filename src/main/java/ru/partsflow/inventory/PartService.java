@@ -183,6 +183,116 @@ public class PartService {
         return part;
     }
 
+    @Transactional(readOnly = true)
+    public Part require(Long partId) {
+        return partRepository.findById(partId)
+                .orElseThrow(() -> new IllegalArgumentException("Запчасть не найдена: " + partId));
+    }
+
+    /**
+     * Правка карточки товара.
+     *
+     * <p><b>До этого править карточку было нечем.</b> {@code changePrice} был
+     * написан и даже публиковал событие для площадок, но снаружи его
+     * не вызывал никто: ни эндпоинта, ни экрана. То есть цену принятой детали
+     * владелец изменить не мог вовсе — а на разборке это ежедневная работа,
+     * от «повисло полгода, снижаем» до опечатки в приёмке.
+     *
+     * <p><b>Форма, а не патч.</b> Приходят все поля разом, и {@code null}
+     * означает «очищено», а не «не трогать». Иначе стереть заметку с экрана
+     * невозможно: пустое поле формы неотличимо от непереданного.
+     *
+     * <p><b>Заголовок сюда не входит.</b> Он производный — собирается
+     * из эталона наименования, машины, стороны и состояния, — и правка руками
+     * разъехалась бы с ним при первом же пересопоставлении справочника.
+     * По той же причине не правятся сторона и состояние: они в заголовок
+     * входят, а пересборки его после правки у нас нет. Предел осознанный:
+     * ошибку в стороне лечит разбор наименований, а не поле в карточке.
+     *
+     * <p>Событие о смене цены уходит только когда цена действительно другая:
+     * площадке незачем дельта на правку заметки, а {@code price_changed_at}
+     * обязан означать «цену меняли», иначе по нему нельзя искать.
+     */
+    @Transactional
+    public Part update(Long partId, PartUpdate update, Long authorId) {
+        Part part = partRepository.findById(partId)
+                .orElseThrow(() -> new IllegalArgumentException("Запчасть не найдена: " + partId));
+
+        if (update.price() != null && update.price().signum() < 0) {
+            throw new IllegalArgumentException("Цена не может быть отрицательной");
+        }
+
+        boolean priceChanged = update.price() != null
+                && (part.getPrice() == null || part.getPrice().compareTo(update.price()) != 0);
+        if (priceChanged) {
+            part.changePrice(update.price(), authorId);
+        }
+
+        part.setMinPrice(update.minPrice());
+        part.setCostPrice(update.costPrice());
+        part.setInstallationPrice(update.installationPrice());
+        part.setQualityGrade(update.qualityGrade());
+        part.setDescription(update.description());
+        part.setNote(update.note());
+        part.setTextBlock(update.textBlock());
+        part.setVideoUrl(update.videoUrl());
+        part.setMarking(update.marking());
+        part.setManufacturer(update.manufacturer());
+        part.setColor(update.color());
+        part.setSection(update.section());
+        part.setBarcode(update.barcode());
+        part.setWeightKg(update.weightKg());
+        part.setDimensionsMm(update.lengthMm(), update.widthMm(), update.heightMm());
+        part.setPackageDimensionsMm(update.packageLengthMm(), update.packageWidthMm(),
+                update.packageHeightMm());
+        part.setPackageWeightKg(update.packageWeightKg());
+        part.setStorageCellId(update.storageCellId());
+        part.setPublished(update.published());
+        part.touchedBy(authorId);
+
+        if (priceChanged) {
+            // Ключ партиции включает id запчасти, поэтому события по одной
+            // детали не переставятся местами и на площадку не уедет
+            // устаревшая цена.
+            eventPublisher.publish(DomainEvent.of(
+                    "part", part.getId(), "part.price_changed.v1", payloadOf(part)));
+        }
+        return part;
+    }
+
+    /**
+     * Поля карточки, которые правит человек.
+     *
+     * <p>Отдельной записью, а не набором аргументов: их два десятка, и порядок
+     * одинаковых по типу — цена, минимальная цена, себестоимость — перепутать
+     * в вызове проще, чем заметить.
+     */
+    public record PartUpdate(BigDecimal price,
+                             BigDecimal minPrice,
+                             BigDecimal costPrice,
+                             BigDecimal installationPrice,
+                             QualityGrade qualityGrade,
+                             String description,
+                             String note,
+                             String textBlock,
+                             String videoUrl,
+                             String marking,
+                             String manufacturer,
+                             String color,
+                             String section,
+                             String barcode,
+                             BigDecimal weightKg,
+                             Integer lengthMm,
+                             Integer widthMm,
+                             Integer heightMm,
+                             Integer packageLengthMm,
+                             Integer packageWidthMm,
+                             Integer packageHeightMm,
+                             BigDecimal packageWeightKg,
+                             Long storageCellId,
+                             boolean published) {
+    }
+
     /**
      * Поиск для продавца: что можно продать прямо сейчас.
      *
