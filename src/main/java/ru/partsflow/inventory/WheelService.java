@@ -109,7 +109,12 @@ public class WheelService {
      * дюжину пустых колонок.
      */
     @Transactional(readOnly = true)
-    public List<WheelRow> list(int limit) {
+    public List<WheelRow> list(String query, String kind, boolean withMissing,
+                               String sort, boolean descending, int limit) {
+        Filter filter = filterOf(query, kind, withMissing);
+        List<Object> args = new java.util.ArrayList<>(filter.args());
+        args.add(limit);
+
         List<WheelRow> rows = jdbc.query("""
                 SELECT p.id, p.public_code, p.title, p.price, p.status, p.qty_on_hand,
                        p.condition, p.description, p.note, p.section, p.is_published,
@@ -143,9 +148,7 @@ public class WheelService {
                   LEFT JOIN part_name pn ON pn.id = p.part_name_id
                   LEFT JOIN donor d ON d.id = p.donor_id
                   LEFT JOIN supply s ON s.id = p.supply_id
-                 WHERE p.product_line = 'WHEEL'
-                 ORDER BY w.set_no DESC NULLS LAST, p.id DESC
-                 LIMIT ?""",
+                """ + filter.where() + orderOf(sort, descending) + " LIMIT ?",
                 (rs, i) -> new WheelRow(
                         rs.getLong("id"), rs.getString("public_code"), rs.getString("title"),
                         rs.getBigDecimal("price"), rs.getString("status"),
@@ -176,9 +179,266 @@ public class WheelService {
                         instant(rs, "price_changed_at"), rs.getString("price_changed_by_name"),
                         rs.getString("photo_key"),
                         Map.of()),
-                limit);
+                args.toArray());
         return withStock(rows);
     }
+
+    /**
+     * Отбор витрины колёс.
+     *
+     * <p>Поиск по номеру товара и наименованию: владелец ищет одно и то же
+     * двумя способами, и спрашивать, что именно он ввёл, значит заставить его
+     * выбирать вкладку перед каждым поиском. Размер сюда же попадает сам —
+     * он собран в заголовок («Шина 195/65 R15 …»), а покупатель называет
+     * именно его.
+     *
+     * <p>Отбор по виду товара нужен ровно потому, что таблица одна на шины
+     * и диски: половина колонок у второго вида пуста, и «покажи только диски»
+     * — первое, что делает кладовщик, когда ищет комплект железа.
+     */
+    private Filter filterOf(String query, String kind, boolean withMissing) {
+        StringBuilder where = new StringBuilder(" WHERE p.product_line = 'WHEEL'");
+        List<Object> args = new java.util.ArrayList<>();
+
+        if (query != null && !query.isBlank()) {
+            where.append(" AND (p.public_code ILIKE ? OR p.title ILIKE ?)");
+            String like = "%" + query.strip() + "%";
+            args.add(like);
+            args.add(like);
+        }
+        if (kind != null && !kind.isBlank()) {
+            // Значение из белого списка: в колонке стоит CHECK, но отдавать
+            // в него что попало из запроса незачем.
+            if (!"TYRE".equals(kind) && !"DISC".equals(kind)) {
+                throw new IllegalArgumentException("Неизвестный вид товара: " + kind);
+            }
+            where.append(" AND w.kind = ?");
+            args.add(kind);
+        }
+        if (!withMissing) {
+            where.append(" AND p.qty_on_hand > 0");
+        }
+        return new Filter(where.toString(), args);
+    }
+
+    private record Filter(String where, List<Object> args) {
+    }
+
+    /**
+     * Сортировка берётся из белого списка.
+     *
+     * <p>{@code ORDER BY} не принимает параметр, и подстановка пришедшего
+     * из запроса текста — это внедрение SQL. Неизвестное имя молча становится
+     * сортировкой по умолчанию.
+     */
+    private static String orderOf(String sort, boolean descending) {
+        String column = SORTS.get(sort);
+        if (column == null) {
+            return " ORDER BY w.set_no DESC NULLS LAST, p.id DESC";
+        }
+        return " ORDER BY " + column + (descending ? " DESC" : " ASC") + " NULLS LAST, p.id DESC";
+    }
+
+    /**
+     * Пишет вкладку колёс в поток — всю, что прошла отбор.
+     *
+     * <p>Потоком, а не списком: причина та же, что у выгрузки склада —
+     * собранные в памяти строки это сотни мегабайт на каждого скачивающего.
+     * Колёс у клиента две сотни, а не тридцать пять тысяч, но второй способ
+     * выгружать разошёлся бы с первым на первой же правке.
+     *
+     * <p>Курсор работает только внутри транзакции: при autoCommit Postgres
+     * игнорирует {@code fetchSize} и вычитывает всё в память.
+     *
+     * <p>Отбор тот же, что и у страницы: скачанный файл обязан совпасть с тем,
+     * что владелец видел на экране, — ради этой сверки он его и качает.
+     */
+    @Transactional(readOnly = true)
+    public void export(String query, String kind, boolean withMissing,
+                       String sort, boolean descending,
+                       List<CatalogService.Warehouse> warehouses,
+                       CatalogService.RowWriter writer) {
+
+        Filter filter = filterOf(query, kind, withMissing);
+
+        StringBuilder stock = new StringBuilder();
+        for (CatalogService.Warehouse warehouse : warehouses) {
+            // Идентификатор подставляется текстом, и это безопасно: он пришёл
+            // из нашей же таблицы, а не из запроса. Параметром колонку не задать.
+            stock.append("""
+                    ,
+                           (SELECT sum(s.qty_available) FROM part_stock s
+                             WHERE s.part_id = p.id AND s.warehouse_id = %1$d) AS free_%1$d,
+                           (SELECT sum(s.qty_reserved) FROM part_stock s
+                             WHERE s.part_id = p.id AND s.warehouse_id = %1$d) AS res_%1$d"""
+                    .formatted(warehouse.id()));
+        }
+
+        String sql = """
+                SELECT p.public_code, p.title, p.price, p.condition, p.description,
+                       p.note, p.section, p.is_published, p.barcode, p.legacy_code,
+                       p.created_at, p.updated_at, p.price_changed_at,
+                       w.kind, w.set_no, w.diameter, w.tyre_width, w.tyre_height,
+                       w.construction, w.tyre_type, w.season, w.wear_mm, w.made_year,
+                       w.disc_type, w.disc_width, w.offset_mm, w.bolt_pattern, w.hub_bore,
+                       w.brand, w.model, w.marking_type, w.tread_type, w.run_flat,
+                       w.light_truck, w.speed_index, w.load_index,
+                       pn.name AS part_name,
+                       d.legacy_code AS donor_legacy, d.public_code AS donor_code,
+                       (SELECT tm.display_name FROM tenant_member tm
+                         WHERE tm.id = p.updated_by)       AS updated_by_name,
+                       (SELECT tm.display_name FROM tenant_member tm
+                         WHERE tm.id = p.price_changed_by) AS price_changed_by_name,
+                       (SELECT count(*) FROM part_photo ph
+                         WHERE ph.part_id = p.id)          AS photo_count,
+                       (SELECT o.raw_number FROM part_oem o
+                         WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
+                       CASE WHEN s.id IS NULL THEN NULL
+                            ELSE s.kind || ' №' || s.number
+                                 || coalesce(' | ' || to_char(s.arrived_on, 'DD.MM.YYYY'), '')
+                       END AS supply""" + stock + """
+
+                  FROM part p
+                  JOIN part_wheel w ON w.part_id = p.id
+                  LEFT JOIN part_name pn ON pn.id = p.part_name_id
+                  LEFT JOIN donor d ON d.id = p.donor_id
+                  LEFT JOIN supply s ON s.id = p.supply_id
+                """ + filter.where() + orderOf(sort, descending);
+
+        jdbc.query(connection -> {
+            var ps = connection.prepareStatement(sql);
+            ps.setFetchSize(500);
+            for (int at = 0; at < filter.args().size(); at++) {
+                ps.setObject(at + 1, filter.args().get(at));
+            }
+            return ps;
+        }, rs -> {
+            List<String> cells = new java.util.ArrayList<>(List.of(
+                    nullToEmpty(rs.getString("public_code")),
+                    nullToEmpty(rs.getString("part_name")),
+                    "TYRE".equals(rs.getString("kind")) ? "Шина" : "Диск",
+                    number(rs, "set_no"),
+                    number(rs, "diameter"),
+                    nullToEmpty(rs.getString("tyre_type")),
+                    number(rs, "tyre_width"),
+                    MARKING.getOrDefault(nullToEmpty(rs.getString("marking_type")), ""),
+                    TREAD.getOrDefault(nullToEmpty(rs.getString("tread_type")), ""),
+                    nullToEmpty(rs.getString("construction")),
+                    number(rs, "tyre_height"),
+                    number(rs, "wear_mm"),
+                    "TYRE".equals(rs.getString("kind")) ? nullToEmpty(rs.getString("brand")) : "",
+                    "TYRE".equals(rs.getString("kind")) ? nullToEmpty(rs.getString("model")) : "",
+                    SEASONS.getOrDefault(nullToEmpty(rs.getString("season")), ""),
+                    number(rs, "made_year"),
+                    nullToEmpty(rs.getString("disc_type")),
+                    number(rs, "disc_width"),
+                    number(rs, "offset_mm"),
+                    nullToEmpty(rs.getString("bolt_pattern")),
+                    number(rs, "hub_bore"),
+                    "DISC".equals(rs.getString("kind")) ? nullToEmpty(rs.getString("brand")) : "",
+                    "DISC".equals(rs.getString("kind")) ? nullToEmpty(rs.getString("model")) : "",
+                    nullToEmpty(rs.getString("oem")),
+                    number(rs, "price"),
+                    nullToEmpty(rs.getString("description")),
+                    nullToEmpty(rs.getString("note")),
+                    nullToEmpty(rs.getString("section")),
+                    day(rs, "created_at"),
+                    day(rs, "updated_at"),
+                    nullToEmpty(rs.getString("updated_by_name")),
+                    nullToEmpty(rs.getString("supply")),
+                    CONDITIONS.getOrDefault(nullToEmpty(rs.getString("condition")), ""),
+                    // Пусто, а не «нет»: флажок сообщает что-то только когда
+                    // он поднят, а колонка из одних «нет» — столбец шума.
+                    rs.getBoolean("run_flat") ? "да" : "",
+                    rs.getBoolean("light_truck") ? "да" : "",
+                    nullToEmpty(rs.getString("speed_index")),
+                    number(rs, "load_index"),
+                    nullToEmpty(rs.getString("donor_legacy") != null
+                            ? rs.getString("donor_legacy") : rs.getString("donor_code")),
+                    rs.getBoolean("is_published") ? "Везде" : "Нет",
+                    rs.getInt("photo_count") == 0 ? "" : String.valueOf(rs.getInt("photo_count")),
+                    nullToEmpty(rs.getString("legacy_code")),
+                    nullToEmpty(rs.getString("barcode")),
+                    day(rs, "price_changed_at"),
+                    nullToEmpty(rs.getString("price_changed_by_name"))));
+
+            for (CatalogService.Warehouse warehouse : warehouses) {
+                cells.add(number(rs, "free_" + warehouse.id()));
+                cells.add(number(rs, "res_" + warehouse.id()));
+            }
+            writer.write(cells);
+        });
+    }
+
+    /** Заголовок выгрузки: те же колонки и в том же порядке, что на экране. */
+    public static List<String> exportHeader(List<CatalogService.Warehouse> warehouses) {
+        List<String> header = new java.util.ArrayList<>(List.of(
+                "Номер товара", "Наименование", "Товар", "Номер комплекта", "Диаметр",
+                "Тип шины", "Ширина шины", "Тип маркировки", "Тип протектора",
+                "Тип конструкции", "Высота шины", "Износ", "Производитель шины",
+                "Модель шины", "Сезон", "Год производства", "Тип диска", "Ширина диска",
+                "Вылет", "Сверловка", "Диаметр ЦО", "Производитель диска", "Модель диска",
+                "Номер производителя", "Цена", "Комментарий", "Заметка", "Секция",
+                "Создан", "Изменён", "Кто изменил", "Поставка", "Состояние",
+                "RunFlat", "Легкогрузовая (LT)", "Индекс скорости", "Индекс нагрузки",
+                "Номер донора", "Выгружать", "Количество фото", "Старые данные",
+                "Ст. баркод", "Цена изменена в", "Кто изменил цену"));
+        for (CatalogService.Warehouse warehouse : warehouses) {
+            header.add(warehouse.name() + " (свободно)");
+            header.add(warehouse.name() + " (резерв)");
+        }
+        return header;
+    }
+
+    private static final Map<String, String> MARKING = Map.of(
+            "METRIC", "Метрическая", "INCH", "Дюймовая", "FLOTATION", "Флотационная");
+
+    private static final Map<String, String> TREAD = Map.of(
+            "STANDARD", "Стандартный", "ASYMMETRIC", "Асимметричный",
+            "DIRECTIONAL", "Направленный");
+
+    private static final Map<String, String> SEASONS = Map.of(
+            "SUMMER", "летняя", "WINTER", "зимняя", "ALL_SEASON", "всесезонная");
+
+    private static final Map<String, String> CONDITIONS = Map.of(
+            "NEW", "новая", "USED", "б/у", "REFURBISHED", "восстановленная");
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    /** Числа словами не пишутся: пустая ячейка честнее нуля. */
+    private static String number(java.sql.ResultSet rs, String column)
+            throws java.sql.SQLException {
+        java.math.BigDecimal value = rs.getBigDecimal(column);
+        return value == null ? "" : value.stripTrailingZeros().toPlainString();
+    }
+
+    /** Дата без времени: в файле время правки — шум. */
+    private static String day(java.sql.ResultSet rs, String column)
+            throws java.sql.SQLException {
+        java.sql.Timestamp value = rs.getTimestamp(column);
+        return value == null ? "" : java.time.format.DateTimeFormatter
+                .ofPattern("dd.MM.yyyy")
+                .withZone(java.time.ZoneId.systemDefault())
+                .format(value.toInstant());
+    }
+
+    private static final Map<String, String> SORTS = Map.ofEntries(
+            Map.entry("code", "p.public_code"),
+            Map.entry("set", "w.set_no"),
+            Map.entry("kind", "w.kind"),
+            Map.entry("diameter", "w.diameter"),
+            Map.entry("tyreWidth", "w.tyre_width"),
+            Map.entry("tyreHeight", "w.tyre_height"),
+            Map.entry("wear", "w.wear_mm"),
+            Map.entry("season", "w.season"),
+            Map.entry("madeYear", "w.made_year"),
+            Map.entry("tyreBrand", "w.brand"),
+            Map.entry("discBrand", "w.brand"),
+            Map.entry("price", "p.price"),
+            Map.entry("section", "p.section"),
+            Map.entry("created", "p.created_at"));
 
     /**
      * Момент из {@code timestamptz} читается через {@code getTimestamp}.

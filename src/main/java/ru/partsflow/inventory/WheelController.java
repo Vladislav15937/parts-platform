@@ -49,9 +49,72 @@ public class WheelController {
      * своя колонка. Та же причина, что и на витрине запчастей.
      */
     @GetMapping
-    public View list(@RequestParam(defaultValue = "200") int limit) {
+    public View list(@RequestParam(required = false) String q,
+                     @RequestParam(required = false) String kind,
+                     @RequestParam(defaultValue = "false") boolean missing,
+                     @RequestParam(defaultValue = "set") String sort,
+                     @RequestParam(defaultValue = "true") boolean desc,
+                     @RequestParam(defaultValue = "200") int limit) {
         return new View(catalog.warehouses(),
-                wheels.list(Math.min(limit, 500)).stream().map(this::rowOf).toList());
+                wheels.list(q, kind, missing, sort, desc, Math.min(limit, 500))
+                        .stream().map(this::rowOf).toList());
+    }
+
+    /**
+     * Выгрузка вкладки в таблицу.
+     *
+     * <p>Ссылкой, а не запросом из скрипта: файл качает браузер, показывая
+     * ход, и вкладка при этом жива. Отбор тот же, что у страницы — скачанный
+     * файл обязан совпасть с тем, что владелец видел на экране.
+     */
+    @GetMapping("/export")
+    public void export(@RequestParam(required = false) String q,
+                       @RequestParam(required = false) String kind,
+                       @RequestParam(defaultValue = "false") boolean missing,
+                       @RequestParam(defaultValue = "set") String sort,
+                       @RequestParam(defaultValue = "true") boolean desc,
+                       jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
+
+        List<CatalogService.Warehouse> found = catalog.warehouses();
+
+        response.setContentType("text/csv");
+        response.setCharacterEncoding("UTF-8");
+        response.setHeader("Content-Disposition", "attachment; filename=\"kolesa.csv\"");
+
+        var out = new java.io.BufferedWriter(
+                new java.io.OutputStreamWriter(response.getOutputStream(),
+                        java.nio.charset.StandardCharsets.UTF_8), 1 << 16);
+        // Метка порядка байтов: без неё Excel открывает файл в кодировке
+        // системы и показывает кракозябры.
+        out.write('\uFEFF');
+        writeRow(out, WheelService.exportHeader(found));
+
+        wheels.export(q, kind, missing, sort, desc, found, cells -> writeRow(out, cells));
+        out.flush();
+    }
+
+    /**
+     * Разделитель — точка с запятой: Excel в русской локали разбирает запятую
+     * как десятичный знак. Кавычки вокруг всего: в наименованиях встречается
+     * и точка с запятой, и перенос строки, и сами кавычки.
+     */
+    private static void writeRow(java.io.Writer out, List<String> cells) {
+        try {
+            for (int at = 0; at < cells.size(); at++) {
+                if (at > 0) {
+                    out.write(';');
+                }
+                out.write('"');
+                out.write(cells.get(at).replace("\"", "\"\""));
+                out.write('"');
+            }
+            out.write('\n');
+        } catch (java.io.IOException e) {
+            // Обрыв на середине выгрузки — обычное дело: скачивающий закрыл
+            // вкладку. Заворачиваем, чтобы не тащить проверяемое исключение
+            // через обработчик строки.
+            throw new java.io.UncheckedIOException(e);
+        }
     }
 
     /**

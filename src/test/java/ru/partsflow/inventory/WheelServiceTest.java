@@ -12,6 +12,7 @@ import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,6 +40,9 @@ class WheelServiceTest extends PostgresTestBase {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private CatalogService catalog;
 
     @Autowired
     private TransactionTemplate transactionTemplate;
@@ -108,13 +112,13 @@ class WheelServiceTest extends PostgresTestBase {
     void listCarriesEveryProperty() {
         var created = inTenant(() -> wheels.createSet(tyre(), 2, warehouseId, null));
 
-        var row = inTenant(() -> wheels.list(50)).stream()
+        var row = inTenant(() -> wheels.list(null, null, false, "set", true, 50)).stream()
                 .filter(w -> created.partIds().contains(w.id()))
                 .findFirst()
                 .orElseThrow();
 
         assertThat(row.markingType()).isEqualTo("METRIC");
-        assertThat(row.treadType()).isEqualTo("STANDARD");
+        assertThat(row.treadType()).isEqualTo("DIRECTIONAL");
         assertThat(row.speedIndex()).isEqualTo("H");
         assertThat(row.loadIndex()).isEqualTo(91);
         assertThat(row.runFlat()).isFalse();
@@ -125,6 +129,80 @@ class WheelServiceTest extends PostgresTestBase {
         // у другого пять, — поэтому остаток едет картой, а не числом.
         assertThat(row.stock()).containsEntry(warehouseId, new java.math.BigDecimal("1.000"));
         assertThat(row.published()).isTrue();
+    }
+
+    /**
+     * Поиск, отбор и сортировка — то, без чего таблица на две сотни колёс
+     * читается только глазами.
+     */
+    @Test
+    @DisplayName("Поиск идёт по номеру и заголовку, отбор — по виду товара")
+    void listIsSearchableAndFiltered() {
+        var tyre = inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+        var disc = inTenant(() -> wheels.createSet(disc(), 1, warehouseId, null));
+        Long tyreId = tyre.partIds().get(0);
+        Long discId = disc.partIds().get(0);
+
+        // Размер попадает в поиск сам: он собран в заголовок, а покупатель
+        // называет именно его.
+        var found = inTenant(() -> wheels.list("195/65", null, false, "set", true, 500));
+        assertThat(ids(found)).contains(tyreId).doesNotContain(discId);
+
+        // «Покажи только диски» — первое, что делает кладовщик, когда ищет
+        // комплект железа: половина колонок у второго вида пуста.
+        var discs = inTenant(() -> wheels.list(null, "DISC", false, "set", true, 500));
+        assertThat(ids(discs)).contains(discId).doesNotContain(tyreId);
+        assertThat(discs).allSatisfy(row -> assertThat(row.kind()).isEqualTo("DISC"));
+
+        var all = inTenant(() -> wheels.list(null, null, false, "set", true, 500));
+        assertThat(ids(all)).contains(tyreId, discId);
+    }
+
+    @Test
+    @DisplayName("Неизвестная сортировка не ломает выдачу и не подставляется в SQL")
+    void unknownSortFallsBackToDefault() {
+        var created = inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+
+        // ORDER BY не принимает параметр, и подстановка пришедшего текста —
+        // это внедрение SQL. Неизвестное имя молча становится умолчанием.
+        assertThat(ids(inTenant(() -> wheels.list(
+                null, null, false, "p.id; DROP TABLE part", true, 500))))
+                .contains(created.partIds().get(0));
+    }
+
+    @Test
+    @DisplayName("Неизвестный вид товара отвергается, а не ищется")
+    void unknownKindIsRejected() {
+        assertThatThrownBy(() -> inTenant(() ->
+                wheels.list(null, "КОЛЕСО", false, "set", true, 50)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * Выгрузка обязана совпасть с экраном: ради этой сверки её и качают.
+     */
+    @Test
+    @DisplayName("Выгрузка отдаёт те же строки, что и страница, и столько же колонок")
+    void exportMatchesTheScreen() {
+        var tyres = inTenant(() -> wheels.createSet(tyre(), 2, warehouseId, null));
+        var disc = inTenant(() -> wheels.createSet(disc(), 1, warehouseId, null));
+
+        var found = inTenant(() -> catalog.warehouses());
+        List<List<String>> rows = new java.util.ArrayList<>();
+        inTenant(() -> {
+            wheels.export(null, "TYRE", false, "set", true, found, rows::add);
+            return null;
+        });
+
+        // Отбор у выгрузки и у страницы общий: диск в файл не попал,
+        // а обе шины попали.
+        var codes = rows.stream().map(row -> row.get(0)).toList();
+        assertThat(codes).containsAll(codesOf(tyres.partIds()))
+                .doesNotContainAnyElementsOf(codesOf(disc.partIds()));
+        // Заголовок и строка обязаны быть одной длины: разъехавшись, файл
+        // сдвигает значения на колонку, и цена приезжает в количество.
+        assertThat(rows.get(0)).hasSameSizeAs(WheelService.exportHeader(found));
+        assertThat(rows.get(0)).contains("Шина", "летняя", "Метрическая", "Направленный");
     }
 
     @Test
@@ -157,12 +235,31 @@ class WheelServiceTest extends PostgresTestBase {
                 .isEqualTo("Диск Литой 6x15 5x100 ET45 Toyota");
     }
 
+    private static List<Long> ids(List<WheelService.WheelRow> rows) {
+        return rows.stream().map(WheelService.WheelRow::id).toList();
+    }
+
+    private List<String> codesOf(List<Long> partIds) {
+        return inTenant(() -> jdbc.queryForList(
+                "SELECT public_code FROM part WHERE id = ANY (?)",
+                String.class, (Object) partIds.toArray(Long[]::new)));
+    }
+
+    private WheelService.WheelRequest disc() {
+        return new WheelService.WheelRequest("DISC", new BigDecimal("15"),
+                null, null, null, null, null, null, null,
+                "Литой", new BigDecimal("6.0"), 45, "5x100", new BigDecimal("54.1"),
+                "Enkei", null,
+                null, null, null, null, null, null,
+                new BigDecimal("6750"), null, null);
+    }
+
     private WheelService.WheelRequest tyre() {
         return new WheelService.WheelRequest("TYRE", new BigDecimal("15"),
                 195, 65, "R", "Легковая", "SUMMER", new BigDecimal("5"), 2022,
                 null, null, null, null, null,
                 "Goodyear", "EfficientGrip",
-                "METRIC", "STANDARD", false, false, "H", 91,
+                "METRIC", "DIRECTIONAL", false, false, "H", 91,
                 new BigDecimal("3500"), null, null);
     }
 

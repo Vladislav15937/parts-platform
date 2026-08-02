@@ -84,8 +84,49 @@ export interface WheelPage {
   rows: WheelRow[];
 }
 
-export function listWheels(): Promise<WheelPage> {
-  return request<WheelPage>('/api/wheels');
+/**
+ * Отбор вкладки колёс.
+ *
+ * <p>Поиск идёт по номеру товара и заголовку разом: размер попадает в него
+ * сам, потому что собран в заголовок («Шина 195/65 R15 …»), а покупатель
+ * называет именно размер.
+ */
+export interface WheelQuery {
+  q: string;
+  /** Пусто — оба вида: у шины и диска половина колонок разная. */
+  kind: '' | 'TYRE' | 'DISC';
+  missing: boolean;
+  sort: string;
+  desc: boolean;
+}
+
+export const EMPTY_WHEEL_QUERY: WheelQuery = {
+  q: '', kind: '', missing: false, sort: 'set', desc: true,
+};
+
+/** Параметры отбора одни и у страницы, и у выгрузки: файл обязан совпасть. */
+export function wheelParams(query: WheelQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  if (query.q.trim() !== '') params.set('q', query.q.trim());
+  if (query.kind !== '') params.set('kind', query.kind);
+  if (query.missing) params.set('missing', 'true');
+  params.set('sort', query.sort);
+  params.set('desc', String(query.desc));
+  return params;
+}
+
+export function listWheels(query: WheelQuery = EMPTY_WHEEL_QUERY): Promise<WheelPage> {
+  const params = wheelParams(query);
+  params.set('limit', '500');
+  return request<WheelPage>(`/api/wheels?${params.toString()}`);
+}
+
+/**
+ * Ссылка на выгрузку, а не запрос из скрипта: файл качает браузер, показывая
+ * ход, и вкладка при этом жива.
+ */
+export function wheelExportUrl(query: WheelQuery): string {
+  return `/api/wheels/export?${wheelParams(query).toString()}`;
 }
 
 export interface SetRequest {
@@ -160,6 +201,8 @@ export function sizeOf(wheel: Wheel): string {
 export interface WheelColumn {
   key: string;
   title: string;
+  /** Имя сортировки на сервере. Нет — по этой колонке не сортируют. */
+  sort?: string;
   numeric?: boolean;
   fixed?: boolean;
   value: (w: Wheel) => string;
@@ -203,47 +246,47 @@ function flag(value: boolean | null): string {
 }
 
 export const WHEEL_COLUMNS: WheelColumn[] = [
-  { key: 'code', title: 'Номер товара', value: (w) => text(w.publicCode) },
+  { key: 'code', title: 'Номер товара', sort: 'code', value: (w) => text(w.publicCode) },
   // Вторым столбцом, как в кабинете: колесо узнают по картинке — диски
   // различаются только рисунком, и словами его не опишешь.
   { key: 'photo', title: 'Превью', fixed: true, value: () => '',
     image: (row) => row.photoUrl },
-  { key: 'set', title: 'Номер комплекта', numeric: true, value: (w) => text(w.setNo) },
-  { key: 'kind', title: 'Товар', value: (w) => (w.kind === 'TYRE' ? 'Шина' : 'Диск') },
-  { key: 'diameter', title: 'Диаметр', numeric: true, value: (w) => text(w.diameter) },
+  { key: 'set', title: 'Номер комплекта', sort: 'set', numeric: true, value: (w) => text(w.setNo) },
+  { key: 'kind', title: 'Товар', sort: 'kind', value: (w) => (w.kind === 'TYRE' ? 'Шина' : 'Диск') },
+  { key: 'diameter', title: 'Диаметр', sort: 'diameter', numeric: true, value: (w) => text(w.diameter) },
   { key: 'tyreType', title: 'Тип шины', value: (w) => text(w.tyreType) },
-  { key: 'tyreWidth', title: 'Ширина шины', numeric: true, value: (w) => text(w.tyreWidth) },
+  { key: 'tyreWidth', title: 'Ширина шины', sort: 'tyreWidth', numeric: true, value: (w) => text(w.tyreWidth) },
   { key: 'markingType', title: 'Тип маркировки',
     value: (w) => MARKING[w.markingType ?? ''] ?? text(w.markingType) },
   { key: 'treadType', title: 'Тип протектора',
     value: (w) => TREAD[w.treadType ?? ''] ?? text(w.treadType) },
   { key: 'construction', title: 'Тип конструкции', value: (w) => text(w.construction) },
-  { key: 'tyreHeight', title: 'Высота шины', numeric: true, value: (w) => text(w.tyreHeight) },
+  { key: 'tyreHeight', title: 'Высота шины', sort: 'tyreHeight', numeric: true, value: (w) => text(w.tyreHeight) },
   // Износ в миллиметрах остатка протектора: покупатель мерил глубиномером,
   // и «осталось 25 %» он пересчитывать не станет.
-  { key: 'wear', title: 'Износ', numeric: true, value: (w) => text(w.wearMm) },
-  { key: 'tyreBrand', title: 'Производитель шины',
+  { key: 'wear', title: 'Износ', sort: 'wear', numeric: true, value: (w) => text(w.wearMm) },
+  { key: 'tyreBrand', title: 'Производитель шины', sort: 'tyreBrand',
     value: (w) => (w.kind === 'TYRE' ? text(w.brand) : '') },
   { key: 'tyreModel', title: 'Модель шины',
     value: (w) => (w.kind === 'TYRE' ? text(w.model) : '') },
-  { key: 'season', title: 'Сезон',
+  { key: 'season', title: 'Сезон', sort: 'season',
     value: (w) => SEASONS.find((s) => s.code === w.season)?.name ?? '' },
-  { key: 'madeYear', title: 'Год производства', numeric: true, value: (w) => text(w.madeYear) },
+  { key: 'madeYear', title: 'Год производства', sort: 'madeYear', numeric: true, value: (w) => text(w.madeYear) },
   { key: 'discType', title: 'Тип диска', value: (w) => text(w.discType) },
   { key: 'discWidth', title: 'Ширина диска', numeric: true, value: (w) => text(w.discWidth) },
   { key: 'offset', title: 'Вылет', numeric: true, value: (w) => text(w.offsetMm) },
   { key: 'bolt', title: 'Сверловка', value: (w) => text(w.boltPattern) },
   { key: 'hub', title: 'Диаметр ЦО', numeric: true, value: (w) => text(w.hubBore) },
-  { key: 'discBrand', title: 'Производитель диска',
+  { key: 'discBrand', title: 'Производитель диска', sort: 'discBrand',
     value: (w) => (w.kind === 'DISC' ? text(w.brand) : '') },
   { key: 'discModel', title: 'Модель диска',
     value: (w) => (w.kind === 'DISC' ? text(w.model) : '') },
   { key: 'oem', title: 'Номер производителя', value: (w) => text(w.oem) },
-  { key: 'price', title: 'Цена', numeric: true, value: (w) => money(w.price) },
+  { key: 'price', title: 'Цена', sort: 'price', numeric: true, value: (w) => money(w.price) },
   { key: 'description', title: 'Комментарий', value: (w) => text(w.description) },
   { key: 'note', title: 'Заметка', value: (w) => text(w.note) },
-  { key: 'section', title: 'Секция', value: (w) => text(w.section) },
-  { key: 'created', title: 'Создан', value: (w) => day(w.createdAt) },
+  { key: 'section', title: 'Секция', sort: 'section', value: (w) => text(w.section) },
+  { key: 'created', title: 'Создан', sort: 'created', value: (w) => day(w.createdAt) },
   { key: 'updated', title: 'Изменён', value: (w) => day(w.updatedAt) },
   { key: 'updatedBy', title: 'Кто изменил', value: (w) => text(w.updatedByName) },
   { key: 'supply', title: 'Поставка', value: (w) => text(w.supply) },
