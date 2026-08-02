@@ -55,6 +55,7 @@
     <include file="tenant/036-zero-stock-status.sql"   relativeToChangelogFile="true"/>
     <include file="tenant/037-inventory-line-applied.sql" relativeToChangelogFile="true"/>
     <include file="tenant/038-customer-settlements.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/039-part-catalog-parity.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

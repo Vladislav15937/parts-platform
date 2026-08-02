@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -340,7 +341,8 @@ public class CatalogService {
                   LEFT JOIN catalog.model m ON m.id = d.model_id
                   LEFT JOIN catalog.generation g ON g.id = d.generation_id
                   LEFT JOIN catalog.modification mo ON mo.id = d.modification_id
-                  LEFT JOIN supply s ON s.id = d.supply_id""";
+                  LEFT JOIN supply s ON s.id = d.supply_id
+                  LEFT JOIN part_name pn ON pn.id = p.part_name_id""";
 
         Long total = jdbc.queryForObject("SELECT count(*)" + joins + where, Long.class,
                 args.toArray());
@@ -358,7 +360,19 @@ public class CatalogService {
                        d.year, d.public_code AS donor_code, d.legacy_code AS donor_legacy,
                        p.price, p.installation_price, p.color, p.description, p.note,
                        p.manufacturer, p.marking, p.section, p.side_lr, p.side_fr,
-                       p.qty_on_hand,
+                       p.qty_on_hand, p.is_published, p.barcode, p.legacy_code,
+                       p.video_url, p.text_block,
+                       p.weight_kg, p.length_mm, p.width_mm, p.height_mm,
+                       p.package_weight_kg, p.package_length_mm,
+                       p.package_width_mm, p.package_height_mm,
+                       p.created_at, p.updated_at, p.price_changed_at,
+                       pn.name AS part_name,
+                       (SELECT tm.display_name FROM tenant_member tm
+                         WHERE tm.id = p.updated_by)      AS updated_by_name,
+                       (SELECT tm.display_name FROM tenant_member tm
+                         WHERE tm.id = p.price_changed_by) AS price_changed_by_name,
+                       (SELECT count(*) FROM part_photo ph2
+                         WHERE ph2.part_id = p.id)         AS photo_count,
                        (SELECT o.raw_number FROM part_oem o
                          WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
                        (SELECT string_agg(o.raw_number, ', ') FROM part_oem o
@@ -403,10 +417,61 @@ public class CatalogService {
                         rs.getBigDecimal("qty_on_hand"),
                         rs.getString("oem"), rs.getString("crosses"), rs.getString("photo_key"),
                         rs.getString("supply"), rs.getString("equipment"),
+                        rs.getString("part_name"),
+                        (Boolean) rs.getObject("is_published"),
+                        rs.getString("barcode"),
+                        rs.getString("legacy_code"),
+                        rs.getString("video_url"), rs.getString("text_block"),
+                        rs.getBigDecimal("weight_kg"),
+                        dimensions(rs.getObject("length_mm", Integer.class),
+                                rs.getObject("width_mm", Integer.class),
+                                rs.getObject("height_mm", Integer.class)),
+                        dimensions(rs.getObject("package_length_mm", Integer.class),
+                                rs.getObject("package_width_mm", Integer.class),
+                                rs.getObject("package_height_mm", Integer.class)),
+                        rs.getBigDecimal("package_weight_kg"),
+                        instant(rs, "created_at"),
+                        instant(rs, "updated_at"),
+                        rs.getString("updated_by_name"),
+                        instant(rs, "price_changed_at"),
+                        rs.getString("price_changed_by_name"),
+                        rs.getInt("photo_count"),
                         Map.of()),
                 pageArgs.toArray());
 
         return new Page(total == null ? 0 : total, withStock(rows));
+    }
+
+    /**
+     * Габариты одной строкой «120×80×45».
+     *
+     * <p>Тремя колонками они не показываются: по отдельности «длина 120»
+     * не отвечает ни на один вопрос, а вместе отвечают на единственный —
+     * влезет ли в коробку. Пусто, если не заполнено ни одно измерение.
+     */
+    /**
+     * Момент из timestamptz.
+     *
+     * <p>Через {@code getObject(..., Instant.class)} нельзя: драйвер Postgres
+     * такое преобразование не умеет и отвечает «conversion to class
+     * java.time.Instant from timestamptz not supported» — вся витрина
+     * при этом падает 409-м. Поймано живым запросом, тесты витрины
+     * этих колонок не касались.
+     */
+    private static Instant instant(java.sql.ResultSet rs, String column)
+            throws java.sql.SQLException {
+        java.sql.Timestamp value = rs.getTimestamp(column);
+        return value == null ? null : value.toInstant();
+    }
+
+    private static String dimensions(Integer length, Integer width, Integer height) {
+        if (length == null && width == null && height == null) {
+            return null;
+        }
+        return "%s×%s×%s".formatted(
+                length == null ? "?" : length,
+                width == null ? "?" : width,
+                height == null ? "?" : height);
     }
 
     /**
@@ -483,14 +548,43 @@ public class CatalogService {
                        (SELECT o.raw_number FROM part_oem o
                          WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
                        (SELECT string_agg(o.raw_number, ', ') FROM part_oem o
-                         WHERE o.part_id = p.id AND NOT o.is_primary) AS crosses"""
+                         WHERE o.part_id = p.id AND NOT o.is_primary) AS crosses,
+                       pn.name AS part_name, p.is_published, p.barcode,
+                       p.legacy_code, p.video_url, p.text_block,
+                       p.weight_kg, p.length_mm, p.width_mm, p.height_mm,
+                       p.package_weight_kg, p.package_length_mm,
+                       p.package_width_mm, p.package_height_mm,
+                       p.created_at, p.updated_at, p.price_changed_at,
+                       (SELECT tm.display_name FROM tenant_member tm
+                         WHERE tm.id = p.updated_by) AS updated_by_name,
+                       (SELECT tm.display_name FROM tenant_member tm
+                         WHERE tm.id = p.price_changed_by) AS price_changed_by_name,
+                       (SELECT count(*) FROM part_photo ph
+                         WHERE ph.part_id = p.id) AS photo_count,
+                       CASE WHEN sp.id IS NULL THEN NULL
+                            ELSE sp.kind || ' №' || sp.number
+                                 || coalesce(' | ' || to_char(sp.arrived_on, 'DD.MM.YYYY'), '')
+                       END AS supply_label,
+                       nullif(concat_ws(', ',
+                           CASE d.steering WHEN 'RIGHT' THEN 'правый руль'
+                                           WHEN 'LEFT' THEN 'левый руль' END,
+                           CASE d.transmission_type WHEN 'AT' THEN 'АКПП'
+                                                    WHEN 'MT' THEN 'МКПП'
+                                                    WHEN 'CVT' THEN 'вариатор' END,
+                           CASE d.drive_type WHEN 'FWD' THEN 'передний'
+                                             WHEN 'RWD' THEN 'задний'
+                                             WHEN 'AWD' THEN 'полный' END,
+                           d.transmission_model,
+                           d.equipment_code), '') AS equipment"""
                 + stock + """
 
                   FROM part p
                   LEFT JOIN donor d ON d.id = p.donor_id
                   LEFT JOIN catalog.brand b ON b.id = d.brand_id
                   LEFT JOIN catalog.model m ON m.id = d.model_id
-                  LEFT JOIN catalog.generation g ON g.id = d.generation_id"""
+                  LEFT JOIN catalog.generation g ON g.id = d.generation_id
+                  LEFT JOIN part_name pn ON pn.id = p.part_name_id
+                  LEFT JOIN supply sp ON sp.id = d.supply_id"""
                 + filter.where() + " ORDER BY " + order;
 
         jdbc.query(connection -> {
@@ -534,6 +628,25 @@ public class CatalogService {
             cells.add(text(rs, "note"));
             cells.add(text(rs, "marking"));
             cells.add(text(rs, "section"));
+            cells.add(text(rs, "part_name"));
+            cells.add(text(rs, "supply_label"));
+            cells.add(text(rs, "equipment"));
+            cells.add(rs.getBoolean("is_published") ? "Везде" : "Нет");
+            cells.add(number(rs, "photo_count"));
+            cells.add(text(rs, "text_block"));
+            cells.add(text(rs, "video_url"));
+            cells.add(number(rs, "weight_kg"));
+            cells.add(dimensionsOf(rs, "length_mm", "width_mm", "height_mm"));
+            cells.add(dimensionsOf(rs, "package_length_mm",
+                    "package_width_mm", "package_height_mm"));
+            cells.add(number(rs, "package_weight_kg"));
+            cells.add(text(rs, "barcode"));
+            cells.add(text(rs, "legacy_code"));
+            cells.add(day(rs, "created_at"));
+            cells.add(day(rs, "updated_at"));
+            cells.add(text(rs, "updated_by_name"));
+            cells.add(day(rs, "price_changed_at"));
+            cells.add(text(rs, "price_changed_by_name"));
             for (Warehouse warehouse : warehouses) {
                 cells.add(number(rs, "free_" + warehouse.id()));
                 cells.add(number(rs, "res_" + warehouse.id()));
@@ -549,12 +662,35 @@ public class CatalogService {
                 "Поколение с", "Поколение по", "Кузов", "Двигатель", "Год выпуска",
                 "Передний / Задний", "Левый / Правый", "Номер донора",
                 "Цена", "Установка", "Цвет", "Комментарий", "Производитель",
-                "Номер производителя", "Кросс-номера", "Заметка", "Маркировка", "Секция"));
+                "Номер производителя", "Кросс-номера", "Заметка", "Маркировка", "Секция",
+                // Скачанный файл обязан совпадать с тем, что владелец видел
+                // на экране, — ради этой сверки он его и качает.
+                "Наименование", "Поставка", "Комплектация", "Выгружать",
+                "Количество фото", "Текстовый блок", "Видео", "Вес товара",
+                "Габариты товара", "Габариты товара в упаковке", "Вес в упаковке",
+                "Ст. баркод", "Старые данные", "Создан", "Изменён", "Кто изменил",
+                "Цена изменена в", "Кто изменил цену"));
         for (Warehouse warehouse : warehouses) {
             header.add(warehouse.name() + " (свободно)");
             header.add(warehouse.name() + " (резерв)");
         }
         return header;
+    }
+
+    /** Дата без времени: в файле на тридцать пять тысяч строк время — шум. */
+    private static String day(java.sql.ResultSet rs, String column) throws java.sql.SQLException {
+        java.sql.Timestamp value = rs.getTimestamp(column);
+        return value == null ? "" : java.time.format.DateTimeFormatter
+                .ofPattern("dd.MM.yyyy")
+                .withZone(java.time.ZoneId.systemDefault())
+                .format(value.toInstant());
+    }
+
+    private static String dimensionsOf(java.sql.ResultSet rs, String a, String b, String c)
+            throws java.sql.SQLException {
+        String value = dimensions(rs.getObject(a, Integer.class),
+                rs.getObject(b, Integer.class), rs.getObject(c, Integer.class));
+        return value == null ? "" : value;
     }
 
     private static String text(java.sql.ResultSet rs, String column) throws java.sql.SQLException {
@@ -600,13 +736,33 @@ public class CatalogService {
                       String sideLr, String sideFr, BigDecimal qty,
                       String oem, String crosses, String photoKey,
                       String supply, String equipment,
+                      // Паритет с таблицей товаров прежней системы: у неё
+                      // сорок две колонки, и владелец переехавшего клиента
+                      // ищет глазами те же, к которым привык.
+                      String partName, Boolean published, String barcode,
+                      /**
+                       * Номер товара в прежней системе. Сырые данные переезда
+                       * (legacy_data) наружу не идут: это jsonb со строкой
+                       * чужой выгрузки, то есть внутреннее представление.
+                       */
+                      String legacyCode,
+                      String videoUrl, String textBlock,
+                      BigDecimal weightKg, String dimensions, String packageDimensions,
+                      BigDecimal packageWeightKg,
+                      Instant createdAt, Instant updatedAt, String updatedByName,
+                      Instant priceChangedAt, String priceChangedByName,
+                      int photoCount,
                       Map<Long, BigDecimal> stock) {
 
         Row withStock(Map<Long, BigDecimal> found) {
             return new Row(id, code, title, qualityGrade, condition, brand, model, generation,
                     yearFrom, yearTo, body, engine, year, donorCode, price, installationPrice,
                     color, description, note, manufacturer, marking, section, sideLr, sideFr,
-                    qty, oem, crosses, photoKey, supply, equipment, found);
+                    qty, oem, crosses, photoKey, supply, equipment,
+                    partName, published, barcode, legacyCode,
+                    videoUrl, textBlock, weightKg, dimensions, packageDimensions,
+                    packageWeightKg, createdAt, updatedAt, updatedByName,
+                    priceChangedAt, priceChangedByName, photoCount, found);
         }
     }
 }
