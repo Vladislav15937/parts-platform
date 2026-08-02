@@ -13,6 +13,7 @@ import {
   type Warehouse,
 } from '../inventory/catalog';
 import { cardFields } from '../inventory/partCard';
+import { deletePhoto, makeMainPhoto, uploadPhoto } from '../inventory/photos';
 import { PartEditForm } from './PartEditForm';
 import { loadCached, modelsOf, type VehicleCatalog } from '../catalog/vehicles';
 import { listCells, type Cell } from '../organization/warehouses';
@@ -75,6 +76,10 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   const [moveCell, setMoveCell] = useState<number | null>(null);
   const [moveError, setMoveError] = useState('');
   const [photos, setPhotos] = useState<PartPhoto[]>([]);
+  // Снимки правит тот, кто отвечает за то, как товар выглядит на площадке.
+  // Кладовщику это не нужно: он деталь не продаёт.
+  const [uploading, setUploading] = useState(false);
+  const [photoError, setPhotoError] = useState('');
   const [shown, setShown] = useState(0);
   const [tab, setTab] = useState<'about' | 'fits'>('about');
   // Правит владелец и менеджер: здесь цена, минимальная цена
@@ -115,6 +120,57 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   const rows = [...(extraFields ?? []), ...cardFields(row)];
 
   const main = photos[shown];
+
+  /**
+   * Добавляет снимки. По одному за раз, а не все разом: хранилище отвечает
+   * на каждый отдельно, и параллельная отправка десяти файлов с телефона
+   * через мобильную связь кончается отказом на половине.
+   */
+  async function addPhotos(files: FileList | null): Promise<void> {
+    if (files === null || files.length === 0) {
+      return;
+    }
+    setPhotoError('');
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        await uploadPhoto(row.id, file);
+      }
+      setPhotos(await loadPhotos(row.id));
+    } catch (e) {
+      setPhotoError(e instanceof ApiError ? e.message : 'Снимок не загрузился');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function setMain(photoId: number): Promise<void> {
+    setPhotoError('');
+    try {
+      await makeMainPhoto(row.id, photoId);
+      // Остаёмся на том же снимке: порядок в списке от смены главного
+      // не меняется (он по sort_order), а прыжок на первый показывал бы
+      // чужую фотографию с той же кнопкой «Сделать главным» — как будто
+      // нажатие не сработало.
+      setPhotos(await loadPhotos(row.id));
+    } catch (e) {
+      setPhotoError(e instanceof ApiError ? e.message : 'Не удалось назначить главным');
+    }
+  }
+
+  async function removePhoto(photoId: number): Promise<void> {
+    setPhotoError('');
+    try {
+      await deletePhoto(row.id, photoId);
+      const left = await loadPhotos(row.id);
+      setPhotos(left);
+      // Удалённый мог быть последним в полосе: без сдвига экран показывал бы
+      // пустое место вместо снимка.
+      setShown((i) => Math.max(0, Math.min(i, left.length - 1)));
+    } catch (e) {
+      setPhotoError(e instanceof ApiError ? e.message : 'Не удалось удалить снимок');
+    }
+  }
 
   /** Ячейки склада-приёмника: без адреса деталь находится только глазами. */
   async function chooseTarget(id: number | null): Promise<void> {
@@ -510,9 +566,10 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
           </div>
 
           <div className="card-view__photos">
-            {main === undefined ? (
+            {main === undefined && !uploading && (
               <p className="muted">Снимков нет</p>
-            ) : (
+            )}
+            {main !== undefined && (
               <>
                 <div className="card-view__frame">
                   {photos.length > 1 && (
@@ -550,6 +607,45 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
                   </div>
                 )}
               </>
+            )}
+
+            {/* Досъёмка: снимок делают телефоном при приёмке, но деталь,
+                приехавшую переносом без картинок, доснять было негде вовсе —
+                а на разборке продаёт фотография. */}
+            {(role === 'OWNER' || role === 'MANAGER' || role === 'SELLER') && (
+              <div className="card-view__upload">
+                {main !== undefined && (
+                  <div className="filter-row">
+                    {!main.main && (
+                      <button
+                        type="button"
+                        className="button--ghost"
+                        onClick={() => void setMain(main.photoId)}
+                      >
+                        Сделать главным
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="button--ghost"
+                      onClick={() => void removePhoto(main.photoId)}
+                    >
+                      Удалить снимок
+                    </button>
+                  </div>
+                )}
+                <label className="button--ghost card-view__add-photo">
+                  {uploading ? 'Загружаем…' : 'Добавить фото'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    disabled={uploading}
+                    onChange={(e) => void addPhotos(e.currentTarget.files)}
+                  />
+                </label>
+                {photoError !== '' && <p className="note note--error">{photoError}</p>}
+              </div>
             )}
           </div>
         </div>

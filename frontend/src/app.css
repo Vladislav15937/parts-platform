@@ -1662,3 +1662,23 @@ hr {
   flex-direction: column;
   gap: 4px;
 }
+
+/* Досъёмка из карточки. Поле выбора файла скрыто: браузерное «Файл не
+   выбран» рядом с кнопкой выглядит поломкой, а нажимают на подпись. */
+.card-view__upload {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.card-view__add-photo {
+  display: inline-block;
+  padding: 6px 12px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.card-view__add-photo input {
+  display: none;
+}
