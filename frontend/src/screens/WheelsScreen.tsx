@@ -8,6 +8,9 @@ import {
   hasWheelFilters,
   listWheels,
   wheelExportUrl,
+  wheelValues,
+  FILTER_EMPTY,
+  FILTER_PRESENT,
   rowOfWheel,
   wheelFields,
   loadWheelVisible,
@@ -40,6 +43,13 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
   // Набранное в поле и отправленное на сервер — разные вещи: искать
   // на каждой букве значит слать запрос за запросом на весь склад.
   const [typed, setTyped] = useState('');
+  // Какая колонка сейчас показывает список значений: открытых больше одной
+  // быть не может — они перекрывают друг друга.
+  const [picking, setPicking] = useState<string | null>(null);
+  // Координаты заголовка: список значений рисуется вне таблицы, иначе его
+  // обрезает контейнер с горизонтальной прокруткой — и от списка остаётся
+  // белая полоска. Та же ловушка, что с накладкой снимков на витрине.
+  const [pickAt, setPickAt] = useState<{ left: number; top: number } | null>(null);
   // Карточка та же, что у запчасти: цена, списание и перемещение написаны
   // на складе, а не на виде товара. Пока карточки не было, колесо нельзя
   // было ни поправить, ни списать, ни перевезти — витрина склада показывает
@@ -154,50 +164,6 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         )}
       </div>
 
-      {/* Отбор по свойствам — то, чем колесо подбирают на самом деле:
-          покупатель называет размер целиком или сверловку. Шинные поля
-          при выбранных дисках только мешают, поэтому набор зависит от вида
-          товара; когда вид не выбран, показываются оба — иначе отобрать
-          по размеру нельзя, не выбрав сперва вид. */}
-      <div className="filter-row">
-        <Filter label="Диаметр" hint="15" value={query.diameter}
-                onChange={(v) => setQuery({ ...query, diameter: v })} />
-        {query.kind !== 'DISC' && (
-          <>
-            <Filter label="Ширина шины" hint="195" value={query.tyreWidth}
-                    onChange={(v) => setQuery({ ...query, tyreWidth: v })} />
-            <Filter label="Высота шины" hint="65" value={query.tyreHeight}
-                    onChange={(v) => setQuery({ ...query, tyreHeight: v })} />
-            <label className="field">
-              Сезон
-              <select
-                value={query.season}
-                onChange={(e) => setQuery({ ...query, season: e.target.value })}
-              >
-                <option value="">любой</option>
-                {SEASONS.map((season) => (
-                  <option key={season.code} value={season.code}>{season.name}</option>
-                ))}
-              </select>
-            </label>
-            {/* «Не меньше», а не «ровно»: покупатель ищет шину с остатком
-                протектора от пяти миллиметров. */}
-            <Filter label="Протектор от, мм" hint="5" value={query.wearFrom}
-                    onChange={(v) => setQuery({ ...query, wearFrom: v })} />
-          </>
-        )}
-        {query.kind !== 'TYRE' && (
-          <Filter label="Сверловка" hint="5x100" value={query.boltPattern}
-                  onChange={(v) => setQuery({ ...query, boltPattern: v })} />
-        )}
-        <Filter label="Производитель" hint="Nokian" value={query.brand}
-                onChange={(v) => setQuery({ ...query, brand: v })} />
-        <Filter label="Цена от" hint="3000" value={query.priceFrom}
-                onChange={(v) => setQuery({ ...query, priceFrom: v })} />
-        <Filter label="до" hint="6000" value={query.priceTo}
-                onChange={(v) => setQuery({ ...query, priceTo: v })} />
-      </div>
-
       <div className="filter-row">
         <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
           Настроить таблицу
@@ -241,14 +207,40 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
                 {columns.map((column) => (
                   <th
                     key={column.key}
-                    className={column.numeric ? 'num' : undefined}
-                    onClick={() => column.sort !== undefined && sortBy(column.sort)}
-                    style={column.sort === undefined ? undefined : { cursor: 'pointer' }}
+                    className={
+                      [column.numeric ? 'num' : '',
+                       query.columns[column.key] === undefined ? '' : 'th--filtered']
+                        .filter((c) => c !== '').join(' ') || undefined
+                    }
                   >
-                    {column.title}
-                    {/* Стрелка только там, где сортировка есть: на колонке
-                        без неё она обманывала бы. */}
-                    {column.sort === query.sort && (query.desc ? ' ↓' : ' ↑')}
+                    {/* Нажатие на заголовок открывает отбор, как в кабинете;
+                        сортировка — на стрелке рядом. Одно нажатие на два
+                        действия пришлось бы разводить по половинкам ячейки,
+                        и промах менял бы не то. */}
+                    <span
+                      className="th__title"
+                      onClick={(e) => {
+                        if (column.filter === false) return;
+                        const box = e.currentTarget.getBoundingClientRect();
+                        setPickAt({ left: box.left, top: box.bottom });
+                        setPicking(picking === column.key ? null : column.key);
+                      }}
+                      style={column.filter === false ? undefined : { cursor: 'pointer' }}
+                    >
+                      {column.title}
+                    </span>
+                    {column.sort !== undefined && (
+                      <button
+                        type="button"
+                        className="th__sort"
+                        onClick={() => sortBy(column.sort ?? '')}
+                      >
+                        {column.sort === query.sort ? (query.desc ? '↓' : '↑') : '⇅'}
+                      </button>
+                    )}
+                    {query.columns[column.key] !== undefined && (
+                      <div className="th__value">«{query.columns[column.key]}»</div>
+                    )}
                   </th>
                 ))}
                 {page.warehouses.map((warehouse) => (
@@ -289,6 +281,22 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         </div>
       )}
 
+      {picking !== null && pickAt !== null && (
+        <ValuePicker
+          column={picking}
+          at={pickAt}
+          chosen={query.columns[picking]}
+          onPick={(value) => {
+            const columns = { ...query.columns };
+            if (value === null) delete columns[picking];
+            else columns[picking] = value;
+            setQuery({ ...query, columns });
+            setPicking(null);
+          }}
+          onClose={() => setPicking(null)}
+        />
+      )}
+
       {card !== null && (
         <PartCard
           row={rowOfWheel(card)}
@@ -308,24 +316,88 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
 }
 
 /**
- * Поле отбора. Значение уезжает на сервер сразу: полей девять, и кнопка
- * «применить» под каждым превратила бы подбор колеса в заполнение анкеты.
+ * Список значений колонки — то, из чего выбирают отбор.
+ *
+ * <p>Значения тянутся по нажатию, а не вместе со страницей: колонок сорок
+ * с лишним, и считать все списки на каждую страницу значит сорок запросов
+ * там, где нужен один, и то не всегда.
+ *
+ * <p>Поиск внутри списка обязателен: моделей шин у живого клиента под сотню,
+ * и глазами по ним не пробежать.
  */
-function Filter({ label, hint, value, onChange }: {
-  label: string;
-  hint: string;
-  value: string;
-  onChange: (value: string) => void;
+function ValuePicker({ column, at, chosen, onPick, onClose }: {
+  column: string;
+  at: { left: number; top: number };
+  chosen: string | undefined;
+  onPick: (value: string | null) => void;
+  onClose: () => void;
 }) {
+  const [values, setValues] = useState<string[] | null>(null);
+  const [typed, setTyped] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    void wheelValues(column)
+      .then((found) => { if (alive) setValues(found); })
+      .catch(() => { if (alive) setValues([]); });
+    return () => { alive = false; };
+  }, [column]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const shown = (values ?? []).filter(
+    (value) => value.toLowerCase().includes(typed.trim().toLowerCase()),
+  );
+
   return (
-    <label className="field">
-      {label}
+    <div className="value-picker" style={{ left: at.left, top: at.top }}>
       <input
-        value={value}
-        placeholder={hint}
-        onChange={(e) => onChange(e.target.value.replace(',', '.'))}
+        autoFocus
+        value={typed}
+        placeholder="поиск"
+        onChange={(e) => setTyped(e.target.value)}
+        onClick={(e) => e.stopPropagation()}
       />
-    </label>
+      <ul>
+        <li>
+          <button type="button" className={chosen === undefined ? 'is-chosen' : ''}
+                  onClick={() => onPick(null)}>
+            — все —
+          </button>
+        </li>
+        {values === null ? (
+          <li className="muted">Читаем…</li>
+        ) : (
+          shown.map((value) => (
+            <li key={value}>
+              <button type="button" className={chosen === value ? 'is-chosen' : ''}
+                      onClick={() => onPick(value)}>
+                {value}
+              </button>
+            </li>
+          ))
+        )}
+        {/* «Где не заполнено» — вопрос, который задают, разгребая склад
+            после переезда. Отдельными пунктами, а не значением: пустая
+            строка в списке выглядела бы промахом мыши. */}
+        <li>
+          <button type="button" className={chosen === FILTER_PRESENT ? 'is-chosen' : ''}
+                  onClick={() => onPick(FILTER_PRESENT)}>
+            {FILTER_PRESENT}
+          </button>
+        </li>
+        <li>
+          <button type="button" className={chosen === FILTER_EMPTY ? 'is-chosen' : ''}
+                  onClick={() => onPick(FILTER_EMPTY)}>
+            {FILTER_EMPTY}
+          </button>
+        </li>
+      </ul>
+    </div>
   );
 }
 

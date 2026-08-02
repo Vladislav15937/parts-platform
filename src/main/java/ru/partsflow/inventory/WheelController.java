@@ -52,23 +52,13 @@ public class WheelController {
     public View list(@RequestParam(required = false) String q,
                      @RequestParam(required = false) String kind,
                      @RequestParam(defaultValue = "false") boolean missing,
-                     @RequestParam(required = false) BigDecimal diameter,
-                     @RequestParam(required = false) BigDecimal tyreWidth,
-                     @RequestParam(required = false) BigDecimal tyreHeight,
-                     @RequestParam(required = false) String season,
-                     @RequestParam(required = false) BigDecimal wearFrom,
-                     @RequestParam(required = false) String boltPattern,
-                     @RequestParam(required = false) String brand,
-                     @RequestParam(required = false) BigDecimal priceFrom,
-                     @RequestParam(required = false) BigDecimal priceTo,
+                     @RequestParam(required = false) List<String> filter,
                      @RequestParam(defaultValue = "set") String sort,
                      @RequestParam(defaultValue = "true") boolean desc,
                      @RequestParam(defaultValue = "200") int limit) {
 
-        var more = new WheelService.WheelFilter(diameter, tyreWidth, tyreHeight, season,
-                wearFrom, boltPattern, brand, priceFrom, priceTo);
         return new View(catalog.warehouses(),
-                wheels.list(q, kind, missing, more, sort, desc, Math.min(limit, 500))
+                wheels.list(q, kind, missing, columnsOf(filter), sort, desc, Math.min(limit, 500))
                         .stream().map(this::rowOf).toList());
     }
 
@@ -83,15 +73,7 @@ public class WheelController {
     public void export(@RequestParam(required = false) String q,
                        @RequestParam(required = false) String kind,
                        @RequestParam(defaultValue = "false") boolean missing,
-                       @RequestParam(required = false) BigDecimal diameter,
-                       @RequestParam(required = false) BigDecimal tyreWidth,
-                       @RequestParam(required = false) BigDecimal tyreHeight,
-                       @RequestParam(required = false) String season,
-                       @RequestParam(required = false) BigDecimal wearFrom,
-                       @RequestParam(required = false) String boltPattern,
-                       @RequestParam(required = false) String brand,
-                       @RequestParam(required = false) BigDecimal priceFrom,
-                       @RequestParam(required = false) BigDecimal priceTo,
+                       @RequestParam(required = false) List<String> filter,
                        @RequestParam(defaultValue = "set") String sort,
                        @RequestParam(defaultValue = "true") boolean desc,
                        jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
@@ -110,10 +92,8 @@ public class WheelController {
         out.write('\uFEFF');
         writeRow(out, WheelService.exportHeader(found));
 
-        wheels.export(q, kind, missing,
-                new WheelService.WheelFilter(diameter, tyreWidth, tyreHeight, season,
-                        wearFrom, boltPattern, brand, priceFrom, priceTo),
-                sort, desc, found, cells -> writeRow(out, cells));
+        wheels.export(q, kind, missing, columnsOf(filter), sort, desc, found,
+                cells -> writeRow(out, cells));
         out.flush();
     }
 
@@ -139,6 +119,41 @@ public class WheelController {
             // через обработчик строки.
             throw new java.io.UncheckedIOException(e);
         }
+    }
+
+    /**
+     * Различные значения колонки — то, из чего владелец выбирает отбор.
+     *
+     * <p>Отдельным запросом по нажатию на заголовок, а не вместе со страницей:
+     * колонок сорок с лишним, и считать все списки на каждую страницу значит
+     * сорок запросов там, где нужен один, и то не всегда.
+     */
+    @GetMapping("/values")
+    public List<String> values(@RequestParam String column) {
+        return wheels.values(column);
+    }
+
+    /**
+     * Отбор приходит парами «колонка:значение» — по одной на каждый
+     * поставленный фильтр.
+     *
+     * <p>Разделитель ищется первым: в значении двоеточие встречается
+     * («Контейнер №7 | 19.06.2024» его не содержит, а вот заметка может),
+     * и разбор по последнему разрезал бы значение пополам.
+     */
+    private static java.util.Map<String, String> columnsOf(List<String> filter) {
+        if (filter == null || filter.isEmpty()) {
+            return java.util.Map.of();
+        }
+        var columns = new java.util.LinkedHashMap<String, String>();
+        for (String pair : filter) {
+            int at = pair.indexOf(':');
+            if (at <= 0) {
+                throw new IllegalArgumentException("Отбор задаётся как «колонка:значение»: " + pair);
+            }
+            columns.put(pair.substring(0, at), pair.substring(at + 1));
+        }
+        return columns;
     }
 
     /**
