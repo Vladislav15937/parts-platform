@@ -26,7 +26,7 @@ function wheel(overrides: Partial<Wheel> = {}): Wheel {
     kind: 'TYRE', setNo: null, diameter: null, tyreWidth: null, tyreHeight: null,
     construction: null, tyreType: null, season: null, wearMm: null, madeYear: null,
     discType: null, discWidth: null, offsetMm: null, boltPattern: null, hubBore: null,
-    brand: null, model: null,
+    brand: null, model: null, discBrand: null, discModel: null,
     markingType: null, treadType: null, runFlat: null, lightTruck: null,
     speedIndex: null, loadIndex: null,
     partName: null, condition: 'USED', supply: null, donorCode: null, oem: null,
@@ -96,12 +96,12 @@ describe('паритет колонок с прежней системой', () 
     expect(WHEEL_DEFAULT_VISIBLE).toContain('wear');
   });
 
-  it('производитель шины и диска — разные колонки', () => {
-    // В базе поле одно на карточку, но у шины и диска они означают разное:
-    // Goodyear в колонке «Производитель диска» — это неверно прочитанная
-    // строка, а покупатель подбирает по обоим.
+  it('производитель шины и диска — разные колонки и разные поля', () => {
+    // Пока видов товара было два, поле годилось одно: строка — либо шина,
+    // либо диск. У колеса в сборе они разные — шина Dunlop на диске
+    // Mitsubishi, — и одним полем такое не записать.
     const tyre = wheel({ kind: 'TYRE', brand: 'Goodyear' });
-    const disc = wheel({ kind: 'DISC', brand: 'Enkei' });
+    const disc = wheel({ kind: 'DISC', brand: null, discBrand: 'Enkei' });
     expect(value('tyreBrand', tyre)).toBe('Goodyear');
     expect(value('discBrand', tyre)).toBe('');
     expect(value('discBrand', disc)).toBe('Enkei');
@@ -254,5 +254,67 @@ describe('отбор вкладки колёс', () => {
     const noFilter = WHEEL_COLUMNS.filter((c) => c.filter === false).map((c) => c.key);
     expect(noFilter).toContain('photo');
     expect(noFilter).toContain('created');
+  });
+});
+
+describe('колесо в сборе', () => {
+  const assembly = () => wheel({
+    kind: 'ASSEMBLY', diameter: 18, tyreWidth: 225, tyreHeight: 55, construction: 'R',
+    season: 'WINTER_FRICTION', wearMm: 4, brand: 'Dunlop', model: 'Winter Maxx SJ8',
+    discType: 'Литой', discWidth: 7, offsetMm: 38, boltPattern: '5x114.3', hubBore: 66,
+    discBrand: 'Mitsubishi', discModel: 'Rays',
+  });
+
+  it('в карточке названы оба производителя', () => {
+    // Шина Dunlop на диске Mitsubishi: одной строкой «производитель»
+    // их не назвать, а перепутав — отдашь покупателю не то, что он подбирал.
+    const fields = Object.fromEntries(wheelFields(assembly()));
+    expect(fields['Производитель шины']).toBe('Dunlop');
+    expect(fields['Производитель диска']).toBe('Mitsubishi');
+    expect(fields['Производитель']).toBeUndefined();
+  });
+
+  it('в карточке показаны свойства и шины, и диска', () => {
+    const titles = wheelFields(assembly()).map(([t]) => t);
+    expect(titles).toContain('Сезон');
+    expect(titles).toContain('Сверловка');
+    expect(titles).toContain('Вылет');
+  });
+
+  it('у шины и диска производитель остаётся одной строкой', () => {
+    // Там он один, и «производитель шины» на карточке диска — лишний вопрос.
+    const tyre = Object.fromEntries(wheelFields(wheel({ kind: 'TYRE', brand: 'Goodyear' })));
+    expect(tyre['Производитель']).toBe('Goodyear');
+    const disc = Object.fromEntries(
+      wheelFields(wheel({ kind: 'DISC', brand: null, discBrand: 'Enkei' })),
+    );
+    expect(disc['Производитель']).toBe('Enkei');
+  });
+
+  it('колонки производителей берут каждая своё поле', () => {
+    const w = assembly();
+    expect(value('tyreBrand', w)).toBe('Dunlop');
+    expect(value('discBrand', w)).toBe('Mitsubishi');
+    expect(value('tyreModel', w)).toBe('Winter Maxx SJ8');
+    expect(value('discModel', w)).toBe('Rays');
+    expect(value('kind', w)).toBe('Колесо');
+  });
+
+  it('зимняя различает шипы и липучку', () => {
+    expect(value('season', wheel({ season: 'WINTER_STUDDED' }))).toBe('зимняя (шипы)');
+    expect(value('season', wheel({ season: 'WINTER_FRICTION' }))).toBe('зимняя (липучка)');
+    // Прежнее «зимняя» осталось: у заведённых раньше шин неизвестно, какие они.
+    expect(value('season', wheel({ season: 'WINTER' }))).toBe('зимняя');
+  });
+});
+
+describe('размер колеса в сборе', () => {
+  it('называет шину, а не диск', () => {
+    // Покупатель называет «225/55 R18», а сверловка и вылет стоят
+    // в карточке своими полями.
+    expect(sizeOf(wheel({
+      kind: 'ASSEMBLY', tyreWidth: 225, tyreHeight: 55, diameter: 18, construction: 'R',
+      discWidth: 7, boltPattern: '5x114.3', offsetMm: 38,
+    }))).toBe('225/55 R18');
   });
 });

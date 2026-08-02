@@ -10,11 +10,30 @@ import type { CatalogRow } from './catalog';
  * разом, но покупатель берёт и одну запаску.
  */
 
+/**
+ * Сезоны. Зимняя разделена на шипы и липучку: разница не косметическая —
+ * ездят на них иначе, стоят по-разному, и покупатель спрашивает именно это.
+ * Прежняя «зимняя» осталась ради уже заведённых шин: у них неизвестно,
+ * какие они, а додумывать за приёмщика нельзя.
+ */
 export const SEASONS = [
   { code: 'SUMMER', name: 'летняя' },
-  { code: 'WINTER', name: 'зимняя' },
+  { code: 'WINTER_STUDDED', name: 'зимняя (шипы)' },
+  { code: 'WINTER_FRICTION', name: 'зимняя (липучка)' },
   { code: 'ALL_SEASON', name: 'всесезонная' },
+  { code: 'WINTER', name: 'зимняя' },
 ] as const;
+
+/** Виды товара вкладки: у колеса в сборе заполнены оба набора свойств. */
+export const WHEEL_KINDS = [
+  { code: 'TYRE', name: 'Шина' },
+  { code: 'DISC', name: 'Диск' },
+  { code: 'ASSEMBLY', name: 'Колесо' },
+] as const;
+
+export function kindName(kind: string): string {
+  return WHEEL_KINDS.find((k) => k.code === kind)?.name ?? kind;
+}
 
 export interface Wheel {
   id: number;
@@ -41,6 +60,8 @@ export interface Wheel {
   hubBore: number | null;
   brand: string | null;
   model: string | null;
+  discBrand: string | null;
+  discModel: string | null;
   markingType: string | null;
   treadType: string | null;
   runFlat: boolean | null;
@@ -94,7 +115,7 @@ export interface WheelPage {
 export interface WheelQuery {
   q: string;
   /** Пусто — оба вида: у шины и диска половина колонок разная. */
-  kind: '' | 'TYRE' | 'DISC';
+  kind: '' | 'TYRE' | 'DISC' | 'ASSEMBLY';
   missing: boolean;
   /**
    * Отбор колонками, как в кабинете: ключ колонки → выбранное значение.
@@ -158,7 +179,7 @@ export function wheelExportUrl(query: WheelQuery): string {
 }
 
 export interface SetRequest {
-  kind: 'TYRE' | 'DISC';
+  kind: 'TYRE' | 'DISC' | 'ASSEMBLY';
   warehouseId: number;
   quantity: number;
   diameter: string | null;
@@ -174,6 +195,8 @@ export interface SetRequest {
   hubBore: string | null;
   brand: string | null;
   model: string | null;
+  discBrand: string | null;
+  discModel: string | null;
   tyreType: string | null;
   construction: string | null;
   markingType: string | null;
@@ -198,7 +221,9 @@ export function createSet(
  * а не название модели.
  */
 export function sizeOf(wheel: Wheel): string {
-  if (wheel.kind === 'TYRE') {
+  // У колеса в сборе размер — шинный: «225/55 R18». Дисковый у него тоже
+  // есть, но ищут его по резине, а сверловка и вылет стоят своими полями.
+  if (wheel.kind !== 'DISC') {
     const profile =
       wheel.tyreWidth !== null && wheel.tyreHeight !== null
         ? `${wheel.tyreWidth}/${wheel.tyreHeight}`
@@ -282,7 +307,7 @@ export const WHEEL_COLUMNS: WheelColumn[] = [
   { key: 'photo', title: 'Превью', fixed: true, filter: false, value: () => '',
     image: (row) => row.photoUrl },
   { key: 'set', title: 'Номер комплекта', sort: 'set', numeric: true, value: (w) => text(w.setNo) },
-  { key: 'kind', title: 'Товар', sort: 'kind', value: (w) => (w.kind === 'TYRE' ? 'Шина' : 'Диск') },
+  { key: 'kind', title: 'Товар', sort: 'kind', value: (w) => kindName(w.kind) },
   { key: 'diameter', title: 'Диаметр', sort: 'diameter', numeric: true, value: (w) => text(w.diameter) },
   { key: 'tyreType', title: 'Тип шины', value: (w) => text(w.tyreType) },
   { key: 'tyreWidth', title: 'Ширина шины', sort: 'tyreWidth', numeric: true, value: (w) => text(w.tyreWidth) },
@@ -296,9 +321,8 @@ export const WHEEL_COLUMNS: WheelColumn[] = [
   // и «осталось 25 %» он пересчитывать не станет.
   { key: 'wear', title: 'Износ', sort: 'wear', numeric: true, value: (w) => text(w.wearMm) },
   { key: 'tyreBrand', title: 'Производитель шины', sort: 'tyreBrand',
-    value: (w) => (w.kind === 'TYRE' ? text(w.brand) : '') },
-  { key: 'tyreModel', title: 'Модель шины',
-    value: (w) => (w.kind === 'TYRE' ? text(w.model) : '') },
+    value: (w) => text(w.brand) },
+  { key: 'tyreModel', title: 'Модель шины', value: (w) => text(w.model) },
   { key: 'season', title: 'Сезон', sort: 'season',
     value: (w) => SEASONS.find((s) => s.code === w.season)?.name ?? '' },
   { key: 'madeYear', title: 'Год производства', sort: 'madeYear', numeric: true, value: (w) => text(w.madeYear) },
@@ -308,9 +332,8 @@ export const WHEEL_COLUMNS: WheelColumn[] = [
   { key: 'bolt', title: 'Сверловка', value: (w) => text(w.boltPattern) },
   { key: 'hub', title: 'Диаметр ЦО', numeric: true, value: (w) => text(w.hubBore) },
   { key: 'discBrand', title: 'Производитель диска', sort: 'discBrand',
-    value: (w) => (w.kind === 'DISC' ? text(w.brand) : '') },
-  { key: 'discModel', title: 'Модель диска',
-    value: (w) => (w.kind === 'DISC' ? text(w.model) : '') },
+    value: (w) => text(w.discBrand) },
+  { key: 'discModel', title: 'Модель диска', value: (w) => text(w.discModel) },
   { key: 'oem', title: 'Номер производителя', value: (w) => text(w.oem) },
   { key: 'price', title: 'Цена', sort: 'price', numeric: true, value: (w) => money(w.price) },
   { key: 'description', title: 'Комментарий', value: (w) => text(w.description) },
@@ -396,8 +419,9 @@ export function rowOfWheel(row: WheelRow): CatalogRow {
     body: null, engine: null, year: null, donorCode: w.donorCode,
     price: w.price, installationPrice: null, color: null,
     description: w.description, note: w.note,
-    // Производитель шины или диска — это и есть производитель товара.
-    manufacturer: w.brand, marking: null, section: w.section,
+    // Производитель шины или диска — это и есть производитель товара;
+    // у сборки в карточке они показываются отдельными строками.
+    manufacturer: w.brand ?? w.discBrand, marking: null, section: w.section,
     sideLr: null, sideFr: null, qty: Number(w.qty), oem: w.oem, crosses: null,
     photoUrl: row.photoUrl, supply: w.supply, equipment: null,
     partName: w.partName, published: w.published, barcode: w.barcode,
@@ -421,10 +445,10 @@ export function wheelFields(w: Wheel): Array<[string, string]> {
     if (value !== '') fields.push([title, value]);
   };
 
-  add('Товар', w.kind === 'TYRE' ? 'Шина' : 'Диск');
+  add('Товар', kindName(w.kind));
   add('Номер комплекта', text(w.setNo));
   add('Размер', sizeOf(w));
-  if (w.kind === 'TYRE') {
+  if (w.kind !== 'DISC') {
     add('Тип шины', text(w.tyreType));
     add('Тип маркировки', MARKING[w.markingType ?? ''] ?? text(w.markingType));
     add('Тип протектора', TREAD[w.treadType ?? ''] ?? text(w.treadType));
@@ -436,13 +460,23 @@ export function wheelFields(w: Wheel): Array<[string, string]> {
     add('Индекс нагрузки', text(w.loadIndex));
     add('RunFlat', w.runFlat === true ? 'да' : '');
     add('Легкогрузовая (LT)', w.lightTruck === true ? 'да' : '');
-  } else {
+  }
+  if (w.kind !== 'TYRE') {
     add('Тип диска', text(w.discType));
     add('Сверловка', text(w.boltPattern));
     add('Вылет', w.offsetMm === null ? '' : `ET${w.offsetMm}`);
     add('Диаметр ЦО', text(w.hubBore));
   }
-  add('Производитель', text(w.brand));
-  add('Модель', text(w.model));
+  // У сборки производители разные — шина Dunlop на диске Mitsubishi, —
+  // и одной строкой «производитель» их не назвать.
+  if (w.kind === 'ASSEMBLY') {
+    add('Производитель шины', text(w.brand));
+    add('Модель шины', text(w.model));
+    add('Производитель диска', text(w.discBrand));
+    add('Модель диска', text(w.discModel));
+  } else {
+    add('Производитель', text(w.brand ?? w.discBrand));
+    add('Модель', text(w.model ?? w.discModel));
+  }
   return fields;
 }
