@@ -48,6 +48,8 @@ public class CatalogController {
                      @RequestParam(required = false) Long modelId,
                      @RequestParam(required = false) String body,
                      @RequestParam(required = false) String engine,
+                     @RequestParam(required = false) List<String> filter,
+                     @RequestParam(required = false) List<String> find,
                      @RequestParam(defaultValue = "code") String sort,
                      @RequestParam(defaultValue = "true") boolean desc,
                      @RequestParam(defaultValue = "0") int page,
@@ -55,6 +57,7 @@ public class CatalogController {
 
         CatalogService.Page found = catalog.list(q, reserved, missing, warehouses,
                 new CatalogService.Vehicle(brandId, modelId, body, engine),
+                columnsOf(filter), columnsOf(find),
                 sort, desc, Math.max(page, 0), Math.min(Math.max(size, 1), MAX_SIZE));
 
         return new View(found.total(), catalog.warehouses(),
@@ -149,6 +152,39 @@ public class CatalogController {
         return catalog.vehicles();
     }
 
+    /**
+     * Различные значения колонки — то, из чего владелец выбирает отбор.
+     *
+     * <p>Отдельным запросом по нажатию на заголовок, а не вместе со страницей:
+     * колонок сорок с лишним, и считать все списки на каждую страницу значит
+     * сорок запросов там, где нужен один, и то не всегда.
+     */
+    @GetMapping("/values")
+    public List<String> values(@RequestParam String column) {
+        return catalog.values(column);
+    }
+
+    /**
+     * Отбор приходит парами «колонка:значение» — по одной на каждый фильтр.
+     *
+     * <p>Разделитель ищется первым: в значении двоеточие встречается,
+     * и разбор по последнему разрезал бы значение пополам.
+     */
+    private static java.util.Map<String, String> columnsOf(List<String> pairs) {
+        if (pairs == null || pairs.isEmpty()) {
+            return java.util.Map.of();
+        }
+        var columns = new java.util.LinkedHashMap<String, String>();
+        for (String pair : pairs) {
+            int at = pair.indexOf(':');
+            if (at <= 0) {
+                throw new IllegalArgumentException("Отбор задаётся как «колонка:значение»: " + pair);
+            }
+            columns.put(pair.substring(0, at), pair.substring(at + 1));
+        }
+        return columns;
+    }
+
     @GetMapping("/export")
     public void export(@RequestParam(required = false) String q,
                        @RequestParam(defaultValue = "true") boolean reserved,
@@ -158,6 +194,8 @@ public class CatalogController {
                        @RequestParam(required = false) Long modelId,
                        @RequestParam(required = false) String body,
                        @RequestParam(required = false) String engine,
+                       @RequestParam(required = false) List<String> filter,
+                       @RequestParam(required = false) List<String> find,
                        @RequestParam(defaultValue = "code") String sort,
                        @RequestParam(defaultValue = "true") boolean desc,
                        jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
@@ -177,7 +215,8 @@ public class CatalogController {
         writeRow(out, CatalogService.exportHeader(found));
 
         catalog.export(q, reserved, missing, warehouses,
-                new CatalogService.Vehicle(brandId, modelId, body, engine), sort, desc, found,
+                new CatalogService.Vehicle(brandId, modelId, body, engine),
+                columnsOf(filter), columnsOf(find), sort, desc, found,
                 cells -> writeRow(out, cells));
         out.flush();
     }

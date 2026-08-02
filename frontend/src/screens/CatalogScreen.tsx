@@ -2,6 +2,9 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
   COLUMNS,
+  columnValues,
+  FILTER_EMPTY,
+  FILTER_PRESENT,
   loadCatalog,
   loadPhotos,
   exportUrl,
@@ -16,6 +19,7 @@ import {
 } from '../inventory/catalog';
 import { PartCard } from './PartCard';
 import { BulkEditForm } from './BulkEditForm';
+import { ColumnMenu } from './ColumnMenu';
 import { VehiclePicker } from './VehiclePicker';
 
 /**
@@ -47,6 +51,8 @@ export function CatalogScreen({ role }: { role: string }) {
     reserved: true,
     missing: false,
     warehouses: [],
+    columns: {},
+    words: {},
     sort: 'code',
     desc: true,
     page: 0,
@@ -71,6 +77,11 @@ export function CatalogScreen({ role }: { role: string }) {
   const [selecting, setSelecting] = useState(false);
   const [chosen, setChosen] = useState<number[]>([]);
   const [editing, setEditing] = useState(false);
+  // Какая колонка сейчас набирается и какая показывает меню: открытых
+  // больше одной быть не может — они перекрывают друг друга.
+  const [typing, setTyping] = useState<string | null>(null);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [menuAt, setMenuAt] = useState<{ left: number; top: number } | null>(null);
 
   function showPhotos(id: number, target: HTMLElement) {
     if (hovered === id) {
@@ -109,12 +120,6 @@ export function CatalogScreen({ role }: { role: string }) {
       : [...visible, key];
     setVisible(next);
     saveVisible(next);
-  }
-
-  function sortBy(sort: string) {
-    // Второй клик по той же колонке переворачивает порядок — так это
-    // работает везде, и объяснять не нужно.
-    change(query.sort === sort ? { desc: !query.desc } : { sort, desc: false });
   }
 
   // Постоянные колонки не зависят от сохранённого выбора: настройка могла
@@ -230,6 +235,33 @@ export function CatalogScreen({ role }: { role: string }) {
         </div>
       )}
 
+      {menuFor !== null && menuAt !== null && (
+        <ColumnMenu
+          column={menuFor}
+          at={menuAt}
+          chosen={query.columns[menuFor]}
+          sortable={COLUMNS.find((c) => c.key === menuFor)?.sort}
+          sort={query.sort}
+          desc={query.desc}
+          onSort={(desc) => {
+            const column = COLUMNS.find((c) => c.key === menuFor);
+            if (column?.sort !== undefined) change({ sort: column.sort, desc, page: 0 });
+            setMenuFor(null);
+          }}
+          onPick={(value) => {
+            const chosenColumns = { ...query.columns };
+            if (value === null) delete chosenColumns[menuFor];
+            else chosenColumns[menuFor] = value;
+            change({ columns: chosenColumns, page: 0 });
+            setMenuFor(null);
+          }}
+          values={columnValues}
+          empty={FILTER_EMPTY}
+          present={FILTER_PRESENT}
+          onClose={() => setMenuFor(null)}
+        />
+      )}
+
       {card !== null && (
         <PartCard
           row={card}
@@ -326,14 +358,60 @@ export function CatalogScreen({ role }: { role: string }) {
                 {columns.map((column) => (
                   <th
                     key={column.key}
-                    className={column.numeric ? 'num' : undefined}
-                    onClick={() => column.sort !== undefined && sortBy(column.sort)}
-                    style={column.sort === undefined ? undefined : { cursor: 'pointer' }}
+                    className={
+                      [column.numeric ? 'num' : '',
+                       query.columns[column.key] !== undefined
+                         || query.words[column.key] !== undefined ? 'th--filtered' : '']
+                        .filter((c) => c !== '').join(' ') || undefined
+                    }
                   >
-                    {column.title}
-                    {/* Стрелка только там, где сортировка есть: на колонке
-                        без неё она обманывала бы. */}
-                    {column.sort === query.sort && (query.desc ? ' ↓' : ' ↑')}
+                    {/* Нажатие на название даёт поле ввода, список значений
+                        и сортировка — на стрелке. Так в кабинете, и так
+                        быстрее: набрать три буквы легче, чем искать значение
+                        глазами в списке из сотни. */}
+                    {typing === column.key ? (
+                      <input
+                        autoFocus
+                        className="th__input"
+                        defaultValue={query.words[column.key] ?? ''}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') setTyping(null);
+                          if (e.key !== 'Enter') return;
+                          const words = { ...query.words };
+                          const typed = e.currentTarget.value.trim();
+                          if (typed === '') delete words[column.key];
+                          else words[column.key] = typed;
+                          change({ words, page: 0 });
+                          setTyping(null);
+                        }}
+                        onBlur={() => setTyping(null)}
+                      />
+                    ) : (
+                      <span
+                        className="th__title"
+                        onClick={() => setTyping(column.key)}
+                        style={{ cursor: 'text' }}
+                      >
+                        {column.title}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      className="th__menu"
+                      onClick={(e) => {
+                        const box = e.currentTarget.getBoundingClientRect();
+                        setMenuAt({ left: box.left, top: box.bottom });
+                        setMenuFor(menuFor === column.key ? null : column.key);
+                      }}
+                    >
+                      {column.sort === query.sort ? (query.desc ? '↓' : '↑') : '▾'}
+                    </button>
+                    {query.columns[column.key] !== undefined && (
+                      <div className="th__value">«{query.columns[column.key]}»</div>
+                    )}
+                    {query.words[column.key] !== undefined && (
+                      <div className="th__value">~{query.words[column.key]}</div>
+                    )}
                   </th>
                 ))}
                 {warehouses.map((warehouse) => (

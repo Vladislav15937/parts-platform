@@ -162,6 +162,10 @@ export interface CatalogQuery {
   reserved: boolean;
   missing: boolean;
   warehouses: number[];
+  /** Выбранное из списка значений колонки: ищется точным равенством. */
+  columns: Record<string, string>;
+  /** Вбитое в колонку руками: ищется вхождением. */
+  words: Record<string, string>;
   sort: string;
   desc: boolean;
   page: number;
@@ -198,6 +202,14 @@ function paramsOf(query: CatalogQuery): URLSearchParams {
   }
   for (const id of query.warehouses) {
     params.append('warehouses', String(id));
+  }
+  // Пустое по умолчанию: состояние, оставшееся от прежней версии кода,
+  // не должно ронять экран целиком — выкат случается, пока вкладка открыта.
+  for (const [column, value] of Object.entries(query.columns ?? {})) {
+    params.append('filter', `${column}:${value}`);
+  }
+  for (const [column, value] of Object.entries(query.words ?? {})) {
+    if (value.trim() !== '') params.append('find', `${column}:${value.trim()}`);
   }
   if (query.vehicle.brandId !== null) {
     params.set('brandId', String(query.vehicle.brandId));
@@ -532,3 +544,15 @@ export const BULK_FIELDS: Array<{ key: string; title: string; kind: 'money' | 't
   { key: 'textBlock', title: 'Текстовый блок', kind: 'text' },
   { key: 'published', title: 'Выгружать', kind: 'flag' },
 ];
+
+
+/** Незаполненное поле и «заполнено хоть чем-то» — тоже ответы на вопрос. */
+export const FILTER_EMPTY = '\u2014пусто\u2014';
+export const FILTER_PRESENT = '\u2014не пусто\u2014';
+
+/** Значения колонки — по нажатию на стрелку, а не вместе со страницей. */
+export function columnValues(column: string): Promise<string[]> {
+  return request<string[]>(`/api/parts/catalog/values?column=${encodeURIComponent(column)}`);
+}
+
+

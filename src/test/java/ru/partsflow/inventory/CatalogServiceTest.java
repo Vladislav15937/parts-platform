@@ -12,9 +12,11 @@ import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Витрина склада: таблица товаров для владельца.
@@ -110,7 +112,7 @@ class CatalogServiceTest extends PostgresTestBase {
         long before = inTenant(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM part", Long.class));
 
-        var page = inTenant(() -> catalog.list(null, true, false, List.of(), null,
+        var page = inTenant(() -> catalog.list(null, true, false, List.of(), null, Map.of(), Map.of(),
                 "id; DROP TABLE part", false, 0, 50));
 
         // Запрос отработал, таблица на месте: неизвестное имя стало
@@ -127,7 +129,7 @@ class CatalogServiceTest extends PostgresTestBase {
 
         List<List<String>> rows = new java.util.ArrayList<>();
         inTenant(() -> {
-            catalog.export(null, true, false, List.of(), null, "code", true,
+            catalog.export(null, true, false, List.of(), null, Map.of(), Map.of(), "code", true,
                     catalog.warehouses(), rows::add);
             return null;
         });
@@ -201,7 +203,8 @@ class CatalogServiceTest extends PostgresTestBase {
     }
 
     private CatalogService.Page catalog(boolean reserved, boolean missing) {
-        return inTenant(() -> catalog.list(null, reserved, missing, List.of(), null, "code", true, 0, 50));
+        return inTenant(() -> catalog.list(null, reserved, missing, List.of(), null, Map.of(), Map.of(),
+                "code", true, 0, 50));
     }
 
     @Test
@@ -272,7 +275,8 @@ class CatalogServiceTest extends PostgresTestBase {
 
     private CatalogService.Page byVehicle(Long brandId, Long modelId, String body, String engine) {
         return inTenant(() -> catalog.list(null, true, false, List.of(),
-                new CatalogService.Vehicle(brandId, modelId, body, engine), "code", true, 0, 50));
+                new CatalogService.Vehicle(brandId, modelId, body, engine),
+                Map.of(), Map.of(), "code", true, 0, 50));
     }
 
     private Long model(String name) {
@@ -296,6 +300,110 @@ class CatalogServiceTest extends PostgresTestBase {
 
     private List<String> titles(CatalogService.Page page) {
         return page.rows().stream().map(CatalogService.Row::title).toList();
+    }
+
+    /**
+     * Отбор колонками на витрине склада — то же, что на вкладке колёс:
+     * выбранное из списка ищется точно, вбитое руками — вхождением.
+     */
+    @Test
+    @DisplayName("Колонка отбирается по значению, показанному на экране")
+    void columnFilterMatchesShownValue() {
+        Long id = part("Фара отбираемая", 1);
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET section = 'Б-15', manufacturer = 'Koito' WHERE id = ?", id));
+
+        assertThat(codes(inTenant(() -> catalog.list(null, true, false, List.of(), null,
+                Map.of("section", "Б-15"), Map.of(), "code", true, 0, 200))))
+                .contains(codeOf(id));
+        assertThat(codes(inTenant(() -> catalog.list(null, true, false, List.of(), null,
+                Map.of("section", "Б-16"), Map.of(), "code", true, 0, 200))))
+                .doesNotContain(codeOf(id));
+    }
+
+    @Test
+    @DisplayName("Слово, вбитое в колонку, ищется вхождением")
+    void typedWordIsSearchedByPart() {
+        Long id = part("Фара набираемая", 1);
+        Long other = part("Фара чужого производителя", 1);
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET manufacturer = 'Koito' WHERE id = ?", id));
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET manufacturer = 'Depo' WHERE id = ?", other));
+
+        // Владелец набирает «koi», а не выбирает «Koito» из списка на тысячу
+        // значений — и регистр ему мешать не должен. Второй товар здесь
+        // не для полноты: без него проверка проходит и при отключённом
+        // отборе вовсе.
+        assertThat(codes(inTenant(() -> catalog.list(null, true, false, List.of(), null,
+                Map.of(), Map.of("manufacturer", "koi"), "code", true, 0, 200))))
+                .contains(codeOf(id)).doesNotContain(codeOf(other));
+    }
+
+    @Test
+    @DisplayName("«Пусто» и «не пусто» — тоже отбор")
+    void emptinessIsAFilter() {
+        Long filled = part("Фара с секцией", 1);
+        Long empty = part("Фара без секции", 1);
+        inTenant(() -> jdbc.update("UPDATE part SET section = 'В-2' WHERE id = ?", filled));
+
+        // Вопрос «где не заполнено» задают, разгребая склад после переезда.
+        assertThat(codes(inTenant(() -> catalog.list(null, true, false, List.of(), null,
+                Map.of("section", CatalogService.EMPTY), Map.of(), "code", true, 0, 200))))
+                .contains(codeOf(empty)).doesNotContain(codeOf(filled));
+        assertThat(codes(inTenant(() -> catalog.list(null, true, false, List.of(), null,
+                Map.of("section", CatalogService.PRESENT), Map.of(), "code", true, 0, 200))))
+                .contains(codeOf(filled)).doesNotContain(codeOf(empty));
+    }
+
+    @Test
+    @DisplayName("Неизвестная колонка отвергается, а не подставляется в SQL")
+    void unknownColumnIsRejected() {
+        assertThatThrownBy(() -> inTenant(() -> catalog.list(null, true, false, List.of(), null,
+                Map.of("p.price = 0 OR true", "1"), Map.of(), "code", true, 0, 50)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> inTenant(() -> catalog.values("p.price; DROP TABLE part")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("Список значений колонки берётся со склада и в том же виде")
+    void valuesComeFromTheStock() {
+        Long id = part("Фара со значением", 1);
+        inTenant(() -> jdbc.update("UPDATE part SET section = 'Г-9' WHERE id = ?", id));
+
+        assertThat(inTenant(() -> catalog.values("section"))).contains("Г-9");
+        // Пустых в списке нет: «— пусто —» это отдельный пункт, а пустая
+        // строка среди секций выглядела бы промахом мыши.
+        assertThat(inTenant(() -> catalog.values("section"))).doesNotContain("");
+    }
+
+    @Test
+    @DisplayName("Отбор колонками действует и на выгрузку")
+    void exportUsesTheSameColumns() {
+        Long id = part("Фара выгружаемая по секции", 1);
+        Long other = part("Фара посторонняя", 1);
+        inTenant(() -> jdbc.update("UPDATE part SET section = 'Д-3' WHERE id = ?", id));
+
+        List<List<String>> rows = new java.util.ArrayList<>();
+        inTenant(() -> {
+            catalog.export(null, true, false, List.of(), null,
+                    Map.of("section", "Д-3"), Map.of(), "code", true,
+                    catalog.warehouses(), rows::add);
+            return null;
+        });
+
+        var codes = rows.stream().map(row -> row.get(0)).toList();
+        assertThat(codes).contains(codeOf(id)).doesNotContain(codeOf(other));
+    }
+
+    private String codeOf(Long id) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT public_code FROM part WHERE id = ?", String.class, id));
+    }
+
+    private static List<String> codes(CatalogService.Page page) {
+        return page.rows().stream().map(CatalogService.Row::code).toList();
     }
 
     private Long part(String title, int qty) {

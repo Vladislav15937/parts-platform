@@ -21,6 +21,8 @@ import {
 } from '../inventory/wheels';
 import type { SetRequest, WheelPage, WheelQuery, WheelRow } from '../inventory/wheels';
 import { PartCard } from './PartCard';
+import { ColumnMenu } from './ColumnMenu';
+import { BulkEditForm } from './BulkEditForm';
 
 /**
  * Шины и диски: своя вкладка, как в кабинете Bazon.
@@ -51,6 +53,13 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
   // обрезает контейнер с горизонтальной прокруткой — и от списка остаётся
   // белая полоска. Та же ловушка, что с накладкой снимков на витрине.
   const [pickAt, setPickAt] = useState<{ left: number; top: number } | null>(null);
+  // Правка списком: у колеса те же общие поля, что у запчасти — цена,
+  // секция, заметка, «Выгружать». Свойства колеса списком не правятся:
+  // размер и сверловка у выбранных разные, и одно значение на всех
+  // означало бы склад, в котором лежит не то, что написано.
+  const [selecting, setSelecting] = useState(false);
+  const [chosen, setChosen] = useState<number[]>([]);
+  const [bulk, setBulk] = useState(false);
   // Какая колонка сейчас набирается: поле ввода на месте названия.
   const [typing, setTyping] = useState<string | null>(null);
   // Карточка та же, что у запчасти: цена, списание и перемещение написаны
@@ -163,12 +172,56 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
           Настроить таблицу
         </button>
+        {(role === 'OWNER' || role === 'MANAGER') && (
+          <button
+            type="button"
+            className="button--ghost"
+            onClick={() => {
+              setSelecting(!selecting);
+              setChosen([]);
+              setBulk(false);
+            }}
+          >
+            {selecting ? 'Выйти из правки' : 'Правка списком'}
+          </button>
+        )}
         {/* Ссылкой, а не кнопкой с запросом: файл качает браузер, показывая
             ход, и вкладка при этом жива. */}
         <a className="button--ghost" href={wheelExportUrl(query)} download>
           Скачать таблицу
         </a>
       </div>
+
+      {/* Панель показывается на весь режим правки, а не с первого выбранного:
+          появившись, она сдвигает таблицу вниз, и следующее нажатие попадает
+          в соседнюю строку — снимая только что выбранное. */}
+      {selecting && !bulk && (
+        <div className="filter-row">
+          <span className="note">
+            {chosen.length === 0 ? 'Отметьте позиции' : `Выбрано ${chosen.length}`}
+          </span>
+          <button type="button" disabled={chosen.length === 0} onClick={() => setBulk(true)}>
+            Изменить
+          </button>
+          <button type="button" className="button--ghost" disabled={chosen.length === 0}
+                  onClick={() => setChosen([])}>
+            Снять выделение
+          </button>
+        </div>
+      )}
+
+      {bulk && (
+        <BulkEditForm
+          partIds={chosen}
+          onSaved={(changed) => {
+            setBulk(false);
+            setChosen([]);
+            setNotice(`Изменено позиций: ${changed}`);
+            load();
+          }}
+          onCancel={() => setBulk(false)}
+        />
+      )}
 
       {settings && (
         <fieldset className="choices">
@@ -199,12 +252,23 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
           <table className="report">
             <thead>
               <tr>
+                {selecting && (
+                  <th className="th--check">
+                    <input
+                      type="checkbox"
+                      checked={chosen.length === page.rows.length && page.rows.length > 0}
+                      onChange={(e) => setChosen(
+                        e.target.checked ? page.rows.map((r) => r.wheel.id) : [])}
+                    />
+                  </th>
+                )}
                 {columns.map((column) => (
                   <th
                     key={column.key}
                     className={
                       [column.numeric ? 'num' : '',
-                       filtered(query, column.key) ? 'th--filtered' : '']
+                       query.columns[column.key] !== undefined
+                         || query.words[column.key] !== undefined ? 'th--filtered' : '']
                         .filter((c) => c !== '').join(' ') || undefined
                     }
                   >
@@ -266,8 +330,23 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
             </thead>
             <tbody>
               {page.rows.map((row) => (
-                <tr key={row.wheel.id} className="row--clickable"
-                    onClick={() => setCard(row)}>
+                <tr
+                  key={row.wheel.id}
+                  className={
+                    chosen.includes(row.wheel.id)
+                      ? 'row--clickable is-chosen' : 'row--clickable'
+                  }
+                  onClick={() => (selecting
+                    ? setChosen(chosen.includes(row.wheel.id)
+                        ? chosen.filter((id) => id !== row.wheel.id)
+                        : [...chosen, row.wheel.id])
+                    : setCard(row))}
+                >
+                  {selecting && (
+                    <td className="th--check">
+                      <input type="checkbox" readOnly checked={chosen.includes(row.wheel.id)} />
+                    </td>
+                  )}
                   {columns.map((column) => (
                     <td key={column.key} className={column.numeric ? 'num' : undefined}>
                       {column.image
@@ -298,7 +377,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
       )}
 
       {picking !== null && pickAt !== null && (
-        <ValuePicker
+        <ColumnMenu
           column={picking}
           at={pickAt}
           chosen={query.columns[picking]}
@@ -317,6 +396,9 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
             setQuery({ ...query, columns });
             setPicking(null);
           }}
+          values={wheelValues}
+          empty={FILTER_EMPTY}
+          present={FILTER_PRESENT}
           onClose={() => setPicking(null)}
         />
       )}
@@ -336,124 +418,6 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         />
       )}
     </section>
-  );
-}
-
-/**
- * Список значений колонки — то, из чего выбирают отбор.
- *
- * <p>Значения тянутся по нажатию, а не вместе со страницей: колонок сорок
- * с лишним, и считать все списки на каждую страницу значит сорок запросов
- * там, где нужен один, и то не всегда.
- *
- * <p>Поиск внутри списка обязателен: моделей шин у живого клиента под сотню,
- * и глазами по ним не пробежать.
- */
-/** Колонка подсвечена, если по ней что-то отобрано — выбором или словом. */
-function filtered(query: WheelQuery, key: string): boolean {
-  return query.columns[key] !== undefined || query.words[key] !== undefined;
-}
-
-function ValuePicker({ column, at, chosen, sortable, sort, desc, onSort, onPick, onClose }: {
-  column: string;
-  at: { left: number; top: number };
-  chosen: string | undefined;
-  /** Имя сортировки, если по колонке сортируют. */
-  sortable: string | undefined;
-  sort: string;
-  desc: boolean;
-  onSort: (desc: boolean) => void;
-  onPick: (value: string | null) => void;
-  onClose: () => void;
-}) {
-  const [values, setValues] = useState<string[] | null>(null);
-  const [typed, setTyped] = useState('');
-
-  useEffect(() => {
-    let alive = true;
-    void wheelValues(column)
-      .then((found) => { if (alive) setValues(found); })
-      .catch(() => { if (alive) setValues([]); });
-    return () => { alive = false; };
-  }, [column]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  const shown = (values ?? []).filter(
-    (value) => value.toLowerCase().includes(typed.trim().toLowerCase()),
-  );
-
-  return (
-    <div className="value-picker" style={{ left: at.left, top: at.top }}>
-      <input
-        autoFocus
-        value={typed}
-        placeholder="поиск"
-        onChange={(e) => setTyped(e.target.value)}
-        onClick={(e) => e.stopPropagation()}
-      />
-      <ul>
-        {/* Сортировка здесь же, а не отдельной кнопкой: и то и другое —
-            «что сделать с этой колонкой», и разводить их по двум местам
-            значит заставлять искать каждое. */}
-        {sortable !== undefined && (
-          <>
-            <li>
-              <button type="button"
-                      className={sortable === sort && !desc ? 'is-chosen' : ''}
-                      onClick={() => onSort(false)}>
-                ↑ по возрастанию
-              </button>
-            </li>
-            <li>
-              <button type="button"
-                      className={sortable === sort && desc ? 'is-chosen' : ''}
-                      onClick={() => onSort(true)}>
-                ↓ по убыванию
-              </button>
-            </li>
-            <li className="value-picker__line" />
-          </>
-        )}
-        <li>
-          <button type="button" className={chosen === undefined ? 'is-chosen' : ''}
-                  onClick={() => onPick(null)}>
-            — все —
-          </button>
-        </li>
-        {values === null ? (
-          <li className="muted">Читаем…</li>
-        ) : (
-          shown.map((value) => (
-            <li key={value}>
-              <button type="button" className={chosen === value ? 'is-chosen' : ''}
-                      onClick={() => onPick(value)}>
-                {value}
-              </button>
-            </li>
-          ))
-        )}
-        {/* «Где не заполнено» — вопрос, который задают, разгребая склад
-            после переезда. Отдельными пунктами, а не значением: пустая
-            строка в списке выглядела бы промахом мыши. */}
-        <li>
-          <button type="button" className={chosen === FILTER_PRESENT ? 'is-chosen' : ''}
-                  onClick={() => onPick(FILTER_PRESENT)}>
-            {FILTER_PRESENT}
-          </button>
-        </li>
-        <li>
-          <button type="button" className={chosen === FILTER_EMPTY ? 'is-chosen' : ''}
-                  onClick={() => onPick(FILTER_EMPTY)}>
-            {FILTER_EMPTY}
-          </button>
-        </li>
-      </ul>
-    </div>
   );
 }
 
