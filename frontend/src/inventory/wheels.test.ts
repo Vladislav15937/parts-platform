@@ -339,3 +339,46 @@ describe('поля карточки колеса', () => {
     expect(titles.length).toBe(new Set(titles).size);
   });
 });
+
+describe('слово, вбитое в колонку', () => {
+  it('уезжает отдельным параметром от выбранного из списка', () => {
+    // Выбранное из списка ищется точно, набранное руками — вхождением:
+    // это разные вопросы, и на сервере они разведены.
+    const params = wheelParams({
+      ...EMPTY_WHEEL_QUERY,
+      columns: { kind: 'Шина' },
+      words: { tyreBrand: 'Nok' },
+    });
+    expect(params.getAll('filter')).toEqual(['kind:Шина']);
+    expect(params.getAll('find')).toEqual(['tyreBrand:Nok']);
+  });
+
+  it('пустое слово не уезжает', () => {
+    // Стёртое поле — это снятый отбор, а не поиск по пустоте.
+    expect(wheelParams({ ...EMPTY_WHEEL_QUERY, words: { tyreBrand: '  ' } })
+      .getAll('find')).toEqual([]);
+  });
+
+  it('считается заданным отбором', () => {
+    // Иначе «Сбросить отбор» не появится, и снять его будет нечем.
+    expect(hasWheelFilters({ ...EMPTY_WHEEL_QUERY, words: { tyreBrand: 'Nok' } })).toBe(true);
+  });
+
+  it('доезжает до выгрузки', () => {
+    const url = wheelExportUrl({ ...EMPTY_WHEEL_QUERY, words: { tyreBrand: 'Nok' } });
+    expect(new URLSearchParams(url.split('?')[1] ?? '').getAll('find'))
+      .toEqual(['tyreBrand:Nok']);
+  });
+});
+
+describe('отбор, оставшийся от прежней версии', () => {
+  it('не роняет экран', () => {
+    // Выкат случается, пока вкладка открыта: состояние в памяти старое,
+    // код новый, и поля, которого раньше не было, в нём нет. Белый экран
+    // вместо таблицы — худшее, чем это может кончиться. Поймано живым
+    // прогоном после горячей перезагрузки.
+    const old = { q: '', kind: '' as const, missing: false, sort: 'set', desc: true };
+    expect(() => wheelParams(old as never)).not.toThrow();
+    expect(() => hasWheelFilters(old as never)).not.toThrow();
+  });
+});

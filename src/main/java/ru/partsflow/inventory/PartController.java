@@ -70,6 +70,33 @@ public class PartController {
     }
 
     /**
+     * Правка нескольких карточек разом.
+     *
+     * <p>Меняется только то, что владелец тронул: у выбранных позиций заметки
+     * разные, и «пустое значит очистить» стёрло бы их все одним нажатием.
+     * Поэтому карта «поле → значение», а не запись со всеми полями, как
+     * в правке одной карточки.
+     *
+     * <p>Роль та же, что у правки одной: здесь цена и себестоимость.
+     */
+    @PostMapping("/bulk")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public BulkResult updateAll(@Valid @RequestBody BulkRequest request) {
+        return new BulkResult(partService.updateAll(
+                request.partIds(), request.changes(), CurrentUser.memberId()));
+    }
+
+    /**
+     * @param changes только тронутые поля: непереданное не меняется
+     */
+    public record BulkRequest(@NotEmpty List<Long> partIds,
+                              @NotEmpty java.util.Map<String, Object> changes) {
+    }
+
+    public record BulkResult(int changed) {
+    }
+
+    /**
      * Карточка для правки: все поля формы, включая те, которых нет на витрине.
      *
      * <p><b>Форма не собирается из витринной строки.</b> Себестоимости

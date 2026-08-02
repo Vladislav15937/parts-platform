@@ -1557,14 +1557,29 @@ hr {
   position: relative;
 }
 
-.th__sort {
+.th__menu {
   margin-left: 4px;
-  padding: 0;
+  padding: 0 2px;
   border: 0;
   background: none;
   color: var(--muted);
   font-size: 0.75rem;
   cursor: pointer;
+}
+
+/* Поле на месте названия: ширина колонки и есть его ширина, иначе
+   набранное расталкивает таблицу. */
+.th__input {
+  width: 100%;
+  min-width: 4rem;
+  padding: 1px 4px;
+  font-size: 0.8125rem;
+}
+
+.value-picker__line {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--line);
 }
 
 /* Значение фильтра под названием колонки: без него непонятно, почему
@@ -1628,4 +1643,22 @@ hr {
 .value-picker li button.is-chosen {
   background: var(--surface-soft);
   font-weight: 600;
+}
+
+/* Правка списком: узкая колонка флажков и подсветка выбранной строки. */
+.th--check {
+  width: 2rem;
+  text-align: center;
+}
+
+.report tr.is-chosen td {
+  background: #fff8e1;
+}
+
+/* Поле правки под своим флажком: без отступа оно читается как подпись
+   к соседнему полю. */
+.bulk-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }

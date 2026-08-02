@@ -18,9 +18,12 @@ import ru.partsflow.support.PostgresTestBase;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -57,6 +60,9 @@ class PartUpdateTest extends PostgresTestBase {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private PartService parts;
 
     private Long partId;
     private Long ownerId;
@@ -215,6 +221,155 @@ class PartUpdateTest extends PostgresTestBase {
         assertThat(card.get("package_height_mm")).isEqualTo(50);
         assertThat(card.get("text_block")).isEqualTo("Проверена на стенде");
         assertThat(card.get("is_published")).isEqualTo(false);
+    }
+
+    /**
+     * Правка списком меняет только то, что владелец тронул.
+     *
+     * <p>Это главное отличие от правки одной карточки: там форма уезжает
+     * целиком и пустое поле означает «очищено», а здесь у выбранных позиций
+     * заметки разные, и «пустое значит очистить» стёрло бы их все одним
+     * нажатием.
+     */
+    @Test
+    @DisplayName("Правка списком трогает только переданные поля")
+    void bulkChangesOnlyWhatWasTouched() throws Exception {
+        Long second = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price, note)
+                VALUES (1, 'Бампер', 8000, 'своя заметка') RETURNING id""", Long.class));
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[%d,%d],"changes":{"section":"А-1"}}"""
+                                .formatted(partId, second)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changed").value(2));
+
+        assertThat(sectionOf(partId)).isEqualTo("А-1");
+        assertThat(sectionOf(second)).isEqualTo("А-1");
+        // Заметки у позиций разные, и правка секции их не касается.
+        assertThat(note()).isEqualTo("скол на креплении");
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT note FROM part WHERE id = ?", String.class, second)))
+                .isEqualTo("своя заметка");
+        assertThat(updatedBy()).isEqualTo(ownerId);
+    }
+
+    @Test
+    @DisplayName("Цена списком меняется и отмечается автором")
+    void bulkPriceIsAttributed() throws Exception {
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[%d],"changes":{"price":3900,"published":false}}"""
+                                .formatted(partId)))
+                .andExpect(status().isOk());
+
+        assertThat(price()).isEqualByComparingTo("3900");
+        assertThat(priceChangedBy()).isEqualTo(ownerId);
+        assertThat(publishedOf(partId)).isFalse();
+        assertThat(priceEvents(partId))
+                .as("площадке нужна дельта, а не отметка о том, что открыли форму")
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Та же цена списком не выдаёт себя за смену цены")
+    void bulkSamePriceIsNotAChange() throws Exception {
+        MockHttpSession session = login("vladelec");
+
+        // Правка секции у сотни позиций не должна засыпать площадку сотней
+        // дельт: цена у них не менялась.
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[%d],"changes":{"price":4500,"section":"Б-2"}}"""
+                                .formatted(partId)))
+                .andExpect(status().isOk());
+
+        assertThat(sectionOf(partId)).isEqualTo("Б-2");
+        assertThat(priceChangedAt()).isNull();
+        assertThat(priceEvents(partId)).isZero();
+    }
+
+    @Test
+    @DisplayName("Список без позиций отвергается и сервисом, а не только формой")
+    void serviceRefusesEmptySelection() {
+        // Сервис зовут не только из контроллера, и проверка «есть что править»
+        // должна стоять там, где операция.
+        assertThatThrownBy(() -> inTenant(() ->
+                parts.updateAll(List.of(), Map.of("price", 1), ownerId)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> inTenant(() ->
+                parts.updateAll(List.of(partId), Map.of(), ownerId)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private int priceEvents(Long part) {
+        return inTenant(() -> jdbc.queryForObject("""
+                SELECT count(*) FROM outbox
+                 WHERE aggregate_id = ? AND event_type = 'part.price_changed.v1'""",
+                Integer.class, part));
+    }
+
+    @Test
+    @DisplayName("Поле, которого нет в списке разрешённых, не правится")
+    void bulkRefusesUnknownField() throws Exception {
+        MockHttpSession session = login("vladelec");
+
+        // Заголовок собирается справочником, остаток ведёт журнал, ячейку
+        // правят перемещением: разрешить их списком значило бы дать испортить
+        // сотню позиций одним нажатием.
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[%d],"changes":{"title":"Чужой заголовок"}}"""
+                                .formatted(partId)))
+                .andExpect(status().isBadRequest());
+
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT title FROM part WHERE id = ?", String.class, partId)))
+                .startsWith("Фара");
+    }
+
+    @Test
+    @DisplayName("Продавец списком не правит")
+    void sellerCannotEditInBulk() throws Exception {
+        MockHttpSession session = login("prodavec");
+
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[%d],"changes":{"price":1}}""".formatted(partId)))
+                .andExpect(status().isForbidden());
+
+        assertThat(price()).isEqualByComparingTo("4500");
+    }
+
+    @Test
+    @DisplayName("Пустой список позиций отвергается")
+    void bulkNeedsPositions() throws Exception {
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[],"changes":{"price":1}}"""))
+                .andExpect(status().isBadRequest());
+    }
+
+    private String sectionOf(Long part) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT section FROM part WHERE id = ?", String.class, part));
+    }
+
+    private Boolean publishedOf(Long part) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT is_published FROM part WHERE id = ?", Boolean.class, part));
     }
 
     private BigDecimal price() {

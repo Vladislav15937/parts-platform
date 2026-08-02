@@ -496,3 +496,39 @@ export function savePart(partId: number, edit: PartEdit): Promise<{ price: numbe
     body: edit as unknown as Record<string, unknown>,
   });
 }
+
+/**
+ * Правка нескольких позиций разом.
+ *
+ * <p>Меняется только то, что владелец тронул: у выбранных позиций заметки
+ * разные, и «пустое значит очистить» стёрло бы их все одним нажатием.
+ * Поэтому карта «поле → значение», а не форма целиком, как у одной карточки.
+ *
+ * <p>Зачем: после переезда надо проставить секцию сотне позиций или снять
+ * «Выгружать» у битых — по одной это день работы, и потому её не делают.
+ */
+export function savePartsBulk(
+  partIds: number[],
+  changes: Record<string, string | number | boolean | null>,
+): Promise<{ changed: number }> {
+  return request<{ changed: number }>('/api/parts/bulk', {
+    method: 'POST',
+    body: { partIds, changes },
+  });
+}
+
+/** Поля, которые правятся списком. Заголовок, остаток и ячейка сюда не идут. */
+export const BULK_FIELDS: Array<{ key: string; title: string; kind: 'money' | 'text' | 'flag' }> = [
+  { key: 'price', title: 'Цена', kind: 'money' },
+  { key: 'minPrice', title: 'Минимальная цена', kind: 'money' },
+  { key: 'costPrice', title: 'Себестоимость', kind: 'money' },
+  { key: 'installationPrice', title: 'Цена установки', kind: 'money' },
+  { key: 'section', title: 'Секция', kind: 'text' },
+  { key: 'manufacturer', title: 'Производитель', kind: 'text' },
+  { key: 'marking', title: 'Маркировка', kind: 'text' },
+  { key: 'color', title: 'Цвет', kind: 'text' },
+  { key: 'description', title: 'Комментарий', kind: 'text' },
+  { key: 'note', title: 'Заметка', kind: 'text' },
+  { key: 'textBlock', title: 'Текстовый блок', kind: 'text' },
+  { key: 'published', title: 'Выгружать', kind: 'flag' },
+];

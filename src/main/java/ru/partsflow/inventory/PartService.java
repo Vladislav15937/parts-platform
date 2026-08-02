@@ -261,6 +261,122 @@ public class PartService {
     }
 
     /**
+     * Правка нескольких карточек разом.
+     *
+     * <p><b>Меняется только то, что владелец тронул.</b> Это главное отличие
+     * от правки одной карточки: там форма уезжает целиком и пустое поле
+     * означает «очищено», а здесь у выбранных позиций заметки разные,
+     * и «пустое значит очистить» стёрло бы их все одним нажатием.
+     * Отсюда карта «поле → значение» вместо записи со всеми полями:
+     * непереданное поле не трогается вовсе.
+     *
+     * <p><b>Зачем.</b> После переезда со старой системы владельцу надо
+     * проставить секцию сотне позиций или снять «Выгружать» у битых — руками
+     * по одной это день работы, и потому её не делают вовсе.
+     *
+     * <p>Событие о смене цены уходит по каждой позиции, у которой цена
+     * действительно стала другой: площадке нужна дельта, а не отметка
+     * о том, что кто-то открыл форму.
+     *
+     * @return сколько карточек изменилось
+     */
+    @Transactional
+    public int updateAll(List<Long> partIds, Map<String, Object> changes, Long authorId) {
+        if (partIds == null || partIds.isEmpty()) {
+            throw new IllegalArgumentException("Не выбрано ни одной позиции");
+        }
+        if (changes == null || changes.isEmpty()) {
+            throw new IllegalArgumentException("Не задано ни одного изменения");
+        }
+        for (String field : changes.keySet()) {
+            if (!BULK_FIELDS.contains(field)) {
+                throw new IllegalArgumentException("Это поле нельзя править списком: " + field);
+            }
+        }
+
+        int changed = 0;
+        for (Long partId : partIds) {
+            Part part = partRepository.findById(partId).orElse(null);
+            if (part == null) {
+                continue;
+            }
+            boolean priceChanged = false;
+            for (var change : changes.entrySet()) {
+                priceChanged |= apply(part, change.getKey(), change.getValue(), authorId);
+            }
+            part.touchedBy(authorId);
+            changed++;
+
+            if (priceChanged) {
+                eventPublisher.publish(DomainEvent.of(
+                        "part", part.getId(), "part.price_changed.v1", payloadOf(part)));
+            }
+        }
+        log.info("Правка списком: позиций {}, полей {}", changed, changes.size());
+        return changed;
+    }
+
+    /** @return правда, если это была смена цены на другую */
+    private boolean apply(Part part, String field, Object value, Long authorId) {
+        switch (field) {
+            case "price" -> {
+                BigDecimal price = decimal(value);
+                boolean other = price != null
+                        && (part.getPrice() == null || part.getPrice().compareTo(price) != 0);
+                if (other) {
+                    part.changePrice(price, authorId);
+                }
+                return other;
+            }
+            case "minPrice" -> part.setMinPrice(decimal(value));
+            case "costPrice" -> part.setCostPrice(decimal(value));
+            case "installationPrice" -> part.setInstallationPrice(decimal(value));
+            case "qualityGrade" -> part.setQualityGrade(
+                    value == null ? null : QualityGrade.valueOf(String.valueOf(value)));
+            case "description" -> part.setDescription(text(value));
+            case "note" -> part.setNote(text(value));
+            case "textBlock" -> part.setTextBlock(text(value));
+            case "marking" -> part.setMarking(text(value));
+            case "manufacturer" -> part.setManufacturer(text(value));
+            case "color" -> part.setColor(text(value));
+            case "section" -> part.setSection(text(value));
+            // Незнакомое поле сюда не доходит: его отбивает BULK_FIELDS
+            // до начала работы. Второй проверки нет намеренно — разойдясь,
+            // они дали бы поле, которое одна пускает, а другая нет.
+            default -> part.setPublished(Boolean.parseBoolean(String.valueOf(value)));
+        }
+        return false;
+    }
+
+    /**
+     * Поля, которые правятся списком.
+     *
+     * <p>Белый список, а не «всё, что есть у карточки»: заголовок собирается
+     * справочником, остаток ведёт журнал, а ячейку правят перемещением.
+     * Разрешить их здесь значило бы дать испортить сотню позиций одним
+     * нажатием — и без возможности откатить.
+     */
+    private static final java.util.Set<String> BULK_FIELDS = java.util.Set.of(
+            "price", "minPrice", "costPrice", "installationPrice", "qualityGrade",
+            "description", "note", "textBlock", "marking", "manufacturer", "color",
+            "section", "published");
+
+    private static BigDecimal decimal(Object value) {
+        if (value == null || String.valueOf(value).isBlank()) {
+            return null;
+        }
+        return new BigDecimal(String.valueOf(value));
+    }
+
+    private static String text(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = String.valueOf(value).strip();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
      * Поля карточки, которые правит человек.
      *
      * <p>Отдельной записью, а не набором аргументов: их два десятка, и порядок
