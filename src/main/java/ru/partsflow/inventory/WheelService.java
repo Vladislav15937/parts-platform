@@ -205,10 +205,44 @@ public class WheelService {
         List<Object> args = new java.util.ArrayList<>();
 
         if (query != null && !query.isBlank()) {
-            where.append(" AND (p.public_code ILIKE ? OR p.title ILIKE ?)");
-            String like = "%" + query.strip() + "%";
-            args.add(like);
-            args.add(like);
+            // Размер разбирается из запроса и ищется по полям, а не по тексту
+            // заголовка: покупатель называет «225 55 18», а в заголовке стоит
+            // «225/55 R18», и по буквам это не совпадает. Нераспознанное
+            // остаётся текстом — «Dunlop зимняя» так и ищется словами.
+            WheelSizeQuery size = WheelSizeQuery.parse(query);
+
+            if (size.tyreWidth() != null) {
+                where.append(" AND w.tyre_width = ?");
+                args.add(size.tyreWidth());
+            }
+            if (size.tyreHeight() != null) {
+                where.append(" AND w.tyre_height = ?");
+                args.add(size.tyreHeight());
+            }
+            if (size.diameter() != null) {
+                where.append(" AND w.diameter = ?");
+                args.add(size.diameter());
+            }
+            if (size.discWidth() != null) {
+                where.append(" AND w.disc_width = ?");
+                args.add(size.discWidth());
+            }
+            if (size.boltPattern() != null) {
+                // Приведение раскладки уже сделано разбором, поэтому
+                // сравниваем без учёта регистра, но точно.
+                where.append(" AND w.bolt_pattern ILIKE ?");
+                args.add(size.boltPattern());
+            }
+            if (size.offsetMm() != null) {
+                where.append(" AND w.offset_mm = ?");
+                args.add(size.offsetMm());
+            }
+            if (size.text() != null) {
+                where.append(" AND (p.public_code ILIKE ? OR p.title ILIKE ?)");
+                String like = "%" + size.text() + "%";
+                args.add(like);
+                args.add(like);
+            }
         }
         if (kind != null && !kind.isBlank()) {
             // Значение из белого списка: в колонке стоит CHECK, но отдавать

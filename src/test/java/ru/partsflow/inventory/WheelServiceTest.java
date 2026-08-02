@@ -447,6 +447,78 @@ class WheelServiceTest extends PostgresTestBase {
                 new BigDecimal("10000"), null, null);
     }
 
+    /**
+     * Поиск по размеру — то, чем колесо ищут на самом деле: покупатель звонит
+     * и называет размер, а не номер товара.
+     */
+    @Test
+    @DisplayName("Шина находится по размеру, как его называют вслух")
+    void tyreIsFoundBySize() {
+        var tyre = inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+        Long id = tyre.partIds().get(0);
+
+        // В заголовке стоит «195/65 R15», а говорят по-разному — и все
+        // написания обязаны находить одну и ту же шину.
+        for (String asked : new String[]{"195/65 R15", "195 65 15", "195/65R15"}) {
+            assertThat(ids(inTenant(() -> wheels.list(asked, null, false, Map.of(),
+                    "set", true, 500)))).as(asked).contains(id);
+        }
+        // А чужой размер её находить не должен.
+        assertThat(ids(inTenant(() -> wheels.list("205/55 R16", null, false, Map.of(),
+                "set", true, 500)))).doesNotContain(id);
+    }
+
+    @Test
+    @DisplayName("Диск находится по сверловке и по своему размеру")
+    void discIsFoundBySize() {
+        var disc = inTenant(() -> wheels.createSet(disc(), 1, warehouseId, null));
+        var other = inTenant(() -> wheels.createSet(disc("5x114.3"), 1, warehouseId, null));
+        Long id = disc.partIds().get(0);
+
+        // «Нужны диски пять на сто» — и в русской раскладке тоже.
+        assertThat(ids(inTenant(() -> wheels.list("5x100", null, false, Map.of(),
+                "set", true, 500)))).contains(id).doesNotContain(other.partIds().get(0));
+        assertThat(ids(inTenant(() -> wheels.list("5х100", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+        // Размер самого диска: «6x15» из объявления и «15x6» с диска.
+        assertThat(ids(inTenant(() -> wheels.list("6x15", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+        assertThat(ids(inTenant(() -> wheels.list("15x6", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+    }
+
+    @Test
+    @DisplayName("Колесо в сборе находится и по резине, и по железу")
+    void assemblyIsFoundByBothSizes() {
+        var assembly = inTenant(() -> wheels.createSet(assembly(), 1, warehouseId, null));
+        Long id = assembly.partIds().get(0);
+
+        assertThat(ids(inTenant(() -> wheels.list("225/55 R18", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+        assertThat(ids(inTenant(() -> wheels.list("5x114.3", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+        // И по тому и другому разом — это уточнение, а не два разных запроса.
+        assertThat(ids(inTenant(() -> wheels.list("225/55 R18 5x114.3", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+    }
+
+    @Test
+    @DisplayName("Слова ищутся словами, а номер — номером")
+    void wordsAndCodesStillWork() {
+        var tyre = inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+        Long id = tyre.partIds().get(0);
+
+        assertThat(ids(inTenant(() -> wheels.list("Goodyear", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+        // Размер и слово вместе: сначала отбор по полям, потом текст.
+        assertThat(ids(inTenant(() -> wheels.list("195/65 R15 Goodyear", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+        assertThat(ids(inTenant(() -> wheels.list("195/65 R15 Nokian", null, false, Map.of(),
+                "set", true, 500)))).doesNotContain(id);
+        assertThat(ids(inTenant(() -> wheels.list(codesOf(List.of(id)).get(0), null, false,
+                Map.of(), "set", true, 500)))).contains(id);
+    }
+
     private static List<Long> ids(List<WheelService.WheelRow> rows) {
         return rows.stream().map(WheelService.WheelRow::id).toList();
     }

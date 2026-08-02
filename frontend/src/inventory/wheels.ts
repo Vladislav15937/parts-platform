@@ -419,9 +419,11 @@ export function rowOfWheel(row: WheelRow): CatalogRow {
     body: null, engine: null, year: null, donorCode: w.donorCode,
     price: w.price, installationPrice: null, color: null,
     description: w.description, note: w.note,
-    // Производитель шины или диска — это и есть производитель товара;
-    // у сборки в карточке они показываются отдельными строками.
-    manufacturer: w.brand ?? w.discBrand, marking: null, section: w.section,
+    // Производителя карточка берёт из свойств колеса (wheelFields), где он
+    // назван по-своему для шины и для диска. Здесь — пусто, иначе в карточке
+    // появляются две строки «Производитель»: React ругается на повторённый
+    // ключ, а человек видит поле дважды.
+    manufacturer: null, marking: null, section: w.section,
     sideLr: null, sideFr: null, qty: Number(w.qty), oem: w.oem, crosses: null,
     photoUrl: row.photoUrl, supply: w.supply, equipment: null,
     partName: w.partName, published: w.published, barcode: w.barcode,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { cardFields } from './partCard';
 import {
   sizeOf,
   WHEEL_COLUMNS,
@@ -147,8 +148,10 @@ describe('карточка колеса', () => {
     // и неоткуда перевозить — блоки смотрят именно на него.
     expect(row.stock).toEqual({ '1': 4 });
     expect(row.photoUrl).toBe('https://s3/фото.jpg');
-    // Производитель шины и есть производитель товара.
-    expect(row.manufacturer).toBe('Goodyear');
+    // А производителя карточка берёт из свойств колеса: там он назван
+    // по-своему для шины и для диска, и второй раз в общих полях он был бы
+    // строкой, показанной дважды.
+    expect(row.manufacturer).toBeNull();
   });
 
   it('показывает свойства шины и молчит про дисковые', () => {
@@ -316,5 +319,23 @@ describe('размер колеса в сборе', () => {
       kind: 'ASSEMBLY', tyreWidth: 225, tyreHeight: 55, diameter: 18, construction: 'R',
       discWidth: 7, boltPattern: '5x114.3', offsetMm: 38,
     }))).toBe('225/55 R18');
+  });
+});
+
+describe('поля карточки колеса', () => {
+  it('не повторяются', () => {
+    // Свойства колеса и общие поля карточки складываются в один список,
+    // и повторённое название — это строка, показанная дважды. Поймано
+    // предупреждением React о повторяющемся ключе, а не глазами.
+    const row = rowOfWheel({
+      wheel: wheel({ kind: 'TYRE', brand: 'Goodyear', model: 'EfficientGrip' }),
+      photoUrl: null,
+    });
+    const titles = [
+      ...wheelFields(wheel({ kind: 'TYRE', brand: 'Goodyear', model: 'EfficientGrip' }))
+        .map(([t]) => t),
+      ...cardFields(row).map(([t]) => t),
+    ];
+    expect(titles.length).toBe(new Set(titles).size);
   });
 });

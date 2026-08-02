@@ -122,7 +122,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         <label className="field">
           <input
             value={typed}
-            placeholder="номер товара или наименование"
+            placeholder="размер, сверловка, марка или номер"
             onChange={(e) => setTyped(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && setQuery({ ...query, q: typed })}
           />
