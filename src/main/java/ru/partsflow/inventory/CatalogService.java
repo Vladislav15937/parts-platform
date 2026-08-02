@@ -77,10 +77,12 @@ public class CatalogService {
      */
     @Transactional(readOnly = true)
     public Page list(String query, boolean withReserved, boolean withMissing,
-                     List<Long> warehouseIds, Vehicle vehicle, String sort, boolean descending,
-                     int page, int size) {
+                     List<Long> warehouseIds, Vehicle vehicle,
+                     Map<String, String> columns, Map<String, String> words,
+                     String sort, boolean descending, int page, int size) {
 
-        Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle);
+        Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
+                columns, words);
         StringBuilder where = filter.where();
         List<Object> args = filter.args();
 
@@ -95,7 +97,7 @@ public class CatalogService {
      */
     private Filter filterOf(String query, boolean withReserved, boolean withMissing,
                             List<Long> warehouseIds) {
-        return filterOf(query, withReserved, withMissing, warehouseIds, null);
+        return filterOf(query, withReserved, withMissing, warehouseIds, null, null, null);
     }
 
     /**
@@ -114,7 +116,8 @@ public class CatalogService {
      * равенство отсекло бы половину подходящего.
      */
     private Filter filterOf(String query, boolean withReserved, boolean withMissing,
-                            List<Long> warehouseIds, Vehicle vehicle) {
+                            List<Long> warehouseIds, Vehicle vehicle,
+                            Map<String, String> columns, Map<String, String> words) {
         StringBuilder where = new StringBuilder(" WHERE p.product_line = 'PART'");
         List<Object> args = new ArrayList<>();
 
@@ -186,8 +189,120 @@ public class CatalogService {
             args.addAll(donorArgs);
             args.addAll(declaredArgs);
         }
+        // Отбор колонками: выбранное из списка ищется точно, вбитое руками —
+        // вхождением. Разные вопросы, и разводить их надо здесь, а не гадать
+        // по виду значения.
+        if (columns != null) {
+            for (var entry : columns.entrySet()) {
+                String expression = columnExpression(entry.getKey());
+                String value = entry.getValue();
+                if (EMPTY.equals(value)) {
+                    where.append(" AND coalesce(").append(expression).append(", '') = ''");
+                } else if (PRESENT.equals(value)) {
+                    where.append(" AND coalesce(").append(expression).append(", '') <> ''");
+                } else {
+                    where.append(" AND ").append(expression).append(" = ?");
+                    args.add(value);
+                }
+            }
+        }
+        if (words != null) {
+            for (var entry : words.entrySet()) {
+                where.append(" AND ").append(columnExpression(entry.getKey())).append(" ILIKE ?");
+                args.add("%" + entry.getValue().strip() + "%");
+            }
+        }
+
         return new Filter(where, args);
     }
+
+    /** Незаполненное поле и «заполнено хоть чем-то» — тоже ответы на вопрос. */
+    public static final String EMPTY = "\u2014пусто\u2014";
+    public static final String PRESENT = "\u2014не пусто\u2014";
+
+    private static String columnExpression(String column) {
+        String expression = FILTERS.get(column);
+        if (expression == null) {
+            throw new IllegalArgumentException("По этой колонке отбор не делается: " + column);
+        }
+        return expression;
+    }
+
+    /**
+     * Различные значения колонки — то, из чего владелец выбирает отбор.
+     *
+     * <p>Считаются по всему складу, а не по текущей выдаче: список, который
+     * сужается от уже поставленных фильтров, не даёт снять один и поставить
+     * другой — выбранного значения в нём уже нет.
+     *
+     * <p>Ограничение в тысячу значений — не косметика: по «Наименованию»
+     * у переехавшего клиента их больше тысячи, и список, в котором надо
+     * прокрутить тысячу строк, бесполезен ровно так же, как пустой. Для таких
+     * колонок есть ввод своего слова.
+     */
+    @Transactional(readOnly = true)
+    public List<String> values(String column) {
+        String expression = columnExpression(column);
+        return jdbc.queryForList("""
+                SELECT DISTINCT %s AS value
+                  FROM part p
+                  LEFT JOIN donor d ON d.id = p.donor_id
+                  LEFT JOIN catalog.brand b ON b.id = d.brand_id
+                  LEFT JOIN catalog.model m ON m.id = d.model_id
+                  LEFT JOIN catalog.generation g ON g.id = d.generation_id
+                  LEFT JOIN supply s ON s.id = d.supply_id
+                  LEFT JOIN part_name pn ON pn.id = p.part_name_id
+                 WHERE p.product_line = 'PART' AND %s IS NOT NULL AND %s <> ''
+                 ORDER BY value
+                 LIMIT 1000""".formatted(expression, expression, expression),
+                String.class);
+    }
+
+    /**
+     * Колонка → выражение, дающее ровно то, что видно на экране.
+     *
+     * <p>Белый список, а не подстановка пришедшего имени: это и защита
+     * от внедрения SQL, и единственный способ не разойтись со списком
+     * значений — разойдись они, выбранное из списка не находило бы ничего.
+     */
+    private static final Map<String, String> FILTERS = Map.ofEntries(
+            Map.entry("code", "p.public_code"),
+            Map.entry("title", "p.title"),
+            Map.entry("partName", "pn.name"),
+            Map.entry("quality", "CASE p.quality_grade"
+                    + " WHEN 'EXCELLENT' THEN 'отличное' WHEN 'GOOD' THEN 'хорошее'"
+                    + " WHEN 'FAIR' THEN 'удовлетворительное' WHEN 'POOR' THEN 'плохое'"
+                    + " ELSE CASE p.condition WHEN 'NEW' THEN 'новая' WHEN 'USED' THEN 'б/у'"
+                    + " WHEN 'REFURBISHED' THEN 'восстановленная' END END"),
+            Map.entry("brand", "b.name"),
+            Map.entry("model", "m.name"),
+            Map.entry("generation", "g.name"),
+            Map.entry("body", "d.body_code"),
+            Map.entry("engine", "d.engine_code"),
+            Map.entry("year", "trim_scale(d.year)::text"),
+            Map.entry("sideFr", "CASE p.side_fr WHEN 'FRONT' THEN 'Перед.'"
+                    + " WHEN 'REAR' THEN 'Задн.' END"),
+            Map.entry("sideLr", "CASE p.side_lr WHEN 'LEFT' THEN 'Лев.'"
+                    + " WHEN 'RIGHT' THEN 'Прав.' END"),
+            Map.entry("donor", "coalesce(d.legacy_code, d.public_code)"),
+            Map.entry("price", "trim_scale(p.price)::text"),
+            Map.entry("installation", "trim_scale(p.installation_price)::text"),
+            Map.entry("color", "p.color"),
+            Map.entry("description", "p.description"),
+            Map.entry("manufacturer", "p.manufacturer"),
+            Map.entry("marking", "p.marking"),
+            Map.entry("note", "p.note"),
+            Map.entry("section", "p.section"),
+            Map.entry("supply", "CASE WHEN s.id IS NULL THEN NULL"
+                    + " ELSE s.kind || ' №' || s.number END"),
+            Map.entry("published", "CASE WHEN p.is_published THEN 'Везде' ELSE 'Нет' END"),
+            Map.entry("barcode", "p.barcode"),
+            Map.entry("legacy", "p.legacy_code"),
+            Map.entry("weight", "trim_scale(p.weight_kg)::text"),
+            Map.entry("updatedBy", "(SELECT tm.display_name FROM tenant_member tm"
+                    + " WHERE tm.id = p.updated_by)"),
+            Map.entry("priceChangedBy", "(SELECT tm.display_name FROM tenant_member tm"
+                    + " WHERE tm.id = p.price_changed_by)"));
 
     private record Filter(StringBuilder where, List<Object> args) {
     }
@@ -521,10 +636,13 @@ public class CatalogService {
      */
     @Transactional(readOnly = true)
     public void export(String query, boolean withReserved, boolean withMissing,
-                       List<Long> warehouseIds, Vehicle vehicle, String sort, boolean descending,
+                       List<Long> warehouseIds, Vehicle vehicle,
+                       Map<String, String> columns, Map<String, String> words,
+                       String sort, boolean descending,
                        List<Warehouse> warehouses, RowWriter writer) {
 
-        Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle);
+        Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
+                columns, words);
         String order = SORTS.getOrDefault(sort, "p.id") + (descending ? " DESC" : " ASC");
 
         StringBuilder stock = new StringBuilder();
