@@ -31,14 +31,48 @@ public class WheelController {
     private static final String INTAKES = "hasAnyRole('OWNER','MANAGER','STOREKEEPER')";
 
     private final WheelService wheels;
+    private final CatalogService catalog;
+    private final PhotoStorage storage;
 
-    public WheelController(WheelService wheels) {
+    public WheelController(WheelService wheels, CatalogService catalog,
+                           PhotoStorage storage) {
         this.wheels = wheels;
+        this.catalog = catalog;
+        this.storage = storage;
     }
 
+    /**
+     * Список колёс со складами страницы.
+     *
+     * <p>Склады едут вместе со списком, а не отдельным запросом: колонок
+     * складов у клиента две, у другого будет пять, и остаток по каждому —
+     * своя колонка. Та же причина, что и на витрине запчастей.
+     */
     @GetMapping
-    public List<WheelService.WheelRow> list(@RequestParam(defaultValue = "200") int limit) {
-        return wheels.list(Math.min(limit, 500));
+    public View list(@RequestParam(defaultValue = "200") int limit) {
+        return new View(catalog.warehouses(),
+                wheels.list(Math.min(limit, 500)).stream().map(this::rowOf).toList());
+    }
+
+    /**
+     * Ссылка на превью подписывается на месте: постоянной ссылки
+     * у фотографий нет намеренно, они короткоживущие.
+     */
+    private Row rowOf(WheelService.WheelRow row) {
+        return new Row(row, row.photoKey() == null ? null : storage.presignView(row.photoKey()));
+    }
+
+    /** @param warehouses колонки складов: у каждого клиента свои */
+    public record View(List<CatalogService.Warehouse> warehouses, List<Row> rows) {
+    }
+
+    /**
+     * Строка витрины колёс: свойства плюс подписанная ссылка на превью.
+     *
+     * <p>Свойства отдаются вложенным объектом, а не расплющенными в строку:
+     * их сорок, и половина относится только к шине или только к диску.
+     */
+    public record Row(WheelService.WheelRow wheel, String photoUrl) {
     }
 
     @PostMapping("/sets")
@@ -53,6 +87,8 @@ public class WheelController {
                         request.discType(), request.discWidth(), request.offsetMm(),
                         request.boltPattern(), request.hubBore(),
                         request.brand(), request.model(),
+                        request.markingType(), request.treadType(), request.runFlat(),
+                        request.lightTruck(), request.speedIndex(), request.loadIndex(),
                         request.price(), request.costPrice(), request.condition()),
                 request.quantity(), request.warehouseId(), CurrentUser.memberId()));
     }
@@ -72,6 +108,9 @@ public class WheelController {
                              String discType, BigDecimal discWidth, Integer offsetMm,
                              String boltPattern, BigDecimal hubBore,
                              String brand, String model,
+                             String markingType, String treadType,
+                             Boolean runFlat, Boolean lightTruck,
+                             String speedIndex, Integer loadIndex,
                              BigDecimal price, BigDecimal costPrice, String condition) {
     }
 }

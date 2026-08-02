@@ -96,6 +96,37 @@ class WheelServiceTest extends PostgresTestBase {
         assertThat(created.title()).isEqualTo("Шина 195/65 R15 Goodyear EfficientGrip летняя");
     }
 
+    /**
+     * Свойства колеса доезжают до витрины вместе с остатком по складам.
+     *
+     * <p>Пока строка витрины несла шесть полей, сорок свойств лежали в базе
+     * и увидеть их было негде — та же порода ошибки, что с витриной
+     * запчастей: данные есть, колонки нет.
+     */
+    @Test
+    @DisplayName("Витрина отдаёт свойства шины и остаток по складам")
+    void listCarriesEveryProperty() {
+        var created = inTenant(() -> wheels.createSet(tyre(), 2, warehouseId, null));
+
+        var row = inTenant(() -> wheels.list(50)).stream()
+                .filter(w -> created.partIds().contains(w.id()))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(row.markingType()).isEqualTo("METRIC");
+        assertThat(row.treadType()).isEqualTo("STANDARD");
+        assertThat(row.speedIndex()).isEqualTo("H");
+        assertThat(row.loadIndex()).isEqualTo(91);
+        assertThat(row.runFlat()).isFalse();
+        assertThat(row.lightTruck()).isFalse();
+        assertThat(row.wearMm()).isEqualByComparingTo("5");
+        assertThat(row.season()).isEqualTo("SUMMER");
+        // Колонки складов не фиксированы: у одного клиента их два,
+        // у другого пять, — поэтому остаток едет картой, а не числом.
+        assertThat(row.stock()).containsEntry(warehouseId, new java.math.BigDecimal("1.000"));
+        assertThat(row.published()).isTrue();
+    }
+
     @Test
     @DisplayName("Одиночное колесо номера комплекта не получает")
     void singleWheelHasNoSetNumber() {
@@ -118,7 +149,9 @@ class WheelServiceTest extends PostgresTestBase {
         var disc = new WheelService.WheelRequest("DISC", new BigDecimal("15"),
                 null, null, null, null, null, null, null,
                 "Литой", new BigDecimal("6.0"), 45, "5x100", new BigDecimal("54.1"),
-                "Toyota", null, new BigDecimal("6750"), null, null);
+                "Toyota", null,
+                null, null, null, null, null, null,
+                new BigDecimal("6750"), null, null);
 
         assertThat(inTenant(() -> wheels.createSet(disc, 4, warehouseId, null)).title())
                 .isEqualTo("Диск Литой 6x15 5x100 ET45 Toyota");
@@ -128,7 +161,9 @@ class WheelServiceTest extends PostgresTestBase {
         return new WheelService.WheelRequest("TYRE", new BigDecimal("15"),
                 195, 65, "R", "Легковая", "SUMMER", new BigDecimal("5"), 2022,
                 null, null, null, null, null,
-                "Goodyear", "EfficientGrip", new BigDecimal("3500"), null, null);
+                "Goodyear", "EfficientGrip",
+                "METRIC", "STANDARD", false, false, "H", 91,
+                new BigDecimal("3500"), null, null);
     }
 
     private <T> T inTenant(Supplier<T> body) {

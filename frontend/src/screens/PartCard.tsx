@@ -32,10 +32,27 @@ import { listCells, type Cell } from '../organization/warehouses';
  */
 /** Дата без времени: в карточке время правки — шум. */
 
-export function PartCard({ row, warehouses, role, onClose, onChanged }: {
+export function PartCard({ row, warehouses, role, extraFields, applicability = true,
+                          onClose, onChanged }: {
   row: CatalogRow;
   warehouses: Warehouse[];
   role: string;
+  /**
+   * Поля, которых нет у запчасти: свойства колеса — размер, сезон, износ,
+   * вылет, сверловка. Карточка одна на оба вида товара, потому что действия
+   * над ними общие: цена, списание, перемещение написаны на складе,
+   * а не на виде товара. Свой экран для колеса разошёлся бы с этим на первой
+   * же правке.
+   */
+  extraFields?: Array<[string, string]>;
+
+  /**
+   * Показывать ли применимость. У колеса её нет и быть не должно: шина
+   * подходит по размеру, а не по модели машины, и вкладка «Применимость»
+   * с вечным «не задана» на карточке шины — это отметка о недоделанной
+   * работе, которой никто никогда не сделает.
+   */
+  applicability?: boolean;
   onClose: () => void;
   /** Склад изменился: списали или перевезли — витрину надо перечитать. */
   onChanged: () => void;
@@ -95,7 +112,7 @@ export function PartCard({ row, warehouses, role, onClose, onChanged }: {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, photos.length]);
 
-  const rows = cardFields(row);
+  const rows = [...(extraFields ?? []), ...cardFields(row)];
 
   const main = photos[shown];
 
@@ -172,13 +189,15 @@ export function PartCard({ row, warehouses, role, onClose, onChanged }: {
               >
                 Описание
               </button>
-              <button
-                type="button"
-                className={tab === 'fits' ? 'card-tab card-tab--active' : 'card-tab'}
-                onClick={() => setTab('fits')}
-              >
-                Применимость
-              </button>
+              {applicability && (
+                <button
+                  type="button"
+                  className={tab === 'fits' ? 'card-tab card-tab--active' : 'card-tab'}
+                  onClick={() => setTab('fits')}
+                >
+                  Применимость
+                </button>
+              )}
             </div>
 
             {tab === 'fits' ? (
@@ -261,19 +280,21 @@ export function PartCard({ row, warehouses, role, onClose, onChanged }: {
                 деталь к машине. Отрицательное состояние важнее положительного:
                 деталь без донора и без применимости не находится подбором,
                 и узнать об этом надо здесь, а не когда покупатель не позвонил. */}
-            <div className="card-marks">
-              <span className={row.donorCode === null ? 'mark mark--off' : 'mark'}>
-                {row.donorCode === null ? 'Донор не задан' : 'Донор задан'}
-              </span>
-              <span className={fits !== null && fits.length > 0 ? 'mark' : 'mark mark--off'}>
-                {fits !== null && fits.length > 0
-                  ? 'Применимость задана'
-                  : 'Применимость не задана'}
-                <button type="button" className="mark__link" onClick={() => setTab('fits')}>
-                  Посмотреть
-                </button>
-              </span>
-            </div>
+            {applicability && (
+              <div className="card-marks">
+                <span className={row.donorCode === null ? 'mark mark--off' : 'mark'}>
+                  {row.donorCode === null ? 'Донор не задан' : 'Донор задан'}
+                </span>
+                <span className={fits !== null && fits.length > 0 ? 'mark' : 'mark mark--off'}>
+                  {fits !== null && fits.length > 0
+                    ? 'Применимость задана'
+                    : 'Применимость не задана'}
+                  <button type="button" className="mark__link" onClick={() => setTab('fits')}>
+                    Посмотреть
+                  </button>
+                </span>
+              </div>
+            )}
 
             {/* Остаток по складам первым: продавец по телефону отвечает
                 «есть, лежит на Ткацкой», а не «сейчас посмотрю». */}
