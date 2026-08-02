@@ -45,6 +45,26 @@ export interface CatalogRow {
   /** Поставка и комплектация показываются в карточке, но не в таблице. */
   supply: string | null;
   equipment: string | null;
+  /**
+   * Паритет с таблицей товаров прежней системы: у неё сорок две колонки,
+   * и владелец переехавшего клиента ищет глазами те же, к которым привык.
+   */
+  partName: string | null;
+  published: boolean | null;
+  barcode: string | null;
+  legacyCode: string | null;
+  videoUrl: string | null;
+  textBlock: string | null;
+  weightKg: number | null;
+  dimensions: string | null;
+  packageDimensions: string | null;
+  packageWeightKg: number | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  updatedByName: string | null;
+  priceChangedAt: string | null;
+  priceChangedByName: string | null;
+  photoCount: number;
   /** Остаток по складам: ключ — идентификатор склада, число колонок = число складов. */
   stock: Record<string, number>;
 }
@@ -233,7 +253,7 @@ export interface Column {
 
 const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.' };
 const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.' };
-const CONDITION: Record<string, string> = {
+export const CONDITION: Record<string, string> = {
   NEW: 'новая',
   USED: 'б/у',
   REFURBISHED: 'восстановленная',
@@ -245,6 +265,11 @@ function text(value: string | number | null): string {
 
 function money(value: number | null): string {
   return value === null ? '' : value.toLocaleString('ru-RU');
+}
+
+/** Дата без времени: в таблице на тридцать пять тысяч строк время — шум. */
+function day(value: string | null): string {
+  return value === null ? '' : new Date(value).toLocaleDateString('ru-RU');
 }
 
 export const COLUMNS: Column[] = [
@@ -279,6 +304,47 @@ export const COLUMNS: Column[] = [
   { key: 'note', title: 'Заметка', value: (r) => text(r.note) },
   { key: 'marking', title: 'Маркировка', value: (r) => text(r.marking) },
   { key: 'section', title: 'Секция', sort: 'section', value: (r) => text(r.section) },
+  // Дальше — то, чего не хватало до паритета с прежней системой. Сверено
+  // с живым каталогом клиента: сорок две колонки против наших двадцати
+  // четырёх.
+  //
+  // «Наименование» и «Запчасть» — разные вещи, и в кабинете это две колонки:
+  // первое собранный заголовок, второе написание вида детали, по которому
+  // разбирают нераспознанные.
+  { key: 'partName', title: 'Наименование', value: (r) => text(r.partName) },
+  { key: 'condition', title: 'Состояние',
+    value: (r) => CONDITION[r.condition ?? ''] ?? '' },
+  { key: 'supply', title: 'Поставка', value: (r) => text(r.supply) },
+  { key: 'equipment', title: 'Комплектация', value: (r) => text(r.equipment) },
+  // «Выгружать» — то, из-за чего у переехавшего клиента прайс уезжал пустым:
+  // в чужой выгрузке колонку не включили, и все позиции приехали
+  // без разрешения на публикацию.
+  { key: 'published', title: 'Выгружать',
+    value: (r) => (r.published === null ? '' : r.published ? 'Везде' : 'Нет') },
+  { key: 'photoCount', title: 'Количество фото', numeric: true,
+    value: (r) => (r.photoCount === 0 ? '' : String(r.photoCount)) },
+  { key: 'textBlock', title: 'Текстовый блок', value: (r) => text(r.textBlock) },
+  { key: 'video', title: 'Видео', value: (r) => text(r.videoUrl) },
+  { key: 'weight', title: 'Вес товара', numeric: true,
+    value: (r) => (r.weightKg === null ? '' : `${r.weightKg} кг`) },
+  // Габариты одной колонкой: по отдельности «длина 120» не отвечает
+  // ни на один вопрос, а вместе отвечают на единственный — влезет ли.
+  { key: 'dimensions', title: 'Габариты товара', value: (r) => text(r.dimensions) },
+  { key: 'packageDimensions', title: 'Габариты товара в упаковке',
+    value: (r) => text(r.packageDimensions) },
+  { key: 'packageWeight', title: 'Вес в упаковке', numeric: true,
+    value: (r) => (r.packageWeightKg === null ? '' : `${r.packageWeightKg} кг`) },
+  { key: 'barcode', title: 'Ст. баркод', value: (r) => text(r.barcode) },
+  // «Старые данные» — номер товара в прежней системе. Переехавший клиент
+  // помнит деталь по нему, а не по нашему коду. Сырые данные переезда
+  // наружу не идут: это внутреннее представление.
+  { key: 'legacy', title: 'Старые данные', value: (r) => text(r.legacyCode) },
+  { key: 'createdAt', title: 'Создан', value: (r) => day(r.createdAt) },
+  { key: 'updatedAt', title: 'Изменён', value: (r) => day(r.updatedAt) },
+  { key: 'updatedBy', title: 'Кто изменил', value: (r) => text(r.updatedByName) },
+  { key: 'priceChangedAt', title: 'Цена изменена в', value: (r) => day(r.priceChangedAt) },
+  { key: 'priceChangedBy', title: 'Кто изменил цену',
+    value: (r) => text(r.priceChangedByName) },
 ];
 
 /**
@@ -368,5 +434,65 @@ export function movePart(
       note,
       items: [{ partId, quantity, toCellId }],
     },
+  });
+}
+
+/**
+ * Поля карточки, которые правит человек.
+ *
+ * <p>Заголовка, стороны и состояния тут нет: заголовок собирается из них
+ * справочником, и правка руками разошлась бы с ним при первом же
+ * пересопоставлении наименований.
+ */
+export interface PartEdit {
+  price: number | null;
+  minPrice: number | null;
+  costPrice: number | null;
+  installationPrice: number | null;
+  qualityGrade: string | null;
+  description: string | null;
+  note: string | null;
+  textBlock: string | null;
+  videoUrl: string | null;
+  marking: string | null;
+  manufacturer: string | null;
+  color: string | null;
+  section: string | null;
+  barcode: string | null;
+  weightKg: number | null;
+  lengthMm: number | null;
+  widthMm: number | null;
+  heightMm: number | null;
+  packageLengthMm: number | null;
+  packageWidthMm: number | null;
+  packageHeightMm: number | null;
+  packageWeightKg: number | null;
+  storageCellId: number | null;
+  published: boolean;
+}
+
+/**
+ * Карточка для правки: все поля формы, включая те, которых нет на витрине.
+ *
+ * <p>Отдельным запросом, а не из уже загруженной строки: себестоимости
+ * и минимальной цены на витрине нет — её читают все вошедшие, включая
+ * продавца. Собери форму из строки — и сохранение стёрло бы закупочную цену,
+ * которая снимком уходит в сделку и в отчёт окупаемости.
+ */
+export function loadEditable(partId: number): Promise<PartEdit> {
+  return request<PartEdit>(`/api/parts/${partId}/editable`);
+}
+
+/**
+ * Сохранение карточки.
+ *
+ * <p>Форма целиком, а не изменённые поля: пустое поле означает «очищено».
+ * Иначе стереть заметку с экрана невозможно — пустое неотличимо
+ * от непереданного.
+ */
+export function savePart(partId: number, edit: PartEdit): Promise<{ price: number | null }> {
+  return request<{ price: number | null }>(`/api/parts/${partId}`, {
+    method: 'PUT',
+    body: edit as unknown as Record<string, unknown>,
   });
 }

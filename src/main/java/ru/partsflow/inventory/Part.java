@@ -164,6 +164,17 @@ public class Part {
     @Column(name = "package_weight_kg")
     private BigDecimal packageWeightKg;
 
+    /** Ссылка на ролик о детали: на видео показывают работу и целость корпуса. */
+    @Column(name = "video_url")
+    private String videoUrl;
+
+    /**
+     * Свободный текст объявления. От заметки и комментария отличается адресатом:
+     * те пишут для себя, этот уезжает покупателю.
+     */
+    @Column(name = "text_block")
+    private String textBlock;
+
     /** Код позиции в прежней системе клиента: нужен на время переезда. */
     @Column(name = "legacy_code")
     private String legacyCode;
@@ -198,6 +209,14 @@ public class Part {
 
     @Column(name = "updated_at", insertable = false, updatable = false)
     private Instant updatedAt;
+
+    /**
+     * Кто правил карточку последним. Время правки ведёт триггер, а имя вести
+     * некому: «изменено вчера» не отвечает на вопрос, к кому идти с вопросом
+     * про цену, уехавшую втрое.
+     */
+    @Column(name = "updated_by")
+    private Long updatedBy;
 
     protected Part() {
     }
@@ -378,6 +397,31 @@ public class Part {
         this.price = newPrice;
         this.priceChangedAt = Instant.now();
         this.priceChangedBy = changedBy;
+    }
+
+    public String getVideoUrl() {
+        return videoUrl;
+    }
+
+    public void setVideoUrl(String videoUrl) {
+        this.videoUrl = videoUrl;
+    }
+
+    public String getTextBlock() {
+        return textBlock;
+    }
+
+    public void setTextBlock(String textBlock) {
+        this.textBlock = textBlock;
+    }
+
+    /** Автор последней правки карточки. Ставится на каждое изменение полей. */
+    public void touchedBy(Long memberId) {
+        this.updatedBy = memberId;
+    }
+
+    public Long getUpdatedBy() {
+        return updatedBy;
     }
 
     public Instant getPriceChangedAt() {

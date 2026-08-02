@@ -670,7 +670,11 @@ public final class BazonImporter {
         ps.setString(12, row.get("Производитель"));
         ps.setString(13, row.get("Цвет"));
         ps.setString(14, row.get("Секция"));
-        setAmount(ps, 15, BazonValueParser.parseAmount(row.get("Установка")));
+        // Ноль в колонке «Установка» — это незаполненное поле прежней системы,
+        // а не бесплатная установка: в её карточке пустое и нулевое выглядят
+        // одинаково, а у нас «Цена установки 0 ₽» — утверждение, которого
+        // никто не делал. У переехавшего клиента таких строк 367 из 381.
+        setAmount(ps, 15, zeroToNull(BazonValueParser.parseAmount(row.get("Установка"))));
         setAmount(ps, 16, BazonValueParser.parseAmount(row.get("Цена")));
         // Номер в прежней системе — естественный ключ импорта: по нему повторный
         // запуск узнаёт уже загруженное.
@@ -807,6 +811,11 @@ public final class BazonImporter {
         } else {
             ps.setInt(i, value);
         }
+    }
+
+    /** Только для необязательных денег: у цены товара ноль — это ноль. */
+    private static BigDecimal zeroToNull(BigDecimal value) {
+        return value == null || value.signum() == 0 ? null : value;
     }
 
     private static void setAmount(PreparedStatement ps, int i, BigDecimal value) throws SQLException {

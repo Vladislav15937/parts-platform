@@ -147,6 +147,59 @@ class CatalogServiceTest extends PostgresTestBase {
         assertThat(String.join(";", rows.get(0))).doesNotContain("REAR").doesNotContain("LEFT");
     }
 
+    /**
+     * Паритет с таблицей товаров прежней системы.
+     *
+     * <p>Сверено с живым каталогом клиента: сорок две его колонки против
+     * наших двадцати четырёх. Половина недостающих полей лежала в базе
+     * и просто не доезжала до витрины — то есть данные были, а увидеть
+     * их было негде.
+     */
+    @Test
+    @DisplayName("Витрина отдаёт поля, которые есть в таблице прежней системы")
+    void showcaseCarriesParityFields() {
+        Long partId = part("Фара с паритетом", 1);
+        inTenant(() -> jdbc.update("""
+                UPDATE part SET weight_kg = 3.5, length_mm = 120, width_mm = 80, height_mm = 45,
+                                barcode = '4600', legacy_code = 'P0001',
+                                video_url = 'https://v/1', text_block = 'без сколов',
+                                is_published = true
+                 WHERE id = ?""", partId));
+
+        var row = catalog(true, true).rows().stream()
+                .filter(r -> r.id().equals(partId))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(row.weightKg()).isEqualByComparingTo("3.5");
+        // Габариты одной строкой: по отдельности «длина 120» не отвечает
+        // ни на один вопрос.
+        assertThat(row.dimensions()).isEqualTo("120×80×45");
+        assertThat(row.barcode()).isEqualTo("4600");
+        assertThat(row.legacyCode()).isEqualTo("P0001");
+        assertThat(row.videoUrl()).isEqualTo("https://v/1");
+        assertThat(row.textBlock()).isEqualTo("без сколов");
+        assertThat(row.published()).isTrue();
+        // Дата создания была в базе с самого начала, а на витрине её не было.
+        assertThat(row.createdAt()).isNotNull();
+    }
+
+    // Скачанный файл обязан совпадать с тем, что владелец видел на экране, —
+    // ради этой сверки он его и качает.
+    @Test
+    @DisplayName("В выгрузку едут те же поля паритета, что и на экран")
+    void exportCarriesParityFields() {
+        part("Фара для файла", 1);
+
+        var header = CatalogService.exportHeader(inTenant(() -> catalog.warehouses()));
+
+        assertThat(header).contains(
+                "Наименование", "Поставка", "Комплектация", "Выгружать",
+                "Количество фото", "Текстовый блок", "Видео", "Вес товара",
+                "Габариты товара", "Ст. баркод", "Старые данные",
+                "Создан", "Изменён", "Кто изменил", "Цена изменена в", "Кто изменил цену");
+    }
+
     private CatalogService.Page catalog(boolean reserved, boolean missing) {
         return inTenant(() -> catalog.list(null, reserved, missing, List.of(), null, "code", true, 0, 50));
     }

@@ -12,6 +12,8 @@ import {
   type PartPhoto,
   type Warehouse,
 } from '../inventory/catalog';
+import { cardFields } from '../inventory/partCard';
+import { PartEditForm } from './PartEditForm';
 import { loadCached, modelsOf, type VehicleCatalog } from '../catalog/vehicles';
 import { listCells, type Cell } from '../organization/warehouses';
 
@@ -28,6 +30,8 @@ import { listCells, type Cell } from '../organization/warehouses';
  * колонок, включая скрытые в таблице. Второй запрос делается только
  * за снимками — их ссылки подписанные и короткоживущие.
  */
+/** Дата без времени: в карточке время правки — шум. */
+
 export function PartCard({ row, warehouses, role, onClose, onChanged }: {
   row: CatalogRow;
   warehouses: Warehouse[];
@@ -56,6 +60,10 @@ export function PartCard({ row, warehouses, role, onClose, onChanged }: {
   const [photos, setPhotos] = useState<PartPhoto[]>([]);
   const [shown, setShown] = useState(0);
   const [tab, setTab] = useState<'about' | 'fits'>('about');
+  // Правит владелец и менеджер: здесь цена, минимальная цена
+  // и себестоимость — продавец, торгующийся с покупателем, не должен уметь
+  // подвинуть себе нижнюю границу.
+  const [editing, setEditing] = useState(false);
   const [fits, setFits] = useState<Applicability[] | null>(null);
   // Справочник машин для добавления: он предзагружен и лежит в IndexedDB,
   // тянуть четыре с половиной тысячи моделей ради одной правки незачем.
@@ -87,35 +95,7 @@ export function PartCard({ row, warehouses, role, onClose, onChanged }: {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, photos.length]);
 
-  // Только там, где что-то лежит: строка «Кузов —» не сообщает ничего,
-  // а таких строк набирается больше, чем заполненных.
-  const rows: Array<[string, string]> = [];
-  const add = (title: string, value: string | number | null) => {
-    if (value !== null && value !== undefined && String(value) !== '') {
-      rows.push([title, String(value)]);
-    }
-  };
-
-  add('Номер товара', row.code);
-  add('Поставка', row.supply);
-  add('Оценка состояния', row.qualityGrade);
-  add('Марка', row.brand);
-  add('Модель', row.model);
-  add('Модель кузова', row.body);
-  add('Модель двигателя', row.engine);
-  add('Год выпуска', row.year);
-  add('Комплектация', row.equipment);
-  add('Поколение', row.generation);
-  add('Номер донора', row.donorCode);
-  add('Передний / Задний', row.sideFr === null ? null : SIDE_FR[row.sideFr] ?? row.sideFr);
-  add('Левый / Правый', row.sideLr === null ? null : SIDE_LR[row.sideLr] ?? row.sideLr);
-  add('Цвет', row.color);
-  add('Секция', row.section);
-  add('Производитель', row.manufacturer);
-  add('Номер производителя', row.oem);
-  add('Кросс-номера', row.crosses);
-  add('Маркировка', row.marking);
-  add('Заметка', row.note);
+  const rows = cardFields(row);
 
   const main = photos[shown];
 
@@ -311,6 +291,24 @@ export function PartCard({ row, warehouses, role, onClose, onChanged }: {
               <span> ₽</span>
             </div>
 
+            {(role === 'OWNER' || role === 'MANAGER') && !editing && (
+              <button
+                type="button"
+                className="button--ghost"
+                onClick={() => setEditing(true)}
+              >
+                Изменить
+              </button>
+            )}
+
+            {editing && (
+              <PartEditForm
+                partId={row.id}
+                onSaved={onChanged}
+                onCancel={() => setEditing(false)}
+              />
+            )}
+
             {/* Списание здесь, а не на отдельном экране: решение принимают,
                 глядя на карточку — что это за деталь, сколько её и где она
                 лежит. Недостача из пересчёта обнуляет остаток, но карточку
@@ -318,7 +316,7 @@ export function PartCard({ row, warehouses, role, onClose, onChanged }: {
             {/* Перевозит и кладовщик: деталь у него в руках, а перестановка
                 между складами — работа, а не расход. Списывает только тот,
                 кто отвечает за деньги. */}
-            {['OWNER', 'MANAGER', 'STOREKEEPER'].includes(role) && (
+            {!editing && ['OWNER', 'MANAGER', 'STOREKEEPER'].includes(role) && (
               moving ? (
                 <div className="card-view__writeoff">
                   <label className="field">
@@ -405,7 +403,7 @@ export function PartCard({ row, warehouses, role, onClose, onChanged }: {
               )
             )}
 
-            {(role === 'OWNER' || role === 'MANAGER') && (
+            {!editing && (role === 'OWNER' || role === 'MANAGER') && (
               writingOff ? (
                 <div className="card-view__writeoff">
                   <label className="field">
@@ -472,18 +470,20 @@ export function PartCard({ row, warehouses, role, onClose, onChanged }: {
               )
             )}
 
-            {row.description !== null && row.description !== '' && (
+            {!editing && row.description !== null && row.description !== '' && (
               <p className="card-view__note">{row.description}</p>
             )}
 
-            <dl className="card-view__fields">
-              {rows.map(([title, value]) => (
-                <div key={title}>
-                  <dt>{title}</dt>
-                  <dd>{value}</dd>
-                </div>
-              ))}
-            </dl>
+            {!editing && (
+              <dl className="card-view__fields">
+                {rows.map(([title, value]) => (
+                  <div key={title}>
+                    <dt>{title}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
             </>
             )}
           </div>
@@ -537,5 +537,3 @@ export function PartCard({ row, warehouses, role, onClose, onChanged }: {
   );
 }
 
-const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.' };
-const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.' };

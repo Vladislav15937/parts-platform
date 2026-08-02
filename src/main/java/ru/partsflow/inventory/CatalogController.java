@@ -77,6 +77,12 @@ public class CatalogController {
                 row.qty(), row.oem(), row.crosses(),
                 row.photoKey() == null ? null : storage.presignView(row.photoKey()),
                 row.supply(), row.equipment(),
+                row.partName(), row.published(), row.barcode(),
+                row.legacyCode(), row.videoUrl(), row.textBlock(),
+                row.weightKg(), row.dimensions(), row.packageDimensions(),
+                row.packageWeightKg(),
+                row.createdAt(), row.updatedAt(), row.updatedByName(),
+                row.priceChangedAt(), row.priceChangedByName(), row.photoCount(),
                 row.stock());
     }
 
@@ -210,6 +216,16 @@ public class CatalogController {
                       String sideLr, String sideFr, java.math.BigDecimal qty,
                       String oem, String crosses, String photoUrl,
                       String supply, String equipment,
+                      // Паритет с таблицей товаров прежней системы: сорок две
+                      // колонки против наших двадцати четырёх.
+                      String partName, Boolean published, String barcode,
+                      String legacyCode, String videoUrl, String textBlock,
+                      java.math.BigDecimal weightKg, String dimensions,
+                      String packageDimensions, java.math.BigDecimal packageWeightKg,
+                      java.time.Instant createdAt, java.time.Instant updatedAt,
+                      String updatedByName,
+                      java.time.Instant priceChangedAt, String priceChangedByName,
+                      int photoCount,
                       Map<Long, java.math.BigDecimal> stock) {
     }
 }

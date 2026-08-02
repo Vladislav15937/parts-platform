@@ -203,6 +203,22 @@ public class ApiExceptionHandler {
     }
 
     /**
+     * Адрес есть, а метод не тот — 405, а не 500.
+     *
+     * <p>Та же причина, что и у 404 выше: очередь приёмки повторяет только
+     * 5xx, и запрос неверным методом переотправлялся бы вечно. Всплыло
+     * появлением {@code PUT /api/parts/{id}}: до него такой путь был
+     * неизвестен вовсе и честно отвечал 404, а с ним POST по тому же адресу
+     * стал «методом не поддержан» — и уехал пятисоткой.
+     */
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiError> methodNotAllowed(
+            org.springframework.web.HttpRequestMethodNotSupportedException e) {
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(new ApiError("Метод не поддержан: " + e.getMethod()));
+    }
+
+    /**
      * Всё остальное — наша поломка.
      *
      * <p>Наружу уходит общая формулировка: текст исключения может содержать

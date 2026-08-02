@@ -15,7 +15,12 @@ function row(overrides: Partial<CatalogRow> = {}): CatalogRow {
     body: null, engine: null, year: null, donorCode: null,
     price: null, installationPrice: null, color: null, description: null, note: null,
     manufacturer: null, marking: null, section: null, sideLr: null, sideFr: null,
-    qty: 1, oem: null, crosses: null, photoUrl: null, supply: null, equipment: null, stock: {},
+    qty: 1, oem: null, crosses: null, photoUrl: null, supply: null, equipment: null,
+    partName: null, published: null, barcode: null, legacyCode: null,
+    videoUrl: null, textBlock: null, weightKg: null, dimensions: null,
+    packageDimensions: null, packageWeightKg: null,
+    createdAt: null, updatedAt: null, updatedByName: null,
+    priceChangedAt: null, priceChangedByName: null, photoCount: 0, stock: {},
     ...overrides,
   };
 }
@@ -58,3 +63,66 @@ describe('колонки витрины', () => {
     expect(loadVisible().length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * Паритет с таблицей товаров прежней системы.
+ *
+ * <p>Сверено с живым каталогом клиента: сорок две его колонки против наших
+ * двадцати четырёх. Владелец переехавшего клиента ищет глазами те же поля,
+ * к которым привык, и отсутствие «Выгружать» или «Поставки» читается
+ * как потеря данных, хотя данные на месте.
+ */
+describe('паритет колонок с прежней системой', () => {
+  const BAZON = [
+    'Номер товара', 'Превью', 'Запчасть', 'Наименование', 'Оценка состояния',
+    'Состояние', 'Марка', 'Модель', 'Поколение донора', 'Рестайлинг донора',
+    'Кузов', 'Двигатель', 'Год выпуска', 'Передний / Задний', 'Левый / Правый',
+    'Номер донора', 'Цена', 'Установка', 'Цвет', 'Комментарий', 'Производитель',
+    'Номер производителя', 'Кросс-номера', 'Заметка', 'Маркировка', 'Секция',
+    'Поставка', 'Комплектация', 'Выгружать', 'Количество фото', 'Текстовый блок',
+    'Видео', 'Вес товара', 'Габариты товара', 'Габариты товара в упаковке',
+    'Ст. баркод', 'Старые данные', 'Создан', 'Изменён', 'Кто изменил',
+    'Цена изменена в', 'Кто изменил цену',
+  ];
+
+  it('показывает всё, что показывает кабинет клиента', () => {
+    const mine = COLUMNS.map((c) => c.title);
+    expect(BAZON.filter((title) => !mine.includes(title))).toEqual([]);
+  });
+
+  // Поле, доехавшее до строки, но не показанное ни одной колонкой, — это
+  // данные, о которых никто не узнает.
+  it('поля паритета доезжают до значений колонок', () => {
+    const full = row({
+      partName: 'фара лев.', published: true, barcode: '4600',
+      legacyCode: 'P0001', videoUrl: 'https://v/1',
+      textBlock: 'без сколов', weightKg: 3.5, dimensions: '120×80×45',
+      packageDimensions: '130×90×50', packageWeightKg: 4,
+      photoCount: 3, updatedByName: 'Сергей', priceChangedByName: 'Марина',
+    });
+
+    expect(value('partName', full)).toBe('фара лев.');
+    expect(value('published', full)).toBe('Везде');
+    expect(value('barcode', full)).toBe('4600');
+    expect(value('legacy', full)).toBe('P0001');
+    expect(value('video', full)).toBe('https://v/1');
+    expect(value('textBlock', full)).toBe('без сколов');
+    expect(value('weight', full)).toBe('3.5 кг');
+    expect(value('dimensions', full)).toBe('120×80×45');
+    expect(value('packageDimensions', full)).toBe('130×90×50');
+    expect(value('photoCount', full)).toBe('3');
+    expect(value('updatedBy', full)).toBe('Сергей');
+    expect(value('priceChangedBy', full)).toBe('Марина');
+  });
+
+  // Незаполненное поле — пусто, а не «null» и не «0 кг»: прочерк в таблице
+  // читается как «не заполнено», а ноль — как измеренный ноль.
+  it('незаполненное не превращается в ноль и в null', () => {
+    const empty = row();
+    expect(value('weight', empty)).toBe('');
+    expect(value('dimensions', empty)).toBe('');
+    expect(value('photoCount', empty)).toBe('');
+    expect(value('published', empty)).toBe('');
+  });
+});
+
