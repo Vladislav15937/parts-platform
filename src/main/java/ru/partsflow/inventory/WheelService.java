@@ -76,16 +76,17 @@ public class WheelService {
                                             tyre_width, tyre_height, construction, tyre_type,
                                             season, wear_mm, made_year,
                                             disc_type, disc_width, offset_mm, bolt_pattern,
-                                            hub_bore, brand, model,
+                                            hub_bore, brand, model, disc_brand, disc_model,
                                             marking_type, tread_type, run_flat, light_truck,
                                             speed_index, load_index)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             ?, ?, ?, ?, ?, ?)""",
                     partId, request.kind(), setNo, request.diameter(),
                     request.tyreWidth(), request.tyreHeight(), request.construction(),
                     request.tyreType(), request.season(), request.wearMm(), request.madeYear(),
                     request.discType(), request.discWidth(), request.offsetMm(),
                     request.boltPattern(), request.hubBore(), request.brand(), request.model(),
+                    request.discBrand(), request.discModel(),
                     request.markingType(), request.treadType(), request.runFlat(),
                     request.lightTruck(), request.speedIndex(), request.loadIndex());
 
@@ -124,7 +125,7 @@ public class WheelService {
                        w.kind, w.set_no, w.diameter, w.tyre_width, w.tyre_height,
                        w.construction, w.tyre_type, w.season, w.wear_mm, w.made_year,
                        w.disc_type, w.disc_width, w.offset_mm, w.bolt_pattern, w.hub_bore,
-                       w.brand, w.model,
+                       w.brand, w.model, w.disc_brand, w.disc_model,
                        w.marking_type, w.tread_type, w.run_flat, w.light_truck,
                        w.speed_index, w.load_index,
                        pn.name AS part_name,
@@ -164,6 +165,7 @@ public class WheelService {
                         (Integer) rs.getObject("offset_mm"), rs.getString("bolt_pattern"),
                         rs.getBigDecimal("hub_bore"),
                         rs.getString("brand"), rs.getString("model"),
+                        rs.getString("disc_brand"), rs.getString("disc_model"),
                         rs.getString("marking_type"), rs.getString("tread_type"),
                         (Boolean) rs.getObject("run_flat"), (Boolean) rs.getObject("light_truck"),
                         rs.getString("speed_index"), (Integer) rs.getObject("load_index"),
@@ -203,15 +205,49 @@ public class WheelService {
         List<Object> args = new java.util.ArrayList<>();
 
         if (query != null && !query.isBlank()) {
-            where.append(" AND (p.public_code ILIKE ? OR p.title ILIKE ?)");
-            String like = "%" + query.strip() + "%";
-            args.add(like);
-            args.add(like);
+            // Размер разбирается из запроса и ищется по полям, а не по тексту
+            // заголовка: покупатель называет «225 55 18», а в заголовке стоит
+            // «225/55 R18», и по буквам это не совпадает. Нераспознанное
+            // остаётся текстом — «Dunlop зимняя» так и ищется словами.
+            WheelSizeQuery size = WheelSizeQuery.parse(query);
+
+            if (size.tyreWidth() != null) {
+                where.append(" AND w.tyre_width = ?");
+                args.add(size.tyreWidth());
+            }
+            if (size.tyreHeight() != null) {
+                where.append(" AND w.tyre_height = ?");
+                args.add(size.tyreHeight());
+            }
+            if (size.diameter() != null) {
+                where.append(" AND w.diameter = ?");
+                args.add(size.diameter());
+            }
+            if (size.discWidth() != null) {
+                where.append(" AND w.disc_width = ?");
+                args.add(size.discWidth());
+            }
+            if (size.boltPattern() != null) {
+                // Приведение раскладки уже сделано разбором, поэтому
+                // сравниваем без учёта регистра, но точно.
+                where.append(" AND w.bolt_pattern ILIKE ?");
+                args.add(size.boltPattern());
+            }
+            if (size.offsetMm() != null) {
+                where.append(" AND w.offset_mm = ?");
+                args.add(size.offsetMm());
+            }
+            if (size.text() != null) {
+                where.append(" AND (p.public_code ILIKE ? OR p.title ILIKE ?)");
+                String like = "%" + size.text() + "%";
+                args.add(like);
+                args.add(like);
+            }
         }
         if (kind != null && !kind.isBlank()) {
             // Значение из белого списка: в колонке стоит CHECK, но отдавать
             // в него что попало из запроса незачем.
-            if (!"TYRE".equals(kind) && !"DISC".equals(kind)) {
+            if (!"TYRE".equals(kind) && !"DISC".equals(kind) && !"ASSEMBLY".equals(kind)) {
                 throw new IllegalArgumentException("Неизвестный вид товара: " + kind);
             }
             where.append(" AND w.kind = ?");
@@ -299,7 +335,8 @@ public class WheelService {
     private static final Map<String, String> FILTERS = Map.ofEntries(
             Map.entry("code", "p.public_code"),
             Map.entry("set", "trim_scale(w.set_no)::text"),
-            Map.entry("kind", "CASE w.kind WHEN 'TYRE' THEN 'Шина' ELSE 'Диск' END"),
+            Map.entry("kind", "CASE w.kind WHEN 'TYRE' THEN 'Шина'"
+                    + " WHEN 'DISC' THEN 'Диск' ELSE 'Колесо' END"),
             Map.entry("diameter", "trim_scale(w.diameter)::text"),
             Map.entry("tyreType", "w.tyre_type"),
             Map.entry("tyreWidth", "trim_scale(w.tyre_width)::text"),
@@ -311,18 +348,21 @@ public class WheelService {
             Map.entry("construction", "w.construction"),
             Map.entry("tyreHeight", "trim_scale(w.tyre_height)::text"),
             Map.entry("wear", "trim_scale(w.wear_mm)::text"),
-            Map.entry("tyreBrand", "CASE WHEN w.kind = 'TYRE' THEN w.brand END"),
-            Map.entry("tyreModel", "CASE WHEN w.kind = 'TYRE' THEN w.model END"),
+            Map.entry("tyreBrand", "w.brand"),
+            Map.entry("tyreModel", "w.model"),
             Map.entry("season", "CASE w.season WHEN 'SUMMER' THEN 'летняя'"
-                    + " WHEN 'WINTER' THEN 'зимняя' WHEN 'ALL_SEASON' THEN 'всесезонная' END"),
+                    + " WHEN 'WINTER' THEN 'зимняя'"
+                    + " WHEN 'WINTER_STUDDED' THEN 'зимняя (шипы)'"
+                    + " WHEN 'WINTER_FRICTION' THEN 'зимняя (липучка)'"
+                    + " WHEN 'ALL_SEASON' THEN 'всесезонная' END"),
             Map.entry("madeYear", "trim_scale(w.made_year)::text"),
             Map.entry("discType", "w.disc_type"),
             Map.entry("discWidth", "trim_scale(w.disc_width)::text"),
             Map.entry("offset", "trim_scale(w.offset_mm)::text"),
             Map.entry("bolt", "w.bolt_pattern"),
             Map.entry("hub", "trim_scale(w.hub_bore)::text"),
-            Map.entry("discBrand", "CASE WHEN w.kind = 'DISC' THEN w.brand END"),
-            Map.entry("discModel", "CASE WHEN w.kind = 'DISC' THEN w.model END"),
+            Map.entry("discBrand", "w.disc_brand"),
+            Map.entry("discModel", "w.disc_model"),
             Map.entry("oem", "(SELECT o.raw_number FROM part_oem o"
                     + " WHERE o.part_id = p.id AND o.is_primary LIMIT 1)"),
             Map.entry("price", "trim_scale(p.price)::text"),
@@ -389,7 +429,8 @@ public class WheelService {
                        w.kind, w.set_no, w.diameter, w.tyre_width, w.tyre_height,
                        w.construction, w.tyre_type, w.season, w.wear_mm, w.made_year,
                        w.disc_type, w.disc_width, w.offset_mm, w.bolt_pattern, w.hub_bore,
-                       w.brand, w.model, w.marking_type, w.tread_type, w.run_flat,
+                       w.brand, w.model, w.disc_brand, w.disc_model,
+                       w.marking_type, w.tread_type, w.run_flat,
                        w.light_truck, w.speed_index, w.load_index,
                        pn.name AS part_name,
                        d.legacy_code AS donor_legacy, d.public_code AS donor_code,
@@ -424,7 +465,7 @@ public class WheelService {
             List<String> cells = new java.util.ArrayList<>(List.of(
                     nullToEmpty(rs.getString("public_code")),
                     nullToEmpty(rs.getString("part_name")),
-                    "TYRE".equals(rs.getString("kind")) ? "Шина" : "Диск",
+                    kindName(rs.getString("kind")),
                     number(rs, "set_no"),
                     number(rs, "diameter"),
                     nullToEmpty(rs.getString("tyre_type")),
@@ -434,8 +475,8 @@ public class WheelService {
                     nullToEmpty(rs.getString("construction")),
                     number(rs, "tyre_height"),
                     number(rs, "wear_mm"),
-                    "TYRE".equals(rs.getString("kind")) ? nullToEmpty(rs.getString("brand")) : "",
-                    "TYRE".equals(rs.getString("kind")) ? nullToEmpty(rs.getString("model")) : "",
+                    nullToEmpty(rs.getString("brand")),
+                    nullToEmpty(rs.getString("model")),
                     SEASONS.getOrDefault(nullToEmpty(rs.getString("season")), ""),
                     number(rs, "made_year"),
                     nullToEmpty(rs.getString("disc_type")),
@@ -443,8 +484,8 @@ public class WheelService {
                     number(rs, "offset_mm"),
                     nullToEmpty(rs.getString("bolt_pattern")),
                     number(rs, "hub_bore"),
-                    "DISC".equals(rs.getString("kind")) ? nullToEmpty(rs.getString("brand")) : "",
-                    "DISC".equals(rs.getString("kind")) ? nullToEmpty(rs.getString("model")) : "",
+                    nullToEmpty(rs.getString("disc_brand")),
+                    nullToEmpty(rs.getString("disc_model")),
                     nullToEmpty(rs.getString("oem")),
                     number(rs, "price"),
                     nullToEmpty(rs.getString("description")),
@@ -506,7 +547,17 @@ public class WheelService {
             "DIRECTIONAL", "Направленный");
 
     private static final Map<String, String> SEASONS = Map.of(
-            "SUMMER", "летняя", "WINTER", "зимняя", "ALL_SEASON", "всесезонная");
+            "SUMMER", "летняя", "WINTER", "зимняя",
+            "WINTER_STUDDED", "зимняя (шипы)", "WINTER_FRICTION", "зимняя (липучка)",
+            "ALL_SEASON", "всесезонная");
+
+    static String kindName(String kind) {
+        return switch (kind) {
+            case "TYRE" -> "Шина";
+            case "DISC" -> "Диск";
+            default -> "Колесо";
+        };
+    }
 
     private static final Map<String, String> CONDITIONS = Map.of(
             "NEW", "новая", "USED", "б/у", "REFURBISHED", "восстановленная");
@@ -558,7 +609,7 @@ public class WheelService {
             Map.entry("season", "w.season"),
             Map.entry("madeYear", "w.made_year"),
             Map.entry("tyreBrand", "w.brand"),
-            Map.entry("discBrand", "w.brand"),
+            Map.entry("discBrand", "w.disc_brand"),
             Map.entry("price", "p.price"),
             Map.entry("section", "p.section"),
             Map.entry("created", "p.created_at"));
@@ -609,11 +660,23 @@ public class WheelService {
      * <p>Собирается, а не пишется руками, по той же причине, что и у запчасти:
      * иначе у одного клиента появятся «195/65R15» и «195 65 15» на соседних
      * строках, и ни поиск, ни выгрузка их не свяжут.
+     *
+     * <p>У колеса в сборе в заголовке оба набора: покупатель ищет его и по
+     * размеру шины, и по сверловке — «225/55 R18 на 5x114.3». Уместить всё
+     * нельзя, поэтому дисковая часть сокращена до того, чем диски
+     * и различают: сверловка, вылет, модель.
      */
     static String titleOf(WheelRequest r) {
-        StringBuilder title = new StringBuilder("TYRE".equals(r.kind()) ? "Шина" : "Диск");
+        boolean tyre = "TYRE".equals(r.kind()) || "ASSEMBLY".equals(r.kind());
+        boolean disc = "DISC".equals(r.kind()) || "ASSEMBLY".equals(r.kind());
 
-        if ("TYRE".equals(r.kind())) {
+        StringBuilder title = new StringBuilder(switch (r.kind()) {
+            case "TYRE" -> "Шина";
+            case "DISC" -> "Диск";
+            default -> "Колесо";
+        });
+
+        if (tyre) {
             if (r.tyreWidth() != null && r.tyreHeight() != null) {
                 title.append(' ').append(r.tyreWidth()).append('/').append(r.tyreHeight());
             }
@@ -621,12 +684,26 @@ public class WheelService {
                 title.append(' ').append(r.construction() == null ? "R" : r.construction())
                         .append(plain(r.diameter()));
             }
-        } else {
+            append(title, r.brand());
+            append(title, r.model());
+            if (r.season() != null) {
+                title.append(' ').append(seasonName(r.season()));
+            }
+        }
+
+        if (disc) {
+            // У сборки — после шины и отдельным словом: «…зимняя, диск Литой
+            // 7x18 5x114.3 ET38 Rays». Без разделителя размер шины
+            // и размер диска сливаются в одну неразбираемую строку.
+            if ("ASSEMBLY".equals(r.kind())) {
+                title.append(", диск");
+            }
             if (r.discType() != null) {
                 title.append(' ').append(r.discType());
             }
             if (r.discWidth() != null && r.diameter() != null) {
-                title.append(' ').append(plain(r.discWidth())).append('x').append(plain(r.diameter()));
+                title.append(' ').append(plain(r.discWidth()))
+                        .append('x').append(plain(r.diameter()));
             }
             if (r.boltPattern() != null) {
                 title.append(' ').append(r.boltPattern());
@@ -634,22 +711,27 @@ public class WheelService {
             if (r.offsetMm() != null) {
                 title.append(" ET").append(r.offsetMm());
             }
-        }
-
-        if (r.brand() != null && !r.brand().isBlank()) {
-            title.append(' ').append(r.brand().strip());
-        }
-        if (r.model() != null && !r.model().isBlank()) {
-            title.append(' ').append(r.model().strip());
-        }
-        if ("TYRE".equals(r.kind()) && r.season() != null) {
-            title.append(' ').append(switch (r.season()) {
-                case "SUMMER" -> "летняя";
-                case "WINTER" -> "зимняя";
-                default -> "всесезонная";
-            });
+            append(title, r.discBrand());
+            append(title, r.discModel());
         }
         return title.toString();
+    }
+
+    private static void append(StringBuilder title, String value) {
+        if (value != null && !value.isBlank()) {
+            title.append(' ').append(value.strip());
+        }
+    }
+
+    /** Зимняя бывает шипованной и на липучке, и покупатель спрашивает именно это. */
+    static String seasonName(String season) {
+        return switch (season) {
+            case "SUMMER" -> "летняя";
+            case "WINTER" -> "зимняя";
+            case "WINTER_STUDDED" -> "зимняя (шипы)";
+            case "WINTER_FRICTION" -> "зимняя (липучка)";
+            default -> "всесезонная";
+        };
     }
 
     private static String plain(BigDecimal value) {
@@ -657,7 +739,10 @@ public class WheelService {
     }
 
     /**
-     * @param kind {@code TYRE} или {@code DISC}
+     * @param kind {@code TYRE}, {@code DISC} или {@code ASSEMBLY} — колесо
+     *             в сборе, у которого заполнены оба набора свойств
+     * @param brand производитель шины; у диска своё поле — у колеса в сборе
+     *              они разные: шина Dunlop на диске Mitsubishi
      * @param wearMm остаток протектора в миллиметрах, а не в процентах:
      *               покупатель мерил глубиномером, а не долями
      */
@@ -668,6 +753,7 @@ public class WheelService {
                                String discType, BigDecimal discWidth, Integer offsetMm,
                                String boltPattern, BigDecimal hubBore,
                                String brand, String model,
+                               String discBrand, String discModel,
                                String markingType, String treadType,
                                Boolean runFlat, Boolean lightTruck,
                                String speedIndex, Integer loadIndex,
@@ -696,6 +782,7 @@ public class WheelService {
                            String discType, BigDecimal discWidth, Integer offsetMm,
                            String boltPattern, BigDecimal hubBore,
                            String brand, String model,
+                           String discBrand, String discModel,
                            String markingType, String treadType,
                            Boolean runFlat, Boolean lightTruck,
                            String speedIndex, Integer loadIndex,
@@ -711,7 +798,7 @@ public class WheelService {
             return new WheelRow(id, publicCode, title, price, status, qty, kind, setNo, diameter,
                     tyreWidth, tyreHeight, construction, tyreType, season, wearMm, madeYear,
                     discType, discWidth, offsetMm, boltPattern, hubBore, brand, model,
-                    markingType, treadType, runFlat, lightTruck, speedIndex, loadIndex,
+                    discBrand, discModel, markingType, treadType, runFlat, lightTruck, speedIndex, loadIndex,
                     partName, condition, supply, donorCode, oem, description, note, section,
                     published, barcode, legacyCode, photoCount, createdAt, updatedAt,
                     updatedByName, priceChangedAt, priceChangedByName, photoKey, byWarehouse);

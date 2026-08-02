@@ -9,6 +9,7 @@ import {
   listWheels,
   wheelExportUrl,
   wheelValues,
+  WHEEL_KINDS,
   FILTER_EMPTY,
   FILTER_PRESENT,
   rowOfWheel,
@@ -121,7 +122,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         <label className="field">
           <input
             value={typed}
-            placeholder="номер товара или наименование"
+            placeholder="размер, сверловка, марка или номер"
             onChange={(e) => setTyped(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && setQuery({ ...query, q: typed })}
           />
@@ -140,9 +141,10 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
             value={query.kind}
             onChange={(e) => setQuery({ ...query, kind: e.target.value as WheelQuery['kind'] })}
           >
-            <option value="">шины и диски</option>
+            <option value="">все</option>
             <option value="TYRE">только шины</option>
             <option value="DISC">только диски</option>
+            <option value="ASSEMBLY">только колёса в сборе</option>
           </select>
         </label>
         <label className="field field--check">
@@ -410,7 +412,7 @@ function SetForm({
   onCreated: (title: string, setNo: number | null) => void;
   onError: (message: string) => void;
 }) {
-  const [kind, setKind] = useState<'TYRE' | 'DISC'>('TYRE');
+  const [kind, setKind] = useState<'TYRE' | 'DISC' | 'ASSEMBLY'>('TYRE');
   const [quantity, setQuantity] = useState('4');
   const [warehouseId, setWarehouseId] = useState(String(warehouses[0]?.id ?? ''));
   const [busy, setBusy] = useState(false);
@@ -445,6 +447,8 @@ function SetForm({
         hubBore: value('hubBore'),
         brand: value('brand'),
         model: value('model'),
+        discBrand: value('discBrand'),
+        discModel: value('discModel'),
         tyreType: value('tyreType'),
         construction: value('construction'),
         markingType: value('markingType'),
@@ -472,9 +476,13 @@ function SetForm({
       <div className="filter-row">
         <label className="field">
           Товар
-          <select value={kind} onChange={(e) => setKind(e.target.value as 'TYRE' | 'DISC')}>
-            <option value="TYRE">Шина</option>
-            <option value="DISC">Диск</option>
+          <select
+            value={kind}
+            onChange={(e) => setKind(e.target.value as 'TYRE' | 'DISC' | 'ASSEMBLY')}
+          >
+            {WHEEL_KINDS.map((k) => (
+              <option key={k.code} value={k.code}>{k.name}</option>
+            ))}
           </select>
         </label>
         <label className="field">
@@ -497,7 +505,7 @@ function SetForm({
         </label>
       </div>
 
-      {kind === 'TYRE' ? (
+      {kind !== 'DISC' && (
         <>
           <div className="filter-row">
             <Field name="tyreWidth" label="Ширина" hint="195" set={set} field={field} />
@@ -577,7 +585,8 @@ function SetForm({
             </label>
           </div>
         </>
-      ) : (
+      )}
+      {kind !== 'TYRE' && (
         <>
           <div className="filter-row">
             <Field name="discType" label="Тип" hint="Литой" set={set} field={field} />
@@ -592,9 +601,25 @@ function SetForm({
         </>
       )}
 
+      {/* У сборки производители разные — шина Dunlop на диске Mitsubishi, —
+          и одним полем «марка» их не записать. */}
+      {kind !== 'DISC' && (
+        <div className="filter-row">
+          <Field name="brand" label={kind === 'ASSEMBLY' ? 'Марка шины' : 'Марка'}
+                 hint="Goodyear" set={set} field={field} />
+          <Field name="model" label={kind === 'ASSEMBLY' ? 'Модель шины' : 'Модель'}
+                 hint="EfficientGrip" set={set} field={field} />
+        </div>
+      )}
+      {kind !== 'TYRE' && (
+        <div className="filter-row">
+          <Field name="discBrand" label={kind === 'ASSEMBLY' ? 'Марка диска' : 'Марка'}
+                 hint="Enkei" set={set} field={field} />
+          <Field name="discModel" label={kind === 'ASSEMBLY' ? 'Модель диска' : 'Модель'}
+                 hint="RPF1" set={set} field={field} />
+        </div>
+      )}
       <div className="filter-row">
-        <Field name="brand" label="Марка" hint="Goodyear" set={set} field={field} />
-        <Field name="model" label="Модель" hint="EfficientGrip" set={set} field={field} />
         <Field name="price" label="Цена, ₽" hint="3500" set={set} field={field} />
       </div>
 

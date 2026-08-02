@@ -228,7 +228,7 @@ class WheelServiceTest extends PostgresTestBase {
         var disc = new WheelService.WheelRequest("DISC", new BigDecimal("15"),
                 null, null, null, null, null, null, null,
                 "Литой", new BigDecimal("6.0"), 45, "5x100", new BigDecimal("54.1"),
-                "Toyota", null,
+                null, null, "Toyota", null,
                 null, null, null, null, null, null,
                 new BigDecimal("6750"), null, null);
 
@@ -343,6 +343,182 @@ class WheelServiceTest extends PostgresTestBase {
         assertThat(rows).allSatisfy(row -> assertThat(row.get(2)).isEqualTo("Шина"));
     }
 
+    /**
+     * Колесо в сборе — третий вид товара: шина, уже надетая на диск.
+     *
+     * <p>Снято с кабинета клиента: комплект №181, четыре колеса 225/55 R18
+     * Dunlop на дисках Rays. Продают их так же поштучно, и свойства заполнены
+     * оба набора сразу.
+     */
+    @Test
+    @DisplayName("Колесо в сборе несёт свойства и шины, и диска")
+    void assemblyCarriesBothSides() {
+        var created = inTenant(() -> wheels.createSet(assembly(), 4, warehouseId, null));
+
+        var row = inTenant(() -> wheels.list(null, null, false, Map.of(), "set", true, 500))
+                .stream().filter(w -> created.partIds().contains(w.id())).findFirst().orElseThrow();
+
+        assertThat(row.kind()).isEqualTo("ASSEMBLY");
+        // Производители разные, и это главное: одним полем такое не записать.
+        assertThat(row.brand()).isEqualTo("Dunlop");
+        assertThat(row.discBrand()).isEqualTo("Mitsubishi");
+        assertThat(row.model()).isEqualTo("Winter Maxx SJ8");
+        assertThat(row.discModel()).isEqualTo("Rays");
+        assertThat(row.tyreWidth()).isEqualTo(225);
+        assertThat(row.boltPattern()).isEqualTo("5x114.3");
+    }
+
+    @Test
+    @DisplayName("Заголовок сборки называет и шину, и диск")
+    void assemblyTitleNamesBothSides() {
+        // Покупатель ищет колесо и по размеру шины, и по сверловке:
+        // «225/55 R18 на 5x114.3».
+        assertThat(WheelService.titleOf(assembly()))
+                .isEqualTo("Колесо 225/55 R18 Dunlop Winter Maxx SJ8 зимняя (липучка),"
+                        + " диск Литой 7x18 5x114.3 ET38 Mitsubishi Rays");
+    }
+
+    @Test
+    @DisplayName("Зимняя различает шипы и липучку")
+    void winterKindIsNamed() {
+        // Разница не косметическая: шипы и липучка ездят по-разному и стоят
+        // по-разному, а покупатель спрашивает именно это.
+        assertThat(WheelService.seasonName("WINTER_STUDDED")).isEqualTo("зимняя (шипы)");
+        assertThat(WheelService.seasonName("WINTER_FRICTION")).isEqualTo("зимняя (липучка)");
+        // Прежнее «зимняя» остаётся: у заведённых раньше шин неизвестно,
+        // какие они, и додумывать за приёмщика нельзя.
+        assertThat(WheelService.seasonName("WINTER")).isEqualTo("зимняя");
+    }
+
+    @Test
+    @DisplayName("Сборка отбирается и попадает в список видов товара")
+    void assemblyIsFilterable() {
+        var assembly = inTenant(() -> wheels.createSet(assembly(), 1, warehouseId, null));
+        var tyre = inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+
+        assertThat(inTenant(() -> wheels.values("kind"))).contains("Колесо");
+        assertThat(ids(inTenant(() -> wheels.list(null, null, false,
+                Map.of("kind", "Колесо"), "set", true, 500))))
+                .contains(assembly.partIds().get(0))
+                .doesNotContain(tyre.partIds().get(0));
+
+        // Отбор по производителю диска обязан смотреть в дисковое поле:
+        // у сборки шина Dunlop, а диск Mitsubishi, и перепутав их, отбор
+        // «диски Mitsubishi» не найдёт ни одного.
+        assertThat(inTenant(() -> wheels.values("discBrand"))).contains("Mitsubishi");
+        assertThat(ids(inTenant(() -> wheels.list(null, null, false,
+                Map.of("discBrand", "Mitsubishi"), "set", true, 500))))
+                .contains(assembly.partIds().get(0));
+        assertThat(ids(inTenant(() -> wheels.list(null, null, false,
+                Map.of("discBrand", "Dunlop"), "set", true, 500))))
+                .doesNotContain(assembly.partIds().get(0));
+    }
+
+    /**
+     * Производитель шины и производитель диска — разные колонки при разных
+     * полях: у сборки в них стоят разные значения, и перепутать их значит
+     * отдать покупателю не то, что он подбирал.
+     */
+    @Test
+    @DisplayName("В выгрузке производители шины и диска стоят каждый в своей колонке")
+    void exportKeepsBrandsApart() {
+        inTenant(() -> wheels.createSet(assembly(), 1, warehouseId, null));
+
+        var found = inTenant(() -> catalog.warehouses());
+        List<List<String>> rows = new java.util.ArrayList<>();
+        inTenant(() -> {
+            wheels.export(null, "ASSEMBLY", false, Map.of(), "set", true, found, rows::add);
+            return null;
+        });
+
+        var header = WheelService.exportHeader(found);
+        var row = rows.get(0);
+        assertThat(row.get(header.indexOf("Производитель шины"))).isEqualTo("Dunlop");
+        assertThat(row.get(header.indexOf("Производитель диска"))).isEqualTo("Mitsubishi");
+        assertThat(row.get(header.indexOf("Товар"))).isEqualTo("Колесо");
+    }
+
+    private WheelService.WheelRequest assembly() {
+        return new WheelService.WheelRequest("ASSEMBLY", new BigDecimal("18"),
+                225, 55, "R", "Легковая", "WINTER_FRICTION", new BigDecimal("4"), 2014,
+                "Литой", new BigDecimal("7.0"), 38, "5x114.3", new BigDecimal("66"),
+                "Dunlop", "Winter Maxx SJ8", "Mitsubishi", "Rays",
+                "METRIC", "STANDARD", false, false, "Q", 98,
+                new BigDecimal("10000"), null, null);
+    }
+
+    /**
+     * Поиск по размеру — то, чем колесо ищут на самом деле: покупатель звонит
+     * и называет размер, а не номер товара.
+     */
+    @Test
+    @DisplayName("Шина находится по размеру, как его называют вслух")
+    void tyreIsFoundBySize() {
+        var tyre = inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+        Long id = tyre.partIds().get(0);
+
+        // В заголовке стоит «195/65 R15», а говорят по-разному — и все
+        // написания обязаны находить одну и ту же шину.
+        for (String asked : new String[]{"195/65 R15", "195 65 15", "195/65R15"}) {
+            assertThat(ids(inTenant(() -> wheels.list(asked, null, false, Map.of(),
+                    "set", true, 500)))).as(asked).contains(id);
+        }
+        // А чужой размер её находить не должен.
+        assertThat(ids(inTenant(() -> wheels.list("205/55 R16", null, false, Map.of(),
+                "set", true, 500)))).doesNotContain(id);
+    }
+
+    @Test
+    @DisplayName("Диск находится по сверловке и по своему размеру")
+    void discIsFoundBySize() {
+        var disc = inTenant(() -> wheels.createSet(disc(), 1, warehouseId, null));
+        var other = inTenant(() -> wheels.createSet(disc("5x114.3"), 1, warehouseId, null));
+        Long id = disc.partIds().get(0);
+
+        // «Нужны диски пять на сто» — и в русской раскладке тоже.
+        assertThat(ids(inTenant(() -> wheels.list("5x100", null, false, Map.of(),
+                "set", true, 500)))).contains(id).doesNotContain(other.partIds().get(0));
+        assertThat(ids(inTenant(() -> wheels.list("5х100", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+        // Размер самого диска: «6x15» из объявления и «15x6» с диска.
+        assertThat(ids(inTenant(() -> wheels.list("6x15", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+        assertThat(ids(inTenant(() -> wheels.list("15x6", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+    }
+
+    @Test
+    @DisplayName("Колесо в сборе находится и по резине, и по железу")
+    void assemblyIsFoundByBothSizes() {
+        var assembly = inTenant(() -> wheels.createSet(assembly(), 1, warehouseId, null));
+        Long id = assembly.partIds().get(0);
+
+        assertThat(ids(inTenant(() -> wheels.list("225/55 R18", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+        assertThat(ids(inTenant(() -> wheels.list("5x114.3", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+        // И по тому и другому разом — это уточнение, а не два разных запроса.
+        assertThat(ids(inTenant(() -> wheels.list("225/55 R18 5x114.3", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+    }
+
+    @Test
+    @DisplayName("Слова ищутся словами, а номер — номером")
+    void wordsAndCodesStillWork() {
+        var tyre = inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+        Long id = tyre.partIds().get(0);
+
+        assertThat(ids(inTenant(() -> wheels.list("Goodyear", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+        // Размер и слово вместе: сначала отбор по полям, потом текст.
+        assertThat(ids(inTenant(() -> wheels.list("195/65 R15 Goodyear", null, false, Map.of(),
+                "set", true, 500)))).contains(id);
+        assertThat(ids(inTenant(() -> wheels.list("195/65 R15 Nokian", null, false, Map.of(),
+                "set", true, 500)))).doesNotContain(id);
+        assertThat(ids(inTenant(() -> wheels.list(codesOf(List.of(id)).get(0), null, false,
+                Map.of(), "set", true, 500)))).contains(id);
+    }
+
     private static List<Long> ids(List<WheelService.WheelRow> rows) {
         return rows.stream().map(WheelService.WheelRow::id).toList();
     }
@@ -361,7 +537,7 @@ class WheelServiceTest extends PostgresTestBase {
         return new WheelService.WheelRequest("DISC", new BigDecimal("15"),
                 null, null, null, null, null, null, null,
                 "Литой", new BigDecimal("6.0"), 45, boltPattern, new BigDecimal("54.1"),
-                "Enkei", null,
+                null, null, "Enkei", "RPF1",
                 null, null, null, null, null, null,
                 new BigDecimal("6750"), null, null);
     }
@@ -370,7 +546,7 @@ class WheelServiceTest extends PostgresTestBase {
         return new WheelService.WheelRequest("TYRE", new BigDecimal("15"),
                 195, 65, "R", "Легковая", "SUMMER", new BigDecimal("5"), 2022,
                 null, null, null, null, null,
-                "Goodyear", "EfficientGrip",
+                "Goodyear", "EfficientGrip", null, null,
                 "METRIC", "DIRECTIONAL", false, false, "H", 91,
                 new BigDecimal("3500"), null, null);
     }
