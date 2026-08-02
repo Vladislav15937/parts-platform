@@ -2,8 +2,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
-import { createSet, listWheels, SEASONS, sizeOf } from '../inventory/wheels';
-import type { SetRequest, Wheel } from '../inventory/wheels';
+import {
+  createSet,
+  listWheels,
+  rowOfWheel,
+  wheelFields,
+  loadWheelVisible,
+  saveWheelVisible,
+  SEASONS,
+  WHEEL_COLUMNS,
+} from '../inventory/wheels';
+import type { SetRequest, WheelPage, WheelRow } from '../inventory/wheels';
+import { PartCard } from './PartCard';
 
 /**
  * Шины и диски: своя вкладка, как в кабинете Bazon.
@@ -16,15 +26,22 @@ import type { SetRequest, Wheel } from '../inventory/wheels';
  * <p>Размер показан отдельным столбцом и первым: покупатель называет
  * «195 65 15», а не модель шины.
  */
-export function WheelsScreen({ canIntake }: { canIntake: boolean }) {
-  const [wheels, setWheels] = useState<Wheel[] | null>(null);
+export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: string }) {
+  const [page, setPage] = useState<WheelPage | null>(null);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [settings, setSettings] = useState(false);
+  const [visible, setVisible] = useState<string[]>(loadWheelVisible);
+  // Карточка та же, что у запчасти: цена, списание и перемещение написаны
+  // на складе, а не на виде товара. Пока карточки не было, колесо нельзя
+  // было ни поправить, ни списать, ни перевезти — витрина склада показывает
+  // только запчасти.
+  const [card, setCard] = useState<WheelRow | null>(null);
 
   const load = useCallback(() => {
     listWheels()
-      .then(setWheels)
+      .then(setPage)
       .catch((cause) => setError(describe(cause, 'Список не загрузился')));
   }, []);
 
@@ -34,9 +51,27 @@ export function WheelsScreen({ canIntake }: { canIntake: boolean }) {
     void listWarehouses().then(setWarehouses).catch(() => setWarehouses([]));
   }, []);
 
+  function toggleColumn(key: string): void {
+    const next = visible.includes(key)
+      ? visible.filter((k) => k !== key)
+      : [...visible, key];
+    setVisible(next);
+    saveWheelVisible(next);
+  }
+
+  // Порядок колонок задаёт список, а не порядок нажатий в настройке:
+  // иначе включённая последней колонка уезжает в конец таблицы, и найти
+  // её там можно только прокруткой.
+  const columns = WHEEL_COLUMNS.filter(
+    (c) => c.fixed === true || visible.includes(c.key),
+  );
+
   return (
-    <section className="screen">
-      <h2>Шины и диски</h2>
+    <section className="screen screen--wide">
+      <h2>
+        Шины и диски
+        {page !== null && <span className="muted"> {page.rows.length} товаров</span>}
+      </h2>
 
       {error && <p className="note note--error">{error}</p>}
       {notice && <p className="note">{notice}</p>}
@@ -56,49 +91,95 @@ export function WheelsScreen({ canIntake }: { canIntake: boolean }) {
         />
       )}
 
-      {wheels === null ? (
+      <div className="filter-row">
+        <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
+          Настроить таблицу
+        </button>
+      </div>
+
+      {settings && (
+        <fieldset className="choices">
+          <legend>Колонки</legend>
+          {/* Постоянные в список не идут: отключить их нельзя, а флажок,
+              который не работает, хуже отсутствующего. */}
+          {WHEEL_COLUMNS.filter((c) => c.fixed !== true).map((column) => (
+            <label key={column.key}>
+              <input
+                type="checkbox"
+                checked={visible.includes(column.key)}
+                onChange={() => toggleColumn(column.key)}
+              />
+              {column.title}
+            </label>
+          ))}
+        </fieldset>
+      )}
+
+      {page === null ? (
         <p className="note">Загружаем…</p>
-      ) : wheels.length === 0 ? (
+      ) : page.rows.length === 0 ? (
         <p className="note">Колёс пока нет.</p>
       ) : (
         <div className="table-scroll">
           <table className="report">
             <thead>
               <tr>
-                <th>Комплект</th>
-                <th>Товар</th>
-                <th>Размер</th>
-                <th>Марка</th>
-                <th className="num">Остаток</th>
-                <th className="num">Цена</th>
+                {columns.map((column) => (
+                  <th key={column.key} className={column.numeric ? 'num' : undefined}>
+                    {column.title}
+                  </th>
+                ))}
+                {page.warehouses.map((warehouse) => (
+                  <th key={warehouse.id} className="num">{warehouse.name}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {wheels.map((wheel) => (
-                <tr key={wheel.id}>
-                  {/* Прочерк, а не пусто: одиночная запаска — это не ошибка
-                      заведения, а обычный товар. */}
-                  <td>{wheel.setNo ?? '—'}</td>
-                  <td>{wheel.kind === 'TYRE' ? 'Шина' : 'Диск'}</td>
-                  <td>{sizeOf(wheel)}</td>
-                  <td>
-                    {[wheel.brand, wheel.model].filter((v) => v !== null).join(' ')}
-                    {wheel.season !== null && (
-                      <span className="muted">
-                        {' · '}
-                        {SEASONS.find((s) => s.code === wheel.season)?.name ?? wheel.season}
-                      </span>
-                    )}
-                  </td>
-                  <td className="num">{wheel.qty}</td>
-                  <td className="num">
-                    {wheel.price === null ? '—' : wheel.price.toLocaleString('ru-RU')}
-                  </td>
+              {page.rows.map((row) => (
+                <tr key={row.wheel.id} className="row--clickable"
+                    onClick={() => setCard(row)}>
+                  {columns.map((column) => (
+                    <td key={column.key} className={column.numeric ? 'num' : undefined}>
+                      {column.image
+                        ? column.image(row) !== null && (
+                            <img
+                              className="thumb"
+                              src={column.image(row) ?? ''}
+                              alt=""
+                              loading="lazy"
+                            />
+                          )
+                        : column.value(row.wheel)}
+                    </td>
+                  ))}
+                  {page.warehouses.map((warehouse) => (
+                    <td key={warehouse.id} className="num">
+                      {/* Прочерк, а не ноль: «на этом складе её нет»
+                          и «есть ноль штук» читаются одинаково, но первое
+                          понятнее. */}
+                      {row.wheel.stock[String(warehouse.id)] ?? '—'}
+                    </td>
+                  ))}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+
+      {card !== null && (
+        <PartCard
+          row={rowOfWheel(card)}
+          warehouses={page?.warehouses ?? []}
+          role={role}
+          extraFields={wheelFields(card.wheel)}
+          applicability={false}
+          onClose={() => setCard(null)}
+          onChanged={() => {
+            setCard(null);
+            load();
+          }}
+        />
       )}
     </section>
   );
@@ -148,6 +229,16 @@ function SetForm({
         hubBore: value('hubBore'),
         brand: value('brand'),
         model: value('model'),
+        tyreType: value('tyreType'),
+        construction: value('construction'),
+        markingType: value('markingType'),
+        treadType: value('treadType'),
+        // Флажок: снятый — это «нет», а не «не знаю». RunFlat видно
+        // по надписи на боковине, и приёмщик на неё смотрит.
+        runFlat: kind === 'TYRE' ? field.runFlat === 'on' : null,
+        lightTruck: kind === 'TYRE' ? field.lightTruck === 'on' : null,
+        speedIndex: value('speedIndex'),
+        loadIndex: value('loadIndex'),
         price: value('price'),
       };
       const created = await createSet(body);
@@ -216,6 +307,58 @@ function SetForm({
                 мерил глубиномером, а «осталось 25 %» он не пересчитает. */}
             <Field name="wearMm" label="Протектор, мм" hint="5" set={set} field={field} />
             <Field name="madeYear" label="Год" hint="2022" set={set} field={field} />
+          </div>
+          <div className="filter-row">
+            <Field name="tyreType" label="Тип шины" hint="Легковая" set={set} field={field} />
+            <Field name="construction" label="Конструкция" hint="R" set={set} field={field} />
+            <label className="field">
+              Маркировка
+              <select
+                value={field.markingType ?? ''}
+                onChange={(e) => set('markingType', e.target.value)}
+              >
+                <option value="">не указана</option>
+                <option value="METRIC">метрическая</option>
+                <option value="INCH">дюймовая</option>
+                <option value="FLOTATION">флотационная</option>
+              </select>
+            </label>
+          </div>
+          <div className="filter-row">
+            <label className="field">
+              Протектор
+              <select
+                value={field.treadType ?? ''}
+                onChange={(e) => set('treadType', e.target.value)}
+              >
+                <option value="">не указан</option>
+                <option value="STANDARD">стандартный</option>
+                <option value="ASYMMETRIC">асимметричный</option>
+                <option value="DIRECTIONAL">направленный</option>
+              </select>
+            </label>
+            {/* Буква и число с боковины: по ним подбирают шину
+                по документам на машину. */}
+            <Field name="speedIndex" label="Индекс скорости" hint="H" set={set} field={field} />
+            <Field name="loadIndex" label="Индекс нагрузки" hint="91" set={set} field={field} />
+          </div>
+          <div className="filter-row">
+            <label className="field field--check">
+              <input
+                type="checkbox"
+                checked={field.runFlat === 'on'}
+                onChange={(e) => set('runFlat', e.target.checked ? 'on' : '')}
+              />
+              RunFlat
+            </label>
+            <label className="field field--check">
+              <input
+                type="checkbox"
+                checked={field.lightTruck === 'on'}
+                onChange={(e) => set('lightTruck', e.target.checked ? 'on' : '')}
+              />
+              Легкогрузовая (LT)
+            </label>
           </div>
         </>
       ) : (

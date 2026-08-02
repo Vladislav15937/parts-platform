@@ -335,7 +335,8 @@ export function HomeScreen() {
       {tab === 'catalog' && <CatalogScreen role={state.me.role} />}
 
       {tab === 'wheels' && (
-        <WheelsScreen canIntake={LABEL_ROLES.includes(state.me.role)} />
+        <WheelsScreen canIntake={LABEL_ROLES.includes(state.me.role)}
+                      role={state.me.role} />
       )}
 
       {tab === 'feeds' && NAMING_ROLES.includes(state.me.role) && <FeedsScreen />}
