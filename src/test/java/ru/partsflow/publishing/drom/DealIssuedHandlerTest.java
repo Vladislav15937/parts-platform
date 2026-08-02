@@ -130,7 +130,7 @@ class DealIssuedHandlerTest extends PostgresTestBase {
         relay.relay();
 
         // Транспорт at-least-once: то же событие приходит снова после сбоя.
-        inTenant(() -> jdbc.update("UPDATE outbox SET published_at = NULL"));
+        redeliver();
         relay.relay();
 
         assertThat(syncClient.calls())
@@ -164,12 +164,26 @@ class DealIssuedHandlerTest extends PostgresTestBase {
         relay.relay();
 
         syncClient.reset();
-        inTenant(() -> jdbc.update("UPDATE outbox SET published_at = NULL"));
+        redeliver();
         relay.relay();
 
         assertThat(syncClient.calls())
                 .as("после отказа событие осталось помеченным обработанным")
                 .hasSize(1);
+    }
+
+    /**
+     * Возвращает событие в состояние «транспорт принесёт его ещё раз».
+     *
+     * <p>Снимается не только отметка об отправке, но и заявка релея: пачку,
+     * которую он забрал, держит {@code claimed_at} — иначе отправка не могла
+     * бы уехать из транзакции. Оставленная заявка означала бы, что релей
+     * событие просто не заметит, и проверка повторной доставки прошла бы,
+     * ничего не проверив.
+     */
+    private void redeliver() {
+        inTenant(() -> jdbc.update(
+                "UPDATE outbox SET published_at = NULL, claimed_at = NULL"));
     }
 
     private void publishIssued(long dealId) {

@@ -4,8 +4,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import ru.partsflow.platform.tenant.TenantContext;
 
 import java.util.List;
@@ -22,14 +20,19 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * делает то же самое, но из слушателя топика — потребители у обоих профилей
  * одни и те же и про транспорт не знают.
  *
- * <p><b>Раздача идёт после коммита релея, а не внутри него.</b> Обработчик
- * ходит в сеть — дельта на Дром это HTTP-запрос к площадке, — и делать это
- * внутри открытой транзакции значит держать соединение с базой всё время
- * ответа площадки. При двух сотнях арендаторов в ячейке пул кончится раньше,
- * чем придёт первый ответ.
+ * <p><b>Раздача идёт вне транзакции.</b> Обработчик ходит в сеть — дельта
+ * на Дром это HTTP-запрос к площадке, — и делать это внутри открытой
+ * транзакции значит держать соединение с базой всё время ответа площадки.
+ * При двух сотнях арендаторов в ячейке пул кончится раньше, чем придёт
+ * первый ответ. Раньше это обеспечивалось подпиской на {@code afterCommit}:
+ * релей звал транспорт из своей транзакции. Теперь он зовёт его снаружи,
+ * и свойство держится самим порядком вызовов, а не колбэком.
  *
- * <p>Арендатор запоминается на момент отправки, а не читается в колбэке:
- * к моменту раздачи релей уже перейдёт к следующему.
+ * <p><b>Арендатор восстанавливается, а не стирается.</b> Релей после отправки
+ * помечает пачку опубликованной — уже своей транзакцией, но в том же потоке
+ * и с тем же арендатором. Очищенный здесь {@code TenantContext} отправил бы
+ * эту пометку в {@code public}, то есть в «relation outbox does not exist»,
+ * и событие уходило бы в транспорт снова и снова.
  */
 @Component
 @Profile("!kafka")
@@ -50,27 +53,20 @@ public class InMemoryEventTransport implements EventTransport {
         log.debug("In-memory транспорт: доставлено {} событий", batch.size());
 
         List<ConsumedEvent> events = batch.stream().map(ConsumedEvent::of).toList();
-        String tenant = TenantContext.require();
-
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    deliver(tenant, events);
-                }
-            });
-        } else {
-            // Вне транзакции — только в тестах, дёргающих транспорт напрямую.
-            deliver(tenant, events);
-        }
+        deliver(TenantContext.require(), events);
     }
 
     private void deliver(String tenant, List<ConsumedEvent> events) {
+        String previous = TenantContext.getOrNull();
         TenantContext.set(tenant);
         try {
             events.forEach(dispatcher::dispatch);
         } finally {
-            TenantContext.clear();
+            if (previous == null) {
+                TenantContext.clear();
+            } else {
+                TenantContext.set(previous);
+            }
         }
     }
 
