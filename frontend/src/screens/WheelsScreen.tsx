@@ -4,7 +4,9 @@ import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
 import {
   createSet,
+  EMPTY_WHEEL_QUERY,
   listWheels,
+  wheelExportUrl,
   rowOfWheel,
   wheelFields,
   loadWheelVisible,
@@ -12,7 +14,7 @@ import {
   SEASONS,
   WHEEL_COLUMNS,
 } from '../inventory/wheels';
-import type { SetRequest, WheelPage, WheelRow } from '../inventory/wheels';
+import type { SetRequest, WheelPage, WheelQuery, WheelRow } from '../inventory/wheels';
 import { PartCard } from './PartCard';
 
 /**
@@ -33,6 +35,10 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
   const [notice, setNotice] = useState('');
   const [settings, setSettings] = useState(false);
   const [visible, setVisible] = useState<string[]>(loadWheelVisible);
+  const [query, setQuery] = useState<WheelQuery>(EMPTY_WHEEL_QUERY);
+  // Набранное в поле и отправленное на сервер — разные вещи: искать
+  // на каждой букве значит слать запрос за запросом на весь склад.
+  const [typed, setTyped] = useState('');
   // Карточка та же, что у запчасти: цена, списание и перемещение написаны
   // на складе, а не на виде товара. Пока карточки не было, колесо нельзя
   // было ни поправить, ни списать, ни перевезти — витрина склада показывает
@@ -40,12 +46,21 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
   const [card, setCard] = useState<WheelRow | null>(null);
 
   const load = useCallback(() => {
-    listWheels()
+    listWheels(query)
       .then(setPage)
       .catch((cause) => setError(describe(cause, 'Список не загрузился')));
-  }, []);
+  }, [query]);
 
   useEffect(load, [load]);
+
+  /**
+   * Смена сортировки: второе нажатие по той же колонке переворачивает
+   * порядок, а по другой — начинает с убывания. Так в кабинете, и так
+   * ожидает рука.
+   */
+  function sortBy(sort: string): void {
+    setQuery(query.sort === sort ? { ...query, desc: !query.desc } : { ...query, sort, desc: true });
+  }
 
   useEffect(() => {
     void listWarehouses().then(setWarehouses).catch(() => setWarehouses([]));
@@ -91,10 +106,53 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         />
       )}
 
+      <div className="filter-row filter-row--search">
+        <label className="field">
+          <input
+            value={typed}
+            placeholder="номер товара или наименование"
+            onChange={(e) => setTyped(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && setQuery({ ...query, q: typed })}
+          />
+        </label>
+        <button type="button" onClick={() => setQuery({ ...query, q: typed })}>
+          Найти
+        </button>
+      </div>
+
+      <div className="filter-row">
+        {/* Половина колонок у второго вида пуста, и «покажи только диски» —
+            первое, что делает кладовщик, когда ищет комплект железа. */}
+        <label className="field">
+          Товар
+          <select
+            value={query.kind}
+            onChange={(e) => setQuery({ ...query, kind: e.target.value as WheelQuery['kind'] })}
+          >
+            <option value="">шины и диски</option>
+            <option value="TYRE">только шины</option>
+            <option value="DISC">только диски</option>
+          </select>
+        </label>
+        <label className="field field--check">
+          <input
+            type="checkbox"
+            checked={query.missing}
+            onChange={(e) => setQuery({ ...query, missing: e.target.checked })}
+          />
+          Показывать отсутствующие
+        </label>
+      </div>
+
       <div className="filter-row">
         <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
           Настроить таблицу
         </button>
+        {/* Ссылкой, а не кнопкой с запросом: файл качает браузер, показывая
+            ход, и вкладка при этом жива. */}
+        <a className="button--ghost" href={wheelExportUrl(query)} download>
+          Скачать таблицу
+        </a>
       </div>
 
       {settings && (
@@ -118,15 +176,25 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
       {page === null ? (
         <p className="note">Загружаем…</p>
       ) : page.rows.length === 0 ? (
-        <p className="note">Колёс пока нет.</p>
+        <p className="note">
+          {query.q === '' && query.kind === '' ? 'Колёс пока нет.' : 'Ничего не найдено.'}
+        </p>
       ) : (
         <div className="table-scroll">
           <table className="report">
             <thead>
               <tr>
                 {columns.map((column) => (
-                  <th key={column.key} className={column.numeric ? 'num' : undefined}>
+                  <th
+                    key={column.key}
+                    className={column.numeric ? 'num' : undefined}
+                    onClick={() => column.sort !== undefined && sortBy(column.sort)}
+                    style={column.sort === undefined ? undefined : { cursor: 'pointer' }}
+                  >
                     {column.title}
+                    {/* Стрелка только там, где сортировка есть: на колонке
+                        без неё она обманывала бы. */}
+                    {column.sort === query.sort && (query.desc ? ' ↓' : ' ↑')}
                   </th>
                 ))}
                 {page.warehouses.map((warehouse) => (

@@ -5,6 +5,9 @@ import {
   WHEEL_DEFAULT_VISIBLE,
   rowOfWheel,
   wheelFields,
+  wheelParams,
+  wheelExportUrl,
+  EMPTY_WHEEL_QUERY,
   type Wheel,
 } from './wheels';
 
@@ -175,5 +178,43 @@ describe('карточка колеса', () => {
     // Двадцать строк, из которых заполнены три, — это три строки,
     // потерянные среди прочерков.
     expect(wheelFields(wheel()).map(([t]) => t)).toEqual(['Товар']);
+  });
+});
+
+describe('отбор вкладки колёс', () => {
+  it('пустой отбор не шлёт лишних параметров', () => {
+    // Пустой фильтр — «без ограничения», а не «ничего».
+    const params = wheelParams(EMPTY_WHEEL_QUERY);
+    expect(params.get('q')).toBeNull();
+    expect(params.get('kind')).toBeNull();
+    expect(params.get('missing')).toBeNull();
+    expect(params.get('sort')).toBe('set');
+  });
+
+  it('у страницы и выгрузки отбор общий', () => {
+    // Скачанный файл обязан совпасть с тем, что владелец видел на экране, —
+    // ради этой сверки он его и качает.
+    const query = { q: '195/65', kind: 'TYRE' as const, missing: true, sort: 'price', desc: false };
+    const url = wheelExportUrl(query);
+    const inUrl = new URLSearchParams(url.split('?')[1] ?? '');
+    expect([...inUrl.entries()].sort())
+      .toEqual([...wheelParams(query).entries()].sort());
+    expect(url.startsWith('/api/wheels/export?')).toBe(true);
+  });
+
+  it('пробелы в запросе не считаются поиском', () => {
+    // Иначе «найти» по пустой строке отсекает весь склад условием ILIKE '% %'.
+    expect(wheelParams({ ...EMPTY_WHEEL_QUERY, q: '   ' }).get('q')).toBeNull();
+    expect(wheelParams({ ...EMPTY_WHEEL_QUERY, q: ' 195 ' }).get('q')).toBe('195');
+  });
+
+  it('сортируемые колонки названы теми же именами, что знает сервер', () => {
+    // Белый список сортировок лежит на сервере, и незнакомое имя молча
+    // становится умолчанием: разъехавшись, экран показывал бы стрелку
+    // на колонке, по которой не сортирует.
+    const SERVER = ['code', 'set', 'kind', 'diameter', 'tyreWidth', 'tyreHeight',
+      'wear', 'season', 'madeYear', 'tyreBrand', 'discBrand', 'price', 'section', 'created'];
+    const mine = WHEEL_COLUMNS.map((c) => c.sort).filter((s): s is string => s !== undefined);
+    expect(mine.filter((s) => !SERVER.includes(s))).toEqual([]);
   });
 });
