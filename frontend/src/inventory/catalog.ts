@@ -152,6 +152,53 @@ export function loadPhotos(partId: number): Promise<PartPhoto[]> {
   return request<PartPhoto[]>(`/api/parts/${partId}/photos`);
 }
 
+/** Одно изменённое поле в правке. `null` — поле было или стало пустым. */
+export interface HistoryField {
+  label: string;
+  before: string | null;
+  after: string | null;
+}
+
+/**
+ * Правка карточки. `author` пустой у всего, что приехало переносом
+ * и что правилось до того, как приложение начало подписывать изменения.
+ */
+export interface HistoryChange {
+  at: string;
+  author: string | null;
+  /** Заполнено у событий без полей: «Товар создан». */
+  action: string | null;
+  fields: HistoryField[];
+}
+
+/** Движение остатка. `document` пустой у перенесённого склада: документа не было. */
+export interface HistoryMovement {
+  at: string;
+  type: string;
+  qty: number;
+  document: string | null;
+  status: string | null;
+  warehouse: string | null;
+  reason: string | null;
+  author: string | null;
+}
+
+export interface PartHistory {
+  changes: HistoryChange[];
+  movements: HistoryMovement[];
+}
+
+/**
+ * История позиции одним запросом, а не двумя на вкладку.
+ *
+ * <p>Обе ленты нужны в одном разбирательстве: «остаток не сходится» кончается
+ * либо движением, либо правкой, и второй запрос по нажатию вкладки — это
+ * ожидание ровно в тот момент, когда человек уже нашёл, куда смотреть.
+ */
+export function loadHistory(partId: number): Promise<PartHistory> {
+  return request<PartHistory>(`/api/parts/${partId}/history`);
+}
+
 export function loadVehicleOptions(): Promise<VehicleOption[]> {
   return request<VehicleOption[]>('/api/parts/catalog/vehicles');
 }

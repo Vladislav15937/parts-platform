@@ -108,6 +108,77 @@ class TenantIsolationTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("После освобождения соединения вошедший сброшен")
+    void userIdIsResetOnRelease() {
+        asMember(7L, () -> inTenant(TENANT_A, parts::count));
+
+        String actual = jdbcTemplate.queryForObject(
+                "SELECT current_setting('app.user_id', true)", String.class);
+        assertThat(actual)
+                .as("соединение вернулось в пул с чужим сотрудником в app.user_id")
+                .isNullOrEmpty();
+    }
+
+    /**
+     * Вторая половина того же механизма — установка при получении соединения.
+     * Сброс при возврате стережёт тест выше; здесь проверяется, что автор
+     * вообще доезжает до журнала, а фоновая работа не подписывается никем.
+     *
+     * <p>Проверено, что тест умеет падать: без установки в
+     * {@code getConnection} правка вошедшего остаётся без автора. И проверено,
+     * что снятие сброса он <b>не</b> ловит — установка при получении
+     * перезаписывает чужое значение раньше, чем оно успеет навредить.
+     * Именно поэтому тестов два, а не один.
+     */
+    @Test
+    @DisplayName("Правка подписана вошедшим, а фоновая — никем")
+    void auditAuthorIsRecorded() {
+        Long member = inTenant(TENANT_A, () -> jdbcTemplate.queryForObject("""
+                INSERT INTO tenant_member (display_name, role, login, password_hash)
+                VALUES ('Автор утечки', 'OWNER', 'leak-probe', 'x') RETURNING id""", Long.class));
+
+        String signed = "Утечка автора: подписанная";
+        asMember(member, () -> inTenant(TENANT_A, () -> parts.insert(signed, BigDecimal.ONE)));
+
+        // Та же физическая связь, но вошедшего уже нет: так работают фоновые
+        // задачи — релей, миграции, забор прайса площадкой.
+        String anonymous = "Утечка автора: фоновая";
+        inTenant(TENANT_A, () -> parts.insert(anonymous, BigDecimal.ONE));
+
+        assertThat(authorOf(signed))
+                .as("правка вошедшего осталась без автора")
+                .isEqualTo(member);
+        assertThat(authorOf(anonymous))
+                .as("фоновой правке приписан сотрудник, которого в ней не было")
+                .isNull();
+    }
+
+    private Long authorOf(String title) {
+        return inTenant(TENANT_A, () -> jdbcTemplate.queryForObject("""
+                SELECT a.changed_by FROM audit_log a
+                 WHERE a.table_name = 'part' AND a.operation = 'INSERT'
+                   AND a.new_value ->> 'title' = ?
+                 ORDER BY a.id DESC LIMIT 1""", Long.class, title));
+    }
+
+    /** Вошедший сотрудник на время действия — так его видит провайдер соединений. */
+    private void asMember(Long memberId, Runnable action) {
+        var principal = new ru.partsflow.platform.security.TenantPrincipal(
+                TENANT_A, 42L, memberId, "leak-probe", "Автор утечки", "OWNER", true);
+        var context = org.springframework.security.core.context.SecurityContextHolder
+                .createEmptyContext();
+        context.setAuthentication(
+                new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                        principal, null, principal.getAuthorities()));
+        org.springframework.security.core.context.SecurityContextHolder.setContext(context);
+        try {
+            action.run();
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
+    @Test
     @DisplayName("Параллельная работа арендаторов не путает данные")
     void concurrentTenantsStayIsolated() throws Exception {
         ExecutorService pool = Executors.newFixedThreadPool(4);

@@ -2,6 +2,7 @@ package ru.partsflow.platform.tenant;
 
 import org.hibernate.engine.jdbc.connections.spi.MultiTenantConnectionProvider;
 import org.springframework.stereotype.Component;
+import ru.partsflow.platform.security.CurrentUser;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -50,7 +51,11 @@ public class TenantConnectionProvider implements MultiTenantConnectionProvider<S
     public Connection getConnection(String tenantSchema) throws SQLException {
         Connection connection = dataSource.getConnection();
         try (Statement st = connection.createStatement()) {
-            st.execute("SET search_path TO " + quote(tenantSchema) + ", catalog, public");
+            // Обе настройки одним обменом с базой: соединение берётся
+            // на каждую транзакцию, и лишний round-trip здесь — это лишний
+            // round-trip на каждый запрос приложения.
+            st.execute("SET search_path TO " + quote(tenantSchema) + ", catalog, public;"
+                    + " SET app.user_id TO " + userId());
         }
         return connection;
     }
@@ -58,11 +63,33 @@ public class TenantConnectionProvider implements MultiTenantConnectionProvider<S
     @Override
     public void releaseConnection(String tenantSchema, Connection connection) throws SQLException {
         try (Statement st = connection.createStatement()) {
-            // Сброс обязателен: соединение уходит в пул и достанется другому арендатору.
-            st.execute("SET search_path TO public");
+            // Сброс обязателен: соединение уходит в пул и достанется другому
+            // арендатору. Вошедшего сбрасываем тем же обменом — иначе следующая
+            // транзакция подпишет чужие правки предыдущим сотрудником, и это
+            // та же утечка, что и со схемой, только заметить её можно лишь
+            // по журналу задним числом.
+            st.execute("SET search_path TO public; SET app.user_id TO ''");
         } finally {
             connection.close();
         }
+    }
+
+    /**
+     * Вошедший сотрудник для триггера аудита.
+     *
+     * <p>{@code audit_trigger} читает его из {@code current_setting('app.user_id')}
+     * и пишет в {@code audit_log.changed_by}. Выставлять это было некому,
+     * поэтому у переехавшего клиента все 141 955 записей аудита без автора:
+     * журнал есть, а «кто уронил цену» по нему не спросить.
+     *
+     * <p>Здесь, а не в бизнес-коде, по той же причине, по которой аудит сидит
+     * на триггере: правка мимо сервиса не должна остаться неподписанной.
+     * Пусто — это фоновые задачи: релей, миграции, забор прайса площадкой.
+     * У них вошедшего нет и быть не может.
+     */
+    private static String userId() {
+        Long memberId = CurrentUser.memberId();
+        return memberId == null ? "''" : String.valueOf(memberId);
     }
 
     @Override

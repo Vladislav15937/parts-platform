@@ -3,18 +3,21 @@ import { ApiError } from '../api/client';
 import {
   addApplicability,
   loadApplicability,
+  loadHistory,
   loadPhotos,
   movePart,
   removeApplicability,
   writeOffPart,
   type Applicability,
   type CatalogRow,
+  type PartHistory,
   type PartPhoto,
   type Warehouse,
 } from '../inventory/catalog';
 import { cardFields } from '../inventory/partCard';
 import { deletePhoto, makeMainPhoto, uploadPhoto } from '../inventory/photos';
 import { PartEditForm } from './PartEditForm';
+import { PartHistoryView } from './PartHistoryView';
 import { loadCached, modelsOf, type VehicleCatalog } from '../catalog/vehicles';
 import { listCells, type Cell } from '../organization/warehouses';
 
@@ -81,7 +84,12 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   const [uploading, setUploading] = useState(false);
   const [photoError, setPhotoError] = useState('');
   const [shown, setShown] = useState(0);
-  const [tab, setTab] = useState<'about' | 'fits'>('about');
+  const [tab, setTab] = useState<'about' | 'fits' | 'history'>('about');
+  // История грузится по открытию вкладки, а не вместе с карточкой: у позиции
+  // переехавшего клиента правок бывают десятки, а открывают карточку чаще
+  // всего чтобы посмотреть цену и снимок.
+  const [history, setHistory] = useState<PartHistory | null>(null);
+  const [historyTab, setHistoryTab] = useState<'changes' | 'movements'>('changes');
   // Правит владелец и менеджер: здесь цена, минимальная цена
   // и себестоимость — продавец, торгующийся с покупателем, не должен уметь
   // подвинуть себе нижнюю границу.
@@ -100,6 +108,15 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
     void loadApplicability(row.id).then(setFits).catch(() => setFits([]));
     void loadCached().then(setVehicles).catch(() => setVehicles(null));
   }, [row.id]);
+
+  useEffect(() => {
+    if (tab !== 'history' || history !== null) {
+      return;
+    }
+    void loadHistory(row.id)
+      .then(setHistory)
+      .catch(() => setHistory({ changes: [], movements: [] }));
+  }, [tab, history, row.id]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -254,6 +271,13 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
                   Применимость
                 </button>
               )}
+              <button
+                type="button"
+                className={tab === 'history' ? 'card-tab card-tab--active' : 'card-tab'}
+                onClick={() => setTab('history')}
+              >
+                История
+              </button>
             </div>
 
             {tab === 'fits' ? (
@@ -565,6 +589,17 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
             )}
           </div>
 
+          {/* История занимает место снимка, а не втискивается в столбец
+              сведений: правка наименования — это две строки текста длиной
+              в заголовок, и в колонке шириной в треть экрана от неё остаются
+              переносы по одному слову. Снимок в это время и не нужен:
+              историю открывают, когда разбираются, а не когда смотрят
+              на деталь. Поймано живым прогоном. */}
+          {tab === 'history' ? (
+            <div className="card-view__history">
+              <PartHistoryView history={history} tab={historyTab} onTab={setHistoryTab} />
+            </div>
+          ) : (
           <div className="card-view__photos">
             {main === undefined && !uploading && (
               <p className="muted">Снимков нет</p>
@@ -648,6 +683,7 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
               </div>
             )}
           </div>
+          )}
         </div>
       </div>
     </div>

@@ -26,9 +26,28 @@ import java.util.List;
 public class PartController {
 
     private final PartService partService;
+    private final PartHistoryService history;
 
-    public PartController(PartService partService) {
+    public PartController(PartService partService, PartHistoryService history) {
         this.partService = partService;
+        this.history = history;
+    }
+
+    /**
+     * История позиции: правки и движения остатка.
+     *
+     * <p>Открыта всем вошедшим, а не только владельцу: «куда делась деталь»
+     * спрашивает кладовщик, и отправлять его за ответом к владельцу — это
+     * ответ через сутки. Деньги при этом отделены: себестоимость
+     * и минимальная цена в ленту правок попадают только владельцу
+     * и менеджеру, и не «скрываются на экране», а не уезжают с сервера.
+     * Стережёт {@code PartHistoryHttpTest}.
+     */
+    @GetMapping("/{id}/history")
+    public PartHistoryService.History history(@PathVariable long id) {
+        String role = CurrentUser.require().role();
+        boolean money = "OWNER".equals(role) || "MANAGER".equals(role);
+        return history.of(id, money);
     }
 
     @GetMapping("/search")
