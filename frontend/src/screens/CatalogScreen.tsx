@@ -15,6 +15,7 @@ import {
   type PartPhoto,
 } from '../inventory/catalog';
 import { PartCard } from './PartCard';
+import { BulkEditForm } from './BulkEditForm';
 import { VehiclePicker } from './VehiclePicker';
 
 /**
@@ -37,6 +38,7 @@ const SIZE = 50;
 export function CatalogScreen({ role }: { role: string }) {
   const [page, setPage] = useState<CatalogPage | null>(null);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [visible, setVisible] = useState<string[]>(loadVisible);
   const [settings, setSettings] = useState(false);
   const [query, setQuery] = useState<CatalogQuery>({
@@ -63,6 +65,12 @@ export function CatalogScreen({ role }: { role: string }) {
   const [photos, setPhotos] = useState<PartPhoto[]>([]);
   // Карточка позиции — по нажатию на строку.
   const [card, setCard] = useState<CatalogRow | null>(null);
+  // Режим правки списком: флажки в строках и форма над таблицей. Отдельным
+  // режимом, а не всегда, потому что нажатие по строке в обычном режиме
+  // открывает карточку — и промах по флажку менял бы не то.
+  const [selecting, setSelecting] = useState(false);
+  const [chosen, setChosen] = useState<number[]>([]);
+  const [editing, setEditing] = useState(false);
 
   function showPhotos(id: number, target: HTMLElement) {
     if (hovered === id) {
@@ -125,6 +133,7 @@ export function CatalogScreen({ role }: { role: string }) {
       </h2>
 
       {error && <p className="note note--error">{error}</p>}
+      {notice && <p className="note">{notice}</p>}
 
       <div className="filter-row filter-row--search">
         <label className="field">
@@ -191,6 +200,19 @@ export function CatalogScreen({ role }: { role: string }) {
         <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
           Настроить таблицу
         </button>
+        {(role === 'OWNER' || role === 'MANAGER') && (
+          <button
+            type="button"
+            className="button--ghost"
+            onClick={() => {
+              setSelecting(!selecting);
+              setChosen([]);
+              setEditing(false);
+            }}
+          >
+            {selecting ? 'Выйти из правки' : 'Правка списком'}
+          </button>
+        )}
         {/* Ссылкой, а не кнопкой с запросом: файл на двенадцать мегабайт
             качает браузер, показывая ход, и вкладка при этом жива. */}
         <a className="button--ghost" href={exportUrl(query)} download>
@@ -232,6 +254,38 @@ export function CatalogScreen({ role }: { role: string }) {
         />
       )}
 
+      {/* Панель показывается на весь режим правки, а не с первого выбранного:
+          появившись, она сдвигает таблицу вниз, и следующее нажатие попадает
+          в соседнюю строку — снимая то, что было только что выбрано. Та же
+          ловушка, что с накладкой снимков. Поймано живым прогоном. */}
+      {selecting && !editing && (
+        <div className="filter-row">
+          <span className="note">
+            {chosen.length === 0 ? 'Отметьте позиции' : `Выбрано ${chosen.length}`}
+          </span>
+          <button type="button" disabled={chosen.length === 0} onClick={() => setEditing(true)}>
+            Изменить
+          </button>
+          <button type="button" className="button--ghost" disabled={chosen.length === 0}
+                  onClick={() => setChosen([])}>
+            Снять выделение
+          </button>
+        </div>
+      )}
+
+      {editing && (
+        <BulkEditForm
+          partIds={chosen}
+          onSaved={(changed) => {
+            setEditing(false);
+            setChosen([]);
+            setNotice(`Изменено позиций: ${changed}`);
+            load(query);
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      )}
+
       {settings && (
         <fieldset className="choices">
           <legend>Колонки</legend>
@@ -259,6 +313,16 @@ export function CatalogScreen({ role }: { role: string }) {
           <table className="report">
             <thead>
               <tr>
+                {selecting && (
+                  <th className="th--check">
+                    <input
+                      type="checkbox"
+                      checked={chosen.length === page.rows.length && page.rows.length > 0}
+                      onChange={(e) => setChosen(
+                        e.target.checked ? page.rows.map((r) => r.id) : [])}
+                    />
+                  </th>
+                )}
                 {columns.map((column) => (
                   <th
                     key={column.key}
@@ -280,7 +344,21 @@ export function CatalogScreen({ role }: { role: string }) {
             <tbody>
               {page.rows.map((row) => (
                 <Fragment key={row.id}>
-                <tr className="row--clickable" onClick={() => setCard(row)}>
+                <tr
+                  className={
+                    chosen.includes(row.id) ? 'row--clickable is-chosen' : 'row--clickable'
+                  }
+                  onClick={() => (selecting
+                    ? setChosen(chosen.includes(row.id)
+                        ? chosen.filter((id) => id !== row.id)
+                        : [...chosen, row.id])
+                    : setCard(row))}
+                >
+                  {selecting && (
+                    <td className="th--check">
+                      <input type="checkbox" readOnly checked={chosen.includes(row.id)} />
+                    </td>
+                  )}
                   {columns.map((column) => (
                     <td key={column.key} className={column.numeric ? 'num' : undefined}>
                       {column.image

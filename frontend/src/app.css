@@ -1644,3 +1644,21 @@ hr {
   background: var(--surface-soft);
   font-weight: 600;
 }
+
+/* Правка списком: узкая колонка флажков и подсветка выбранной строки. */
+.th--check {
+  width: 2rem;
+  text-align: center;
+}
+
+.report tr.is-chosen td {
+  background: #fff8e1;
+}
+
+/* Поле правки под своим флажком: без отступа оно читается как подпись
+   к соседнему полю. */
+.bulk-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}

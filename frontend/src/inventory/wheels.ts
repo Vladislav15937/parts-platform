@@ -145,8 +145,8 @@ export const EMPTY_WHEEL_QUERY: WheelQuery = {
 /** Задан ли хоть один отбор: по этому экран решает, показывать ли «Сбросить». */
 export function hasWheelFilters(query: WheelQuery): boolean {
   return query.q.trim() !== '' || query.kind !== '' || query.missing
-    || Object.keys(query.columns).length > 0
-    || Object.keys(query.words).length > 0;
+    || Object.keys(query.columns ?? {}).length > 0
+    || Object.keys(query.words ?? {}).length > 0;
 }
 
 /** Значения колонки — по нажатию на заголовок, а не вместе со страницей. */
@@ -163,10 +163,13 @@ export function wheelParams(query: WheelQuery): URLSearchParams {
   if (query.missing) params.set('missing', 'true');
   // Пара на каждый фильтр: «колонка:значение». Одним параметром их не свести —
   // значение может содержать что угодно, включая запятую.
-  for (const [column, value] of Object.entries(query.columns)) {
+  // Пустое по умолчанию: состояние, оставшееся от прежней версии кода,
+  // не должно ронять экран целиком. Выкат случается, пока вкладка открыта,
+  // и белый экран вместо таблицы — худшее, чем это может кончиться.
+  for (const [column, value] of Object.entries(query.columns ?? {})) {
     params.append('filter', `${column}:${value}`);
   }
-  for (const [column, value] of Object.entries(query.words)) {
+  for (const [column, value] of Object.entries(query.words ?? {})) {
     if (value.trim() !== '') params.append('find', `${column}:${value.trim()}`);
   }
   params.set('sort', query.sort);
