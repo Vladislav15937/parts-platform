@@ -110,8 +110,8 @@ public class WheelService {
      */
     @Transactional(readOnly = true)
     public List<WheelRow> list(String query, String kind, boolean withMissing,
-                               String sort, boolean descending, int limit) {
-        Filter filter = filterOf(query, kind, withMissing);
+                               WheelFilter more, String sort, boolean descending, int limit) {
+        Filter filter = filterOf(query, kind, withMissing, more);
         List<Object> args = new java.util.ArrayList<>(filter.args());
         args.add(limit);
 
@@ -196,7 +196,7 @@ public class WheelService {
      * и диски: половина колонок у второго вида пуста, и «покажи только диски»
      * — первое, что делает кладовщик, когда ищет комплект железа.
      */
-    private Filter filterOf(String query, String kind, boolean withMissing) {
+    private Filter filterOf(String query, String kind, boolean withMissing, WheelFilter more) {
         StringBuilder where = new StringBuilder(" WHERE p.product_line = 'WHEEL'");
         List<Object> args = new java.util.ArrayList<>();
 
@@ -218,7 +218,81 @@ public class WheelService {
         if (!withMissing) {
             where.append(" AND p.qty_on_hand > 0");
         }
+
+        // Свойства колеса. Покупатель звонит и называет размер целиком —
+        // «195/65 R15, лето» — или сверловку, если ему нужны диски. Поэтому
+        // отбор идёт по тем же полям, что стоят в таблице колонками,
+        // а не по всем сорока: остальные он не назовёт.
+        if (more != null) {
+            equalsNumber(where, args, "w.diameter", more.diameter());
+            equalsNumber(where, args, "w.tyre_width", more.tyreWidth());
+            equalsNumber(where, args, "w.tyre_height", more.tyreHeight());
+            if (more.season() != null && !more.season().isBlank()) {
+                if (!SEASONS.containsKey(more.season())) {
+                    throw new IllegalArgumentException("Неизвестный сезон: " + more.season());
+                }
+                where.append(" AND w.season = ?");
+                args.add(more.season());
+            }
+            // Износ — «не меньше стольки-то»: покупатель ищет шину
+            // с остатком протектора от пяти миллиметров, а не ровно пять.
+            if (more.wearFrom() != null) {
+                where.append(" AND w.wear_mm >= ?");
+                args.add(more.wearFrom());
+            }
+            // Сверловка сравнивается как есть: «5x100» и «5х100»
+            // с кириллической «х» — разные строки, и приводить их друг
+            // к другу здесь значило бы прятать беспорядок в справочнике.
+            if (more.boltPattern() != null && !more.boltPattern().isBlank()) {
+                where.append(" AND w.bolt_pattern ILIKE ?");
+                args.add(more.boltPattern().strip());
+            }
+            if (more.brand() != null && !more.brand().isBlank()) {
+                where.append(" AND w.brand ILIKE ?");
+                args.add("%" + more.brand().strip() + "%");
+            }
+            if (more.priceFrom() != null) {
+                where.append(" AND p.price >= ?");
+                args.add(more.priceFrom());
+            }
+            if (more.priceTo() != null) {
+                where.append(" AND p.price <= ?");
+                args.add(more.priceTo());
+            }
+        }
         return new Filter(where.toString(), args);
+    }
+
+    /** Точное равенство числа, если оно задано. */
+    private static void equalsNumber(StringBuilder where, List<Object> args,
+                                     String column, java.math.BigDecimal value) {
+        if (value != null) {
+            where.append(" AND ").append(column).append(" = ?");
+            args.add(value);
+        }
+    }
+
+    /**
+     * Отбор по свойствам колеса.
+     *
+     * <p>Диаметр, ширина и профиль — точным равенством: «почти 15 дюймов»
+     * не бывает, шина или встанет на диск, или нет. Износ — «от», цена —
+     * «от и до»: это диапазоны по смыслу.
+     *
+     * @param wearFrom остаток протектора не меньше стольки миллиметров
+     */
+    public record WheelFilter(java.math.BigDecimal diameter,
+                              java.math.BigDecimal tyreWidth,
+                              java.math.BigDecimal tyreHeight,
+                              String season,
+                              java.math.BigDecimal wearFrom,
+                              String boltPattern,
+                              String brand,
+                              java.math.BigDecimal priceFrom,
+                              java.math.BigDecimal priceTo) {
+
+        public static final WheelFilter NONE =
+                new WheelFilter(null, null, null, null, null, null, null, null, null);
     }
 
     private record Filter(String where, List<Object> args) {
@@ -254,12 +328,12 @@ public class WheelService {
      * что владелец видел на экране, — ради этой сверки он его и качает.
      */
     @Transactional(readOnly = true)
-    public void export(String query, String kind, boolean withMissing,
+    public void export(String query, String kind, boolean withMissing, WheelFilter more,
                        String sort, boolean descending,
                        List<CatalogService.Warehouse> warehouses,
                        CatalogService.RowWriter writer) {
 
-        Filter filter = filterOf(query, kind, withMissing);
+        Filter filter = filterOf(query, kind, withMissing, more);
 
         StringBuilder stock = new StringBuilder();
         for (CatalogService.Warehouse warehouse : warehouses) {

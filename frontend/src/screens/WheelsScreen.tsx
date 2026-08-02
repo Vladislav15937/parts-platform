@@ -5,6 +5,7 @@ import type { Warehouse } from '../organization/warehouses';
 import {
   createSet,
   EMPTY_WHEEL_QUERY,
+  hasWheelFilters,
   listWheels,
   wheelExportUrl,
   rowOfWheel,
@@ -142,6 +143,59 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
           />
           Показывать отсутствующие
         </label>
+        {hasWheelFilters(query) && (
+          <button
+            type="button"
+            className="button--ghost"
+            onClick={() => { setQuery(EMPTY_WHEEL_QUERY); setTyped(''); }}
+          >
+            Сбросить отбор
+          </button>
+        )}
+      </div>
+
+      {/* Отбор по свойствам — то, чем колесо подбирают на самом деле:
+          покупатель называет размер целиком или сверловку. Шинные поля
+          при выбранных дисках только мешают, поэтому набор зависит от вида
+          товара; когда вид не выбран, показываются оба — иначе отобрать
+          по размеру нельзя, не выбрав сперва вид. */}
+      <div className="filter-row">
+        <Filter label="Диаметр" hint="15" value={query.diameter}
+                onChange={(v) => setQuery({ ...query, diameter: v })} />
+        {query.kind !== 'DISC' && (
+          <>
+            <Filter label="Ширина шины" hint="195" value={query.tyreWidth}
+                    onChange={(v) => setQuery({ ...query, tyreWidth: v })} />
+            <Filter label="Высота шины" hint="65" value={query.tyreHeight}
+                    onChange={(v) => setQuery({ ...query, tyreHeight: v })} />
+            <label className="field">
+              Сезон
+              <select
+                value={query.season}
+                onChange={(e) => setQuery({ ...query, season: e.target.value })}
+              >
+                <option value="">любой</option>
+                {SEASONS.map((season) => (
+                  <option key={season.code} value={season.code}>{season.name}</option>
+                ))}
+              </select>
+            </label>
+            {/* «Не меньше», а не «ровно»: покупатель ищет шину с остатком
+                протектора от пяти миллиметров. */}
+            <Filter label="Протектор от, мм" hint="5" value={query.wearFrom}
+                    onChange={(v) => setQuery({ ...query, wearFrom: v })} />
+          </>
+        )}
+        {query.kind !== 'TYRE' && (
+          <Filter label="Сверловка" hint="5x100" value={query.boltPattern}
+                  onChange={(v) => setQuery({ ...query, boltPattern: v })} />
+        )}
+        <Filter label="Производитель" hint="Nokian" value={query.brand}
+                onChange={(v) => setQuery({ ...query, brand: v })} />
+        <Filter label="Цена от" hint="3000" value={query.priceFrom}
+                onChange={(v) => setQuery({ ...query, priceFrom: v })} />
+        <Filter label="до" hint="6000" value={query.priceTo}
+                onChange={(v) => setQuery({ ...query, priceTo: v })} />
       </div>
 
       <div className="filter-row">
@@ -250,6 +304,28 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         />
       )}
     </section>
+  );
+}
+
+/**
+ * Поле отбора. Значение уезжает на сервер сразу: полей девять, и кнопка
+ * «применить» под каждым превратила бы подбор колеса в заполнение анкеты.
+ */
+function Filter({ label, hint, value, onChange }: {
+  label: string;
+  hint: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="field">
+      {label}
+      <input
+        value={value}
+        placeholder={hint}
+        onChange={(e) => onChange(e.target.value.replace(',', '.'))}
+      />
+    </label>
   );
 }
 

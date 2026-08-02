@@ -8,6 +8,7 @@ import {
   wheelParams,
   wheelExportUrl,
   EMPTY_WHEEL_QUERY,
+  hasWheelFilters,
   type Wheel,
 } from './wheels';
 
@@ -194,7 +195,12 @@ describe('отбор вкладки колёс', () => {
   it('у страницы и выгрузки отбор общий', () => {
     // Скачанный файл обязан совпасть с тем, что владелец видел на экране, —
     // ради этой сверки он его и качает.
-    const query = { q: '195/65', kind: 'TYRE' as const, missing: true, sort: 'price', desc: false };
+    const query = {
+      ...EMPTY_WHEEL_QUERY,
+      q: '195/65', kind: 'TYRE' as const, missing: true,
+      diameter: '15', season: 'WINTER', wearFrom: '5',
+      sort: 'price', desc: false,
+    };
     const url = wheelExportUrl(query);
     const inUrl = new URLSearchParams(url.split('?')[1] ?? '');
     expect([...inUrl.entries()].sort())
@@ -216,5 +222,49 @@ describe('отбор вкладки колёс', () => {
       'wear', 'season', 'madeYear', 'tyreBrand', 'discBrand', 'price', 'section', 'created'];
     const mine = WHEEL_COLUMNS.map((c) => c.sort).filter((s): s is string => s !== undefined);
     expect(mine.filter((s) => !SERVER.includes(s))).toEqual([]);
+  });
+});
+
+describe('отбор по свойствам колеса', () => {
+  it('пустые свойства не уезжают на сервер', () => {
+    // Пустое поле — «без ограничения»: незаполненный отбор обязан отдавать
+    // весь склад, а не пустоту.
+    const params = wheelParams({ ...EMPTY_WHEEL_QUERY, diameter: '  ' });
+    expect(params.get('diameter')).toBeNull();
+    expect([...params.keys()].sort()).toEqual(['desc', 'sort']);
+  });
+
+  it('заполненные свойства уезжают все', () => {
+    const params = wheelParams({
+      ...EMPTY_WHEEL_QUERY,
+      diameter: '15', tyreWidth: '195', tyreHeight: '65', season: 'WINTER',
+      wearFrom: '5', boltPattern: '5x100', brand: 'Nokian',
+      priceFrom: '3000', priceTo: '6000',
+    });
+    expect(params.get('diameter')).toBe('15');
+    expect(params.get('tyreWidth')).toBe('195');
+    expect(params.get('season')).toBe('WINTER');
+    expect(params.get('wearFrom')).toBe('5');
+    expect(params.get('boltPattern')).toBe('5x100');
+    expect(params.get('brand')).toBe('Nokian');
+    expect(params.get('priceFrom')).toBe('3000');
+    expect(params.get('priceTo')).toBe('6000');
+  });
+
+  it('видит заданный отбор — иначе сбросить его нечем', () => {
+    expect(hasWheelFilters(EMPTY_WHEEL_QUERY)).toBe(false);
+    // Сортировка отбором не считается: она задана всегда, и «Сбросить»
+    // висело бы на экране постоянно.
+    expect(hasWheelFilters({ ...EMPTY_WHEEL_QUERY, sort: 'price', desc: false })).toBe(false);
+    expect(hasWheelFilters({ ...EMPTY_WHEEL_QUERY, diameter: '15' })).toBe(true);
+    expect(hasWheelFilters({ ...EMPTY_WHEEL_QUERY, kind: 'DISC' })).toBe(true);
+    expect(hasWheelFilters({ ...EMPTY_WHEEL_QUERY, missing: true })).toBe(true);
+  });
+
+  it('отбор по свойствам доезжает и до выгрузки', () => {
+    const query = { ...EMPTY_WHEEL_QUERY, diameter: '15', season: 'WINTER' };
+    const inUrl = new URLSearchParams(wheelExportUrl(query).split('?')[1] ?? '');
+    expect(inUrl.get('diameter')).toBe('15');
+    expect(inUrl.get('season')).toBe('WINTER');
   });
 });

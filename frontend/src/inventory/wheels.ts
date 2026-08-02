@@ -96,18 +96,55 @@ export interface WheelQuery {
   /** Пусто — оба вида: у шины и диска половина колонок разная. */
   kind: '' | 'TYRE' | 'DISC';
   missing: boolean;
+  /**
+   * Свойства, по которым колесо подбирают. Покупатель звонит и называет
+   * размер целиком — «195/65 R15, лето» — или сверловку, если ему нужны
+   * диски; остальные сорок свойств он не назовёт, и фильтров по ним нет.
+   *
+   * <p>Строки, а не числа: поле ввода отдаёт строку, и держать в состоянии
+   * число значит терять набранное на каждом промежуточном «1».
+   */
+  diameter: string;
+  tyreWidth: string;
+  tyreHeight: string;
+  season: string;
+  /** Остаток протектора не меньше стольки миллиметров. */
+  wearFrom: string;
+  boltPattern: string;
+  brand: string;
+  priceFrom: string;
+  priceTo: string;
   sort: string;
   desc: boolean;
 }
 
 export const EMPTY_WHEEL_QUERY: WheelQuery = {
-  q: '', kind: '', missing: false, sort: 'set', desc: true,
+  q: '', kind: '', missing: false,
+  diameter: '', tyreWidth: '', tyreHeight: '', season: '', wearFrom: '',
+  boltPattern: '', brand: '', priceFrom: '', priceTo: '',
+  sort: 'set', desc: true,
 };
+
+/** Задан ли хоть один отбор: по этому экран решает, показывать ли «Сбросить». */
+export function hasWheelFilters(query: WheelQuery): boolean {
+  return FILTER_KEYS.some((key) => query[key].trim() !== '')
+    || query.kind !== '' || query.missing;
+}
+
+const FILTER_KEYS = [
+  'q', 'diameter', 'tyreWidth', 'tyreHeight', 'season', 'wearFrom',
+  'boltPattern', 'brand', 'priceFrom', 'priceTo',
+] as const;
 
 /** Параметры отбора одни и у страницы, и у выгрузки: файл обязан совпасть. */
 export function wheelParams(query: WheelQuery): URLSearchParams {
   const params = new URLSearchParams();
-  if (query.q.trim() !== '') params.set('q', query.q.trim());
+  // Пустое поле — «без ограничения», а не «ничего»: незаполненный отбор
+  // обязан отдавать весь склад.
+  for (const key of FILTER_KEYS) {
+    const value = query[key].trim();
+    if (value !== '') params.set(key, value);
+  }
   if (query.kind !== '') params.set('kind', query.kind);
   if (query.missing) params.set('missing', 'true');
   params.set('sort', query.sort);

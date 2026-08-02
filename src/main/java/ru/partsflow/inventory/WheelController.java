@@ -52,11 +52,23 @@ public class WheelController {
     public View list(@RequestParam(required = false) String q,
                      @RequestParam(required = false) String kind,
                      @RequestParam(defaultValue = "false") boolean missing,
+                     @RequestParam(required = false) BigDecimal diameter,
+                     @RequestParam(required = false) BigDecimal tyreWidth,
+                     @RequestParam(required = false) BigDecimal tyreHeight,
+                     @RequestParam(required = false) String season,
+                     @RequestParam(required = false) BigDecimal wearFrom,
+                     @RequestParam(required = false) String boltPattern,
+                     @RequestParam(required = false) String brand,
+                     @RequestParam(required = false) BigDecimal priceFrom,
+                     @RequestParam(required = false) BigDecimal priceTo,
                      @RequestParam(defaultValue = "set") String sort,
                      @RequestParam(defaultValue = "true") boolean desc,
                      @RequestParam(defaultValue = "200") int limit) {
+
+        var more = new WheelService.WheelFilter(diameter, tyreWidth, tyreHeight, season,
+                wearFrom, boltPattern, brand, priceFrom, priceTo);
         return new View(catalog.warehouses(),
-                wheels.list(q, kind, missing, sort, desc, Math.min(limit, 500))
+                wheels.list(q, kind, missing, more, sort, desc, Math.min(limit, 500))
                         .stream().map(this::rowOf).toList());
     }
 
@@ -71,6 +83,15 @@ public class WheelController {
     public void export(@RequestParam(required = false) String q,
                        @RequestParam(required = false) String kind,
                        @RequestParam(defaultValue = "false") boolean missing,
+                       @RequestParam(required = false) BigDecimal diameter,
+                       @RequestParam(required = false) BigDecimal tyreWidth,
+                       @RequestParam(required = false) BigDecimal tyreHeight,
+                       @RequestParam(required = false) String season,
+                       @RequestParam(required = false) BigDecimal wearFrom,
+                       @RequestParam(required = false) String boltPattern,
+                       @RequestParam(required = false) String brand,
+                       @RequestParam(required = false) BigDecimal priceFrom,
+                       @RequestParam(required = false) BigDecimal priceTo,
                        @RequestParam(defaultValue = "set") String sort,
                        @RequestParam(defaultValue = "true") boolean desc,
                        jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
@@ -89,7 +110,10 @@ public class WheelController {
         out.write('\uFEFF');
         writeRow(out, WheelService.exportHeader(found));
 
-        wheels.export(q, kind, missing, sort, desc, found, cells -> writeRow(out, cells));
+        wheels.export(q, kind, missing,
+                new WheelService.WheelFilter(diameter, tyreWidth, tyreHeight, season,
+                        wearFrom, boltPattern, brand, priceFrom, priceTo),
+                sort, desc, found, cells -> writeRow(out, cells));
         out.flush();
     }
 
