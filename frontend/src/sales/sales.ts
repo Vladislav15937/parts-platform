@@ -454,3 +454,40 @@ export function payDealFromAccount(dealId: number, amount: string): Promise<unkn
     body: { amount },
   });
 }
+
+/**
+ * Выдача со счёта наличными.
+ *
+ * <p>В отличие от зачёта создаёт расход в кассе: там деньги остаются у нас
+ * и меняют назначение, здесь уходят клиенту.
+ */
+export function withdrawFromAccount(customerId: number, amount: string): Promise<unknown> {
+  return request(`/api/customers/${customerId}/account/withdraw`, {
+    method: 'POST',
+    body: { amount },
+  });
+}
+
+/** Пополнение счёта: клиент оставил деньги авансом. */
+export function topUpAccount(customerId: number, amount: string): Promise<unknown> {
+  return request(`/api/customers/${customerId}/account/top-up`, {
+    method: 'POST',
+    body: { amount },
+  });
+}
+
+/**
+ * Ручная правка остатка — со знаком и с обязательной причиной.
+ *
+ * <p>Только для того, что случилось вне системы: деньги приняли мимо кассы,
+ * старый долг простили, при переезде остаток приехал не тем. Расхождения,
+ * растущие из самой системы, лечатся в ней.
+ */
+export function correctAccount(
+  customerId: number, amount: string, reason: string,
+): Promise<unknown> {
+  return request(`/api/customers/${customerId}/account/correct`, {
+    method: 'POST',
+    body: { amount, reason },
+  });
+}

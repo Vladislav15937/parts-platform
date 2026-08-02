@@ -270,6 +270,81 @@ class ReportControllerTest extends PostgresTestBase {
                 .contains("\"sourceName\":null");
     }
 
+    /**
+     * Отчёт по расчётам: у кого наши деньги и кто должен нам.
+     *
+     * <p>Владелец не видел своих обязательств перед клиентами ни одним числом.
+     */
+    @Test
+    @DisplayName("Расчёты показывают аванс клиента и его долг")
+    void settlementsShowAdvanceAndDebt() throws Exception {
+        MockHttpSession seller = seller("расчётов");
+        Long partId = partWithStock("Фара в долг", 1);
+        long dealId = issuedDeal(seller, partId);
+
+        // Оплатили половину: остальное — долг по выданному товару.
+        mvc.perform(post("/api/deals/" + dealId + "/payments").with(csrf()).session(seller)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amount\":2000}"))
+                .andExpect(status().isCreated());
+
+        mvc.perform(get("/api/reports/customers").session(login("vladelec")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rows[?(@.customerId == %d)].debt".formatted(customer))
+                        .value(org.hamcrest.Matchers.contains(3000.00)))
+                // Сверка едет вместе с итогом: число обязательств без ответа
+                // «сходится ли» — спокойствие без основания.
+                .andExpect(jsonPath("$.totals.problems.length()").value(0));
+    }
+
+    /**
+     * Сверка обязана ловить ровно ту потерю, ради которой заведена.
+     *
+     * <p>Отменённая сделка с оплатой, по которой деньги не вернулись, —
+     * это и есть расхождение, найденное когда-то руками: сделка закрыта,
+     * со счёта списано, а деньги не числятся нигде.
+     */
+    @Test
+    @DisplayName("Сверка находит отменённую сделку, по которой деньги не вернулись")
+    void reconciliationFindsLostMoney() throws Exception {
+        MockHttpSession seller = seller("потери");
+        Long partId = partWithStock("Бампер потерянных денег", 1);
+
+        long dealId = reservedDeal(seller, partId);
+
+        mvc.perform(post("/api/deals/" + dealId + "/payments").with(csrf()).session(seller)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amount\":5000}"))
+                .andExpect(status().isCreated());
+
+        // Ломаем руками так, как ломалось до правки: сделку закрыли,
+        // а деньги не вернули.
+        inTenant(() -> jdbc.update(
+                "UPDATE deal SET status = 'CANCELLED' WHERE id = ?", dealId));
+
+        mvc.perform(get("/api/reports/customers").session(login("vladelec")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totals.problems.length()").value(1))
+                .andExpect(jsonPath("$.totals.problems[0].problem")
+                        .value(org.hamcrest.Matchers.containsString("оплата не возвращена")))
+                .andExpect(jsonPath("$.totals.problems[0].amount").value(5000.00));
+    }
+
+    /** Отложенная сделка без выдачи: нужна там, где её потом закрывают отменой. */
+    private long reservedDeal(MockHttpSession session, Long partId) throws Exception {
+        var created = mvc.perform(post("/api/deals").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"customerId\":%d,\"items\":[{\"partId\":%d,\"quantity\":1,\"warehouseId\":%d}]}"
+                                .formatted(customer, partId, warehouse)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        // Разбираем разбором, а не регуляркой: у ответа со списком позиций
+        // она молча возвращает всю строку, и падает это уже на parseLong.
+        return new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(created.getResponse().getContentAsByteArray())
+                .get("id").asLong();
+    }
+
     private long issuedDeal(MockHttpSession session, Long... partIds) throws Exception {
         return issuedDealFrom(session, null, partIds);
     }

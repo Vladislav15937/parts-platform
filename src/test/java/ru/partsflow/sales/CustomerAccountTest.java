@@ -165,6 +165,188 @@ class CustomerAccountTest extends PostgresTestBase {
         assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("2500");
     }
 
+    /**
+     * У выдачи и зачёта разная природа, и видно это по кассе.
+     *
+     * <p>Зачёт денег не двигает — они уже у нас и просто меняют назначение.
+     * Выдача уносит их из кассы клиенту, и расход, которого в кассе нет,
+     * к вечеру не сойдётся с ящиком.
+     */
+    @Test
+    @DisplayName("Выдача со счёта создаёт расход в кассе, в отличие от зачёта")
+    void withdrawalCreatesPayment() {
+        inTenant(() -> sales.topUpAccount(customerId, new BigDecimal("3000"), null, managerId));
+        int before = payments();
+
+        inTenant(() -> sales.withdrawFromAccount(
+                customerId, new BigDecimal("1200"), null, managerId));
+
+        assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("1800");
+        assertThat(payments())
+                .as("выдача не отразилась в кассе — деньги ушли, а расхода нет")
+                .isEqualTo(before + 1);
+        assertThat(outgoing())
+                .as("выдача записана приходом: касса вырастет на сумму, которую отдали")
+                .isEqualByComparingTo("1200");
+    }
+
+    @Test
+    @DisplayName("Больше остатка со счёта не выдать")
+    void cannotWithdrawMoreThanBalance() {
+        inTenant(() -> sales.topUpAccount(customerId, new BigDecimal("700"), null, managerId));
+
+        assertThatThrownBy(() -> inTenant(() -> sales.withdrawFromAccount(
+                customerId, new BigDecimal("1000"), null, managerId)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("700");
+
+        assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("700");
+    }
+
+    private BigDecimal outgoing() {
+        return inTenant(() -> jdbc.queryForObject("""
+                SELECT COALESCE(sum(amount), 0) FROM payment
+                 WHERE customer_id = ? AND direction = 'OUT'""",
+                BigDecimal.class, customerId));
+    }
+
+    /**
+     * Отмена оплаченной сделки возвращает деньги, а не теряет их.
+     *
+     * <p>Клиент оставил аванс, продавец зачёл его в отложенную сделку, клиент
+     * передумал. До этой правки полторы тысячи не числились ни за сделкой
+     * (она закрыта), ни на счёте (их оттуда списали) — и всплывало это,
+     * когда клиент приезжал за своими деньгами.
+     */
+    @Test
+    @DisplayName("Отмена оплаченной сделки возвращает деньги на счёт")
+    void cancellingPaidDealReturnsMoney() {
+        inTenant(() -> sales.topUpAccount(customerId, new BigDecimal("2000"), null, managerId));
+        Long partId = partWithStock("Фара, от которой отказались", new BigDecimal("1500"));
+        Deal deal = inTenant(() -> sales.createReserved(customerId, managerId,
+                Instant.now().plus(1, ChronoUnit.DAYS), null,
+                List.of(new SalesService.ItemRequest(
+                        partId, BigDecimal.ONE, new BigDecimal("1500"), warehouseId)),
+                List.of()));
+        inTenant(() -> sales.payFromAccount(deal.getId(), new BigDecimal("1500"), managerId));
+        assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("500");
+
+        inTenant(() -> sales.cancel(deal.getId(), managerId, "клиент передумал"));
+
+        assertThat(inTenant(() -> sales.accountBalance(customerId)))
+                .as("деньги пропали: сделка закрыта, а на счёт они не вернулись")
+                .isEqualByComparingTo("2000");
+    }
+
+    // Оплата наличными возвращается туда же — на счёт: отмена это решение
+    // в системе, а не открытая касса. Захочет забрать — выдадут, и расход
+    // появится тогда же.
+    @Test
+    @DisplayName("Наличная оплата при отмене тоже возвращается на счёт")
+    void cancellingCashPaidDealReturnsMoney() {
+        Long partId = partWithStock("Бампер, от которого отказались", new BigDecimal("3000"));
+        Deal deal = inTenant(() -> sales.createReserved(customerId, managerId,
+                Instant.now().plus(1, ChronoUnit.DAYS), null,
+                List.of(new SalesService.ItemRequest(
+                        partId, BigDecimal.ONE, new BigDecimal("3000"), warehouseId)),
+                List.of()));
+        inTenant(() -> sales.takePayment(deal.getId(), new BigDecimal("3000"), null, managerId));
+
+        inTenant(() -> sales.cancel(deal.getId(), managerId, null));
+
+        assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("3000");
+    }
+
+    // Неоплаченную отменяют как раньше: записи о возврате быть не должно,
+    // иначе журнал счёта заполнится нулями, среди которых не найти настоящих.
+    @Test
+    @DisplayName("Отмена неоплаченной сделки счёта не касается")
+    void cancellingUnpaidDealLeavesAccountAlone() {
+        Long partId = partWithStock("Стартер без оплаты", new BigDecimal("900"));
+        Deal deal = inTenant(() -> sales.createReserved(customerId, managerId,
+                Instant.now().plus(1, ChronoUnit.DAYS), null,
+                List.of(new SalesService.ItemRequest(
+                        partId, BigDecimal.ONE, new BigDecimal("900"), warehouseId)),
+                List.of()));
+
+        inTenant(() -> sales.cancel(deal.getId(), managerId, null));
+
+        assertThat(inTenant(() -> sales.accountEntries(customerId))).isEmpty();
+    }
+
+    /**
+     * Правка — для того, что случилось вне системы: деньги приняли мимо кассы,
+     * старый долг простили, при переезде остаток приехал не тем. Всё, что
+     * растёт из самой системы, чинится в ней.
+     */
+    @Test
+    @DisplayName("Правка меняет остаток в обе стороны и хранит причину")
+    void correctionMovesBalanceBothWays() {
+        inTenant(() -> sales.correctAccount(customerId, new BigDecimal("1500"),
+                "принято наличными мимо кассы 30 июля", managerId));
+        assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("1500");
+
+        inTenant(() -> sales.correctAccount(customerId, new BigDecimal("-500"),
+                "ошиблись при переносе из прежней системы", managerId));
+
+        assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("1000");
+        assertThat(inTenant(() -> sales.accountEntries(customerId)).get(0).getComment())
+                .isEqualTo("ошиблись при переносе из прежней системы");
+    }
+
+    // Без «почему» через месяц правку не отличить от ошибки, а спорить о ней
+    // придётся с клиентом.
+    @Test
+    @DisplayName("Правка без причины не принимается")
+    void correctionRequiresReason() {
+        assertThatThrownBy(() -> inTenant(() -> sales.correctAccount(
+                customerId, new BigDecimal("100"), "  ", managerId)))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(inTenant(() -> sales.accountEntries(customerId))).isEmpty();
+    }
+
+    // Отрицательный остаток — это долг клиента, а такого договора нет.
+    @Test
+    @DisplayName("Правка не уводит остаток в минус")
+    void correctionKeepsBalanceNonNegative() {
+        inTenant(() -> sales.topUpAccount(customerId, new BigDecimal("300"), null, managerId));
+
+        assertThatThrownBy(() -> inTenant(() -> sales.correctAccount(
+                customerId, new BigDecimal("-1000"), "списываем лишнее", managerId)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("300");
+
+        assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("300");
+    }
+
+    /**
+     * У заказа с площадки клиент необязателен, а назначить его задним числом
+     * нечем. Отказ в отмене запер бы продавца в сделке, которую не отменить
+     * и не выдать, поэтому деньги уходят расходом из кассы — так же,
+     * как пришли.
+     */
+    @Test
+    @DisplayName("Оплаченная сделка без клиента отменяется, деньги уходят из кассы")
+    void cancellingPaidDealWithoutCustomerRefundsCash() {
+        Long partId = partWithStock("Фара с площадки", new BigDecimal("2500"));
+        var accepted = inTenant(() -> sales.registerMarketplaceOrder(
+                "DROM", "301-000-77", null, null, null, null, null, null,
+                List.of(new SalesService.ItemRequest(
+                        partId, BigDecimal.ONE, new BigDecimal("2500"), warehouseId)),
+                List.of()));
+        Long dealId = accepted.deal().getId();
+        inTenant(() -> sales.takePayment(dealId, new BigDecimal("2500"), null, managerId));
+
+        inTenant(() -> sales.cancel(dealId, managerId, "покупатель отказался"));
+
+        assertThat(inTenant(() -> jdbc.queryForObject("""
+                SELECT COALESCE(sum(amount), 0) FROM payment
+                 WHERE deal_id = ? AND direction = 'OUT'""", BigDecimal.class, dealId)))
+                .as("деньги остались у нас: отмена прошла, а расхода нет")
+                .isEqualByComparingTo("2500");
+    }
+
     private int payments() {
         Integer found = inTenant(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM payment WHERE customer_id = ?", Integer.class, customerId));

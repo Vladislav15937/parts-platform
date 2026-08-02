@@ -25,6 +25,9 @@ import java.util.List;
 public class ReportController {
 
     /** Полсотни машин — это уже год работы разборки, дальше листают. */
+    /** Столько строк расчётов показываем: остальное — работа отбора, а не списка. */
+    private static final int SETTLEMENT_LIMIT = 100;
+
     private static final int DONOR_LIMIT = 50;
 
     private final ReportService reports;
@@ -59,6 +62,22 @@ public class ReportController {
     @GetMapping("/donors")
     public DonorReport donors() {
         return new DonorReport(reports.donorProfitability(DONOR_LIMIT), reports.donorTotals());
+    }
+
+    /**
+     * Расчёты с клиентами: у кого наши деньги, кто должен нам и сходится ли.
+     *
+     * <p>Сверка едет вместе с итогом намеренно: число обязательств, рядом
+     * с которым не сказано, сходится ли оно, — спокойствие без основания.
+     */
+    @GetMapping("/customers")
+    public SettlementReport customers() {
+        return new SettlementReport(
+                reports.customerSettlements(SETTLEMENT_LIMIT), reports.settlementTotals());
+    }
+
+    public record SettlementReport(List<ReportService.SettlementRow> rows,
+                                   ReportService.SettlementTotals totals) {
     }
 
     private static YearMonth parseMonth(String month) {

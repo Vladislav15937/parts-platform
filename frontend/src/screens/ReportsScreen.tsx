@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
+  customerSettlements,
   donorProfitability,
   managerSales,
   money,
@@ -10,7 +11,12 @@ import {
   monthOf,
   shiftMonth,
 } from '../reports/reports';
-import type { DonorReport, ManagerReport, SourceReport } from '../reports/reports';
+import type {
+  DonorReport,
+  ManagerReport,
+  SettlementReport,
+  SourceReport,
+} from '../reports/reports';
 
 /**
  * Отчёты владельца.
@@ -37,6 +43,9 @@ export function ReportsScreen({ canRead }: Props) {
   const [donors, setDonors] = useState<DonorReport | null>(null);
   const [sources, setSources] = useState<SourceReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Расчёты с клиентами: авансы, долги и сверка. Число обязательств без
+  // ответа «сходится ли» — спокойствие без основания.
+  const [settlements, setSettlements] = useState<SettlementReport | null>(null);
 
   useEffect(() => {
     void managerSales(month)
@@ -56,6 +65,9 @@ export function ReportsScreen({ canRead }: Props) {
     void donorProfitability()
       .then(setDonors)
       .catch((cause) => setError(describe(cause, 'Отчёт по машинам не загрузился')));
+    void customerSettlements()
+      .then(setSettlements)
+      .catch((cause) => setError(describe(cause, 'Расчёты с клиентами не загрузились')));
   }, []);
 
   if (!canRead) {
@@ -173,6 +185,73 @@ export function ReportsScreen({ canRead }: Props) {
           сравнивать каналы между собой нельзя: «Дром принёс мало» и «продавцы
           не отмечают Дром» отсюда выглядят одинаково.
         </p>
+      )}
+
+      <hr />
+      <h3>Расчёты с клиентами</h3>
+
+      {settlements !== null && (
+        <>
+          <p className="note">
+            Авансов {settlements.totals.advances.toLocaleString('ru-RU')} ₽
+            у {settlements.totals.withAdvance} клиентов · долгов{' '}
+            {settlements.totals.debts.toLocaleString('ru-RU')} ₽
+            у {settlements.totals.withDebt}
+          </p>
+
+          {/* Сверка рядом с итогом, а не отдельной вкладкой: расхождение,
+              за которым надо куда-то идти, не смотрит никто. */}
+          {settlements.totals.problems.length > 0 ? (
+            <div className="note note--error">
+              <p>Деньги не сходятся — {settlements.totals.problems.length} расхождений:</p>
+              <ul>
+                {settlements.totals.problems.map((p, i) => (
+                  <li key={i}>
+                    {p.problem}
+                    {p.dealId !== null && ` · сделка ${p.dealId}`}
+                    {' · '}{p.amount.toLocaleString('ru-RU')} ₽
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="note">Расхождений нет: деньги на счетах сходятся с их движением.</p>
+          )}
+
+          {settlements.rows.length === 0 ? (
+            <p className="note">Ни авансов, ни долгов.</p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Клиент</th>
+                  <th className="num">Аванс</th>
+                  <th className="num">Долг</th>
+                  <th className="num">Сделок</th>
+                </tr>
+              </thead>
+              <tbody>
+                {settlements.rows.map((row) => (
+                  <tr key={row.customerId}>
+                    <td>
+                      {row.customerName ?? `клиент ${row.customerId}`}
+                      {row.phone !== null && <span className="muted"> · {row.phone}</span>}
+                    </td>
+                    <td className="num">
+                      {row.accountBalance === 0
+                        ? '—'
+                        : row.accountBalance.toLocaleString('ru-RU')}
+                    </td>
+                    <td className="num">
+                      {row.debt === 0 ? '—' : row.debt.toLocaleString('ru-RU')}
+                    </td>
+                    <td className="num">{row.unpaidDeals === 0 ? '—' : row.unpaidDeals}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
       )}
 
       <hr />
