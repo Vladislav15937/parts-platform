@@ -51,6 +51,8 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
   // обрезает контейнер с горизонтальной прокруткой — и от списка остаётся
   // белая полоска. Та же ловушка, что с накладкой снимков на витрине.
   const [pickAt, setPickAt] = useState<{ left: number; top: number } | null>(null);
+  // Какая колонка сейчас набирается: поле ввода на месте названия.
+  const [typing, setTyping] = useState<string | null>(null);
   // Карточка та же, что у запчасти: цена, списание и перемещение написаны
   // на складе, а не на виде товара. Пока карточки не было, колесо нельзя
   // было ни поправить, ни списать, ни перевезти — витрина склада показывает
@@ -64,15 +66,6 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
   }, [query]);
 
   useEffect(load, [load]);
-
-  /**
-   * Смена сортировки: второе нажатие по той же колонке переворачивает
-   * порядок, а по другой — начинает с убывания. Так в кабинете, и так
-   * ожидает рука.
-   */
-  function sortBy(sort: string): void {
-    setQuery(query.sort === sort ? { ...query, desc: !query.desc } : { ...query, sort, desc: true });
-  }
 
   useEffect(() => {
     void listWarehouses().then(setWarehouses).catch(() => setWarehouses([]));
@@ -159,7 +152,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
           <button
             type="button"
             className="button--ghost"
-            onClick={() => { setQuery(EMPTY_WHEEL_QUERY); setTyped(''); }}
+            onClick={() => { setQuery(EMPTY_WHEEL_QUERY); setTyped(''); setTyping(null); }}
           >
             Сбросить отбор
           </button>
@@ -211,37 +204,58 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
                     key={column.key}
                     className={
                       [column.numeric ? 'num' : '',
-                       query.columns[column.key] === undefined ? '' : 'th--filtered']
+                       filtered(query, column.key) ? 'th--filtered' : '']
                         .filter((c) => c !== '').join(' ') || undefined
                     }
                   >
-                    {/* Нажатие на заголовок открывает отбор, как в кабинете;
-                        сортировка — на стрелке рядом. Одно нажатие на два
-                        действия пришлось бы разводить по половинкам ячейки,
-                        и промах менял бы не то. */}
-                    <span
-                      className="th__title"
-                      onClick={(e) => {
-                        if (column.filter === false) return;
-                        const box = e.currentTarget.getBoundingClientRect();
-                        setPickAt({ left: box.left, top: box.bottom });
-                        setPicking(picking === column.key ? null : column.key);
-                      }}
-                      style={column.filter === false ? undefined : { cursor: 'pointer' }}
-                    >
-                      {column.title}
-                    </span>
-                    {column.sort !== undefined && (
+                    {/* Нажатие на название превращает его в поле ввода —
+                        так в кабинете: набрать три буквы быстрее, чем искать
+                        значение глазами в списке из сотни. Список и сортировка
+                        живут на стрелке рядом. */}
+                    {typing === column.key ? (
+                      <input
+                        autoFocus
+                        className="th__input"
+                        defaultValue={query.words[column.key] ?? ''}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') setTyping(null);
+                          if (e.key !== 'Enter') return;
+                          const words = { ...query.words };
+                          const typed = e.currentTarget.value.trim();
+                          if (typed === '') delete words[column.key];
+                          else words[column.key] = typed;
+                          setQuery({ ...query, words });
+                          setTyping(null);
+                        }}
+                        onBlur={() => setTyping(null)}
+                      />
+                    ) : (
+                      <span
+                        className="th__title"
+                        onClick={() => column.filter !== false && setTyping(column.key)}
+                        style={column.filter === false ? undefined : { cursor: 'text' }}
+                      >
+                        {column.title}
+                      </span>
+                    )}
+                    {(column.filter !== false || column.sort !== undefined) && (
                       <button
                         type="button"
-                        className="th__sort"
-                        onClick={() => sortBy(column.sort ?? '')}
+                        className="th__menu"
+                        onClick={(e) => {
+                          const box = e.currentTarget.getBoundingClientRect();
+                          setPickAt({ left: box.left, top: box.bottom });
+                          setPicking(picking === column.key ? null : column.key);
+                        }}
                       >
-                        {column.sort === query.sort ? (query.desc ? '↓' : '↑') : '⇅'}
+                        {column.sort === query.sort ? (query.desc ? '↓' : '↑') : '▾'}
                       </button>
                     )}
                     {query.columns[column.key] !== undefined && (
                       <div className="th__value">«{query.columns[column.key]}»</div>
+                    )}
+                    {query.words[column.key] !== undefined && (
+                      <div className="th__value">~{query.words[column.key]}</div>
                     )}
                   </th>
                 ))}
@@ -288,6 +302,14 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
           column={picking}
           at={pickAt}
           chosen={query.columns[picking]}
+          sortable={WHEEL_COLUMNS.find((c) => c.key === picking)?.sort}
+          sort={query.sort}
+          desc={query.desc}
+          onSort={(desc) => {
+            const column = WHEEL_COLUMNS.find((c) => c.key === picking);
+            if (column?.sort !== undefined) setQuery({ ...query, sort: column.sort, desc });
+            setPicking(null);
+          }}
           onPick={(value) => {
             const columns = { ...query.columns };
             if (value === null) delete columns[picking];
@@ -327,10 +349,20 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
  * <p>Поиск внутри списка обязателен: моделей шин у живого клиента под сотню,
  * и глазами по ним не пробежать.
  */
-function ValuePicker({ column, at, chosen, onPick, onClose }: {
+/** Колонка подсвечена, если по ней что-то отобрано — выбором или словом. */
+function filtered(query: WheelQuery, key: string): boolean {
+  return query.columns[key] !== undefined || query.words[key] !== undefined;
+}
+
+function ValuePicker({ column, at, chosen, sortable, sort, desc, onSort, onPick, onClose }: {
   column: string;
   at: { left: number; top: number };
   chosen: string | undefined;
+  /** Имя сортировки, если по колонке сортируют. */
+  sortable: string | undefined;
+  sort: string;
+  desc: boolean;
+  onSort: (desc: boolean) => void;
   onPick: (value: string | null) => void;
   onClose: () => void;
 }) {
@@ -365,6 +397,28 @@ function ValuePicker({ column, at, chosen, onPick, onClose }: {
         onClick={(e) => e.stopPropagation()}
       />
       <ul>
+        {/* Сортировка здесь же, а не отдельной кнопкой: и то и другое —
+            «что сделать с этой колонкой», и разводить их по двум местам
+            значит заставлять искать каждое. */}
+        {sortable !== undefined && (
+          <>
+            <li>
+              <button type="button"
+                      className={sortable === sort && !desc ? 'is-chosen' : ''}
+                      onClick={() => onSort(false)}>
+                ↑ по возрастанию
+              </button>
+            </li>
+            <li>
+              <button type="button"
+                      className={sortable === sort && desc ? 'is-chosen' : ''}
+                      onClick={() => onSort(true)}>
+                ↓ по убыванию
+              </button>
+            </li>
+            <li className="value-picker__line" />
+          </>
+        )}
         <li>
           <button type="button" className={chosen === undefined ? 'is-chosen' : ''}
                   onClick={() => onPick(null)}>

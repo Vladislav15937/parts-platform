@@ -111,9 +111,9 @@ public class WheelService {
      */
     @Transactional(readOnly = true)
     public List<WheelRow> list(String query, String kind, boolean withMissing,
-                               Map<String, String> columns, String sort, boolean descending,
-                               int limit) {
-        Filter filter = filterOf(query, kind, withMissing, columns);
+                               Map<String, String> columns, Map<String, String> words,
+                               String sort, boolean descending, int limit) {
+        Filter filter = filterOf(query, kind, withMissing, columns, words);
         List<Object> args = new java.util.ArrayList<>(filter.args());
         args.add(limit);
 
@@ -200,7 +200,7 @@ public class WheelService {
      * — первое, что делает кладовщик, когда ищет комплект железа.
      */
     private Filter filterOf(String query, String kind, boolean withMissing,
-                            Map<String, String> columns) {
+                            Map<String, String> columns, Map<String, String> words) {
         StringBuilder where = new StringBuilder(" WHERE p.product_line = 'WHEEL'");
         List<Object> args = new java.util.ArrayList<>();
 
@@ -262,6 +262,21 @@ public class WheelService {
         // а не набирает руками. Свободный ввод тут хуже: набрав «16» там,
         // где на складе только пятнадцатые, человек получает пустую таблицу
         // и не понимает, ошибся он или товара нет.
+        if (words != null) {
+            // Вбитое в колонку руками ищется вхождением: владелец набирает
+            // «Nok», а не выбирает «Nokian» из списка, — и это другой вопрос,
+            // чем выбор значения. Точным равенством оно не нашло бы ничего.
+            for (var entry : words.entrySet()) {
+                String expression = FILTERS.get(entry.getKey());
+                if (expression == null) {
+                    throw new IllegalArgumentException(
+                            "По этой колонке отбор не делается: " + entry.getKey());
+                }
+                where.append(" AND ").append(expression).append(" ILIKE ?");
+                args.add("%" + entry.getValue().strip() + "%");
+            }
+        }
+
         if (columns != null) {
             for (var entry : columns.entrySet()) {
                 String expression = FILTERS.get(entry.getKey());
@@ -403,11 +418,12 @@ public class WheelService {
      */
     @Transactional(readOnly = true)
     public void export(String query, String kind, boolean withMissing,
-                       Map<String, String> columns, String sort, boolean descending,
+                       Map<String, String> columns, Map<String, String> words,
+                       String sort, boolean descending,
                        List<CatalogService.Warehouse> warehouses,
                        CatalogService.RowWriter writer) {
 
-        Filter filter = filterOf(query, kind, withMissing, columns);
+        Filter filter = filterOf(query, kind, withMissing, columns, words);
 
         StringBuilder stock = new StringBuilder();
         for (CatalogService.Warehouse warehouse : warehouses) {

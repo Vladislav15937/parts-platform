@@ -124,6 +124,12 @@ export interface WheelQuery {
    * получает пустую таблицу и не понимает, ошибся он или товара нет.
    */
   columns: Record<string, string>;
+  /**
+   * Вбитое в колонку руками: ищется вхождением, а не точным равенством.
+   * Список нужен, когда значений десяток; когда их сотня — быстрее набрать
+   * три буквы, чем искать глазами.
+   */
+  words: Record<string, string>;
   sort: string;
   desc: boolean;
 }
@@ -133,13 +139,14 @@ export const FILTER_EMPTY = '\u2014пусто\u2014';
 export const FILTER_PRESENT = '\u2014не пусто\u2014';
 
 export const EMPTY_WHEEL_QUERY: WheelQuery = {
-  q: '', kind: '', missing: false, columns: {}, sort: 'set', desc: true,
+  q: '', kind: '', missing: false, columns: {}, words: {}, sort: 'set', desc: true,
 };
 
 /** Задан ли хоть один отбор: по этому экран решает, показывать ли «Сбросить». */
 export function hasWheelFilters(query: WheelQuery): boolean {
   return query.q.trim() !== '' || query.kind !== '' || query.missing
-    || Object.keys(query.columns).length > 0;
+    || Object.keys(query.columns).length > 0
+    || Object.keys(query.words).length > 0;
 }
 
 /** Значения колонки — по нажатию на заголовок, а не вместе со страницей. */
@@ -158,6 +165,9 @@ export function wheelParams(query: WheelQuery): URLSearchParams {
   // значение может содержать что угодно, включая запятую.
   for (const [column, value] of Object.entries(query.columns)) {
     params.append('filter', `${column}:${value}`);
+  }
+  for (const [column, value] of Object.entries(query.words)) {
+    if (value.trim() !== '') params.append('find', `${column}:${value.trim()}`);
   }
   params.set('sort', query.sort);
   params.set('desc', String(query.desc));

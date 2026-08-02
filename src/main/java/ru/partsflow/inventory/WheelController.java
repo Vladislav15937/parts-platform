@@ -53,12 +53,14 @@ public class WheelController {
                      @RequestParam(required = false) String kind,
                      @RequestParam(defaultValue = "false") boolean missing,
                      @RequestParam(required = false) List<String> filter,
+                     @RequestParam(required = false) List<String> find,
                      @RequestParam(defaultValue = "set") String sort,
                      @RequestParam(defaultValue = "true") boolean desc,
                      @RequestParam(defaultValue = "200") int limit) {
 
         return new View(catalog.warehouses(),
-                wheels.list(q, kind, missing, columnsOf(filter), sort, desc, Math.min(limit, 500))
+                wheels.list(q, kind, missing, columnsOf(filter), columnsOf(find),
+                                sort, desc, Math.min(limit, 500))
                         .stream().map(this::rowOf).toList());
     }
 
@@ -74,6 +76,7 @@ public class WheelController {
                        @RequestParam(required = false) String kind,
                        @RequestParam(defaultValue = "false") boolean missing,
                        @RequestParam(required = false) List<String> filter,
+                       @RequestParam(required = false) List<String> find,
                        @RequestParam(defaultValue = "set") String sort,
                        @RequestParam(defaultValue = "true") boolean desc,
                        jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
@@ -92,7 +95,7 @@ public class WheelController {
         out.write('\uFEFF');
         writeRow(out, WheelService.exportHeader(found));
 
-        wheels.export(q, kind, missing, columnsOf(filter), sort, desc, found,
+        wheels.export(q, kind, missing, columnsOf(filter), columnsOf(find), sort, desc, found,
                 cells -> writeRow(out, cells));
         out.flush();
     }
