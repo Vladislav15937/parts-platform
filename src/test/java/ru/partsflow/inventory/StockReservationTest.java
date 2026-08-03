@@ -183,10 +183,15 @@ class StockReservationTest extends PostgresTestBase {
             long partId = partWithStock("Стартер 1NZ-FE", 1);
             reserveCommitted(partId, warehouseId, 1);
 
-            // Ровно та ошибка, от которой стоит триггер: сначала списали,
-            // резерв снять забыли.
+            // Ровно та ошибка, от которой стоит ограничение схемы: сначала
+            // списали, резерв снять забыли. Отбивает её
+            // part_stock_reserved_ck — до 3 августа 2026 рядом стоял ещё
+            // и триггер с внятным текстом, но текст этот наружу не уходил
+            // (он поднимался с ERRCODE 'check_violation', а приложение
+            // отдаёт клиенту только P0001), то есть две проверки одного
+            // и того же, одна невидимая.
             assertThatThrownBy(() -> sale(partId, warehouseId, 1))
-                    .hasMessageContaining("При выдаче резерв снимают до списания");
+                    .hasMessageContaining("part_stock_reserved_ck");
 
             assertThat(qty(partId, warehouseId))
                     .as("списание прошло, несмотря на отбой").isEqualByComparingTo("1");
@@ -264,11 +269,27 @@ class StockReservationTest extends PostgresTestBase {
         }
     }
 
+    /**
+      * Тот же единственный запрос, что делает {@code StockReservationRepository}.
+      *
+      * <p>Дословно, а не через репозиторий: гонка воспроизводится только
+      * на двух своих соединениях со своими транзакциями, а репозиторий работает
+      * в транзакции Spring. Поэтому здесь копия — и она обязана оставаться
+      * копией: разойдясь, тест перестанет стеречь то, ради чего написан.
+      */
     private void reserve(Connection connection, long partId, long warehouse, int quantity)
             throws SQLException {
         try (Statement statement = connection.createStatement()) {
-            statement.execute("SELECT reserve_stock(%d, %d, %d)"
-                    .formatted(partId, warehouse, quantity));
+            int updated = statement.executeUpdate("""
+                    UPDATE part_stock
+                       SET qty_reserved = qty_reserved + %d, updated_at = now()
+                     WHERE part_id = %d AND warehouse_id = %d
+                       AND qty - qty_reserved >= %d"""
+                    .formatted(quantity, partId, warehouse, quantity));
+            if (updated == 0) {
+                throw new SQLException("Недостаточно свободного остатка: деталь %d, склад %d"
+                        .formatted(partId, warehouse));
+            }
         }
     }
 
@@ -280,8 +301,16 @@ class StockReservationTest extends PostgresTestBase {
 
     private void releaseCommitted(long partId, long warehouse, int quantity) throws SQLException {
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-            statement.execute("SELECT release_stock(%d, %d, %d)"
-                    .formatted(partId, warehouse, quantity));
+            int updated = statement.executeUpdate("""
+                    UPDATE part_stock
+                       SET qty_reserved = qty_reserved - %d, updated_at = now()
+                     WHERE part_id = %d AND warehouse_id = %d
+                       AND qty_reserved >= %d"""
+                    .formatted(quantity, partId, warehouse, quantity));
+            if (updated == 0) {
+                throw new SQLException("Нечего снимать с резерва: деталь %d, склад %d"
+                        .formatted(partId, warehouse));
+            }
         }
     }
 
@@ -294,7 +323,8 @@ class StockReservationTest extends PostgresTestBase {
         while (System.currentTimeMillis() < deadline) {
             if (scalarInt("""
                     SELECT count(*) FROM pg_stat_activity
-                    WHERE wait_event_type = 'Lock' AND query LIKE '%reserve_stock%'""") > 0) {
+                    WHERE wait_event_type = 'Lock'
+                      AND query LIKE '%qty_reserved = qty_reserved +%'""") > 0) {
                 return;
             }
             Thread.sleep(50);

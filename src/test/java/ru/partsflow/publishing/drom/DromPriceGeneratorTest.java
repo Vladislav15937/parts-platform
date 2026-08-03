@@ -44,6 +44,9 @@ class DromPriceGeneratorTest extends PostgresTestBase {
     private JdbcTemplate jdbc;
 
     @Autowired
+    private ru.partsflow.inventory.StockReservationRepository reservations;
+
+    @Autowired
     private TransactionTemplate transactionTemplate;
 
     private Long warehouse;
@@ -100,8 +103,10 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         String name = "Прайс: стартер 1NZ-FE";
         Long partId = part(name, new BigDecimal("5000"), true);
         intake(partId, warehouse, 1);
-        inTenant(() -> jdbc.queryForObject("SELECT reserve_stock(?, ?, 1)",
-                Object.class, partId, warehouse));
+        inTenant(() -> {
+            reservations.reserve(partId, warehouse, java.math.BigDecimal.ONE);
+            return null;
+        });
 
         assertThat(offerOf(name))
                 .as("зарезервированная деталь ушла в прайс как доступная")

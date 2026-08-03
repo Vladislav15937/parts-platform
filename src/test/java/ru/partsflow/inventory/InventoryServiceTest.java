@@ -41,6 +41,9 @@ class InventoryServiceTest extends PostgresTestBase {
     private JdbcTemplate jdbc;
 
     @Autowired
+    private StockReservationRepository reservations;
+
+    @Autowired
     private TransactionTemplate transactionTemplate;
 
     private Long warehouse;
@@ -175,8 +178,10 @@ class InventoryServiceTest extends PostgresTestBase {
     void promisedShortageDoesNotBlockOthers() {
         Long promised = partWithStock("Фара, обещанная покупателю", 1);
         Long other = partWithStock("Стартер, просто пропавший", 1);
-        inTenant(() -> jdbc.queryForObject(
-                "SELECT reserve_stock(?, ?, 1)", Object.class, promised, warehouse));
+        inTenant(() -> {
+            reservations.reserve(promised, warehouse, BigDecimal.ONE);
+            return null;
+        });
 
         Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
         inTenant(() -> inventory.count(sessionId, promised, BigDecimal.ZERO, null));
@@ -211,8 +216,10 @@ class InventoryServiceTest extends PostgresTestBase {
     void repeatedApplyAdjustsOnlyBlocked() {
         Long promised = partWithStock("Фара, снятая с резерва", 1);
         Long other = partWithStock("Стартер, пропавший рядом", 2);
-        inTenant(() -> jdbc.queryForObject(
-                "SELECT reserve_stock(?, ?, 1)", Object.class, promised, warehouse));
+        inTenant(() -> {
+            reservations.reserve(promised, warehouse, BigDecimal.ONE);
+            return null;
+        });
 
         Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
         inTenant(() -> inventory.count(sessionId, promised, BigDecimal.ZERO, null));
@@ -220,8 +227,10 @@ class InventoryServiceTest extends PostgresTestBase {
         inTenant(() -> inventory.finishCounting(sessionId));
         inTenant(() -> inventory.apply(sessionId));
 
-        inTenant(() -> jdbc.queryForObject(
-                "SELECT release_stock(?, ?, 1)", Object.class, promised, warehouse));
+        inTenant(() -> {
+            reservations.release(promised, warehouse, BigDecimal.ONE);
+            return null;
+        });
         var second = inTenant(() -> inventory.apply(sessionId));
 
         assertThat(second.adjusted()).isEqualTo(1);

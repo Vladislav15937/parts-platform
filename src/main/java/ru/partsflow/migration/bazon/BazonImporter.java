@@ -462,18 +462,32 @@ public final class BazonImporter {
                     + ".deal_item (deal_id, part_id, quantity, price, warehouse_id, status)"
                     + " VALUES (?, ?, ?, COALESCE((SELECT price FROM " + schema
                     + ".part WHERE id = ?), 0), ?, 'RESERVED')");
-                 PreparedStatement reserve = c.prepareStatement(
-                         "SELECT " + schema + ".reserve_stock(?, ?, ?)")) {
+                 // Тот же единственный запрос, что делает
+                 // StockReservationRepository. Копия, а не вызов репозитория:
+                 // перенос идёт своим соединением и своей транзакцией, вне
+                 // JPA. Разойдясь с оригиналом, копия перестанет проверять
+                 // свободный остаток — поэтому условие здесь дословное.
+                 PreparedStatement reserve = c.prepareStatement("UPDATE " + schema + """
+                         .part_stock
+                            SET qty_reserved = qty_reserved + ?, updated_at = now()
+                          WHERE part_id = ? AND warehouse_id = ?
+                            AND qty - qty_reserved >= ?""")) {
 
                 for (Reservation r : legacyReservations) {
                     java.sql.Savepoint savepoint = c.setSavepoint();
                     try {
-                        // Через ту же функцию, что и продажа: она проверяет
-                        // свободный остаток и меняет его одной инструкцией.
-                        reserve.setLong(1, r.partId());
-                        reserve.setLong(2, r.warehouseId());
-                        reserve.setBigDecimal(3, r.qty());
-                        reserve.execute();
+                        // Проверка и изменение — одна инструкция, как
+                        // и при продаже: ноль изменённых строк означает, что
+                        // свободного остатка не хватило.
+                        reserve.setBigDecimal(1, r.qty());
+                        reserve.setLong(2, r.partId());
+                        reserve.setLong(3, r.warehouseId());
+                        reserve.setBigDecimal(4, r.qty());
+                        if (reserve.executeUpdate() == 0) {
+                            throw new SQLException(
+                                    "недостаточно свободного остатка на складе "
+                                            + r.warehouseId());
+                        }
 
                         item.setLong(1, dealId);
                         item.setLong(2, r.partId());

@@ -135,9 +135,7 @@ class PartStatusTest extends PostgresTestBase {
         long partId = part("Капот Camry V40");
         intake(partId, warehouseId, 1);
 
-        try (Connection c = connect(); Statement s = c.createStatement()) {
-            s.execute("SELECT reserve_stock(%d, %d, 1)".formatted(partId, warehouseId));
-        }
+        reserve(partId, warehouseId);
 
         // Зарезервированная деталь физически на складе, и статус карточки
         // про наличие, а не про обещания: резерв виден в part_stock.
@@ -168,9 +166,7 @@ class PartStatusTest extends PostgresTestBase {
             applicableToBrand(partId, 1);
         }
         sale(sold, warehouseId, 1);
-        try (Connection c = connect(); Statement s = c.createStatement()) {
-            s.execute("SELECT reserve_stock(%d, %d, 1)".formatted(reserved, warehouseId));
-        }
+        reserve(reserved, warehouseId);
 
         assertThat(applicableParts(1))
                 .as("экран продавца показывает не только свободное")
@@ -214,6 +210,23 @@ class PartStatusTest extends PostgresTestBase {
 
     private void intake(long partId, long warehouse, int qty) throws SQLException {
         movement(partId, "INTAKE", qty, null, warehouse);
+    }
+
+    /**
+     * Тот же единственный запрос, что делает {@code StockReservationRepository}:
+     * этот тест ходит своими соединениями, а репозиторий работает в транзакции
+     * Spring.
+     */
+    private void reserve(long partId, long warehouse) throws SQLException {
+        try (Connection c = connect(); Statement s = c.createStatement()) {
+            int updated = s.executeUpdate("""
+                    UPDATE part_stock SET qty_reserved = qty_reserved + 1, updated_at = now()
+                     WHERE part_id = %d AND warehouse_id = %d AND qty - qty_reserved >= 1"""
+                    .formatted(partId, warehouse));
+            if (updated == 0) {
+                throw new SQLException("Недостаточно свободного остатка: деталь " + partId);
+            }
+        }
     }
 
     private void sale(long partId, long warehouse, int qty) throws SQLException {

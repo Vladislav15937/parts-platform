@@ -49,6 +49,9 @@ class WriteOffTest extends PostgresTestBase {
     private JdbcTemplate jdbc;
 
     @Autowired
+    private StockReservationRepository reservations;
+
+    @Autowired
     private TransactionTemplate transactionTemplate;
 
     @Autowired
@@ -134,8 +137,10 @@ class WriteOffTest extends PostgresTestBase {
     @Test
     @DisplayName("Отложенное покупателю не списывается, и отказ называет остаток")
     void reservedStockIsNotWrittenOff() throws Exception {
-        inTenant(() -> jdbc.queryForObject(
-                "SELECT reserve_stock(?, ?, 2)", Object.class, partId, warehouseId));
+        inTenant(() -> {
+            reservations.reserve(partId, warehouseId, new java.math.BigDecimal("2"));
+            return null;
+        });
 
         MockHttpSession session = login("vladelec");
 
