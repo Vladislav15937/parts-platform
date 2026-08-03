@@ -68,6 +68,7 @@
     <include file="tenant/049-no-triggers.sql" relativeToChangelogFile="true"/>
     <include file="tenant/050-no-functions.sql" relativeToChangelogFile="true"/>
     <include file="tenant/051-no-generated-columns.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/052-wheel-feed.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

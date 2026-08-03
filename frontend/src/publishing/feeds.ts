@@ -28,6 +28,8 @@ export interface Feed {
   hasCredentials: boolean;
   plaintextSecret: boolean;
   hasFeed: boolean;
+  /** Что уезжает: «PART» — запчасти, «WHEEL» — шины и диски. */
+  productLine: 'PART' | 'WHEEL';
   lastError: string | null;
   /**
    * Цена приходит числом, а не строкой: на сервере это {@code numeric},
@@ -88,13 +90,18 @@ export function listFeeds(): Promise<Feed[]> {
  * @param packetId номер прайс-листа из кабинета площадки; нужен дельтам
  *                 по API, постоянная ссылка работает и без него
  */
-export function createFeed(title: string, packetId: string): Promise<Feed> {
+export function createFeed(
+  title: string,
+  packetId: string,
+  productLine: 'PART' | 'WHEEL',
+): Promise<Feed> {
   return request<Feed>('/api/marketplace-accounts', {
     method: 'POST',
     body: {
       marketplace: 'DROM',
       title,
       settings: packetId.trim() === '' ? null : JSON.stringify({ packetId: packetId.trim() }),
+      productLine,
     },
   });
 }

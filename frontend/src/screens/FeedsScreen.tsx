@@ -201,7 +201,12 @@ function FeedCard({
     <li className="card">
       <div className="order-head">
         <strong>{feed.title}</strong>
-        <span>{feed.marketplace === 'AVITO' ? 'Авито' : 'Дром'}</span>
+        <span>
+          {feed.marketplace === 'AVITO' ? 'Авито' : 'Дром'}
+          {/* Вид товара — не украшение: две выгрузки на одну площадку иначе
+              различаются только содержимым файла, а его открывают раз в жизни. */}
+          {feed.productLine === 'WHEEL' ? ' · шины и диски' : ''}
+        </span>
       </div>
       <p className="muted">{filterSummary(feed)}</p>
 
@@ -435,6 +440,7 @@ function Picker({
 function NewFeed({ onCreated }: { onCreated: () => void }) {
   const [title, setTitle] = useState('');
   const [packetId, setPacketId] = useState('');
+  const [productLine, setProductLine] = useState<'PART' | 'WHEEL'>('PART');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -453,6 +459,21 @@ function NewFeed({ onCreated }: { onCreated: () => void }) {
           placeholder="например, Дром: основной"
           onChange={(e) => setTitle(e.target.value)}
         />
+      </label>
+
+      {/* Площадка требует держать шины отдельным прайс-листом, и требование
+          по делу: у шины свои поля — маркировка, сезон, шиповка, износ, —
+          а объявление «Шина 195/65 R15» среди запчастей уезжает в чужую
+          категорию, откуда его снимают. */}
+      <label>
+        Что выгружаем
+        <select
+          value={productLine}
+          onChange={(e) => setProductLine(e.target.value === 'WHEEL' ? 'WHEEL' : 'PART')}
+        >
+          <option value="PART">Запчасти</option>
+          <option value="WHEEL">Шины и диски</option>
+        </select>
       </label>
 
       <label>
@@ -476,7 +497,7 @@ function NewFeed({ onCreated }: { onCreated: () => void }) {
     setBusy(true);
     setError('');
     try {
-      await createFeed(title.trim(), packetId);
+      await createFeed(title.trim(), packetId, productLine);
       setTitle('');
       setPacketId('');
       onCreated();

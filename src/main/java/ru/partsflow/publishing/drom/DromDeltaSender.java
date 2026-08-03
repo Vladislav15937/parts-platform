@@ -49,17 +49,20 @@ public class DromDeltaSender {
     private final JdbcTemplate jdbc;
     private final DromAccountReader accounts;
     private final DromPriceGenerator priceGenerator;
+    private final DromWheelGenerator wheelGenerator;
     private final DromSyncClient syncClient;
     private final SecretCipher cipher;
 
     public DromDeltaSender(JdbcTemplate jdbc,
                            DromAccountReader accounts,
                            DromPriceGenerator priceGenerator,
+                           DromWheelGenerator wheelGenerator,
                            DromSyncClient syncClient,
                            SecretCipher cipher) {
         this.jdbc = jdbc;
         this.accounts = accounts;
         this.priceGenerator = priceGenerator;
+        this.wheelGenerator = wheelGenerator;
         this.syncClient = syncClient;
         this.cipher = cipher;
     }
@@ -134,12 +137,17 @@ public class DromDeltaSender {
 
     private boolean sendToAccount(Ready target, List<Long> partIds, String label) {
         ByteArrayOutputStream delta = new ByteArrayOutputStream();
-        int offers = priceGenerator.writeDelta(delta, partIds, target.account().filter());
+        // Выгрузка колёс собирается своим генератором: у шины свои поля,
+        // и дельта обязана быть в том же формате, что и полный прайс —
+        // площадка разбирает её той же настройкой.
+        int offers = target.account().isWheelFeed()
+                ? wheelGenerator.writeDelta(delta, partIds, target.account().filter())
+                : priceGenerator.writeDelta(delta, partIds, target.account().filter());
         if (offers == 0) {
             // Ни одна позиция не проходит отбор этой выгрузки — слать нечего.
             // Обычный случай: пять прайс-листов по ценовым диапазонам, деталь
-            // попадает в один. И сюда же попадают колёса: у прайса запчастей
-            // свой вид товара, а выгрузки для шин и дисков у нас пока нет.
+            // попадает в один. И сюда же попадает фара, отправленная
+            // в колёсную выгрузку, и шина — в выгрузку запчастей.
             return true;
         }
 

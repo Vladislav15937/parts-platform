@@ -52,15 +52,18 @@ public class DromFeedController {
     private final DromPriceGenerator generator;
     private final PhotoStorage photos;
     private final DromAccountReader accounts;
+    private final DromWheelGenerator wheels;
     private final String publicUrl;
 
     public DromFeedController(JdbcTemplate jdbc, DromPriceGenerator generator,
                               DromAccountReader accounts,
+                              DromWheelGenerator wheels,
                               PhotoStorage photos,
                               @Value("${app.public-url:}") String publicUrl) {
         this.jdbc = jdbc;
         this.generator = generator;
         this.accounts = accounts;
+        this.wheels = wheels;
         this.photos = photos;
         this.publicUrl = publicUrl;
     }
@@ -72,8 +75,8 @@ public class DromFeedController {
                      HttpServletResponse response) throws IOException {
 
         String schema = schemaOf(company);
-        DromPriceGenerator.FeedFilter filter = schema == null ? null : filterFor(schema, token);
-        if (filter == null) {
+        DromAccountReader.Account account = schema == null ? null : accountFor(schema, token);
+        if (account == null) {
             // Неверный код и неверный токен неразличимы: иначе по коду ответа
             // ссылка работает справочником действующих компаний.
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
@@ -89,8 +92,14 @@ public class DromFeedController {
 
         TenantContext.set(schema);
         try (OutputStream out = response.getOutputStream()) {
-            int offers = generator.writeTo(out, filter, photoBase(request, company, token));
-            log.info("Дром забрал прайс арендатора {}: {} позиций", schema, offers);
+            // Выгрузка знает, чем торгует: у шин свой формат со своими полями,
+            // и площадка сама требует держать их отдельным прайс-листом.
+            String base = photoBase(request, company, token);
+            int offers = account.isWheelFeed()
+                    ? wheels.writeTo(out, account.filter(), base)
+                    : generator.writeTo(out, account.filter(), base);
+            log.info("Дром забрал прайс арендатора {} ({}): {} позиций",
+                    schema, account.isWheelFeed() ? "колёса" : "запчасти", offers);
         } finally {
             TenantContext.clear();
         }
@@ -120,7 +129,7 @@ public class DromFeedController {
                       HttpServletResponse response) throws IOException {
 
         String schema = schemaOf(company);
-        String key = schema == null || filterFor(schema, token) == null
+        String key = schema == null || accountFor(schema, token) == null
                 ? null
                 : keyOf(schema, photoId);
         if (key == null) {
@@ -196,7 +205,7 @@ public class DromFeedController {
      * без раннего выхода — иначе «совпал первый кабинет» и «совпал третий»
      * отвечают за разное время.
      */
-    private DromPriceGenerator.FeedFilter filterFor(String schema, String token) {
+    private DromAccountReader.Account accountFor(String schema, String token) {
         List<DromAccountReader.Account> feeds = accounts.active(schema);
 
         byte[] presented = token.getBytes(StandardCharsets.UTF_8);
@@ -210,7 +219,7 @@ public class DromFeedController {
                 found = candidate;
             }
         }
-        return found == null ? null : found.filter();
+        return found;
     }
 
 }

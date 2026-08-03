@@ -26,6 +26,7 @@ public class DromAccountReader {
 
     private static final String SQL = """
             SELECT id, feed_token, settings ->> 'packetId' AS packet_id, credentials,
+                   product_line,
                    price_from, price_to, conditions, warehouse_ids,
                    kind_ids, kinds_excluded, brand_ids, brands_excluded
               FROM %smarketplace_account
@@ -56,6 +57,7 @@ public class DromAccountReader {
                 rs.getString("feed_token"),
                 rs.getString("packet_id"),
                 rs.getBytes("credentials"),
+                rs.getString("product_line"),
                 new DromPriceGenerator.FeedFilter(
                         rs.getBigDecimal("price_from"),
                         rs.getBigDecimal("price_to"),
@@ -82,7 +84,13 @@ public class DromAccountReader {
      * @param credentials ключ кабинета как он лежит в базе, зашифрованным
      */
     public record Account(long id, String feedToken, String packetId, byte[] credentials,
+                          String productLine,
                           DromPriceGenerator.FeedFilter filter) {
+
+        /** Выгрузка шин и дисков — у неё свой формат и свой генератор. */
+        public boolean isWheelFeed() {
+            return "WHEEL".equals(productLine);
+        }
 
         /** Готов принимать дельты: есть и номер прайс-листа, и ключ. */
         public boolean canReceiveDelta() {

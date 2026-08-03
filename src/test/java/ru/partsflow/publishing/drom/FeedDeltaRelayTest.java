@@ -228,6 +228,29 @@ class FeedDeltaRelayTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Колесо уезжает в выгрузку колёс своим форматом")
+    void wheelGoesToTheWheelFeed() {
+        wheelAccount("77777");
+        Long wheelId = wheel("Шина 195/65 R15 Nokian зимняя");
+        drainQueue();
+
+        inTenant(() -> {
+            jdbc.update("UPDATE part SET price = 7000 WHERE id = ?", wheelId);
+            partChanges.changed(wheelId);
+            return null;
+        });
+        relay.relayFor(TENANT);
+
+        // Формат тот же, что у полного прайса колёс: площадка разбирает
+        // дельту той же настройкой, и «marking» ей нужен не меньше, чем цена.
+        assertThat(syncClient.calls()).singleElement()
+                .satisfies(call -> {
+                    assertThat(call.packetId()).isEqualTo("77777");
+                    assertThat(call.delta()).contains("<marking>");
+                });
+    }
+
+    @Test
     @DisplayName("Колесо отмечается, но в прайс запчастей не уезжает")
     void wheelIsMarkedButNotSentToPartsFeed() {
         account("12345", null, null);
@@ -286,6 +309,18 @@ class FeedDeltaRelayTest extends PostgresTestBase {
     }
 
     // ---------- фикстуры ----------
+
+    /** Выгрузка шин и дисков: у неё свой формат и свой генератор. */
+    private Long wheelAccount(String packetId) {
+        return inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO marketplace_account
+                    (marketplace, title, credentials, settings, product_line)
+                VALUES ('DROM', ?, ?, ?::jsonb, 'WHEEL') RETURNING id""",
+                Long.class,
+                "Дром колёса " + packetId,
+                "ключ-кабинета".getBytes(StandardCharsets.UTF_8),
+                "{\"packetId\": \"" + packetId + "\"}"));
+    }
 
     private Long account(String packetId, String priceFrom, String priceTo) {
         return inTenant(() -> jdbc.queryForObject("""
