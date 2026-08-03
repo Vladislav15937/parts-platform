@@ -36,6 +36,9 @@ class PartChangeLogTest extends PostgresTestBase {
     private static final String TENANT = "t_000094";
 
     @Autowired
+    private StockLedger ledger;
+
+    @Autowired
     private PartService parts;
 
     @Autowired
@@ -230,9 +233,7 @@ class PartChangeLogTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price, is_published)
                     VALUES (1, ?, ?::numeric, true) RETURNING id""",
                     Long.class, title, price);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 1, ?)""", partId, warehouse);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
             return partId;
         });
     }

@@ -9,6 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.math.BigDecimal;
@@ -52,6 +53,9 @@ class DealConcurrencyTest extends PostgresTestBase {
      * потоки встречаются за миллисекунды.
      */
     private static final int WAIT_SECONDS = 60;
+
+    @Autowired
+    private ru.partsflow.inventory.StockLedger ledger;
 
     @Autowired
     private SalesService sales;
@@ -250,9 +254,7 @@ class DealConcurrencyTest extends PostgresTestBase {
             Long partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price) VALUES (1, ?, 5000)
                     RETURNING id""", Long.class, title);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', ?, ?)""", partId, qty, warehouseId);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.valueOf(qty), warehouseId, null));
             return partId;
         });
     }

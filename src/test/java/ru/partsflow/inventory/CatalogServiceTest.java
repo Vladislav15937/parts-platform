@@ -31,6 +31,9 @@ class CatalogServiceTest extends PostgresTestBase {
     private static final String TENANT = "t_000089";
 
     @Autowired
+    private StockLedger ledger;
+
+    @Autowired
     private CatalogService catalog;
 
     @Autowired
@@ -412,10 +415,7 @@ class CatalogServiceTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price) VALUES (1, ?, 1000)
                     RETURNING id""", Long.class, title);
             if (qty > 0) {
-                jdbc.update("""
-                        INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                                    to_warehouse_id)
-                        VALUES (?, 'INTAKE', ?, ?)""", id, qty, warehouseId);
+                ledger.record(StockMovement.intake(id, java.math.BigDecimal.valueOf(qty), warehouseId, null));
             }
             return id;
         });

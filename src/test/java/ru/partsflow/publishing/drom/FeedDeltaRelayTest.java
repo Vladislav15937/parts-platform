@@ -10,6 +10,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.nio.charset.StandardCharsets;
@@ -35,6 +36,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FeedDeltaRelayTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000093";
+
+    @Autowired
+    private ru.partsflow.inventory.StockLedger ledger;
 
     @Autowired
     private FeedDeltaRelay relay;
@@ -125,10 +129,7 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         // ещё меняет триггер базы (пункт 1 в docs/triggers-to-java.md),
         // поэтому отметку кладёт тот, кто движение записал.
         inTenant(() -> {
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                                from_warehouse_id)
-                    VALUES (?, 'WRITE_OFF', -1, ?)""", partId, warehouse);
+            ledger.record(StockMovement.writeOff(partId, java.math.BigDecimal.ONE, warehouse));
             partChanges.changed(partId);
             return null;
         });
@@ -304,9 +305,7 @@ class FeedDeltaRelayTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price, is_published)
                     VALUES (1, ?, ?::numeric, true) RETURNING id""",
                     Long.class, title, price);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 1, ?)""", partId, warehouse);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
             return partId;
         });
     }
@@ -319,9 +318,7 @@ class FeedDeltaRelayTest extends PostgresTestBase {
             jdbc.update("""
                     INSERT INTO part_wheel (part_id, kind, diameter, tyre_width, tyre_height)
                     VALUES (?, 'TYRE', 15, 195, 65)""", partId);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 1, ?)""", partId, warehouse);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
             return partId;
         });
     }
@@ -337,10 +334,7 @@ class FeedDeltaRelayTest extends PostgresTestBase {
             jdbc.update("""
                     INSERT INTO deal_item (deal_id, part_id, quantity, price, warehouse_id, status)
                     VALUES (?, ?, 1, 5000, ?, 'ISSUED')""", dealId, partId, warehouse);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                                from_warehouse_id, ref_type, ref_id)
-                    VALUES (?, 'SALE', -1, ?, 'DEAL', ?)""", partId, warehouse, dealId);
+            ledger.record(StockMovement.sale(partId, java.math.BigDecimal.ONE, warehouse, dealId));
             return dealId;
         });
     }

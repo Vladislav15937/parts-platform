@@ -40,18 +40,18 @@ public class InventoryService {
     private static final Logger log = LoggerFactory.getLogger(InventoryService.class);
 
     private final InventorySessionRepository sessions;
-    private final StockMovementRepository movements;
+    private final StockLedger ledger;
     private final JdbcTemplate jdbc;
     private final StockReservationRepository reservations;
     private final PartChangeLog partChanges;
 
     public InventoryService(InventorySessionRepository sessions,
-                            StockMovementRepository movements,
+                            StockLedger ledger,
                             JdbcTemplate jdbc,
                             StockReservationRepository reservations,
                             PartChangeLog partChanges) {
         this.sessions = sessions;
-        this.movements = movements;
+        this.ledger = ledger;
         this.jdbc = jdbc;
         this.reservations = reservations;
         this.partChanges = partChanges;
@@ -329,7 +329,7 @@ public class InventoryService {
                     continue;
                 }
             }
-            movements.save(StockMovement.inventoryAdjust(
+            ledger.record(StockMovement.inventoryAdjust(
                     d.partId(), d.delta(), session.getWarehouseId()));
             // Недостача обнуляет остаток и списывает карточку: на площадке
             // она обязана стать недоступной, а не ждать полного прайса.

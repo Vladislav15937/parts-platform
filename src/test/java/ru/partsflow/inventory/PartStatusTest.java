@@ -119,11 +119,7 @@ class PartStatusTest extends PostgresTestBase {
         intake(partId, warehouseId, 1);
 
         try (Connection c = connect(); Statement s = c.createStatement()) {
-            s.execute("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                                from_warehouse_id, to_warehouse_id)
-                    VALUES (%d, 'MOVE', 1, %d, %d)"""
-                    .formatted(partId, warehouseId, otherWarehouseId));
+            recordMovement(s, partId, "MOVE", "1", warehouseId, otherWarehouseId, null);
         }
 
         assertThat(status(partId)).isEqualTo("IN_STOCK");
@@ -244,12 +240,7 @@ class PartStatusTest extends PostgresTestBase {
     private void movement(long partId, String type, int delta, Long from, Long to)
             throws SQLException {
         try (Connection c = connect(); Statement s = c.createStatement()) {
-            s.execute("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                                from_warehouse_id, to_warehouse_id)
-                    VALUES (%d, '%s', %d, %s, %s)"""
-                    .formatted(partId, type, delta,
-                            from == null ? "NULL" : from, to == null ? "NULL" : to));
+            recordMovement(s, partId, type, String.valueOf(delta), from, to, null);
         }
     }
 

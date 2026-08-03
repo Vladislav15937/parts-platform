@@ -14,6 +14,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.util.function.Supplier;
@@ -39,6 +40,9 @@ class DromFeedControllerTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000066";
     private static final String OTHER_TENANT = "t_000067";
+
+    @Autowired
+    private ru.partsflow.inventory.StockLedger ledger;
 
     @Autowired
     private MockMvc mvc;
@@ -265,9 +269,7 @@ class DromFeedControllerTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price, cost_price, is_published)
                     VALUES (1, 'Дверь на дальнем складе', 7000, 3000, true) RETURNING id""",
                     Long.class);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 1, ?)""", partId, far);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, far, null));
 
             return jdbc.queryForObject("""
                     INSERT INTO marketplace_account (marketplace, title, settings, warehouse_ids)
@@ -311,9 +313,7 @@ class DromFeedControllerTest extends PostgresTestBase {
                     INSERT INTO part (category_id, donor_id, title, price, is_published)
                     VALUES (1, ?, 'Дверь с донора', 8000, true) RETURNING id""",
                     Long.class, donorId);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 1, ?)""", partId, warehouse);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
             return brandId;
         });
 
@@ -350,9 +350,7 @@ class DromFeedControllerTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price, is_published, product_line)
                     VALUES (1, 'Шина 195/65 R15 Goodyear', 3500, true, 'WHEEL') RETURNING id""",
                     Long.class);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 4, ?)""", partId, warehouse);
+            ledger.record(StockMovement.intake(partId, new java.math.BigDecimal("4"), warehouse, null));
             return null;
         });
 
@@ -408,9 +406,7 @@ class DromFeedControllerTest extends PostgresTestBase {
         Long partId = jdbc.queryForObject("""
                 INSERT INTO part (category_id, title, price, cost_price, is_published)
                 VALUES (1, ?, ?, 100, true) RETURNING id""", Long.class, title, price);
-        jdbc.update("""
-                INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                VALUES (?, 'INTAKE', 1, ?)""", partId, warehouse);
+        ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
     }
 
     private String rotate(Long id) throws Exception {
@@ -478,9 +474,7 @@ class DromFeedControllerTest extends PostgresTestBase {
         Long partId = jdbc.queryForObject("""
                 INSERT INTO part (category_id, title, price, cost_price, is_published)
                 VALUES (1, ?, 5000, 2000, true) RETURNING id""", Long.class, title);
-        jdbc.update("""
-                INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                VALUES (?, 'INTAKE', 1, ?)""", partId, warehouse);
+        ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
     }
 
     private void member(String login, String role) {

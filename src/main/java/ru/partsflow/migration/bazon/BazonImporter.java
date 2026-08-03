@@ -12,6 +12,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.sql.Types;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -83,8 +84,55 @@ public final class BazonImporter {
         Map<String, Long> warehouses = ensureWarehouses(catalogCsv, branchId, report);
 
         importParts(catalogCsv, categoryId, donorSupplies, donors, partNames, warehouses, report);
+        // Пересчёт до резервов: те проверяют свободный остаток, а он берётся
+        // из раскладки, которую как раз этот шаг и заполняет.
+        report.count("карточек с пересчитанным остатком", applyMovements());
         importReservations(report);
         return report;
+    }
+
+    /**
+     * Применяет записанные движения к раскладке и карточкам — пачкой.
+     *
+     * <p>До 3 августа 2026 это делал триггер на каждой вставке. Перенос пишет
+     * тридцать пять тысяч движений, и применять их по одному значило бы
+     * столько же обращений к базе; остаток и статус выводятся из журнала,
+     * поэтому пачкой получается то же самое. Тот же расчёт, что
+     * в {@code StockLedger.recomputeAll} — но своим соединением: перенос идёт
+     * вне JPA.
+     *
+     * <p>Статус выводится из остатка, а не из вида последнего движения:
+     * у переехавшего склада все движения — приход. Позиция, которой в чужой
+     * выгрузке нет ни на одном складе, так и остаётся черновиком — обещать
+     * наличие за неё нельзя.
+     */
+    private int applyMovements() throws SQLException {
+        try (Connection c = dataSource.getConnection(); Statement s = c.createStatement()) {
+            s.execute("SET search_path TO " + schema + ", catalog, public");
+            s.executeUpdate("""
+                    INSERT INTO part_stock (part_id, warehouse_id, qty)
+                    SELECT part_id, warehouse, sum(delta)
+                      FROM (
+                          SELECT part_id, to_warehouse_id AS warehouse, abs(qty_delta) AS delta
+                            FROM stock_movement WHERE to_warehouse_id IS NOT NULL
+                          UNION ALL
+                          SELECT part_id, from_warehouse_id, -abs(qty_delta)
+                            FROM stock_movement WHERE from_warehouse_id IS NOT NULL
+                      ) m
+                     GROUP BY part_id, warehouse
+                    ON CONFLICT (part_id, warehouse_id) DO UPDATE
+                        SET qty = EXCLUDED.qty, updated_at = now()""");
+
+            return s.executeUpdate("""
+                    UPDATE part p
+                       SET qty_on_hand = stock.qty,
+                           status = CASE WHEN stock.qty > 0 THEN 'IN_STOCK' ELSE p.status END
+                      FROM (SELECT part_id, sum(qty) AS qty
+                              FROM part_stock GROUP BY part_id) stock
+                     WHERE p.id = stock.part_id
+                       AND (p.qty_on_hand IS DISTINCT FROM stock.qty
+                            OR (stock.qty > 0 AND p.status <> 'IN_STOCK'))""");
+        }
     }
 
     /**

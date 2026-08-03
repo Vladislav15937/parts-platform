@@ -36,7 +36,7 @@ public class SalesService {
     private final CustomerAccountEntryRepository accountRepository;
     private final DocumentEventRepository eventRepository;
     private final PartRepository partRepository;
-    private final StockMovementRepository movementRepository;
+    private final ru.partsflow.inventory.StockLedger ledger;
     private final StockReservationRepository reservationRepository;
     private final DomainEventPublisher eventPublisher;
     private final ServiceKindRepository serviceKinds;
@@ -50,7 +50,7 @@ public class SalesService {
                         CustomerAccountEntryRepository accountRepository,
                         DocumentEventRepository eventRepository,
                         PartRepository partRepository,
-                        StockMovementRepository movementRepository,
+                        ru.partsflow.inventory.StockLedger ledger,
                         StockReservationRepository reservationRepository,
                         DomainEventPublisher eventPublisher,
                         ServiceKindRepository serviceKinds,
@@ -63,7 +63,7 @@ public class SalesService {
         this.accountRepository = accountRepository;
         this.eventRepository = eventRepository;
         this.partRepository = partRepository;
-        this.movementRepository = movementRepository;
+        this.ledger = ledger;
         this.reservationRepository = reservationRepository;
         this.eventPublisher = eventPublisher;
         this.serviceKinds = serviceKinds;
@@ -435,7 +435,7 @@ public class SalesService {
             reservationRepository.release(
                     item.getPartId(), item.getWarehouseId(), item.getQuantity());
 
-            movementRepository.save(StockMovement.sale(
+            ledger.record(StockMovement.sale(
                     item.getPartId(), item.getQuantity(), item.getWarehouseId(), dealId));
             // Проданная позиция обязана уехать на площадку недоступной, и чем
             // раньше, тем меньше звонков «а она у вас есть».
@@ -579,7 +579,7 @@ public class SalesService {
 
         saved.complete(now);
         for (DealReturnItem item : saved.restockedItems()) {
-            movementRepository.save(StockMovement.returned(
+            ledger.record(StockMovement.returned(
                     item.getPartId(), item.getQuantity(), warehouseId, saved.getId()));
             // Вернувшаяся деталь снова в продаже — объявление надо оживить.
             partChanges.changed(item.getPartId());

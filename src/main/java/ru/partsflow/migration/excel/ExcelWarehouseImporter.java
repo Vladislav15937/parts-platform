@@ -54,9 +54,13 @@ public class ExcelWarehouseImporter {
     private final JdbcTemplate jdbc;
     private final PartNameService partNames;
 
-    public ExcelWarehouseImporter(JdbcTemplate jdbc, PartNameService partNames) {
+    private final ru.partsflow.inventory.StockLedger ledger;
+
+    public ExcelWarehouseImporter(JdbcTemplate jdbc, PartNameService partNames,
+                                  ru.partsflow.inventory.StockLedger ledger) {
         this.jdbc = jdbc;
         this.partNames = partNames;
+        this.ledger = ledger;
     }
 
     /**
@@ -153,6 +157,11 @@ public class ExcelWarehouseImporter {
             return true;
         });
         flush(batch, warehouseId, cells, names, report);
+
+        // Движения записаны, применить их надо пачкой: тысяча строк — тысяча
+        // обращений к базе, если делать это по одному. Остаток и статус
+        // считаются по журналу, поэтому результат тот же.
+        ledger.recomputeAll();
 
         log.info("Импорт из таблицы: заведено {} позиций, пропущено {}",
                 report.imported, report.skipped.size());
@@ -261,6 +270,8 @@ public class ExcelWarehouseImporter {
                                                 to_warehouse_id, to_cell_id, reason)
                     VALUES (?, 'INTAKE', ?, ?, ?, 'Импорт из таблицы')""",
                     partId, row.quantity(), warehouseId, cellId);
+            // Применяется это пачкой, после всех строк — см. recomputeAll
+            // в конце importInto.
 
             report.imported++;
         }

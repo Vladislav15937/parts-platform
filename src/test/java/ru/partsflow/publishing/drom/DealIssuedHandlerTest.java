@@ -16,6 +16,7 @@ import ru.partsflow.platform.outbox.DomainEvent;
 import ru.partsflow.platform.outbox.DomainEventPublisher;
 import ru.partsflow.platform.outbox.OutboxRelay;
 import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.nio.charset.StandardCharsets;
@@ -41,6 +42,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DealIssuedHandlerTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000063";
+
+    @Autowired
+    private ru.partsflow.inventory.StockLedger ledger;
 
     @Autowired
     private OutboxRelay relay;
@@ -211,9 +215,7 @@ class DealIssuedHandlerTest extends PostgresTestBase {
             Long partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price, cost_price, is_published)
                     VALUES (1, ?, 5000, 2000, true) RETURNING id""", Long.class, title);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 1, ?)""", partId, warehouse);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
             return partId;
         });
     }
@@ -227,10 +229,7 @@ class DealIssuedHandlerTest extends PostgresTestBase {
             jdbc.update("""
                     INSERT INTO deal_item (deal_id, part_id, quantity, price, warehouse_id, status)
                     VALUES (?, ?, 1, 5000, ?, 'ISSUED')""", dealId, partId, warehouse);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                                from_warehouse_id, ref_type, ref_id)
-                    VALUES (?, 'SALE', -1, ?, 'DEAL', ?)""", partId, warehouse, dealId);
+            ledger.record(StockMovement.sale(partId, java.math.BigDecimal.ONE, warehouse, dealId));
             return dealId;
         });
     }

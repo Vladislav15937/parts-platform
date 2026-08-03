@@ -244,28 +244,22 @@ class StockReservationTest extends PostgresTestBase {
             long partId = insertId(statement, """
                     INSERT INTO part (category_id, title, price, cost_price, status)
                     VALUES (1, '%s', 8500, 4000, 'IN_STOCK') RETURNING id""".formatted(title));
-            statement.execute("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                                to_warehouse_id, to_cell_id)
-                    VALUES (%d, 'INTAKE', %d, %d, %d)"""
-                    .formatted(partId, quantity, warehouseId, cellId));
+            recordMovement(statement, partId, "INTAKE", String.valueOf(quantity),
+                    null, warehouseId, cellId);
             return partId;
         }
     }
 
     private void addStock(long partId, long warehouse, int quantity) throws SQLException {
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-            statement.execute("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (%d, 'INTAKE', %d, %d)""".formatted(partId, quantity, warehouse));
+            recordMovement(statement, partId, "INTAKE", String.valueOf(quantity),
+                    null, warehouse, null);
         }
     }
 
     private void sale(long partId, long warehouse, int quantity) throws SQLException {
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-            statement.execute("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, from_warehouse_id)
-                    VALUES (%d, 'SALE', -%d, %d)""".formatted(partId, quantity, warehouse));
+            recordMovement(statement, partId, "SALE", "-" + quantity, warehouse, null, null);
         }
     }
 

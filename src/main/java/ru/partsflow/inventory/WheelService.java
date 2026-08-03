@@ -34,9 +34,11 @@ public class WheelService {
     private final JdbcTemplate jdbc;
 
     private final PartChangeLog partChanges;
+    private final StockLedger ledger;
 
-    public WheelService(JdbcTemplate jdbc, PartChangeLog partChanges) {
+    public WheelService(JdbcTemplate jdbc, PartChangeLog partChanges, StockLedger ledger) {
         this.partChanges = partChanges;
+        this.ledger = ledger;
         this.jdbc = jdbc;
     }
 
@@ -93,12 +95,12 @@ public class WheelService {
                     request.markingType(), request.treadType(), request.runFlat(),
                     request.lightTruck(), request.speedIndex(), request.loadIndex());
 
-            // Остаток появляется только движением: писать qty_on_hand напрямую
-            // нельзя, его ведёт триггер.
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                                to_warehouse_id, created_by)
-                    VALUES (?, 'INTAKE', 1, ?, ?)""", partId, warehouseId, createdBy);
+            // Остаток появляется только движением, и записать его мало —
+            // применить движение к раскладке и карточке должен тот же вызов.
+            StockMovement intake = StockMovement.intake(
+                    partId, java.math.BigDecimal.ONE, warehouseId, null);
+            intake.setCreatedBy(createdBy);
+            ledger.record(intake);
 
             ids.add(partId);
         }

@@ -132,6 +132,61 @@ public abstract class PostgresTestBase {
         runLiquibase("db.changelog-catalog.xml", "public", null);
     }
 
+    /**
+     * Движение склада своим соединением: журнал плюс применение.
+     *
+     * <p>Копия того, что делает {@code StockLedger}. Нужна тестам, которые
+     * ходят в базу собственными соединениями — гонка двух продавцов
+     * и проверка статусов иначе не воспроизводятся: репозиторий работает
+     * в транзакции Spring, а тут нужны две независимые.
+     *
+     * <p>Копия обязана оставаться копией: разойдясь с оригиналом, эти тесты
+     * начнут проверять несуществующее поведение. До 3 августа 2026 применял
+     * триггер, и копия была не нужна — это и есть цена переноса.
+     */
+    protected static void recordMovement(Statement statement, long partId, String type,
+                                         String delta, Long from, Long to, Long toCell)
+            throws java.sql.SQLException {
+        statement.execute("""
+                INSERT INTO stock_movement (part_id, movement_type, qty_delta,
+                                            from_warehouse_id, to_warehouse_id, to_cell_id)
+                VALUES (%d, '%s', %s, %s, %s, %s)"""
+                .formatted(partId, type, delta,
+                        from == null ? "NULL" : from,
+                        to == null ? "NULL" : to,
+                        toCell == null ? "NULL" : toCell));
+
+        if (from != null) {
+            statement.executeUpdate("""
+                    UPDATE part_stock SET qty = qty - abs(%s), updated_at = now()
+                     WHERE part_id = %d AND warehouse_id = %d"""
+                    .formatted(delta, partId, from));
+        }
+        if (to != null) {
+            statement.executeUpdate("""
+                    INSERT INTO part_stock (part_id, warehouse_id, qty, cell_id)
+                    VALUES (%d, %d, abs(%s), %s)
+                    ON CONFLICT (part_id, warehouse_id) DO UPDATE
+                        SET qty = part_stock.qty + abs(%s),
+                            cell_id = COALESCE(EXCLUDED.cell_id, part_stock.cell_id),
+                            updated_at = now()"""
+                    .formatted(partId, to, delta, toCell == null ? "NULL" : toCell, delta));
+        }
+        statement.executeUpdate("""
+                UPDATE part p
+                   SET qty_on_hand = stock.qty,
+                       status = CASE
+                           WHEN stock.qty > 0 THEN 'IN_STOCK'
+                           WHEN '%s' = 'SALE' THEN 'SOLD'
+                           WHEN '%s' = 'WRITE_OFF' THEN 'WRITTEN_OFF'
+                           WHEN '%s' = 'INVENTORY_ADJUST' AND %s < 0 THEN 'WRITTEN_OFF'
+                           ELSE p.status END
+                  FROM (SELECT COALESCE(sum(qty), 0) AS qty
+                          FROM part_stock WHERE part_id = %d) stock
+                 WHERE p.id = %d"""
+                .formatted(type, type, type, delta, partId, partId));
+    }
+
     protected static void provisionTenants(String... schemas) {
         for (String schema : schemas) {
             // Схему создаёт провижининг, а не миграции: DATABASECHANGELOG лежит

@@ -9,6 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.io.ByteArrayOutputStream;
@@ -33,6 +34,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DromPriceGeneratorTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000046";
+
+    @Autowired
+    private ru.partsflow.inventory.StockLedger ledger;
 
     @Autowired
     private DromPriceGenerator generator;
@@ -132,9 +136,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         String name = "Прайс: радиатор кондиционера";
         Long partId = part(name, new BigDecimal("2000"), true);
         intake(partId, warehouse, 1);
-        inTenant(() -> jdbc.update("""
-                INSERT INTO stock_movement (part_id, movement_type, qty_delta, from_warehouse_id)
-                VALUES (?, 'WRITE_OFF', -1, ?)""", partId, warehouse));
+        inTenant(() -> ledger.record(StockMovement.writeOff(partId, java.math.BigDecimal.ONE, warehouse)));
 
         // Из полного прайса пропало — так площадка и узнаёт об удалении:
         // «проверяем, какие товары пропали, и убираем их с сайта».
@@ -254,15 +256,11 @@ class DromPriceGeneratorTest extends PostgresTestBase {
     }
 
     private void intake(Long partId, Long warehouseId, int qty) {
-        inTenant(() -> jdbc.update("""
-                INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                VALUES (?, 'INTAKE', ?, ?)""", partId, qty, warehouseId));
+        inTenant(() -> ledger.record(StockMovement.intake(partId, java.math.BigDecimal.valueOf(qty), warehouseId, null)));
     }
 
     private void sale(Long partId, Long warehouseId, int qty) {
-        inTenant(() -> jdbc.update("""
-                INSERT INTO stock_movement (part_id, movement_type, qty_delta, from_warehouse_id)
-                VALUES (?, 'SALE', ?, ?)""", partId, -qty, warehouseId));
+        inTenant(() -> ledger.record(StockMovement.sale(partId, java.math.BigDecimal.valueOf(qty), warehouseId, null)));
     }
 
     private String price() {

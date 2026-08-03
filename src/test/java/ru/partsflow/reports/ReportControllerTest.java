@@ -14,6 +14,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.time.YearMonth;
@@ -39,6 +40,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ReportControllerTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000073";
+
+    @Autowired
+    private ru.partsflow.inventory.StockLedger ledger;
 
     @Autowired
     private MockMvc mvc;
@@ -137,9 +141,7 @@ class ReportControllerTest extends PostgresTestBase {
             Long id = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price) VALUES (1, 'Дверь без закупки', 5000)
                     RETURNING id""", Long.class);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 1, ?)""", id, warehouse);
+            ledger.record(StockMovement.intake(id, java.math.BigDecimal.ONE, warehouse, null));
             return id;
         });
         issuedDeal(seller("без себестоимости"), partId);
@@ -392,9 +394,7 @@ class ReportControllerTest extends PostgresTestBase {
             Long partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, donor_id, title, price, cost_price)
                     VALUES (1, ?, ?, 5000, 2000) RETURNING id""", Long.class, donorId, title);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', ?, ?)""", partId, qty, warehouse);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.valueOf(qty), warehouse, null));
             return partId;
         });
     }

@@ -41,6 +41,9 @@ class PartHistoryHttpTest extends PostgresTestBase {
     private static final String TENANT = "t_000091";
 
     @Autowired
+    private StockLedger ledger;
+
+    @Autowired
     private MockMvc mvc;
 
     @Autowired
@@ -79,9 +82,7 @@ class PartHistoryHttpTest extends PostgresTestBase {
                     VALUES (1, 'Фара для истории', 4500, 1200) RETURNING id""", Long.class);
             // Приход двигает остаток и статус — это правка строки, которую
             // делает триггер, а не человек. В ленте правок её быть не должно.
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 2, ?)""", partId, warehouseId);
+            ledger.record(StockMovement.intake(partId, new java.math.BigDecimal("2"), warehouseId, null));
             return null;
         });
     }

@@ -45,6 +45,9 @@ class InventoryHttpTest extends PostgresTestBase {
     private static final String TENANT = "t_000087";
 
     @Autowired
+    private StockLedger ledger;
+
+    @Autowired
     private MockMvc mvc;
 
     @Autowired
@@ -88,9 +91,7 @@ class InventoryHttpTest extends PostgresTestBase {
             partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price) VALUES (1, 'Фара для пересчёта', 4500)
                     RETURNING id""", Long.class);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 2, ?)""", partId, warehouseId);
+            ledger.record(StockMovement.intake(partId, new java.math.BigDecimal("2"), warehouseId, null));
             return null;
         });
     }

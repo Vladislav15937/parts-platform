@@ -13,6 +13,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.nio.charset.StandardCharsets;
@@ -34,6 +35,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DromDeltaSenderTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000047";
+
+    @Autowired
+    private ru.partsflow.inventory.StockLedger ledger;
 
     @Autowired
     private DromDeltaSender sender;
@@ -238,9 +242,7 @@ class DromDeltaSenderTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price, cost_price, is_published)
                     VALUES (1, ?, 5000, 2000, ?) RETURNING id""",
                     Long.class, title, published);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 1, ?)""", partId, warehouse);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
             return partId;
         });
     }
@@ -255,10 +257,7 @@ class DromDeltaSenderTest extends PostgresTestBase {
             jdbc.update("""
                     INSERT INTO deal_item (deal_id, part_id, quantity, price, warehouse_id, status)
                     VALUES (?, ?, 1, 5000, ?, 'ISSUED')""", dealId, partId, warehouse);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                                from_warehouse_id, ref_type, ref_id)
-                    VALUES (?, 'SALE', -1, ?, 'DEAL', ?)""", partId, warehouse, dealId);
+            ledger.record(StockMovement.sale(partId, java.math.BigDecimal.ONE, warehouse, dealId));
             return dealId;
         });
     }

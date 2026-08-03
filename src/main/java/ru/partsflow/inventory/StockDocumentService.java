@@ -17,16 +17,16 @@ import java.time.Instant;
 public class StockDocumentService {
 
     private final StockDocumentRepository documents;
-    private final StockMovementRepository movements;
+    private final StockLedger ledger;
     private final StockReservationRepository stock;
     private final PartChangeLog partChanges;
 
     public StockDocumentService(StockDocumentRepository documents,
-                               StockMovementRepository movements,
+                               StockLedger ledger,
                                StockReservationRepository stock,
                                PartChangeLog partChanges) {
         this.documents = documents;
-        this.movements = movements;
+        this.ledger = ledger;
         this.stock = stock;
         this.partChanges = partChanges;
     }
@@ -55,7 +55,7 @@ public class StockDocumentService {
 
         for (StockDocumentLine line : document.getLines()) {
             requireAvailable(document, line);
-            movements.save(movementFor(document, line));
+            ledger.record(movementFor(document, line));
         }
         // Остаток и статус пересчитает триггер журнала, но узнать об этом
         // площадке неоткуда: отметку ставим здесь, где движение и рождается.

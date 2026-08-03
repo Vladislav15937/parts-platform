@@ -14,6 +14,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.util.function.Supplier;
@@ -40,6 +41,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class MarketplaceOrderHttpTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000086";
+
+    @Autowired
+    private ru.partsflow.inventory.StockLedger ledger;
 
     @Autowired
     private MockMvc mvc;
@@ -84,9 +88,7 @@ class MarketplaceOrderHttpTest extends PostgresTestBase {
             partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price) VALUES (1, 'Фара заказанная', 4500)
                     RETURNING id""", Long.class);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 2, ?)""", partId, warehouseId);
+            ledger.record(StockMovement.intake(partId, new java.math.BigDecimal("2"), warehouseId, null));
             return null;
         });
     }

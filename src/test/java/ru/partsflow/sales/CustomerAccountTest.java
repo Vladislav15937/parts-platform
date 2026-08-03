@@ -9,6 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.math.BigDecimal;
@@ -35,6 +36,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class CustomerAccountTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000089";
+
+    @Autowired
+    private ru.partsflow.inventory.StockLedger ledger;
 
     @Autowired
     private SalesService sales;
@@ -367,9 +371,7 @@ class CustomerAccountTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price, cost_price, status)
                     VALUES (1, ?, ?, ?, 'IN_STOCK') RETURNING id""",
                     Long.class, title, price, price.multiply(new BigDecimal("0.4")));
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 1, ?)""", partId, warehouseId);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouseId, null));
             return partId;
         });
     }
