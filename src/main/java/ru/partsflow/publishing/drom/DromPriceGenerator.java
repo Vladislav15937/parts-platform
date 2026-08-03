@@ -68,7 +68,16 @@ public class DromPriceGenerator {
                    p.side_ud,
                    primary_oem.raw_number AS oem_number,
                    analogs.numbers        AS analog_numbers,
-                   photos.ids             AS photo_ids
+                   photos.ids             AS photo_ids,
+                   -- Применимость: сначала машина, с которой деталь снята,
+                   -- потом — перечисленные в применимости. У контрактной
+                   -- машины нет вовсе, а подходит она к нескольким, и без
+                   -- второй половины такая позиция уезжает безадресной.
+                   COALESCE(db.name, fit.brands)  AS car_brand,
+                   COALESCE(dm.name, fit.models)  AS car_model,
+                   d.body_code,
+                   d.engine_code,
+                   d.year
               FROM part p
               LEFT JOIN (
                   SELECT part_id, sum(qty_available) AS qty_available
@@ -95,6 +104,20 @@ public class DromPriceGenerator {
                    WHERE status = 'PROCESSED'
                    GROUP BY part_id
               ) photos ON photos.part_id = p.id
+              LEFT JOIN catalog.brand db ON db.id = d.brand_id
+              LEFT JOIN catalog.model dm ON dm.id = d.model_id
+              -- Марки и модели применимости — списком через запятую, как
+              -- и номера-аналоги: деталь, подходящая к пяти машинам, иначе
+              -- достанется одной из них.
+              LEFT JOIN (
+                  SELECT a.part_id,
+                         string_agg(DISTINCT ab.name, ',') AS brands,
+                         string_agg(DISTINCT am.name, ',') AS models
+                    FROM part_applicability a
+                    JOIN catalog.brand ab ON ab.id = a.brand_id
+                    LEFT JOIN catalog.model am ON am.id = a.model_id
+                   GROUP BY a.part_id
+              ) fit ON fit.part_id = p.id
              WHERE p.is_published
                -- Колёса в прайс запчастей не идут: у площадки для шин
                -- и дисков свой формат со своими полями, и объявление
@@ -364,7 +387,18 @@ public class DromPriceGenerator {
                     enumOf(VerticalSide.class, rs.getString("side_ud")),
                     rs.getString("color"),
                     rs.getString("marking"),
-                    photoLinks(rs.getString("photo_ids"), photoBase));
+                    photoLinks(rs.getString("photo_ids"), photoBase),
+                    rs.getString("car_brand"),
+                    rs.getString("car_model"),
+                    rs.getString("body_code"),
+                    rs.getString("engine_code"),
+                    year(rs));
+        }
+
+        /** Года у контрактной детали нет, а {@code getInt} отдаёт на это ноль. */
+        private static Integer year(ResultSet rs) throws SQLException {
+            int value = rs.getInt("year");
+            return rs.wasNull() ? null : value;
         }
 
         private static List<String> splitAnalogs(String joined) {

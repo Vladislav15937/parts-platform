@@ -55,6 +55,43 @@ class DromPriceWriterTest {
         }
 
         @Test
+        @DisplayName("Применимость едет отдельными тегами, а не в наименовании")
+        void writesApplicability() throws Exception {
+            // Эталон Дрома для «Автозапчастей» просит это первым: по марке
+            // и модели покупатель фильтрует, а из заголовка площадка их
+            // не разбирает.
+            String xml = write(offer());
+
+            assertThat(xml)
+                    .contains("<brandcars>Honda</brandcars>")
+                    .contains("<modelcars>Airwave</modelcars>")
+                    .contains("<bodycars>GJ1</bodycars>")
+                    .contains("<engine>L15A</engine>")
+                    .contains("<year>2007</year>");
+        }
+
+        @Test
+        @DisplayName("У контрактной детали года нет, и ноль вместо него не пишется")
+        void contractPartHasNoYear() throws Exception {
+            // Машины у неё нет вовсе, а подходит она к нескольким: марки
+            // и модели едут списком, кузов с двигателем — никак. «Год 0»
+            // на площадке означал бы машину, которой не существует.
+            DromOffer contract = new DromOffer("P-7", "Стартер", null, new BigDecimal("100"),
+                    BigDecimal.ONE, PartCondition.USED, null, null, List.of(),
+                    null, null, null, null, null, List.of(),
+                    "Toyota,Lexus", "Camry,Windom", null, null, null);
+
+            String xml = write(contract);
+
+            assertThat(xml)
+                    .contains("<brandcars>Toyota,Lexus</brandcars>")
+                    .contains("<modelcars>Camry,Windom</modelcars>")
+                    .doesNotContain("<year>")
+                    .doesNotContain("<bodycars>")
+                    .doesNotContain("<engine>");
+        }
+
+        @Test
         @DisplayName("Аналоги идут одной строкой через запятую")
         void joinsAnalogNumbers() throws Exception {
             String xml = write(offer());
@@ -67,7 +104,8 @@ class DromPriceWriterTest {
         void skipsEmptyFields() throws Exception {
             DromOffer bare = new DromOffer("P-1", "Деталь", null, new BigDecimal("100"),
                     BigDecimal.ONE, PartCondition.USED, null, null, List.of(),
-                    null, null, null, null, null, List.of());
+                    null, null, null, null, null, List.of(),
+                    null, null, null, null, null);
 
             String xml = write(bare);
 
@@ -77,7 +115,8 @@ class DromPriceWriterTest {
                     .doesNotContain("<oem_number>")
                     .doesNotContain("<analog_numbers>")
                     .doesNotContain("<lr>")
-                    .doesNotContain("<color>");
+                    .doesNotContain("<color>")
+                    .doesNotContain("<brandcars>");
         }
 
         @Test
@@ -85,7 +124,8 @@ class DromPriceWriterTest {
         void escapesSpecialCharacters() throws Exception {
             DromOffer tricky = new DromOffer("P-2", "Кронштейн <передний> & правый", null,
                     new BigDecimal("100"), BigDecimal.ONE, PartCondition.USED,
-                    null, null, List.of(), null, null, null, null, null, List.of());
+                    null, null, List.of(), null, null, null, null, null, List.of(),
+                    null, null, null, null, null);
 
             String xml = write(tricky);
 
@@ -111,7 +151,8 @@ class DromPriceWriterTest {
         void skipsPhotosWhenThereAreNone() throws Exception {
             DromOffer noPhotos = new DromOffer("P-6", "Фара", null, new BigDecimal("100"),
                     BigDecimal.ONE, PartCondition.USED, null, null, List.of(),
-                    null, null, null, null, null, List.of());
+                    null, null, null, null, null, List.of(),
+                    null, null, null, null, null);
 
             assertThat(write(noPhotos)).doesNotContain("<photo>");
         }
@@ -121,7 +162,8 @@ class DromPriceWriterTest {
         void mapsNewCondition() throws Exception {
             DromOffer brandNew = new DromOffer("P-3", "Фильтр", null, new BigDecimal("500"),
                     BigDecimal.ONE, PartCondition.NEW, null, null, List.of(),
-                    null, null, null, null, null, List.of());
+                    null, null, null, null, null, List.of(),
+                    null, null, null, null, null);
 
             assertThat(write(brandNew)).contains("<condition>Новое</condition>");
         }
@@ -142,7 +184,8 @@ class DromPriceWriterTest {
         void soldOutStaysInPriceAsUnavailable() throws Exception {
             DromOffer soldOut = new DromOffer("P-4", "Стартер", null, new BigDecimal("5000"),
                     BigDecimal.ZERO, PartCondition.USED, null, null, List.of(),
-                    null, null, null, null, null, List.of());
+                    null, null, null, null, null, List.of(),
+                    null, null, null, null, null);
 
             String xml = write(soldOut);
 
@@ -157,7 +200,8 @@ class DromPriceWriterTest {
         void unknownStockIsNotAvailable() throws Exception {
             DromOffer unknown = new DromOffer("P-5", "Бампер", null, new BigDecimal("100"),
                     null, PartCondition.USED, null, null, List.of(),
-                    null, null, null, null, null, List.of());
+                    null, null, null, null, null, List.of(),
+                    null, null, null, null, null);
 
             assertThat(write(unknown)).contains("<available>false</available>");
         }
@@ -230,7 +274,12 @@ class DromPriceWriterTest {
                 "Чёрный",
                 "AM334388K",
                 List.of("https://parts.example.ru/feeds/drom/yardt/tok/photo/11.jpg",
-                        "https://parts.example.ru/feeds/drom/yardt/tok/photo/12.jpg"));
+                        "https://parts.example.ru/feeds/drom/yardt/tok/photo/12.jpg"),
+                "Honda",
+                "Airwave",
+                "GJ1",
+                "L15A",
+                2007);
     }
 
     private String write(DromOffer... offers) throws XMLStreamException {

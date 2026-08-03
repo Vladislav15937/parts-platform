@@ -27,13 +27,15 @@ import java.util.List;
  * съест гигабайты и уронит приложение у самого ценного клиента. Вход —
  * {@link Iterator}, чтобы и набор позиций не материализовался.
  *
- * <p><b>Применимость намеренно не пишется.</b> Дром выводит её сам из
- * {@code manufacturer} и {@code oem_number}, а для неоригинала ищет кросс
- * (§4 документа). Своя применимость у нас сейчас всё равно пуста: каталог
- * марок и моделей не наполнен, а импорт из Bazon кладёт кузов и двигатель
- * только в наименование. Когда каталог появится, поля {@code brandcars},
- * {@code modelcars}, {@code bodycars}, {@code engine} и {@code year}
- * добавляются здесь же.
+ * <p><b>Применимость пишется отдельными тегами.</b> Эталон Дрома для раздела
+ * «Автозапчасти» начинается ровно с этого: «укажите применимость», «размещайте
+ * информацию о каждом параметре в отдельные теги — марка, модель, кузов,
+ * двигатель». Выводить её самому из {@code oem_number} площадка умеет, но
+ * только для оригинала и только если номер она знает; у б/у детали с разборки
+ * половина номеров ей не известна, и без марки такая позиция не находится
+ * фильтром покупателя. Данные лежат у нас с самого начала: марка и модель —
+ * в машине-доноре, у контрактной — в {@code part_applicability}, которую
+ * разбор наименований наполнил.
  */
 @org.springframework.stereotype.Component
 public class DromPriceWriter {
@@ -97,6 +99,16 @@ public class DromPriceWriter {
         element(w, "lr", lateral(offer.lateralSide()));
         element(w, "fr", longitudinal(offer.longitudinalSide()));
         element(w, "ud", vertical(offer.verticalSide()));
+
+        // Применимость. Порядок тегов — как в эталоне площадки: сначала
+        // машина, потом её кузов и двигатель. Кузов и двигатель есть только
+        // у детали с донора: у контрактной машина не одна, и приписать ей
+        // чужой кузов значит соврать покупателю, который по нему и подбирает.
+        element(w, "brandcars", offer.carBrand());
+        element(w, "modelcars", offer.carModel());
+        element(w, "bodycars", offer.bodyCode());
+        element(w, "engine", offer.engineCode());
+        element(w, "year", offer.year() == null ? null : String.valueOf(offer.year()));
 
         element(w, "color", offer.color());
         element(w, "supplier_art", offer.marking());
