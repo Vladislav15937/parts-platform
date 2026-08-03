@@ -19,7 +19,6 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.sql.SQLException;
 import java.util.List;
 
 /**
@@ -52,13 +51,16 @@ public class DromFeedController {
     private final JdbcTemplate jdbc;
     private final DromPriceGenerator generator;
     private final PhotoStorage photos;
+    private final DromAccountReader accounts;
     private final String publicUrl;
 
     public DromFeedController(JdbcTemplate jdbc, DromPriceGenerator generator,
+                              DromAccountReader accounts,
                               PhotoStorage photos,
                               @Value("${app.public-url:}") String publicUrl) {
         this.jdbc = jdbc;
         this.generator = generator;
+        this.accounts = accounts;
         this.photos = photos;
         this.publicUrl = publicUrl;
     }
@@ -195,47 +197,20 @@ public class DromFeedController {
      * отвечают за разное время.
      */
     private DromPriceGenerator.FeedFilter filterFor(String schema, String token) {
-        List<Feed> feeds = jdbc.query("""
-                SELECT feed_token, price_from, price_to, conditions, warehouse_ids,
-                       kind_ids, kinds_excluded, brand_ids, brands_excluded
-                  FROM %s.marketplace_account
-                 WHERE marketplace = 'DROM' AND status = 'ACTIVE'
-                   AND feed_token IS NOT NULL""".formatted(schema),
-                (rs, i) -> new Feed(rs.getString("feed_token"),
-                        rs.getBigDecimal("price_from"),
-                        rs.getBigDecimal("price_to"),
-                        textList(rs.getArray("conditions")),
-                        longList(rs.getArray("warehouse_ids")),
-                        longList(rs.getArray("kind_ids")),
-                        rs.getBoolean("kinds_excluded"),
-                        longList(rs.getArray("brand_ids")),
-                        rs.getBoolean("brands_excluded")));
+        List<DromAccountReader.Account> feeds = accounts.active(schema);
 
         byte[] presented = token.getBytes(StandardCharsets.UTF_8);
-        Feed found = null;
-        for (Feed candidate : feeds) {
+        DromAccountReader.Account found = null;
+        for (DromAccountReader.Account candidate : feeds) {
+            if (candidate.feedToken() == null) {
+                continue;
+            }
             if (MessageDigest.isEqual(
-                    candidate.token().getBytes(StandardCharsets.UTF_8), presented)) {
+                    candidate.feedToken().getBytes(StandardCharsets.UTF_8), presented)) {
                 found = candidate;
             }
         }
-        return found == null ? null : new DromPriceGenerator.FeedFilter(
-                found.priceFrom(), found.priceTo(), found.conditions(), found.warehouseIds(),
-                found.kindIds(), found.kindsExcluded(),
-                found.brandIds(), found.brandsExcluded());
+        return found == null ? null : found.filter();
     }
 
-    private static List<String> textList(java.sql.Array array) throws SQLException {
-        return array == null ? List.of() : List.of((String[]) array.getArray());
-    }
-
-    private static List<Long> longList(java.sql.Array array) throws SQLException {
-        return array == null ? List.of() : List.of((Long[]) array.getArray());
-    }
-
-    private record Feed(String token, java.math.BigDecimal priceFrom, java.math.BigDecimal priceTo,
-                        List<String> conditions, List<Long> warehouseIds,
-                        List<Long> kindIds, boolean kindsExcluded,
-                        List<Long> brandIds, boolean brandsExcluded) {
-    }
 }

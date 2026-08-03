@@ -60,6 +60,7 @@
     <include file="tenant/041-wheel-parity.sql" relativeToChangelogFile="true"/>
     <include file="tenant/042-wheel-assembly.sql" relativeToChangelogFile="true"/>
     <include file="tenant/043-outbox-claim.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/044-feed-dirty.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

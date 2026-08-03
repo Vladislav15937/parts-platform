@@ -130,7 +130,7 @@ public class DromPriceGenerator {
                -- «Шина 195/65 R15» среди запчастей уедет в чужую категорию.
                -- Отдельная выгрузка для них — своя задача.
                AND p.product_line = 'PART'
-               AND p.status IN ('IN_STOCK', 'SOLD')
+               AND p.status IN ${statuses}
                AND p.price IS NOT NULL
                AND (?::numeric IS NULL OR p.price >= ?::numeric)
                AND (?::numeric IS NULL OR p.price <= ?::numeric)
@@ -151,6 +151,25 @@ public class DromPriceGenerator {
 
     /** Дельта — тот же запрос по списку позиций: формат обязан совпасть с прайсом. */
     private static final String DELTA_FILTER = " AND p.id = ANY (?)";
+
+    /**
+     * Статусы полного прайса: списанного в нём нет.
+     *
+     * <p>Так площадка узнаёт об удалении: «при обновлении прайс-листа мы
+     * проверяем, какие товары из него пропали, и убираем их с сайта».
+     */
+    private static final String PRICE_STATUSES = "('IN_STOCK', 'SOLD')";
+
+    /**
+     * Статусы дельты: списанное в ней есть, и это не расхождение с прайсом.
+     *
+     * <p>Дельта не умеет сообщать об исчезновении — сообщить можно только
+     * о том, что в неё попало. Списание, отброшенное отбором, дошло бы
+     * до площадки лишь следующим полным забором, то есть деталь, которой
+     * уже нет, висела бы доступной до суток. Уезжает она недоступной, а это
+     * ровно то, что документация Дрома и называет удалением через API.
+     */
+    private static final String DELTA_STATUSES = "('IN_STOCK', 'SOLD', 'WRITTEN_OFF')";
 
     private static final String ORDER = " ORDER BY p.id";
 
@@ -248,6 +267,19 @@ public class DromPriceGenerator {
      */
     @Transactional(readOnly = true)
     public int writeDelta(OutputStream out, List<Long> partIds) {
+        return writeDelta(out, partIds, FeedFilter.everything());
+    }
+
+    /**
+     * Дельта одной выгрузки: те же позиции, но её отбором.
+     *
+     * <p>Отбор обязателен, а не «для полноты». У клиента прайс-листов
+     * несколько, и позиция, не проходящая отбор конкретного, уехав в него,
+     * создаст там объявление, которого владелец не заводил, — и снять его
+     * будет нечем до полного забора.
+     */
+    @Transactional(readOnly = true)
+    public int writeDelta(OutputStream out, List<Long> partIds, FeedFilter filter) {
         if (partIds == null || partIds.isEmpty()) {
             return 0;
         }
@@ -255,12 +287,14 @@ public class DromPriceGenerator {
         // что позиция продана или подешевела, — объявление и его фотографии
         // у Дрома уже есть. Отсутствие необязательного элемента сменой формата
         // не является: позиции без снимков и в полном прайсе идут без него.
-        return write(out, partIds, FeedFilter.everything(), null);
+        return write(out, partIds, filter, null);
     }
 
     private int write(OutputStream out, List<Long> partIds, FeedFilter filter, String photoBase) {
         Session session = entityManager.unwrap(Session.class);
-        String sql = SQL + (partIds == null ? "" : DELTA_FILTER) + ORDER;
+        String sql = SQL.replace("${statuses}",
+                partIds == null ? PRICE_STATUSES : DELTA_STATUSES)
+                + (partIds == null ? "" : DELTA_FILTER) + ORDER;
 
         return session.doReturningWork(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {

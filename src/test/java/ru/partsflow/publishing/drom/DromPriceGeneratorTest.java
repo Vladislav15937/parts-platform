@@ -122,8 +122,8 @@ class DromPriceGeneratorTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Списанное в прайс не попадает")
-    void writtenOffIsExcluded() {
+    @DisplayName("Списанное в прайс не попадает, а в дельту попадает недоступным")
+    void writtenOffIsExcludedFromPriceButSentInDelta() {
         String name = "Прайс: радиатор кондиционера";
         Long partId = part(name, new BigDecimal("2000"), true);
         intake(partId, warehouse, 1);
@@ -131,7 +131,16 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 INSERT INTO stock_movement (part_id, movement_type, qty_delta, from_warehouse_id)
                 VALUES (?, 'WRITE_OFF', -1, ?)""", partId, warehouse));
 
+        // Из полного прайса пропало — так площадка и узнаёт об удалении:
+        // «проверяем, какие товары пропали, и убираем их с сайта».
         assertThat(price()).doesNotContain(name);
+
+        // А дельта об исчезновении сообщить не умеет: сказать можно только
+        // о том, что в неё попало. Отброшенное здесь висело бы на сайте
+        // доступным до следующего полного забора, то есть до суток.
+        assertThat(delta(partId))
+                .contains(name)
+                .contains("<available>false</available>");
     }
 
     @Test
@@ -255,6 +264,14 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         return inTenant(() -> {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             generator.writeTo(out);
+            return out.toString(StandardCharsets.UTF_8);
+        });
+    }
+
+    private String delta(Long... partIds) {
+        return inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeDelta(out, java.util.List.of(partIds));
             return out.toString(StandardCharsets.UTF_8);
         });
     }
