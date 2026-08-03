@@ -44,6 +44,9 @@ class PartHistoryHttpTest extends PostgresTestBase {
     private StockLedger ledger;
 
     @Autowired
+    private PartRepository parts;
+
+    @Autowired
     private MockMvc mvc;
 
     @Autowired
@@ -77,9 +80,12 @@ class PartHistoryHttpTest extends PostgresTestBase {
             warehouseId = jdbc.queryForObject(
                     "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Ткацкая') RETURNING id",
                     Long.class, branch);
-            partId = jdbc.queryForObject("""
-                    INSERT INTO part (category_id, title, price, cost_price)
-                    VALUES (1, 'Фара для истории', 4500, 1200) RETURNING id""", Long.class);
+            // Через JPA, а не прямым SQL: журнал изменений пишет слушатель
+            // Hibernate, и вставка мимо сессии в ленту не попадёт. Пока писал
+            // триггер, это было безразлично — он видел всё.
+            Part part = new Part(1L, "Фара для истории", new java.math.BigDecimal("4500"));
+            part.setCostPrice(new java.math.BigDecimal("1200"));
+            partId = parts.saveAndFlush(part).getId();
             // Приход двигает остаток и статус — это правка строки, которую
             // делает триггер, а не человек. В ленте правок её быть не должно.
             ledger.record(StockMovement.intake(partId, new java.math.BigDecimal("2"), warehouseId, null));
@@ -102,7 +108,7 @@ class PartHistoryHttpTest extends PostgresTestBase {
                 // Свежее сверху: историю читают с конца.
                 .andExpect(jsonPath("$.changes[0].fields[0].label").value("Цена"))
                 .andExpect(jsonPath("$.changes[0].fields[0].before").value("4500.00"))
-                .andExpect(jsonPath("$.changes[0].fields[0].after").value("5200.00"))
+                .andExpect(jsonPath("$.changes[0].fields[0].after").value("5200"))
                 // Автор подписан: до этой правки app.user_id не выставлял никто,
                 // и в audit_log.changed_by у всех записей стоял null.
                 .andExpect(jsonPath("$.changes[0].author").value("Владелец"))

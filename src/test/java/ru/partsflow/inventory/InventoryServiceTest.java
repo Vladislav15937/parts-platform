@@ -558,13 +558,13 @@ class InventoryServiceTest extends PostgresTestBase {
         inTenant(() -> {
             StockMovement movement = ledger.record(StockMovement.sale(
                     partId, java.math.BigDecimal.valueOf(qty), warehouseId, null));
-            // Момент правится после записи: журнал неизменяем для приложения,
-            // но проверки давности иначе не поставить — все движения теста
-            // попадают в одну миллисекунду.
-            jdbc.update("ALTER TABLE stock_movement DISABLE TRIGGER stock_movement_no_update");
+            // Момент правится после записи: иначе все движения теста
+            // попадают в одну миллисекунду и «до подсчёта» от «после»
+            // не отличить. Правка идёт прямым SQL мимо репозитория — тот
+            // менять журнал не умеет вовсе, и это ровно то, что нужно:
+            // в приложении такой правки быть не может, а тесту она нужна.
             jdbc.update("UPDATE stock_movement SET created_at = ? WHERE id = ?",
                     java.sql.Timestamp.from(when), movement.getId());
-            jdbc.update("ALTER TABLE stock_movement ENABLE TRIGGER stock_movement_no_update");
             return null;
         });
     }

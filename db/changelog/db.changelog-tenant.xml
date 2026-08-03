@@ -65,6 +65,8 @@
     <include file="tenant/046-part-change-in-java.sql" relativeToChangelogFile="true"/>
     <include file="tenant/047-reservation-to-java.sql" relativeToChangelogFile="true"/>
     <include file="tenant/048-stock-apply-to-java.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/049-no-triggers.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/050-no-functions.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

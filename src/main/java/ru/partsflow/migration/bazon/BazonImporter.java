@@ -126,6 +126,7 @@ public final class BazonImporter {
             return s.executeUpdate("""
                     UPDATE part p
                        SET qty_on_hand = stock.qty,
+                           updated_at = now(),
                            status = CASE WHEN stock.qty > 0 THEN 'IN_STOCK' ELSE p.status END
                       FROM (SELECT part_id, sum(qty) AS qty
                               FROM part_stock GROUP BY part_id) stock

@@ -59,7 +59,7 @@ public interface PartNameRepository extends JpaRepository<PartName, Long> {
      * приёмщика с одним наименованием затрут друг другу счёт.
      */
     @Modifying
-    @Query(value = "UPDATE part_name SET usage_count = usage_count + 1 WHERE id = :id",
+    @Query(value = "UPDATE part_name SET usage_count = usage_count + 1, updated_at = now() WHERE id = :id",
             nativeQuery = true)
     void incrementUsage(@Param("id") Long id);
 }

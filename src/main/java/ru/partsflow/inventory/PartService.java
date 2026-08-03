@@ -99,6 +99,9 @@ public class PartService {
                 UPDATE part
                    SET category_id  = COALESCE(?, category_id),
                        part_kind_id = ?,
+                       -- Момент правки раньше ставил триггер; теперь его
+                       -- ставит тот, кто правит.
+                       updated_at = now(),
                        title = CASE WHEN left(title, length(?)) = ?
                                      AND length(title) > length(?)
                                     THEN ? || substr(title, length(?) + 1)
@@ -177,6 +180,7 @@ public class PartService {
                 UPDATE part p
                    SET category_id = pn.category_id,
                        part_kind_id = pn.part_kind_id,
+                       updated_at = now(),
                        title = CASE WHEN left(p.title, length(pn.name)) = pn.name
                                      AND length(p.title) > length(pn.name)
                                     THEN k.name || substr(p.title, length(pn.name) + 1)
@@ -515,7 +519,7 @@ public class PartService {
         if (partIds == null || partIds.isEmpty()) {
             throw new IllegalArgumentException("Не указано ни одной позиции");
         }
-        int updated = jdbc.update("UPDATE part SET is_published = ? WHERE id = ANY (?)",
+        int updated = jdbc.update("UPDATE part SET is_published = ?, updated_at = now() WHERE id = ANY (?)",
                 published, partIds.toArray(Long[]::new));
         // Снятая с публикации позиция обязана уехать недоступной, иначе
         // объявление висит, а продавать её владелец не собирался.

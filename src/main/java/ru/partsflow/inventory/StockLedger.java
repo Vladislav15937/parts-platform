@@ -129,6 +129,7 @@ public class StockLedger {
         entityManager.createNativeQuery("""
                         UPDATE part p
                            SET qty_on_hand = stock.qty,
+                               updated_at = now(),
                                storage_cell_id = COALESCE(:cell, p.storage_cell_id),
                                status = CASE
                                    WHEN stock.qty > 0 THEN 'IN_STOCK'
@@ -177,6 +178,7 @@ public class StockLedger {
         return entityManager.createNativeQuery("""
                         UPDATE part p
                            SET qty_on_hand = COALESCE(stock.qty, 0),
+                               updated_at = now(),
                                status = CASE WHEN COALESCE(stock.qty, 0) > 0
                                              THEN 'IN_STOCK' ELSE p.status END
                           FROM (SELECT part_id, sum(qty) AS qty

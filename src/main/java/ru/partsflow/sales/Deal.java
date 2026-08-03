@@ -585,4 +585,24 @@ public class Deal {
     public Instant getClosedAt() {
         return closedAt;
     }
+
+    /**
+     * Момент последней правки. До 4 августа 2026 его ставил триггер
+     * {@code touch_updated_at}; теперь — приложение, как и всё остальное.
+     *
+     * <p>{@code @PreUpdate}, а не присваивание в каждом сеттере: полей
+     * у сущности десятки, и забыть один из них — вопрос времени.
+     */
+    @Column(name = "updated_at", insertable = false)
+    private java.time.Instant updatedAt;
+
+    @jakarta.persistence.PreUpdate
+    void touchUpdatedAt() {
+        this.updatedAt = java.time.Instant.now();
+    }
+
+    public java.time.Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
 }

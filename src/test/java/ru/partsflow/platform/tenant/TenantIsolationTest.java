@@ -218,15 +218,25 @@ class TenantIsolationTest extends PostgresTestBase {
     static class PartRepositoryProbe {
 
         private final JdbcTemplate jdbc;
+        private final jakarta.persistence.EntityManager entityManager;
 
-        PartRepositoryProbe(JdbcTemplate jdbc) {
+        PartRepositoryProbe(JdbcTemplate jdbc, jakarta.persistence.EntityManager entityManager) {
             this.jdbc = jdbc;
+            this.entityManager = entityManager;
         }
 
+        /**
+         * Через JPA, а не прямым SQL, и это существенно.
+         *
+         * <p>Журнал изменений пишет слушатель Hibernate, а он видит только
+         * то, что прошло через сессию. Прямой SQL мимо него — и есть та
+         * дыра, которую перенос {@code audit_trigger} в приложение открыл:
+         * пока писал триггер, обойти его не мог никто.
+         */
         @Transactional
         void insert(String title, BigDecimal price) {
-            jdbc.update("INSERT INTO part (category_id, title, price, status) VALUES (1, ?, ?, 'IN_STOCK')",
-                    title, price);
+            entityManager.persist(new ru.partsflow.inventory.Part(1L, title, price));
+            entityManager.flush();
         }
 
         @Transactional(readOnly = true)
