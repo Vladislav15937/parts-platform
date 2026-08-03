@@ -147,6 +147,19 @@ class BazonImportRestTest extends PostgresTestBase {
                 .formatted(tenant.schemaName(), tenant.schemaName()), Integer.class))
                 .as("наименование распознано, а карточка осталась без вида детали")
                 .isZero();
+
+        // И поколение обязано подобраться по году: импортёр заводит машины
+        // своим SQL, мимо registerDonor, и до этого шага у переехавшего
+        // клиента поколения не было ни у одной машины — а от него зависит
+        // кузов в заголовке и подбор детали по машине.
+        assertThat(jdbc.queryForObject("""
+                SELECT g.name FROM %s.donor d
+                  JOIN catalog.generation g ON g.id = d.generation_id
+                 WHERE d.legacy_code = 'Д-1'"""
+                .formatted(tenant.schemaName()), String.class))
+                .as("поколение по году не подобрано — заголовок и применимость "
+                        + "останутся без кузова")
+                .isNotBlank();
     }
 
     @Test

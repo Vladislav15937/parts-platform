@@ -96,4 +96,63 @@ public class DonorVehicleResolver {
 
         return found.isEmpty() ? null : found.get(0);
     }
+
+    /**
+     * Проставляет поколение машинам, у которых его нет.
+     *
+     * <p>Перенос из прежней системы заводит доноров своим SQL, мимо
+     * {@code IntakeService.registerDonor}, — и поколение у них не появлялось
+     * никогда. Замерено на живой выгрузке: 440 машин, у всех есть модель
+     * и год, поколения нет ни у одной. А от него зависит кузов в заголовке
+     * и подбор детали по машине: продавец, выбравший поколение, не находил
+     * ничего.
+     *
+     * <p>Правило подбора не повторяется здесь запросом, а зовётся тем же
+     * {@link #generationFor}: написанное дважды, оно разъедется на первой же
+     * правке — и машины, заведённые руками и переносом, начнут отвечать
+     * по-разному.
+     *
+     * <p>Считается по парам «модель и год», а не по машинам: у переехавшего
+     * клиента четыре сотни машин на несколько десятков таких пар, и спрашивать
+     * справочник на каждую значит потратить перенос на повторные запросы
+     * об одном и том же.
+     *
+     * <p>Трогает только пустое: выбранное человеком поколение перебивать
+     * нельзя — он смотрел в документы, а мы считаем по году.
+     *
+     * <p><b>Транзакция обязательна.</b> {@code search_path} выставляет
+     * провайдер соединений Hibernate при выдаче соединения транзакции;
+     * вызванный снаружи, {@code JdbcTemplate} берёт соединение из пула
+     * напрямую и уходит в {@code public} — «relation donor does not exist»,
+     * то есть пятисотка в конце часового переезда. Ловушка из правил проекта,
+     * и это четвёртый раз, когда на неё наступают.
+     *
+     * @return сколько машин получили поколение
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public int backfillGenerations() {
+        List<long[]> pairs = jdbc.query("""
+                SELECT DISTINCT d.model_id, d.year
+                  FROM donor d
+                 WHERE d.generation_id IS NULL
+                   AND d.model_id IS NOT NULL
+                   AND d.year IS NOT NULL""",
+                (rs, i) -> new long[]{rs.getLong("model_id"), rs.getShort("year")});
+
+        int filled = 0;
+        for (long[] pair : pairs) {
+            Long generationId = generationFor(pair[0], (short) pair[1]);
+            if (generationId == null) {
+                // Год вне всех диапазонов справочника: соседнее поколение
+                // не подставляем — чужая применимость отправит деталь
+                // покупателю, которому она не подойдёт.
+                continue;
+            }
+            filled += jdbc.update("""
+                    UPDATE donor SET generation_id = ?
+                     WHERE generation_id IS NULL AND model_id = ? AND year = ?""",
+                    generationId, pair[0], (short) pair[1]);
+        }
+        return filled;
+    }
 }

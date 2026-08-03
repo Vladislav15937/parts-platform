@@ -40,6 +40,9 @@ class IntakeServiceTest extends PostgresTestBase {
     private IntakeService intake;
 
     @Autowired
+    private DonorVehicleResolver vehicles;
+
+    @Autowired
     private StockDocumentService documents;
 
     @Autowired
@@ -406,6 +409,39 @@ class IntakeServiceTest extends PostgresTestBase {
         Donor saved = inTenant(() -> intake.registerDonor(donor, null, null));
 
         assertThat(saved.getGenerationId()).isEqualTo(generation2001);
+    }
+
+    @Test
+    @DisplayName("Дозаполнение проставляет поколение машинам переезда")
+    void backfillFillsGenerations() {
+        Long model = modelWithGenerations();
+
+        // Так машина приезжает переносом: импортёр пишет доноров своим SQL,
+        // мимо registerDonor, и поколения у них не появлялось никогда.
+        Long fromImport = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO donor (public_code, brand_id, model_id, year, status)
+                VALUES ('ПРОГОН-1', (SELECT brand_id FROM catalog.model WHERE id = ?),
+                        ?, 2007, 'DISMANTLING') RETURNING id""",
+                Long.class, model, model));
+        // А эту машину человек завёл руками и поколение выбрал сам —
+        // перебивать его нельзя: он смотрел в документы, мы считаем по году.
+        Long chosen = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO donor (public_code, brand_id, model_id, year, generation_id, status)
+                VALUES ('ПРОГОН-2', (SELECT brand_id FROM catalog.model WHERE id = ?),
+                        ?, 2007, ?, 'DISMANTLING') RETURNING id""",
+                Long.class, model, model, generation2001));
+
+        assertThat(inTenant(() -> vehicles.backfillGenerations())).isPositive();
+
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT generation_id FROM donor WHERE id = ?", Long.class, fromImport)))
+                .as("машина переезда осталась без поколения — ни кузова "
+                        + "в заголовке, ни подбора по машине")
+                .isEqualTo(generation2006);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT generation_id FROM donor WHERE id = ?", Long.class, chosen)))
+                .as("дозаполнение перебило выбранное человеком")
+                .isEqualTo(generation2001);
     }
 
     @Test
