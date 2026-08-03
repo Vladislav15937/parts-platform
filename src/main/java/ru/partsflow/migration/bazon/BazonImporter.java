@@ -239,19 +239,84 @@ public final class BazonImporter {
 
     // ---------- доноры ----------
 
+    /**
+     * Поля машины, которые перенос заполняет из выгрузки.
+     *
+     * <p>Один список на вставку и на дозаполнение — из него собираются оба
+     * запроса. Разойдись они, и колонка, добавленная в перенос, у клиентов,
+     * загруженных раньше, не появилась бы никогда: ровно это и случилось
+     * с кузовом и двигателем.
+     */
+    private static final List<DonorColumn> DONOR_FIELDS = List.of(
+            new DonorColumn("vin", Types.VARCHAR),
+            new DonorColumn("brand_id", Types.BIGINT),
+            new DonorColumn("model_id", Types.BIGINT),
+            new DonorColumn("year", Types.INTEGER),
+            new DonorColumn("color", Types.VARCHAR),
+            new DonorColumn("color_code", Types.VARCHAR),
+            new DonorColumn("mileage_km", Types.INTEGER),
+            new DonorColumn("supply_id", Types.BIGINT),
+            new DonorColumn("location", Types.VARCHAR),
+            new DonorColumn("steering", Types.VARCHAR),
+            new DonorColumn("drive_type", Types.VARCHAR),
+            new DonorColumn("transmission_type", Types.VARCHAR),
+            new DonorColumn("transmission_model", Types.VARCHAR),
+            new DonorColumn("equipment_code", Types.VARCHAR),
+            new DonorColumn("body_code", Types.VARCHAR),
+            new DonorColumn("engine_code", Types.VARCHAR),
+            new DonorColumn("note", Types.VARCHAR));
+
+    private record DonorColumn(String name, int sqlType) {
+    }
+
+    /**
+     * Машины из выгрузки.
+     *
+     * <p><b>Повтор дозаполняет, а не пропускает.</b> Раньше найденная машина
+     * пропускалась целиком, и это работало против нас: колонка, появившаяся
+     * в переносе позже, у клиента, загруженного раньше, не заполнялась
+     * никогда — повторный перенос его же выгрузки ничего не менял. Так у
+     * живого клиента остались пустыми кузов и двигатель всех 440 машин,
+     * притом что в его выгрузке они есть.
+     *
+     * <p><b>Заполняется только пустое.</b> {@code COALESCE} не трогает
+     * ни того, что ввёл человек, ни того, что положил прошлый перенос:
+     * выгрузка бывает старше правки, и затирать ею живые данные нельзя.
+     * Поэтому же дозаполнение — часть обычного переноса, а не миграция:
+     * миграция чинит одного клиента и один раз, а здесь любой, повторив
+     * свою выгрузку, получает то же самое.
+     *
+     * <p>Статус машины не трогается вовсе: он ведётся у нас — купленная
+     * встаёт в разбор, разобранная списывается, — и выгрузка про это
+     * не знает.
+     */
     private Map<String, Long> importDonors(Path donorsCsv, Map<String, Long> supplies,
                                            ImportReport report) throws SQLException {
         Map<String, Long> ids = new HashMap<>();
+        String columns = DONOR_FIELDS.stream()
+                .map(DonorColumn::name).collect(java.util.stream.Collectors.joining(", "));
+        String holders = DONOR_FIELDS.stream()
+                .map(f -> "?").collect(java.util.stream.Collectors.joining(", "));
+        String assignments = DONOR_FIELDS.stream()
+                .map(f -> "%s = COALESCE(%s, ?)".formatted(f.name(), f.name()))
+                .collect(java.util.stream.Collectors.joining(", "));
+        String coalesced = DONOR_FIELDS.stream()
+                .map(f -> "COALESCE(%s, ?)".formatted(f.name()))
+                .collect(java.util.stream.Collectors.joining(", "));
 
         try (Connection c = dataSource.getConnection()) {
             c.setAutoCommit(false);
-            try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + schema + """
-                    .donor (vin, brand_id, year, color, mileage_km, note, supply_id, location,
-                            steering, drive_type, transmission_type, transmission_model,
-                            color_code, equipment_code, legacy_code, model_id,
-                            body_code, engine_code, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISMANTLED')
-                    RETURNING id""")) {
+            try (PreparedStatement insert = c.prepareStatement("""
+                    INSERT INTO %s.donor (%s, legacy_code, status)
+                    VALUES (%s, ?, 'DISMANTLED') RETURNING id"""
+                    .formatted(schema, columns, holders));
+                 // Обновление только при настоящем расхождении: без этого
+                 // повтор отчитывался бы «дополнено» по каждой машине,
+                 // ничего не изменив, и число перестало бы что-либо значить.
+                 PreparedStatement fill = c.prepareStatement("""
+                    UPDATE %s.donor SET %s
+                     WHERE legacy_code = ? AND (%s) IS DISTINCT FROM (%s)"""
+                    .formatted(schema, assignments, columns, coalesced))) {
 
                 forEachRow(donorsCsv, report, row -> {
                     var number = BazonValueParser.parseDonorNumber(row.get("Номер донора"));
@@ -264,6 +329,7 @@ public final class BazonImporter {
                         return;
                     }
                     try {
+                        Object[] values = donorValues(c, row, supplies);
                         // Повторный запуск не заводит машину второй раз.
                         // Раньше заводил — и оставлял её пустой: детали
                         // пропускались по своему legacy_code и оставались
@@ -273,49 +339,18 @@ public final class BazonImporter {
                                 + ".donor WHERE legacy_code = ?", number.number());
                         if (existing != null) {
                             ids.put(number.number(), existing);
-                            report.count("машин пропущено (уже есть)");
+                            report.count(fillDonor(fill, values, number.number()) > 0
+                                    ? "машин дополнено" : "машин пропущено (уже есть)");
                             return;
                         }
-                    } catch (SQLException e) {
-                        report.problem(row.lineNumber(),
-                                "не удалось проверить машину: " + e.getMessage());
-                        return;
-                    }
-                    try {
-                        var color = BazonValueParser.parseColor(row.get("Цвет"));
-                        var years = BazonValueParser.parseYearRange(row.get("Год выпуска"));
 
-                        ps.setString(1, row.get("VIN"));
-                        // Марка и модель ищутся в общем каталоге по имени.
-                        // Не нашлись — остаются пустыми: заводить свою марку
-                        // нельзя, через месяц в справочнике будут «Тойота»,
-                        // «тойота» и «Toyota». Раньше здесь стоял ноль —
-                        // ссылка на несуществующую марку, из-за которой
-                        // у переехавшего клиента не работали ни фильтр
-                        // по марке, ни применимость.
-                        Long brandId = brands.find(c, row.get("Марка"));
-                        setLong(ps, 2, brandId);
-                        setInt(ps, 3, years == null ? null : years.from());
-                        ps.setString(4, color == null ? null : color.name());
-                        setInt(ps, 5, BazonValueParser.parseInteger(row.get("Пробег")));
-                        ps.setString(6, buildDonorNote(row));
-                        setLong(ps, 7, supplies.get(row.get("Поставка")));
-                        ps.setString(8, row.get("Статус"));
-                        ps.setString(9, BazonValueParser.parseSteering(row.get("Руль")));
-                        ps.setString(10, BazonValueParser.parseDriveType(row.get("Привод")));
-                        ps.setString(11, BazonValueParser.parseTransmissionType(row.get("Тип КПП")));
-                        ps.setString(12, row.get("Модель КПП"));
-                        ps.setString(13, color == null ? null : color.code());
-                        ps.setString(14, row.get("Комплектация"));
-                        ps.setString(15, number.number());
-                        setLong(ps, 16, brandId == null
-                                ? null : brands.findModel(c, brandId, row.get("Модель")));
-                        // Кузов и двигатель — своими полями: по ним продавец
-                        // отличает подходящую деталь, и на витрине это колонки.
-                        ps.setString(17, row.get("Кузов"));
-                        ps.setString(18, row.get("Двигатель"));
+                        int at = 1;
+                        for (int i = 0; i < DONOR_FIELDS.size(); i++) {
+                            bind(insert, at++, DONOR_FIELDS.get(i), values[i]);
+                        }
+                        insert.setString(at, number.number());
 
-                        ids.put(number.number(), firstLong(ps));
+                        ids.put(number.number(), firstLong(insert));
                         report.count("доноров");
                     } catch (SQLException e) {
                         report.problem(row.lineNumber(), "донор не загружен: " + e.getMessage());
@@ -325,6 +360,65 @@ public final class BazonImporter {
             c.commit();
         }
         return ids;
+    }
+
+    /** @return сколько строк изменилось: единица — машину дополнили */
+    private int fillDonor(PreparedStatement fill, Object[] values, String legacyCode)
+            throws SQLException {
+        int at = 1;
+        for (int i = 0; i < DONOR_FIELDS.size(); i++) {
+            bind(fill, at++, DONOR_FIELDS.get(i), values[i]);
+        }
+        fill.setString(at++, legacyCode);
+        // Те же значения второй раз — для сравнения «изменится ли что-нибудь».
+        for (int i = 0; i < DONOR_FIELDS.size(); i++) {
+            bind(fill, at++, DONOR_FIELDS.get(i), values[i]);
+        }
+        return fill.executeUpdate();
+    }
+
+    /** Значения полей машины в порядке {@link #DONOR_FIELDS}. */
+    private Object[] donorValues(Connection c, BazonCsvReader.Row row,
+                                 Map<String, Long> supplies) throws SQLException {
+        var color = BazonValueParser.parseColor(row.get("Цвет"));
+        var years = BazonValueParser.parseYearRange(row.get("Год выпуска"));
+        // Марка и модель ищутся в общем каталоге по имени. Не нашлись —
+        // остаются пустыми: заводить свою марку нельзя, через месяц
+        // в справочнике будут «Тойота», «тойота» и «Toyota». Раньше здесь
+        // стоял ноль — ссылка на несуществующую марку, из-за которой
+        // у переехавшего клиента не работали ни фильтр по марке,
+        // ни применимость.
+        Long brandId = brands.find(c, row.get("Марка"));
+
+        return new Object[] {
+                row.get("VIN"),
+                brandId,
+                brandId == null ? null : brands.findModel(c, brandId, row.get("Модель")),
+                years == null ? null : years.from(),
+                color == null ? null : color.name(),
+                color == null ? null : color.code(),
+                BazonValueParser.parseInteger(row.get("Пробег")),
+                supplies.get(row.get("Поставка")),
+                row.get("Статус"),
+                BazonValueParser.parseSteering(row.get("Руль")),
+                BazonValueParser.parseDriveType(row.get("Привод")),
+                BazonValueParser.parseTransmissionType(row.get("Тип КПП")),
+                row.get("Модель КПП"),
+                row.get("Комплектация"),
+                // Кузов и двигатель — своими полями: по ним продавец отличает
+                // подходящую деталь, и на витрине это колонки.
+                row.get("Кузов"),
+                row.get("Двигатель"),
+                buildDonorNote(row)};
+    }
+
+    private static void bind(PreparedStatement ps, int index, DonorColumn column, Object value)
+            throws SQLException {
+        if (value == null) {
+            ps.setNull(index, column.sqlType());
+        } else {
+            ps.setObject(index, value);
+        }
     }
 
     /**

@@ -43,6 +43,7 @@ class BazonImporterTest extends PostgresTestBase {
     private static final String NAMES = "t_000080";
     private static final String BAD_ROW = "t_000081";
     private static final String UNKNOWN = "t_000082";
+    private static final String BACKFILL = "t_000083";
 
     @Autowired
     private DataSource dataSource;
@@ -55,7 +56,7 @@ class BazonImporterTest extends PostgresTestBase {
 
     @BeforeAll
     static void migrate() {
-        provisionTenants(IMPORT, REPEAT, HEADER, NAMES, BAD_ROW, UNKNOWN);
+        provisionTenants(IMPORT, REPEAT, HEADER, NAMES, BAD_ROW, UNKNOWN, BACKFILL);
     }
 
     @Test
@@ -181,6 +182,67 @@ class BazonImporterTest extends PostgresTestBase {
                 .as("повтор прошёл с ошибками: он обязан быть обычным действием, "
                         + "а не аварией, которую спас индекс")
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("Повтор дозаполняет пустое, но не затирает заполненное")
+    void repeatFillsWhatIsMissing() throws Exception {
+        // Так выглядит клиент, загруженный до появления колонки: в его
+        // выгрузке кузов с двигателем были, а перенос их ещё не читал.
+        Path oldExport = write("donors-old.csv", """
+                "Номер донора";"Марка";"Модель";"Год выпуска";"VIN";"Поставка";"Статус";\
+                "Цвет";"Пробег";"Руль";"Привод";"Тип КПП";"Модель КПП";"Комплектация"
+                "Д-7";"Toyota";"Camry";"2006";"VIN7";"";"Разбор";\
+                "серебристый";"180000";"Левый";"Передний";"Автомат";"U151E";""
+                """);
+        new BazonImporter(dataSource, BACKFILL).importAll(oldExport, catalogFixture());
+
+        assertThat(bodyOf(BACKFILL, "Д-7"))
+                .as("кузов взялся неоткуда: выгрузка его не содержала")
+                .isNull();
+
+        // Человек поправил цвет руками — выгрузка старше этой правки.
+        jdbc.update("UPDATE %s.donor SET color = 'синий металлик' WHERE legacy_code = 'Д-7'"
+                .formatted(BACKFILL));
+
+        Path fullExport = write("donors-new.csv", """
+                "Номер донора";"Марка";"Модель";"Год выпуска";"VIN";"Поставка";"Статус";\
+                "Цвет";"Пробег";"Руль";"Привод";"Тип КПП";"Модель КПП";"Комплектация";\
+                "Кузов";"Двигатель"
+                "Д-7";"Toyota";"Camry";"2006";"VIN7";"";"Разбор";\
+                "серебристый";"180000";"Левый";"Передний";"Автомат";"U151E";"";"ACV40";"2AZFE"
+                """);
+        ImportReport second = new BazonImporter(dataSource, BACKFILL)
+                .importAll(fullExport, catalogFixture());
+
+        assertThat(bodyOf(BACKFILL, "Д-7"))
+                .as("пустой кузов так и не заполнился — повтор снова пропустил машину, "
+                        + "и колонка, добавленная в перенос позже, не появится никогда")
+                .isEqualTo("ACV40");
+        assertThat(jdbc.queryForObject(
+                "SELECT engine_code FROM %s.donor WHERE legacy_code = 'Д-7'".formatted(BACKFILL),
+                String.class)).isEqualTo("2AZFE");
+        assertThat(jdbc.queryForObject(
+                "SELECT color FROM %s.donor WHERE legacy_code = 'Д-7'".formatted(BACKFILL),
+                String.class))
+                .as("выгрузка затёрла правку человека: она бывает старше его работы")
+                .isEqualTo("синий металлик");
+        assertThat(second.loaded("машин дополнено")).isEqualTo(1);
+        assertThat(count(BACKFILL, "donor"))
+                .as("дозаполнение завело вторую машину вместо правки первой")
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Повтор без единого нового поля машину не трогает")
+    void repeatWithoutChangesFillsNothing() throws Exception {
+        importFixture(BACKFILL);
+        ImportReport second = importFixture(BACKFILL);
+
+        // Иначе число «дополнено» перестаёт что-либо значить: оно росло бы
+        // на каждый повтор, ничего не изменив.
+        assertThat(second.loaded("машин дополнено")).isZero();
+        assertThat(second.loaded("машин пропущено (уже есть)")).isEqualTo(1);
     }
 
     @Test
@@ -316,6 +378,12 @@ class BazonImporterTest extends PostgresTestBase {
         Integer found = jdbc.queryForObject(
                 "SELECT count(*) FROM " + schema + "." + table, Integer.class);
         return found == null ? 0 : found;
+    }
+
+    private String bodyOf(String schema, String legacyCode) {
+        return jdbc.queryForObject(
+                "SELECT body_code FROM " + schema + ".donor WHERE legacy_code = ?",
+                String.class, legacyCode);
     }
 
     private String statusOf(String schema, String legacyCode) {
