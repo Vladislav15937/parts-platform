@@ -339,7 +339,8 @@ export function HomeScreen() {
                       role={state.me.role} />
       )}
 
-      {tab === 'feeds' && NAMING_ROLES.includes(state.me.role) && <FeedsScreen />}
+      {tab === 'feeds' && NAMING_ROLES.includes(state.me.role)
+        && <FeedsScreen role={state.me.role} />}
 
       {tab === 'orders' && (
         <OrdersScreen canSell={SELLING_ROLES.includes(state.me.role)} />
