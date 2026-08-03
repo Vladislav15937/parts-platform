@@ -1024,24 +1024,34 @@ public final class BazonImporter {
     private void insertNumbers(PreparedStatement ps, BazonCsvReader.Row row, long partId)
             throws SQLException {
 
-        String primary = row.get("Номер производителя");
-        if (primary != null) {
-            ps.setLong(1, partId);
-            ps.setString(2, primary);
-            // Приведённый номер считает приложение — тем же методом, что
-            // и при приёмке. До 4 августа 2026 его считала генерируемая
-            // колонка.
-            ps.setString(3, ru.partsflow.catalog.OemNumbers.normalize(primary));
-            ps.setBoolean(4, true);
-            ps.executeUpdate();
-        }
+        writeNumber(ps, partId, row.get("Номер производителя"), true);
         for (String cross : BazonValueParser.parseList(row.get("Кросс-номера"))) {
-            ps.setLong(1, partId);
-            ps.setString(2, cross);
-            ps.setString(3, ru.partsflow.catalog.OemNumbers.normalize(cross));
-            ps.setBoolean(4, false);
-            ps.executeUpdate();
+            writeNumber(ps, partId, cross, false);
         }
+    }
+
+    /**
+     * Один номер, если после приведения от него что-то осталось.
+     *
+     * <p>Приведённый номер считает приложение — тем же методом, что и приёмка.
+     * До 4 августа 2026 его считала генерируемая колонка, и слово вместо номера
+     * превращалось в пустую строку; теперь это {@code null}, а колонка
+     * {@code NOT NULL} — то есть отказ базы, уносящий карточку целиком вместе
+     * с остатком и очередью снимков. В выгрузке живого клиента такое есть:
+     * в кросс-номерах стоит «АНАЛОГ». Пропускаем номер, а не теряем товар.
+     */
+    private void writeNumber(PreparedStatement ps, long partId, String raw, boolean primary)
+            throws SQLException {
+
+        String normalized = ru.partsflow.catalog.OemNumbers.normalize(raw);
+        if (normalized == null) {
+            return;
+        }
+        ps.setLong(1, partId);
+        ps.setString(2, raw);
+        ps.setString(3, normalized);
+        ps.setBoolean(4, primary);
+        ps.executeUpdate();
     }
 
     // ---------- вспомогательное ----------

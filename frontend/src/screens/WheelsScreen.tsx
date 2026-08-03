@@ -5,6 +5,7 @@ import type { Warehouse } from '../organization/warehouses';
 import {
   createSet,
   EMPTY_WHEEL_QUERY,
+  WHEEL_PAGE_SIZE,
   hasWheelFilters,
   listWheels,
   wheelExportUrl,
@@ -43,6 +44,16 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
   const [settings, setSettings] = useState(false);
   const [visible, setVisible] = useState<string[]>(loadWheelVisible);
   const [query, setQuery] = useState<WheelQuery>(EMPTY_WHEEL_QUERY);
+
+  /**
+   * Смена отбора возвращает на первую страницу.
+   *
+   * <p>Иначе владелец, стоящий на пятой странице, отбирает диски и видит
+   * пустую таблицу: страницы у нового отбора столько нет, а выглядит это
+   * как «дисков на складе нет».
+   */
+  const change = (patch: Partial<WheelQuery>) =>
+    setQuery({ ...query, ...patch, page: patch.page ?? 0 });
   // Набранное в поле и отправленное на сервер — разные вещи: искать
   // на каждой букве значит слать запрос за запросом на весь склад.
   const [typed, setTyped] = useState('');
@@ -95,11 +106,15 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
     (c) => c.fixed === true || visible.includes(c.key),
   );
 
+  const pages = page === null ? 0 : Math.ceil(page.total / WHEEL_PAGE_SIZE);
+
   return (
     <section className="screen screen--wide">
       <h2>
         Шины и диски
-        {page !== null && <span className="muted"> {page.rows.length} товаров</span>}
+        {page !== null && (
+          <span className="muted"> {page.total.toLocaleString('ru-RU')} товаров</span>
+        )}
       </h2>
 
       {error && <p className="note note--error">{error}</p>}
@@ -126,10 +141,10 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
             value={typed}
             placeholder="размер, сверловка, марка или номер"
             onChange={(e) => setTyped(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && setQuery({ ...query, q: typed })}
+            onKeyDown={(e) => e.key === 'Enter' && change({ q: typed })}
           />
         </label>
-        <button type="button" onClick={() => setQuery({ ...query, q: typed })}>
+        <button type="button" onClick={() => change({ q: typed })}>
           Найти
         </button>
       </div>
@@ -141,7 +156,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
           Товар
           <select
             value={query.kind}
-            onChange={(e) => setQuery({ ...query, kind: e.target.value as WheelQuery['kind'] })}
+            onChange={(e) => change({ kind: e.target.value as WheelQuery['kind'] })}
           >
             <option value="">все</option>
             <option value="TYRE">только шины</option>
@@ -153,7 +168,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
           <input
             type="checkbox"
             checked={query.missing}
-            onChange={(e) => setQuery({ ...query, missing: e.target.checked })}
+            onChange={(e) => change({ missing: e.target.checked })}
           />
           Показывать отсутствующие
         </label>
@@ -288,7 +303,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
                           const typed = e.currentTarget.value.trim();
                           if (typed === '') delete words[column.key];
                           else words[column.key] = typed;
-                          setQuery({ ...query, words });
+                          change({ words });
                           setTyping(null);
                         }}
                         onBlur={() => setTyping(null)}
@@ -376,6 +391,30 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         </div>
       )}
 
+      {pages > 1 && (
+        <div className="filter-row">
+          <button
+            type="button"
+            className="button--ghost"
+            disabled={query.page === 0}
+            onClick={() => change({ page: query.page - 1 })}
+          >
+            ←
+          </button>
+          <span className="note">
+            {query.page + 1} из {pages.toLocaleString('ru-RU')}
+          </span>
+          <button
+            type="button"
+            className="button--ghost"
+            disabled={query.page + 1 >= pages}
+            onClick={() => change({ page: query.page + 1 })}
+          >
+            →
+          </button>
+        </div>
+      )}
+
       {picking !== null && pickAt !== null && (
         <ColumnMenu
           column={picking}
@@ -386,14 +425,14 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
           desc={query.desc}
           onSort={(desc) => {
             const column = WHEEL_COLUMNS.find((c) => c.key === picking);
-            if (column?.sort !== undefined) setQuery({ ...query, sort: column.sort, desc });
+            if (column?.sort !== undefined) change({ sort: column.sort, desc });
             setPicking(null);
           }}
           onPick={(value) => {
             const columns = { ...query.columns };
             if (value === null) delete columns[picking];
             else columns[picking] = value;
-            setQuery({ ...query, columns });
+            change({ columns });
             setPicking(null);
           }}
           values={wheelValues}

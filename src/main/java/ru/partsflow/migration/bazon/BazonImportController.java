@@ -59,14 +59,17 @@ public class BazonImportController {
     private final PartNameService partNames;
     private final PartService parts;
     private final PhotoMigration photoMigration;
+    private final ru.partsflow.intake.DonorVehicleResolver vehicles;
 
     public BazonImportController(DataSource dataSource, PartNameService partNames,
                                  PartService parts, PhotoMigration photoMigration,
+                                 ru.partsflow.intake.DonorVehicleResolver vehicles,
                                  ru.partsflow.inventory.StockLedger stock) {
         this.dataSource = dataSource;
         this.partNames = partNames;
         this.parts = parts;
         this.photoMigration = photoMigration;
+        this.vehicles = vehicles;
     }
 
     /**
@@ -136,6 +139,12 @@ public class BazonImportController {
             // значит починить будущее и не починить прошлое. Ровно ради
             // этих карточек клиент и переезжает.
             loaded.put("карточек получили категорию", parts.applyMatchedNames());
+            // Поколение подбирается по году — тем же методом, что и у машины,
+            // заведённой руками. Импортёр пишет доноров своим SQL, мимо
+            // registerDonor, и без этого шага поколения у переехавшего клиента
+            // не появлялось никогда: ни кузова в заголовке, ни подбора детали
+            // по машине с поколением.
+            loaded.put("машин получили поколение", vehicles.backfillGenerations());
 
             return new Result(loaded, report.problems(), report.problemCount());
         } finally {

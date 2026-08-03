@@ -171,6 +171,28 @@ class ExcelImportTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Номер детали доезжает до склада, а слово вместо номера не валит строку")
+    void oemColumnIsStored() throws Exception {
+        byte[] book = workbook(
+                List.of("Наименование", "Цена", "Кол-во", "Артикул"),
+                List.of(List.of("Стартер Corolla", "4000", "1", "28100-0D030"),
+                        List.of("Фара правая Corolla", "6000", "1", "б/н")));
+
+        // Колонка с номером была написана в чужие имена — part_oem (number,
+        // is_original) при колонках raw_number и is_primary. То есть импорт
+        // с номером не работал никогда, а «б/н» валило бы строку и после
+        // починки имён: приведение такого номера даёт пустоту, а колонка
+        // объявлена NOT NULL.
+        assertThat(inTenant(() -> load(book, Map.of(Field.NAME, 0, Field.PRICE, 1,
+                Field.QUANTITY, 2, Field.OEM, 3))).imported()).isEqualTo(2);
+
+        assertThat(inTenant(() -> jdbc.queryForList("""
+                SELECT normalized FROM part_oem o JOIN part p ON p.id = o.part_id
+                 WHERE p.title LIKE '%Corolla%'""", String.class)))
+                .containsExactly("281000D030");
+    }
+
+    @Test
     @DisplayName("Повтор с тем же ключом не заводит второй склад")
     void repeatWithSameKeyDoesNotDouble() throws Exception {
         byte[] book = workbook(

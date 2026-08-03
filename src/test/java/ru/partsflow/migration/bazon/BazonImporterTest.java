@@ -45,6 +45,7 @@ class BazonImporterTest extends PostgresTestBase {
     private static final String UNKNOWN = "t_000082";
     private static final String BACKFILL = "t_000083";
     private static final String PARTS_BACKFILL = "t_000084";
+    private static final String JUNK_OEM = "t_000097";
 
     @Autowired
     private DataSource dataSource;
@@ -58,7 +59,7 @@ class BazonImporterTest extends PostgresTestBase {
     @BeforeAll
     static void migrate() {
         provisionTenants(IMPORT, REPEAT, HEADER, NAMES, BAD_ROW, UNKNOWN, BACKFILL,
-                PARTS_BACKFILL);
+                PARTS_BACKFILL, JUNK_OEM);
     }
 
     @Test
@@ -380,6 +381,29 @@ class BazonImporterTest extends PostgresTestBase {
                 .as("плохая строка унесла с собой хорошие")
                 .isEqualTo(1);
         assertThat(report.problems()).isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("Слово вместо кросс-номера не уносит карточку")
+    void junkCrossNumberDoesNotLoseThePart() throws Exception {
+        Path catalog = write("catalog-junk-oem.csv", CATALOG_HEADER.strip()
+                + ";\"Кросс-номера\"\n" + """
+                "A-900";"Фара левая";"";"";"";"";"";"";"";"";"";"";"";"";"";"9500";\
+                "81150-33670";"1";"0";"0";"0";"0";"0";"да";"0";"АНАЛОГ, 8115033671"
+                """);
+
+        new BazonImporter(dataSource, JUNK_OEM).importAll(donorsFixture(), catalog);
+
+        // В выгрузке живого клиента в кросс-номерах стоит слово «АНАЛОГ»:
+        // после приведения от него не остаётся ничего, а колонка normalized
+        // объявлена NOT NULL. Пока номер писали не глядя, отказ базы уносил
+        // карточку целиком — вместе с остатком, снимками и деньгами.
+        assertThat(count(JUNK_OEM, "part")).isEqualTo(1);
+        assertThat(qtyOf(JUNK_OEM, "A-900")).isEqualByComparingTo("1");
+        assertThat(jdbc.queryForList(
+                "SELECT normalized FROM " + JUNK_OEM + ".part_oem ORDER BY normalized",
+                String.class))
+                .containsExactly("8115033670", "8115033671");
     }
 
     private ImportReport importFixture(String schema) throws Exception {

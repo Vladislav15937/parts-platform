@@ -1,0 +1,34 @@
+--liquibase formatted sql
+
+--changeset platform:tenant-054-rollback-bridge
+--comment Мост для отката: возвращает то, что сняли changeset'ы 045 и 051.
+--comment
+--comment Разворот схемы на чистой базе (db/verify.sh, шаг 7) вставал дважды.
+--comment Откат 045 создавал триггер лицевого счёта на функцию, которую тот же
+--comment changeset снёс, — а триггер на несуществующую функцию это отказ
+--comment Postgres, то есть откат, который не откатывается. Откат 051 был
+--comment пустым, и следом откат 012 ронял qty_available безусловным
+--comment DROP COLUMN по колонке, которой уже нет.
+--comment
+--comment Чинить это правкой самих 045 и 051 нельзя: они применены, а в их
+--comment чек-сумму входит всё тело changeset'а, включая комментарии. Мерено
+--comment на живых схемах: правка комментария меняет md5 и валит накат
+--comment у всех заведённых арендаторов. Поэтому недостающее возвращает
+--comment отдельный changeset, стоящий последним: откат идёт от новых к старым,
+--comment и его rollback отработает раньше, чем откаты 051, 045 и 012.
+--comment
+--comment Вперёд он не делает ничего — возвращать нечего, схема уже такая,
+--comment какой должна быть.
+SELECT 1;
+--rollback CREATE OR REPLACE FUNCTION ${tenant.schema}.customer_balance_apply() RETURNS trigger LANGUAGE plpgsql AS $fn$ BEGIN UPDATE ${tenant.schema}.customer SET balance = balance + NEW.amount WHERE id = NEW.customer_id; RETURN NEW; END $fn$;
+--rollback ALTER TABLE ${tenant.schema}.part_oem DROP COLUMN normalized;
+--rollback ALTER TABLE ${tenant.schema}.part_oem ADD COLUMN normalized text NOT NULL GENERATED ALWAYS AS (catalog.normalize_oem(raw_number)) STORED;
+--rollback ALTER TABLE ${tenant.schema}.part_oem ADD CONSTRAINT part_oem_uk UNIQUE (part_id, normalized);
+--rollback CREATE INDEX part_oem_normalized_ix ON ${tenant.schema}.part_oem (normalized);
+--rollback CREATE INDEX part_oem_trgm ON ${tenant.schema}.part_oem USING gin (normalized gin_trgm_ops);
+--rollback DROP INDEX IF EXISTS ${tenant.schema}.part_search_gin;
+--rollback ALTER TABLE ${tenant.schema}.part ADD COLUMN search_vector tsvector GENERATED ALWAYS AS (to_tsvector('russian', coalesce(title,'') || ' ' || coalesce(description,'') || ' ' || coalesce(marking,''))) STORED;
+--rollback CREATE INDEX part_search_gin ON ${tenant.schema}.part USING gin (search_vector);
+--rollback DROP INDEX IF EXISTS ${tenant.schema}.part_stock_available_ix;
+--rollback ALTER TABLE ${tenant.schema}.part_stock ADD COLUMN qty_available numeric(12,3) GENERATED ALWAYS AS (qty - qty_reserved) STORED;
+--rollback CREATE INDEX part_stock_available_ix ON ${tenant.schema}.part_stock (warehouse_id, part_id) WHERE qty_available > 0;

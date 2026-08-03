@@ -113,7 +113,7 @@ class WheelServiceTest extends PostgresTestBase {
     void listCarriesEveryProperty() {
         var created = inTenant(() -> wheels.createSet(tyre(), 2, warehouseId, null));
 
-        var row = inTenant(() -> wheels.list(null, null, false, Map.of(), Map.of(), "set", true, 50)).stream()
+        var row = inTenant(() -> wheels.list(null, null, false, Map.of(), Map.of(), "set", true, 0, 50).rows()).stream()
                 .filter(w -> created.partIds().contains(w.id()))
                 .findFirst()
                 .orElseThrow();
@@ -146,16 +146,16 @@ class WheelServiceTest extends PostgresTestBase {
 
         // Размер попадает в поиск сам: он собран в заголовок, а покупатель
         // называет именно его.
-        var found = inTenant(() -> wheels.list("195/65", null, false, Map.of(), Map.of(), "set", true, 500));
+        var found = inTenant(() -> wheels.list("195/65", null, false, Map.of(), Map.of(), "set", true, 0, 500).rows());
         assertThat(ids(found)).contains(tyreId).doesNotContain(discId);
 
         // «Покажи только диски» — первое, что делает кладовщик, когда ищет
         // комплект железа: половина колонок у второго вида пуста.
-        var discs = inTenant(() -> wheels.list(null, "DISC", false, Map.of(), Map.of(), "set", true, 500));
+        var discs = inTenant(() -> wheels.list(null, "DISC", false, Map.of(), Map.of(), "set", true, 0, 500).rows());
         assertThat(ids(discs)).contains(discId).doesNotContain(tyreId);
         assertThat(discs).allSatisfy(row -> assertThat(row.kind()).isEqualTo("DISC"));
 
-        var all = inTenant(() -> wheels.list(null, null, false, Map.of(), Map.of(), "set", true, 500));
+        var all = inTenant(() -> wheels.list(null, null, false, Map.of(), Map.of(), "set", true, 0, 500).rows());
         assertThat(ids(all)).contains(tyreId, discId);
     }
 
@@ -167,7 +167,7 @@ class WheelServiceTest extends PostgresTestBase {
         // ORDER BY не принимает параметр, и подстановка пришедшего текста —
         // это внедрение SQL. Неизвестное имя молча становится умолчанием.
         assertThat(ids(inTenant(() -> wheels.list(
-                null, null, false, Map.of(), Map.of(), "p.id; DROP TABLE part", true, 500))))
+                null, null, false, Map.of(), Map.of(), "p.id; DROP TABLE part", true, 0, 500).rows())))
                 .contains(created.partIds().get(0));
     }
 
@@ -175,7 +175,7 @@ class WheelServiceTest extends PostgresTestBase {
     @DisplayName("Неизвестный вид товара отвергается, а не ищется")
     void unknownKindIsRejected() {
         assertThatThrownBy(() -> inTenant(() ->
-                wheels.list(null, "КОЛЕСО", false, Map.of(), Map.of(), "set", true, 50)))
+                wheels.list(null, "КОЛЕСО", false, Map.of(), Map.of(), "set", true, 0, 50).rows()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -223,6 +223,37 @@ class WheelServiceTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Чужой вид товара отвергается при заведении, а не базой")
+    void unknownKindIsRejectedOnCreate() {
+        WheelService.WheelRequest wrong = new WheelService.WheelRequest("WHEEL",
+                new BigDecimal("18"), 225, 55, "R", "Легковая", "SUMMER",
+                new BigDecimal("7"), 2021, null, null, null, null, null,
+                "Dunlop", "SP Sport", null, null, "METRIC", "DIRECTIONAL",
+                false, false, "V", 95, new BigDecimal("21000"), null, null);
+
+        // Белый список стоял только в отборе, и «WHEEL» вместо «ASSEMBLY»
+        // доезжал до CHECK в колонке: наружу это уходило как «операция
+        // нарушает целостность данных» — человеку неясно, что он ввёл не то,
+        // а офлайн-очередь читает 409 как повод повторить. Поймано прогоном.
+        assertThatThrownBy(() -> inTenant(() -> wheels.createSet(wrong, 4, warehouseId, null)))
+                .hasMessageContaining("Неизвестный вид товара");
+    }
+
+    @Test
+    @DisplayName("Общее число едет вместе со страницей")
+    void pageCarriesTotal() {
+        wheels.getClass();
+        var page = inTenant(() -> wheels.list(null, null, true, Map.of(), Map.of(),
+                "set", true, 0, 1));
+
+        // Счётчик считался длиной ответа, а ответ был обрезан лимитом:
+        // у клиента с большим складом «500 товаров» выглядело правдой,
+        // а до остального было не добраться вовсе.
+        assertThat(page.rows()).hasSize(1);
+        assertThat(page.total()).isGreaterThan(1);
+    }
+
+    @Test
     @DisplayName("Диск получает свой заголовок, а не шинный")
     void discTitleDiffers() {
         var disc = new WheelService.WheelRequest("DISC", new BigDecimal("15"),
@@ -249,10 +280,10 @@ class WheelServiceTest extends PostgresTestBase {
         // «Шина», а не TYRE, и «летняя», а не SUMMER: владелец выбирает
         // из списка то, что видит в таблице, и отбор обязан понимать ровно это.
         assertThat(ids(inTenant(() -> wheels.list(null, null, false,
-                Map.of("kind", "Шина"), Map.of(), "set", true, 500))))
+                Map.of("kind", "Шина"), Map.of(), "set", true, 0, 500).rows())))
                 .contains(tyre.partIds().get(0)).doesNotContain(disc.partIds().get(0));
         assertThat(ids(inTenant(() -> wheels.list(null, null, false,
-                Map.of("season", "летняя"), Map.of(), "set", true, 500))))
+                Map.of("season", "летняя"), Map.of(), "set", true, 0, 500).rows())))
                 .contains(tyre.partIds().get(0));
     }
 
@@ -264,7 +295,7 @@ class WheelServiceTest extends PostgresTestBase {
         // В базе диаметр лежит как 15.0, в таблице стоит «15», и выбранное
         // из списка «15» обязано находить эту шину.
         assertThat(ids(inTenant(() -> wheels.list(null, null, false,
-                Map.of("diameter", "15"), Map.of(), "set", true, 500))))
+                Map.of("diameter", "15"), Map.of(), "set", true, 0, 500).rows())))
                 .contains(created.partIds().get(0));
     }
 
@@ -291,10 +322,10 @@ class WheelServiceTest extends PostgresTestBase {
         // У диска сезона нет вовсе, у шины он летний. Вопрос «где не заполнено»
         // задают, когда разгребают склад после переезда.
         assertThat(ids(inTenant(() -> wheels.list(null, null, false,
-                Map.of("season", WheelService.EMPTY), Map.of(), "set", true, 500))))
+                Map.of("season", WheelService.EMPTY), Map.of(), "set", true, 0, 500).rows())))
                 .contains(disc.partIds().get(0)).doesNotContain(tyre.partIds().get(0));
         assertThat(ids(inTenant(() -> wheels.list(null, null, false,
-                Map.of("season", WheelService.PRESENT), Map.of(), "set", true, 500))))
+                Map.of("season", WheelService.PRESENT), Map.of(), "set", true, 0, 500).rows())))
                 .contains(tyre.partIds().get(0)).doesNotContain(disc.partIds().get(0));
     }
 
@@ -307,7 +338,7 @@ class WheelServiceTest extends PostgresTestBase {
         // Диаметр у обоих пятнадцатый, вид разный: вместе они обязаны
         // оставить одну строку.
         var found = ids(inTenant(() -> wheels.list(null, null, false,
-                Map.of("diameter", "15", "kind", "Диск"), Map.of(), "set", true, 500)));
+                Map.of("diameter", "15", "kind", "Диск"), Map.of(), "set", true, 0, 500).rows()));
         assertThat(found).contains(disc.partIds().get(0))
                 .doesNotContain(tyre.partIds().get(0));
     }
@@ -316,7 +347,7 @@ class WheelServiceTest extends PostgresTestBase {
     @DisplayName("Неизвестная колонка отвергается, а не подставляется в SQL")
     void unknownColumnIsRejected() {
         assertThatThrownBy(() -> inTenant(() -> wheels.list(null, null, false,
-                Map.of("p.price = 0 OR true", "1"), Map.of(), "set", true, 50)))
+                Map.of("p.price = 0 OR true", "1"), Map.of(), "set", true, 0, 50).rows()))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> inTenant(() -> wheels.values("p.price; DROP TABLE part")))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -355,7 +386,7 @@ class WheelServiceTest extends PostgresTestBase {
     void assemblyCarriesBothSides() {
         var created = inTenant(() -> wheels.createSet(assembly(), 4, warehouseId, null));
 
-        var row = inTenant(() -> wheels.list(null, null, false, Map.of(), Map.of(), "set", true, 500))
+        var row = inTenant(() -> wheels.list(null, null, false, Map.of(), Map.of(), "set", true, 0, 500).rows())
                 .stream().filter(w -> created.partIds().contains(w.id())).findFirst().orElseThrow();
 
         assertThat(row.kind()).isEqualTo("ASSEMBLY");
@@ -398,7 +429,7 @@ class WheelServiceTest extends PostgresTestBase {
 
         assertThat(inTenant(() -> wheels.values("kind"))).contains("Колесо");
         assertThat(ids(inTenant(() -> wheels.list(null, null, false,
-                Map.of("kind", "Колесо"), Map.of(), "set", true, 500))))
+                Map.of("kind", "Колесо"), Map.of(), "set", true, 0, 500).rows())))
                 .contains(assembly.partIds().get(0))
                 .doesNotContain(tyre.partIds().get(0));
 
@@ -407,10 +438,10 @@ class WheelServiceTest extends PostgresTestBase {
         // «диски Mitsubishi» не найдёт ни одного.
         assertThat(inTenant(() -> wheels.values("discBrand"))).contains("Mitsubishi");
         assertThat(ids(inTenant(() -> wheels.list(null, null, false,
-                Map.of("discBrand", "Mitsubishi"), Map.of(), "set", true, 500))))
+                Map.of("discBrand", "Mitsubishi"), Map.of(), "set", true, 0, 500).rows())))
                 .contains(assembly.partIds().get(0));
         assertThat(ids(inTenant(() -> wheels.list(null, null, false,
-                Map.of("discBrand", "Dunlop"), Map.of(), "set", true, 500))))
+                Map.of("discBrand", "Dunlop"), Map.of(), "set", true, 0, 500).rows())))
                 .doesNotContain(assembly.partIds().get(0));
     }
 
@@ -461,11 +492,11 @@ class WheelServiceTest extends PostgresTestBase {
         // написания обязаны находить одну и ту же шину.
         for (String asked : new String[]{"195/65 R15", "195 65 15", "195/65R15"}) {
             assertThat(ids(inTenant(() -> wheels.list(asked, null, false, Map.of(), Map.of(),
-                    "set", true, 500)))).as(asked).contains(id);
+                    "set", true, 0, 500).rows()))).as(asked).contains(id);
         }
         // А чужой размер её находить не должен.
         assertThat(ids(inTenant(() -> wheels.list("205/55 R16", null, false, Map.of(), Map.of(),
-                "set", true, 500)))).doesNotContain(id);
+                "set", true, 0, 500).rows()))).doesNotContain(id);
     }
 
     @Test
@@ -477,14 +508,14 @@ class WheelServiceTest extends PostgresTestBase {
 
         // «Нужны диски пять на сто» — и в русской раскладке тоже.
         assertThat(ids(inTenant(() -> wheels.list("5x100", null, false, Map.of(), Map.of(),
-                "set", true, 500)))).contains(id).doesNotContain(other.partIds().get(0));
+                "set", true, 0, 500).rows()))).contains(id).doesNotContain(other.partIds().get(0));
         assertThat(ids(inTenant(() -> wheels.list("5х100", null, false, Map.of(), Map.of(),
-                "set", true, 500)))).contains(id);
+                "set", true, 0, 500).rows()))).contains(id);
         // Размер самого диска: «6x15» из объявления и «15x6» с диска.
         assertThat(ids(inTenant(() -> wheels.list("6x15", null, false, Map.of(), Map.of(),
-                "set", true, 500)))).contains(id);
+                "set", true, 0, 500).rows()))).contains(id);
         assertThat(ids(inTenant(() -> wheels.list("15x6", null, false, Map.of(), Map.of(),
-                "set", true, 500)))).contains(id);
+                "set", true, 0, 500).rows()))).contains(id);
     }
 
     @Test
@@ -494,12 +525,12 @@ class WheelServiceTest extends PostgresTestBase {
         Long id = assembly.partIds().get(0);
 
         assertThat(ids(inTenant(() -> wheels.list("225/55 R18", null, false, Map.of(), Map.of(),
-                "set", true, 500)))).contains(id);
+                "set", true, 0, 500).rows()))).contains(id);
         assertThat(ids(inTenant(() -> wheels.list("5x114.3", null, false, Map.of(), Map.of(),
-                "set", true, 500)))).contains(id);
+                "set", true, 0, 500).rows()))).contains(id);
         // И по тому и другому разом — это уточнение, а не два разных запроса.
         assertThat(ids(inTenant(() -> wheels.list("225/55 R18 5x114.3", null, false, Map.of(), Map.of(),
-                "set", true, 500)))).contains(id);
+                "set", true, 0, 500).rows()))).contains(id);
     }
 
     @Test
@@ -509,14 +540,14 @@ class WheelServiceTest extends PostgresTestBase {
         Long id = tyre.partIds().get(0);
 
         assertThat(ids(inTenant(() -> wheels.list("Goodyear", null, false, Map.of(), Map.of(),
-                "set", true, 500)))).contains(id);
+                "set", true, 0, 500).rows()))).contains(id);
         // Размер и слово вместе: сначала отбор по полям, потом текст.
         assertThat(ids(inTenant(() -> wheels.list("195/65 R15 Goodyear", null, false, Map.of(), Map.of(),
-                "set", true, 500)))).contains(id);
+                "set", true, 0, 500).rows()))).contains(id);
         assertThat(ids(inTenant(() -> wheels.list("195/65 R15 Nokian", null, false, Map.of(), Map.of(),
-                "set", true, 500)))).doesNotContain(id);
+                "set", true, 0, 500).rows()))).doesNotContain(id);
         assertThat(ids(inTenant(() -> wheels.list(codesOf(List.of(id)).get(0), null, false,
-                Map.of(), Map.of(), "set", true, 500)))).contains(id);
+                Map.of(), Map.of(), "set", true, 0, 500).rows()))).contains(id);
     }
 
     /**
@@ -534,14 +565,14 @@ class WheelServiceTest extends PostgresTestBase {
         Long id = tyre.partIds().get(0);
 
         assertThat(ids(inTenant(() -> wheels.list(null, null, false, Map.of(),
-                Map.of("tyreBrand", "good"), "set", true, 500))))
+                Map.of("tyreBrand", "good"), "set", true, 0, 500).rows())))
                 .as("регистр не должен мешать: набирают как придётся")
                 .contains(id).doesNotContain(disc.partIds().get(0));
 
         // Выбор из списка остаётся точным: «Goodyear» — это именно он,
         // а не всё, что на него похоже.
         assertThat(ids(inTenant(() -> wheels.list(null, null, false,
-                Map.of("tyreBrand", "Good"), Map.of(), "set", true, 500))))
+                Map.of("tyreBrand", "Good"), Map.of(), "set", true, 0, 500).rows())))
                 .doesNotContain(id);
     }
 
@@ -549,7 +580,7 @@ class WheelServiceTest extends PostgresTestBase {
     @DisplayName("Вбитое слово по неизвестной колонке отвергается")
     void typedWordChecksTheColumn() {
         assertThatThrownBy(() -> inTenant(() -> wheels.list(null, null, false, Map.of(),
-                Map.of("p.price = 0 OR true", "1"), "set", true, 50)))
+                Map.of("p.price = 0 OR true", "1"), "set", true, 0, 50).rows()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

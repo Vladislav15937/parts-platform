@@ -28,6 +28,9 @@ import java.util.List;
 @RequestMapping("/api/wheels")
 public class WheelController {
 
+    /** Страница крупнее полутысячи — это не просмотр, а выгрузка; для неё есть /export. */
+    private static final int MAX_SIZE = 500;
+
     private static final String INTAKES = "hasAnyRole('OWNER','MANAGER','STOREKEEPER')";
 
     private final WheelService wheels;
@@ -56,12 +59,15 @@ public class WheelController {
                      @RequestParam(required = false) List<String> find,
                      @RequestParam(defaultValue = "set") String sort,
                      @RequestParam(defaultValue = "true") boolean desc,
-                     @RequestParam(defaultValue = "200") int limit) {
+                     @RequestParam(defaultValue = "0") int page,
+                     @RequestParam(defaultValue = "50") int size) {
 
-        return new View(catalog.warehouses(),
-                wheels.list(q, kind, missing, columnsOf(filter), columnsOf(find),
-                                sort, desc, Math.min(limit, 500))
-                        .stream().map(this::rowOf).toList());
+        WheelService.Page found = wheels.list(q, kind, missing,
+                columnsOf(filter), columnsOf(find), sort, desc,
+                Math.max(page, 0), Math.min(Math.max(size, 1), MAX_SIZE));
+
+        return new View(found.total(), catalog.warehouses(),
+                found.rows().stream().map(this::rowOf).toList());
     }
 
     /**
@@ -168,7 +174,7 @@ public class WheelController {
     }
 
     /** @param warehouses колонки складов: у каждого клиента свои */
-    public record View(List<CatalogService.Warehouse> warehouses, List<Row> rows) {
+    public record View(long total, List<CatalogService.Warehouse> warehouses, List<Row> rows) {
     }
 
     /**

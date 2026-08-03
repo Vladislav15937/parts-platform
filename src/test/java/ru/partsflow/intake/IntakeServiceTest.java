@@ -40,6 +40,9 @@ class IntakeServiceTest extends PostgresTestBase {
     private IntakeService intake;
 
     @Autowired
+    private DonorVehicleResolver vehicles;
+
+    @Autowired
     private StockDocumentService documents;
 
     @Autowired
@@ -164,6 +167,27 @@ class IntakeServiceTest extends PostgresTestBase {
                 "SELECT raw_number, is_primary FROM part_oem WHERE part_id = ?", partId)))
                 .containsEntry("raw_number", "334388")
                 .containsEntry("is_primary", true);
+    }
+
+    @Test
+    @DisplayName("«б/н» вместо номера не валит приёмку")
+    void unusableOemNumberIsSkipped() {
+        Supply supply = arrivedSupply("33");
+        IntakeService.Receipt receipt = inTenant(() -> intake.receive(
+                warehouse, supply.getId(), null,
+                List.of(new IntakeService.ItemRequest("амортизатор", BigDecimal.ONE,
+                        new BigDecimal("8500"), null, cell, null, null, null,
+                        PartCondition.USED, null, "KYB", "б/н", null, null)),
+                null, uniqueRequestId()));
+
+        // Приведение выкусывает всё, кроме латиницы и цифр, а колонка
+        // normalized объявлена NOT NULL: записанный не глядя, такой номер
+        // отвечает пятисоткой — а её офлайн-очередь приёмщика повторяет вечно.
+        // Деталь заводится, просто без номера.
+        Long partId = receipt.parts().get(0).getId();
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_oem WHERE part_id = ?", Integer.class, partId)))
+                .isZero();
     }
 
     @Test
@@ -385,6 +409,39 @@ class IntakeServiceTest extends PostgresTestBase {
         Donor saved = inTenant(() -> intake.registerDonor(donor, null, null));
 
         assertThat(saved.getGenerationId()).isEqualTo(generation2001);
+    }
+
+    @Test
+    @DisplayName("Дозаполнение проставляет поколение машинам переезда")
+    void backfillFillsGenerations() {
+        Long model = modelWithGenerations();
+
+        // Так машина приезжает переносом: импортёр пишет доноров своим SQL,
+        // мимо registerDonor, и поколения у них не появлялось никогда.
+        Long fromImport = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO donor (public_code, brand_id, model_id, year, status)
+                VALUES ('ПРОГОН-1', (SELECT brand_id FROM catalog.model WHERE id = ?),
+                        ?, 2007, 'DISMANTLING') RETURNING id""",
+                Long.class, model, model));
+        // А эту машину человек завёл руками и поколение выбрал сам —
+        // перебивать его нельзя: он смотрел в документы, мы считаем по году.
+        Long chosen = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO donor (public_code, brand_id, model_id, year, generation_id, status)
+                VALUES ('ПРОГОН-2', (SELECT brand_id FROM catalog.model WHERE id = ?),
+                        ?, 2007, ?, 'DISMANTLING') RETURNING id""",
+                Long.class, model, model, generation2001));
+
+        assertThat(inTenant(() -> vehicles.backfillGenerations())).isPositive();
+
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT generation_id FROM donor WHERE id = ?", Long.class, fromImport)))
+                .as("машина переезда осталась без поколения — ни кузова "
+                        + "в заголовке, ни подбора по машине")
+                .isEqualTo(generation2006);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT generation_id FROM donor WHERE id = ?", Long.class, chosen)))
+                .as("дозаполнение перебило выбранное человеком")
+                .isEqualTo(generation2001);
     }
 
     @Test
