@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useLockedScroll } from '../ui/useLockedScroll';
 import { ApiError } from '../api/client';
 import {
   addApplicability,
@@ -261,6 +262,8 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   async function drop(id: number): Promise<void> {
     setFits(await removeApplicability(row.id, id));
   }
+
+  useLockedScroll();
 
   return (
     <div className="modal-backdrop" onClick={onClose}>

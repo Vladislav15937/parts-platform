@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useLockedScroll } from '../ui/useLockedScroll';
 import { loadVehicleOptions, type VehicleOption } from '../inventory/catalog';
 import { NO_VEHICLE, type VehicleFilter } from '../inventory/catalog';
 
@@ -66,6 +67,8 @@ export function VehiclePicker({ chosen, onPick, onClose }: {
       setDraft({ ...draft, body: '', engine: '' });
     }
   }
+
+  useLockedScroll();
 
   return (
     <div className="modal-backdrop" onClick={onClose}>

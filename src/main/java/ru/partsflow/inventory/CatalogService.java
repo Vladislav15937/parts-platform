@@ -507,7 +507,7 @@ public class CatalogService {
                        (SELECT tm.display_name FROM tenant_member tm
                          WHERE tm.id = p.price_changed_by) AS price_changed_by_name,
                        (SELECT count(*) FROM part_photo ph2
-                         WHERE ph2.part_id = p.id)         AS photo_count,
+                         WHERE ph2.part_id = p.id AND ph2.status = 'PROCESSED')         AS photo_count,
                        (SELECT o.raw_number FROM part_oem o
                          WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
                        (SELECT string_agg(o.raw_number, ', ') FROM part_oem o
@@ -531,8 +531,14 @@ public class CatalogService {
                                              WHEN 'AWD' THEN 'полный' END,
                            d.transmission_model,
                            d.equipment_code), '') AS equipment,
+                       -- Только подтверждённый снимок: у оборванной загрузки
+                       -- и у неподтверждённой записи файла в хранилище нет,
+                       -- и в колонке «Превью» висит битая картинка. Прайс
+                       -- и карточка это уже фильтруют, витрины — нет,
+                       -- и поймано это глазами, а не тестом.
                        (SELECT ph.s3_key FROM part_photo ph
-                         WHERE ph.part_id = p.id ORDER BY ph.is_main DESC, ph.sort_order,
+                         WHERE ph.part_id = p.id AND ph.status = 'PROCESSED'
+                         ORDER BY ph.is_main DESC, ph.sort_order,
                                ph.id LIMIT 1) AS photo_key
                 """ + joins + where + " ORDER BY " + order + " LIMIT ? OFFSET ?",
                 (rs, i) -> new Row(
@@ -698,7 +704,7 @@ public class CatalogService {
                        (SELECT tm.display_name FROM tenant_member tm
                          WHERE tm.id = p.price_changed_by) AS price_changed_by_name,
                        (SELECT count(*) FROM part_photo ph
-                         WHERE ph.part_id = p.id) AS photo_count,
+                         WHERE ph.part_id = p.id AND ph.status = 'PROCESSED') AS photo_count,
                        CASE WHEN sp.id IS NULL THEN NULL
                             ELSE sp.kind || ' №' || sp.number
                                  || coalesce(' | ' || to_char(sp.arrived_on, 'DD.MM.YYYY'), '')

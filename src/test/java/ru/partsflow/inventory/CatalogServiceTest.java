@@ -236,6 +236,25 @@ class CatalogServiceTest extends PostgresTestBase {
         assertThat(found).contains("Фара левая 81150-33670");
     }
 
+    @Test
+    @DisplayName("Неподтверждённый снимок в превью не идёт")
+    void unconfirmedPhotoIsNotShown() {
+        Long partId = part("Фара со сломанной загрузкой", 1);
+        inTenant(() -> jdbc.update("""
+                INSERT INTO part_photo (part_id, s3_key, status, sort_order)
+                VALUES (?, 't_000042/parts/1/broken.jpg', 'FAILED', 0)""", partId));
+
+        var row = catalog(true, true).rows().stream()
+                .filter(r -> r.id().equals(partId)).findFirst().orElseThrow();
+
+        // У оборванной загрузки файла в хранилище нет, и в колонке «Превью»
+        // висит битая картинка, а колонка «Количество фото» обещает снимок,
+        // которого не существует. Прайс и карточка это фильтруют — витрина
+        // не фильтровала, и поймано это глазами, а не тестом.
+        assertThat(row.photoKey()).as("превью показывает неподтверждённый снимок").isNull();
+        assertThat(row.photoCount()).as("счётчик считает неподтверждённые").isZero();
+    }
+
     private CatalogService.Page catalog(boolean reserved, boolean missing) {
         return inTenant(() -> catalog.list(null, reserved, missing, List.of(), null, Map.of(), Map.of(),
                 "code", true, 0, 50));
