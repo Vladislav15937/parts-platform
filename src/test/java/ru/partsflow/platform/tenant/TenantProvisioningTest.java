@@ -130,6 +130,45 @@ class TenantProvisioningTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Одновременное заведение не теряет заявок")
+    void parallelProvisioningLosesNothing() throws Exception {
+        int count = 6;
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(count);
+        var codes = new java.util.ArrayList<String>();
+        for (int i = 0; i < count; i++) {
+            codes.add(uniqueCode());
+        }
+        try {
+            var results = pool.invokeAll(codes.stream()
+                    .map(code -> (java.util.concurrent.Callable<String>) () -> {
+                        provisioning.provision(new TenantProvisioning.Request(
+                                code, "Одновременная " + code, "owner", "пароль-8симв", null));
+                        return code;
+                    })
+                    .toList());
+
+            // Номер берётся «максимальный плюс один», и параллельные заявки
+            // читают одно и то же: проигравший получал отказ «код занят»,
+            // хотя код был свободен. На нагрузочной пробе так терялась каждая
+            // десятая заявка из двухсот — а пачкой их и заводят, когда
+            // переносят клиентов или поднимают ячейку заново.
+            for (var result : results) {
+                result.get();
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        for (String code : codes) {
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM public.tenant_registry WHERE code = ? AND status = 'ACTIVE'",
+                    Integer.class, code))
+                    .as("арендатор %s потерялся при одновременном заведении", code)
+                    .isEqualTo(1);
+        }
+    }
+
+    @Test
     @DisplayName("Код компании проверяется: он станет поддоменом")
     void codeIsValidated() {
         assertThatThrownBy(() -> provisioning.provision(new TenantProvisioning.Request(

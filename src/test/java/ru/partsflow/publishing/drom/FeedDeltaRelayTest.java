@@ -165,6 +165,33 @@ class FeedDeltaRelayTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Очередь длиннее пачки уходит за один проход, а не за десять")
+    void longQueueDrainsInOneSweep() {
+        account("12345", null, null);
+        List<Long> ids = new ArrayList<>();
+        for (int i = 0; i < 1200; i++) {
+            ids.add(part("Массовая " + i, "5000"));
+        }
+        drainQueue();
+        inTenant(() -> {
+            partChanges.changed(ids);
+            return null;
+        });
+
+        int sent = relay.drainFor(TENANT);
+
+        // Пачка в пятьсот и интервал в пятнадцать секунд задумывались как
+        // склейка мелких правок, а не как предел скорости: пока проход брал
+        // ровно одну пачку, правка списком на тридцать пять тысяч позиций
+        // доезжала до площадки семнадцать минут. Измерено нагрузочной пробой.
+        assertThat(sent).isEqualTo(1200);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_change", Integer.class)))
+                .as("очередь осталась непустой после прохода")
+                .isZero();
+    }
+
+    @Test
     @DisplayName("Отказ площадки оставляет позицию в очереди")
     void failureKeepsThePartQueued() {
         account("12345", null, null);

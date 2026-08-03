@@ -58,6 +58,17 @@ public class TenantProvisioning {
      */
     private static final long CELL_RANGE = 1_000_000L;
 
+    /**
+     * Сколько раз пробовать занять номер.
+     *
+     * <p>Пять: при заведении ячейки пачкой в несколько потоков столкновение
+     * случается на каждой десятой заявке, но подряд пять раз проиграть надо
+     * очень постараться. Больше — значит прятать настоящую проблему: если
+     * не хватает и пяти, арендаторов создают десятками в секунду, и об этом
+     * лучше узнать отказом.
+     */
+    private static final int RESERVE_ATTEMPTS = 5;
+
     private final JdbcTemplate jdbc;
     private final DataSource dataSource;
     private final TenantSchemaMigrator migrator;
@@ -121,24 +132,47 @@ public class TenantProvisioning {
         // а переносить клиента между ячейками придётся при первой же
         // перебалансировке. Заодно по номеру видно, где искать клиента.
         long base = cellNumber * CELL_RANGE;
-        Long tenantId = jdbc.queryForObject("""
-                SELECT GREATEST(COALESCE(max(tenant_id), 0), ?) + 1
-                  FROM public.tenant_registry""", Long.class, base);
-        String schema = "t_%06d".formatted(tenantId);
 
-        try {
-            jdbc.update("""
-                    INSERT INTO public.tenant_registry
-                        (tenant_id, schema_name, company_name, code, status)
-                    VALUES (?, ?, ?, ?, 'PROVISIONING')""",
-                    tenantId, schema, companyName, code);
-        } catch (org.springframework.dao.DuplicateKeyException e) {
-            // Код занят или номер увели параллельно — второе означает гонку,
-            // и повторить попытку должен вызывающий, а не мы молча.
-            throw new IllegalStateException(
-                    "Код компании «%s» занят либо арендатор создаётся параллельно".formatted(code), e);
+        // Номер берётся «максимальный плюс один», и два одновременных создания
+        // прочитают одно и то же при любом уровне изоляции ниже сериализуемого.
+        // Уникальность стережёт первичный ключ — но проигравшему надо дать
+        // второй номер, а не отказ: при заведении ячейки заявки идут пачкой,
+        // и на двухстах арендаторах в четыре потока так терялась каждая
+        // десятая. Замерено нагрузочной пробой: 21 отказ на 195 заявок.
+        for (int attempt = 1; attempt <= RESERVE_ATTEMPTS; attempt++) {
+            Long tenantId = jdbc.queryForObject("""
+                    SELECT GREATEST(COALESCE(max(tenant_id), 0), ?) + 1
+                      FROM public.tenant_registry""", Long.class, base);
+            String schema = "t_%06d".formatted(tenantId);
+            try {
+                jdbc.update("""
+                        INSERT INTO public.tenant_registry
+                            (tenant_id, schema_name, company_name, code, status)
+                        VALUES (?, ?, ?, ?, 'PROVISIONING')""",
+                        tenantId, schema, companyName, code);
+                return new Reserved(tenantId, schema);
+            } catch (org.springframework.dao.DuplicateKeyException e) {
+                // Код занят — повторять бессмысленно, номер тут ни при чём.
+                // Это разные причины, и раньше они шли одним сообщением:
+                // оператор массового заведения не мог понять, повторять ему
+                // или искать другой код.
+                if (codeTaken(code)) {
+                    throw new IllegalStateException(
+                            "Код компании «%s» занят".formatted(code), e);
+                }
+                log.debug("Номер {} увели параллельно, попытка {}", tenantId, attempt);
+            }
         }
-        return new Reserved(tenantId, schema);
+        throw new IllegalStateException(
+                "Не удалось занять номер за %d попыток: арендаторов создают слишком много сразу"
+                        .formatted(RESERVE_ATTEMPTS));
+    }
+
+    /** Занят ли код: отличает «повторять бессмысленно» от «номер увели». */
+    private boolean codeTaken(String code) {
+        Integer found = jdbc.queryForObject(
+                "SELECT count(*) FROM public.tenant_registry WHERE code = ?", Integer.class, code);
+        return found != null && found > 0;
     }
 
     /**
