@@ -55,6 +55,14 @@ public class StockLedger {
      * не должны ни на мгновение.
      */
     public StockMovement record(StockMovement movement) {
+        // Автор проставляется здесь, а не у каждого вызывающего: движение
+        // пишут приёмка, продажа, возврат, пересчёт, списание и перевозка,
+        // и забыть подписать можно в любом из них — а спрашивают журнал
+        // ровно тогда, когда ищут, кто унёс деталь. Пусто — фоновая задача
+        // или перенос: вошедшего там нет и быть не может.
+        if (movement.getCreatedBy() == null) {
+            movement.setCreatedBy(ru.partsflow.platform.security.CurrentUser.memberId());
+        }
         StockMovement saved = movements.saveAndFlush(movement);
         apply(saved);
         // Остаток и статус уехали в прайс — площадке надо сообщить.

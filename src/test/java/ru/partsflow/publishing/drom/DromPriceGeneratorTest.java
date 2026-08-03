@@ -171,6 +171,21 @@ class DromPriceGeneratorTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Нулевая цена в прайс не идёт — это незаполненное поле")
+    void zeroPriceIsExcluded() {
+        String name = "Прайс: цена ноль";
+        Long partId = part(name, BigDecimal.ZERO, true);
+        intake(partId, warehouse, 1);
+
+        // В выгрузке прежней системы ноль стоит там, где поле не заполняли:
+        // у переехавшего клиента таких десять позиций из тридцати шести тысяч,
+        // и уезжали они молча. А «0 ₽» в объявлении — публичное обещание
+        // отдать деталь даром, за которым идут звонки, а по правилам площадки
+        // и снятие всех объявлений разом.
+        assertThat(price()).doesNotContain(name);
+    }
+
+    @Test
     @DisplayName("Основной номер отделён от аналогов")
     void splitsPrimaryOemAndAnalogs() {
         String name = "Прайс: амортизатор с номерами";

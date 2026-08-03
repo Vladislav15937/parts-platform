@@ -13,7 +13,10 @@ import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
+import java.util.Map;
 import ru.partsflow.platform.tenant.TenantContext;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.util.function.Supplier;
@@ -137,6 +140,19 @@ class InventoryHttpTest extends PostgresTestBase {
                 // Пустой список — не украшение: экран по нему решает, показывать
                 // ли кладовщику, что часть строк осталась непроведённой.
                 .andExpect(jsonPath("$.blocked.length()").value(0));
+
+        // Движение недостачи обязано объяснять себя. У продажи в журнале
+        // стоит сделка, у возврата — возврат, у списания и перевозки —
+        // документ, а корректировка пересчёта не ссылалась ни на что:
+        // «остаток уменьшился на два» без указания пересчёта не отвечает
+        // на вопрос, ради которого журнал и ведут.
+        Map<String, Object> movement = inTenant(() -> jdbc.queryForMap("""
+                SELECT ref_type, ref_id, created_by FROM stock_movement
+                 WHERE movement_type = 'INVENTORY_ADJUST' ORDER BY id DESC LIMIT 1"""));
+        assertThat(movement).containsEntry("ref_type", "INVENTORY")
+                .containsEntry("ref_id", sessionId);
+        // И автора: спрашивают журнал ровно тогда, когда ищут, кто унёс деталь.
+        assertThat(movement.get("created_by")).as("движение без автора").isNotNull();
     }
 
     @Test

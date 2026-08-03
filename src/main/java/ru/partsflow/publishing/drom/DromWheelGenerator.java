@@ -91,7 +91,7 @@ public class DromWheelGenerator {
              WHERE p.is_published
                AND p.product_line = 'WHEEL'
                AND p.status IN ('IN_STOCK', 'SOLD')
-               AND p.price IS NOT NULL
+               AND p.price > 0
                AND (?::numeric IS NULL OR p.price >= ?::numeric)
                AND (?::numeric IS NULL OR p.price <= ?::numeric)
                AND (?::text[]   IS NULL OR p.condition = ANY (?::text[]))
@@ -183,7 +183,7 @@ public class DromWheelGenerator {
                           JOIN part_wheel w ON w.part_id = p.id
                          WHERE p.is_published AND p.product_line = 'WHEEL'
                            AND p.status IN ('IN_STOCK', 'SOLD')
-                           AND p.price IS NOT NULL
+                           AND p.price > 0
                            AND (CAST(:priceFrom AS numeric) IS NULL
                                 OR p.price >= CAST(:priceFrom AS numeric))
                            AND (CAST(:priceTo AS numeric) IS NULL
