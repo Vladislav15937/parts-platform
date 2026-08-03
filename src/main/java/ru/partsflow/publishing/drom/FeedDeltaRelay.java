@@ -12,16 +12,20 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * Доводит изменения склада до площадки: очередь {@code feed_dirty} → дельта.
+ * Доводит изменения склада до площадки: очередь {@code part_change} → дельта.
  *
- * <p><b>Зачем очередь, а не вызов из кода.</b> Половину изменений позиции
- * делает сама база: остаток и статус ведёт триггер складского движения,
- * раскладку по складам — он же, резерв — функции {@code reserve_stock}
- * и {@code release_stock}. Приложение об этих правках не знает и знать
- * не должно. Отправка «из места, где меняем» означала бы список мест, который
- * надо не забыть дополнить при каждой новой операции, — а забывают всегда,
- * и обнаруживается это сутки спустя на чужом сайте. Отметку ставит триггер,
- * и мимо него не проходит ни импорт, ни правка руками прямым SQL.
+ * <p><b>Зачем очередь, а не отправка прямо из места правки.</b> Разговор
+ * с чужим сервером внутри транзакции продавца означал бы, что нажатие
+ * «выдать» ждёт ответа площадки, а соединение из пула ждёт вместе с ним.
+ * Очередь разводит эти два времени: правка коммитится сразу, отправка идёт
+ * своим ходом и умеет повторяться, не трогая склад.
+ *
+ * <p>Наполняет очередь {@link ru.partsflow.inventory.PartChangeLog} —
+ * из приёмки, склада, продаж и правки карточки. До 3 августа 2026 это делал
+ * триггер базы; он был полнее, но противоречил правилу «логика в Java»,
+ * и цена его невидимости выше цены забытой отметки: забытая откладывает
+ * обновление до полного прайса, а невидимая съедает часы на вопрос «почему
+ * оно поменялось само».
  *
  * <p><b>Пачкой, а не по одному изменению.</b> Правка секции у сотни позиций
  * не должна засыпать площадку сотней запросов; отметка лежит на позиции,
@@ -157,10 +161,10 @@ public class FeedDeltaRelay {
      */
     private List<Long> claim() {
         return jdbc.queryForList("""
-                UPDATE feed_dirty
+                UPDATE part_change
                    SET claimed_at = now()
                  WHERE part_id IN (
-                     SELECT part_id FROM feed_dirty
+                     SELECT part_id FROM part_change
                       WHERE claimed_at IS NULL OR claimed_at < now() - ?::interval
                       ORDER BY marked_at
                       LIMIT ?
@@ -174,17 +178,18 @@ public class FeedDeltaRelay {
      *
      * <p>Только те, что не менялись после заявки: правка, случившаяся, пока
      * дельта была в пути, уехала в площадку прежним состоянием, и стереть её
-     * отметку значит оставить сайт неправым до полного забора. Триггер такую
-     * правку опознаёт тем, что сбрасывает {@code claimed_at}.
+     * отметку значит оставить сайт неправым до полного забора. Такую правку
+     * видно по снятой заявке: {@link ru.partsflow.inventory.PartChangeLog}
+     * сбрасывает {@code claimed_at} на каждой отметке.
      */
     private void clear(List<Long> partIds) {
-        jdbc.update("DELETE FROM feed_dirty WHERE claimed_at IS NOT NULL AND part_id IN ("
+        jdbc.update("DELETE FROM part_change WHERE claimed_at IS NOT NULL AND part_id IN ("
                         + placeholders(partIds) + ")",
                 partIds.toArray());
     }
 
     private void release(List<Long> partIds) {
-        jdbc.update("UPDATE feed_dirty SET claimed_at = NULL WHERE part_id IN ("
+        jdbc.update("UPDATE part_change SET claimed_at = NULL WHERE part_id IN ("
                         + placeholders(partIds) + ")",
                 partIds.toArray());
     }

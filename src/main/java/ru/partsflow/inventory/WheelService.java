@@ -33,7 +33,10 @@ public class WheelService {
 
     private final JdbcTemplate jdbc;
 
-    public WheelService(JdbcTemplate jdbc) {
+    private final PartChangeLog partChanges;
+
+    public WheelService(JdbcTemplate jdbc, PartChangeLog partChanges) {
+        this.partChanges = partChanges;
         this.jdbc = jdbc;
     }
 
@@ -99,6 +102,10 @@ public class WheelService {
 
             ids.add(partId);
         }
+        // Колёса в прайс запчастей не идут — там свой вид товара, — но отметка
+        // ставится всё равно: выгрузка для шин и дисков появится, и лишний
+        // список мест, который надо не забыть дополнить, никому не нужен.
+        partChanges.changed(ids);
         return new Created(setNo, title, ids);
     }
 

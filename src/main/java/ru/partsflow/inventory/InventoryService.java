@@ -43,15 +43,18 @@ public class InventoryService {
     private final StockMovementRepository movements;
     private final JdbcTemplate jdbc;
     private final StockReservationRepository reservations;
+    private final PartChangeLog partChanges;
 
     public InventoryService(InventorySessionRepository sessions,
                             StockMovementRepository movements,
                             JdbcTemplate jdbc,
-                            StockReservationRepository reservations) {
+                            StockReservationRepository reservations,
+                            PartChangeLog partChanges) {
         this.sessions = sessions;
         this.movements = movements;
         this.jdbc = jdbc;
         this.reservations = reservations;
+        this.partChanges = partChanges;
     }
 
     /**
@@ -328,6 +331,9 @@ public class InventoryService {
             }
             movements.save(StockMovement.inventoryAdjust(
                     d.partId(), d.delta(), session.getWarehouseId()));
+            // Недостача обнуляет остаток и списывает карточку: на площадке
+            // она обязана стать недоступной, а не ждать полного прайса.
+            partChanges.changed(d.partId());
             line.markApplied(now);
             adjusted++;
         }

@@ -61,7 +61,10 @@ public class CatalogService {
 
     private final JdbcTemplate jdbc;
 
-    public CatalogService(JdbcTemplate jdbc) {
+    private final PartChangeLog partChanges;
+
+    public CatalogService(JdbcTemplate jdbc, PartChangeLog partChanges) {
+        this.partChanges = partChanges;
         this.jdbc = jdbc;
     }
 
@@ -398,17 +401,23 @@ public class CatalogService {
     /** Добавляет применимость руками — из карточки. Отметка подтверждения стоит. */
     @Transactional
     public boolean addApplicability(long partId, long brandId, Long modelId) {
-        return jdbc.update("""
+        boolean added = jdbc.update("""
                 INSERT INTO part_applicability (part_id, brand_id, model_id, is_verified)
                 VALUES (?, ?, ?, true)
                 ON CONFLICT (part_id, brand_id, model_id, generation_id, modification_id)
                 DO UPDATE SET is_verified = true""", partId, brandId, modelId) > 0;
+        // Марка и модель уезжают в прайс отдельными тегами: у контрактной
+        // детали они берутся именно отсюда. Прежний триггер этого не ловил
+        // вовсе — на part_applicability его не было.
+        partChanges.changed(partId);
+        return added;
     }
 
     @Transactional
     public void removeApplicability(long partId, long applicabilityId) {
         jdbc.update("DELETE FROM part_applicability WHERE id = ? AND part_id = ?",
                 applicabilityId, partId);
+        partChanges.changed(partId);
     }
 
     /**

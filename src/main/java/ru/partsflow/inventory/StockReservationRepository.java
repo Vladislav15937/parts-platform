@@ -23,9 +23,11 @@ import java.math.BigDecimal;
 public class StockReservationRepository {
 
     private final EntityManager entityManager;
+    private final PartChangeLog partChanges;
 
-    public StockReservationRepository(EntityManager entityManager) {
+    public StockReservationRepository(EntityManager entityManager, PartChangeLog partChanges) {
         this.entityManager = entityManager;
+        this.partChanges = partChanges;
     }
 
     /**
@@ -38,6 +40,11 @@ public class StockReservationRepository {
         call("reserve_stock", partId, warehouseId, quantity,
                 "Недостаточно свободного остатка: деталь %d, склад %d, требуется %s"
                         .formatted(partId, warehouseId, quantity));
+        // На площадку уезжает свободный остаток, а не общий: отложенная деталь
+        // обязана стать недоступной сразу, иначе за ней приедет второй
+        // покупатель. Отметка здесь, а не у вызывающих: резерв меняется
+        // только этими двумя методами.
+        partChanges.changed(partId);
     }
 
     /** Снимает резерв: при отмене сделки и перед списанием на выдаче. */
@@ -45,6 +52,7 @@ public class StockReservationRepository {
         call("release_stock", partId, warehouseId, quantity,
                 "Нечего снимать с резерва: деталь %d, склад %d, требуется %s"
                         .formatted(partId, warehouseId, quantity));
+        partChanges.changed(partId);
     }
 
     /**

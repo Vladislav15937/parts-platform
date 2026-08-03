@@ -286,9 +286,23 @@ class SalesServiceReturnTest extends PostgresTestBase {
                 Integer.class, partId, warehouseId));
     }
 
+    /**
+     * Остаток лицевого счёта — по журналу, а не из колонки.
+     *
+     * <p>Колонки {@code customer.balance} больше нет: её вёл триггер, и вёл
+     * неверно — знак операции живёт в Java, а он складывал суммы как есть,
+     * отчего выдача со счёта его увеличивала. Замерено на живой схеме перед
+     * удалением: пополнение 1000 и выдача 400 давали 1400 при верных 600.
+     */
     private BigDecimal balance() {
-        return inTenant(() -> jdbc.queryForObject(
-                "SELECT balance FROM customer WHERE id = ?", BigDecimal.class, customerId));
+        return inTenant(() -> jdbc.queryForObject("""
+                SELECT COALESCE(sum(CASE entry_type
+                                        WHEN 'TOP_UP'      THEN amount
+                                        WHEN 'DEAL_REFUND' THEN amount
+                                        WHEN 'CORRECTION'  THEN amount
+                                        ELSE -amount END), 0)
+                  FROM customer_account_entry WHERE customer_id = ?""",
+                BigDecimal.class, customerId));
     }
 
     private String dealStatus(Long dealId) {

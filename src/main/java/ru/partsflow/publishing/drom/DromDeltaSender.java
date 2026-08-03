@@ -36,7 +36,8 @@ import java.util.List;
  * уходило на площадку.
  *
  * <p><b>Кто это вызывает.</b> {@link FeedDeltaRelay} — по очереди изменений,
- * которую наполняет триггер, и {@code DealIssuedHandler} — сразу по выдаче
+ * которую наполняет {@link ru.partsflow.inventory.PartChangeLog},
+ * и {@code DealIssuedHandler} — сразу по выдаче
  * сделки, не дожидаясь очередного захода релея. Напрямую из кода продаж
  * не вызывается намеренно: сделка не должна знать про площадки.
  */
@@ -80,9 +81,9 @@ public class DromDeltaSender {
 
         boolean sent = sendParts(partIds, "deal-%d".formatted(dealId));
         if (sent) {
-            // Продажу отмечает и триггер очереди — движение склада меняет
-            // остаток и статус позиции. Без уборки релей через несколько
-            // секунд отправил бы то же самое второй раз.
+            // Продажу отмечает и очередь изменений — SalesService кладёт
+            // отметку на каждую списанную позицию. Без уборки релей через
+            // несколько секунд отправил бы то же самое второй раз.
             clearDirty(partIds, startedAt);
         }
         return sent;
@@ -98,7 +99,7 @@ public class DromDeltaSender {
             args[i] = partIds.get(i);
         }
         args[partIds.size()] = before;
-        jdbc.update("DELETE FROM feed_dirty WHERE part_id IN (" + places + ") AND marked_at <= ?",
+        jdbc.update("DELETE FROM part_change WHERE part_id IN (" + places + ") AND marked_at <= ?",
                 args);
     }
 

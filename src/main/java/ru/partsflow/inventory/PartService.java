@@ -35,14 +35,31 @@ public class PartService {
     private final PartRepository partRepository;
     private final DomainEventPublisher eventPublisher;
     private final PartNameService partNames;
+    private final PartChangeLog partChanges;
     private final JdbcTemplate jdbc;
 
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
-                       PartNameService partNames, JdbcTemplate jdbc) {
+                       PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc) {
         this.partRepository = partRepository;
         this.eventPublisher = eventPublisher;
         this.partNames = partNames;
+        this.partChanges = partChanges;
         this.jdbc = jdbc;
+    }
+
+    /**
+     * Отмечает изменившимися все карточки под наименованием.
+     *
+     * <p>Списком, а не по одной: сопоставление правит сотни карточек одним
+     * запросом, и вытаскивать их идентификаторы в приложение ради отметки
+     * значило бы возить сотни чисел туда и обратно.
+     */
+    private void markByPartName(Long partNameId) {
+        jdbc.update("""
+                INSERT INTO part_change (part_id)
+                SELECT id FROM part WHERE part_name_id = ?
+                ON CONFLICT (part_id) DO UPDATE SET marked_at = now(), claimed_at = NULL""",
+                partNameId);
     }
 
     /**
@@ -90,6 +107,9 @@ public class PartService {
                 matched.getCategoryId(), matched.getPartKindId(),
                 localSpelling, localSpelling, localSpelling, kindName, localSpelling,
                 partNameId);
+
+        // Заголовок и категория уехали в прайс — площадке надо сообщить.
+        markByPartName(partNameId);
 
         log.info("Наименование «{}» сопоставлено с «{}», доведено карточек: {}",
                 localSpelling, kindName, updated);
@@ -150,6 +170,9 @@ public class PartService {
      */
     @Transactional
     public int applyMatchedNames() {
+        // Отметки об изменении здесь нет намеренно: это доводка после
+        // переезда, за раз она правит десятки тысяч карточек, и площадка
+        // узнает о них полным прайсом. Смотри PartChangeLog.
         return jdbc.update("""
                 UPDATE part p
                    SET category_id = pn.category_id,
@@ -174,6 +197,7 @@ public class PartService {
             return part;
         }
         part.changePrice(newPrice, changedBy);
+        partChanges.changed(partId);
 
         // Ключ партиции включает id запчасти, поэтому события по одной детали
         // не переставятся местами и на площадку не уедет устаревшая цена.
@@ -250,6 +274,11 @@ public class PartService {
         part.setPublished(update.published());
         part.touchedBy(authorId);
 
+        // Отметка на любой правке, а не только на смене цены: в прайс уезжают
+        // и наименование, и цвет, и «Выгружать». Событие о цене — другой
+        // вопрос и другое условие.
+        partChanges.changed(partId);
+
         if (priceChanged) {
             // Ключ партиции включает id запчасти, поэтому события по одной
             // детали не переставятся местами и на площадку не уедет
@@ -295,11 +324,13 @@ public class PartService {
         }
 
         int changed = 0;
+        List<Long> touched = new java.util.ArrayList<>();
         for (Long partId : partIds) {
             Part part = partRepository.findById(partId).orElse(null);
             if (part == null) {
                 continue;
             }
+            touched.add(partId);
             boolean priceChanged = false;
             for (var change : changes.entrySet()) {
                 priceChanged |= apply(part, change.getKey(), change.getValue(), authorId);
@@ -312,6 +343,10 @@ public class PartService {
                         "part", part.getId(), "part.price_changed.v1", payloadOf(part)));
             }
         }
+        // Одной отметкой на позицию, а не по полю: площадке нужно текущее
+        // состояние, и правка сотни позиций уедет одной дельтой.
+        partChanges.changed(touched);
+
         log.info("Правка списком: позиций {}, полей {}", changed, changes.size());
         return changed;
     }
@@ -480,8 +515,12 @@ public class PartService {
         if (partIds == null || partIds.isEmpty()) {
             throw new IllegalArgumentException("Не указано ни одной позиции");
         }
-        return jdbc.update("UPDATE part SET is_published = ? WHERE id = ANY (?)",
+        int updated = jdbc.update("UPDATE part SET is_published = ? WHERE id = ANY (?)",
                 published, partIds.toArray(Long[]::new));
+        // Снятая с публикации позиция обязана уехать недоступной, иначе
+        // объявление висит, а продавать её владелец не собирался.
+        partChanges.changed(partIds);
+        return updated;
     }
 
     @Transactional(readOnly = true)

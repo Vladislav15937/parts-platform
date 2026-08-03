@@ -42,6 +42,15 @@ class FeedDeltaRelayTest extends PostgresTestBase {
     @Autowired
     private DromDeltaSender sender;
 
+    /**
+     * Отметку здесь ставим руками: этот тест про релей, а не про источник.
+     * Что отметку ставит каждая операция над позицией, стережёт
+     * {@code PartChangeLogTest} — до 3 августа 2026 это делал триггер базы,
+     * и тогда её было достаточно записать прямым SQL.
+     */
+    @Autowired
+    private ru.partsflow.inventory.PartChangeLog partChanges;
+
     @Autowired
     private JdbcTemplate jdbc;
 
@@ -70,7 +79,7 @@ class FeedDeltaRelayTest extends PostgresTestBase {
             // Позиции между тестами не чистятся: журнал движений неизменяем,
             // а удаление позиции унесло бы его каскадом. Тесты вместо этого
             // трогают только свои строки, а очередь опустошается явно.
-            jdbc.update("DELETE FROM feed_dirty");
+            jdbc.update("DELETE FROM part_change");
             jdbc.update("DELETE FROM publication_log");
             jdbc.update("DELETE FROM marketplace_account");
 
@@ -91,7 +100,11 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         String code = publicCodeOf(partId);
         drainQueue();
 
-        inTenant(() -> jdbc.update("UPDATE part SET price = 7000 WHERE id = ?", partId));
+        inTenant(() -> {
+            jdbc.update("UPDATE part SET price = 7000 WHERE id = ?", partId);
+            partChanges.changed(partId);
+            return null;
+        });
         relay.relayFor(TENANT);
 
         assertThat(syncClient.calls()).singleElement()
@@ -102,17 +115,23 @@ class FeedDeltaRelayTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Изменение остатка отмечает позицию — его делает не приложение, а триггер")
-    void stockMovementMarksThePart() {
+    @DisplayName("Списанная позиция уезжает недоступной")
+    void writtenOffGoesAsUnavailable() {
         account("12345", null, null);
         Long partId = part("Стартер", "5000");
         drainQueue();
 
-        // Списание идёт движением журнала: остаток и статус позиции меняет
-        // триггер базы, и приложение об этой правке не знает вовсе.
-        inTenant(() -> jdbc.update("""
-                INSERT INTO stock_movement (part_id, movement_type, qty_delta, from_warehouse_id)
-                VALUES (?, 'WRITE_OFF', -1, ?)""", partId, warehouse));
+        // Списание идёт движением журнала — остаток и статус позиции пока
+        // ещё меняет триггер базы (пункт 1 в docs/triggers-to-java.md),
+        // поэтому отметку кладёт тот, кто движение записал.
+        inTenant(() -> {
+            jdbc.update("""
+                    INSERT INTO stock_movement (part_id, movement_type, qty_delta,
+                                                from_warehouse_id)
+                    VALUES (?, 'WRITE_OFF', -1, ?)""", partId, warehouse);
+            partChanges.changed(partId);
+            return null;
+        });
 
         assertThat(queueSize()).isEqualTo(1);
         relay.relayFor(TENANT);
@@ -130,9 +149,12 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         drainQueue();
 
         String places = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
-        inTenant(() -> jdbc.update(
-                "UPDATE part SET note = 'распродажа' WHERE id IN (" + places + ")",
-                ids.toArray()));
+        inTenant(() -> {
+            jdbc.update("UPDATE part SET note = 'распродажа' WHERE id IN (" + places + ")",
+                    ids.toArray());
+            partChanges.changed(ids);
+            return null;
+        });
         relay.relayFor(TENANT);
 
         // Отметка лежит на позиции, а не на изменении, и пачка забирается
@@ -149,7 +171,11 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         drainQueue();
         syncClient.failWith(403, "ERROR_REASON_AUTH_FAILED");
 
-        inTenant(() -> jdbc.update("UPDATE part SET price = 9000 WHERE id = ?", partId));
+        inTenant(() -> {
+            jdbc.update("UPDATE part SET price = 9000 WHERE id = ?", partId);
+            partChanges.changed(partId);
+            return null;
+        });
         relay.relayFor(TENANT);
 
         // Не ушло — значит уедет следующим заходом. Заявка при этом снята,
@@ -166,7 +192,11 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         Long partId = part("Радиатор", "5000");
         drainQueue();
 
-        inTenant(() -> jdbc.update("UPDATE part SET price = 6000 WHERE id = ?", partId));
+        inTenant(() -> {
+            jdbc.update("UPDATE part SET price = 6000 WHERE id = ?", partId);
+            partChanges.changed(partId);
+            return null;
+        });
         relay.relayFor(TENANT);
 
         // Прайс-листов у клиента несколько, и позиция, сменившая цену, могла
@@ -183,7 +213,11 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         Long cheap = part("Дешёвая", "5000");
         drainQueue();
 
-        inTenant(() -> jdbc.update("UPDATE part SET note = 'правка' WHERE id = ?", cheap));
+        inTenant(() -> {
+            jdbc.update("UPDATE part SET note = 'правка' WHERE id = ?", cheap);
+            partChanges.changed(cheap);
+            return null;
+        });
         relay.relayFor(TENANT);
 
         // Позиция не проходит отбор прайс-листа — уехав туда, она создала бы
@@ -199,11 +233,15 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         Long wheelId = wheel("Шина 195/65 R15 Nokian зимняя");
         drainQueue();
 
-        inTenant(() -> jdbc.update("UPDATE part_wheel SET wear_mm = 5 WHERE part_id = ?",
-                wheelId));
+        inTenant(() -> {
+            jdbc.update("UPDATE part_wheel SET wear_mm = 5 WHERE part_id = ?", wheelId);
+            partChanges.changed(wheelId);
+            return null;
+        });
 
-        // Отметка ставится — свойства колеса тоже часть товара; но прайс
-        // запчастей отбирает product_line = 'PART', и слать нечего.
+        // Отметка ставится — свойства колеса тоже часть товара (WheelService
+        // кладёт её при заведении комплекта); но прайс запчастей отбирает
+        // product_line = 'PART', и слать нечего.
         // Выгрузки для шин и дисков у нас пока нет, и это её место.
         assertThat(queueSize()).isEqualTo(1);
         relay.relayFor(TENANT);
@@ -233,15 +271,16 @@ class FeedDeltaRelayTest extends PostgresTestBase {
     void changeDuringSendingSurvives() {
         Long partId = part("Крыло", "5000");
         inTenant(() -> {
-            jdbc.update("UPDATE feed_dirty SET claimed_at = now() WHERE part_id = ?", partId);
+            jdbc.update("UPDATE part_change SET claimed_at = now() WHERE part_id = ?", partId);
             // Правка, случившаяся, пока дельта в пути: уборка после успешной
             // отправки прежнего состояния обязана её пощадить.
             jdbc.update("UPDATE part SET price = 8000 WHERE id = ?", partId);
+            partChanges.changed(partId);
             return null;
         });
 
         assertThat(claimedCount())
-                .as("триггер обязан сбросить заявку, иначе правка уедет в мусор")
+                .as("отметка обязана снять заявку, иначе правка уедет в мусор")
                 .isZero();
     }
 
@@ -308,18 +347,18 @@ class FeedDeltaRelayTest extends PostgresTestBase {
 
     /** Заведение позиции — тоже изменение; очередь после него надо опустошить. */
     private void drainQueue() {
-        inTenant(() -> jdbc.update("DELETE FROM feed_dirty"));
+        inTenant(() -> jdbc.update("DELETE FROM part_change"));
         syncClient.reset();
     }
 
     private int queueSize() {
         return inTenant(() -> jdbc.queryForObject(
-                "SELECT count(*) FROM feed_dirty", Integer.class));
+                "SELECT count(*) FROM part_change", Integer.class));
     }
 
     private int claimedCount() {
         return inTenant(() -> jdbc.queryForObject(
-                "SELECT count(*) FROM feed_dirty WHERE claimed_at IS NOT NULL", Integer.class));
+                "SELECT count(*) FROM part_change WHERE claimed_at IS NOT NULL", Integer.class));
     }
 
     private String publicCodeOf(Long partId) {

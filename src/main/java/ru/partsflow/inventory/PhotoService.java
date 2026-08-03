@@ -37,10 +37,14 @@ public class PhotoService {
     private final PartRepository parts;
     private final PhotoStorage storage;
 
-    public PhotoService(PartPhotoRepository photos, PartRepository parts, PhotoStorage storage) {
+    private final PartChangeLog partChanges;
+
+    public PhotoService(PartPhotoRepository photos, PartRepository parts, PhotoStorage storage,
+                        PartChangeLog partChanges) {
         this.photos = photos;
         this.parts = parts;
         this.storage = storage;
+        this.partChanges = partChanges;
     }
 
     /**
@@ -97,6 +101,10 @@ public class PhotoService {
 
         photo.confirm(size.get(), width, height);
         photos.saveAndFlush(photo);
+        // Ссылки на снимки едут в прайс, и площадка сама говорит, что
+        // фотография увеличивает просмотры в четыре-пять раз: появившаяся
+        // не должна ждать суток.
+        partChanges.changed(photo.getPartId());
         return true;
     }
 
@@ -123,6 +131,8 @@ public class PhotoService {
         });
         photo.makeMain();
         photos.saveAndFlush(photo);
+        // Главный снимок идёт в прайсе первым — площадка ставит его обложкой.
+        partChanges.changed(photo.getPartId());
     }
 
     /**
@@ -150,6 +160,9 @@ public class PhotoService {
                         photos.saveAndFlush(next);
                     });
         }
+        // Ссылка на удалённый снимок в прайсе — битая картинка, а за неё
+        // площадка снимает объявление.
+        partChanges.changed(partId);
     }
 
     /** Фотографии карточки со ссылками на просмотр. */

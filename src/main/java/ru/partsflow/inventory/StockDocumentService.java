@@ -19,13 +19,16 @@ public class StockDocumentService {
     private final StockDocumentRepository documents;
     private final StockMovementRepository movements;
     private final StockReservationRepository stock;
+    private final PartChangeLog partChanges;
 
     public StockDocumentService(StockDocumentRepository documents,
                                StockMovementRepository movements,
-                               StockReservationRepository stock) {
+                               StockReservationRepository stock,
+                               PartChangeLog partChanges) {
         this.documents = documents;
         this.movements = movements;
         this.stock = stock;
+        this.partChanges = partChanges;
     }
 
     @Transactional
@@ -54,6 +57,12 @@ public class StockDocumentService {
             requireAvailable(document, line);
             movements.save(movementFor(document, line));
         }
+        // Остаток и статус пересчитает триггер журнала, но узнать об этом
+        // площадке неоткуда: отметку ставим здесь, где движение и рождается.
+        partChanges.changed(document.getLines().stream()
+                .map(StockDocumentLine::getPartId)
+                .toList());
+
         document.complete(now);
         return documents.saveAndFlush(document);
     }
