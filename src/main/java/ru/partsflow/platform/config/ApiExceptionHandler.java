@@ -169,6 +169,27 @@ public class ApiExceptionHandler {
     }
 
     /**
+     * Запрос не тем типом или без файла — 400, а не 500.
+     *
+     * <p>Перенос из прежней системы принимает два файла формой, и запрос
+     * без них (или с телом в JSON) отвечал «внутренней ошибкой»: владелец,
+     * подавший файлы не тем способом, шёл искать поломку сервера. Ошибка
+     * при этом его, а не наша, и сказать надо именно это.
+     *
+     * <p>Отдельно от {@code MissingServletRequestParameterException}: там
+     * нет параметра в адресе, здесь запрос вообще не форма — Spring бросает
+     * разные исключения, а до общего {@code Exception} доводить нельзя ни то
+     * ни другое.
+     */
+    @ExceptionHandler({org.springframework.web.multipart.MultipartException.class,
+                       org.springframework.web.multipart.support.MissingServletRequestPartException.class})
+    public ResponseEntity<ApiError> badUpload(Exception e) {
+        log.warn("Загрузка файла не разобрана: {}", e.getMessage());
+        return ResponseEntity.badRequest().body(new ApiError(
+                "Файлы не переданы: запрос должен быть формой с файлами, а не телом JSON"));
+    }
+
+    /**
      * Документ изменил кто-то ещё, пока с ним работали, — 409.
      *
      * <p>На разборке это обычное дело: клиент звонит одному продавцу
