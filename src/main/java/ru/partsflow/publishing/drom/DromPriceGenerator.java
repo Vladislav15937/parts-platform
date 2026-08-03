@@ -85,7 +85,11 @@ public class DromPriceGenerator {
                    -- в документах, а поколение подобрано по году.
                    COALESCE(d.body_code, dg.code)            AS body_code,
                    COALESCE(d.engine_code, dmo.engine_code)  AS engine_code,
-                   d.year
+                   d.year,
+                   -- Снята с машины или пришла контейнером: у контрактной
+                   -- марка берётся из применимости, и «снято с» про неё
+                   -- было бы неправдой.
+                   d.id IS NOT NULL AS from_donor
               FROM part p
               LEFT JOIN (
                   SELECT part_id, sum(qty - qty_reserved) AS qty_available
@@ -438,7 +442,8 @@ public class DromPriceGenerator {
                     rs.getString("car_model"),
                     rs.getString("body_code"),
                     rs.getString("engine_code"),
-                    year(rs));
+                    year(rs),
+                    rs.getBoolean("from_donor"));
         }
 
         /** Года у контрактной детали нет, а {@code getInt} отдаёт на это ноль. */

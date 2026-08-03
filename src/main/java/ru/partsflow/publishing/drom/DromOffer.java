@@ -23,6 +23,10 @@ import java.util.List;
  * @param availableQty свободный остаток, а не общий: см. {@link DromPriceWriter}
  * @param photos       постоянные ссылки на снимки, главный первым; пустой
  *                     список — снимков нет либо выдача не настроена
+ * @param fromDonor    снята с машины, а не пришла контейнером. От этого
+ *                     зависит формулировка описания: «снято с» у детали
+ *                     с донора и «подходит на» у контрактной — её никто
+ *                     ни с чего не снимал, и марка у неё из применимости
  * @param carBrand     марка машины, к которой деталь подходит; у контрактной
  *                     это список марок применимости через запятую
  * @param carModel     модель — так же, списком у контрактной
@@ -49,7 +53,8 @@ public record DromOffer(
         String carModel,
         String bodyCode,
         String engineCode,
-        Integer year) {
+        Integer year,
+        boolean fromDonor) {
 
     public boolean isAvailable() {
         return availableQty != null && availableQty.signum() > 0;

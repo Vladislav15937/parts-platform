@@ -80,7 +80,7 @@ class DromPriceWriterTest {
             DromOffer contract = new DromOffer("P-7", "Стартер", "Стартер", null, new BigDecimal("100"),
                     BigDecimal.ONE, PartCondition.USED, null, null, List.of(),
                     null, null, null, null, null, List.of(),
-                    "Toyota,Lexus", "Camry,Windom", null, null, null);
+                    "Toyota,Lexus", "Camry,Windom", null, null, null, false);
 
             String xml = write(contract);
 
@@ -106,7 +106,7 @@ class DromPriceWriterTest {
             DromOffer bare = new DromOffer("P-1", "Деталь", "Деталь", null, new BigDecimal("100"),
                     BigDecimal.ONE, PartCondition.USED, null, null, List.of(),
                     null, null, null, null, null, List.of(),
-                    null, null, null, null, null);
+                    null, null, null, null, null, true);
 
             String xml = write(bare);
 
@@ -141,7 +141,7 @@ class DromPriceWriterTest {
                     new BigDecimal("100"), BigDecimal.ONE, PartCondition.USED,
                     null, "81170-33670", List.of(),
                     LateralSide.LEFT, LongitudinalSide.FRONT, null, null, null, List.of(),
-                    null, null, null, null, null);
+                    null, null, null, null, null, true);
 
             // «Названия максимально простые и понятные, без сокращений» —
             // требование площадки, от него зависит раздел. Сторона
@@ -164,13 +164,24 @@ class DromPriceWriterTest {
                     "KYB", "334388", List.of(),
                     LateralSide.LEFT, LongitudinalSide.FRONT, VerticalSide.LOWER,
                     null, null, List.of(),
-                    "Honda", "Airwave", "GJ1", "L15A", 2007);
+                    "Honda", "Airwave", "GJ1", "L15A", 2007, true);
 
             assertThat(write(bare))
                     .contains("Снято с: Honda Airwave GJ1 L15A 2007.")
                     .contains("Расположение: передняя, левая, нижняя.")
                     .contains("Номер производителя: 334388.")
                     .contains("Состояние: б/у.");
+
+            // У контрактной формулировка другая: её никто ни с чего не снимал,
+            // марка у неё из применимости, и «снято с Toyota Camry» было бы
+            // неправдой — заметил бы покупатель, а не мы.
+            DromOffer contract = new DromOffer("P-11", "Стартер", "Стартер", null,
+                    new BigDecimal("100"), BigDecimal.ONE, PartCondition.USED,
+                    null, null, List.of(), null, null, null, null, null, List.of(),
+                    "Toyota,Lexus", "Camry,Windom", null, null, null, false);
+            assertThat(write(contract))
+                    .contains("Подходит на: Toyota,Lexus Camry,Windom.")
+                    .doesNotContain("Снято с:");
 
             // Своё описание, если оно есть, не подменяется собранным.
             assertThat(write(offer())).contains("Снят с Honda Airwave, пробег 80 000");
@@ -184,7 +195,7 @@ class DromPriceWriterTest {
             DromOffer soldOut = new DromOffer("P-9", "Стартер", "Стартер", null,
                     new BigDecimal("100"), BigDecimal.ZERO, PartCondition.USED,
                     null, null, List.of(), null, null, null, null, null, List.of(),
-                    null, null, null, null, null);
+                    null, null, null, null, null, true);
             assertThat(write(soldOut)).contains("<quantity>0</quantity>");
         }
 
@@ -194,7 +205,7 @@ class DromPriceWriterTest {
             DromOffer tricky = new DromOffer("P-2", "Кронштейн <передний> & правый", "Кронштейн", null,
                     new BigDecimal("100"), BigDecimal.ONE, PartCondition.USED,
                     null, null, List.of(), null, null, null, null, null, List.of(),
-                    null, null, null, null, null);
+                    null, null, null, null, null, true);
 
             String xml = write(tricky);
 
@@ -221,7 +232,7 @@ class DromPriceWriterTest {
             DromOffer noPhotos = new DromOffer("P-6", "Фара", "Фара", null, new BigDecimal("100"),
                     BigDecimal.ONE, PartCondition.USED, null, null, List.of(),
                     null, null, null, null, null, List.of(),
-                    null, null, null, null, null);
+                    null, null, null, null, null, true);
 
             assertThat(write(noPhotos)).doesNotContain("<photo>");
         }
@@ -232,7 +243,7 @@ class DromPriceWriterTest {
             DromOffer brandNew = new DromOffer("P-3", "Фильтр", "Фильтр", null, new BigDecimal("500"),
                     BigDecimal.ONE, PartCondition.NEW, null, null, List.of(),
                     null, null, null, null, null, List.of(),
-                    null, null, null, null, null);
+                    null, null, null, null, null, true);
 
             assertThat(write(brandNew)).contains("<condition>Новое</condition>");
         }
@@ -254,7 +265,7 @@ class DromPriceWriterTest {
             DromOffer soldOut = new DromOffer("P-4", "Стартер", "Стартер", null, new BigDecimal("5000"),
                     BigDecimal.ZERO, PartCondition.USED, null, null, List.of(),
                     null, null, null, null, null, List.of(),
-                    null, null, null, null, null);
+                    null, null, null, null, null, true);
 
             String xml = write(soldOut);
 
@@ -270,7 +281,7 @@ class DromPriceWriterTest {
             DromOffer unknown = new DromOffer("P-5", "Бампер", "Бампер", null, new BigDecimal("100"),
                     null, PartCondition.USED, null, null, List.of(),
                     null, null, null, null, null, List.of(),
-                    null, null, null, null, null);
+                    null, null, null, null, null, true);
 
             assertThat(write(unknown)).contains("<available>false</available>");
         }
@@ -349,7 +360,8 @@ class DromPriceWriterTest {
                 "Airwave",
                 "GJ1",
                 "L15A",
-                2007);
+                2007,
+                true);
     }
 
     private String write(DromOffer... offers) throws XMLStreamException {

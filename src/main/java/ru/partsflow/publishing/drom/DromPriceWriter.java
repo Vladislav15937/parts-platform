@@ -184,7 +184,10 @@ public class DromPriceWriter {
                 .filter(part -> part != null && !part.isBlank())
                 .collect(java.util.stream.Collectors.joining(" "));
         if (!vehicle.isBlank()) {
-            lines.add("Снято с: " + vehicle + ".");
+            // Контрактную деталь никто ни с чего не снимал: она приехала
+            // контейнером, а марка у неё из применимости. «Снято с Toyota
+            // Camry» про неё — неправда, и заметит её покупатель, а не мы.
+            lines.add((offer.fromDonor() ? "Снято с: " : "Подходит на: ") + vehicle + ".");
         }
 
         String sides = java.util.stream.Stream.of(
