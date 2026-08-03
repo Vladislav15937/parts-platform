@@ -312,6 +312,7 @@ public class PartHistoryService {
                                d.number AS doc_number, d.doc_type, d.status AS doc_status,
                                wf.name AS from_warehouse, wt.name AS to_warehouse,
                                deal.number AS deal_number, ret.number AS return_number,
+                               inv.id AS inventory_id,
                                who.display_name AS author
                           FROM stock_movement m
                           LEFT JOIN stock_document d  ON d.id = m.document_id
@@ -319,6 +320,10 @@ public class PartHistoryService {
                           LEFT JOIN warehouse wt      ON wt.id = m.to_warehouse_id
                           LEFT JOIN deal              ON m.ref_type = 'DEAL' AND deal.id = m.ref_id
                           LEFT JOIN deal_return ret   ON m.ref_type = 'RETURN' AND ret.id = m.ref_id
+                          -- Недостача объясняется пересчётом: без этого в ленте
+                          -- стоит «Корректировка −2» и больше ничего.
+                          LEFT JOIN inventory_session inv ON m.ref_type = 'INVENTORY'
+                                                         AND inv.id = m.ref_id
                           LEFT JOIN tenant_member who ON who.id = m.created_by
                          WHERE m.part_id = ?
                          ORDER BY m.created_at DESC, m.id DESC""",
@@ -327,7 +332,8 @@ public class PartHistoryService {
                         label(MOVEMENTS, rs.getString("movement_type")),
                         rs.getBigDecimal("qty_delta"),
                         documentOf(rs.getObject("doc_number"), rs.getString("doc_type"),
-                                rs.getObject("deal_number"), rs.getObject("return_number")),
+                                rs.getObject("deal_number"), rs.getObject("return_number"),
+                                rs.getObject("inventory_id")),
                         label(DOC_STATUSES, rs.getString("doc_status")),
                         warehouseOf(rs.getString("from_warehouse"), rs.getString("to_warehouse")),
                         rs.getString("reason"),
@@ -343,7 +349,8 @@ public class PartHistoryService {
      * честнее выдуманного номера.
      */
     private static String documentOf(Object docNumber, String docType,
-                                     Object dealNumber, Object returnNumber) {
+                                     Object dealNumber, Object returnNumber,
+                                     Object inventoryId) {
         if (docNumber != null) {
             return "%s №%s".formatted(label(DOCUMENTS, docType), docNumber);
         }
@@ -352,6 +359,9 @@ public class PartHistoryService {
         }
         if (returnNumber != null) {
             return "Возврат №" + returnNumber;
+        }
+        if (inventoryId != null) {
+            return "Пересчёт №" + inventoryId;
         }
         return null;
     }

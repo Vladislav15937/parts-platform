@@ -330,7 +330,7 @@ public class InventoryService {
                 }
             }
             ledger.record(StockMovement.inventoryAdjust(
-                    d.partId(), d.delta(), session.getWarehouseId()));
+                    d.partId(), d.delta(), session.getWarehouseId(), sessionId));
             // Недостача обнуляет остаток и списывает карточку: на площадке
             // она обязана стать недоступной, а не ждать полного прайса.
             partChanges.changed(d.partId());

@@ -275,7 +275,10 @@ public class MarketplaceAccountService {
                    -- в ту сторону, ради которой заведён: успокаивал числом.
                    AND p.product_line = 'PART'
                    AND p.status IN ('IN_STOCK', 'SOLD')
-                   AND p.price IS NOT NULL
+                   -- Тем же условием, что и генератор: нулевая цена в прайс
+                   -- не идёт, потому что «0 ₽» в объявлении — обещание отдать
+                   -- деталь даром, а на деле это незаполненное поле.
+                   AND p.price > 0
                    AND (?::numeric IS NULL OR p.price >= ?::numeric)
                    AND (?::numeric IS NULL OR p.price <= ?::numeric)
                    AND (?::text[] IS NULL OR p.condition = ANY (?::text[]))

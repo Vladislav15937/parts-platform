@@ -125,13 +125,13 @@ class StockLedgerTest extends PostgresTestBase {
         Long shortage = part("Пропавшая фара");
         intake(shortage, warehouse, "1");
         inTenant(() -> ledger.record(
-                StockMovement.inventoryAdjust(shortage, new BigDecimal("-1"), warehouse)));
+                StockMovement.inventoryAdjust(shortage, new BigDecimal("-1"), warehouse, null)));
         assertThat(status(shortage)).isEqualTo("WRITTEN_OFF");
 
         Long surplus = part("Нашедшийся стартер");
         intake(surplus, warehouse, "1");
         inTenant(() -> ledger.record(
-                StockMovement.inventoryAdjust(surplus, BigDecimal.ONE, warehouse)));
+                StockMovement.inventoryAdjust(surplus, BigDecimal.ONE, warehouse, null)));
 
         // Излишек не говорит, куда делась деталь: статус остаётся прежним.
         assertThat(status(surplus)).isEqualTo("IN_STOCK");

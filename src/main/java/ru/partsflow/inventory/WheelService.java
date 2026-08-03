@@ -181,15 +181,21 @@ public class WheelService {
                        (SELECT tm.display_name FROM tenant_member tm
                          WHERE tm.id = p.price_changed_by) AS price_changed_by_name,
                        (SELECT count(*) FROM part_photo ph2
-                         WHERE ph2.part_id = p.id)         AS photo_count,
+                         WHERE ph2.part_id = p.id AND ph2.status = 'PROCESSED')         AS photo_count,
                        (SELECT o.raw_number FROM part_oem o
                          WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
                        CASE WHEN s.id IS NULL THEN NULL
                             ELSE s.kind || ' №' || s.number
                                  || coalesce(' | ' || to_char(s.arrived_on, 'DD.MM.YYYY'), '')
                        END AS supply,
+                       -- Только подтверждённый снимок: у оборванной загрузки
+                       -- и у неподтверждённой записи файла в хранилище нет,
+                       -- и в колонке «Превью» висит битая картинка. Прайс
+                       -- и карточка это уже фильтруют, витрины — нет,
+                       -- и поймано это глазами, а не тестом.
                        (SELECT ph.s3_key FROM part_photo ph
-                         WHERE ph.part_id = p.id ORDER BY ph.is_main DESC, ph.sort_order,
+                         WHERE ph.part_id = p.id AND ph.status = 'PROCESSED'
+                         ORDER BY ph.is_main DESC, ph.sort_order,
                                ph.id LIMIT 1) AS photo_key
                   FROM part p
                   JOIN part_wheel w ON w.part_id = p.id
@@ -501,7 +507,7 @@ public class WheelService {
                        (SELECT tm.display_name FROM tenant_member tm
                          WHERE tm.id = p.price_changed_by) AS price_changed_by_name,
                        (SELECT count(*) FROM part_photo ph
-                         WHERE ph.part_id = p.id)          AS photo_count,
+                         WHERE ph.part_id = p.id AND ph.status = 'PROCESSED') AS photo_count,
                        (SELECT o.raw_number FROM part_oem o
                          WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
                        CASE WHEN s.id IS NULL THEN NULL

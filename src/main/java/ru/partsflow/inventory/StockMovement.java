@@ -119,13 +119,21 @@ public class StockMovement {
      * @param delta расхождение, отличное от нуля — сошедшуюся позицию
      *              корректировать нечем, и БД такое движение отвергнет
      */
-    public static StockMovement inventoryAdjust(Long partId, BigDecimal delta, Long warehouseId) {
+    public static StockMovement inventoryAdjust(Long partId, BigDecimal delta, Long warehouseId,
+                                                Long sessionId) {
         if (delta == null || delta.signum() == 0) {
             throw new IllegalArgumentException(
                     "Корректировка на ноль бессмысленна: позиция сошлась");
         }
         StockMovement movement =
                 new StockMovement(partId, MovementType.INVENTORY_ADJUST, delta);
+        // Ссылка на сессию обязательна: у продажи в журнале стоит сделка,
+        // у возврата — возврат, у списания и перевозки — документ, а недостача
+        // до этого не объяснялась ничем. «Куда делась деталь» спрашивают
+        // именно про неё, и ответ «остаток уменьшился на два» без указания
+        // пересчёта не отвечает ни на что.
+        movement.refType = "INVENTORY";
+        movement.refId = sessionId;
         if (delta.signum() < 0) {
             movement.fromWarehouseId = warehouseId;
         } else {

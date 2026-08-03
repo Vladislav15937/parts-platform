@@ -140,7 +140,13 @@ public class DromPriceGenerator {
                -- Отдельная выгрузка для них — своя задача.
                AND p.product_line = 'PART'
                AND p.status IN ${statuses}
-               AND p.price IS NOT NULL
+               -- Цена обязательна, и ноль в неё не годится: в выгрузке
+               -- прежней системы ноль стоит там, где поле не заполняли,
+               -- а в объявлении «0 ₽» — это публичное обещание отдать
+               -- деталь даром. У переехавшего клиента таких десять из
+               -- тридцати шести тысяч, и уезжали они молча. Позиция
+               -- остаётся на складе и уедет, когда цену проставят.
+               AND p.price > 0
                AND (?::numeric IS NULL OR p.price >= ?::numeric)
                AND (?::numeric IS NULL OR p.price <= ?::numeric)
                AND (?::text[]   IS NULL OR p.condition = ANY (?::text[]))
