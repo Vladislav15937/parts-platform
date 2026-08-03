@@ -100,6 +100,26 @@ public class Donor {
     @Column(name = "equipment_code")
     private String equipmentCode;
 
+    /**
+     * Кузов и двигатель как написано в документах машины: «ACV40», «2AZ-FE».
+     *
+     * <p>Свободный текст, а не ссылка в каталог, и это не небрежность.
+     * Кузов у нас есть и в справочнике — `catalog.generation.code`, — но
+     * поколение приёмщик выбирает не всегда: у модели, которой в каталоге
+     * нет, ссылаться не на что, а кузов в ПТС написан. По той же причине
+     * двигатель отдельно от `modification`.
+     *
+     * <p>Колонки завёл перенос, а сущность их не знала: заполнить их мог
+     * только импорт, то есть у клиента, который заводит машины руками, они
+     * были пусты всегда — при том что по кузову и двигателю деталь и
+     * подбирают, и в прайс Дрома они уходят отдельными тегами.
+     */
+    @Column(name = "body_code")
+    private String bodyCode;
+
+    @Column(name = "engine_code")
+    private String engineCode;
+
     @Column(name = "purchase_date")
     private LocalDate purchaseDate;
 
@@ -310,6 +330,22 @@ public class Donor {
 
     public void setEquipmentCode(String equipmentCode) {
         this.equipmentCode = equipmentCode;
+    }
+
+    public String getBodyCode() {
+        return bodyCode;
+    }
+
+    public void setBodyCode(String bodyCode) {
+        this.bodyCode = bodyCode;
+    }
+
+    public String getEngineCode() {
+        return engineCode;
+    }
+
+    public void setEngineCode(String engineCode) {
+        this.engineCode = engineCode;
     }
 
     public LocalDate getPurchaseDate() {

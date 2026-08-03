@@ -109,6 +109,9 @@ public class IntakeService {
             requireSupply(supplyId);
             donor.arrivedWith(supplyId);
         }
+        if (donor.getGenerationId() == null) {
+            donor.setGenerationId(vehicles.generationFor(donor.getModelId(), donor.getYear()));
+        }
         donor.setCreatedBy(authorId);
         return donors.saveAndFlush(donor);
     }

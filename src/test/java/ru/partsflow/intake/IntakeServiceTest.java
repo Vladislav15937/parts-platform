@@ -51,6 +51,8 @@ class IntakeServiceTest extends PostgresTestBase {
     private Long warehouse;
     private Long cell;
     private Long brandId;
+    private Long generation2001;
+    private Long generation2006;
 
     @BeforeAll
     static void migrate() {
@@ -341,6 +343,73 @@ class IntakeServiceTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Поколение подбирается по году на сервере, а не только в PWA")
+    void generationIsResolvedFromYear() {
+        // Подбор жил только на клиенте, и машина, заведённая любым другим
+        // путём, оставалась без поколения навсегда — а вместе с ним без
+        // кузова в заголовке и в применимости прайса.
+        Long model = modelWithGenerations();
+
+        Donor donor = camry();
+        donor.setModelId(model);
+        donor.setYear((short) 2007);
+        Donor saved = inTenant(() -> intake.registerDonor(donor, null, null));
+
+        assertThat(saved.getGenerationId()).isEqualTo(generation2006);
+    }
+
+    @Test
+    @DisplayName("Год вне диапазонов соседнее поколение не подставляет")
+    void unknownYearLeavesGenerationEmpty() {
+        // Тихо поставленная чужая применимость отправит деталь клиенту,
+        // которому она не подойдёт, и узнает об этом он, а не мы.
+        Long model = modelWithGenerations();
+
+        Donor donor = camry();
+        donor.setModelId(model);
+        donor.setYear((short) 1974);
+        Donor saved = inTenant(() -> intake.registerDonor(donor, null, null));
+
+        assertThat(saved.getGenerationId()).isNull();
+    }
+
+    @Test
+    @DisplayName("Выбранное руками поколение подбор не перебивает")
+    void chosenGenerationWins() {
+        Long model = modelWithGenerations();
+
+        Donor donor = camry();
+        donor.setModelId(model);
+        donor.setYear((short) 2007);
+        donor.setGenerationId(generation2001);
+        Donor saved = inTenant(() -> intake.registerDonor(donor, null, null));
+
+        assertThat(saved.getGenerationId()).isEqualTo(generation2001);
+    }
+
+    @Test
+    @DisplayName("Кузов и двигатель сохраняются и доезжают до заголовка")
+    void bodyAndEngineAreStored() {
+        // Колонки завёл перенос, а сущность их не знала: у клиента, который
+        // заводит машины руками, они были пусты всегда — при том что по ним
+        // подбирают деталь и они уходят в прайс отдельными тегами.
+        Donor donor = camry();
+        donor.setBodyCode("ACV40");
+        donor.setEngineCode("2AZ-FE");
+        Donor saved = inTenant(() -> intake.registerDonor(donor, null, null));
+        inTenant(() -> intake.startDismantling(saved.getId()));
+
+        assertThat(saved.getBodyCode()).isEqualTo("ACV40");
+        assertThat(saved.getEngineCode()).isEqualTo("2AZ-FE");
+
+        IntakeService.Receipt receipt = inTenant(() -> intake.receive(
+                warehouse, null, saved.getId(), List.of(item("Фара", "5000")),
+                null, uniqueRequestId()));
+
+        assertThat(receipt.parts().get(0).getTitle()).contains("ACV40").contains("2AZ-FE");
+    }
+
+    @Test
     @DisplayName("Разбор нельзя начать дважды")
     void dismantlingStartsOnce() {
         Donor donor = inTenant(() -> intake.registerDonor(camry(), null, null));
@@ -351,6 +420,36 @@ class IntakeServiceTest extends PostgresTestBase {
     }
 
     // ---------- фикстуры ----------
+
+    /**
+     * Модель с двумя поколениями: 2001—2005 и 2006—2011.
+     *
+     * <p>Своя, а не из поставляемого справочника: тот наполняется миграцией
+     * и меняется с релизом, а тест про границы диапазонов обязан знать их
+     * точно.
+     */
+    private Long modelWithGenerations() {
+        Long model = jdbc.queryForObject("""
+                INSERT INTO catalog.model (brand_id, name, slug)
+                VALUES (?, 'Camry', 'camry-intake-test')
+                ON CONFLICT (brand_id, slug) DO UPDATE SET name = excluded.name
+                RETURNING id""", Long.class, brandId);
+
+        // Пересоздаём, а не пропускаем существующие: диапазоны — то, что этот
+        // тест и проверяет, и накопленные прошлым прогоном лишние поколения
+        // сделали бы ответ зависящим от порядка запусков.
+        jdbc.update("DELETE FROM catalog.generation WHERE model_id = ?", model);
+        generation2001 = generation(model, "2001—2005", 2001, 2005);
+        generation2006 = generation(model, "2006—2011", 2006, 2011);
+        return model;
+    }
+
+    private Long generation(Long modelId, String name, int from, int to) {
+        return jdbc.queryForObject("""
+                INSERT INTO catalog.generation (model_id, name, code, year_from, year_to)
+                VALUES (?, ?, ?, ?, ?)
+                RETURNING id""", Long.class, modelId, name, name, from, to);
+    }
 
     private Donor camry() {
         Donor donor = new Donor(brandId);

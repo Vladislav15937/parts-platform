@@ -57,6 +57,8 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
   const [modelId, setModelId] = useState<number | null>(null);
   const [year, setYear] = useState('');
   const [generationId, setGenerationId] = useState<number | null>(null);
+  const [bodyCode, setBodyCode] = useState('');
+  const [engineCode, setEngineCode] = useState('');
   const [vin, setVin] = useState('');
   const [scanning, setScanning] = useState(false);
   const [supplyId, setSupplyId] = useState<number | null>(null);
@@ -190,6 +192,34 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
               </option>
             ))}
           </select>
+        </label>
+      </div>
+
+      {/* Кузов и двигатель приёмщик списывает с документов машины. По ним
+          подбирают деталь по телефону — «подойдёт ли на JZX110» — и они же
+          уходят в прайс отдельными полями. Свободный ввод, а не выбор:
+          у модели, которой в справочнике нет, выбирать не из чего. */}
+      <div className="row">
+        <label>
+          Кузов
+          <input
+            value={bodyCode}
+            onChange={(e) => setBodyCode(e.target.value.toUpperCase())}
+            placeholder="ACV40"
+            autoCapitalize="characters"
+            autoCorrect="off"
+          />
+        </label>
+
+        <label>
+          Двигатель
+          <input
+            value={engineCode}
+            onChange={(e) => setEngineCode(e.target.value.toUpperCase())}
+            placeholder="2AZ-FE"
+            autoCapitalize="characters"
+            autoCorrect="off"
+          />
         </label>
       </div>
 
@@ -401,6 +431,8 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
           modelId,
           generationId,
           year: year === '' ? null : Number(year),
+          bodyCode: bodyCode.trim() === '' ? null : bodyCode.trim(),
+          engineCode: engineCode.trim() === '' ? null : engineCode.trim(),
           vin: vin.trim() === '' ? null : vin.trim(),
           supplyId,
           note: note.trim() === '' ? null : note.trim(),
@@ -414,6 +446,8 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
       setModelId(null);
       setGenerationId(null);
       setYear('');
+      setBodyCode('');
+      setEngineCode('');
       setVin('');
       setNote('');
     } catch (cause) {

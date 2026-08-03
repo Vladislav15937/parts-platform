@@ -75,8 +75,12 @@ public class DromPriceGenerator {
                    -- второй половины такая позиция уезжает безадресной.
                    COALESCE(db.name, fit.brands)  AS car_brand,
                    COALESCE(dm.name, fit.models)  AS car_model,
-                   d.body_code,
-                   d.engine_code,
+                   -- Кузов и двигатель лежат в двух местах: своими полями
+                   -- машины (их вводят руками и заполняет перенос) и ссылками
+                   -- в каталог. Введённое руками сильнее — оно написано
+                   -- в документах, а поколение подобрано по году.
+                   COALESCE(d.body_code, dg.code)            AS body_code,
+                   COALESCE(d.engine_code, dmo.engine_code)  AS engine_code,
                    d.year
               FROM part p
               LEFT JOIN (
@@ -106,6 +110,8 @@ public class DromPriceGenerator {
               ) photos ON photos.part_id = p.id
               LEFT JOIN catalog.brand db ON db.id = d.brand_id
               LEFT JOIN catalog.model dm ON dm.id = d.model_id
+              LEFT JOIN catalog.generation dg ON dg.id = d.generation_id
+              LEFT JOIN catalog.modification dmo ON dmo.id = d.modification_id
               -- Марки и модели применимости — списком через запятую, как
               -- и номера-аналоги: деталь, подходящая к пяти машинам, иначе
               -- достанется одной из них.
