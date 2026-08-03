@@ -205,6 +205,37 @@ class CatalogServiceTest extends PostgresTestBase {
                 "Создан", "Изменён", "Кто изменил", "Цена изменена в", "Кто изменил цену");
     }
 
+    @Test
+    @DisplayName("Поиск по слову находит его в другом падеже")
+    void searchUnderstandsWordForms() {
+        part("Фары передние в сборе Camry", 1);
+        part("Фара левая Corolla", 1);
+        part("Кронштейн бампера", 1);
+
+        List<String> found = titles(inTenant(() -> catalog.list("фара", true, true,
+                List.of(), null, Map.of(), Map.of(), "code", true, 0, 50)));
+
+        // Подстрокой «фара» не находит «фары», а спрашивают именно так.
+        // Пока условие было только подстрочным, владелец видел на живом
+        // складе 521 позицию там, где продавец по тому же слову находил 739:
+        // два поиска по одному складу отвечали по-разному.
+        assertThat(found).contains("Фара левая Corolla", "Фары передние в сборе Camry");
+        assertThat(found).doesNotContain("Кронштейн бампера");
+    }
+
+    @Test
+    @DisplayName("Поиск по куску номера остаётся подстрочным")
+    void searchStillMatchesNumberFragments() {
+        part("Фара левая 81150-33670", 1);
+
+        List<String> found = titles(inTenant(() -> catalog.list("1150-33", true, true,
+                List.of(), null, Map.of(), Map.of(), "code", true, 0, 50)));
+
+        // Морфология тут не поможет: номер ищут куском, и это второй способ
+        // спросить об одном и том же.
+        assertThat(found).contains("Фара левая 81150-33670");
+    }
+
     private CatalogService.Page catalog(boolean reserved, boolean missing) {
         return inTenant(() -> catalog.list(null, reserved, missing, List.of(), null, Map.of(), Map.of(),
                 "code", true, 0, 50));

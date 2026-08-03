@@ -148,6 +148,16 @@ class MarketplaceOrderTest extends PostgresTestBase {
         assertThat(reserved(partId))
                 .as("необеспеченный заказ держит товар, который можно продать")
                 .isEqualByComparingTo("0");
+
+        // И сверка обязана молчать. Позиции черновика заводятся со статусом
+        // RESERVED — для обычной сделки он верен, там резерв и статус ставятся
+        // вместе, — а сверка складывала обещанное и по черновикам тоже
+        // и выдавала «обещано три, отложено ноль». Инвариант, обязанный быть
+        // пустым, шумел ровно в правильном сценарии и переставал быть сигналом.
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM v_reservation_discrepancy", Integer.class)))
+                .as("сверка резервов шумит на необеспеченном заказе")
+                .isZero();
     }
 
     @Test

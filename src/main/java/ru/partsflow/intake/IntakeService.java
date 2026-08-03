@@ -239,17 +239,26 @@ public class IntakeService {
     /**
      * Номер производителя кладётся основным.
      *
-     * <p>Через SQL, а не сущностью: {@code part_oem.normalized} — генерируемая
-     * колонка, её считает БД функцией {@code catalog.normalize_oem}, и любое
-     * написание номера должно находить одну и ту же деталь.
+     * <p>Через SQL, а не сущностью: приведённый номер считает
+     * {@code OemNumbers.normalize} — тем же методом, которым потом ищут,
+     * и любое написание номера должно находить одну и ту же деталь.
+     *
+     * <p><b>Номер, от которого после приведения ничего не осталось, не
+     * записывается.</b> Приёмщик пишет в это поле и «б/н», и «нет», а колонка
+     * {@code normalized} объявлена {@code NOT NULL}: строка ушла бы отказом
+     * базы, то есть пятисоткой на приёмке — а её офлайн-очередь повторяет
+     * вечно. Деталь при этом заводится, просто без номера.
      */
     private void primaryOem(Long partId, String rawNumber) {
+        String normalized = ru.partsflow.catalog.OemNumbers.normalize(rawNumber);
+        if (normalized == null) {
+            return;
+        }
         jdbc.update("""
                 INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
                 VALUES (?, ?, ?, true)
                 ON CONFLICT DO NOTHING""",
-                partId, rawNumber.strip(),
-                ru.partsflow.catalog.OemNumbers.normalize(rawNumber));
+                partId, rawNumber.strip(), normalized);
     }
 
     private void publishCreated(Part part) {

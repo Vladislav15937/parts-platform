@@ -167,6 +167,27 @@ class IntakeServiceTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("«б/н» вместо номера не валит приёмку")
+    void unusableOemNumberIsSkipped() {
+        Supply supply = arrivedSupply("33");
+        IntakeService.Receipt receipt = inTenant(() -> intake.receive(
+                warehouse, supply.getId(), null,
+                List.of(new IntakeService.ItemRequest("амортизатор", BigDecimal.ONE,
+                        new BigDecimal("8500"), null, cell, null, null, null,
+                        PartCondition.USED, null, "KYB", "б/н", null, null)),
+                null, uniqueRequestId()));
+
+        // Приведение выкусывает всё, кроме латиницы и цифр, а колонка
+        // normalized объявлена NOT NULL: записанный не глядя, такой номер
+        // отвечает пятисоткой — а её офлайн-очередь приёмщика повторяет вечно.
+        // Деталь заводится, просто без номера.
+        Long partId = receipt.parts().get(0).getId();
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_oem WHERE part_id = ?", Integer.class, partId)))
+                .isZero();
+    }
+
+    @Test
     @DisplayName("Карточки возвращаются в порядке позиций запроса")
     void partsFollowRequestOrder() {
         Supply supply = arrivedSupply("42");

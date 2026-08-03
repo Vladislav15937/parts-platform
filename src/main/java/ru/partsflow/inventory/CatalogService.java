@@ -128,14 +128,25 @@ public class CatalogService {
             // Номер товара, наименование и номер детали — три способа, которыми
             // владелец ищет одно и то же. Спрашивать, что именно он ввёл,
             // значит заставить его выбирать вкладку перед каждым поиском.
+            // Плюс морфология: подстрокой «фара» не находит «фары» и «фару»,
+            // а спрашивают именно так. Пока условие было только подстрочным,
+            // владелец видел 521 позицию там, где продавец по тому же слову
+            // находил 739, — то есть два поиска по одному складу отвечали
+            // по-разному, и правым оказывался тот, о ком не спрашивали.
+            // Ложится на тот же GIN-индекс, что и поиск продавца.
             where.append("""
 
                      AND (p.public_code ILIKE ? OR p.title ILIKE ?
+                          OR to_tsvector('russian', coalesce(p.title, '') || ' '
+                                 || coalesce(p.description, '') || ' '
+                                 || coalesce(p.marking, ''))
+                             @@ plainto_tsquery('russian', ?)
                           OR EXISTS (SELECT 1 FROM part_oem o
                                       WHERE o.part_id = p.id AND o.raw_number ILIKE ?))""");
             String like = "%" + query.strip() + "%";
             args.add(like);
             args.add(like);
+            args.add(query.strip());
             args.add(like);
         }
         if (!withMissing) {

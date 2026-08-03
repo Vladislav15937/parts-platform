@@ -256,13 +256,16 @@ public class ExcelWarehouseImporter {
                     Long.class, partName.getCategoryId(), partName.getId(),
                     row.name(), row.price(), row.note(), cellId);
 
-            if (row.oem() != null) {
+            // Номер, от которого после приведения ничего не осталось, — не номер:
+            // колонка normalized объявлена NOT NULL, и такая строка отвечает
+            // отказом базы вместо загруженной позиции.
+            String normalizedOem = ru.partsflow.catalog.OemNumbers.normalize(row.oem());
+            if (normalizedOem != null) {
                 jdbc.update("""
-                        INSERT INTO part_oem (part_id, number, normalized, is_original)
-                        VALUES (?, ?, ?, false)
+                        INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
+                        VALUES (?, ?, ?, true)
                         ON CONFLICT DO NOTHING""",
-                        partId, row.oem(),
-                        ru.partsflow.catalog.OemNumbers.normalize(row.oem()));
+                        partId, row.oem(), normalizedOem);
             }
 
             // Остаток появляется движением: писать qty_on_hand напрямую значит
