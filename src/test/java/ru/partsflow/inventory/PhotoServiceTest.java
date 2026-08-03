@@ -254,6 +254,26 @@ class PhotoServiceTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Удаление снимка отмечает позицию для выгрузки")
+    void deleteMarksThePart() throws Exception {
+        PhotoService.Upload upload = uploaded("image/jpeg");
+        inTenant(() -> jdbc.update("DELETE FROM part_change WHERE part_id = ?", partId));
+
+        inTenant(() -> {
+            photos.delete(upload.photoId());
+            return null;
+        });
+
+        // Ссылка на удалённый снимок в прайсе — битая картинка в объявлении,
+        // а за такое площадка объявление снимает. Проверка стоит здесь,
+        // а не в PartChangeLogTest: удаление ходит в хранилище, и у того
+        // контекста хранилища нет — на CI он падал бы «Connection refused».
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_change WHERE part_id = ?", Integer.class, partId)))
+                .isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("Ссылка на просмотр открывается")
     void viewUrlWorks() throws Exception {
         uploaded("image/jpeg");

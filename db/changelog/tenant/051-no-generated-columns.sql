@@ -12,7 +12,18 @@
 --comment на месте, индексы тоже. Колонка из генерируемой становится обычной,
 --comment и заполняет её теперь тот, кто пишет номер.
 ALTER TABLE ${tenant.schema}.part_oem ALTER COLUMN normalized DROP EXPRESSION;
---rollback SELECT 1;
+--comment
+--comment Откат возвращает колонку генерируемой, а не оставляет как есть.
+--comment Postgres не умеет вернуть выражение уже существующей колонке
+--comment (ADD EXPRESSION не существует), поэтому колонка пересоздаётся,
+--comment а вместе с ней — ограничение и оба индекса: DROP COLUMN уносит
+--comment их следом, и откат, оставивший таблицу без part_oem_uk, дал бы
+--comment задвоенные номера у детали.
+--rollback ALTER TABLE ${tenant.schema}.part_oem DROP COLUMN normalized;
+--rollback ALTER TABLE ${tenant.schema}.part_oem ADD COLUMN normalized text NOT NULL GENERATED ALWAYS AS (catalog.normalize_oem(raw_number)) STORED;
+--rollback ALTER TABLE ${tenant.schema}.part_oem ADD CONSTRAINT part_oem_uk UNIQUE (part_id, normalized);
+--rollback CREATE INDEX part_oem_normalized_ix ON ${tenant.schema}.part_oem (normalized);
+--rollback CREATE INDEX part_oem_trgm ON ${tenant.schema}.part_oem USING gin (normalized gin_trgm_ops);
 
 --changeset platform:tenant-051-search-vector-expression splitStatements:false
 --comment Полнотекстовый вектор больше не колонка, а выражение в запросе
@@ -32,7 +43,13 @@ ALTER TABLE ${tenant.schema}.part DROP COLUMN IF EXISTS search_vector;
 CREATE INDEX part_search_gin ON ${tenant.schema}.part USING gin (
     to_tsvector('russian', coalesce(title, '') || ' '
         || coalesce(description, '') || ' ' || coalesce(marking, '')));
---rollback SELECT 1;
+--comment
+--comment Откат возвращает хранимую колонку и индекс на ней. Пустой откат
+--comment оставил бы индекс на выражении там, где следующий откат ждёт
+--comment колонку, — и разворот на чистой базе встал бы на первом же DROP.
+--rollback DROP INDEX IF EXISTS ${tenant.schema}.part_search_gin;
+--rollback ALTER TABLE ${tenant.schema}.part ADD COLUMN search_vector tsvector GENERATED ALWAYS AS (to_tsvector('russian', coalesce(title,'') || ' ' || coalesce(description,'') || ' ' || coalesce(marking,''))) STORED;
+--rollback CREATE INDEX part_search_gin ON ${tenant.schema}.part USING gin (search_vector);
 
 --changeset platform:tenant-051-qty-available-expression
 --comment Свободный остаток считается там, где спрашивают, а не хранится
@@ -46,4 +63,12 @@ DROP INDEX IF EXISTS ${tenant.schema}.part_stock_available_ix;
 ALTER TABLE ${tenant.schema}.part_stock DROP COLUMN IF EXISTS qty_available;
 CREATE INDEX part_stock_available_ix ON ${tenant.schema}.part_stock (warehouse_id, part_id)
     WHERE qty - qty_reserved > 0;
---rollback SELECT 1;
+--comment
+--comment Откат возвращает колонку и частичный индекс по ней: откат
+--comment changeset'а 110 (012-stock-reservation.sql) снимает qty_available
+--comment безусловным DROP COLUMN, и без восстановления полный разворот
+--comment падает с «column qty_available does not exist». Стенд краснел
+--comment ровно на этом.
+--rollback DROP INDEX IF EXISTS ${tenant.schema}.part_stock_available_ix;
+--rollback ALTER TABLE ${tenant.schema}.part_stock ADD COLUMN qty_available numeric(12,3) GENERATED ALWAYS AS (qty - qty_reserved) STORED;
+--rollback CREATE INDEX part_stock_available_ix ON ${tenant.schema}.part_stock (warehouse_id, part_id) WHERE qty_available > 0;

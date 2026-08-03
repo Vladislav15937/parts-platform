@@ -173,22 +173,30 @@ class PartChangeLogTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Удаление фотографии отмечается: битая ссылка снимает объявление")
-    void photoDeletionIsMarked() {
+    @DisplayName("Назначение главного снимка отмечается")
+    void mainPhotoIsMarked() {
         Long partId = part("Крыло", "5000");
         Long photoId = inTenant(() -> jdbc.queryForObject("""
-                INSERT INTO part_photo (part_id, s3_key, status, sort_order)
-                VALUES (?, 't_000094/parts/1/x.jpg', 'PROCESSED', 0) RETURNING id""",
+                INSERT INTO part_photo (part_id, s3_key, status, sort_order, width, height)
+                VALUES (?, 't_000094/parts/1/x.jpg', 'PROCESSED', 0, 800, 600) RETURNING id""",
                 Long.class, partId));
         drain();
 
         inTenant(() -> {
-            photos.delete(photoId);
+            photos.makeMain(photoId);
             return null;
         });
 
+        // Главный снимок идёт в прайсе первым — площадка ставит его обложкой.
         assertThat(marked()).containsExactly(partId);
     }
+
+    // Удаление снимка отмечается тоже, но проверяется оно в PhotoServiceTest:
+    // PhotoService.delete ходит в хранилище, а у этого контекста хранилища нет
+    // и быть не должно. MinIO поднимают только те два теста, которым он нужен
+    // по делу; остальные смотрят в localhost:9000, где на CI не отвечает никто.
+    // Локально это невидимо: там на 9000 стоит MinIO из compose разработки —
+    // и ровно на этом стенд краснел.
 
     @Test
     @DisplayName("Повторные правки одной позиции дают одну строку")

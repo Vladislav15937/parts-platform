@@ -22,6 +22,13 @@
 --comment который никто не открывал.
 DROP TRIGGER IF EXISTS customer_balance_apply_trg ON ${tenant.schema}.customer_account_entry;
 DROP FUNCTION IF EXISTS ${tenant.schema}.customer_balance_apply();
+--comment
+--comment Откат воссоздаёт и функцию, а не только триггер. Снесены они одним
+--comment changeset'ом, значит и вернуть их обязан он один: триггер, созданный
+--comment на несуществующую функцию, — это отказ Postgres, то есть откат,
+--comment который не откатывается. Ловится это только полным разворотом
+--comment на чистой базе (db/verify.sh), и ровно на нём стенд и краснел.
+--rollback CREATE OR REPLACE FUNCTION ${tenant.schema}.customer_balance_apply() RETURNS trigger LANGUAGE plpgsql AS $fn$ BEGIN UPDATE ${tenant.schema}.customer SET balance = balance + NEW.amount WHERE id = NEW.customer_id; RETURN NEW; END $fn$;
 --rollback CREATE TRIGGER customer_balance_apply_trg AFTER INSERT ON ${tenant.schema}.customer_account_entry FOR EACH ROW EXECUTE FUNCTION ${tenant.schema}.customer_balance_apply();
 
 --changeset platform:tenant-045-drop-customer-balance-column
