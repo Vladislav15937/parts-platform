@@ -57,6 +57,10 @@ public class DromPriceGenerator {
             SELECT p.public_code,
                    p.title,
                    p.description,
+                   -- Вид детали отдельным полем: по нему площадка кладёт товар
+                   -- в раздел. Пока его не было, ей оставалось угадывать
+                   -- по заголовку, а угадывает она не всегда.
+                   kind.name AS part_kind,
                    p.price,
                    COALESCE(s.qty_available, 0) AS qty_available,
                    p.condition,
@@ -108,6 +112,7 @@ public class DromPriceGenerator {
                    WHERE status = 'PROCESSED'
                    GROUP BY part_id
               ) photos ON photos.part_id = p.id
+              LEFT JOIN catalog.part_kind kind ON kind.id = p.part_kind_id
               LEFT JOIN catalog.brand db ON db.id = d.brand_id
               LEFT JOIN catalog.model dm ON dm.id = d.model_id
               LEFT JOIN catalog.generation dg ON dg.id = d.generation_id
@@ -415,6 +420,7 @@ public class DromPriceGenerator {
             return new DromOffer(
                     rs.getString("public_code"),
                     rs.getString("title"),
+                    rs.getString("part_kind"),
                     rs.getString("description"),
                     rs.getBigDecimal("price"),
                     rs.getBigDecimal("qty_available"),

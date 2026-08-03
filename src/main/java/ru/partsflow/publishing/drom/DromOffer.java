@@ -17,6 +17,9 @@ import java.util.List;
  * позициях значит получить 50 000 дополнительных запросов, поэтому строку
  * собирает один потоковый SQL, а писателю остаётся только форматирование.
  *
+ * @param partKind     вид детали справочником — «Фара», «Стартер»; по нему
+ *                     площадка раскладывает товар по разделам, и заголовка
+ *                     ей для этого мало
  * @param availableQty свободный остаток, а не общий: см. {@link DromPriceWriter}
  * @param photos       постоянные ссылки на снимки, главный первым; пустой
  *                     список — снимков нет либо выдача не настроена
@@ -28,6 +31,7 @@ import java.util.List;
 public record DromOffer(
         String orderCode,
         String name,
+        String partKind,
         String description,
         BigDecimal price,
         BigDecimal availableQty,
