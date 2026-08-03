@@ -71,6 +71,18 @@ class NotFoundMappingTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Загрузка без файлов — 400, а не пятисотка")
+    void uploadWithoutFilesIsClientError() throws Exception {
+        // Перенос принимает два файла формой. Запрос телом в JSON отвечал
+        // «внутренней ошибкой», и владелец, подавший файлы не тем способом,
+        // шёл искать поломку сервера — при том что ошибка его.
+        mvc.perform(post("/api/import/bazon").with(csrf()).with(user("priyomshchik"))
+                        .contentType("application/json")
+                        .content("{}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     @DisplayName("Неизвестный путь вне /api — тоже 404")
     void unknownPathIsNotFound() throws Exception {
         mvc.perform(get("/net-takogo-adresa").with(user("priyomshchik")))
