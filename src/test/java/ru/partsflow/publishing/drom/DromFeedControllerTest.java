@@ -98,6 +98,57 @@ class DromFeedControllerTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Снимки уходят ссылками на постоянный адрес, а не подписанными")
+    void feedCarriesPermanentPhotoLinks() throws Exception {
+        Long photoId = inTenant(TENANT, () -> photo("Фара левая Camry", true));
+
+        String body = mvc.perform(get(feedPath))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String token = tokenOf(feedPath);
+        assertThat(body)
+                .as("прайс ушёл без единой ссылки на снимок при том, что снимки есть")
+                .contains("/feeds/drom/feedco/%s/photo/%d.jpg".formatted(token, photoId));
+        // Подписанная ссылка живёт часы и протухнет между заборами прайса,
+        // а объявление с мёртвой картинкой площадка снимает.
+        assertThat(body).doesNotContain("X-Amz-Signature");
+    }
+
+    @Test
+    @DisplayName("По ссылке на снимок уходит редирект в хранилище")
+    void photoRedirectsToStorage() throws Exception {
+        Long photoId = inTenant(TENANT, () -> photo("Фара левая Camry", true));
+
+        // Многомегабайтные снимки через приложение не идут: отсюда уезжает
+        // только 302, а байты Дром берёт из хранилища напрямую.
+        mvc.perform(get("/feeds/drom/feedco/%s/photo/%d.jpg".formatted(tokenOf(feedPath), photoId)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(result -> assertThat(result.getResponse().getRedirectedUrl())
+                        .contains("X-Amz-Signature"));
+    }
+
+    @Test
+    @DisplayName("Снимок непубликуемой позиции наружу не отдаётся")
+    void photoOfUnpublishedPartIsHidden() throws Exception {
+        Long hidden = inTenant(TENANT, () -> photo("Битая дверь", false));
+
+        // В прайс такая позиция не уезжает — значит и смотреть её фотографии
+        // площадке (и всякому, кто знает ссылку) незачем.
+        mvc.perform(get("/feeds/drom/feedco/%s/photo/%d.jpg".formatted(tokenOf(feedPath), hidden)))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("Чужой токен не открывает и снимок")
+    void photoNeedsTheSameToken() throws Exception {
+        Long photoId = inTenant(TENANT, () -> photo("Фара левая Camry", true));
+
+        mvc.perform(get("/feeds/drom/feedco/%s/photo/%d.jpg".formatted("z".repeat(43), photoId)))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
     @DisplayName("Прайс не кэшируется: склад меняется между заборами")
     void feedIsNotCached() throws Exception {
         mvc.perform(get(feedPath))
@@ -385,6 +436,37 @@ class DromFeedControllerTest extends PostgresTestBase {
         jdbc.update("""
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
                 VALUES (?, ?, 'Разборка', ?)""", id, schema, code);
+    }
+
+    /** Токен из пути прайса: он же открывает и снимки. */
+    private static String tokenOf(String path) {
+        return path.substring(path.lastIndexOf('/') + 1, path.length() - 4);
+    }
+
+    /**
+     * Снимок существующей позиции либо новой непубликуемой.
+     *
+     * @param published {@code false} — заводится своя позиция, снятая
+     *                  с выгрузки: у публикуемой снимок и должен быть виден
+     */
+    private Long photo(String title, boolean published) {
+        Long partId;
+        if (published) {
+            // Свежайшая: позиции между прогонами не чистятся — журнал движений
+            // неизменяем, и приход не удалить, — поэтому одноимённых накопится
+            // столько же, сколько было прогонов.
+            partId = jdbc.queryForObject(
+                    "SELECT id FROM part WHERE title = ? ORDER BY id DESC LIMIT 1",
+                    Long.class, title);
+        } else {
+            partId = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, is_published)
+                    VALUES (1, ?, 3000, false) RETURNING id""", Long.class, title);
+        }
+        return jdbc.queryForObject("""
+                INSERT INTO part_photo (part_id, s3_key, sort_order, is_main, status)
+                VALUES (?, ?, 0, true, 'PROCESSED') RETURNING id""",
+                Long.class, partId, "t_000066/parts/%d/snimok.jpg".formatted(partId));
     }
 
     private void part(String title) {

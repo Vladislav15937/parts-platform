@@ -101,6 +101,16 @@ public class DromPriceWriter {
         element(w, "color", offer.color());
         element(w, "supplier_art", offer.marking());
 
+        // Фотографии повторяющимся элементом, а не одной строкой через
+        // запятую: в ссылке может встретиться что угодно, а разбор по
+        // разделителю ломается ровно на том товаре, у которого он попался.
+        // Первая ссылка — главный снимок: площадка ставит его обложкой.
+        if (offer.photos() != null) {
+            for (String photo : offer.photos()) {
+                element(w, "photo", photo);
+            }
+        }
+
         w.writeEndElement();
     }
 

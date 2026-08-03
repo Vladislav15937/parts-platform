@@ -67,7 +67,8 @@ public class DromPriceGenerator {
                    p.side_fr,
                    p.side_ud,
                    primary_oem.raw_number AS oem_number,
-                   analogs.numbers        AS analog_numbers
+                   analogs.numbers        AS analog_numbers,
+                   photos.ids             AS photo_ids
               FROM part p
               LEFT JOIN (
                   SELECT part_id, sum(qty_available) AS qty_available
@@ -84,6 +85,16 @@ public class DromPriceGenerator {
                    WHERE NOT is_primary
                    GROUP BY part_id
               ) analogs ON analogs.part_id = p.id
+              -- Главный снимок первым: площадка ставит первую ссылку
+              -- обложкой объявления, и порядок здесь — это то, что покупатель
+              -- увидит в списке, не открывая карточку.
+              LEFT JOIN (
+                  SELECT part_id,
+                         string_agg(id::text, ',' ORDER BY is_main DESC, sort_order, id) AS ids
+                    FROM part_photo
+                   WHERE status = 'PROCESSED'
+                   GROUP BY part_id
+              ) photos ON photos.part_id = p.id
              WHERE p.is_published
                -- Колёса в прайс запчастей не идут: у площадки для шин
                -- и дисков свой формат со своими полями, и объявление
@@ -130,7 +141,7 @@ public class DromPriceGenerator {
      */
     @Transactional(readOnly = true)
     public int writeTo(OutputStream out) {
-        return write(out, null, FeedFilter.everything());
+        return write(out, null, FeedFilter.everything(), null);
     }
 
     /**
@@ -143,7 +154,25 @@ public class DromPriceGenerator {
      */
     @Transactional(readOnly = true)
     public int writeTo(OutputStream out, FeedFilter filter) {
-        return write(out, null, filter);
+        return write(out, null, filter, null);
+    }
+
+    /**
+     * Прайс со ссылками на снимки.
+     *
+     * <p>Фотографии в прайсе — не украшение: по утверждению самой площадки
+     * они увеличивают просмотры в четыре-пять раз, а на разборке продаёт
+     * именно фотография. До этого прайс уходил без единой ссылки при том,
+     * что снимки у нас лежат.
+     *
+     * @param photoBase постоянный адрес выдачи снимков этой выгрузки;
+     *                  {@code null} — ссылки не пишутся вовсе. Пустой лучше
+     *                  битого: объявление без фотографии хуже соседнего,
+     *                  а объявление с картинкой-заглушкой площадка снимает
+     */
+    @Transactional(readOnly = true)
+    public int writeTo(OutputStream out, FeedFilter filter, String photoBase) {
+        return write(out, null, filter, photoBase);
     }
 
     /**
@@ -193,10 +222,14 @@ public class DromPriceGenerator {
         if (partIds == null || partIds.isEmpty()) {
             return 0;
         }
-        return write(out, partIds, FeedFilter.everything());
+        // Дельта идёт без ссылок на снимки намеренно. Она сообщает площадке,
+        // что позиция продана или подешевела, — объявление и его фотографии
+        // у Дрома уже есть. Отсутствие необязательного элемента сменой формата
+        // не является: позиции без снимков и в полном прайсе идут без него.
+        return write(out, partIds, FeedFilter.everything(), null);
     }
 
-    private int write(OutputStream out, List<Long> partIds, FeedFilter filter) {
+    private int write(OutputStream out, List<Long> partIds, FeedFilter filter, String photoBase) {
         Session session = entityManager.unwrap(Session.class);
         String sql = SQL + (partIds == null ? "" : DELTA_FILTER) + ORDER;
 
@@ -244,7 +277,7 @@ public class DromPriceGenerator {
                     statement.setArray(17, connection.createArrayOf("bigint", partIds.toArray()));
                 }
                 try (ResultSet rs = statement.executeQuery()) {
-                    return writer.write(out, new OfferCursor(rs));
+                    return writer.write(out, new OfferCursor(rs, photoBase));
                 }
             } catch (XMLStreamException e) {
                 // doReturningWork пропускает только SQLException; заворачиваем,
@@ -257,11 +290,22 @@ public class DromPriceGenerator {
     /** Итератор поверх курсора: строки не накапливаются. */
     private static final class OfferCursor implements Iterator<DromOffer> {
 
+        /**
+         * Больше десяти снимков в объявление всё равно не уедет, а прайс они
+         * растят на ровном месте: у переехавшего клиента их в среднем пять
+         * с половиной на позицию, и при тридцати пяти тысячах позиций каждая
+         * лишняя ссылка — это лишний мегабайт в файле, который площадка
+         * забирает целиком.
+         */
+        private static final int MAX_PHOTOS = 10;
+
         private final ResultSet resultSet;
+        private final String photoBase;
         private Boolean hasNext;
 
-        private OfferCursor(ResultSet resultSet) {
+        private OfferCursor(ResultSet resultSet, String photoBase) {
             this.resultSet = resultSet;
+            this.photoBase = photoBase;
         }
 
         @Override
@@ -283,13 +327,28 @@ public class DromPriceGenerator {
             }
             hasNext = null;
             try {
-                return map(resultSet);
+                return map(resultSet, photoBase);
             } catch (SQLException e) {
                 throw new IllegalStateException("Не удалось прочитать позицию прайса", e);
             }
         }
 
-        private static DromOffer map(ResultSet rs) throws SQLException {
+        /**
+         * Ссылки на снимки — постоянные адреса нашей выдачи, а не подписанные
+         * ссылки в хранилище. Подписанная живёт часы и протухнет между
+         * заборами прайса, а объявление с мёртвой картинкой площадка снимает.
+         */
+        private static List<String> photoLinks(String ids, String base) {
+            if (base == null || ids == null || ids.isBlank()) {
+                return List.of();
+            }
+            return java.util.Arrays.stream(ids.split(","))
+                    .limit(MAX_PHOTOS)
+                    .map(id -> base + id + ".jpg")
+                    .toList();
+        }
+
+        private static DromOffer map(ResultSet rs, String photoBase) throws SQLException {
             return new DromOffer(
                     rs.getString("public_code"),
                     rs.getString("title"),
@@ -304,7 +363,8 @@ public class DromPriceGenerator {
                     enumOf(LongitudinalSide.class, rs.getString("side_fr")),
                     enumOf(VerticalSide.class, rs.getString("side_ud")),
                     rs.getString("color"),
-                    rs.getString("marking"));
+                    rs.getString("marking"),
+                    photoLinks(rs.getString("photo_ids"), photoBase));
         }
 
         private static List<String> splitAnalogs(String joined) {

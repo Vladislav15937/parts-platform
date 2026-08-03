@@ -67,7 +67,7 @@ class DromPriceWriterTest {
         void skipsEmptyFields() throws Exception {
             DromOffer bare = new DromOffer("P-1", "Деталь", null, new BigDecimal("100"),
                     BigDecimal.ONE, PartCondition.USED, null, null, List.of(),
-                    null, null, null, null, null);
+                    null, null, null, null, null, List.of());
 
             String xml = write(bare);
 
@@ -85,7 +85,7 @@ class DromPriceWriterTest {
         void escapesSpecialCharacters() throws Exception {
             DromOffer tricky = new DromOffer("P-2", "Кронштейн <передний> & правый", null,
                     new BigDecimal("100"), BigDecimal.ONE, PartCondition.USED,
-                    null, null, List.of(), null, null, null, null, null);
+                    null, null, List.of(), null, null, null, null, null, List.of());
 
             String xml = write(tricky);
 
@@ -93,11 +93,35 @@ class DromPriceWriterTest {
         }
 
         @Test
+        @DisplayName("Снимки уходят ссылками, главный первым")
+        void writesPhotoLinks() throws Exception {
+            String xml = write(offer());
+
+            // Повторяющимся элементом, а не строкой через запятую: разбор
+            // по разделителю ломается на первой же ссылке с запятой внутри.
+            assertThat(xml)
+                    .contains("<photo>https://parts.example.ru/feeds/drom/yardt/tok/photo/11.jpg</photo>")
+                    .contains("<photo>https://parts.example.ru/feeds/drom/yardt/tok/photo/12.jpg</photo>");
+            // Порядок — это обложка объявления: площадка берёт первую ссылку.
+            assertThat(xml.indexOf("photo/11.jpg")).isLessThan(xml.indexOf("photo/12.jpg"));
+        }
+
+        @Test
+        @DisplayName("Позиция без снимков не получает пустого элемента")
+        void skipsPhotosWhenThereAreNone() throws Exception {
+            DromOffer noPhotos = new DromOffer("P-6", "Фара", null, new BigDecimal("100"),
+                    BigDecimal.ONE, PartCondition.USED, null, null, List.of(),
+                    null, null, null, null, null, List.of());
+
+            assertThat(write(noPhotos)).doesNotContain("<photo>");
+        }
+
+        @Test
         @DisplayName("Новая запчасть уходит как новая")
         void mapsNewCondition() throws Exception {
             DromOffer brandNew = new DromOffer("P-3", "Фильтр", null, new BigDecimal("500"),
                     BigDecimal.ONE, PartCondition.NEW, null, null, List.of(),
-                    null, null, null, null, null);
+                    null, null, null, null, null, List.of());
 
             assertThat(write(brandNew)).contains("<condition>Новое</condition>");
         }
@@ -118,7 +142,7 @@ class DromPriceWriterTest {
         void soldOutStaysInPriceAsUnavailable() throws Exception {
             DromOffer soldOut = new DromOffer("P-4", "Стартер", null, new BigDecimal("5000"),
                     BigDecimal.ZERO, PartCondition.USED, null, null, List.of(),
-                    null, null, null, null, null);
+                    null, null, null, null, null, List.of());
 
             String xml = write(soldOut);
 
@@ -133,7 +157,7 @@ class DromPriceWriterTest {
         void unknownStockIsNotAvailable() throws Exception {
             DromOffer unknown = new DromOffer("P-5", "Бампер", null, new BigDecimal("100"),
                     null, PartCondition.USED, null, null, List.of(),
-                    null, null, null, null, null);
+                    null, null, null, null, null, List.of());
 
             assertThat(write(unknown)).contains("<available>false</available>");
         }
@@ -204,7 +228,9 @@ class DromPriceWriterTest {
                 LongitudinalSide.FRONT,
                 VerticalSide.LOWER,
                 "Чёрный",
-                "AM334388K");
+                "AM334388K",
+                List.of("https://parts.example.ru/feeds/drom/yardt/tok/photo/11.jpg",
+                        "https://parts.example.ru/feeds/drom/yardt/tok/photo/12.jpg"));
     }
 
     private String write(DromOffer... offers) throws XMLStreamException {

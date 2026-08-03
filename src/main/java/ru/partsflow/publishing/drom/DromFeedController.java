@@ -1,8 +1,10 @@
 package ru.partsflow.publishing.drom;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -10,6 +12,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
+import ru.partsflow.inventory.PhotoStorage;
 import ru.partsflow.platform.tenant.TenantContext;
 
 import java.io.IOException;
@@ -48,15 +51,22 @@ public class DromFeedController {
 
     private final JdbcTemplate jdbc;
     private final DromPriceGenerator generator;
+    private final PhotoStorage photos;
+    private final String publicUrl;
 
-    public DromFeedController(JdbcTemplate jdbc, DromPriceGenerator generator) {
+    public DromFeedController(JdbcTemplate jdbc, DromPriceGenerator generator,
+                              PhotoStorage photos,
+                              @Value("${app.public-url:}") String publicUrl) {
         this.jdbc = jdbc;
         this.generator = generator;
+        this.photos = photos;
+        this.publicUrl = publicUrl;
     }
 
     @GetMapping(value = "/feeds/drom/{company}/{token}.xml", produces = "application/xml")
     public void feed(@PathVariable String company,
                      @PathVariable String token,
+                     HttpServletRequest request,
                      HttpServletResponse response) throws IOException {
 
         String schema = schemaOf(company);
@@ -77,11 +87,79 @@ public class DromFeedController {
 
         TenantContext.set(schema);
         try (OutputStream out = response.getOutputStream()) {
-            int offers = generator.writeTo(out, filter);
+            int offers = generator.writeTo(out, filter, photoBase(request, company, token));
             log.info("Дром забрал прайс арендатора {}: {} позиций", schema, offers);
         } finally {
             TenantContext.clear();
         }
+    }
+
+    /**
+     * Снимок по постоянному адресу.
+     *
+     * <p><b>Редирект, а не отдача файла.</b> Многомегабайтные снимки не должны
+     * идти через приложение — по той же причине, по которой телефон грузит их
+     * в хранилище напрямую. Здесь уходит только 302, а байты Дром берёт из S3
+     * подписанной ссылкой, которую мы подписываем в этот самый момент.
+     *
+     * <p><b>И постоянный адрес нужен именно поэтому.</b> Подписанная ссылка
+     * живёт часы: положенная прямо в прайс, она протухнет между заборами,
+     * а объявление с мёртвой картинкой площадка снимает.
+     *
+     * <p>Снимок непубликуемой позиции отсюда не отдаётся: в прайс она
+     * не уезжает, значит и фотографии её наружу смотреть незачем. Токен
+     * проверяется тот же, что у прайса, — иначе адрес превращается
+     * в перебор по номеру снимка.
+     */
+    @GetMapping("/feeds/drom/{company}/{token}/photo/{photoId}.jpg")
+    public void photo(@PathVariable String company,
+                      @PathVariable String token,
+                      @PathVariable long photoId,
+                      HttpServletResponse response) throws IOException {
+
+        String schema = schemaOf(company);
+        String key = schema == null || filterFor(schema, token) == null
+                ? null
+                : keyOf(schema, photoId);
+        if (key == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        }
+        response.sendRedirect(photos.presignView(key));
+    }
+
+    /**
+     * Ключ снимка публикуемой позиции; {@code null} — нет такого либо позиция
+     * не выгружается.
+     *
+     * <p>Схема квалифицируется в SQL руками, как и при проверке токена:
+     * {@code TenantContext} здесь ещё пуст.
+     */
+    private String keyOf(String schema, long photoId) {
+        try {
+            return jdbc.queryForObject("""
+                    SELECT ph.s3_key
+                      FROM %s.part_photo ph
+                      JOIN %s.part p ON p.id = ph.part_id
+                     WHERE ph.id = ? AND ph.status = 'PROCESSED' AND p.is_published"""
+                    .formatted(schema, schema), String.class, photoId);
+        } catch (EmptyResultDataAccessException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Постоянный адрес выдачи снимков этой выгрузки.
+     *
+     * <p>Берётся из настройки, а не из запроса: за терминатором адрес
+     * в запросе — это внутреннее имя контейнера, и прайс уехал бы со ссылками
+     * вида {@code http://app:8080/…}, по которым Дром не сходит никуда.
+     * Из запроса строится только в разработке, где настройки нет.
+     */
+    private String photoBase(HttpServletRequest request, String company, String token) {
+        String origin = publicUrl == null || publicUrl.isBlank()
+                ? request.getRequestURL().toString().replaceFirst("/feeds/drom/.*$", "")
+                : publicUrl.replaceFirst("/+$", "");
+        return "%s/feeds/drom/%s/%s/photo/".formatted(origin, company, token);
     }
 
     /**

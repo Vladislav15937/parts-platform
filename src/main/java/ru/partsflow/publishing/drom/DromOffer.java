@@ -18,6 +18,8 @@ import java.util.List;
  * собирает один потоковый SQL, а писателю остаётся только форматирование.
  *
  * @param availableQty свободный остаток, а не общий: см. {@link DromPriceWriter}
+ * @param photos       постоянные ссылки на снимки, главный первым; пустой
+ *                     список — снимков нет либо выдача не настроена
  */
 public record DromOffer(
         String orderCode,
@@ -33,7 +35,8 @@ public record DromOffer(
         LongitudinalSide longitudinalSide,
         VerticalSide verticalSide,
         String color,
-        String marking) {
+        String marking,
+        List<String> photos) {
 
     public boolean isAvailable() {
         return availableQty != null && availableQty.signum() > 0;
