@@ -40,6 +40,7 @@ public class MarketplaceAccountService {
                 SELECT id, marketplace, title, status, last_sync_at IS NOT NULL AS synced,
                        last_error, credentials IS NOT NULL AS has_credentials,
                        credentials, feed_token IS NOT NULL AS has_feed,
+                       product_line,
                        price_from, price_to, conditions, warehouse_ids,
                        kind_ids, kinds_excluded, brand_ids, brands_excluded
                   FROM marketplace_account
@@ -55,6 +56,7 @@ public class MarketplaceAccountService {
                         rs.getBoolean("has_credentials")
                                 && !SecretCipher.isEncrypted(rs.getBytes("credentials")),
                         rs.getBoolean("has_feed"),
+                        rs.getString("product_line"),
                         rs.getString("last_error"),
                         rs.getBigDecimal("price_from"),
                         rs.getBigDecimal("price_to"),
@@ -133,16 +135,25 @@ public class MarketplaceAccountService {
      * с настройками значит однажды вернуть его в ответе на чтение списка.
      */
     @Transactional
-    public Account create(String marketplace, String title, String settingsJson) {
+    public Account create(String marketplace, String title, String settingsJson,
+                          String productLine) {
         if (title == null || title.isBlank()) {
             throw new IllegalArgumentException("Название кабинета обязательно");
         }
+        // Вид товара проверяется белым списком, хотя в колонке и стоит CHECK:
+        // отказ базы приезжает пятисоткой, а это ошибка запроса.
+        String line = productLine == null || productLine.isBlank() ? "PART" : productLine;
+        if (!"PART".equals(line) && !"WHEEL".equals(line)) {
+            throw new IllegalArgumentException("Выгрузка бывает по запчастям или по колёсам: "
+                    + productLine);
+        }
         Long id = jdbc.queryForObject("""
-                INSERT INTO marketplace_account (marketplace, title, settings)
-                VALUES (?, ?, COALESCE(?::jsonb, '{}'::jsonb))
+                INSERT INTO marketplace_account (marketplace, title, settings, product_line)
+                VALUES (?, ?, COALESCE(?::jsonb, '{}'::jsonb), ?)
                 RETURNING id""",
                 Long.class, marketplace, title.strip(),
-                settingsJson == null || settingsJson.isBlank() ? null : settingsJson);
+                settingsJson == null || settingsJson.isBlank() ? null : settingsJson,
+                line);
 
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
     }
@@ -232,7 +243,7 @@ public class MarketplaceAccountService {
      */
     public record Account(Long id, String marketplace, String title, String status,
                           boolean hasCredentials, boolean plaintextSecret, boolean hasFeed,
-                          String lastError, java.math.BigDecimal priceFrom,
+                          String productLine, String lastError, java.math.BigDecimal priceFrom,
                           java.math.BigDecimal priceTo, List<String> conditions,
                           List<Long> warehouseIds, List<Long> kindIds, boolean kindsExcluded,
                           List<Long> brandIds, boolean brandsExcluded) {

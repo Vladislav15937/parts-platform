@@ -14,6 +14,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.util.function.Supplier;
@@ -39,6 +40,9 @@ class DromFeedControllerTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000066";
     private static final String OTHER_TENANT = "t_000067";
+
+    @Autowired
+    private ru.partsflow.inventory.StockLedger ledger;
 
     @Autowired
     private MockMvc mvc;
@@ -95,6 +99,57 @@ class DromFeedControllerTest extends PostgresTestBase {
 
         // Cookie у сервера площадки нет и не будет: права даёт секрет в адресе.
         assertThat(body).contains("Фара левая Camry");
+    }
+
+    @Test
+    @DisplayName("Снимки уходят ссылками на постоянный адрес, а не подписанными")
+    void feedCarriesPermanentPhotoLinks() throws Exception {
+        Long photoId = inTenant(TENANT, () -> photo("Фара левая Camry", true));
+
+        String body = mvc.perform(get(feedPath))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String token = tokenOf(feedPath);
+        assertThat(body)
+                .as("прайс ушёл без единой ссылки на снимок при том, что снимки есть")
+                .contains("/feeds/drom/feedco/%s/photo/%d.jpg".formatted(token, photoId));
+        // Подписанная ссылка живёт часы и протухнет между заборами прайса,
+        // а объявление с мёртвой картинкой площадка снимает.
+        assertThat(body).doesNotContain("X-Amz-Signature");
+    }
+
+    @Test
+    @DisplayName("По ссылке на снимок уходит редирект в хранилище")
+    void photoRedirectsToStorage() throws Exception {
+        Long photoId = inTenant(TENANT, () -> photo("Фара левая Camry", true));
+
+        // Многомегабайтные снимки через приложение не идут: отсюда уезжает
+        // только 302, а байты Дром берёт из хранилища напрямую.
+        mvc.perform(get("/feeds/drom/feedco/%s/photo/%d.jpg".formatted(tokenOf(feedPath), photoId)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(result -> assertThat(result.getResponse().getRedirectedUrl())
+                        .contains("X-Amz-Signature"));
+    }
+
+    @Test
+    @DisplayName("Снимок непубликуемой позиции наружу не отдаётся")
+    void photoOfUnpublishedPartIsHidden() throws Exception {
+        Long hidden = inTenant(TENANT, () -> photo("Битая дверь", false));
+
+        // В прайс такая позиция не уезжает — значит и смотреть её фотографии
+        // площадке (и всякому, кто знает ссылку) незачем.
+        mvc.perform(get("/feeds/drom/feedco/%s/photo/%d.jpg".formatted(tokenOf(feedPath), hidden)))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("Чужой токен не открывает и снимок")
+    void photoNeedsTheSameToken() throws Exception {
+        Long photoId = inTenant(TENANT, () -> photo("Фара левая Camry", true));
+
+        mvc.perform(get("/feeds/drom/feedco/%s/photo/%d.jpg".formatted("z".repeat(43), photoId)))
+                .andExpect(status().isNotFound());
     }
 
     @Test
@@ -214,9 +269,7 @@ class DromFeedControllerTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price, cost_price, is_published)
                     VALUES (1, 'Дверь на дальнем складе', 7000, 3000, true) RETURNING id""",
                     Long.class);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 1, ?)""", partId, far);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, far, null));
 
             return jdbc.queryForObject("""
                     INSERT INTO marketplace_account (marketplace, title, settings, warehouse_ids)
@@ -260,9 +313,7 @@ class DromFeedControllerTest extends PostgresTestBase {
                     INSERT INTO part (category_id, donor_id, title, price, is_published)
                     VALUES (1, ?, 'Дверь с донора', 8000, true) RETURNING id""",
                     Long.class, donorId);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 1, ?)""", partId, warehouse);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
             return brandId;
         });
 
@@ -299,9 +350,7 @@ class DromFeedControllerTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price, is_published, product_line)
                     VALUES (1, 'Шина 195/65 R15 Goodyear', 3500, true, 'WHEEL') RETURNING id""",
                     Long.class);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 4, ?)""", partId, warehouse);
+            ledger.record(StockMovement.intake(partId, new java.math.BigDecimal("4"), warehouse, null));
             return null;
         });
 
@@ -357,9 +406,7 @@ class DromFeedControllerTest extends PostgresTestBase {
         Long partId = jdbc.queryForObject("""
                 INSERT INTO part (category_id, title, price, cost_price, is_published)
                 VALUES (1, ?, ?, 100, true) RETURNING id""", Long.class, title, price);
-        jdbc.update("""
-                INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                VALUES (?, 'INTAKE', 1, ?)""", partId, warehouse);
+        ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
     }
 
     private String rotate(Long id) throws Exception {
@@ -387,6 +434,37 @@ class DromFeedControllerTest extends PostgresTestBase {
                 VALUES (?, ?, 'Разборка', ?)""", id, schema, code);
     }
 
+    /** Токен из пути прайса: он же открывает и снимки. */
+    private static String tokenOf(String path) {
+        return path.substring(path.lastIndexOf('/') + 1, path.length() - 4);
+    }
+
+    /**
+     * Снимок существующей позиции либо новой непубликуемой.
+     *
+     * @param published {@code false} — заводится своя позиция, снятая
+     *                  с выгрузки: у публикуемой снимок и должен быть виден
+     */
+    private Long photo(String title, boolean published) {
+        Long partId;
+        if (published) {
+            // Свежайшая: позиции между прогонами не чистятся — журнал движений
+            // неизменяем, и приход не удалить, — поэтому одноимённых накопится
+            // столько же, сколько было прогонов.
+            partId = jdbc.queryForObject(
+                    "SELECT id FROM part WHERE title = ? ORDER BY id DESC LIMIT 1",
+                    Long.class, title);
+        } else {
+            partId = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, is_published)
+                    VALUES (1, ?, 3000, false) RETURNING id""", Long.class, title);
+        }
+        return jdbc.queryForObject("""
+                INSERT INTO part_photo (part_id, s3_key, sort_order, is_main, status)
+                VALUES (?, ?, 0, true, 'PROCESSED') RETURNING id""",
+                Long.class, partId, "t_000066/parts/%d/snimok.jpg".formatted(partId));
+    }
+
     private void part(String title) {
         Long branch = jdbc.queryForObject(
                 "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class);
@@ -396,9 +474,7 @@ class DromFeedControllerTest extends PostgresTestBase {
         Long partId = jdbc.queryForObject("""
                 INSERT INTO part (category_id, title, price, cost_price, is_published)
                 VALUES (1, ?, 5000, 2000, true) RETURNING id""", Long.class, title);
-        jdbc.update("""
-                INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                VALUES (?, 'INTAKE', 1, ?)""", partId, warehouse);
+        ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
     }
 
     private void member(String login, String role) {

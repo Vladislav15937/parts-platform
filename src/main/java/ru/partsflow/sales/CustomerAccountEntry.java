@@ -19,6 +19,7 @@ import java.time.Instant;
  * «сколько на счету» без истории операций невозможно разобрать в тот день,
  * когда клиент с суммой не согласен. Журнал неизменяем на уровне БД.
  */
+@org.hibernate.annotations.Immutable
 @Entity
 @Table(name = "customer_account_entry")
 public class CustomerAccountEntry {

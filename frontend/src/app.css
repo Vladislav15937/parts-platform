@@ -1417,7 +1417,11 @@ hr {
 /* Вкладки карточки — как в кабинете: сведения и применимость. */
 .card-tabs {
   display: flex;
-  gap: 1rem;
+  /* Переносятся, а не обрезаются: вкладок стало четыре, и в столбец
+     сведений шириной в 21rem они в одну строку не влезают — «История»
+     превращалась в «Истор». */
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
   border-bottom: 1px solid var(--line);
 }
 
@@ -1661,4 +1665,151 @@ hr {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* Досъёмка из карточки. Поле выбора файла скрыто: браузерное «Файл не
+   выбран» рядом с кнопкой выглядит поломкой, а нажимают на подпись. */
+.card-view__upload {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.card-view__add-photo {
+  display: inline-block;
+  padding: 6px 12px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.card-view__add-photo input {
+  display: none;
+}
+
+/* История позиции. Две ленты в одной вкладке карточки: правки и движения
+   остатка. Разведены переключателем, а не свалены в один список, — в общем
+   списке правка заметки встаёт между продажей и возвратом, и движение
+   в нём не найти. */
+.history__tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.chip--active {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.chip--active:hover {
+  color: #fff;
+}
+
+.history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Записи разделены линией, а не отступом: их бывает несколько десятков,
+   и без границы лента читается как сплошной текст. */
+.history__item {
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.history__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.history__at {
+  font-variant-numeric: tabular-nums;
+}
+
+.history__action {
+  margin-top: 0.25rem;
+}
+
+.history__fields {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+}
+
+/* Поле, старое значение, стрелка, новое — в строку. Перенос допускается:
+   наименование бывает длиннее колонки, а обрезать его многоточием здесь
+   нельзя — именно ради него историю и открыли. */
+.history__fields li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.15rem 0;
+}
+
+.card-view__history {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.history__field {
+  min-width: 11rem;
+  color: var(--muted);
+}
+
+.history__was {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.history__arrow {
+  color: var(--muted);
+}
+
+.history__now {
+  font-weight: 600;
+}
+
+.history__moves {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.history__moves th,
+.history__moves td {
+  padding: 0.4rem 0.5rem 0.4rem 0;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+.history__moves th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.history__moves .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Машина, с которой снята деталь. Число снятых деталей стоит первым:
+   на вопрос «разобрана она или сняли одну эту» отвечает именно оно,
+   а не марка с моделью. */
+.donor-view__parts {
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  background: var(--surface-soft);
+  border-radius: var(--radius);
+}
+
+.donor-view__parts b {
+  font-size: 1.1rem;
 }

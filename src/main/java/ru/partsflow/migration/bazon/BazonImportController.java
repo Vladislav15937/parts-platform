@@ -61,7 +61,8 @@ public class BazonImportController {
     private final PhotoMigration photoMigration;
 
     public BazonImportController(DataSource dataSource, PartNameService partNames,
-                                 PartService parts, PhotoMigration photoMigration) {
+                                 PartService parts, PhotoMigration photoMigration,
+                                 ru.partsflow.inventory.StockLedger stock) {
         this.dataSource = dataSource;
         this.partNames = partNames;
         this.parts = parts;

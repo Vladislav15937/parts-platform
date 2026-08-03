@@ -43,10 +43,16 @@ class WriteOffTest extends PostgresTestBase {
     private static final String TENANT = "t_000088";
 
     @Autowired
+    private StockLedger ledger;
+
+    @Autowired
     private MockMvc mvc;
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private StockReservationRepository reservations;
 
     @Autowired
     private TransactionTemplate transactionTemplate;
@@ -81,9 +87,7 @@ class WriteOffTest extends PostgresTestBase {
             partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price) VALUES (1, 'Фара битая', 4500)
                     RETURNING id""", Long.class);
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', 2, ?)""", partId, warehouseId);
+            ledger.record(StockMovement.intake(partId, new java.math.BigDecimal("2"), warehouseId, null));
             return null;
         });
     }
@@ -134,8 +138,10 @@ class WriteOffTest extends PostgresTestBase {
     @Test
     @DisplayName("Отложенное покупателю не списывается, и отказ называет остаток")
     void reservedStockIsNotWrittenOff() throws Exception {
-        inTenant(() -> jdbc.queryForObject(
-                "SELECT reserve_stock(?, ?, 2)", Object.class, partId, warehouseId));
+        inTenant(() -> {
+            reservations.reserve(partId, warehouseId, new java.math.BigDecimal("2"));
+            return null;
+        });
 
         MockHttpSession session = login("vladelec");
 

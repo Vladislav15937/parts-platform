@@ -96,6 +96,24 @@ public class ApiExceptionHandler {
     }
 
     /**
+     * Тело запроса, которое не разбирается.
+     *
+     * <p>Это ошибка клиента, а не поломка сервера: строка вместо числа,
+     * объект вместо строки, обрезанный JSON. Пока такое ехало пятисоткой,
+     * офлайн-очередь приёмки повторяла бы его вечно — вместо того чтобы
+     * один раз пометить «требует внимания». Та же причина, по которой
+     * отдельно отображены 404 на опечатку в пути и 405 на чужой метод.
+     *
+     * <p>Текст разбора наружу не отдаётся: в нём имена полей и классов.
+     */
+    @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiError> unreadableBody(
+            org.springframework.http.converter.HttpMessageNotReadableException e) {
+        log.warn("Тело запроса не разобрано: {}", e.getMostSpecificCause().getMessage());
+        return ResponseEntity.badRequest().body(new ApiError("Запрос не разобран"));
+    }
+
+    /**
      * Правило, которое стережёт база.
      *
      * <p>Остаток, резерв и неизменяемость журнала защищены триггерами, а не

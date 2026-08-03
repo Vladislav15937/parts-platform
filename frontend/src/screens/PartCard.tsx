@@ -3,17 +3,24 @@ import { ApiError } from '../api/client';
 import {
   addApplicability,
   loadApplicability,
+  loadDonor,
+  loadHistory,
   loadPhotos,
   movePart,
   removeApplicability,
   writeOffPart,
   type Applicability,
   type CatalogRow,
+  type PartDonor,
+  type PartHistory,
   type PartPhoto,
   type Warehouse,
 } from '../inventory/catalog';
 import { cardFields } from '../inventory/partCard';
+import { deletePhoto, makeMainPhoto, uploadPhoto } from '../inventory/photos';
 import { PartEditForm } from './PartEditForm';
+import { PartDonorView } from './PartDonorView';
+import { PartHistoryView } from './PartHistoryView';
 import { loadCached, modelsOf, type VehicleCatalog } from '../catalog/vehicles';
 import { listCells, type Cell } from '../organization/warehouses';
 
@@ -33,7 +40,7 @@ import { listCells, type Cell } from '../organization/warehouses';
 /** Дата без времени: в карточке время правки — шум. */
 
 export function PartCard({ row, warehouses, role, extraFields, applicability = true,
-                          onClose, onChanged }: {
+                          onClose, onChanged, onDonorParts }: {
   row: CatalogRow;
   warehouses: Warehouse[];
   role: string;
@@ -56,6 +63,13 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   onClose: () => void;
   /** Склад изменился: списали или перевезли — витрину надо перечитать. */
   onChanged: () => void;
+
+  /**
+   * Показать остальные детали с той же машины: экран ставит отбор по номеру
+   * донора и закрывает карточку. Без обработчика кнопка не появляется —
+   * на вкладке колёс отбирать по донору нечем.
+   */
+  onDonorParts?: (donorCode: string) => void;
 }) {
   // Списывает тот, кто отвечает за деньги: списанная деталь — это убыток,
   // а не запись в журнале. Кладовщик находит недостачу, решение не его.
@@ -75,8 +89,18 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   const [moveCell, setMoveCell] = useState<number | null>(null);
   const [moveError, setMoveError] = useState('');
   const [photos, setPhotos] = useState<PartPhoto[]>([]);
+  // Снимки правит тот, кто отвечает за то, как товар выглядит на площадке.
+  // Кладовщику это не нужно: он деталь не продаёт.
+  const [uploading, setUploading] = useState(false);
+  const [photoError, setPhotoError] = useState('');
   const [shown, setShown] = useState(0);
-  const [tab, setTab] = useState<'about' | 'fits'>('about');
+  const [tab, setTab] = useState<'about' | 'fits' | 'history' | 'donor'>('about');
+  const [donor, setDonor] = useState<PartDonor | null>(null);
+  // История грузится по открытию вкладки, а не вместе с карточкой: у позиции
+  // переехавшего клиента правок бывают десятки, а открывают карточку чаще
+  // всего чтобы посмотреть цену и снимок.
+  const [history, setHistory] = useState<PartHistory | null>(null);
+  const [historyTab, setHistoryTab] = useState<'changes' | 'movements'>('changes');
   // Правит владелец и менеджер: здесь цена, минимальная цена
   // и себестоимость — продавец, торгующийся с покупателем, не должен уметь
   // подвинуть себе нижнюю границу.
@@ -97,6 +121,24 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   }, [row.id]);
 
   useEffect(() => {
+    if (tab !== 'history' || history !== null) {
+      return;
+    }
+    void loadHistory(row.id)
+      .then(setHistory)
+      .catch(() => setHistory({ changes: [], movements: [] }));
+  }, [tab, history, row.id]);
+
+  // Машина грузится по открытию вкладки: чаще всего карточку открывают ради
+  // цены и снимка, а не ради того, какой у донора привод.
+  useEffect(() => {
+    if (tab !== 'donor' || donor !== null) {
+      return;
+    }
+    void loadDonor(row.id).then(setDonor).catch(() => setDonor(null));
+  }, [tab, donor, row.id]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose();
@@ -115,6 +157,57 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   const rows = [...(extraFields ?? []), ...cardFields(row)];
 
   const main = photos[shown];
+
+  /**
+   * Добавляет снимки. По одному за раз, а не все разом: хранилище отвечает
+   * на каждый отдельно, и параллельная отправка десяти файлов с телефона
+   * через мобильную связь кончается отказом на половине.
+   */
+  async function addPhotos(files: FileList | null): Promise<void> {
+    if (files === null || files.length === 0) {
+      return;
+    }
+    setPhotoError('');
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        await uploadPhoto(row.id, file);
+      }
+      setPhotos(await loadPhotos(row.id));
+    } catch (e) {
+      setPhotoError(e instanceof ApiError ? e.message : 'Снимок не загрузился');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function setMain(photoId: number): Promise<void> {
+    setPhotoError('');
+    try {
+      await makeMainPhoto(row.id, photoId);
+      // Остаёмся на том же снимке: порядок в списке от смены главного
+      // не меняется (он по sort_order), а прыжок на первый показывал бы
+      // чужую фотографию с той же кнопкой «Сделать главным» — как будто
+      // нажатие не сработало.
+      setPhotos(await loadPhotos(row.id));
+    } catch (e) {
+      setPhotoError(e instanceof ApiError ? e.message : 'Не удалось назначить главным');
+    }
+  }
+
+  async function removePhoto(photoId: number): Promise<void> {
+    setPhotoError('');
+    try {
+      await deletePhoto(row.id, photoId);
+      const left = await loadPhotos(row.id);
+      setPhotos(left);
+      // Удалённый мог быть последним в полосе: без сдвига экран показывал бы
+      // пустое место вместо снимка.
+      setShown((i) => Math.max(0, Math.min(i, left.length - 1)));
+    } catch (e) {
+      setPhotoError(e instanceof ApiError ? e.message : 'Не удалось удалить снимок');
+    }
+  }
 
   /** Ячейки склада-приёмника: без адреса деталь находится только глазами. */
   async function chooseTarget(id: number | null): Promise<void> {
@@ -198,9 +291,27 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
                   Применимость
                 </button>
               )}
+              {row.donorCode !== null && (
+                <button
+                  type="button"
+                  className={tab === 'donor' ? 'card-tab card-tab--active' : 'card-tab'}
+                  onClick={() => setTab('donor')}
+                >
+                  Донор
+                </button>
+              )}
+              <button
+                type="button"
+                className={tab === 'history' ? 'card-tab card-tab--active' : 'card-tab'}
+                onClick={() => setTab('history')}
+              >
+                История
+              </button>
             </div>
 
-            {tab === 'fits' ? (
+            {tab === 'donor' ? (
+              <PartDonorView donor={donor} onParts={onDonorParts} />
+            ) : tab === 'fits' ? (
               <div className="card-view__fits">
                 {fits === null ? (
                   <p className="muted">Загружаем…</p>
@@ -284,6 +395,15 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
               <div className="card-marks">
                 <span className={row.donorCode === null ? 'mark mark--off' : 'mark'}>
                   {row.donorCode === null ? 'Донор не задан' : 'Донор задан'}
+                  {/* Отметка без самих данных — это сообщение «данные есть,
+                      но не здесь». Продавец по телефону отвечает как раз ими:
+                      руль, коробка, привод машины, с которой деталь снята. */}
+                  {row.donorCode !== null && (
+                    <button type="button" className="mark__link"
+                            onClick={() => setTab('donor')}>
+                      Посмотреть
+                    </button>
+                  )}
                 </span>
                 <span className={fits !== null && fits.length > 0 ? 'mark' : 'mark mark--off'}>
                   {fits !== null && fits.length > 0
@@ -509,10 +629,22 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
             )}
           </div>
 
+          {/* История занимает место снимка, а не втискивается в столбец
+              сведений: правка наименования — это две строки текста длиной
+              в заголовок, и в колонке шириной в треть экрана от неё остаются
+              переносы по одному слову. Снимок в это время и не нужен:
+              историю открывают, когда разбираются, а не когда смотрят
+              на деталь. Поймано живым прогоном. */}
+          {tab === 'history' ? (
+            <div className="card-view__history">
+              <PartHistoryView history={history} tab={historyTab} onTab={setHistoryTab} />
+            </div>
+          ) : (
           <div className="card-view__photos">
-            {main === undefined ? (
+            {main === undefined && !uploading && (
               <p className="muted">Снимков нет</p>
-            ) : (
+            )}
+            {main !== undefined && (
               <>
                 <div className="card-view__frame">
                   {photos.length > 1 && (
@@ -551,7 +683,47 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
                 )}
               </>
             )}
+
+            {/* Досъёмка: снимок делают телефоном при приёмке, но деталь,
+                приехавшую переносом без картинок, доснять было негде вовсе —
+                а на разборке продаёт фотография. */}
+            {(role === 'OWNER' || role === 'MANAGER' || role === 'SELLER') && (
+              <div className="card-view__upload">
+                {main !== undefined && (
+                  <div className="filter-row">
+                    {!main.main && (
+                      <button
+                        type="button"
+                        className="button--ghost"
+                        onClick={() => void setMain(main.photoId)}
+                      >
+                        Сделать главным
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="button--ghost"
+                      onClick={() => void removePhoto(main.photoId)}
+                    >
+                      Удалить снимок
+                    </button>
+                  </div>
+                )}
+                <label className="button--ghost card-view__add-photo">
+                  {uploading ? 'Загружаем…' : 'Добавить фото'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    disabled={uploading}
+                    onChange={(e) => void addPhotos(e.currentTarget.files)}
+                  />
+                </label>
+                {photoError !== '' && <p className="note note--error">{photoError}</p>}
+              </div>
+            )}
           </div>
+          )}
         </div>
       </div>
     </div>

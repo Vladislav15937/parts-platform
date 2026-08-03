@@ -57,6 +57,10 @@ public class DromPriceGenerator {
             SELECT p.public_code,
                    p.title,
                    p.description,
+                   -- Вид детали отдельным полем: по нему площадка кладёт товар
+                   -- в раздел. Пока его не было, ей оставалось угадывать
+                   -- по заголовку, а угадывает она не всегда.
+                   kind.name AS part_kind,
                    p.price,
                    COALESCE(s.qty_available, 0) AS qty_available,
                    p.condition,
@@ -67,10 +71,28 @@ public class DromPriceGenerator {
                    p.side_fr,
                    p.side_ud,
                    primary_oem.raw_number AS oem_number,
-                   analogs.numbers        AS analog_numbers
+                   analogs.numbers        AS analog_numbers,
+                   photos.ids             AS photo_ids,
+                   -- Применимость: сначала машина, с которой деталь снята,
+                   -- потом — перечисленные в применимости. У контрактной
+                   -- машины нет вовсе, а подходит она к нескольким, и без
+                   -- второй половины такая позиция уезжает безадресной.
+                   COALESCE(db.name, fit.brands)  AS car_brand,
+                   COALESCE(dm.name, fit.models)  AS car_model,
+                   -- Кузов и двигатель лежат в двух местах: своими полями
+                   -- машины (их вводят руками и заполняет перенос) и ссылками
+                   -- в каталог. Введённое руками сильнее — оно написано
+                   -- в документах, а поколение подобрано по году.
+                   COALESCE(d.body_code, dg.code)            AS body_code,
+                   COALESCE(d.engine_code, dmo.engine_code)  AS engine_code,
+                   d.year,
+                   -- Снята с машины или пришла контейнером: у контрактной
+                   -- марка берётся из применимости, и «снято с» про неё
+                   -- было бы неправдой.
+                   d.id IS NOT NULL AS from_donor
               FROM part p
               LEFT JOIN (
-                  SELECT part_id, sum(qty_available) AS qty_available
+                  SELECT part_id, sum(qty - qty_reserved) AS qty_available
                     FROM part_stock
                    WHERE (?::bigint[] IS NULL OR warehouse_id = ANY (?::bigint[]))
                    GROUP BY part_id
@@ -84,13 +106,40 @@ public class DromPriceGenerator {
                    WHERE NOT is_primary
                    GROUP BY part_id
               ) analogs ON analogs.part_id = p.id
+              -- Главный снимок первым: площадка ставит первую ссылку
+              -- обложкой объявления, и порядок здесь — это то, что покупатель
+              -- увидит в списке, не открывая карточку.
+              LEFT JOIN (
+                  SELECT part_id,
+                         string_agg(id::text, ',' ORDER BY is_main DESC, sort_order, id) AS ids
+                    FROM part_photo
+                   WHERE status = 'PROCESSED'
+                   GROUP BY part_id
+              ) photos ON photos.part_id = p.id
+              LEFT JOIN catalog.part_kind kind ON kind.id = p.part_kind_id
+              LEFT JOIN catalog.brand db ON db.id = d.brand_id
+              LEFT JOIN catalog.model dm ON dm.id = d.model_id
+              LEFT JOIN catalog.generation dg ON dg.id = d.generation_id
+              LEFT JOIN catalog.modification dmo ON dmo.id = d.modification_id
+              -- Марки и модели применимости — списком через запятую, как
+              -- и номера-аналоги: деталь, подходящая к пяти машинам, иначе
+              -- достанется одной из них.
+              LEFT JOIN (
+                  SELECT a.part_id,
+                         string_agg(DISTINCT ab.name, ',') AS brands,
+                         string_agg(DISTINCT am.name, ',') AS models
+                    FROM part_applicability a
+                    JOIN catalog.brand ab ON ab.id = a.brand_id
+                    LEFT JOIN catalog.model am ON am.id = a.model_id
+                   GROUP BY a.part_id
+              ) fit ON fit.part_id = p.id
              WHERE p.is_published
                -- Колёса в прайс запчастей не идут: у площадки для шин
                -- и дисков свой формат со своими полями, и объявление
                -- «Шина 195/65 R15» среди запчастей уедет в чужую категорию.
                -- Отдельная выгрузка для них — своя задача.
                AND p.product_line = 'PART'
-               AND p.status IN ('IN_STOCK', 'SOLD')
+               AND p.status IN ${statuses}
                AND p.price IS NOT NULL
                AND (?::numeric IS NULL OR p.price >= ?::numeric)
                AND (?::numeric IS NULL OR p.price <= ?::numeric)
@@ -112,6 +161,25 @@ public class DromPriceGenerator {
     /** Дельта — тот же запрос по списку позиций: формат обязан совпасть с прайсом. */
     private static final String DELTA_FILTER = " AND p.id = ANY (?)";
 
+    /**
+     * Статусы полного прайса: списанного в нём нет.
+     *
+     * <p>Так площадка узнаёт об удалении: «при обновлении прайс-листа мы
+     * проверяем, какие товары из него пропали, и убираем их с сайта».
+     */
+    private static final String PRICE_STATUSES = "('IN_STOCK', 'SOLD')";
+
+    /**
+     * Статусы дельты: списанное в ней есть, и это не расхождение с прайсом.
+     *
+     * <p>Дельта не умеет сообщать об исчезновении — сообщить можно только
+     * о том, что в неё попало. Списание, отброшенное отбором, дошло бы
+     * до площадки лишь следующим полным забором, то есть деталь, которой
+     * уже нет, висела бы доступной до трёх суток. Уезжает она недоступной, а это
+     * ровно то, что документация Дрома и называет удалением через API.
+     */
+    private static final String DELTA_STATUSES = "('IN_STOCK', 'SOLD', 'WRITTEN_OFF')";
+
     private static final String ORDER = " ORDER BY p.id";
 
     private final EntityManager entityManager;
@@ -130,7 +198,7 @@ public class DromPriceGenerator {
      */
     @Transactional(readOnly = true)
     public int writeTo(OutputStream out) {
-        return write(out, null, FeedFilter.everything());
+        return write(out, null, FeedFilter.everything(), null);
     }
 
     /**
@@ -143,7 +211,25 @@ public class DromPriceGenerator {
      */
     @Transactional(readOnly = true)
     public int writeTo(OutputStream out, FeedFilter filter) {
-        return write(out, null, filter);
+        return write(out, null, filter, null);
+    }
+
+    /**
+     * Прайс со ссылками на снимки.
+     *
+     * <p>Фотографии в прайсе — не украшение: по утверждению самой площадки
+     * они увеличивают просмотры в четыре-пять раз, а на разборке продаёт
+     * именно фотография. До этого прайс уходил без единой ссылки при том,
+     * что снимки у нас лежат.
+     *
+     * @param photoBase постоянный адрес выдачи снимков этой выгрузки;
+     *                  {@code null} — ссылки не пишутся вовсе. Пустой лучше
+     *                  битого: объявление без фотографии хуже соседнего,
+     *                  а объявление с картинкой-заглушкой площадка снимает
+     */
+    @Transactional(readOnly = true)
+    public int writeTo(OutputStream out, FeedFilter filter, String photoBase) {
+        return write(out, null, filter, photoBase);
     }
 
     /**
@@ -190,15 +276,34 @@ public class DromPriceGenerator {
      */
     @Transactional(readOnly = true)
     public int writeDelta(OutputStream out, List<Long> partIds) {
+        return writeDelta(out, partIds, FeedFilter.everything());
+    }
+
+    /**
+     * Дельта одной выгрузки: те же позиции, но её отбором.
+     *
+     * <p>Отбор обязателен, а не «для полноты». У клиента прайс-листов
+     * несколько, и позиция, не проходящая отбор конкретного, уехав в него,
+     * создаст там объявление, которого владелец не заводил, — и снять его
+     * будет нечем до полного забора.
+     */
+    @Transactional(readOnly = true)
+    public int writeDelta(OutputStream out, List<Long> partIds, FeedFilter filter) {
         if (partIds == null || partIds.isEmpty()) {
             return 0;
         }
-        return write(out, partIds, FeedFilter.everything());
+        // Дельта идёт без ссылок на снимки намеренно. Она сообщает площадке,
+        // что позиция продана или подешевела, — объявление и его фотографии
+        // у Дрома уже есть. Отсутствие необязательного элемента сменой формата
+        // не является: позиции без снимков и в полном прайсе идут без него.
+        return write(out, partIds, filter, null);
     }
 
-    private int write(OutputStream out, List<Long> partIds, FeedFilter filter) {
+    private int write(OutputStream out, List<Long> partIds, FeedFilter filter, String photoBase) {
         Session session = entityManager.unwrap(Session.class);
-        String sql = SQL + (partIds == null ? "" : DELTA_FILTER) + ORDER;
+        String sql = SQL.replace("${statuses}",
+                partIds == null ? PRICE_STATUSES : DELTA_STATUSES)
+                + (partIds == null ? "" : DELTA_FILTER) + ORDER;
 
         return session.doReturningWork(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -244,7 +349,7 @@ public class DromPriceGenerator {
                     statement.setArray(17, connection.createArrayOf("bigint", partIds.toArray()));
                 }
                 try (ResultSet rs = statement.executeQuery()) {
-                    return writer.write(out, new OfferCursor(rs));
+                    return writer.write(out, new OfferCursor(rs, photoBase));
                 }
             } catch (XMLStreamException e) {
                 // doReturningWork пропускает только SQLException; заворачиваем,
@@ -257,11 +362,22 @@ public class DromPriceGenerator {
     /** Итератор поверх курсора: строки не накапливаются. */
     private static final class OfferCursor implements Iterator<DromOffer> {
 
+        /**
+         * Больше десяти снимков в объявление всё равно не уедет, а прайс они
+         * растят на ровном месте: у переехавшего клиента их в среднем пять
+         * с половиной на позицию, и при тридцати пяти тысячах позиций каждая
+         * лишняя ссылка — это лишний мегабайт в файле, который площадка
+         * забирает целиком.
+         */
+        private static final int MAX_PHOTOS = 10;
+
         private final ResultSet resultSet;
+        private final String photoBase;
         private Boolean hasNext;
 
-        private OfferCursor(ResultSet resultSet) {
+        private OfferCursor(ResultSet resultSet, String photoBase) {
             this.resultSet = resultSet;
+            this.photoBase = photoBase;
         }
 
         @Override
@@ -283,16 +399,32 @@ public class DromPriceGenerator {
             }
             hasNext = null;
             try {
-                return map(resultSet);
+                return map(resultSet, photoBase);
             } catch (SQLException e) {
                 throw new IllegalStateException("Не удалось прочитать позицию прайса", e);
             }
         }
 
-        private static DromOffer map(ResultSet rs) throws SQLException {
+        /**
+         * Ссылки на снимки — постоянные адреса нашей выдачи, а не подписанные
+         * ссылки в хранилище. Подписанная живёт часы и протухнет между
+         * заборами прайса, а объявление с мёртвой картинкой площадка снимает.
+         */
+        private static List<String> photoLinks(String ids, String base) {
+            if (base == null || ids == null || ids.isBlank()) {
+                return List.of();
+            }
+            return java.util.Arrays.stream(ids.split(","))
+                    .limit(MAX_PHOTOS)
+                    .map(id -> base + id + ".jpg")
+                    .toList();
+        }
+
+        private static DromOffer map(ResultSet rs, String photoBase) throws SQLException {
             return new DromOffer(
                     rs.getString("public_code"),
                     rs.getString("title"),
+                    rs.getString("part_kind"),
                     rs.getString("description"),
                     rs.getBigDecimal("price"),
                     rs.getBigDecimal("qty_available"),
@@ -304,7 +436,20 @@ public class DromPriceGenerator {
                     enumOf(LongitudinalSide.class, rs.getString("side_fr")),
                     enumOf(VerticalSide.class, rs.getString("side_ud")),
                     rs.getString("color"),
-                    rs.getString("marking"));
+                    rs.getString("marking"),
+                    photoLinks(rs.getString("photo_ids"), photoBase),
+                    rs.getString("car_brand"),
+                    rs.getString("car_model"),
+                    rs.getString("body_code"),
+                    rs.getString("engine_code"),
+                    year(rs),
+                    rs.getBoolean("from_donor"));
+        }
+
+        /** Года у контрактной детали нет, а {@code getInt} отдаёт на это ноль. */
+        private static Integer year(ResultSet rs) throws SQLException {
+            int value = rs.getInt("year");
+            return rs.wasNull() ? null : value;
         }
 
         private static List<String> splitAnalogs(String joined) {

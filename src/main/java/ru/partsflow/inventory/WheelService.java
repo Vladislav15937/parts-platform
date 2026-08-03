@@ -33,7 +33,12 @@ public class WheelService {
 
     private final JdbcTemplate jdbc;
 
-    public WheelService(JdbcTemplate jdbc) {
+    private final PartChangeLog partChanges;
+    private final StockLedger ledger;
+
+    public WheelService(JdbcTemplate jdbc, PartChangeLog partChanges, StockLedger ledger) {
+        this.partChanges = partChanges;
+        this.ledger = ledger;
         this.jdbc = jdbc;
     }
 
@@ -90,15 +95,19 @@ public class WheelService {
                     request.markingType(), request.treadType(), request.runFlat(),
                     request.lightTruck(), request.speedIndex(), request.loadIndex());
 
-            // Остаток появляется только движением: писать qty_on_hand напрямую
-            // нельзя, его ведёт триггер.
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                                to_warehouse_id, created_by)
-                    VALUES (?, 'INTAKE', 1, ?, ?)""", partId, warehouseId, createdBy);
+            // Остаток появляется только движением, и записать его мало —
+            // применить движение к раскладке и карточке должен тот же вызов.
+            StockMovement intake = StockMovement.intake(
+                    partId, java.math.BigDecimal.ONE, warehouseId, null);
+            intake.setCreatedBy(createdBy);
+            ledger.record(intake);
 
             ids.add(partId);
         }
+        // Колёса в прайс запчастей не идут — там свой вид товара, — но отметка
+        // ставится всё равно: выгрузка для шин и дисков появится, и лишний
+        // список мест, который надо не забыть дополнить, никому не нужен.
+        partChanges.changed(ids);
         return new Created(setNo, title, ids);
     }
 
@@ -431,7 +440,7 @@ public class WheelService {
             // из нашей же таблицы, а не из запроса. Параметром колонку не задать.
             stock.append("""
                     ,
-                           (SELECT sum(s.qty_available) FROM part_stock s
+                           (SELECT sum(s.qty - s.qty_reserved) FROM part_stock s
                              WHERE s.part_id = p.id AND s.warehouse_id = %1$d) AS free_%1$d,
                            (SELECT sum(s.qty_reserved) FROM part_stock s
                              WHERE s.part_id = p.id AND s.warehouse_id = %1$d) AS res_%1$d"""

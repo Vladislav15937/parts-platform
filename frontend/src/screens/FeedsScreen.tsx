@@ -9,6 +9,7 @@ import type { Brand } from '../catalog/vehicles';
 import {
   CONDITIONS,
   countMatching,
+  createFeed,
   filterSummary,
   listFeeds,
   rotateFeedUrl,
@@ -33,7 +34,11 @@ import {
  * выгрузку до тех пор, пока техспециалист площадки не пропишет новую в кабинете
  * клиента, а это не минуты.
  */
-export function FeedsScreen() {
+/**
+ * @param role кабинет заводит только владелец: ссылка на прайс открывает
+ *             склад целиком, и раздавать это право управляющему рано
+ */
+export function FeedsScreen({ role }: { role: string }) {
   const [feeds, setFeeds] = useState<Feed[] | null>(null);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   // Справочники берутся целиком: видов сто семьдесят восемь, марок триста
@@ -85,9 +90,13 @@ export function FeedsScreen() {
 
       {feeds.length === 0 && (
         <p className="note">
-          Выгрузок пока нет. Кабинет площадки заводит владелец.
+          {role === 'OWNER'
+            ? 'Выгрузок пока нет. Заведите кабинет — и появится постоянная ссылка на прайс.'
+            : 'Выгрузок пока нет. Кабинет площадки заводит владелец.'}
         </p>
       )}
+
+      {role === 'OWNER' && <NewFeed onCreated={load} />}
 
       <ul className="cards">
         {feeds.map((feed) => (
@@ -192,7 +201,12 @@ function FeedCard({
     <li className="card">
       <div className="order-head">
         <strong>{feed.title}</strong>
-        <span>{feed.marketplace === 'AVITO' ? 'Авито' : 'Дром'}</span>
+        <span>
+          {feed.marketplace === 'AVITO' ? 'Авито' : 'Дром'}
+          {/* Вид товара — не украшение: две выгрузки на одну площадку иначе
+              различаются только содержимым файла, а его открывают раз в жизни. */}
+          {feed.productLine === 'WHEEL' ? ' · шины и диски' : ''}
+        </span>
       </div>
       <p className="muted">{filterSummary(feed)}</p>
 
@@ -411,6 +425,88 @@ function Picker({
       )}
     </fieldset>
   );
+}
+
+/**
+ * Заведение кабинета площадки.
+ *
+ * <p>Только Дром: генератор фида Авито написан, но отдавать его наружу
+ * нечем, и предлагать в форме площадку, выгрузка на которую не работает, —
+ * это обещание, которого нет.
+ *
+ * <p>Номер прайс-листа необязателен: постоянная ссылка работает без него,
+ * он нужен дельтам по API — а ключ к ним Дром выдаёт по заявке.
+ */
+function NewFeed({ onCreated }: { onCreated: () => void }) {
+  const [title, setTitle] = useState('');
+  const [packetId, setPacketId] = useState('');
+  const [productLine, setProductLine] = useState<'PART' | 'WHEEL'>('PART');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  return (
+    <div className="card">
+      <h3>Завести выгрузку</h3>
+      <p className="note">
+        Выгрузок на одну площадку бывает несколько: у каждой свой отбор,
+        свой прайс-лист в кабинете и своя цена размещения.
+      </p>
+
+      <label>
+        Название
+        <input
+          value={title}
+          placeholder="например, Дром: основной"
+          onChange={(e) => setTitle(e.target.value)}
+        />
+      </label>
+
+      {/* Площадка требует держать шины отдельным прайс-листом, и требование
+          по делу: у шины свои поля — маркировка, сезон, шиповка, износ, —
+          а объявление «Шина 195/65 R15» среди запчастей уезжает в чужую
+          категорию, откуда его снимают. */}
+      <label>
+        Что выгружаем
+        <select
+          value={productLine}
+          onChange={(e) => setProductLine(e.target.value === 'WHEEL' ? 'WHEEL' : 'PART')}
+        >
+          <option value="PART">Запчасти</option>
+          <option value="WHEEL">Шины и диски</option>
+        </select>
+      </label>
+
+      <label>
+        Номер прайс-листа в кабинете
+        <input
+          value={packetId}
+          placeholder="необязательно"
+          onChange={(e) => setPacketId(e.target.value)}
+        />
+      </label>
+
+      {error !== '' && <p className="note note--error">{error}</p>}
+
+      <button type="button" disabled={busy || title.trim() === ''} onClick={() => void save()}>
+        {busy ? 'Заводим…' : 'Завести кабинет Дрома'}
+      </button>
+    </div>
+  );
+
+  async function save(): Promise<void> {
+    setBusy(true);
+    setError('');
+    try {
+      await createFeed(title.trim(), packetId, productLine);
+      setTitle('');
+      setPacketId('');
+      onCreated();
+    } catch (cause) {
+      setError(describe(cause, 'Кабинет не заведён'));
+    } finally {
+      setBusy(false);
+    }
+  }
 }
 
 function describe(cause: unknown, fallback: string): string {

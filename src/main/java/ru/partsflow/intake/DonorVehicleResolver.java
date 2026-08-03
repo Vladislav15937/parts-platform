@@ -36,8 +36,11 @@ public class DonorVehicleResolver {
         List<PartTitleGenerator.VehicleTitlePart> found = jdbc.query("""
                 SELECT b.name  AS brand,
                        m.name  AS model,
-                       g.code  AS body_code,
-                       mo.engine_code,
+                       -- Введённое руками сильнее справочника: приёмщик писал
+                       -- его, глядя в документы машины, а поколение подобрано
+                       -- по году и у модели вне каталога отсутствует вовсе.
+                       COALESCE(d.body_code, g.code)              AS body_code,
+                       COALESCE(d.engine_code, mo.engine_code)    AS engine_code,
                        d.year
                   FROM donor d
                   LEFT JOIN catalog.brand b        ON b.id = d.brand_id
@@ -52,6 +55,44 @@ public class DonorVehicleResolver {
                         rs.getString("engine_code"),
                         rs.getObject("year") == null ? null : rs.getInt("year")),
                 donorId);
+
+        return found.isEmpty() ? null : found.get(0);
+    }
+
+    /**
+     * Поколение по модели и году.
+     *
+     * <p>Год приёмщик знает из документов, поколение — вопрос, на который он
+     * отвечать не должен. Подбор жил только в PWA
+     * ({@code frontend/src/catalog/vehicles.ts}), то есть машина, заведённая
+     * любым другим путём — запросом, переносом, будущим импортом, — оставалась
+     * без поколения навсегда, а вместе с ним без кузова в заголовке
+     * и в применимости.
+     *
+     * <p><b>Не попавший ни в один диапазон год соседнее поколение
+     * не подставляет.</b> Тихо поставленная чужая применимость отправит деталь
+     * клиенту, которому она не подойдёт, и заметить это можно будет только
+     * от него.
+     *
+     * <p>Несколько подошедших — берём самое позднее, как и PWA: диапазоны
+     * пересекаться не должны, но справочник живой, и полагаться на это нельзя.
+     *
+     * @return идентификатор поколения либо {@code null} — модели нет, года нет
+     *         или год вне всех диапазонов
+     */
+    public Long generationFor(Long modelId, Short year) {
+        if (modelId == null || year == null) {
+            return null;
+        }
+        List<Long> found = jdbc.queryForList("""
+                SELECT g.id
+                  FROM catalog.generation g
+                 WHERE g.model_id = ?
+                   AND g.year_from IS NOT NULL
+                   AND ? BETWEEN g.year_from AND COALESCE(g.year_to, 9999)
+                 ORDER BY g.year_from DESC
+                 LIMIT 1""",
+                Long.class, modelId, year);
 
         return found.isEmpty() ? null : found.get(0);
     }

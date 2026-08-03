@@ -47,6 +47,24 @@ $COMPOSE exec -T postgres psql -U "$DB_USER" -d parts -v ON_ERROR_STOP=1 \
     -c "DROP SCHEMA IF EXISTS $SCHEMA CASCADE" >/dev/null
 $COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d parts --no-owner < "$DUMP"
 
+# Фотографии возвращаются вместе с базой. Схема-на-арендатора и префикс
+# арендатора в ключе S3 выбирались ради одного и того же — вернуть одного
+# клиента, — и восстановленный склад со ссылками в никуда этого не делает:
+# карточки на месте, а смотреть покупателю не на что.
+#
+# Ключи неизменяемы, поэтому копируется только недостающее, и без --remove:
+# снимки, появившиеся после снятия набора, останутся. Их карточек в схеме
+# уже нет, то есть это мусор на диске, — а удаление означало бы потерю
+# того, чего в наборе не было и восстановить нечем.
+PHOTOS="${PHOTO_DIR:-$(dirname "$SET_DIR")/photos}/$SCHEMA"
+if [ -d "$PHOTOS" ]; then
+    $COMPOSE run --rm -v "$(cd "$PHOTOS" && pwd):/restore" mc \
+        mirror --overwrite --quiet /restore "cell/${S3_BUCKET:-parts-photos}/$SCHEMA" > /dev/null
+    printf 'Снимков возвращено: %s\n' "$(find "$PHOTOS" -type f | wc -l | tr -d ' ')"
+else
+    printf '\033[1;33mСнимков в копии нет: %s — карточки будут без фотографий\033[0m\n' "$PHOTOS"
+fi
+
 PARTS=$($COMPOSE exec -T postgres psql -U "$DB_USER" -d parts -tAc \
     "SELECT count(*) FROM $SCHEMA.part")
 printf '\n\033[1;32mВосстановлено: %s, позиций %s\033[0m\n' "$SCHEMA" "$PARTS"

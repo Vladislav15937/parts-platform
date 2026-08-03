@@ -56,6 +56,20 @@ class NotFoundMappingTest extends PostgresTestBase {
                 .andExpect(status().isMethodNotAllowed());
     }
 
+    /**
+     * Тело, которое не разбирается, — 400, а не пятисотка. Поймано живым
+     * прогоном: объект вместо строки в настройках кабинета площадки отвечал
+     * «Внутренняя ошибка», то есть очередь повторяла бы такое вечно.
+     */
+    @Test
+    @DisplayName("Неразбираемое тело — 400, а не пятисотка")
+    void unreadableBodyIsClientError() throws Exception {
+        mvc.perform(post("/api/parts/publication").with(csrf()).with(user("priyomshchik"))
+                        .contentType("application/json")
+                        .content("{\"partIds\": \"не список\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
     @Test
     @DisplayName("Неизвестный путь вне /api — тоже 404")
     void unknownPathIsNotFound() throws Exception {

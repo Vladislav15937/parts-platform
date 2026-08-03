@@ -44,6 +44,8 @@ export function ImportScreen({ reference, canImport }: Props) {
     reference.warehouses[0]?.id ?? null,
   );
   const [report, setReport] = useState<Report | null>(null);
+  // Счётчик переносов: по его смене оживает очередь снимков ниже.
+  const [imported, setImported] = useState(0);
   // Ключ идемпотентности живёт от выбора файла до успеха: повтор после
   // ошибки обязан отдать прежний итог, а не завести второй склад.
   const [requestId, setRequestId] = useState<string>('');
@@ -228,8 +230,13 @@ export function ImportScreen({ reference, canImport }: Props) {
         </>
       )}
 
-      <BazonImport />
-      <AfterImport />
+      {/* Перенос и то, что делается после него, — разные компоненты, но
+          счётчик очереди снимков обязан ожить сразу после переноса: иначе
+          он показывает «ждёт 0» при полной очереди, и владелец решает,
+          что переносить нечего. Ровно так у живого клиента и осталось
+          восемь снимков вместо ста девяноста тысяч. */}
+      <BazonImport onImported={() => setImported((n) => n + 1)} />
+      <AfterImport reload={imported} />
     </section>
   );
 
@@ -295,7 +302,7 @@ export function ImportScreen({ reference, canImport }: Props) {
  * после того, как справочник наименований разобран, иначе часть машин ещё
  * не будет узнана.
  */
-function AfterImport() {
+function AfterImport({ reload }: { reload: number }) {
   const [photos, setPhotos] = useState<PhotoProgress | null>(null);
   const [fits, setFits] = useState<ParsedApplicability | null>(null);
   const [busy, setBusy] = useState<'photos' | 'fits' | null>(null);
@@ -303,7 +310,7 @@ function AfterImport() {
 
   useEffect(() => {
     void photoStatus().then(setPhotos).catch(() => setPhotos(null));
-  }, []);
+  }, [reload]);
 
   return (
     <>
@@ -399,7 +406,7 @@ function AfterImport() {
   }
 }
 
-function BazonImport() {
+function BazonImport({ onImported }: { onImported: () => void }) {
   const [donors, setDonors] = useState<File | null>(null);
   const [catalog, setCatalog] = useState<File | null>(null);
   const [result, setResult] = useState<BazonResult | null>(null);
@@ -490,6 +497,7 @@ function BazonImport() {
     setError(null);
     try {
       setResult(await importBazon(donors, catalog));
+      onImported();
     } catch (cause) {
       setError(describe(cause, 'Перенос не прошёл'));
     } finally {

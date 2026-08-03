@@ -12,6 +12,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.sql.Types;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -83,8 +84,56 @@ public final class BazonImporter {
         Map<String, Long> warehouses = ensureWarehouses(catalogCsv, branchId, report);
 
         importParts(catalogCsv, categoryId, donorSupplies, donors, partNames, warehouses, report);
+        // Пересчёт до резервов: те проверяют свободный остаток, а он берётся
+        // из раскладки, которую как раз этот шаг и заполняет.
+        report.count("карточек с пересчитанным остатком", applyMovements());
         importReservations(report);
         return report;
+    }
+
+    /**
+     * Применяет записанные движения к раскладке и карточкам — пачкой.
+     *
+     * <p>До 3 августа 2026 это делал триггер на каждой вставке. Перенос пишет
+     * тридцать пять тысяч движений, и применять их по одному значило бы
+     * столько же обращений к базе; остаток и статус выводятся из журнала,
+     * поэтому пачкой получается то же самое. Тот же расчёт, что
+     * в {@code StockLedger.recomputeAll} — но своим соединением: перенос идёт
+     * вне JPA.
+     *
+     * <p>Статус выводится из остатка, а не из вида последнего движения:
+     * у переехавшего склада все движения — приход. Позиция, которой в чужой
+     * выгрузке нет ни на одном складе, так и остаётся черновиком — обещать
+     * наличие за неё нельзя.
+     */
+    private int applyMovements() throws SQLException {
+        try (Connection c = dataSource.getConnection(); Statement s = c.createStatement()) {
+            s.execute("SET search_path TO " + schema + ", catalog, public");
+            s.executeUpdate("""
+                    INSERT INTO part_stock (part_id, warehouse_id, qty)
+                    SELECT part_id, warehouse, sum(delta)
+                      FROM (
+                          SELECT part_id, to_warehouse_id AS warehouse, abs(qty_delta) AS delta
+                            FROM stock_movement WHERE to_warehouse_id IS NOT NULL
+                          UNION ALL
+                          SELECT part_id, from_warehouse_id, -abs(qty_delta)
+                            FROM stock_movement WHERE from_warehouse_id IS NOT NULL
+                      ) m
+                     GROUP BY part_id, warehouse
+                    ON CONFLICT (part_id, warehouse_id) DO UPDATE
+                        SET qty = EXCLUDED.qty, updated_at = now()""");
+
+            return s.executeUpdate("""
+                    UPDATE part p
+                       SET qty_on_hand = stock.qty,
+                           updated_at = now(),
+                           status = CASE WHEN stock.qty > 0 THEN 'IN_STOCK' ELSE p.status END
+                      FROM (SELECT part_id, sum(qty) AS qty
+                              FROM part_stock GROUP BY part_id) stock
+                     WHERE p.id = stock.part_id
+                       AND (p.qty_on_hand IS DISTINCT FROM stock.qty
+                            OR (stock.qty > 0 AND p.status <> 'IN_STOCK'))""");
+        }
     }
 
     /**
@@ -239,19 +288,85 @@ public final class BazonImporter {
 
     // ---------- доноры ----------
 
+    /**
+     * Поля машины, которые перенос заполняет из выгрузки.
+     *
+     * <p>Один список на вставку и на дозаполнение — из него собираются оба
+     * запроса. Разойдись они, и колонка, добавленная в перенос, у клиентов,
+     * загруженных раньше, не появилась бы никогда: ровно это и случилось
+     * с кузовом и двигателем.
+     */
+    private static final List<Column> DONOR_FIELDS = List.of(
+            new Column("vin", Types.VARCHAR),
+            new Column("brand_id", Types.BIGINT),
+            new Column("model_id", Types.BIGINT),
+            new Column("year", Types.INTEGER),
+            new Column("color", Types.VARCHAR),
+            new Column("color_code", Types.VARCHAR),
+            new Column("mileage_km", Types.INTEGER),
+            new Column("supply_id", Types.BIGINT),
+            new Column("location", Types.VARCHAR),
+            new Column("steering", Types.VARCHAR),
+            new Column("drive_type", Types.VARCHAR),
+            new Column("transmission_type", Types.VARCHAR),
+            new Column("transmission_model", Types.VARCHAR),
+            new Column("equipment_code", Types.VARCHAR),
+            new Column("body_code", Types.VARCHAR),
+            new Column("engine_code", Types.VARCHAR),
+            new Column("note", Types.VARCHAR));
+
+    /** Колонка переноса: имя и тип, чтобы пустое значение уходило типизированным. */
+    private record Column(String name, int sqlType) {
+    }
+
+    /**
+     * Машины из выгрузки.
+     *
+     * <p><b>Повтор дозаполняет, а не пропускает.</b> Раньше найденная машина
+     * пропускалась целиком, и это работало против нас: колонка, появившаяся
+     * в переносе позже, у клиента, загруженного раньше, не заполнялась
+     * никогда — повторный перенос его же выгрузки ничего не менял. Так у
+     * живого клиента остались пустыми кузов и двигатель всех 440 машин,
+     * притом что в его выгрузке они есть.
+     *
+     * <p><b>Заполняется только пустое.</b> {@code COALESCE} не трогает
+     * ни того, что ввёл человек, ни того, что положил прошлый перенос:
+     * выгрузка бывает старше правки, и затирать ею живые данные нельзя.
+     * Поэтому же дозаполнение — часть обычного переноса, а не миграция:
+     * миграция чинит одного клиента и один раз, а здесь любой, повторив
+     * свою выгрузку, получает то же самое.
+     *
+     * <p>Статус машины не трогается вовсе: он ведётся у нас — купленная
+     * встаёт в разбор, разобранная списывается, — и выгрузка про это
+     * не знает.
+     */
     private Map<String, Long> importDonors(Path donorsCsv, Map<String, Long> supplies,
                                            ImportReport report) throws SQLException {
         Map<String, Long> ids = new HashMap<>();
+        String columns = DONOR_FIELDS.stream()
+                .map(Column::name).collect(java.util.stream.Collectors.joining(", "));
+        String holders = DONOR_FIELDS.stream()
+                .map(f -> "?").collect(java.util.stream.Collectors.joining(", "));
+        String assignments = DONOR_FIELDS.stream()
+                .map(f -> "%s = COALESCE(%s, ?)".formatted(f.name(), f.name()))
+                .collect(java.util.stream.Collectors.joining(", "));
+        String coalesced = DONOR_FIELDS.stream()
+                .map(f -> "COALESCE(%s, ?)".formatted(f.name()))
+                .collect(java.util.stream.Collectors.joining(", "));
 
         try (Connection c = dataSource.getConnection()) {
             c.setAutoCommit(false);
-            try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + schema + """
-                    .donor (vin, brand_id, year, color, mileage_km, note, supply_id, location,
-                            steering, drive_type, transmission_type, transmission_model,
-                            color_code, equipment_code, legacy_code, model_id,
-                            body_code, engine_code, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISMANTLED')
-                    RETURNING id""")) {
+            try (PreparedStatement insert = c.prepareStatement("""
+                    INSERT INTO %s.donor (%s, legacy_code, status)
+                    VALUES (%s, ?, 'DISMANTLED') RETURNING id"""
+                    .formatted(schema, columns, holders));
+                 // Обновление только при настоящем расхождении: без этого
+                 // повтор отчитывался бы «дополнено» по каждой машине,
+                 // ничего не изменив, и число перестало бы что-либо значить.
+                 PreparedStatement fill = c.prepareStatement("""
+                    UPDATE %s.donor SET %s
+                     WHERE legacy_code = ? AND (%s) IS DISTINCT FROM (%s)"""
+                    .formatted(schema, assignments, columns, coalesced))) {
 
                 forEachRow(donorsCsv, report, row -> {
                     var number = BazonValueParser.parseDonorNumber(row.get("Номер донора"));
@@ -264,6 +379,7 @@ public final class BazonImporter {
                         return;
                     }
                     try {
+                        Object[] values = donorValues(c, row, supplies);
                         // Повторный запуск не заводит машину второй раз.
                         // Раньше заводил — и оставлял её пустой: детали
                         // пропускались по своему legacy_code и оставались
@@ -273,49 +389,18 @@ public final class BazonImporter {
                                 + ".donor WHERE legacy_code = ?", number.number());
                         if (existing != null) {
                             ids.put(number.number(), existing);
-                            report.count("машин пропущено (уже есть)");
+                            report.count(fillDonor(fill, values, number.number()) > 0
+                                    ? "машин дополнено" : "машин пропущено (уже есть)");
                             return;
                         }
-                    } catch (SQLException e) {
-                        report.problem(row.lineNumber(),
-                                "не удалось проверить машину: " + e.getMessage());
-                        return;
-                    }
-                    try {
-                        var color = BazonValueParser.parseColor(row.get("Цвет"));
-                        var years = BazonValueParser.parseYearRange(row.get("Год выпуска"));
 
-                        ps.setString(1, row.get("VIN"));
-                        // Марка и модель ищутся в общем каталоге по имени.
-                        // Не нашлись — остаются пустыми: заводить свою марку
-                        // нельзя, через месяц в справочнике будут «Тойота»,
-                        // «тойота» и «Toyota». Раньше здесь стоял ноль —
-                        // ссылка на несуществующую марку, из-за которой
-                        // у переехавшего клиента не работали ни фильтр
-                        // по марке, ни применимость.
-                        Long brandId = brands.find(c, row.get("Марка"));
-                        setLong(ps, 2, brandId);
-                        setInt(ps, 3, years == null ? null : years.from());
-                        ps.setString(4, color == null ? null : color.name());
-                        setInt(ps, 5, BazonValueParser.parseInteger(row.get("Пробег")));
-                        ps.setString(6, buildDonorNote(row));
-                        setLong(ps, 7, supplies.get(row.get("Поставка")));
-                        ps.setString(8, row.get("Статус"));
-                        ps.setString(9, BazonValueParser.parseSteering(row.get("Руль")));
-                        ps.setString(10, BazonValueParser.parseDriveType(row.get("Привод")));
-                        ps.setString(11, BazonValueParser.parseTransmissionType(row.get("Тип КПП")));
-                        ps.setString(12, row.get("Модель КПП"));
-                        ps.setString(13, color == null ? null : color.code());
-                        ps.setString(14, row.get("Комплектация"));
-                        ps.setString(15, number.number());
-                        setLong(ps, 16, brandId == null
-                                ? null : brands.findModel(c, brandId, row.get("Модель")));
-                        // Кузов и двигатель — своими полями: по ним продавец
-                        // отличает подходящую деталь, и на витрине это колонки.
-                        ps.setString(17, row.get("Кузов"));
-                        ps.setString(18, row.get("Двигатель"));
+                        int at = 1;
+                        for (int i = 0; i < DONOR_FIELDS.size(); i++) {
+                            bind(insert, at++, DONOR_FIELDS.get(i), values[i]);
+                        }
+                        insert.setString(at, number.number());
 
-                        ids.put(number.number(), firstLong(ps));
+                        ids.put(number.number(), firstLong(insert));
                         report.count("доноров");
                     } catch (SQLException e) {
                         report.problem(row.lineNumber(), "донор не загружен: " + e.getMessage());
@@ -325,6 +410,65 @@ public final class BazonImporter {
             c.commit();
         }
         return ids;
+    }
+
+    /** @return сколько строк изменилось: единица — машину дополнили */
+    private int fillDonor(PreparedStatement fill, Object[] values, String legacyCode)
+            throws SQLException {
+        int at = 1;
+        for (int i = 0; i < DONOR_FIELDS.size(); i++) {
+            bind(fill, at++, DONOR_FIELDS.get(i), values[i]);
+        }
+        fill.setString(at++, legacyCode);
+        // Те же значения второй раз — для сравнения «изменится ли что-нибудь».
+        for (int i = 0; i < DONOR_FIELDS.size(); i++) {
+            bind(fill, at++, DONOR_FIELDS.get(i), values[i]);
+        }
+        return fill.executeUpdate();
+    }
+
+    /** Значения полей машины в порядке {@link #DONOR_FIELDS}. */
+    private Object[] donorValues(Connection c, BazonCsvReader.Row row,
+                                 Map<String, Long> supplies) throws SQLException {
+        var color = BazonValueParser.parseColor(row.get("Цвет"));
+        var years = BazonValueParser.parseYearRange(row.get("Год выпуска"));
+        // Марка и модель ищутся в общем каталоге по имени. Не нашлись —
+        // остаются пустыми: заводить свою марку нельзя, через месяц
+        // в справочнике будут «Тойота», «тойота» и «Toyota». Раньше здесь
+        // стоял ноль — ссылка на несуществующую марку, из-за которой
+        // у переехавшего клиента не работали ни фильтр по марке,
+        // ни применимость.
+        Long brandId = brands.find(c, row.get("Марка"));
+
+        return new Object[] {
+                row.get("VIN"),
+                brandId,
+                brandId == null ? null : brands.findModel(c, brandId, row.get("Модель")),
+                years == null ? null : years.from(),
+                color == null ? null : color.name(),
+                color == null ? null : color.code(),
+                BazonValueParser.parseInteger(row.get("Пробег")),
+                supplies.get(row.get("Поставка")),
+                row.get("Статус"),
+                BazonValueParser.parseSteering(row.get("Руль")),
+                BazonValueParser.parseDriveType(row.get("Привод")),
+                BazonValueParser.parseTransmissionType(row.get("Тип КПП")),
+                row.get("Модель КПП"),
+                row.get("Комплектация"),
+                // Кузов и двигатель — своими полями: по ним продавец отличает
+                // подходящую деталь, и на витрине это колонки.
+                row.get("Кузов"),
+                row.get("Двигатель"),
+                buildDonorNote(row)};
+    }
+
+    private static void bind(PreparedStatement ps, int index, Column column, Object value)
+            throws SQLException {
+        if (value == null) {
+            ps.setNull(index, column.sqlType());
+        } else {
+            ps.setObject(index, value);
+        }
     }
 
     /**
@@ -367,18 +511,32 @@ public final class BazonImporter {
                     + ".deal_item (deal_id, part_id, quantity, price, warehouse_id, status)"
                     + " VALUES (?, ?, ?, COALESCE((SELECT price FROM " + schema
                     + ".part WHERE id = ?), 0), ?, 'RESERVED')");
-                 PreparedStatement reserve = c.prepareStatement(
-                         "SELECT " + schema + ".reserve_stock(?, ?, ?)")) {
+                 // Тот же единственный запрос, что делает
+                 // StockReservationRepository. Копия, а не вызов репозитория:
+                 // перенос идёт своим соединением и своей транзакцией, вне
+                 // JPA. Разойдясь с оригиналом, копия перестанет проверять
+                 // свободный остаток — поэтому условие здесь дословное.
+                 PreparedStatement reserve = c.prepareStatement("UPDATE " + schema + """
+                         .part_stock
+                            SET qty_reserved = qty_reserved + ?, updated_at = now()
+                          WHERE part_id = ? AND warehouse_id = ?
+                            AND qty - qty_reserved >= ?""")) {
 
                 for (Reservation r : legacyReservations) {
                     java.sql.Savepoint savepoint = c.setSavepoint();
                     try {
-                        // Через ту же функцию, что и продажа: она проверяет
-                        // свободный остаток и меняет его одной инструкцией.
-                        reserve.setLong(1, r.partId());
-                        reserve.setLong(2, r.warehouseId());
-                        reserve.setBigDecimal(3, r.qty());
-                        reserve.execute();
+                        // Проверка и изменение — одна инструкция, как
+                        // и при продаже: ноль изменённых строк означает, что
+                        // свободного остатка не хватило.
+                        reserve.setBigDecimal(1, r.qty());
+                        reserve.setLong(2, r.partId());
+                        reserve.setLong(3, r.warehouseId());
+                        reserve.setBigDecimal(4, r.qty());
+                        if (reserve.executeUpdate() == 0) {
+                            throw new SQLException(
+                                    "недостаточно свободного остатка на складе "
+                                            + r.warehouseId());
+                        }
 
                         item.setLong(1, dealId);
                         item.setLong(2, r.partId());
@@ -556,22 +714,28 @@ public final class BazonImporter {
             // которой в выгрузке нет ни на одном складе, движения не будет
             // вовсе — и «в наличии» осталось бы у карточки, за которой ничего
             // не лежит. У переехавшего клиента таких оказалось десять.
-            try (PreparedStatement insertPart = c.prepareStatement("INSERT INTO " + schema + """
-                     .part (category_id, part_name_id, donor_id, supply_id, title, description,
-                            note, side_lr, side_fr, condition, quality_grade, marking, manufacturer,
-                            color, section, installation_price, price, legacy_code, is_published,
-                            status)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'USED', ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                             'DRAFT')
+            try (PreparedStatement insertPart = c.prepareStatement("""
+                     INSERT INTO %s.part (%s, category_id, title, legacy_code, is_published,
+                                          condition, status)
+                     VALUES (%s, ?, ?, ?, ?, 'USED', 'DRAFT')
                      ON CONFLICT (legacy_code) WHERE legacy_code IS NOT NULL DO NOTHING
-                     RETURNING id""");
+                     RETURNING id"""
+                     .formatted(schema, partColumns(), partHolders()));
+                 // Дозаполнение уже загруженной позиции — то же, что у машин:
+                 // колонка, появившаяся в переносе позже, иначе не доедет
+                 // до клиента, загруженного раньше, никогда.
+                 PreparedStatement fillPart = c.prepareStatement("""
+                     UPDATE %s.part SET %s
+                      WHERE legacy_code = ? AND (%s) IS DISTINCT FROM (%s)"""
+                     .formatted(schema, partAssignments(), partColumns(), partCoalesced()));
                  PreparedStatement insertMovement = c.prepareStatement("INSERT INTO " + schema + """
                      .stock_movement (part_id, movement_type, qty_delta, to_warehouse_id, reason)
                      VALUES (?, 'INTAKE', ?, ?, 'Перенос из предыдущей системы')""");
                  PreparedStatement setReserved = c.prepareStatement("UPDATE " + schema + """
                      .part_stock SET qty_reserved = ? WHERE part_id = ? AND warehouse_id = ?""");
                  PreparedStatement insertOem = c.prepareStatement("INSERT INTO " + schema + """
-                     .part_oem (part_id, raw_number, is_primary) VALUES (?, ?, ?)
+                     .part_oem (part_id, raw_number, normalized, is_primary)
+                     VALUES (?, ?, ?, ?)
                      ON CONFLICT DO NOTHING""");
                  PreparedStatement insertPhoto = c.prepareStatement("INSERT INTO " + schema + """
                      .part_photo_import (part_id, url, sort_order) VALUES (?, ?, ?)
@@ -588,12 +752,24 @@ public final class BazonImporter {
                     try {
                         savepoint = c.setSavepoint();
 
-                        Long partId = insertPart(insertPart, row, categoryId,
-                                donorSupplies, donors, partNames);
+                        Object[] values = partValues(row, donorSupplies, donors, partNames);
+                        Long partId = insertPart(insertPart, values, row, categoryId);
                         if (partId == null) {
-                            // Уже импортирован: повторный запуск не создаёт дублей.
+                            // Уже загружена. Не пропускаем целиком, как раньше:
+                            // дозаполняем пустое, дописываем номера и ставим
+                            // в очередь недостающие снимки. Движения при этом
+                            // не повторяются — они бы удвоили остаток.
+                            Long existing = selectId(c, "SELECT id FROM " + schema
+                                    + ".part WHERE legacy_code = ?", row.get("Номер товара"));
+                            boolean filled = false;
+                            if (existing != null) {
+                                filled = fillPart(fillPart, values, row.get("Номер товара")) > 0;
+                                insertNumbers(insertOem, row, existing);
+                                filled |= queuePhotos(insertPhoto, row, existing, report) > 0;
+                            }
                             c.releaseSavepoint(savepoint);
-                            report.count("товаров пропущено (уже есть)");
+                            report.count(filled
+                                    ? "товаров дополнено" : "товаров пропущено (уже есть)");
                             return;
                         }
 
@@ -630,8 +806,18 @@ public final class BazonImporter {
      * и «Выгружать»: невключённая колонка означает склад без единого снимка,
      * а на разборке продаёт фотография.
      */
-    private void queuePhotos(PreparedStatement ps, BazonCsvReader.Row row, long partId,
-                             ImportReport report) throws SQLException {
+    /**
+     * Ставит снимки в очередь на перенос.
+     *
+     * <p>Считается поставленное, а не перечисленное в строке: у повторного
+     * переноса большинство ссылок уже в очереди, и отчёт «поставлено сто
+     * тысяч» на втором прогоне был бы неправдой. Уникальность пары
+     * «позиция + ссылка» стережёт индекс, поэтому повтор безопасен.
+     *
+     * @return сколько ссылок добавилось
+     */
+    private int queuePhotos(PreparedStatement ps, BazonCsvReader.Row row, long partId,
+                            ImportReport report) throws SQLException {
 
         List<String> urls = BazonValueParser.parsePhotoUrls(row.get("Превью"));
         int order = 0;
@@ -641,44 +827,115 @@ public final class BazonImporter {
             ps.setInt(3, order++);
             ps.addBatch();
         }
-        if (order > 0) {
-            ps.executeBatch();
-            report.count("фотографий в очереди", order);
+        if (order == 0) {
+            return 0;
         }
+        int queued = 0;
+        for (int affected : ps.executeBatch()) {
+            if (affected > 0) {
+                queued++;
+            }
+        }
+        if (queued > 0) {
+            report.count("фотографий в очереди", queued);
+        }
+        return queued;
     }
 
-    private Long insertPart(PreparedStatement ps, BazonCsvReader.Row row, long categoryId,
-                            Map<String, Long> donorSupplies, Map<String, Long> donors,
-                            Map<String, Long> partNames) throws SQLException {
+    /**
+     * Поля позиции, которые перенос заполняет из выгрузки.
+     *
+     * <p>Список тот же, что у машин, и по той же причине: из него собираются
+     * и вставка, и дозаполнение. Чего здесь нет — тоже решение. Заголовок
+     * и категорию ведёт справочник наименований: перенос собрал их однажды,
+     * а дальше их правит сопоставление, и выгрузка не должна возвращать
+     * старое. «Выгружать» не трогается вовсе: владелец мог снять позицию
+     * с площадки, и повтор переноса не имеет права её вернуть. Остаток
+     * и статус ведут триггеры склада.
+     */
+    private static final List<Column> PART_FIELDS = List.of(
+            new Column("part_name_id", Types.BIGINT),
+            new Column("donor_id", Types.BIGINT),
+            new Column("supply_id", Types.BIGINT),
+            new Column("description", Types.VARCHAR),
+            new Column("note", Types.VARCHAR),
+            new Column("side_lr", Types.VARCHAR),
+            new Column("side_fr", Types.VARCHAR),
+            new Column("quality_grade", Types.VARCHAR),
+            new Column("marking", Types.VARCHAR),
+            new Column("manufacturer", Types.VARCHAR),
+            new Column("color", Types.VARCHAR),
+            new Column("section", Types.VARCHAR),
+            new Column("installation_price", Types.NUMERIC),
+            new Column("price", Types.NUMERIC));
+
+    private static String partColumns() {
+        return PART_FIELDS.stream().map(Column::name)
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
+    private static String partHolders() {
+        return PART_FIELDS.stream().map(f -> "?")
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
+    private static String partAssignments() {
+        return PART_FIELDS.stream().map(f -> "%s = COALESCE(%s, ?)".formatted(f.name(), f.name()))
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
+    private static String partCoalesced() {
+        return PART_FIELDS.stream().map(f -> "COALESCE(%s, ?)".formatted(f.name()))
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
+    /** Значения полей позиции в порядке {@link #PART_FIELDS}. */
+    private Object[] partValues(BazonCsvReader.Row row, Map<String, Long> donorSupplies,
+                                Map<String, Long> donors, Map<String, Long> partNames) {
 
         String partName = row.get("Запчасть");
         var donorNumber = BazonValueParser.parseDonorNumber(row.get("Номер донора"));
-        var years = BazonValueParser.parseYearRange(row.get("Год выпуска"));
         String donorKey = donorNumber == null ? null : donorNumber.number();
 
-        ps.setLong(1, categoryId);
-        setLong(ps, 2, partName == null ? null : partNames.get(partName.toLowerCase().strip()));
-        setLong(ps, 3, donorKey == null ? null : donors.get(donorKey));
-        setLong(ps, 4, donorKey == null ? null : donorSupplies.get(donorKey));
-        ps.setString(5, buildTitle(row, partName, years));
-        ps.setString(6, row.get("Комментарий"));
-        ps.setString(7, row.get("Заметка"));
-        setEnum(ps, 8, BazonValueParser.parseLateralSide(row.get("Левый / Правый")));
-        setEnum(ps, 9, BazonValueParser.parseLongitudinalSide(row.get("Передний / Задний")));
-        setEnum(ps, 10, BazonValueParser.parseQualityGrade(row.get("Оценка состояния")));
-        ps.setString(11, row.get("Маркировка"));
-        ps.setString(12, row.get("Производитель"));
-        ps.setString(13, row.get("Цвет"));
-        ps.setString(14, row.get("Секция"));
-        // Ноль в колонке «Установка» — это незаполненное поле прежней системы,
-        // а не бесплатная установка: в её карточке пустое и нулевое выглядят
-        // одинаково, а у нас «Цена установки 0 ₽» — утверждение, которого
-        // никто не делал. У переехавшего клиента таких строк 367 из 381.
-        setAmount(ps, 15, zeroToNull(BazonValueParser.parseAmount(row.get("Установка"))));
-        setAmount(ps, 16, BazonValueParser.parseAmount(row.get("Цена")));
+        return new Object[] {
+                partName == null ? null : partNames.get(partName.toLowerCase().strip()),
+                donorKey == null ? null : donors.get(donorKey),
+                donorKey == null ? null : donorSupplies.get(donorKey),
+                row.get("Комментарий"),
+                row.get("Заметка"),
+                name(BazonValueParser.parseLateralSide(row.get("Левый / Правый"))),
+                name(BazonValueParser.parseLongitudinalSide(row.get("Передний / Задний"))),
+                name(BazonValueParser.parseQualityGrade(row.get("Оценка состояния"))),
+                row.get("Маркировка"),
+                row.get("Производитель"),
+                row.get("Цвет"),
+                row.get("Секция"),
+                // Ноль в колонке «Установка» — это незаполненное поле прежней
+                // системы, а не бесплатная установка: в её карточке пустое
+                // и нулевое выглядят одинаково, а у нас «Цена установки 0 ₽» —
+                // утверждение, которого никто не делал. У переехавшего клиента
+                // таких строк 367 из 381.
+                zeroToNull(BazonValueParser.parseAmount(row.get("Установка"))),
+                BazonValueParser.parseAmount(row.get("Цена"))};
+    }
+
+    private static String name(Enum<?> value) {
+        return value == null ? null : value.name();
+    }
+
+    private Long insertPart(PreparedStatement ps, Object[] values, BazonCsvReader.Row row,
+                            long categoryId) throws SQLException {
+
+        var years = BazonValueParser.parseYearRange(row.get("Год выпуска"));
+        int at = 1;
+        for (int i = 0; i < PART_FIELDS.size(); i++) {
+            bind(ps, at++, PART_FIELDS.get(i), values[i]);
+        }
+        ps.setLong(at++, categoryId);
+        ps.setString(at++, buildTitle(row, row.get("Запчасть"), years));
         // Номер в прежней системе — естественный ключ импорта: по нему повторный
         // запуск узнаёт уже загруженное.
-        ps.setString(17, row.get("Номер товара"));
+        ps.setString(at++, row.get("Номер товара"));
 
         // Разрешение публиковать переносится как есть: клиент выгружал эти
         // позиции на площадки и после переноса должен продолжить. Когда колонки
@@ -686,11 +943,28 @@ public final class BazonImporter {
         // на площадку по своей инициативе нельзя. О пропаже предупреждает
         // warnIfPublishFlagMissing.
         Boolean publish = BazonValueParser.parsePublishFlag(row.get("Выгружать"));
-        ps.setBoolean(18, Boolean.TRUE.equals(publish));
+        ps.setBoolean(at, Boolean.TRUE.equals(publish));
 
         try (ResultSet rs = ps.executeQuery()) {
             return rs.next() ? rs.getLong(1) : null;
         }
+    }
+
+    /** @return сколько строк изменилось: единица — позицию дополнили */
+    private int fillPart(PreparedStatement fill, Object[] values, String legacyCode)
+            throws SQLException {
+        if (legacyCode == null) {
+            return 0;
+        }
+        int at = 1;
+        for (int i = 0; i < PART_FIELDS.size(); i++) {
+            bind(fill, at++, PART_FIELDS.get(i), values[i]);
+        }
+        fill.setString(at++, legacyCode);
+        for (int i = 0; i < PART_FIELDS.size(); i++) {
+            bind(fill, at++, PART_FIELDS.get(i), values[i]);
+        }
+        return fill.executeUpdate();
     }
 
     private String buildTitle(BazonCsvReader.Row row, String partName,
@@ -754,13 +1028,18 @@ public final class BazonImporter {
         if (primary != null) {
             ps.setLong(1, partId);
             ps.setString(2, primary);
-            ps.setBoolean(3, true);
+            // Приведённый номер считает приложение — тем же методом, что
+            // и при приёмке. До 4 августа 2026 его считала генерируемая
+            // колонка.
+            ps.setString(3, ru.partsflow.catalog.OemNumbers.normalize(primary));
+            ps.setBoolean(4, true);
             ps.executeUpdate();
         }
         for (String cross : BazonValueParser.parseList(row.get("Кросс-номера"))) {
             ps.setLong(1, partId);
             ps.setString(2, cross);
-            ps.setBoolean(3, false);
+            ps.setString(3, ru.partsflow.catalog.OemNumbers.normalize(cross));
+            ps.setBoolean(4, false);
             ps.executeUpdate();
         }
     }

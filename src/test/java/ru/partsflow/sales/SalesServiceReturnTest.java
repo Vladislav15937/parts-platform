@@ -9,6 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.math.BigDecimal;
@@ -33,6 +34,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class SalesServiceReturnTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000044";
+
+    @Autowired
+    private ru.partsflow.inventory.StockLedger ledger;
 
     @Autowired
     private SalesService salesService;
@@ -264,9 +268,7 @@ class SalesServiceReturnTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price, cost_price, status)
                     VALUES (1, ?, ?, ?, 'IN_STOCK') RETURNING id""",
                     Long.class, title, price, price.multiply(new BigDecimal("0.4")));
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                    VALUES (?, 'INTAKE', ?, ?)""", partId, quantity, issueWarehouseId);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.valueOf(quantity), issueWarehouseId, null));
             return partId;
         });
     }
@@ -286,9 +288,23 @@ class SalesServiceReturnTest extends PostgresTestBase {
                 Integer.class, partId, warehouseId));
     }
 
+    /**
+     * Остаток лицевого счёта — по журналу, а не из колонки.
+     *
+     * <p>Колонки {@code customer.balance} больше нет: её вёл триггер, и вёл
+     * неверно — знак операции живёт в Java, а он складывал суммы как есть,
+     * отчего выдача со счёта его увеличивала. Замерено на живой схеме перед
+     * удалением: пополнение 1000 и выдача 400 давали 1400 при верных 600.
+     */
     private BigDecimal balance() {
-        return inTenant(() -> jdbc.queryForObject(
-                "SELECT balance FROM customer WHERE id = ?", BigDecimal.class, customerId));
+        return inTenant(() -> jdbc.queryForObject("""
+                SELECT COALESCE(sum(CASE entry_type
+                                        WHEN 'TOP_UP'      THEN amount
+                                        WHEN 'DEAL_REFUND' THEN amount
+                                        WHEN 'CORRECTION'  THEN amount
+                                        ELSE -amount END), 0)
+                  FROM customer_account_entry WHERE customer_id = ?""",
+                BigDecimal.class, customerId));
     }
 
     private String dealStatus(Long dealId) {

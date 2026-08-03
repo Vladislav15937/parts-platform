@@ -61,7 +61,10 @@ public class CatalogService {
 
     private final JdbcTemplate jdbc;
 
-    public CatalogService(JdbcTemplate jdbc) {
+    private final PartChangeLog partChanges;
+
+    public CatalogService(JdbcTemplate jdbc, PartChangeLog partChanges) {
+        this.partChanges = partChanges;
         this.jdbc = jdbc;
     }
 
@@ -147,7 +150,7 @@ public class CatalogService {
 
                      AND (p.qty_on_hand = 0
                           OR EXISTS (SELECT 1 FROM part_stock s
-                                      WHERE s.part_id = p.id AND s.qty_available > 0))""");
+                                      WHERE s.part_id = p.id AND s.qty - s.qty_reserved > 0))""");
         }
         if (warehouseIds != null && !warehouseIds.isEmpty()) {
             where.append("""
@@ -398,17 +401,23 @@ public class CatalogService {
     /** Добавляет применимость руками — из карточки. Отметка подтверждения стоит. */
     @Transactional
     public boolean addApplicability(long partId, long brandId, Long modelId) {
-        return jdbc.update("""
+        boolean added = jdbc.update("""
                 INSERT INTO part_applicability (part_id, brand_id, model_id, is_verified)
                 VALUES (?, ?, ?, true)
                 ON CONFLICT (part_id, brand_id, model_id, generation_id, modification_id)
                 DO UPDATE SET is_verified = true""", partId, brandId, modelId) > 0;
+        // Марка и модель уезжают в прайс отдельными тегами: у контрактной
+        // детали они берутся именно отсюда. Прежний триггер этого не ловил
+        // вовсе — на part_applicability его не было.
+        partChanges.changed(partId);
+        return added;
     }
 
     @Transactional
     public void removeApplicability(long partId, long applicabilityId) {
         jdbc.update("DELETE FROM part_applicability WHERE id = ? AND part_id = ?",
                 applicabilityId, partId);
+        partChanges.changed(partId);
     }
 
     /**
@@ -649,7 +658,7 @@ public class CatalogService {
         for (Warehouse warehouse : warehouses) {
             stock.append("""
                     ,
-                           (SELECT sum(s.qty_available) FROM part_stock s
+                           (SELECT sum(s.qty - s.qty_reserved) FROM part_stock s
                              WHERE s.part_id = p.id AND s.warehouse_id = %1$d) AS free_%1$d,
                            (SELECT sum(s.qty_reserved) FROM part_stock s
                              WHERE s.part_id = p.id AND s.warehouse_id = %1$d) AS res_%1$d"""

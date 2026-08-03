@@ -100,6 +100,26 @@ public class Donor {
     @Column(name = "equipment_code")
     private String equipmentCode;
 
+    /**
+     * Кузов и двигатель как написано в документах машины: «ACV40», «2AZ-FE».
+     *
+     * <p>Свободный текст, а не ссылка в каталог, и это не небрежность.
+     * Кузов у нас есть и в справочнике — `catalog.generation.code`, — но
+     * поколение приёмщик выбирает не всегда: у модели, которой в каталоге
+     * нет, ссылаться не на что, а кузов в ПТС написан. По той же причине
+     * двигатель отдельно от `modification`.
+     *
+     * <p>Колонки завёл перенос, а сущность их не знала: заполнить их мог
+     * только импорт, то есть у клиента, который заводит машины руками, они
+     * были пусты всегда — при том что по кузову и двигателю деталь и
+     * подбирают, и в прайс Дрома они уходят отдельными тегами.
+     */
+    @Column(name = "body_code")
+    private String bodyCode;
+
+    @Column(name = "engine_code")
+    private String engineCode;
+
     @Column(name = "purchase_date")
     private LocalDate purchaseDate;
 
@@ -312,6 +332,22 @@ public class Donor {
         this.equipmentCode = equipmentCode;
     }
 
+    public String getBodyCode() {
+        return bodyCode;
+    }
+
+    public void setBodyCode(String bodyCode) {
+        this.bodyCode = bodyCode;
+    }
+
+    public String getEngineCode() {
+        return engineCode;
+    }
+
+    public void setEngineCode(String engineCode) {
+        this.engineCode = engineCode;
+    }
+
     public LocalDate getPurchaseDate() {
         return purchaseDate;
     }
@@ -382,4 +418,24 @@ public class Donor {
         AMT,
         DCT
     }
+
+    /**
+     * Момент последней правки. До 4 августа 2026 его ставил триггер
+     * {@code touch_updated_at}; теперь — приложение, как и всё остальное.
+     *
+     * <p>{@code @PreUpdate}, а не присваивание в каждом сеттере: полей
+     * у сущности десятки, и забыть один из них — вопрос времени.
+     */
+    @Column(name = "updated_at", insertable = false)
+    private java.time.Instant updatedAt;
+
+    @jakarta.persistence.PreUpdate
+    void touchUpdatedAt() {
+        this.updatedAt = java.time.Instant.now();
+    }
+
+    public java.time.Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
 }

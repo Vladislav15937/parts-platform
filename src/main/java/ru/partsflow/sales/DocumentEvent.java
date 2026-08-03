@@ -17,6 +17,7 @@ import java.time.Instant;
  * «создана и зарезервирована», «перенесено в новую сделку 67971». Собрать
  * второе из первого нельзя — в аудите нет ни намерения, ни формулировки.
  */
+@org.hibernate.annotations.Immutable
 @Entity
 @Table(name = "document_event")
 public class DocumentEvent {

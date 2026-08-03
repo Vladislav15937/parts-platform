@@ -109,6 +109,9 @@ public class IntakeService {
             requireSupply(supplyId);
             donor.arrivedWith(supplyId);
         }
+        if (donor.getGenerationId() == null) {
+            donor.setGenerationId(vehicles.generationFor(donor.getModelId(), donor.getYear()));
+        }
         donor.setCreatedBy(authorId);
         return donors.saveAndFlush(donor);
     }
@@ -242,8 +245,11 @@ public class IntakeService {
      */
     private void primaryOem(Long partId, String rawNumber) {
         jdbc.update("""
-                INSERT INTO part_oem (part_id, raw_number, is_primary) VALUES (?, ?, true)
-                ON CONFLICT DO NOTHING""", partId, rawNumber.strip());
+                INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
+                VALUES (?, ?, ?, true)
+                ON CONFLICT DO NOTHING""",
+                partId, rawNumber.strip(),
+                ru.partsflow.catalog.OemNumbers.normalize(rawNumber));
     }
 
     private void publishCreated(Part part) {

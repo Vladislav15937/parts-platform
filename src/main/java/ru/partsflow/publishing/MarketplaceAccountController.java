@@ -53,7 +53,8 @@ public class MarketplaceAccountController {
             @Valid @RequestBody CreateRequest request) {
 
         MarketplaceAccountService.Account created = accounts.create(
-                request.marketplace(), request.title(), request.settings());
+                request.marketplace(), request.title(), request.settings(),
+                request.productLine());
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
@@ -132,9 +133,11 @@ public class MarketplaceAccountController {
      *                 {@code {"packetId":"…"}} — номер прайс-листа из адреса
      *                 в кабинете клиента
      */
+    /** @param productLine «PART» или «WHEEL»; пусто — запчасти */
     public record CreateRequest(@NotBlank String marketplace,
                                 @NotBlank String title,
-                                String settings) {
+                                String settings,
+                                String productLine) {
     }
 
     public record CredentialsRequest(@NotBlank String secret) {

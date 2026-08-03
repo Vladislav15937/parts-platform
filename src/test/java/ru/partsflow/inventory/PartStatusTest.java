@@ -119,11 +119,7 @@ class PartStatusTest extends PostgresTestBase {
         intake(partId, warehouseId, 1);
 
         try (Connection c = connect(); Statement s = c.createStatement()) {
-            s.execute("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                                from_warehouse_id, to_warehouse_id)
-                    VALUES (%d, 'MOVE', 1, %d, %d)"""
-                    .formatted(partId, warehouseId, otherWarehouseId));
+            recordMovement(s, partId, "MOVE", "1", warehouseId, otherWarehouseId, null);
         }
 
         assertThat(status(partId)).isEqualTo("IN_STOCK");
@@ -135,9 +131,7 @@ class PartStatusTest extends PostgresTestBase {
         long partId = part("Капот Camry V40");
         intake(partId, warehouseId, 1);
 
-        try (Connection c = connect(); Statement s = c.createStatement()) {
-            s.execute("SELECT reserve_stock(%d, %d, 1)".formatted(partId, warehouseId));
-        }
+        reserve(partId, warehouseId);
 
         // Зарезервированная деталь физически на складе, и статус карточки
         // про наличие, а не про обещания: резерв виден в part_stock.
@@ -168,9 +162,7 @@ class PartStatusTest extends PostgresTestBase {
             applicableToBrand(partId, 1);
         }
         sale(sold, warehouseId, 1);
-        try (Connection c = connect(); Statement s = c.createStatement()) {
-            s.execute("SELECT reserve_stock(%d, %d, 1)".formatted(reserved, warehouseId));
-        }
+        reserve(reserved, warehouseId);
 
         assertThat(applicableParts(1))
                 .as("экран продавца показывает не только свободное")
@@ -201,7 +193,7 @@ class PartStatusTest extends PostgresTestBase {
              ResultSet rs = s.executeQuery("""
                      SELECT DISTINCT p.id FROM part p
                      JOIN part_applicability a ON a.part_id = p.id
-                     JOIN part_stock ps ON ps.part_id = p.id AND ps.qty_available > 0
+                     JOIN part_stock ps ON ps.part_id = p.id AND ps.qty - ps.qty_reserved > 0
                      WHERE a.brand_id = %d
                      ORDER BY p.id""".formatted(brandId))) {
             java.util.List<Long> found = new java.util.ArrayList<>();
@@ -214,6 +206,23 @@ class PartStatusTest extends PostgresTestBase {
 
     private void intake(long partId, long warehouse, int qty) throws SQLException {
         movement(partId, "INTAKE", qty, null, warehouse);
+    }
+
+    /**
+     * Тот же единственный запрос, что делает {@code StockReservationRepository}:
+     * этот тест ходит своими соединениями, а репозиторий работает в транзакции
+     * Spring.
+     */
+    private void reserve(long partId, long warehouse) throws SQLException {
+        try (Connection c = connect(); Statement s = c.createStatement()) {
+            int updated = s.executeUpdate("""
+                    UPDATE part_stock SET qty_reserved = qty_reserved + 1, updated_at = now()
+                     WHERE part_id = %d AND warehouse_id = %d AND qty - qty_reserved >= 1"""
+                    .formatted(partId, warehouse));
+            if (updated == 0) {
+                throw new SQLException("Недостаточно свободного остатка: деталь " + partId);
+            }
+        }
     }
 
     private void sale(long partId, long warehouse, int qty) throws SQLException {
@@ -231,12 +240,7 @@ class PartStatusTest extends PostgresTestBase {
     private void movement(long partId, String type, int delta, Long from, Long to)
             throws SQLException {
         try (Connection c = connect(); Statement s = c.createStatement()) {
-            s.execute("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                                from_warehouse_id, to_warehouse_id)
-                    VALUES (%d, '%s', %d, %s, %s)"""
-                    .formatted(partId, type, delta,
-                            from == null ? "NULL" : from, to == null ? "NULL" : to));
+            recordMovement(s, partId, type, String.valueOf(delta), from, to, null);
         }
     }
 

@@ -1,6 +1,7 @@
 package ru.partsflow.publishing.drom;
 
 import ru.partsflow.inventory.LateralSide;
+import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.LongitudinalSide;
 import ru.partsflow.inventory.VerticalSide;
 
@@ -27,13 +28,15 @@ import java.util.List;
  * съест гигабайты и уронит приложение у самого ценного клиента. Вход —
  * {@link Iterator}, чтобы и набор позиций не материализовался.
  *
- * <p><b>Применимость намеренно не пишется.</b> Дром выводит её сам из
- * {@code manufacturer} и {@code oem_number}, а для неоригинала ищет кросс
- * (§4 документа). Своя применимость у нас сейчас всё равно пуста: каталог
- * марок и моделей не наполнен, а импорт из Bazon кладёт кузов и двигатель
- * только в наименование. Когда каталог появится, поля {@code brandcars},
- * {@code modelcars}, {@code bodycars}, {@code engine} и {@code year}
- * добавляются здесь же.
+ * <p><b>Применимость пишется отдельными тегами.</b> Эталон Дрома для раздела
+ * «Автозапчасти» начинается ровно с этого: «укажите применимость», «размещайте
+ * информацию о каждом параметре в отдельные теги — марка, модель, кузов,
+ * двигатель». Выводить её самому из {@code oem_number} площадка умеет, но
+ * только для оригинала и только если номер она знает; у б/у детали с разборки
+ * половина номеров ей не известна, и без марки такая позиция не находится
+ * фильтром покупателя. Данные лежат у нас с самого начала: марка и модель —
+ * в машине-доноре, у контрактной — в {@code part_applicability}, которую
+ * разбор наименований наполнил.
  */
 @org.springframework.stereotype.Component
 public class DromPriceWriter {
@@ -72,9 +75,19 @@ public class DromPriceWriter {
         // узнаёт позицию при обновлении. Меняется — и вместо обновления
         // получится новое объявление вместо старого.
         element(w, "ordercode", offer.orderCode());
-        element(w, "name", offer.name());
-        element(w, "description", offer.description());
+        element(w, "name", plainName(offer.name()));
+        // Вид детали отдельным полем: по нему площадка кладёт товар в раздел,
+        // и заголовка ей для этого мало — она его разбирает, а не читает.
+        element(w, "partname", offer.partKind());
+        element(w, "description", descriptionOf(offer));
         element(w, "price", offer.price() == null ? null : offer.price().toPlainString());
+
+        // Остаток числом, а не только флагом наличия. Их документация по API
+        // говорит про удаление буквально: «если товар нужно удалить,
+        // в колонке отправить значение "0"», и колонка эта — количество.
+        // Флаг available остаётся: он есть в их же эталоне для автозапчастей.
+        element(w, "quantity", offer.availableQty() == null
+                ? "0" : offer.availableQty().stripTrailingZeros().toPlainString());
 
         // available считается по свободному остатку, а не по общему. Деталь,
         // отложенную под клиента, площадка показывать не должна: иначе
@@ -98,10 +111,112 @@ public class DromPriceWriter {
         element(w, "fr", longitudinal(offer.longitudinalSide()));
         element(w, "ud", vertical(offer.verticalSide()));
 
+        // Применимость. Порядок тегов — как в эталоне площадки: сначала
+        // машина, потом её кузов и двигатель. Кузов и двигатель есть только
+        // у детали с донора: у контрактной машина не одна, и приписать ей
+        // чужой кузов значит соврать покупателю, который по нему и подбирает.
+        element(w, "brandcars", offer.carBrand());
+        element(w, "modelcars", offer.carModel());
+        element(w, "bodycars", offer.bodyCode());
+        element(w, "engine", offer.engineCode());
+        element(w, "year", offer.year() == null ? null : String.valueOf(offer.year()));
+
         element(w, "color", offer.color());
         element(w, "supplier_art", offer.marking());
 
+        // Фотографии повторяющимся элементом, а не одной строкой через
+        // запятую: в ссылке может встретиться что угодно, а разбор по
+        // разделителю ломается ровно на том товаре, у которого он попался.
+        // Первая ссылка — главный снимок: площадка ставит его обложкой.
+        if (offer.photos() != null) {
+            for (String photo : offer.photos()) {
+                element(w, "photo", photo);
+            }
+        }
+
         w.writeEndElement();
+    }
+
+    /**
+     * Заголовок без сокращений и без того, что уже уехало своими полями.
+     *
+     * <p>Требование площадки прямое: «названия товаров должны быть максимально
+     * простые и понятные, без сокращений и аббревиатур» — от этого зависит,
+     * в какой раздел товар попадёт при распознавании. У нас же в заголовке
+     * стоят «лев.», «перед.», «(б/у)», и стоят они там по делу: заголовок
+     * читают глазами на витрине склада, на этикетке и в карточке.
+     *
+     * <p>Поэтому чистится только выгрузка, а собранный заголовок в системе
+     * остаётся как был. Сторона и состояние при этом не теряются — они уже
+     * уехали полями {@code lr}, {@code fr}, {@code ud} и {@code condition},
+     * то есть в заголовке они были повторением. Тот же приём у Bazon: у него
+     * заголовок чистый, а сторона живёт отдельными полями.
+     */
+    static String plainName(String title) {
+        if (title == null || title.isBlank()) {
+            return title;
+        }
+        String plain = title
+                .replaceAll("\\s*\\((?:б/у|новая|восст\\.)\\)", "")
+                .replaceAll("\\s+(?:перед|задн|лев|прав|верх|ниж)\\.", "");
+        return plain.replaceAll("\\s{2,}", " ").trim();
+    }
+
+    /**
+     * Описание позиции.
+     *
+     * <p>Их «минимальный формат» XML — наименование, описание и цена, а у детали
+     * с разборки описания обычно нет вовсе: приёмщик его не пишет, ему некогда.
+     * Поэтому, когда своего описания нет, оно собирается из того, что мы и так
+     * знаем: с какой машины снято, какая сторона, какой номер. Ничего сверх
+     * этого — «отличное качество» и «гарантия» тут были бы обещанием,
+     * которого никто не давал.
+     */
+    static String descriptionOf(DromOffer offer) {
+        if (offer.description() != null && !offer.description().isBlank()) {
+            return offer.description();
+        }
+
+        List<String> lines = new java.util.ArrayList<>();
+        String vehicle = java.util.stream.Stream.of(
+                        offer.carBrand(), offer.carModel(), offer.bodyCode(),
+                        offer.engineCode(), offer.year() == null ? null : String.valueOf(offer.year()))
+                .filter(part -> part != null && !part.isBlank())
+                .collect(java.util.stream.Collectors.joining(" "));
+        if (!vehicle.isBlank()) {
+            // Контрактную деталь никто ни с чего не снимал: она приехала
+            // контейнером, а марка у неё из применимости. «Снято с Toyota
+            // Camry» про неё — неправда, и заметит её покупатель, а не мы.
+            lines.add((offer.fromDonor() ? "Снято с: " : "Подходит на: ") + vehicle + ".");
+        }
+
+        String sides = java.util.stream.Stream.of(
+                        longitudinalWord(offer.longitudinalSide()),
+                        lateralWord(offer.lateralSide()),
+                        verticalWord(offer.verticalSide()))
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.joining(", "));
+        if (!sides.isBlank()) {
+            lines.add("Расположение: " + sides + ".");
+        }
+
+        if (offer.oemNumber() != null && !offer.oemNumber().isBlank()) {
+            lines.add("Номер производителя: " + offer.oemNumber() + ".");
+        }
+        lines.add("Состояние: " + (offer.condition() == PartCondition.NEW ? "новая" : "б/у") + ".");
+        return String.join(" ", lines);
+    }
+
+    private static String lateralWord(LateralSide side) {
+        return side == null ? null : side == LateralSide.LEFT ? "левая" : "правая";
+    }
+
+    private static String longitudinalWord(LongitudinalSide side) {
+        return side == null ? null : side == LongitudinalSide.FRONT ? "передняя" : "задняя";
+    }
+
+    private static String verticalWord(VerticalSide side) {
+        return side == null ? null : side == VerticalSide.UPPER ? "верхняя" : "нижняя";
     }
 
     /** Дром ждёт номера одной строкой через запятую. */

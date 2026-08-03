@@ -12,6 +12,9 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+import ru.partsflow.intake.DonorDirectory;
 import ru.partsflow.platform.security.CurrentUser;
 
 import java.math.BigDecimal;
@@ -26,9 +29,48 @@ import java.util.List;
 public class PartController {
 
     private final PartService partService;
+    private final PartHistoryService history;
+    private final DonorDirectory donors;
 
-    public PartController(PartService partService) {
+    public PartController(PartService partService, PartHistoryService history,
+                          DonorDirectory donors) {
         this.partService = partService;
+        this.history = history;
+        this.donors = donors;
+    }
+
+    /**
+     * История позиции: правки и движения остатка.
+     *
+     * <p>Открыта всем вошедшим, а не только владельцу: «куда делась деталь»
+     * спрашивает кладовщик, и отправлять его за ответом к владельцу — это
+     * ответ через сутки. Деньги при этом отделены: себестоимость
+     * и минимальная цена в ленту правок попадают только владельцу
+     * и менеджеру, и не «скрываются на экране», а не уезжают с сервера.
+     * Стережёт {@code PartHistoryHttpTest}.
+     */
+    @GetMapping("/{id}/history")
+    public PartHistoryService.History history(@PathVariable long id) {
+        String role = CurrentUser.require().role();
+        boolean money = "OWNER".equals(role) || "MANAGER".equals(role);
+        return history.of(id, money);
+    }
+
+    /**
+     * Машина, с которой снята позиция.
+     *
+     * <p>Карточка сообщала «Донор задан» — отметку о том, что данные есть,
+     * вместо самих данных. А продавец по телефону отвечает именно ими:
+     * подойдёт ли деталь, решает не марка, а руль, коробка и привод машины,
+     * с которой её сняли.
+     *
+     * <p>Запрос отдаёт {@code intake}: машины принадлежат ему. Контроллер
+     * здесь потому, что спрашивает карточка позиции.
+     */
+    @GetMapping("/{id}/donor")
+    public DonorDirectory.Card donor(@PathVariable long id) {
+        return donors.cardByPart(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }
 
     @GetMapping("/search")

@@ -24,6 +24,7 @@ import java.time.Instant;
  * <p>Правки и удаления запрещены триггером в БД. Исправление — только
  * компенсирующим движением.
  */
+@org.hibernate.annotations.Immutable
 @Entity
 @Table(name = "stock_movement")
 public class StockMovement {

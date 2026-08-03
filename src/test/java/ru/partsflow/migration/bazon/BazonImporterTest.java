@@ -43,6 +43,8 @@ class BazonImporterTest extends PostgresTestBase {
     private static final String NAMES = "t_000080";
     private static final String BAD_ROW = "t_000081";
     private static final String UNKNOWN = "t_000082";
+    private static final String BACKFILL = "t_000083";
+    private static final String PARTS_BACKFILL = "t_000084";
 
     @Autowired
     private DataSource dataSource;
@@ -55,7 +57,8 @@ class BazonImporterTest extends PostgresTestBase {
 
     @BeforeAll
     static void migrate() {
-        provisionTenants(IMPORT, REPEAT, HEADER, NAMES, BAD_ROW, UNKNOWN);
+        provisionTenants(IMPORT, REPEAT, HEADER, NAMES, BAD_ROW, UNKNOWN, BACKFILL,
+                PARTS_BACKFILL);
     }
 
     @Test
@@ -181,6 +184,121 @@ class BazonImporterTest extends PostgresTestBase {
                 .as("повтор прошёл с ошибками: он обязан быть обычным действием, "
                         + "а не аварией, которую спас индекс")
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("Повтор дозаполняет пустое, но не затирает заполненное")
+    void repeatFillsWhatIsMissing() throws Exception {
+        // Так выглядит клиент, загруженный до появления колонки: в его
+        // выгрузке кузов с двигателем были, а перенос их ещё не читал.
+        Path oldExport = write("donors-old.csv", """
+                "Номер донора";"Марка";"Модель";"Год выпуска";"VIN";"Поставка";"Статус";\
+                "Цвет";"Пробег";"Руль";"Привод";"Тип КПП";"Модель КПП";"Комплектация"
+                "Д-7";"Toyota";"Camry";"2006";"VIN7";"";"Разбор";\
+                "серебристый";"180000";"Левый";"Передний";"Автомат";"U151E";""
+                """);
+        new BazonImporter(dataSource, BACKFILL).importAll(oldExport, catalogFixture());
+
+        assertThat(bodyOf(BACKFILL, "Д-7"))
+                .as("кузов взялся неоткуда: выгрузка его не содержала")
+                .isNull();
+
+        // Человек поправил цвет руками — выгрузка старше этой правки.
+        jdbc.update("UPDATE %s.donor SET color = 'синий металлик' WHERE legacy_code = 'Д-7'"
+                .formatted(BACKFILL));
+
+        Path fullExport = write("donors-new.csv", """
+                "Номер донора";"Марка";"Модель";"Год выпуска";"VIN";"Поставка";"Статус";\
+                "Цвет";"Пробег";"Руль";"Привод";"Тип КПП";"Модель КПП";"Комплектация";\
+                "Кузов";"Двигатель"
+                "Д-7";"Toyota";"Camry";"2006";"VIN7";"";"Разбор";\
+                "серебристый";"180000";"Левый";"Передний";"Автомат";"U151E";"";"ACV40";"2AZFE"
+                """);
+        ImportReport second = new BazonImporter(dataSource, BACKFILL)
+                .importAll(fullExport, catalogFixture());
+
+        assertThat(bodyOf(BACKFILL, "Д-7"))
+                .as("пустой кузов так и не заполнился — повтор снова пропустил машину, "
+                        + "и колонка, добавленная в перенос позже, не появится никогда")
+                .isEqualTo("ACV40");
+        assertThat(jdbc.queryForObject(
+                "SELECT engine_code FROM %s.donor WHERE legacy_code = 'Д-7'".formatted(BACKFILL),
+                String.class)).isEqualTo("2AZFE");
+        assertThat(jdbc.queryForObject(
+                "SELECT color FROM %s.donor WHERE legacy_code = 'Д-7'".formatted(BACKFILL),
+                String.class))
+                .as("выгрузка затёрла правку человека: она бывает старше его работы")
+                .isEqualTo("синий металлик");
+        assertThat(second.loaded("машин дополнено")).isEqualTo(1);
+        assertThat(count(BACKFILL, "donor"))
+                .as("дозаполнение завело вторую машину вместо правки первой")
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Повтор дозаполняет позицию и ставит недостающие снимки в очередь")
+    void repeatFillsPartAndQueuesPhotos() throws Exception {
+        // Выгрузка без «Превью» и без секции: так грузился клиент, у которого
+        // колонку снимков не читали — в очереди у него восемь ссылок вместо
+        // ста девяноста тысяч.
+        String headerWithoutPhotos = CATALOG_HEADER;
+        Path first = write("catalog-old.csv", headerWithoutPhotos + """
+                "A-500";"Стартер";"";"";"";"";"";"";"";"";"";"";\
+                "";"";"";"7000";"";"1";"0";"0";"0";"0";"0";"да";""
+                """);
+        new BazonImporter(dataSource, PARTS_BACKFILL).importAll(donorsFixture(), first);
+
+        assertThat(photoQueueOf(PARTS_BACKFILL)).isZero();
+
+        // Цену владелец подвинул руками — выгрузка старше этой правки.
+        jdbc.update("UPDATE %s.part SET price = 6000 WHERE legacy_code = 'A-500'"
+                .formatted(PARTS_BACKFILL));
+
+        Path second = write("catalog-new.csv", """
+                "Номер товара";"Превью";"Запчасть";"Номер донора";"Марка";"Модель";\
+                "Год выпуска";"Кузов";"Двигатель";"Комментарий";"Заметка";"Левый / Правый";\
+                "Передний / Задний";"Оценка состояния";"Маркировка";"Производитель";"Цена";\
+                "Секция";"Номер производителя";"Ткацкая (свободно)";"Ткацкая (резерв)";\
+                "Ткацкая (ожидается)";"Ангар (свободно)";"Ангар (резерв)";\
+                "Ангар (ожидается)";"Выгружать";"Установка"
+                "A-500";"http://cdn/1.jpg,http://cdn/2.jpg";"Стартер";"";"";"";"";"";"";\
+                "Контракт";"";"";"";"";"";"Denso";"7000";"01-02-03";"28100-0D030";\
+                "1";"0";"0";"0";"0";"0";"да";""
+                """);
+        ImportReport report = new BazonImporter(dataSource, PARTS_BACKFILL)
+                .importAll(donorsFixture(), second);
+
+        assertThat(report.loaded("товаров дополнено")).isEqualTo(1);
+        assertThat(textOf(PARTS_BACKFILL, "A-500", "section"))
+                .as("пустая секция так и не заполнилась")
+                .isEqualTo("01-02-03");
+        assertThat(textOf(PARTS_BACKFILL, "A-500", "manufacturer")).isEqualTo("Denso");
+        assertThat(textOf(PARTS_BACKFILL, "A-500", "description")).isEqualTo("Контракт");
+        assertThat(jdbc.queryForObject(
+                "SELECT price FROM %s.part WHERE legacy_code = 'A-500'".formatted(PARTS_BACKFILL),
+                BigDecimal.class))
+                .as("выгрузка вернула прежнюю цену поверх правки владельца")
+                .isEqualByComparingTo("6000");
+        assertThat(photoQueueOf(PARTS_BACKFILL))
+                .as("снимки не поставились в очередь: у клиента, загруженного до чтения "
+                        + "«Превью», они не появятся никогда")
+                .isEqualTo(2);
+        // Самое опасное в дозаполнении: движения повторить нельзя.
+        assertThat(qtyOf(PARTS_BACKFILL, "A-500"))
+                .as("остаток удвоился — дозаполнение повторило движения")
+                .isEqualByComparingTo("1");
+    }
+
+    @Test
+    @DisplayName("Повтор без единого нового поля машину не трогает")
+    void repeatWithoutChangesFillsNothing() throws Exception {
+        importFixture(BACKFILL);
+        ImportReport second = importFixture(BACKFILL);
+
+        // Иначе число «дополнено» перестаёт что-либо значить: оно росло бы
+        // на каждый повтор, ничего не изменив.
+        assertThat(second.loaded("машин дополнено")).isZero();
+        assertThat(second.loaded("машин пропущено (уже есть)")).isEqualTo(1);
     }
 
     @Test
@@ -316,6 +434,24 @@ class BazonImporterTest extends PostgresTestBase {
         Integer found = jdbc.queryForObject(
                 "SELECT count(*) FROM " + schema + "." + table, Integer.class);
         return found == null ? 0 : found;
+    }
+
+    private int photoQueueOf(String schema) {
+        Integer found = jdbc.queryForObject(
+                "SELECT count(*) FROM " + schema + ".part_photo_import", Integer.class);
+        return found == null ? 0 : found;
+    }
+
+    private String textOf(String schema, String legacyCode, String column) {
+        return jdbc.queryForObject(
+                "SELECT " + column + " FROM " + schema + ".part WHERE legacy_code = ?",
+                String.class, legacyCode);
+    }
+
+    private String bodyOf(String schema, String legacyCode) {
+        return jdbc.queryForObject(
+                "SELECT body_code FROM " + schema + ".donor WHERE legacy_code = ?",
+                String.class, legacyCode);
     }
 
     private String statusOf(String schema, String legacyCode) {

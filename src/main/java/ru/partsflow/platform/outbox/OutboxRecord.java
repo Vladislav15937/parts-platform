@@ -81,7 +81,8 @@ public class OutboxRecord {
         return publishedAt;
     }
 
-    public void markPublished() {
-        this.publishedAt = Instant.now();
-    }
+    // Метода «пометить опубликованным» здесь нет намеренно. Пометка ставится
+    // после отправки, то есть когда запись уже отцеплена от контекста
+    // персистентности: изменение поля в ней не записало бы ничего. Пишет
+    // OutboxRepository.markPublished своим запросом.
 }

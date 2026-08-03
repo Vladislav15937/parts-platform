@@ -7,9 +7,10 @@
 #   2. Два арендатора провижинятся независимо
 #   3. DATABASECHANGELOG у каждого арендатора — внутри его схемы
 #   4. Изоляция: данные арендаторов не пересекаются
-#   5. Триггеры работают (остаток, аудит, неизменяемость журнала)
-#   6. rollback отрабатывает
-#   7. Повторный update идемпотентен
+#   5. Что осталось за базой: ограничения, каскады, сверки — и что в схеме
+#      арендатора не осталось ни триггеров, ни функций, ни генерируемых колонок
+#   6. Повторный update идемпотентен
+#   7. rollback отрабатывает
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -61,7 +62,11 @@ A=$($PSQL -tAc "SELECT count(*) FROM t_000042.branch WHERE name='Филиал 43
 [ "$A" = "0" ] || fail "данные арендаторов пересекаются"
 ok "схемы изолированы"
 
-step "5. Триггеры: остаток, аудит, неизменяемость журнала"
+step "5. Что осталось за базой: ограничения, каскады, сверки"
+# Раньше здесь проверялись триггеры: остаток, аудит, неизменяемость журнала.
+# Их больше нет — вся логика переехала в приложение (docs/triggers-to-java.md),
+# и проверять её надо тестами, а не миграциями. Здесь остаётся то, за что
+# база по-прежнему отвечает: форма данных и связи между ними.
 $PSQL <<'SQL'
 INSERT INTO t_000042.warehouse (branch_id, name)
     SELECT id, 'Основной' FROM t_000042.branch LIMIT 1;
@@ -73,63 +78,53 @@ INSERT INTO t_000042.supply (kind, number, supplier_name, arrived_on, status)
     VALUES ('CONTAINER', '17', 'Onteco 6', current_date, 'ARRIVED');
 INSERT INTO t_000042.part (category_id, title, price, status, supply_id)
     SELECT 1, 'Фара левая Camry V50', 8500, 'IN_STOCK', id FROM t_000042.supply LIMIT 1;
-INSERT INTO t_000042.stock_movement (part_id, movement_type, qty_delta, to_warehouse_id, to_cell_id)
-    SELECT p.id, 'INTAKE', 1, c.warehouse_id, c.id
-    FROM t_000042.part p, t_000042.storage_cell c LIMIT 1;
 SQL
 
-QTY=$($PSQL -tAc "SELECT qty_on_hand FROM t_000042.part LIMIT 1;")
-[ "${QTY%.*}" = "1" ] || fail "остаток не обновился триггером (получено: $QTY)"
-ok "остаток пересчитан"
+# Публичный код выдаётся умолчанием колонки: без него не напечатать этикетку
+# и не узнать позицию в объявлении.
+CODE=$($PSQL -tAc "SELECT public_code FROM t_000042.part LIMIT 1;")
+[ -n "$CODE" ] || fail "публичный код не выдан умолчанием"
+ok "публичный код выдан ($CODE)"
 
-WQ=$($PSQL -tAc "SELECT qty FROM t_000042.part_stock
-                 JOIN t_000042.warehouse w ON w.id = warehouse_id WHERE w.name='Основной';")
-[ "${WQ%.*}" = "1" ] || fail "остаток по складу не разложился (получено: $WQ)"
-ok "остаток разложен по складам"
-
-AUD=$($PSQL -tAc "SELECT count(*) FROM t_000042.audit_log WHERE table_name='part';")
-[ "$AUD" -ge 1 ] || fail "аудит не записался"
-ok "аудит пишется"
-
-if $PSQL -c "UPDATE t_000042.stock_movement SET qty_delta = 99;" >/dev/null 2>&1; then
-    fail "журнал движений оказался изменяемым"
+# Резерв больше остатка отбивает ограничение схемы, а не триггер.
+$PSQL -c "INSERT INTO t_000042.part_stock (part_id, warehouse_id, qty, qty_reserved)
+          SELECT p.id, w.id, 1, 1 FROM t_000042.part p, t_000042.warehouse w
+           WHERE w.name='Основной' LIMIT 1;" >/dev/null
+if $PSQL -c "UPDATE t_000042.part_stock SET qty_reserved = 5;" >/dev/null 2>&1; then
+    fail "резерв больше остатка прошёл — part_stock_reserved_ck не стережёт"
 fi
-ok "журнал движений неизменяем"
+ok "резерв больше остатка отбит ограничением"
 
-DISC=$($PSQL -tAc "SELECT count(*) FROM t_000042.v_stock_discrepancy;")
-[ "$DISC" = "0" ] || fail "расхождение остатка с журналом: $DISC"
-ok "сверка остатка чистая"
+# Ссылочная целостность: удаление позиции уносит её раскладку каскадом.
+$PSQL -c "DELETE FROM t_000042.part_stock;" >/dev/null
+$PSQL -c "DELETE FROM t_000042.part;" >/dev/null
+LEFTOVER=$($PSQL -tAc "SELECT count(*) FROM t_000042.part_stock;")
+[ "$LEFTOVER" = "0" ] || fail "раскладка пережила удаление позиции: $LEFTOVER"
+ok "каскады работают"
 
-step "5a. Перемещение между складами не меняет общий остаток"
-$PSQL <<'SQL'
-INSERT INTO t_000042.stock_movement (part_id, movement_type, qty_delta,
-                                     from_warehouse_id, to_warehouse_id)
-    SELECT p.id, 'MOVE', 1,
-           (SELECT id FROM t_000042.warehouse WHERE name='Основной'),
-           (SELECT id FROM t_000042.warehouse WHERE name='Второй')
-    FROM t_000042.part p LIMIT 1;
-SQL
+# Сверки — вопросы к данным, а не поведение: они обязаны существовать
+# и на пустом складе отвечать «расхождений нет».
+for VIEW in v_stock_discrepancy v_reservation_discrepancy v_account_discrepancy; do
+    CNT=$($PSQL -tAc "SELECT count(*) FROM t_000042.$VIEW;")
+    [ "$CNT" = "0" ] || fail "$VIEW на пустом складе не пуста: $CNT"
+done
+ok "сверки на месте и чисты"
 
-TOTAL=$($PSQL -tAc "SELECT qty_on_hand FROM t_000042.part LIMIT 1;")
-[ "${TOTAL%.*}" = "1" ] || fail "перемещение изменило общий остаток (получено: $TOTAL)"
-ok "общий остаток сохранился"
-
-HERE=$($PSQL -tAc "SELECT qty FROM t_000042.part_stock ps
-                   JOIN t_000042.warehouse w ON w.id = ps.warehouse_id
-                   WHERE w.name='Второй';")
-[ "${HERE%.*}" = "1" ] || fail "деталь не доехала до второго склада (получено: $HERE)"
-ok "деталь переехала на второй склад"
-
-if $PSQL -c "INSERT INTO t_000042.stock_movement (part_id, movement_type, qty_delta, from_warehouse_id)
-             SELECT p.id, 'SALE', -1, (SELECT id FROM t_000042.warehouse WHERE name='Основной')
-             FROM t_000042.part p LIMIT 1;" >/dev/null 2>&1; then
-    fail "списание с пустого склада прошло — триггер не стережёт остаток"
-fi
-ok "списание с пустого склада отбито"
-
-DISC=$($PSQL -tAc "SELECT count(*) FROM t_000042.v_stock_discrepancy;")
-[ "$DISC" = "0" ] || fail "после перемещения сверка разошлась: $DISC"
-ok "сверка после перемещения чистая"
+# Ни одного триггера и ни одной функции в схеме арендатора — это и есть
+# правило «логика только в приложении», проверяемое, а не декларируемое.
+TRG=$($PSQL -tAc "SELECT count(*) FROM pg_trigger t
+                    JOIN pg_class c ON c.oid = t.tgrelid
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE n.nspname = 't_000042' AND NOT t.tgisinternal;")
+[ "$TRG" = "0" ] || fail "в схеме арендатора остались триггеры: $TRG"
+FN=$($PSQL -tAc "SELECT count(*) FROM pg_proc p
+                   JOIN pg_namespace n ON n.oid = p.pronamespace
+                  WHERE n.nspname = 't_000042';")
+[ "$FN" = "0" ] || fail "в схеме арендатора остались функции: $FN"
+GEN=$($PSQL -tAc "SELECT count(*) FROM information_schema.columns
+                   WHERE table_schema = 't_000042' AND is_generated = 'ALWAYS';")
+[ "$GEN" = "0" ] || fail "в схеме арендатора остались генерируемые колонки: $GEN"
+ok "триггеров, функций и генерируемых колонок нет"
 
 step "6. Идемпотентность повторного update"
 $LB --changelog-file=changelog/db.changelog-tenant.xml $CRED \

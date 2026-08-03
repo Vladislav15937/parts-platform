@@ -35,10 +35,16 @@ class InventoryServiceTest extends PostgresTestBase {
     private static final String TENANT = "t_000051";
 
     @Autowired
+    private StockLedger ledger;
+
+    @Autowired
     private InventoryService inventory;
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private StockReservationRepository reservations;
 
     @Autowired
     private TransactionTemplate transactionTemplate;
@@ -175,8 +181,10 @@ class InventoryServiceTest extends PostgresTestBase {
     void promisedShortageDoesNotBlockOthers() {
         Long promised = partWithStock("Фара, обещанная покупателю", 1);
         Long other = partWithStock("Стартер, просто пропавший", 1);
-        inTenant(() -> jdbc.queryForObject(
-                "SELECT reserve_stock(?, ?, 1)", Object.class, promised, warehouse));
+        inTenant(() -> {
+            reservations.reserve(promised, warehouse, BigDecimal.ONE);
+            return null;
+        });
 
         Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
         inTenant(() -> inventory.count(sessionId, promised, BigDecimal.ZERO, null));
@@ -211,8 +219,10 @@ class InventoryServiceTest extends PostgresTestBase {
     void repeatedApplyAdjustsOnlyBlocked() {
         Long promised = partWithStock("Фара, снятая с резерва", 1);
         Long other = partWithStock("Стартер, пропавший рядом", 2);
-        inTenant(() -> jdbc.queryForObject(
-                "SELECT reserve_stock(?, ?, 1)", Object.class, promised, warehouse));
+        inTenant(() -> {
+            reservations.reserve(promised, warehouse, BigDecimal.ONE);
+            return null;
+        });
 
         Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
         inTenant(() -> inventory.count(sessionId, promised, BigDecimal.ZERO, null));
@@ -220,8 +230,10 @@ class InventoryServiceTest extends PostgresTestBase {
         inTenant(() -> inventory.finishCounting(sessionId));
         inTenant(() -> inventory.apply(sessionId));
 
-        inTenant(() -> jdbc.queryForObject(
-                "SELECT release_stock(?, ?, 1)", Object.class, promised, warehouse));
+        inTenant(() -> {
+            reservations.release(promised, warehouse, BigDecimal.ONE);
+            return null;
+        });
         var second = inTenant(() -> inventory.apply(sessionId));
 
         assertThat(second.adjusted()).isEqualTo(1);
@@ -374,10 +386,8 @@ class InventoryServiceTest extends PostgresTestBase {
         Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
 
         // Две уехали на второй склад до подсчёта.
-        inTenant(() -> jdbc.update("""
-                INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                            from_warehouse_id, to_warehouse_id)
-                VALUES (?, 'MOVE', 2, ?, ?)""", partId, warehouse, otherWarehouse));
+        inTenant(() -> ledger.record(StockMovement.move(
+                partId, new BigDecimal("2"), warehouse, otherWarehouse, null)));
 
         inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("2"), null));
         inTenant(() -> inventory.finishCounting(sessionId));
@@ -500,18 +510,14 @@ class InventoryServiceTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price, cost_price)
                     VALUES (NULL, ?, 5000, 2000) RETURNING id""", Long.class, title);
             if (qty > 0) {
-                jdbc.update("""
-                        INSERT INTO stock_movement (part_id, movement_type, qty_delta, to_warehouse_id)
-                        VALUES (?, 'INTAKE', ?, ?)""", partId, qty, warehouse);
+                ledger.record(StockMovement.intake(partId, java.math.BigDecimal.valueOf(qty), warehouse, null));
             }
             return partId;
         });
     }
 
     private void sale(Long partId, Long warehouseId, int qty) {
-        inTenant(() -> jdbc.update("""
-                INSERT INTO stock_movement (part_id, movement_type, qty_delta, from_warehouse_id)
-                VALUES (?, 'SALE', ?, ?)""", partId, -qty, warehouseId));
+        inTenant(() -> ledger.record(StockMovement.sale(partId, java.math.BigDecimal.valueOf(qty), warehouseId, null)));
     }
 
     /** Когда сервер записал подсчёт строки. */
@@ -549,11 +555,18 @@ class InventoryServiceTest extends PostgresTestBase {
      * от «после» становится нечем.
      */
     private void saleAt(Long partId, Long warehouseId, int qty, Instant when) {
-        inTenant(() -> jdbc.update("""
-                INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                            from_warehouse_id, created_at)
-                VALUES (?, 'SALE', ?, ?, ?)""",
-                partId, -qty, warehouseId, java.sql.Timestamp.from(when)));
+        inTenant(() -> {
+            StockMovement movement = ledger.record(StockMovement.sale(
+                    partId, java.math.BigDecimal.valueOf(qty), warehouseId, null));
+            // Момент правится после записи: иначе все движения теста
+            // попадают в одну миллисекунду и «до подсчёта» от «после»
+            // не отличить. Правка идёт прямым SQL мимо репозитория — тот
+            // менять журнал не умеет вовсе, и это ровно то, что нужно:
+            // в приложении такой правки быть не может, а тесту она нужна.
+            jdbc.update("UPDATE stock_movement SET created_at = ? WHERE id = ?",
+                    java.sql.Timestamp.from(when), movement.getId());
+            return null;
+        });
     }
 
     private BigDecimal qtyOf(Long partId, Long warehouseId) {

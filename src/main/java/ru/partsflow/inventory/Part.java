@@ -207,8 +207,20 @@ public class Part {
     @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
 
-    @Column(name = "updated_at", insertable = false, updatable = false)
+    /**
+     * Момент последней правки. До 4 августа 2026 его ставил триггер
+     * {@code touch_updated_at}; теперь — приложение, как и всё остальное.
+     *
+     * <p>{@code @PreUpdate}, а не присваивание в каждом сеттере: полей
+     * у карточки под сорок, и забыть один из них — вопрос времени.
+     */
+    @Column(name = "updated_at", insertable = false)
     private Instant updatedAt;
+
+    @jakarta.persistence.PreUpdate
+    void touchUpdatedAt() {
+        this.updatedAt = Instant.now();
+    }
 
     /**
      * Кто правил карточку последним. Время правки ведёт триггер, а имя вести

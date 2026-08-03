@@ -94,6 +94,8 @@ public class IntakeController {
         donor.setYear(request.year());
         donor.setColor(request.color());
         donor.setColorCode(request.colorCode());
+        donor.setBodyCode(request.bodyCode());
+        donor.setEngineCode(request.engineCode());
         donor.setMileageKm(request.mileageKm());
         donor.setSteering(request.steering());
         donor.setDriveType(request.driveType());
@@ -197,6 +199,11 @@ public class IntakeController {
                                Short year,
                                String color,
                                String colorCode,
+                               /* Как написано в документах: «ACV40», «2AZ-FE».
+                                  По ним подбирают деталь по телефону, и они
+                                  же уходят в прайс отдельными тегами. */
+                               String bodyCode,
+                               String engineCode,
                                Integer mileageKm,
                                Donor.Steering steering,
                                Donor.DriveType driveType,

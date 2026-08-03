@@ -36,12 +36,13 @@ public class SalesService {
     private final CustomerAccountEntryRepository accountRepository;
     private final DocumentEventRepository eventRepository;
     private final PartRepository partRepository;
-    private final StockMovementRepository movementRepository;
+    private final ru.partsflow.inventory.StockLedger ledger;
     private final StockReservationRepository reservationRepository;
     private final DomainEventPublisher eventPublisher;
     private final ServiceKindRepository serviceKinds;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final DealSourceRepository dealSources;
+    private final ru.partsflow.inventory.PartChangeLog partChanges;
 
     public SalesService(DealRepository dealRepository,
                         DealReturnRepository dealReturnRepository,
@@ -49,11 +50,12 @@ public class SalesService {
                         CustomerAccountEntryRepository accountRepository,
                         DocumentEventRepository eventRepository,
                         PartRepository partRepository,
-                        StockMovementRepository movementRepository,
+                        ru.partsflow.inventory.StockLedger ledger,
                         StockReservationRepository reservationRepository,
                         DomainEventPublisher eventPublisher,
                         ServiceKindRepository serviceKinds,
                         DealSourceRepository dealSources,
+                        ru.partsflow.inventory.PartChangeLog partChanges,
                         org.springframework.jdbc.core.JdbcTemplate jdbc) {
         this.dealRepository = dealRepository;
         this.dealReturnRepository = dealReturnRepository;
@@ -61,11 +63,12 @@ public class SalesService {
         this.accountRepository = accountRepository;
         this.eventRepository = eventRepository;
         this.partRepository = partRepository;
-        this.movementRepository = movementRepository;
+        this.ledger = ledger;
         this.reservationRepository = reservationRepository;
         this.eventPublisher = eventPublisher;
         this.serviceKinds = serviceKinds;
         this.dealSources = dealSources;
+        this.partChanges = partChanges;
         this.jdbc = jdbc;
     }
 
@@ -432,8 +435,11 @@ public class SalesService {
             reservationRepository.release(
                     item.getPartId(), item.getWarehouseId(), item.getQuantity());
 
-            movementRepository.save(StockMovement.sale(
+            ledger.record(StockMovement.sale(
                     item.getPartId(), item.getQuantity(), item.getWarehouseId(), dealId));
+            // Проданная позиция обязана уехать на площадку недоступной, и чем
+            // раньше, тем меньше звонков «а она у вас есть».
+            partChanges.changed(item.getPartId());
         }
 
         deal.issue(now);
@@ -573,8 +579,10 @@ public class SalesService {
 
         saved.complete(now);
         for (DealReturnItem item : saved.restockedItems()) {
-            movementRepository.save(StockMovement.returned(
+            ledger.record(StockMovement.returned(
                     item.getPartId(), item.getQuantity(), warehouseId, saved.getId()));
+            // Вернувшаяся деталь снова в продаже — объявление надо оживить.
+            partChanges.changed(item.getPartId());
         }
         refund(saved, deal, refundToAccount, paymentSourceId, managerId);
         dealReturnRepository.saveAndFlush(saved);

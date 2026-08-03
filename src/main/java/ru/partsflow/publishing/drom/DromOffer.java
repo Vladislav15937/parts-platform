@@ -17,11 +17,25 @@ import java.util.List;
  * позициях значит получить 50 000 дополнительных запросов, поэтому строку
  * собирает один потоковый SQL, а писателю остаётся только форматирование.
  *
+ * @param partKind     вид детали справочником — «Фара», «Стартер»; по нему
+ *                     площадка раскладывает товар по разделам, и заголовка
+ *                     ей для этого мало
  * @param availableQty свободный остаток, а не общий: см. {@link DromPriceWriter}
+ * @param photos       постоянные ссылки на снимки, главный первым; пустой
+ *                     список — снимков нет либо выдача не настроена
+ * @param fromDonor    снята с машины, а не пришла контейнером. От этого
+ *                     зависит формулировка описания: «снято с» у детали
+ *                     с донора и «подходит на» у контрактной — её никто
+ *                     ни с чего не снимал, и марка у неё из применимости
+ * @param carBrand     марка машины, к которой деталь подходит; у контрактной
+ *                     это список марок применимости через запятую
+ * @param carModel     модель — так же, списком у контрактной
+ * @param year         год машины-донора; у контрактной его нет и быть не может
  */
 public record DromOffer(
         String orderCode,
         String name,
+        String partKind,
         String description,
         BigDecimal price,
         BigDecimal availableQty,
@@ -33,7 +47,14 @@ public record DromOffer(
         LongitudinalSide longitudinalSide,
         VerticalSide verticalSide,
         String color,
-        String marking) {
+        String marking,
+        List<String> photos,
+        String carBrand,
+        String carModel,
+        String bodyCode,
+        String engineCode,
+        Integer year,
+        boolean fromDonor) {
 
     public boolean isAvailable() {
         return availableQty != null && availableQty.signum() > 0;

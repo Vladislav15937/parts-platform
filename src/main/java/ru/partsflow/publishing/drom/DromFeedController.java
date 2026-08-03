@@ -1,8 +1,10 @@
 package ru.partsflow.publishing.drom;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -10,19 +12,20 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
+import ru.partsflow.inventory.PhotoStorage;
 import ru.partsflow.platform.tenant.TenantContext;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.sql.SQLException;
 import java.util.List;
 
 /**
  * Постоянная ссылка на полный прайс Дрома.
  *
- * <p>Дром забирает прайс сам раз в сутки. Ссылку техспециалист площадки
+ * <p>Дром забирает прайс сам — раз в трое суток, а при платном
+ * позиционировании раз в сутки. Ссылку техспециалист площадки
  * прописывает в настройках прайс-листа один раз, поэтому она обязана быть
  * постоянной: подписанная на пятнадцать минут, как ссылки на фотографии,
  * протухнет до первого же забора.
@@ -48,20 +51,33 @@ public class DromFeedController {
 
     private final JdbcTemplate jdbc;
     private final DromPriceGenerator generator;
+    private final PhotoStorage photos;
+    private final DromAccountReader accounts;
+    private final DromWheelGenerator wheels;
+    private final String publicUrl;
 
-    public DromFeedController(JdbcTemplate jdbc, DromPriceGenerator generator) {
+    public DromFeedController(JdbcTemplate jdbc, DromPriceGenerator generator,
+                              DromAccountReader accounts,
+                              DromWheelGenerator wheels,
+                              PhotoStorage photos,
+                              @Value("${app.public-url:}") String publicUrl) {
         this.jdbc = jdbc;
         this.generator = generator;
+        this.accounts = accounts;
+        this.wheels = wheels;
+        this.photos = photos;
+        this.publicUrl = publicUrl;
     }
 
     @GetMapping(value = "/feeds/drom/{company}/{token}.xml", produces = "application/xml")
     public void feed(@PathVariable String company,
                      @PathVariable String token,
+                     HttpServletRequest request,
                      HttpServletResponse response) throws IOException {
 
         String schema = schemaOf(company);
-        DromPriceGenerator.FeedFilter filter = schema == null ? null : filterFor(schema, token);
-        if (filter == null) {
+        DromAccountReader.Account account = schema == null ? null : accountFor(schema, token);
+        if (account == null) {
             // Неверный код и неверный токен неразличимы: иначе по коду ответа
             // ссылка работает справочником действующих компаний.
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
@@ -77,11 +93,85 @@ public class DromFeedController {
 
         TenantContext.set(schema);
         try (OutputStream out = response.getOutputStream()) {
-            int offers = generator.writeTo(out, filter);
-            log.info("Дром забрал прайс арендатора {}: {} позиций", schema, offers);
+            // Выгрузка знает, чем торгует: у шин свой формат со своими полями,
+            // и площадка сама требует держать их отдельным прайс-листом.
+            String base = photoBase(request, company, token);
+            int offers = account.isWheelFeed()
+                    ? wheels.writeTo(out, account.filter(), base)
+                    : generator.writeTo(out, account.filter(), base);
+            log.info("Дром забрал прайс арендатора {} ({}): {} позиций",
+                    schema, account.isWheelFeed() ? "колёса" : "запчасти", offers);
         } finally {
             TenantContext.clear();
         }
+    }
+
+    /**
+     * Снимок по постоянному адресу.
+     *
+     * <p><b>Редирект, а не отдача файла.</b> Многомегабайтные снимки не должны
+     * идти через приложение — по той же причине, по которой телефон грузит их
+     * в хранилище напрямую. Здесь уходит только 302, а байты Дром берёт из S3
+     * подписанной ссылкой, которую мы подписываем в этот самый момент.
+     *
+     * <p><b>И постоянный адрес нужен именно поэтому.</b> Подписанная ссылка
+     * живёт часы: положенная прямо в прайс, она протухнет между заборами,
+     * а объявление с мёртвой картинкой площадка снимает.
+     *
+     * <p>Снимок непубликуемой позиции отсюда не отдаётся: в прайс она
+     * не уезжает, значит и фотографии её наружу смотреть незачем. Токен
+     * проверяется тот же, что у прайса, — иначе адрес превращается
+     * в перебор по номеру снимка.
+     */
+    @GetMapping("/feeds/drom/{company}/{token}/photo/{photoId}.jpg")
+    public void photo(@PathVariable String company,
+                      @PathVariable String token,
+                      @PathVariable long photoId,
+                      HttpServletResponse response) throws IOException {
+
+        String schema = schemaOf(company);
+        String key = schema == null || accountFor(schema, token) == null
+                ? null
+                : keyOf(schema, photoId);
+        if (key == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        }
+        response.sendRedirect(photos.presignView(key));
+    }
+
+    /**
+     * Ключ снимка публикуемой позиции; {@code null} — нет такого либо позиция
+     * не выгружается.
+     *
+     * <p>Схема квалифицируется в SQL руками, как и при проверке токена:
+     * {@code TenantContext} здесь ещё пуст.
+     */
+    private String keyOf(String schema, long photoId) {
+        try {
+            return jdbc.queryForObject("""
+                    SELECT ph.s3_key
+                      FROM %s.part_photo ph
+                      JOIN %s.part p ON p.id = ph.part_id
+                     WHERE ph.id = ? AND ph.status = 'PROCESSED' AND p.is_published"""
+                    .formatted(schema, schema), String.class, photoId);
+        } catch (EmptyResultDataAccessException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Постоянный адрес выдачи снимков этой выгрузки.
+     *
+     * <p>Берётся из настройки, а не из запроса: за терминатором адрес
+     * в запросе — это внутреннее имя контейнера, и прайс уехал бы со ссылками
+     * вида {@code http://app:8080/…}, по которым Дром не сходит никуда.
+     * Из запроса строится только в разработке, где настройки нет.
+     */
+    private String photoBase(HttpServletRequest request, String company, String token) {
+        String origin = publicUrl == null || publicUrl.isBlank()
+                ? request.getRequestURL().toString().replaceFirst("/feeds/drom/.*$", "")
+                : publicUrl.replaceFirst("/+$", "");
+        return "%s/feeds/drom/%s/%s/photo/".formatted(origin, company, token);
     }
 
     /**
@@ -116,48 +206,21 @@ public class DromFeedController {
      * без раннего выхода — иначе «совпал первый кабинет» и «совпал третий»
      * отвечают за разное время.
      */
-    private DromPriceGenerator.FeedFilter filterFor(String schema, String token) {
-        List<Feed> feeds = jdbc.query("""
-                SELECT feed_token, price_from, price_to, conditions, warehouse_ids,
-                       kind_ids, kinds_excluded, brand_ids, brands_excluded
-                  FROM %s.marketplace_account
-                 WHERE marketplace = 'DROM' AND status = 'ACTIVE'
-                   AND feed_token IS NOT NULL""".formatted(schema),
-                (rs, i) -> new Feed(rs.getString("feed_token"),
-                        rs.getBigDecimal("price_from"),
-                        rs.getBigDecimal("price_to"),
-                        textList(rs.getArray("conditions")),
-                        longList(rs.getArray("warehouse_ids")),
-                        longList(rs.getArray("kind_ids")),
-                        rs.getBoolean("kinds_excluded"),
-                        longList(rs.getArray("brand_ids")),
-                        rs.getBoolean("brands_excluded")));
+    private DromAccountReader.Account accountFor(String schema, String token) {
+        List<DromAccountReader.Account> feeds = accounts.active(schema);
 
         byte[] presented = token.getBytes(StandardCharsets.UTF_8);
-        Feed found = null;
-        for (Feed candidate : feeds) {
+        DromAccountReader.Account found = null;
+        for (DromAccountReader.Account candidate : feeds) {
+            if (candidate.feedToken() == null) {
+                continue;
+            }
             if (MessageDigest.isEqual(
-                    candidate.token().getBytes(StandardCharsets.UTF_8), presented)) {
+                    candidate.feedToken().getBytes(StandardCharsets.UTF_8), presented)) {
                 found = candidate;
             }
         }
-        return found == null ? null : new DromPriceGenerator.FeedFilter(
-                found.priceFrom(), found.priceTo(), found.conditions(), found.warehouseIds(),
-                found.kindIds(), found.kindsExcluded(),
-                found.brandIds(), found.brandsExcluded());
+        return found;
     }
 
-    private static List<String> textList(java.sql.Array array) throws SQLException {
-        return array == null ? List.of() : List.of((String[]) array.getArray());
-    }
-
-    private static List<Long> longList(java.sql.Array array) throws SQLException {
-        return array == null ? List.of() : List.of((Long[]) array.getArray());
-    }
-
-    private record Feed(String token, java.math.BigDecimal priceFrom, java.math.BigDecimal priceTo,
-                        List<String> conditions, List<Long> warehouseIds,
-                        List<Long> kindIds, boolean kindsExcluded,
-                        List<Long> brandIds, boolean brandsExcluded) {
-    }
 }
