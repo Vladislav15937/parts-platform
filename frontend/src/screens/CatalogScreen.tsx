@@ -272,6 +272,20 @@ export function CatalogScreen({ role }: { role: string }) {
             setCard(null);
             load(query);
           }}
+          // «Что ещё сняли с этой машины» — обычный отбор по колонке
+          // «Номер донора», а не отдельный экран: список тот же самый,
+          // с теми же колонками и той же выгрузкой.
+          //
+          // Колонка при этом включается, даже если была скрыта: иначе
+          // отбор невидим — из трёхсот семидесяти пяти позиций остаётся две,
+          // и почему, на экране не написано нигде, а снять его нечем.
+          onDonorParts={(donorCode) => {
+            setCard(null);
+            if (!visible.includes('donor')) {
+              toggleColumn('donor');
+            }
+            change({ columns: { ...query.columns, donor: donorCode } });
+          }}
         />
       )}
 

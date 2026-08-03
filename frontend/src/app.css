@@ -1417,7 +1417,11 @@ hr {
 /* Вкладки карточки — как в кабинете: сведения и применимость. */
 .card-tabs {
   display: flex;
-  gap: 1rem;
+  /* Переносятся, а не обрезаются: вкладок стало четыре, и в столбец
+     сведений шириной в 21rem они в одну строку не влезают — «История»
+     превращалась в «Истор». */
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
   border-bottom: 1px solid var(--line);
 }
 
@@ -1794,4 +1798,18 @@ hr {
 .history__moves .num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* Машина, с которой снята деталь. Число снятых деталей стоит первым:
+   на вопрос «разобрана она или сняли одну эту» отвечает именно оно,
+   а не марка с моделью. */
+.donor-view__parts {
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  background: var(--surface-soft);
+  border-radius: var(--radius);
+}
+
+.donor-view__parts b {
+  font-size: 1.1rem;
 }

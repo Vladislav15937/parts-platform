@@ -12,6 +12,9 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+import ru.partsflow.intake.DonorDirectory;
 import ru.partsflow.platform.security.CurrentUser;
 
 import java.math.BigDecimal;
@@ -27,10 +30,13 @@ public class PartController {
 
     private final PartService partService;
     private final PartHistoryService history;
+    private final DonorDirectory donors;
 
-    public PartController(PartService partService, PartHistoryService history) {
+    public PartController(PartService partService, PartHistoryService history,
+                          DonorDirectory donors) {
         this.partService = partService;
         this.history = history;
+        this.donors = donors;
     }
 
     /**
@@ -48,6 +54,23 @@ public class PartController {
         String role = CurrentUser.require().role();
         boolean money = "OWNER".equals(role) || "MANAGER".equals(role);
         return history.of(id, money);
+    }
+
+    /**
+     * Машина, с которой снята позиция.
+     *
+     * <p>Карточка сообщала «Донор задан» — отметку о том, что данные есть,
+     * вместо самих данных. А продавец по телефону отвечает именно ими:
+     * подойдёт ли деталь, решает не марка, а руль, коробка и привод машины,
+     * с которой её сняли.
+     *
+     * <p>Запрос отдаёт {@code intake}: машины принадлежат ему. Контроллер
+     * здесь потому, что спрашивает карточка позиции.
+     */
+    @GetMapping("/{id}/donor")
+    public DonorDirectory.Card donor(@PathVariable long id) {
+        return donors.cardByPart(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }
 
     @GetMapping("/search")

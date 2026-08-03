@@ -152,6 +152,43 @@ export function loadPhotos(partId: number): Promise<PartPhoto[]> {
   return request<PartPhoto[]>(`/api/parts/${partId}/photos`);
 }
 
+/**
+ * Машина, с которой снята позиция.
+ *
+ * <p>Значения приходят уже словами: «Правый руль», «АКПП, U340E-05A»,
+ * «Серебро (1D9)». Раскладывать коды по словарям на клиенте значит держать
+ * второй словарь, который разойдётся с серверным на первой же правке.
+ */
+export interface PartDonor {
+  id: number;
+  /** Номер, которым машину зовёт клиент. */
+  code: string;
+  status: string | null;
+  supply: string | null;
+  brand: string | null;
+  model: string | null;
+  generation: string | null;
+  bodyCode: string | null;
+  engineCode: string | null;
+  year: number | null;
+  steering: string | null;
+  transmission: string | null;
+  driveType: string | null;
+  color: string | null;
+  equipmentCode: string | null;
+  mileageKm: number | null;
+  vin: string | null;
+  location: string | null;
+  note: string | null;
+  /** Сколько деталей снято с этой машины. */
+  partsCount: number;
+}
+
+/** Машина позиции; ошибка — донор не задан. */
+export function loadDonor(partId: number): Promise<PartDonor> {
+  return request<PartDonor>(`/api/parts/${partId}/donor`);
+}
+
 /** Одно изменённое поле в правке. `null` — поле было или стало пустым. */
 export interface HistoryField {
   label: string;

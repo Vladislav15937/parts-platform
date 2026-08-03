@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import {
   addApplicability,
   loadApplicability,
+  loadDonor,
   loadHistory,
   loadPhotos,
   movePart,
@@ -10,6 +11,7 @@ import {
   writeOffPart,
   type Applicability,
   type CatalogRow,
+  type PartDonor,
   type PartHistory,
   type PartPhoto,
   type Warehouse,
@@ -17,6 +19,7 @@ import {
 import { cardFields } from '../inventory/partCard';
 import { deletePhoto, makeMainPhoto, uploadPhoto } from '../inventory/photos';
 import { PartEditForm } from './PartEditForm';
+import { PartDonorView } from './PartDonorView';
 import { PartHistoryView } from './PartHistoryView';
 import { loadCached, modelsOf, type VehicleCatalog } from '../catalog/vehicles';
 import { listCells, type Cell } from '../organization/warehouses';
@@ -37,7 +40,7 @@ import { listCells, type Cell } from '../organization/warehouses';
 /** Дата без времени: в карточке время правки — шум. */
 
 export function PartCard({ row, warehouses, role, extraFields, applicability = true,
-                          onClose, onChanged }: {
+                          onClose, onChanged, onDonorParts }: {
   row: CatalogRow;
   warehouses: Warehouse[];
   role: string;
@@ -60,6 +63,13 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   onClose: () => void;
   /** Склад изменился: списали или перевезли — витрину надо перечитать. */
   onChanged: () => void;
+
+  /**
+   * Показать остальные детали с той же машины: экран ставит отбор по номеру
+   * донора и закрывает карточку. Без обработчика кнопка не появляется —
+   * на вкладке колёс отбирать по донору нечем.
+   */
+  onDonorParts?: (donorCode: string) => void;
 }) {
   // Списывает тот, кто отвечает за деньги: списанная деталь — это убыток,
   // а не запись в журнале. Кладовщик находит недостачу, решение не его.
@@ -84,7 +94,8 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   const [uploading, setUploading] = useState(false);
   const [photoError, setPhotoError] = useState('');
   const [shown, setShown] = useState(0);
-  const [tab, setTab] = useState<'about' | 'fits' | 'history'>('about');
+  const [tab, setTab] = useState<'about' | 'fits' | 'history' | 'donor'>('about');
+  const [donor, setDonor] = useState<PartDonor | null>(null);
   // История грузится по открытию вкладки, а не вместе с карточкой: у позиции
   // переехавшего клиента правок бывают десятки, а открывают карточку чаще
   // всего чтобы посмотреть цену и снимок.
@@ -117,6 +128,15 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
       .then(setHistory)
       .catch(() => setHistory({ changes: [], movements: [] }));
   }, [tab, history, row.id]);
+
+  // Машина грузится по открытию вкладки: чаще всего карточку открывают ради
+  // цены и снимка, а не ради того, какой у донора привод.
+  useEffect(() => {
+    if (tab !== 'donor' || donor !== null) {
+      return;
+    }
+    void loadDonor(row.id).then(setDonor).catch(() => setDonor(null));
+  }, [tab, donor, row.id]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -271,6 +291,15 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
                   Применимость
                 </button>
               )}
+              {row.donorCode !== null && (
+                <button
+                  type="button"
+                  className={tab === 'donor' ? 'card-tab card-tab--active' : 'card-tab'}
+                  onClick={() => setTab('donor')}
+                >
+                  Донор
+                </button>
+              )}
               <button
                 type="button"
                 className={tab === 'history' ? 'card-tab card-tab--active' : 'card-tab'}
@@ -280,7 +309,9 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
               </button>
             </div>
 
-            {tab === 'fits' ? (
+            {tab === 'donor' ? (
+              <PartDonorView donor={donor} onParts={onDonorParts} />
+            ) : tab === 'fits' ? (
               <div className="card-view__fits">
                 {fits === null ? (
                   <p className="muted">Загружаем…</p>
@@ -364,6 +395,15 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
               <div className="card-marks">
                 <span className={row.donorCode === null ? 'mark mark--off' : 'mark'}>
                   {row.donorCode === null ? 'Донор не задан' : 'Донор задан'}
+                  {/* Отметка без самих данных — это сообщение «данные есть,
+                      но не здесь». Продавец по телефону отвечает как раз ими:
+                      руль, коробка, привод машины, с которой деталь снята. */}
+                  {row.donorCode !== null && (
+                    <button type="button" className="mark__link"
+                            onClick={() => setTab('donor')}>
+                      Посмотреть
+                    </button>
+                  )}
                 </span>
                 <span className={fits !== null && fits.length > 0 ? 'mark' : 'mark mark--off'}>
                   {fits !== null && fits.length > 0
