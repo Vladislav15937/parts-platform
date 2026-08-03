@@ -470,14 +470,20 @@ public class PartService {
                 SELECT p.id, p.public_code, p.title, p.price, p.status,
                        w.id AS warehouse_id, w.name AS warehouse_name,
                        c.code AS cell_code,
-                       s.qty, s.qty_reserved, s.qty_available
+                       s.qty, s.qty_reserved, s.qty - s.qty_reserved AS qty_available
                   FROM part p
                   JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
                   JOIN warehouse w ON w.id = s.warehouse_id
                   LEFT JOIN storage_cell c ON c.id = s.cell_id
-                 WHERE p.search_vector @@ plainto_tsquery('russian', ?)
-                 ORDER BY (s.qty_available > 0) DESC,
-                          ts_rank(p.search_vector, plainto_tsquery('russian', ?)) DESC,
+                 WHERE to_tsvector('russian', coalesce(p.title, '') || ' '
+                           || coalesce(p.description, '') || ' '
+                           || coalesce(p.marking, ''))
+                       @@ plainto_tsquery('russian', ?)
+                 ORDER BY (s.qty - s.qty_reserved > 0) DESC,
+                          ts_rank(to_tsvector('russian', coalesce(p.title, '') || ' '
+                              || coalesce(p.description, '') || ' '
+                              || coalesce(p.marking, '')),
+                              plainto_tsquery('russian', ?)) DESC,
                           p.id
                  LIMIT ?""",
                 (rs, i) -> new StockRow(
@@ -534,7 +540,8 @@ public class PartService {
 
     @Transactional(readOnly = true)
     public List<Part> findByOem(String number) {
-        return partRepository.findByOemNumber(number);
+        return partRepository.findByNormalizedOem(
+                ru.partsflow.catalog.OemNumbers.normalize(number));
     }
 
     /**

@@ -17,27 +17,39 @@ public interface PartRepository extends JpaRepository<Part, Long> {
 
     /**
      * Поиск по названию и описанию через полнотекстовый индекс.
-     * Нативный запрос: JPQL не умеет tsvector.
+     *
+     * <p>Нативный запрос: JPQL не умеет tsvector. Выражение пишется в запросе,
+     * а не хранится колонкой — генерируемых колонок в схеме не осталось;
+     * на то же выражение стоит GIN-индекс {@code part_search_gin}, поэтому
+     * план запроса не изменился.
      */
     @Query(value = """
             SELECT * FROM part
-            WHERE search_vector @@ plainto_tsquery('russian', :query)
-            ORDER BY ts_rank(search_vector, plainto_tsquery('russian', :query)) DESC
+            WHERE to_tsvector('russian', coalesce(title, '') || ' '
+                    || coalesce(description, '') || ' ' || coalesce(marking, ''))
+                @@ plainto_tsquery('russian', :query)
+            ORDER BY ts_rank(to_tsvector('russian', coalesce(title, '') || ' '
+                    || coalesce(description, '') || ' ' || coalesce(marking, '')),
+                    plainto_tsquery('russian', :query)) DESC
             LIMIT :limit
             """, nativeQuery = true)
     List<Part> search(@Param("query") String query, @Param("limit") int limit);
 
     /**
-     * Поиск по номеру детали. Номер нормализуется той же функцией, что и при
-     * записи, поэтому любое написание (с дефисами, пробелами, в любом регистре)
-     * находит одну и ту же деталь.
+     * Поиск по номеру детали.
+     *
+     * <p>Номер приводится {@code OemNumbers.normalize} — тем же методом, что
+     * и при записи, поэтому любое написание (с дефисами, пробелами, в любом
+     * регистре) находит одну и ту же деталь. Приведённый номер передаётся
+     * параметром: раньше его считала функция БД, и приведение жило в двух
+     * местах сразу.
      */
     @Query(value = """
             SELECT p.* FROM part p
             JOIN part_oem o ON o.part_id = p.id
-            WHERE o.normalized = catalog.normalize_oem(:number)
+            WHERE o.normalized = :normalized
             """, nativeQuery = true)
-    List<Part> findByOemNumber(@Param("number") String number);
+    List<Part> findByNormalizedOem(@Param("normalized") String normalized);
 
     /**
      * Главный экран продавца: что есть на конкретную машину.
@@ -50,7 +62,7 @@ public interface PartRepository extends JpaRepository<Part, Long> {
     @Query(value = """
             SELECT DISTINCT p.* FROM part p
             JOIN part_applicability a ON a.part_id = p.id
-            JOIN part_stock ps ON ps.part_id = p.id AND ps.qty_available > 0
+            JOIN part_stock ps ON ps.part_id = p.id AND ps.qty - ps.qty_reserved > 0
             WHERE a.brand_id = :brandId
               AND (:modelId IS NULL OR a.model_id = :modelId OR a.model_id IS NULL)
               AND (:generationId IS NULL OR a.generation_id = :generationId OR a.generation_id IS NULL)

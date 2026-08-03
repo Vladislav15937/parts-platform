@@ -131,7 +131,7 @@ public class StockReservationRepository {
      */
     public BigDecimal availableQuantity(Long partId, Long warehouseId) {
         Object found = entityManager.createNativeQuery("""
-                        SELECT COALESCE(sum(qty_available), 0) FROM part_stock
+                        SELECT COALESCE(sum(qty - qty_reserved), 0) FROM part_stock
                          WHERE part_id = :part AND warehouse_id = :warehouse""")
                 .setParameter("part", partId)
                 .setParameter("warehouse", warehouseId)

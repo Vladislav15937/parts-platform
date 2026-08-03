@@ -193,7 +193,7 @@ class PartStatusTest extends PostgresTestBase {
              ResultSet rs = s.executeQuery("""
                      SELECT DISTINCT p.id FROM part p
                      JOIN part_applicability a ON a.part_id = p.id
-                     JOIN part_stock ps ON ps.part_id = p.id AND ps.qty_available > 0
+                     JOIN part_stock ps ON ps.part_id = p.id AND ps.qty - ps.qty_reserved > 0
                      WHERE a.brand_id = %d
                      ORDER BY p.id""".formatted(brandId))) {
             java.util.List<Long> found = new java.util.ArrayList<>();

@@ -339,7 +339,7 @@ class StockReservationTest extends PostgresTestBase {
     }
 
     private BigDecimal available(long partId, long warehouse) throws SQLException {
-        return scalarDecimal("SELECT qty_available FROM part_stock WHERE part_id = %d AND warehouse_id = %d"
+        return scalarDecimal("SELECT qty - qty_reserved FROM part_stock WHERE part_id = %d AND warehouse_id = %d"
                 .formatted(partId, warehouse));
     }
 

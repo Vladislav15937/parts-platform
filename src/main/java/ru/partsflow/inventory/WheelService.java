@@ -440,7 +440,7 @@ public class WheelService {
             // из нашей же таблицы, а не из запроса. Параметром колонку не задать.
             stock.append("""
                     ,
-                           (SELECT sum(s.qty_available) FROM part_stock s
+                           (SELECT sum(s.qty - s.qty_reserved) FROM part_stock s
                              WHERE s.part_id = p.id AND s.warehouse_id = %1$d) AS free_%1$d,
                            (SELECT sum(s.qty_reserved) FROM part_stock s
                              WHERE s.part_id = p.id AND s.warehouse_id = %1$d) AS res_%1$d"""

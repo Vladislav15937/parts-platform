@@ -177,10 +177,10 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         Long partId = part(name, new BigDecimal("8500"), true);
         intake(partId, warehouse, 1);
         inTenant(() -> {
-            jdbc.update("INSERT INTO part_oem (part_id, raw_number, is_primary) "
-                    + "VALUES (?, '334388', true)", partId);
-            jdbc.update("INSERT INTO part_oem (part_id, raw_number) VALUES (?, '4853033281')", partId);
-            jdbc.update("INSERT INTO part_oem (part_id, raw_number) VALUES (?, 'DS2130GS')", partId);
+            jdbc.update("INSERT INTO part_oem (part_id, raw_number, normalized, is_primary) "
+                    + "VALUES (?, '334388', '334388', true)", partId);
+            jdbc.update("INSERT INTO part_oem (part_id, raw_number, normalized) VALUES (?, '4853033281', '4853033281')", partId);
+            jdbc.update("INSERT INTO part_oem (part_id, raw_number, normalized) VALUES (?, 'DS2130GS', 'DS2130GS')", partId);
             return null;
         });
 

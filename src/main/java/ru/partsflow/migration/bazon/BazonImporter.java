@@ -734,7 +734,8 @@ public final class BazonImporter {
                  PreparedStatement setReserved = c.prepareStatement("UPDATE " + schema + """
                      .part_stock SET qty_reserved = ? WHERE part_id = ? AND warehouse_id = ?""");
                  PreparedStatement insertOem = c.prepareStatement("INSERT INTO " + schema + """
-                     .part_oem (part_id, raw_number, is_primary) VALUES (?, ?, ?)
+                     .part_oem (part_id, raw_number, normalized, is_primary)
+                     VALUES (?, ?, ?, ?)
                      ON CONFLICT DO NOTHING""");
                  PreparedStatement insertPhoto = c.prepareStatement("INSERT INTO " + schema + """
                      .part_photo_import (part_id, url, sort_order) VALUES (?, ?, ?)
@@ -1027,13 +1028,18 @@ public final class BazonImporter {
         if (primary != null) {
             ps.setLong(1, partId);
             ps.setString(2, primary);
-            ps.setBoolean(3, true);
+            // Приведённый номер считает приложение — тем же методом, что
+            // и при приёмке. До 4 августа 2026 его считала генерируемая
+            // колонка.
+            ps.setString(3, ru.partsflow.catalog.OemNumbers.normalize(primary));
+            ps.setBoolean(4, true);
             ps.executeUpdate();
         }
         for (String cross : BazonValueParser.parseList(row.get("Кросс-номера"))) {
             ps.setLong(1, partId);
             ps.setString(2, cross);
-            ps.setBoolean(3, false);
+            ps.setString(3, ru.partsflow.catalog.OemNumbers.normalize(cross));
+            ps.setBoolean(4, false);
             ps.executeUpdate();
         }
     }

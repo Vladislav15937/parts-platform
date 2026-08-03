@@ -150,7 +150,7 @@ public class CatalogService {
 
                      AND (p.qty_on_hand = 0
                           OR EXISTS (SELECT 1 FROM part_stock s
-                                      WHERE s.part_id = p.id AND s.qty_available > 0))""");
+                                      WHERE s.part_id = p.id AND s.qty - s.qty_reserved > 0))""");
         }
         if (warehouseIds != null && !warehouseIds.isEmpty()) {
             where.append("""
@@ -658,7 +658,7 @@ public class CatalogService {
         for (Warehouse warehouse : warehouses) {
             stock.append("""
                     ,
-                           (SELECT sum(s.qty_available) FROM part_stock s
+                           (SELECT sum(s.qty - s.qty_reserved) FROM part_stock s
                              WHERE s.part_id = p.id AND s.warehouse_id = %1$d) AS free_%1$d,
                            (SELECT sum(s.qty_reserved) FROM part_stock s
                              WHERE s.part_id = p.id AND s.warehouse_id = %1$d) AS res_%1$d"""

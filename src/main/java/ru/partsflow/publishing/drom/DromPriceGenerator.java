@@ -84,7 +84,7 @@ public class DromPriceGenerator {
                    d.year
               FROM part p
               LEFT JOIN (
-                  SELECT part_id, sum(qty_available) AS qty_available
+                  SELECT part_id, sum(qty - qty_reserved) AS qty_available
                     FROM part_stock
                    WHERE (?::bigint[] IS NULL OR warehouse_id = ANY (?::bigint[]))
                    GROUP BY part_id

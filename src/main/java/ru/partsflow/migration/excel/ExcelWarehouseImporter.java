@@ -259,8 +259,10 @@ public class ExcelWarehouseImporter {
             if (row.oem() != null) {
                 jdbc.update("""
                         INSERT INTO part_oem (part_id, number, normalized, is_original)
-                        VALUES (?, ?, catalog.normalize_oem(?), false)
-                        ON CONFLICT DO NOTHING""", partId, row.oem(), row.oem());
+                        VALUES (?, ?, ?, false)
+                        ON CONFLICT DO NOTHING""",
+                        partId, row.oem(),
+                        ru.partsflow.catalog.OemNumbers.normalize(row.oem()));
             }
 
             // Остаток появляется движением: писать qty_on_hand напрямую значит
