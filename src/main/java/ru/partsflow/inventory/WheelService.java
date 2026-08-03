@@ -43,6 +43,26 @@ public class WheelService {
     }
 
     /**
+     * Виды товара колёсной линии.
+     *
+     * <p>Один список на отбор и на заведение: разойдясь, они дали бы вид,
+     * который отбор пускает, а заведение нет. В колонке стоит CHECK, но
+     * доводить до него значение из запроса незачем — оттуда оно возвращается
+     * как «операция нарушает целостность данных», то есть человеку неясно,
+     * что он ввёл не то, а офлайн-очередь читает такое как повод повторять.
+     */
+    private static final java.util.Set<String> KINDS =
+            java.util.Set.of("TYRE", "DISC", "ASSEMBLY");
+
+    private static String requireKind(String kind) {
+        if (kind == null || !KINDS.contains(kind)) {
+            throw new IllegalArgumentException(
+                    "Неизвестный вид товара: " + kind + ". Допустимы " + KINDS);
+        }
+        return kind;
+    }
+
+    /**
      * Заводит комплект: {@code quantity} одинаковых колёс под общим номером.
      *
      * @return номера заведённых карточек
@@ -59,6 +79,7 @@ public class WheelService {
         if (warehouseId == null) {
             throw new IllegalArgumentException("Не указан склад");
         }
+        requireKind(request.kind());
 
         Integer setNo = quantity > 1
                 ? jdbc.queryForObject("SELECT nextval('wheel_set_no_seq')", Integer.class)
@@ -119,12 +140,28 @@ public class WheelService {
      * дюжину пустых колонок.
      */
     @Transactional(readOnly = true)
-    public List<WheelRow> list(String query, String kind, boolean withMissing,
-                               Map<String, String> columns, Map<String, String> words,
-                               String sort, boolean descending, int limit) {
+    public Page list(String query, String kind, boolean withMissing,
+                     Map<String, String> columns, Map<String, String> words,
+                     String sort, boolean descending, int page, int size) {
         Filter filter = filterOf(query, kind, withMissing, columns, words);
+
+        // Общее число — не украшение: страница отдаёт полсотни строк,
+        // и без него на экране нельзя ни написать «812 товаров», ни понять,
+        // сколько страниц. Пока его не было, вкладка брала пятьсот строк
+        // разом и считала товары длиной ответа: у клиента с бо́льшим складом
+        // счётчик врал ровно на то, чего не видно, а до остального было
+        // не добраться вовсе.
+        Long total = jdbc.queryForObject("""
+                SELECT count(*) FROM part p
+                  JOIN part_wheel w ON w.part_id = p.id
+                  LEFT JOIN part_name pn ON pn.id = p.part_name_id
+                  LEFT JOIN donor d ON d.id = p.donor_id
+                  LEFT JOIN supply s ON s.id = p.supply_id
+                """ + filter.where(), Long.class, filter.args().toArray());
+
         List<Object> args = new java.util.ArrayList<>(filter.args());
-        args.add(limit);
+        args.add(size);
+        args.add((long) page * size);
 
         List<WheelRow> rows = jdbc.query("""
                 SELECT p.id, p.public_code, p.title, p.price, p.status, p.qty_on_hand,
@@ -159,7 +196,7 @@ public class WheelService {
                   LEFT JOIN part_name pn ON pn.id = p.part_name_id
                   LEFT JOIN donor d ON d.id = p.donor_id
                   LEFT JOIN supply s ON s.id = p.supply_id
-                """ + filter.where() + orderOf(sort, descending) + " LIMIT ?",
+                """ + filter.where() + orderOf(sort, descending) + " LIMIT ? OFFSET ?",
                 (rs, i) -> new WheelRow(
                         rs.getLong("id"), rs.getString("public_code"), rs.getString("title"),
                         rs.getBigDecimal("price"), rs.getString("status"),
@@ -192,7 +229,11 @@ public class WheelService {
                         rs.getString("photo_key"),
                         Map.of()),
                 args.toArray());
-        return withStock(rows);
+        return new Page(total == null ? 0 : total, withStock(rows));
+    }
+
+    /** @param total сколько всего под отбором, а не сколько строк на странице */
+    public record Page(long total, List<WheelRow> rows) {
     }
 
     /**
@@ -254,11 +295,7 @@ public class WheelService {
             }
         }
         if (kind != null && !kind.isBlank()) {
-            // Значение из белого списка: в колонке стоит CHECK, но отдавать
-            // в него что попало из запроса незачем.
-            if (!"TYRE".equals(kind) && !"DISC".equals(kind) && !"ASSEMBLY".equals(kind)) {
-                throw new IllegalArgumentException("Неизвестный вид товара: " + kind);
-            }
+            requireKind(kind);
             where.append(" AND w.kind = ?");
             args.add(kind);
         }

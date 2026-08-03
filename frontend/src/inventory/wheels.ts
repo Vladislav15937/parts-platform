@@ -101,6 +101,8 @@ export interface WheelWarehouse {
 }
 
 export interface WheelPage {
+  /** Сколько всего под отбором, а не сколько строк пришло. */
+  total: number;
   warehouses: WheelWarehouse[];
   rows: WheelRow[];
 }
@@ -124,6 +126,8 @@ export interface WheelQuery {
    * получает пустую таблицу и не понимает, ошибся он или товара нет.
    */
   columns: Record<string, string>;
+  /** Страница, считая с нуля: у крупной шинки колёс больше, чем влезает в одну. */
+  page: number;
   /**
    * Вбитое в колонку руками: ищется вхождением, а не точным равенством.
    * Список нужен, когда значений десяток; когда их сотня — быстрее набрать
@@ -138,8 +142,10 @@ export interface WheelQuery {
 export const FILTER_EMPTY = '\u2014пусто\u2014';
 export const FILTER_PRESENT = '\u2014не пусто\u2014';
 
+export const WHEEL_PAGE_SIZE = 50;
+
 export const EMPTY_WHEEL_QUERY: WheelQuery = {
-  q: '', kind: '', missing: false, columns: {}, words: {}, sort: 'set', desc: true,
+  q: '', kind: '', missing: false, columns: {}, words: {}, sort: 'set', desc: true, page: 0,
 };
 
 /** Задан ли хоть один отбор: по этому экран решает, показывать ли «Сбросить». */
@@ -179,7 +185,8 @@ export function wheelParams(query: WheelQuery): URLSearchParams {
 
 export function listWheels(query: WheelQuery = EMPTY_WHEEL_QUERY): Promise<WheelPage> {
   const params = wheelParams(query);
-  params.set('limit', '500');
+  params.set('page', String(query.page ?? 0));
+  params.set('size', String(WHEEL_PAGE_SIZE));
   return request<WheelPage>(`/api/wheels?${params.toString()}`);
 }
 
