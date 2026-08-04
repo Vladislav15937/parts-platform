@@ -36,6 +36,11 @@ import { BulkEditForm } from './BulkEditForm';
  * <p>Размер показан отдельным столбцом и первым: покупатель называет
  * «195 65 15», а не модель шины.
  */
+/** Название колонки для чипа отбора: ключ ничего не говорит владельцу. */
+function wheelColumnTitle(key: string): string {
+  return WHEEL_COLUMNS.find((c) => c.key === key)?.title ?? key;
+}
+
 export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: string }) {
   const [page, setPage] = useState<WheelPage | null>(null);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
@@ -184,6 +189,38 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
       </div>
 
       <div className="filter-row">
+        {/* Отборы колонок — здесь, а не только в шапке таблицы: при пустой
+            выдаче таблицы нет вовсе, и снять их становится нечем. */}
+        {Object.entries(query.columns).map(([key, value]) => (
+          <button
+            key={`col-${key}`}
+            type="button"
+            className="crumb"
+            onClick={() => {
+              const columns = { ...query.columns };
+              delete columns[key];
+              change({ columns, page: 0 });
+            }}
+          >
+            {wheelColumnTitle(key)}: {value} ✕
+          </button>
+        ))}
+
+        {Object.entries(query.words).map(([key, value]) => (
+          <button
+            key={`word-${key}`}
+            type="button"
+            className="crumb"
+            onClick={() => {
+              const words = { ...query.words };
+              delete words[key];
+              change({ words, page: 0 });
+            }}
+          >
+            {wheelColumnTitle(key)}: «{value}» ✕
+          </button>
+        ))}
+
         <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
           Настроить таблицу
         </button>

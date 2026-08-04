@@ -39,6 +39,11 @@ import { VehiclePicker } from './VehiclePicker';
  */
 const SIZE = 50;
 
+/** Название колонки для чипа отбора: ключ ничего не говорит владельцу. */
+function columnTitle(key: string): string {
+  return COLUMNS.find((c) => c.key === key)?.title ?? key;
+}
+
 export function CatalogScreen({ role }: { role: string }) {
   const [page, setPage] = useState<CatalogPage | null>(null);
   const [error, setError] = useState('');
@@ -204,6 +209,42 @@ export function CatalogScreen({ role }: { role: string }) {
             {vehicleLabel(query.vehicle)} ✕
           </button>
         )}
+
+        {/* Отборы колонок — здесь, а не только в шапке таблицы. Снимаются они
+            в меню колонки, а при пустой выдаче таблицы нет вовсе: отбор
+            действует, объяснения ему нет нигде, и снять его нечем — остаётся
+            перезагрузить страницу. Та же беда, что со скрытой колонкой
+            «Номер донора»: почему из тридцати пяти тысяч осталось ноль,
+            на экране не написано. */}
+        {Object.entries(query.columns).map(([key, value]) => (
+          <button
+            key={`col-${key}`}
+            type="button"
+            className="crumb"
+            onClick={() => {
+              const columns = { ...query.columns };
+              delete columns[key];
+              change({ columns, page: 0 });
+            }}
+          >
+            {columnTitle(key)}: {value} ✕
+          </button>
+        ))}
+
+        {Object.entries(query.words).map(([key, value]) => (
+          <button
+            key={`word-${key}`}
+            type="button"
+            className="crumb"
+            onClick={() => {
+              const words = { ...query.words };
+              delete words[key];
+              change({ words, page: 0 });
+            }}
+          >
+            {columnTitle(key)}: «{value}» ✕
+          </button>
+        ))}
         <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
           Настроить таблицу
         </button>
