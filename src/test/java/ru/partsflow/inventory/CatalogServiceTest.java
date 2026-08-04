@@ -94,10 +94,9 @@ class CatalogServiceTest extends PostgresTestBase {
     @Test
     @DisplayName("Остаток приходит по складам, а не одним числом")
     void stockIsPerWarehouse() {
-        Long partId = part("Бампер", 3);
+        Long partId = part("Бампер витринный", 3);
 
-        var row = catalog(true, false).rows().stream()
-                .filter(r -> r.id().equals(partId)).findFirst().orElseThrow();
+        var row = rowOf(partId, "Бампер витринный");
 
         // У клиента складов несколько, и колонка на каждый — это то, как
         // на складе ищут: «на Ткацкой две, на дальнем ноль».
@@ -171,10 +170,7 @@ class CatalogServiceTest extends PostgresTestBase {
                                 is_published = true
                  WHERE id = ?""", partId));
 
-        var row = catalog(true, true).rows().stream()
-                .filter(r -> r.id().equals(partId))
-                .findFirst()
-                .orElseThrow();
+        var row = rowOf(partId, "Фара с паритетом");
 
         assertThat(row.weightKg()).isEqualByComparingTo("3.5");
         // Габариты одной строкой: по отдельности «длина 120» не отвечает
@@ -244,8 +240,7 @@ class CatalogServiceTest extends PostgresTestBase {
                 INSERT INTO part_photo (part_id, s3_key, status, sort_order)
                 VALUES (?, 't_000042/parts/1/broken.jpg', 'FAILED', 0)""", partId));
 
-        var row = catalog(true, true).rows().stream()
-                .filter(r -> r.id().equals(partId)).findFirst().orElseThrow();
+        var row = rowOf(partId, "Фара со сломанной загрузкой");
 
         // У оборванной загрузки файла в хранилище нет, и в колонке «Превью»
         // висит битая картинка, а колонка «Количество фото» обещает снимок,
@@ -290,6 +285,24 @@ class CatalogServiceTest extends PostgresTestBase {
                 Map.of(), Map.of(), "price", true, 0, 5, "что-угодно"));
 
         assertThat(byPrice.rows()).isNotEmpty();
+    }
+
+    /**
+     * Строка своей позиции — поиском по заголовку, а не листанием страницы.
+     *
+     * <p>Тесты делят схему, страница отдаёт полсотни строк, и позиция уезжает
+     * за её край, как только сосед заведёт десяток своих. Локально порядок
+     * тестов один, на стенде другой — и падает то один тест, то другой.
+     * Поймано стендом: `showcaseCarriesParityFields` не нашёл свою позицию
+     * после того, как рядом появились тесты курсора.
+     */
+    private CatalogService.Row rowOf(Long partId, String title) {
+        return inTenant(() -> catalog.list(title, true, true, List.of(), null,
+                        Map.of(), Map.of(), "code", true, 0, 50))
+                .rows().stream()
+                .filter(r -> r.id().equals(partId))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("позиция «" + title + "» не найдена на витрине"));
     }
 
     private CatalogService.Page catalog(boolean reserved, boolean missing) {
