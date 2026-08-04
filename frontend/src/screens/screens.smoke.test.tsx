@@ -50,7 +50,17 @@ describe('экраны открываются', () => {
       const body: unknown = listLike.some((path) => url.includes(path))
         ? []
         : url.includes('/api/reports/')
-          ? { rows: [], totals: {}, month: '2026-08' }
+          // Итоги отдаём заполненными: экран читает их поля напрямую,
+          // и пустой объект означал бы падение на «undefined.toLocaleString» —
+          // проверку формы ответа, а не проверку экрана.
+          ? {
+              month: '2026-08',
+              rows: [],
+              totals: {
+                advances: 0, debts: 0, withAdvance: 0, withDebt: 0, problems: [],
+                donors: 0, totalCost: 0, revenue: 0, stockValue: 0,
+              },
+            }
           : EMPTY;
       return new Response(JSON.stringify(body), {
         status: 200,
