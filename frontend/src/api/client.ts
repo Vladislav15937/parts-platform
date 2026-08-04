@@ -62,14 +62,31 @@ function classify(status: number): FailureKind {
   return 'permanent';
 }
 
+/**
+ * Текст отказа для человека.
+ *
+ * <p>Приложение объясняет свои отказы само — «Нечего снимать с резерва»,
+ * «нет количества», — и такой текст уходит наружу как есть.
+ *
+ * <p><b>А вот когда тела нет, показывать код ответа нельзя.</b> Лежащее
+ * приложение за живым терминатором отвечает 502, а прокси разработки — 500,
+ * и продавец видел «HTTP 500»: по этому не понять ни что случилось, ни что
+ * делать. Полный обрыв сети при этом говорил по-человечески — «Нет связи
+ * с сервером», — то есть хуже всего сообщение было ровно в том случае,
+ * который в ангаре и случается: wi-fi поднят, а сервера за ним нет.
+ */
 async function messageOf(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { message?: string };
-    return body.message ?? `HTTP ${response.status}`;
+    if (body.message) {
+      return body.message;
+    }
   } catch {
     // Тело может быть пустым (204) или не JSON — это не повод падать.
-    return `HTTP ${response.status}`;
   }
+  return response.status >= 500
+    ? 'Сервер не отвечает — проверьте связь и повторите'
+    : `Запрос отклонён (${response.status})`;
 }
 
 interface RequestOptions {

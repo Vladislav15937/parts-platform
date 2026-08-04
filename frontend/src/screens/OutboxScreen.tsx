@@ -50,7 +50,11 @@ export function OutboxScreen({ records, needsSignIn, onRetry, onDrop }: Props) {
                 {record.attempts > 0 && (
                   <span className="muted"> · попыток {record.attempts}</span>
                 )}
-                {record.lastError !== undefined && (
+                {/* След прошлой неудачи полезен, пока причина неизвестна.
+                    Когда она названа выше — «сессия кончилась», — он ей
+                    противоречит: приёмщик читает «проверьте связь» при
+                    исправной связи и идёт чинить не то. */}
+                {record.lastError !== undefined && !needsSignIn && (
                   <div className="muted">{record.lastError}</div>
                 )}
               </li>
