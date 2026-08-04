@@ -53,12 +53,15 @@ public class CatalogController {
                      @RequestParam(defaultValue = "code") String sort,
                      @RequestParam(defaultValue = "true") boolean desc,
                      @RequestParam(defaultValue = "0") int page,
-                     @RequestParam(defaultValue = "50") int size) {
+                     @RequestParam(defaultValue = "50") int size,
+                     /* Номер товара последней строки предыдущей страницы:
+                        тогда следующая берётся от него, а не отступом. */
+                     @RequestParam(required = false) String after) {
 
         CatalogService.Page found = catalog.list(q, reserved, missing, warehouses,
                 new CatalogService.Vehicle(brandId, modelId, body, engine),
                 columnsOf(filter), columnsOf(find),
-                sort, desc, Math.max(page, 0), Math.min(Math.max(size, 1), MAX_SIZE));
+                sort, desc, Math.max(page, 0), Math.min(Math.max(size, 1), MAX_SIZE), after);
 
         return new View(found.total(), catalog.warehouses(),
                 found.rows().stream().map(this::rowOf).toList());

@@ -111,7 +111,9 @@ export function CatalogScreen({ role }: { role: string }) {
     // Любая смена отбора возвращает на первую страницу: остаться на сорок
     // второй после нового фильтра значит увидеть пустоту и решить,
     // что ничего не нашлось.
-    setQuery({ ...query, ...patch, page: patch.page ?? 0 });
+    // Курсор живёт ровно один переход: смена отбора или прыжок по номеру
+    // страницы его сбрасывают, иначе он указывал бы в прежнюю выдачу.
+    setQuery({ ...query, after: undefined, ...patch, page: patch.page ?? 0 });
   }
 
   function toggleColumn(key: string) {
@@ -504,7 +506,15 @@ export function CatalogScreen({ role }: { role: string }) {
             type="button"
             className="button--ghost"
             disabled={query.page + 1 >= pages}
-            onClick={() => change({ page: query.page + 1 })}
+            onClick={() => change({
+              page: query.page + 1,
+              // Вперёд — от последней строки: серверу не придётся читать
+              // и выбрасывать всё, что до неё. Назад и при прыжке курсора
+              // нет, и страница берётся отступом, как раньше.
+              after: query.sort === 'code' && page !== null
+                ? (page.rows[page.rows.length - 1]?.code ?? undefined)
+                : undefined,
+            })}
           >
             →
           </button>

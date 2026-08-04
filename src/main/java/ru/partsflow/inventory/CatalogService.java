@@ -83,13 +83,32 @@ public class CatalogService {
                      List<Long> warehouseIds, Vehicle vehicle,
                      Map<String, String> columns, Map<String, String> words,
                      String sort, boolean descending, int page, int size) {
+        return list(query, withReserved, withMissing, warehouseIds, vehicle,
+                columns, words, sort, descending, page, size, null);
+    }
+
+    /**
+     * @param after код товара последней строки предыдущей страницы: тогда
+     *              следующая берётся не отступом, а от него
+     */
+    // Транзакция обязательна и здесь, а не только у соседней перегрузки:
+    // search_path выставляет провайдер соединений Hibernate внутри неё,
+    // и JdbcTemplate, вызванный снаружи, уходит в public — «relation part
+    // does not exist» на витрине при полностью целых данных. Поймано
+    // репетицией восстановления ячейки: там витрина отвечала пятисоткой,
+    // а поиск продавца, который идёт через репозиторий, работал.
+    @Transactional(readOnly = true)
+    public Page list(String query, boolean withReserved, boolean withMissing,
+                     List<Long> warehouseIds, Vehicle vehicle,
+                     Map<String, String> columns, Map<String, String> words,
+                     String sort, boolean descending, int page, int size, String after) {
 
         Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
                 columns, words);
         StringBuilder where = filter.where();
         List<Object> args = filter.args();
 
-        return finish(where, args, sort, descending, page, size);
+        return finish(where, args, sort, descending, page, size, after);
     }
 
     /**
@@ -475,7 +494,7 @@ public class CatalogService {
     }
 
     private Page finish(StringBuilder where, List<Object> args, String sort,
-                        boolean descending, int page, int size) {
+                        boolean descending, int page, int size, String after) {
         String joins = """
 
                   FROM part p
@@ -492,8 +511,27 @@ public class CatalogService {
 
         String order = SORTS.getOrDefault(sort, "p.id") + (descending ? " DESC" : " ASC");
         List<Object> pageArgs = new ArrayList<>(args);
+
+        // Отступом или от последней строки предыдущей страницы.
+        //
+        // OFFSET заставляет базу прочитать и выбросить всё, что до него:
+        // на складе в 35 841 позицию семисотая страница обходилась в 748 мс
+        // против 82 мс на первой — замерено. От курсора это стоит столько же,
+        // сколько первая страница.
+        //
+        // Только для сортировки по номеру товара, и это не лень: остальные
+        // колонки бывают пустыми, а по колонке с NULL курсор не построить —
+        // сравнение с NULL не отвечает ни «больше», ни «меньше», и страница
+        // молча теряла бы строки. Листают подряд как раз склад целиком,
+        // то есть в порядке по умолчанию; отсортировав по цене, владелец
+        // смотрит верхушку, а не идёт вглубь.
+        String pageWhere = "";
+        if (after != null && !after.isBlank() && "code".equals(sort)) {
+            pageWhere = " AND p.public_code " + (descending ? "<" : ">") + " ?";
+            pageArgs.add(after);
+        }
         pageArgs.add(size);
-        pageArgs.add(page * size);
+        pageArgs.add(pageWhere.isEmpty() ? (long) page * size : 0L);
 
         List<Row> rows = jdbc.query("""
                 SELECT p.id, p.public_code, p.title, p.quality_grade, p.condition,
@@ -548,7 +586,7 @@ public class CatalogService {
                          WHERE ph.part_id = p.id AND ph.status = 'PROCESSED'
                          ORDER BY ph.is_main DESC, ph.sort_order,
                                ph.id LIMIT 1) AS photo_key
-                """ + joins + where + " ORDER BY " + order + " LIMIT ? OFFSET ?",
+                """ + joins + where + pageWhere + " ORDER BY " + order + " LIMIT ? OFFSET ?",
                 (rs, i) -> new Row(
                         rs.getLong("id"), rs.getString("public_code"), rs.getString("title"),
                         rs.getString("quality_grade"), rs.getString("condition"),
