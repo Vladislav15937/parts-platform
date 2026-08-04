@@ -43,6 +43,9 @@ class DromWheelGeneratorTest extends PostgresTestBase {
     private StockLedger ledger;
 
     @Autowired
+    private ru.partsflow.publishing.MarketplaceAccountService accounts;
+
+    @Autowired
     private JdbcTemplate jdbc;
 
     @Autowired
@@ -194,6 +197,47 @@ class DromWheelGeneratorTest extends PostgresTestBase {
         assertThat(offerOf(title)).contains("<available>false</available>");
     }
 
+    /**
+     * Счётчик обязан считать тем же условием, что и генератор.
+     *
+     * <p>Пока он знал только запчасти, у выгрузки колёс он показывал 35 835
+     * позиций там, где уезжало 60: число, ради которого он и заведён, врало
+     * в шестьсот раз и успокаивало вместо того, чтобы предупреждать.
+     * Сравнение идёт с числом {@code <offer>} в собранном прайсе, а не
+     * с ожидаемым числом, — так расхождение поймается при любой будущей
+     * правке отбора.
+     *
+     * <p>Отбор по цене отсекает фикстуры соседних проверок: схема у класса
+     * общая, и без него число зависело бы от порядка тестов. Шин при этом
+     * две, а запчасть одна — иначе счёт по чужой линии случайно совпал бы
+     * с верным, и проверка молчала бы при сломанном коде.
+     */
+    @Test
+    @DisplayName("Счётчик выгрузки колёс обещает столько, сколько уедет")
+    void counterMatchesTheWheelFeed() {
+        BigDecimal from = new BigDecimal("987000");
+        BigDecimal to = new BigDecimal("988000");
+
+        tyre("Счётчик: шина первая", "987500", "SUMMER", 205, 55, "16", 91, "V", "6");
+        tyre("Счётчик: шина вторая", "987600", "SUMMER", 215, 60, "17", 94, "H", "5");
+        inTenant(() -> {
+            Long partId = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, cost_price, is_published)
+                    VALUES (1, 'Счётчик: фара', 987700, 1000, true) RETURNING id""", Long.class);
+            ledger.record(StockMovement.intake(partId, BigDecimal.ONE, warehouse, null));
+            return partId;
+        });
+
+        long counted = inTenant(() -> accounts.countMatching(
+                from, to, null, null, null, false, null, false, "WHEEL"));
+        long offers = priceWithin(from, to).split("<offer>", -1).length - 1;
+
+        assertThat(offers).as("в прайс колёс попали не обе шины").isEqualTo(2);
+        assertThat(counted)
+                .as("счётчик колёсной выгрузки обещает не то число, которое уедет")
+                .isEqualTo(offers);
+    }
+
     // ---------- фикстуры ----------
 
     private Long wheelPart(String title, String price) {
@@ -217,6 +261,16 @@ class DromWheelGeneratorTest extends PostgresTestBase {
                 VALUES (?, 'TYRE', ?::numeric, ?, ?, ?, ?::numeric, ?, ?, 2021)""",
                 partId, diameter, width, height, season, wearMm, loadIndex, speedIndex));
         return partId;
+    }
+
+    private String priceWithin(BigDecimal from, BigDecimal to) {
+        return inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeTo(out, new DromPriceGenerator.FeedFilter(
+                    from, to, java.util.List.of(), java.util.List.of(),
+                    java.util.List.of(), false, java.util.List.of(), false), null);
+            return out.toString(StandardCharsets.UTF_8);
+        });
     }
 
     private String price() {

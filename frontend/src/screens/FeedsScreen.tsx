@@ -173,7 +173,7 @@ function FeedCard({
   async function count() {
     setBusy(true);
     try {
-      setMatching((await countMatching(current())).parts);
+      setMatching((await countMatching(current(), feed.productLine)).parts);
     } catch (cause) {
       onError(describe(cause, 'Посчитать не удалось'));
     } finally {
@@ -263,23 +263,31 @@ function FeedCard({
         </fieldset>
       )}
 
-      <Picker
-        title="Наименования"
-        options={kinds.map((k) => ({ id: k.id, name: k.name }))}
-        chosen={kindIds}
-        excluded={kindsExcluded}
-        onChosen={setKindIds}
-        onExcluded={setKindsExcluded}
-      />
+      {/* Вид детали и марка машины есть только у запчасти. У колеса part_kind
+          не заполнен вовсе, а марка — это Dunlop, а не Toyota; прайс колёс
+          их и не отбирает. Показанный тут отбор был бы обещанием, которого
+          нет: владелец сузил бы выгрузку, а уехал бы весь склад колёс. */}
+      {feed.productLine === 'PART' && (
+        <>
+          <Picker
+            title="Наименования"
+            options={kinds.map((k) => ({ id: k.id, name: k.name }))}
+            chosen={kindIds}
+            excluded={kindsExcluded}
+            onChosen={setKindIds}
+            onExcluded={setKindsExcluded}
+          />
 
-      <Picker
-        title="Марки"
-        options={brands.map((b) => ({ id: b.id, name: b.nameRu ?? b.name }))}
-        chosen={brandIds}
-        excluded={brandsExcluded}
-        onChosen={setBrandIds}
-        onExcluded={setBrandsExcluded}
-      />
+          <Picker
+            title="Марки"
+            options={brands.map((b) => ({ id: b.id, name: b.nameRu ?? b.name }))}
+            chosen={brandIds}
+            excluded={brandsExcluded}
+            onChosen={setBrandIds}
+            onExcluded={setBrandsExcluded}
+          />
+        </>
+      )}
 
       <div className="filter-row">
         <button type="button" className="button--ghost" disabled={busy}

@@ -69,10 +69,15 @@ export interface FeedFilter {
  * не сопоставлены. Площадка пустой прайс примет молча, и объявления пропадут
  * вместе с просмотрами — узнают об этом через сутки.
  */
-export function countMatching(filter: FeedFilter): Promise<{ parts: number }> {
+export function countMatching(
+  filter: FeedFilter,
+  productLine: 'PART' | 'WHEEL',
+): Promise<{ parts: number }> {
+  // Линия обязательна: без неё счётчик считал запчасти всегда и у выгрузки
+  // колёс обещал 35 835 позиций там, где уезжало 60.
   return request<{ parts: number }>('/api/marketplace-accounts/filter/count', {
     method: 'POST',
-    body: filter,
+    body: { ...filter, productLine },
   });
 }
 

@@ -259,21 +259,34 @@ public class MarketplaceAccountService {
      * примет молча, и объявления пропадут вместе с просмотрами — а узнают
      * об этом через сутки. Поэтому владелец видит число до сохранения,
      * как и в кабинете Bazon.
+     *
+     * <p><b>Считать надо ту линию товара, которой торгует выгрузка.</b>
+     * Пока счётчик знал только запчасти, у выгрузки колёс он показывал
+     * 35 835 позиций там, где уезжало 60: число, ради которого он заведён,
+     * врало в шестьсот раз и успокаивало вместо того, чтобы предупреждать.
+     * Та же ошибка, что и с колёсами в прайсе запчастей, только с другой
+     * стороны — и та же причина: счётчик отбирает не тем условием,
+     * что генератор.
+     *
+     * <p>Виды деталей и марки при этом остаются в запросе и для колёс,
+     * хотя генератор колёс их не применяет: экран их для колёсной выгрузки
+     * и не показывает, а молча менять смысл параметра хуже, чем его
+     * не прислать.
      */
     @Transactional(readOnly = true)
     public long countMatching(java.math.BigDecimal priceFrom, java.math.BigDecimal priceTo,
                               List<String> conditions, List<Long> warehouseIds,
                               List<Long> kindIds, boolean kindsExcluded,
-                              List<Long> brandIds, boolean brandsExcluded) {
+                              List<Long> brandIds, boolean brandsExcluded,
+                              String productLine) {
         Long found = jdbc.queryForObject("""
                 SELECT count(*) FROM part p
                   LEFT JOIN donor d ON d.id = p.donor_id
                  WHERE p.is_published
-                   -- Колёса из прайса запчастей исключает генератор, и счётчик
-                   -- обязан исключать их тем же условием. Пока он их считал,
-                   -- он обещал вдвое больше, чем уезжало, — то есть врал ровно
-                   -- в ту сторону, ради которой заведён: успокаивал числом.
-                   AND p.product_line = 'PART'
+                   -- Тем же условием, что и генератор: у каждой линии товара
+                   -- свой прайс, и колесо в прайсе запчастей — чужая категория,
+                   -- из которой объявление снимут.
+                   AND p.product_line = ?::text
                    AND p.status IN ('IN_STOCK', 'SOLD')
                    -- Тем же условием, что и генератор: нулевая цена в прайс
                    -- не идёт, потому что «0 ₽» в объявлении — обещание отдать
@@ -294,12 +307,18 @@ public class MarketplaceAccountService {
                              THEN COALESCE(d.brand_id <> ALL (?::bigint[]), true)
                              ELSE d.brand_id = ANY (?::bigint[]) END)""",
                 Long.class,
+                line(productLine),
                 priceFrom, priceFrom, priceTo, priceTo,
                 text(conditions), text(conditions),
                 longs(warehouseIds), longs(warehouseIds),
                 longs(kindIds), kindsExcluded, longs(kindIds), longs(kindIds),
                 longs(brandIds), brandsExcluded, longs(brandIds), longs(brandIds));
         return found == null ? 0 : found;
+    }
+
+    /** Пусто — запчасти: так выгрузка вела себя до появления колёс. */
+    private static String line(String productLine) {
+        return productLine == null || productLine.isBlank() ? "PART" : productLine.strip();
     }
 
     private static String text(List<String> values) {

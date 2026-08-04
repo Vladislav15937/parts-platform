@@ -104,7 +104,8 @@ public class MarketplaceAccountController {
                 request.priceFrom(), request.priceTo(),
                 request.conditions(), request.warehouseIds(),
                 request.kindIds(), request.kindsExcluded(),
-                request.brandIds(), request.brandsExcluded()));
+                request.brandIds(), request.brandsExcluded(),
+                request.productLine()));
     }
 
     public record CountView(long parts) {
@@ -144,6 +145,13 @@ public class MarketplaceAccountController {
     }
 
     /** Пустое поле — «без ограничения», а не «ничего». */
+    /**
+     * @param productLine чем торгует выгрузка. Без него счётчик считал
+     *                   запчасти всегда: у выгрузки колёс он обещал 35 835
+     *                   позиций там, где уезжало 60 — то есть врал в шестьсот
+     *                   раз ровно в ту сторону, ради которой заведён.
+     *                   Пусто — запчасти, как было
+     */
     public record FilterRequest(java.math.BigDecimal priceFrom,
                                 java.math.BigDecimal priceTo,
                                 List<String> conditions,
@@ -151,7 +159,8 @@ public class MarketplaceAccountController {
                                 List<Long> kindIds,
                                 boolean kindsExcluded,
                                 List<Long> brandIds,
-                                boolean brandsExcluded) {
+                                boolean brandsExcluded,
+                                String productLine) {
     }
 
     public record FeedUrlView(String path) {

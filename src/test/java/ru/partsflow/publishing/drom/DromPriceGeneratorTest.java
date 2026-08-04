@@ -253,7 +253,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         intake(wheel, warehouse, 1);
 
         long counted = inTenant(() -> accounts.countMatching(
-                null, null, null, null, null, false, null, false));
+                null, null, null, null, null, false, null, false, "PART"));
         long offers = price().split("<offer>", -1).length - 1;
 
         assertThat(counted)
