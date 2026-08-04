@@ -61,10 +61,15 @@ public class TenantMigrations {
     private final SchemaGrants grants;
     private final LockProvider lockProvider;
 
-    public TenantMigrations(JdbcTemplate jdbc, TenantSchemaMigrator migrator,
-                            SchemaGrants grants,
-                            LockProvider lockProvider) {
-        this.jdbc = jdbc;
+    public TenantMigrations(
+            // Владельцем, а не рабочей ролью: реестр арендаторов — управляющие
+            // данные, и рабочая роль их только читает. Иначе накат отмечает
+            // версию и падает на правах, объявляя отставшими всех подряд.
+            @SchemaOwnerDataSource.SchemaOwner javax.sql.DataSource ownerDataSource,
+            TenantSchemaMigrator migrator,
+            SchemaGrants grants,
+            LockProvider lockProvider) {
+        this.jdbc = new JdbcTemplate(ownerDataSource);
         this.migrator = migrator;
         this.grants = grants;
         this.lockProvider = lockProvider;
@@ -120,6 +125,12 @@ public class TenantMigrations {
                 int pending = migrator.pendingCount(tenant.schema());
                 if (pending == 0) {
                     skipped++;
+                    // Права выдаём и пропущенным. Иначе разделение ролей,
+                    // включённое на работающей ячейке, не доедет ни до кого:
+                    // все схемы уже на актуальной версии, накат их пропускает,
+                    // и рабочая роль остаётся без доступа к складу. Операция
+                    // идемпотентна и стоит трёх запросов на схему.
+                    grants.apply(tenant.schema());
                     // Отметку всё же поправим: у клиента, мигрированного
                     // до появления оркестратора, она пуста, и без этого
                     // он вечно висел бы в отставших у быстрой проверки.
