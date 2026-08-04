@@ -63,6 +63,7 @@ public class FeedDeltaRelay {
     private static final int MAX_PASSES = 50;
 
     private final JdbcTemplate jdbc;
+    private final ru.partsflow.platform.tenant.TenantShare tenants;
     private final DromDeltaSender sender;
     private final TransactionTemplate transactions;
     private final Duration claimTtl;
@@ -70,8 +71,10 @@ public class FeedDeltaRelay {
     public FeedDeltaRelay(JdbcTemplate jdbc,
                           DromDeltaSender sender,
                           TransactionTemplate transactions,
+                          ru.partsflow.platform.tenant.TenantShare tenants,
                           @Value("${app.feeds.claim-ttl:5m}") Duration claimTtl) {
         this.jdbc = jdbc;
+        this.tenants = tenants;
         this.sender = sender;
         this.transactions = transactions;
         this.claimTtl = claimTtl;
@@ -85,7 +88,7 @@ public class FeedDeltaRelay {
      * а {@code @SchedulerLock} на нём молча пропускал бы такой вызов.
      */
     public void relay() {
-        for (String schema : activeTenantSchemas()) {
+        for (String schema : tenants.schemas()) {
             try {
                 TenantContext.set(schema);
                 int sent = drainTenant();
@@ -244,10 +247,4 @@ public class FeedDeltaRelay {
         return String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
     }
 
-    private List<String> activeTenantSchemas() {
-        return jdbc.queryForList(
-                "SELECT schema_name FROM public.tenant_registry WHERE status = 'ACTIVE'"
-                        + " ORDER BY tenant_id",
-                String.class);
-    }
 }

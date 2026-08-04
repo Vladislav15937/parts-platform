@@ -154,6 +154,16 @@ app:
   # значит держать его недоступным минуты.
   migrate-catalog-on-start: ${MIGRATE_CATALOG:true}
 
+  # Разделение ролей базы. Пустое — одна роль на всё, как в разработке.
+  # В ячейке заводится ops/create-roles.sh: приложение работает рабочей ролью,
+  # а схемы создаёт и мигрирует владелец. Смысл в журналах: рабочая роль
+  # ими не владеет, и переписать их прямым SQL из приложения нельзя.
+  runtime-role: ${APP_RUNTIME_ROLE:}
+  ddl:
+    url: ${APP_DDL_URL:}
+    username: ${APP_DDL_USERNAME:}
+    password: ${APP_DDL_PASSWORD:}
+
   s3:
     endpoint: ${S3_ENDPOINT:http://localhost:9000}
     # Адрес для подписанных ссылок. На localhost совпадает с внутренним,

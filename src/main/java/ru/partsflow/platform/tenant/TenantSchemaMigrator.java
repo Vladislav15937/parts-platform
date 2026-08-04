@@ -36,7 +36,8 @@ public class TenantSchemaMigrator {
 
     private final DataSource dataSource;
 
-    public TenantSchemaMigrator(DataSource dataSource) {
+    public TenantSchemaMigrator(
+            @SchemaOwnerDataSource.SchemaOwner DataSource dataSource) {
         this.dataSource = dataSource;
     }
 

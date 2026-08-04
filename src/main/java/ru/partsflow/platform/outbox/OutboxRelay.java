@@ -52,6 +52,7 @@ public class OutboxRelay {
     private static final int BATCH_SIZE = 500;
 
     private final JdbcTemplate jdbcTemplate;
+    private final ru.partsflow.platform.tenant.TenantShare tenants;
     private final OutboxRepository outboxRepository;
     private final EventTransport transport;
     private final TransactionTemplate transactions;
@@ -61,8 +62,10 @@ public class OutboxRelay {
                        OutboxRepository outboxRepository,
                        EventTransport transport,
                        TransactionTemplate transactions,
+                       ru.partsflow.platform.tenant.TenantShare tenants,
                        @Value("${app.outbox.claim-ttl:5m}") Duration claimTtl) {
         this.jdbcTemplate = jdbcTemplate;
+        this.tenants = tenants;
         this.outboxRepository = outboxRepository;
         this.transport = transport;
         this.transactions = transactions;
@@ -78,7 +81,7 @@ public class OutboxRelay {
      * ShedLock — то есть мог быть молча пропущен.
      */
     public void relay() {
-        for (String schema : activeTenantSchemas()) {
+        for (String schema : tenants.schemas()) {
             try {
                 TenantContext.set(schema);
                 int sent = relayTenant();
@@ -139,9 +142,4 @@ public class OutboxRelay {
         return batch.size();
     }
 
-    private List<String> activeTenantSchemas() {
-        return jdbcTemplate.queryForList(
-                "SELECT schema_name FROM public.tenant_registry WHERE status = 'ACTIVE' ORDER BY tenant_id",
-                String.class);
-    }
 }

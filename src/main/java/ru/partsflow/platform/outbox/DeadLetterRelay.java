@@ -26,10 +26,13 @@ public class DeadLetterRelay {
     private static final Logger log = LoggerFactory.getLogger(DeadLetterRelay.class);
 
     private final JdbcTemplate jdbc;
+    private final ru.partsflow.platform.tenant.TenantShare tenants;
     private final DeadLetterService deadLetters;
 
-    public DeadLetterRelay(JdbcTemplate jdbc, DeadLetterService deadLetters) {
+    public DeadLetterRelay(JdbcTemplate jdbc, DeadLetterService deadLetters,
+                       ru.partsflow.platform.tenant.TenantShare tenants) {
         this.jdbc = jdbc;
+        this.tenants = tenants;
         this.deadLetters = deadLetters;
     }
 
@@ -41,7 +44,7 @@ public class DeadLetterRelay {
      * {@code @SchedulerLock} на нём молча пропускал бы вызов.
      */
     public void retryDue() {
-        for (String schema : activeTenantSchemas()) {
+        for (String schema : tenants.schemas()) {
             try {
                 TenantContext.set(schema);
                 int delivered = deadLetters.retryDue();
@@ -56,9 +59,4 @@ public class DeadLetterRelay {
         }
     }
 
-    private List<String> activeTenantSchemas() {
-        return jdbc.queryForList(
-                "SELECT schema_name FROM public.tenant_registry WHERE status = 'ACTIVE' "
-                        + "ORDER BY tenant_id", String.class);
-    }
 }
