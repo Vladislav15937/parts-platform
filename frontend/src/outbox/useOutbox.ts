@@ -30,6 +30,16 @@ export function useOutbox(company?: string) {
   }, []);
 
   const flush = useCallback(async () => {
+    // Пока неизвестно, в какой компании мы вошли, отправлять нельзя вовсе.
+    // Это окно между входом и ответом «кто я»: отметку о компании в записи
+    // не с чем сравнивать, и фильтр пропускает любую. Партия одной компании
+    // ушла под сессией другой — спасло лишь то, что склада с таким номером
+    // там не оказалось. Номера складов у арендаторов свои и начинаются
+    // с единицы: у обоих есть склад №1, и деталь завелась бы в чужой компании
+    // молча. «Не знаю» не должно значить «в любой».
+    if (company === undefined) {
+      return { sent: 0, failed: 0, needsSignIn: false, foreign: 0 };
+    }
     const result = await processOutbox(undefined, Date.now(), company);
     setNeedsSignIn(result.needsSignIn);
     await reload();
