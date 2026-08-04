@@ -43,7 +43,10 @@ public class CatalogMigrations implements ApplicationRunner {
 
     private final DataSource dataSource;
 
-    public CatalogMigrations(DataSource dataSource) {
+    public CatalogMigrations(
+            @SchemaOwnerDataSource.SchemaOwner DataSource dataSource) {
+        // Владельцем, а не рантайм-ролью: DDL делает тот, кому принадлежат
+        // схемы, иначе разделение ролей бессмысленно.
         this.dataSource = dataSource;
     }
 

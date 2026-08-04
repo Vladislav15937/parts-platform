@@ -70,15 +70,19 @@ public class TenantProvisioning {
     private static final int RESERVE_ATTEMPTS = 5;
 
     private final JdbcTemplate jdbc;
+    private final SchemaGrants grants;
     private final DataSource dataSource;
     private final TenantSchemaMigrator migrator;
     private final PasswordEncoder passwordEncoder;
     private final long cellNumber;
 
-    public TenantProvisioning(JdbcTemplate jdbc, DataSource dataSource,
+    public TenantProvisioning(JdbcTemplate jdbc,
+                              @SchemaOwnerDataSource.SchemaOwner DataSource dataSource,
+                              SchemaGrants grants,
                               TenantSchemaMigrator migrator, PasswordEncoder passwordEncoder,
                               @Value("${app.cell-number:1}") long cellNumber) {
         this.jdbc = jdbc;
+        this.grants = grants;
         this.dataSource = dataSource;
         this.migrator = migrator;
         this.passwordEncoder = passwordEncoder;
@@ -97,6 +101,9 @@ public class TenantProvisioning {
         try {
             createSchema(reserved.schema());
             migrator.migrate(reserved.schema());
+            // Права рантайм-роли — сразу после миграций и до первого запроса:
+            // схема без прав означает клиента, который заведён и не работает.
+            grants.apply(reserved.schema());
             recordVersion(reserved.tenantId());
             createOwner(reserved.schema(), request);
             createFirstWarehouse(reserved.schema(), request.companyName());

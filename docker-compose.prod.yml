@@ -76,9 +76,22 @@ services:
       minio:
         condition: service_started
     environment:
+      # Рабочее подключение. Если заведена отдельная роль (ops/create-roles.sh),
+      # приложение работает ею — и тогда журналы движений, изменений и лицевых
+      # счетов ему не принадлежат: переписать их прямым SQL нельзя. Без роли
+      # всё идёт владельцем, как раньше.
       DB_URL: jdbc:postgresql://postgres:5432/parts
-      DB_USER: ${DB_USER:?укажите DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD:?укажите DB_PASSWORD}
+      DB_USER: ${APP_RUNTIME_ROLE:-${DB_USER:?укажите DB_USER}}
+      DB_PASSWORD: ${APP_RUNTIME_PASSWORD:-${DB_PASSWORD:?укажите DB_PASSWORD}}
+
+      # Подключение владельца схем: миграции, провижининг, выдача прав.
+      # Пустое означает «отдельной роли нет» — тогда DDL идёт рабочей ролью.
+      APP_DDL_URL: ${APP_DDL_URL:-}
+      APP_DDL_USERNAME: ${APP_DDL_USERNAME:-}
+      APP_DDL_PASSWORD: ${APP_DDL_PASSWORD:-}
+
+      # Кому выдавать права на схемы арендаторов. Пусто — разделения нет.
+      APP_RUNTIME_ROLE: ${APP_RUNTIME_ROLE:-}
 
       # Секрет создания арендаторов. Пустой выключает механизм — так и надо
       # держать между подключениями клиентов.

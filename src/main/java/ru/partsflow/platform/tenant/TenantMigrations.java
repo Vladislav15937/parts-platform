@@ -58,12 +58,15 @@ public class TenantMigrations {
 
     private final JdbcTemplate jdbc;
     private final TenantSchemaMigrator migrator;
+    private final SchemaGrants grants;
     private final LockProvider lockProvider;
 
     public TenantMigrations(JdbcTemplate jdbc, TenantSchemaMigrator migrator,
+                            SchemaGrants grants,
                             LockProvider lockProvider) {
         this.jdbc = jdbc;
         this.migrator = migrator;
+        this.grants = grants;
         this.lockProvider = lockProvider;
     }
 
@@ -125,6 +128,9 @@ public class TenantMigrations {
                 }
 
                 migrator.migrate(tenant.schema());
+                // Новая таблица прав не наследует: без этого арендатор
+                // после миграции падает на первом запросе к ней.
+                grants.apply(tenant.schema());
                 markMigrated(tenant.tenantId(), expected);
                 migrated.add(tenant.schema());
                 log.info("Схема {} обновлена до {}: не хватало {}",

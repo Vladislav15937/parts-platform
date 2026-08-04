@@ -45,13 +45,16 @@ public class ProvisioningController {
 
     private final TenantProvisioning provisioning;
     private final TenantMigrations migrations;
+    private final ru.partsflow.platform.config.TenantLoadMetrics tenantLoad;
     private final String token;
 
     public ProvisioningController(TenantProvisioning provisioning,
                                   TenantMigrations migrations,
+                                  ru.partsflow.platform.config.TenantLoadMetrics tenantLoad,
                                   @Value("${app.provisioning-token:}") String token) {
         this.provisioning = provisioning;
         this.migrations = migrations;
+        this.tenantLoad = tenantLoad;
         this.token = token;
     }
 
@@ -105,6 +108,25 @@ public class ProvisioningController {
             @RequestParam(defaultValue = "false") boolean deep) {
         requireToken(token);
         return migrations.status(deep);
+    }
+
+    /**
+     * Кто из клиентов греет ячейку.
+     *
+     * <p>Метрики очереди говорят, что ячейке плохо, но не говорят, из-за кого:
+     * при пятистах арендаторах на общем комплекте это первый вопрос оператора.
+     * Отдаётся десятка самых тяжёлых по суммарному времени за час — в Prometheus
+     * такое не вынести, там метка-арендатор размножит ряды пятикратно
+     * на каждое число.
+     *
+     * <p>Тем же секретом и тем же контуром, что и миграции: это взгляд на всю
+     * ячейку, вошедшего пользователя у него нет и быть не может.
+     */
+    @GetMapping("/load")
+    public java.util.List<ru.partsflow.platform.config.TenantLoadMetrics.TenantLoad> load(
+            @RequestHeader(name = TOKEN_HEADER, required = false) String token) {
+        requireToken(token);
+        return tenantLoad.top();
     }
 
     /**
