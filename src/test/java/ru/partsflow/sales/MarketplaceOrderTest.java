@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.inventory.StockMovement;
+import ru.partsflow.inventory.StockReservationRepository;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.math.BigDecimal;
@@ -49,6 +50,9 @@ class MarketplaceOrderTest extends PostgresTestBase {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private StockReservationRepository reservations;
 
     @Autowired
     private TransactionTemplate transactionTemplate;
@@ -149,15 +153,58 @@ class MarketplaceOrderTest extends PostgresTestBase {
                 .as("необеспеченный заказ держит товар, который можно продать")
                 .isEqualByComparingTo("0");
 
-        // И сверка обязана молчать. Позиции черновика заводятся со статусом
-        // RESERVED — для обычной сделки он верен, там резерв и статус ставятся
-        // вместе, — а сверка складывала обещанное и по черновикам тоже
+        // Позиция обязана говорить правду о том, отложил ли под неё склад.
+        // Умолчание «зарезервирована» верно для обычной продажи, где резерв
+        // ставится тут же, — а здесь оно делало заказ незакрываемым.
+        assertThat(accepted.deal().getItems())
+                .singleElement()
+                .extracting(DealItem::getStatus)
+                .as("позиция необеспеченного заказа названа зарезервированной")
+                .isEqualTo(DealItemStatus.DRAFT);
+
+        // И сверка обязана молчать. Пока позиции черновика заводились
+        // со статусом RESERVED, сверка складывала обещанное и по черновикам
         // и выдавала «обещано три, отложено ноль». Инвариант, обязанный быть
         // пустым, шумел ровно в правильном сценарии и переставал быть сигналом.
         assertThat(inTenant(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM v_reservation_discrepancy", Integer.class)))
                 .as("сверка резервов шумит на необеспеченном заказе")
                 .isZero();
+    }
+
+    /**
+     * Отклонить необеспеченный заказ — единственное, что с ним можно сделать,
+     * и до этой правки оно не работало: отмена шла снимать резерв, которого
+     * никто не ставил, и отвечала «нечего снимать». Заказ висел в очереди
+     * «ждут ответа» вечно — клиента у него нет, и добраться до него
+     * больше неоткуда.
+     */
+    @Test
+    @DisplayName("Необеспеченный заказ можно отклонить")
+    void unfulfillableOrderCanBeDeclined() {
+        Long partId = partWithStock("Стартер единственный", 1);
+        // Чужой резерв на той же детали: отмена черновика не должна его тронуть.
+        inTenant(() -> {
+            reservations.reserve(partId, warehouseId, BigDecimal.ONE);
+            return null;
+        });
+
+        var accepted = inTenant(() -> sales.registerMarketplaceOrder(
+                "DROM", "301-000-77", null, customerId, null, null, null, null,
+                List.of(new SalesService.ItemRequest(
+                        partId, new BigDecimal("3"), null, warehouseId)), List.of()));
+        Long dealId = accepted.deal().getId();
+
+        var cancelled = inTenant(() -> sales.cancel(dealId, null, "обеспечить нечем"));
+
+        assertThat(cancelled.getStatus()).isEqualTo(DealStatus.CANCELLED);
+        assertThat(cancelled.getItems())
+                .singleElement()
+                .extracting(DealItem::getStatus)
+                .isEqualTo(DealItemStatus.CANCELLED);
+        assertThat(reserved(partId))
+                .as("отмена черновика забрала чужой резерв")
+                .isEqualByComparingTo("1");
     }
 
     @Test

@@ -75,9 +75,21 @@ public class DealItem {
     }
 
     void cancel() {
-        if (status == DealItemStatus.RESERVED) {
+        // Черновая отменяется наравне с зарезервированной: склад под неё
+        // ничего не откладывал, но в документе она есть, и оставить её
+        // висеть значит показать отменённый заказ живым.
+        if (status == DealItemStatus.RESERVED || status == DealItemStatus.DRAFT) {
             status = DealItemStatus.CANCELLED;
         }
+    }
+
+    /**
+     * Отмечает, что склад под позицию ничего не отложил.
+     *
+     * <p>Зовётся, когда заказ с площадки записан, но обеспечить его нечем.
+     */
+    void markUnreserved() {
+        status = DealItemStatus.DRAFT;
     }
 
     void markReturned() {

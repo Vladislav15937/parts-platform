@@ -299,6 +299,13 @@ public class SalesService {
                 reservationRepository.reserve(item.partId(), item.warehouseId(), item.quantity());
             }
             deal.reserve(reservedUntil != null ? reservedUntil : defaultReserveUntil(replyDeadline));
+        } else {
+            // Позиция обязана говорить правду о том, отложил ли под неё склад.
+            // Умолчание «зарезервирована» верно для обычной продажи, где резерв
+            // ставится тут же; здесь оно превращало отмену заказа в попытку
+            // снять несуществующий резерв, то есть в 409 на единственное
+            // действие, которое с необеспеченным заказом можно сделать.
+            deal.markUnreserved();
         }
 
         Deal saved = detachable(dealRepository.saveAndFlush(deal));

@@ -214,6 +214,15 @@ public class Deal {
         return service;
     }
 
+    /**
+     * Отмечает все позиции черновыми: склад под них ничего не отложил.
+     *
+     * <p>Так остаётся заказ с площадки, который нечем закрыть.
+     */
+    void markUnreserved() {
+        items.forEach(DealItem::markUnreserved);
+    }
+
     public DealItem addItem(Long partId, BigDecimal quantity, BigDecimal price, Long warehouseId) {
         requireOpen("добавить позицию");
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   acceptOrder,
+  cancelDeal,
   hoursUntilDeadline,
   ordersAwaitingReply,
   type Deal,
@@ -22,11 +23,18 @@ import {
  * <p><b>Заказ без резерва выделен отдельно.</b> Он записан, но товара
  * на складе нет — отвечать площадке «отправлю» по нему нельзя, и это
  * единственное, что продавцу нужно увидеть с первого взгляда.
+ *
+ * <p><b>Отклонить можно отсюда, и только отсюда.</b> Экран говорил
+ * «заказ придётся отклонить» и не давал этого сделать: клиента у заказа
+ * с площадки нет, а до сделок продавец добирается через клиента —
+ * то есть необеспеченный заказ висел в очереди «ждут ответа» вечно,
+ * вытесняя из неё те, по которым ещё можно успеть.
  */
 export function OrdersScreen({ canSell }: { canSell: boolean }) {
   const [orders, setOrders] = useState<Deal[] | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<number | null>(null);
+  const [declining, setDeclining] = useState<number | null>(null);
 
   const load = useCallback(() => {
     ordersAwaitingReply()
@@ -38,6 +46,25 @@ export function OrdersScreen({ canSell }: { canSell: boolean }) {
   }, []);
 
   useEffect(load, [load]);
+
+  async function decline(deal: Deal) {
+    // Второе нажатие вместо окна подтверждения: заказ уже оплачен
+    // покупателем, и отказ возвращает ему деньги.
+    if (declining !== deal.id) {
+      setDeclining(deal.id);
+      return;
+    }
+    setBusy(deal.id);
+    try {
+      await cancelDeal(deal.id, 'Обеспечить нечем: товара нет на складе');
+      setDeclining(null);
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function accept(deal: Deal) {
     setBusy(deal.id);
@@ -112,6 +139,17 @@ export function OrdersScreen({ canSell }: { canSell: boolean }) {
                   onClick={() => accept(deal)}
                 >
                   Подтвердил площадке
+                </button>
+              )}
+
+              {canSell && unfulfilled && (
+                <button
+                  type="button"
+                  className="button--ghost"
+                  disabled={busy === deal.id}
+                  onClick={() => decline(deal)}
+                >
+                  {declining === deal.id ? 'Точно отклонить?' : 'Отклонить заказ'}
                 </button>
               )}
             </li>

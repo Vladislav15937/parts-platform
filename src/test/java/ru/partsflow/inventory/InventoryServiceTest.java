@@ -176,6 +176,24 @@ class InventoryServiceTest extends PostgresTestBase {
      * посчитанный склад непроведённым, пока продавец говорит с покупателем,
      * — а кладовщик, который считал, снять резерв не может по роли.
      */
+    /**
+     * По этой строке кладовщик идёт действовать — снимать резерв, — значит она
+     * обязана называть документы так, как их спросят у продавца. Перечень
+     * номеров под словом в единственном числе («по сделке 1, 14») читается
+     * как один документ с составным номером, и искать его будут напрасно.
+     */
+    @Test
+    @DisplayName("Несколько сделок названы во множественном числе и с номерами")
+    void promisedNamesEveryDeal() {
+        assertThat(InventoryService.promisedBy(List.of()))
+                .as("резерв без сделки не должен выдумывать её номер")
+                .isEmpty();
+        assertThat(InventoryService.promisedBy(List.of(7L)))
+                .isEqualTo(", обещана по сделке №7");
+        assertThat(InventoryService.promisedBy(List.of(1L, 14L)))
+                .isEqualTo(", обещана по сделкам №1, №14");
+    }
+
     @Test
     @DisplayName("Обещанная деталь не блокирует проведение остальных позиций")
     void promisedShortageDoesNotBlockOthers() {
@@ -198,6 +216,10 @@ class InventoryServiceTest extends PostgresTestBase {
                 .isEqualTo(1);
         assertThat(applied.blocked()).singleElement()
                 .asString().contains("Фара, обещанная покупателю");
+
+        assertThat(applied.blocked()).singleElement().asString()
+                .as("резерв без сделки не должен выдумывать её номер")
+                .doesNotContain("сделк");
 
         assertThat(qtyOf(other, warehouse)).isEqualByComparingTo("0");
         assertThat(qtyOf(promised, warehouse))

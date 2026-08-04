@@ -370,8 +370,30 @@ public class InventoryService {
                 title == null ? "деталь " + partId : title,
                 needed.stripTrailingZeros().toPlainString(),
                 available.stripTrailingZeros().toPlainString(),
-                deals.isEmpty() ? "" : ", обещана по сделке " + deals.stream()
-                        .map(String::valueOf).collect(java.util.stream.Collectors.joining(", ")));
+                promisedBy(deals));
+    }
+
+    /**
+     * Сделки называются числом и решёткой, а множественное число — словом.
+     *
+     * <p>Перечень под словом в единственном числе («по сделке 1, 14») читается
+     * как один документ с составным номером, и кладовщик идёт искать
+     * несуществующую сделку. А идёт он по этой строке действовать — снимать
+     * резерв, — так что она обязана называть документы так, как их спросят
+     * у продавца.
+     */
+    // Видимость пакета — ради теста: проверяется формулировка,
+    // а не путь к базе, и городить две сделки в фикстуре ради строки незачем.
+    static String promisedBy(List<Long> deals) {
+        if (deals.isEmpty()) {
+            return "";
+        }
+        String numbers = deals.stream()
+                .map(number -> "№" + number)
+                .collect(java.util.stream.Collectors.joining(", "));
+        return deals.size() == 1
+                ? ", обещана по сделке " + numbers
+                : ", обещана по сделкам " + numbers;
     }
 
     @Transactional
