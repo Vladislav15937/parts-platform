@@ -175,6 +175,44 @@ class MarketplaceOrderHttpTest extends PostgresTestBase {
                 .andExpect(jsonPath("$[0].authorName").isNotEmpty());
     }
 
+    /**
+     * Экран продавца показывает те же строки, что и ссылка клиенту: услуга
+     * идёт наравне с деталью. Без неё сумма строк не сходится с итогом —
+     * «итого 7 500» под деталями на 7 000, — и спор об этом начинается
+     * в момент оплаты, когда продавец называет одно, а клиент считает другое.
+     *
+     * <p>Строка при этом обязана нести название, а не номер услуги: «услуга 1»
+     * ничего не говорит ни продавцу, ни клиенту. Та же причина, по которой
+     * название несёт и строка запчасти.
+     */
+    @Test
+    @DisplayName("Услуга видна в сделке и названа по имени")
+    void dealShowsServicesByName() throws Exception {
+        MockHttpSession session = login();
+        Long delivery = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM service WHERE name = 'Доставка'", Long.class));
+        long dealId = orderDeal(session, "301-910-77", delivery);
+
+        String body = mvc.perform(get("/api/deals/" + dealId).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.services[0].name").value("Доставка"))
+                .andReturn().getResponse().getContentAsString();
+
+        var view = new com.fasterxml.jackson.databind.ObjectMapper().readTree(body);
+        java.math.BigDecimal linesTotal = java.math.BigDecimal.ZERO;
+        for (var item : view.get("items")) {
+            linesTotal = linesTotal.add(
+                    item.get("price").decimalValue().multiply(item.get("quantity").decimalValue()));
+        }
+        for (var line : view.get("services")) {
+            linesTotal = linesTotal.add(
+                    line.get("price").decimalValue().multiply(line.get("quantity").decimalValue()));
+        }
+        assertThat(linesTotal)
+                .as("сумма строк сделки не сходится с её итогом")
+                .isEqualByComparingTo(view.get("totalAmount").decimalValue());
+    }
+
     @Test
     @DisplayName("Клиент видит свою покупку по ссылке — и только её")
     void sharedDealShowsOnlyThePurchase() throws Exception {

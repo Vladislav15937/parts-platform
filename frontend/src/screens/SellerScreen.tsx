@@ -776,6 +776,24 @@ function DealCard({
             </div>
           </li>
         ))}
+
+        {/* Услуги — наравне с деталями. Без них сумма строк не сходится
+            с итогом документа: «итого 7 500» под деталями на 7 000, и спор
+            об этом начинается в момент оплаты. Отмечать их галочкой нельзя:
+            услуга не переносится в другую сделку — доставка уже состоялась. */}
+        {deal.services.map((line) => (
+          <li key={`service-${line.id}`} className="stock-row">
+            <span className="stock-info">
+              {line.name ?? `услуга ${line.serviceId}`}
+              <span className="muted"> · {Number(line.quantity)} шт</span>
+            </span>
+            <div className="stock-action">
+              <strong className="stock-price">
+                {Number(line.price).toLocaleString('ru-RU')} ₽
+              </strong>
+            </div>
+          </li>
+        ))}
       </ul>
 
       <div className="row">
@@ -866,9 +884,10 @@ function DealCard({
         <ReturnPanel
           chosen={chosen}
           canSell={canSell}
-          onReturn={(warehouseId, lines, reason) =>
+          onReturn={(warehouseId, lines, reason, refundToAccount) =>
             void act(async () => {
-              const doc = await registerReturn(deal.id, warehouseId, lines, reason);
+              const doc = await registerReturn(deal.id, warehouseId, lines, reason,
+                refundToAccount);
               setPicked([]);
               setNotice(
                 `Возврат №${doc.number ?? doc.id} на `
@@ -1047,11 +1066,13 @@ function ReturnPanel({
 }: {
   chosen: DealItem[];
   canSell: boolean;
-  onReturn: (warehouseId: number, lines: ReturnLine[], reason: string) => void;
+  onReturn: (warehouseId: number, lines: ReturnLine[], reason: string,
+             refundToAccount: boolean) => void;
 }) {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [warehouseId, setWarehouseId] = useState<number | null>(null);
   const [reason, setReason] = useState('');
+  const [toAccount, setToAccount] = useState(false);
   const [broken, setBroken] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
@@ -1114,6 +1135,22 @@ function ReturnPanel({
         Брак — деньги вернуть, в остаток не ставить
       </label>
 
+      {/* Деньги наличными или на счёт. Запись о выдаче создаётся независимо
+          от того, есть ли они в кассе, — а утром её может не быть, и тогда
+          касса к вечеру не сойдётся ровно на сумму возврата. На счёт —
+          это «мы должны», и клиент заберёт их или зачтёт в следующую покупку. */}
+      <label className="pick">
+        <input
+          type="checkbox"
+          checked={toAccount}
+          onChange={(e) => {
+            setToAccount(e.target.checked);
+            setConfirming(false);
+          }}
+        />{' '}
+        Деньги на лицевой счёт, а не из кассы
+      </label>
+
       {confirming ? (
         <div className="row">
           <button type="button" disabled={!ready} onClick={submit}>
@@ -1149,6 +1186,7 @@ function ReturnPanel({
       warehouseId,
       chosen.map((item) => ({ dealItemId: item.id, restocked: !broken })),
       reason.trim(),
+      toAccount,
     );
   }
 }

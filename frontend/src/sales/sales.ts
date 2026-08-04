@@ -82,6 +82,8 @@ export interface Deal {
 export interface DealServiceLine {
   id: number;
   serviceId: number;
+  /** Название услуги: без него строка — это номер, как было у запчастей. */
+  name: string | null;
   quantity: string;
   price: string;
 }
@@ -240,16 +242,21 @@ export interface ReturnDoc {
  * @param warehouseId склад возврата. Не обязан совпадать со складом выдачи:
  *                    клиент приезжает туда, куда ему удобно, а деталь встаёт
  *                    на ту полку, где он её оставил
+ * @param refundToAccount зачислить деньги на лицевой счёт вместо выдачи
+ *                    из кассы. Запись о выдаче создаётся независимо от того,
+ *                    есть ли в кассе деньги, — а утром её может не быть,
+ *                    и тогда касса к вечеру не сойдётся на сумму возврата
  */
 export function registerReturn(
   dealId: number,
   warehouseId: number,
   items: ReturnLine[],
   reason: string,
+  refundToAccount = false,
 ): Promise<ReturnDoc> {
   return request<ReturnDoc>(`/api/deals/${dealId}/returns`, {
     method: 'POST',
-    body: { warehouseId, items, reason, refundToAccount: false },
+    body: { warehouseId, items, reason, refundToAccount },
   });
 }
 
