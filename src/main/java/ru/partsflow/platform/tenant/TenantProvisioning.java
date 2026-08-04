@@ -76,12 +76,14 @@ public class TenantProvisioning {
     private final PasswordEncoder passwordEncoder;
     private final long cellNumber;
 
-    public TenantProvisioning(JdbcTemplate jdbc,
+    public TenantProvisioning(
+                              // Реестр и схемы ведёт владелец: рабочая роль
+                              // реестр только читает при входе.
                               @SchemaOwnerDataSource.SchemaOwner DataSource dataSource,
                               SchemaGrants grants,
                               TenantSchemaMigrator migrator, PasswordEncoder passwordEncoder,
                               @Value("${app.cell-number:1}") long cellNumber) {
-        this.jdbc = jdbc;
+        this.jdbc = new JdbcTemplate(dataSource);
         this.grants = grants;
         this.dataSource = dataSource;
         this.migrator = migrator;
