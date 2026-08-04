@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import ru.partsflow.catalog.VehicleWords;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -63,9 +64,13 @@ public class CatalogService {
 
     private final PartChangeLog partChanges;
 
-    public CatalogService(JdbcTemplate jdbc, PartChangeLog partChanges) {
+    private final VehicleWords vehicleWords;
+
+    public CatalogService(JdbcTemplate jdbc, PartChangeLog partChanges,
+                          VehicleWords vehicleWords) {
         this.partChanges = partChanges;
         this.jdbc = jdbc;
+        this.vehicleWords = vehicleWords;
     }
 
     /**
@@ -144,6 +149,9 @@ public class CatalogService {
         List<Object> args = new ArrayList<>();
 
         if (query != null && !query.isBlank()) {
+            // «камри» приводится к «Camry» до всего остального: в заголовке
+            // латиница, а владелец ищет то же слово, что и продавец.
+            query = vehicleWords.translate(query);
             // Номер товара, наименование и номер детали — три способа, которыми
             // владелец ищет одно и то же. Спрашивать, что именно он ввёл,
             // значит заставить его выбирать вкладку перед каждым поиском.

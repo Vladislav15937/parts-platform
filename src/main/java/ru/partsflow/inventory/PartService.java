@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.catalog.PartName;
 import ru.partsflow.catalog.PartNameService;
+import ru.partsflow.catalog.VehicleWords;
 import ru.partsflow.platform.outbox.DomainEvent;
 import ru.partsflow.platform.outbox.DomainEventPublisher;
 import ru.partsflow.platform.outbox.EventPayloads;
@@ -37,14 +38,17 @@ public class PartService {
     private final PartNameService partNames;
     private final PartChangeLog partChanges;
     private final JdbcTemplate jdbc;
+    private final VehicleWords vehicleWords;
 
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
-                       PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc) {
+                       PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc,
+                       VehicleWords vehicleWords) {
         this.partRepository = partRepository;
         this.eventPublisher = eventPublisher;
         this.partNames = partNames;
         this.partChanges = partChanges;
         this.jdbc = jdbc;
+        this.vehicleWords = vehicleWords;
     }
 
     /**
@@ -466,6 +470,9 @@ public class PartService {
      */
     @Transactional(readOnly = true)
     public List<StockRow> searchAvailable(String query, int limit) {
+        // «фара камри» приводится к «фара Camry»: покупатель звонит и говорит
+        // по-русски, а в заголовке стоит латиница.
+        String text = vehicleWords.translate(query);
         return jdbc.query("""
                 SELECT p.id, p.public_code, p.title, p.price, p.status,
                        w.id AS warehouse_id, w.name AS warehouse_name,
@@ -498,7 +505,7 @@ public class PartService {
                         rs.getBigDecimal("qty"),
                         rs.getBigDecimal("qty_reserved"),
                         rs.getBigDecimal("qty_available")),
-                query, query, limit);
+                text, text, limit);
     }
 
     /** Строка выдачи продавцу: деталь на конкретном складе. */
@@ -535,7 +542,7 @@ public class PartService {
 
     @Transactional(readOnly = true)
     public List<Part> search(String query, int limit) {
-        return partRepository.search(query, limit);
+        return partRepository.search(vehicleWords.translate(query), limit);
     }
 
     @Transactional(readOnly = true)
