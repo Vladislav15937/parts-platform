@@ -37,7 +37,7 @@ class NotFoundMappingTest extends PostgresTestBase {
     @DisplayName("Неизвестный путь под /api — 404")
     void unknownApiPathIsNotFound() throws Exception {
         mvc.perform(post("/api/parts/opechatka/net-takoy-operacii").with(csrf())
-                        .with(user("priyomshchik"))
+                        .with(user("priyomshchik").roles("STOREKEEPER"))
                         .contentType("application/json").content("{}"))
                 .andExpect(status().isNotFound());
     }
@@ -51,7 +51,7 @@ class NotFoundMappingTest extends PostgresTestBase {
     @Test
     @DisplayName("Верный адрес неверным методом — 405, а не пятисотка")
     void wrongMethodIsNotAServerError() throws Exception {
-        mvc.perform(post("/api/parts/42").with(csrf()).with(user("priyomshchik"))
+        mvc.perform(post("/api/parts/42").with(csrf()).with(user("priyomshchik").roles("STOREKEEPER"))
                         .contentType("application/json").content("{}"))
                 .andExpect(status().isMethodNotAllowed());
     }
@@ -64,7 +64,7 @@ class NotFoundMappingTest extends PostgresTestBase {
     @Test
     @DisplayName("Неразбираемое тело — 400, а не пятисотка")
     void unreadableBodyIsClientError() throws Exception {
-        mvc.perform(post("/api/parts/publication").with(csrf()).with(user("priyomshchik"))
+        mvc.perform(post("/api/parts/publication").with(csrf()).with(user("priyomshchik").roles("STOREKEEPER"))
                         .contentType("application/json")
                         .content("{\"partIds\": \"не список\"}"))
                 .andExpect(status().isBadRequest());
@@ -76,7 +76,7 @@ class NotFoundMappingTest extends PostgresTestBase {
         // Перенос принимает два файла формой. Запрос телом в JSON отвечал
         // «внутренней ошибкой», и владелец, подавший файлы не тем способом,
         // шёл искать поломку сервера — при том что ошибка его.
-        mvc.perform(post("/api/import/bazon").with(csrf()).with(user("priyomshchik"))
+        mvc.perform(post("/api/import/bazon").with(csrf()).with(user("priyomshchik").roles("STOREKEEPER"))
                         .contentType("application/json")
                         .content("{}"))
                 .andExpect(status().isBadRequest());
@@ -85,7 +85,7 @@ class NotFoundMappingTest extends PostgresTestBase {
     @Test
     @DisplayName("Неизвестный путь вне /api — тоже 404")
     void unknownPathIsNotFound() throws Exception {
-        mvc.perform(get("/net-takogo-adresa").with(user("priyomshchik")))
+        mvc.perform(get("/net-takogo-adresa").with(user("priyomshchik").roles("STOREKEEPER")))
                 .andExpect(status().isNotFound());
     }
 }

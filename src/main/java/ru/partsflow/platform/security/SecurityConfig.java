@@ -2,6 +2,7 @@ package ru.partsflow.platform.security;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
@@ -95,6 +96,28 @@ public class SecurityConfig {
                         .requestMatchers("/", "/index.html", "/assets/**",
                                 "/sw.js", "/manifest.webmanifest", "/favicon.ico")
                         .permitAll()
+                        // Выйти может кто угодно вошедший, включая «Просмотр»:
+                        // запрет ниже смотрит на метод, а выход — это POST.
+                        .requestMatchers("/api/auth/logout").authenticated()
+                        // «Просмотр» не меняет ничего — это свойство роли,
+                        // а не отдельных операций, и потому стоит здесь,
+                        // а не на методах, как остальные проверки.
+                        //
+                        // Расставленная по методам, она обязана быть повторена
+                        // в каждом новом эндпоинте, и забыть её можно в любом:
+                        // роль, названная «только смотреть», заводила детали
+                        // на склад, машины, инвентаризации и удаляла
+                        // фотографии — четыре пути, у каждого из которых
+                        // просто не было своей проверки. Правило же одно
+                        // на все, и здесь оно не забудется.
+                        .requestMatchers(HttpMethod.POST, "/api/**").hasAnyRole(
+                                "OWNER", "MANAGER", "STOREKEEPER", "SELLER")
+                        .requestMatchers(HttpMethod.PUT, "/api/**").hasAnyRole(
+                                "OWNER", "MANAGER", "STOREKEEPER", "SELLER")
+                        .requestMatchers(HttpMethod.PATCH, "/api/**").hasAnyRole(
+                                "OWNER", "MANAGER", "STOREKEEPER", "SELLER")
+                        .requestMatchers(HttpMethod.DELETE, "/api/**").hasAnyRole(
+                                "OWNER", "MANAGER", "STOREKEEPER", "SELLER")
                         .anyRequest().authenticated())
                 .logout(l -> l.logoutUrl("/api/auth/logout")
                         .logoutSuccessHandler((req, res, a) -> res.setStatus(HttpStatus.NO_CONTENT.value())));
