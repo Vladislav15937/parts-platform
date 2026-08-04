@@ -46,6 +46,7 @@ class BazonImporterTest extends PostgresTestBase {
     private static final String BACKFILL = "t_000083";
     private static final String PARTS_BACKFILL = "t_000084";
     private static final String JUNK_OEM = "t_000097";
+    private static final String BROKEN_ROW = "t_000100";
 
     @Autowired
     private DataSource dataSource;
@@ -59,7 +60,7 @@ class BazonImporterTest extends PostgresTestBase {
     @BeforeAll
     static void migrate() {
         provisionTenants(IMPORT, REPEAT, HEADER, NAMES, BAD_ROW, UNKNOWN, BACKFILL,
-                PARTS_BACKFILL, JUNK_OEM);
+                PARTS_BACKFILL, JUNK_OEM, BROKEN_ROW);
     }
 
     @Test
@@ -381,6 +382,28 @@ class BazonImporterTest extends PostgresTestBase {
                 .as("плохая строка унесла с собой хорошие")
                 .isEqualTo(1);
         assertThat(report.problems()).isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("Битая строка называется один раз, а не по разу на проход")
+    void brokenRowIsReportedOnce() throws Exception {
+        Path catalog = write("catalog-broken.csv", CATALOG_HEADER + """
+                "A-500";"Фара левая";"";"";"";"";"";"";"";"";"";"";"";"";"";"9500";"";\
+                "1";"0";"0";"0";"0";"0";"да";"0"
+                "A-501";"обрезанная
+                """);
+
+        ImportReport report = new BazonImporter(dataSource, BROKEN_ROW)
+                .importAll(donorsFixture(), catalog);
+
+        // Файл товаров читается двумя проходами — наименования и позиции, —
+        // и каждый спотыкается об одну и ту же строку. Владелец видел бы её
+        // дважды и решил, что файл испорчен сильнее, чем есть: по числу
+        // проблем он и судит, доехало ли всё.
+        long unparsed = report.problems().stream()
+                .filter(p -> p.message().contains("не разобрана"))
+                .count();
+        assertThat(unparsed).as("битая строка названа %d раз", unparsed).isEqualTo(1);
     }
 
     @Test

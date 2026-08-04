@@ -18,6 +18,17 @@ public final class ImportReport {
     private final Map<String, Integer> loaded = new LinkedHashMap<>();
     private final List<Problem> problems = new ArrayList<>();
 
+    /**
+     * Уже названные проблемы: строка плюс текст.
+     *
+     * <p>Файл читается несколькими проходами — у товаров двумя (наименования
+     * и сами позиции), у машин тремя, — и каждый спотыкается об одну и ту же
+     * битую строку. Владелец видел бы её дважды и трижды и решил, что файл
+     * испорчен сильнее, чем есть, — а по числу проблем он и судит, доехало ли
+     * всё. Поймано прогоном под ролью: одна обрезанная строка дала три записи.
+     */
+    private final java.util.Set<String> seen = new java.util.HashSet<>();
+
     /** Список проблем не растёт бесконечно: битый файл не должен съесть память. */
     private static final int MAX_PROBLEMS = 500;
 
@@ -32,6 +43,9 @@ public final class ImportReport {
     }
 
     public void problem(long line, String message) {
+        if (!seen.add(line + "|" + message)) {
+            return;
+        }
         if (problems.size() < MAX_PROBLEMS) {
             problems.add(new Problem(line, message));
         } else {
