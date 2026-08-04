@@ -146,10 +146,27 @@ class DonorCostServiceTest extends PostgresTestBase {
         var all = inTenant(() -> directory.all());
 
         assertThat(all).singleElement().satisfies(entry -> {
-            assertThat(entry.publicCode()).isEqualTo("ТЕСТ-1");
+            assertThat(entry.code()).isEqualTo("ТЕСТ-1");
             assertThat(entry.status()).isEqualTo("PURCHASED");
             assertThat(entry.note()).isEqualTo("Камри");
         });
+    }
+
+    /**
+     * Клиент зовёт машину своим номером, а наш внутренний код ему не говорит
+     * ничего: у переехавшего клиента 440 машин со своими номерами, и список,
+     * подписанный шестнадцатеричными кодами, выбрать машину не даёт.
+     */
+    @Test
+    @DisplayName("Список машин называет машину номером клиента, а не нашим")
+    void directoryPrefersLegacyCode() {
+        inTenant(() -> jdbc.update(
+                "UPDATE donor SET legacy_code = '350' WHERE public_code = 'ТЕСТ-1'"));
+
+        assertThat(inTenant(() -> directory.all()))
+                .singleElement()
+                .extracting(DonorDirectory.Entry::code)
+                .isEqualTo("350");
     }
 
     private <T> T inTenant(Supplier<T> action) {

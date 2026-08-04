@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { PhotoPicker } from '../photos/PhotoPicker';
 import type { ResizedPhoto } from '../photos/resize';
+import { donorTitle } from '../intake/donors';
 import { suggestNames } from '../reference/reference';
 import type { Reference } from '../reference/reference';
 import { ScanOverlay } from '../scan/ScanOverlay';
@@ -112,7 +113,7 @@ export function IntakeScreen({ reference, onSend }: Props) {
           <option value="">без машины (контракт)</option>
           {reference.donors.map((d) => (
             <option key={d.id} value={d.id}>
-              {d.publicCode} · {[d.brand, d.model, d.year].filter(Boolean).join(' ')}
+              {donorTitle(d)}
             </option>
           ))}
         </select>
@@ -280,7 +281,7 @@ export function IntakeScreen({ reference, onSend }: Props) {
     }
     if (match.kind === 'donor') {
       setDonorId(match.donor.id);
-      setScanNote(`Машина ${match.donor.publicCode}`);
+      setScanNote(`Машина ${match.donor.code}`);
       return;
     }
     if (match.kind === 'ambiguous') {
@@ -337,7 +338,7 @@ export function IntakeScreen({ reference, onSend }: Props) {
       return 'без машины';
     }
     const donor = reference.donors.find((d) => d.id === donorId);
-    return donor === undefined ? 'машина' : donor.publicCode;
+    return donor === undefined ? 'машина' : donor.code;
   }
 }
 

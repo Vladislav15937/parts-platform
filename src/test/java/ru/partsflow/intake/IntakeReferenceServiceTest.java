@@ -203,7 +203,30 @@ class IntakeReferenceServiceTest extends PostgresTestBase {
         assertThat(inTenant(() -> reference.load()).donors()).singleElement().satisfies(d -> {
             assertThat(d.brand()).isEqualTo("Toyota");
             assertThat(d.model()).isEqualTo("Camry");
-            assertThat(d.publicCode()).isNotBlank();
+            assertThat(d.code()).isNotBlank();
+        });
+    }
+
+    /**
+     * Выбрать машину из списка приёмщик должен уметь, а марки, модели и года
+     * для этого мало: у переехавшего клиента 200 машин из 442 совпадают
+     * по этой тройке. Различают их номер клиента и его же заметка — и то
+     * и другое лежит в базе с самого переезда.
+     */
+    @Test
+    @DisplayName("Машину в справочнике подписывают номер клиента и его заметка")
+    void donorCarriesClientCodeAndNote() {
+        inTenant(() -> {
+            var saved = intake.registerDonor(donor("JT8"), null, null);
+            intake.startDismantling(saved.getId());
+            jdbc.update("UPDATE donor SET legacy_code = '229', note = 'Синий маркер!!!' "
+                    + "WHERE id = ?", saved.getId());
+            return null;
+        });
+
+        assertThat(inTenant(() -> reference.load()).donors()).singleElement().satisfies(d -> {
+            assertThat(d.code()).isEqualTo("229");
+            assertThat(d.note()).isEqualTo("Синий маркер!!!");
         });
     }
 

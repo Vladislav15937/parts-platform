@@ -33,7 +33,7 @@ public class DonorDirectory {
     @Transactional(readOnly = true)
     public List<Entry> all() {
         return jdbc.query("""
-                SELECT d.id, d.public_code, d.vin, d.year, d.status, d.note,
+                SELECT d.id, d.public_code, d.legacy_code, d.vin, d.year, d.status, d.note,
                        b.name AS brand, m.name AS model
                   FROM donor d
                   LEFT JOIN catalog.brand b ON b.id = d.brand_id
@@ -41,7 +41,10 @@ public class DonorDirectory {
                  ORDER BY d.id DESC""",
                 (rs, i) -> new Entry(
                         rs.getLong("id"),
-                        rs.getString("public_code"),
+                        // Тот же выбор, что в карточке машины и в отчёте
+                        // окупаемости: клиент зовёт машину своим номером.
+                        rs.getString("legacy_code") == null
+                                ? rs.getString("public_code") : rs.getString("legacy_code"),
                         rs.getString("brand"),
                         rs.getString("model"),
                         rs.getObject("year") == null ? null : rs.getInt("year"),
@@ -156,7 +159,11 @@ public class DonorDirectory {
         return key == null ? null : dictionary.getOrDefault(key, key);
     }
 
-    public record Entry(long id, String publicCode, String brand, String model,
+    /**
+     * @param code номер, которым машину зовёт клиент: свой, если он есть,
+     *             и наш внутренний, если машину завели уже у нас
+     */
+    public record Entry(long id, String code, String brand, String model,
                         Integer year, String vin, String status, String note) {
     }
 

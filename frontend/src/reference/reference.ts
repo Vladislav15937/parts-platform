@@ -25,7 +25,10 @@ export interface SupplyRef {
 
 export interface DonorRef {
   id: number;
-  publicCode: string;
+  /** Номер, которым машину зовёт клиент, а не наш внутренний. */
+  code: string;
+  /** Заметка владельца: ею различают машины с одинаковой маркой и годом. */
+  note: string | null;
   brand: string | null;
   model: string | null;
   year: number | null;
