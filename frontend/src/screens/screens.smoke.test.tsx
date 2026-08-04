@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, waitFor } from '@testing-library/react';
 
 import { CatalogScreen } from './CatalogScreen';
 import { WheelsScreen } from './WheelsScreen';
@@ -66,15 +66,15 @@ describe('экраны открываются', () => {
 
   const screens: Array<[string, () => JSX.Element]> = [
     ['Склад', () => <CatalogScreen role="OWNER" />],
-    ['Шины и диски', () => <WheelsScreen role="OWNER" />],
-    ['Отчёты', () => <ReportsScreen />],
+    ['Шины и диски', () => <WheelsScreen canIntake role="OWNER" />],
+    ['Отчёты', () => <ReportsScreen canRead />],
     ['Выгрузки', () => <FeedsScreen role="OWNER" />],
     ['Сотрудники', () => <MembersScreen />],
     ['Склады', () => <OrganizationScreen />],
-    ['Наименования', () => <UnmatchedScreen onCount={() => {}} />],
-    ['Заказы', () => <OrdersScreen />],
-    ['Доставка', () => <DeliveryScreen />],
-    ['Этикетки', () => <LabelsScreen />],
+    ['Наименования', () => <UnmatchedScreen canManage onTotalChanged={() => {}} />],
+    ['Заказы', () => <OrdersScreen canSell />],
+    ['Доставка', () => <DeliveryScreen canManage onTotalChanged={() => {}} />],
+    ['Этикетки', () => <LabelsScreen canPrint />],
   ];
 
   it.each(screens)('%s отрисовывается и не падает на пустом ответе', async (name, make) => {
