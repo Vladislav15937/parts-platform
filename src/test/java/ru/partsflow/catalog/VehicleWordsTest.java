@@ -81,6 +81,20 @@ class VehicleWordsTest extends PostgresTestBase {
         assertThat(words.translate("фара Camry")).isEqualTo("фара Camry");
     }
 
+    /**
+     * Поиск колёс разбирает размер («225 55 18» против «225/55 R18»), а марку
+     * покупатель называет так же по-русски: «есть зимняя бриджстоун 225
+     * на 18». До словаря «бриджстоун» отдавал ноль при четырёх позициях.
+     */
+    @Test
+    @DisplayName("Шинная марка переводится тем же словарём")
+    void tyreBrandIsTranslated() {
+        assertThat(words.translate("бриджстоун 225 55 18")).isEqualTo("Bridgestone 225 55 18");
+        assertThat(words.translate("данлоп")).isEqualTo("Dunlop");
+        assertThat(words.translate("йокохама")).isEqualTo("Yokohama");
+        assertThat(words.translate("ёкохама")).isEqualTo("Yokohama");
+    }
+
     @Test
     @DisplayName("Пустой запрос не ломает перевод")
     void emptyIsSafe() {
@@ -102,7 +116,9 @@ class VehicleWordsTest extends PostgresTestBase {
                       JOIN catalog.brand b ON b.id = a.brand_id
                     UNION
                     SELECT a.alias, m.name FROM catalog.model_alias a
-                      JOIN catalog.model m ON m.id = a.model_id) x
+                      JOIN catalog.model m ON m.id = a.model_id
+                    UNION
+                    SELECT a.alias, a.name FROM catalog.tyre_brand_alias a) x
                  GROUP BY alias HAVING count(DISTINCT name) > 1""",
                 String.class);
 

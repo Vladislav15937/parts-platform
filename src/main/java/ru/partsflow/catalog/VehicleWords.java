@@ -11,6 +11,10 @@ import java.util.Map;
 /**
  * Русское написание машины в поисковом запросе приводится к латинскому.
  *
+ * <p>Тем же словарём пользуется поиск колёс: там своя беда с размерами
+ * («225 55 18» против «225/55 R18»), но марку покупатель называет так же
+ * по-русски, и «бриджстоун» находил ноль при четырёх позициях на складе.
+ *
  * <p><b>Зачем.</b> Покупатель звонит и говорит «есть фара на камри?».
  * Продавец набирает как слышит — и получает ноль при 1218 позициях от Camry
  * на складе, потому что в заголовке стоит «Фара Toyota Camry 2007 лев.
@@ -123,7 +127,12 @@ public class VehicleWords {
                       JOIN catalog.brand b ON b.id = a.brand_id
                     UNION ALL
                     SELECT a.alias, m.name FROM catalog.model_alias a
-                      JOIN catalog.model m ON m.id = a.model_id""",
+                      JOIN catalog.model m ON m.id = a.model_id
+                    UNION ALL
+                    -- Шинные марки живут своей таблицей: у Bridgestone нет
+                    -- строки в справочнике машин, а спрашивают о ней так же —
+                    -- «есть зимняя бриджстоун 225 на 18».
+                    SELECT a.alias, a.name FROM catalog.tyre_brand_alias a""",
                     rs -> {
                         known.put(rs.getString("alias").toLowerCase(), rs.getString("name"));
                     });

@@ -35,11 +35,14 @@ public class WheelService {
 
     private final PartChangeLog partChanges;
     private final StockLedger ledger;
+    private final ru.partsflow.catalog.VehicleWords vehicleWords;
 
-    public WheelService(JdbcTemplate jdbc, PartChangeLog partChanges, StockLedger ledger) {
+    public WheelService(JdbcTemplate jdbc, PartChangeLog partChanges, StockLedger ledger,
+                        ru.partsflow.catalog.VehicleWords vehicleWords) {
         this.partChanges = partChanges;
         this.ledger = ledger;
         this.jdbc = jdbc;
+        this.vehicleWords = vehicleWords;
     }
 
     /**
@@ -265,7 +268,10 @@ public class WheelService {
             // заголовка: покупатель называет «225 55 18», а в заголовке стоит
             // «225/55 R18», и по буквам это не совпадает. Нераспознанное
             // остаётся текстом — «Dunlop зимняя» так и ищется словами.
-            WheelSizeQuery size = WheelSizeQuery.parse(query);
+            // Марка приводится к латинскому написанию до разбора размера:
+            // «бриджстоун 225 55 18» — обычный запрос по телефону, и словарь
+            // тут тот же, что у машин.
+            WheelSizeQuery size = WheelSizeQuery.parse(vehicleWords.translate(query));
 
             if (size.tyreWidth() != null) {
                 where.append(" AND w.tyre_width = ?");
