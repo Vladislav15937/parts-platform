@@ -66,6 +66,32 @@ public class WheelService {
     }
 
     /**
+     * Остальные свойства колеса проверяются тем же списком, каким
+     * показываются.
+     *
+     * <p>Белый список стоял только у вида товара, а у сезона, состояния,
+     * маркировки и протектора — нет, хотя болезнь одна и уже описана выше:
+     * значение доезжает до `CHECK` в колонке и возвращается как «операция
+     * нарушает целостность данных». Человеку по такому ответу неясно, что
+     * он ввёл не то, — он идёт искать поломку сервера, — а офлайн-очередь
+     * читает 409 как повод повторять. Поймано попыткой завести комплект
+     * с сезоном `WINTER_STUD` вместо `WINTER_STUDDED`: разница в четыре
+     * буквы, ответ — про целостность данных.
+     *
+     * <p>Сверяется с тем же словарём, которым значение показывают
+     * на экране: отдельный список разошёлся бы с показом на первой же
+     * правке, и появилось бы значение, которое одна сторона пускает,
+     * а другая нет.
+     */
+    private static void requireKnown(String field, String value, Map<String, String> allowed) {
+        if (value != null && !allowed.containsKey(value)) {
+            throw new IllegalArgumentException(
+                    "Неизвестное значение поля «%s»: %s. Допустимы %s"
+                            .formatted(field, value, allowed.keySet()));
+        }
+    }
+
+    /**
      * Заводит комплект: {@code quantity} одинаковых колёс под общим номером.
      *
      * @return номера заведённых карточек
@@ -83,6 +109,10 @@ public class WheelService {
             throw new IllegalArgumentException("Не указан склад");
         }
         requireKind(request.kind());
+        requireKnown("Сезон", request.season(), SEASONS);
+        requireKnown("Состояние", request.condition(), CONDITIONS);
+        requireKnown("Тип маркировки", request.markingType(), MARKING);
+        requireKnown("Тип протектора", request.treadType(), TREAD);
 
         Integer setNo = quantity > 1
                 ? jdbc.queryForObject("SELECT nextval('wheel_set_no_seq')", Integer.class)

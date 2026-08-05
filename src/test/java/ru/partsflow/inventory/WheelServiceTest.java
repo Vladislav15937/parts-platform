@@ -180,6 +180,54 @@ class WheelServiceTest extends PostgresTestBase {
     }
 
     /**
+     * Свойства колеса проверяются белым списком, как и вид товара.
+     *
+     * <p>Белый список стоял только у вида, а у сезона, состояния, маркировки
+     * и протектора — нет, хотя болезнь одна: значение доезжает до {@code CHECK}
+     * в колонке и возвращается как «операция нарушает целостность данных».
+     * По такому ответу человеку неясно, что он ввёл не то, — он идёт искать
+     * поломку сервера, — а офлайн-очередь читает 409 как повод повторять.
+     *
+     * <p>Поймано живым прогоном: комплект с сезоном {@code WINTER_STUD}
+     * вместо {@code WINTER_STUDDED}. Разница в четыре буквы, ответ —
+     * про целостность данных.
+     */
+    @Test
+    @DisplayName("Неизвестный сезон отвергается словами, а не ограничением схемы")
+    void unknownSeasonIsRejectedWithWords() {
+        WheelService.WheelRequest wrong = withSeason("WINTER_STUD");
+
+        assertThatThrownBy(() -> inTenant(() -> wheels.createSet(wrong, 1, warehouseId, null)))
+                .as("значение доехало до CHECK в колонке вместо внятного отказа")
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Сезон")
+                .hasMessageContaining("WINTER_STUDDED");
+    }
+
+    /** Проверка обязана различать неверное и настоящее, а не запрещать всё. */
+    @Test
+    @DisplayName("Известный сезон заводится как раньше")
+    void knownSeasonStillWorks() {
+        var created = inTenant(() ->
+                wheels.createSet(withSeason("WINTER_STUDDED"), 1, warehouseId, null));
+
+        assertThat(created.partIds()).hasSize(1);
+    }
+
+    private WheelService.WheelRequest withSeason(String season) {
+        WheelService.WheelRequest base = tyre();
+        return new WheelService.WheelRequest(base.kind(), base.diameter(),
+                base.tyreWidth(), base.tyreHeight(), base.construction(),
+                base.tyreType(), season, base.wearMm(), base.madeYear(),
+                base.discType(), base.discWidth(), base.offsetMm(),
+                base.boltPattern(), base.hubBore(),
+                base.brand(), base.model(), base.discBrand(), base.discModel(),
+                base.markingType(), base.treadType(),
+                base.runFlat(), base.lightTruck(), base.speedIndex(), base.loadIndex(),
+                base.price(), base.costPrice(), base.condition());
+    }
+
+    /**
      * Выгрузка обязана совпасть с экраном: ради этой сверки её и качают.
      */
     @Test
