@@ -468,11 +468,34 @@ public class PartService {
      * и три числа, а поднимать ради этого агрегат детали с фотографиями
      * и OEM-номерами незачем.
      */
+    /*
+     * Ищется тем же способом, что и витрина: подстрокой и по морфологии.
+     *
+     * Морфология одна не годится числам. Покупатель называет номер куском
+     * («1150-33»), а продавец читает с этикетки на детали код товара —
+     * и пока условие было только полнотекстовым, «140125» находило
+     * у владельца три позиции и ни одной у продавца, а код товара
+     * «7584A8FEAE3D» — одну у владельца и ноль у продавца. То есть деталь
+     * лежала на полке, её номер был напечатан на ней же, и продавец
+     * отвечал «нет такого».
+     *
+     * Кросс-номера тем более: по ним и звонят, когда своего номера нет.
+     * Их поиск не видел вовсе — part_oem в запросе не участвовал.
+     *
+     * Ровно эта же расходимость уже была починена с другой стороны, когда
+     * витрина искала только подстрокой: два поиска по одному складу
+     * отвечают по-разному, и неправ тот, о ком не спрашивали.
+     *
+     * UNION, а не OR, и по той же причине, что на витрине: с OR планировщик
+     * уходит в полный перебор. Триграммные индексы на public_code
+     * и raw_number уже стоят (tenant/055) — они заводились для витрины.
+     */
     @Transactional(readOnly = true)
     public List<StockRow> searchAvailable(String query, int limit) {
         // «фара камри» приводится к «фара Camry»: покупатель звонит и говорит
         // по-русски, а в заголовке стоит латиница.
         String text = vehicleWords.translate(query);
+        String like = "%" + text.strip() + "%";
         return jdbc.query("""
                 SELECT p.id, p.public_code, p.title, p.price, p.status,
                        w.id AS warehouse_id, w.name AS warehouse_name,
@@ -482,10 +505,15 @@ public class PartService {
                   JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
                   JOIN warehouse w ON w.id = s.warehouse_id
                   LEFT JOIN storage_cell c ON c.id = s.cell_id
-                 WHERE to_tsvector('russian', coalesce(p.title, '') || ' '
-                           || coalesce(p.description, '') || ' '
-                           || coalesce(p.marking, ''))
-                       @@ plainto_tsquery('russian', ?)
+                 WHERE p.id IN (
+                         SELECT id FROM part WHERE public_code ILIKE ?
+                          UNION SELECT id FROM part WHERE title ILIKE ?
+                          UNION SELECT id FROM part
+                                 WHERE to_tsvector('russian', coalesce(title, '') || ' '
+                                           || coalesce(description, '') || ' '
+                                           || coalesce(marking, ''))
+                                       @@ plainto_tsquery('russian', ?)
+                          UNION SELECT part_id FROM part_oem WHERE raw_number ILIKE ?)
                  ORDER BY (s.qty - s.qty_reserved > 0) DESC,
                           ts_rank(to_tsvector('russian', coalesce(p.title, '') || ' '
                               || coalesce(p.description, '') || ' '
@@ -505,7 +533,8 @@ public class PartService {
                         rs.getBigDecimal("qty"),
                         rs.getBigDecimal("qty_reserved"),
                         rs.getBigDecimal("qty_available")),
-                text, text, limit);
+                // Четыре ветки UNION, потом ранжирование, потом предел.
+                like, like, text, like, text, limit);
     }
 
     /** Строка выдачи продавцу: деталь на конкретном складе. */
