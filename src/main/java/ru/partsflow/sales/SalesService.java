@@ -710,6 +710,33 @@ public class SalesService {
     }
 
     /**
+     * Деньги по закрытой сделке не принимаются — ни в кассу, ни зачётом.
+     *
+     * <p>Отменённая не состоялась, возвращённая закрыта встречным документом:
+     * платить не за что. Пока проверки не было, оба пути пропускали такую
+     * оплату молча — отменённая сделка получала приход в кассу, которого
+     * вечером не сойдётся с ящиком, а зачёт списывал деньги <b>со счёта
+     * клиента</b> в счёт товара, который тот сам принёс обратно. Второе
+     * не ловила даже сверка: {@code v_account_discrepancy} знает про
+     * отменённую с невозвращённой оплатой, а про возвращённую — нет.
+     *
+     * <p>Проверка стоит здесь, а не только в нулевом долге: с {@code debt()
+     * == 0} приём денег не отказал бы, а тихо положил всю сумму на лицевой
+     * счёт — то есть сделал бы не то, что просили, и без единого слова.
+     */
+    private void requireOpen(Deal deal) {
+        if (deal.getStatus().isClosed()) {
+            throw new IllegalStateException(
+                    "Сделка %s закрыта (%s): платить по ней не за что"
+                            .formatted(deal.getNumber(), statusWord(deal.getStatus())));
+        }
+    }
+
+    private static String statusWord(DealStatus status) {
+        return status == DealStatus.CANCELLED ? "отменена" : "возвращена";
+    }
+
+    /**
      * Оплата сделки.
      *
      * <p>Переплата не отбрасывается и не превращается в отрицательный долг:
@@ -719,6 +746,7 @@ public class SalesService {
     @Transactional
     public Payment takePayment(Long dealId, BigDecimal amount, Long paymentSourceId, Long managerId) {
         Deal deal = requireDeal(dealId);
+        requireOpen(deal);
 
         Payment payment = new Payment(PaymentDirection.IN, amount, deal.getCustomerId());
         payment.setDealId(dealId);
@@ -790,6 +818,7 @@ public class SalesService {
     @Transactional
     public Deal payFromAccount(Long dealId, BigDecimal amount, Long managerId) {
         Deal deal = requireDeal(dealId);
+        requireOpen(deal);
         if (deal.getCustomerId() == null) {
             throw new IllegalStateException(
                     "У сделки нет клиента: списывать не с чего");

@@ -30,4 +30,16 @@ public enum DealStatus {
     public boolean holdsStock() {
         return this == DRAFT || this == RESERVED || this == READY;
     }
+
+    /**
+     * Сделка закрыта: товара у клиента нет и денег он не должен.
+     *
+     * <p>Отменённая не состоялась вовсе, а возвращённая закрыта встречным
+     * документом — деньги по ней либо вернули, либо не брали. Частичный
+     * возврат сюда не попадает: там сделка остаётся {@code ISSUED}, потому
+     * что часть товара клиент оставил себе и за неё должен.
+     */
+    public boolean isClosed() {
+        return this == CANCELLED || this == RETURNED;
+    }
 }
