@@ -346,7 +346,11 @@ export interface OrderResult {
 export function receiveOrder(
   marketplace: string,
   orderNo: string,
-  customerId: number,
+  /**
+   * Клиента у заказа с площадки может не быть: покупателя она не называет,
+   * а выдумывать его значит засорять справочник и врать отчёту по клиентам.
+   */
+  customerId: number | null,
   lines: BasketLine[],
   replyDeadline: string | null,
   deliveryNote: string,

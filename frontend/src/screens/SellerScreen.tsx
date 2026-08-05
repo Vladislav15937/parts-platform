@@ -271,7 +271,14 @@ export function SellerScreen({ canSell, role }: Props) {
 
           <button
             type="button"
-            disabled={customer === null || !canSell
+            /* Клиент обязателен обычной продаже — она ведётся с человеком,
+               который стоит у прилавка. У заказа с площадки клиента нет:
+               покупателя она не называет, и назначить его задним числом
+               нечем. Пока клиент требовался и здесь, принять заказ с экрана
+               было нельзя вовсе — продавец заводил фиктивного, чтобы кнопка
+               ожила, и в справочнике клиентов появлялся «Дром». */
+            disabled={!canSell
+              || (marketplace === '' && customer === null)
               || (marketplace !== '' && orderNo.trim() === '')}
             onClick={() => void submit()}
           >
@@ -318,14 +325,14 @@ export function SellerScreen({ canSell, role }: Props) {
   }
 
   async function submit(): Promise<void> {
-    if (customer === null) {
+    if (customer === null && marketplace === '') {
       return;
     }
     setError(null);
     try {
       if (marketplace !== '') {
         const result = await receiveOrder(
-          marketplace, orderNo.trim(), customer.id, lines, null, note, services,
+          marketplace, orderNo.trim(), customer?.id ?? null, lines, null, note, services,
           sourceId === '' ? null : Number(sourceId));
         setDeal(result.deal);
         if (result.replayed) {
@@ -341,7 +348,7 @@ export function SellerScreen({ canSell, role }: Props) {
         setOrderNo('');
         setNote('');
       } else {
-        setDeal(await createDeal(customer.id, lines, services,
+        setDeal(await createDeal(customer!.id, lines, services,
           sourceId === '' ? null : Number(sourceId)));
       }
       setLines([]);
