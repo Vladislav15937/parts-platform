@@ -178,6 +178,16 @@ function KindPicker({
   const [query, setQuery] = useState('');
   const [found, setFound] = useState<PartKind[]>([]);
   const [asked, setAsked] = useState(false);
+  /**
+   * На какой эталон навели: строка «Станет» показывает именно его.
+   *
+   * <p>Заголовок после сопоставления — единственное, чем верное решение
+   * отличается от ложного: обе кнопки выглядят одинаково, а нажатие правит
+   * сотни карточек и назад не откатывается. Пока «Станет» показывал только
+   * первый эталон, у остальных — а среди них соседи вроде «Ключ зажигания»
+   * и «Замок зажигания» — сравнить было нечего.
+   */
+  const [hovered, setHovered] = useState<string | null>(null);
 
   useEffect(() => {
     void suggestionsFor(partName.id)
@@ -204,6 +214,15 @@ function KindPicker({
                 type="button"
                 className="chip"
                 title={preview(partName, kind.name)}
+                // Наведение и фокус меняют строку «Станет» ниже. Нативной
+                // подсказки для этого мало: она всплывает через секунду,
+                // и разбирающий шестьсот написаний подряд её не дожидается —
+                // он выбирает из того, что видно, а видно было только
+                // первый эталон.
+                onMouseEnter={() => setHovered(kind.name)}
+                onMouseLeave={() => setHovered(null)}
+                onFocus={() => setHovered(kind.name)}
+                onBlur={() => setHovered(null)}
                 onClick={() => onPick(kind)}
               >
                 {kind.name}
@@ -217,7 +236,7 @@ function KindPicker({
               только в получившемся заголовке. */}
           {suggested[0] !== undefined && partName.sampleTitle !== null && (
             <p className="note">
-              Станет: <b>{preview(partName, suggested[0].name)}</b>
+              Станет: <b>{preview(partName, hovered ?? suggested[0].name)}</b>
               {suggested.length > 1 && ' — и так для каждого эталона, наведите'}
             </p>
           )}
