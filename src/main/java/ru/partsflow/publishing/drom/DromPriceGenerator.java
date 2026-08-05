@@ -158,10 +158,25 @@ public class DromPriceGenerator {
                     CASE WHEN ?::boolean
                          THEN COALESCE(p.part_kind_id <> ALL (?::bigint[]), true)
                          ELSE p.part_kind_id = ANY (?::bigint[]) END)
+               -- Марка берётся и из применимости, а не только из машины.
+               -- У контрактной детали донора нет вовсе, а марка у неё есть —
+               -- и прайс её публикует тегом brandcars именно отсюда. Пока
+               -- отбор смотрел только на донора, «только Toyota» отдавало
+               -- 12 537 позиций там, где витрина по той же марке показывала
+               -- 16 529: четыре тысячи контрактных Тойот в прайс-лист
+               -- не попадали, хотя сам прайс объявляет их Тойотами.
+               -- Два ответа на один вопрос, и неправ был тот, о котором
+               -- не спрашивали.
                AND (?::bigint[] IS NULL OR
                     CASE WHEN ?::boolean
                          THEN COALESCE(d.brand_id <> ALL (?::bigint[]), true)
-                         ELSE d.brand_id = ANY (?::bigint[]) END)
+                              AND NOT EXISTS (SELECT 1 FROM part_applicability pa
+                                               WHERE pa.part_id = p.id
+                                                 AND pa.brand_id = ANY (?::bigint[]))
+                         ELSE (d.brand_id = ANY (?::bigint[])
+                               OR EXISTS (SELECT 1 FROM part_applicability pa
+                                           WHERE pa.part_id = p.id
+                                             AND pa.brand_id = ANY (?::bigint[]))) END)
             """;
 
     /** Дельта — тот же запрос по списку позиций: формат обязан совпасть с прайсом. */
@@ -348,11 +363,15 @@ public class DromPriceGenerator {
                 statement.setArray(12, kinds);
                 statement.setArray(13, brands);
                 statement.setBoolean(14, filter.brandsExcluded());
+                // По четыре на ветку: марка сверяется и с машиной, и
+                // с применимостью — у контрактной детали она только там.
                 statement.setArray(15, brands);
                 statement.setArray(16, brands);
+                statement.setArray(17, brands);
+                statement.setArray(18, brands);
 
                 if (partIds != null) {
-                    statement.setArray(17, connection.createArrayOf("bigint", partIds.toArray()));
+                    statement.setArray(19, connection.createArrayOf("bigint", partIds.toArray()));
                 }
                 try (ResultSet rs = statement.executeQuery()) {
                     return writer.write(out, new OfferCursor(rs, photoBase));

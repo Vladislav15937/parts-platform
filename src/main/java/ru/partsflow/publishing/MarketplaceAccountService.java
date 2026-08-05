@@ -302,17 +302,29 @@ public class MarketplaceAccountService {
                         CASE WHEN ?::boolean
                              THEN COALESCE(p.part_kind_id <> ALL (?::bigint[]), true)
                              ELSE p.part_kind_id = ANY (?::bigint[]) END)
+                   -- Марка берётся и из применимости — тем же условием,
+                   -- что и генератор. У контрактной детали донора нет,
+                   -- а марка есть, и прайс её публикует: пока отбор смотрел
+                   -- только на донора, счётчик обещал 12 537 позиций там,
+                   -- где витрина по той же марке показывала 16 529.
                    AND (?::bigint[] IS NULL OR
                         CASE WHEN ?::boolean
                              THEN COALESCE(d.brand_id <> ALL (?::bigint[]), true)
-                             ELSE d.brand_id = ANY (?::bigint[]) END)""",
+                                  AND NOT EXISTS (SELECT 1 FROM part_applicability pa
+                                                   WHERE pa.part_id = p.id
+                                                     AND pa.brand_id = ANY (?::bigint[]))
+                             ELSE (d.brand_id = ANY (?::bigint[])
+                                   OR EXISTS (SELECT 1 FROM part_applicability pa
+                                               WHERE pa.part_id = p.id
+                                                 AND pa.brand_id = ANY (?::bigint[]))) END)""",
                 Long.class,
                 line(productLine),
                 priceFrom, priceFrom, priceTo, priceTo,
                 text(conditions), text(conditions),
                 longs(warehouseIds), longs(warehouseIds),
                 longs(kindIds), kindsExcluded, longs(kindIds), longs(kindIds),
-                longs(brandIds), brandsExcluded, longs(brandIds), longs(brandIds));
+                longs(brandIds), brandsExcluded,
+                longs(brandIds), longs(brandIds), longs(brandIds), longs(brandIds));
         return found == null ? 0 : found;
     }
 

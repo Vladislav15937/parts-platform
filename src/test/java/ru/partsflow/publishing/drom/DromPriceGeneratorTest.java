@@ -263,6 +263,79 @@ class DromPriceGeneratorTest extends PostgresTestBase {
 
     // ---------- фикстуры ----------
 
+    /**
+     * Отбор по марке видит и применимость, а не только машину-донора.
+     *
+     * <p>У контрактной детали донора нет вовсе, а марка есть — она лежит
+     * в {@code part_applicability}, и прайс публикует её тегом
+     * {@code brandcars} именно оттуда. Пока отбор смотрел только на донора,
+     * прайс-лист «только Toyota» отдавал 12 537 позиций живого склада там,
+     * где витрина по той же марке показывала 16 529: четыре тысячи
+     * контрактных Тойот не попадали в выгрузку, хотя сама выгрузка
+     * объявляет их Тойотами.
+     *
+     * <p>Обратная сторона держится тем же тестом: «кроме Toyota» обязано
+     * выкинуть и контрактную Тойоту — иначе исключение марки не исключает.
+     */
+    @Test
+    @DisplayName("Отбор по марке берёт её и из применимости")
+    void brandFilterSeesApplicability() {
+        Long brandId = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM catalog.brand WHERE name = 'Toyota'", Long.class));
+
+        Long contract = part("Фара контрактная", new BigDecimal("5000"), true);
+        intake(contract, warehouse, 1);
+        inTenant(() -> jdbc.update(
+                "INSERT INTO part_applicability (part_id, brand_id) VALUES (?, ?)",
+                contract, brandId));
+
+        Long other = part("Бампер без машины", new BigDecimal("5000"), true);
+        intake(other, warehouse, 1);
+
+        DromPriceGenerator.FeedFilter only = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), false,
+                java.util.List.of(brandId), false);
+        String onlyToyota = priceWith(only);
+
+        assertThat(onlyToyota)
+                .as("контрактная Тойота не попала в прайс-лист «только Toyota»")
+                .contains("Фара контрактная");
+        assertThat(onlyToyota)
+                .as("в «только Toyota» уехало то, что к Toyota не относится")
+                .doesNotContain("Бампер без машины");
+
+        DromPriceGenerator.FeedFilter except = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), false,
+                java.util.List.of(brandId), true);
+        String withoutToyota = priceWith(except);
+
+        assertThat(withoutToyota)
+                .as("«кроме Toyota» оставило контрактную Тойоту")
+                .doesNotContain("Фара контрактная");
+        assertThat(withoutToyota)
+                .as("«кроме Toyota» выкинуло позицию без машины — а она не Тойота")
+                .contains("Бампер без машины");
+
+        // Счётчик и генератор — два разных запроса с одним условием,
+        // и правка одного мимо другого была бы обещанием не того числа,
+        // которое уедет площадке. Проверяется отбором, а не пустым фильтром:
+        // существующая сверка счётчика идёт без марок и эту ветку не трогает.
+        long counted = inTenant(() -> accounts.countMatching(
+                null, null, null, null, null, false,
+                java.util.List.of(brandId), false, "PART"));
+        assertThat(counted)
+                .as("счётчик считает марку не так, как генератор")
+                .isEqualTo(onlyToyota.split("<offer>", -1).length - 1);
+    }
+
+    private String priceWith(DromPriceGenerator.FeedFilter filter) {
+        return inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeTo(out, filter);
+            return out.toString(StandardCharsets.UTF_8);
+        });
+    }
+
     private Long part(String title, BigDecimal price, boolean published) {
         return inTenant(() -> jdbc.queryForObject("""
                 INSERT INTO part (category_id, title, price, cost_price, is_published)
