@@ -181,11 +181,38 @@ public class ExcelWarehouseImporter {
      * ещё раз.
      */
     private Report replayOf(String requestId) {
-        List<Report> found = jdbc.query(
-                "SELECT imported, skipped FROM import_run WHERE client_request_id = ?",
-                (rs, i) -> new Report(rs.getInt("imported"), parseSkipped(rs.getString("skipped"))),
+        List<Integer> imported = jdbc.queryForList(
+                "SELECT imported FROM import_run WHERE client_request_id = ?",
+                Integer.class, requestId);
+        if (imported.isEmpty()) {
+            return null;
+        }
+        return new Report(imported.get(0), skippedOf(requestId));
+    }
+
+    /**
+     * Пропущенные строки прошлого прогона — разбирает их Postgres, а не мы.
+     *
+     * <p>Колонка объявлена {@code jsonb}, и база хранит не тот текст, что мы
+     * записали, а свой: пробел после двоеточия, свой порядок ключей. Разбор
+     * регуляркой по нашему же написанию не совпадал с этим ни разу, и повтор
+     * загрузки отвечал «пропущено 0» при непустом списке — то есть терял
+     * ровно тот перечень строк, ради которого повтор и смотрят. «Пропущено
+     * 0» читается как «всё загрузилось», и битые строки владелец
+     * не исправляет никогда.
+     *
+     * <p>Записываем по-прежнему руками: список короткий и плоский, а тянуть
+     * сериализатор ради двух полей значит связать импортёр с представлением.
+     * Читать так же нельзя — на чтении собеседник не мы, а база.
+     */
+    private List<Report.Skipped> skippedOf(String requestId) {
+        return jdbc.query("""
+                        SELECT (e->>'row')::int AS row_number, e->>'reason' AS reason
+                          FROM import_run r
+                         CROSS JOIN LATERAL jsonb_array_elements(r.skipped) e
+                         WHERE r.client_request_id = ?""",
+                (rs, i) -> new Report.Skipped(rs.getInt("row_number"), rs.getString("reason")),
                 requestId);
-        return found.isEmpty() ? null : found.get(0);
     }
 
     /**
@@ -203,17 +230,6 @@ public class ExcelWarehouseImporter {
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
     }
 
-    private static List<Report.Skipped> parseSkipped(String json) {
-        List<Report.Skipped> skipped = new ArrayList<>();
-        java.util.regex.Matcher matcher = java.util.regex.Pattern
-                .compile("\\{\"row\":(\\d+),\"reason\":\"([^\"]*)\"}")
-                .matcher(json == null ? "" : json);
-        while (matcher.find()) {
-            skipped.add(new Report.Skipped(
-                    Integer.parseInt(matcher.group(1)), matcher.group(2)));
-        }
-        return skipped;
-    }
 
     private Row parse(ExcelSheetReader.Row row, ColumnMapping mapping, Tally report) {
         String name = mapping.value(row, Field.NAME).strip();

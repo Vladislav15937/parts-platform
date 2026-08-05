@@ -221,6 +221,42 @@ class ExcelImportTest extends PostgresTestBase {
                 .isEqualByComparingTo("3");
     }
 
+    /**
+     * Повтор обязан вернуть и список пропущенных, а не только их число.
+     *
+     * <p>Колонка {@code skipped} объявлена {@code jsonb}, и база хранит
+     * не тот текст, что записал импортёр, а свой — с пробелом после
+     * двоеточия. Разбор шёл регуляркой по нашему же написанию и не совпадал
+     * с базой ни разу: повтор отвечал «пропущено 0» при непустом списке.
+     *
+     * <p>Это хуже, чем потеря сведений. «Пропущено 0» читается как «всё
+     * загрузилось», и строки, которые надо поправить в таблице и загрузить
+     * заново, владелец не исправляет никогда — а повтор смотрят как раз
+     * затем, чтобы узнать, что не доехало.
+     */
+    @Test
+    @DisplayName("Повтор возвращает и пропущенные строки, а не только число")
+    void repeatKeepsSkippedRows() throws Exception {
+        byte[] book = workbook(
+                List.of("Наименование", "Цена", "Кол-во"),
+                List.of(List.of("Фара левая", "9500", "2"),
+                        List.of("", "100", "1")));
+        String key = java.util.UUID.randomUUID().toString();
+        Map<Field, Integer> columns = Map.of(Field.NAME, 0, Field.PRICE, 1, Field.QUANTITY, 2);
+
+        ExcelWarehouseImporter.Report first = inTenant(() -> load(book, key, columns));
+        assertThat(first.skipped()).hasSize(1);
+
+        ExcelWarehouseImporter.Report again = inTenant(() -> load(book, key, columns));
+
+        assertThat(again.imported()).isEqualTo(first.imported());
+        assertThat(again.skipped())
+                .as("повтор потерял пропущенные — «пропущено 0» читается как «всё загрузилось»")
+                .hasSize(1);
+        assertThat(again.skipped().get(0).row()).isEqualTo(first.skipped().get(0).row());
+        assertThat(again.skipped().get(0).reason()).isEqualTo(first.skipped().get(0).reason());
+    }
+
     @Test
     @DisplayName("Другой ключ — другая загрузка")
     void differentKeyImportsAgain() throws Exception {
