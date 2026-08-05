@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { plural } from '../ui/plural';
 import { ApiError } from '../api/client';
 import {
   customerSettlements,
@@ -194,7 +195,9 @@ export function ReportsScreen({ canRead }: Props) {
         <>
           <p className="note">
             Авансов {settlements.totals.advances.toLocaleString('ru-RU')} ₽
-            у {settlements.totals.withAdvance} клиентов · долгов{' '}
+            у {settlements.totals.withAdvance}{' '}
+            {plural(settlements.totals.withAdvance, 'клиента', 'клиентов', 'клиентов')}
+            {' '}· долгов{' '}
             {settlements.totals.debts.toLocaleString('ru-RU')} ₽
             у {settlements.totals.withDebt}
           </p>
@@ -203,7 +206,14 @@ export function ReportsScreen({ canRead }: Props) {
               за которым надо куда-то идти, не смотрит никто. */}
           {settlements.totals.problems.length > 0 ? (
             <div className="note note--error">
-              <p>Деньги не сходятся — {settlements.totals.problems.length} расхождений:</p>
+              {/* Склонение: «1 расхождений» на экране, где владелец
+                  проверяет деньги, читается как небрежность — а рядом стоят
+                  суммы, которым он должен верить. */}
+              <p>
+                Деньги не сходятся — {settlements.totals.problems.length}{' '}
+                {plural(settlements.totals.problems.length,
+                        'расхождение', 'расхождения', 'расхождений')}:
+              </p>
               <ul>
                 {settlements.totals.problems.map((p, i) => (
                   <li key={i}>
