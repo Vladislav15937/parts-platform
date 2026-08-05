@@ -81,6 +81,15 @@ export function CatalogScreen({ role }: { role: string }) {
   // открывает карточку — и промах по флажку менял бы не то.
   const [selecting, setSelecting] = useState(false);
   const [chosen, setChosen] = useState<number[]>([]);
+  /**
+   * Выбран весь отбор, а не отмеченные строки.
+   *
+   * <p>Отметить можно только видимое, а видно пятьдесят строк из тридцати
+   * пяти тысяч. После переезда без колонки «Выгружать» включить публикацию
+   * надо всему складу — постранично это семьсот семнадцать заходов, и
+   * до тех пор прайс уезжает пустым.
+   */
+  const [whole, setWhole] = useState(false);
   const [editing, setEditing] = useState(false);
   // Какая колонка сейчас набирается и какая показывает меню: открытых
   // больше одной быть не может — они перекрывают друг друга.
@@ -255,6 +264,7 @@ export function CatalogScreen({ role }: { role: string }) {
             onClick={() => {
               setSelecting(!selecting);
               setChosen([]);
+              setWhole(false);
               setEditing(false);
             }}
           >
@@ -350,13 +360,27 @@ export function CatalogScreen({ role }: { role: string }) {
       {selecting && !editing && (
         <div className="filter-row">
           <span className="note">
-            {chosen.length === 0 ? 'Отметьте позиции' : `Выбрано ${chosen.length}`}
+            {whole ? `Выбран весь отбор: ${page?.total ?? 0}`
+              : chosen.length === 0 ? 'Отметьте позиции'
+              : `Выбрано ${chosen.length}`}
           </span>
-          <button type="button" disabled={chosen.length === 0} onClick={() => setEditing(true)}>
+          <button type="button" disabled={!whole && chosen.length === 0}
+                  onClick={() => setEditing(true)}>
             Изменить
           </button>
-          <button type="button" className="button--ghost" disabled={chosen.length === 0}
-                  onClick={() => setChosen([])}>
+          {/* Весь отбор — единственный способ тронуть больше страницы.
+              Кнопка стоит рядом с отметками, а не в настройках: нужна она
+              ровно тогда, когда владелец уже понял, что отмечать придётся
+              семьсот страниц. */}
+          {!whole && page !== null && page.total > page.rows.length && (
+            <button type="button" className="button--ghost"
+                    onClick={() => { setWhole(true); setChosen([]); }}>
+              Выбрать весь отбор ({page.total})
+            </button>
+          )}
+          <button type="button" className="button--ghost"
+                  disabled={!whole && chosen.length === 0}
+                  onClick={() => { setChosen([]); setWhole(false); }}>
             Снять выделение
           </button>
         </div>
@@ -365,9 +389,12 @@ export function CatalogScreen({ role }: { role: string }) {
       {editing && (
         <BulkEditForm
           partIds={chosen}
+          whole={whole ? query : undefined}
+          count={whole ? (page?.total ?? 0) : chosen.length}
           onSaved={(changed) => {
             setEditing(false);
             setChosen([]);
+            setWhole(false);
             setNotice(`Изменено позиций: ${changed}`);
             load(query);
           }}

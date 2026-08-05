@@ -501,18 +501,59 @@ public class CatalogService {
     public record Vehicle(Long brandId, Long modelId, String body, String engine) {
     }
 
+    /**
+     * Соединения отбора — те же для страницы и для правки по отбору.
+     *
+     * <p>Условие ссылается на марку, модель и написание вида детали, то есть
+     * на соседние таблицы: собранное без них, оно не выполнится вовсе.
+     * Константа, а не копия в каждом запросе, по той же причине, по которой
+     * отбор один: разойдясь, они дали бы правку не того, что владелец видел.
+     */
+    private static final String JOINS = """
+
+              FROM part p
+              LEFT JOIN donor d ON d.id = p.donor_id
+              LEFT JOIN catalog.brand b ON b.id = d.brand_id
+              LEFT JOIN catalog.model m ON m.id = d.model_id
+              LEFT JOIN catalog.generation g ON g.id = d.generation_id
+              LEFT JOIN catalog.modification mo ON mo.id = d.modification_id
+              LEFT JOIN supply s ON s.id = d.supply_id
+              LEFT JOIN part_name pn ON pn.id = p.part_name_id""";
+
+    /**
+     * Номера всех позиций отбора, а не одной страницы.
+     *
+     * <p><b>Зачем.</b> Правка списком берёт то, что владелец отметил на
+     * экране, а на экране пятьдесят строк. После переезда без колонки
+     * «Выгружать» включить публикацию надо всему складу — у живого клиента
+     * это 35 841 позиция, то есть семьсот семнадцать страниц по полсотни,
+     * причём выделение сбрасывается при переходе на следующую. Прайс при
+     * этом уезжает пустым, и площадка молча не заводит ни одного объявления.
+     * Возможность была написана — {@code updateAll} принимает хоть весь
+     * склад и проходит его за двадцать секунд, — и не было только способа
+     * дотянуться до неё с экрана.
+     *
+     * <p>Отбор тот же, что у страницы и у выгрузки: правка обязана тронуть
+     * ровно то, что владелец видел, — иначе он правит одно, а меняется
+     * другое, и заметить это можно только пересчётом склада.
+     *
+     * <p>Порядок задан намеренно: без него база вправе вернуть строки
+     * как попало, и «изменено 35 841» перестанет быть воспроизводимым
+     * при разборе того, что именно уехало.
+     */
+    @Transactional(readOnly = true)
+    public List<Long> idsMatching(String query, boolean withReserved, boolean withMissing,
+                                  List<Long> warehouseIds, Vehicle vehicle,
+                                  Map<String, String> columns, Map<String, String> words) {
+        Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
+                columns, words);
+        return jdbc.queryForList("SELECT p.id" + JOINS + filter.where() + " ORDER BY p.id",
+                Long.class, filter.args().toArray());
+    }
+
     private Page finish(StringBuilder where, List<Object> args, String sort,
                         boolean descending, int page, int size, String after) {
-        String joins = """
-
-                  FROM part p
-                  LEFT JOIN donor d ON d.id = p.donor_id
-                  LEFT JOIN catalog.brand b ON b.id = d.brand_id
-                  LEFT JOIN catalog.model m ON m.id = d.model_id
-                  LEFT JOIN catalog.generation g ON g.id = d.generation_id
-                  LEFT JOIN catalog.modification mo ON mo.id = d.modification_id
-                  LEFT JOIN supply s ON s.id = d.supply_id
-                  LEFT JOIN part_name pn ON pn.id = p.part_name_id""";
+        String joins = JOINS;
 
         Long total = jdbc.queryForObject("SELECT count(*)" + joins + where, Long.class,
                 args.toArray());

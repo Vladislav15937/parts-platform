@@ -262,9 +262,13 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         </div>
       )}
 
+      {/* Отбора целиком у колёс нет: их у клиента две сотни против
+          тридцати пяти тысяч запчастей, то есть несколько страниц,
+          а не семьсот. Понадобится — берётся тем же способом. */}
       {bulk && (
         <BulkEditForm
           partIds={chosen}
+          count={chosen.length}
           onSaved={(changed) => {
             setBulk(false);
             setChosen([]);

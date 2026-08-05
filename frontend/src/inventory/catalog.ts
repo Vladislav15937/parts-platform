@@ -620,6 +620,29 @@ export function savePartsBulk(
   });
 }
 
+/**
+ * Правка всего, что попало в отбор, — а не отмеченного на странице.
+ *
+ * <p>Отметить можно только видимое, а видно пятьдесят строк. После переезда
+ * без колонки «Выгружать» включить публикацию надо всему складу: у живого
+ * клиента это 35 841 позиция, то есть семьсот семнадцать страниц, причём
+ * выделение сбрасывается на каждой. Прайс до тех пор уезжает пустым, и
+ * площадка молча не заводит ни одного объявления.
+ *
+ * <p>Отбор уезжает теми же параметрами, что у страницы и у выгрузки
+ * (`paramsOf`): владелец правит ровно то, что видел, — иначе разойтись
+ * они могут молча.
+ */
+export function savePartsBulkByFilter(
+  query: CatalogQuery,
+  changes: Record<string, string | number | boolean | null>,
+): Promise<{ changed: number }> {
+  return request<{ changed: number }>(`/api/parts/catalog/bulk?${paramsOf(query).toString()}`, {
+    method: 'POST',
+    body: { changes },
+  });
+}
+
 /** Поля, которые правятся списком. Заголовок, остаток и ячейка сюда не идут. */
 export const BULK_FIELDS: Array<{ key: string; title: string; kind: 'money' | 'text' | 'flag' }> = [
   { key: 'price', title: 'Цена', kind: 'money' },
