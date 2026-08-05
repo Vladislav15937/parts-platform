@@ -155,6 +155,53 @@ class PartNameServiceTest extends PostgresTestBase {
                 .contains("Топливный фильтр");
     }
 
+    /**
+     * Похожесть считается и по синонимам, а не по одному имени эталона.
+     *
+     * <p>Синонимы — это и есть живые написания, ради которых справочник
+     * заведён, и близкое написание клиента похоже именно на них. Замерено
+     * на живом складе: «тросик ручного тормоза» (379 карточек) против имени
+     * «Трос ручника» даёт 0,296 — последнее место, ниже «Колодок стояночного
+     * тормоза» с 0,316; против синонима «трос ручного тормоза» — 0,826.
+     *
+     * <p>Цена не в лишнем нажатии. Разбирающий тысячу написаний подряд
+     * выбирает из показанного, а показывались три чужие детали, из них
+     * первыми — колодки. Одно такое сопоставление переписывает сотни
+     * карточек, и назад это не откатывается.
+     */
+    @Test
+    @DisplayName("Подсказки ищут похожее и среди синонимов")
+    void suggestionsLookAtSynonyms() {
+        PartName resolved = inTenant(() -> service.resolve("тросик ручного тормоза", null));
+        assertThat(resolved.getMatchStatus()).isEqualTo(PartName.MatchStatus.UNMATCHED);
+
+        List<PartKindMatcher.PartKind> suggestions =
+                inTenant(() -> service.suggestionsFor(resolved.getId()));
+
+        assertThat(suggestions).extracting(PartKindMatcher.PartKind::name)
+                .as("верный эталон не попал в подсказки — человек выберет из чужих")
+                .contains("Трос ручника");
+        assertThat(suggestions.get(0).name())
+                .as("первой подсказкой идёт не самое похожее")
+                .isEqualTo("Трос ручника");
+    }
+
+    /**
+     * Поиск руками — то, чем спасаются, когда подсказки мимо. Он обязан
+     * находить по живому написанию: «ручного тормоза» не входит в «Трос
+     * ручника» ни одной буквой, зато входит в его синоним.
+     */
+    @Test
+    @DisplayName("Поиск эталона идёт и по синонимам")
+    void searchLooksAtSynonyms() {
+        List<PartKindMatcher.PartKind> found =
+                inTenant(() -> service.searchKinds("ручного тормоза", 10));
+
+        assertThat(found).extracting(PartKindMatcher.PartKind::name)
+                .as("по живому написанию эталон не находится вовсе")
+                .contains("Трос ручника");
+    }
+
     @Test
     @DisplayName("Ручное сопоставление помечается вручную и пересчёту не подлежит")
     void manualMatchSurvivesRematch() {
