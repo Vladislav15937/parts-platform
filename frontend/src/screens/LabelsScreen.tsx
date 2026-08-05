@@ -239,9 +239,9 @@ export function LabelsScreen({ canPrint }: Props) {
   async function findParts(): Promise<void> {
     setError(null);
     try {
-      const rows = await searchStock(query.trim());
+      const found = await searchStock(query.trim());
       setPartLabels(
-        rows
+        found.rows
           .filter((row) => row.publicCode !== null)
           .map((row) => partLabel(row.publicCode!, row.title, row.price)),
       );

@@ -149,8 +149,45 @@ class SellerSearchTest extends PostgresTestBase {
         assertThat(found("9999999999")).isEmpty();
     }
 
+    /**
+     * Обрезанный список обязан называть, сколько нашлось всего.
+     *
+     * <p>Продавец видел пятьдесят строк из семисот сорока одной и не знал
+     * об этом ничего: ответить покупателю «нет такого», глядя на обрезанный
+     * список, — то же, что ответить так на пустой, только тут он ещё
+     * и уверен, что посмотрел всё.
+     */
+    @Test
+    @DisplayName("Обрезанный список называет число найденного")
+    void truncatedListTellsTheTotal() {
+        inTenant(() -> {
+            for (int i = 0; i < 5; i++) {
+                Long id = jdbc.queryForObject("""
+                        INSERT INTO part (category_id, title, price, is_published)
+                        VALUES (1, ?, 100, true) RETURNING id""",
+                        Long.class, "Фара запасная " + i);
+                jdbc.update("""
+                        INSERT INTO part_stock (part_id, warehouse_id, qty, qty_reserved)
+                        VALUES (?, ?, 1, 0)""", id, warehouseId);
+            }
+            return null;
+        });
+
+        PartService.StockSearch cut = inTenant(() -> parts.searchAvailable("фара", 2));
+
+        assertThat(cut.rows()).hasSize(2);
+        assertThat(cut.total())
+                .as("список обрезан, а число найденного молчит: продавец решит, "
+                        + "что посмотрел всё")
+                .isEqualTo(6);
+
+        // Когда всё влезло, лишний запрос не нужен и число равно длине.
+        PartService.StockSearch whole = inTenant(() -> parts.searchAvailable("фара", 50));
+        assertThat(whole.total()).isEqualTo(whole.rows().size());
+    }
+
     private List<Long> found(String query) {
-        return inTenant(() -> parts.searchAvailable(query, 50)).stream()
+        return inTenant(() -> parts.searchAvailable(query, 50)).rows().stream()
                 .map(PartService.StockRow::partId)
                 .toList();
     }

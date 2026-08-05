@@ -86,8 +86,12 @@ public class PartController {
      * а продавать можно только то, что не обещано другому клиенту.
      */
     @GetMapping("/stock")
-    public List<PartService.StockRow> stock(@RequestParam("q") String query,
-                                            @RequestParam(value = "limit", defaultValue = "50") int limit) {
+    public PartService.StockSearch stock(@RequestParam("q") String query,
+                                         @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        // Вместе с числом найденного: список обрезан на полусотне, и экран
+        // обязан об этом сказать. Продавец, глядя на обрезанный список,
+        // отвечает покупателю «нет такого» с той же уверенностью, что и
+        // на пустом, — только тут он ещё и думает, что посмотрел всё.
         return partService.searchAvailable(query, limit);
     }
 

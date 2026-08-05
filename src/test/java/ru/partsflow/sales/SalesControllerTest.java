@@ -265,13 +265,16 @@ class SalesControllerTest extends PostgresTestBase {
                         .content(createBody(partId, 1)))
                 .andExpect(status().isCreated());
 
+        // Выдача едет вместе с числом найденного: список обрезан
+        // на полусотне, и молча этого делать нельзя.
         mvc.perform(get("/api/parts/stock?q=интеркулер").session(session))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].partId").value(partId))
-                .andExpect(jsonPath("$[0].status").value("IN_STOCK"))
-                .andExpect(jsonPath("$[0].qtyAvailable").value(2))
-                .andExpect(jsonPath("$[0].qtyReserved").value(1))
-                .andExpect(jsonPath("$[0].warehouseName").value("Ткацкая"));
+                .andExpect(jsonPath("$.rows[0].partId").value(partId))
+                .andExpect(jsonPath("$.rows[0].status").value("IN_STOCK"))
+                .andExpect(jsonPath("$.rows[0].qtyAvailable").value(2))
+                .andExpect(jsonPath("$.rows[0].qtyReserved").value(1))
+                .andExpect(jsonPath("$.rows[0].warehouseName").value("Ткацкая"))
+                .andExpect(jsonPath("$.total").value(1));
     }
 
     @Test
@@ -289,8 +292,8 @@ class SalesControllerTest extends PostgresTestBase {
         // клиент перезвонит, а деталь освободится.
         mvc.perform(get("/api/parts/stock?q=стартер").session(session))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(1))
-                .andExpect(jsonPath("$[0].qtyAvailable").value(0));
+                .andExpect(jsonPath("$.rows.length()").value(1))
+                .andExpect(jsonPath("$.rows[0].qtyAvailable").value(0));
     }
 
     @Test
@@ -306,7 +309,8 @@ class SalesControllerTest extends PostgresTestBase {
         // Остатка нет — предлагать её клиенту нельзя ни с какой оговоркой.
         mvc.perform(get("/api/parts/stock?q=компрессор").session(session))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(0));
+                .andExpect(jsonPath("$.rows.length()").value(0))
+                .andExpect(jsonPath("$.total").value(0));
     }
 
     @Test

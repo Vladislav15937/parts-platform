@@ -133,8 +133,21 @@ export interface HistoryEntry {
   createdAt: string;
 }
 
-export function searchStock(query: string): Promise<StockRow[]> {
-  return request<StockRow[]>(`/api/parts/stock?q=${encodeURIComponent(query)}`);
+/**
+ * Выдача вместе с числом найденного.
+ *
+ * <p>Список обрезан на полусотне, и молча этого делать нельзя: продавец
+ * видел пятьдесят строк из семисот сорока одной и не знал об этом ничего.
+ * Ответить «нет такого», глядя на обрезанный список, — то же, что ответить
+ * так на пустой, только тут продавец уверен, что посмотрел всё.
+ */
+export interface StockSearch {
+  rows: StockRow[];
+  total: number;
+}
+
+export function searchStock(query: string): Promise<StockSearch> {
+  return request<StockSearch>(`/api/parts/stock?q=${encodeURIComponent(query)}`);
 }
 
 export function searchCustomers(query: string): Promise<Customer[]> {

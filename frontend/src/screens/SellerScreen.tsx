@@ -62,6 +62,12 @@ interface Props {
 export function SellerScreen({ canSell, role }: Props) {
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState<StockRow[]>([]);
+  /**
+   * Сколько нашлось всего. Больше показанного — список обрезан, и сказать
+   * об этом обязательно: продавец, глядя на полсотни строк из семисот,
+   * отвечает покупателю «нет такого» с уверенностью, что посмотрел всё.
+   */
+  const [found, setFound] = useState(0);
   const [searching, setSearching] = useState(false);
   const [lines, setLines] = useState<BasketLine[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -143,6 +149,13 @@ export function SellerScreen({ canSell, role }: Props) {
           }}
           onError={setError}
         />
+      )}
+
+      {found > rows.length && (
+        <p className="note">
+          Показаны первые {rows.length} из {found} — уточните запрос,
+          иначе нужная деталь может остаться за списком.
+        </p>
       )}
 
       {rows.length > 0 && (
@@ -303,9 +316,12 @@ export function SellerScreen({ canSell, role }: Props) {
     setSearching(true);
     setError(null);
     try {
-      setRows(await searchStock(query.trim()));
+      const result = await searchStock(query.trim());
+      setRows(result.rows);
+      setFound(result.total);
     } catch (cause) {
       setRows([]);
+      setFound(0);
       setError(describe(cause, 'Не удалось выполнить поиск'));
     } finally {
       setSearching(false);

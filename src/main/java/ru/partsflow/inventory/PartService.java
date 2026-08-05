@@ -490,21 +490,15 @@ public class PartService {
      * уходит в полный перебор. Триграммные индексы на public_code
      * и raw_number уже стоят (tenant/055) — они заводились для витрины.
      */
-    @Transactional(readOnly = true)
-    public List<StockRow> searchAvailable(String query, int limit) {
-        // «фара камри» приводится к «фара Camry»: покупатель звонит и говорит
-        // по-русски, а в заголовке стоит латиница.
-        String text = vehicleWords.translate(query);
-        String like = "%" + text.strip() + "%";
-        return jdbc.query("""
-                SELECT p.id, p.public_code, p.title, p.price, p.status,
-                       w.id AS warehouse_id, w.name AS warehouse_name,
-                       c.code AS cell_code,
-                       s.qty, s.qty_reserved, s.qty - s.qty_reserved AS qty_available
-                  FROM part p
-                  JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
-                  JOIN warehouse w ON w.id = s.warehouse_id
-                  LEFT JOIN storage_cell c ON c.id = s.cell_id
+    /**
+     * Условие поиска продавца — одно на выдачу и на счёт.
+     *
+     * <p>Разойдись они, и «показаны 50 из 741» называло бы число, посчитанное
+     * не тем условием, которым собран список: продавец сузил бы запрос
+     * по неверной подсказке. Та же причина, по которой отбор один у страницы
+     * витрины, её выгрузки и правки списком.
+     */
+    private static final String STOCK_SEARCH_MATCH = """
                  WHERE p.id IN (
                          SELECT id FROM part WHERE public_code ILIKE ?
                           UNION SELECT id FROM part WHERE title ILIKE ?
@@ -513,7 +507,24 @@ public class PartService {
                                            || coalesce(description, '') || ' '
                                            || coalesce(marking, ''))
                                        @@ plainto_tsquery('russian', ?)
-                          UNION SELECT part_id FROM part_oem WHERE raw_number ILIKE ?)
+                          UNION SELECT part_id FROM part_oem WHERE raw_number ILIKE ?)""";
+
+    @Transactional(readOnly = true)
+    public StockSearch searchAvailable(String query, int limit) {
+        // «фара камри» приводится к «фара Camry»: покупатель звонит и говорит
+        // по-русски, а в заголовке стоит латиница.
+        String text = vehicleWords.translate(query);
+        String like = "%" + text.strip() + "%";
+        List<StockRow> rows = jdbc.query("""
+                SELECT p.id, p.public_code, p.title, p.price, p.status,
+                       w.id AS warehouse_id, w.name AS warehouse_name,
+                       c.code AS cell_code,
+                       s.qty, s.qty_reserved, s.qty - s.qty_reserved AS qty_available
+                  FROM part p
+                  JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
+                  JOIN warehouse w ON w.id = s.warehouse_id
+                  LEFT JOIN storage_cell c ON c.id = s.cell_id
+                """ + STOCK_SEARCH_MATCH + """
                  ORDER BY (s.qty - s.qty_reserved > 0) DESC,
                           ts_rank(to_tsvector('russian', coalesce(p.title, '') || ' '
                               || coalesce(p.description, '') || ' '
@@ -535,6 +546,38 @@ public class PartService {
                         rs.getBigDecimal("qty_available")),
                 // Четыре ветки UNION, потом ранжирование, потом предел.
                 like, like, text, like, text, limit);
+
+        // Сколько нашлось всего — тем же условием. Список обрезан
+        // на полусотне, и молча этого делать нельзя: продавец видел
+        // пятьдесят строк из семисот сорока одной и не знал об этом ничего.
+        // Ответить покупателю «нет такого», глядя на обрезанный список, —
+        // то же самое, что ответить так на пустой, только тут продавец
+        // ещё и уверен, что посмотрел всё.
+        //
+        // Счёт стоит десять миллисекунд на складе в 35 841 позицию —
+        // замерено. Когда список короче предела, он и есть всё найденное,
+        // и лишний запрос был бы платой ни за что.
+        long total = rows.size() < limit ? rows.size() : countAvailable(like, text);
+        return new StockSearch(rows, total);
+    }
+
+    private long countAvailable(String like, String text) {
+        Long found = jdbc.queryForObject("""
+                SELECT count(*)
+                  FROM part p
+                  JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
+                """ + STOCK_SEARCH_MATCH,
+                Long.class, like, like, text, like);
+        return found == null ? 0 : found;
+    }
+
+    /**
+     * Выдача продавцу вместе с общим числом найденного.
+     *
+     * @param total сколько нашлось всего; больше длины {@code rows} — список
+     *              обрезан, и экран обязан об этом сказать
+     */
+    public record StockSearch(List<StockRow> rows, long total) {
     }
 
     /** Строка выдачи продавцу: деталь на конкретном складе. */

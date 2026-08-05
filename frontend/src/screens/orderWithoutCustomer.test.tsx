@@ -20,9 +20,12 @@ describe('заказ с площадки', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/api/parts/stock')) {
-        return json([{ partId: 1, publicCode: 'A-1', title: 'Бампер', price: '10000',
-                       status: 'IN_STOCK', warehouseId: 2, warehouseName: 'Ткацкая',
-                       cellCode: null, qty: '1', qtyReserved: '0', qtyAvailable: '1' }]);
+        // Выдача едет вместе с числом найденного: список обрезан
+        // на полусотне, и экран обязан сказать, если за ним что-то осталось.
+        return json({ total: 1, rows: [
+          { partId: 1, publicCode: 'A-1', title: 'Бампер', price: '10000',
+            status: 'IN_STOCK', warehouseId: 2, warehouseName: 'Ткацкая',
+            cellCode: null, qty: '1', qtyReserved: '0', qtyAvailable: '1' }] });
       }
       return json([]);
     }));
