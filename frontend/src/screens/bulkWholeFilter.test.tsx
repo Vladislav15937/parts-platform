@@ -76,10 +76,11 @@ describe('правка всего отбора', () => {
     fireEvent.click(button('Точно изменить 35841?')!);
 
     await waitFor(() => expect(sent.length).toBe(1));
-    expect(sent[0].url, 'уехал список номеров вместо отбора — тронется одна страница')
+    const request = sent[0]!;
+    expect(request.url, 'уехал список номеров вместо отбора — тронется одна страница')
       .toContain('/api/parts/catalog/bulk');
-    expect(sent[0].body).toContain('"published":true');
-    expect(sent[0].body, 'в теле оказались номера страницы, а не отбор')
+    expect(request.body).toContain('"published":true');
+    expect(request.body, 'в теле оказались номера страницы, а не отбор')
       .not.toContain('partIds');
   });
 
@@ -111,7 +112,7 @@ describe('правка всего отбора', () => {
 
     fireEvent.click(button('Изменить 1 позиций')!);
     await waitFor(() => expect(sent.length).toBe(1));
-    expect(sent[0].body, 'показано «Везде», а уехало «Нет» — позиции сняты с выгрузки')
+    expect(sent[0]!.body, 'показано «Везде», а уехало «Нет» — позиции сняты с выгрузки')
       .toContain('"published":true');
   });
 });
