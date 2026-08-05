@@ -330,10 +330,23 @@ public class WheelService {
                 args.add(size.offsetMm());
             }
             if (size.text() != null) {
-                where.append(" AND (p.public_code ILIKE ? OR p.title ILIKE ?)");
-                String like = "%" + size.text() + "%";
-                args.add(like);
-                args.add(like);
+                // Словами, а не одной подстрокой. «Bridgestone зимняя» —
+                // обычный запрос по телефону, а в заголовке между ними стоит
+                // модель: «Шина 225/55 R18 Bridgestone Blizzak зимняя (шипы)».
+                // Целиком такая фраза не совпадает ни с чем, и поиск отдавал
+                // ноль при том, что каждое слово по отдельности находило обе
+                // шины. Продавец в этот момент отвечает «нет такого».
+                //
+                // Слова соединяются через AND: они сужают запрос, а не
+                // расширяют его. Иначе «Dunlop зимняя» вернуло бы вдобавок
+                // все летние Dunlop и все зимние чужих марок — выдачу,
+                // которую продавец читает глазами.
+                for (String word : size.text().trim().split("\\s+")) {
+                    where.append(" AND (p.public_code ILIKE ? OR p.title ILIKE ?)");
+                    String like = "%" + word + "%";
+                    args.add(like);
+                    args.add(like);
+                }
             }
         }
         if (kind != null && !kind.isBlank()) {

@@ -171,6 +171,38 @@ class WheelServiceTest extends PostgresTestBase {
                 .contains(created.partIds().get(0));
     }
 
+    /**
+     * Несколько слов сужают запрос, а не требуют их подряд в заголовке.
+     *
+     * <p>«Bridgestone зимняя» — обычный запрос по телефону, а в собранном
+     * заголовке между ними стоит модель: «Шина 225/55 R18 Bridgestone
+     * Blizzak зимняя (шипы)». Пока остаток запроса искался одной подстрокой,
+     * такая фраза не совпадала ни с чем — при том что каждое слово
+     * по отдельности находило обе шины. Продавец в этот момент отвечает
+     * покупателю «нет такого».
+     *
+     * <p>Комментарий в коде обещал ровно это поведение — «Dunlop зимняя»
+     * так и ищется словами, — а код искал фразой.
+     */
+    @Test
+    @DisplayName("Несколько слов ищутся вместе, а не одной фразой")
+    void wordsAreSearchedSeparately() {
+        inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+
+        assertThat(inTenant(() -> wheels.list("Goodyear летняя", null, false,
+                Map.of(), Map.of(), "set", true, 0, 50).rows()))
+                .as("слова стоят в заголовке не подряд, и запрос не нашёл ничего")
+                .isNotEmpty();
+
+        // Сужение обязано остаться сужением. Пара марок, которой нет ни у одной
+        // шины разом: соседние тесты заводят и зимние Goodyear, поэтому
+        // «Goodyear зимняя» тут ничего не доказало бы.
+        assertThat(inTenant(() -> wheels.list("Goodyear Bridgestone", null, false,
+                Map.of(), Map.of(), "set", true, 0, 50).rows()))
+                .as("слова перестали сужать запрос: нашлось то, чего не спрашивали")
+                .isEmpty();
+    }
+
     @Test
     @DisplayName("Неизвестный вид товара отвергается, а не ищется")
     void unknownKindIsRejected() {
