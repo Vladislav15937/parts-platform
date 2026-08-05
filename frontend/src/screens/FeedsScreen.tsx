@@ -7,6 +7,7 @@ import type { PartKind } from '../catalog/partNames';
 import { loadCached, refresh } from '../catalog/vehicles';
 import type { Brand } from '../catalog/vehicles';
 import {
+  feedUrl,
   CONDITIONS,
   countMatching,
   createFeed,
@@ -308,7 +309,17 @@ function FeedCard({
         </p>
       )}
 
-      <details>
+      {/* Ссылка спрашивается при раскрытии, а не показывается только сразу
+          после выдачи. Иначе узнать её нельзя вовсе: владелец завёл прайс,
+          отдал адрес техспециалисту площадки, а через неделю адрес спросили
+          снова — и посмотреть его негде. Единственной кнопкой была «Сменить
+          ссылку», которая, как честно написано рядом, выгрузку останавливает:
+          чтобы узнать ссылку, приходилось её сломать. */}
+      <details onToggle={(e) => {
+        if ((e.target as HTMLDetailsElement).open && link === null && feed.hasFeed) {
+          void feedUrl(feed.id).then((r) => setLink(r.path)).catch(() => {});
+        }
+      }}>
         <summary>Ссылка для площадки</summary>
         <p className="note">
           Смена ссылки останавливает выгрузку: новую в кабинет площадки
