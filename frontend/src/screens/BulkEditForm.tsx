@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import {
   BULK_FIELDS, savePartsBulk, savePartsBulkByFilter, type CatalogQuery,
 } from '../inventory/catalog';
+import { count as formatCount, positions } from '../ui/plural';
 
 /**
  * Правка нескольких позиций разом.
@@ -86,8 +87,8 @@ export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
         Правка списком
         <span className="muted">
           {whole === undefined
-            ? ` · выбрано ${count}`
-            : ` · весь отбор: ${count}`}
+            ? ` · выбрано ${formatCount(count)}`
+            : ` · весь отбор: ${formatCount(count)}`}
         </span>
       </h4>
       <p className="note">
@@ -143,8 +144,8 @@ export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
           }}
         >
           {saving ? 'Сохраняем…'
-            : confirming ? `Точно изменить ${count}?`
-            : `Изменить ${count} позиций`}
+            : confirming ? `Точно изменить ${positions(count)}?`
+            : `Изменить ${positions(count)}`}
         </button>
         <button type="button" className="button--ghost" onClick={onCancel}>
           Отмена

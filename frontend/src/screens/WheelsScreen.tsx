@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { goods } from '../ui/plural';
 import { ApiError } from '../api/client';
 import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
@@ -118,7 +119,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
       <h2>
         Шины и диски
         {page !== null && (
-          <span className="muted"> {page.total.toLocaleString('ru-RU')} товаров</span>
+          <span className="muted"> {goods(page.total)}</span>
         )}
       </h2>
 

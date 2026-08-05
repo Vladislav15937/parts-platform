@@ -1,4 +1,5 @@
 import type { PartDonor } from '../inventory/catalog';
+import { plural } from '../ui/plural';
 
 /**
  * Машина, с которой снята позиция.
@@ -54,7 +55,7 @@ export function PartDonorView({ donor, onParts }: {
           разобрана машина или с неё сняли одну эту деталь. */}
       <div className="donor-view__parts">
         <b>{donor.partsCount}</b>
-        <span> {plural(donor.partsCount)} с этой машины </span>
+        <span> {plural(donor.partsCount, 'деталь', 'детали', 'деталей')} с этой машины </span>
         {onParts !== undefined && donor.partsCount > 1 && (
           <button type="button" className="mark__link" onClick={() => onParts(donor.code)}>
             Посмотреть
@@ -74,14 +75,3 @@ export function PartDonorView({ donor, onParts }: {
   );
 }
 
-function plural(count: number): string {
-  const tail = count % 100;
-  if (tail >= 11 && tail <= 14) {
-    return 'деталей';
-  }
-  switch (count % 10) {
-    case 1: return 'деталь';
-    case 2: case 3: case 4: return 'детали';
-    default: return 'деталей';
-  }
-}

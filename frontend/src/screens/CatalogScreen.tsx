@@ -19,6 +19,7 @@ import {
 } from '../inventory/catalog';
 import { PartCard } from './PartCard';
 import { BulkEditForm } from './BulkEditForm';
+import { count, goods } from '../ui/plural';
 import { ColumnMenu } from './ColumnMenu';
 import { VehiclePicker } from './VehiclePicker';
 
@@ -149,7 +150,7 @@ export function CatalogScreen({ role }: { role: string }) {
       <h2>
         Склад{' '}
         <span className="muted counter">
-          {page === null ? '' : `${page.total.toLocaleString('ru-RU')} товаров`}
+          {page === null ? '' : goods(page.total)}
         </span>
       </h2>
 
@@ -360,7 +361,7 @@ export function CatalogScreen({ role }: { role: string }) {
       {selecting && !editing && (
         <div className="filter-row">
           <span className="note">
-            {whole ? `Выбран весь отбор: ${page?.total ?? 0}`
+            {whole ? `Выбран весь отбор: ${count(page?.total ?? 0)}`
               : chosen.length === 0 ? 'Отметьте позиции'
               : `Выбрано ${chosen.length}`}
           </span>
@@ -375,7 +376,7 @@ export function CatalogScreen({ role }: { role: string }) {
           {!whole && page !== null && page.total > page.rows.length && (
             <button type="button" className="button--ghost"
                     onClick={() => { setWhole(true); setChosen([]); }}>
-              Выбрать весь отбор ({page.total})
+              Выбрать весь отбор ({count(page.total)})
             </button>
           )}
           <button type="button" className="button--ghost"

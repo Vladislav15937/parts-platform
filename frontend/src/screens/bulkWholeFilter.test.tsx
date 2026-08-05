@@ -58,11 +58,13 @@ describe('правка всего отбора', () => {
 
     fireEvent.click(button('Правка списком')!);
 
-    const whole = button('Выбрать весь отбор (35841)');
+    const whole = button('Выбрать весь отбор (35\u00a0841)');
     expect(whole, 'отметить можно только страницу — склад целиком не включить').toBeTruthy();
     fireEvent.click(whole!);
 
-    await waitFor(() => expect(screen.getByText(/Выбран весь отбор: 35841/)).toBeTruthy());
+    await waitFor(() => expect(// Точка вместо разделителя: getByText нормализует неразрывный пробел
+      // в обычный, а textContent у кнопок — нет.
+      screen.getByText(/Выбран весь отбор: 35.841/)).toBeTruthy());
     fireEvent.click(button('Изменить')!);
 
     // Отмечаем «Выгружать» — то самое поле, из-за которого прайс пуст.
@@ -71,9 +73,9 @@ describe('правка всего отбора', () => {
     fireEvent.click(flag!.querySelector('input[type=checkbox]')!);
 
     // Вторым нажатием: отменить правку склада нечем, кроме бэкапа.
-    fireEvent.click(button('Изменить 35841 позиций')!);
-    await waitFor(() => expect(button('Точно изменить 35841?')).toBeTruthy());
-    fireEvent.click(button('Точно изменить 35841?')!);
+    fireEvent.click(button('Изменить 35\u00a0841 позицию')!);
+    await waitFor(() => expect(button('Точно изменить 35\u00a0841 позицию?')).toBeTruthy());
+    fireEvent.click(button('Точно изменить 35\u00a0841 позицию?')!);
 
     await waitFor(() => expect(sent.length).toBe(1));
     const request = sent[0]!;
@@ -110,7 +112,7 @@ describe('правка всего отбора', () => {
     const select = flag!.querySelector('select') as HTMLSelectElement;
     expect(select.value, 'список показан не тем, чем читается').toBe('yes');
 
-    fireEvent.click(button('Изменить 1 позиций')!);
+    fireEvent.click(button('Изменить 1 позицию')!);
     await waitFor(() => expect(sent.length).toBe(1));
     expect(sent[0]!.body, 'показано «Везде», а уехало «Нет» — позиции сняты с выгрузки')
       .toContain('"published":true');
