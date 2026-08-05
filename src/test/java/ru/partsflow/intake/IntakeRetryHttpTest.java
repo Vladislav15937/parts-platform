@@ -143,10 +143,77 @@ class IntakeRetryHttpTest extends PostgresTestBase {
                 Integer.class, requestId)))
                 .as("повтор завёл вторую партию")
                 .isEqualTo(1);
-        assertThat(inTenant(() -> jdbc.queryForObject(
-                "SELECT count(*) FROM part WHERE title LIKE 'Фара%'", Integer.class)))
+        // Считаем детали этой партии, а не все «Фары» в схеме: соседний тест
+        // заводит свою, и общий счёт ловил бы её, а не повтор.
+        assertThat(inTenant(() -> jdbc.queryForObject("""
+                SELECT count(*) FROM stock_document_line l
+                  JOIN stock_document d ON d.id = l.document_id
+                 WHERE d.client_request_id = ?""", Integer.class, requestId)))
                 .as("повтор завёл вторую деталь")
                 .isEqualTo(1);
+    }
+
+    /**
+     * У ссылки на снимок тот же ключ и была та же половинчатая защита:
+     * телефон ждёт адрес, чтобы залить фотографию, и вместо него получал 409.
+     */
+    @Test
+    @DisplayName("Одновременный запрос ссылки на снимок отдаёт одну и ту же")
+    void concurrentPhotoUploadUrlIsReplayed() throws Exception {
+        MockHttpSession session = login();
+        Long partId = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price, cost_price, is_published)
+                VALUES (1, 'Фара под снимок', 100, 50, true) RETURNING id""", Long.class));
+        String requestId = "foto-" + System.nanoTime();
+        String body = """
+                {"requestId":"%s","contentType":"image/jpeg"}""".formatted(requestId);
+
+        List<Integer> codes = parallel(PARALLEL, () -> mvc.perform(
+                post("/api/parts/%d/photos/upload-url".formatted(partId))
+                        .with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andReturn().getResponse().getStatus());
+
+        assertThat(codes)
+                .as("телефон ждёт ссылку, а получил ошибку: %s", codes)
+                .containsOnly(201);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_photo WHERE client_request_id = ?",
+                Integer.class, requestId)))
+                .as("повтор завёл второй снимок")
+                .isEqualTo(1);
+    }
+
+    /** Пускает n одинаковых запросов разом и собирает коды ответов. */
+    private List<Integer> parallel(int n, ThrowingSupplier request) throws Exception {
+        List<Integer> codes = new ArrayList<>();
+        CyclicBarrier start = new CyclicBarrier(n);
+        List<Thread> threads = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            Thread thread = new Thread(() -> {
+                int status;
+                try {
+                    start.await();
+                    status = request.get();
+                } catch (Exception e) {
+                    status = -1;
+                }
+                synchronized (codes) {
+                    codes.add(status);
+                }
+            });
+            threads.add(thread);
+            thread.start();
+        }
+        for (Thread thread : threads) {
+            thread.join();
+        }
+        return codes;
+    }
+
+    private interface ThrowingSupplier {
+        int get() throws Exception;
     }
 
     private MockHttpSession login() throws Exception {

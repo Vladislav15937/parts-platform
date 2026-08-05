@@ -54,6 +54,30 @@ public class PhotoService {
      * отмечать её вручную значит получить склад, где у половины позиций главной
      * нет, а в списке и на площадке показывается случайная.
      */
+    /**
+     * Повтор, случившийся одновременно с первым запросом.
+     *
+     * <p>Та же половинчатая защита, что была у приёмки: проверку «нет ли уже
+     * такого» два одновременных повтора проходят оба, дубль отбивает
+     * уникальный индекс, а наружу летит 409 — ошибка на успешный запрос.
+     * Телефон при этом ждёт ссылку, чтобы залить снимок, и вместо неё
+     * получает отказ.
+     *
+     * <p>Читается новой транзакцией: та, в которой случилось нарушение,
+     * помечена на откат.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
+                   readOnly = true)
+    public Upload replayAfterConflict(String requestId, String contentType) {
+        if (requestId == null || requestId.isBlank()) {
+            return null;
+        }
+        return photos.findByClientRequestId(requestId)
+                .map(existing -> new Upload(existing.getId(), existing.getS3Key(),
+                        storage.presignUpload(existing.getS3Key(), contentType)))
+                .orElse(null);
+    }
+
     @Transactional
     public Upload requestUpload(Long partId, String contentType, String requestId) {
         requirePart(partId);

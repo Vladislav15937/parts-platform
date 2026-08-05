@@ -39,8 +39,18 @@ public class PhotoController {
             @PathVariable Long partId,
             @Valid @RequestBody UploadRequest request) {
 
-        PhotoService.Upload upload = photos.requestUpload(
-                partId, request.contentType(), request.requestId());
+        PhotoService.Upload upload;
+        try {
+            upload = photos.requestUpload(partId, request.contentType(), request.requestId());
+        } catch (org.springframework.dao.DataIntegrityViolationException conflict) {
+            // Одновременный повтор: первый запрос успел вставить снимок,
+            // второй упёрся в уникальный ключ. Телефон ждёт ссылку —
+            // отдаём ту же, что и первому.
+            upload = photos.replayAfterConflict(request.requestId(), request.contentType());
+            if (upload == null) {
+                throw conflict;
+            }
+        }
         return ResponseEntity.status(HttpStatus.CREATED).body(upload);
     }
 
