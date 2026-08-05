@@ -58,7 +58,13 @@ public class PhotoController {
      * Шаг 2: подтвердить, что файл загружен.
      *
      * <p>Приложение проверяет хранилище само. {@code 409} означает, что объекта
-     * там нет — телефону надо повторить загрузку по новой ссылке.
+     * там нет — надо повторить загрузку по новой ссылке.
+     *
+     * <p><b>Отказ объясняется словами.</b> Пока снимки грузил только телефон,
+     * хватало кода ответа: очередь разбирает его сама. С появлением досъёмки
+     * из карточки этот отказ увидел человек — и увидел «Запрос отклонён
+     * (409)», по которому не понять ни что случилось, ни что делать.
+     * Классификация при этом та же: 409 остаётся 409, меняется только тело.
      */
     @PostMapping("/{photoId}/confirm")
     public ResponseEntity<Void> confirm(@PathVariable Long partId,
@@ -69,8 +75,11 @@ public class PhotoController {
                 request == null ? null : request.width(),
                 request == null ? null : request.height());
 
-        return ok ? ResponseEntity.noContent().build()
-                : ResponseEntity.status(HttpStatus.CONFLICT).build();
+        if (!ok) {
+            throw new IllegalStateException(
+                    "Снимок не найден в хранилище: загрузка оборвалась. Повторите её");
+        }
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping
