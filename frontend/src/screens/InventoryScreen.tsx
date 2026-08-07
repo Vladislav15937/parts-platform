@@ -73,7 +73,11 @@ export function InventoryScreen({ reference, onCount }: Props) {
 
         <label>
           Склад
-          <select id="inv-warehouse" defaultValue={reference.warehouses[0]?.id ?? ''}>
+          {/* Без умолчания: пересчёт не того склада — это обход, который
+              кладовщик сделает целиком и который спишет недостачу там,
+              где ничего не считали. Какой склад считают, знает он. */}
+          <select id="inv-warehouse" defaultValue="">
+            <option value="">— выберите склад —</option>
             {reference.warehouses.map((w) => (
               <option key={w.id} value={w.id}>
                 {w.name}
@@ -164,7 +168,14 @@ export function InventoryScreen({ reference, onCount }: Props) {
     setNote(null);
     try {
       const select = document.getElementById('inv-warehouse') as HTMLSelectElement | null;
-      const warehouseId = Number(select?.value ?? reference.warehouses[0]?.id);
+      // Ни выбора, ни подстановки: без склада пересчёт не начинается вовсе.
+      // Прежний запасной вариант «первый из списка» и был тем умолчанием,
+      // ради снятия которого всё это делается.
+      if (select === null || select.value === '') {
+        setNote('Выберите склад: пересчёт идёт по одному складу, и какой — знаете вы');
+        return;
+      }
+      const warehouseId = Number(select.value);
 
       const opened = fresh
         ? await openSession(warehouseId)

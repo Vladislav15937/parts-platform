@@ -40,9 +40,10 @@ export function ImportScreen({ reference, canImport }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [columns, setColumns] = useState<Partial<Record<FieldKey, number>>>({});
-  const [warehouseId, setWarehouseId] = useState<number | null>(
-    reference.warehouses[0]?.id ?? null,
-  );
+  // Склад не подставляется: это самая разрушительная операция в системе —
+  // тысячи позиций, отменяемые только восстановлением из бэкапа, — и первый
+  // склад списка у клиента с тремя складами оказывался пустым «54 YARD».
+  const [warehouseId, setWarehouseId] = useState<number | null>(null);
   const [report, setReport] = useState<Report | null>(null);
   // Счётчик переносов: по его смене оживает очередь снимков ниже.
   const [imported, setImported] = useState(0);
@@ -176,8 +177,10 @@ export function ImportScreen({ reference, canImport }: Props) {
             Склад
             <select
               value={warehouseId ?? ''}
-              onChange={(e) => setWarehouseId(Number(e.target.value))}
+              onChange={(e) => setWarehouseId(
+                e.target.value === '' ? null : Number(e.target.value))}
             >
+              <option value="">— выберите склад —</option>
               {reference.warehouses.map((w) => (
                 <option key={w.id} value={w.id}>
                   {w.name}

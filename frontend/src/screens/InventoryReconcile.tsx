@@ -27,9 +27,9 @@ import type { Reference } from '../reference/reference';
  * дописывает только их. Проведённая строка второй корректировки не породит.
  */
 export function InventoryReconcile({ reference }: { reference: Reference }) {
-  const [warehouseId, setWarehouseId] = useState<number | null>(
-    reference.warehouses[0]?.id ?? null,
-  );
+  // Склад не подставляется: пересчёт не того склада списывает недостачу
+  // там, где её не считали.
+  const [warehouseId, setWarehouseId] = useState<number | null>(null);
   const [session, setSession] = useState<InventorySession | null>(null);
   const [rows, setRows] = useState<Discrepancy[] | null>(null);
   const [applied, setApplied] = useState<Applied | null>(null);
@@ -52,6 +52,7 @@ export function InventoryReconcile({ reference }: { reference: Reference }) {
               setApplied(null);
             }}
           >
+            <option value="">— выберите склад —</option>
             {reference.warehouses.map((w) => (
               <option key={w.id} value={w.id}>{w.name}</option>
             ))}

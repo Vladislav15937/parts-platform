@@ -513,7 +513,10 @@ function SetForm({
 }) {
   const [kind, setKind] = useState<'TYRE' | 'DISC' | 'ASSEMBLY'>('TYRE');
   const [quantity, setQuantity] = useState('4');
-  const [warehouseId, setWarehouseId] = useState(String(warehouses[0]?.id ?? ''));
+  // Склад не подставляется: комплект из четырёх колёс, заведённый не туда,
+  // ищут потом глазами по всем стеллажам. Какой склад — знает тот,
+  // кто их принёс.
+  const [warehouseId, setWarehouseId] = useState('');
   const [busy, setBusy] = useState(false);
   const [field, setField] = useState<Record<string, string>>({});
 
@@ -595,6 +598,7 @@ function SetForm({
         <label className="field">
           Склад
           <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
+            <option value="">— выберите склад —</option>
             {warehouses.map((warehouse) => (
               <option key={warehouse.id} value={warehouse.id}>
                 {warehouse.name}
@@ -722,7 +726,7 @@ function SetForm({
         <Field name="price" label="Цена, ₽" hint="3500" set={set} field={field} />
       </div>
 
-      <button type="button" disabled={busy} onClick={() => void submit()}>
+      <button type="button" disabled={busy || warehouseId === ''} onClick={() => void submit()}>
         Завести
       </button>
     </div>

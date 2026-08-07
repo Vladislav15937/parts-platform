@@ -50,9 +50,20 @@ interface Payload {
 }
 
 export function IntakeScreen({ reference, onSend }: Props) {
-  const [warehouseId, setWarehouseId] = useState<number | null>(
-    reference.warehouses[0]?.id ?? null,
-  );
+  /**
+   * Склад не подставляется — его выбирают.
+   *
+   * <p>Умолчанием стоял первый склад списка, а список отсортирован по имени:
+   * у клиента с тремя складами первым оказывался «54 YARD», пустой, тогда
+   * как весь товар лежит на «Ткацкой». Приёмщик поле не смотрит — оно
+   * заполнено, — и партия уходит не туда. Ошибка тихая: деталь заведена,
+   * остаток сходится, ничего не падает; находят её, когда деталь ищут
+   * на полке и не могут найти.
+   *
+   * <p>Подставить «правильный» склад система не может: какой из них
+   * правильный, знает только тот, кто стоит у стеллажа. Значит спрашиваем.
+   */
+  const [warehouseId, setWarehouseId] = useState<number | null>(null);
   /**
    * Поставка не подставляется — «не указана», пока приёмщик не выбрал.
    *
@@ -77,7 +88,10 @@ export function IntakeScreen({ reference, onSend }: Props) {
 
   const warehouse = reference.warehouses.find((w) => w.id === warehouseId);
   const suggestions = suggestNames(reference.partNames, draft.rawName);
-  const canAdd = draft.rawName.trim().length > 0 && Number(draft.price) > 0;
+  // Склад проверяется здесь, а не при отправке: остановить приёмщика надо
+  // до того, как он наберёт двадцать позиций, а не после.
+  const canAdd = warehouseId !== null
+    && draft.rawName.trim().length > 0 && Number(draft.price) > 0;
 
   return (
     <section className="card">
@@ -88,12 +102,13 @@ export function IntakeScreen({ reference, onSend }: Props) {
         <select
           value={warehouseId ?? ''}
           onChange={(e) => {
-            setWarehouseId(Number(e.target.value));
+            setWarehouseId(e.target.value === '' ? null : Number(e.target.value));
             // Ячейка принадлежит складу: оставить её при смене склада значит
             // положить деталь в ячейку, которой на этом складе нет.
             setDraft((d) => ({ ...d, cellId: null }));
           }}
         >
+          <option value="">— выберите склад —</option>
           {reference.warehouses.map((w) => (
             <option key={w.id} value={w.id}>
               {w.name}

@@ -45,7 +45,10 @@ export function LabelsScreen({ canPrint }: Props) {
     void listWarehouses()
       .then((loaded) => {
         setWarehouses(loaded);
-        setWarehouseId((current) => current ?? loaded[0]?.id ?? null);
+        // Склад не подставляется, как и на остальных экранах: первый
+        // по имени у клиента с тремя складами оказывался пустым, и экран
+        // печати встречал сообщением «На этом складе ячеек нет» — то есть
+        // отвечал на вопрос, которого никто не задавал.
       })
       .catch((cause) => setError(describe(cause, 'Склады не загрузились')));
   }, []);
@@ -109,8 +112,10 @@ export function LabelsScreen({ canPrint }: Props) {
               Склад
               <select
                 value={warehouseId ?? ''}
-                onChange={(e) => setWarehouseId(Number(e.target.value))}
+                onChange={(e) => setWarehouseId(
+                  e.target.value === '' ? null : Number(e.target.value))}
               >
+                <option value="">— выберите склад —</option>
                 {warehouses.map((w) => (
                   <option key={w.id} value={w.id}>
                     {w.name}

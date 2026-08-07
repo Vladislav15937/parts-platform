@@ -29,16 +29,53 @@ describe('умолчания формы приёмки', () => {
     expect(supply!.value, 'подставилась последняя приехавшая поставка').toBe('');
   });
 
-  /** Склад, наоборот, обязан быть выбран: деталь должна куда-то лечь. */
-  it('склад остаётся выбранным', () => {
+  /**
+   * Склад тоже не подставляется.
+   *
+   * <p>Умолчанием стоял первый склад списка, а список отсортирован по имени:
+   * у клиента с тремя складами первым оказывался пустой «54 YARD», тогда как
+   * весь товар лежит на «Ткацкой». Приёмщик поле не смотрит — оно заполнено, —
+   * и партия уходит не туда. Ошибка тихая: деталь заведена, остаток сходится,
+   * ничего не падает; находят её, когда деталь ищут на полке.
+   *
+   * <p>Какой склад правильный, система знать не может — знает тот, кто стоит
+   * у стеллажа. Значит спрашиваем.
+   */
+  it('склад пуст, пока приёмщик не выбрал', () => {
     render(<IntakeScreen reference={reference()} onSend={vi.fn()} />);
 
     const warehouse = [...document.querySelectorAll('select')]
       .find((s) => [...s.options].some((o) => o.textContent === 'Ткацкая'));
 
-    expect(warehouse!.value).not.toBe('');
+    expect(warehouse!.value, 'подставился первый склад списка').toBe('');
+  });
+
+  /**
+   * И до выбора склада позицию в партию не добавить: остановить приёмщика
+   * надо до того, как он наберёт двадцать штук, а не после.
+   */
+  it('без склада позиция в партию не добавляется', () => {
+    render(<IntakeScreen reference={reference()} onSend={vi.fn()} />);
+
+    const name = [...document.querySelectorAll('input')]
+      .find((i) => i.placeholder?.includes('фара'))!;
+    const price = [...document.querySelectorAll('input')]
+      .find((i) => i.inputMode === 'decimal' || i.type === 'number');
+    set(name, 'Фара левая');
+    if (price) set(price, '5000');
+
+    const add = [...document.querySelectorAll('button')]
+      .find((b) => b.textContent === 'Добавить в партию')!;
+    expect(add.hasAttribute('disabled'), 'партию можно набирать без склада').toBe(true);
   });
 });
+
+/** React слушает нативный сеттер, а не присваивание value. */
+function set(input: HTMLInputElement, value: string): void {
+  Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!
+    .set!.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
 
 function reference() {
   return {
