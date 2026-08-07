@@ -85,9 +85,19 @@ export function IntakeScreen({ reference, onSend }: Props) {
   const [photos, setPhotos] = useState<ResizedPhoto[]>([]);
   const [scanning, setScanning] = useState(false);
   const [scanNote, setScanNote] = useState<string | null>(null);
+  /**
+   * Подсказку выбрали — список закрыт до следующего набора.
+   *
+   * <p>Список считается от текста поля, поэтому выбранное написание
+   * оставалось в нём и после нажатия: приёмщик не видел, что выбор
+   * засчитан, а список продолжал стоять между полем и ценой. На телефоне,
+   * где эта форма и живёт, шесть подсказок отжимают «Цена» и «Добавить
+   * в партию» за край экрана — и так на каждой детали из тридцати.
+   */
+  const [pickedName, setPickedName] = useState(false);
 
   const warehouse = reference.warehouses.find((w) => w.id === warehouseId);
-  const suggestions = suggestNames(reference.partNames, draft.rawName);
+  const suggestions = pickedName ? [] : suggestNames(reference.partNames, draft.rawName);
   // Склад проверяется здесь, а не при отправке: остановить приёмщика надо
   // до того, как он наберёт двадцать позиций, а не после.
   const canAdd = warehouseId !== null
@@ -154,7 +164,11 @@ export function IntakeScreen({ reference, onSend }: Props) {
         Вид детали
         <input
           value={draft.rawName}
-          onChange={(e) => setDraft({ ...draft, rawName: e.target.value })}
+          onChange={(e) => {
+            setDraft({ ...draft, rawName: e.target.value });
+            // Набирают дальше — значит выбранное больше не подходит.
+            setPickedName(false);
+          }}
           placeholder="например, фара левая"
           autoCapitalize="none"
         />
@@ -167,7 +181,10 @@ export function IntakeScreen({ reference, onSend }: Props) {
               <button
                 type="button"
                 className="button--ghost"
-                onClick={() => setDraft({ ...draft, rawName: name.name })}
+                onClick={() => {
+                  setDraft({ ...draft, rawName: name.name });
+                  setPickedName(true);
+                }}
               >
                 {name.name}
                 {!name.matched && <span className="muted"> · не распознано</span>}
@@ -326,6 +343,9 @@ export function IntakeScreen({ reference, onSend }: Props) {
     setItems([...items, { ...draft, key: crypto.randomUUID(), photos }]);
     // Склад, поставка и машина остаются: с одного донора снимают подряд.
     setDraft(emptyItem());
+    // Позиция ушла в партию — следующую набирают с чистого листа,
+    // и подсказки для неё снова нужны.
+    setPickedName(false);
     setPhotos([]);
   }
 
