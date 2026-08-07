@@ -53,7 +53,21 @@ export function IntakeScreen({ reference, onSend }: Props) {
   const [warehouseId, setWarehouseId] = useState<number | null>(
     reference.warehouses[0]?.id ?? null,
   );
-  const [supplyId, setSupplyId] = useState<number | null>(reference.supplies[0]?.id ?? null);
+  /**
+   * Поставка не подставляется — «не указана», пока приёмщик не выбрал.
+   *
+   * <p>Списком идут поставки от свежей к старой, и первая из них
+   * подставлялась как умолчание. То есть каждая принятая деталь молча
+   * приписывалась к последнему приехавшему контейнеру, к которому она может
+   * не иметь никакого отношения: приёмщик поле не трогает, потому что оно
+   * уже заполнено и выглядит осмысленно.
+   *
+   * <p>Правильное умолчание в списке уже стояло первым пунктом — «не
+   * указана». Пусто здесь означает «неизвестно», и это честнее любой
+   * догадки: поставку правят потом, а неверную не находят никогда.
+   * Та же причина, по которой на экране машины поставка тоже пуста.
+   */
+  const [supplyId, setSupplyId] = useState<number | null>(null);
   const [donorId, setDonorId] = useState<number | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState<Item>(emptyItem());
