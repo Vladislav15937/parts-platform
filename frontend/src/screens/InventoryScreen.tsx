@@ -31,6 +31,14 @@ interface Props {
 }
 
 export function InventoryScreen({ reference, onCount }: Props) {
+  /**
+   * Склад пересчёта. В состоянии, а не чтением поля из DOM: пока значение
+   * жило только в разметке, кнопки нельзя было погасить до выбора — они
+   * выглядели нажимаемыми, хотя нажатие ничего не делало. В соседнем блоке
+   * «Свести расхождения» кнопка при этом гасла, и два блока на одном экране
+   * вели себя по-разному.
+   */
+  const [warehouseId, setWarehouseId] = useState('');
   const [session, setSession] = useState<InventorySession | null>(null);
   const [lines, setLines] = useState<InventoryLine[]>([]);
   const [counts, setCounts] = useState<Record<string, LocalCount>>({});
@@ -76,7 +84,10 @@ export function InventoryScreen({ reference, onCount }: Props) {
           {/* Без умолчания: пересчёт не того склада — это обход, который
               кладовщик сделает целиком и который спишет недостачу там,
               где ничего не считали. Какой склад считают, знает он. */}
-          <select id="inv-warehouse" defaultValue="">
+          <select
+            value={warehouseId}
+            onChange={(e) => { setWarehouseId(e.target.value); setNote(null); }}
+          >
             <option value="">— выберите склад —</option>
             {reference.warehouses.map((w) => (
               <option key={w.id} value={w.id}>
@@ -86,10 +97,12 @@ export function InventoryScreen({ reference, onCount }: Props) {
           </select>
         </label>
 
-        <button type="button" disabled={busy} onClick={() => void start(false)}>
+        <button type="button" disabled={busy || warehouseId === ''}
+                onClick={() => void start(false)}>
           Продолжить начатую
         </button>
-        <button type="button" disabled={busy} onClick={() => void start(true)}>
+        <button type="button" disabled={busy || warehouseId === ''}
+                onClick={() => void start(true)}>
           Открыть новую
         </button>
         {note !== null && <p className="note">{note}</p>}
@@ -167,19 +180,17 @@ export function InventoryScreen({ reference, onCount }: Props) {
     setBusy(true);
     setNote(null);
     try {
-      const select = document.getElementById('inv-warehouse') as HTMLSelectElement | null;
       // Ни выбора, ни подстановки: без склада пересчёт не начинается вовсе.
-      // Прежний запасной вариант «первый из списка» и был тем умолчанием,
-      // ради снятия которого всё это делается.
-      if (select === null || select.value === '') {
+      // Кнопки до выбора погашены, так что сюда попадают только с выбранным;
+      // проверка остаётся сторожем на случай, если кнопку разблокируют.
+      if (warehouseId === '') {
         setNote('Выберите склад: пересчёт идёт по одному складу, и какой — знаете вы');
         return;
       }
-      const warehouseId = Number(select.value);
 
       const opened = fresh
-        ? await openSession(warehouseId)
-        : await findOpenSession(warehouseId);
+        ? await openSession(Number(warehouseId))
+        : await findOpenSession(Number(warehouseId));
 
       if (opened === null) {
         setNote('На этом складе инвентаризация не открыта');
