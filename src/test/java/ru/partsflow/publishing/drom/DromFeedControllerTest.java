@@ -221,6 +221,31 @@ class DromFeedControllerTest extends PostgresTestBase {
                 .andExpect(status().isForbidden());
     }
 
+    /**
+     * Ссылка отдаётся полным адресом, а не одним путём.
+     *
+     * <p>Её передают человеку на той стороне — инструкция так и говорит,
+     * «передать ссылку техспециалисту площадки». По {@code /feeds/drom/…}
+     * он не сходит никуда, и владельцу приходилось дописывать домен руками.
+     * Домен сервер знает: тот же {@code app.public-url} уже подставляется
+     * в ссылки на снимки внутри самого прайса.
+     *
+     * <p>Путь при этом остаётся: по нему прайс качается с того же источника,
+     * где открыт экран, и в разработке это единственный работающий адрес.
+     */
+    @Test
+    @DisplayName("Ссылка на прайс отдаётся полным адресом")
+    void feedUrlIsAbsolute() throws Exception {
+        mvc.perform(get("/api/marketplace-accounts/" + accountId + "/feed-url")
+                        .session(login("owner")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.path").value(feedPath))
+                .andExpect(jsonPath("$.url")
+                        .value(org.hamcrest.Matchers.startsWith("http")))
+                .andExpect(jsonPath("$.url")
+                        .value(org.hamcrest.Matchers.endsWith(feedPath)));
+    }
+
     @Test
     @DisplayName("Две выгрузки одной площадки отдают разный товар")
     void feedsAreFilteredIndependently() throws Exception {
@@ -415,7 +440,7 @@ class DromFeedControllerTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        return body.replaceAll("^\\{\"path\":\"(.*)\"\\}$", "$1");
+        return pathOf(body);
     }
 
     private String rotate() throws Exception {
@@ -424,7 +449,20 @@ class DromFeedControllerTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        return body.replaceAll("^\\{\"path\":\"(.*)\"\\}$", "$1");
+        return pathOf(body);
+    }
+
+    /**
+     * Путь из ответа.
+     *
+     * <p>Именно разбором поля, а не «всё между кавычками»: рядом с путём
+     * теперь едет полный адрес, и наивное выдирание захватывало его вместе
+     * с закрывающей скобкой.
+     */
+    private static String pathOf(String body) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"path\":\"([^\"]*)\"").matcher(body);
+        return m.find() ? m.group(1) : null;
     }
 
     private void register(long id, String schema, String code) {

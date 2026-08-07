@@ -1,3 +1,4 @@
+import type { FeedLink } from '../publishing/feeds';
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { listWarehouses } from '../organization/warehouses';
@@ -139,7 +140,7 @@ function FeedCard({
     feed.priceTo === null ? '' : String(feed.priceTo));
   const [conditions, setConditions] = useState<string[]>(feed.conditions);
   const [warehouseIds, setWarehouseIds] = useState<number[]>(feed.warehouseIds);
-  const [link, setLink] = useState<string | null>(null);
+  const [link, setLink] = useState<FeedLink | null>(null);
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState<number | null>(null);
 
@@ -185,7 +186,7 @@ function FeedCard({
   async function rotate() {
     setBusy(true);
     try {
-      setLink((await rotateFeedUrl(feed.id)).path);
+      setLink(await rotateFeedUrl(feed.id));
       onChanged();
     } catch (cause) {
       onError(describe(cause, 'Ссылка не сменилась'));
@@ -317,7 +318,7 @@ function FeedCard({
           чтобы узнать ссылку, приходилось её сломать. */}
       <details onToggle={(e) => {
         if ((e.target as HTMLDetailsElement).open && link === null && feed.hasFeed) {
-          void feedUrl(feed.id).then((r) => setLink(r.path)).catch(() => {});
+          void feedUrl(feed.id).then(setLink).catch(() => {});
         }
       }}>
         <summary>Ссылка для площадки</summary>
@@ -326,7 +327,21 @@ function FeedCard({
           прописывает её техспециалист руками, и до этого прайс забирать
           будет неоткуда.
         </p>
-        {link !== null && <p className="muted">{link}</p>}
+        {link !== null && link.path !== null && (
+          <>
+            {/* Полный адрес, а не путь: его копируют и отдают человеку
+                на той стороне, и по «/feeds/drom/…» тот не сходит никуда. */}
+            <p className="muted">{link.url ?? link.path}</p>
+            {/* Скачать — потому что заливка файлом руками это не запасной
+                путь, а единственный быстрый: забор по ссылке идёт раз
+                в трое суток, и до него новая деталь на площадке
+                не появится. Ссылкой, а не кнопкой с запросом: файл
+                на двадцать мегабайт качает браузер, показывая ход. */}
+            <p>
+              <a href={link.path} download>Скачать файл прайса</a>
+            </p>
+          </>
+        )}
         <button type="button" className="button--ghost" disabled={busy}
                 onClick={() => void rotate()}>
           {feed.hasFeed ? 'Сменить ссылку' : 'Выдать ссылку'}

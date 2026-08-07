@@ -118,12 +118,24 @@ export function setFilter(id: number, filter: FeedFilter): Promise<Feed> {
   });
 }
 
-export function feedUrl(id: number): Promise<{ path: string | null }> {
-  return request<{ path: string | null }>(`/api/marketplace-accounts/${id}/feed-url`);
+/**
+ * Ссылка на прайс: путь и полный адрес.
+ *
+ * <p>Полный отдаёт сервер из `app.public-url` — его и передают
+ * техспециалисту площадки. По одному пути тот не сходит никуда,
+ * а владелец дописывал домен руками.
+ */
+export interface FeedLink {
+  path: string | null;
+  url: string | null;
 }
 
-export function rotateFeedUrl(id: number): Promise<{ path: string }> {
-  return request<{ path: string }>(`/api/marketplace-accounts/${id}/feed-url`, {
+export function feedUrl(id: number): Promise<FeedLink> {
+  return request<FeedLink>(`/api/marketplace-accounts/${id}/feed-url`);
+}
+
+export function rotateFeedUrl(id: number): Promise<FeedLink> {
+  return request<FeedLink>(`/api/marketplace-accounts/${id}/feed-url`, {
     method: 'POST',
   });
 }
