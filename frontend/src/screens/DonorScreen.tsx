@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { ApiError, request } from '../api/client';
 import {
   generationForYear,
@@ -307,7 +307,8 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
           </thead>
           <tbody>
             {donors.map((donor) => (
-              <tr key={donor.id}>
+              <Fragment key={donor.id}>
+              <tr>
                 <td>{donorTitle(donor)}</td>
                 <td>{statusTitle(donor.status)}</td>
                 <td className="filter-row">
@@ -330,22 +331,35 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
                   </button>
                 </td>
               </tr>
+              {/* Затраты раскрываются под своей же строкой. Пока блок стоял
+                  после таблицы, у клиента с 441 машиной он открывался
+                  за одиннадцать экранов вниз — замерено: строка на 17 995
+                  пикселе, блок на 27 756. Владелец нажимал «Затраты»
+                  и не видел ничего, кроме сменившейся надписи на кнопке. */}
+              {costsOf === donor.id && (
+                <tr>
+                  <td colSpan={3}>
+                    <DonorCosts donorId={donor.id} title={donorTitle(donor)} />
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             ))}
           </tbody>
         </table>
       )}
+      {/* «Только в разборе» было неправдой: справочник приёмки отдаёт
+          и разобранные — вернуться за забытой мелочью через неделю после
+          закрытия разбора обычное дело, и это закреплено тестом
+          IntakeReferenceServiceTest. А у переехавшего клиента разобраны
+          все 440 машин: прочитав прежний текст, он решил бы, что принимать
+          на них нельзя вовсе, и заводил бы детали без машины. */}
       <p className="note">
-        Деталь принимают только на машину в разборе: снятая с той, которую ещё
-        везут, — ошибка выбора, а не работа. Поэтому купленную машину надо
-        поставить в разбор, и до этого на приёмке её нет.
+        Деталь принимают на машину, которую разбирают или уже разобрали:
+        вернуться за забытой мелочью через неделю — обычное дело. А купленной
+        и той, что ещё в пути, на приёмке нет: снятая с них деталь — ошибка
+        выбора, а не работа. Поэтому купленную ставят в разбор.
       </p>
-
-      {costsOf !== null && donors.some((donor) => donor.id === costsOf) && (
-        <DonorCosts
-          donorId={costsOf}
-          title={donorTitle(donors.find((donor) => donor.id === costsOf)!)}
-        />
-      )}
 
     </section>
   );
