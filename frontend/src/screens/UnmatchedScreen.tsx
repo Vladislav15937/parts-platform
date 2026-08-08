@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import { positions } from '../ui/plural';
 import {
   matchName,
+  rematchNames,
   searchKinds,
   suggestionsFor,
   unmatchedNames,
@@ -40,6 +41,7 @@ export function UnmatchedScreen({ canManage, onTotalChanged }: Props) {
   const [done, setDone] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     void load(size);
@@ -78,6 +80,29 @@ export function UnmatchedScreen({ canManage, onTotalChanged }: Props) {
         <p className="note">
           Всего {total}. Сначала те, под которыми больше позиций: с них разбор
           и окупается.
+        </p>
+      )}
+
+      {/*
+        * Пересопоставление по нынешнему справочнику.
+        *
+        * Справочник видов деталей растёт с релизом, а написания клиента
+        * заведены раньше: пополнение само по себе не меняет ничего, и
+        * владелец продолжает видеть ту же стену нераспознанных. Эндпоинт
+        * для этого написан давно, но звать его было некому — дотянуться
+        * можно было только повторным импортом, то есть перезалив выгрузку
+        * целиком ради пересчёта.
+        *
+        * Безопасно и потому без подтверждения: сопоставляется только точное
+        * совпадение с эталоном или синонимом, а сделанное человеком руками
+        * не трогается вовсе.
+        */}
+      {canManage && total > 0 && (
+        <p>
+          <button type="button" className="button--ghost" disabled={busy}
+                  onClick={() => void rematchAll()}>
+            Пересопоставить по справочнику
+          </button>
         </p>
       )}
 
@@ -122,6 +147,24 @@ export function UnmatchedScreen({ canManage, onTotalChanged }: Props) {
       )}
     </section>
   );
+
+  async function rematchAll(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await rematchNames();
+      // Числом, а не «готово»: «сопоставил» и «ничего не изменилось» —
+      // разные новости, и по экрану их иначе не различить.
+      setDone(result.matched === 0
+        ? 'Ни одно написание не совпало с эталоном — эти разбираются руками'
+        : `Сопоставлено написаний: ${result.matched}, исправлено карточек: ${result.updated}`);
+      await load(size);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : 'Пересопоставить не удалось');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function load(pageSize: number): Promise<void> {
     setLoading(true);

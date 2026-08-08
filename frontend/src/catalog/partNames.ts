@@ -85,3 +85,19 @@ export function matchName(partNameId: number, partKindId: number): Promise<Match
 export function unmatchName(partNameId: number): Promise<UnmatchedName> {
   return request<UnmatchedName>(`/api/part-names/${partNameId}/unmatch`, { method: 'POST' });
 }
+
+/**
+ * Пересопоставляет нераспознанные написания по нынешнему справочнику.
+ *
+ * <p>Справочник видов деталей растёт с релизом, а написания клиента заведены
+ * раньше: без этого пополнение не меняет ничего, и владелец продолжает видеть
+ * ту же стену нераспознанных. Точное совпадение с эталоном или синонимом,
+ * похожесть сюда не идёт; решённое человеком не трогается.
+ *
+ * @returns сколько написаний нашли эталон и сколько карточек это исправило
+ */
+export function rematchNames(): Promise<{ matched: number; updated: number }> {
+  return request<{ matched: number; updated: number }>('/api/part-names/rematch', {
+    method: 'POST',
+  });
+}

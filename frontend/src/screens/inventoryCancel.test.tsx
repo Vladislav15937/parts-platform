@@ -21,7 +21,7 @@ describe('отмена пересчёта', () => {
 
   beforeEach(() => {
     cancelled = [];
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/cancel')) {
         cancelled.push(url);
