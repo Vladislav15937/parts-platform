@@ -20,20 +20,66 @@ public class StockDocumentService {
     private final StockLedger ledger;
     private final StockReservationRepository stock;
     private final PartChangeLog partChanges;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     public StockDocumentService(StockDocumentRepository documents,
                                StockLedger ledger,
                                StockReservationRepository stock,
-                               PartChangeLog partChanges) {
+                               PartChangeLog partChanges,
+                               org.springframework.jdbc.core.JdbcTemplate jdbc) {
         this.documents = documents;
         this.ledger = ledger;
         this.stock = stock;
         this.partChanges = partChanges;
+        this.jdbc = jdbc;
     }
 
     @Transactional
     public StockDocument save(StockDocument document) {
+        requireReferences(document);
         return documents.saveAndFlush(document);
+    }
+
+    /**
+     * Склад, ячейка и деталь обязаны существовать — и сказать об этом надо
+     * словами.
+     *
+     * <p>Пока проверки не было, чужой номер доезжал до внешнего ключа
+     * и возвращался как «Операция нарушает целостность данных». Через этот
+     * метод проходят приёмка, списание, перевозка и возврат, то есть один
+     * невнятный ответ на четыре операции сразу.
+     *
+     * <p>Для человека это «сервер сломался», для офлайн-очереди — 409, отказ
+     * по существу: партия уходит в «требует внимания» с сообщением, из
+     * которого не понять, что делать. Случай не выдуманный: склад или ячейку
+     * могли выключить, пока телефон был без связи, а в теле записи очереди
+     * лежат прежние номера.
+     *
+     * <p>Проверка ради текста, а не вместо схемы: сторожем остаются внешние
+     * ключи — между проверкой и вставкой строку может убрать кто-то другой.
+     */
+    private void requireReferences(StockDocument document) {
+        requireExists("warehouse", document.getWarehouseId(), "Склад не найден: ");
+        requireExists("warehouse", document.getToWarehouseId(), "Склад назначения не найден: ");
+        for (StockDocumentLine line : document.getLines()) {
+            requireExists("part", line.getPartId(), "Деталь не найдена: ");
+            requireExists("storage_cell", line.getCellId(), "Ячейка не найдена: ");
+        }
+    }
+
+    /**
+     * Имя таблицы подставляется текстом, и это безопасно: оно приходит
+     * из этого же класса, а не из запроса. Параметром таблицу не задать.
+     */
+    private void requireExists(String table, Long id, String complaint) {
+        if (id == null) {
+            return;
+        }
+        Integer found = jdbc.queryForObject(
+                "SELECT count(*) FROM " + table + " WHERE id = ?", Integer.class, id);
+        if (found == null || found == 0) {
+            throw new IllegalArgumentException(complaint + id);
+        }
     }
 
     /** Документ по ключу запроса клиента: так узнаётся повтор офлайн-очереди. */

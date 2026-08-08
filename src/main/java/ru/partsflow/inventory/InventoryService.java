@@ -67,6 +67,17 @@ public class InventoryService {
      */
     @Transactional
     public InventorySession open(Long warehouseId, Long authorId) {
+        // Склад проверяется словами: чужой номер доезжал до внешнего ключа
+        // и возвращался как «Операция нарушает целостность данных» — то есть
+        // кладовщик получал сообщение о поломке сервера там, где ошибся
+        // в выборе. Пустой лист обхода при этом не отличить от «на складе
+        // ничего нет».
+        Integer exists = jdbc.queryForObject(
+                "SELECT count(*) FROM warehouse WHERE id = ?", Integer.class, warehouseId);
+        if (exists == null || exists == 0) {
+            throw new IllegalArgumentException("Склад не найден: " + warehouseId);
+        }
+
         List<InventorySession> alreadyOpen = sessions.findByWarehouseIdAndStatus(
                 warehouseId, InventorySession.SessionStatus.OPEN);
         if (!alreadyOpen.isEmpty()) {
