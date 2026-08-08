@@ -44,17 +44,20 @@ public class InventoryService {
     private final JdbcTemplate jdbc;
     private final StockReservationRepository reservations;
     private final PartChangeLog partChanges;
+    private final org.springframework.transaction.support.TransactionTemplate transactions;
 
     public InventoryService(InventorySessionRepository sessions,
                             StockLedger ledger,
                             JdbcTemplate jdbc,
                             StockReservationRepository reservations,
-                            PartChangeLog partChanges) {
+                            PartChangeLog partChanges,
+                            org.springframework.transaction.support.TransactionTemplate transactions) {
         this.sessions = sessions;
         this.ledger = ledger;
         this.jdbc = jdbc;
         this.reservations = reservations;
         this.partChanges = partChanges;
+        this.transactions = transactions;
     }
 
     /**
@@ -109,7 +112,10 @@ public class InventoryService {
      * учётным остатком: это найденный излишек — деталь лежит, а учёт про неё
      * не знает.
      */
-    @Transactional
+    // Без @Transactional намеренно: транзакцией управляет перегрузка ниже —
+    // ей нужно повторить подсчёт в новой, когда строку позиции успел завести
+    // другой кладовщик. Открытая здесь транзакция стала бы внешней, повтор
+    // шёл бы в ней же и падал бы на «transaction is marked rollback-only».
     public InventorySession count(Long sessionId, Long partId, BigDecimal qty, Long authorId) {
         return count(sessionId, partId, qty, authorId, null);
     }
@@ -121,9 +127,37 @@ public class InventoryService {
      *                   на момент подсчёта. Поставить время получения запроса
      *                   значит записать всё проданное за это время в излишки
      */
-    @Transactional
     public InventorySession count(Long sessionId, Long partId, BigDecimal qty,
                                   Long authorId, Duration countedAgo) {
+        try {
+            return transactions.execute(
+                    status -> applyCount(sessionId, partId, qty, authorId, countedAgo));
+        } catch (org.springframework.dao.DataIntegrityViolationException
+                 | org.hibernate.exception.ConstraintViolationException e) {
+            // Позицию, которой не было в снимке, второй кладовщик завёл
+            // строкой между нашим чтением и записью — уникальный индекс
+            // inventory_line_uk это отбил. Повторяем: теперь строка есть,
+            // и подсчёт ляжет на неё.
+            //
+            // Повтор, а не отказ: посчитать одну позицию дважды законно
+            // и последовательно — побеждает последний, — и по скорости
+            // нажатия поведение расходиться не должно. А наружу это ехало
+            // как «Операция нарушает целостность данных», то есть очередь
+            // телефона уводила подсчёт в «требует внимания» и работа
+            // кладовщика пропадала.
+            //
+            // Повтор точечный, а не блокировка сессии на каждый подсчёт:
+            // столкновение редкое, а подсчёты идут с нескольких телефонов
+            // разом, и общая блокировка замедлила бы их все ради него.
+            log.warn("Строку позиции {} в сессии {} завёл кто-то другой — повторяем подсчёт",
+                    partId, sessionId);
+            return transactions.execute(
+                    status -> applyCount(sessionId, partId, qty, authorId, countedAgo));
+        }
+    }
+
+    private InventorySession applyCount(Long sessionId, Long partId, BigDecimal qty,
+                                        Long authorId, Duration countedAgo) {
         InventorySession session = require(sessionId);
         if (!session.isOpen()) {
             throw new IllegalStateException(

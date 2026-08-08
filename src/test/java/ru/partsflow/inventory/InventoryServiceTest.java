@@ -186,6 +186,69 @@ class InventoryServiceTest extends PostgresTestBase {
     }
 
     /**
+     * Двое считают одну и ту же позицию, которой не было в снимке.
+     *
+     * <p>Строка такой позиции заводится подсчётом, и уникальный индекс
+     * {@code inventory_line_uk} отбивает вторую. Наружу это ехало как
+     * «Операция нарушает целостность данных» — на телефон кладовщика, где
+     * очередь читает 409 как «требует внимания»: подсчёт пропадал, а почему,
+     * по такому ответу не понять.
+     *
+     * <p>Последовательно посчитать позицию дважды законно, побеждает
+     * последний, — и от скорости нажатия поведение зависеть не должно.
+     * Поэтому повтор, а не отказ.
+     */
+    @Test
+    @DisplayName("Одновременный подсчёт позиции вне снимка не теряет работу")
+    void concurrentCountOfAnUnlistedPartRetries() throws Exception {
+        Long inSnapshot = partWithStock("Бампер в снимке", 1);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        // Деталь заводится после открытия сессии: в снимок она не попала,
+        // и строку для неё создаст первый же подсчёт.
+        Long found = partWithStock("Фара, найденная на полке", 1);
+
+        java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(2);
+        List<Throwable> failures = java.util.Collections.synchronizedList(new ArrayList<>());
+        Runnable counting = () -> {
+            try {
+                together.await();
+                // Без внешней транзакции: повтор обязан идти новой, а внутри
+                // чужой она была бы помечена на откат.
+                TenantContext.set(TENANT);
+                inventory.count(sessionId, found, new BigDecimal("1"), null);
+            } catch (Throwable e) {
+                failures.add(e);
+            } finally {
+                TenantContext.clear();
+            }
+        };
+
+        Thread first = new Thread(counting);
+        Thread second = new Thread(counting);
+        first.start();
+        second.start();
+        first.join();
+        second.join();
+
+        assertThat(failures)
+                .as("подсчёт кладовщика потерян с ответом про целостность данных")
+                .isEmpty();
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM inventory_line WHERE session_id = ? AND part_id = ?",
+                Integer.class, sessionId, found)))
+                .as("строк позиции больше одной").isEqualTo(1);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT qty_counted FROM inventory_line WHERE session_id = ? AND part_id = ?",
+                BigDecimal.class, sessionId, found)))
+                .as("подсчёт не записан").isEqualByComparingTo("1");
+        // Снимок открывался до появления найденной детали, и в нём должна
+        // остаться только та позиция: иначе тест проверяет не то, что задумано.
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT qty_expected FROM inventory_line WHERE session_id = ? AND part_id = ?",
+                BigDecimal.class, sessionId, inSnapshot))).isEqualByComparingTo("1");
+    }
+
+    /**
      * Недостача, обнулившая остаток, закрывает карточку.
      *
      * <p>Прежде она оставалась «в наличии» с нулём — то есть врала про самое
