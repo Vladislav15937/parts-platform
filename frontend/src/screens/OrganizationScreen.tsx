@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
+import { scannable } from '../labels/labels';
 import {
   createBranch,
   createCells,
@@ -98,9 +99,30 @@ export function OrganizationScreen() {
           ) : (
             <div className="chips">
               {cells.map((cell) => (
-                <span key={cell.id} className="chip">{cell.code}</span>
+                <span
+                  key={cell.id}
+                  className={scannable(cell.code) ? 'chip' : 'chip chip--warn'}
+                  title={scannable(cell.code) ? undefined : 'Не печатается штрихкодом'}
+                >
+                  {cell.code}
+                  {!scannable(cell.code) && <span className="muted"> · не печатается</span>}
+                </span>
               ))}
             </div>
+          )}
+
+          {/* Проверка смотрела только на то, что вводят сейчас, — а «Б-02-1»
+              у клиента заведена давно, переездом или руками до появления
+              этой проверки. В списке она выглядела обычной, и владелец
+              узнавал о ней на печати этикеток: ровно тот случай, которого
+              предупреждение ниже и должно избегать. */}
+          {cells.some((cell) => !scannable(cell.code)) && (
+            <p className="note note--error">
+              Заведённые адреса выше, помеченные «не печатается», штрихкодом
+              не напечатать: Code128 не знает кириллицы, а у «Б», «Г», «Д»
+              латинского двойника нет. Пока стеллаж не подписан, переименовать
+              дешевле всего.
+            </p>
           )}
 
           <label className="field">
