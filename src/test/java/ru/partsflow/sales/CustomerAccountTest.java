@@ -244,6 +244,32 @@ class CustomerAccountTest extends PostgresTestBase {
                 .as("сверка денег перестала быть пустой").isEmpty();
     }
 
+    /**
+     * У несуществующего клиента не «ноль на счету», а «нет такого клиента».
+     *
+     * <p>Чтение счёта проверки не имело, и запрос по чужому или ошибочному
+     * номеру отвечал 200 с балансом 0 ₽ — то есть утверждал что-то о деньгах
+     * того, кого нет. Продавец, открывший не того клиента, читает это как
+     * «за ним ничего не числится» и говорит покупателю, что аванса у него
+     * нет. Пустой журнал и отсутствующий клиент выглядят на экране
+     * одинаково, различать их обязан сервер.
+     */
+    @Test
+    @DisplayName("Счёт несуществующего клиента не отвечает нулём")
+    void accountOfUnknownCustomerIsRefused() {
+        assertThatThrownBy(() -> inTenant(() -> sales.accountBalance(999_999L)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Клиент не найден");
+
+        assertThatThrownBy(() -> inTenant(() -> sales.accountEntries(999_999L)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Клиент не найден");
+
+        // У настоящего клиента без операций ноль — это ответ по существу.
+        assertThat(inTenant(() -> sales.accountBalance(customerId)))
+                .isEqualByComparingTo("0");
+    }
+
     @Test
     @DisplayName("Больше остатка со счёта не выдать")
     void cannotWithdrawMoreThanBalance() {

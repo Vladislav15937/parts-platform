@@ -826,8 +826,19 @@ public class SalesService {
      * числа, иначе «минус тысяча» и «тысяча со знаком минус» перестают
      * различаться при чтении глазами.
      */
+    /**
+     * Остаток счёта существующего клиента.
+     *
+     * <p>Проверка есть и на чтении, а не только на записи: без неё счёт
+     * несуществующего клиента отвечал «баланс 0 ₽» — то есть утверждал
+     * что-то о деньгах того, кого нет. Продавец, открывший не того клиента,
+     * читает это как «за ним ничего не числится» и говорит покупателю,
+     * что аванса у него нет. Пустой журнал и отсутствующий клиент — разные
+     * вещи, и различать их обязан сервер: на экране они выглядят одинаково.
+     */
     @Transactional(readOnly = true)
     public BigDecimal accountBalance(Long customerId) {
+        requireExistingCustomer(customerId);
         return accountRepository.findByCustomerIdOrderByIdDesc(customerId).stream()
                 .map(CustomerAccountEntry::signedAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -835,6 +846,7 @@ public class SalesService {
 
     @Transactional(readOnly = true)
     public List<CustomerAccountEntry> accountEntries(Long customerId) {
+        requireExistingCustomer(customerId);
         return accountRepository.findByCustomerIdOrderByIdDesc(customerId);
     }
 
