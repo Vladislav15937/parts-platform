@@ -21,6 +21,7 @@ import {
   type DonorEntry,
 } from '../intake/donors';
 import { ScanOverlay } from '../scan/ScanOverlay';
+import { shown } from '../ui/plural';
 
 /**
  * Заведение машины-донора.
@@ -48,6 +49,7 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
   // платежами и в разные дни.
   const [costsOf, setCostsOf] = useState<number | null>(null);
   const [donors, setDonors] = useState<DonorEntry[]>([]);
+  const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [catalog, setCatalog] = useState<VehicleCatalog | null>(null);
   const [loading, setLoading] = useState(true);
@@ -109,6 +111,15 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
       </section>
     );
   }
+
+  // Ищем по тому же, что видно в строке, плюс VIN: владелец помнит машину
+  // по своему номеру («261»), по марке с моделью или по заметке
+  // («Синий маркер!!!») — по нашему внутреннему коду не помнит никто.
+  const needle = query.trim().toLowerCase();
+  const found = needle === ''
+    ? donors
+    : donors.filter((donor) =>
+        `${donorTitle(donor)} ${donor.vin ?? ''}`.toLowerCase().includes(needle));
 
   const models = modelsOf(catalog, brand?.id ?? null);
   const generations = generationsOf(catalog, modelId);
@@ -298,6 +309,36 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
       {donors.length === 0 ? (
         <p className="note">Машин пока нет.</p>
       ) : (
+        <>
+        {/*
+          * Поиск по списку, а не прокрутка.
+          *
+          * У переехавшего клиента 441 машина, и список идёт простынёй
+          * в 27 801 пиксель — тридцать четыре экрана подряд. Владелец
+          * приходит сюда за одной машиной: положить на неё эвакуатор
+          * или перевести в разбор, — а найти её мог только глазами.
+          * Ровно та же болезнь, что с правкой списком в семьсот страниц
+          * и переносом снимков в девятьсот нажатий: возможность есть,
+          * воспользоваться нельзя.
+          *
+          * Отбор на клиенте: все машины уже загружены одним запросом,
+          * и лишний поход на сервер тут ничего не уточнит.
+          */}
+        <input
+          type="search"
+          value={query}
+          placeholder="Найти машину — номер, марка, модель, заметка, VIN"
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {query.trim() !== '' && (
+          // Обрезанный список говорит, что он обрезан: иначе владелец
+          // читает выдачу как весь свой автопарк.
+          <p className="note">
+            {found.length === 0
+              ? `Ничего не найдено среди ${donors.length} — очистите поиск`
+              : `Показано ${shown(found.length, donors.length)}`}
+          </p>
+        )}
         <table>
           <thead>
             <tr>
@@ -307,7 +348,7 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
             </tr>
           </thead>
           <tbody>
-            {donors.map((donor) => (
+            {found.map((donor) => (
               <Fragment key={donor.id}>
               <tr>
                 <td>{donorTitle(donor)}</td>
@@ -348,6 +389,7 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
             ))}
           </tbody>
         </table>
+        </>
       )}
       {/* «Только в разборе» было неправдой: справочник приёмки отдаёт
           и разобранные — вернуться за забытой мелочью через неделю после
