@@ -164,6 +164,9 @@ public class SalesService {
                                Long dealSourceId, List<ItemRequest> items,
                                List<ServiceRequest> services) {
 
+        requireCustomer(customerId);
+        requireDealSource(dealSourceId);
+
         Deal deal = new Deal(customerId, managerId);
         deal.setCreatedBy(managerId);
         // Откуда пришла продажа. Заполняется при каждой сделке, а не только
@@ -872,6 +875,7 @@ public class SalesService {
     @Transactional
     public CustomerAccountEntry withdrawFromAccount(Long customerId, BigDecimal amount,
                                                     Long paymentSourceId, Long managerId) {
+        requireExistingCustomer(customerId);
         if (amount == null || amount.signum() <= 0) {
             throw new IllegalArgumentException("Сумма выдачи должна быть больше нуля");
         }
@@ -923,6 +927,7 @@ public class SalesService {
     @Transactional
     public CustomerAccountEntry correctAccount(Long customerId, BigDecimal amount,
                                                String reason, Long managerId) {
+        requireExistingCustomer(customerId);
         if (amount == null || amount.signum() == 0) {
             throw new IllegalArgumentException("Правка на ноль ничего не меняет");
         }
@@ -950,6 +955,10 @@ public class SalesService {
     @Transactional
     public CustomerAccountEntry topUpAccount(Long customerId, BigDecimal amount,
                                              Long paymentSourceId, Long managerId) {
+        // Клиент обязан существовать: иначе деньги ложатся на счёт, которого
+        // нет, и отказ приходит как «нарушает целостность данных» — продавцу
+        // непонятно, ошибся он или сломался сервер.
+        requireExistingCustomer(customerId);
         Payment payment = new Payment(PaymentDirection.IN, amount, customerId);
         payment.setPaymentSourceId(paymentSourceId);
         payment.setCreatedBy(managerId);
@@ -1019,6 +1028,46 @@ public class SalesService {
     private Deal requireDeal(Long dealId) {
         return dealRepository.findById(dealId)
                 .orElseThrow(() -> new IllegalArgumentException("Сделка не найдена: " + dealId));
+    }
+
+    /**
+     * Клиент обязан существовать, и сказать об этом надо словами.
+     *
+     * <p>Деталь и услуга проверялись, клиент — нет: он доезжал до внешнего
+     * ключа и возвращался как «Операция нарушает целостность данных».
+     * Продавец по такому ответу идёт искать поломку сервера, стоя перед
+     * покупателем.
+     *
+     * <p>Пусто — законно: у заказа с площадки клиента нет, покупателя она
+     * не называет.
+     */
+    private void requireCustomer(Long customerId) {
+        if (customerId == null) {
+            return;
+        }
+        requireExistingCustomer(customerId);
+    }
+
+    /** То же, но клиент обязателен: у денег на счёте владелец есть всегда. */
+    private void requireExistingCustomer(Long customerId) {
+        if (customerId == null) {
+            throw new IllegalArgumentException("Не указан клиент");
+        }
+        Integer found = jdbc.queryForObject(
+                "SELECT count(*) FROM customer WHERE id = ?", Integer.class, customerId);
+        if (found == null || found == 0) {
+            throw new IllegalArgumentException("Клиент не найден: " + customerId);
+        }
+    }
+
+    /** Источник сделки — из справочника; пусто значит «не указан». */
+    private void requireDealSource(Long dealSourceId) {
+        if (dealSourceId == null) {
+            return;
+        }
+        if (!dealSources.existsById(dealSourceId)) {
+            throw new IllegalArgumentException("Источник сделки не найден: " + dealSourceId);
+        }
     }
 
     private Part requirePart(Long partId) {

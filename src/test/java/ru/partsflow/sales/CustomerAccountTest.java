@@ -207,6 +207,43 @@ class CustomerAccountTest extends PostgresTestBase {
         assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("700");
     }
 
+    /**
+     * Несуществующий клиент отбивается словами, а не ограничением схемы.
+     *
+     * <p>Деталь и услуга в сделке проверялись, клиент — нет: он доезжал
+     * до внешнего ключа и возвращался как «Операция нарушает целостность
+     * данных». Продавец по такому ответу идёт искать поломку сервера,
+     * стоя перед покупателем, — при том что ошибка в выборе клиента.
+     */
+    @Test
+    @DisplayName("Операции со счётом чужого клиента отказывают словами")
+    void unknownCustomerIsRefusedWithWords() {
+        assertThatThrownBy(() -> inTenant(() -> sales.topUpAccount(
+                999_999L, new BigDecimal("100"), null, managerId)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Клиент не найден");
+
+        assertThatThrownBy(() -> inTenant(() -> sales.withdrawFromAccount(
+                999_999L, new BigDecimal("100"), null, managerId)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Клиент не найден");
+
+        assertThatThrownBy(() -> inTenant(() -> sales.correctAccount(
+                999_999L, new BigDecimal("100"), "правка", managerId)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Клиент не найден");
+    }
+
+    /** У сделки клиент тоже проверяется — и пустой при этом законен. */
+    @Test
+    @DisplayName("Сделка с чужим клиентом отказывает словами")
+    void unknownCustomerInDealIsRefused() {
+        assertThatThrownBy(() -> inTenant(() -> sales.createReserved(
+                999_999L, managerId, null, null, java.util.List.of(), java.util.List.of())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Клиент не найден");
+    }
+
     private BigDecimal outgoing() {
         return inTenant(() -> jdbc.queryForObject("""
                 SELECT COALESCE(sum(amount), 0) FROM payment
