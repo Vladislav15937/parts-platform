@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
+import { positions } from '../ui/plural';
 import {
   matchName,
   searchKinds,
@@ -189,6 +190,19 @@ function KindPicker({
    */
   const [hovered, setHovered] = useState<string | null>(null);
 
+  /**
+   * Какой эталон ждёт подтверждения.
+   *
+   * <p>Сопоставление правит все позиции под написанием разом — у живого
+   * клиента это до трёхсот карточек, — и назад не откатывается ничем,
+   * кроме восстановления из бэкапа. Фишки эталонов стоят в ряд и похожи
+   * друг на друга («Ключ зажигания» рядом с «Замком зажигания»), а
+   * разбирают их сотнями подряд: промах мышью стоит трёхсот карточек,
+   * утверждающих, что они другая деталь. Поэтому второе нажатие — так же,
+   * как у правки списком и у отказа по заказу.
+   */
+  const [confirming, setConfirming] = useState<number | null>(null);
+
   useEffect(() => {
     void suggestionsFor(partName.id)
       .then(setSuggested)
@@ -223,9 +237,9 @@ function KindPicker({
                 onMouseLeave={() => setHovered(null)}
                 onFocus={() => setHovered(kind.name)}
                 onBlur={() => setHovered(null)}
-                onClick={() => onPick(kind)}
+                onClick={() => pick(kind)}
               >
-                {kind.name}
+                {label(kind)}
               </button>
             ))}
           </div>
@@ -272,9 +286,11 @@ function KindPicker({
                 type="button"
                 className="chip"
                 title={preview(partName, kind.name)}
-                onClick={() => onPick(kind)}
+                onMouseEnter={() => setHovered(kind.name)}
+                onMouseLeave={() => setHovered(null)}
+                onClick={() => pick(kind)}
               >
-                {kind.name}
+                {label(kind)}
               </button>
             ))}
           </div>
@@ -294,6 +310,33 @@ function KindPicker({
       )}
     </div>
   );
+
+  /**
+   * Первое нажатие спрашивает, второе применяет.
+   *
+   * <p>Подтверждение живёт на самой фишке, а не в отдельном окне: рядом
+   * стоит строка «Станет», и человеку надо видеть будущий заголовок в тот
+   * момент, когда он подтверждает. Наведение её и меняет, поэтому
+   * подтверждаемый эталон подсвечивается там же.
+   */
+  function pick(kind: PartKind): void {
+    if (confirming !== kind.id) {
+      setConfirming(kind.id);
+      setHovered(kind.name);
+      return;
+    }
+    setConfirming(null);
+    onPick(kind);
+  }
+
+  function label(kind: PartKind): string {
+    if (confirming !== kind.id) {
+      return kind.name;
+    }
+    return partName.usageCount > 0
+      ? `Точно? ${positions(partName.usageCount)}`
+      : 'Точно?';
+  }
 
   async function lookup(term: string): Promise<void> {
     if (term.trim().length < 2) {

@@ -63,6 +63,43 @@ describe('предпросмотр заголовка при разборе', ()
     await waitFor(() => expect(screen.getByText(/Станет:/).textContent)
       .toContain('Трос замка'));
   });
+
+  /**
+   * Сопоставление применяется вторым нажатием.
+   *
+   * <p>Одно нажатие правит все позиции под написанием — у живого клиента
+   * до трёхсот карточек, — и назад это не откатывается ничем, кроме
+   * восстановления из бэкапа. Фишки эталонов стоят в ряд и похожи друг
+   * на друга, а разбирают их сотнями подряд: промах мышью стоит трёхсот
+   * карточек, утверждающих, что они другая деталь. Ровно так «Знак
+   * аварийной остановки» однажды стал «Набором инструментов».
+   */
+  it('применяется вторым нажатием, а не первым', async () => {
+    const sent: string[] = [];
+    const before = globalThis.fetch as typeof fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        sent.push(String(input));
+        return json({ changed: 40 });
+      }
+      return before(input, init);
+    }));
+
+    render(<UnmatchedScreen canManage onTotalChanged={() => {}} />);
+    fireEvent.click(await screen.findByText('сопоставить'));
+    const chip = await screen.findByRole('button', { name: 'Трос замка' });
+
+    fireEvent.click(chip);
+
+    // Первое нажатие только спрашивает — и называет цену действия.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Точно\?/ })
+      .textContent).toContain('40'));
+    expect(sent, 'сопоставление ушло с первого нажатия').toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /Точно\?/ }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toContain('/match');
+  });
 });
 
 function json(body: unknown): Response {
