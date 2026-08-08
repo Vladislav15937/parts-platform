@@ -16,6 +16,7 @@ import { DonorCosts } from './DonorCosts';
 import {
   donorTitle,
   listDonors,
+  registerSupply,
   startDismantling,
   statusTitle,
   type DonorEntry,
@@ -50,6 +51,9 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
   const [costsOf, setCostsOf] = useState<number | null>(null);
   const [donors, setDonors] = useState<DonorEntry[]>([]);
   const [query, setQuery] = useState('');
+  const [supplyNumber, setSupplyNumber] = useState('');
+  const [supplyKind, setSupplyKind] = useState('CONTAINER');
+  const [supplier, setSupplier] = useState('');
   const [busy, setBusy] = useState(false);
   const [catalog, setCatalog] = useState<VehicleCatalog | null>(null);
   const [loading, setLoading] = useState(true);
@@ -270,6 +274,56 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
         </select>
       </label>
 
+      {/*
+        * Поставка заводится здесь же, где выбирается.
+        *
+        * `POST /api/intake/supplies` был написан с самого начала, и звать
+        * его было некому: список поставок приезжал справочником, а новую
+        * завести было нельзя ниоткуда. У переехавшего клиента их
+        * восемнадцать — все из переноса, — и следующий пришедший контейнер
+        * записать было бы не на что: приёмщик выбрал бы «не указана»,
+        * и связь детали с партией потерялась бы навсегда.
+        *
+        * Рядом с выбором, а не отдельным разделом: контейнер и машины
+        * приходят вместе, и заводит их один человек за один заход.
+        */}
+      <details>
+        <summary>Завести поставку</summary>
+        <div className="row">
+          <label className="field">
+            Номер
+            <input
+              value={supplyNumber}
+              placeholder="18"
+              onChange={(e) => setSupplyNumber(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Вид
+            <select value={supplyKind} onChange={(e) => setSupplyKind(e.target.value)}>
+              <option value="CONTAINER">Контейнер</option>
+              <option value="PURCHASE">Закупка</option>
+              <option value="OTHER">Прочее</option>
+            </select>
+          </label>
+          <label className="field">
+            Поставщик
+            <input
+              value={supplier}
+              placeholder="необязательно"
+              onChange={(e) => setSupplier(e.target.value)}
+            />
+          </label>
+        </div>
+        <button
+          type="button"
+          disabled={sending || !online || supplyNumber.trim() === ''}
+          onClick={() => void createSupply()}
+        >
+          Завести поставку
+        </button>
+      </details>
+
       <label>
         Примечание
         <input value={note} onChange={(e) => setNote(e.target.value)} />
@@ -449,6 +503,25 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
     }
     const matched = generationForYear(generationsOf(catalog, model), Number(value));
     return matched?.id ?? null;
+  }
+
+  async function createSupply(): Promise<void> {
+    setSending(true);
+    setMessage(null);
+    try {
+      const created = await registerSupply(
+        supplyNumber.trim(), supplyKind, supplier.trim() === '' ? null : supplier.trim());
+      setSupplyNumber('');
+      setSupplier('');
+      // Справочник приёмки перечитывается: без этого заведённая поставка
+      // не появится в списке ни здесь, ни у приёмщика на телефоне.
+      onChanged();
+      setMessage(`Поставка «${created.number}» заведена — её уже можно выбрать.`);
+    } catch (cause) {
+      setMessage(cause instanceof ApiError ? cause.message : 'Поставку завести не удалось');
+    } finally {
+      setSending(false);
+    }
   }
 
   async function reloadDonors(): Promise<void> {

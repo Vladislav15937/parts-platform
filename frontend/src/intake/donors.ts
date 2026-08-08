@@ -89,3 +89,22 @@ export function listDonors(): Promise<DonorEntry[]> {
 export function startDismantling(id: number): Promise<unknown> {
   return request<unknown>(`/api/intake/donors/${id}/dismantling`, { method: 'POST' });
 }
+
+/**
+ * Заводит поставку — партию, к которой привязывают машины и детали.
+ *
+ * <p>Эндпоинт был написан с самого начала, и звать его было некому: список
+ * поставок приезжал справочником, а новую завести было нельзя ниоткуда.
+ * Следующий пришедший контейнер записать было не на что — приёмщик выбрал бы
+ * «не указана», и связь детали с партией потерялась бы навсегда.
+ */
+export function registerSupply(
+  number: string,
+  kind: string,
+  supplierName: string | null,
+): Promise<{ id: number; number: string }> {
+  return request<{ id: number; number: string }>('/api/intake/supplies', {
+    method: 'POST',
+    body: { number, kind, supplierName },
+  });
+}
