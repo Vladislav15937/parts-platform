@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { plural } from '../ui/plural';
+import { plural, shown } from '../ui/plural';
 import { ApiError } from '../api/client';
 import {
   customerSettlements,
@@ -261,6 +261,13 @@ export function ReportsScreen({ canRead }: Props) {
               </tbody>
             </table>
           )}
+
+          {settlements.rows.length < settlements.totals.customers && (
+            <p className="note">
+              Показаны {shown(settlements.rows.length, settlements.totals.customers,
+                'клиент', 'клиентов', 'клиентов')}, сверху самые должные.
+            </p>
+          )}
         </>
       )}
 
@@ -278,6 +285,20 @@ export function ReportsScreen({ canRead }: Props) {
       {donors !== null && donors.rows.length === 0 && (
         <p className="note">Машин пока нет. Донора заводят на вкладке «Машина».</p>
       )}
+
+      {/* Список обрезан пределом, и молчать об этом нельзя: у живого клиента
+          441 машина против полусотни строк, а рядом стоит «Машин: 441» —
+          глаз читает это как полноту и строки не пересчитывает. Сортировка
+          от убыточных, поэтому окупившиеся машины не видны вовсе, и владелец,
+          не найдя свою, решает, что её нет. Та же болезнь, что была у поиска
+          продавца: обрезанный список обязан говорить, что он обрезан. */}
+      {donors !== null && donors.rows.length > 0
+        && donors.rows.length < donors.totals.donors && (
+          <p className="note">
+            Показаны {shown(donors.rows.length, donors.totals.donors)},
+            сверху самые убыточные.
+          </p>
+        )}
 
       {donors !== null && donors.rows.length > 0 && (
         <div className="table-scroll">

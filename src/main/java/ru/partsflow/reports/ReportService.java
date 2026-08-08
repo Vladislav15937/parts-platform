@@ -177,18 +177,20 @@ public class ReportService {
                 SELECT COALESCE(sum(account_balance) FILTER (WHERE account_balance > 0), 0) AS advances,
                        COALESCE(sum(debt), 0)                                               AS debts,
                        count(*) FILTER (WHERE account_balance > 0)                          AS with_advance,
-                       count(*) FILTER (WHERE debt > 0)                                     AS with_debt
+                       count(*) FILTER (WHERE debt > 0)                                     AS with_debt,
+                       count(*)                                                             AS customers
                   FROM v_customer_settlement""",
                 (rs, i) -> new SettlementTotals(
                         rs.getBigDecimal("advances"),
                         rs.getBigDecimal("debts"),
                         rs.getInt("with_advance"),
                         rs.getInt("with_debt"),
+                        rs.getInt("customers"),
                         List.of()));
 
         return new SettlementTotals(
                 totals.advances(), totals.debts(), totals.withAdvance(), totals.withDebt(),
-                discrepancies());
+                totals.customers(), discrepancies());
     }
 
     /** Нарушенные инварианты расчётов. Пусто — деньги сходятся. */
@@ -210,9 +212,15 @@ public class ReportService {
                                 BigDecimal accountBalance, BigDecimal debt, int unpaidDeals) {
     }
 
-    /** @param problems нарушенные инварианты. Непусто — деньги не сходятся */
+    /**
+     * @param customers сколько клиентов в расчётах всего. Список обрезан
+     *                  пределом, и без общего числа экран не может сказать,
+     *                  что показывает не всех, — а владелец, не найдя клиента
+     *                  в списке, решит, что за ним ничего не числится
+     * @param problems  нарушенные инварианты. Непусто — деньги не сходятся
+     */
     public record SettlementTotals(BigDecimal advances, BigDecimal debts,
-                                   int withAdvance, int withDebt,
+                                   int withAdvance, int withDebt, int customers,
                                    List<Discrepancy> problems) {
     }
 
