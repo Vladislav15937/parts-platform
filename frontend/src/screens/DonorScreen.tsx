@@ -67,8 +67,9 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  // Список машин — с сервера, а не из офлайн-справочника: там только те,
-  // что в разборе, и только что заведённой машины в нём нет.
+  // Список машин — с сервера, а не из офлайн-справочника: тот отдаёт
+  // только те, с которых можно снимать (в разборе и разобранные),
+  // и только что купленной машины в нём нет.
   useEffect(() => {
     void reloadDonors();
   }, []);
