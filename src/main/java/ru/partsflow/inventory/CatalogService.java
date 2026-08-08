@@ -367,6 +367,13 @@ public class CatalogService {
                     + " WHEN 'FAIR' THEN 'удовлетворительное' WHEN 'POOR' THEN 'плохое'"
                     + " ELSE CASE p.condition WHEN 'NEW' THEN 'новая' WHEN 'USED' THEN 'б/у'"
                     + " WHEN 'REFURBISHED' THEN 'восстановленная' END END"),
+            // Состояние отбирается отдельно от оценки: «б/у» и «отличное» —
+            // разные вопросы, и на вкладке колёс отбор по состоянию есть
+            // с самого начала, как и в отборе выгрузок. На витрине его
+            // не было вовсе — то есть «покажи всё новое» владелец задать
+            // не мог, хотя колонка перед глазами.
+            Map.entry("condition", "CASE p.condition WHEN 'NEW' THEN 'новая'"
+                    + " WHEN 'USED' THEN 'б/у' WHEN 'REFURBISHED' THEN 'восстановленная' END"),
             Map.entry("brand", "b.name"),
             Map.entry("model", "m.name"),
             Map.entry("generation", "g.name"),

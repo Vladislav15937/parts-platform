@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -311,6 +312,41 @@ class CatalogServiceTest extends PostgresTestBase {
         assertThat(new java.util.HashSet<>(seen))
                 .as("позиции потерялись между страницами или показаны дважды")
                 .hasSize(24);
+    }
+
+    @Test
+    @DisplayName("Список отбираемых колонок совпадает с тем, что отбор принимает")
+    void filterableColumnsAreExactlyThoseAccepted() {
+        // Экран открывает меню отбора по этому списку и только по нему.
+        // Разойдись он с тем, что принимает отбор, — и меню предложило бы
+        // колонку, на которой сервер отвечает отказом: список значений
+        // приезжает пустым, выбранное значение не меняет ничего, а владелец
+        // видит тот же склад и решает, что отбор сломан.
+        var declared = CatalogService.filterableColumns();
+
+        assertThat(declared).as("состояние не отбирается, хотя колонка на виду")
+                .contains("condition");
+
+        for (String column : declared) {
+            assertThatCode(() -> inTenant(() -> catalog.values(column)))
+                    .as("колонка %s объявлена отбираемой, а отбор её не принимает", column)
+                    .doesNotThrowAnyException();
+        }
+    }
+
+    @Test
+    @DisplayName("Состояние отбирается теми же словами, какими показано")
+    void conditionIsFilteredByTheWordsShown() {
+        part("Фара с состоянием", 1);
+
+        var values = inTenant(() -> catalog.values("condition"));
+
+        // «б/у», а не «USED»: выбранное из списка значение сравнивается с тем
+        // же выражением, которым колонка выводится, — иначе выбор из списка
+        // не находил бы ничего.
+        assertThat(values).as("состояние показано кодом, а не словом")
+                .allSatisfy(value -> assertThat(value)
+                        .isIn("новая", "б/у", "восстановленная"));
     }
 
     @Test
