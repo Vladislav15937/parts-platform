@@ -126,6 +126,38 @@ class PartHistoryHttpTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.movements[0].document").doesNotExist());
     }
 
+    /**
+     * Причина списания видна в истории.
+     *
+     * <p>Списание оформляется документом, и «почему» пишется туда —
+     * в {@code stock_document.note}. История же читала только
+     * {@code stock_movement.reason}, и в ленте у списания стоял прочерк:
+     * причина обязательна, её только что ввели руками, а на экране её нет.
+     *
+     * <p>Это единственная операция, уносящая товар без покупателя и без
+     * денег. Через месяц «почему» не восстановить ничем, кроме этой строки:
+     * ни по журналу, ни по документу — в документ никто не пойдёт, историю
+     * карточки открывают именно затем, чтобы разобраться.
+     */
+    @Test
+    @DisplayName("Причина списания видна в истории")
+    void writeOffReasonIsListed() throws Exception {
+        MockHttpSession owner = login("vladelec");
+
+        mvc.perform(post("/api/stock/write-offs").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"Разбита при разборе",
+                                 "items":[{"partId":%d,"quantity":1}]}"""
+                                .formatted(warehouseId, partId)))
+                .andExpect(status().isCreated());
+
+        mvc.perform(get("/api/parts/%d/history".formatted(partId)).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.movements[0].type").value("Списание"))
+                .andExpect(jsonPath("$.movements[0].reason").value("Разбита при разборе"));
+    }
+
     @Test
     @DisplayName("Себестоимость в ленте правок продавцу не отдаётся")
     void sellerDoesNotSeeCost() throws Exception {
