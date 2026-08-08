@@ -84,7 +84,13 @@ export function OrdersScreen({ canSell }: { canSell: boolean }) {
   }
 
   if (orders === null) {
-    return <p className="note">Загружаем заказы…</p>;
+    // Не удалось — так и говорим. Ошибка при загрузке оставляет состояние
+    // пустым, и до разметки с сообщением дело не доходило: экран показывал
+    // «Загружаем заказы» бесконечно, а причина — «сессия кончилась» —
+    // лежала рядом непоказанной.
+    return error === ''
+      ? <p className="note">Загружаем заказы…</p>
+      : <p className="note note--error">{error}</p>;
   }
 
   return (
