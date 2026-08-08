@@ -60,6 +60,7 @@ public class OrganizationService {
     public Warehouse createWarehouse(Long branchId, String name) {
         requireName(name, "Название склада");
         Long branch = branchId != null ? branchId : soleBranch();
+        requireExists("branch", branch, "Филиал не найден: ");
 
         Long id = jdbc.queryForObject(
                 "INSERT INTO warehouse (branch_id, name) VALUES (?, ?) RETURNING id",
@@ -108,6 +109,7 @@ public class OrganizationService {
         if (codes == null || codes.isEmpty()) {
             throw new IllegalArgumentException("Не указано ни одной ячейки");
         }
+        requireExists("warehouse", warehouseId, "Склад не найден: ");
         List<Cell> created = new ArrayList<>();
 
         for (String raw : codes) {
@@ -135,6 +137,28 @@ public class OrganizationService {
     private static Cell cell(ResultSet rs, int row) throws SQLException {
         return new Cell(rs.getLong("id"), rs.getString("code"),
                 rs.getString("zone"), rs.getBoolean("is_active"));
+    }
+
+    /**
+     * Ссылка обязана существовать, и сказать об этом надо словами.
+     *
+     * <p>Иначе чужой номер доезжает до внешнего ключа и возвращается как
+     * «Операция нарушает целостность данных»: владелец, заводящий склад
+     * или стеллаж, идёт искать поломку сервера вместо того, чтобы
+     * посмотреть, что он выбрал.
+     *
+     * <p>Имя таблицы подставляется текстом, и это безопасно: оно приходит
+     * из этого же класса, а не из запроса. Параметром таблицу не задать.
+     */
+    private void requireExists(String table, Long id, String complaint) {
+        if (id == null) {
+            return;
+        }
+        Integer found = jdbc.queryForObject(
+                "SELECT count(*) FROM " + table + " WHERE id = ?", Integer.class, id);
+        if (found == null || found == 0) {
+            throw new IllegalArgumentException(complaint + id);
+        }
     }
 
     private static void requireName(String name, String what) {

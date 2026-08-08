@@ -118,6 +118,46 @@ class OrganizationTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.name").value("Контейнерная площадка"));
     }
 
+    /**
+     * Чужие филиал и склад отбиваются словами, а не ограничением схемы.
+     *
+     * <p>Роль сотрудника проверяется белым списком и отказывает внятно,
+     * а чужой филиал и чужой склад доезжали до внешнего ключа: «Операция
+     * нарушает целостность данных». Владелец, заводящий склад или стеллаж,
+     * по такому ответу идёт искать поломку сервера вместо того, чтобы
+     * посмотреть, что он выбрал.
+     */
+    @Test
+    @DisplayName("Чужой филиал и чужой склад отказывают словами")
+    void unknownReferencesAreRefusedWithWords() throws Exception {
+        String code = tenant("Шестая разборка");
+        MockHttpSession session = login(code);
+
+        mvc.perform(post("/api/organization/warehouses").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Склад\",\"branchId\":999999}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("Филиал не найден")));
+
+        mvc.perform(post("/api/organization/warehouses/999999/cells").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"codes\":[\"А-01-1\"]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("Склад не найден")));
+
+        // Сотрудник в несуществующем филиале — то же самое.
+        mvc.perform(post("/api/members").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"login":"chuzhoy","password":"пароль-подлиннее",
+                                 "role":"SELLER","branchId":999999}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("Филиал не найден")));
+    }
+
     @Test
     @DisplayName("Продавец склады не заводит")
     void sellerCannotCreateWarehouse() throws Exception {
