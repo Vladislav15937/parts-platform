@@ -145,6 +145,43 @@ class PartUpdateTest extends PostgresTestBase {
     }
 
     /**
+     * «Выгружать» правят три пути, и роль у них одна.
+     *
+     * <p>Отметка есть в карточке, в правке списком и отдельным запросом
+     * списком номеров. Первые два были владельцу и менеджеру, третий —
+     * ещё и продавцу: то есть снять с площадки хоть весь склад он мог,
+     * а тронуть одну позицию через форму — нет. Снятое объявление уносит
+     * накопленные просмотры, а заметно это через дни по пустому прайсу.
+     *
+     * <p>Проверяются оба пути сразу: разойдясь снова, они дадут ровно ту же
+     * дыру, и увидеть её можно только сравнением.
+     */
+    @Test
+    @DisplayName("Продавец не снимает позиции с выгрузки ни одним из путей")
+    void publicationIsOwnerWork() throws Exception {
+        MockHttpSession seller = login("prodavec");
+
+        mvc.perform(post("/api/parts/publication").with(csrf()).session(seller)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"partIds\":[%d],\"published\":false}".formatted(partId)))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(post("/api/parts/catalog/bulk").with(csrf()).session(seller)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"changes\":{\"published\":false}}"))
+                .andExpect(status().isForbidden());
+
+        assertThat(publishedOf(partId)).as("позиция снята с выгрузки продавцом").isTrue();
+
+        // Владельцу — можно, иначе проверка запрещает саму работу.
+        mvc.perform(post("/api/parts/publication").with(csrf()).session(login("vladelec"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"partIds\":[%d],\"published\":false}".formatted(partId)))
+                .andExpect(status().isOk());
+        assertThat(publishedOf(partId)).isFalse();
+    }
+
+    /**
      * Снятый штрихкод — это NULL, а не пустая строка.
      *
      * <p>Пустых строк в уникальном индексе может быть только одна: сняв

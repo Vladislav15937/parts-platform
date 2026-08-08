@@ -119,22 +119,26 @@ class InventoryHttpTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.counted").value(1));
 
+        // Дальше сводит расхождения владелец: кладовщик обошёл полки
+        // и внёс факт, а списанная недостача — это убыток.
+        MockHttpSession owner = login("vladelec");
+
         // Вот этот путь и отдавал пятисотку: завершение строк не трогает,
         // а представление сессии их считает.
         mvc.perform(post("/api/inventory/sessions/%d/finish".formatted(sessionId))
-                        .with(csrf()).session(session))
+                        .with(csrf()).session(owner))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("COUNTED"))
                 .andExpect(jsonPath("$.lines").value(1));
 
         mvc.perform(get("/api/inventory/sessions/%d/discrepancies".formatted(sessionId))
-                        .session(session))
+                        .session(owner))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].delta").value(-1.0));
 
         mvc.perform(post("/api/inventory/sessions/%d/apply".formatted(sessionId))
-                        .with(csrf()).session(session))
+                        .with(csrf()).session(owner))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.adjusted").value(1))
                 // Пустой список — не украшение: экран по нему решает, показывать
@@ -155,6 +159,61 @@ class InventoryHttpTest extends PostgresTestBase {
         assertThat(movement.get("created_by")).as("движение без автора").isNotNull();
     }
 
+    /**
+     * Считать может любой, кто работает руками, а проводить — нет.
+     *
+     * <p>Проведение превращает недостачу в убыток: то же правило, по которому
+     * списывает владелец или менеджер, а не кладовщик. Экран это делал
+     * с самого начала — блок «Свести расхождения» показан владельцу
+     * и менеджеру, — а сервер не проверял ничего: правило жило в одном
+     * интерфейсе из двух. Продавец, зашедший запросом, открывал пересчёт,
+     * завершал его и проводил, то есть списывал недостачу по всему складу.
+     *
+     * <p>Поймано не чтением кода, а входом под каждой ролью и попыткой
+     * сделать ею всё подряд — тем же способом, что и дыра у «Просмотра».
+     */
+    @Test
+    @DisplayName("Продавец считает, но расхождения не сводит")
+    void countingIsNotReconciling() throws Exception {
+        MockHttpSession seller = login("prodavec");
+
+        String opened = mvc.perform(post("/api/inventory/sessions").with(csrf()).session(seller)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"warehouseId\":%d}".formatted(warehouseId)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        long sessionId = Long.parseLong(opened.replaceAll(".*\"id\":(\\d+).*", "$1"));
+
+        mvc.perform(post("/api/inventory/sessions/%d/counts".formatted(sessionId))
+                        .with(csrf()).session(seller)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"partId\":%d,\"qty\":0}".formatted(partId)))
+                .andExpect(status().isOk());
+
+        // Дальше — деньги, и продавцу туда нельзя. Посчитанный ноль это
+        // недостача: пройди проведение, склад бы её списал.
+        mvc.perform(post("/api/inventory/sessions/%d/finish".formatted(sessionId))
+                        .with(csrf()).session(seller))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/inventory/sessions/%d/discrepancies".formatted(sessionId))
+                        .session(seller))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/api/inventory/sessions/%d/apply".formatted(sessionId))
+                        .with(csrf()).session(seller))
+                .andExpect(status().isForbidden());
+
+        // Остаток на месте: проведения не было.
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT qty FROM part_stock WHERE part_id = ? AND warehouse_id = ?",
+                java.math.BigDecimal.class, partId, warehouseId)))
+                .as("недостачу списали в обход роли").isEqualByComparingTo("2");
+
+        // А владельцу — можно, иначе проверка запрещает саму работу.
+        mvc.perform(post("/api/inventory/sessions/%d/cancel".formatted(sessionId))
+                        .with(csrf()).session(login("vladelec")))
+                .andExpect(status().isOk());
+    }
+
     @Test
     @DisplayName("Открытая сессия склада отдаётся, а не пятисоткой")
     void openSessionIsReadable() throws Exception {
@@ -172,21 +231,34 @@ class InventoryHttpTest extends PostgresTestBase {
     }
 
     private void member() {
+        member("kladovshchik", "Кладовщик", "STOREKEEPER");
+        // Сводит расхождения не тот, кто считает: проведение превращает
+        // недостачу в убыток.
+        member("vladelec", "Владелец", "OWNER");
+        member("prodavec", "Продавец", "SELLER");
+    }
+
+    private void member(String login, String name, String role) {
         var found = jdbc.queryForList(
-                "SELECT id FROM tenant_member WHERE login = ?", Long.class, "kladovshchik");
+                "SELECT id FROM tenant_member WHERE login = ?", Long.class, login);
         if (found.isEmpty()) {
             jdbc.update("""
                     INSERT INTO tenant_member (display_name, role, login, password_hash)
-                    VALUES ('Кладовщик', 'STOREKEEPER', 'kladovshchik', ?)""",
-                    passwordEncoder.encode("пароль"));
+                    VALUES (?, ?, ?, ?)""",
+                    name, role, login, passwordEncoder.encode("пароль"));
         }
     }
 
     private MockHttpSession login() throws Exception {
+        return login("kladovshchik");
+    }
+
+    private MockHttpSession login(String who) throws Exception {
         var result = mvc.perform(post("/api/auth/login").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"company":"invco","login":"kladovshchik","password":"пароль"}"""))
+                                {"company":"invco","login":"%s","password":"пароль"}"""
+                                .formatted(who)))
                 .andExpect(status().isOk())
                 .andReturn();
         return (MockHttpSession) result.getRequest().getSession(false);

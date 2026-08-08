@@ -108,8 +108,14 @@ public class PartController {
      * и снимают, а «не выгружать» это отметка руками для битых и отложенных
      * под заказ.
      */
+    // Роль та же, что у правки списком и у карточки: «Выгружать» правят три
+    // пути, и разойдясь, они дают изменение, которое одному запрещено,
+    // а другим разрешено. Продавцу это было можно только здесь — то есть
+    // он мог снять с площадки хоть весь склад, а через форму и через отбор
+    // не мог тронуть ни одной позиции. Снятое объявление уносит с собой
+    // накопленные просмотры, и заметно это через дни по пустому прайсу.
     @PostMapping("/publication")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER','SELLER')")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public PublicationResult setPublication(@Valid @RequestBody PublicationRequest request) {
         return new PublicationResult(
                 partService.setPublished(request.partIds(), request.published()));

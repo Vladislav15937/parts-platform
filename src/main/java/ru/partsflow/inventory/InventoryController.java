@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,10 +29,27 @@ import java.util.List;
  * между позициями проходят минуты, и потерять час работы из-за одного
  * неудачного запроса нельзя. Момент подсчёта каждой позиции при этом важен
  * сам по себе: по нему считается расхождение.
+ *
+ * <p><b>Обход и сведение расхождений разведены по ролям.</b> Считать может
+ * любой, кто работает руками, — от этого ничего не списывается. А проведение
+ * превращает недостачу в убыток, и решение это принимает тот, кто отвечает
+ * за деньги: то же правило, по которому списывает владелец или менеджер,
+ * а не кладовщик.
+ *
+ * <p>Экран это делал с самого начала — блок «Свести расхождения» показан
+ * владельцу и менеджеру, — а сервер не проверял ничего: правило жило
+ * в одном интерфейсе из двух. Продавец, зашедший запросом, открывал пересчёт,
+ * завершал его и проводил, то есть списывал недостачу по всему складу.
  */
 @RestController
 @RequestMapping("/api/inventory")
 public class InventoryController {
+
+    /** Обход полок: считает тот, кто работает руками. */
+    private static final String COUNTS = "hasAnyRole('OWNER','MANAGER','STOREKEEPER','SELLER')";
+
+    /** Сведение расхождений: недостача превращается в убыток. */
+    private static final String RECONCILES = "hasAnyRole('OWNER','MANAGER')";
 
     private final InventoryService inventory;
 
@@ -39,6 +57,7 @@ public class InventoryController {
         this.inventory = inventory;
     }
 
+    @PreAuthorize(COUNTS)
     @PostMapping("/sessions")
     public ResponseEntity<SessionView> open(@Valid @RequestBody OpenRequest request) {
         InventorySession session = inventory.open(request.warehouseId(), CurrentUser.memberId());
@@ -46,6 +65,7 @@ public class InventoryController {
     }
 
     /** Фактическое количество по позиции. Ноль — это недостача, а не пропуск. */
+    @PreAuthorize(COUNTS)
     @PostMapping("/sessions/{id}/counts")
     public SessionView count(@PathVariable Long id, @Valid @RequestBody CountRequest request) {
         return SessionView.of(inventory.count(
@@ -53,6 +73,7 @@ public class InventoryController {
                 request.countedAgoMs() == null ? null : Duration.ofMillis(request.countedAgoMs())));
     }
 
+    @PreAuthorize(RECONCILES)
     @PostMapping("/sessions/{id}/finish")
     public SessionView finishCounting(@PathVariable Long id) {
         return SessionView.of(inventory.finishCounting(id));
@@ -64,12 +85,14 @@ public class InventoryController {
      * <p>Телефон забирает его целиком сразу после открытия сессии — пересчёт
      * идёт в ангаре без связи, и подгружать по мере обхода нечем.
      */
+    @PreAuthorize(COUNTS)
     @GetMapping("/sessions/{id}/lines")
     public List<InventoryService.Line> lines(@PathVariable Long id) {
         return inventory.lines(id);
     }
 
     /** Открытая инвентаризация склада: телефон подхватывает начатый обход. */
+    @PreAuthorize(COUNTS)
     @GetMapping("/sessions/open")
     public ResponseEntity<SessionView> openSession(@RequestParam Long warehouseId) {
         return inventory.openSessionOf(warehouseId)
@@ -82,17 +105,20 @@ public class InventoryController {
      * проведения: кладовщику можно показать итог, дать пересчитать спорные
      * полки и посмотреть снова.
      */
+    @PreAuthorize(RECONCILES)
     @GetMapping("/sessions/{id}/discrepancies")
     public List<InventoryService.DiscrepancyLine> discrepancies(@PathVariable Long id) {
         return inventory.discrepancies(id);
     }
 
+    @PreAuthorize(RECONCILES)
     @PostMapping("/sessions/{id}/apply")
     public AppliedView apply(@PathVariable Long id) {
         InventoryService.Applied applied = inventory.apply(id);
         return new AppliedView(id, applied.adjusted(), applied.blocked());
     }
 
+    @PreAuthorize(RECONCILES)
     @PostMapping("/sessions/{id}/cancel")
     public SessionView cancel(@PathVariable Long id) {
         return SessionView.of(inventory.cancel(id));
