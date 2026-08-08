@@ -15,6 +15,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -125,6 +126,63 @@ class InventoryServiceTest extends PostgresTestBase {
 
         assertThat(inTenant(() -> inventory.apply(sessionId)).adjusted()).isEqualTo(1);
         assertThat(qtyOf(partId, warehouse)).isEqualByComparingTo("3");
+    }
+
+    /**
+     * Одновременное проведение не списывает недостачу дважды.
+     *
+     * <p>Отметка {@code applied_at} на строке защищает от повтора, но читается
+     * она в начале транзакции: двойное нажатие или второй менеджер видят её
+     * пустой оба. Проверено на живом складе — остаток 20 при недостаче 2 стал
+     * 16 вместо 18, и оба ответа сказали «скорректировано 1». То есть пересчёт
+     * испортил склад тем самым действием, которым его чинят, и молча: ошибки
+     * не показал никто, а заметить это можно только следующим пересчётом.
+     *
+     * <p>Недостача берётся заведомо меньше половины остатка. С большой
+     * ошибка прячется: второму не хватает свободного, и его отбивает
+     * условие в {@code StockLedger} — то есть тест был бы зелёным при
+     * сломанном коде.
+     *
+     * <p>Проигравший получает то же, что и при последовательном повторе:
+     * «пересчёт уже проведён». Свой ответ на гонку означал бы, что одно
+     * и то же действие объясняется по-разному в зависимости от того,
+     * с какой скоростью нажали.
+     */
+    @Test
+    @DisplayName("Одновременное проведение пересчёта списывает недостачу один раз")
+    void concurrentApplyWritesTheShortageOnce() throws Exception {
+        Long partId = partWithStock("Радиатор одновременный", 20);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("18"), null));
+        inTenant(() -> inventory.finishCounting(sessionId));
+
+        java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(2);
+        List<Integer> adjusted = java.util.Collections.synchronizedList(new ArrayList<>());
+        List<Throwable> refused = java.util.Collections.synchronizedList(new ArrayList<>());
+        Runnable applying = () -> {
+            try {
+                together.await();
+                adjusted.add(inTenant(() -> inventory.apply(sessionId)).adjusted());
+            } catch (Throwable e) {
+                refused.add(e);
+            }
+        };
+
+        Thread first = new Thread(applying);
+        Thread second = new Thread(applying);
+        first.start();
+        second.start();
+        first.join();
+        second.join();
+
+        assertThat(qtyOf(partId, warehouse))
+                .as("недостача списана дважды: пересчёт испортил склад")
+                .isEqualByComparingTo("18");
+        assertThat(adjusted).as("прошли оба").containsExactly(1);
+        // Отказ по правилу, то есть 409, а не поломка сервера: пятисотку
+        // офлайн-очередь повторяет вечно.
+        assertThat(refused).singleElement().isInstanceOf(IllegalStateException.class);
+        assertThat(refused.get(0)).hasMessageContaining("завершённый пересчёт");
     }
 
     /**

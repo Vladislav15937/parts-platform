@@ -317,7 +317,11 @@ public class InventoryService {
      */
     @Transactional
     public Applied apply(Long sessionId) {
-        InventorySession session = require(sessionId);
+        // Строка сессии берётся под блокировку: отметку applied_at два
+        // одновременных проведения читают пустой оба и списывают недостачу
+        // дважды. Подробности — у findByIdForUpdate.
+        InventorySession session = sessions.findByIdForUpdate(sessionId).orElseThrow(
+                () -> new IllegalArgumentException("Инвентаризация не найдена: " + sessionId));
         Instant now = Instant.now();
 
         int adjusted = 0;
