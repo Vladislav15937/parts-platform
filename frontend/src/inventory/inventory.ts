@@ -189,6 +189,19 @@ export function applySession(sessionId: number): Promise<Applied> {
   return request<Applied>(`/api/inventory/sessions/${sessionId}/apply`, { method: 'POST' });
 }
 
+/**
+ * Отменяет сессию, не трогая склад.
+ *
+ * <p>Единственный выход из ошибочно открытой инвентаризации: вторую на том же
+ * складе открыть нельзя — две дадут двойную корректировку, — и кладовщик,
+ * выбравший не тот склад, запирал пересчёт на нём насовсем.
+ */
+export function cancelSession(sessionId: number): Promise<InventorySession> {
+  return request<InventorySession>(`/api/inventory/sessions/${sessionId}/cancel`, {
+    method: 'POST',
+  });
+}
+
 export function linesOfSession(sessionId: number): Promise<InventoryLine[]> {
   return request<InventoryLine[]>(`/api/inventory/sessions/${sessionId}/lines`);
 }
