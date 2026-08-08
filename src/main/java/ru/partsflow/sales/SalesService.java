@@ -829,6 +829,14 @@ public class SalesService {
         if (amount == null || amount.signum() <= 0) {
             throw new IllegalArgumentException("Сумма зачёта должна быть больше нуля");
         }
+        // Сначала сделка, потом клиент — порядок обязателен. Отмена, возврат
+        // и приём денег пишут запись счёта уже после того, как Hibernate
+        // отправил правку сделки, то есть держат строку сделки и просят
+        // клиента (внешний ключ берёт на нём FOR KEY SHARE). Возьми мы клиента
+        // первым, два продавца по одной сделке встали бы друг против друга
+        // насмерть, и Postgres убил бы одного из них.
+        lockDeal(dealId);
+        lockCustomer(deal.getCustomerId());
 
         BigDecimal balance = accountBalance(deal.getCustomerId());
         if (balance.compareTo(amount) < 0) {
@@ -875,7 +883,7 @@ public class SalesService {
     @Transactional
     public CustomerAccountEntry withdrawFromAccount(Long customerId, BigDecimal amount,
                                                     Long paymentSourceId, Long managerId) {
-        requireExistingCustomer(customerId);
+        lockCustomer(customerId);
         if (amount == null || amount.signum() <= 0) {
             throw new IllegalArgumentException("Сумма выдачи должна быть больше нуля");
         }
@@ -927,7 +935,7 @@ public class SalesService {
     @Transactional
     public CustomerAccountEntry correctAccount(Long customerId, BigDecimal amount,
                                                String reason, Long managerId) {
-        requireExistingCustomer(customerId);
+        lockCustomer(customerId);
         if (amount == null || amount.signum() == 0) {
             throw new IllegalArgumentException("Правка на ноль ничего не меняет");
         }
@@ -1058,6 +1066,38 @@ public class SalesService {
         if (found == null || found == 0) {
             throw new IllegalArgumentException("Клиент не найден: " + customerId);
         }
+    }
+
+    /**
+     * Клиент под блокировкой строки: для всего, что смотрит на остаток счёта
+     * и потом пишет.
+     *
+     * <p>Остаток считается по журналу — а значит проверка «хватает» и запись
+     * это два действия, и между ними встаёт второй продавец. Замерено живьём:
+     * счёт в 1000 ₽ и две одновременные выдачи по 1000 дали **два расхода
+     * по 1000**, остаток минус тысяча и два нарушения в
+     * {@code v_account_discrepancy}. Оба ответа при этом 201 — продавец
+     * дважды увидел успех, а деньги ушли настоящие.
+     *
+     * <p>Инструкцией это не закрыть, в отличие от остатка склада. Там условие
+     * ставится в {@code WHERE} у {@code UPDATE}, и Postgres перечитывает
+     * строку после снятия блокировки; здесь мы **вставляем** запись, блокировать
+     * нечего, и условие в insert проверялось бы по своему снимку, не видя
+     * чужой невидимой строки. Поэтому строка клиента — та самая точка,
+     * за которую операции счёта выстраиваются в очередь.
+     *
+     * <p>Берётся она **до** сделки во всех трёх местах: обратный порядок
+     * с чем-нибудь, что идёт от сделки к счёту, даёт взаимную блокировку.
+     */
+    private void lockCustomer(Long customerId) {
+        requireExistingCustomer(customerId);
+        jdbc.queryForObject("SELECT id FROM customer WHERE id = ? FOR UPDATE",
+                Long.class, customerId);
+    }
+
+    /** Строка сделки: берётся перед клиентом, чтобы порядок был один у всех. */
+    private void lockDeal(Long dealId) {
+        jdbc.queryForObject("SELECT id FROM deal WHERE id = ? FOR UPDATE", Long.class, dealId);
     }
 
     /** Источник сделки — из справочника; пусто значит «не указан». */

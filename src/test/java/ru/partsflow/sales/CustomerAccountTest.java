@@ -194,6 +194,56 @@ class CustomerAccountTest extends PostgresTestBase {
                 .isEqualByComparingTo("1200");
     }
 
+    /**
+     * Двое выдают со счёта одновременно — деньги уходят один раз.
+     *
+     * <p>Остаток счёта считается по журналу, и это значит, что «хватает ли»
+     * и «записываем» — два действия: между ними встаёт второй продавец.
+     * Замерено живьём: счёт в 1000 ₽ и две одновременные выдачи по 1000 дали
+     * два расхода по 1000, остаток минус тысяча и два нарушения
+     * в {@code v_account_discrepancy}. Оба ответа при этом 201 — продавец
+     * дважды увидел успех, а деньги ушли настоящие.
+     *
+     * <p>Инструкцией это не закрыть, в отличие от остатка склада: там условие
+     * стоит в {@code WHERE} у {@code UPDATE} и Postgres перечитывает строку
+     * после блокировки, здесь же запись **вставляется**, и блокировать нечего.
+     */
+    @Test
+    @DisplayName("Одновременные выдачи не уводят счёт в минус")
+    void concurrentWithdrawalsCannotOverdrawTheAccount() throws Exception {
+        inTenant(() -> sales.topUpAccount(customerId, new BigDecimal("1000"), null, managerId));
+
+        java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(2);
+        List<Throwable> refused =
+                java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        Runnable withdrawing = () -> {
+            try {
+                together.await();
+                inTenant(() -> sales.withdrawFromAccount(
+                        customerId, new BigDecimal("1000"), null, managerId));
+            } catch (Throwable e) {
+                refused.add(e);
+            }
+        };
+
+        Thread first = new Thread(withdrawing);
+        Thread second = new Thread(withdrawing);
+        first.start();
+        second.start();
+        first.join();
+        second.join();
+
+        assertThat(inTenant(() -> sales.accountBalance(customerId)))
+                .as("со счёта выдали дважды то, что лежало один раз")
+                .isEqualByComparingTo("0");
+        assertThat(refused).as("прошли обе выдачи").hasSize(1);
+        assertThat(refused.get(0)).hasMessageContaining("выдать просят");
+        // Сверка денег обязана быть пустой: отрицательный остаток — первое
+        // из пяти нарушений, которые она ловит.
+        assertThat(inTenant(() -> jdbc.queryForList("SELECT * FROM v_account_discrepancy")))
+                .as("сверка денег перестала быть пустой").isEmpty();
+    }
+
     @Test
     @DisplayName("Больше остатка со счёта не выдать")
     void cannotWithdrawMoreThanBalance() {
