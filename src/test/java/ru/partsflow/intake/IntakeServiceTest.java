@@ -190,6 +190,31 @@ class IntakeServiceTest extends PostgresTestBase {
                 .isZero();
     }
 
+    /**
+     * Несуществующий склад отбивается словами, а не ограничением схемы.
+     *
+     * <p>Поставка и машина проверялись, склад — нет: он доезжал до внешнего
+     * ключа и возвращался как «Операция нарушает целостность данных».
+     * Приёмщик по такому ответу идёт искать поломку сервера, а офлайн-очередь
+     * читает 409 как отказ по существу и уводит партию в «требует внимания» —
+     * работа смены встаёт на сообщении, из которого не понять, что делать.
+     *
+     * <p>Случай не выдуманный: склад могли выключить, пока телефон был
+     * без связи, а в теле записи очереди лежит его прежний номер.
+     */
+    @Test
+    @DisplayName("Приёмка на несуществующий склад отказывает словами")
+    void unknownWarehouseIsRefusedWithWords() {
+        assertThatThrownBy(() -> inTenant(() -> intake.receive(
+                999_999L, null, null,
+                List.of(new IntakeService.ItemRequest("фара", BigDecimal.ONE,
+                        new BigDecimal("100"), null, null, null, null, null,
+                        PartCondition.USED, null, null, null, null, null)),
+                null, uniqueRequestId())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Склад не найден");
+    }
+
     @Test
     @DisplayName("Карточки возвращаются в порядке позиций запроса")
     void partsFollowRequestOrder() {

@@ -165,6 +165,7 @@ public class IntakeService {
             return alreadyDone;
         }
 
+        requireWarehouse(warehouseId);
         if (supplyId != null) {
             requireSupply(supplyId);
         }
@@ -313,6 +314,30 @@ public class IntakeService {
                 .map(ru.partsflow.inventory.StockDocumentLine::getPartId)
                 .toList();
         return parts.findAllById(partIds);
+    }
+
+    /**
+     * Склад обязан существовать, и сказать об этом надо словами.
+     *
+     * <p>Поставка и машина проверялись, склад — нет: он доезжал до внешнего
+     * ключа и возвращался как «Операция нарушает целостность данных».
+     * Приёмщик по такому ответу идёт искать поломку сервера, а офлайн-очередь
+     * читает 409 как отказ по существу и уводит партию в «требует внимания» —
+     * то есть работа смены останавливается на сообщении, из которого
+     * не понять, что делать.
+     *
+     * <p>Случай не выдуманный: склад могли выключить, пока телефон был
+     * без связи, а в теле записи очереди лежит его прежний номер.
+     */
+    private void requireWarehouse(Long warehouseId) {
+        if (warehouseId == null) {
+            throw new IllegalArgumentException("Не указан склад приёмки");
+        }
+        Integer found = jdbc.queryForObject(
+                "SELECT count(*) FROM warehouse WHERE id = ?", Integer.class, warehouseId);
+        if (found == null || found == 0) {
+            throw new IllegalArgumentException("Склад не найден: " + warehouseId);
+        }
     }
 
     private Supply requireSupply(Long supplyId) {
