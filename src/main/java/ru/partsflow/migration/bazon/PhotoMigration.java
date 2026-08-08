@@ -87,7 +87,7 @@ public class PhotoMigration {
                 transfer(task);
                 done++;
             } catch (Exception e) {
-                markFailed(task.id(), e.getMessage());
+                markFailed(task.id(), reason(e));
                 failed++;
             }
         }
@@ -187,7 +187,39 @@ public class PhotoMigration {
     private void markFailed(long id, String reason) {
         transactions.executeWithoutResult(status -> jdbc.update("""
                 UPDATE part_photo_import SET status = 'FAILED', error = ?, done_at = now()
-                 WHERE id = ?""", reason == null ? "неизвестная ошибка" : reason, id));
+                 WHERE id = ?""", reason, id));
+    }
+
+    /**
+     * Причина отказа словами.
+     *
+     * <p><b>Зачем.</b> Соседняя кнопка возвращает неудачные в очередь, и решение
+     * «нажимать или не нажимать» целиком зависит от причины: лежавший CDN
+     * чинится повтором, удалённый файл — нет, а закрытая наружу сеть означает,
+     * что чинить надо не здесь. Пока причина бралась из {@code getMessage()},
+     * этого решения принять было нельзя: у отказа соединения сообщение пустое,
+     * и все двести заданий получали «неизвестная ошибка».
+     *
+     * <p>Поймано прогоном подключения: CDN прежней системы перестал отвечать
+     * на обоих портах, и перенос двухсот снимков отчитался ровно ничем.
+     */
+    static String reason(Throwable e) {
+        if (e instanceof java.net.UnknownHostException) {
+            return "источник не найден по имени: " + e.getMessage();
+        }
+        if (e instanceof java.net.ConnectException
+                || e instanceof java.net.http.HttpConnectTimeoutException) {
+            // Сообщения у этих исключений может не быть вовсе, а сказать надо:
+            // «не отвечает» — это про повтор, а не про новые ссылки.
+            return "источник не отвечает (" + e.getClass().getSimpleName() + ")";
+        }
+        if (e instanceof java.net.http.HttpTimeoutException) {
+            return "источник не ответил вовремя";
+        }
+        String message = e.getMessage();
+        return message == null || message.isBlank()
+                ? e.getClass().getSimpleName()
+                : message;
     }
 
     private long countBy(String status) {
