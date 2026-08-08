@@ -272,7 +272,13 @@ public class PartService {
         part.setManufacturer(update.manufacturer());
         part.setColor(update.color());
         part.setSection(update.section());
-        part.setBarcode(update.barcode());
+        requireFreeBarcode(partId, update.barcode());
+        // Пустое — это «штрихкода нет», то есть NULL, а не пустая строка.
+        // Пустых строк в уникальном индексе может быть только одна: сняв
+        // штрихкод с одной позиции, владелец на второй получал «Операция
+        // нарушает целостность данных» — при том что ничего не задвоил.
+        // NULL же в Postgres друг с другом не сталкиваются.
+        part.setBarcode(blankToNull(update.barcode()));
         part.setWeightKg(update.weightKg());
         part.setDimensionsMm(update.lengthMm(), update.widthMm(), update.heightMm());
         part.setPackageDimensionsMm(update.packageLengthMm(), update.packageWidthMm(),
@@ -403,6 +409,32 @@ public class PartService {
             "price", "minPrice", "costPrice", "installationPrice", "qualityGrade",
             "description", "note", "textBlock", "marking", "manufacturer", "color",
             "section", "published");
+
+    /**
+     * Штрихкод не должен стоять у двух позиций сразу.
+     *
+     * <p>Уникальность стережёт индекс, а проверка нужна ради текста: владелец
+     * вводит штрихкод с этикетки, и «Операция нарушает целостность данных»
+     * не говорит ни что случилось, ни у какой позиции этот код уже стоит.
+     * Позиция называется публичным кодом, а не номером в базе: по нему её
+     * можно найти на витрине, по внутреннему номеру — нельзя.
+     */
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.strip();
+    }
+
+    private void requireFreeBarcode(Long partId, String barcode) {
+        if (barcode == null || barcode.isBlank()) {
+            return;
+        }
+        List<String> taken = jdbc.queryForList(
+                "SELECT public_code FROM part WHERE barcode = ? AND id <> ?",
+                String.class, barcode.strip(), partId);
+        if (!taken.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Штрихкод «%s» уже стоит у позиции %s".formatted(barcode.strip(), taken.get(0)));
+        }
+    }
 
     private static BigDecimal decimal(Object value) {
         if (value == null || String.valueOf(value).isBlank()) {

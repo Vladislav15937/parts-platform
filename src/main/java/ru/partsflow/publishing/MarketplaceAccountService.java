@@ -147,6 +147,22 @@ public class MarketplaceAccountService {
             throw new IllegalArgumentException("Выгрузка бывает по запчастям или по колёсам: "
                     + productLine);
         }
+        // Название уникально в пределах площадки, и стережёт это индекс.
+        // Но у владельца прайс-листов на Дром пять («новые», «низкая»,
+        // «средняя»…), названия он придумывает сам и рано или поздно
+        // повторится — а ответ «Операция нарушает целостность данных»
+        // не говорит ни что случилось, ни что делать. Проверка ради текста,
+        // сторожем остаётся индекс.
+        Integer taken = jdbc.queryForObject("""
+                SELECT count(*) FROM marketplace_account
+                 WHERE marketplace = ? AND title = ?""",
+                Integer.class, marketplace, title.strip());
+        if (taken != null && taken > 0) {
+            throw new IllegalArgumentException(
+                    "Выгрузка «%s» на этой площадке уже заведена: у названия своя ссылка "
+                            .formatted(title.strip()) + "на прайс, и двух одинаковых быть не может");
+        }
+
         Long id = jdbc.queryForObject("""
                 INSERT INTO marketplace_account (marketplace, title, settings, product_line)
                 VALUES (?, ?, COALESCE(?::jsonb, '{}'::jsonb), ?)

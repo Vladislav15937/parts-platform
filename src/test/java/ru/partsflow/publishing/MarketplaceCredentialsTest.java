@@ -163,6 +163,35 @@ class MarketplaceCredentialsTest extends PostgresTestBase {
                 .andExpect(jsonPath("$[0].plaintextSecret").value(true));
     }
 
+    /**
+     * Занятое название выгрузки объясняется словами.
+     *
+     * <p>У владельца прайс-листов на Дром пять — «новые», «низкая», «средняя»
+     * и так далее, — названия он придумывает сам и рано или поздно повторится.
+     * Уникальность стережёт индекс, и это верно: у каждой выгрузки своя ссылка
+     * на прайс. Но ответ «Операция нарушает целостность данных» не говорит
+     * ни что случилось, ни что делать — владелец идёт искать поломку сервера
+     * вместо того, чтобы переименовать.
+     */
+    @Test
+    @DisplayName("Второй прайс с тем же названием отказывает словами")
+    void duplicateTitleIsExplained() throws Exception {
+        mvc.perform(post("/api/marketplace-accounts").with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"marketplace\":\"DROM\",\"title\":\"Кабинет\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("уже заведена")));
+
+        // Название занято на этой площадке, а не вообще: на Авито оно
+        // свободно, и запрещать его там значило бы придумать ограничение,
+        // которого в схеме нет.
+        mvc.perform(post("/api/marketplace-accounts").with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"marketplace\":\"AVITO\",\"title\":\"Кабинет\"}"))
+                .andExpect(status().isCreated());
+    }
+
     @Test
     @DisplayName("Пустой ключ не принимается")
     void blankSecretIsRejected() throws Exception {
