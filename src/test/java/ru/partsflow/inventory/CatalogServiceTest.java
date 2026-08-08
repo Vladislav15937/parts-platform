@@ -273,6 +273,46 @@ class CatalogServiceTest extends PostgresTestBase {
         assertThat(secondByCursor.total()).isEqualTo(secondByOffset.total());
     }
 
+    /**
+     * Страницы не теряют строк при сортировке по неуникальной колонке.
+     *
+     * <p>Все колонки витрины, кроме номера товара, неуникальны — цена
+     * повторяется у сотен позиций. Без вторичного ключа полного порядка нет:
+     * строки с одинаковой ценой база вправе вернуть в любой
+     * последовательности, и между запросами соседних страниц она меняется.
+     * Часть позиций попадает на обе страницы, ровно столько же — никуда.
+     *
+     * <p>Замерено на живом складе: «фара» отдаёт 744 позиции, и за пятнадцать
+     * страниц по сортировке «цена» набиралось 744 строки при 721 уникальной.
+     * Двадцать три показаны дважды, двадцать три не показаны вовсе — узнать
+     * об этом по экрану нельзя никак, а выгрузка идёт тем же порядком.
+     */
+    @Test
+    @DisplayName("Обход страниц по цене не теряет и не двоит позиции")
+    void pagingByPriceCoversEveryRow() {
+        // Одна и та же цена у всех: так выглядит склад, где половина мелочи
+        // стоит пятьсот рублей.
+        for (int i = 0; i < 24; i++) {
+            partPriced("Одинаковая цена " + i, new java.math.BigDecimal("500"));
+        }
+
+        java.util.List<Long> seen = new java.util.ArrayList<>();
+        for (int page = 0; page < 40; page++) {
+            int at = page;
+            var rows = inTenant(() -> catalog.list("Одинаковая цена", true, true, List.of(), null,
+                    Map.of(), Map.of(), "price", true, at, 5, null)).rows();
+            if (rows.isEmpty()) {
+                break;
+            }
+            rows.forEach(row -> seen.add(row.id()));
+        }
+
+        assertThat(seen).as("страницы вернули разное число строк").hasSize(24);
+        assertThat(new java.util.HashSet<>(seen))
+                .as("позиции потерялись между страницами или показаны дважды")
+                .hasSize(24);
+    }
+
     @Test
     @DisplayName("По колонке с пустыми значениями курсор не применяется")
     void cursorIsIgnoredForNullableSort() {
@@ -507,6 +547,16 @@ class CatalogServiceTest extends PostgresTestBase {
 
     private static List<String> codes(CatalogService.Page page) {
         return page.rows().stream().map(CatalogService.Row::code).toList();
+    }
+
+    private Long partPriced(String title, java.math.BigDecimal price) {
+        return inTenant(() -> {
+            Long id = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price) VALUES (1, ?, ?)
+                    RETURNING id""", Long.class, title, price);
+            ledger.record(StockMovement.intake(id, java.math.BigDecimal.ONE, warehouseId, null));
+            return id;
+        });
     }
 
     private Long part(String title, int qty) {

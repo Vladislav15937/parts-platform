@@ -54,6 +54,32 @@ public class CatalogService {
             Map.entry("manufacturer", "p.manufacturer"),
             Map.entry("section", "p.section"));
 
+    /**
+     * Порядок строк с вторичным ключом.
+     *
+     * <p>Без него сортировка по неуникальной колонке — а такие все, кроме
+     * номера товара, — не задаёт полного порядка: строки с одинаковой ценой
+     * база вправе вернуть в любой последовательности, и между запросами
+     * двух соседних страниц эта последовательность меняется. Часть позиций
+     * тогда попадает на обе страницы, ровно столько же не попадает никуда.
+     *
+     * <p>Замерено на живом складе: поиск «фара» отдаёт 744 позиции, и, пройдя
+     * все пятнадцать страниц по сортировке «цена», владелец видит 744 строки,
+     * из которых уникальных только 721. Двадцать три позиции показаны дважды,
+     * двадцать три не показаны вовсе — и узнать об этом по экрану нельзя
+     * никак. Выгрузка идёт тем же порядком, значит и в файле их не будет.
+     *
+     * <p>У вкладки колёс это сделано с самого начала: там {@code ORDER BY}
+     * заканчивается на {@code p.id DESC}.
+     */
+    private static String orderBy(String sort, boolean descending) {
+        String column = SORTS.getOrDefault(sort, "p.id");
+        String direction = descending ? " DESC" : " ASC";
+        return column.equals("p.id")
+                ? column + direction
+                : column + direction + ", p.id" + direction;
+    }
+
     private static final Map<String, String> SIDE_FR =
             Map.of("FRONT", "Перед.", "REAR", "Задн.");
 
@@ -558,7 +584,7 @@ public class CatalogService {
         Long total = jdbc.queryForObject("SELECT count(*)" + joins + where, Long.class,
                 args.toArray());
 
-        String order = SORTS.getOrDefault(sort, "p.id") + (descending ? " DESC" : " ASC");
+        String order = orderBy(sort, descending);
         List<Object> pageArgs = new ArrayList<>(args);
 
         // Отступом или от последней строки предыдущей страницы.
@@ -764,7 +790,7 @@ public class CatalogService {
 
         Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
                 columns, words);
-        String order = SORTS.getOrDefault(sort, "p.id") + (descending ? " DESC" : " ASC");
+        String order = orderBy(sort, descending);
 
         StringBuilder stock = new StringBuilder();
         for (Warehouse warehouse : warehouses) {
