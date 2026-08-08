@@ -103,15 +103,31 @@ public class SalesController {
     @PostMapping("/orders")
     @PreAuthorize(SELLS)
     public ResponseEntity<OrderView> receiveOrder(@Valid @RequestBody OrderRequest request) {
-        SalesService.AcceptedOrder accepted = sales.registerMarketplaceOrder(
-                request.marketplace(), request.orderNo(), request.replyDeadline(),
-                request.customerId(), CurrentUser.memberId(), request.dealSourceId(),
-                request.deliveryNote(), request.reservedUntil(),
-                request.items().stream()
-                        .map(i -> new SalesService.ItemRequest(
-                                i.partId(), i.quantity(), i.price(), i.warehouseId()))
-                        .toList(),
-                servicesOf(request.services()));
+        SalesService.AcceptedOrder accepted;
+        try {
+            accepted = sales.registerMarketplaceOrder(
+                    request.marketplace(), request.orderNo(), request.replyDeadline(),
+                    request.customerId(), CurrentUser.memberId(), request.dealSourceId(),
+                    request.deliveryNote(), request.reservedUntil(),
+                    request.items().stream()
+                            .map(i -> new SalesService.ItemRequest(
+                                    i.partId(), i.quantity(), i.price(), i.warehouseId()))
+                            .toList(),
+                    servicesOf(request.services()));
+        } catch (org.springframework.dao.DataIntegrityViolationException conflict) {
+            // Одновременный повтор: первый запрос успел завести сделку, второй
+            // упёрся в deal_external_order_uk. Заказ при этом принят и товар
+            // отложен — отвечать «нарушает целостность данных» продавцу,
+            // нажавшему «Принять заказ» второй раз, значит послать его искать
+            // поломку сервера. Та же половина защиты, что была у приёмки.
+            SalesService.AcceptedOrder done = sales.replayOrderAfterConflict(
+                    request.marketplace(), request.orderNo() == null
+                            ? null : request.orderNo().strip());
+            if (done == null) {
+                throw conflict;
+            }
+            accepted = done;
+        }
 
         OrderView body = new OrderView(view(accepted.deal()), accepted.replayed(),
                 accepted.missing());

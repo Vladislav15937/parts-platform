@@ -253,6 +253,16 @@ public class SalesService {
      * и сейчас (продавец завёл заказ дважды), и позже, когда заказы поедут
      * из API площадки: доставка там будет at-least-once, как и всюду.
      *
+     * <p><b>Одновременный повтор проверку не проходит, и это половина
+     * защиты.</b> Между чтением и вставкой второй запрос ещё ничего не видит:
+     * дубля не появляется — его отбивает {@code deal_external_order_uk}, —
+     * но наружу летело «Операция нарушает целостность данных». Продавец
+     * нажимает «Принять заказ» второй раз, потому что первое нажатие
+     * не показало результата, и получает ответ про поломку сервера на заказ,
+     * который уже принят. {@link #replayOrderAfterConflict} перечитывает
+     * прежнюю сделку и отдаёт её — то же лечение, что у приёмки и у ссылки
+     * на снимок, и болезнь одна.
+     *
      * @param replyDeadline до какого момента площадка ждёт ответа; у Дрома
      *                      по защищённой сделке это трое рабочих суток,
      *                      после чего деньги возвращаются покупателю
@@ -270,18 +280,21 @@ public class SalesService {
         if (items == null || items.isEmpty()) {
             throw new IllegalArgumentException("В заказе нет позиций");
         }
+        // Обрезается один раз и на всё: пишется в сделку обрезанный номер,
+        // а искался прежде тот, что пришёл, — номер с лишним пробелом
+        // не находил своей же сделки и уходил на повторное заведение.
+        String number = orderNo.strip();
 
-        Deal existing = dealRepository.findByMarketplaceAndExternalOrderNo(marketplace, orderNo)
-                .orElse(null);
-        if (existing != null) {
-            return new AcceptedOrder(detachable(existing), true, List.of());
+        AcceptedOrder replayed = replayOrder(marketplace, number);
+        if (replayed != null) {
+            return replayed;
         }
 
         Deal deal = new Deal(customerId, managerId);
         deal.setCreatedBy(managerId);
         deal.setDealSourceId(dealSourceId);
         deal.setDeliveryNote(deliveryNote);
-        deal.fromMarketplace(marketplace, orderNo.strip(),
+        deal.fromMarketplace(marketplace, number,
                 replyDeadline != null ? replyDeadline : defaultReplyDeadline());
 
         for (ItemRequest item : items) {
@@ -417,6 +430,25 @@ public class SalesService {
      * @param missing  чего не хватило на складе; пусто — заказ обеспечен
      */
     public record AcceptedOrder(Deal deal, boolean replayed, List<String> missing) {
+    }
+
+    /**
+     * Прежняя сделка после одновременного повтора.
+     *
+     * <p>Читается новой транзакцией: та, в которой случилось нарушение
+     * уникальности, помечена на откат, и запрос из неё не пройдёт. Та же
+     * причина, что у {@code IntakeService.replayAfterConflict}.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
+                   readOnly = true)
+    public AcceptedOrder replayOrderAfterConflict(String marketplace, String orderNo) {
+        return replayOrder(marketplace, orderNo);
+    }
+
+    private AcceptedOrder replayOrder(String marketplace, String orderNo) {
+        return dealRepository.findByMarketplaceAndExternalOrderNo(marketplace, orderNo)
+                .map(existing -> new AcceptedOrder(detachable(existing), true, List.of()))
+                .orElse(null);
     }
 
     /**
