@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ApiError, ensureCsrfToken } from '../api/client';
+import { ApiError, ensureCsrfToken, refreshCsrfToken } from '../api/client';
 import * as auth from '../api/auth';
 import type { Credentials, Me } from '../api/auth';
 import { scopeTo } from '../storage/tenantScope';
@@ -112,7 +112,22 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = useCallback(async (credentials: Credentials) => {
-    await ensureCsrfToken();
+    /*
+     * Токен берётся заново, а не «если его нет».
+     *
+     * Cookie с токеном переживает сессию, которой он принадлежал: утром
+     * в браузере лежит вчерашний, `ensureCsrfToken` видит его и молчит,
+     * а сервер такой вход отвергает. И отвергает **401 с пустым телом** —
+     * ровно тем же ответом, что и неверный пароль: на входе человек ещё
+     * анонимен, поэтому отказ CSRF уходит через точку входа
+     * аутентификации, а не как 403. Значит ни человек, ни повтор
+     * по 403 в `request` отличить одно от другого не могут — владелец
+     * с верным паролем читает «неверный логин или пароль» и заперт
+     * снаружи, пока не догадается почистить cookie.
+     *
+     * Лишний запрос тут ничего не стоит: вход и так создаёт сессию заново.
+     */
+    await refreshCsrfToken();
     const current = await auth.login(credentials);
     rememberMe(current);
     await scopeTo(current.companySchema);
