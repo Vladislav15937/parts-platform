@@ -15,6 +15,7 @@ import {
   filterSummary,
   listFeeds,
   rotateFeedUrl,
+  setCredentials,
   setFilter,
   type Feed,
   type FeedFilter,
@@ -147,6 +148,7 @@ function FeedCard({
   const [conditions, setConditions] = useState<string[]>(feed.conditions);
   const [warehouseIds, setWarehouseIds] = useState<number[]>(feed.warehouseIds);
   const [link, setLink] = useState<FeedLink | null>(null);
+  const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState<number | null>(null);
 
@@ -353,8 +355,70 @@ function FeedCard({
           {feed.hasFeed ? 'Сменить ссылку' : 'Выдать ссылку'}
         </button>
       </details>
+
+      {/*
+        * Ключ синхронизации вводится здесь, и до этого его нельзя было
+        * ввести нигде.
+        *
+        * Экран рядом честно писал «ключ к ним Дром выдаёт по заявке»,
+        * а поля не было: `PUT /credentials` не звала ни одна строка
+        * фронтенда. Без ключа дельты не уходят вовсе — принятая деталь,
+        * подорожавшая или проданная, ждёт полного забора прайса, то есть
+        * до трёх суток на бесплатном размещении. Заметить это нельзя:
+        * очередь разгребается, `publication_log` пуст, и всё выглядит
+        * работающим.
+        *
+        * Поле всегда пустое: прочитать ключ нельзя ни одним эндпоинтом,
+        * и это часть защиты, а не недоделка. Состояние показывает
+        * `hasCredentials`.
+        */}
+      <details>
+        <summary>Ключ синхронизации {feed.hasCredentials ? '· задан' : '· не задан'}</summary>
+        <p className="note">
+          {feed.hasCredentials
+            ? 'Ключ хранится зашифрованным и наружу не отдаётся: показать его нельзя, можно только заменить.'
+            : 'Без ключа дельты по API не уходят: цена и остаток обновятся у площадки только с полным прайсом, а его забирают раз в трое суток.'}
+        </p>
+        <p className="note">
+          Ключ выдаёт поддержка Дрома по обращению — он один на кабинет,
+          выглядит как UUID и в кабинете площадки нигде не показывается.
+          Обновление по API включают отдельно каждому прайс-листу.
+        </p>
+        <label>
+          Ключ
+          <input
+            type="password"
+            value={secret}
+            autoComplete="off"
+            placeholder="00000000-0000-0000-0000-000000000000"
+            onChange={(e) => setSecret(e.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          disabled={busy || secret.trim() === ''}
+          onClick={() => void saveSecret()}
+        >
+          {feed.hasCredentials ? 'Заменить ключ' : 'Сохранить ключ'}
+        </button>
+      </details>
     </li>
   );
+
+  async function saveSecret(): Promise<void> {
+    setBusy(true);
+    try {
+      await setCredentials(feed.id, secret.trim());
+      // Поле чистим сразу: ключ прочитать нельзя, и оставленный в поле
+      // он выглядел бы как «мы его вам показываем».
+      setSecret('');
+      onChanged();
+    } catch (cause) {
+      onError(describe(cause, 'Ключ не сохранён'));
+    } finally {
+      setBusy(false);
+    }
+  }
 }
 
 /**
