@@ -105,7 +105,7 @@ public class PartNameService {
      */
     @Transactional(readOnly = true)
     public Page<PartName> unmatched(int page, int size) {
-        return repository.findByMatchStatusOrderByUsageCountDescCreatedAtDesc(
+        return repository.findByMatchStatusOrderByUsageCountDescCreatedAtDescIdDesc(
                 PartName.MatchStatus.UNMATCHED, PageRequest.of(page, size));
     }
 

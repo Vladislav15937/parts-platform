@@ -31,8 +31,17 @@ public interface PartNameRepository extends JpaRepository<PartName, Long> {
      * написания одной секундой, и внутри неё сортировка случайна. Счётчик
      * отвечает на вопрос, который задаёт владелец, — какое написание держит
      * двести карточек, а какое одну, заведённую вчера по ошибке.
+     *
+     * <p><b>Заканчивается номером записи, и это не украшение.</b> Число
+     * позиций и время создания оба неуникальны: у 353 написаний живого
+     * клиента счётчик равен единице, а заведены они одной секундой импорта.
+     * Полного порядка нет, и страницы начинают перекрываться — обход
+     * по двадцать штук отдал 679 строк при 579 уникальных: сотня написаний
+     * показана дважды, сотня не показана вовсе. Экран этого не видел, потому
+     * что тянет список с начала растущими кусками, но эндпоинт отдаёт
+     * неполноту любому, кто листает страницами.
      */
-    Page<PartName> findByMatchStatusOrderByUsageCountDescCreatedAtDesc(
+    Page<PartName> findByMatchStatusOrderByUsageCountDescCreatedAtDescIdDesc(
             PartName.MatchStatus status, Pageable pageable);
 
     long countByMatchStatus(PartName.MatchStatus status);
