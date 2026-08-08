@@ -126,6 +126,32 @@ export function importBazon(donors: File, catalog: File): Promise<BazonResult> {
   return upload<BazonResult>('/api/import/bazon', form);
 }
 
+/**
+ * Итог переноса шин и дисков.
+ *
+ * @param created карточек: комплект из четырёх — это четыре
+ * @param sets    строк файла, ставших комплектами
+ * @param skipped уже перенесённых раньше — повтор безопасен
+ */
+export interface WheelImportResult {
+  created: number;
+  sets: number;
+  skipped: number;
+  photos: number;
+  problems: string[];
+}
+
+/**
+ * Колёса переезжают отдельным файлом: у Bazon они на своей вкладке
+ * и в выгрузку товаров не попадают вовсе.
+ */
+export function importWheels(file: File, warehouseId: number): Promise<WheelImportResult> {
+  const form = new FormData();
+  form.append('wheels', file);
+  form.append('warehouseId', String(warehouseId));
+  return upload<WheelImportResult>('/api/import/bazon/wheels', form);
+}
+
 /** Сколько фотографий перенесено, сколько не вышло и сколько ждёт. */
 export interface PhotoProgress {
   done: number;

@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
-import { count } from '../ui/plural';
+import { count, plural } from '../ui/plural';
 import {
   duplicateColumns,
   FIELDS,
   applicabilityFromTitles,
   importBazon,
   importFile,
+  importWheels,
   migratePhotos,
   photoStatus,
   retryPhotos,
@@ -17,6 +18,7 @@ import type {
   BazonResult,
   FieldKey,
   ParsedApplicability,
+  WheelImportResult,
   PhotoProgress,
   Preview,
   Report,
@@ -240,6 +242,8 @@ export function ImportScreen({ reference, canImport }: Props) {
           что переносить нечего. Ровно так у живого клиента и осталось
           восемь снимков вместо ста девяноста тысяч. */}
       <BazonImport onImported={() => setImported((n) => n + 1)} />
+
+      <WheelImport reference={reference} />
       <AfterImport reload={imported} />
     </section>
   );
@@ -454,6 +458,103 @@ function AfterImport({ reload }: { reload: number }) {
       setError(describe(cause, 'Разбор применимости не прошёл'));
     } finally {
       setBusy(null);
+    }
+  }
+}
+
+/**
+ * Перенос шин и дисков — отдельным файлом.
+ *
+ * <p>Колёса лежат у Bazon на своей вкладке и в выгрузку товаров не попадают:
+ * в её сорока восьми колонках нет ни ширины, ни профиля, ни сезона. Пока
+ * этого блока не было, переехавший клиент терял весь колёсный склад —
+ * 65 позиций, 221 карточку с учётом комплектов, — и узнать об этом мог
+ * только по пустой вкладке «Шины и диски».
+ */
+function WheelImport({ reference }: { reference: Reference }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [warehouseId, setWarehouseId] = useState<number | null>(null);
+  const [result, setResult] = useState<WheelImportResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <>
+      <hr />
+      <h3>Шины и диски</h3>
+      <p className="note">
+        Третий файл из кабинета — выгрузка колёс. В выгрузке товаров их нет
+        вовсе: ни ширины, ни профиля, ни сезона там не бывает. Комплект
+        из четырёх станет четырьмя карточками, как и в кабинете.
+      </p>
+
+      <label>
+        Выгрузка шин и дисков
+        <input
+          type="file"
+          accept=".csv"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        />
+      </label>
+
+      {/* Склад спрашивается, а не подставляется: какой правильный, знает
+          только владелец, а уехавший не туда товар ищут глазами. */}
+      <label>
+        Склад
+        <select
+          value={warehouseId ?? ''}
+          onChange={(e) => setWarehouseId(
+            e.target.value === '' ? null : Number(e.target.value))}
+        >
+          <option value="">— выберите склад —</option>
+          {reference.warehouses.map((w) => (
+            <option key={w.id} value={w.id}>{w.name}</option>
+          ))}
+        </select>
+      </label>
+
+      {error !== null && <p className="note note--error">{error}</p>}
+
+      <button
+        type="button"
+        disabled={busy || file === null || warehouseId === null}
+        onClick={() => void run()}
+      >
+        {busy ? 'Переносим…' : 'Перенести колёса'}
+      </button>
+
+      {result !== null && (
+        <>
+          <p className="note">
+            Заведено карточек: {result.created} из {result.sets}{' '}
+            {plural(result.sets, 'строки', 'строк', 'строк')} файла
+            {result.skipped > 0 && `, пропущено уже перенесённых: ${result.skipped}`}
+            {result.photos > 0 && `, снимков в очередь: ${result.photos}`}.
+          </p>
+          {result.problems.length > 0 && (
+            <ul className="suggestions">
+              {result.problems.slice(0, 20).map((problem) => (
+                <li key={problem}>{problem}</li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </>
+  );
+
+  async function run(): Promise<void> {
+    if (file === null || warehouseId === null) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(await importWheels(file, warehouseId));
+    } catch (cause) {
+      setError(describe(cause, 'Перенос колёс не прошёл'));
+    } finally {
+      setBusy(false);
     }
   }
 }
