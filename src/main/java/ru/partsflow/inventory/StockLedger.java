@@ -85,22 +85,30 @@ public class StockLedger {
      */
     private void apply(StockMovement movement) {
         if (movement.getFromWarehouseId() != null) {
+            // Условие «хватает свободного» стоит в WHERE, а не проверяется
+            // раньше отдельным чтением: между чтением и записью встаёт второй
+            // кладовщик, и одну и ту же деталь списывают дважды. Вызывающие
+            // проверяют остаток заранее ради внятного текста, но сторожем
+            // остаётся эта инструкция — то же правило, что у резерва
+            // в StockReservationRepository.
+            //
+            // Свободный, а не общий: уронив qty ниже qty_reserved, мы обещали
+            // бы покупателю деталь, которой уже нет. Оба неравенства стоят
+            // и в схеме (part_stock_qty_ck, part_stock_reserved_ck), но
+            // нарушение схемы приезжает наружу пятисоткой, которую
+            // офлайн-очередь повторяет вечно.
             int updated = entityManager.createNativeQuery("""
                             UPDATE part_stock
                                SET qty = qty - abs(:delta), updated_at = now()
-                             WHERE part_id = :part AND warehouse_id = :warehouse""")
+                             WHERE part_id = :part AND warehouse_id = :warehouse
+                               AND qty - qty_reserved >= abs(:delta)""")
                     .setParameter("delta", movement.getQtyDelta())
                     .setParameter("part", movement.getPartId())
                     .setParameter("warehouse", movement.getFromWarehouseId())
                     .executeUpdate();
 
             if (updated == 0) {
-                // Строки раскладки нет вовсе — значит на этом складе детали
-                // и не было. Молча пропустив, мы получили бы журнал, по
-                // которому со склада уносили то, чего там нет.
-                throw new IllegalStateException(
-                        "Нет остатка детали %d на складе %d: списывать нечего"
-                                .formatted(movement.getPartId(), movement.getFromWarehouseId()));
+                throw shortage(movement);
             }
         }
 
@@ -120,6 +128,46 @@ public class StockLedger {
         }
 
         applyToPart(movement);
+    }
+
+    /**
+     * Объясняет, почему списание не прошло.
+     *
+     * <p>«Строки раскладки нет вовсе» и «свободного не хватило» — разные
+     * причины и разные действия: в первом случае деталь ищут на другом
+     * складе, во втором смотрят, кому она обещана. Один текст на оба
+     * отправлял бы кладовщика не туда.
+     */
+    private RuntimeException shortage(StockMovement movement) {
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                        SELECT qty, qty_reserved FROM part_stock
+                         WHERE part_id = :part AND warehouse_id = :warehouse""")
+                .setParameter("part", movement.getPartId())
+                .setParameter("warehouse", movement.getFromWarehouseId())
+                .getResultList();
+
+        if (rows.isEmpty()) {
+            // Молча пропустив, мы получили бы журнал, по которому со склада
+            // уносили то, чего там нет.
+            return new IllegalStateException(
+                    "Нет остатка детали %d на складе %d: списывать нечего"
+                            .formatted(movement.getPartId(), movement.getFromWarehouseId()));
+        }
+
+        BigDecimal qty = (BigDecimal) rows.get(0)[0];
+        BigDecimal reserved = (BigDecimal) rows.get(0)[1];
+        return new StockReservationRepository.InsufficientStockException(
+                "На складе %d свободно %s, а требуется %s: деталь %d"
+                        .formatted(movement.getFromWarehouseId(),
+                                plain(qty.subtract(reserved)),
+                                plain(movement.getQtyDelta().abs()),
+                                movement.getPartId()),
+                null);
+    }
+
+    private static String plain(BigDecimal value) {
+        return value.stripTrailingZeros().toPlainString();
     }
 
     /**

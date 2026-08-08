@@ -5,6 +5,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Import;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.test.web.servlet.MockMvc;
 import ru.partsflow.support.PostgresTestBase;
 
@@ -28,6 +32,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
 @AutoConfigureMockMvc
+@Import(NotFoundMappingTest.ThrowingController.class)
 class NotFoundMappingTest extends PostgresTestBase {
 
     @Autowired
@@ -87,5 +92,44 @@ class NotFoundMappingTest extends PostgresTestBase {
     void unknownPathIsNotFound() throws Exception {
         mvc.perform(get("/net-takogo-adresa").with(user("priyomshchik").roles("STOREKEEPER")))
                 .andExpect(status().isNotFound());
+    }
+
+    /**
+     * Нарушение ограничения схемы — 409, каким бы типом оно ни приехало.
+     *
+     * <p>Спринговое {@code DataIntegrityViolationException} получается
+     * трансляцией у репозиториев и {@code JdbcTemplate}; нативный запрос
+     * через {@code EntityManager} бросает хибернейтовское, и оно шло мимо
+     * обработчика. Так отвечала гонка двух кладовщиков за последней деталью:
+     * склад схема отстояла, а наружу ушла «внутренняя ошибка», которую
+     * офлайн-очередь повторяет вечно.
+     *
+     * <p>Проверяется через свой контроллер, а не живой гонкой: воспроизводить
+     * состязание двух потоков в проверке кода ответа значит завести флейк.
+     * Саму гонку держит {@code StockLedgerTest}.
+     */
+    @Test
+    @DisplayName("Нарушение схемы из EntityManager — 409, а не пятисотка")
+    void hibernateConstraintViolationIsConflict() throws Exception {
+        mvc.perform(get("/test/constraint-violation")
+                        .with(user("priyomshchik").roles("STOREKEEPER")))
+                .andExpect(status().isConflict());
+    }
+
+    // Контроллер вложен в @TestConfiguration и регистрируется ею сам:
+    // объявленный вдобавок @Bean'ом, он попадает в диспетчер дважды
+    // и валит контекст «Ambiguous mapping».
+    @TestConfiguration
+    static class ThrowingController {
+
+        @RestController
+        static class Endpoint {
+            @GetMapping("/test/constraint-violation")
+            public String violate() {
+                throw new org.hibernate.exception.ConstraintViolationException(
+                        "нарушение", new java.sql.SQLException("нарушение", "23514"),
+                        "part_stock_qty_ck");
+            }
+        }
     }
 }

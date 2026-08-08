@@ -127,10 +127,19 @@ public class ApiExceptionHandler {
      * наших триггеров, написанный по-русски и для человека. Нарушения ключей
      * и ссылок уходят общей формулировкой: в них лежат имена таблиц
      * и колонок, то есть подсказки тому, кто ищет способ забраться внутрь.
+     *
+     * <p><b>Типов исключения два, и это не перестраховка.</b> Трансляция
+     * в спринговое {@code DataIntegrityViolationException} происходит
+     * у репозиториев и {@code JdbcTemplate}, а нативный запрос через
+     * {@code EntityManager} бросает своё, хибернейтовское — оно шло мимо
+     * обработчика и приезжало пятисоткой. Так отвечала гонка двух
+     * кладовщиков за последней деталью: склад схема отстояла, а наружу
+     * ушла «внутренняя ошибка».
      */
-    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
-    public ResponseEntity<ApiError> integrityViolation(
-            org.springframework.dao.DataIntegrityViolationException e) {
+    @ExceptionHandler({
+            org.springframework.dao.DataIntegrityViolationException.class,
+            org.hibernate.exception.ConstraintViolationException.class})
+    public ResponseEntity<ApiError> integrityViolation(Exception e) {
 
         log.warn("Нарушение целостности", e);
         String message = raiseMessage(e);
