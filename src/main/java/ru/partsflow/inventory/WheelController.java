@@ -66,7 +66,7 @@ public class WheelController {
                 columnsOf(filter), columnsOf(find), sort, desc,
                 Math.max(page, 0), Math.min(Math.max(size, 1), MAX_SIZE));
 
-        return new View(found.total(), catalog.warehouses(),
+        return new View(found.total(), catalog.warehouses(), WheelService.filterableColumns(),
                 found.rows().stream().map(this::rowOf).toList());
     }
 
@@ -174,7 +174,11 @@ public class WheelController {
     }
 
     /** @param warehouses колонки складов: у каждого клиента свои */
-    public record View(long total, List<CatalogService.Warehouse> warehouses, List<Row> rows) {
+    /** @param filterable по каким колонкам отбор делается: меню открывается
+     *                     только у них, иначе экран предлагает то, что сервер
+     *                     отобьёт, и отказ проглатывается молча */
+    public record View(long total, List<CatalogService.Warehouse> warehouses,
+                       java.util.Set<String> filterable, List<Row> rows) {
     }
 
     /**

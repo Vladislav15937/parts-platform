@@ -70,7 +70,8 @@ public class CatalogController {
                 sort, desc, Math.max(page, 0), Math.min(Math.max(size, 1), MAX_SIZE), after);
 
         return new View(found.total(), catalog.warehouses(),
-                found.rows().stream().map(this::rowOf).toList());
+                found.rows().stream().map(this::rowOf).toList(),
+                CatalogService.filterableColumns());
     }
 
     /**
@@ -311,7 +312,14 @@ public class CatalogController {
         }
     }
 
-    public record View(long total, List<CatalogService.Warehouse> warehouses, List<Row> rows) {
+    /**
+     * @param filterable по каким колонкам отбор делается. Экран открывает меню
+     *                   только у них: у остальных сервер отвечает отказом,
+     *                   а отказ, проглоченный молча, выглядит как «отбор
+     *                   не сработал» на целом складе
+     */
+    public record View(long total, List<CatalogService.Warehouse> warehouses, List<Row> rows,
+                       java.util.Set<String> filterable) {
     }
 
     public record Row(Long id, String code, String title, String qualityGrade, String condition,

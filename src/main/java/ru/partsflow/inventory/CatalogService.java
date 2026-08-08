@@ -12,6 +12,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Витрина склада: таблица товаров, как её видит владелец.
@@ -294,6 +295,23 @@ public class CatalogService {
     /** Незаполненное поле и «заполнено хоть чем-то» — тоже ответы на вопрос. */
     public static final String EMPTY = "\u2014пусто\u2014";
     public static final String PRESENT = "\u2014не пусто\u2014";
+
+    /**
+     * По каким колонкам отбор вообще делается.
+     *
+     * <p><b>Зачем наружу.</b> Экран открывал меню отбора у любой колонки —
+     * в том числе у превью, состояния, комплектации и себестоимости, которых
+     * в этом списке нет. Список значений приезжал отказом, отбор не применялся,
+     * и оба отказа проглатывались молча: владелец нажимал «Состояние → новое»,
+     * видел те же тридцать пять тысяч строк и делал единственный возможный
+     * вывод — что весь склад новый либо что отбор сломан.
+     *
+     * <p>Отдаём сам список, а не повторяем его на клиенте: два списка
+     * разошлись бы на первой же новой колонке, и разошлись бы молча.
+     */
+    public static Set<String> filterableColumns() {
+        return FILTERS.keySet();
+    }
 
     private static String columnExpression(String column) {
         String expression = FILTERS.get(column);

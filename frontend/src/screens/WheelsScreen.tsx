@@ -66,6 +66,15 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
   // Какая колонка сейчас показывает список значений: открытых больше одной
   // быть не может — они перекрывают друг друга.
   const [picking, setPicking] = useState<string | null>(null);
+
+  /*
+   * Отбор предлагается только там, где он есть: список отбираемых колонок
+   * приезжает с сервера вместе со страницей. Повторённый здесь, он разошёлся
+   * бы с серверным молча — и меню предлагало бы отбор, который сервер отобьёт.
+   */
+  const canFilter = (key: string | null): boolean =>
+    key !== null && (page?.filterable ?? []).includes(key);
+
   // Координаты заголовка: список значений рисуется вне таблицы, иначе его
   // обрезает контейнер с горизонтальной прокруткой — и от списка остаётся
   // белая полоска. Та же ловушка, что с накладкой снимков на витрине.
@@ -353,13 +362,16 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
                     ) : (
                       <span
                         className="th__title"
-                        onClick={() => column.filter !== false && setTyping(column.key)}
+                        onClick={() => canFilter(column.key) && setTyping(column.key)}
                         style={column.filter === false ? undefined : { cursor: 'text' }}
                       >
                         {column.title}
                       </span>
                     )}
-                    {(column.filter !== false || column.sort !== undefined) && (
+                    {/* Отбираемость — из серверного списка, а не из локального
+                        флага: тот был заведён и не заполнен ни у одной колонки,
+                        то есть защищал ровно ничего. */}
+                    {(canFilter(column.key) || column.sort !== undefined) && (
                       <button
                         type="button"
                         className="th__menu"
@@ -462,6 +474,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
           column={picking}
           at={pickAt}
           chosen={query.columns[picking]}
+          filterable={canFilter(picking)}
           sortable={WHEEL_COLUMNS.find((c) => c.key === picking)?.sort}
           sort={query.sort}
           desc={query.desc}

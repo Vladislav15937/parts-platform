@@ -30,9 +30,14 @@ describe('отбор колонки при пустой выдаче', () => {
       if (url.includes('/api/catalog/vehicles') || url.includes('/api/intake/donors')) {
         return json([]);
       }
-      return json(url.includes('filter=') ? { total: 0, rows: [], warehouses: [] } : {
+      // filterable приезжает с сервера: экран открывает меню только у тех
+      // колонок, по которым отбор действительно делается.
+      return json(url.includes('filter=')
+        ? { total: 0, rows: [], warehouses: [], filterable: ['brand'] }
+        : {
         total: 1,
         warehouses: [],
+        filterable: ['brand'],
         rows: [{ id: 1, publicCode: 'A-1', title: 'Фара', brand: 'Ford', price: '100',
                  stock: {}, photoCount: 0 }],
       });

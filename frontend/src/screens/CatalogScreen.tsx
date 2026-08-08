@@ -96,6 +96,20 @@ export function CatalogScreen({ role }: { role: string }) {
   // больше одной быть не может — они перекрывают друг друга.
   const [typing, setTyping] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+
+  /*
+   * Отбор предлагается только там, где он есть.
+   *
+   * Список отбираемых колонок приезжает с сервера вместе со страницей:
+   * повторённый здесь, он разошёлся бы с серверным на первой же новой
+   * колонке — и разошёлся бы молча. Пока меню открывалось у любой колонки,
+   * по превью, состоянию и комплектации оно предлагало отбор, которого нет:
+   * сервер отвечал «по этой колонке отбор не делается», отказ проглатывался,
+   * и владелец видел те же тридцать пять тысяч строк.
+   */
+  const canFilter = (key: string | null): boolean =>
+    key !== null && (page?.filterable ?? []).includes(key);
+
   const [menuAt, setMenuAt] = useState<{ left: number; top: number } | null>(null);
 
   function showPhotos(id: number, target: HTMLElement) {
@@ -294,6 +308,7 @@ export function CatalogScreen({ role }: { role: string }) {
           column={menuFor}
           at={menuAt}
           chosen={query.columns[menuFor]}
+          filterable={canFilter(menuFor)}
           sortable={COLUMNS.find((c) => c.key === menuFor)?.sort}
           sort={query.sort}
           desc={query.desc}
@@ -476,12 +491,18 @@ export function CatalogScreen({ role }: { role: string }) {
                     ) : (
                       <span
                         className="th__title"
-                        onClick={() => setTyping(column.key)}
-                        style={{ cursor: 'text' }}
+                        onClick={canFilter(column.key)
+                          ? () => setTyping(column.key)
+                          : undefined}
+                        style={{ cursor: canFilter(column.key) ? 'text' : 'default' }}
                       >
                         {column.title}
                       </span>
                     )}
+                    {/* Стрелка — только если меню есть что предложить:
+                        отбор по этой колонке или сортировку. Пустое меню
+                        обещает действие, которого нет. */}
+                    {(canFilter(column.key) || column.sort !== undefined) && (
                     <button
                       type="button"
                       className="th__menu"
@@ -493,6 +514,7 @@ export function CatalogScreen({ role }: { role: string }) {
                     >
                       {column.sort === query.sort ? (query.desc ? '↓' : '↑') : '▾'}
                     </button>
+                    )}
                     {query.columns[column.key] !== undefined && (
                       <div className="th__value">«{query.columns[column.key]}»</div>
                     )}

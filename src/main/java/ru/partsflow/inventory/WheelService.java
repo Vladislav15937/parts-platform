@@ -419,6 +419,11 @@ public class WheelService {
      * и «летняя», а не {@code TYRE} и {@code SUMMER}, и отбирает по ним же.
      * Разойдись они — выбранное из списка значение не находило бы ничего.
      */
+    /** По каким колонкам отбор делается — тот же список, что и у отбора. */
+    public static java.util.Set<String> filterableColumns() {
+        return FILTERS.keySet();
+    }
+
     @Transactional(readOnly = true)
     public List<String> values(String column) {
         String expression = FILTERS.get(column);

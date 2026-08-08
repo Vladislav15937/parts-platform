@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react';
  * прокруткой, и от списка остаётся белая полоска.
  */
 export function ColumnMenu({
-  column, at, chosen, sortable, sort, desc, values, empty, present,
+  column, at, chosen, sortable, filterable, sort, desc, values, empty, present,
   onSort, onPick, onClose,
 }: {
   column: string;
@@ -23,6 +23,18 @@ export function ColumnMenu({
   chosen: string | undefined;
   /** Имя сортировки, если по колонке сортируют. */
   sortable: string | undefined;
+  /**
+   * Делается ли по колонке отбор.
+   *
+   * <p>Список приходит с сервера, а не повторяется здесь: два списка
+   * разошлись бы на первой же новой колонке, и разошлись бы молча. Пока
+   * меню открывалось у любой колонки, по превью и состоянию оно предлагало
+   * отбор, которого нет: сервер отвечал «по этой колонке отбор не делается»,
+   * `catch` превращал отказ в пустой список, а выбранное значение ничего
+   * не меняло. Владелец видел те же тридцать пять тысяч строк и решал,
+   * что весь склад новый или что отбор сломан.
+   */
+  filterable: boolean;
   sort: string;
   desc: boolean;
   /** Откуда брать значения: у склада и у колёс свои списки. */
@@ -37,12 +49,15 @@ export function ColumnMenu({
   const [typed, setTyped] = useState('');
 
   useEffect(() => {
+    if (!filterable) {
+      return;
+    }
     let alive = true;
     void values(column)
       .then((list) => { if (alive) setFound(list); })
       .catch(() => { if (alive) setFound([]); });
     return () => { alive = false; };
-  }, [column, values]);
+  }, [column, values, filterable]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -56,12 +71,14 @@ export function ColumnMenu({
 
   return (
     <div className="value-picker" style={{ left: at.left, top: at.top }}>
-      <input
-        autoFocus
-        value={typed}
-        placeholder="поиск"
-        onChange={(e) => setTyped(e.target.value)}
-      />
+      {filterable && (
+        <input
+          autoFocus
+          value={typed}
+          placeholder="поиск"
+          onChange={(e) => setTyped(e.target.value)}
+        />
+      )}
       <ul>
         {sortable !== undefined && (
           <>
@@ -80,13 +97,15 @@ export function ColumnMenu({
             <li className="value-picker__line" />
           </>
         )}
+        {filterable && (
         <li>
           <button type="button" className={chosen === undefined ? 'is-chosen' : ''}
                   onClick={() => onPick(null)}>
             — все —
           </button>
         </li>
-        {found === null ? (
+        )}
+        {filterable && found === null ? (
           <li className="muted">Читаем…</li>
         ) : (
           shown.map((value) => (
@@ -101,6 +120,8 @@ export function ColumnMenu({
         {/* «Где не заполнено» — вопрос, который задают, разгребая склад
             после переезда. Отдельными пунктами, а не значением: пустая
             строка в списке выглядела бы промахом мыши. */}
+        {filterable && (
+        <>
         <li>
           <button type="button" className={chosen === present ? 'is-chosen' : ''}
                   onClick={() => onPick(present)}>
@@ -113,6 +134,8 @@ export function ColumnMenu({
             {empty}
           </button>
         </li>
+        </>
+        )}
       </ul>
     </div>
   );
