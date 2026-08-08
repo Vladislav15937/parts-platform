@@ -146,12 +146,18 @@ export function SellerScreen({ canSell, role }: Props) {
             // Корзина от прежнего разговора к чужой сделке отношения не имеет.
             setLines([]);
             setRows([]);
+            setFound(0);
           }}
           onError={setError}
         />
       )}
 
-      {found > rows.length && (
+      {/* Подпись про обрезку не появляется без самого списка: она о том,
+          что видно не всё, а когда не видно ничего, она превращается
+          в «Показаны первые 0 из 17». Поймано живым прогоном — после
+          оформления сделки список убирают, потому что остаток изменился
+          и показанное уже врёт. */}
+      {rows.length > 0 && found > rows.length && (
         <p className="note">
           Показаны первые {rows.length} из {found} — уточните запрос,
           иначе нужная деталь может остаться за списком.
@@ -371,6 +377,7 @@ export function SellerScreen({ canSell, role }: Props) {
       setServices(services.map((line) => ({ ...line, price: '' })));
       // Остаток изменился — показанный список уже врёт.
       setRows([]);
+      setFound(0);
     } catch (cause) {
       setError(describe(cause, 'Сделка не оформлена'));
     }
@@ -396,6 +403,12 @@ function StockItem({
   onAdd: () => void;
 }) {
   const reserved = Number(row.qtyReserved);
+  // Сколько этой позиции уже лежит в корзине. Без этого «нет свободных»
+  // появлялось и тогда, когда свободное есть, но всё оно взято в сделку,
+  // — а рядом, в той же строке, написано «свободно 1». На складе б/у
+  // запчастей остаток почти всегда единица, значит противоречие видно
+  // при каждом нажатии.
+  const taken = Number(row.qtyAvailable) - room;
 
   return (
     <li className="stock-row">
@@ -413,7 +426,7 @@ function StockItem({
           {row.price === null ? '—' : `${Number(row.price).toLocaleString('ru-RU')} ₽`}
         </strong>
         <button type="button" disabled={room < 1 || !canSell} onClick={onAdd}>
-          {room < 1 ? 'нет свободных' : 'в сделку'}
+          {room >= 1 ? 'в сделку' : taken > 0 ? 'уже в сделке' : 'нет свободных'}
         </button>
       </div>
     </li>
