@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 
+import { CatalogScreen } from './CatalogScreen';
 import { DeliveryScreen } from './DeliveryScreen';
 import { FeedsScreen } from './FeedsScreen';
+import { MembersScreen } from './MembersScreen';
 import { OrdersScreen } from './OrdersScreen';
 
 /**
@@ -49,6 +51,32 @@ describe('экран при неудачной загрузке', () => {
 
     await waitFor(() => expect(screen.getByText(/Сессия кончилась/)).toBeTruthy());
     expect(screen.queryByText(/Загружаем заказы/)).toBeNull();
+  });
+
+  /**
+   * «Загружаем…» — пока грузим, а не пока пусто.
+   *
+   * <p>При ошибке состояние так и остаётся пустым, и надпись висела рядом
+   * с красной причиной: «Запрос отклонён (401)» и тут же «Загружаем…».
+   * Одно противоречит другому, и человек ждёт того, чего не будет.
+   * Поймано на «Сотрудниках», нашлось ещё на витрине склада и в затратах
+   * по машине — то есть на главном экране владельца тоже.
+   */
+  it('«Сотрудники» не ждут вечно после отказа', async () => {
+    refuse();
+    render(<MembersScreen />);
+
+    await waitFor(() => expect(screen.getByText(/Сессия кончилась/)).toBeTruthy());
+    expect(screen.queryByText(/Загружаем/),
+      'экран ждёт загрузку, которая уже провалилась').toBeNull();
+  });
+
+  it('витрина склада — тоже', async () => {
+    refuse();
+    render(<CatalogScreen role="OWNER" />);
+
+    await waitFor(() => expect(screen.getByText(/Сессия кончилась/)).toBeTruthy());
+    expect(screen.queryByText(/Загружаем/)).toBeNull();
   });
 });
 

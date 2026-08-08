@@ -422,7 +422,9 @@ export function CatalogScreen({ role }: { role: string }) {
       )}
 
       {page === null ? (
-        <p className="note">Загружаем…</p>
+        // Не «Загружаем…» вечно, когда загрузка провалилась: причина
+        // показана выше, и висящее рядом ожидание ей противоречит.
+        error !== '' ? null : <p className="note">Загружаем…</p>
       ) : page.rows.length === 0 ? (
         <p className="note">Ничего не найдено.</p>
       ) : (

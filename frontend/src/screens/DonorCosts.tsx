@@ -64,7 +64,7 @@ export function DonorCosts({ donorId, title }: { donorId: number; title: string 
       {error !== '' && <p className="note note--error">{error}</p>}
 
       {costs === null ? (
-        <p className="note">Загружаем…</p>
+        error !== '' ? null : <p className="note">Загружаем…</p>
       ) : costs.length === 0 ? (
         <p className="note">
           Затрат нет. Пока их не внести, окупаемость этой машины покажет
