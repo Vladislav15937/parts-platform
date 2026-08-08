@@ -24,6 +24,16 @@ const TICK_MS = 15_000;
 export function useOutbox(company?: string) {
   const [records, setRecords] = useState<OutboxRecord[]>([]);
   const [needsSignIn, setNeedsSignIn] = useState(false);
+  /**
+   * Отвечал ли сервер в последнем проходе очереди.
+   *
+   * <p>`navigator.onLine` знает только про интерфейс, а в ангаре wi-fi
+   * поднят и сервера за ним нет. Успешный или осмысленно отказавший запрос —
+   * единственное настоящее свидетельство связи, и есть оно только здесь.
+   *
+   * <p>`null` — прохода ещё не было: показываем то, что знает браузер.
+   */
+  const [reachedServer, setReachedServer] = useState<boolean | null>(null);
 
   const reload = useCallback(async () => {
     setRecords(await listOutbox());
@@ -42,6 +52,11 @@ export function useOutbox(company?: string) {
     }
     const result = await processOutbox(undefined, Date.now(), company);
     setNeedsSignIn(result.needsSignIn);
+    // Прохода не было — о связи это не говорит ничего, прежний ответ
+    // затирать нельзя.
+    if (result.reachedServer !== undefined) {
+      setReachedServer(result.reachedServer);
+    }
     await reload();
     return result;
   }, [reload, company]);
@@ -86,6 +101,7 @@ export function useOutbox(company?: string) {
   }, [flush]);
 
   return {
+    reachedServer,
     records,
     pending: records.filter((r) => r.state === 'pending'),
     failed: records.filter((r) => r.state === 'failed'),
