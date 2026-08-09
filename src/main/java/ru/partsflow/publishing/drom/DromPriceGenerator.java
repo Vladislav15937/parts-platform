@@ -57,6 +57,10 @@ public class DromPriceGenerator {
             SELECT p.public_code,
                    p.title,
                    p.description,
+                   -- Дополнительный текст и ссылка на ролик: владелец их пишет,
+                   -- а покупатель до правки не видел вовсе.
+                   p.text_block,
+                   p.video_url,
                    -- Вид детали отдельным полем: по нему площадка кладёт товар
                    -- в раздел. Пока его не было, ей оставалось угадывать
                    -- по заголовку, а угадывает она не всегда.
@@ -468,7 +472,9 @@ public class DromPriceGenerator {
                     rs.getString("body_code"),
                     rs.getString("engine_code"),
                     year(rs),
-                    rs.getBoolean("from_donor"));
+                    rs.getBoolean("from_donor"),
+                    rs.getString("text_block"),
+                    rs.getString("video_url"));
         }
 
         /** Года у контрактной детали нет, а {@code getInt} отдаёт на это ноль. */

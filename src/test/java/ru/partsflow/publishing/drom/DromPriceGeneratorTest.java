@@ -393,6 +393,10 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 new Field("marking", "АРТ-42", true),
                 new Field("color", "Чёрный", true),
                 new Field("is_published", false, true),
+                // Владелец пишет их «для объявления» — значит покупатель
+                // обязан их видеть.
+                new Field("text_block", "Снята с целой машины, следов удара нет", true),
+                new Field("video_url", "https://example.org/video", true),
                 // Внутреннее: на площадку не идёт.
                 new Field("min_price", new BigDecimal("100"), false),
                 new Field("cost_price", new BigDecimal("200"), false),
@@ -404,9 +408,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 new Field("length_mm", 120, false),
                 new Field("width_mm", 80, false),
                 new Field("height_mm", 45, false),
-                new Field("package_weight_kg", new BigDecimal("5.1"), false),
-                new Field("text_block", "дополнительный текст", false),
-                new Field("video_url", "https://example.org/video", false));
+                new Field("package_weight_kg", new BigDecimal("5.1"), false));
 
         String clean = offerOf(name);
         for (Field field : fields) {
@@ -440,6 +442,59 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                     .as("после отката поля «%s» прайс не вернулся к прежнему", field.column())
                     .isEqualTo(clean);
         }
+    }
+
+    /**
+     * Текст и видео из карточки доезжают до объявления, а не остаются внутри.
+     *
+     * <p>Владелец пишет их в полях «Текстовый блок» и «Видео» — это те же
+     * колонки, что приезжают из прежней системы. До правки в прайс уходило
+     * только описание, и написанное «для объявления» покупатель не видел
+     * вовсе: заметить это можно было лишь сверив файл с карточкой руками.
+     */
+    @Test
+    @DisplayName("Текстовый блок и видео дописываются к описанию")
+    void textBlockAndVideoReachTheDescription() {
+        String name = "Прайс: текст и видео";
+        Long partId = part(name, new BigDecimal("4000"), true);
+        intake(partId, warehouse, 1);
+        inTenant(() -> jdbc.update("""
+                UPDATE part SET description = 'Снято с целой машины.',
+                                text_block = 'Резьба целая, крепления без трещин.',
+                                video_url = 'https://example.org/v/17'
+                 WHERE id = ?""", partId));
+
+        String offer = offerOf(name);
+
+        assertThat(offer)
+                .as("описание владельца обязано остаться первым")
+                .contains("Снято с целой машины.")
+                .as("текстовый блок не доехал до покупателя")
+                .contains("Резьба целая, крепления без трещин.")
+                // Подпись обязательна: голый адрес посреди текста читается
+                // как мусор, и по нему не понять, что там ролик о детали.
+                .as("ссылка на видео ушла без подписи или не ушла вовсе")
+                .contains("Видео: https://example.org/v/17");
+    }
+
+    /**
+     * Пустые поля не дают ни строки, ни подписи.
+     *
+     * <p>Иначе у каждой второй позиции в описании висело бы «Видео:»
+     * без ссылки — обещание, которого никто не давал.
+     */
+    @Test
+    @DisplayName("Незаполненные текст и видео описание не портят")
+    void emptyTextAndVideoAddNothing() {
+        String name = "Прайс: без текста и видео";
+        Long partId = part(name, new BigDecimal("4000"), true);
+        intake(partId, warehouse, 1);
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET description = 'Только описание.' WHERE id = ?", partId));
+
+        assertThat(offerOf(name))
+                .contains("<description>Только описание.</description>")
+                .doesNotContain("Видео:");
     }
 
     /** {@code null}, если позиции в прайсе нет вовсе: снятая с публикации исчезает. */
