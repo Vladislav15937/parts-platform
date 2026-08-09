@@ -196,6 +196,30 @@ public class PartKindMatcher {
         return rows.stream().map(PartKindMatcher::toKind).toList();
     }
 
+    /**
+     * Сколько эталонов подошло всего — тем же условием, что и поиск.
+     *
+     * <p>Выдача обрезана, и разбирающий должен знать, что видит не всё:
+     * по слову «датчик» эталонов 21 при пределе 20, и один не показан вовсе.
+     * Разойдись условие со счётом — число врало бы ровно там, где на него
+     * смотрят.
+     */
+    public long count(String query) {
+        if (query == null || query.isBlank()) {
+            return 0;
+        }
+        Number found = (Number) entityManager.createNativeQuery("""
+                        SELECT count(*)
+                          FROM catalog.part_kind k
+                         WHERE k.is_active
+                           AND (k.name ILIKE '%' || :query || '%'
+                                OR EXISTS (SELECT 1 FROM unnest(k.synonyms) s
+                                            WHERE s ILIKE '%' || :query || '%'))""")
+                .setParameter("query", query.strip())
+                .getSingleResult();
+        return found == null ? 0 : found.longValue();
+    }
+
     private static PartKind toKind(Object[] row) {
         return new PartKind(
                 ((Number) row[0]).longValue(),

@@ -126,6 +126,12 @@ public class PartNameService {
         return matcher.search(query, limit);
     }
 
+    /** Сколько эталонов подошло — для подписи «показаны первые N из M». */
+    @Transactional(readOnly = true)
+    public long countKinds(String query) {
+        return matcher.count(query);
+    }
+
     /** Все виды деталей: справочник статичный и маленький. */
     @Transactional(readOnly = true)
     public List<PartKindMatcher.PartKind> allKinds() {

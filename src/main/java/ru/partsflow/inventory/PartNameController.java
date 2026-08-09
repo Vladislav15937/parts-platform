@@ -137,10 +137,29 @@ public class PartNameController {
         return partNames.allKinds().stream().map(KindView::of).toList();
     }
 
+    /**
+     * Поиск эталона руками — спасение, когда подсказки мимо.
+     *
+     * <p>Выдача обрезана двадцатью строками, и молчать об этом нельзя:
+     * по слову «датчик» в справочнике 21 эталон, то есть один не показан
+     * вовсе. Разбирающий видит два десятка, не находит нужного и решает,
+     * что такого эталона нет, — а одно сопоставление правит сотни карточек
+     * и назад не откатывается. Поэтому вместе со списком едет и число
+     * найденного, как в поиске продавца.
+     */
     @GetMapping("/kinds")
-    public List<KindView> kinds(@RequestParam("q") String query) {
-        return partNames.searchKinds(query, KIND_SEARCH_LIMIT).stream()
+    public KindPage kinds(@RequestParam("q") String query) {
+        List<KindView> found = partNames.searchKinds(query, KIND_SEARCH_LIMIT).stream()
                 .map(KindView::of).toList();
+        // Считаем только когда упёрлись в предел: список короче предела
+        // и есть всё найденное, а лишний запрос был бы платой ни за что.
+        long total = found.size() < KIND_SEARCH_LIMIT
+                ? found.size() : partNames.countKinds(query);
+        return new KindPage(found, total);
+    }
+
+    /** @param total сколько эталонов подошло всего; больше длины — список обрезан */
+    public record KindPage(List<KindView> items, long total) {
     }
 
     /**

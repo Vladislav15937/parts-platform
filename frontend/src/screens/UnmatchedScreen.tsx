@@ -221,6 +221,9 @@ function KindPicker({
   const [suggested, setSuggested] = useState<PartKind[]>([]);
   const [query, setQuery] = useState('');
   const [found, setFound] = useState<PartKind[]>([]);
+  // Сколько подошло всего: список обрезан, и молчать нельзя —
+  // не найдя эталона, разбирающий решит, что его нет вовсе.
+  const [foundTotal, setFoundTotal] = useState(0);
   const [asked, setAsked] = useState(false);
   /**
    * На какой эталон навели: строка «Станет» показывает именно его.
@@ -337,6 +340,15 @@ function KindPicker({
               </button>
             ))}
           </div>
+          {/* Список обрезан — говорим об этом: не найдя нужного среди
+              двух десятков, разбирающий решит, что эталона нет вовсе,
+              и оставит написание неразобранным либо возьмёт похожий,
+              а одно сопоставление правит сотни карточек. */}
+          {foundTotal > found.length && (
+            <p className="note note--error">
+              Подошло {foundTotal}, показаны первые {found.length} — уточните запрос.
+            </p>
+          )}
           {found[0] !== undefined && partName.sampleTitle !== null && (
             <p className="note">
               Станет: <b>{preview(partName, found[0].name)}</b>
@@ -387,7 +399,9 @@ function KindPicker({
       return;
     }
     try {
-      setFound(await searchKinds(term.trim()));
+      const page = await searchKinds(term.trim());
+      setFound(page.items);
+      setFoundTotal(page.total);
     } catch (cause) {
       onError(describe(cause, 'Поиск эталона не работает'));
     }

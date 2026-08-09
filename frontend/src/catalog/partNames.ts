@@ -65,8 +65,16 @@ export function allKinds(): Promise<PartKind[]> {
   return request<PartKind[]>('/api/part-names/kinds/all');
 }
 
-export function searchKinds(query: string): Promise<PartKind[]> {
-  return request<PartKind[]>(`/api/part-names/kinds?q=${encodeURIComponent(query)}`);
+/**
+ * Поиск эталона руками — вместе с числом найденного.
+ *
+ * <p>Выдача обрезана двумя десятками: по слову «датчик» эталонов 21, и один
+ * не показан вовсе. Разбирающий, не найдя нужного, решает, что такого эталона
+ * нет, — а одно сопоставление правит сотни карточек и назад не откатывается.
+ */
+export function searchKinds(query: string): Promise<{ items: PartKind[]; total: number }> {
+  return request<{ items: PartKind[]; total: number }>(
+    `/api/part-names/kinds?q=${encodeURIComponent(query)}`);
 }
 
 export interface MatchResult {
