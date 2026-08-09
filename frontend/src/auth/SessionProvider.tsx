@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ApiError, ensureCsrfToken, refreshCsrfToken } from '../api/client';
+import { ApiError, SESSION_LOST, ensureCsrfToken, refreshCsrfToken } from '../api/client';
 import * as auth from '../api/auth';
 import type { Credentials, Me } from '../api/auth';
 import { scopeTo } from '../storage/tenantScope';
@@ -109,6 +109,31 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  /*
+   * Сессия кончилась — просим войти заново, а не показываем «401» на каждом
+   * экране.
+   *
+   * Сессия истекает по таймауту и умирает при выкладке — то есть регулярно.
+   * До этого приложение оставалось «вошедшим»: шапка писала «владелец ·
+   * на связи», рельс работал, а экраны один за другим встречали владельца
+   * красной строкой «Запрос отклонён (401)». Догадаться по ней, что дело
+   * в сессии, нельзя.
+   *
+   * Личность стирается — та же причина, что и при 401 на старте: сессия
+   * кончилась по-настоящему, и офлайн-режим тут не при чём. Очередь
+   * отправки при этом цела: она ждёт входа и уйдёт следующим проходом.
+   */
+  useEffect(() => {
+    const onLost = () => {
+      forgetMe();
+      setState((was) => (was.status === 'authenticated'
+        ? { status: 'anonymous', reason: 'Сессия кончилась — войдите заново.' }
+        : was));
+    };
+    window.addEventListener(SESSION_LOST, onLost);
+    return () => window.removeEventListener(SESSION_LOST, onLost);
   }, []);
 
   const signIn = useCallback(async (credentials: Credentials) => {

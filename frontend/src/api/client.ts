@@ -51,6 +51,33 @@ function csrfToken(): string | null {
   return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : null;
 }
 
+/** Имя события: сессия кончилась, приложению пора спросить вход заново. */
+export const SESSION_LOST = 'partsflow:session-lost';
+
+/**
+ * Говорит приложению, что сессия кончилась.
+ *
+ * <p><b>Зачем.</b> 401 приходит на обычный запрос экрана — сессия истекла
+ * по таймауту или приложение перезапустили при выкладке. Экран показывал
+ * «Запрос отклонён (401)» и на этом успокаивался: шапка по-прежнему писала
+ * «Хозяин · владелец · на связи», рельс работал, а каждый следующий экран
+ * встречал владельца своей красной строкой с кодом. Догадаться, что надо
+ * войти заново, по этому нельзя — а больше сказать некому.
+ *
+ * <p>Событием, а не прямым вызовом: слой запросов не знает про сессию,
+ * и знать не должен — иначе получится кольцо зависимостей ради одного
+ * сообщения.
+ *
+ * <p>Пути входа исключены: там 401 означает «неверный пароль» либо
+ * «мы ещё не входили», и выкидывать из приложения нечего.
+ */
+function noticeSessionLoss(status: number, path: string): void {
+  if (status !== 401 || path.startsWith('/api/auth/')) {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(SESSION_LOST));
+}
+
 function classify(status: number): FailureKind {
   if (status === 401) {
     return 'unauthenticated';
@@ -162,6 +189,7 @@ export async function request<T>(
   }
 
   if (!response.ok) {
+    noticeSessionLoss(response.status, path);
     throw new ApiError(classify(response.status), response.status, await messageOf(response));
   }
 
@@ -230,6 +258,7 @@ export async function upload<T>(path: string, form: FormData, retrying = false):
     return await upload<T>(path, form, true);
   }
   if (!response.ok) {
+    noticeSessionLoss(response.status, path);
     throw new ApiError(classify(response.status), response.status, await messageOf(response));
   }
   return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
