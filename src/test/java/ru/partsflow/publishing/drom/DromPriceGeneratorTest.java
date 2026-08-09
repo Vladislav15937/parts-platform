@@ -359,6 +359,99 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         });
     }
 
+    /**
+     * Каждое поле карточки решено: доезжает до прайса или нет.
+     *
+     * <p><b>Зачем.</b> Владелец правит цену — и ждёт, что покупатель увидит
+     * новую; правит закупочную — и ждёт, что не увидит никто. Между этими
+     * двумя ожиданиями нет ничего, кроме нашего решения по каждому полю,
+     * а решение это нигде не записано: поле, добавленное в форму правки
+     * завтра, молча не попадёт в файл, и заметить это можно будет только
+     * по жалобе покупателя, который приехал не за тем.
+     *
+     * <p>Поэтому список закрытый и делится надвое. Слева — то, что видит
+     * покупатель: правка обязана менять файл. Справа — внутреннее
+     * и коммерческое: правка обязана файл <b>не</b> менять, иначе адрес
+     * стеллажа или минимальная цена уедут на площадку.
+     *
+     * <p>Новое поле формы, не названное ни там, ни там, роняет тест —
+     * и это единственный способ не забыть про него.
+     */
+    @Test
+    @DisplayName("Правка поля меняет прайс тогда и только тогда, когда так решено")
+    void everyEditedFieldIsDecidedAboutTheFeed() {
+        String name = "Прайс: поля карточки";
+        Long partId = part(name, new BigDecimal("5000"), true);
+        intake(partId, warehouse, 1);
+
+        record Field(String column, Object value, boolean reachesBuyer) { }
+        java.util.List<Field> fields = java.util.List.of(
+                // Видит покупатель.
+                new Field("price", new BigDecimal("6000"), true),
+                new Field("description", "Снято с целой машины", true),
+                new Field("manufacturer", "KYB", true),
+                new Field("marking", "АРТ-42", true),
+                new Field("color", "Чёрный", true),
+                new Field("is_published", false, true),
+                // Внутреннее: на площадку не идёт.
+                new Field("min_price", new BigDecimal("100"), false),
+                new Field("cost_price", new BigDecimal("200"), false),
+                new Field("installation_price", new BigDecimal("300"), false),
+                new Field("note", "лежит с краю", false),
+                new Field("section", "01-02-03", false),
+                new Field("barcode", "4600000000048", false),
+                new Field("weight_kg", new BigDecimal("4.2"), false),
+                new Field("length_mm", 120, false),
+                new Field("width_mm", 80, false),
+                new Field("height_mm", 45, false),
+                new Field("package_weight_kg", new BigDecimal("5.1"), false),
+                new Field("text_block", "дополнительный текст", false),
+                new Field("video_url", "https://example.org/video", false));
+
+        String clean = offerOf(name);
+        for (Field field : fields) {
+            inTenant(() -> jdbc.update(
+                    "UPDATE part SET %s = ? WHERE id = ?".formatted(field.column()),
+                    field.value(), partId));
+
+            if (field.reachesBuyer()) {
+                assertThat(offerOfOrNull(name))
+                        .as("правка «%s» не доехала до прайса, а покупатель её ждёт",
+                                field.column())
+                        .isNotEqualTo(clean);
+            } else {
+                assertThat(offerOf(name))
+                        .as("«%s» уехало на площадку, хотя это внутреннее поле",
+                                field.column())
+                        .isEqualTo(clean);
+            }
+
+            // Возвращаем как было: иначе следующее поле сравнивается
+            // с изменённым состоянием и «меняется» покажет предыдущая правка.
+            // У обязательных колонок NULL не годится — возвращаем значение.
+            inTenant(() -> switch (field.column()) {
+                case "price" -> jdbc.update("UPDATE part SET price = 5000 WHERE id = ?", partId);
+                case "is_published" ->
+                        jdbc.update("UPDATE part SET is_published = true WHERE id = ?", partId);
+                default -> jdbc.update(
+                        "UPDATE part SET %s = NULL WHERE id = ?".formatted(field.column()), partId);
+            });
+            assertThat(offerOf(name))
+                    .as("после отката поля «%s» прайс не вернулся к прежнему", field.column())
+                    .isEqualTo(clean);
+        }
+    }
+
+    /** {@code null}, если позиции в прайсе нет вовсе: снятая с публикации исчезает. */
+    private String offerOfOrNull(String name) {
+        String xml = price();
+        int nameAt = xml.indexOf("<name>" + name + "</name>");
+        if (nameAt < 0) {
+            return null;
+        }
+        return xml.substring(xml.lastIndexOf("<offer>", nameAt), xml.indexOf("</offer>", nameAt));
+    }
+
     private String delta(Long... partIds) {
         return inTenant(() -> {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
