@@ -14,6 +14,7 @@ import ru.partsflow.platform.outbox.EventPayloads;
 import ru.partsflow.platform.outbox.contract.PartEvent;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -539,14 +540,93 @@ public class PartService {
                                            || coalesce(description, '') || ' '
                                            || coalesce(marking, ''))
                                        @@ plainto_tsquery('russian', ?)
-                          UNION SELECT part_id FROM part_oem WHERE raw_number ILIKE ?)""";
+                          UNION SELECT part_id FROM part_oem WHERE raw_number ILIKE ?%s)""";
+
+    /**
+     * Условие поиска и его аргументы — вместе, чтобы выдача и счёт брали одно.
+     *
+     * <p><b>Размер колеса разбирается и здесь, а не только на вкладке
+     * «Шины и диски».</b> Покупатель звонит и называет размер словами —
+     * «двести двадцать пять пятьдесят пять на восемнадцать», — продавец
+     * набирает «225 55 18», а в заголовке стоит «225/55 R18»: по буквам это
+     * не совпадает ни с чем. Замерено на живом складе: вкладка колёс отдавала
+     * по такому запросу 22 позиции, поиск продавца — ноль. Двадцать два
+     * колеса лежат на складе, а продавец отвечает «нет такого», и проверить
+     * его некому.
+     *
+     * <p>Та же болезнь, что дважды чинилась раньше: витрина искала подстрокой
+     * там, где продавец искал морфологией, и наоборот. Правило общее — два
+     * поиска по одному складу обязаны находить одно и то же, а неправ всегда
+     * тот, о ком не спрашивали.
+     *
+     * <p>Разобранный размер идёт отдельной веткой `UNION` по полям
+     * {@code part_wheel}, а нераспознанный остаток ищется словами, как
+     * и прежде: «Bridgestone зимняя» так и остаётся текстом.
+     */
+    private Match matchFor(String query) {
+        String text = vehicleWords.translate(query);
+        WheelSizeQuery size = WheelSizeQuery.parse(text);
+
+        StringBuilder wheels = new StringBuilder();
+        List<Object> wheelArgs = new ArrayList<>();
+        appendSize(wheels, wheelArgs, "tyre_width", size.tyreWidth());
+        appendSize(wheels, wheelArgs, "tyre_height", size.tyreHeight());
+        appendSize(wheels, wheelArgs, "diameter", size.diameter());
+        appendSize(wheels, wheelArgs, "disc_width", size.discWidth());
+        appendSize(wheels, wheelArgs, "offset_mm", size.offsetMm());
+        if (size.boltPattern() != null) {
+            wheels.append(" AND bolt_pattern ILIKE ?");
+            wheelArgs.add(size.boltPattern());
+        }
+
+        if (!wheels.isEmpty()) {
+            // Размер распознан — значит спрашивают колесо, и отбор идёт
+            // пересечением, как на вкладке «Шины и диски»: размер И слова.
+            // Через UNION с текстовыми ветками «данлоп 225 55 18» вернул бы
+            // ещё и все Dunlop других размеров — семнадцать позиций там, где
+            // владелец видит четыре. Два ответа на один вопрос, и продавец
+            // предложил бы покупателю не тот размер.
+            if (size.text() != null) {
+                wheels.append(" AND part_id IN (SELECT id FROM part WHERE title ILIKE ?)");
+                wheelArgs.add("%" + size.text().strip() + "%");
+            }
+            return new Match(" WHERE p.id IN (SELECT part_id FROM part_wheel WHERE true"
+                    + wheels + ")", wheelArgs, size.text() == null ? "" : size.text());
+        }
+
+        String like = "%" + text.strip() + "%";
+        return new Match(STOCK_SEARCH_MATCH.formatted(""),
+                new ArrayList<>(List.of(like, like, text, like)), text);
+    }
+
+    private static void appendSize(StringBuilder where, List<Object> args,
+                                   String column, Object value) {
+        if (value != null) {
+            where.append(" AND ").append(column).append(" = ?");
+            args.add(value);
+        }
+    }
+
+    /**
+     * @param sql  условие отбора со своими ветками
+     * @param args его параметры по порядку
+     * @param rankText текст для ранжирования выдачи; отдельно от параметров,
+     *                 потому что при отборе по размеру их порядок другой —
+     *                 брать «третий по счёту» значило бы однажды подставить
+     *                 в {@code plainto_tsquery} ширину шины
+     */
+    private record Match(String sql, List<Object> args, String rankText) {
+    }
 
     @Transactional(readOnly = true)
     public StockSearch searchAvailable(String query, int limit) {
-        // «фара камри» приводится к «фара Camry»: покупатель звонит и говорит
-        // по-русски, а в заголовке стоит латиница.
-        String text = vehicleWords.translate(query);
-        String like = "%" + text.strip() + "%";
+        // «фара камри» приводится к «фара Camry», «225 55 18» — к размеру
+        // по полям: покупатель звонит и говорит по-русски и словами.
+        Match match = matchFor(query);
+        List<Object> args = new ArrayList<>(match.args());
+        // Ранжирование берёт тот же текст, что и поиск по словам.
+        args.add(match.rankText());
+        args.add(limit);
         List<StockRow> rows = jdbc.query("""
                 SELECT p.id, p.public_code, p.title, p.price, p.status,
                        w.id AS warehouse_id, w.name AS warehouse_name,
@@ -556,7 +636,7 @@ public class PartService {
                   JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
                   JOIN warehouse w ON w.id = s.warehouse_id
                   LEFT JOIN storage_cell c ON c.id = s.cell_id
-                """ + STOCK_SEARCH_MATCH + """
+                """ + match.sql() + """
                  ORDER BY (s.qty - s.qty_reserved > 0) DESC,
                           ts_rank(to_tsvector('russian', coalesce(p.title, '') || ' '
                               || coalesce(p.description, '') || ' '
@@ -576,8 +656,8 @@ public class PartService {
                         rs.getBigDecimal("qty"),
                         rs.getBigDecimal("qty_reserved"),
                         rs.getBigDecimal("qty_available")),
-                // Четыре ветки UNION, потом ранжирование, потом предел.
-                like, like, text, like, text, limit);
+                // Ветки UNION, потом ранжирование, потом предел.
+                args.toArray());
 
         // Сколько нашлось всего — тем же условием. Список обрезан
         // на полусотне, и молча этого делать нельзя: продавец видел
@@ -589,17 +669,17 @@ public class PartService {
         // Счёт стоит десять миллисекунд на складе в 35 841 позицию —
         // замерено. Когда список короче предела, он и есть всё найденное,
         // и лишний запрос был бы платой ни за что.
-        long total = rows.size() < limit ? rows.size() : countAvailable(like, text);
+        long total = rows.size() < limit ? rows.size() : countAvailable(match);
         return new StockSearch(rows, total);
     }
 
-    private long countAvailable(String like, String text) {
+    private long countAvailable(Match match) {
         Long found = jdbc.queryForObject("""
                 SELECT count(*)
                   FROM part p
                   JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
-                """ + STOCK_SEARCH_MATCH,
-                Long.class, like, like, text, like);
+                """ + match.sql(),
+                Long.class, match.args().toArray());
         return found == null ? 0 : found;
     }
 

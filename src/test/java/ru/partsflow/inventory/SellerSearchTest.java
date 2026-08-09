@@ -39,7 +39,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
 class SellerSearchTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000106";
+    // Своя схема, а не общая: в t_000106 живёт перенос колёс, и заведённая
+    // здесь шина ломала ему счёт остатка — поймано полным прогоном, когда
+    // в этом тесте появилось колесо.
+    private static final String TENANT = "t_000112";
 
     @Autowired
     private PartService parts;
@@ -102,6 +105,60 @@ class SellerSearchTest extends PostgresTestBase {
         assertThat(found(code))
                 .as("код товара с этикетки не находит собственную деталь")
                 .contains(partId);
+    }
+
+    /**
+     * Размер шины покупатель называет словами, и продавец набирает как слышит.
+     *
+     * <p>Вкладка «Шины и диски» разбирает «225 55 18» в поля с самого начала,
+     * а поиск продавца — нет: он искал подстрокой, а в заголовке стоит
+     * «225/55 R18», и по буквам это не совпадает ни с чем. Замерено на живом
+     * складе: вкладка отдавала 22 позиции, продавец — ноль. Двадцать два
+     * колеса лежат, а продавец отвечает «нет такого».
+     *
+     * <p>Правило общее и чинилось уже дважды: два поиска по одному складу
+     * обязаны находить одно и то же.
+     */
+    @Test
+    @DisplayName("Продавец находит шину по размеру, названному словами")
+    void findsWheelBySpokenSize() {
+        Long wheel = wheelWithSize();
+
+        assertThat(found("225 55 18"))
+                .as("размер словами не находит шину — продавец ответит «нет такого»")
+                .contains(wheel);
+        assertThat(found("225/55 R18"))
+                .as("размер в привычной записи тоже обязан находить")
+                .contains(wheel);
+    }
+
+    /** Нераспознанное остаётся текстом: «Bridgestone» ищется словами. */
+    @Test
+    @DisplayName("Марка вместе с размером сужает, а не теряет позицию")
+    void findsWheelByBrandAndSize() {
+        Long wheel = wheelWithSize();
+
+        assertThat(found("бриджстоун 225 55 18"))
+                .as("марка по-русски вместе с размером не нашла шину")
+                .contains(wheel);
+        assertThat(found("данлоп 225 55 18"))
+                .as("чужая марка обязана сузить выдачу до пустоты")
+                .doesNotContain(wheel);
+    }
+
+    private Long wheelWithSize() {
+        return inTenant(() -> {
+            Long id = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, is_published, product_line)
+                    VALUES (1, 'Шина 225/55 R18 Bridgestone Blizzak зимняя (шипы)',
+                            9000, true, 'WHEEL')
+                    RETURNING id""", Long.class);
+            jdbc.update("""
+                    INSERT INTO part_wheel (part_id, kind, tyre_width, tyre_height, diameter)
+                    VALUES (?, 'TYRE', 225, 55, 18)""", id);
+            ledger.record(StockMovement.intake(id, BigDecimal.ONE, warehouseId, null));
+            return id;
+        });
     }
 
     /** Номер называют куском: «есть 1150-33?» */
