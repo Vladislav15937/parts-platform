@@ -328,6 +328,55 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 .isEqualTo(onlyToyota.split("<offer>", -1).length - 1);
     }
 
+    /**
+     * Выгрузка филиала показывает остаток этого филиала, а не всей компании.
+     *
+     * <p><b>Зачем.</b> Прайс с отбором по складу — это витрина конкретной
+     * точки: покупатель читает «в наличии» и едет туда. Если остаток считать
+     * по всем складам, он приедет за деталью, которая лежит на другом конце
+     * города, и виноват будет магазин, а не он.
+     *
+     * <p>Из прайса позиция при этом не исчезает — уезжает недоступной:
+     * убранное из файла объявление площадка снимает вместе с накопленными
+     * просмотрами, за которые и платят.
+     *
+     * <p>Правило было записано, но ничем не закрыто: тестов на отбор
+     * по складу не было вовсе, и проверить его можно было только глазами
+     * на живой выгрузке.
+     */
+    @Test
+    @DisplayName("Отбор по складу меняет остаток, а не только состав")
+    void warehouseFilterChangesAvailability() {
+        String name = "Прайс: лежит на дальнем складе";
+        Long partId = part(name, new BigDecimal("7000"), true);
+        intake(partId, otherWarehouse, 1);
+
+        DromPriceGenerator.FeedFilter own = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(otherWarehouse),
+                java.util.List.of(), false, java.util.List.of(), false);
+        assertThat(offerIn(priceWith(own), name))
+                .as("на своём складе деталь есть, а прайс объявил её недоступной")
+                .contains("<available>true</available>")
+                .contains("<quantity>1</quantity>");
+
+        DromPriceGenerator.FeedFilter alien = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(warehouse),
+                java.util.List.of(), false, java.util.List.of(), false);
+        String other = offerIn(priceWith(alien), name);
+        assertThat(other)
+                .as("прайс филиала обещает деталь, которой в этом филиале нет")
+                .contains("<available>false</available>")
+                .contains("<quantity>0</quantity>");
+    }
+
+    /** Вырезает {@code <offer>} по названию из готового прайса. */
+    private String offerIn(String xml, String name) {
+        int nameAt = xml.indexOf("<name>" + name + "</name>");
+        assertThat(nameAt).as("позиции «%s» нет в прайсе вовсе — объявление исчезло", name)
+                .isNotNegative();
+        return xml.substring(xml.lastIndexOf("<offer>", nameAt), xml.indexOf("</offer>", nameAt));
+    }
+
     private String priceWith(DromPriceGenerator.FeedFilter filter) {
         return inTenant(() -> {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
