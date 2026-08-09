@@ -373,6 +373,11 @@ public class WheelService {
                     throw new IllegalArgumentException(
                             "По этой колонке отбор не делается: " + entry.getKey());
                 }
+                // Пустое «содержит» — не «подходит любое»: `ILIKE '%%'`
+                // отбрасывает незаполненные, тихо сужая выдачу.
+                if (entry.getValue() == null || entry.getValue().isBlank()) {
+                    continue;
+                }
                 where.append(" AND ").append(expression).append(" ILIKE ?");
                 args.add("%" + entry.getValue().strip() + "%");
             }
@@ -386,6 +391,13 @@ public class WheelService {
                             "По этой колонке отбор не делается: " + entry.getKey());
                 }
                 String value = entry.getValue();
+                // Пустое значение — «условие не задано», а не «равно пустоте»:
+                // отбор по нему не находит ничего, и у выгрузки это пустой
+                // прайс, который площадка примет молча вместе с потерей
+                // объявлений. «Не заполнено» спрашивают отдельным пунктом.
+                if (value == null || value.isBlank()) {
+                    continue;
+                }
                 if (EMPTY.equals(value)) {
                     // «Пустые значения» — это вопрос «где не заполнено»,
                     // и он нужен: незаполненный сезон у шины видно только так.

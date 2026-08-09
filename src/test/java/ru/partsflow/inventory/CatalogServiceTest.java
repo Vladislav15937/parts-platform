@@ -595,6 +595,49 @@ class CatalogServiceTest extends PostgresTestBase {
         });
     }
 
+    /**
+     * Пустое условие — «не задано», а не «равно пустоте».
+     *
+     * <p><b>Зачем.</b> Отбор колонками теперь настраивает и выгрузка, а там
+     * условия хранятся картой и приходят запросом. Пустое значение
+     * превращалось в {@code = ''} и не находило ничего — то есть давало
+     * пустой прайс, который площадка принимает молча, снимая объявления
+     * вместе с накопленными просмотрами. Пустое «содержит» тем же способом
+     * отбрасывало незаполненные: {@code ILIKE '%%'} мимо NULL не проходит.
+     *
+     * <p>Вопрос «где не заполнено» при этом остаётся — он задаётся отдельным
+     * пунктом «—пусто—», и тест держит обе стороны: без него правка
+     * «пропускать пустое» съела бы и его.
+     */
+    @Test
+    @DisplayName("Пустое значение условия ничего не отбирает, а «—пусто—» отбирает")
+    void blankConditionIsNoCondition() {
+        Long withSection = part("Отбор: с секцией", 1);
+        Long without = part("Отбор: без секции", 1);
+        inTenant(() -> jdbc.update("UPDATE part SET section = 'A-01' WHERE id = ?", withSection));
+
+        long all = inTenant(() -> catalog.list(null, true, true, List.of(), null,
+                Map.of(), Map.of(), "code", true, 0, 50)).total();
+
+        assertThat(inTenant(() -> catalog.list(null, true, true, List.of(), null,
+                Map.of("section", ""), Map.of(), "code", true, 0, 50)).total())
+                .as("пустое условие отобрало вместо того, чтобы ничего не значить")
+                .isEqualTo(all);
+        assertThat(inTenant(() -> catalog.list(null, true, true, List.of(), null,
+                Map.of(), Map.of("section", "  "), "code", true, 0, 50)).total())
+                .as("пустое «содержит» тихо выбросило незаполненные")
+                .isEqualTo(all);
+
+        // А отдельный пункт «где не заполнено» обязан работать по-прежнему.
+        List<String> empty = titles(inTenant(() -> catalog.list(null, true, true, List.of(), null,
+                Map.of("section", CatalogService.EMPTY), Map.of(), "code", true, 0, 200)));
+        assertThat(empty)
+                .as("«—пусто—» перестал отбирать незаполненные")
+                .contains("Отбор: без секции")
+                .doesNotContain("Отбор: с секцией");
+        assertThat(without).isNotNull();
+    }
+
     private Long part(String title, int qty) {
         return inTenant(() -> {
             Long id = jdbc.queryForObject("""

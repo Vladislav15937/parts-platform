@@ -272,6 +272,14 @@ public class CatalogService {
             for (var entry : columns.entrySet()) {
                 String expression = columnExpression(entry.getKey());
                 String value = entry.getValue();
+                // Пустое значение — «условие не задано», а не «равно пустоте»:
+                // отбор по нему не находит ничего, и у выгрузки это пустой
+                // прайс, который площадка примет молча вместе с потерей
+                // объявлений. «Не заполнено» спрашивают отдельным пунктом
+                // («—пусто—»), и он выше по коду.
+                if (value == null || value.isBlank()) {
+                    continue;
+                }
                 if (EMPTY.equals(value)) {
                     where.append(" AND coalesce(").append(expression).append(", '') = ''");
                 } else if (PRESENT.equals(value)) {
@@ -284,6 +292,12 @@ public class CatalogService {
         }
         if (words != null) {
             for (var entry : words.entrySet()) {
+                // Пустое «содержит» — не «подходит любое»: `ILIKE '%%'`
+                // отбрасывает незаполненные, то есть тихо сужает выдачу там,
+                // где владелец ничего не спрашивал.
+                if (entry.getValue() == null || entry.getValue().isBlank()) {
+                    continue;
+                }
                 where.append(" AND ").append(columnExpression(entry.getKey())).append(" ILIKE ?");
                 args.add("%" + entry.getValue().strip() + "%");
             }
