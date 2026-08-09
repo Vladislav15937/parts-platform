@@ -151,6 +151,16 @@ public class MarketplaceAccountService {
         if (priceFrom != null && priceTo != null && priceFrom.compareTo(priceTo) > 0) {
             throw new IllegalArgumentException("Нижняя граница цены больше верхней");
         }
+        /*
+         * Колонка проверяется той линией товара, которой торгует выгрузка.
+         *
+         * У колеса нет стороны, у запчасти нет сезона, и списки колонок
+         * у них разные. Принятое молча чужое условие ломается не здесь,
+         * а при заборе прайса — и до появления проверки площадка получала
+         * пустой файл, то есть команду снять все объявления. Владелец при
+         * этом видел сохранённый отбор и ничего подозрительного.
+         */
+        checkColumns(productLineOf(id), columns, words);
         int updated = jdbc.update("""
                 UPDATE marketplace_account
                    SET price_from = ?, price_to = ?,
@@ -172,6 +182,28 @@ public class MarketplaceAccountService {
             throw new IllegalArgumentException("Выгрузка не найдена: " + id);
         }
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
+    }
+
+    /**
+     * Проверяет имена колонок белым списком той линии, которой торгует
+     * выгрузка, — тем же, каким потом собирается прайс.
+     */
+    private void checkColumns(String productLine, java.util.Map<String, String> columns,
+                              java.util.Map<String, String> words) {
+        if ("WHEEL".equals(line(productLine))) {
+            wheels.columnFilter(columns, words);
+        } else {
+            parts.columnFilter(columns, words);
+        }
+    }
+
+    private String productLineOf(Long id) {
+        List<String> found = jdbc.queryForList(
+                "SELECT product_line FROM marketplace_account WHERE id = ?", String.class, id);
+        if (found.isEmpty()) {
+            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+        }
+        return found.get(0);
     }
 
     private static String arrayLiteral(List<?> values) {

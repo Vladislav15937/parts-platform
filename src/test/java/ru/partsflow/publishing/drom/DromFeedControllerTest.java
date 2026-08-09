@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -219,6 +220,37 @@ class DromFeedControllerTest extends PostgresTestBase {
         mvc.perform(post("/api/marketplace-accounts/" + accountId + "/feed-url")
                         .with(csrf()).session(login("manager")))
                 .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Условие по чужой колонке отбивается словами при сохранении.
+     *
+     * <p><b>Зачем.</b> Списки колонок у запчастей и у колёс разные: у колеса
+     * нет стороны, у запчасти нет сезона. Принятое молча чужое условие
+     * ломается не при сохранении, а при заборе прайса — то есть у площадки,
+     * и молча: до появления проверки она получала пустой файл, читала его
+     * как «товаров нет» и снимала объявления. Владелец при этом видел
+     * сохранённый отбор и ничего подозрительного.
+     */
+    @Test
+    @DisplayName("Условие по колонке чужой линии товара не сохраняется")
+    void alienColumnIsRefusedOnSave() throws Exception {
+        mvc.perform(put("/api/marketplace-accounts/" + accountId + "/filter")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"columns\":{\"season\":\"летняя\"}}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("season")));
+
+        // А своя колонка сохраняется как была: проверка не должна перекрыть
+        // то, ради чего отбор и заведён.
+        mvc.perform(put("/api/marketplace-accounts/" + accountId + "/filter")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"columns\":{\"section\":\"A-01\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.filterColumns.section").value("A-01"));
     }
 
     /**

@@ -112,6 +112,12 @@ public class DromWheelGenerator {
         this.wheels = wheels;
     }
 
+    /** Разбирает отбор, ничего не записывая, — до открытия потока ответа. */
+    @Transactional(readOnly = true)
+    public void checkFilter(DromPriceGenerator.FeedFilter filter) {
+        wheels.columnFilter(filter.columns(), filter.words());
+    }
+
     /**
      * Пишет прайс колёс в поток.
      *
