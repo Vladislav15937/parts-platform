@@ -102,7 +102,8 @@ public class MarketplaceAccountController {
         return accounts.setFilter(id, request.priceFrom(), request.priceTo(),
                 request.conditions(), request.warehouseIds(),
                 request.kindIds(), request.kindsExcluded(),
-                request.brandIds(), request.brandsExcluded());
+                request.brandIds(), request.brandsExcluded(),
+                request.columns(), request.words());
     }
 
     /**
@@ -120,7 +121,7 @@ public class MarketplaceAccountController {
                 request.conditions(), request.warehouseIds(),
                 request.kindIds(), request.kindsExcluded(),
                 request.brandIds(), request.brandsExcluded(),
-                request.productLine()));
+                request.productLine(), request.columns(), request.words()));
     }
 
     public record CountView(long parts) {
@@ -198,7 +199,15 @@ public class MarketplaceAccountController {
                                 boolean kindsExcluded,
                                 List<Long> brandIds,
                                 boolean brandsExcluded,
-                                String productLine) {
+                                String productLine,
+                                /**
+                                 * Отбор по колонкам склада: точное равенство,
+                                 * «колонка → значение». Список колонок закрыт
+                                 * сервером, неизвестное имя отвергается.
+                                 */
+                                java.util.Map<String, String> columns,
+                                /** То же вхождением: набранное руками. */
+                                java.util.Map<String, String> words) {
     }
 
     /**

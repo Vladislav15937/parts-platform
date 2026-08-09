@@ -292,6 +292,45 @@ public class CatalogService {
         return new Filter(where, args);
     }
 
+    /**
+     * Отбор колонками как подзапрос — для тех, кто отбирает не витрину.
+     *
+     * <p><b>Зачем наружу.</b> Прайс площадки отбирался шестью условиями,
+     * зашитыми колонками таблицы, и каждое седьмое означало миграцию, правку
+     * генератора, счётчика и экрана — то есть релиз вместо действия
+     * владельца. Витрина к этому времени умеет отбирать по двадцати девяти
+     * колонкам, и заводить рядом второй список выражений значило бы получить
+     * две правды об одном и том же: они разошлись бы на первой же правке,
+     * и разошлись бы молча.
+     *
+     * <p>Поэтому выгрузка спрашивает условие здесь и подставляет его
+     * подзапросом по номерам позиций. Выражения, белый список колонок
+     * и разбор «пусто / не пусто» остаются в одном месте, а генератору
+     * не нужно знать ни про соединения витрины, ни про её алиасы.
+     *
+     * @return пусто, если условий нет — тогда прайс отдаёт всё, что прошло
+     *         остальные его отборы
+     */
+    @Transactional(readOnly = true)
+    public java.util.Optional<ColumnFilter> columnFilter(Map<String, String> columns,
+                                                         Map<String, String> words) {
+        boolean empty = (columns == null || columns.isEmpty())
+                && (words == null || words.isEmpty());
+        if (empty) {
+            return java.util.Optional.empty();
+        }
+        Filter filter = filterOf(null, true, true, List.of(), null, columns, words);
+        return java.util.Optional.of(new ColumnFilter(
+                "p.id IN (SELECT p.id" + JOINS + filter.where() + ")", filter.args()));
+    }
+
+    /**
+     * @param sql  готовое условие вида {@code p.id IN (…)}
+     * @param args его параметры по порядку
+     */
+    public record ColumnFilter(String sql, List<Object> args) {
+    }
+
     /** Незаполненное поле и «заполнено хоть чем-то» — тоже ответы на вопрос. */
     public static final String EMPTY = "\u2014пусто\u2014";
     public static final String PRESENT = "\u2014не пусто\u2014";

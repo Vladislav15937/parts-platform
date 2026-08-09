@@ -7,8 +7,17 @@ import { allKinds } from '../catalog/partNames';
 import type { PartKind } from '../catalog/partNames';
 import { loadCached, refresh } from '../catalog/vehicles';
 import type { Brand } from '../catalog/vehicles';
+import { ColumnMenu } from './ColumnMenu';
+import {
+  COLUMNS,
+  FILTER_EMPTY,
+  FILTER_PRESENT,
+  columnValues,
+} from '../inventory/catalog';
+import { WHEEL_COLUMNS, wheelValues } from '../inventory/wheels';
 import {
   feedUrl,
+  filterableColumns,
   CONDITIONS,
   countMatching,
   createFeed,
@@ -152,6 +161,37 @@ function FeedCard({
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState<number | null>(null);
 
+  // Свои условия владельца — те же колонки, какими он смотрит склад.
+  const [columns, setColumns] = useState<Record<string, string>>(
+    feed.filterColumns ?? {});
+  const [words, setWords] = useState<Record<string, string>>(feed.filterWords ?? {});
+  const [addFor, setAddFor] = useState('');
+  const [typed, setTyped] = useState('');
+  const [menuAt, setMenuAt] = useState<{ left: number; top: number } | null>(null);
+
+  const wheels = feed.productLine === 'WHEEL';
+  const known = wheels
+    ? WHEEL_COLUMNS.map((c) => ({ key: c.key, title: c.title }))
+    : COLUMNS.map((c) => ({ key: c.key, title: c.title }));
+  const titleOf = (key: string) => known.find((c) => c.key === key)?.title ?? key;
+
+  /*
+   * Список отбираемых колонок спрашивается у сервера, а не повторяется здесь.
+   *
+   * Повторённый, он разошёлся бы с ним на первой же новой колонке — и экран
+   * предлагал бы отбор, которого нет: сервер отвечает «по этой колонке отбор
+   * не делается», а владелец видит те же тридцать пять тысяч позиций
+   * и решает, что отбор сломан. Ровно этим уже болело меню колонки.
+   */
+  const [filterable, setFilterable] = useState<string[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void filterableColumns(feed.productLine)
+      .then((list) => { if (alive) setFilterable(list); })
+      .catch(() => { if (alive) setFilterable([]); });
+    return () => { alive = false; };
+  }, [feed.productLine]);
+
   const [kindIds, setKindIds] = useState<number[]>(feed.kindIds);
   const [kindsExcluded, setKindsExcluded] = useState(feed.kindsExcluded);
   const [brandIds, setBrandIds] = useState<number[]>(feed.brandIds);
@@ -166,6 +206,8 @@ function FeedCard({
     kindsExcluded,
     brandIds,
     brandsExcluded,
+    columns,
+    words,
   });
 
   async function save() {
@@ -206,6 +248,34 @@ function FeedCard({
   function toggle<T>(list: T[], value: T): T[] {
     return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
   }
+
+  const menu = addFor !== '' && menuAt !== null ? (
+    <ColumnMenu
+      column={addFor}
+      at={menuAt}
+      chosen={columns[addFor]}
+      filterable
+      sortable={undefined}
+      sort=""
+      desc={false}
+      values={wheels ? wheelValues : columnValues}
+      empty={FILTER_EMPTY}
+      present={FILTER_PRESENT}
+      onSort={() => {}}
+      onPick={(value) => {
+        const chosen = { ...columns };
+        if (value === null) {
+          delete chosen[addFor];
+        } else {
+          chosen[addFor] = value;
+        }
+        setColumns(chosen);
+        setMenuAt(null);
+        setAddFor('');
+      }}
+      onClose={() => setMenuAt(null)}
+    />
+  ) : null;
 
   return (
     <li className="card">
@@ -299,6 +369,112 @@ function FeedCard({
         </>
       )}
 
+      {/* Свои условия владельца.
+          Шесть зашитых условий покрывают не всё, а каждое седьмое означало бы
+          релиз: миграция, генератор, счётчик, экран. Витрина склада к этому
+          времени отбирает по двадцати девяти колонкам, и выгрузка берёт тот же
+          механизм — те же колонки, те же значения, тот же разбор «пусто».
+          Второй список колонок рядом с витринным разошёлся бы с ним
+          на первой правке. */}
+      <fieldset className="choices">
+        <legend>Свои условия — пусто значит без ограничения</legend>
+
+        {/* Тем же значком, что и на витрине склада: условия там снимаются
+            нажатием на сам значок, и второй вид того же элемента заставлял бы
+            владельца заново догадываться, как его убрать. */}
+        {Object.entries(columns).map(([key, value]) => (
+          <button
+            key={`c-${key}`}
+            type="button"
+            className="crumb"
+            onClick={() => {
+              const left = { ...columns };
+              delete left[key];
+              setColumns(left);
+            }}
+          >
+            {titleOf(key)}: {value} ✕
+          </button>
+        ))}
+        {Object.entries(words).map(([key, value]) => (
+          <button
+            key={`w-${key}`}
+            type="button"
+            className="crumb"
+            onClick={() => {
+              const left = { ...words };
+              delete left[key];
+              setWords(left);
+            }}
+          >
+            {titleOf(key)}: «{value}» ✕
+          </button>
+        ))}
+
+        <div className="filter-row">
+          <label className="field">
+            Колонка
+            <select value={addFor} onChange={(e) => {
+              setAddFor(e.target.value);
+              setTyped('');
+              setMenuAt(null);
+            }}>
+              <option value="">— выберите колонку —</option>
+              {known
+                .filter((c) => (filterable ?? []).includes(c.key))
+                .map((c) => (
+                  <option key={c.key} value={c.key}>{c.title}</option>
+                ))}
+            </select>
+          </label>
+
+          {/* Два способа, как на витрине: вбитое руками ищется вхождением
+              («Nok» находит Nokian), выбранное из списка — точным равенством.
+              Это разные вопросы, и различать их магией в значении нельзя. */}
+          <label className="field">
+            Содержит
+            <input
+              value={typed}
+              placeholder="часть значения"
+              disabled={addFor === ''}
+              onChange={(e) => setTyped(e.target.value)}
+            />
+          </label>
+
+          <button
+            type="button"
+            className="button--ghost"
+            disabled={addFor === '' || typed.trim() === ''}
+            onClick={() => {
+              setWords({ ...words, [addFor]: typed.trim() });
+              setAddFor('');
+              setTyped('');
+            }}
+          >
+            Добавить
+          </button>
+
+          <button
+            type="button"
+            className="button--ghost"
+            disabled={addFor === ''}
+            onClick={(e) => {
+              // Без прокрутки: список значений рисуется `position: fixed`,
+              // и прибавленный scrollY уводит его за нижний край экрана —
+              // кнопка нажата, а ответа на ней нет.
+              const box = (e.target as HTMLElement).getBoundingClientRect();
+              setMenuAt({ left: box.left, top: box.bottom });
+            }}
+          >
+            Выбрать значение
+          </button>
+        </div>
+
+        {filterable !== null && filterable.length === 0 && (
+          <p className="muted">Список колонок не прочитан — обновите страницу</p>
+        )}
+      </fieldset>
+
       <div className="filter-row">
         <button type="button" className="button--ghost" disabled={busy}
                 onClick={() => void count()}>
@@ -355,6 +531,7 @@ function FeedCard({
           {feed.hasFeed ? 'Сменить ссылку' : 'Выдать ссылку'}
         </button>
       </details>
+      {menu}
 
       {/*
         * Ключ синхронизации вводится здесь, и до этого его нельзя было

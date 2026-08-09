@@ -404,6 +404,42 @@ public class WheelService {
     private record Filter(String where, List<Object> args) {
     }
 
+    /**
+     * Отбор по колонкам вкладки колёс — готовым условием для чужого запроса.
+     *
+     * <p><b>Зачем.</b> Выгрузку колёс владелец настраивает теми же колонками,
+     * какими смотрит склад: сезон, диаметр, марка, износ. Второй белый список
+     * рядом с этим разошёлся бы с ним на первой правке, и появилось бы
+     * значение, которое таблица показывает, а выгрузка не отбирает.
+     *
+     * @return пусто, если условий нет вовсе, — «без ограничения», а не
+     *         «ничего»: выгрузка без отбора отдаёт весь колёсный склад
+     */
+    @Transactional(readOnly = true)
+    public java.util.Optional<ColumnFilter> columnFilter(Map<String, String> columns,
+                                                         Map<String, String> words) {
+        boolean empty = (columns == null || columns.isEmpty())
+                && (words == null || words.isEmpty());
+        if (empty) {
+            return java.util.Optional.empty();
+        }
+        Filter filter = filterOf(null, null, true, columns, words);
+        return java.util.Optional.of(new ColumnFilter("""
+                p.id IN (SELECT p.id FROM part p
+                           JOIN part_wheel w ON w.part_id = p.id
+                           LEFT JOIN part_name pn ON pn.id = p.part_name_id
+                           LEFT JOIN donor d ON d.id = p.donor_id
+                           LEFT JOIN supply s ON s.id = p.supply_id
+                """ + filter.where() + ")", filter.args()));
+    }
+
+    /**
+     * @param sql  готовое условие вида {@code p.id IN (…)}
+     * @param args его параметры по порядку
+     */
+    public record ColumnFilter(String sql, List<Object> args) {
+    }
+
     /** Незаполненное поле и «заполнено хоть чем-то» — тоже ответы на вопрос. */
     public static final String EMPTY = "\u2014пусто\u2014";
     public static final String PRESENT = "\u2014не пусто\u2014";

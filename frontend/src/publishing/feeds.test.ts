@@ -29,6 +29,8 @@ function feed(overrides: Partial<Feed> = {}): Feed {
     kindsExcluded: false,
     brandIds: [],
     brandsExcluded: false,
+    filterColumns: {},
+    filterWords: {},
     ...overrides,
   };
 }

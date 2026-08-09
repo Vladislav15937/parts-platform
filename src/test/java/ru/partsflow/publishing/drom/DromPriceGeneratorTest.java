@@ -253,7 +253,8 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         intake(wheel, warehouse, 1);
 
         long counted = inTenant(() -> accounts.countMatching(
-                null, null, null, null, null, false, null, false, "PART"));
+                null, null, null, null, null, false, null, false, "PART",
+                java.util.Map.of(), java.util.Map.of()));
         long offers = price().split("<offer>", -1).length - 1;
 
         assertThat(counted)
@@ -322,7 +323,8 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         // существующая сверка счётчика идёт без марок и эту ветку не трогает.
         long counted = inTenant(() -> accounts.countMatching(
                 null, null, null, null, null, false,
-                java.util.List.of(brandId), false, "PART"));
+                java.util.List.of(brandId), false, "PART",
+                java.util.Map.of(), java.util.Map.of()));
         assertThat(counted)
                 .as("счётчик считает марку не так, как генератор")
                 .isEqualTo(onlyToyota.split("<offer>", -1).length - 1);
@@ -367,6 +369,102 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 .as("прайс филиала обещает деталь, которой в этом филиале нет")
                 .contains("<available>false</available>")
                 .contains("<quantity>0</quantity>");
+    }
+
+    /**
+     * Своё условие владельца сужает и прайс, и дельту, и счётчик.
+     *
+     * <p><b>Зачем.</b> Зашитых условий было шесть — цена, состояние, склады,
+     * наименования, марки, — и каждое седьмое означало релиз: миграция,
+     * генератор, счётчик, экран. Владелец при этом смотрит склад по двадцати
+     * девяти колонкам и отбирает по любой; выгрузка брала из них ни одной.
+     *
+     * <p>Проверяются три поверхности разом, потому что разойтись они могут
+     * только порознь. Счётчик, не знающий условия, обещает не то число,
+     * которое уедет площадке, — это уже случалось дважды, с колёсами
+     * и с марками из применимости. А дельта, не знающая условия, заводит
+     * в чужом прайс-листе объявление, которого владелец не создавал: снять
+     * его нечем до следующего полного забора, то есть до трёх суток.
+     */
+    @Test
+    @DisplayName("Своё условие по колонке склада сужает прайс, дельту и счётчик")
+    void ownColumnConditionNarrowsFeedDeltaAndCounter() {
+        String mine = "Прайс: фара в своей секции";
+        String alien = "Прайс: фара в чужой секции";
+        Long ours = part(mine, new BigDecimal("4000"), true);
+        Long theirs = part(alien, new BigDecimal("4000"), true);
+        intake(ours, warehouse, 1);
+        intake(theirs, warehouse, 1);
+        inTenant(() -> jdbc.update("UPDATE part SET section = 'A-01' WHERE id = ?", ours));
+        inTenant(() -> jdbc.update("UPDATE part SET section = 'B-02' WHERE id = ?", theirs));
+
+        DromPriceGenerator.FeedFilter bySection = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), false,
+                java.util.List.of(), false,
+                java.util.Map.of("section", "A-01"), java.util.Map.of());
+
+        String xml = priceWith(bySection);
+        assertThat(xml)
+                .as("позиция своей секции не попала в прайс с условием по секции")
+                .contains(mine);
+        assertThat(xml)
+                .as("условие по колонке не применилось: уехала чужая секция")
+                .doesNotContain(alien);
+
+        // Дельта — та же выгрузка, только выбранными позициями. Не знай она
+        // условия, чужая секция завела бы объявление в этом прайс-листе.
+        String delta = inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeDelta(out, java.util.List.of(ours, theirs), bySection);
+            return out.toString(StandardCharsets.UTF_8);
+        });
+        assertThat(delta).as("своя позиция пропала из дельты").contains(mine);
+        assertThat(delta)
+                .as("дельта уносит в прайс-лист то, что его отбор не пускает")
+                .doesNotContain(alien);
+
+        long counted = inTenant(() -> accounts.countMatching(
+                null, null, null, null, null, false, null, false, "PART",
+                java.util.Map.of("section", "A-01"), java.util.Map.of()));
+        assertThat(counted)
+                .as("счётчик считает не тем условием, каким собирается прайс")
+                .isEqualTo(xml.split("<offer>", -1).length - 1);
+    }
+
+    /**
+     * Вбитое руками ищется вхождением, как на витрине.
+     *
+     * <p>Это не придирка к способу набора: «Nok» обязано находить Nokian,
+     * иначе владелец, знающий производителя приблизительно, получает пустой
+     * прайс — а пустой прайс площадка примет молча, и объявления пропадут
+     * вместе с накопленными просмотрами.
+     */
+    @Test
+    @DisplayName("Условие «содержит» ищет куском, а не целым значением")
+    void ownWordConditionMatchesBySubstring() {
+        String name = "Прайс: стойка Tokico";
+        String alien = "Прайс: стойка KYB";
+        Long partId = part(name, new BigDecimal("4500"), true);
+        Long other = part(alien, new BigDecimal("4500"), true);
+        intake(partId, warehouse, 1);
+        intake(other, warehouse, 1);
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET manufacturer = 'Tokico Japan' WHERE id = ?", partId));
+        inTenant(() -> jdbc.update("UPDATE part SET manufacturer = 'KYB' WHERE id = ?", other));
+
+        String xml = priceWith(new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), false,
+                java.util.List.of(), false,
+                java.util.Map.of(), java.util.Map.of("manufacturer", "toki")));
+        assertThat(xml)
+                .as("«содержит» ищет целым значением — куском производителя не найти")
+                .contains(name);
+        // Вторая половина: условие обязано ещё и отсекать. Без неё тест
+        // проходит на выгрузке, не знающей условий вовсе, — то есть стережёт
+        // ровно ничего; проверено откатом правки.
+        assertThat(xml)
+                .as("условие «содержит» не отсекает: уехал чужой производитель")
+                .doesNotContain(alien);
     }
 
     /** Вырезает {@code <offer>} по названию из готового прайса. */

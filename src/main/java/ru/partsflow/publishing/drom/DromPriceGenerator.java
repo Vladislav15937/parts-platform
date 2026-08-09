@@ -210,9 +210,15 @@ public class DromPriceGenerator {
     private final EntityManager entityManager;
     private final DromPriceWriter writer;
 
-    public DromPriceGenerator(EntityManager entityManager, DromPriceWriter writer) {
+    private final ru.partsflow.inventory.CatalogService catalog;
+
+    public DromPriceGenerator(EntityManager entityManager, DromPriceWriter writer,
+                              ru.partsflow.inventory.CatalogService catalog) {
         this.entityManager = entityManager;
         this.writer = writer;
+        // Отбор по колонкам берётся у витрины: список колонок, выражения
+        // и разбор «пусто / не пусто» обязаны быть одни на оба экрана.
+        this.catalog = catalog;
     }
 
     /**
@@ -278,10 +284,26 @@ public class DromPriceGenerator {
      *                     пусто — любое
      * @param warehouseIds пусто — все склады
      */
+    /**
+     * @param columns отбор по колонкам витрины: точное равенство,
+     *                «колонка → значение». Владелец добавляет условия сам,
+     *                и новое не требует ни миграции, ни правки генератора
+     * @param words   то же вхождением: набранное руками ищется куском
+     */
     public record FeedFilter(BigDecimal priceFrom, BigDecimal priceTo,
                              List<String> conditions, List<Long> warehouseIds,
                              List<Long> kindIds, boolean kindsExcluded,
-                             List<Long> brandIds, boolean brandsExcluded) {
+                             List<Long> brandIds, boolean brandsExcluded,
+                             java.util.Map<String, String> columns,
+                             java.util.Map<String, String> words) {
+
+        public FeedFilter(BigDecimal priceFrom, BigDecimal priceTo,
+                          List<String> conditions, List<Long> warehouseIds,
+                          List<Long> kindIds, boolean kindsExcluded,
+                          List<Long> brandIds, boolean brandsExcluded) {
+            this(priceFrom, priceTo, conditions, warehouseIds, kindIds, kindsExcluded,
+                    brandIds, brandsExcluded, java.util.Map.of(), java.util.Map.of());
+        }
 
         public static FeedFilter everything() {
             return new FeedFilter(null, null, List.of(), List.of(),
@@ -326,9 +348,20 @@ public class DromPriceGenerator {
 
     private int write(OutputStream out, List<Long> partIds, FeedFilter filter, String photoBase) {
         Session session = entityManager.unwrap(Session.class);
+
+        // Условия по колонкам витрины: их собирает сам отбор витрины, чтобы
+        // выражения и белый список колонок жили в одном месте. Идут в конец,
+        // перед фильтром дельты, — иначе сдвинулись бы номера параметров
+        // у всех условий выше.
+        var byColumns = catalog.columnFilter(filter.columns(), filter.words());
+        String columnsSql = byColumns.map(f -> " AND " + f.sql()).orElse("");
+        List<Object> columnArgs = byColumns
+                .map(ru.partsflow.inventory.CatalogService.ColumnFilter::args)
+                .orElseGet(List::of);
+
         String sql = SQL.replace("${statuses}",
                 partIds == null ? PRICE_STATUSES : DELTA_STATUSES)
-                + (partIds == null ? "" : DELTA_FILTER) + ORDER;
+                + columnsSql + (partIds == null ? "" : DELTA_FILTER) + ORDER;
 
         return session.doReturningWork(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -374,8 +407,12 @@ public class DromPriceGenerator {
                 statement.setArray(17, brands);
                 statement.setArray(18, brands);
 
+                int next = 19;
+                for (Object arg : columnArgs) {
+                    statement.setObject(next++, arg);
+                }
                 if (partIds != null) {
-                    statement.setArray(19, connection.createArrayOf("bigint", partIds.toArray()));
+                    statement.setArray(next, connection.createArrayOf("bigint", partIds.toArray()));
                 }
                 try (ResultSet rs = statement.executeQuery()) {
                     return writer.write(out, new OfferCursor(rs, photoBase));

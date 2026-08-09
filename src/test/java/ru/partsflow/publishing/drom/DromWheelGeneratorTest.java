@@ -260,13 +260,59 @@ class DromWheelGeneratorTest extends PostgresTestBase {
         });
 
         long counted = inTenant(() -> accounts.countMatching(
-                from, to, null, null, null, false, null, false, "WHEEL"));
+                from, to, null, null, null, false, null, false, "WHEEL",
+                java.util.Map.of(), java.util.Map.of()));
         long offers = priceWithin(from, to).split("<offer>", -1).length - 1;
 
         assertThat(offers).as("в прайс колёс попали не обе шины").isEqualTo(2);
         assertThat(counted)
                 .as("счётчик колёсной выгрузки обещает не то число, которое уедет")
                 .isEqualTo(offers);
+    }
+
+    /**
+     * Своё условие по колонке вкладки колёс сужает прайс и счётчик.
+     *
+     * <p><b>Зачем.</b> Прайс шин у владельца не один: летние и зимние
+     * размещаются отдельно, у каждого свой прайс-лист и своя цена. Отбор
+     * выгрузки при этом знал только цену, состояние и склады — сезона среди
+     * них нет, и разложить колёса по прайс-листам было нечем вовсе.
+     *
+     * <p>Колонки берутся у самой вкладки колёс, а не повторяются здесь:
+     * второй список разошёлся бы с ней на первой правке, и появилось бы
+     * значение, которое таблица показывает, а выгрузка не отбирает.
+     */
+    @Test
+    @DisplayName("Условие по колонке колёс сужает прайс и счётчик заодно")
+    void ownColumnConditionNarrowsTheWheelFeed() {
+        BigDecimal from = new BigDecimal("991000");
+        BigDecimal to = new BigDecimal("992000");
+
+        tyre("Отбор: шина летняя", "991100", "SUMMER", 205, 55, "16", 91, "V", "6");
+        tyre("Отбор: шина зимняя", "991200", "WINTER_STUDDED", 215, 60, "17", 94, "H", "5");
+
+        DromPriceGenerator.FeedFilter summer = new DromPriceGenerator.FeedFilter(
+                from, to, java.util.List.of(), java.util.List.of(),
+                java.util.List.of(), false, java.util.List.of(), false,
+                java.util.Map.of("season", "летняя"), java.util.Map.of());
+
+        String xml = inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeTo(out, summer, null);
+            return out.toString(StandardCharsets.UTF_8);
+        });
+
+        assertThat(xml).as("летняя шина не попала в летний прайс")
+                .contains("Отбор: шина летняя");
+        assertThat(xml).as("в летний прайс уехала зимняя шина")
+                .doesNotContain("Отбор: шина зимняя");
+
+        long counted = inTenant(() -> accounts.countMatching(
+                from, to, null, null, null, false, null, false, "WHEEL",
+                java.util.Map.of("season", "летняя"), java.util.Map.of()));
+        assertThat(counted)
+                .as("счётчик колёс считает не тем условием, каким собирается прайс")
+                .isEqualTo(xml.split("<offer>", -1).length - 1);
     }
 
     // ---------- фикстуры ----------

@@ -46,6 +46,18 @@ export interface Feed {
   kindsExcluded: boolean;
   brandIds: number[];
   brandsExcluded: boolean;
+  /**
+   * Свои условия владельца: «колонка → значение», точное равенство.
+   *
+   * <p>Шесть зашитых условий (цена, состояние, склады, наименования, марки)
+   * покрывают не всё, а каждое седьмое означало бы релиз. Витрина склада
+   * к этому времени отбирает по двадцати девяти колонкам, и выгрузка берёт
+   * тот же механизм: список колонок закрыт сервером, неизвестное имя
+   * отвергается.
+   */
+  filterColumns: Record<string, string>;
+  /** То же вхождением: «Nok» находит Nokian. */
+  filterWords: Record<string, string>;
 }
 
 /** Отправляем строками: сервер разберёт их в numeric сам. */
@@ -58,6 +70,8 @@ export interface FeedFilter {
   kindsExcluded: boolean;
   brandIds: number[];
   brandsExcluded: boolean;
+  columns: Record<string, string>;
+  words: Record<string, string>;
 }
 
 /**
@@ -79,6 +93,27 @@ export function countMatching(
     method: 'POST',
     body: { ...filter, productLine },
   });
+}
+
+/**
+ * По каким колонкам сервер умеет отбирать — списком с самого сервера.
+ *
+ * <p>Повторённый на клиенте, список разошёлся бы с ним на первой же новой
+ * колонке, и экран предлагал бы условие, которого нет: сервер отвечает
+ * «по этой колонке отбор не делается», а владелец видит прежний прайс
+ * и решает, что отбор сломан. Ровно этим болело меню колонки на витрине.
+ *
+ * <p>Страницей в одну строку, а не своим эндпоинтом: список едет вместе
+ * с выдачей склада, и второй источник того же знания — это то, что здесь
+ * и избегается.
+ */
+export function filterableColumns(line: 'PART' | 'WHEEL'): Promise<string[]> {
+  const path = line === 'WHEEL'
+    ? '/api/wheels?page=0&size=1'
+    : '/api/parts/catalog?page=0&size=1';
+  // Ответ без ожидаемого ключа — это чужой ответ, а не пустой список:
+  // разбирать его дальше значит уронить экран целиком на `undefined.length`.
+  return request<{ filterable?: string[] }>(path).then((page) => page.filterable ?? []);
 }
 
 export function listFeeds(): Promise<Feed[]> {
@@ -199,6 +234,14 @@ export function filterSummary(feed: Feed): string {
   }
   if (feed.brandIds.length > 0) {
     parts.push(`${feed.brandsExcluded ? 'кроме' : 'только'} марок: ${feed.brandIds.length}`);
+  }
+
+  // Свои условия названы числом, а не перечислены: колонок бывает
+  // несколько, и подпись под заголовком должна оставаться в одну строку.
+  const own = Object.keys(feed.filterColumns ?? {}).length
+      + Object.keys(feed.filterWords ?? {}).length;
+  if (own > 0) {
+    parts.push(`своих условий: ${own}`);
   }
 
   // Не «фильтров нет»: пустой отбор — это осмысленное состояние, весь склад.
