@@ -1,63 +1,104 @@
 # parts-platform
 
 Учётная система для авторазборок и продавцов б/у автозапчастей.
-Мультиарендная SaaS: приёмка, склад, продажи, выгрузка объявлений на Авито и Дром.
+Мультиарендная SaaS: приёмка с телефона, склад, продажи, выгрузка объявлений
+на Дром (Авито отложено).
 
 ## Запуск
 
-Нужны JDK 21, Maven и Docker.
+Нужны JDK 21, Docker и Node 20+ для фронтенда. Maven брать не обязательно:
+в репозитории лежит `mvnw` — им же собирает CI.
 
 ```bash
-docker compose up -d          # postgres, kafka, minio
-
-cd db && ./verify.sh && cd .. # накатить миграции и проверить инварианты
-mvn spring-boot:run           # приложение на :8080
+docker compose up -d                        # postgres, kafka, minio
+./mvnw spring-boot:run                      # приложение на :8080
+cd frontend && npm install && npm run dev   # PWA на :5173, прокси на /api
 ```
+
+Открывать надо **`localhost:5173`**: приложение и фронтенд обязаны быть
+на одном источнике — сессия в cookie, CSRF-токен читается из cookie
+скриптом. В разработке это делает прокси Vite, в бою — один домен.
 
 Профиль по умолчанию `local`: транспорт событий in-memory, Kafka не нужна.
-Для реального брокера — `mvn spring-boot:run -Dspring-boot.run.profiles=kafka`.
+Для реального брокера — `./mvnw spring-boot:run -Dspring-boot.run.profiles=kafka`.
 
-Проверка:
+Встроенных в базу компаний нет и не будет: первую заводит провижининг
+(`POST /api/provisioning/tenants` под `app.provisioning-token`). Пошагово,
+от пустой базы до первой позиции, — `docs/walkthrough.md`, раздел 0.
+
+`db/verify.sh` накатывает миграции и проверяет инварианты **на отдельной
+базе**. Рядом с работающим приложением по той же базе его запускать нельзя:
+Liquibase считает changeset по пути файла, и два накатывающих процесса
+не видят историю друг друга.
+
+## Как попасть внутрь
+
+Арендатор берётся из сессии вошедшего, а не из запроса. Заголовка
+`X-Tenant-Id` больше нет — он давал чтение чужого склада всякому, кто
+подставит другой номер; `TenantFilterTest.headerIsIgnored` это стережёт.
+Значит любой запрос к `/api/**` требует входа и CSRF-токена:
 
 ```bash
-curl -X POST localhost:8080/api/parts \
-  -H 'Content-Type: application/json' -H 'X-Tenant-Id: 42' \
-  -d '{"categoryId":1,"title":"Фара левая Camry V50","price":8500,"quantity":1}'
+curl -c jar -s localhost:8080/api/auth/csrf -o /dev/null
+CSRF=$(grep XSRF-TOKEN jar | awk '{print $NF}')
 
-curl 'localhost:8080/api/parts/search?q=фара' -H 'X-Tenant-Id: 42'
+curl -b jar -c jar -X POST localhost:8080/api/auth/login \
+  -H 'Content-Type: application/json' -H "X-XSRF-TOKEN: $CSRF" \
+  -d '{"company":"КОД","login":"hozyain","password":"..."}'
+
+curl -b jar 'localhost:8080/api/parts/stock?q=фара'   # поиск продавца
+curl -b jar 'localhost:8080/api/parts/catalog?size=50' # витрина склада
 ```
 
-Заголовок `X-Tenant-Id` — временная заглушка до аутентификации. Убрать при
-внедрении Spring Security, иначе любой сможет читать чужой склад.
+Единственные пути без сессии: прайс площадки по постоянной ссылке
+(`/feeds/drom/{код}/{токен}.xml`), ссылка клиенту на его сделку
+и провижининг — у него свой секрет в заголовке.
 
 ## Тесты
 
 ```bash
-mvn test
+./mvnw test                 # 744 теста, нужен Docker (Testcontainers)
+cd frontend && npm test     # 286 тестов
 ```
 
-`TenantIsolationTest` требует Docker (Testcontainers) и проверяет, что данные
-арендаторов не пересекаются при работе через общий пул соединений. Это
-сторожевой тест самой опасной ошибки архитектуры — не отключай его.
+То же гоняет CI на каждый push (`.github/workflows/ci.yml`) тремя
+независимыми задачами: миграции, бэкенд, фронтенд.
+
+`TenantIsolationTest` проверяет, что данные арендаторов не пересекаются при
+работе через общий пул соединений. Это сторожевой тест самой опасной ошибки
+архитектуры — не отключай его.
 
 ## Что внутри
 
 ```
 src/main/java/ru/partsflow/
-├── platform/tenant/   маршрутизация по схемам арендаторов
+├── platform/tenant/   маршрутизация по схемам арендаторов, провижининг
 ├── platform/outbox/   Outbox, релей, транспорт событий
-├── inventory/         запчасти, склад, движения
-├── publishing/        выгрузки: Авито (pull-фид), Дром (pull-фид + API-дельты)
+├── catalog/           справочники: машины, виды деталей
+├── intake/            доноры, поставки, приёмка
+├── inventory/         запчасти, колёса, склад, движения, инвентаризация
+├── sales/             сделки, оплаты, возвраты, лицевые счета
+├── reports/           продажи по менеджерам, окупаемость машин
+├── publishing/        выгрузки: Дром (прайс + дельты по API), Авито отложено
+└── migration/bazon/   переезд с предыдущей системы
 db/                    миграции Liquibase, см. db/README.md
-docs/                  архитектура и доменная модель
-CLAUDE.md              контекст для продолжения в Claude Code
+frontend/              PWA: приёмка, продажа, склад, отчёты
+ops/                   развёртывание ячейки, бэкапы, тревоги
+docs/                  архитектура, интеграции, инструкции
+CLAUDE.md              ловушки, на которых проект сломается
 ```
 
 ## Документация
 
-- `docs/architecture-and-plan.md` — архитектура, обоснования, план на 6 месяцев
+- `CLAUDE.md` — ловушки и принятые решения; прочти перед правками
+- `docs/architecture-and-plan.md` — архитектура, обоснования, план
 - `docs/domain-model.md` — предметная область и решения по модели данных
+- `docs/bazon-parity.md` — карта функционала ориентира и список пробелов
 - `docs/drom-integration.md` — как на самом деле устроен обмен с Дромом
-- `docs/bazon-parity.md` — карта функционала Bazon и список пробелов
+- `docs/walkthrough.md` — сквозной прогон системы руками, от пустой базы
+- `docs/onboarding.md` — подключение живого клиента по шагам
+- `docs/deployment.md` — развёртывание ячейки, бэкапы, наблюдение
+- `docs/triggers-to-java.md` — перенос логики из базы в код: что чем стало
+- `docs/pwa-intake-plan.md` — устройство офлайн-приёмки
+- `docs/fiscal-54fz.md` — что готово к фискализации и чего не делать раньше времени
 - `db/README.md` — соглашения по миграциям
-- `CLAUDE.md` — ловушки, на которых проект сломается; прочти перед правками
