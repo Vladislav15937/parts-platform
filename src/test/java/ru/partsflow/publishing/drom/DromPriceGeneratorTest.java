@@ -372,6 +372,39 @@ class DromPriceGeneratorTest extends PostgresTestBase {
     }
 
     /**
+     * Склад уходит в прайс и подчиняется тому же отбору, что и остаток.
+     *
+     * <p><b>Зачем.</b> Покупателю это ответ на «куда ехать»: у клиента филиалы
+     * на разных концах города, и без поля он узнаёт адрес только звонком.
+     *
+     * <p>А отбор здесь важнее самого поля. Прайс филиала обязан называть
+     * его склад, и назвать соседний — хуже, чем промолчать: покупатель
+     * приедет туда, где детали нет. Поэтому склад считается тем же
+     * подзапросом, что и остаток, и на чужом складе не остаётся ничего.
+     */
+    @Test
+    @DisplayName("Склад уходит в прайс и берётся из отбора выгрузки")
+    void warehouseTravelsToTheFeed() {
+        String name = "Прайс: склад в объявлении";
+        Long partId = part(name, new BigDecimal("7000"), true);
+        intake(partId, otherWarehouse, 1);
+
+        DromPriceGenerator.FeedFilter own = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(otherWarehouse),
+                java.util.List.of(), false, java.util.List.of(), false);
+        assertThat(offerIn(priceWith(own), name))
+                .as("прайс не назвал склад, на котором деталь лежит")
+                .contains("<sklad>54 YARD</sklad>");
+
+        DromPriceGenerator.FeedFilter alien = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(warehouse),
+                java.util.List.of(), false, java.util.List.of(), false);
+        assertThat(offerIn(priceWith(alien), name))
+                .as("прайс филиала назвал чужой склад — покупатель приедет не туда")
+                .doesNotContain("<sklad>");
+    }
+
+    /**
      * Своё условие владельца сужает и прайс, и дельту, и счётчик.
      *
      * <p><b>Зачем.</b> Зашитых условий было шесть — цена, состояние, склады,

@@ -53,6 +53,8 @@ public record DromOffer(
         VerticalSide verticalSide,
         String color,
         String marking,
+        /** Где лежит: имя склада, а не адрес — реквизитов складов у нас нет. */
+        String warehouse,
         List<String> photos,
         String carBrand,
         String carModel,

@@ -79,7 +79,7 @@ class DromPriceWriterTest {
             // на площадке означал бы машину, которой не существует.
             DromOffer contract = new DromOffer("P-7", "Стартер", "Стартер", null, new BigDecimal("100"),
                     BigDecimal.ONE, PartCondition.USED, null, null, List.of(),
-                    null, null, null, null, null, List.of(),
+                    null, null, null, null, null, null, List.of(),
                     "Toyota,Lexus", "Camry,Windom", null, null, null, false, null, null);
 
             String xml = write(contract);
@@ -105,7 +105,7 @@ class DromPriceWriterTest {
         void skipsEmptyFields() throws Exception {
             DromOffer bare = new DromOffer("P-1", "Деталь", "Деталь", null, new BigDecimal("100"),
                     BigDecimal.ONE, PartCondition.USED, null, null, List.of(),
-                    null, null, null, null, null, List.of(),
+                    null, null, null, null, null, null, List.of(),
                     null, null, null, null, null, true, null, null);
 
             String xml = write(bare);
@@ -134,13 +134,34 @@ class DromPriceWriterTest {
         }
 
         @Test
+        @DisplayName("Склад уходит отдельным полем")
+        void writesWarehouse() throws Exception {
+            // Покупателю это «куда ехать»: у клиента филиалы на разных концах
+            // города, и без поля он узнаёт адрес только звонком.
+            assertThat(write(offer())).contains("<sklad>Ткацкая</sklad>");
+        }
+
+        @Test
+        @DisplayName("Позиция без склада не получает пустого элемента")
+        void skipsWarehouseWhenUnknown() throws Exception {
+            // Проданная позиция остаётся в прайсе недоступной, но лежать ей
+            // уже негде: пустой <sklad> означал бы склад с пустым именем.
+            DromOffer soldOut = new DromOffer("P-12", "Стартер", "Стартер", null,
+                    new BigDecimal("100"), BigDecimal.ZERO, PartCondition.USED,
+                    null, null, List.of(), null, null, null, null, null, null, List.of(),
+                    null, null, null, null, null, true, null, null);
+
+            assertThat(write(soldOut)).doesNotContain("<sklad>");
+        }
+
+        @Test
         @DisplayName("В наименовании выгрузки нет сокращений и повторов")
         void nameIsPlain() throws Exception {
             DromOffer abbreviated = new DromOffer("P-8",
                     "Фара Toyota Camry 2007 перед. лев. (б/у) 81170-33670", "Фара", null,
                     new BigDecimal("100"), BigDecimal.ONE, PartCondition.USED,
                     null, "81170-33670", List.of(),
-                    LateralSide.LEFT, LongitudinalSide.FRONT, null, null, null, List.of(),
+                    LateralSide.LEFT, LongitudinalSide.FRONT, null, null, null, null, List.of(),
                     null, null, null, null, null, true, null, null);
 
             // «Названия максимально простые и понятные, без сокращений» —
@@ -163,7 +184,7 @@ class DromPriceWriterTest {
                     new BigDecimal("8500"), BigDecimal.ONE, PartCondition.USED,
                     "KYB", "334388", List.of(),
                     LateralSide.LEFT, LongitudinalSide.FRONT, VerticalSide.LOWER,
-                    null, null, List.of(),
+                    null, null, null, List.of(),
                     "Honda", "Airwave", "GJ1", "L15A", 2007, true, null, null);
 
             assertThat(write(bare))
@@ -177,7 +198,7 @@ class DromPriceWriterTest {
             // неправдой — заметил бы покупатель, а не мы.
             DromOffer contract = new DromOffer("P-11", "Стартер", "Стартер", null,
                     new BigDecimal("100"), BigDecimal.ONE, PartCondition.USED,
-                    null, null, List.of(), null, null, null, null, null, List.of(),
+                    null, null, List.of(), null, null, null, null, null, null, List.of(),
                     "Toyota,Lexus", "Camry,Windom", null, null, null, false, null, null);
             assertThat(write(contract))
                     .contains("Подходит на: Toyota,Lexus Camry,Windom.")
@@ -194,7 +215,7 @@ class DromPriceWriterTest {
 
             DromOffer soldOut = new DromOffer("P-9", "Стартер", "Стартер", null,
                     new BigDecimal("100"), BigDecimal.ZERO, PartCondition.USED,
-                    null, null, List.of(), null, null, null, null, null, List.of(),
+                    null, null, List.of(), null, null, null, null, null, null, List.of(),
                     null, null, null, null, null, true, null, null);
             assertThat(write(soldOut)).contains("<quantity>0</quantity>");
         }
@@ -204,7 +225,7 @@ class DromPriceWriterTest {
         void escapesSpecialCharacters() throws Exception {
             DromOffer tricky = new DromOffer("P-2", "Кронштейн <передний> & правый", "Кронштейн", null,
                     new BigDecimal("100"), BigDecimal.ONE, PartCondition.USED,
-                    null, null, List.of(), null, null, null, null, null, List.of(),
+                    null, null, List.of(), null, null, null, null, null, null, List.of(),
                     null, null, null, null, null, true, null, null);
 
             String xml = write(tricky);
@@ -231,7 +252,7 @@ class DromPriceWriterTest {
         void skipsPhotosWhenThereAreNone() throws Exception {
             DromOffer noPhotos = new DromOffer("P-6", "Фара", "Фара", null, new BigDecimal("100"),
                     BigDecimal.ONE, PartCondition.USED, null, null, List.of(),
-                    null, null, null, null, null, List.of(),
+                    null, null, null, null, null, null, List.of(),
                     null, null, null, null, null, true, null, null);
 
             assertThat(write(noPhotos)).doesNotContain("<photo>");
@@ -242,7 +263,7 @@ class DromPriceWriterTest {
         void mapsNewCondition() throws Exception {
             DromOffer brandNew = new DromOffer("P-3", "Фильтр", "Фильтр", null, new BigDecimal("500"),
                     BigDecimal.ONE, PartCondition.NEW, null, null, List.of(),
-                    null, null, null, null, null, List.of(),
+                    null, null, null, null, null, null, List.of(),
                     null, null, null, null, null, true, null, null);
 
             assertThat(write(brandNew)).contains("<condition>Новое</condition>");
@@ -264,7 +285,7 @@ class DromPriceWriterTest {
         void soldOutStaysInPriceAsUnavailable() throws Exception {
             DromOffer soldOut = new DromOffer("P-4", "Стартер", "Стартер", null, new BigDecimal("5000"),
                     BigDecimal.ZERO, PartCondition.USED, null, null, List.of(),
-                    null, null, null, null, null, List.of(),
+                    null, null, null, null, null, null, List.of(),
                     null, null, null, null, null, true, null, null);
 
             String xml = write(soldOut);
@@ -280,7 +301,7 @@ class DromPriceWriterTest {
         void unknownStockIsNotAvailable() throws Exception {
             DromOffer unknown = new DromOffer("P-5", "Бампер", "Бампер", null, new BigDecimal("100"),
                     null, PartCondition.USED, null, null, List.of(),
-                    null, null, null, null, null, List.of(),
+                    null, null, null, null, null, null, List.of(),
                     null, null, null, null, null, true, null, null);
 
             assertThat(write(unknown)).contains("<available>false</available>");
@@ -354,6 +375,7 @@ class DromPriceWriterTest {
                 VerticalSide.LOWER,
                 "Чёрный",
                 "AM334388K",
+                "Ткацкая",
                 List.of("https://parts.example.ru/feeds/drom/yardt/tok/photo/11.jpg",
                         "https://parts.example.ru/feeds/drom/yardt/tok/photo/12.jpg"),
                 "Honda",

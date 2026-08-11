@@ -67,6 +67,11 @@ public class DromPriceGenerator {
                    kind.name AS part_kind,
                    p.price,
                    COALESCE(s.qty_available, 0) AS qty_available,
+                   -- Где деталь лежит: покупателю это «куда ехать», и у клиента
+                   -- с двумя филиалами на разных концах города вопрос не праздный.
+                   -- Берётся из того же отбора, что и остаток: у прайса филиала
+                   -- в поле обязан стоять его склад, а не соседний.
+                   s.warehouses,
                    p.condition,
                    p.manufacturer,
                    p.color,
@@ -96,10 +101,21 @@ public class DromPriceGenerator {
                    d.id IS NOT NULL AS from_donor
               FROM part p
               LEFT JOIN (
-                  SELECT part_id, sum(qty - qty_reserved) AS qty_available
-                    FROM part_stock
-                   WHERE (?::bigint[] IS NULL OR warehouse_id = ANY (?::bigint[]))
-                   GROUP BY part_id
+                  SELECT ps.part_id,
+                         sum(ps.qty - ps.qty_reserved) AS qty_available,
+                         -- Только там, где деталь физически лежит: склад,
+                         -- на котором остаток нулевой, — это не «где она»,
+                         -- а строка раскладки, оставшаяся после продажи.
+                         -- Несколько складов склеиваются через запятую: раскладка
+                         -- ведётся по складам, одна позиция может лежать не на
+                         -- одном, и назвать один из двух значило бы отправить
+                         -- половину покупателей не туда.
+                         string_agg(DISTINCT w.name, ', ') FILTER (WHERE ps.qty > 0)
+                             AS warehouses
+                    FROM part_stock ps
+                    JOIN warehouse w ON w.id = ps.warehouse_id
+                   WHERE (?::bigint[] IS NULL OR ps.warehouse_id = ANY (?::bigint[]))
+                   GROUP BY ps.part_id
               ) s ON s.part_id = p.id
               LEFT JOIN donor d ON d.id = p.donor_id
               LEFT JOIN part_oem primary_oem
@@ -519,6 +535,7 @@ public class DromPriceGenerator {
                     enumOf(VerticalSide.class, rs.getString("side_ud")),
                     rs.getString("color"),
                     rs.getString("marking"),
+                    rs.getString("warehouses"),
                     photoLinks(rs.getString("photo_ids"), photoBase),
                     rs.getString("car_brand"),
                     rs.getString("car_model"),
