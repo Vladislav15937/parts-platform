@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import { FeedsScreen } from './FeedsScreen';
 
@@ -37,6 +37,12 @@ describe('свои условия выгрузки', () => {
         return json(feed({ filterWords: { manufacturer: 'toki' } }));
       }
       if (url.includes('/api/parts/catalog')) {
+        // Отвечает не мгновенно, и это часть проверки. Мок, отвечающий
+        // в микрозадаче, прячет гонку: select уже нарисован, опции ещё нет,
+        // и подстановка значения молча ничего не делает. Локально так всё
+        // и проходило, а покраснело на раннере CI. С задержкой тот же промах
+        // падает всегда, а не раз в двенадцать прогонов.
+        await new Promise((r) => setTimeout(r, 50));
         // Список отбираемых колонок — с сервера, как и на витрине.
         return json({ total: 0, rows: [], warehouses: [],
                       filterable: ['manufacturer', 'section'] });
@@ -61,7 +67,17 @@ describe('свои условия выгрузки', () => {
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     // Колонка выбирается из того, что назвал сервер.
-    const column = await waitFor(() => screen.getByLabelText('Колонка'));
+    //
+    // Ждать надо появления самой опции, а не поля: select рисуется сразу,
+    // а список колонок приезжает запросом, и до его ответа в нём только
+    // «— выберите колонку —». Подстановка значения, которому нет опции, —
+    // в jsdom пустая операция: значение остаётся пустым, условие
+    // не добавляется, и падает уже проверка значка ниже. Локально мок
+    // успевает ответить в микрозадаче, на раннере CI — не всегда;
+    // ровно так этот тест и покраснел, зелёный двенадцать прогонов подряд.
+    const column = await screen.findByLabelText('Колонка');
+    await waitFor(() =>
+      expect(within(column).getByRole('option', { name: 'Производитель' })).toBeTruthy());
     fireEvent.change(column, { target: { value: 'manufacturer' } });
     fireEvent.change(screen.getByLabelText('Содержит'), { target: { value: 'toki' } });
     fireEvent.click(screen.getByRole('button', { name: 'Добавить' }));
