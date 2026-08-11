@@ -205,6 +205,35 @@ class PhotoMigrationTest extends PostgresTestBase {
         assertThat(inTenant(() -> migration.status()).pending()).isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("Несколько снимков одной позиции дают ровно одного главного")
+    void oneMainPhotoPerPartWhenBatchRunsInParallel() {
+        // Проход идёт в несколько потоков, и это единственное место, где
+        // параллельность видна снаружи: главный выбирается чтением part_photo,
+        // и два потока по одной позиции прочитали бы «главного нет» оба.
+        // Второму отказал бы частичный уникальный индекс — снимок пометился
+        // бы неудачным при полностью исправной работе.
+        // Порядок нулевой у всех: ровно так гонка и видна. Главным пытается
+        // стать только снимок с sort_order = 0, и пока он в пачке один,
+        // параллельность ничего не ломает — то есть тест на разных порядках
+        // проходил бы и на сломанном коде. В чужой выгрузке порядок
+        // не гарантирован ничем, а цена совпадения — снимок, помеченный
+        // неудачным при исправной работе.
+        //
+        // Адреса при этом разные: у очереди уникальность по паре
+        // «позиция и ссылка».
+        for (int n = 0; n < 8; n++) {
+            queue(url("/ok.jpg") + "?n=" + n, 0);
+        }
+
+        PhotoMigration.Progress progress = inTenant(() -> migration.migrateBatch(20));
+
+        assertThat(progress.done()).isEqualTo(8);
+        assertThat(progress.failed()).isZero();
+        assertThat(photoCount()).isEqualTo(8);
+        assertThat(mainCount()).isEqualTo(1);
+    }
+
     private void queue(String url, int order) {
         inTenant(() -> jdbc.update("""
                 INSERT INTO part_photo_import (part_id, url, sort_order) VALUES (?, ?, ?)""",
