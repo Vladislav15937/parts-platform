@@ -53,10 +53,13 @@ class DonorCostServiceTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
-        brandId = jdbc.queryForObject("""
-                INSERT INTO catalog.brand (name, slug) VALUES ('Toyota', 'toyota-donor-cost-test')
-                ON CONFLICT (slug) DO UPDATE SET name = excluded.name
-                RETURNING id""", Long.class);
+        // Эталонная марка берётся из поставляемого справочника, а не заводится
+        // своей копией: «Toyota» с уникальным slug у каждого теста
+        // накапливались в общей схеме catalog и ломали соседей — отбор по марке
+        // считал четыре «Toyota» вместо одной, а VehicleWordsTest видел
+        // лишние модели без алиаса. Правило записано в CLAUDE.md.
+        brandId = jdbc.queryForObject(
+                "SELECT id FROM catalog.brand WHERE slug = 'toyota'", Long.class);
 
         donorId = inTenant(() -> {
             jdbc.update("DELETE FROM donor_cost");

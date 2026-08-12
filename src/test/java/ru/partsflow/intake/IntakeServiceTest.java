@@ -64,11 +64,12 @@ class IntakeServiceTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
-        // Марки живут в общей схеме catalog и между тестами не сбрасываются.
-        brandId = jdbc.queryForObject("""
-                INSERT INTO catalog.brand (name, slug) VALUES ('Toyota', 'toyota-intake-test')
-                ON CONFLICT (slug) DO UPDATE SET name = excluded.name
-                RETURNING id""", Long.class);
+        // Марки живут в общей схеме catalog и между тестами не сбрасываются —
+        // поэтому берём эталонную из справочника, а не заводим свою копию.
+        // Свои «Toyota» с разными slug накапливались и ломали соседей: отбор
+        // по марке считал их четыре вместо одной. Правило записано в CLAUDE.md.
+        brandId = jdbc.queryForObject(
+                "SELECT id FROM catalog.brand WHERE slug = 'toyota'", Long.class);
 
         inTenant(() -> {
             Long branch = jdbc.queryForObject(
@@ -511,9 +512,14 @@ class IntakeServiceTest extends PostgresTestBase {
      * точно.
      */
     private Long modelWithGenerations() {
+        // Своя модель, а не сидовая: тест пересоздаёт её поколения (ниже),
+        // и трогать поколения эталонной Camry нельзя — их читают соседи.
+        // Имя намеренно НЕ «Camry»: иначе VehicleWordsTest, проверяющий наличие
+        // алиасов у ходовых моделей, поймал бы её как модель без алиаса.
+        // Тест проверяет подбор поколения по году, а не имя модели.
         Long model = jdbc.queryForObject("""
                 INSERT INTO catalog.model (brand_id, name, slug)
-                VALUES (?, 'Camry', 'camry-intake-test')
+                VALUES (?, 'Модель поколений (тест приёмки)', 'camry-intake-test')
                 ON CONFLICT (brand_id, slug) DO UPDATE SET name = excluded.name
                 RETURNING id""", Long.class, brandId);
 
