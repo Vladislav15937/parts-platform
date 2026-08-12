@@ -185,20 +185,26 @@ public final class BazonImporter {
      * дереву категорий автоматически — значит разложить их неверно, поэтому
      * все едут в «Не разобрано» и разбираются потом через справочник
      * наименований. Пустая категория честнее выдуманной.
+     *
+     * <p>Строку сеет миграция {@code catalog/020}, а импорт её только читает.
+     * Раньше он заводил её сам одним INSERT — и на ячейке с разделением ролей
+     * падал: рабочая роль на общей схеме {@code catalog} имеет только
+     * {@code SELECT} (справочники пишет миграция, читают все), и INSERT отвечал
+     * «permission denied for table part_category», уводя весь перенос
+     * в пятисотку ещё до первой позиции. Теперь в {@code catalog} импорт
+     * не пишет вовсе; отсутствие строки — это не накатанная миграция, и об этом
+     * честнее сказать прямо, чем пытаться её вставить.
      */
     private long ensureUncategorized() throws SQLException {
         try (Connection c = dataSource.getConnection()) {
             Long existing = selectId(c,
                     "SELECT id FROM catalog.part_category WHERE slug = 'uncategorized'");
-            if (existing != null) {
-                return existing;
+            if (existing == null) {
+                throw new IllegalStateException(
+                        "В каталоге нет категории «Не разобрано» (slug=uncategorized): "
+                        + "не накатана миграция catalog/020");
             }
-            try (PreparedStatement ps = c.prepareStatement("""
-                    INSERT INTO catalog.part_category (name, slug, path, sort_order)
-                    VALUES ('Не разобрано', 'uncategorized', 'uncategorized', 9999)
-                    RETURNING id""")) {
-                return firstLong(ps);
-            }
+            return existing;
         }
     }
 
