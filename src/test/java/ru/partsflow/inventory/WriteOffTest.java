@@ -188,6 +188,45 @@ class WriteOffTest extends PostgresTestBase {
                 .andExpect(status().isBadRequest());
     }
 
+    /**
+     * Несуществующие ссылки отбиваются словами, а не ограничением схемы.
+     *
+     * <p>Чужой номер склада или детали доезжал до внешнего ключа
+     * и возвращался как «Операция нарушает целостность данных». Для человека
+     * это «сервер сломался», для офлайн-очереди — 409, то есть отказ
+     * по существу: запись уходит в «требует внимания» с сообщением,
+     * из которого не понять, что делать.
+     *
+     * <p>Проверка стоит в {@code StockDocumentService.save}, через который
+     * проходят приёмка, списание, перевозка и возврат: один невнятный ответ
+     * закрывался сразу на четырёх операциях.
+     */
+    @Test
+    @DisplayName("Списание с чужим складом и деталью отказывает словами")
+    void unknownReferencesAreRefusedWithWords() throws Exception {
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(post("/api/stock/write-offs").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":999999,"reason":"Разбита",
+                                 "items":[{"partId":%d,"quantity":1}]}"""
+                                .formatted(partId)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("Склад не найден")));
+
+        mvc.perform(post("/api/stock/write-offs").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"Разбита",
+                                 "items":[{"partId":999999,"quantity":1}]}"""
+                                .formatted(warehouseId)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("Деталь не найдена")));
+    }
+
     private String partStatus(Long part) {
         return inTenant(() -> jdbc.queryForObject(
                 "SELECT status FROM part WHERE id = ?", String.class, part));

@@ -55,7 +55,7 @@ public class DeadLetterController {
      */
     @PostMapping("/{id}/retry")
     public ResponseEntity<Result> retry(@PathVariable long id) {
-        return deadLetters.retry(id)
+        return deadLetters.retry(id, CurrentUser.memberId())
                 .map(error -> ResponseEntity.status(HttpStatus.CONFLICT)
                         .body(new Result(false, error)))
                 .orElseGet(() -> ResponseEntity.ok(new Result(true, null)));

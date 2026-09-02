@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -273,6 +274,81 @@ class CatalogServiceTest extends PostgresTestBase {
         assertThat(secondByCursor.total()).isEqualTo(secondByOffset.total());
     }
 
+    /**
+     * Страницы не теряют строк при сортировке по неуникальной колонке.
+     *
+     * <p>Все колонки витрины, кроме номера товара, неуникальны — цена
+     * повторяется у сотен позиций. Без вторичного ключа полного порядка нет:
+     * строки с одинаковой ценой база вправе вернуть в любой
+     * последовательности, и между запросами соседних страниц она меняется.
+     * Часть позиций попадает на обе страницы, ровно столько же — никуда.
+     *
+     * <p>Замерено на живом складе: «фара» отдаёт 744 позиции, и за пятнадцать
+     * страниц по сортировке «цена» набиралось 744 строки при 721 уникальной.
+     * Двадцать три показаны дважды, двадцать три не показаны вовсе — узнать
+     * об этом по экрану нельзя никак, а выгрузка идёт тем же порядком.
+     */
+    @Test
+    @DisplayName("Обход страниц по цене не теряет и не двоит позиции")
+    void pagingByPriceCoversEveryRow() {
+        // Одна и та же цена у всех: так выглядит склад, где половина мелочи
+        // стоит пятьсот рублей.
+        for (int i = 0; i < 24; i++) {
+            partPriced("Одинаковая цена " + i, new java.math.BigDecimal("500"));
+        }
+
+        java.util.List<Long> seen = new java.util.ArrayList<>();
+        for (int page = 0; page < 40; page++) {
+            int at = page;
+            var rows = inTenant(() -> catalog.list("Одинаковая цена", true, true, List.of(), null,
+                    Map.of(), Map.of(), "price", true, at, 5, null)).rows();
+            if (rows.isEmpty()) {
+                break;
+            }
+            rows.forEach(row -> seen.add(row.id()));
+        }
+
+        assertThat(seen).as("страницы вернули разное число строк").hasSize(24);
+        assertThat(new java.util.HashSet<>(seen))
+                .as("позиции потерялись между страницами или показаны дважды")
+                .hasSize(24);
+    }
+
+    @Test
+    @DisplayName("Список отбираемых колонок совпадает с тем, что отбор принимает")
+    void filterableColumnsAreExactlyThoseAccepted() {
+        // Экран открывает меню отбора по этому списку и только по нему.
+        // Разойдись он с тем, что принимает отбор, — и меню предложило бы
+        // колонку, на которой сервер отвечает отказом: список значений
+        // приезжает пустым, выбранное значение не меняет ничего, а владелец
+        // видит тот же склад и решает, что отбор сломан.
+        var declared = CatalogService.filterableColumns();
+
+        assertThat(declared).as("состояние не отбирается, хотя колонка на виду")
+                .contains("condition");
+
+        for (String column : declared) {
+            assertThatCode(() -> inTenant(() -> catalog.values(column)))
+                    .as("колонка %s объявлена отбираемой, а отбор её не принимает", column)
+                    .doesNotThrowAnyException();
+        }
+    }
+
+    @Test
+    @DisplayName("Состояние отбирается теми же словами, какими показано")
+    void conditionIsFilteredByTheWordsShown() {
+        part("Фара с состоянием", 1);
+
+        var values = inTenant(() -> catalog.values("condition"));
+
+        // «б/у», а не «USED»: выбранное из списка значение сравнивается с тем
+        // же выражением, которым колонка выводится, — иначе выбор из списка
+        // не находил бы ничего.
+        assertThat(values).as("состояние показано кодом, а не словом")
+                .allSatisfy(value -> assertThat(value)
+                        .isIn("новая", "б/у", "восстановленная"));
+    }
+
     @Test
     @DisplayName("По колонке с пустыми значениями курсор не применяется")
     void cursorIsIgnoredForNullableSort() {
@@ -507,6 +583,59 @@ class CatalogServiceTest extends PostgresTestBase {
 
     private static List<String> codes(CatalogService.Page page) {
         return page.rows().stream().map(CatalogService.Row::code).toList();
+    }
+
+    private Long partPriced(String title, java.math.BigDecimal price) {
+        return inTenant(() -> {
+            Long id = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price) VALUES (1, ?, ?)
+                    RETURNING id""", Long.class, title, price);
+            ledger.record(StockMovement.intake(id, java.math.BigDecimal.ONE, warehouseId, null));
+            return id;
+        });
+    }
+
+    /**
+     * Пустое условие — «не задано», а не «равно пустоте».
+     *
+     * <p><b>Зачем.</b> Отбор колонками теперь настраивает и выгрузка, а там
+     * условия хранятся картой и приходят запросом. Пустое значение
+     * превращалось в {@code = ''} и не находило ничего — то есть давало
+     * пустой прайс, который площадка принимает молча, снимая объявления
+     * вместе с накопленными просмотрами. Пустое «содержит» тем же способом
+     * отбрасывало незаполненные: {@code ILIKE '%%'} мимо NULL не проходит.
+     *
+     * <p>Вопрос «где не заполнено» при этом остаётся — он задаётся отдельным
+     * пунктом «—пусто—», и тест держит обе стороны: без него правка
+     * «пропускать пустое» съела бы и его.
+     */
+    @Test
+    @DisplayName("Пустое значение условия ничего не отбирает, а «—пусто—» отбирает")
+    void blankConditionIsNoCondition() {
+        Long withSection = part("Отбор: с секцией", 1);
+        Long without = part("Отбор: без секции", 1);
+        inTenant(() -> jdbc.update("UPDATE part SET section = 'A-01' WHERE id = ?", withSection));
+
+        long all = inTenant(() -> catalog.list(null, true, true, List.of(), null,
+                Map.of(), Map.of(), "code", true, 0, 50)).total();
+
+        assertThat(inTenant(() -> catalog.list(null, true, true, List.of(), null,
+                Map.of("section", ""), Map.of(), "code", true, 0, 50)).total())
+                .as("пустое условие отобрало вместо того, чтобы ничего не значить")
+                .isEqualTo(all);
+        assertThat(inTenant(() -> catalog.list(null, true, true, List.of(), null,
+                Map.of(), Map.of("section", "  "), "code", true, 0, 50)).total())
+                .as("пустое «содержит» тихо выбросило незаполненные")
+                .isEqualTo(all);
+
+        // А отдельный пункт «где не заполнено» обязан работать по-прежнему.
+        List<String> empty = titles(inTenant(() -> catalog.list(null, true, true, List.of(), null,
+                Map.of("section", CatalogService.EMPTY), Map.of(), "code", true, 0, 200)));
+        assertThat(empty)
+                .as("«—пусто—» перестал отбирать незаполненные")
+                .contains("Отбор: без секции")
+                .doesNotContain("Отбор: с секцией");
+        assertThat(without).isNotNull();
     }
 
     private Long part(String title, int qty) {

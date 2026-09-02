@@ -4,6 +4,8 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,8 +32,21 @@ public class MarketplaceAccountController {
 
     private final MarketplaceAccountService accounts;
 
-    public MarketplaceAccountController(MarketplaceAccountService accounts) {
+    /**
+     * Адрес, по которому ячейка видна снаружи.
+     *
+     * <p>Тот же, из которого собираются ссылки на снимки внутри прайса,
+     * и по той же причине: за терминатором адрес в запросе — это внутреннее
+     * имя контейнера, и техспециалист площадки получил бы
+     * {@code http://app:8080/…}. Из запроса строится только в разработке,
+     * где настройки нет.
+     */
+    private final String publicUrl;
+
+    public MarketplaceAccountController(MarketplaceAccountService accounts,
+                                        @Value("${app.public-url:}") String publicUrl) {
         this.accounts = accounts;
+        this.publicUrl = publicUrl;
     }
 
     @GetMapping
@@ -87,7 +102,8 @@ public class MarketplaceAccountController {
         return accounts.setFilter(id, request.priceFrom(), request.priceTo(),
                 request.conditions(), request.warehouseIds(),
                 request.kindIds(), request.kindsExcluded(),
-                request.brandIds(), request.brandsExcluded());
+                request.brandIds(), request.brandsExcluded(),
+                request.columns(), request.words());
     }
 
     /**
@@ -104,7 +120,8 @@ public class MarketplaceAccountController {
                 request.priceFrom(), request.priceTo(),
                 request.conditions(), request.warehouseIds(),
                 request.kindIds(), request.kindsExcluded(),
-                request.brandIds(), request.brandsExcluded()));
+                request.brandIds(), request.brandsExcluded(),
+                request.productLine(), request.columns(), request.words()));
     }
 
     public record CountView(long parts) {
@@ -112,16 +129,39 @@ public class MarketplaceAccountController {
 
     @PostMapping("/{id}/feed-url")
     @PreAuthorize("hasRole('OWNER')")
-    public FeedUrlView rotateFeedUrl(@PathVariable Long id) {
+    public FeedUrlView rotateFeedUrl(@PathVariable Long id, HttpServletRequest request) {
         accounts.rotateFeedToken(id);
-        return new FeedUrlView(feedPathOf(id));
+        return view(feedPathOf(id), request);
     }
 
     /** Текущая ссылка на прайс. Пусто — ещё не заводили. */
     @GetMapping("/{id}/feed-url")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public FeedUrlView feedUrl(@PathVariable Long id) {
-        return new FeedUrlView(feedPathOf(id));
+    public FeedUrlView feedUrl(@PathVariable Long id, HttpServletRequest request) {
+        return view(feedPathOf(id), request);
+    }
+
+    /**
+     * Путь и полный адрес.
+     *
+     * <p>Полный — потому что его передают человеку на той стороне: инструкция
+     * так и говорит, «передать ссылку техспециалисту площадки». Отдавая один
+     * путь, мы заставляли владельца дописывать домен руками, а специалист,
+     * получив {@code /feeds/drom/…}, не сходит по нему никуда. Домен сервер
+     * знает: тот же {@code app.public-url} уже подставляется в ссылки
+     * на снимки внутри самого прайса.
+     *
+     * <p>Путь оставлен: по нему прайс скачивается с того же источника,
+     * где открыт экран, и в разработке это единственный работающий адрес.
+     */
+    private FeedUrlView view(String path, HttpServletRequest request) {
+        if (path == null) {
+            return new FeedUrlView(null, null);
+        }
+        String origin = publicUrl == null || publicUrl.isBlank()
+                ? request.getRequestURL().toString().replaceFirst("/api/.*$", "")
+                : publicUrl.replaceFirst("/+$", "");
+        return new FeedUrlView(path, origin + path);
     }
 
     private String feedPathOf(Long id) {
@@ -144,6 +184,13 @@ public class MarketplaceAccountController {
     }
 
     /** Пустое поле — «без ограничения», а не «ничего». */
+    /**
+     * @param productLine чем торгует выгрузка. Без него счётчик считал
+     *                   запчасти всегда: у выгрузки колёс он обещал 35 835
+     *                   позиций там, где уезжало 60 — то есть врал в шестьсот
+     *                   раз ровно в ту сторону, ради которой заведён.
+     *                   Пусто — запчасти, как было
+     */
     public record FilterRequest(java.math.BigDecimal priceFrom,
                                 java.math.BigDecimal priceTo,
                                 List<String> conditions,
@@ -151,9 +198,22 @@ public class MarketplaceAccountController {
                                 List<Long> kindIds,
                                 boolean kindsExcluded,
                                 List<Long> brandIds,
-                                boolean brandsExcluded) {
+                                boolean brandsExcluded,
+                                String productLine,
+                                /**
+                                 * Отбор по колонкам склада: точное равенство,
+                                 * «колонка → значение». Список колонок закрыт
+                                 * сервером, неизвестное имя отвергается.
+                                 */
+                                java.util.Map<String, String> columns,
+                                /** То же вхождением: набранное руками. */
+                                java.util.Map<String, String> words) {
     }
 
-    public record FeedUrlView(String path) {
+    /**
+     * @param path путь на том же источнике, откуда открыт экран
+     * @param url  полный адрес — его и передают площадке
+     */
+    public record FeedUrlView(String path, String url) {
     }
 }

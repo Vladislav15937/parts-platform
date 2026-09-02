@@ -86,8 +86,12 @@ public class PartController {
      * а продавать можно только то, что не обещано другому клиенту.
      */
     @GetMapping("/stock")
-    public List<PartService.StockRow> stock(@RequestParam("q") String query,
-                                            @RequestParam(value = "limit", defaultValue = "50") int limit) {
+    public PartService.StockSearch stock(@RequestParam("q") String query,
+                                         @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        // Вместе с числом найденного: список обрезан на полусотне, и экран
+        // обязан об этом сказать. Продавец, глядя на обрезанный список,
+        // отвечает покупателю «нет такого» с той же уверенностью, что и
+        // на пустом, — только тут он ещё и думает, что посмотрел всё.
         return partService.searchAvailable(query, limit);
     }
 
@@ -104,8 +108,14 @@ public class PartController {
      * и снимают, а «не выгружать» это отметка руками для битых и отложенных
      * под заказ.
      */
+    // Роль та же, что у правки списком и у карточки: «Выгружать» правят три
+    // пути, и разойдясь, они дают изменение, которое одному запрещено,
+    // а другим разрешено. Продавцу это было можно только здесь — то есть
+    // он мог снять с площадки хоть весь склад, а через форму и через отбор
+    // не мог тронуть ни одной позиции. Снятое объявление уносит с собой
+    // накопленные просмотры, и заметно это через дни по пустому прайсу.
     @PostMapping("/publication")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER','SELLER')")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public PublicationResult setPublication(@Valid @RequestBody PublicationRequest request) {
         return new PublicationResult(
                 partService.setPublished(request.partIds(), request.published()));

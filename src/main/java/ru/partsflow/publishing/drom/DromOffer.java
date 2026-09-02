@@ -31,6 +31,11 @@ import java.util.List;
  *                     это список марок применимости через запятую
  * @param carModel     модель — так же, списком у контрактной
  * @param year         год машины-донора; у контрактной его нет и быть не может
+ * @param textBlock    дополнительный текст объявления, введённый владельцем.
+ *                     Приезжает из прежней системы колонкой «Текстовый блок»
+ *                     и до правки не доходил до покупателя вовсе: владелец
+ *                     писал, а видел это только он сам
+ * @param videoUrl     ссылка на ролик о детали, тоже из прежней системы
  */
 public record DromOffer(
         String orderCode,
@@ -48,13 +53,17 @@ public record DromOffer(
         VerticalSide verticalSide,
         String color,
         String marking,
+        /** Где лежит: имя склада, а не адрес — реквизитов складов у нас нет. */
+        String warehouse,
         List<String> photos,
         String carBrand,
         String carModel,
         String bodyCode,
         String engineCode,
         Integer year,
-        boolean fromDonor) {
+        boolean fromDonor,
+        String textBlock,
+        String videoUrl) {
 
     public boolean isAvailable() {
         return availableQty != null && availableQty.signum() > 0;

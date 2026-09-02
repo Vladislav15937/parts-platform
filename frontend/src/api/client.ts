@@ -51,6 +51,33 @@ function csrfToken(): string | null {
   return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : null;
 }
 
+/** Имя события: сессия кончилась, приложению пора спросить вход заново. */
+export const SESSION_LOST = 'partsflow:session-lost';
+
+/**
+ * Говорит приложению, что сессия кончилась.
+ *
+ * <p><b>Зачем.</b> 401 приходит на обычный запрос экрана — сессия истекла
+ * по таймауту или приложение перезапустили при выкладке. Экран показывал
+ * «Запрос отклонён (401)» и на этом успокаивался: шапка по-прежнему писала
+ * «Хозяин · владелец · на связи», рельс работал, а каждый следующий экран
+ * встречал владельца своей красной строкой с кодом. Догадаться, что надо
+ * войти заново, по этому нельзя — а больше сказать некому.
+ *
+ * <p>Событием, а не прямым вызовом: слой запросов не знает про сессию,
+ * и знать не должен — иначе получится кольцо зависимостей ради одного
+ * сообщения.
+ *
+ * <p>Пути входа исключены: там 401 означает «неверный пароль» либо
+ * «мы ещё не входили», и выкидывать из приложения нечего.
+ */
+function noticeSessionLoss(status: number, path: string): void {
+  if (status !== 401 || path.startsWith('/api/auth/')) {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(SESSION_LOST));
+}
+
 function classify(status: number): FailureKind {
   if (status === 401) {
     return 'unauthenticated';
@@ -62,14 +89,31 @@ function classify(status: number): FailureKind {
   return 'permanent';
 }
 
+/**
+ * Текст отказа для человека.
+ *
+ * <p>Приложение объясняет свои отказы само — «Нечего снимать с резерва»,
+ * «нет количества», — и такой текст уходит наружу как есть.
+ *
+ * <p><b>А вот когда тела нет, показывать код ответа нельзя.</b> Лежащее
+ * приложение за живым терминатором отвечает 502, а прокси разработки — 500,
+ * и продавец видел «HTTP 500»: по этому не понять ни что случилось, ни что
+ * делать. Полный обрыв сети при этом говорил по-человечески — «Нет связи
+ * с сервером», — то есть хуже всего сообщение было ровно в том случае,
+ * который в ангаре и случается: wi-fi поднят, а сервера за ним нет.
+ */
 async function messageOf(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { message?: string };
-    return body.message ?? `HTTP ${response.status}`;
+    if (body.message) {
+      return body.message;
+    }
   } catch {
     // Тело может быть пустым (204) или не JSON — это не повод падать.
-    return `HTTP ${response.status}`;
   }
+  return response.status >= 500
+    ? 'Сервер не отвечает — проверьте связь и повторите'
+    : `Запрос отклонён (${response.status})`;
 }
 
 interface RequestOptions {
@@ -145,6 +189,7 @@ export async function request<T>(
   }
 
   if (!response.ok) {
+    noticeSessionLoss(response.status, path);
     throw new ApiError(classify(response.status), response.status, await messageOf(response));
   }
 
@@ -213,6 +258,7 @@ export async function upload<T>(path: string, form: FormData, retrying = false):
     return await upload<T>(path, form, true);
   }
   if (!response.ok) {
+    noticeSessionLoss(response.status, path);
     throw new ApiError(classify(response.status), response.status, await messageOf(response));
   }
   return response.status === 204 ? (undefined as T) : ((await response.json()) as T);

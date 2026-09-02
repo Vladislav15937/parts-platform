@@ -117,3 +117,4 @@ async function store(reference: Reference): Promise<void> {
   );
   await refreshReference();
 }
+

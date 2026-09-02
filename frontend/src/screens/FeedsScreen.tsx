@@ -1,3 +1,4 @@
+import type { FeedLink } from '../publishing/feeds';
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { listWarehouses } from '../organization/warehouses';
@@ -6,13 +7,24 @@ import { allKinds } from '../catalog/partNames';
 import type { PartKind } from '../catalog/partNames';
 import { loadCached, refresh } from '../catalog/vehicles';
 import type { Brand } from '../catalog/vehicles';
+import { ColumnMenu } from './ColumnMenu';
 import {
+  COLUMNS,
+  FILTER_EMPTY,
+  FILTER_PRESENT,
+  columnValues,
+} from '../inventory/catalog';
+import { WHEEL_COLUMNS, wheelValues } from '../inventory/wheels';
+import {
+  feedUrl,
+  filterableColumns,
   CONDITIONS,
   countMatching,
   createFeed,
   filterSummary,
   listFeeds,
   rotateFeedUrl,
+  setCredentials,
   setFilter,
   type Feed,
   type FeedFilter,
@@ -75,7 +87,13 @@ export function FeedsScreen({ role }: { role: string }) {
   }, []);
 
   if (feeds === null) {
-    return <p className="note">Загружаем выгрузки…</p>;
+    // Не удалось — так и говорим. Ошибка при загрузке оставляет состояние
+    // пустым, и до разметки с сообщением дело не доходило: экран показывал
+    // «Загружаем выгрузки» бесконечно, а причина — «сессия кончилась» —
+    // лежала рядом непоказанной.
+    return error === ''
+      ? <p className="note">Загружаем выгрузки…</p>
+      : <p className="note note--error">{error}</p>;
   }
 
   return (
@@ -138,9 +156,41 @@ function FeedCard({
     feed.priceTo === null ? '' : String(feed.priceTo));
   const [conditions, setConditions] = useState<string[]>(feed.conditions);
   const [warehouseIds, setWarehouseIds] = useState<number[]>(feed.warehouseIds);
-  const [link, setLink] = useState<string | null>(null);
+  const [link, setLink] = useState<FeedLink | null>(null);
+  const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState<number | null>(null);
+
+  // Свои условия владельца — те же колонки, какими он смотрит склад.
+  const [columns, setColumns] = useState<Record<string, string>>(
+    feed.filterColumns ?? {});
+  const [words, setWords] = useState<Record<string, string>>(feed.filterWords ?? {});
+  const [addFor, setAddFor] = useState('');
+  const [typed, setTyped] = useState('');
+  const [menuAt, setMenuAt] = useState<{ left: number; top: number } | null>(null);
+
+  const wheels = feed.productLine === 'WHEEL';
+  const known = wheels
+    ? WHEEL_COLUMNS.map((c) => ({ key: c.key, title: c.title }))
+    : COLUMNS.map((c) => ({ key: c.key, title: c.title }));
+  const titleOf = (key: string) => known.find((c) => c.key === key)?.title ?? key;
+
+  /*
+   * Список отбираемых колонок спрашивается у сервера, а не повторяется здесь.
+   *
+   * Повторённый, он разошёлся бы с ним на первой же новой колонке — и экран
+   * предлагал бы отбор, которого нет: сервер отвечает «по этой колонке отбор
+   * не делается», а владелец видит те же тридцать пять тысяч позиций
+   * и решает, что отбор сломан. Ровно этим уже болело меню колонки.
+   */
+  const [filterable, setFilterable] = useState<string[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void filterableColumns(feed.productLine)
+      .then((list) => { if (alive) setFilterable(list); })
+      .catch(() => { if (alive) setFilterable([]); });
+    return () => { alive = false; };
+  }, [feed.productLine]);
 
   const [kindIds, setKindIds] = useState<number[]>(feed.kindIds);
   const [kindsExcluded, setKindsExcluded] = useState(feed.kindsExcluded);
@@ -156,6 +206,8 @@ function FeedCard({
     kindsExcluded,
     brandIds,
     brandsExcluded,
+    columns,
+    words,
   });
 
   async function save() {
@@ -173,7 +225,7 @@ function FeedCard({
   async function count() {
     setBusy(true);
     try {
-      setMatching((await countMatching(current())).parts);
+      setMatching((await countMatching(current(), feed.productLine)).parts);
     } catch (cause) {
       onError(describe(cause, 'Посчитать не удалось'));
     } finally {
@@ -184,7 +236,7 @@ function FeedCard({
   async function rotate() {
     setBusy(true);
     try {
-      setLink((await rotateFeedUrl(feed.id)).path);
+      setLink(await rotateFeedUrl(feed.id));
       onChanged();
     } catch (cause) {
       onError(describe(cause, 'Ссылка не сменилась'));
@@ -196,6 +248,34 @@ function FeedCard({
   function toggle<T>(list: T[], value: T): T[] {
     return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
   }
+
+  const menu = addFor !== '' && menuAt !== null ? (
+    <ColumnMenu
+      column={addFor}
+      at={menuAt}
+      chosen={columns[addFor]}
+      filterable
+      sortable={undefined}
+      sort=""
+      desc={false}
+      values={wheels ? wheelValues : columnValues}
+      empty={FILTER_EMPTY}
+      present={FILTER_PRESENT}
+      onSort={() => {}}
+      onPick={(value) => {
+        const chosen = { ...columns };
+        if (value === null) {
+          delete chosen[addFor];
+        } else {
+          chosen[addFor] = value;
+        }
+        setColumns(chosen);
+        setMenuAt(null);
+        setAddFor('');
+      }}
+      onClose={() => setMenuAt(null)}
+    />
+  ) : null;
 
   return (
     <li className="card">
@@ -263,23 +343,137 @@ function FeedCard({
         </fieldset>
       )}
 
-      <Picker
-        title="Наименования"
-        options={kinds.map((k) => ({ id: k.id, name: k.name }))}
-        chosen={kindIds}
-        excluded={kindsExcluded}
-        onChosen={setKindIds}
-        onExcluded={setKindsExcluded}
-      />
+      {/* Вид детали и марка машины есть только у запчасти. У колеса part_kind
+          не заполнен вовсе, а марка — это Dunlop, а не Toyota; прайс колёс
+          их и не отбирает. Показанный тут отбор был бы обещанием, которого
+          нет: владелец сузил бы выгрузку, а уехал бы весь склад колёс. */}
+      {feed.productLine === 'PART' && (
+        <>
+          <Picker
+            title="Наименования"
+            options={kinds.map((k) => ({ id: k.id, name: k.name }))}
+            chosen={kindIds}
+            excluded={kindsExcluded}
+            onChosen={setKindIds}
+            onExcluded={setKindsExcluded}
+          />
 
-      <Picker
-        title="Марки"
-        options={brands.map((b) => ({ id: b.id, name: b.nameRu ?? b.name }))}
-        chosen={brandIds}
-        excluded={brandsExcluded}
-        onChosen={setBrandIds}
-        onExcluded={setBrandsExcluded}
-      />
+          <Picker
+            title="Марки"
+            options={brands.map((b) => ({ id: b.id, name: b.nameRu ?? b.name }))}
+            chosen={brandIds}
+            excluded={brandsExcluded}
+            onChosen={setBrandIds}
+            onExcluded={setBrandsExcluded}
+          />
+        </>
+      )}
+
+      {/* Свои условия владельца.
+          Шесть зашитых условий покрывают не всё, а каждое седьмое означало бы
+          релиз: миграция, генератор, счётчик, экран. Витрина склада к этому
+          времени отбирает по двадцати девяти колонкам, и выгрузка берёт тот же
+          механизм — те же колонки, те же значения, тот же разбор «пусто».
+          Второй список колонок рядом с витринным разошёлся бы с ним
+          на первой правке. */}
+      <fieldset className="choices">
+        <legend>Свои условия — пусто значит без ограничения</legend>
+
+        {/* Тем же значком, что и на витрине склада: условия там снимаются
+            нажатием на сам значок, и второй вид того же элемента заставлял бы
+            владельца заново догадываться, как его убрать. */}
+        {Object.entries(columns).map(([key, value]) => (
+          <button
+            key={`c-${key}`}
+            type="button"
+            className="crumb"
+            onClick={() => {
+              const left = { ...columns };
+              delete left[key];
+              setColumns(left);
+            }}
+          >
+            {titleOf(key)}: {value} ✕
+          </button>
+        ))}
+        {Object.entries(words).map(([key, value]) => (
+          <button
+            key={`w-${key}`}
+            type="button"
+            className="crumb"
+            onClick={() => {
+              const left = { ...words };
+              delete left[key];
+              setWords(left);
+            }}
+          >
+            {titleOf(key)}: «{value}» ✕
+          </button>
+        ))}
+
+        <div className="filter-row">
+          <label className="field">
+            Колонка
+            <select value={addFor} onChange={(e) => {
+              setAddFor(e.target.value);
+              setTyped('');
+              setMenuAt(null);
+            }}>
+              <option value="">— выберите колонку —</option>
+              {known
+                .filter((c) => (filterable ?? []).includes(c.key))
+                .map((c) => (
+                  <option key={c.key} value={c.key}>{c.title}</option>
+                ))}
+            </select>
+          </label>
+
+          {/* Два способа, как на витрине: вбитое руками ищется вхождением
+              («Nok» находит Nokian), выбранное из списка — точным равенством.
+              Это разные вопросы, и различать их магией в значении нельзя. */}
+          <label className="field">
+            Содержит
+            <input
+              value={typed}
+              placeholder="часть значения"
+              disabled={addFor === ''}
+              onChange={(e) => setTyped(e.target.value)}
+            />
+          </label>
+
+          <button
+            type="button"
+            className="button--ghost"
+            disabled={addFor === '' || typed.trim() === ''}
+            onClick={() => {
+              setWords({ ...words, [addFor]: typed.trim() });
+              setAddFor('');
+              setTyped('');
+            }}
+          >
+            Добавить
+          </button>
+
+          <button
+            type="button"
+            className="button--ghost"
+            disabled={addFor === ''}
+            onClick={(e) => {
+              // Без прокрутки: список значений рисуется `position: fixed`,
+              // и прибавленный scrollY уводит его за нижний край экрана —
+              // кнопка нажата, а ответа на ней нет.
+              const box = (e.target as HTMLElement).getBoundingClientRect();
+              setMenuAt({ left: box.left, top: box.bottom });
+            }}
+          >
+            Выбрать значение
+          </button>
+        </div>
+
+        {filterable !== null && filterable.length === 0 && (
+          <p className="muted">Список колонок не прочитан — обновите страницу</p>
+        )}
+      </fieldset>
 
       <div className="filter-row">
         <button type="button" className="button--ghost" disabled={busy}
@@ -300,21 +494,108 @@ function FeedCard({
         </p>
       )}
 
-      <details>
+      {/* Ссылка спрашивается при раскрытии, а не показывается только сразу
+          после выдачи. Иначе узнать её нельзя вовсе: владелец завёл прайс,
+          отдал адрес техспециалисту площадки, а через неделю адрес спросили
+          снова — и посмотреть его негде. Единственной кнопкой была «Сменить
+          ссылку», которая, как честно написано рядом, выгрузку останавливает:
+          чтобы узнать ссылку, приходилось её сломать. */}
+      <details onToggle={(e) => {
+        if ((e.target as HTMLDetailsElement).open && link === null && feed.hasFeed) {
+          void feedUrl(feed.id).then(setLink).catch(() => {});
+        }
+      }}>
         <summary>Ссылка для площадки</summary>
         <p className="note">
           Смена ссылки останавливает выгрузку: новую в кабинет площадки
           прописывает её техспециалист руками, и до этого прайс забирать
           будет неоткуда.
         </p>
-        {link !== null && <p className="muted">{link}</p>}
+        {link !== null && link.path !== null && (
+          <>
+            {/* Полный адрес, а не путь: его копируют и отдают человеку
+                на той стороне, и по «/feeds/drom/…» тот не сходит никуда. */}
+            <p className="muted">{link.url ?? link.path}</p>
+            {/* Скачать — потому что заливка файлом руками это не запасной
+                путь, а единственный быстрый: забор по ссылке идёт раз
+                в трое суток, и до него новая деталь на площадке
+                не появится. Ссылкой, а не кнопкой с запросом: файл
+                на двадцать мегабайт качает браузер, показывая ход. */}
+            <p>
+              <a href={link.path} download>Скачать файл прайса</a>
+            </p>
+          </>
+        )}
         <button type="button" className="button--ghost" disabled={busy}
                 onClick={() => void rotate()}>
           {feed.hasFeed ? 'Сменить ссылку' : 'Выдать ссылку'}
         </button>
       </details>
+      {menu}
+
+      {/*
+        * Ключ синхронизации вводится здесь, и до этого его нельзя было
+        * ввести нигде.
+        *
+        * Экран рядом честно писал «ключ к ним Дром выдаёт по заявке»,
+        * а поля не было: `PUT /credentials` не звала ни одна строка
+        * фронтенда. Без ключа дельты не уходят вовсе — принятая деталь,
+        * подорожавшая или проданная, ждёт полного забора прайса, то есть
+        * до трёх суток на бесплатном размещении. Заметить это нельзя:
+        * очередь разгребается, `publication_log` пуст, и всё выглядит
+        * работающим.
+        *
+        * Поле всегда пустое: прочитать ключ нельзя ни одним эндпоинтом,
+        * и это часть защиты, а не недоделка. Состояние показывает
+        * `hasCredentials`.
+        */}
+      <details>
+        <summary>Ключ синхронизации {feed.hasCredentials ? '· задан' : '· не задан'}</summary>
+        <p className="note">
+          {feed.hasCredentials
+            ? 'Ключ хранится зашифрованным и наружу не отдаётся: показать его нельзя, можно только заменить.'
+            : 'Без ключа дельты по API не уходят: цена и остаток обновятся у площадки только с полным прайсом, а его забирают раз в трое суток.'}
+        </p>
+        <p className="note">
+          Ключ выдаёт поддержка Дрома по обращению — он один на кабинет,
+          выглядит как UUID и в кабинете площадки нигде не показывается.
+          Обновление по API включают отдельно каждому прайс-листу.
+        </p>
+        <label>
+          Ключ
+          <input
+            type="password"
+            value={secret}
+            autoComplete="off"
+            placeholder="00000000-0000-0000-0000-000000000000"
+            onChange={(e) => setSecret(e.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          disabled={busy || secret.trim() === ''}
+          onClick={() => void saveSecret()}
+        >
+          {feed.hasCredentials ? 'Заменить ключ' : 'Сохранить ключ'}
+        </button>
+      </details>
     </li>
   );
+
+  async function saveSecret(): Promise<void> {
+    setBusy(true);
+    try {
+      await setCredentials(feed.id, secret.trim());
+      // Поле чистим сразу: ключ прочитать нельзя, и оставленный в поле
+      // он выглядел бы как «мы его вам показываем».
+      setSecret('');
+      onChanged();
+    } catch (cause) {
+      onError(describe(cause, 'Ключ не сохранён'));
+    } finally {
+      setBusy(false);
+    }
+  }
 }
 
 /**

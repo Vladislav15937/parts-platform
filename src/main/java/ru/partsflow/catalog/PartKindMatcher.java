@@ -127,13 +127,32 @@ public class PartKindMatcher {
         if (rawName == null || rawName.isBlank()) {
             return List.of();
         }
+        // Похожесть считается и по синонимам, а не по одному названию эталона.
+        // Синонимы — это и есть живые написания, ради которых справочник
+        // заведён, и близкое написание клиента похоже именно на них.
+        //
+        // Замерено на «тросик ручного тормоза» (379 карточек живого склада):
+        // по названию «Трос ручника» даёт 0,296 — последнее место из четырёх,
+        // ниже «Колодок стояночного тормоза» с 0,316, то есть в тройку
+        // подсказок верный эталон не попадал вовсе. По синониму «трос ручного
+        // тормоза» — 0,826, первое место с большим отрывом.
+        //
+        // Цена ошибки тут не в лишнем нажатии: человек, разбирающий тысячу
+        // написаний подряд, выбирает из показанного, а показывались три
+        // чужие детали. Сопоставив трос с колодками, он одним действием
+        // переписывает сотни карточек, и назад это не откатывается.
         @SuppressWarnings("unchecked")
         List<Object[]> rows = entityManager.createNativeQuery("""
                         SELECT k.id, k.category_id, k.name
                           FROM catalog.part_kind k
+                         CROSS JOIN LATERAL (
+                             SELECT greatest(
+                                 similarity(k.name, :name),
+                                 coalesce((SELECT max(similarity(s, :name))
+                                             FROM unnest(k.synonyms) s), 0)) AS score) m
                          WHERE k.is_active
-                           AND similarity(k.name, :name) >= :threshold
-                         ORDER BY similarity(k.name, :name) DESC, k.id
+                           AND m.score >= :threshold
+                         ORDER BY m.score DESC, k.id
                          LIMIT :limit""")
                 .setParameter("name", rawName)
                 .setParameter("threshold", MIN_SIMILARITY)
@@ -155,12 +174,19 @@ public class PartKindMatcher {
         if (query == null || query.isBlank()) {
             return List.of();
         }
+        // Ищется и по синонимам: человек набирает то, как деталь зовут
+        // на складе, а эталон называется иначе — «ручного тормоза» не входит
+        // в «Трос ручника» ни одной буквой, зато входит в его синоним.
+        // Без этого поиск не спасал ровно там, где подсказки промахнулись,
+        // а он для того и заведён.
         @SuppressWarnings("unchecked")
         List<Object[]> rows = entityManager.createNativeQuery("""
                         SELECT k.id, k.category_id, k.name
                           FROM catalog.part_kind k
                          WHERE k.is_active
-                           AND k.name ILIKE '%' || :query || '%'
+                           AND (k.name ILIKE '%' || :query || '%'
+                                OR EXISTS (SELECT 1 FROM unnest(k.synonyms) s
+                                            WHERE s ILIKE '%' || :query || '%'))
                          ORDER BY length(k.name), k.name
                          LIMIT :limit""")
                 .setParameter("query", query.strip())
@@ -168,6 +194,30 @@ public class PartKindMatcher {
                 .getResultList();
 
         return rows.stream().map(PartKindMatcher::toKind).toList();
+    }
+
+    /**
+     * Сколько эталонов подошло всего — тем же условием, что и поиск.
+     *
+     * <p>Выдача обрезана, и разбирающий должен знать, что видит не всё:
+     * по слову «датчик» эталонов 21 при пределе 20, и один не показан вовсе.
+     * Разойдись условие со счётом — число врало бы ровно там, где на него
+     * смотрят.
+     */
+    public long count(String query) {
+        if (query == null || query.isBlank()) {
+            return 0;
+        }
+        Number found = (Number) entityManager.createNativeQuery("""
+                        SELECT count(*)
+                          FROM catalog.part_kind k
+                         WHERE k.is_active
+                           AND (k.name ILIKE '%' || :query || '%'
+                                OR EXISTS (SELECT 1 FROM unnest(k.synonyms) s
+                                            WHERE s ILIKE '%' || :query || '%'))""")
+                .setParameter("query", query.strip())
+                .getSingleResult();
+        return found == null ? 0 : found.longValue();
     }
 
     private static PartKind toKind(Object[] row) {

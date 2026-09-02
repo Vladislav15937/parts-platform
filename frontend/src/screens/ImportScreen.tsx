@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
+import { count, plural } from '../ui/plural';
 import {
   duplicateColumns,
   FIELDS,
   applicabilityFromTitles,
   importBazon,
   importFile,
+  importWheels,
   migratePhotos,
   photoStatus,
   retryPhotos,
@@ -16,6 +18,7 @@ import type {
   BazonResult,
   FieldKey,
   ParsedApplicability,
+  WheelImportResult,
   PhotoProgress,
   Preview,
   Report,
@@ -40,9 +43,10 @@ export function ImportScreen({ reference, canImport }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [columns, setColumns] = useState<Partial<Record<FieldKey, number>>>({});
-  const [warehouseId, setWarehouseId] = useState<number | null>(
-    reference.warehouses[0]?.id ?? null,
-  );
+  // Склад не подставляется: это самая разрушительная операция в системе —
+  // тысячи позиций, отменяемые только восстановлением из бэкапа, — и первый
+  // склад списка у клиента с тремя складами оказывался пустым «54 YARD».
+  const [warehouseId, setWarehouseId] = useState<number | null>(null);
   const [report, setReport] = useState<Report | null>(null);
   // Счётчик переносов: по его смене оживает очередь снимков ниже.
   const [imported, setImported] = useState(0);
@@ -176,8 +180,10 @@ export function ImportScreen({ reference, canImport }: Props) {
             Склад
             <select
               value={warehouseId ?? ''}
-              onChange={(e) => setWarehouseId(Number(e.target.value))}
+              onChange={(e) => setWarehouseId(
+                e.target.value === '' ? null : Number(e.target.value))}
             >
+              <option value="">— выберите склад —</option>
               {reference.warehouses.map((w) => (
                 <option key={w.id} value={w.id}>
                   {w.name}
@@ -236,6 +242,8 @@ export function ImportScreen({ reference, canImport }: Props) {
           что переносить нечего. Ровно так у живого клиента и осталось
           восемь снимков вместо ста девяноста тысяч. */}
       <BazonImport onImported={() => setImported((n) => n + 1)} />
+
+      <WheelImport reference={reference} />
       <AfterImport reload={imported} />
     </section>
   );
@@ -307,10 +315,19 @@ function AfterImport({ reload }: { reload: number }) {
   const [fits, setFits] = useState<ParsedApplicability | null>(null);
   const [busy, setBusy] = useState<'photos' | 'fits' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Останов читается из ref, а не из состояния: цикл живёт внутри одного
+  // вызова и обновлённого состояния не увидит.
+  const stop = useRef(false);
 
   useEffect(() => {
     void photoStatus().then(setPhotos).catch(() => setPhotos(null));
   }, [reload]);
+
+  // Уход с раздела останавливает проход. Иначе цикл живёт дальше — промис
+  // размонтированием не отменяется, — а кнопки «Остановить» на экране уже
+  // нет; вернувшись, владелец увидит «Перенести все» и запустит второй
+  // проход рядом с первым.
+  useEffect(() => () => { stop.current = true; }, []);
 
   return (
     <>
@@ -324,15 +341,22 @@ function AfterImport({ reload }: { reload: number }) {
           <p className="muted">Состояние неизвестно</p>
         ) : (
           <p className="note">
-            Перенесено {photos.total}, ждёт {photos.pending}
-            {photos.broken > 0 && `, не вышло ${photos.broken}`}.
+            Перенесено {count(photos.total)}, ждёт {count(photos.pending)}
+            {photos.broken > 0 && `, не вышло ${count(photos.broken)}`}.
+            {busy === 'photos' && ' Идёт перенос…'}
           </p>
         )}
         <div className="filter-row">
-          <button type="button" disabled={busy !== null} onClick={() => void pullPhotos()}>
-            {busy === 'photos' ? 'Переносим…' : 'Перенести пачку'}
-          </button>
-          {photos !== null && photos.broken > 0 && (
+          {busy === 'photos' ? (
+            <button type="button" className="button--ghost" onClick={() => { stop.current = true; }}>
+              Остановить
+            </button>
+          ) : (
+            <button type="button" disabled={busy !== null} onClick={() => void pullPhotos()}>
+              Перенести все
+            </button>
+          )}
+          {busy !== 'photos' && photos !== null && photos.broken > 0 && (
             <button
               type="button"
               className="button--ghost"
@@ -345,8 +369,11 @@ function AfterImport({ reload }: { reload: number }) {
         </div>
         <p className="note">
           Пачками, потому что сотня тысяч файлов с чужого CDN — это часы,
-          а запрос столько не живёт. Нажимать, пока в очереди не станет пусто;
-          прервать можно в любой момент.
+          а запрос столько не живёт. Пачки идут одна за другой сами: у клиента
+          их бывает под двести тысяч, и нажимать на каждую значило бы простоять
+          у экрана смену. Вкладку до конца не закрывать и с раздела
+          не уходить — уход останавливает проход. Терять при этом нечего:
+          перенесённое остаётся перенесённым, продолжить можно позже.
         </p>
       </div>
 
@@ -370,14 +397,43 @@ function AfterImport({ reload }: { reload: number }) {
     </>
   );
 
+  /**
+   * Гонит пачки, пока очередь не опустеет.
+   *
+   * <p>Пачка — это запрос, который живёт секунды; очередь — сотни тысяч
+   * снимков. Пока за каждую пачку отвечало нажатие, у живого клиента
+   * получалось 961 нажатие подряд, и экран сам это и предлагал. Перенос
+   * при этом остаётся прерываемым: остановились — перенесённое осталось.
+   */
   async function pullPhotos(): Promise<void> {
     setBusy('photos');
     setError(null);
+    stop.current = false;
     try {
-      setPhotos(await migratePhotos());
+      // Исходная длина берётся из показанного состояния: иначе первая
+      // пачка не с чем сравнить, и по неподвижной очереди проход сделал бы
+      // лишний заход к чужому CDN.
+      let left = photos?.pending ?? Number.POSITIVE_INFINITY;
+      while (!stop.current) {
+        // Двести, а не пятьсот: минимизировать надо не число запросов —
+        // цикл идёт сам, и лишние round-trip'ы ничего не стоят, — а время
+        // одного. Пятьсот снимков это пятьдесят секунд, то есть запрос
+        // на грани таймаута терминатора и почти минута, в которую счётчик
+        // на экране стоит. Замерено живьём: десять снимков в секунду.
+        const next = await migratePhotos(200);
+        setPhotos(next);
+        // Очередь не сдвинулась — дальше ходить незачем: так выглядит
+        // пачка, целиком легшая в неудачные, и без этой проверки цикл
+        // молотил бы вечно.
+        if (next.pending === 0 || next.pending >= left) {
+          break;
+        }
+        left = next.pending;
+      }
     } catch (cause) {
       setError(describe(cause, 'Перенос фотографий не прошёл'));
     } finally {
+      stop.current = false;
       setBusy(null);
     }
   }
@@ -402,6 +458,103 @@ function AfterImport({ reload }: { reload: number }) {
       setError(describe(cause, 'Разбор применимости не прошёл'));
     } finally {
       setBusy(null);
+    }
+  }
+}
+
+/**
+ * Перенос шин и дисков — отдельным файлом.
+ *
+ * <p>Колёса лежат у Bazon на своей вкладке и в выгрузку товаров не попадают:
+ * в её сорока восьми колонках нет ни ширины, ни профиля, ни сезона. Пока
+ * этого блока не было, переехавший клиент терял весь колёсный склад —
+ * 65 позиций, 221 карточку с учётом комплектов, — и узнать об этом мог
+ * только по пустой вкладке «Шины и диски».
+ */
+function WheelImport({ reference }: { reference: Reference }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [warehouseId, setWarehouseId] = useState<number | null>(null);
+  const [result, setResult] = useState<WheelImportResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <>
+      <hr />
+      <h3>Шины и диски</h3>
+      <p className="note">
+        Третий файл из кабинета — выгрузка колёс. В выгрузке товаров их нет
+        вовсе: ни ширины, ни профиля, ни сезона там не бывает. Комплект
+        из четырёх станет четырьмя карточками, как и в кабинете.
+      </p>
+
+      <label>
+        Выгрузка шин и дисков
+        <input
+          type="file"
+          accept=".csv"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        />
+      </label>
+
+      {/* Склад спрашивается, а не подставляется: какой правильный, знает
+          только владелец, а уехавший не туда товар ищут глазами. */}
+      <label>
+        Склад
+        <select
+          value={warehouseId ?? ''}
+          onChange={(e) => setWarehouseId(
+            e.target.value === '' ? null : Number(e.target.value))}
+        >
+          <option value="">— выберите склад —</option>
+          {reference.warehouses.map((w) => (
+            <option key={w.id} value={w.id}>{w.name}</option>
+          ))}
+        </select>
+      </label>
+
+      {error !== null && <p className="note note--error">{error}</p>}
+
+      <button
+        type="button"
+        disabled={busy || file === null || warehouseId === null}
+        onClick={() => void run()}
+      >
+        {busy ? 'Переносим…' : 'Перенести колёса'}
+      </button>
+
+      {result !== null && (
+        <>
+          <p className="note">
+            Заведено карточек: {result.created} из {result.sets}{' '}
+            {plural(result.sets, 'строки', 'строк', 'строк')} файла
+            {result.skipped > 0 && `, пропущено уже перенесённых: ${result.skipped}`}
+            {result.photos > 0 && `, снимков в очередь: ${result.photos}`}.
+          </p>
+          {result.problems.length > 0 && (
+            <ul className="suggestions">
+              {result.problems.slice(0, 20).map((problem) => (
+                <li key={problem}>{problem}</li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </>
+  );
+
+  async function run(): Promise<void> {
+    if (file === null || warehouseId === null) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(await importWheels(file, warehouseId));
+    } catch (cause) {
+      setError(describe(cause, 'Перенос колёс не прошёл'));
+    } finally {
+      setBusy(false);
     }
   }
 }

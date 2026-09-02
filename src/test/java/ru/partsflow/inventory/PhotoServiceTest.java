@@ -37,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * расхождение даёт отказ уже на телефоне приёмщика.
  */
 @SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
+@org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 class PhotoServiceTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000050";
@@ -85,6 +86,12 @@ class PhotoServiceTest extends PostgresTestBase {
     @Autowired
     private TransactionTemplate transactionTemplate;
 
+    @Autowired
+    private org.springframework.test.web.servlet.MockMvc mvc;
+
+    @Autowired
+    private org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
+
     private Long partId;
 
     @BeforeAll
@@ -111,6 +118,63 @@ class PhotoServiceTest extends PostgresTestBase {
         partId = inTenant(() -> jdbc.queryForObject("""
                 INSERT INTO part (category_id, title, price, cost_price)
                 VALUES (NULL, 'Фара левая Camry V50', 8500, 4000) RETURNING id""", Long.class));
+
+        // Вход нужен только тем проверкам, что идут через HTTP: досъёмка
+        // из карточки — единственный путь, где отказ читает человек.
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 50");
+        jdbc.update("""
+                INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
+                VALUES (50, ?, 'Снимочная', 'fotoco')""", TENANT);
+        inTenant(() -> {
+            jdbc.update("DELETE FROM tenant_member WHERE login = 'hozyain'");
+            jdbc.update("""
+                    INSERT INTO tenant_member (login, display_name, password_hash, role)
+                    VALUES ('hozyain', 'Хозяин', ?, 'OWNER')""",
+                    passwordEncoder.encode("пароль-подлиннее"));
+            return null;
+        });
+    }
+
+    /**
+     * Отказ подтверждения объясняется словами, а не голым кодом.
+     *
+     * <p>Пока снимки грузил только телефон, кода ответа хватало: очередь
+     * разбирает его сама. С появлением досъёмки из карточки этот отказ
+     * увидел человек — и увидел «Запрос отклонён (409)», по которому
+     * не понять ни что случилось, ни что делать.
+     *
+     * <p>Через HTTP, а не через сервис: сервис отвечает {@code false},
+     * а теряется текст на границе контроллера.
+     */
+    @Test
+    @DisplayName("Подтверждение без файла отказывает словами")
+    void confirmWithoutUploadExplainsItself() throws Exception {
+        PhotoService.Upload upload =
+                inTenant(() -> photos.requestUpload(partId, "image/jpeg", uniqueRequestId()));
+
+        var session = mvc.perform(
+                        org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                                .post("/api/auth/login")
+                                .with(org.springframework.security.test.web.servlet.request
+                                        .SecurityMockMvcRequestPostProcessors.csrf())
+                                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                                .content("""
+                                        {"company":"fotoco","login":"hozyain",
+                                         "password":"пароль-подлиннее"}"""))
+                .andReturn().getRequest().getSession(false);
+
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/parts/%d/photos/%d/confirm".formatted(partId, upload.photoId()))
+                        .with(org.springframework.security.test.web.servlet.request
+                                .SecurityMockMvcRequestPostProcessors.csrf())
+                        .session((org.springframework.mock.web.MockHttpSession) session)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .status().isConflict())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("хранилище")));
     }
 
     @Test

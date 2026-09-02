@@ -103,15 +103,31 @@ public class SalesController {
     @PostMapping("/orders")
     @PreAuthorize(SELLS)
     public ResponseEntity<OrderView> receiveOrder(@Valid @RequestBody OrderRequest request) {
-        SalesService.AcceptedOrder accepted = sales.registerMarketplaceOrder(
-                request.marketplace(), request.orderNo(), request.replyDeadline(),
-                request.customerId(), CurrentUser.memberId(), request.dealSourceId(),
-                request.deliveryNote(), request.reservedUntil(),
-                request.items().stream()
-                        .map(i -> new SalesService.ItemRequest(
-                                i.partId(), i.quantity(), i.price(), i.warehouseId()))
-                        .toList(),
-                servicesOf(request.services()));
+        SalesService.AcceptedOrder accepted;
+        try {
+            accepted = sales.registerMarketplaceOrder(
+                    request.marketplace(), request.orderNo(), request.replyDeadline(),
+                    request.customerId(), CurrentUser.memberId(), request.dealSourceId(),
+                    request.deliveryNote(), request.reservedUntil(),
+                    request.items().stream()
+                            .map(i -> new SalesService.ItemRequest(
+                                    i.partId(), i.quantity(), i.price(), i.warehouseId()))
+                            .toList(),
+                    servicesOf(request.services()));
+        } catch (org.springframework.dao.DataIntegrityViolationException conflict) {
+            // Одновременный повтор: первый запрос успел завести сделку, второй
+            // упёрся в deal_external_order_uk. Заказ при этом принят и товар
+            // отложен — отвечать «нарушает целостность данных» продавцу,
+            // нажавшему «Принять заказ» второй раз, значит послать его искать
+            // поломку сервера. Та же половина защиты, что была у приёмки.
+            SalesService.AcceptedOrder done = sales.replayOrderAfterConflict(
+                    request.marketplace(), request.orderNo() == null
+                            ? null : request.orderNo().strip());
+            if (done == null) {
+                throw conflict;
+            }
+            accepted = done;
+        }
 
         OrderView body = new OrderView(view(accepted.deal()), accepted.replayed(),
                 accepted.missing());
@@ -339,9 +355,18 @@ public class SalesController {
     public record ServiceView(Long id, String name, BigDecimal price) {
     }
 
-    /** Строка услуги в сделке: доставка, упаковка. Склад не двигает. */
-    public record ServiceLineView(Long id, Long serviceId, BigDecimal quantity,
-                                  BigDecimal price) {
+    /**
+     * Строка услуги в сделке: доставка, упаковка. Склад не двигает.
+     *
+     * @param name название услуги. Без него экран продавца показать её
+     *             не может, а не показать нельзя: сумма строк тогда
+     *             не сходится с итогом документа — «итого 7 500» под
+     *             деталями на 7 000, — и спор об этом начинается
+     *             в момент оплаты. Та же причина, по которой наименование
+     *             несёт и строка запчасти
+     */
+    public record ServiceLineView(Long id, Long serviceId, String name,
+                                  BigDecimal quantity, BigDecimal price) {
     }
 
     private List<DealView> views(List<Deal> deals) {
@@ -350,7 +375,14 @@ public class SalesController {
                 .map(DealItem::getPartId)
                 .distinct()
                 .toList());
-        return deals.stream().map(deal -> DealView.of(deal, titles)).toList();
+        // Справочник услуг — это несколько строк на арендатора, и читается он
+        // одним запросом на всю выдачу: по запросу на строку история клиента
+        // превратилась бы в сотню обращений к базе.
+        Map<Long, String> serviceNames = sales.serviceKinds().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        ru.partsflow.sales.ServiceKind::getId,
+                        ru.partsflow.sales.ServiceKind::getName));
+        return deals.stream().map(deal -> DealView.of(deal, titles, serviceNames)).toList();
     }
 
     private DealView view(Deal deal) {
@@ -451,7 +483,8 @@ public class SalesController {
                            String deliveryNote, List<ItemView> items,
                            List<ServiceLineView> services) {
 
-        static DealView of(Deal deal, Map<Long, String> titles) {
+        static DealView of(Deal deal, Map<Long, String> titles,
+                           Map<Long, String> serviceNames) {
             return new DealView(deal.getId(), deal.getNumber(), deal.getCustomerId(),
                     deal.getManagerId(), deal.getStatus(), deal.getReservedUntil(),
                     deal.getTotalAmount(), deal.getPaidAmount(), deal.debt(),
@@ -463,6 +496,7 @@ public class SalesController {
                     deal.getItems().stream().map(item -> ItemView.of(item, titles)).toList(),
                     deal.getServices().stream()
                             .map(s -> new ServiceLineView(s.getId(), s.getServiceId(),
+                                    serviceNames.get(s.getServiceId()),
                                     s.getQuantity(), s.getPrice()))
                             .toList());
         }

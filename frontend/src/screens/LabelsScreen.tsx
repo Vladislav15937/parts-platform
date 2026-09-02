@@ -13,6 +13,7 @@ import type { Cell, Label } from '../labels/labels';
 import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
 import { searchStock } from '../sales/sales';
+import { count } from '../ui/plural';
 
 /**
  * Печать этикеток.
@@ -39,13 +40,19 @@ export function LabelsScreen({ canPrint }: Props) {
   const [picked, setPicked] = useState<number[]>([]);
   const [query, setQuery] = useState('');
   const [partLabels, setPartLabels] = useState<Label[]>([]);
+  // Сколько нашлось всего: список обрезан полусотней, и молчать об этом
+  // нельзя — печатают по нему.
+  const [partsFound, setPartsFound] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void listWarehouses()
       .then((loaded) => {
         setWarehouses(loaded);
-        setWarehouseId((current) => current ?? loaded[0]?.id ?? null);
+        // Склад не подставляется, как и на остальных экранах: первый
+        // по имени у клиента с тремя складами оказывался пустым, и экран
+        // печати встречал сообщением «На этом складе ячеек нет» — то есть
+        // отвечал на вопрос, которого никто не задавал.
       })
       .catch((cause) => setError(describe(cause, 'Склады не загрузились')));
   }, []);
@@ -109,8 +116,10 @@ export function LabelsScreen({ canPrint }: Props) {
               Склад
               <select
                 value={warehouseId ?? ''}
-                onChange={(e) => setWarehouseId(Number(e.target.value))}
+                onChange={(e) => setWarehouseId(
+                  e.target.value === '' ? null : Number(e.target.value))}
               >
+                <option value="">— выберите склад —</option>
                 {warehouses.map((w) => (
                   <option key={w.id} value={w.id}>
                     {w.name}
@@ -119,10 +128,21 @@ export function LabelsScreen({ canPrint }: Props) {
               </select>
             </label>
 
-            {cells.length === 0 && (
+            {/* «На этом складе» — только когда склад назван. Без выбора
+                это утверждение о том, чего экран не знает: владелец читает
+                «ячеек нет», ничего ещё не выбрав. Ровно этой формулировки
+                избегали, когда убирали подстановку склада, — и оставили
+                её показываться при пустом выборе. */}
+            {warehouseId !== null && cells.length === 0 && (
               <p className="note">
                 На этом складе ячеек нет. Их заводят списком — стеллаж целиком,
                 а не по одной.
+              </p>
+            )}
+
+            {warehouseId === null && (
+              <p className="note">
+                Выберите склад — печатать будем ячейки с него.
               </p>
             )}
 
@@ -214,6 +234,23 @@ export function LabelsScreen({ canPrint }: Props) {
               На этикетку детали идёт неугадываемый код карточки, а не её номер:
               этикетка уезжает к покупателю вместе с деталью.
             </p>
+            {/*
+              * Обрезанная выдача говорит, что она обрезана.
+              *
+              * Поиск отдаёт полсотни строк, а «фара» на живом складе находит
+              * 745. Экран брал первые пятьдесят и выбрасывал число найденного,
+              * которое сервер отдаёт как раз для этого: владелец печатал
+              * пятьдесят этикеток и уходил к стеллажу в уверенности, что
+              * промаркировал все фары. Та же болезнь, что у продавца
+              * («первые 50 из 741») и в отчётах («50 машин из 441»), только
+              * тут о нехватке узнают уже у полки, с пачкой наклеек в руках.
+              */}
+            {partsFound > partLabels.length && (
+              <p className="note note--error">
+                Найдено {count(partsFound)}, а на печать пойдут первые{' '}
+                {count(partLabels.length)} — уточните запрос.
+              </p>
+            )}
           </>
         )}
 
@@ -239,9 +276,10 @@ export function LabelsScreen({ canPrint }: Props) {
   async function findParts(): Promise<void> {
     setError(null);
     try {
-      const rows = await searchStock(query.trim());
+      const found = await searchStock(query.trim());
+      setPartsFound(found.total);
       setPartLabels(
-        rows
+        found.rows
           .filter((row) => row.publicCode !== null)
           .map((row) => partLabel(row.publicCode!, row.title, row.price)),
       );

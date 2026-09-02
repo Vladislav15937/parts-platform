@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { ApiError, request } from '../api/client';
 import {
   generationForYear,
@@ -16,11 +16,13 @@ import { DonorCosts } from './DonorCosts';
 import {
   donorTitle,
   listDonors,
+  registerSupply,
   startDismantling,
   statusTitle,
   type DonorEntry,
 } from '../intake/donors';
 import { ScanOverlay } from '../scan/ScanOverlay';
+import { shown } from '../ui/plural';
 
 /**
  * Заведение машины-донора.
@@ -48,6 +50,10 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
   // платежами и в разные дни.
   const [costsOf, setCostsOf] = useState<number | null>(null);
   const [donors, setDonors] = useState<DonorEntry[]>([]);
+  const [query, setQuery] = useState('');
+  const [supplyNumber, setSupplyNumber] = useState('');
+  const [supplyKind, setSupplyKind] = useState('CONTAINER');
+  const [supplier, setSupplier] = useState('');
   const [busy, setBusy] = useState(false);
   const [catalog, setCatalog] = useState<VehicleCatalog | null>(null);
   const [loading, setLoading] = useState(true);
@@ -67,8 +73,9 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  // Список машин — с сервера, а не из офлайн-справочника: там только те,
-  // что в разборе, и только что заведённой машины в нём нет.
+  // Список машин — с сервера, а не из офлайн-справочника: тот отдаёт
+  // только те, с которых можно снимать (в разборе и разобранные),
+  // и только что купленной машины в нём нет.
   useEffect(() => {
     void reloadDonors();
   }, []);
@@ -108,6 +115,15 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
       </section>
     );
   }
+
+  // Ищем по тому же, что видно в строке, плюс VIN: владелец помнит машину
+  // по своему номеру («261»), по марке с моделью или по заметке
+  // («Синий маркер!!!») — по нашему внутреннему коду не помнит никто.
+  const needle = query.trim().toLowerCase();
+  const found = needle === ''
+    ? donors
+    : donors.filter((donor) =>
+        `${donorTitle(donor)} ${donor.vin ?? ''}`.toLowerCase().includes(needle));
 
   const models = modelsOf(catalog, brand?.id ?? null);
   const generations = generationsOf(catalog, modelId);
@@ -258,6 +274,56 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
         </select>
       </label>
 
+      {/*
+        * Поставка заводится здесь же, где выбирается.
+        *
+        * `POST /api/intake/supplies` был написан с самого начала, и звать
+        * его было некому: список поставок приезжал справочником, а новую
+        * завести было нельзя ниоткуда. У переехавшего клиента их
+        * восемнадцать — все из переноса, — и следующий пришедший контейнер
+        * записать было бы не на что: приёмщик выбрал бы «не указана»,
+        * и связь детали с партией потерялась бы навсегда.
+        *
+        * Рядом с выбором, а не отдельным разделом: контейнер и машины
+        * приходят вместе, и заводит их один человек за один заход.
+        */}
+      <details>
+        <summary>Завести поставку</summary>
+        <div className="row">
+          <label className="field">
+            Номер
+            <input
+              value={supplyNumber}
+              placeholder="18"
+              onChange={(e) => setSupplyNumber(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Вид
+            <select value={supplyKind} onChange={(e) => setSupplyKind(e.target.value)}>
+              <option value="CONTAINER">Контейнер</option>
+              <option value="PURCHASE">Закупка</option>
+              <option value="OTHER">Прочее</option>
+            </select>
+          </label>
+          <label className="field">
+            Поставщик
+            <input
+              value={supplier}
+              placeholder="необязательно"
+              onChange={(e) => setSupplier(e.target.value)}
+            />
+          </label>
+        </div>
+        <button
+          type="button"
+          disabled={sending || !online || supplyNumber.trim() === ''}
+          onClick={() => void createSupply()}
+        >
+          Завести поставку
+        </button>
+      </details>
+
       <label>
         Примечание
         <input value={note} onChange={(e) => setNote(e.target.value)} />
@@ -297,6 +363,36 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
       {donors.length === 0 ? (
         <p className="note">Машин пока нет.</p>
       ) : (
+        <>
+        {/*
+          * Поиск по списку, а не прокрутка.
+          *
+          * У переехавшего клиента 441 машина, и список идёт простынёй
+          * в 27 801 пиксель — тридцать четыре экрана подряд. Владелец
+          * приходит сюда за одной машиной: положить на неё эвакуатор
+          * или перевести в разбор, — а найти её мог только глазами.
+          * Ровно та же болезнь, что с правкой списком в семьсот страниц
+          * и переносом снимков в девятьсот нажатий: возможность есть,
+          * воспользоваться нельзя.
+          *
+          * Отбор на клиенте: все машины уже загружены одним запросом,
+          * и лишний поход на сервер тут ничего не уточнит.
+          */}
+        <input
+          type="search"
+          value={query}
+          placeholder="Найти машину — номер, марка, модель, заметка, VIN"
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {query.trim() !== '' && (
+          // Обрезанный список говорит, что он обрезан: иначе владелец
+          // читает выдачу как весь свой автопарк.
+          <p className="note">
+            {found.length === 0
+              ? `Ничего не найдено среди ${donors.length} — очистите поиск`
+              : `Показано ${shown(found.length, donors.length)}`}
+          </p>
+        )}
         <table>
           <thead>
             <tr>
@@ -306,8 +402,9 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
             </tr>
           </thead>
           <tbody>
-            {donors.map((donor) => (
-              <tr key={donor.id}>
+            {found.map((donor) => (
+              <Fragment key={donor.id}>
+              <tr>
                 <td>{donorTitle(donor)}</td>
                 <td>{statusTitle(donor.status)}</td>
                 <td className="filter-row">
@@ -330,22 +427,36 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
                   </button>
                 </td>
               </tr>
+              {/* Затраты раскрываются под своей же строкой. Пока блок стоял
+                  после таблицы, у клиента с 441 машиной он открывался
+                  за одиннадцать экранов вниз — замерено: строка на 17 995
+                  пикселе, блок на 27 756. Владелец нажимал «Затраты»
+                  и не видел ничего, кроме сменившейся надписи на кнопке. */}
+              {costsOf === donor.id && (
+                <tr>
+                  <td colSpan={3}>
+                    <DonorCosts donorId={donor.id} title={donorTitle(donor)} />
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             ))}
           </tbody>
         </table>
+        </>
       )}
+      {/* «Только в разборе» было неправдой: справочник приёмки отдаёт
+          и разобранные — вернуться за забытой мелочью через неделю после
+          закрытия разбора обычное дело, и это закреплено тестом
+          IntakeReferenceServiceTest. А у переехавшего клиента разобраны
+          все 440 машин: прочитав прежний текст, он решил бы, что принимать
+          на них нельзя вовсе, и заводил бы детали без машины. */}
       <p className="note">
-        Деталь принимают только на машину в разборе: снятая с той, которую ещё
-        везут, — ошибка выбора, а не работа. Поэтому купленную машину надо
-        поставить в разбор, и до этого на приёмке её нет.
+        Деталь принимают на машину, которую разбирают или уже разобрали:
+        вернуться за забытой мелочью через неделю — обычное дело. А купленной
+        и той, что ещё в пути, на приёмке нет: снятая с них деталь — ошибка
+        выбора, а не работа. Поэтому купленную ставят в разбор.
       </p>
-
-      {costsOf !== null && donors.some((donor) => donor.id === costsOf) && (
-        <DonorCosts
-          donorId={costsOf}
-          title={donorTitle(donors.find((donor) => donor.id === costsOf)!)}
-        />
-      )}
 
     </section>
   );
@@ -392,6 +503,25 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
     }
     const matched = generationForYear(generationsOf(catalog, model), Number(value));
     return matched?.id ?? null;
+  }
+
+  async function createSupply(): Promise<void> {
+    setSending(true);
+    setMessage(null);
+    try {
+      const created = await registerSupply(
+        supplyNumber.trim(), supplyKind, supplier.trim() === '' ? null : supplier.trim());
+      setSupplyNumber('');
+      setSupplier('');
+      // Справочник приёмки перечитывается: без этого заведённая поставка
+      // не появится в списке ни здесь, ни у приёмщика на телефоне.
+      onChanged();
+      setMessage(`Поставка «${created.number}» заведена — её уже можно выбрать.`);
+    } catch (cause) {
+      setMessage(cause instanceof ApiError ? cause.message : 'Поставку завести не удалось');
+    } finally {
+      setSending(false);
+    }
   }
 
   async function reloadDonors(): Promise<void> {

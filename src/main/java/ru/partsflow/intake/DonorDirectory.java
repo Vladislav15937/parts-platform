@@ -33,7 +33,7 @@ public class DonorDirectory {
     @Transactional(readOnly = true)
     public List<Entry> all() {
         return jdbc.query("""
-                SELECT d.id, d.public_code, d.vin, d.year, d.status, d.note,
+                SELECT d.id, d.public_code, d.legacy_code, d.vin, d.year, d.status, d.note,
                        b.name AS brand, m.name AS model
                   FROM donor d
                   LEFT JOIN catalog.brand b ON b.id = d.brand_id
@@ -41,7 +41,10 @@ public class DonorDirectory {
                  ORDER BY d.id DESC""",
                 (rs, i) -> new Entry(
                         rs.getLong("id"),
-                        rs.getString("public_code"),
+                        // Тот же выбор, что в карточке машины и в отчёте
+                        // окупаемости: клиент зовёт машину своим номером.
+                        rs.getString("legacy_code") == null
+                                ? rs.getString("public_code") : rs.getString("legacy_code"),
                         rs.getString("brand"),
                         rs.getString("model"),
                         rs.getObject("year") == null ? null : rs.getInt("year"),
@@ -77,8 +80,7 @@ public class DonorDirectory {
                        d.transmission_type, d.transmission_model, d.color, d.color_code,
                        d.equipment_code, d.mileage_km, d.note,
                        b.name AS brand, m.name AS model, g.name AS generation,
-                       CASE WHEN s.id IS NULL THEN NULL
-                            ELSE s.kind || ' №' || s.number END AS supply,
+                       s.kind AS supply_kind, s.number AS supply_number,
                        (SELECT count(*) FROM part sibling WHERE sibling.donor_id = d.id)
                            AS parts_count
                   FROM part p
@@ -95,7 +97,7 @@ public class DonorDirectory {
                         rs.getString("legacy_code") == null
                                 ? rs.getString("public_code") : rs.getString("legacy_code"),
                         label(STATUSES, rs.getString("status")),
-                        rs.getString("supply"),
+                        supply(rs.getString("supply_kind"), rs.getString("supply_number")),
                         rs.getString("brand"),
                         rs.getString("model"),
                         rs.getString("generation"),
@@ -127,6 +129,24 @@ public class DonorDirectory {
     private static final Map<String, String> DRIVE =
             Map.of("FWD", "Передний", "RWD", "Задний", "AWD", "Полный");
 
+    private static final Map<String, String> SUPPLY_KINDS =
+            Map.of("CONTAINER", "Контейнер", "PURCHASE", "Закупка", "OTHER", "Поставка");
+
+    /**
+     * Поставка словами, а не кодом.
+     *
+     * <p>Рядом в этой же карточке руль, коробка и привод уже разложены
+     * по-русски — а поставка уходила как «CONTAINER №16». Это внутреннее
+     * представление на экране, ровно то, чего избегает выгрузка витрины,
+     * где стороны пишутся «Задн.» и «Лев.», а не `REAR` и `LEFT`.
+     */
+    private static String supply(String kind, String number) {
+        if (number == null) {
+            return null;
+        }
+        return label(SUPPLY_KINDS, kind) + " №" + number;
+    }
+
     private static final Map<String, String> TRANSMISSIONS = Map.of(
             "AT", "АКПП", "MT", "МКПП", "CVT", "Вариатор", "AMT", "Робот");
 
@@ -156,7 +176,11 @@ public class DonorDirectory {
         return key == null ? null : dictionary.getOrDefault(key, key);
     }
 
-    public record Entry(long id, String publicCode, String brand, String model,
+    /**
+     * @param code номер, которым машину зовёт клиент: свой, если он есть,
+     *             и наш внутренний, если машину завели уже у нас
+     */
+    public record Entry(long id, String code, String brand, String model,
                         Integer year, String vin, String status, String note) {
     }
 

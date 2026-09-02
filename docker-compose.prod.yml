@@ -288,6 +288,7 @@ services:
         /etc/prometheus/prometheus.yml > /tmp/prometheus.yml &&
         exec /bin/prometheus --config.file=/tmp/prometheus.yml
         --storage.tsdb.retention.time=14d
+        --web.enable-lifecycle
     environment:
       APP_CELL: ${APP_CELL:-cell01}
     volumes:

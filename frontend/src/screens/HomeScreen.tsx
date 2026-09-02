@@ -51,6 +51,17 @@ const NAMING_ROLES = ['OWNER', 'MANAGER'];
  */
 const LABEL_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
 
+/**
+ * Кто заводит данные: приёмка, машины, пересчёт, очередь отправки.
+ *
+ * <p>Здесь все, кроме «Просмотра». Роль эта названа владельцу «только
+ * смотреть», и заводят её тому, кому дают посмотреть; форма приёмки,
+ * открытая ей, — это работа, которую сервер отобьёт, а очередь пометит
+ * «требует внимания». Экран, называющий действие и не дающий его сделать,
+ * хуже отсутствующего экрана.
+ */
+const WRITING_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER', 'SELLER'];
+
 type Tab =
   | 'intake'
   | 'donor'
@@ -79,7 +90,13 @@ export function HomeScreen() {
   // видел бы её лист обхода и справочники.
   const company = state.status === 'authenticated' ? state.me.companySchema : undefined;
   const outbox = useOutbox(company);
-  const [tab, setTab] = useState<Tab>('intake');
+  // «Просмотр» открывается на складе: приёмки у него в рельсе нет,
+  // и начать с экрана, которого не видно, значит открыться пустым местом.
+  const [tab, setTab] = useState<Tab>(
+    state.status === 'authenticated' && !WRITING_ROLES.includes(state.me.role)
+      ? 'catalog'
+      : 'intake',
+  );
   // Число на вкладке — единственное, что сообщает о накопившемся: сам список
   // владелец не откроет, пока не узнает, что там что-то есть. После импорта
   // склада там сразу сотня.
@@ -131,27 +148,36 @@ export function HomeScreen() {
 
   // Личность, восстановленная локально, — тоже признак отсутствия связи,
   // и более достоверный, чем navigator.onLine: сервер только что не ответил.
-  const connected = online && !state.offline;
+  // Связь считается по последнему проходу очереди, а не по navigator.onLine:
+  // тот знает только про интерфейс, а в ангаре wi-fi поднят и сервера за ним
+  // нет. Значок «на связи» при лежащем сервере — это обещание, которого
+  // никто не давал: приёмщик видит его и решает, что работа ушла.
+  // Пока проход не состоялся, показываем то, что знает браузер.
+  const connected = (outbox.reachedServer ?? online) && !state.offline;
   const unsent = outbox.records.length;
 
   return (
     <div className="app">
       <nav className="rail">
         <div className="rail__brand">PartsFlow</div>
-        <button
-          type="button"
-          className={tab === 'intake' ? 'rail__item rail__item--active' : 'rail__item'}
-          onClick={() => setTab('intake')}
-        >
-          Приёмка
-        </button>
-        <button
-          type="button"
-          className={tab === 'donor' ? 'rail__item rail__item--active' : 'rail__item'}
-          onClick={() => setTab('donor')}
-        >
-          Машина
-        </button>
+        {WRITING_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
+            className={tab === 'intake' ? 'rail__item rail__item--active' : 'rail__item'}
+            onClick={() => setTab('intake')}
+          >
+            Приёмка
+          </button>
+        )}
+        {WRITING_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
+            className={tab === 'donor' ? 'rail__item rail__item--active' : 'rail__item'}
+            onClick={() => setTab('donor')}
+          >
+            Машина
+          </button>
+        )}
         <button
           type="button"
           className={tab === 'sales' ? 'rail__item rail__item--active' : 'rail__item'}
@@ -182,27 +208,33 @@ export function HomeScreen() {
         >
           Шины и диски
         </button>
-        <button
-          type="button"
-          className={tab === 'inventory' ? 'rail__item rail__item--active' : 'rail__item'}
-          onClick={() => setTab('inventory')}
-        >
-          Пересчёт
-        </button>
-        <button
-          type="button"
-          className={tab === 'outbox' ? 'rail__item rail__item--active' : 'rail__item'}
-          onClick={() => setTab('outbox')}
-        >
-          Очередь{unsent > 0 && ` · ${unsent}`}
-        </button>
-        <button
-          type="button"
-          className={tab === 'import' ? 'rail__item rail__item--active' : 'rail__item'}
-          onClick={() => setTab('import')}
-        >
-          Загрузка
-        </button>
+        {WRITING_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
+            className={tab === 'inventory' ? 'rail__item rail__item--active' : 'rail__item'}
+            onClick={() => setTab('inventory')}
+          >
+            Пересчёт
+          </button>
+        )}
+        {WRITING_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
+            className={tab === 'outbox' ? 'rail__item rail__item--active' : 'rail__item'}
+            onClick={() => setTab('outbox')}
+          >
+            Очередь{unsent > 0 && ` · ${unsent}`}
+          </button>
+        )}
+        {WRITING_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
+            className={tab === 'import' ? 'rail__item rail__item--active' : 'rail__item'}
+            onClick={() => setTab('import')}
+          >
+            Загрузка
+          </button>
+        )}
         <button
           type="button"
           className={tab === 'names' ? 'rail__item rail__item--active' : 'rail__item'}

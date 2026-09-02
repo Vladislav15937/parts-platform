@@ -72,20 +72,26 @@ class PartDonorHttpTest extends PostgresTestBase {
             // а число снятых деталей проверяется точным значением.
             jdbc.update("DELETE FROM part");
             jdbc.update("DELETE FROM donor");
+            // Поставка уникальна парой «вид и номер»: без уборки второй
+            // прогон падает на своём же INSERT.
+            jdbc.update("DELETE FROM supply");
             // LIMIT 1: справочник марок общий на все контексты тестов,
             // и одноимённых записей в нём накапливается несколько —
             // уникальность имени марки схемой не обещана.
             Long brand = jdbc.queryForObject(
                     "SELECT id FROM catalog.brand WHERE name = 'Toyota' ORDER BY id LIMIT 1",
                     Long.class);
+            Long supply = jdbc.queryForObject("""
+                    INSERT INTO supply (kind, number, status)
+                    VALUES ('CONTAINER', '16', 'ARRIVED') RETURNING id""", Long.class);
             Long donor = jdbc.queryForObject("""
                     INSERT INTO donor (brand_id, year, status, steering, drive_type,
                                        transmission_type, transmission_model, color, color_code,
                                        equipment_code, mileage_km, body_code, engine_code,
-                                       legacy_code)
+                                       legacy_code, supply_id)
                     VALUES (?, 2000, 'DISMANTLING', 'RIGHT', 'FWD', 'AT', 'A244L-01A',
-                            'Белый', '040', '0128644', 85364, 'EXZ10', '5EFE', 'Д-395')
-                    RETURNING id""", Long.class, brand);
+                            'Белый', '040', '0128644', 85364, 'EXZ10', '5EFE', 'Д-395', ?)
+                    RETURNING id""", Long.class, brand, supply);
 
             withDonor = part("Колонка рулевая", donor);
             part("Стартер с той же машины", donor);
@@ -103,6 +109,10 @@ class PartDonorHttpTest extends PostgresTestBase {
                 // Номер, которым машину зовёт клиент, а не наш внутренний код.
                 .andExpect(jsonPath("$.code").value("Д-395"))
                 .andExpect(jsonPath("$.status").value("В разборе"))
+                // Поставка тоже словами: рядом руль и коробка разложены
+                // по-русски, а она уходила как «CONTAINER №16» — внутреннее
+                // представление на экране, которого здесь быть не должно.
+                .andExpect(jsonPath("$.supply").value("Контейнер №16"))
                 .andExpect(jsonPath("$.steering").value("Правый руль"))
                 // Тип и модель вместе: одна модель коробки человеку ничего
                 // не говорит, а один тип не даёт подобрать деталь.

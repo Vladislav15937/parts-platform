@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { PhotoPicker } from '../photos/PhotoPicker';
 import type { ResizedPhoto } from '../photos/resize';
+import { donorTitle } from '../intake/donors';
 import { suggestNames } from '../reference/reference';
 import type { Reference } from '../reference/reference';
 import { ScanOverlay } from '../scan/ScanOverlay';
@@ -49,20 +50,58 @@ interface Payload {
 }
 
 export function IntakeScreen({ reference, onSend }: Props) {
-  const [warehouseId, setWarehouseId] = useState<number | null>(
-    reference.warehouses[0]?.id ?? null,
-  );
-  const [supplyId, setSupplyId] = useState<number | null>(reference.supplies[0]?.id ?? null);
+  /**
+   * Склад не подставляется — его выбирают.
+   *
+   * <p>Умолчанием стоял первый склад списка, а список отсортирован по имени:
+   * у клиента с тремя складами первым оказывался «54 YARD», пустой, тогда
+   * как весь товар лежит на «Ткацкой». Приёмщик поле не смотрит — оно
+   * заполнено, — и партия уходит не туда. Ошибка тихая: деталь заведена,
+   * остаток сходится, ничего не падает; находят её, когда деталь ищут
+   * на полке и не могут найти.
+   *
+   * <p>Подставить «правильный» склад система не может: какой из них
+   * правильный, знает только тот, кто стоит у стеллажа. Значит спрашиваем.
+   */
+  const [warehouseId, setWarehouseId] = useState<number | null>(null);
+  /**
+   * Поставка не подставляется — «не указана», пока приёмщик не выбрал.
+   *
+   * <p>Списком идут поставки от свежей к старой, и первая из них
+   * подставлялась как умолчание. То есть каждая принятая деталь молча
+   * приписывалась к последнему приехавшему контейнеру, к которому она может
+   * не иметь никакого отношения: приёмщик поле не трогает, потому что оно
+   * уже заполнено и выглядит осмысленно.
+   *
+   * <p>Правильное умолчание в списке уже стояло первым пунктом — «не
+   * указана». Пусто здесь означает «неизвестно», и это честнее любой
+   * догадки: поставку правят потом, а неверную не находят никогда.
+   * Та же причина, по которой на экране машины поставка тоже пуста.
+   */
+  const [supplyId, setSupplyId] = useState<number | null>(null);
   const [donorId, setDonorId] = useState<number | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState<Item>(emptyItem());
   const [photos, setPhotos] = useState<ResizedPhoto[]>([]);
   const [scanning, setScanning] = useState(false);
   const [scanNote, setScanNote] = useState<string | null>(null);
+  /**
+   * Подсказку выбрали — список закрыт до следующего набора.
+   *
+   * <p>Список считается от текста поля, поэтому выбранное написание
+   * оставалось в нём и после нажатия: приёмщик не видел, что выбор
+   * засчитан, а список продолжал стоять между полем и ценой. На телефоне,
+   * где эта форма и живёт, шесть подсказок отжимают «Цена» и «Добавить
+   * в партию» за край экрана — и так на каждой детали из тридцати.
+   */
+  const [pickedName, setPickedName] = useState(false);
 
   const warehouse = reference.warehouses.find((w) => w.id === warehouseId);
-  const suggestions = suggestNames(reference.partNames, draft.rawName);
-  const canAdd = draft.rawName.trim().length > 0 && Number(draft.price) > 0;
+  const suggestions = pickedName ? [] : suggestNames(reference.partNames, draft.rawName);
+  // Склад проверяется здесь, а не при отправке: остановить приёмщика надо
+  // до того, как он наберёт двадцать позиций, а не после.
+  const canAdd = warehouseId !== null
+    && draft.rawName.trim().length > 0 && Number(draft.price) > 0;
 
   return (
     <section className="card">
@@ -73,12 +112,13 @@ export function IntakeScreen({ reference, onSend }: Props) {
         <select
           value={warehouseId ?? ''}
           onChange={(e) => {
-            setWarehouseId(Number(e.target.value));
+            setWarehouseId(e.target.value === '' ? null : Number(e.target.value));
             // Ячейка принадлежит складу: оставить её при смене склада значит
             // положить деталь в ячейку, которой на этом складе нет.
             setDraft((d) => ({ ...d, cellId: null }));
           }}
         >
+          <option value="">— выберите склад —</option>
           {reference.warehouses.map((w) => (
             <option key={w.id} value={w.id}>
               {w.name}
@@ -112,7 +152,7 @@ export function IntakeScreen({ reference, onSend }: Props) {
           <option value="">без машины (контракт)</option>
           {reference.donors.map((d) => (
             <option key={d.id} value={d.id}>
-              {d.publicCode} · {[d.brand, d.model, d.year].filter(Boolean).join(' ')}
+              {donorTitle(d)}
             </option>
           ))}
         </select>
@@ -124,7 +164,11 @@ export function IntakeScreen({ reference, onSend }: Props) {
         Вид детали
         <input
           value={draft.rawName}
-          onChange={(e) => setDraft({ ...draft, rawName: e.target.value })}
+          onChange={(e) => {
+            setDraft({ ...draft, rawName: e.target.value });
+            // Набирают дальше — значит выбранное больше не подходит.
+            setPickedName(false);
+          }}
           placeholder="например, фара левая"
           autoCapitalize="none"
         />
@@ -137,7 +181,10 @@ export function IntakeScreen({ reference, onSend }: Props) {
               <button
                 type="button"
                 className="button--ghost"
-                onClick={() => setDraft({ ...draft, rawName: name.name })}
+                onClick={() => {
+                  setDraft({ ...draft, rawName: name.name });
+                  setPickedName(true);
+                }}
               >
                 {name.name}
                 {!name.matched && <span className="muted"> · не распознано</span>}
@@ -280,7 +327,7 @@ export function IntakeScreen({ reference, onSend }: Props) {
     }
     if (match.kind === 'donor') {
       setDonorId(match.donor.id);
-      setScanNote(`Машина ${match.donor.publicCode}`);
+      setScanNote(`Машина ${match.donor.code}`);
       return;
     }
     if (match.kind === 'ambiguous') {
@@ -296,6 +343,9 @@ export function IntakeScreen({ reference, onSend }: Props) {
     setItems([...items, { ...draft, key: crypto.randomUUID(), photos }]);
     // Склад, поставка и машина остаются: с одного донора снимают подряд.
     setDraft(emptyItem());
+    // Позиция ушла в партию — следующую набирают с чистого листа,
+    // и подсказки для неё снова нужны.
+    setPickedName(false);
     setPhotos([]);
   }
 
@@ -337,7 +387,7 @@ export function IntakeScreen({ reference, onSend }: Props) {
       return 'без машины';
     }
     const donor = reference.donors.find((d) => d.id === donorId);
-    return donor === undefined ? 'машина' : donor.publicCode;
+    return donor === undefined ? 'машина' : donor.code;
   }
 }
 

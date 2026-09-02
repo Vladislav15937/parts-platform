@@ -48,10 +48,11 @@ class IntakeReferenceServiceTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
-        brandId = jdbc.queryForObject("""
-                INSERT INTO catalog.brand (name, slug) VALUES ('Toyota', 'toyota-reference-test')
-                ON CONFLICT (slug) DO UPDATE SET name = excluded.name
-                RETURNING id""", Long.class);
+        // Эталонная марка из справочника, а не своя копия: «Toyota» с уникальным
+        // slug у каждого теста накапливались в общей схеме catalog и ломали
+        // соседей — отбор по марке считал их несколько вместо одной. CLAUDE.md.
+        brandId = jdbc.queryForObject(
+                "SELECT id FROM catalog.brand WHERE slug = 'toyota'", Long.class);
 
         inTenant(() -> {
             jdbc.update("DELETE FROM part_name");
@@ -186,11 +187,12 @@ class IntakeReferenceServiceTest extends PostgresTestBase {
     @Test
     @DisplayName("У машины видно марку и модель, а не только идентификаторы")
     void donorCarriesReadableVehicle() {
-        // Уникальность модели — по паре с маркой, а не по одному slug.
-        Long modelId = jdbc.queryForObject("""
-                INSERT INTO catalog.model (brand_id, name, slug) VALUES (?, 'Camry', 'camry-ref-test')
-                ON CONFLICT (brand_id, slug) DO UPDATE SET name = excluded.name
-                RETURNING id""", Long.class, brandId);
+        // Эталонная модель из справочника, а не своя копия: тесту нужно лишь
+        // читаемое «Camry» у машины, а сидовая Camry именно так и называется
+        // и уже имеет алиас. Своя «Camry» без алиаса ломала VehicleWordsTest.
+        Long modelId = jdbc.queryForObject(
+                "SELECT id FROM catalog.model WHERE brand_id = ? AND slug = 'camry'",
+                Long.class, brandId);
 
         inTenant(() -> {
             Donor donor = donor("JT9");
@@ -203,7 +205,30 @@ class IntakeReferenceServiceTest extends PostgresTestBase {
         assertThat(inTenant(() -> reference.load()).donors()).singleElement().satisfies(d -> {
             assertThat(d.brand()).isEqualTo("Toyota");
             assertThat(d.model()).isEqualTo("Camry");
-            assertThat(d.publicCode()).isNotBlank();
+            assertThat(d.code()).isNotBlank();
+        });
+    }
+
+    /**
+     * Выбрать машину из списка приёмщик должен уметь, а марки, модели и года
+     * для этого мало: у переехавшего клиента 200 машин из 442 совпадают
+     * по этой тройке. Различают их номер клиента и его же заметка — и то
+     * и другое лежит в базе с самого переезда.
+     */
+    @Test
+    @DisplayName("Машину в справочнике подписывают номер клиента и его заметка")
+    void donorCarriesClientCodeAndNote() {
+        inTenant(() -> {
+            var saved = intake.registerDonor(donor("JT8"), null, null);
+            intake.startDismantling(saved.getId());
+            jdbc.update("UPDATE donor SET legacy_code = '229', note = 'Синий маркер!!!' "
+                    + "WHERE id = ?", saved.getId());
+            return null;
+        });
+
+        assertThat(inTenant(() -> reference.load()).donors()).singleElement().satisfies(d -> {
+            assertThat(d.code()).isEqualTo("229");
+            assertThat(d.note()).isEqualTo("Синий маркер!!!");
         });
     }
 

@@ -165,6 +165,7 @@ public class IntakeService {
             return alreadyDone;
         }
 
+        requireWarehouse(warehouseId);
         if (supplyId != null) {
             requireSupply(supplyId);
         }
@@ -278,6 +279,27 @@ public class IntakeService {
      * не отличает «получилось только что» от «получилось в прошлый раз»,
      * ей нужен ответ, чтобы удалить запись и идти дальше.
      */
+    /**
+     * Повтор, случившийся одновременно с первым запросом.
+     *
+     * <p>Проверка «нет ли уже такого» ловит обычный повтор — тот, что пришёл
+     * после ответа. А два повтора в один момент проходят её оба: между
+     * чтением и вставкой второй ещё ничего не видит. Дубля при этом
+     * не появляется — его отбивает уникальный индекс, — но наружу летел
+     * 409 «Операция нарушает целостность данных», то есть **ошибка на
+     * успешную приёмку**. Офлайн-очередь читает 409 как отказ по существу
+     * и уводит запись в «требует внимания»: приёмщик видит красное там,
+     * где деталь уже на складе, и заводит её второй раз руками.
+     *
+     * <p>Читается новой транзакцией: та, в которой случилось нарушение,
+     * помечена на откат, и запрос из неё не пройдёт.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
+                   readOnly = true)
+    public Receipt replayAfterConflict(String requestId) {
+        return replayOf(requestId);
+    }
+
     private Receipt replayOf(String requestId) {
         if (requestId == null || requestId.isBlank()) {
             return null;
@@ -292,6 +314,30 @@ public class IntakeService {
                 .map(ru.partsflow.inventory.StockDocumentLine::getPartId)
                 .toList();
         return parts.findAllById(partIds);
+    }
+
+    /**
+     * Склад обязан существовать, и сказать об этом надо словами.
+     *
+     * <p>Поставка и машина проверялись, склад — нет: он доезжал до внешнего
+     * ключа и возвращался как «Операция нарушает целостность данных».
+     * Приёмщик по такому ответу идёт искать поломку сервера, а офлайн-очередь
+     * читает 409 как отказ по существу и уводит партию в «требует внимания» —
+     * то есть работа смены останавливается на сообщении, из которого
+     * не понять, что делать.
+     *
+     * <p>Случай не выдуманный: склад могли выключить, пока телефон был
+     * без связи, а в теле записи очереди лежит его прежний номер.
+     */
+    private void requireWarehouse(Long warehouseId) {
+        if (warehouseId == null) {
+            throw new IllegalArgumentException("Не указан склад приёмки");
+        }
+        Integer found = jdbc.queryForObject(
+                "SELECT count(*) FROM warehouse WHERE id = ?", Integer.class, warehouseId);
+        if (found == null || found == 0) {
+            throw new IllegalArgumentException("Склад не найден: " + warehouseId);
+        }
     }
 
     private Supply requireSupply(Long supplyId) {

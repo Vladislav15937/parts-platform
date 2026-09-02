@@ -49,6 +49,8 @@ class DeadLetterServiceTest extends PostgresTestBase {
     @Autowired
     private JdbcTemplate jdbc;
 
+    private Long memberId;
+
     @Autowired
     private TransactionTemplate transactionTemplate;
 
@@ -63,6 +65,12 @@ class DeadLetterServiceTest extends PostgresTestBase {
         inTenant(() -> {
             jdbc.update("DELETE FROM event_dead_letter");
             jdbc.update("DELETE FROM processed_event");
+            // Автор повтора — настоящий сотрудник: resolved_by смотрит
+            // на tenant_member внешним ключом.
+            memberId = jdbc.queryForObject("""
+                    INSERT INTO tenant_member (user_id, display_name, role)
+                    VALUES ((SELECT COALESCE(max(user_id), 0) + 1 FROM tenant_member),
+                            'Хозяин', 'OWNER') RETURNING id""", Long.class);
             return null;
         });
     }
@@ -92,12 +100,53 @@ class DeadLetterServiceTest extends PostgresTestBase {
         handler.recover();
 
         var letter = inTenant(() -> deadLetters.unresolved(10).get(0));
-        var failure = inTenant(() -> deadLetters.retry(letter.id()));
+        var failure = inTenant(() -> deadLetters.retry(letter.id(), null));
 
         assertThat(failure).isEmpty();
         assertThat(handler.delivered()).contains(102L);
         assertThat(inTenant(() -> deadLetters.unresolved(10))).isEmpty();
         assertThat(resolutionOf(letter.id())).isEqualTo("RETRIED");
+    }
+
+    /**
+     * Повтор руками подписывается тем, кто нажал.
+     *
+     * <p>Метод общий у робота и у человека, и автора он не писал вовсе:
+     * нажатие «Повторить» на экране «Доставка» было неотличимо от прохода
+     * робота. На вопрос «кто отправил это повторно» ответа не находилось —
+     * при том что у соседней кнопки, снятия с разбора, автор есть.
+     *
+     * <p>Пусто по-прежнему означает робота: у фонового прохода вошедшего
+     * нет и быть не может, как и у движений склада из переноса.
+     */
+    @Test
+    @DisplayName("Повтор руками записывает автора, а проход робота — нет")
+    void manualRetryIsSigned() {
+        handler.failWith("площадка не отвечает");
+        dispatchOnce(107);
+        handler.recover();
+
+        var letter = inTenant(() -> deadLetters.unresolved(10).get(0));
+        assertThat(inTenant(() -> deadLetters.retry(letter.id(), memberId))).isEmpty();
+
+        assertThat(resolvedByOf(letter.id()))
+                .as("повтор руками не подписан: не отличить от прохода робота")
+                .isEqualTo(memberId);
+
+        handler.failWith("площадка не отвечает");
+        dispatchOnce(108);
+        handler.recover();
+        var byRobot = inTenant(() -> deadLetters.unresolved(10).get(0));
+        inTenant(() -> deadLetters.retryDue());
+
+        assertThat(resolvedByOf(byRobot.id()))
+                .as("робот подписался чужим именем")
+                .isNull();
+    }
+
+    private Long resolvedByOf(long id) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT resolved_by FROM event_dead_letter WHERE id = ?", Long.class, id));
     }
 
     @Test
@@ -108,7 +157,7 @@ class DeadLetterServiceTest extends PostgresTestBase {
         handler.recover();
 
         var letter = inTenant(() -> deadLetters.unresolved(10).get(0));
-        inTenant(() -> deadLetters.retry(letter.id()));
+        inTenant(() -> deadLetters.retry(letter.id(), null));
 
         // Повторная доставка тем же транспортом обязана уйти в «уже обработано»:
         // иначе at-least-once даст вторую дельту по той же сделке.
@@ -123,7 +172,7 @@ class DeadLetterServiceTest extends PostgresTestBase {
         dispatchOnce(104);
 
         var letter = inTenant(() -> deadLetters.unresolved(10).get(0));
-        var failure = inTenant(() -> deadLetters.retry(letter.id()));
+        var failure = inTenant(() -> deadLetters.retry(letter.id(), null));
 
         assertThat(failure).contains("ключ кабинета не принят");
         var after = inTenant(() -> deadLetters.unresolved(10).get(0));
@@ -168,7 +217,7 @@ class DeadLetterServiceTest extends PostgresTestBase {
         // четыре часа значит заставить лезть в базу — от чего экран и избавляет.
         handler.recover();
         var letter = inTenant(() -> deadLetters.unresolved(10).get(0));
-        assertThat(inTenant(() -> deadLetters.retry(letter.id()))).isEmpty();
+        assertThat(inTenant(() -> deadLetters.retry(letter.id(), null))).isEmpty();
         assertThat(inTenant(() -> deadLetters.unresolved(10))).isEmpty();
     }
 

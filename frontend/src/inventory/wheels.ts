@@ -105,6 +105,8 @@ export interface WheelPage {
   total: number;
   warehouses: WheelWarehouse[];
   rows: WheelRow[];
+  /** По каким колонкам сервер делает отбор — см. CatalogPage. */
+  filterable: string[];
 }
 
 /**

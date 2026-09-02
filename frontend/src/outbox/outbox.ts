@@ -85,6 +85,18 @@ export interface ProcessResult {
   needsSignIn: boolean;
   /** Пропущено записей другой компании: они ждут возврата в свою. */
   foreign: number;
+  /**
+   * Достучались ли до сервера в этом проходе.
+   *
+   * <p>`navigator.onLine` говорит только «интерфейс поднят», а в ангаре
+   * это ровно тот случай, когда wi-fi подключён, а сервера за ним нет:
+   * приёмщик видит «на связи», работа при этом ложится в очередь.
+   * Настоящий признак — успешный запрос, и знает о нём только очередь.
+   *
+   * <p>`undefined` — прохода не было (нечего отправлять): о связи
+   * это не говорит ничего, и затирать прежний ответ нельзя.
+   */
+  reachedServer?: boolean;
 }
 
 /**
@@ -224,6 +236,8 @@ export async function processOutbox(
       }
       try {
         const followUps = await send(record);
+        // Ответ получен — сервер жив, что бы ни говорил navigator.onLine.
+        result.reachedServer = true;
         // Удаляем только после ответа: обрыв до него означает повтор,
         // а не потерю.
         await remove(STORE_OUTBOX, record.id);
@@ -240,6 +254,14 @@ export async function processOutbox(
       } catch (error) {
         const kind = error instanceof ApiError ? error.kind : 'transient';
         const message = error instanceof Error ? error.message : 'Неизвестная ошибка';
+
+        // Сервер ответил отказом — значит он есть. Связи нет только
+        // при временной ошибке, когда до него не достучались вовсе.
+        if (kind !== 'transient') {
+          result.reachedServer = true;
+        } else if (result.reachedServer === undefined) {
+          result.reachedServer = false;
+        }
 
         if (kind === 'unauthenticated') {
           // Сессия кончилась. Записи не трогаем вовсе: попытки не тратим,

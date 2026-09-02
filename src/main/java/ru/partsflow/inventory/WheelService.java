@@ -35,11 +35,14 @@ public class WheelService {
 
     private final PartChangeLog partChanges;
     private final StockLedger ledger;
+    private final ru.partsflow.catalog.VehicleWords vehicleWords;
 
-    public WheelService(JdbcTemplate jdbc, PartChangeLog partChanges, StockLedger ledger) {
+    public WheelService(JdbcTemplate jdbc, PartChangeLog partChanges, StockLedger ledger,
+                        ru.partsflow.catalog.VehicleWords vehicleWords) {
         this.partChanges = partChanges;
         this.ledger = ledger;
         this.jdbc = jdbc;
+        this.vehicleWords = vehicleWords;
     }
 
     /**
@@ -63,6 +66,32 @@ public class WheelService {
     }
 
     /**
+     * Остальные свойства колеса проверяются тем же списком, каким
+     * показываются.
+     *
+     * <p>Белый список стоял только у вида товара, а у сезона, состояния,
+     * маркировки и протектора — нет, хотя болезнь одна и уже описана выше:
+     * значение доезжает до `CHECK` в колонке и возвращается как «операция
+     * нарушает целостность данных». Человеку по такому ответу неясно, что
+     * он ввёл не то, — он идёт искать поломку сервера, — а офлайн-очередь
+     * читает 409 как повод повторять. Поймано попыткой завести комплект
+     * с сезоном `WINTER_STUD` вместо `WINTER_STUDDED`: разница в четыре
+     * буквы, ответ — про целостность данных.
+     *
+     * <p>Сверяется с тем же словарём, которым значение показывают
+     * на экране: отдельный список разошёлся бы с показом на первой же
+     * правке, и появилось бы значение, которое одна сторона пускает,
+     * а другая нет.
+     */
+    private static void requireKnown(String field, String value, Map<String, String> allowed) {
+        if (value != null && !allowed.containsKey(value)) {
+            throw new IllegalArgumentException(
+                    "Неизвестное значение поля «%s»: %s. Допустимы %s"
+                            .formatted(field, value, allowed.keySet()));
+        }
+    }
+
+    /**
      * Заводит комплект: {@code quantity} одинаковых колёс под общим номером.
      *
      * @return номера заведённых карточек
@@ -80,6 +109,10 @@ public class WheelService {
             throw new IllegalArgumentException("Не указан склад");
         }
         requireKind(request.kind());
+        requireKnown("Сезон", request.season(), SEASONS);
+        requireKnown("Состояние", request.condition(), CONDITIONS);
+        requireKnown("Тип маркировки", request.markingType(), MARKING);
+        requireKnown("Тип протектора", request.treadType(), TREAD);
 
         Integer setNo = quantity > 1
                 ? jdbc.queryForObject("SELECT nextval('wheel_set_no_seq')", Integer.class)
@@ -265,7 +298,10 @@ public class WheelService {
             // заголовка: покупатель называет «225 55 18», а в заголовке стоит
             // «225/55 R18», и по буквам это не совпадает. Нераспознанное
             // остаётся текстом — «Dunlop зимняя» так и ищется словами.
-            WheelSizeQuery size = WheelSizeQuery.parse(query);
+            // Марка приводится к латинскому написанию до разбора размера:
+            // «бриджстоун 225 55 18» — обычный запрос по телефону, и словарь
+            // тут тот же, что у машин.
+            WheelSizeQuery size = WheelSizeQuery.parse(vehicleWords.translate(query));
 
             if (size.tyreWidth() != null) {
                 where.append(" AND w.tyre_width = ?");
@@ -294,10 +330,23 @@ public class WheelService {
                 args.add(size.offsetMm());
             }
             if (size.text() != null) {
-                where.append(" AND (p.public_code ILIKE ? OR p.title ILIKE ?)");
-                String like = "%" + size.text() + "%";
-                args.add(like);
-                args.add(like);
+                // Словами, а не одной подстрокой. «Bridgestone зимняя» —
+                // обычный запрос по телефону, а в заголовке между ними стоит
+                // модель: «Шина 225/55 R18 Bridgestone Blizzak зимняя (шипы)».
+                // Целиком такая фраза не совпадает ни с чем, и поиск отдавал
+                // ноль при том, что каждое слово по отдельности находило обе
+                // шины. Продавец в этот момент отвечает «нет такого».
+                //
+                // Слова соединяются через AND: они сужают запрос, а не
+                // расширяют его. Иначе «Dunlop зимняя» вернуло бы вдобавок
+                // все летние Dunlop и все зимние чужих марок — выдачу,
+                // которую продавец читает глазами.
+                for (String word : size.text().trim().split("\\s+")) {
+                    where.append(" AND (p.public_code ILIKE ? OR p.title ILIKE ?)");
+                    String like = "%" + word + "%";
+                    args.add(like);
+                    args.add(like);
+                }
             }
         }
         if (kind != null && !kind.isBlank()) {
@@ -324,6 +373,11 @@ public class WheelService {
                     throw new IllegalArgumentException(
                             "По этой колонке отбор не делается: " + entry.getKey());
                 }
+                // Пустое «содержит» — не «подходит любое»: `ILIKE '%%'`
+                // отбрасывает незаполненные, тихо сужая выдачу.
+                if (entry.getValue() == null || entry.getValue().isBlank()) {
+                    continue;
+                }
                 where.append(" AND ").append(expression).append(" ILIKE ?");
                 args.add("%" + entry.getValue().strip() + "%");
             }
@@ -337,6 +391,13 @@ public class WheelService {
                             "По этой колонке отбор не делается: " + entry.getKey());
                 }
                 String value = entry.getValue();
+                // Пустое значение — «условие не задано», а не «равно пустоте»:
+                // отбор по нему не находит ничего, и у выгрузки это пустой
+                // прайс, который площадка примет молча вместе с потерей
+                // объявлений. «Не заполнено» спрашивают отдельным пунктом.
+                if (value == null || value.isBlank()) {
+                    continue;
+                }
                 if (EMPTY.equals(value)) {
                     // «Пустые значения» — это вопрос «где не заполнено»,
                     // и он нужен: незаполненный сезон у шины видно только так.
@@ -355,6 +416,42 @@ public class WheelService {
     private record Filter(String where, List<Object> args) {
     }
 
+    /**
+     * Отбор по колонкам вкладки колёс — готовым условием для чужого запроса.
+     *
+     * <p><b>Зачем.</b> Выгрузку колёс владелец настраивает теми же колонками,
+     * какими смотрит склад: сезон, диаметр, марка, износ. Второй белый список
+     * рядом с этим разошёлся бы с ним на первой правке, и появилось бы
+     * значение, которое таблица показывает, а выгрузка не отбирает.
+     *
+     * @return пусто, если условий нет вовсе, — «без ограничения», а не
+     *         «ничего»: выгрузка без отбора отдаёт весь колёсный склад
+     */
+    @Transactional(readOnly = true)
+    public java.util.Optional<ColumnFilter> columnFilter(Map<String, String> columns,
+                                                         Map<String, String> words) {
+        boolean empty = (columns == null || columns.isEmpty())
+                && (words == null || words.isEmpty());
+        if (empty) {
+            return java.util.Optional.empty();
+        }
+        Filter filter = filterOf(null, null, true, columns, words);
+        return java.util.Optional.of(new ColumnFilter("""
+                p.id IN (SELECT p.id FROM part p
+                           JOIN part_wheel w ON w.part_id = p.id
+                           LEFT JOIN part_name pn ON pn.id = p.part_name_id
+                           LEFT JOIN donor d ON d.id = p.donor_id
+                           LEFT JOIN supply s ON s.id = p.supply_id
+                """ + filter.where() + ")", filter.args()));
+    }
+
+    /**
+     * @param sql  готовое условие вида {@code p.id IN (…)}
+     * @param args его параметры по порядку
+     */
+    public record ColumnFilter(String sql, List<Object> args) {
+    }
+
     /** Незаполненное поле и «заполнено хоть чем-то» — тоже ответы на вопрос. */
     public static final String EMPTY = "\u2014пусто\u2014";
     public static final String PRESENT = "\u2014не пусто\u2014";
@@ -370,6 +467,11 @@ public class WheelService {
      * и «летняя», а не {@code TYRE} и {@code SUMMER}, и отбирает по ним же.
      * Разойдись они — выбранное из списка значение не находило бы ничего.
      */
+    /** По каким колонкам отбор делается — тот же список, что и у отбора. */
+    public static java.util.Set<String> filterableColumns() {
+        return FILTERS.keySet();
+    }
+
     @Transactional(readOnly = true)
     public List<String> values(String column) {
         String expression = FILTERS.get(column);

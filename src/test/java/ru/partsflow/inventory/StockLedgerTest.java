@@ -188,6 +188,50 @@ class StockLedgerTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Гонка за последней деталью: вторая попытка отказывает словами")
+    void concurrentWriteOffsDoNotDriveTheStockNegative() throws Exception {
+        Long partId = part("Стартер");
+        intake(partId, warehouse, "1");
+
+        // Двое кладовщиков списывают одну и ту же единицу. Предпроверка
+        // остатка их не разводит — она читает то, чего через миллисекунду
+        // уже нет, — поэтому сторожем обязана быть сама инструкция.
+        java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(2);
+        java.util.List<Throwable> failures = java.util.Collections.synchronizedList(
+                new java.util.ArrayList<>());
+        Runnable writeOff = () -> {
+            try {
+                together.await();
+                inTenant(() -> ledger.record(
+                        StockMovement.writeOff(partId, BigDecimal.ONE, warehouse)));
+            } catch (Throwable e) {
+                failures.add(e);
+            }
+        };
+
+        Thread first = new Thread(writeOff);
+        Thread second = new Thread(writeOff);
+        first.start();
+        second.start();
+        first.join();
+        second.join();
+
+        assertThat(failures).as("списали дважды одну и ту же единицу").hasSize(1);
+        // Схема отбила бы уход в минус и без этой проверки, но нарушением
+        // CHECK — то есть пятисоткой, которую офлайн-очередь повторяет вечно.
+        // Проигравший обязан получить объяснение, а не «внутреннюю ошибку».
+        assertThat(failures.get(0))
+                .as("гонка ответила поломкой сервера вместо отказа по правилу")
+                .isInstanceOf(StockReservationRepository.InsufficientStockException.class)
+                .hasMessageContaining("свободно 0");
+
+        assertThat(qtyAt(partId, warehouse)).isEqualByComparingTo("0");
+        // Движение проигравшего обязано откатиться вместе с его транзакцией:
+        // иначе журнал скажет, что унесли две штуки, а раскладка — что одну.
+        assertThat(discrepancies()).isEmpty();
+    }
+
+    @Test
     @DisplayName("Пачка после массовой записи считает то же самое")
     void recomputeMatchesStepByStep() {
         Long partId = part("Рейка рулевая");

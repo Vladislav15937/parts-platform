@@ -46,6 +46,18 @@ export interface Feed {
   kindsExcluded: boolean;
   brandIds: number[];
   brandsExcluded: boolean;
+  /**
+   * Свои условия владельца: «колонка → значение», точное равенство.
+   *
+   * <p>Шесть зашитых условий (цена, состояние, склады, наименования, марки)
+   * покрывают не всё, а каждое седьмое означало бы релиз. Витрина склада
+   * к этому времени отбирает по двадцати девяти колонкам, и выгрузка берёт
+   * тот же механизм: список колонок закрыт сервером, неизвестное имя
+   * отвергается.
+   */
+  filterColumns: Record<string, string>;
+  /** То же вхождением: «Nok» находит Nokian. */
+  filterWords: Record<string, string>;
 }
 
 /** Отправляем строками: сервер разберёт их в numeric сам. */
@@ -58,6 +70,8 @@ export interface FeedFilter {
   kindsExcluded: boolean;
   brandIds: number[];
   brandsExcluded: boolean;
+  columns: Record<string, string>;
+  words: Record<string, string>;
 }
 
 /**
@@ -69,11 +83,37 @@ export interface FeedFilter {
  * не сопоставлены. Площадка пустой прайс примет молча, и объявления пропадут
  * вместе с просмотрами — узнают об этом через сутки.
  */
-export function countMatching(filter: FeedFilter): Promise<{ parts: number }> {
+export function countMatching(
+  filter: FeedFilter,
+  productLine: 'PART' | 'WHEEL',
+): Promise<{ parts: number }> {
+  // Линия обязательна: без неё счётчик считал запчасти всегда и у выгрузки
+  // колёс обещал 35 835 позиций там, где уезжало 60.
   return request<{ parts: number }>('/api/marketplace-accounts/filter/count', {
     method: 'POST',
-    body: filter,
+    body: { ...filter, productLine },
   });
+}
+
+/**
+ * По каким колонкам сервер умеет отбирать — списком с самого сервера.
+ *
+ * <p>Повторённый на клиенте, список разошёлся бы с ним на первой же новой
+ * колонке, и экран предлагал бы условие, которого нет: сервер отвечает
+ * «по этой колонке отбор не делается», а владелец видит прежний прайс
+ * и решает, что отбор сломан. Ровно этим болело меню колонки на витрине.
+ *
+ * <p>Страницей в одну строку, а не своим эндпоинтом: список едет вместе
+ * с выдачей склада, и второй источник того же знания — это то, что здесь
+ * и избегается.
+ */
+export function filterableColumns(line: 'PART' | 'WHEEL'): Promise<string[]> {
+  const path = line === 'WHEEL'
+    ? '/api/wheels?page=0&size=1'
+    : '/api/parts/catalog?page=0&size=1';
+  // Ответ без ожидаемого ключа — это чужой ответ, а не пустой список:
+  // разбирать его дальше значит уронить экран целиком на `undefined.length`.
+  return request<{ filterable?: string[] }>(path).then((page) => page.filterable ?? []);
 }
 
 export function listFeeds(): Promise<Feed[]> {
@@ -113,13 +153,44 @@ export function setFilter(id: number, filter: FeedFilter): Promise<Feed> {
   });
 }
 
-export function feedUrl(id: number): Promise<{ path: string | null }> {
-  return request<{ path: string | null }>(`/api/marketplace-accounts/${id}/feed-url`);
+/**
+ * Ссылка на прайс: путь и полный адрес.
+ *
+ * <p>Полный отдаёт сервер из `app.public-url` — его и передают
+ * техспециалисту площадки. По одному пути тот не сходит никуда,
+ * а владелец дописывал домен руками.
+ */
+export interface FeedLink {
+  path: string | null;
+  url: string | null;
 }
 
-export function rotateFeedUrl(id: number): Promise<{ path: string }> {
-  return request<{ path: string }>(`/api/marketplace-accounts/${id}/feed-url`, {
+export function feedUrl(id: number): Promise<FeedLink> {
+  return request<FeedLink>(`/api/marketplace-accounts/${id}/feed-url`);
+}
+
+export function rotateFeedUrl(id: number): Promise<FeedLink> {
+  return request<FeedLink>(`/api/marketplace-accounts/${id}/feed-url`, {
     method: 'POST',
+  });
+}
+
+/**
+ * Записывает ключ синхронизации кабинета площадки.
+ *
+ * <p>Только запись: прочитать ключ нельзя ни одним эндпоинтом, и это часть
+ * защиты — иначе право смотреть настройки превращается в доступ к кабинету
+ * клиента. Хранится он зашифрованным (AES-GCM), ключ шифрования живёт вне
+ * базы.
+ *
+ * <p>Без него дельты по API не уходят вовсе: цена, остаток и снятие
+ * с продажи доезжают до площадки только с полным прайсом, а его забирают
+ * раз в трое суток.
+ */
+export function setCredentials(id: number, secret: string): Promise<void> {
+  return request<void>(`/api/marketplace-accounts/${id}/credentials`, {
+    method: 'PUT',
+    body: { secret },
   });
 }
 
@@ -163,6 +234,14 @@ export function filterSummary(feed: Feed): string {
   }
   if (feed.brandIds.length > 0) {
     parts.push(`${feed.brandsExcluded ? 'кроме' : 'только'} марок: ${feed.brandIds.length}`);
+  }
+
+  // Свои условия названы числом, а не перечислены: колонок бывает
+  // несколько, и подпись под заголовком должна оставаться в одну строку.
+  const own = Object.keys(feed.filterColumns ?? {}).length
+      + Object.keys(feed.filterWords ?? {}).length;
+  if (own > 0) {
+    parts.push(`своих условий: ${own}`);
   }
 
   // Не «фильтров нет»: пустой отбор — это осмысленное состояние, весь склад.

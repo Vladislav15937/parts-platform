@@ -74,7 +74,14 @@ public class MemberController {
     @PreAuthorize("hasRole('OWNER')")
     public ResponseEntity<Void> disable(@PathVariable Long id) {
         if (id.equals(CurrentUser.require().memberId())) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).build();
+            // Словами, а не пустым 409. Экран показывает эту кнопку всем,
+            // включая самого вошедшего, и рассчитывает, что отказ объяснит
+            // сервер, — но тело ответа было пустым, и владелец видел
+            // «Запрос отклонён (409)»: ни что случилось, ни что делать.
+            // Отказ без объяснения читается как поломка, а это правило.
+            throw new IllegalStateException(
+                    "Себя выключить нельзя: выйти из компании было бы некому "
+                            + "вернуть. Попросите другого владельца");
         }
         members.setActive(id, false);
         return ResponseEntity.noContent().build();

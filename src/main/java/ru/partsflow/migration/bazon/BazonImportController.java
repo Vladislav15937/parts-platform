@@ -13,6 +13,7 @@ import ru.partsflow.platform.tenant.TenantContext;
 
 import javax.sql.DataSource;
 import java.io.IOException;
+import ru.partsflow.platform.security.CurrentUser;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -60,16 +61,19 @@ public class BazonImportController {
     private final PartService parts;
     private final PhotoMigration photoMigration;
     private final ru.partsflow.intake.DonorVehicleResolver vehicles;
+    private final BazonWheelImporter wheelImporter;
 
     public BazonImportController(DataSource dataSource, PartNameService partNames,
                                  PartService parts, PhotoMigration photoMigration,
                                  ru.partsflow.intake.DonorVehicleResolver vehicles,
-                                 ru.partsflow.inventory.StockLedger stock) {
+                                 ru.partsflow.inventory.StockLedger stock,
+                                 BazonWheelImporter wheelImporter) {
         this.dataSource = dataSource;
         this.partNames = partNames;
         this.parts = parts;
         this.photoMigration = photoMigration;
         this.vehicles = vehicles;
+        this.wheelImporter = wheelImporter;
     }
 
     /**
@@ -105,6 +109,44 @@ public class BazonImportController {
     public PhotoMigration.Progress retryPhotos() {
         photoMigration.retryFailed();
         return photoMigration.status();
+    }
+
+    /**
+     * Перенос шин и дисков — отдельным файлом и отдельным действием.
+     *
+     * <p>Колёса лежат у Bazon на своей вкладке и в выгрузку товаров
+     * не попадают: проверено на выгрузке живого клиента, где в сорока
+     * восьми колонках нет ни ширины, ни профиля, ни сезона. Пока этого
+     * прохода не было, переехавший клиент терял весь колёсный склад —
+     * 65 позиций, 221 карточку с учётом комплектов.
+     *
+     * <p>Склад спрашивается, а не подставляется: какой из них правильный,
+     * знает только владелец, а тихо уехавший не туда товар ищут глазами.
+     */
+    @PostMapping("/wheels")
+    @PreAuthorize("hasRole('OWNER')")
+    public WheelResult loadWheels(@RequestParam("wheels") MultipartFile wheels,
+                                  @RequestParam("warehouseId") Long warehouseId)
+            throws IOException {
+
+        requireFile(wheels, "выгрузка шин и дисков");
+        requireBazonExport(wheels, "выгрузка шин и дисков", BazonWheelImporter.ANCHOR);
+
+        try (InputStream in = wheels.getInputStream()) {
+            BazonWheelImporter.Report report =
+                    wheelImporter.load(in, warehouseId, CurrentUser.memberId());
+            return new WheelResult(report.created(), report.sets(), report.skipped(),
+                    report.photos(), report.problems());
+        }
+    }
+
+    /**
+     * @param created карточек заведено: комплект из четырёх — это четыре
+     * @param sets    строк файла, ставших комплектами
+     * @param skipped уже перенесённых раньше: повтор безопасен
+     */
+    public record WheelResult(int created, int sets, int skipped, int photos,
+                              List<String> problems) {
     }
 
     @PostMapping

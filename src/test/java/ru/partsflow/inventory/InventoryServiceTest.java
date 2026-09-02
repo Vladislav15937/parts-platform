@@ -15,6 +15,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -128,6 +129,126 @@ class InventoryServiceTest extends PostgresTestBase {
     }
 
     /**
+     * Одновременное проведение не списывает недостачу дважды.
+     *
+     * <p>Отметка {@code applied_at} на строке защищает от повтора, но читается
+     * она в начале транзакции: двойное нажатие или второй менеджер видят её
+     * пустой оба. Проверено на живом складе — остаток 20 при недостаче 2 стал
+     * 16 вместо 18, и оба ответа сказали «скорректировано 1». То есть пересчёт
+     * испортил склад тем самым действием, которым его чинят, и молча: ошибки
+     * не показал никто, а заметить это можно только следующим пересчётом.
+     *
+     * <p>Недостача берётся заведомо меньше половины остатка. С большой
+     * ошибка прячется: второму не хватает свободного, и его отбивает
+     * условие в {@code StockLedger} — то есть тест был бы зелёным при
+     * сломанном коде.
+     *
+     * <p>Проигравший получает то же, что и при последовательном повторе:
+     * «пересчёт уже проведён». Свой ответ на гонку означал бы, что одно
+     * и то же действие объясняется по-разному в зависимости от того,
+     * с какой скоростью нажали.
+     */
+    @Test
+    @DisplayName("Одновременное проведение пересчёта списывает недостачу один раз")
+    void concurrentApplyWritesTheShortageOnce() throws Exception {
+        Long partId = partWithStock("Радиатор одновременный", 20);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("18"), null));
+        inTenant(() -> inventory.finishCounting(sessionId));
+
+        java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(2);
+        List<Integer> adjusted = java.util.Collections.synchronizedList(new ArrayList<>());
+        List<Throwable> refused = java.util.Collections.synchronizedList(new ArrayList<>());
+        Runnable applying = () -> {
+            try {
+                together.await();
+                adjusted.add(inTenant(() -> inventory.apply(sessionId)).adjusted());
+            } catch (Throwable e) {
+                refused.add(e);
+            }
+        };
+
+        Thread first = new Thread(applying);
+        Thread second = new Thread(applying);
+        first.start();
+        second.start();
+        first.join();
+        second.join();
+
+        assertThat(qtyOf(partId, warehouse))
+                .as("недостача списана дважды: пересчёт испортил склад")
+                .isEqualByComparingTo("18");
+        assertThat(adjusted).as("прошли оба").containsExactly(1);
+        // Отказ по правилу, то есть 409, а не поломка сервера: пятисотку
+        // офлайн-очередь повторяет вечно.
+        assertThat(refused).singleElement().isInstanceOf(IllegalStateException.class);
+        assertThat(refused.get(0)).hasMessageContaining("завершённый пересчёт");
+    }
+
+    /**
+     * Двое считают одну и ту же позицию, которой не было в снимке.
+     *
+     * <p>Строка такой позиции заводится подсчётом, и уникальный индекс
+     * {@code inventory_line_uk} отбивает вторую. Наружу это ехало как
+     * «Операция нарушает целостность данных» — на телефон кладовщика, где
+     * очередь читает 409 как «требует внимания»: подсчёт пропадал, а почему,
+     * по такому ответу не понять.
+     *
+     * <p>Последовательно посчитать позицию дважды законно, побеждает
+     * последний, — и от скорости нажатия поведение зависеть не должно.
+     * Поэтому повтор, а не отказ.
+     */
+    @Test
+    @DisplayName("Одновременный подсчёт позиции вне снимка не теряет работу")
+    void concurrentCountOfAnUnlistedPartRetries() throws Exception {
+        Long inSnapshot = partWithStock("Бампер в снимке", 1);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        // Деталь заводится после открытия сессии: в снимок она не попала,
+        // и строку для неё создаст первый же подсчёт.
+        Long found = partWithStock("Фара, найденная на полке", 1);
+
+        java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(2);
+        List<Throwable> failures = java.util.Collections.synchronizedList(new ArrayList<>());
+        Runnable counting = () -> {
+            try {
+                together.await();
+                // Без внешней транзакции: повтор обязан идти новой, а внутри
+                // чужой она была бы помечена на откат.
+                TenantContext.set(TENANT);
+                inventory.count(sessionId, found, new BigDecimal("1"), null);
+            } catch (Throwable e) {
+                failures.add(e);
+            } finally {
+                TenantContext.clear();
+            }
+        };
+
+        Thread first = new Thread(counting);
+        Thread second = new Thread(counting);
+        first.start();
+        second.start();
+        first.join();
+        second.join();
+
+        assertThat(failures)
+                .as("подсчёт кладовщика потерян с ответом про целостность данных")
+                .isEmpty();
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM inventory_line WHERE session_id = ? AND part_id = ?",
+                Integer.class, sessionId, found)))
+                .as("строк позиции больше одной").isEqualTo(1);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT qty_counted FROM inventory_line WHERE session_id = ? AND part_id = ?",
+                BigDecimal.class, sessionId, found)))
+                .as("подсчёт не записан").isEqualByComparingTo("1");
+        // Снимок открывался до появления найденной детали, и в нём должна
+        // остаться только та позиция: иначе тест проверяет не то, что задумано.
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT qty_expected FROM inventory_line WHERE session_id = ? AND part_id = ?",
+                BigDecimal.class, sessionId, inSnapshot))).isEqualByComparingTo("1");
+    }
+
+    /**
      * Недостача, обнулившая остаток, закрывает карточку.
      *
      * <p>Прежде она оставалась «в наличии» с нулём — то есть врала про самое
@@ -176,6 +297,24 @@ class InventoryServiceTest extends PostgresTestBase {
      * посчитанный склад непроведённым, пока продавец говорит с покупателем,
      * — а кладовщик, который считал, снять резерв не может по роли.
      */
+    /**
+     * По этой строке кладовщик идёт действовать — снимать резерв, — значит она
+     * обязана называть документы так, как их спросят у продавца. Перечень
+     * номеров под словом в единственном числе («по сделке 1, 14») читается
+     * как один документ с составным номером, и искать его будут напрасно.
+     */
+    @Test
+    @DisplayName("Несколько сделок названы во множественном числе и с номерами")
+    void promisedNamesEveryDeal() {
+        assertThat(InventoryService.promisedBy(List.of()))
+                .as("резерв без сделки не должен выдумывать её номер")
+                .isEmpty();
+        assertThat(InventoryService.promisedBy(List.of(7L)))
+                .isEqualTo(", обещана по сделке №7");
+        assertThat(InventoryService.promisedBy(List.of(1L, 14L)))
+                .isEqualTo(", обещана по сделкам №1, №14");
+    }
+
     @Test
     @DisplayName("Обещанная деталь не блокирует проведение остальных позиций")
     void promisedShortageDoesNotBlockOthers() {
@@ -198,6 +337,10 @@ class InventoryServiceTest extends PostgresTestBase {
                 .isEqualTo(1);
         assertThat(applied.blocked()).singleElement()
                 .asString().contains("Фара, обещанная покупателю");
+
+        assertThat(applied.blocked()).singleElement().asString()
+                .as("резерв без сделки не должен выдумывать её номер")
+                .doesNotContain("сделк");
 
         assertThat(qtyOf(other, warehouse)).isEqualByComparingTo("0");
         assertThat(qtyOf(promised, warehouse))
@@ -478,6 +621,46 @@ class InventoryServiceTest extends PostgresTestBase {
 
         assertThatThrownBy(() -> inTenant(() -> inventory.cancel(sessionId)))
                 .hasMessageContaining("не отменяют");
+    }
+
+    /**
+     * Проданное сразу после подсчёта не считается пропавшим до него.
+     *
+     * <p><b>Зачем.</b> Расхождение считается за окно «открытие сессии —
+     * подсчёт строки», и обе границы окна ставит база: {@code started_at}
+     * и {@code created_at} движений — это её {@code now()}. Момент подсчёта
+     * при этом брался по часам приложения, а они с часами базы расходятся:
+     * на машине разработчика 87 мс, между разными машинами — секунды.
+     *
+     * <p>Стоит базе отставать, и движение, случившееся <b>после</b> подсчёта,
+     * получает отметку раньше него, попадает в окно и уменьшает учётный
+     * остаток. Деталь, проданную через полсекунды после того, как кладовщик
+     * прошёл полку, пересчёт объявляет недостачей — и проведение её
+     * списывает. Порча склада ровно тем действием, которым его сверяют.
+     *
+     * <p><b>Чего этот тест не доказывает.</b> В контейнере тестов часы базы
+     * и приложения совпадают до миллисекунды, поэтому от возврата к часам
+     * JVM он не падает — проверено откатом. Он держит другое, тоже нужное:
+     * окно считается «до подсчёта», а не «до текущего момента». Само
+     * расхождение часов закрывается правилом, а не проверкой: обе границы
+     * окна спрашиваются у базы.
+     */
+    @Test
+    @DisplayName("Проданное сразу после подсчёта не превращается в недостачу")
+    void saleRightAfterCountIsNotCountedBeforeIt() {
+        Long partId = partWithStock("Клапан EGR", 5);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+
+        // Считаем ровно то, что лежит: расхождения нет.
+        inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("5"), null));
+        // И тут же продаём — это уже после подсчёта, сколько бы часы
+        // приложения и базы ни расходились.
+        inTenant(() -> ledger.record(
+                StockMovement.sale(partId, BigDecimal.ONE, warehouse, null)));
+
+        assertThat(inTenant(() -> inventory.discrepancies(sessionId)))
+                .as("проданное после подсчёта записано в недостачу — проведение её спишет")
+                .isEmpty();
     }
 
     @Test

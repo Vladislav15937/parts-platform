@@ -126,6 +126,45 @@ class PartNameServiceTest extends PostgresTestBase {
         assertThat(inTenant(() -> service.unmatchedCount())).isEqualTo(1);
     }
 
+    /**
+     * Обход страницами нераспознанных не теряет написаний.
+     *
+     * <p>Сортировка идёт по числу позиций, потом по времени создания —
+     * и то и другое неуникально: у 353 написаний живого клиента счётчик
+     * равен единице, а заведены они одной секундой импорта. Без номера
+     * записи в конце полного порядка нет, страницы перекрываются, и обход
+     * по двадцать штук отдал 679 строк при 579 уникальных: сотня написаний
+     * показана дважды, сотня не показана вовсе.
+     *
+     * <p>Экран этого не видел — он тянет список с начала растущими
+     * кусками, — но эндпоинт отдаёт неполноту любому, кто листает
+     * страницами. Та же болезнь, что была у витрины склада.
+     */
+    @Test
+    @DisplayName("Страницы нераспознанных упорядочены полностью, до номера записи")
+    void unmatchedPagingHasFullOrder() {
+        // Все с одним счётчиком и одной секундой создания: так выглядит
+        // хвост списка после переезда, где 353 написания держат по одной
+        // позиции и заведены одним импортом.
+        for (int i = 0; i < 10; i++) {
+            inTenant(() -> service.resolve("хвост " + java.util.UUID.randomUUID(), null));
+        }
+        inTenant(() -> {
+            jdbc.update("UPDATE part_name SET created_at = now() WHERE match_status = 'UNMATCHED'");
+            return null;
+        });
+
+        List<Long> ids = new java.util.ArrayList<>();
+        inTenant(() -> service.unmatched(0, 10)).forEach(name -> ids.add(name.getId()));
+
+        // Порядок обязан быть полным: при равных счётчике и времени
+        // разбирает номер записи. Без него база вольна вернуть строки как
+        // угодно, и соседние страницы перекрываются — на живом складе обход
+        // по двадцать штук отдал 679 строк при 579 уникальных.
+        assertThat(ids).as("порядок неполный: при равных полях он произволен")
+                .isSortedAccordingTo(java.util.Comparator.reverseOrder());
+    }
+
     @Test
     @DisplayName("Похожее не сопоставляется само: кронштейн фильтра — не фильтр")
     void similarNameIsNotMatchedAutomatically() {
@@ -153,6 +192,53 @@ class PartNameServiceTest extends PostgresTestBase {
         assertThat(suggestions).isNotEmpty();
         assertThat(suggestions).extracting(PartKindMatcher.PartKind::name)
                 .contains("Топливный фильтр");
+    }
+
+    /**
+     * Похожесть считается и по синонимам, а не по одному имени эталона.
+     *
+     * <p>Синонимы — это и есть живые написания, ради которых справочник
+     * заведён, и близкое написание клиента похоже именно на них. Замерено
+     * на живом складе: «тросик ручного тормоза» (379 карточек) против имени
+     * «Трос ручника» даёт 0,296 — последнее место, ниже «Колодок стояночного
+     * тормоза» с 0,316; против синонима «трос ручного тормоза» — 0,826.
+     *
+     * <p>Цена не в лишнем нажатии. Разбирающий тысячу написаний подряд
+     * выбирает из показанного, а показывались три чужие детали, из них
+     * первыми — колодки. Одно такое сопоставление переписывает сотни
+     * карточек, и назад это не откатывается.
+     */
+    @Test
+    @DisplayName("Подсказки ищут похожее и среди синонимов")
+    void suggestionsLookAtSynonyms() {
+        PartName resolved = inTenant(() -> service.resolve("тросик ручного тормоза", null));
+        assertThat(resolved.getMatchStatus()).isEqualTo(PartName.MatchStatus.UNMATCHED);
+
+        List<PartKindMatcher.PartKind> suggestions =
+                inTenant(() -> service.suggestionsFor(resolved.getId()));
+
+        assertThat(suggestions).extracting(PartKindMatcher.PartKind::name)
+                .as("верный эталон не попал в подсказки — человек выберет из чужих")
+                .contains("Трос ручника");
+        assertThat(suggestions.get(0).name())
+                .as("первой подсказкой идёт не самое похожее")
+                .isEqualTo("Трос ручника");
+    }
+
+    /**
+     * Поиск руками — то, чем спасаются, когда подсказки мимо. Он обязан
+     * находить по живому написанию: «ручного тормоза» не входит в «Трос
+     * ручника» ни одной буквой, зато входит в его синоним.
+     */
+    @Test
+    @DisplayName("Поиск эталона идёт и по синонимам")
+    void searchLooksAtSynonyms() {
+        List<PartKindMatcher.PartKind> found =
+                inTenant(() -> service.searchKinds("ручного тормоза", 10));
+
+        assertThat(found).extracting(PartKindMatcher.PartKind::name)
+                .as("по живому написанию эталон не находится вовсе")
+                .contains("Трос ручника");
     }
 
     @Test

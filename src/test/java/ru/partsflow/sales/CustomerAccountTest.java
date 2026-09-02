@@ -194,6 +194,82 @@ class CustomerAccountTest extends PostgresTestBase {
                 .isEqualByComparingTo("1200");
     }
 
+    /**
+     * Двое выдают со счёта одновременно — деньги уходят один раз.
+     *
+     * <p>Остаток счёта считается по журналу, и это значит, что «хватает ли»
+     * и «записываем» — два действия: между ними встаёт второй продавец.
+     * Замерено живьём: счёт в 1000 ₽ и две одновременные выдачи по 1000 дали
+     * два расхода по 1000, остаток минус тысяча и два нарушения
+     * в {@code v_account_discrepancy}. Оба ответа при этом 201 — продавец
+     * дважды увидел успех, а деньги ушли настоящие.
+     *
+     * <p>Инструкцией это не закрыть, в отличие от остатка склада: там условие
+     * стоит в {@code WHERE} у {@code UPDATE} и Postgres перечитывает строку
+     * после блокировки, здесь же запись **вставляется**, и блокировать нечего.
+     */
+    @Test
+    @DisplayName("Одновременные выдачи не уводят счёт в минус")
+    void concurrentWithdrawalsCannotOverdrawTheAccount() throws Exception {
+        inTenant(() -> sales.topUpAccount(customerId, new BigDecimal("1000"), null, managerId));
+
+        java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(2);
+        List<Throwable> refused =
+                java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        Runnable withdrawing = () -> {
+            try {
+                together.await();
+                inTenant(() -> sales.withdrawFromAccount(
+                        customerId, new BigDecimal("1000"), null, managerId));
+            } catch (Throwable e) {
+                refused.add(e);
+            }
+        };
+
+        Thread first = new Thread(withdrawing);
+        Thread second = new Thread(withdrawing);
+        first.start();
+        second.start();
+        first.join();
+        second.join();
+
+        assertThat(inTenant(() -> sales.accountBalance(customerId)))
+                .as("со счёта выдали дважды то, что лежало один раз")
+                .isEqualByComparingTo("0");
+        assertThat(refused).as("прошли обе выдачи").hasSize(1);
+        assertThat(refused.get(0)).hasMessageContaining("выдать просят");
+        // Сверка денег обязана быть пустой: отрицательный остаток — первое
+        // из пяти нарушений, которые она ловит.
+        assertThat(inTenant(() -> jdbc.queryForList("SELECT * FROM v_account_discrepancy")))
+                .as("сверка денег перестала быть пустой").isEmpty();
+    }
+
+    /**
+     * У несуществующего клиента не «ноль на счету», а «нет такого клиента».
+     *
+     * <p>Чтение счёта проверки не имело, и запрос по чужому или ошибочному
+     * номеру отвечал 200 с балансом 0 ₽ — то есть утверждал что-то о деньгах
+     * того, кого нет. Продавец, открывший не того клиента, читает это как
+     * «за ним ничего не числится» и говорит покупателю, что аванса у него
+     * нет. Пустой журнал и отсутствующий клиент выглядят на экране
+     * одинаково, различать их обязан сервер.
+     */
+    @Test
+    @DisplayName("Счёт несуществующего клиента не отвечает нулём")
+    void accountOfUnknownCustomerIsRefused() {
+        assertThatThrownBy(() -> inTenant(() -> sales.accountBalance(999_999L)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Клиент не найден");
+
+        assertThatThrownBy(() -> inTenant(() -> sales.accountEntries(999_999L)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Клиент не найден");
+
+        // У настоящего клиента без операций ноль — это ответ по существу.
+        assertThat(inTenant(() -> sales.accountBalance(customerId)))
+                .isEqualByComparingTo("0");
+    }
+
     @Test
     @DisplayName("Больше остатка со счёта не выдать")
     void cannotWithdrawMoreThanBalance() {
@@ -205,6 +281,43 @@ class CustomerAccountTest extends PostgresTestBase {
                 .hasMessageContaining("700");
 
         assertThat(inTenant(() -> sales.accountBalance(customerId))).isEqualByComparingTo("700");
+    }
+
+    /**
+     * Несуществующий клиент отбивается словами, а не ограничением схемы.
+     *
+     * <p>Деталь и услуга в сделке проверялись, клиент — нет: он доезжал
+     * до внешнего ключа и возвращался как «Операция нарушает целостность
+     * данных». Продавец по такому ответу идёт искать поломку сервера,
+     * стоя перед покупателем, — при том что ошибка в выборе клиента.
+     */
+    @Test
+    @DisplayName("Операции со счётом чужого клиента отказывают словами")
+    void unknownCustomerIsRefusedWithWords() {
+        assertThatThrownBy(() -> inTenant(() -> sales.topUpAccount(
+                999_999L, new BigDecimal("100"), null, managerId)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Клиент не найден");
+
+        assertThatThrownBy(() -> inTenant(() -> sales.withdrawFromAccount(
+                999_999L, new BigDecimal("100"), null, managerId)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Клиент не найден");
+
+        assertThatThrownBy(() -> inTenant(() -> sales.correctAccount(
+                999_999L, new BigDecimal("100"), "правка", managerId)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Клиент не найден");
+    }
+
+    /** У сделки клиент тоже проверяется — и пустой при этом законен. */
+    @Test
+    @DisplayName("Сделка с чужим клиентом отказывает словами")
+    void unknownCustomerInDealIsRefused() {
+        assertThatThrownBy(() -> inTenant(() -> sales.createReserved(
+                999_999L, managerId, null, null, java.util.List.of(), java.util.List.of())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Клиент не найден");
     }
 
     private BigDecimal outgoing() {

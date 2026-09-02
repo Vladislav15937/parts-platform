@@ -253,7 +253,8 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         intake(wheel, warehouse, 1);
 
         long counted = inTenant(() -> accounts.countMatching(
-                null, null, null, null, null, false, null, false));
+                null, null, null, null, null, false, null, false, "PART",
+                java.util.Map.of(), java.util.Map.of()));
         long offers = price().split("<offer>", -1).length - 1;
 
         assertThat(counted)
@@ -262,6 +263,258 @@ class DromPriceGeneratorTest extends PostgresTestBase {
     }
 
     // ---------- фикстуры ----------
+
+    /**
+     * Отбор по марке видит и применимость, а не только машину-донора.
+     *
+     * <p>У контрактной детали донора нет вовсе, а марка есть — она лежит
+     * в {@code part_applicability}, и прайс публикует её тегом
+     * {@code brandcars} именно оттуда. Пока отбор смотрел только на донора,
+     * прайс-лист «только Toyota» отдавал 12 537 позиций живого склада там,
+     * где витрина по той же марке показывала 16 529: четыре тысячи
+     * контрактных Тойот не попадали в выгрузку, хотя сама выгрузка
+     * объявляет их Тойотами.
+     *
+     * <p>Обратная сторона держится тем же тестом: «кроме Toyota» обязано
+     * выкинуть и контрактную Тойоту — иначе исключение марки не исключает.
+     */
+    @Test
+    @DisplayName("Отбор по марке берёт её и из применимости")
+    void brandFilterSeesApplicability() {
+        Long brandId = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM catalog.brand WHERE name = 'Toyota'", Long.class));
+
+        Long contract = part("Фара контрактная", new BigDecimal("5000"), true);
+        intake(contract, warehouse, 1);
+        inTenant(() -> jdbc.update(
+                "INSERT INTO part_applicability (part_id, brand_id) VALUES (?, ?)",
+                contract, brandId));
+
+        Long other = part("Бампер без машины", new BigDecimal("5000"), true);
+        intake(other, warehouse, 1);
+
+        DromPriceGenerator.FeedFilter only = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), false,
+                java.util.List.of(brandId), false);
+        String onlyToyota = priceWith(only);
+
+        assertThat(onlyToyota)
+                .as("контрактная Тойота не попала в прайс-лист «только Toyota»")
+                .contains("Фара контрактная");
+        assertThat(onlyToyota)
+                .as("в «только Toyota» уехало то, что к Toyota не относится")
+                .doesNotContain("Бампер без машины");
+
+        DromPriceGenerator.FeedFilter except = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), false,
+                java.util.List.of(brandId), true);
+        String withoutToyota = priceWith(except);
+
+        assertThat(withoutToyota)
+                .as("«кроме Toyota» оставило контрактную Тойоту")
+                .doesNotContain("Фара контрактная");
+        assertThat(withoutToyota)
+                .as("«кроме Toyota» выкинуло позицию без машины — а она не Тойота")
+                .contains("Бампер без машины");
+
+        // Счётчик и генератор — два разных запроса с одним условием,
+        // и правка одного мимо другого была бы обещанием не того числа,
+        // которое уедет площадке. Проверяется отбором, а не пустым фильтром:
+        // существующая сверка счётчика идёт без марок и эту ветку не трогает.
+        long counted = inTenant(() -> accounts.countMatching(
+                null, null, null, null, null, false,
+                java.util.List.of(brandId), false, "PART",
+                java.util.Map.of(), java.util.Map.of()));
+        assertThat(counted)
+                .as("счётчик считает марку не так, как генератор")
+                .isEqualTo(onlyToyota.split("<offer>", -1).length - 1);
+    }
+
+    /**
+     * Выгрузка филиала показывает остаток этого филиала, а не всей компании.
+     *
+     * <p><b>Зачем.</b> Прайс с отбором по складу — это витрина конкретной
+     * точки: покупатель читает «в наличии» и едет туда. Если остаток считать
+     * по всем складам, он приедет за деталью, которая лежит на другом конце
+     * города, и виноват будет магазин, а не он.
+     *
+     * <p>Из прайса позиция при этом не исчезает — уезжает недоступной:
+     * убранное из файла объявление площадка снимает вместе с накопленными
+     * просмотрами, за которые и платят.
+     *
+     * <p>Правило было записано, но ничем не закрыто: тестов на отбор
+     * по складу не было вовсе, и проверить его можно было только глазами
+     * на живой выгрузке.
+     */
+    @Test
+    @DisplayName("Отбор по складу меняет остаток, а не только состав")
+    void warehouseFilterChangesAvailability() {
+        String name = "Прайс: лежит на дальнем складе";
+        Long partId = part(name, new BigDecimal("7000"), true);
+        intake(partId, otherWarehouse, 1);
+
+        DromPriceGenerator.FeedFilter own = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(otherWarehouse),
+                java.util.List.of(), false, java.util.List.of(), false);
+        assertThat(offerIn(priceWith(own), name))
+                .as("на своём складе деталь есть, а прайс объявил её недоступной")
+                .contains("<available>true</available>")
+                .contains("<quantity>1</quantity>");
+
+        DromPriceGenerator.FeedFilter alien = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(warehouse),
+                java.util.List.of(), false, java.util.List.of(), false);
+        String other = offerIn(priceWith(alien), name);
+        assertThat(other)
+                .as("прайс филиала обещает деталь, которой в этом филиале нет")
+                .contains("<available>false</available>")
+                .contains("<quantity>0</quantity>");
+    }
+
+    /**
+     * Склад уходит в прайс и подчиняется тому же отбору, что и остаток.
+     *
+     * <p><b>Зачем.</b> Покупателю это ответ на «куда ехать»: у клиента филиалы
+     * на разных концах города, и без поля он узнаёт адрес только звонком.
+     *
+     * <p>А отбор здесь важнее самого поля. Прайс филиала обязан называть
+     * его склад, и назвать соседний — хуже, чем промолчать: покупатель
+     * приедет туда, где детали нет. Поэтому склад считается тем же
+     * подзапросом, что и остаток, и на чужом складе не остаётся ничего.
+     */
+    @Test
+    @DisplayName("Склад уходит в прайс и берётся из отбора выгрузки")
+    void warehouseTravelsToTheFeed() {
+        String name = "Прайс: склад в объявлении";
+        Long partId = part(name, new BigDecimal("7000"), true);
+        intake(partId, otherWarehouse, 1);
+
+        DromPriceGenerator.FeedFilter own = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(otherWarehouse),
+                java.util.List.of(), false, java.util.List.of(), false);
+        assertThat(offerIn(priceWith(own), name))
+                .as("прайс не назвал склад, на котором деталь лежит")
+                .contains("<sklad>54 YARD</sklad>");
+
+        DromPriceGenerator.FeedFilter alien = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(warehouse),
+                java.util.List.of(), false, java.util.List.of(), false);
+        assertThat(offerIn(priceWith(alien), name))
+                .as("прайс филиала назвал чужой склад — покупатель приедет не туда")
+                .doesNotContain("<sklad>");
+    }
+
+    /**
+     * Своё условие владельца сужает и прайс, и дельту, и счётчик.
+     *
+     * <p><b>Зачем.</b> Зашитых условий было шесть — цена, состояние, склады,
+     * наименования, марки, — и каждое седьмое означало релиз: миграция,
+     * генератор, счётчик, экран. Владелец при этом смотрит склад по двадцати
+     * девяти колонкам и отбирает по любой; выгрузка брала из них ни одной.
+     *
+     * <p>Проверяются три поверхности разом, потому что разойтись они могут
+     * только порознь. Счётчик, не знающий условия, обещает не то число,
+     * которое уедет площадке, — это уже случалось дважды, с колёсами
+     * и с марками из применимости. А дельта, не знающая условия, заводит
+     * в чужом прайс-листе объявление, которого владелец не создавал: снять
+     * его нечем до следующего полного забора, то есть до трёх суток.
+     */
+    @Test
+    @DisplayName("Своё условие по колонке склада сужает прайс, дельту и счётчик")
+    void ownColumnConditionNarrowsFeedDeltaAndCounter() {
+        String mine = "Прайс: фара в своей секции";
+        String alien = "Прайс: фара в чужой секции";
+        Long ours = part(mine, new BigDecimal("4000"), true);
+        Long theirs = part(alien, new BigDecimal("4000"), true);
+        intake(ours, warehouse, 1);
+        intake(theirs, warehouse, 1);
+        inTenant(() -> jdbc.update("UPDATE part SET section = 'A-01' WHERE id = ?", ours));
+        inTenant(() -> jdbc.update("UPDATE part SET section = 'B-02' WHERE id = ?", theirs));
+
+        DromPriceGenerator.FeedFilter bySection = new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), false,
+                java.util.List.of(), false,
+                java.util.Map.of("section", "A-01"), java.util.Map.of());
+
+        String xml = priceWith(bySection);
+        assertThat(xml)
+                .as("позиция своей секции не попала в прайс с условием по секции")
+                .contains(mine);
+        assertThat(xml)
+                .as("условие по колонке не применилось: уехала чужая секция")
+                .doesNotContain(alien);
+
+        // Дельта — та же выгрузка, только выбранными позициями. Не знай она
+        // условия, чужая секция завела бы объявление в этом прайс-листе.
+        String delta = inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeDelta(out, java.util.List.of(ours, theirs), bySection);
+            return out.toString(StandardCharsets.UTF_8);
+        });
+        assertThat(delta).as("своя позиция пропала из дельты").contains(mine);
+        assertThat(delta)
+                .as("дельта уносит в прайс-лист то, что его отбор не пускает")
+                .doesNotContain(alien);
+
+        long counted = inTenant(() -> accounts.countMatching(
+                null, null, null, null, null, false, null, false, "PART",
+                java.util.Map.of("section", "A-01"), java.util.Map.of()));
+        assertThat(counted)
+                .as("счётчик считает не тем условием, каким собирается прайс")
+                .isEqualTo(xml.split("<offer>", -1).length - 1);
+    }
+
+    /**
+     * Вбитое руками ищется вхождением, как на витрине.
+     *
+     * <p>Это не придирка к способу набора: «Nok» обязано находить Nokian,
+     * иначе владелец, знающий производителя приблизительно, получает пустой
+     * прайс — а пустой прайс площадка примет молча, и объявления пропадут
+     * вместе с накопленными просмотрами.
+     */
+    @Test
+    @DisplayName("Условие «содержит» ищет куском, а не целым значением")
+    void ownWordConditionMatchesBySubstring() {
+        String name = "Прайс: стойка Tokico";
+        String alien = "Прайс: стойка KYB";
+        Long partId = part(name, new BigDecimal("4500"), true);
+        Long other = part(alien, new BigDecimal("4500"), true);
+        intake(partId, warehouse, 1);
+        intake(other, warehouse, 1);
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET manufacturer = 'Tokico Japan' WHERE id = ?", partId));
+        inTenant(() -> jdbc.update("UPDATE part SET manufacturer = 'KYB' WHERE id = ?", other));
+
+        String xml = priceWith(new DromPriceGenerator.FeedFilter(
+                null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), false,
+                java.util.List.of(), false,
+                java.util.Map.of(), java.util.Map.of("manufacturer", "toki")));
+        assertThat(xml)
+                .as("«содержит» ищет целым значением — куском производителя не найти")
+                .contains(name);
+        // Вторая половина: условие обязано ещё и отсекать. Без неё тест
+        // проходит на выгрузке, не знающей условий вовсе, — то есть стережёт
+        // ровно ничего; проверено откатом правки.
+        assertThat(xml)
+                .as("условие «содержит» не отсекает: уехал чужой производитель")
+                .doesNotContain(alien);
+    }
+
+    /** Вырезает {@code <offer>} по названию из готового прайса. */
+    private String offerIn(String xml, String name) {
+        int nameAt = xml.indexOf("<name>" + name + "</name>");
+        assertThat(nameAt).as("позиции «%s» нет в прайсе вовсе — объявление исчезло", name)
+                .isNotNegative();
+        return xml.substring(xml.lastIndexOf("<offer>", nameAt), xml.indexOf("</offer>", nameAt));
+    }
+
+    private String priceWith(DromPriceGenerator.FeedFilter filter) {
+        return inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeTo(out, filter);
+            return out.toString(StandardCharsets.UTF_8);
+        });
+    }
 
     private Long part(String title, BigDecimal price, boolean published) {
         return inTenant(() -> jdbc.queryForObject("""
@@ -284,6 +537,154 @@ class DromPriceGeneratorTest extends PostgresTestBase {
             generator.writeTo(out);
             return out.toString(StandardCharsets.UTF_8);
         });
+    }
+
+    /**
+     * Каждое поле карточки решено: доезжает до прайса или нет.
+     *
+     * <p><b>Зачем.</b> Владелец правит цену — и ждёт, что покупатель увидит
+     * новую; правит закупочную — и ждёт, что не увидит никто. Между этими
+     * двумя ожиданиями нет ничего, кроме нашего решения по каждому полю,
+     * а решение это нигде не записано: поле, добавленное в форму правки
+     * завтра, молча не попадёт в файл, и заметить это можно будет только
+     * по жалобе покупателя, который приехал не за тем.
+     *
+     * <p>Поэтому список закрытый и делится надвое. Слева — то, что видит
+     * покупатель: правка обязана менять файл. Справа — внутреннее
+     * и коммерческое: правка обязана файл <b>не</b> менять, иначе адрес
+     * стеллажа или минимальная цена уедут на площадку.
+     *
+     * <p>Новое поле формы, не названное ни там, ни там, роняет тест —
+     * и это единственный способ не забыть про него.
+     */
+    @Test
+    @DisplayName("Правка поля меняет прайс тогда и только тогда, когда так решено")
+    void everyEditedFieldIsDecidedAboutTheFeed() {
+        String name = "Прайс: поля карточки";
+        Long partId = part(name, new BigDecimal("5000"), true);
+        intake(partId, warehouse, 1);
+
+        record Field(String column, Object value, boolean reachesBuyer) { }
+        java.util.List<Field> fields = java.util.List.of(
+                // Видит покупатель.
+                new Field("price", new BigDecimal("6000"), true),
+                new Field("description", "Снято с целой машины", true),
+                new Field("manufacturer", "KYB", true),
+                new Field("marking", "АРТ-42", true),
+                new Field("color", "Чёрный", true),
+                new Field("is_published", false, true),
+                // Владелец пишет их «для объявления» — значит покупатель
+                // обязан их видеть.
+                new Field("text_block", "Снята с целой машины, следов удара нет", true),
+                new Field("video_url", "https://example.org/video", true),
+                // Внутреннее: на площадку не идёт.
+                new Field("min_price", new BigDecimal("100"), false),
+                new Field("cost_price", new BigDecimal("200"), false),
+                new Field("installation_price", new BigDecimal("300"), false),
+                new Field("note", "лежит с краю", false),
+                new Field("section", "01-02-03", false),
+                new Field("barcode", "4600000000048", false),
+                new Field("weight_kg", new BigDecimal("4.2"), false),
+                new Field("length_mm", 120, false),
+                new Field("width_mm", 80, false),
+                new Field("height_mm", 45, false),
+                new Field("package_weight_kg", new BigDecimal("5.1"), false));
+
+        String clean = offerOf(name);
+        for (Field field : fields) {
+            inTenant(() -> jdbc.update(
+                    "UPDATE part SET %s = ? WHERE id = ?".formatted(field.column()),
+                    field.value(), partId));
+
+            if (field.reachesBuyer()) {
+                assertThat(offerOfOrNull(name))
+                        .as("правка «%s» не доехала до прайса, а покупатель её ждёт",
+                                field.column())
+                        .isNotEqualTo(clean);
+            } else {
+                assertThat(offerOf(name))
+                        .as("«%s» уехало на площадку, хотя это внутреннее поле",
+                                field.column())
+                        .isEqualTo(clean);
+            }
+
+            // Возвращаем как было: иначе следующее поле сравнивается
+            // с изменённым состоянием и «меняется» покажет предыдущая правка.
+            // У обязательных колонок NULL не годится — возвращаем значение.
+            inTenant(() -> switch (field.column()) {
+                case "price" -> jdbc.update("UPDATE part SET price = 5000 WHERE id = ?", partId);
+                case "is_published" ->
+                        jdbc.update("UPDATE part SET is_published = true WHERE id = ?", partId);
+                default -> jdbc.update(
+                        "UPDATE part SET %s = NULL WHERE id = ?".formatted(field.column()), partId);
+            });
+            assertThat(offerOf(name))
+                    .as("после отката поля «%s» прайс не вернулся к прежнему", field.column())
+                    .isEqualTo(clean);
+        }
+    }
+
+    /**
+     * Текст и видео из карточки доезжают до объявления, а не остаются внутри.
+     *
+     * <p>Владелец пишет их в полях «Текстовый блок» и «Видео» — это те же
+     * колонки, что приезжают из прежней системы. До правки в прайс уходило
+     * только описание, и написанное «для объявления» покупатель не видел
+     * вовсе: заметить это можно было лишь сверив файл с карточкой руками.
+     */
+    @Test
+    @DisplayName("Текстовый блок и видео дописываются к описанию")
+    void textBlockAndVideoReachTheDescription() {
+        String name = "Прайс: текст и видео";
+        Long partId = part(name, new BigDecimal("4000"), true);
+        intake(partId, warehouse, 1);
+        inTenant(() -> jdbc.update("""
+                UPDATE part SET description = 'Снято с целой машины.',
+                                text_block = 'Резьба целая, крепления без трещин.',
+                                video_url = 'https://example.org/v/17'
+                 WHERE id = ?""", partId));
+
+        String offer = offerOf(name);
+
+        assertThat(offer)
+                .as("описание владельца обязано остаться первым")
+                .contains("Снято с целой машины.")
+                .as("текстовый блок не доехал до покупателя")
+                .contains("Резьба целая, крепления без трещин.")
+                // Подпись обязательна: голый адрес посреди текста читается
+                // как мусор, и по нему не понять, что там ролик о детали.
+                .as("ссылка на видео ушла без подписи или не ушла вовсе")
+                .contains("Видео: https://example.org/v/17");
+    }
+
+    /**
+     * Пустые поля не дают ни строки, ни подписи.
+     *
+     * <p>Иначе у каждой второй позиции в описании висело бы «Видео:»
+     * без ссылки — обещание, которого никто не давал.
+     */
+    @Test
+    @DisplayName("Незаполненные текст и видео описание не портят")
+    void emptyTextAndVideoAddNothing() {
+        String name = "Прайс: без текста и видео";
+        Long partId = part(name, new BigDecimal("4000"), true);
+        intake(partId, warehouse, 1);
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET description = 'Только описание.' WHERE id = ?", partId));
+
+        assertThat(offerOf(name))
+                .contains("<description>Только описание.</description>")
+                .doesNotContain("Видео:");
+    }
+
+    /** {@code null}, если позиции в прайсе нет вовсе: снятая с публикации исчезает. */
+    private String offerOfOrNull(String name) {
+        String xml = price();
+        int nameAt = xml.indexOf("<name>" + name + "</name>");
+        if (nameAt < 0) {
+            return null;
+        }
+        return xml.substring(xml.lastIndexOf("<offer>", nameAt), xml.indexOf("</offer>", nameAt));
     }
 
     private String delta(Long... partIds) {

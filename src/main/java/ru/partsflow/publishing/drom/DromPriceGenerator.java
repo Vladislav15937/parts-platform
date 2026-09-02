@@ -57,12 +57,21 @@ public class DromPriceGenerator {
             SELECT p.public_code,
                    p.title,
                    p.description,
+                   -- Дополнительный текст и ссылка на ролик: владелец их пишет,
+                   -- а покупатель до правки не видел вовсе.
+                   p.text_block,
+                   p.video_url,
                    -- Вид детали отдельным полем: по нему площадка кладёт товар
                    -- в раздел. Пока его не было, ей оставалось угадывать
                    -- по заголовку, а угадывает она не всегда.
                    kind.name AS part_kind,
                    p.price,
                    COALESCE(s.qty_available, 0) AS qty_available,
+                   -- Где деталь лежит: покупателю это «куда ехать», и у клиента
+                   -- с двумя филиалами на разных концах города вопрос не праздный.
+                   -- Берётся из того же отбора, что и остаток: у прайса филиала
+                   -- в поле обязан стоять его склад, а не соседний.
+                   s.warehouses,
                    p.condition,
                    p.manufacturer,
                    p.color,
@@ -92,10 +101,21 @@ public class DromPriceGenerator {
                    d.id IS NOT NULL AS from_donor
               FROM part p
               LEFT JOIN (
-                  SELECT part_id, sum(qty - qty_reserved) AS qty_available
-                    FROM part_stock
-                   WHERE (?::bigint[] IS NULL OR warehouse_id = ANY (?::bigint[]))
-                   GROUP BY part_id
+                  SELECT ps.part_id,
+                         sum(ps.qty - ps.qty_reserved) AS qty_available,
+                         -- Только там, где деталь физически лежит: склад,
+                         -- на котором остаток нулевой, — это не «где она»,
+                         -- а строка раскладки, оставшаяся после продажи.
+                         -- Несколько складов склеиваются через запятую: раскладка
+                         -- ведётся по складам, одна позиция может лежать не на
+                         -- одном, и назвать один из двух значило бы отправить
+                         -- половину покупателей не туда.
+                         string_agg(DISTINCT w.name, ', ') FILTER (WHERE ps.qty > 0)
+                             AS warehouses
+                    FROM part_stock ps
+                    JOIN warehouse w ON w.id = ps.warehouse_id
+                   WHERE (?::bigint[] IS NULL OR ps.warehouse_id = ANY (?::bigint[]))
+                   GROUP BY ps.part_id
               ) s ON s.part_id = p.id
               LEFT JOIN donor d ON d.id = p.donor_id
               LEFT JOIN part_oem primary_oem
@@ -158,10 +178,25 @@ public class DromPriceGenerator {
                     CASE WHEN ?::boolean
                          THEN COALESCE(p.part_kind_id <> ALL (?::bigint[]), true)
                          ELSE p.part_kind_id = ANY (?::bigint[]) END)
+               -- Марка берётся и из применимости, а не только из машины.
+               -- У контрактной детали донора нет вовсе, а марка у неё есть —
+               -- и прайс её публикует тегом brandcars именно отсюда. Пока
+               -- отбор смотрел только на донора, «только Toyota» отдавало
+               -- 12 537 позиций там, где витрина по той же марке показывала
+               -- 16 529: четыре тысячи контрактных Тойот в прайс-лист
+               -- не попадали, хотя сам прайс объявляет их Тойотами.
+               -- Два ответа на один вопрос, и неправ был тот, о котором
+               -- не спрашивали.
                AND (?::bigint[] IS NULL OR
                     CASE WHEN ?::boolean
                          THEN COALESCE(d.brand_id <> ALL (?::bigint[]), true)
-                         ELSE d.brand_id = ANY (?::bigint[]) END)
+                              AND NOT EXISTS (SELECT 1 FROM part_applicability pa
+                                               WHERE pa.part_id = p.id
+                                                 AND pa.brand_id = ANY (?::bigint[]))
+                         ELSE (d.brand_id = ANY (?::bigint[])
+                               OR EXISTS (SELECT 1 FROM part_applicability pa
+                                           WHERE pa.part_id = p.id
+                                             AND pa.brand_id = ANY (?::bigint[]))) END)
             """;
 
     /** Дельта — тот же запрос по списку позиций: формат обязан совпасть с прайсом. */
@@ -191,9 +226,31 @@ public class DromPriceGenerator {
     private final EntityManager entityManager;
     private final DromPriceWriter writer;
 
-    public DromPriceGenerator(EntityManager entityManager, DromPriceWriter writer) {
+    private final ru.partsflow.inventory.CatalogService catalog;
+
+    public DromPriceGenerator(EntityManager entityManager, DromPriceWriter writer,
+                              ru.partsflow.inventory.CatalogService catalog) {
         this.entityManager = entityManager;
         this.writer = writer;
+        // Отбор по колонкам берётся у витрины: список колонок, выражения
+        // и разбор «пусто / не пусто» обязаны быть одни на оба экрана.
+        this.catalog = catalog;
+    }
+
+    /**
+     * Разбирает отбор, ничего не записывая.
+     *
+     * <p><b>Зачем отдельно.</b> Условие, которое не разбирается, — например
+     * колонка чужой линии товара, оставшаяся от прежней настройки, — до этого
+     * всплывало посреди записи ответа: заголовки уже отправлены, и площадка
+     * получала <b>200 и ноль байт</b>. Пустой файл она понимает буквально:
+     * «товаров нет», то есть снимает все объявления вместе с накопленными
+     * просмотрами. Проверка до открытия потока превращает это в честный отказ,
+     * при котором прежний прайс остаётся в силе.
+     */
+    @Transactional(readOnly = true)
+    public void checkFilter(FeedFilter filter) {
+        catalog.columnFilter(filter.columns(), filter.words());
     }
 
     /**
@@ -259,10 +316,26 @@ public class DromPriceGenerator {
      *                     пусто — любое
      * @param warehouseIds пусто — все склады
      */
+    /**
+     * @param columns отбор по колонкам витрины: точное равенство,
+     *                «колонка → значение». Владелец добавляет условия сам,
+     *                и новое не требует ни миграции, ни правки генератора
+     * @param words   то же вхождением: набранное руками ищется куском
+     */
     public record FeedFilter(BigDecimal priceFrom, BigDecimal priceTo,
                              List<String> conditions, List<Long> warehouseIds,
                              List<Long> kindIds, boolean kindsExcluded,
-                             List<Long> brandIds, boolean brandsExcluded) {
+                             List<Long> brandIds, boolean brandsExcluded,
+                             java.util.Map<String, String> columns,
+                             java.util.Map<String, String> words) {
+
+        public FeedFilter(BigDecimal priceFrom, BigDecimal priceTo,
+                          List<String> conditions, List<Long> warehouseIds,
+                          List<Long> kindIds, boolean kindsExcluded,
+                          List<Long> brandIds, boolean brandsExcluded) {
+            this(priceFrom, priceTo, conditions, warehouseIds, kindIds, kindsExcluded,
+                    brandIds, brandsExcluded, java.util.Map.of(), java.util.Map.of());
+        }
 
         public static FeedFilter everything() {
             return new FeedFilter(null, null, List.of(), List.of(),
@@ -307,9 +380,20 @@ public class DromPriceGenerator {
 
     private int write(OutputStream out, List<Long> partIds, FeedFilter filter, String photoBase) {
         Session session = entityManager.unwrap(Session.class);
+
+        // Условия по колонкам витрины: их собирает сам отбор витрины, чтобы
+        // выражения и белый список колонок жили в одном месте. Идут в конец,
+        // перед фильтром дельты, — иначе сдвинулись бы номера параметров
+        // у всех условий выше.
+        var byColumns = catalog.columnFilter(filter.columns(), filter.words());
+        String columnsSql = byColumns.map(f -> " AND " + f.sql()).orElse("");
+        List<Object> columnArgs = byColumns
+                .map(ru.partsflow.inventory.CatalogService.ColumnFilter::args)
+                .orElseGet(List::of);
+
         String sql = SQL.replace("${statuses}",
                 partIds == null ? PRICE_STATUSES : DELTA_STATUSES)
-                + (partIds == null ? "" : DELTA_FILTER) + ORDER;
+                + columnsSql + (partIds == null ? "" : DELTA_FILTER) + ORDER;
 
         return session.doReturningWork(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -348,11 +432,19 @@ public class DromPriceGenerator {
                 statement.setArray(12, kinds);
                 statement.setArray(13, brands);
                 statement.setBoolean(14, filter.brandsExcluded());
+                // По четыре на ветку: марка сверяется и с машиной, и
+                // с применимостью — у контрактной детали она только там.
                 statement.setArray(15, brands);
                 statement.setArray(16, brands);
+                statement.setArray(17, brands);
+                statement.setArray(18, brands);
 
+                int next = 19;
+                for (Object arg : columnArgs) {
+                    statement.setObject(next++, arg);
+                }
                 if (partIds != null) {
-                    statement.setArray(17, connection.createArrayOf("bigint", partIds.toArray()));
+                    statement.setArray(next, connection.createArrayOf("bigint", partIds.toArray()));
                 }
                 try (ResultSet rs = statement.executeQuery()) {
                     return writer.write(out, new OfferCursor(rs, photoBase));
@@ -443,13 +535,16 @@ public class DromPriceGenerator {
                     enumOf(VerticalSide.class, rs.getString("side_ud")),
                     rs.getString("color"),
                     rs.getString("marking"),
+                    rs.getString("warehouses"),
                     photoLinks(rs.getString("photo_ids"), photoBase),
                     rs.getString("car_brand"),
                     rs.getString("car_model"),
                     rs.getString("body_code"),
                     rs.getString("engine_code"),
                     year(rs),
-                    rs.getBoolean("from_donor"));
+                    rs.getBoolean("from_donor"),
+                    rs.getString("text_block"),
+                    rs.getString("video_url"));
         }
 
         /** Года у контрактной детали нет, а {@code getInt} отдаёт на это ноль. */

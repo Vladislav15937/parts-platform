@@ -308,7 +308,17 @@ public class PartHistoryService {
 
     private List<Movement> movements(long partId) {
         return jdbc.query("""
-                        SELECT m.created_at, m.movement_type, m.qty_delta, m.reason,
+                        SELECT m.created_at, m.movement_type, m.qty_delta,
+                               -- Причина списания лежит в документе, а не
+                               -- в движении: списание оформляется документом,
+                               -- и «почему» пишется там. Пока история читала
+                               -- только m.reason, у списания в ленте стоял
+                               -- прочерк — при том что причина обязательна
+                               -- и её только что ввели руками. Единственная
+                               -- операция, уносящая товар без покупателя
+                               -- и без денег, и «почему» через месяц
+                               -- не восстановить ничем, кроме этой строки.
+                               coalesce(m.reason, d.note) AS reason,
                                d.number AS doc_number, d.doc_type, d.status AS doc_status,
                                wf.name AS from_warehouse, wt.name AS to_warehouse,
                                deal.number AS deal_number, ret.number AS return_number,

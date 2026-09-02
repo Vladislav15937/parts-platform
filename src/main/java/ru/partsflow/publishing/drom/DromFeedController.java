@@ -83,6 +83,31 @@ public class DromFeedController {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
 
+        /*
+         * Отбор разбирается до того, как открыт поток ответа.
+         *
+         * Битое условие — колонка чужой линии товара, оставшаяся от прежней
+         * настройки, — всплывало посреди записи: заголовки отправлены,
+         * и площадка получала 200 с нулём байт. Пустой файл она понимает
+         * буквально: «товаров нет», и снимает все объявления вместе
+         * с просмотрами, за которые платят. Отказ до первой строки оставляет
+         * прежний прайс в силе — площадка просто попробует позже.
+         */
+        TenantContext.set(schema);
+        try {
+            if (account.isWheelFeed()) {
+                wheels.checkFilter(account.filter());
+            } else {
+                generator.checkFilter(account.filter());
+            }
+        } catch (RuntimeException e) {
+            log.error("Прайс арендатора {} не собран: отбор выгрузки не разбирается — {}",
+                    schema, e.getMessage());
+            throw e;
+        } finally {
+            TenantContext.clear();
+        }
+
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         // Кэшировать прайс нельзя: между заборами склад меняется весь день,
         // а Дром показывает то, что забрал.

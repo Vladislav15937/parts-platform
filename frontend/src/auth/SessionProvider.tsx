@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ApiError, ensureCsrfToken } from '../api/client';
+import { ApiError, SESSION_LOST, ensureCsrfToken, refreshCsrfToken } from '../api/client';
 import * as auth from '../api/auth';
 import type { Credentials, Me } from '../api/auth';
 import { scopeTo } from '../storage/tenantScope';
@@ -111,8 +111,48 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  /*
+   * Сессия кончилась — просим войти заново, а не показываем «401» на каждом
+   * экране.
+   *
+   * Сессия истекает по таймауту и умирает при выкладке — то есть регулярно.
+   * До этого приложение оставалось «вошедшим»: шапка писала «владелец ·
+   * на связи», рельс работал, а экраны один за другим встречали владельца
+   * красной строкой «Запрос отклонён (401)». Догадаться по ней, что дело
+   * в сессии, нельзя.
+   *
+   * Личность стирается — та же причина, что и при 401 на старте: сессия
+   * кончилась по-настоящему, и офлайн-режим тут не при чём. Очередь
+   * отправки при этом цела: она ждёт входа и уйдёт следующим проходом.
+   */
+  useEffect(() => {
+    const onLost = () => {
+      forgetMe();
+      setState((was) => (was.status === 'authenticated'
+        ? { status: 'anonymous', reason: 'Сессия кончилась — войдите заново.' }
+        : was));
+    };
+    window.addEventListener(SESSION_LOST, onLost);
+    return () => window.removeEventListener(SESSION_LOST, onLost);
+  }, []);
+
   const signIn = useCallback(async (credentials: Credentials) => {
-    await ensureCsrfToken();
+    /*
+     * Токен берётся заново, а не «если его нет».
+     *
+     * Cookie с токеном переживает сессию, которой он принадлежал: утром
+     * в браузере лежит вчерашний, `ensureCsrfToken` видит его и молчит,
+     * а сервер такой вход отвергает. И отвергает **401 с пустым телом** —
+     * ровно тем же ответом, что и неверный пароль: на входе человек ещё
+     * анонимен, поэтому отказ CSRF уходит через точку входа
+     * аутентификации, а не как 403. Значит ни человек, ни повтор
+     * по 403 в `request` отличить одно от другого не могут — владелец
+     * с верным паролем читает «неверный логин или пароль» и заперт
+     * снаружи, пока не догадается почистить cookie.
+     *
+     * Лишний запрос тут ничего не стоит: вход и так создаёт сессию заново.
+     */
+    await refreshCsrfToken();
     const current = await auth.login(credentials);
     rememberMe(current);
     await scopeTo(current.companySchema);

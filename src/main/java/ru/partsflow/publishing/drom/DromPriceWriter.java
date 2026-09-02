@@ -124,6 +124,14 @@ public class DromPriceWriter {
         element(w, "color", offer.color());
         element(w, "supplier_art", offer.marking());
 
+        // Склад, на котором деталь лежит. Имя, а не адрес: реквизитов складов
+        // у нас нет вовсе, а имена клиент даёт по месту — «Ткацкая», «54 YARD».
+        // Для покупателя это ответ на «куда ехать», и у клиента с филиалами
+        // на разных концах города вопрос не праздный. Проданная позиция едет
+        // без него: она никуда не делась только в том смысле, что объявление
+        // остаётся, — лежать ей уже негде.
+        element(w, "sklad", offer.warehouse());
+
         // Фотографии повторяющимся элементом, а не одной строкой через
         // запятую: в ссылке может встретиться что угодно, а разбор по
         // разделителю ломается ровно на том товаре, у которого он попался.
@@ -173,6 +181,41 @@ public class DromPriceWriter {
      * которого никто не давал.
      */
     static String descriptionOf(DromOffer offer) {
+        return append(own(offer), offer);
+    }
+
+    /**
+     * Дописывает к описанию то, что владелец ввёл отдельными полями.
+     *
+     * <p><b>Зачем.</b> «Текстовый блок» и «Видео» приезжают из прежней системы
+     * и правятся в карточке — владелец их пишет, а покупатель не видел вовсе:
+     * в прайс уходило только `description`. Написанное «для объявления»
+     * оставалось внутри системы, и заметить это можно было лишь сверив файл
+     * с карточкой руками.
+     *
+     * <p>Дописываем, а не заменяем: своё описание остаётся первым, потому что
+     * с него покупатель начинает читать. Ссылка на ролик идёт последней
+     * и с подписью — голый адрес посреди текста читается как мусор.
+     *
+     * <p>Ничего не выдумываем: в описание попадает только то, что владелец
+     * ввёл сам. Пустые поля не дают ни строки, ни подписи.
+     */
+    private static String append(String description, DromOffer offer) {
+        List<String> parts = new java.util.ArrayList<>();
+        if (description != null && !description.isBlank()) {
+            parts.add(description.strip());
+        }
+        if (offer.textBlock() != null && !offer.textBlock().isBlank()) {
+            parts.add(offer.textBlock().strip());
+        }
+        if (offer.videoUrl() != null && !offer.videoUrl().isBlank()) {
+            parts.add("Видео: " + offer.videoUrl().strip());
+        }
+        return String.join("\n", parts);
+    }
+
+    /** Описание владельца, а если его нет — собранное из того, что знаем. */
+    private static String own(DromOffer offer) {
         if (offer.description() != null && !offer.description().isBlank()) {
             return offer.description();
         }

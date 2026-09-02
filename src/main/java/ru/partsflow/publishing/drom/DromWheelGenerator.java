@@ -101,9 +101,21 @@ public class DromWheelGenerator {
     private final EntityManager entityManager;
     private final DromWheelWriter writer;
 
-    public DromWheelGenerator(EntityManager entityManager, DromWheelWriter writer) {
+    private final ru.partsflow.inventory.WheelService wheels;
+
+    public DromWheelGenerator(EntityManager entityManager, DromWheelWriter writer,
+                              ru.partsflow.inventory.WheelService wheels) {
         this.entityManager = entityManager;
         this.writer = writer;
+        // Отбор по колонкам собирает сама вкладка колёс: список колонок
+        // и выражения обязаны быть одни на экран и на выгрузку.
+        this.wheels = wheels;
+    }
+
+    /** Разбирает отбор, ничего не записывая, — до открытия потока ответа. */
+    @Transactional(readOnly = true)
+    public void checkFilter(DromPriceGenerator.FeedFilter filter) {
+        wheels.columnFilter(filter.columns(), filter.words());
     }
 
     /**
@@ -122,8 +134,18 @@ public class DromWheelGenerator {
     private int write(OutputStream out, List<Long> partIds,
                       DromPriceGenerator.FeedFilter filter, String photoBase) {
         Session session = entityManager.unwrap(Session.class);
+
+        // Условия по колонкам вкладки — в конец, перед отбором дельты:
+        // иначе сдвинулись бы номера параметров у всех условий выше.
+        var byColumns = wheels.columnFilter(filter.columns(), filter.words());
+        String columnsSql = byColumns.map(f -> " AND " + f.sql()).orElse("");
+        List<Object> columnArgs = byColumns
+                .map(ru.partsflow.inventory.WheelService.ColumnFilter::args)
+                .orElseGet(List::of);
+
         String sql = SQL.replace("ORDER BY p.id",
-                partIds == null ? "ORDER BY p.id" : "AND p.id = ANY (?) ORDER BY p.id");
+                columnsSql + (partIds == null ? " ORDER BY p.id"
+                        : " AND p.id = ANY (?) ORDER BY p.id"));
 
         return session.doReturningWork(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -146,8 +168,12 @@ public class DromWheelGenerator {
                 statement.setBigDecimal(6, filter.priceTo());
                 statement.setArray(7, conditions);
                 statement.setArray(8, conditions);
+                int next = 9;
+                for (Object arg : columnArgs) {
+                    statement.setObject(next++, arg);
+                }
                 if (partIds != null) {
-                    statement.setArray(9, connection.createArrayOf("bigint", partIds.toArray()));
+                    statement.setArray(next, connection.createArrayOf("bigint", partIds.toArray()));
                 }
 
                 try (ResultSet rs = statement.executeQuery()) {
@@ -173,24 +199,6 @@ public class DromWheelGenerator {
             return 0;
         }
         return write(out, partIds, filter, null);
-    }
-
-    /** Сколько позиций уедет — владелец видит число до сохранения выгрузки. */
-    @Transactional(readOnly = true)
-    public long countMatching(DromPriceGenerator.FeedFilter filter) {
-        return entityManager.createNativeQuery("""
-                        SELECT count(*) FROM part p
-                          JOIN part_wheel w ON w.part_id = p.id
-                         WHERE p.is_published AND p.product_line = 'WHEEL'
-                           AND p.status IN ('IN_STOCK', 'SOLD')
-                           AND p.price > 0
-                           AND (CAST(:priceFrom AS numeric) IS NULL
-                                OR p.price >= CAST(:priceFrom AS numeric))
-                           AND (CAST(:priceTo AS numeric) IS NULL
-                                OR p.price <= CAST(:priceTo AS numeric))""")
-                .setParameter("priceFrom", filter.priceFrom())
-                .setParameter("priceTo", filter.priceTo())
-                .getSingleResult() instanceof Number number ? number.longValue() : 0L;
     }
 
     /** Итератор поверх курсора: строки не накапливаются. */

@@ -36,7 +36,8 @@ const reference: Reference = {
   donors: [
     {
       id: 100,
-      publicCode: 'М-0042',
+      code: 'М-0042',
+      note: null,
       brand: 'Toyota',
       model: 'Camry',
       year: 2012,

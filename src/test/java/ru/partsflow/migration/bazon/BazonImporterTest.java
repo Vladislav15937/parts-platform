@@ -47,6 +47,7 @@ class BazonImporterTest extends PostgresTestBase {
     private static final String PARTS_BACKFILL = "t_000084";
     private static final String JUNK_OEM = "t_000097";
     private static final String BROKEN_ROW = "t_000100";
+    private static final String NO_PUBLISH = "t_000105";
 
     @Autowired
     private DataSource dataSource;
@@ -60,7 +61,7 @@ class BazonImporterTest extends PostgresTestBase {
     @BeforeAll
     static void migrate() {
         provisionTenants(IMPORT, REPEAT, HEADER, NAMES, BAD_ROW, UNKNOWN, BACKFILL,
-                PARTS_BACKFILL, JUNK_OEM, BROKEN_ROW);
+                PARTS_BACKFILL, JUNK_OEM, BROKEN_ROW, NO_PUBLISH);
     }
 
     @Test
@@ -186,6 +187,52 @@ class BazonImporterTest extends PostgresTestBase {
                 .as("повтор прошёл с ошибками: он обязан быть обычным действием, "
                         + "а не аварией, которую спас индекс")
                 .isEmpty();
+    }
+
+    /**
+     * Про отсутствие колонки «Выгружать» предупреждаем один раз — про то,
+     * что действительно завелось.
+     *
+     * <p>Выгрузка без этой колонки грузит весь склад без разрешения
+     * публиковать, и предупреждение о пустом прайсе тут по делу. Но на
+     * повторе все позиции пропускаются как уже существующие, публикацию
+     * повтор не трогает вовсе — а предупреждение всё равно обещало пустой
+     * прайс. Владелец, повторивший выгрузку ради дозаполнения полей, читал,
+     * что остался без объявлений, при полностью целой публикации: тревога
+     * на ровном месте ровно там, где он только что ждал минуту.
+     *
+     * <p>Поймано повтором переноса на живом складе — 35 841 пропущено,
+     * ноль заведено, предупреждение на месте.
+     */
+    @Test
+    @DisplayName("Про «Выгружать» предупреждает первый проход, а не повтор")
+    void publishWarningOnlyWhenSomethingWasCreated() throws Exception {
+        BazonImporter importer = new BazonImporter(dataSource, NO_PUBLISH);
+        Path catalog = catalogWithoutPublishFlag();
+
+        ImportReport first = importer.importAll(donorsFixture(), catalog);
+        assertThat(first.problems())
+                .as("склад завёлся без разрешения публиковать, а прайс уедет пустым — "
+                        + "об этом обязаны сказать")
+                .anyMatch(p -> p.message().contains("Выгружать"));
+
+        ImportReport second = new BazonImporter(dataSource, NO_PUBLISH)
+                .importAll(donorsFixture(), catalog);
+
+        assertThat(second.loaded("товаров")).as("повтор что-то завёл заново").isZero();
+        assertThat(second.problems())
+                .as("повтор ничего не завёл, а пустым прайсом всё равно пугает")
+                .noneMatch(p -> p.message().contains("Выгружать"));
+    }
+
+    /** Та же выгрузка, но без колонки «Выгружать» — так её отдаёт Bazon по умолчанию. */
+    private Path catalogWithoutPublishFlag() throws Exception {
+        return write("catalog-no-publish.csv", """
+                "Номер товара";"Запчасть";"Номер донора";"Цена";"Ткацкая (свободно)";\
+                "Ткацкая (резерв)";"Ткацкая (ожидается)"
+                "B-100";"Фара левая";"Д-1";"9500";"2";"0";"0"
+                "B-200";"Бампер передний";"";"12000";"1";"0";"0"
+                """);
     }
 
     @Test

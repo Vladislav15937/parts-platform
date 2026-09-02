@@ -105,7 +105,7 @@ public class PartNameService {
      */
     @Transactional(readOnly = true)
     public Page<PartName> unmatched(int page, int size) {
-        return repository.findByMatchStatusOrderByUsageCountDescCreatedAtDesc(
+        return repository.findByMatchStatusOrderByUsageCountDescCreatedAtDescIdDesc(
                 PartName.MatchStatus.UNMATCHED, PageRequest.of(page, size));
     }
 
@@ -124,6 +124,12 @@ public class PartNameService {
     @Transactional(readOnly = true)
     public List<PartKindMatcher.PartKind> searchKinds(String query, int limit) {
         return matcher.search(query, limit);
+    }
+
+    /** Сколько эталонов подошло — для подписи «показаны первые N из M». */
+    @Transactional(readOnly = true)
+    public long countKinds(String query) {
+        return matcher.count(query);
     }
 
     /** Все виды деталей: справочник статичный и маленький. */

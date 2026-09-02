@@ -172,9 +172,22 @@ public class IntakeController {
                 .map(ItemRequest::toService)
                 .toList();
 
-        IntakeService.Receipt receipt = intake.receive(
-                request.warehouseId(), request.supplyId(), request.donorId(),
-                items, CurrentUser.memberId(), request.requestId());
+        IntakeService.Receipt receipt;
+        try {
+            receipt = intake.receive(
+                    request.warehouseId(), request.supplyId(), request.donorId(),
+                    items, CurrentUser.memberId(), request.requestId());
+        } catch (org.springframework.dao.DataIntegrityViolationException conflict) {
+            // Одновременный повтор: первый запрос успел вставить документ,
+            // второй упёрся в уникальный ключ. Приёмка при этом прошла,
+            // и очередь ждёт результат — иначе она уведёт запись
+            // в «требует внимания», а приёмщик заведёт деталь второй раз.
+            IntakeService.Receipt done = intake.replayAfterConflict(request.requestId());
+            if (done == null) {
+                throw conflict;
+            }
+            receipt = done;
+        }
 
         return ResponseEntity.status(HttpStatus.CREATED).body(ReceiptView.of(receipt));
     }

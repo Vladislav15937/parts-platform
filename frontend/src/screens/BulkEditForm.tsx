@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { ApiError } from '../api/client';
-import { BULK_FIELDS, savePartsBulk } from '../inventory/catalog';
+import {
+  BULK_FIELDS, savePartsBulk, savePartsBulkByFilter, type CatalogQuery,
+} from '../inventory/catalog';
+import { count as formatCount, positions } from '../ui/plural';
 
 /**
  * Правка нескольких позиций разом.
@@ -15,8 +18,16 @@ import { BULK_FIELDS, savePartsBulk } from '../inventory/catalog';
  * это день работы, и потому её не делают вовсе — склад так и остаётся
  * без адресов.
  */
-export function BulkEditForm({ partIds, onSaved, onCancel }: {
+export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
   partIds: number[];
+  /**
+   * Отбор целиком вместо отмеченных строк: правится всё, что нашёл экран,
+   * а не пятьдесят видимых. Ради этого режима форма и знает про отбор —
+   * без него включить «Выгружать» всему переехавшему складу нельзя.
+   */
+  whole?: CatalogQuery | undefined;
+  /** Сколько позиций тронем. У отбора это общее число, а не длина списка. */
+  count: number;
   onSaved: (changed: number) => void;
   onCancel: () => void;
 }) {
@@ -24,6 +35,11 @@ export function BulkEditForm({ partIds, onSaved, onCancel }: {
   const [values, setValues] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  // Правка всего отбора вторым нажатием: отменить её нечем, кроме
+  // восстановления из бэкапа, а промах мышью стоит всего склада.
+  // Отмеченные руками строки этого не требуют — их владелец только что
+  // выбрал сам.
+  const [confirming, setConfirming] = useState(false);
 
   function toggle(key: string): void {
     setTouched({ ...touched, [key]: touched[key] !== true });
@@ -37,7 +53,13 @@ export function BulkEditForm({ partIds, onSaved, onCancel }: {
     try {
       const changes: Record<string, string | number | boolean | null> = {};
       for (const field of chosen) {
-        const raw = values[field.key] ?? '';
+        // Умолчание читается тем же, каким показано. Разойдясь, они дают
+        // самую тихую поломку из возможных: список стоит на «Везде»,
+        // владелец его не трогает — и уезжает «Нет», то есть отмеченные
+        // позиции снимаются с выгрузки вместо постановки на неё. На экране
+        // при этом написано обратное, и заметить это можно только по
+        // опустевшему прайсу через несколько дней.
+        const raw = values[field.key] ?? (field.kind === 'flag' ? 'yes' : '');
         if (field.kind === 'flag') {
           changes[field.key] = raw === 'yes';
         } else if (field.kind === 'money') {
@@ -48,7 +70,9 @@ export function BulkEditForm({ partIds, onSaved, onCancel }: {
           changes[field.key] = raw.trim() === '' ? null : raw.trim();
         }
       }
-      const result = await savePartsBulk(partIds, changes);
+      const result = whole === undefined
+        ? await savePartsBulk(partIds, changes)
+        : await savePartsBulkByFilter(whole, changes);
       onSaved(result.changed);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Не удалось сохранить');
@@ -61,7 +85,11 @@ export function BulkEditForm({ partIds, onSaved, onCancel }: {
     <div className="card-edit">
       <h4>
         Правка списком
-        <span className="muted"> · выбрано {partIds.length}</span>
+        <span className="muted">
+          {whole === undefined
+            ? ` · выбрано ${formatCount(count)}`
+            : ` · весь отбор: ${formatCount(count)}`}
+        </span>
       </h4>
       <p className="note">
         Изменится только отмеченное. Остальные поля у выбранных позиций
@@ -107,9 +135,17 @@ export function BulkEditForm({ partIds, onSaved, onCancel }: {
         <button
           type="button"
           disabled={saving || chosen.length === 0}
-          onClick={() => void save()}
+          onClick={() => {
+            if (whole !== undefined && !confirming) {
+              setConfirming(true);
+              return;
+            }
+            void save();
+          }}
         >
-          {saving ? 'Сохраняем…' : `Изменить ${partIds.length} позиций`}
+          {saving ? 'Сохраняем…'
+            : confirming ? `Точно изменить ${positions(count)}?`
+            : `Изменить ${positions(count)}`}
         </button>
         <button type="button" className="button--ghost" onClick={onCancel}>
           Отмена

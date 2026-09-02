@@ -171,12 +171,92 @@ class WheelServiceTest extends PostgresTestBase {
                 .contains(created.partIds().get(0));
     }
 
+    /**
+     * Несколько слов сужают запрос, а не требуют их подряд в заголовке.
+     *
+     * <p>«Bridgestone зимняя» — обычный запрос по телефону, а в собранном
+     * заголовке между ними стоит модель: «Шина 225/55 R18 Bridgestone
+     * Blizzak зимняя (шипы)». Пока остаток запроса искался одной подстрокой,
+     * такая фраза не совпадала ни с чем — при том что каждое слово
+     * по отдельности находило обе шины. Продавец в этот момент отвечает
+     * покупателю «нет такого».
+     *
+     * <p>Комментарий в коде обещал ровно это поведение — «Dunlop зимняя»
+     * так и ищется словами, — а код искал фразой.
+     */
+    @Test
+    @DisplayName("Несколько слов ищутся вместе, а не одной фразой")
+    void wordsAreSearchedSeparately() {
+        inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+
+        assertThat(inTenant(() -> wheels.list("Goodyear летняя", null, false,
+                Map.of(), Map.of(), "set", true, 0, 50).rows()))
+                .as("слова стоят в заголовке не подряд, и запрос не нашёл ничего")
+                .isNotEmpty();
+
+        // Сужение обязано остаться сужением. Пара марок, которой нет ни у одной
+        // шины разом: соседние тесты заводят и зимние Goodyear, поэтому
+        // «Goodyear зимняя» тут ничего не доказало бы.
+        assertThat(inTenant(() -> wheels.list("Goodyear Bridgestone", null, false,
+                Map.of(), Map.of(), "set", true, 0, 50).rows()))
+                .as("слова перестали сужать запрос: нашлось то, чего не спрашивали")
+                .isEmpty();
+    }
+
     @Test
     @DisplayName("Неизвестный вид товара отвергается, а не ищется")
     void unknownKindIsRejected() {
         assertThatThrownBy(() -> inTenant(() ->
                 wheels.list(null, "КОЛЕСО", false, Map.of(), Map.of(), "set", true, 0, 50).rows()))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * Свойства колеса проверяются белым списком, как и вид товара.
+     *
+     * <p>Белый список стоял только у вида, а у сезона, состояния, маркировки
+     * и протектора — нет, хотя болезнь одна: значение доезжает до {@code CHECK}
+     * в колонке и возвращается как «операция нарушает целостность данных».
+     * По такому ответу человеку неясно, что он ввёл не то, — он идёт искать
+     * поломку сервера, — а офлайн-очередь читает 409 как повод повторять.
+     *
+     * <p>Поймано живым прогоном: комплект с сезоном {@code WINTER_STUD}
+     * вместо {@code WINTER_STUDDED}. Разница в четыре буквы, ответ —
+     * про целостность данных.
+     */
+    @Test
+    @DisplayName("Неизвестный сезон отвергается словами, а не ограничением схемы")
+    void unknownSeasonIsRejectedWithWords() {
+        WheelService.WheelRequest wrong = withSeason("WINTER_STUD");
+
+        assertThatThrownBy(() -> inTenant(() -> wheels.createSet(wrong, 1, warehouseId, null)))
+                .as("значение доехало до CHECK в колонке вместо внятного отказа")
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Сезон")
+                .hasMessageContaining("WINTER_STUDDED");
+    }
+
+    /** Проверка обязана различать неверное и настоящее, а не запрещать всё. */
+    @Test
+    @DisplayName("Известный сезон заводится как раньше")
+    void knownSeasonStillWorks() {
+        var created = inTenant(() ->
+                wheels.createSet(withSeason("WINTER_STUDDED"), 1, warehouseId, null));
+
+        assertThat(created.partIds()).hasSize(1);
+    }
+
+    private WheelService.WheelRequest withSeason(String season) {
+        WheelService.WheelRequest base = tyre();
+        return new WheelService.WheelRequest(base.kind(), base.diameter(),
+                base.tyreWidth(), base.tyreHeight(), base.construction(),
+                base.tyreType(), season, base.wearMm(), base.madeYear(),
+                base.discType(), base.discWidth(), base.offsetMm(),
+                base.boltPattern(), base.hubBore(),
+                base.brand(), base.model(), base.discBrand(), base.discModel(),
+                base.markingType(), base.treadType(),
+                base.runFlat(), base.lightTruck(), base.speedIndex(), base.loadIndex(),
+                base.price(), base.costPrice(), base.condition());
     }
 
     /**

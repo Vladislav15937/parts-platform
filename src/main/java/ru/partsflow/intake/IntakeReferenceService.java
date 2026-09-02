@@ -104,7 +104,8 @@ public class IntakeReferenceService {
      */
     private List<DonorRef> donors() {
         return jdbc.query("""
-                SELECT d.id, d.public_code, d.vin, d.year, d.status, d.location,
+                SELECT d.id, d.public_code, d.legacy_code, d.note,
+                       d.vin, d.year, d.status, d.location,
                        b.name AS brand, m.name AS model
                   FROM donor d
                   LEFT JOIN catalog.brand b ON b.id = d.brand_id
@@ -113,7 +114,11 @@ public class IntakeReferenceService {
                  ORDER BY d.id DESC""",
                 (rs, i) -> new DonorRef(
                         rs.getLong("id"),
-                        rs.getString("public_code"),
+                        // Клиент зовёт машину своим номером, а не нашим:
+                        // то же, что в карточке машины и в отчёте окупаемости.
+                        rs.getString("legacy_code") == null
+                                ? rs.getString("public_code") : rs.getString("legacy_code"),
+                        rs.getString("note"),
                         rs.getString("brand"),
                         rs.getString("model"),
                         rs.getObject("year") == null ? null : rs.getInt("year"),
@@ -168,7 +173,12 @@ public class IntakeReferenceService {
                             String status, LocalDate arrivedOn) {
     }
 
-    public record DonorRef(long id, String publicCode, String brand, String model,
+    /**
+     * @param code номер, которым машину зовёт клиент
+     * @param note заметка владельца — ею машины и различают, когда марка,
+     *             модель и год у них совпадают
+     */
+    public record DonorRef(long id, String code, String note, String brand, String model,
                            Integer year, String vin, String status, String location) {
     }
 

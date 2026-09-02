@@ -185,20 +185,26 @@ public final class BazonImporter {
      * дереву категорий автоматически — значит разложить их неверно, поэтому
      * все едут в «Не разобрано» и разбираются потом через справочник
      * наименований. Пустая категория честнее выдуманной.
+     *
+     * <p>Строку сеет миграция {@code catalog/020}, а импорт её только читает.
+     * Раньше он заводил её сам одним INSERT — и на ячейке с разделением ролей
+     * падал: рабочая роль на общей схеме {@code catalog} имеет только
+     * {@code SELECT} (справочники пишет миграция, читают все), и INSERT отвечал
+     * «permission denied for table part_category», уводя весь перенос
+     * в пятисотку ещё до первой позиции. Теперь в {@code catalog} импорт
+     * не пишет вовсе; отсутствие строки — это не накатанная миграция, и об этом
+     * честнее сказать прямо, чем пытаться её вставить.
      */
     private long ensureUncategorized() throws SQLException {
         try (Connection c = dataSource.getConnection()) {
             Long existing = selectId(c,
                     "SELECT id FROM catalog.part_category WHERE slug = 'uncategorized'");
-            if (existing != null) {
-                return existing;
+            if (existing == null) {
+                throw new IllegalStateException(
+                        "В каталоге нет категории «Не разобрано» (slug=uncategorized): "
+                        + "не накатана миграция catalog/020");
             }
-            try (PreparedStatement ps = c.prepareStatement("""
-                    INSERT INTO catalog.part_category (name, slug, path, sort_order)
-                    VALUES ('Не разобрано', 'uncategorized', 'uncategorized', 9999)
-                    RETURNING id""")) {
-                return firstLong(ps);
-            }
+            return existing;
         }
     }
 
@@ -681,13 +687,23 @@ public final class BazonImporter {
      * её включают в настройках таблицы товаров перед экспортом
      * (см. {@code docs/bazon-parity.md} §11).
      */
-    private void warnIfPublishFlagMissing(List<String> header, ImportReport report) {
-        boolean present = header.stream().anyMatch(column -> "Выгружать".equals(column.trim()));
-        if (!present) {
-            report.problem(1, "в выгрузке нет колонки «Выгружать»: все позиции импортированы "
-                    + "без разрешения на публикацию, площадки получат пустой прайс. "
-                    + "Включите колонку в настройках таблицы товаров Bazon и повторите экспорт");
+    private void warnPublishFlagMissing(ImportReport report) {
+        // Говорится только о том, что действительно завелось. На повторе
+        // переноса все позиции пропускаются как уже существующие, публикацию
+        // повтор не трогает вовсе — а предупреждение всё равно обещало пустой
+        // прайс. Владелец, повторивший выгрузку ради дозаполнения полей,
+        // читал, что остался без объявлений, при полностью целой публикации.
+        // Поймано повтором на живом складе: 35 841 пропущено, ноль заведено,
+        // и тревога на ровном месте.
+        int created = report.loaded("товаров");
+        if (created == 0) {
+            return;
         }
+        report.problem(1, "в выгрузке нет колонки «Выгружать»: заведённые позиции (%d) "
+                .formatted(created)
+                + "импортированы без разрешения на публикацию, и в прайс они не попадут. "
+                + "Включите колонку в настройках таблицы товаров Bazon и повторите экспорт — "
+                + "либо включите выгрузку отбором на витрине склада");
     }
 
     // ---------- товары ----------
@@ -697,11 +713,13 @@ public final class BazonImporter {
                              Map<String, Long> partNames, Map<String, Long> warehouses,
                              ImportReport report) throws SQLException {
 
+        boolean publishFlagMissing;
         List<BazonWarehouseColumns.Warehouse> warehouseColumns;
         try (InputStream in = Files.newInputStream(catalogCsv);
              BazonCsvReader reader = new BazonCsvReader(in)) {
             warehouseColumns = BazonWarehouseColumns.discover(reader.header());
-            warnIfPublishFlagMissing(reader.header(), report);
+            publishFlagMissing = reader.header().stream()
+                    .noneMatch(column -> "Выгружать".equals(column.trim()));
         } catch (Exception e) {
             throw new IllegalStateException("Не удалось прочитать заголовок выгрузки товаров", e);
         }
@@ -789,6 +807,12 @@ public final class BazonImporter {
                 });
             }
             c.commit();
+        }
+
+        // После прохода, а не по заголовку: предупреждать надо о том, что
+        // действительно завелось без разрешения публиковать.
+        if (publishFlagMissing) {
+            warnPublishFlagMissing(report);
         }
     }
 

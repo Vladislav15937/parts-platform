@@ -83,9 +83,9 @@ public class DeadLetterService {
      * @return причина отказа; пусто — доставлено
      */
     @Transactional
-    public Optional<String> retry(long id) {
+    public Optional<String> retry(long id, Long memberId) {
         DeadLetter letter = require(id);
-        return attempt(letter);
+        return attempt(letter, memberId);
     }
 
     /**
@@ -110,7 +110,10 @@ public class DeadLetterService {
 
         int delivered = 0;
         for (DeadLetter letter : due) {
-            if (attempt(letter).isEmpty()) {
+            // Автора нет и быть не может: это фоновый проход. Пустой
+            // resolved_by и означает «отправил робот» — как и везде,
+            // где автор берётся из вошедшего.
+            if (attempt(letter, null).isEmpty()) {
                 delivered++;
             }
         }
@@ -134,7 +137,7 @@ public class DeadLetterService {
                  WHERE id = ? AND resolved_at IS NULL""", memberId, id);
     }
 
-    private Optional<String> attempt(DeadLetter letter) {
+    private Optional<String> attempt(DeadLetter letter, Long memberId) {
         byte[] payload = jdbc.queryForObject(
                 "SELECT payload FROM event_dead_letter WHERE id = ?", byte[].class, letter.id());
 
@@ -143,10 +146,16 @@ public class DeadLetterService {
                 letter.eventType(), payload));
 
         if (failure.isEmpty()) {
+            // Автор пишется и здесь, а не только у снятия с разбора.
+            // Метод общий у робота и у человека, и пока автора не было
+            // вовсе, нажатие «Повторить» было неотличимо от прохода робота:
+            // на вопрос «кто отправил это повторно» ответа не находилось,
+            // хотя у соседней кнопки он есть. Пусто — значит робот.
             jdbc.update("""
                     UPDATE event_dead_letter
-                       SET resolved_at = now(), resolution = 'RETRIED', error = ''
-                     WHERE id = ?""", letter.id());
+                       SET resolved_at = now(), resolution = 'RETRIED', error = '',
+                           resolved_by = ?
+                     WHERE id = ?""", memberId, letter.id());
             log.info("Событие {} доставлено повтором обработчику {}",
                     letter.eventId(), letter.handler());
             return Optional.empty();

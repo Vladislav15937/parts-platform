@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { goods } from '../ui/plural';
 import { ApiError } from '../api/client';
 import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
@@ -36,6 +37,11 @@ import { BulkEditForm } from './BulkEditForm';
  * <p>Размер показан отдельным столбцом и первым: покупатель называет
  * «195 65 15», а не модель шины.
  */
+/** Название колонки для чипа отбора: ключ ничего не говорит владельцу. */
+function wheelColumnTitle(key: string): string {
+  return WHEEL_COLUMNS.find((c) => c.key === key)?.title ?? key;
+}
+
 export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: string }) {
   const [page, setPage] = useState<WheelPage | null>(null);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
@@ -60,6 +66,15 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
   // Какая колонка сейчас показывает список значений: открытых больше одной
   // быть не может — они перекрывают друг друга.
   const [picking, setPicking] = useState<string | null>(null);
+
+  /*
+   * Отбор предлагается только там, где он есть: список отбираемых колонок
+   * приезжает с сервера вместе со страницей. Повторённый здесь, он разошёлся
+   * бы с серверным молча — и меню предлагало бы отбор, который сервер отобьёт.
+   */
+  const canFilter = (key: string | null): boolean =>
+    key !== null && (page?.filterable ?? []).includes(key);
+
   // Координаты заголовка: список значений рисуется вне таблицы, иначе его
   // обрезает контейнер с горизонтальной прокруткой — и от списка остаётся
   // белая полоска. Та же ловушка, что с накладкой снимков на витрине.
@@ -113,7 +128,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
       <h2>
         Шины и диски
         {page !== null && (
-          <span className="muted"> {page.total.toLocaleString('ru-RU')} товаров</span>
+          <span className="muted"> {goods(page.total)}</span>
         )}
       </h2>
 
@@ -184,6 +199,38 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
       </div>
 
       <div className="filter-row">
+        {/* Отборы колонок — здесь, а не только в шапке таблицы: при пустой
+            выдаче таблицы нет вовсе, и снять их становится нечем. */}
+        {Object.entries(query.columns).map(([key, value]) => (
+          <button
+            key={`col-${key}`}
+            type="button"
+            className="crumb"
+            onClick={() => {
+              const columns = { ...query.columns };
+              delete columns[key];
+              change({ columns, page: 0 });
+            }}
+          >
+            {wheelColumnTitle(key)}: {value} ✕
+          </button>
+        ))}
+
+        {Object.entries(query.words).map(([key, value]) => (
+          <button
+            key={`word-${key}`}
+            type="button"
+            className="crumb"
+            onClick={() => {
+              const words = { ...query.words };
+              delete words[key];
+              change({ words, page: 0 });
+            }}
+          >
+            {wheelColumnTitle(key)}: «{value}» ✕
+          </button>
+        ))}
+
         <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
           Настроить таблицу
         </button>
@@ -225,9 +272,13 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         </div>
       )}
 
+      {/* Отбора целиком у колёс нет: их у клиента две сотни против
+          тридцати пяти тысяч запчастей, то есть несколько страниц,
+          а не семьсот. Понадобится — берётся тем же способом. */}
       {bulk && (
         <BulkEditForm
           partIds={chosen}
+          count={chosen.length}
           onSaved={(changed) => {
             setBulk(false);
             setChosen([]);
@@ -311,13 +362,16 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
                     ) : (
                       <span
                         className="th__title"
-                        onClick={() => column.filter !== false && setTyping(column.key)}
+                        onClick={() => canFilter(column.key) && setTyping(column.key)}
                         style={column.filter === false ? undefined : { cursor: 'text' }}
                       >
                         {column.title}
                       </span>
                     )}
-                    {(column.filter !== false || column.sort !== undefined) && (
+                    {/* Отбираемость — из серверного списка, а не из локального
+                        флага: тот был заведён и не заполнен ни у одной колонки,
+                        то есть защищал ровно ничего. */}
+                    {(canFilter(column.key) || column.sort !== undefined) && (
                       <button
                         type="button"
                         className="th__menu"
@@ -420,6 +474,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
           column={picking}
           at={pickAt}
           chosen={query.columns[picking]}
+          filterable={canFilter(picking)}
           sortable={WHEEL_COLUMNS.find((c) => c.key === picking)?.sort}
           sort={query.sort}
           desc={query.desc}
@@ -471,7 +526,10 @@ function SetForm({
 }) {
   const [kind, setKind] = useState<'TYRE' | 'DISC' | 'ASSEMBLY'>('TYRE');
   const [quantity, setQuantity] = useState('4');
-  const [warehouseId, setWarehouseId] = useState(String(warehouses[0]?.id ?? ''));
+  // Склад не подставляется: комплект из четырёх колёс, заведённый не туда,
+  // ищут потом глазами по всем стеллажам. Какой склад — знает тот,
+  // кто их принёс.
+  const [warehouseId, setWarehouseId] = useState('');
   const [busy, setBusy] = useState(false);
   const [field, setField] = useState<Record<string, string>>({});
 
@@ -553,6 +611,7 @@ function SetForm({
         <label className="field">
           Склад
           <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
+            <option value="">— выберите склад —</option>
             {warehouses.map((warehouse) => (
               <option key={warehouse.id} value={warehouse.id}>
                 {warehouse.name}
@@ -680,7 +739,7 @@ function SetForm({
         <Field name="price" label="Цена, ₽" hint="3500" set={set} field={field} />
       </div>
 
-      <button type="button" disabled={busy} onClick={() => void submit()}>
+      <button type="button" disabled={busy || warehouseId === ''} onClick={() => void submit()}>
         Завести
       </button>
     </div>

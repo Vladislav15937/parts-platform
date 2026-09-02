@@ -7,12 +7,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.catalog.PartName;
 import ru.partsflow.catalog.PartNameService;
+import ru.partsflow.catalog.VehicleWords;
 import ru.partsflow.platform.outbox.DomainEvent;
 import ru.partsflow.platform.outbox.DomainEventPublisher;
 import ru.partsflow.platform.outbox.EventPayloads;
 import ru.partsflow.platform.outbox.contract.PartEvent;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -37,14 +39,17 @@ public class PartService {
     private final PartNameService partNames;
     private final PartChangeLog partChanges;
     private final JdbcTemplate jdbc;
+    private final VehicleWords vehicleWords;
 
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
-                       PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc) {
+                       PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc,
+                       VehicleWords vehicleWords) {
         this.partRepository = partRepository;
         this.eventPublisher = eventPublisher;
         this.partNames = partNames;
         this.partChanges = partChanges;
         this.jdbc = jdbc;
+        this.vehicleWords = vehicleWords;
     }
 
     /**
@@ -268,7 +273,13 @@ public class PartService {
         part.setManufacturer(update.manufacturer());
         part.setColor(update.color());
         part.setSection(update.section());
-        part.setBarcode(update.barcode());
+        requireFreeBarcode(partId, update.barcode());
+        // Пустое — это «штрихкода нет», то есть NULL, а не пустая строка.
+        // Пустых строк в уникальном индексе может быть только одна: сняв
+        // штрихкод с одной позиции, владелец на второй получал «Операция
+        // нарушает целостность данных» — при том что ничего не задвоил.
+        // NULL же в Postgres друг с другом не сталкиваются.
+        part.setBarcode(blankToNull(update.barcode()));
         part.setWeightKg(update.weightKg());
         part.setDimensionsMm(update.lengthMm(), update.widthMm(), update.heightMm());
         part.setPackageDimensionsMm(update.packageLengthMm(), update.packageWidthMm(),
@@ -400,6 +411,32 @@ public class PartService {
             "description", "note", "textBlock", "marking", "manufacturer", "color",
             "section", "published");
 
+    /**
+     * Штрихкод не должен стоять у двух позиций сразу.
+     *
+     * <p>Уникальность стережёт индекс, а проверка нужна ради текста: владелец
+     * вводит штрихкод с этикетки, и «Операция нарушает целостность данных»
+     * не говорит ни что случилось, ни у какой позиции этот код уже стоит.
+     * Позиция называется публичным кодом, а не номером в базе: по нему её
+     * можно найти на витрине, по внутреннему номеру — нельзя.
+     */
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.strip();
+    }
+
+    private void requireFreeBarcode(Long partId, String barcode) {
+        if (barcode == null || barcode.isBlank()) {
+            return;
+        }
+        List<String> taken = jdbc.queryForList(
+                "SELECT public_code FROM part WHERE barcode = ? AND id <> ?",
+                String.class, barcode.strip(), partId);
+        if (!taken.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Штрихкод «%s» уже стоит у позиции %s".formatted(barcode.strip(), taken.get(0)));
+        }
+    }
+
     private static BigDecimal decimal(Object value) {
         if (value == null || String.valueOf(value).isBlank()) {
             return null;
@@ -464,9 +501,133 @@ public class PartService {
      * и три числа, а поднимать ради этого агрегат детали с фотографиями
      * и OEM-номерами незачем.
      */
+    /*
+     * Ищется тем же способом, что и витрина: подстрокой и по морфологии.
+     *
+     * Морфология одна не годится числам. Покупатель называет номер куском
+     * («1150-33»), а продавец читает с этикетки на детали код товара —
+     * и пока условие было только полнотекстовым, «140125» находило
+     * у владельца три позиции и ни одной у продавца, а код товара
+     * «7584A8FEAE3D» — одну у владельца и ноль у продавца. То есть деталь
+     * лежала на полке, её номер был напечатан на ней же, и продавец
+     * отвечал «нет такого».
+     *
+     * Кросс-номера тем более: по ним и звонят, когда своего номера нет.
+     * Их поиск не видел вовсе — part_oem в запросе не участвовал.
+     *
+     * Ровно эта же расходимость уже была починена с другой стороны, когда
+     * витрина искала только подстрокой: два поиска по одному складу
+     * отвечают по-разному, и неправ тот, о ком не спрашивали.
+     *
+     * UNION, а не OR, и по той же причине, что на витрине: с OR планировщик
+     * уходит в полный перебор. Триграммные индексы на public_code
+     * и raw_number уже стоят (tenant/055) — они заводились для витрины.
+     */
+    /**
+     * Условие поиска продавца — одно на выдачу и на счёт.
+     *
+     * <p>Разойдись они, и «показаны 50 из 741» называло бы число, посчитанное
+     * не тем условием, которым собран список: продавец сузил бы запрос
+     * по неверной подсказке. Та же причина, по которой отбор один у страницы
+     * витрины, её выгрузки и правки списком.
+     */
+    private static final String STOCK_SEARCH_MATCH = """
+                 WHERE p.id IN (
+                         SELECT id FROM part WHERE public_code ILIKE ?
+                          UNION SELECT id FROM part WHERE title ILIKE ?
+                          UNION SELECT id FROM part
+                                 WHERE to_tsvector('russian', coalesce(title, '') || ' '
+                                           || coalesce(description, '') || ' '
+                                           || coalesce(marking, ''))
+                                       @@ plainto_tsquery('russian', ?)
+                          UNION SELECT part_id FROM part_oem WHERE raw_number ILIKE ?%s)""";
+
+    /**
+     * Условие поиска и его аргументы — вместе, чтобы выдача и счёт брали одно.
+     *
+     * <p><b>Размер колеса разбирается и здесь, а не только на вкладке
+     * «Шины и диски».</b> Покупатель звонит и называет размер словами —
+     * «двести двадцать пять пятьдесят пять на восемнадцать», — продавец
+     * набирает «225 55 18», а в заголовке стоит «225/55 R18»: по буквам это
+     * не совпадает ни с чем. Замерено на живом складе: вкладка колёс отдавала
+     * по такому запросу 22 позиции, поиск продавца — ноль. Двадцать два
+     * колеса лежат на складе, а продавец отвечает «нет такого», и проверить
+     * его некому.
+     *
+     * <p>Та же болезнь, что дважды чинилась раньше: витрина искала подстрокой
+     * там, где продавец искал морфологией, и наоборот. Правило общее — два
+     * поиска по одному складу обязаны находить одно и то же, а неправ всегда
+     * тот, о ком не спрашивали.
+     *
+     * <p>Разобранный размер идёт отдельной веткой `UNION` по полям
+     * {@code part_wheel}, а нераспознанный остаток ищется словами, как
+     * и прежде: «Bridgestone зимняя» так и остаётся текстом.
+     */
+    private Match matchFor(String query) {
+        String text = vehicleWords.translate(query);
+        WheelSizeQuery size = WheelSizeQuery.parse(text);
+
+        StringBuilder wheels = new StringBuilder();
+        List<Object> wheelArgs = new ArrayList<>();
+        appendSize(wheels, wheelArgs, "tyre_width", size.tyreWidth());
+        appendSize(wheels, wheelArgs, "tyre_height", size.tyreHeight());
+        appendSize(wheels, wheelArgs, "diameter", size.diameter());
+        appendSize(wheels, wheelArgs, "disc_width", size.discWidth());
+        appendSize(wheels, wheelArgs, "offset_mm", size.offsetMm());
+        if (size.boltPattern() != null) {
+            wheels.append(" AND bolt_pattern ILIKE ?");
+            wheelArgs.add(size.boltPattern());
+        }
+
+        if (!wheels.isEmpty()) {
+            // Размер распознан — значит спрашивают колесо, и отбор идёт
+            // пересечением, как на вкладке «Шины и диски»: размер И слова.
+            // Через UNION с текстовыми ветками «данлоп 225 55 18» вернул бы
+            // ещё и все Dunlop других размеров — семнадцать позиций там, где
+            // владелец видит четыре. Два ответа на один вопрос, и продавец
+            // предложил бы покупателю не тот размер.
+            if (size.text() != null) {
+                wheels.append(" AND part_id IN (SELECT id FROM part WHERE title ILIKE ?)");
+                wheelArgs.add("%" + size.text().strip() + "%");
+            }
+            return new Match(" WHERE p.id IN (SELECT part_id FROM part_wheel WHERE true"
+                    + wheels + ")", wheelArgs, size.text() == null ? "" : size.text());
+        }
+
+        String like = "%" + text.strip() + "%";
+        return new Match(STOCK_SEARCH_MATCH.formatted(""),
+                new ArrayList<>(List.of(like, like, text, like)), text);
+    }
+
+    private static void appendSize(StringBuilder where, List<Object> args,
+                                   String column, Object value) {
+        if (value != null) {
+            where.append(" AND ").append(column).append(" = ?");
+            args.add(value);
+        }
+    }
+
+    /**
+     * @param sql  условие отбора со своими ветками
+     * @param args его параметры по порядку
+     * @param rankText текст для ранжирования выдачи; отдельно от параметров,
+     *                 потому что при отборе по размеру их порядок другой —
+     *                 брать «третий по счёту» значило бы однажды подставить
+     *                 в {@code plainto_tsquery} ширину шины
+     */
+    private record Match(String sql, List<Object> args, String rankText) {
+    }
+
     @Transactional(readOnly = true)
-    public List<StockRow> searchAvailable(String query, int limit) {
-        return jdbc.query("""
+    public StockSearch searchAvailable(String query, int limit) {
+        // «фара камри» приводится к «фара Camry», «225 55 18» — к размеру
+        // по полям: покупатель звонит и говорит по-русски и словами.
+        Match match = matchFor(query);
+        List<Object> args = new ArrayList<>(match.args());
+        // Ранжирование берёт тот же текст, что и поиск по словам.
+        args.add(match.rankText());
+        args.add(limit);
+        List<StockRow> rows = jdbc.query("""
                 SELECT p.id, p.public_code, p.title, p.price, p.status,
                        w.id AS warehouse_id, w.name AS warehouse_name,
                        c.code AS cell_code,
@@ -475,10 +636,7 @@ public class PartService {
                   JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
                   JOIN warehouse w ON w.id = s.warehouse_id
                   LEFT JOIN storage_cell c ON c.id = s.cell_id
-                 WHERE to_tsvector('russian', coalesce(p.title, '') || ' '
-                           || coalesce(p.description, '') || ' '
-                           || coalesce(p.marking, ''))
-                       @@ plainto_tsquery('russian', ?)
+                """ + match.sql() + """
                  ORDER BY (s.qty - s.qty_reserved > 0) DESC,
                           ts_rank(to_tsvector('russian', coalesce(p.title, '') || ' '
                               || coalesce(p.description, '') || ' '
@@ -498,7 +656,40 @@ public class PartService {
                         rs.getBigDecimal("qty"),
                         rs.getBigDecimal("qty_reserved"),
                         rs.getBigDecimal("qty_available")),
-                query, query, limit);
+                // Ветки UNION, потом ранжирование, потом предел.
+                args.toArray());
+
+        // Сколько нашлось всего — тем же условием. Список обрезан
+        // на полусотне, и молча этого делать нельзя: продавец видел
+        // пятьдесят строк из семисот сорока одной и не знал об этом ничего.
+        // Ответить покупателю «нет такого», глядя на обрезанный список, —
+        // то же самое, что ответить так на пустой, только тут продавец
+        // ещё и уверен, что посмотрел всё.
+        //
+        // Счёт стоит десять миллисекунд на складе в 35 841 позицию —
+        // замерено. Когда список короче предела, он и есть всё найденное,
+        // и лишний запрос был бы платой ни за что.
+        long total = rows.size() < limit ? rows.size() : countAvailable(match);
+        return new StockSearch(rows, total);
+    }
+
+    private long countAvailable(Match match) {
+        Long found = jdbc.queryForObject("""
+                SELECT count(*)
+                  FROM part p
+                  JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
+                """ + match.sql(),
+                Long.class, match.args().toArray());
+        return found == null ? 0 : found;
+    }
+
+    /**
+     * Выдача продавцу вместе с общим числом найденного.
+     *
+     * @param total сколько нашлось всего; больше длины {@code rows} — список
+     *              обрезан, и экран обязан об этом сказать
+     */
+    public record StockSearch(List<StockRow> rows, long total) {
     }
 
     /** Строка выдачи продавцу: деталь на конкретном складе. */
@@ -535,7 +726,7 @@ public class PartService {
 
     @Transactional(readOnly = true)
     public List<Part> search(String query, int limit) {
-        return partRepository.search(query, limit);
+        return partRepository.search(vehicleWords.translate(query), limit);
     }
 
     @Transactional(readOnly = true)

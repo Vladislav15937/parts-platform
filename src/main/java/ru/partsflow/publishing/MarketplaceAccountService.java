@@ -29,9 +29,22 @@ public class MarketplaceAccountService {
     private final JdbcTemplate jdbc;
     private final SecretCipher cipher;
 
-    public MarketplaceAccountService(JdbcTemplate jdbc, SecretCipher cipher) {
+    /*
+     * Отбор по колонкам собирают сами экраны склада: у запчастей свой белый
+     * список колонок и выражений, у колёс свой. Повторить их здесь значило бы
+     * завести вторую правду об одном и том же — и получить колонку, которую
+     * таблица показывает, а выгрузка не отбирает.
+     */
+    private final ru.partsflow.inventory.CatalogService parts;
+    private final ru.partsflow.inventory.WheelService wheels;
+
+    public MarketplaceAccountService(JdbcTemplate jdbc, SecretCipher cipher,
+                                     ru.partsflow.inventory.CatalogService parts,
+                                     ru.partsflow.inventory.WheelService wheels) {
         this.jdbc = jdbc;
         this.cipher = cipher;
+        this.parts = parts;
+        this.wheels = wheels;
     }
 
     @Transactional(readOnly = true)
@@ -42,7 +55,9 @@ public class MarketplaceAccountService {
                        credentials, feed_token IS NOT NULL AS has_feed,
                        product_line,
                        price_from, price_to, conditions, warehouse_ids,
-                       kind_ids, kinds_excluded, brand_ids, brands_excluded
+                       kind_ids, kinds_excluded, brand_ids, brands_excluded,
+                       filter_columns::text AS filter_columns,
+                       filter_words::text AS filter_words
                   FROM marketplace_account
                  ORDER BY marketplace, title""",
                 (rs, i) -> new Account(
@@ -65,7 +80,44 @@ public class MarketplaceAccountService {
                         longList(rs.getArray("kind_ids")),
                         rs.getBoolean("kinds_excluded"),
                         longList(rs.getArray("brand_ids")),
-                        rs.getBoolean("brands_excluded")));
+                        rs.getBoolean("brands_excluded"),
+                        map(rs.getString("filter_columns")),
+                        map(rs.getString("filter_words"))));
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * Карта «колонка → значение» из jsonb.
+     *
+     * <p>Читается текстом и разбирается Jackson'ом, а не собирается руками:
+     * {@code jsonb} возвращает не тот текст, который в него записали, —
+     * свой порядок ключей и свои пробелы. На этом уже спотыкался список
+     * пропущенных строк импорта.
+     */
+    private static java.util.Map<String, String> map(String json) {
+        if (json == null || json.isBlank()) {
+            return java.util.Map.of();
+        }
+        try {
+            return JSON.readValue(json,
+                    new com.fasterxml.jackson.core.type.TypeReference<
+                            java.util.LinkedHashMap<String, String>>() { });
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("Отбор выгрузки не читается: " + json, e);
+        }
+    }
+
+    private static String json(java.util.Map<String, String> values) {
+        if (values == null || values.isEmpty()) {
+            return "{}";
+        }
+        try {
+            return JSON.writeValueAsString(values);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalArgumentException("Отбор выгрузки не записывается", e);
+        }
     }
 
     private static List<String> textList(java.sql.Array array) throws SQLException {
@@ -93,16 +145,29 @@ public class MarketplaceAccountService {
                              java.math.BigDecimal priceTo,
                              List<String> conditions, List<Long> warehouseIds,
                              List<Long> kindIds, boolean kindsExcluded,
-                             List<Long> brandIds, boolean brandsExcluded) {
+                             List<Long> brandIds, boolean brandsExcluded,
+                             java.util.Map<String, String> columns,
+                             java.util.Map<String, String> words) {
         if (priceFrom != null && priceTo != null && priceFrom.compareTo(priceTo) > 0) {
             throw new IllegalArgumentException("Нижняя граница цены больше верхней");
         }
+        /*
+         * Колонка проверяется той линией товара, которой торгует выгрузка.
+         *
+         * У колеса нет стороны, у запчасти нет сезона, и списки колонок
+         * у них разные. Принятое молча чужое условие ломается не здесь,
+         * а при заборе прайса — и до появления проверки площадка получала
+         * пустой файл, то есть команду снять все объявления. Владелец при
+         * этом видел сохранённый отбор и ничего подозрительного.
+         */
+        checkColumns(productLineOf(id), columns, words);
         int updated = jdbc.update("""
                 UPDATE marketplace_account
                    SET price_from = ?, price_to = ?,
                        conditions = ?::text[], warehouse_ids = ?::bigint[],
                        kind_ids = ?::bigint[], kinds_excluded = ?,
-                       brand_ids = ?::bigint[], brands_excluded = ?
+                       brand_ids = ?::bigint[], brands_excluded = ?,
+                       filter_columns = ?::jsonb, filter_words = ?::jsonb
                  WHERE id = ?""",
                 priceFrom, priceTo,
                 conditions == null || conditions.isEmpty() ? null : arrayLiteral(conditions),
@@ -111,11 +176,34 @@ public class MarketplaceAccountService {
                 kindsExcluded,
                 brandIds == null || brandIds.isEmpty() ? null : arrayLiteral(brandIds),
                 brandsExcluded,
+                json(columns), json(words),
                 id);
         if (updated == 0) {
             throw new IllegalArgumentException("Выгрузка не найдена: " + id);
         }
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
+    }
+
+    /**
+     * Проверяет имена колонок белым списком той линии, которой торгует
+     * выгрузка, — тем же, каким потом собирается прайс.
+     */
+    private void checkColumns(String productLine, java.util.Map<String, String> columns,
+                              java.util.Map<String, String> words) {
+        if ("WHEEL".equals(line(productLine))) {
+            wheels.columnFilter(columns, words);
+        } else {
+            parts.columnFilter(columns, words);
+        }
+    }
+
+    private String productLineOf(Long id) {
+        List<String> found = jdbc.queryForList(
+                "SELECT product_line FROM marketplace_account WHERE id = ?", String.class, id);
+        if (found.isEmpty()) {
+            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+        }
+        return found.get(0);
     }
 
     private static String arrayLiteral(List<?> values) {
@@ -147,6 +235,22 @@ public class MarketplaceAccountService {
             throw new IllegalArgumentException("Выгрузка бывает по запчастям или по колёсам: "
                     + productLine);
         }
+        // Название уникально в пределах площадки, и стережёт это индекс.
+        // Но у владельца прайс-листов на Дром пять («новые», «низкая»,
+        // «средняя»…), названия он придумывает сам и рано или поздно
+        // повторится — а ответ «Операция нарушает целостность данных»
+        // не говорит ни что случилось, ни что делать. Проверка ради текста,
+        // сторожем остаётся индекс.
+        Integer taken = jdbc.queryForObject("""
+                SELECT count(*) FROM marketplace_account
+                 WHERE marketplace = ? AND title = ?""",
+                Integer.class, marketplace, title.strip());
+        if (taken != null && taken > 0) {
+            throw new IllegalArgumentException(
+                    "Выгрузка «%s» на этой площадке уже заведена: у названия своя ссылка "
+                            .formatted(title.strip()) + "на прайс, и двух одинаковых быть не может");
+        }
+
         Long id = jdbc.queryForObject("""
                 INSERT INTO marketplace_account (marketplace, title, settings, product_line)
                 VALUES (?, ?, COALESCE(?::jsonb, '{}'::jsonb), ?)
@@ -246,7 +350,9 @@ public class MarketplaceAccountService {
                           String productLine, String lastError, java.math.BigDecimal priceFrom,
                           java.math.BigDecimal priceTo, List<String> conditions,
                           List<Long> warehouseIds, List<Long> kindIds, boolean kindsExcluded,
-                          List<Long> brandIds, boolean brandsExcluded) {
+                          List<Long> brandIds, boolean brandsExcluded,
+                          java.util.Map<String, String> filterColumns,
+                          java.util.Map<String, String> filterWords) {
     }
 
     /**
@@ -259,21 +365,53 @@ public class MarketplaceAccountService {
      * примет молча, и объявления пропадут вместе с просмотрами — а узнают
      * об этом через сутки. Поэтому владелец видит число до сохранения,
      * как и в кабинете Bazon.
+     *
+     * <p><b>Считать надо ту линию товара, которой торгует выгрузка.</b>
+     * Пока счётчик знал только запчасти, у выгрузки колёс он показывал
+     * 35 835 позиций там, где уезжало 60: число, ради которого он заведён,
+     * врало в шестьсот раз и успокаивало вместо того, чтобы предупреждать.
+     * Та же ошибка, что и с колёсами в прайсе запчастей, только с другой
+     * стороны — и та же причина: счётчик отбирает не тем условием,
+     * что генератор.
+     *
+     * <p>Виды деталей и марки при этом остаются в запросе и для колёс,
+     * хотя генератор колёс их не применяет: экран их для колёсной выгрузки
+     * и не показывает, а молча менять смысл параметра хуже, чем его
+     * не прислать.
      */
     @Transactional(readOnly = true)
     public long countMatching(java.math.BigDecimal priceFrom, java.math.BigDecimal priceTo,
                               List<String> conditions, List<Long> warehouseIds,
                               List<Long> kindIds, boolean kindsExcluded,
-                              List<Long> brandIds, boolean brandsExcluded) {
+                              List<Long> brandIds, boolean brandsExcluded,
+                              String productLine,
+                              java.util.Map<String, String> columns,
+                              java.util.Map<String, String> words) {
+        // Колонки отбираются тем же выражением, каким показаны на экране —
+        // и у каждой линии товара своим: у колеса нет вида детали, у запчасти
+        // нет сезона.
+        String columnsSql = "WHEEL".equals(line(productLine))
+                ? wheels.columnFilter(columns, words)
+                        .map(f -> " AND " + f.sql()).orElse("")
+                : parts.columnFilter(columns, words)
+                        .map(f -> " AND " + f.sql()).orElse("");
+        List<Object> columnArgs = "WHEEL".equals(line(productLine))
+                ? wheels.columnFilter(columns, words)
+                        .map(ru.partsflow.inventory.WheelService.ColumnFilter::args)
+                        .orElseGet(List::of)
+                : parts.columnFilter(columns, words)
+                        .map(ru.partsflow.inventory.CatalogService.ColumnFilter::args)
+                        .orElseGet(List::of);
+
+        List<Object> args = new java.util.ArrayList<>(List.of());
         Long found = jdbc.queryForObject("""
                 SELECT count(*) FROM part p
                   LEFT JOIN donor d ON d.id = p.donor_id
                  WHERE p.is_published
-                   -- Колёса из прайса запчастей исключает генератор, и счётчик
-                   -- обязан исключать их тем же условием. Пока он их считал,
-                   -- он обещал вдвое больше, чем уезжало, — то есть врал ровно
-                   -- в ту сторону, ради которой заведён: успокаивал числом.
-                   AND p.product_line = 'PART'
+                   -- Тем же условием, что и генератор: у каждой линии товара
+                   -- свой прайс, и колесо в прайсе запчастей — чужая категория,
+                   -- из которой объявление снимут.
+                   AND p.product_line = ?::text
                    AND p.status IN ('IN_STOCK', 'SOLD')
                    -- Тем же условием, что и генератор: нулевая цена в прайс
                    -- не идёт, потому что «0 ₽» в объявлении — обещание отдать
@@ -289,17 +427,45 @@ public class MarketplaceAccountService {
                         CASE WHEN ?::boolean
                              THEN COALESCE(p.part_kind_id <> ALL (?::bigint[]), true)
                              ELSE p.part_kind_id = ANY (?::bigint[]) END)
+                   -- Марка берётся и из применимости — тем же условием,
+                   -- что и генератор. У контрактной детали донора нет,
+                   -- а марка есть, и прайс её публикует: пока отбор смотрел
+                   -- только на донора, счётчик обещал 12 537 позиций там,
+                   -- где витрина по той же марке показывала 16 529.
                    AND (?::bigint[] IS NULL OR
                         CASE WHEN ?::boolean
                              THEN COALESCE(d.brand_id <> ALL (?::bigint[]), true)
-                             ELSE d.brand_id = ANY (?::bigint[]) END)""",
+                                  AND NOT EXISTS (SELECT 1 FROM part_applicability pa
+                                                   WHERE pa.part_id = p.id
+                                                     AND pa.brand_id = ANY (?::bigint[]))
+                             ELSE (d.brand_id = ANY (?::bigint[])
+                                   OR EXISTS (SELECT 1 FROM part_applicability pa
+                                               WHERE pa.part_id = p.id
+                                                 AND pa.brand_id = ANY (?::bigint[]))) END)"""
+                + columnsSql,
                 Long.class,
+                argsOf(args, columnArgs,
+                line(productLine),
                 priceFrom, priceFrom, priceTo, priceTo,
                 text(conditions), text(conditions),
                 longs(warehouseIds), longs(warehouseIds),
                 longs(kindIds), kindsExcluded, longs(kindIds), longs(kindIds),
-                longs(brandIds), brandsExcluded, longs(brandIds), longs(brandIds));
+                longs(brandIds), brandsExcluded,
+                longs(brandIds), longs(brandIds), longs(brandIds), longs(brandIds)));
         return found == null ? 0 : found;
+    }
+
+    /** Условия колонок идут последними, чтобы не сдвигать номера параметров. */
+    private static Object[] argsOf(List<Object> buffer, List<Object> columnArgs,
+                                   Object... head) {
+        buffer.addAll(java.util.Arrays.asList(head));
+        buffer.addAll(columnArgs);
+        return buffer.toArray();
+    }
+
+    /** Пусто — запчасти: так выгрузка вела себя до появления колёс. */
+    private static String line(String productLine) {
+        return productLine == null || productLine.isBlank() ? "PART" : productLine.strip();
     }
 
     private static String text(List<String> values) {

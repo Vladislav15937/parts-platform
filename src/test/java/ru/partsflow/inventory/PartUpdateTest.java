@@ -113,6 +113,107 @@ class PartUpdateTest extends PostgresTestBase {
     }
 
     /**
+     * Занятый штрихкод объясняется словами, а не отказом базы.
+     *
+     * <p>Уникальность стережёт {@code part_barcode_uk}, и это верно: один код
+     * у двух позиций означает, что сканер на складе приводит не к той детали.
+     * Но владелец вводит штрихкод с этикетки, и «Операция нарушает целостность
+     * данных» не говорит ни что случилось, ни у какой позиции этот код уже
+     * стоит — а именно её и надо найти, чтобы понять, кто из двух прав.
+     */
+    @Test
+    @DisplayName("Занятый штрихкод называет позицию, а не отвечает про целостность")
+    void takenBarcodeIsExplained() throws Exception {
+        MockHttpSession session = login("vladelec");
+        String code = inTenant(() -> jdbc.queryForObject(
+                "SELECT public_code FROM part WHERE id = ?", String.class, partId));
+        Long other = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price) VALUES (1, 'Бампер', 1000)
+                RETURNING id""", Long.class));
+
+        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"price\":4500,\"barcode\":\"ШК-1\",\"published\":true}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(put("/api/parts/" + other).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"price\":1000,\"barcode\":\"ШК-1\",\"published\":true}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString(code)));
+    }
+
+    /**
+     * «Выгружать» правят три пути, и роль у них одна.
+     *
+     * <p>Отметка есть в карточке, в правке списком и отдельным запросом
+     * списком номеров. Первые два были владельцу и менеджеру, третий —
+     * ещё и продавцу: то есть снять с площадки хоть весь склад он мог,
+     * а тронуть одну позицию через форму — нет. Снятое объявление уносит
+     * накопленные просмотры, а заметно это через дни по пустому прайсу.
+     *
+     * <p>Проверяются оба пути сразу: разойдясь снова, они дадут ровно ту же
+     * дыру, и увидеть её можно только сравнением.
+     */
+    @Test
+    @DisplayName("Продавец не снимает позиции с выгрузки ни одним из путей")
+    void publicationIsOwnerWork() throws Exception {
+        MockHttpSession seller = login("prodavec");
+
+        mvc.perform(post("/api/parts/publication").with(csrf()).session(seller)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"partIds\":[%d],\"published\":false}".formatted(partId)))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(post("/api/parts/catalog/bulk").with(csrf()).session(seller)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"changes\":{\"published\":false}}"))
+                .andExpect(status().isForbidden());
+
+        assertThat(publishedOf(partId)).as("позиция снята с выгрузки продавцом").isTrue();
+
+        // Владельцу — можно, иначе проверка запрещает саму работу.
+        mvc.perform(post("/api/parts/publication").with(csrf()).session(login("vladelec"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"partIds\":[%d],\"published\":false}".formatted(partId)))
+                .andExpect(status().isOk());
+        assertThat(publishedOf(partId)).isFalse();
+    }
+
+    /**
+     * Снятый штрихкод — это NULL, а не пустая строка.
+     *
+     * <p>Пустых строк в уникальном индексе может быть только одна: сняв
+     * штрихкод с одной позиции, владелец на второй получал «Операция нарушает
+     * целостность данных» — при том что ничего не задвоил и вообще стирал.
+     * NULL же друг с другом не сталкиваются. Та же природа, что у нулевой
+     * цены установки: пусто означает «не заполнено», а не значение.
+     */
+    @Test
+    @DisplayName("Штрихкод можно снять с двух позиций подряд")
+    void clearedBarcodesDoNotCollide() throws Exception {
+        MockHttpSession session = login("vladelec");
+        Long other = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price) VALUES (1, 'Крыло', 2000)
+                RETURNING id""", Long.class));
+
+        for (Long id : java.util.List.of(partId, other)) {
+            mvc.perform(put("/api/parts/" + id).with(csrf()).session(session)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"price\":2000,\"barcode\":\"\",\"published\":true}"))
+                    .andExpect(status().isOk());
+        }
+
+        // Счёт по своим двум позициям: соседние тесты штрихкоды оставляют,
+        // а фикстура позиции между тестами не чистит.
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part WHERE barcode IS NOT NULL AND id IN (?, ?)",
+                Integer.class, partId, other)))
+                .as("снятый штрихкод остался пустой строкой").isZero();
+    }
+
+    /**
      * Отметка о смене цены обязана означать «цену меняли»: иначе по ней нельзя
      * искать подешевевшее, а площадка получает дельту на правку заметки.
      */

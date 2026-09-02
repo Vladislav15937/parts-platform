@@ -67,7 +67,12 @@ export function ReferencePanel() {
           Поставки: <strong>{reference.supplies.length}</strong>
         </li>
         <li>
-          Машины в разборе: <strong>{reference.donors.length}</strong>
+          {/* Не «в разборе»: в справочник приёмки идут и разобранные —
+              вернуться за забытой мелочью через неделю обычное дело.
+              У переехавшего клиента разобраны 440 машин из 441, и подпись
+              «Машины в разборе: 441» была прямой неправдой. Та же
+              формулировка правилась на экране машин. */}
+          Машины для приёмки: <strong>{reference.donors.length}</strong>
         </li>
         <li>
           Наименования: <strong>{reference.partNames.length}</strong>

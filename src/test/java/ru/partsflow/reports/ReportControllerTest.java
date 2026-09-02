@@ -296,7 +296,11 @@ class ReportControllerTest extends PostgresTestBase {
                         .value(org.hamcrest.Matchers.contains(3000.00)))
                 // Сверка едет вместе с итогом: число обязательств без ответа
                 // «сходится ли» — спокойствие без основания.
-                .andExpect(jsonPath("$.totals.problems.length()").value(0));
+                .andExpect(jsonPath("$.totals.problems.length()").value(0))
+                // Общее число клиентов: список обрезан пределом, и без него
+                // экран не может сказать, что показывает не всех.
+                .andExpect(jsonPath("$.totals.customers").value(
+                        org.hamcrest.Matchers.greaterThanOrEqualTo(1)));
     }
 
     /**

@@ -129,7 +129,12 @@ class PublicationReachTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        return body.replaceAll("^\\{\"path\":\"(.*)\"\\}$", "$1");
+        // Разбором поля, а не «всё между кавычками»: рядом с путём едет
+        // полный адрес, и наивное выдирание захватывало его вместе
+        // с закрывающей скобкой.
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"path\":\"([^\"]*)\"").matcher(body);
+        return m.find() ? m.group(1) : null;
     }
 
     private String currentSchema(MockHttpSession session) throws Exception {

@@ -62,6 +62,12 @@ interface Props {
 export function SellerScreen({ canSell, role }: Props) {
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState<StockRow[]>([]);
+  /**
+   * Сколько нашлось всего. Больше показанного — список обрезан, и сказать
+   * об этом обязательно: продавец, глядя на полсотни строк из семисот,
+   * отвечает покупателю «нет такого» с уверенностью, что посмотрел всё.
+   */
+  const [found, setFound] = useState(0);
   const [searching, setSearching] = useState(false);
   const [lines, setLines] = useState<BasketLine[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -140,9 +146,22 @@ export function SellerScreen({ canSell, role }: Props) {
             // Корзина от прежнего разговора к чужой сделке отношения не имеет.
             setLines([]);
             setRows([]);
+            setFound(0);
           }}
           onError={setError}
         />
+      )}
+
+      {/* Подпись про обрезку не появляется без самого списка: она о том,
+          что видно не всё, а когда не видно ничего, она превращается
+          в «Показаны первые 0 из 17». Поймано живым прогоном — после
+          оформления сделки список убирают, потому что остаток изменился
+          и показанное уже врёт. */}
+      {rows.length > 0 && found > rows.length && (
+        <p className="note">
+          Показаны первые {rows.length} из {found} — уточните запрос,
+          иначе нужная деталь может остаться за списком.
+        </p>
       )}
 
       {rows.length > 0 && (
@@ -271,7 +290,14 @@ export function SellerScreen({ canSell, role }: Props) {
 
           <button
             type="button"
-            disabled={customer === null || !canSell
+            /* Клиент обязателен обычной продаже — она ведётся с человеком,
+               который стоит у прилавка. У заказа с площадки клиента нет:
+               покупателя она не называет, и назначить его задним числом
+               нечем. Пока клиент требовался и здесь, принять заказ с экрана
+               было нельзя вовсе — продавец заводил фиктивного, чтобы кнопка
+               ожила, и в справочнике клиентов появлялся «Дром». */
+            disabled={!canSell
+              || (marketplace === '' && customer === null)
               || (marketplace !== '' && orderNo.trim() === '')}
             onClick={() => void submit()}
           >
@@ -296,9 +322,12 @@ export function SellerScreen({ canSell, role }: Props) {
     setSearching(true);
     setError(null);
     try {
-      setRows(await searchStock(query.trim()));
+      const result = await searchStock(query.trim());
+      setRows(result.rows);
+      setFound(result.total);
     } catch (cause) {
       setRows([]);
+      setFound(0);
       setError(describe(cause, 'Не удалось выполнить поиск'));
     } finally {
       setSearching(false);
@@ -318,14 +347,14 @@ export function SellerScreen({ canSell, role }: Props) {
   }
 
   async function submit(): Promise<void> {
-    if (customer === null) {
+    if (customer === null && marketplace === '') {
       return;
     }
     setError(null);
     try {
       if (marketplace !== '') {
         const result = await receiveOrder(
-          marketplace, orderNo.trim(), customer.id, lines, null, note, services,
+          marketplace, orderNo.trim(), customer?.id ?? null, lines, null, note, services,
           sourceId === '' ? null : Number(sourceId));
         setDeal(result.deal);
         if (result.replayed) {
@@ -341,13 +370,14 @@ export function SellerScreen({ canSell, role }: Props) {
         setOrderNo('');
         setNote('');
       } else {
-        setDeal(await createDeal(customer.id, lines, services,
+        setDeal(await createDeal(customer!.id, lines, services,
           sourceId === '' ? null : Number(sourceId)));
       }
       setLines([]);
       setServices(services.map((line) => ({ ...line, price: '' })));
       // Остаток изменился — показанный список уже врёт.
       setRows([]);
+      setFound(0);
     } catch (cause) {
       setError(describe(cause, 'Сделка не оформлена'));
     }
@@ -373,6 +403,12 @@ function StockItem({
   onAdd: () => void;
 }) {
   const reserved = Number(row.qtyReserved);
+  // Сколько этой позиции уже лежит в корзине. Без этого «нет свободных»
+  // появлялось и тогда, когда свободное есть, но всё оно взято в сделку,
+  // — а рядом, в той же строке, написано «свободно 1». На складе б/у
+  // запчастей остаток почти всегда единица, значит противоречие видно
+  // при каждом нажатии.
+  const taken = Number(row.qtyAvailable) - room;
 
   return (
     <li className="stock-row">
@@ -390,7 +426,7 @@ function StockItem({
           {row.price === null ? '—' : `${Number(row.price).toLocaleString('ru-RU')} ₽`}
         </strong>
         <button type="button" disabled={room < 1 || !canSell} onClick={onAdd}>
-          {room < 1 ? 'нет свободных' : 'в сделку'}
+          {room >= 1 ? 'в сделку' : taken > 0 ? 'уже в сделке' : 'нет свободных'}
         </button>
       </div>
     </li>
@@ -776,6 +812,24 @@ function DealCard({
             </div>
           </li>
         ))}
+
+        {/* Услуги — наравне с деталями. Без них сумма строк не сходится
+            с итогом документа: «итого 7 500» под деталями на 7 000, и спор
+            об этом начинается в момент оплаты. Отмечать их галочкой нельзя:
+            услуга не переносится в другую сделку — доставка уже состоялась. */}
+        {deal.services.map((line) => (
+          <li key={`service-${line.id}`} className="stock-row">
+            <span className="stock-info">
+              {line.name ?? `услуга ${line.serviceId}`}
+              <span className="muted"> · {Number(line.quantity)} шт</span>
+            </span>
+            <div className="stock-action">
+              <strong className="stock-price">
+                {Number(line.price).toLocaleString('ru-RU')} ₽
+              </strong>
+            </div>
+          </li>
+        ))}
       </ul>
 
       <div className="row">
@@ -866,9 +920,10 @@ function DealCard({
         <ReturnPanel
           chosen={chosen}
           canSell={canSell}
-          onReturn={(warehouseId, lines, reason) =>
+          onReturn={(warehouseId, lines, reason, refundToAccount) =>
             void act(async () => {
-              const doc = await registerReturn(deal.id, warehouseId, lines, reason);
+              const doc = await registerReturn(deal.id, warehouseId, lines, reason,
+                refundToAccount);
               setPicked([]);
               setNotice(
                 `Возврат №${doc.number ?? doc.id} на `
@@ -1047,11 +1102,13 @@ function ReturnPanel({
 }: {
   chosen: DealItem[];
   canSell: boolean;
-  onReturn: (warehouseId: number, lines: ReturnLine[], reason: string) => void;
+  onReturn: (warehouseId: number, lines: ReturnLine[], reason: string,
+             refundToAccount: boolean) => void;
 }) {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [warehouseId, setWarehouseId] = useState<number | null>(null);
   const [reason, setReason] = useState('');
+  const [toAccount, setToAccount] = useState(false);
   const [broken, setBroken] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
@@ -1114,6 +1171,22 @@ function ReturnPanel({
         Брак — деньги вернуть, в остаток не ставить
       </label>
 
+      {/* Деньги наличными или на счёт. Запись о выдаче создаётся независимо
+          от того, есть ли они в кассе, — а утром её может не быть, и тогда
+          касса к вечеру не сойдётся ровно на сумму возврата. На счёт —
+          это «мы должны», и клиент заберёт их или зачтёт в следующую покупку. */}
+      <label className="pick">
+        <input
+          type="checkbox"
+          checked={toAccount}
+          onChange={(e) => {
+            setToAccount(e.target.checked);
+            setConfirming(false);
+          }}
+        />{' '}
+        Деньги на лицевой счёт, а не из кассы
+      </label>
+
       {confirming ? (
         <div className="row">
           <button type="button" disabled={!ready} onClick={submit}>
@@ -1149,6 +1222,7 @@ function ReturnPanel({
       warehouseId,
       chosen.map((item) => ({ dealItemId: item.id, restocked: !broken })),
       reason.trim(),
+      toAccount,
     );
   }
 }

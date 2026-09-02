@@ -46,6 +46,18 @@ public class MemberService {
     public Member create(String login, String password, String displayName, String role,
                          Long branchId) {
         validate(login, password, role);
+        // Филиал обязан существовать, и сказать об этом надо словами: роль
+        // проверяется белым списком и отбивается внятно, а чужой филиал
+        // доезжал до внешнего ключа и возвращался как «Операция нарушает
+        // целостность данных». Пусто законно: филиал у сотрудника
+        // необязателен.
+        if (branchId != null) {
+            Integer branch = jdbc.queryForObject(
+                    "SELECT count(*) FROM branch WHERE id = ?", Integer.class, branchId);
+            if (branch == null || branch == 0) {
+                throw new IllegalArgumentException("Филиал не найден: " + branchId);
+            }
+        }
 
         try {
             Long id = jdbc.queryForObject("""

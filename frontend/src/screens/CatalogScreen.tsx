@@ -19,6 +19,7 @@ import {
 } from '../inventory/catalog';
 import { PartCard } from './PartCard';
 import { BulkEditForm } from './BulkEditForm';
+import { count, goods } from '../ui/plural';
 import { ColumnMenu } from './ColumnMenu';
 import { VehiclePicker } from './VehiclePicker';
 
@@ -38,6 +39,11 @@ import { VehiclePicker } from './VehiclePicker';
  * не может.
  */
 const SIZE = 50;
+
+/** Название колонки для чипа отбора: ключ ничего не говорит владельцу. */
+function columnTitle(key: string): string {
+  return COLUMNS.find((c) => c.key === key)?.title ?? key;
+}
 
 export function CatalogScreen({ role }: { role: string }) {
   const [page, setPage] = useState<CatalogPage | null>(null);
@@ -76,11 +82,34 @@ export function CatalogScreen({ role }: { role: string }) {
   // открывает карточку — и промах по флажку менял бы не то.
   const [selecting, setSelecting] = useState(false);
   const [chosen, setChosen] = useState<number[]>([]);
+  /**
+   * Выбран весь отбор, а не отмеченные строки.
+   *
+   * <p>Отметить можно только видимое, а видно пятьдесят строк из тридцати
+   * пяти тысяч. После переезда без колонки «Выгружать» включить публикацию
+   * надо всему складу — постранично это семьсот семнадцать заходов, и
+   * до тех пор прайс уезжает пустым.
+   */
+  const [whole, setWhole] = useState(false);
   const [editing, setEditing] = useState(false);
   // Какая колонка сейчас набирается и какая показывает меню: открытых
   // больше одной быть не может — они перекрывают друг друга.
   const [typing, setTyping] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+
+  /*
+   * Отбор предлагается только там, где он есть.
+   *
+   * Список отбираемых колонок приезжает с сервера вместе со страницей:
+   * повторённый здесь, он разошёлся бы с серверным на первой же новой
+   * колонке — и разошёлся бы молча. Пока меню открывалось у любой колонки,
+   * по превью, состоянию и комплектации оно предлагало отбор, которого нет:
+   * сервер отвечал «по этой колонке отбор не делается», отказ проглатывался,
+   * и владелец видел те же тридцать пять тысяч строк.
+   */
+  const canFilter = (key: string | null): boolean =>
+    key !== null && (page?.filterable ?? []).includes(key);
+
   const [menuAt, setMenuAt] = useState<{ left: number; top: number } | null>(null);
 
   function showPhotos(id: number, target: HTMLElement) {
@@ -135,7 +164,7 @@ export function CatalogScreen({ role }: { role: string }) {
       <h2>
         Склад{' '}
         <span className="muted counter">
-          {page === null ? '' : `${page.total.toLocaleString('ru-RU')} товаров`}
+          {page === null ? '' : goods(page.total)}
         </span>
       </h2>
 
@@ -204,6 +233,42 @@ export function CatalogScreen({ role }: { role: string }) {
             {vehicleLabel(query.vehicle)} ✕
           </button>
         )}
+
+        {/* Отборы колонок — здесь, а не только в шапке таблицы. Снимаются они
+            в меню колонки, а при пустой выдаче таблицы нет вовсе: отбор
+            действует, объяснения ему нет нигде, и снять его нечем — остаётся
+            перезагрузить страницу. Та же беда, что со скрытой колонкой
+            «Номер донора»: почему из тридцати пяти тысяч осталось ноль,
+            на экране не написано. */}
+        {Object.entries(query.columns).map(([key, value]) => (
+          <button
+            key={`col-${key}`}
+            type="button"
+            className="crumb"
+            onClick={() => {
+              const columns = { ...query.columns };
+              delete columns[key];
+              change({ columns, page: 0 });
+            }}
+          >
+            {columnTitle(key)}: {value} ✕
+          </button>
+        ))}
+
+        {Object.entries(query.words).map(([key, value]) => (
+          <button
+            key={`word-${key}`}
+            type="button"
+            className="crumb"
+            onClick={() => {
+              const words = { ...query.words };
+              delete words[key];
+              change({ words, page: 0 });
+            }}
+          >
+            {columnTitle(key)}: «{value}» ✕
+          </button>
+        ))}
         <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
           Настроить таблицу
         </button>
@@ -214,6 +279,7 @@ export function CatalogScreen({ role }: { role: string }) {
             onClick={() => {
               setSelecting(!selecting);
               setChosen([]);
+              setWhole(false);
               setEditing(false);
             }}
           >
@@ -242,6 +308,7 @@ export function CatalogScreen({ role }: { role: string }) {
           column={menuFor}
           at={menuAt}
           chosen={query.columns[menuFor]}
+          filterable={canFilter(menuFor)}
           sortable={COLUMNS.find((c) => c.key === menuFor)?.sort}
           sort={query.sort}
           desc={query.desc}
@@ -309,13 +376,27 @@ export function CatalogScreen({ role }: { role: string }) {
       {selecting && !editing && (
         <div className="filter-row">
           <span className="note">
-            {chosen.length === 0 ? 'Отметьте позиции' : `Выбрано ${chosen.length}`}
+            {whole ? `Выбран весь отбор: ${count(page?.total ?? 0)}`
+              : chosen.length === 0 ? 'Отметьте позиции'
+              : `Выбрано ${chosen.length}`}
           </span>
-          <button type="button" disabled={chosen.length === 0} onClick={() => setEditing(true)}>
+          <button type="button" disabled={!whole && chosen.length === 0}
+                  onClick={() => setEditing(true)}>
             Изменить
           </button>
-          <button type="button" className="button--ghost" disabled={chosen.length === 0}
-                  onClick={() => setChosen([])}>
+          {/* Весь отбор — единственный способ тронуть больше страницы.
+              Кнопка стоит рядом с отметками, а не в настройках: нужна она
+              ровно тогда, когда владелец уже понял, что отмечать придётся
+              семьсот страниц. */}
+          {!whole && page !== null && page.total > page.rows.length && (
+            <button type="button" className="button--ghost"
+                    onClick={() => { setWhole(true); setChosen([]); }}>
+              Выбрать весь отбор ({count(page.total)})
+            </button>
+          )}
+          <button type="button" className="button--ghost"
+                  disabled={!whole && chosen.length === 0}
+                  onClick={() => { setChosen([]); setWhole(false); }}>
             Снять выделение
           </button>
         </div>
@@ -324,9 +405,12 @@ export function CatalogScreen({ role }: { role: string }) {
       {editing && (
         <BulkEditForm
           partIds={chosen}
+          whole={whole ? query : undefined}
+          count={whole ? (page?.total ?? 0) : chosen.length}
           onSaved={(changed) => {
             setEditing(false);
             setChosen([]);
+            setWhole(false);
             setNotice(`Изменено позиций: ${changed}`);
             load(query);
           }}
@@ -353,7 +437,9 @@ export function CatalogScreen({ role }: { role: string }) {
       )}
 
       {page === null ? (
-        <p className="note">Загружаем…</p>
+        // Не «Загружаем…» вечно, когда загрузка провалилась: причина
+        // показана выше, и висящее рядом ожидание ей противоречит.
+        error !== '' ? null : <p className="note">Загружаем…</p>
       ) : page.rows.length === 0 ? (
         <p className="note">Ничего не найдено.</p>
       ) : (
@@ -405,12 +491,18 @@ export function CatalogScreen({ role }: { role: string }) {
                     ) : (
                       <span
                         className="th__title"
-                        onClick={() => setTyping(column.key)}
-                        style={{ cursor: 'text' }}
+                        onClick={canFilter(column.key)
+                          ? () => setTyping(column.key)
+                          : undefined}
+                        style={{ cursor: canFilter(column.key) ? 'text' : 'default' }}
                       >
                         {column.title}
                       </span>
                     )}
+                    {/* Стрелка — только если меню есть что предложить:
+                        отбор по этой колонке или сортировку. Пустое меню
+                        обещает действие, которого нет. */}
+                    {(canFilter(column.key) || column.sort !== undefined) && (
                     <button
                       type="button"
                       className="th__menu"
@@ -422,6 +514,7 @@ export function CatalogScreen({ role }: { role: string }) {
                     >
                       {column.sort === query.sort ? (query.desc ? '↓' : '↑') : '▾'}
                     </button>
+                    )}
                     {query.columns[column.key] !== undefined && (
                       <div className="th__value">«{query.columns[column.key]}»</div>
                     )}

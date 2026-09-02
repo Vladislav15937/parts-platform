@@ -216,8 +216,16 @@ class MemberManagementTest extends PostgresTestBase {
 
         // Единственный владелец запер бы компанию, и починить это можно было бы
         // только руками в БД.
+        //
+        // Отказ обязан быть словами, а не пустым 409. Экран показывает кнопку
+        // «Выключить» всем, включая самого вошедшего, и в коде так и написано:
+        // «последнего отобьёт сервер с объяснением». Объяснения не было — тело
+        // ответа пустое, — и владелец видел «Запрос отклонён (409)»: ни что
+        // случилось, ни что делать. Отказ без объяснения читается как поломка,
+        // а это правило.
         mvc.perform(post("/api/members/" + ownerId + "/disable").with(csrf()).session(session))
-                .andExpect(status().isConflict());
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Себя")));
     }
 
 

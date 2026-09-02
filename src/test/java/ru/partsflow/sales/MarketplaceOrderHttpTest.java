@@ -127,6 +127,68 @@ class MarketplaceOrderHttpTest extends PostgresTestBase {
                 .andExpect(jsonPath("$[0].items.length()").value(1));
     }
 
+    /**
+     * Двойное нажатие «Принять заказ» возвращает прежнюю сделку, а не отказ.
+     *
+     * <p>Проверка «нет ли уже такого номера» одновременный повтор не ловит:
+     * между чтением и вставкой второй запрос ещё ничего не видит. Дубля
+     * при этом не появляется — его отбивает {@code deal_external_order_uk}, —
+     * но наружу летело «Операция нарушает целостность данных»: продавец
+     * нажал второй раз, потому что первое нажатие не показало результата,
+     * и получил ответ про поломку сервера на заказ, который уже принят.
+     *
+     * <p>Та же половина защиты, что была у приёмки и у ссылки на снимок:
+     * уникальный индекс спасает данные, а правильный ответ надо дать
+     * отдельно. Последовательный повтор работал правильно с самого начала —
+     * его держит соседний тест.
+     */
+    @Test
+    @DisplayName("Одновременное двойное нажатие отдаёт прежнюю сделку, а не 409")
+    void simultaneousRepeatReturnsTheSameDeal() throws Exception {
+        MockHttpSession session = login();
+        String body = """
+                {"marketplace":"DROM","orderNo":"301-555-77","customerId":%d,
+                 "items":[{"partId":%d,"quantity":1,"warehouseId":%d}]}"""
+                .formatted(customerId, partId, warehouseId);
+
+        java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(2);
+        java.util.List<Integer> statuses =
+                java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        java.util.List<Throwable> failures =
+                java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        Runnable accepting = () -> {
+            try {
+                together.await();
+                statuses.add(mvc.perform(post("/api/deals/orders").with(csrf()).session(session)
+                                .contentType(MediaType.APPLICATION_JSON).content(body))
+                        .andReturn().getResponse().getStatus());
+            } catch (Throwable e) {
+                failures.add(e);
+            }
+        };
+
+        Thread first = new Thread(accepting);
+        Thread second = new Thread(accepting);
+        first.start();
+        second.start();
+        first.join();
+        second.join();
+
+        assertThat(failures).isEmpty();
+        assertThat(statuses)
+                .as("продавцу ответили отказом на заказ, который уже принят")
+                .containsExactlyInAnyOrder(201, 200);
+        // Одна сделка и один резерв: вторая означала бы одну деталь,
+        // обещанную двум покупателям.
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM deal WHERE external_order_no = '301-555-77'",
+                Integer.class))).isEqualTo(1);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT qty_reserved FROM part_stock WHERE part_id = ? AND warehouse_id = ?",
+                java.math.BigDecimal.class, partId, warehouseId)))
+                .isEqualByComparingTo("1");
+    }
+
     @Test
     @DisplayName("Подтверждение убирает заказ из очереди")
     void acceptRemovesFromQueue() throws Exception {
@@ -173,6 +235,44 @@ class MarketplaceOrderHttpTest extends PostgresTestBase {
         mvc.perform(get("/api/deals/%d/history".formatted(dealId)).session(session))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].authorName").isNotEmpty());
+    }
+
+    /**
+     * Экран продавца показывает те же строки, что и ссылка клиенту: услуга
+     * идёт наравне с деталью. Без неё сумма строк не сходится с итогом —
+     * «итого 7 500» под деталями на 7 000, — и спор об этом начинается
+     * в момент оплаты, когда продавец называет одно, а клиент считает другое.
+     *
+     * <p>Строка при этом обязана нести название, а не номер услуги: «услуга 1»
+     * ничего не говорит ни продавцу, ни клиенту. Та же причина, по которой
+     * название несёт и строка запчасти.
+     */
+    @Test
+    @DisplayName("Услуга видна в сделке и названа по имени")
+    void dealShowsServicesByName() throws Exception {
+        MockHttpSession session = login();
+        Long delivery = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM service WHERE name = 'Доставка'", Long.class));
+        long dealId = orderDeal(session, "301-910-77", delivery);
+
+        String body = mvc.perform(get("/api/deals/" + dealId).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.services[0].name").value("Доставка"))
+                .andReturn().getResponse().getContentAsString();
+
+        var view = new com.fasterxml.jackson.databind.ObjectMapper().readTree(body);
+        java.math.BigDecimal linesTotal = java.math.BigDecimal.ZERO;
+        for (var item : view.get("items")) {
+            linesTotal = linesTotal.add(
+                    item.get("price").decimalValue().multiply(item.get("quantity").decimalValue()));
+        }
+        for (var line : view.get("services")) {
+            linesTotal = linesTotal.add(
+                    line.get("price").decimalValue().multiply(line.get("quantity").decimalValue()));
+        }
+        assertThat(linesTotal)
+                .as("сумма строк сделки не сходится с её итогом")
+                .isEqualByComparingTo(view.get("totalAmount").decimalValue());
     }
 
     @Test

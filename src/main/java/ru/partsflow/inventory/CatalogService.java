@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import ru.partsflow.catalog.VehicleWords;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -11,6 +12,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Витрина склада: таблица товаров, как её видит владелец.
@@ -53,6 +55,32 @@ public class CatalogService {
             Map.entry("manufacturer", "p.manufacturer"),
             Map.entry("section", "p.section"));
 
+    /**
+     * Порядок строк с вторичным ключом.
+     *
+     * <p>Без него сортировка по неуникальной колонке — а такие все, кроме
+     * номера товара, — не задаёт полного порядка: строки с одинаковой ценой
+     * база вправе вернуть в любой последовательности, и между запросами
+     * двух соседних страниц эта последовательность меняется. Часть позиций
+     * тогда попадает на обе страницы, ровно столько же не попадает никуда.
+     *
+     * <p>Замерено на живом складе: поиск «фара» отдаёт 744 позиции, и, пройдя
+     * все пятнадцать страниц по сортировке «цена», владелец видит 744 строки,
+     * из которых уникальных только 721. Двадцать три позиции показаны дважды,
+     * двадцать три не показаны вовсе — и узнать об этом по экрану нельзя
+     * никак. Выгрузка идёт тем же порядком, значит и в файле их не будет.
+     *
+     * <p>У вкладки колёс это сделано с самого начала: там {@code ORDER BY}
+     * заканчивается на {@code p.id DESC}.
+     */
+    private static String orderBy(String sort, boolean descending) {
+        String column = SORTS.getOrDefault(sort, "p.id");
+        String direction = descending ? " DESC" : " ASC";
+        return column.equals("p.id")
+                ? column + direction
+                : column + direction + ", p.id" + direction;
+    }
+
     private static final Map<String, String> SIDE_FR =
             Map.of("FRONT", "Перед.", "REAR", "Задн.");
 
@@ -63,9 +91,13 @@ public class CatalogService {
 
     private final PartChangeLog partChanges;
 
-    public CatalogService(JdbcTemplate jdbc, PartChangeLog partChanges) {
+    private final VehicleWords vehicleWords;
+
+    public CatalogService(JdbcTemplate jdbc, PartChangeLog partChanges,
+                          VehicleWords vehicleWords) {
         this.partChanges = partChanges;
         this.jdbc = jdbc;
+        this.vehicleWords = vehicleWords;
     }
 
     /**
@@ -144,6 +176,9 @@ public class CatalogService {
         List<Object> args = new ArrayList<>();
 
         if (query != null && !query.isBlank()) {
+            // «камри» приводится к «Camry» до всего остального: в заголовке
+            // латиница, а владелец ищет то же слово, что и продавец.
+            query = vehicleWords.translate(query);
             // Номер товара, наименование и номер детали — три способа, которыми
             // владелец ищет одно и то же. Спрашивать, что именно он ввёл,
             // значит заставить его выбирать вкладку перед каждым поиском.
@@ -237,6 +272,14 @@ public class CatalogService {
             for (var entry : columns.entrySet()) {
                 String expression = columnExpression(entry.getKey());
                 String value = entry.getValue();
+                // Пустое значение — «условие не задано», а не «равно пустоте»:
+                // отбор по нему не находит ничего, и у выгрузки это пустой
+                // прайс, который площадка примет молча вместе с потерей
+                // объявлений. «Не заполнено» спрашивают отдельным пунктом
+                // («—пусто—»), и он выше по коду.
+                if (value == null || value.isBlank()) {
+                    continue;
+                }
                 if (EMPTY.equals(value)) {
                     where.append(" AND coalesce(").append(expression).append(", '') = ''");
                 } else if (PRESENT.equals(value)) {
@@ -249,6 +292,12 @@ public class CatalogService {
         }
         if (words != null) {
             for (var entry : words.entrySet()) {
+                // Пустое «содержит» — не «подходит любое»: `ILIKE '%%'`
+                // отбрасывает незаполненные, то есть тихо сужает выдачу там,
+                // где владелец ничего не спрашивал.
+                if (entry.getValue() == null || entry.getValue().isBlank()) {
+                    continue;
+                }
                 where.append(" AND ").append(columnExpression(entry.getKey())).append(" ILIKE ?");
                 args.add("%" + entry.getValue().strip() + "%");
             }
@@ -257,9 +306,65 @@ public class CatalogService {
         return new Filter(where, args);
     }
 
+    /**
+     * Отбор колонками как подзапрос — для тех, кто отбирает не витрину.
+     *
+     * <p><b>Зачем наружу.</b> Прайс площадки отбирался шестью условиями,
+     * зашитыми колонками таблицы, и каждое седьмое означало миграцию, правку
+     * генератора, счётчика и экрана — то есть релиз вместо действия
+     * владельца. Витрина к этому времени умеет отбирать по двадцати девяти
+     * колонкам, и заводить рядом второй список выражений значило бы получить
+     * две правды об одном и том же: они разошлись бы на первой же правке,
+     * и разошлись бы молча.
+     *
+     * <p>Поэтому выгрузка спрашивает условие здесь и подставляет его
+     * подзапросом по номерам позиций. Выражения, белый список колонок
+     * и разбор «пусто / не пусто» остаются в одном месте, а генератору
+     * не нужно знать ни про соединения витрины, ни про её алиасы.
+     *
+     * @return пусто, если условий нет — тогда прайс отдаёт всё, что прошло
+     *         остальные его отборы
+     */
+    @Transactional(readOnly = true)
+    public java.util.Optional<ColumnFilter> columnFilter(Map<String, String> columns,
+                                                         Map<String, String> words) {
+        boolean empty = (columns == null || columns.isEmpty())
+                && (words == null || words.isEmpty());
+        if (empty) {
+            return java.util.Optional.empty();
+        }
+        Filter filter = filterOf(null, true, true, List.of(), null, columns, words);
+        return java.util.Optional.of(new ColumnFilter(
+                "p.id IN (SELECT p.id" + JOINS + filter.where() + ")", filter.args()));
+    }
+
+    /**
+     * @param sql  готовое условие вида {@code p.id IN (…)}
+     * @param args его параметры по порядку
+     */
+    public record ColumnFilter(String sql, List<Object> args) {
+    }
+
     /** Незаполненное поле и «заполнено хоть чем-то» — тоже ответы на вопрос. */
     public static final String EMPTY = "\u2014пусто\u2014";
     public static final String PRESENT = "\u2014не пусто\u2014";
+
+    /**
+     * По каким колонкам отбор вообще делается.
+     *
+     * <p><b>Зачем наружу.</b> Экран открывал меню отбора у любой колонки —
+     * в том числе у превью, состояния, комплектации и себестоимости, которых
+     * в этом списке нет. Список значений приезжал отказом, отбор не применялся,
+     * и оба отказа проглатывались молча: владелец нажимал «Состояние → новое»,
+     * видел те же тридцать пять тысяч строк и делал единственный возможный
+     * вывод — что весь склад новый либо что отбор сломан.
+     *
+     * <p>Отдаём сам список, а не повторяем его на клиенте: два списка
+     * разошлись бы на первой же новой колонке, и разошлись бы молча.
+     */
+    public static Set<String> filterableColumns() {
+        return FILTERS.keySet();
+    }
 
     private static String columnExpression(String column) {
         String expression = FILTERS.get(column);
@@ -315,6 +420,13 @@ public class CatalogService {
                     + " WHEN 'FAIR' THEN 'удовлетворительное' WHEN 'POOR' THEN 'плохое'"
                     + " ELSE CASE p.condition WHEN 'NEW' THEN 'новая' WHEN 'USED' THEN 'б/у'"
                     + " WHEN 'REFURBISHED' THEN 'восстановленная' END END"),
+            // Состояние отбирается отдельно от оценки: «б/у» и «отличное» —
+            // разные вопросы, и на вкладке колёс отбор по состоянию есть
+            // с самого начала, как и в отборе выгрузок. На витрине его
+            // не было вовсе — то есть «покажи всё новое» владелец задать
+            // не мог, хотя колонка перед глазами.
+            Map.entry("condition", "CASE p.condition WHEN 'NEW' THEN 'новая'"
+                    + " WHEN 'USED' THEN 'б/у' WHEN 'REFURBISHED' THEN 'восстановленная' END"),
             Map.entry("brand", "b.name"),
             Map.entry("model", "m.name"),
             Map.entry("generation", "g.name"),
@@ -493,23 +605,64 @@ public class CatalogService {
     public record Vehicle(Long brandId, Long modelId, String body, String engine) {
     }
 
+    /**
+     * Соединения отбора — те же для страницы и для правки по отбору.
+     *
+     * <p>Условие ссылается на марку, модель и написание вида детали, то есть
+     * на соседние таблицы: собранное без них, оно не выполнится вовсе.
+     * Константа, а не копия в каждом запросе, по той же причине, по которой
+     * отбор один: разойдясь, они дали бы правку не того, что владелец видел.
+     */
+    private static final String JOINS = """
+
+              FROM part p
+              LEFT JOIN donor d ON d.id = p.donor_id
+              LEFT JOIN catalog.brand b ON b.id = d.brand_id
+              LEFT JOIN catalog.model m ON m.id = d.model_id
+              LEFT JOIN catalog.generation g ON g.id = d.generation_id
+              LEFT JOIN catalog.modification mo ON mo.id = d.modification_id
+              LEFT JOIN supply s ON s.id = d.supply_id
+              LEFT JOIN part_name pn ON pn.id = p.part_name_id""";
+
+    /**
+     * Номера всех позиций отбора, а не одной страницы.
+     *
+     * <p><b>Зачем.</b> Правка списком берёт то, что владелец отметил на
+     * экране, а на экране пятьдесят строк. После переезда без колонки
+     * «Выгружать» включить публикацию надо всему складу — у живого клиента
+     * это 35 841 позиция, то есть семьсот семнадцать страниц по полсотни,
+     * причём выделение сбрасывается при переходе на следующую. Прайс при
+     * этом уезжает пустым, и площадка молча не заводит ни одного объявления.
+     * Возможность была написана — {@code updateAll} принимает хоть весь
+     * склад и проходит его за двадцать секунд, — и не было только способа
+     * дотянуться до неё с экрана.
+     *
+     * <p>Отбор тот же, что у страницы и у выгрузки: правка обязана тронуть
+     * ровно то, что владелец видел, — иначе он правит одно, а меняется
+     * другое, и заметить это можно только пересчётом склада.
+     *
+     * <p>Порядок задан намеренно: без него база вправе вернуть строки
+     * как попало, и «изменено 35 841» перестанет быть воспроизводимым
+     * при разборе того, что именно уехало.
+     */
+    @Transactional(readOnly = true)
+    public List<Long> idsMatching(String query, boolean withReserved, boolean withMissing,
+                                  List<Long> warehouseIds, Vehicle vehicle,
+                                  Map<String, String> columns, Map<String, String> words) {
+        Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
+                columns, words);
+        return jdbc.queryForList("SELECT p.id" + JOINS + filter.where() + " ORDER BY p.id",
+                Long.class, filter.args().toArray());
+    }
+
     private Page finish(StringBuilder where, List<Object> args, String sort,
                         boolean descending, int page, int size, String after) {
-        String joins = """
-
-                  FROM part p
-                  LEFT JOIN donor d ON d.id = p.donor_id
-                  LEFT JOIN catalog.brand b ON b.id = d.brand_id
-                  LEFT JOIN catalog.model m ON m.id = d.model_id
-                  LEFT JOIN catalog.generation g ON g.id = d.generation_id
-                  LEFT JOIN catalog.modification mo ON mo.id = d.modification_id
-                  LEFT JOIN supply s ON s.id = d.supply_id
-                  LEFT JOIN part_name pn ON pn.id = p.part_name_id""";
+        String joins = JOINS;
 
         Long total = jdbc.queryForObject("SELECT count(*)" + joins + where, Long.class,
                 args.toArray());
 
-        String order = SORTS.getOrDefault(sort, "p.id") + (descending ? " DESC" : " ASC");
+        String order = orderBy(sort, descending);
         List<Object> pageArgs = new ArrayList<>(args);
 
         // Отступом или от последней строки предыдущей страницы.
@@ -715,7 +868,7 @@ public class CatalogService {
 
         Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
                 columns, words);
-        String order = SORTS.getOrDefault(sort, "p.id") + (descending ? " DESC" : " ASC");
+        String order = orderBy(sort, descending);
 
         StringBuilder stock = new StringBuilder();
         for (Warehouse warehouse : warehouses) {

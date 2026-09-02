@@ -65,8 +65,16 @@ export function allKinds(): Promise<PartKind[]> {
   return request<PartKind[]>('/api/part-names/kinds/all');
 }
 
-export function searchKinds(query: string): Promise<PartKind[]> {
-  return request<PartKind[]>(`/api/part-names/kinds?q=${encodeURIComponent(query)}`);
+/**
+ * Поиск эталона руками — вместе с числом найденного.
+ *
+ * <p>Выдача обрезана двумя десятками: по слову «датчик» эталонов 21, и один
+ * не показан вовсе. Разбирающий, не найдя нужного, решает, что такого эталона
+ * нет, — а одно сопоставление правит сотни карточек и назад не откатывается.
+ */
+export function searchKinds(query: string): Promise<{ items: PartKind[]; total: number }> {
+  return request<{ items: PartKind[]; total: number }>(
+    `/api/part-names/kinds?q=${encodeURIComponent(query)}`);
 }
 
 export interface MatchResult {
@@ -84,4 +92,20 @@ export function matchName(partNameId: number, partKindId: number): Promise<Match
 
 export function unmatchName(partNameId: number): Promise<UnmatchedName> {
   return request<UnmatchedName>(`/api/part-names/${partNameId}/unmatch`, { method: 'POST' });
+}
+
+/**
+ * Пересопоставляет нераспознанные написания по нынешнему справочнику.
+ *
+ * <p>Справочник видов деталей растёт с релизом, а написания клиента заведены
+ * раньше: без этого пополнение не меняет ничего, и владелец продолжает видеть
+ * ту же стену нераспознанных. Точное совпадение с эталоном или синонимом,
+ * похожесть сюда не идёт; решённое человеком не трогается.
+ *
+ * @returns сколько написаний нашли эталон и сколько карточек это исправило
+ */
+export function rematchNames(): Promise<{ matched: number; updated: number }> {
+  return request<{ matched: number; updated: number }>('/api/part-names/rematch', {
+    method: 'POST',
+  });
 }

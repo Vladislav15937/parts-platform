@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ApiError } from '../api/client';
 import {
   applySession,
+  cancelSession as cancelOnServer,
   discrepanciesOf,
   finishCounting,
   findOpenSession,
@@ -27,14 +28,19 @@ import type { Reference } from '../reference/reference';
  * дописывает только их. Проведённая строка второй корректировки не породит.
  */
 export function InventoryReconcile({ reference }: { reference: Reference }) {
-  const [warehouseId, setWarehouseId] = useState<number | null>(
-    reference.warehouses[0]?.id ?? null,
-  );
+  // Склад не подставляется: пересчёт не того склада списывает недостачу
+  // там, где её не считали.
+  const [warehouseId, setWarehouseId] = useState<number | null>(null);
   const [session, setSession] = useState<InventorySession | null>(null);
   const [rows, setRows] = useState<Discrepancy[] | null>(null);
   const [applied, setApplied] = useState<Applied | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  // Отмена выбрасывает работу смены — спрашиваем вторым нажатием.
+  const [cancelling, setCancelling] = useState(false);
+  // Удача и отказ показываются по-разному: «пересчёт отменён» красным
+  // читается как поломка.
+  const [done, setDone] = useState('');
 
   return (
     <section className="card">
@@ -52,6 +58,7 @@ export function InventoryReconcile({ reference }: { reference: Reference }) {
               setApplied(null);
             }}
           >
+            <option value="">— выберите склад —</option>
             {reference.warehouses.map((w) => (
               <option key={w.id} value={w.id}>{w.name}</option>
             ))}
@@ -63,6 +70,7 @@ export function InventoryReconcile({ reference }: { reference: Reference }) {
       </div>
 
       {note !== '' && <p className="note note--error">{note}</p>}
+      {done !== '' && <p className="note">{done}</p>}
 
       {session !== null && (
         <>
@@ -88,6 +96,31 @@ export function InventoryReconcile({ reference }: { reference: Reference }) {
               Провести
             </button>
           )}
+
+          {/*
+            * Отмена — единственный выход из ошибочно открытой сессии.
+            *
+            * Вторую инвентаризацию на складе открыть нельзя: две дадут
+            * двойную корректировку, и сервер это отбивает. Значит
+            * кладовщик, выбравший не тот склад, запирал пересчёт на нём
+            * навсегда — `POST /sessions/{id}/cancel` был написан и закрыт
+            * ролью, но не звала его ни одна строка фронтенда, и штатного
+            * выхода не было вовсе.
+            *
+            * Вторым нажатием: отмена выбрасывает лист обхода вместе
+            * с посчитанным, а это работа смены. Склад при этом не меняется
+            * ничем — корректировки делает только проведение.
+            */}
+          <button
+            type="button"
+            className="button--ghost"
+            disabled={busy}
+            onClick={() => void cancelSession()}
+          >
+            {cancelling
+              ? `Точно отменить? Посчитанное (${session.counted}) пропадёт`
+              : 'Отменить пересчёт'}
+          </button>
         </>
       )}
 
@@ -144,12 +177,37 @@ export function InventoryReconcile({ reference }: { reference: Reference }) {
     </section>
   );
 
+  async function cancelSession(): Promise<void> {
+    if (session === null) {
+      return;
+    }
+    if (!cancelling) {
+      setCancelling(true);
+      return;
+    }
+    setBusy(true);
+    try {
+      await cancelOnServer(session.id);
+      setSession(null);
+      setRows(null);
+      setApplied(null);
+      setCancelling(false);
+      setNote('');
+      setDone('Пересчёт отменён — склад не изменился. Можно открыть новый.');
+    } catch (cause) {
+      setNote(cause instanceof ApiError ? cause.message : 'Отменить не удалось');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function find(): Promise<void> {
     if (warehouseId === null) {
       return;
     }
     setBusy(true);
     setNote('');
+    setDone('');
     setApplied(null);
     try {
       const found = await findOpenSession(warehouseId);

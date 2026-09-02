@@ -28,7 +28,9 @@ public class DromAccountReader {
             SELECT id, feed_token, settings ->> 'packetId' AS packet_id, credentials,
                    product_line,
                    price_from, price_to, conditions, warehouse_ids,
-                   kind_ids, kinds_excluded, brand_ids, brands_excluded
+                   kind_ids, kinds_excluded, brand_ids, brands_excluded,
+                   filter_columns::text AS filter_columns,
+                   filter_words::text AS filter_words
               FROM %smarketplace_account
              WHERE marketplace = 'DROM' AND status = 'ACTIVE'
              ORDER BY id""";
@@ -66,7 +68,26 @@ public class DromAccountReader {
                         longList(rs.getArray("kind_ids")),
                         rs.getBoolean("kinds_excluded"),
                         longList(rs.getArray("brand_ids")),
-                        rs.getBoolean("brands_excluded")));
+                        rs.getBoolean("brands_excluded"),
+                        filterMap(rs.getString("filter_columns")),
+                        filterMap(rs.getString("filter_words"))));
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /** Карта «колонка → значение» из jsonb: собирать её текстом руками нельзя. */
+    private static java.util.Map<String, String> filterMap(String json) {
+        if (json == null || json.isBlank()) {
+            return java.util.Map.of();
+        }
+        try {
+            return JSON.readValue(json,
+                    new com.fasterxml.jackson.core.type.TypeReference<
+                            java.util.LinkedHashMap<String, String>>() { });
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("Отбор выгрузки не читается: " + json, e);
+        }
     }
 
     private static List<String> textList(java.sql.Array array) throws SQLException {

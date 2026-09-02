@@ -178,6 +178,8 @@ export interface SettlementReport {
     debts: number;
     withAdvance: number;
     withDebt: number;
+    /** Сколько клиентов в расчётах всего: список обрезан пределом. */
+    customers: number;
     problems: SettlementProblem[];
   };
 }

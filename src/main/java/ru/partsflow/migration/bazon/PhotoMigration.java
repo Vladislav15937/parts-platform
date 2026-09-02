@@ -8,12 +8,20 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.inventory.PhotoStorage;
 
+import ru.partsflow.platform.tenant.TenantContext;
+
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 /**
  * Перенос фотографий из предыдущей системы.
@@ -53,13 +61,20 @@ public class PhotoMigration {
     private final PhotoStorage storage;
     private final TransactionTemplate transactions;
     private final HttpClient http;
+    private final int concurrency;
 
     public PhotoMigration(JdbcTemplate jdbc, PhotoStorage storage,
                           TransactionTemplate transactions,
-                          @Value("${app.migration.photo-timeout:20s}") Duration timeout) {
+                          @Value("${app.migration.photo-timeout:20s}") Duration timeout,
+                          @Value("${app.migration.photo-concurrency:8}") int concurrency) {
         this.jdbc = jdbc;
         this.storage = storage;
         this.transactions = transactions;
+        if (concurrency < 1) {
+            throw new IllegalArgumentException(
+                    "Потоков переноса фотографий должно быть хотя бы один: " + concurrency);
+        }
+        this.concurrency = concurrency;
         this.http = HttpClient.newBuilder()
                 .connectTimeout(timeout)
                 // Чужой CDN отвечает редиректом на своё зеркало, и без этого
@@ -75,25 +90,69 @@ public class PhotoMigration {
      * и держать всё это время одну транзакцию значит держать соединение
      * с базой ради ожидания сети.
      *
+     * <p><b>Задания идут в несколько потоков, и это не преждевременная
+     * оптимизация.</b> Проход по одному упирается не в канал, а в ожидание:
+     * живой снимок приходит за полсекунды, а недоступный держит поток все
+     * двадцать секунд таймаута соединения. Замерено на переезде живого
+     * клиента: 200 снимков за 4 минуты 20 секунд, из них 12 неудачных —
+     * то есть почти всё время прохода ушло на ожидание отказов. При очереди
+     * в 193 тысячи это семьдесят часов, и переезд превращается в неделю.
+     *
+     * <p><b>Снимки одной позиции идут одним заданием и по порядку.</b>
+     * Главным становится первый, а решается это чтением {@code part_photo}:
+     * два потока по одной позиции прочитали бы «главного нет» оба, и второму
+     * отказал бы частичный уникальный индекс — то есть снимок пометился бы
+     * неудачным при полностью исправной работе. Разводить по потокам можно
+     * позиции, но не снимки внутри позиции.
+     *
+     * <p><b>Арендатор уносится в поток руками.</b> {@link TenantContext}
+     * живёт в {@code ThreadLocal}, а его требуют и ключ в хранилище, и любой
+     * запрос к схеме: рабочий поток без него падает на «арендатор
+     * не установлен» — и это верное направление отказа, молчаливый фолбэк
+     * означал бы снимок, положенный чужому клиенту.
+     *
      * @return сколько перенесено, сколько не вышло и сколько осталось
      */
     public Progress migrateBatch(int limit) {
         List<Task> batch = transactions.execute(status -> pending(limit));
-        int done = 0;
-        int failed = 0;
+        String tenant = TenantContext.require();
 
-        for (Task task : batch) {
-            try {
-                transfer(task);
-                done++;
-            } catch (Exception e) {
-                markFailed(task.id(), e.getMessage());
-                failed++;
+        Map<Long, List<Task>> byPart = batch.stream().collect(Collectors.groupingBy(
+                Task::partId, LinkedHashMap::new, Collectors.toList()));
+
+        AtomicInteger done = new AtomicInteger();
+        AtomicInteger failed = new AtomicInteger();
+
+        if (!byPart.isEmpty()) {
+            // close() у пула дожидается окончания заданий — пачка не должна
+            // отчитаться числами раньше, чем она перенесена.
+            try (ExecutorService pool =
+                         Executors.newFixedThreadPool(Math.min(concurrency, byPart.size()))) {
+                for (List<Task> tasks : byPart.values()) {
+                    pool.execute(() -> {
+                        TenantContext.set(tenant);
+                        try {
+                            for (Task task : tasks) {
+                                try {
+                                    transfer(task);
+                                    done.incrementAndGet();
+                                } catch (Exception e) {
+                                    markFailed(task.id(), reason(e));
+                                    failed.incrementAndGet();
+                                }
+                            }
+                        } finally {
+                            // Поток переиспользуется следующей позицией, а при
+                            // возврате в пул не должен уносить чужую схему.
+                            TenantContext.clear();
+                        }
+                    });
+                }
             }
         }
 
-        int transferred = done;
-        int broken = failed;
+        int transferred = done.get();
+        int broken = failed.get();
         Progress progress = transactions.execute(status ->
                 new Progress(transferred, broken, pendingCount(), doneCount(), failedCount()));
         log.info("Перенос фотографий: перенесено {}, не вышло {}, осталось {}",
@@ -187,7 +246,39 @@ public class PhotoMigration {
     private void markFailed(long id, String reason) {
         transactions.executeWithoutResult(status -> jdbc.update("""
                 UPDATE part_photo_import SET status = 'FAILED', error = ?, done_at = now()
-                 WHERE id = ?""", reason == null ? "неизвестная ошибка" : reason, id));
+                 WHERE id = ?""", reason, id));
+    }
+
+    /**
+     * Причина отказа словами.
+     *
+     * <p><b>Зачем.</b> Соседняя кнопка возвращает неудачные в очередь, и решение
+     * «нажимать или не нажимать» целиком зависит от причины: лежавший CDN
+     * чинится повтором, удалённый файл — нет, а закрытая наружу сеть означает,
+     * что чинить надо не здесь. Пока причина бралась из {@code getMessage()},
+     * этого решения принять было нельзя: у отказа соединения сообщение пустое,
+     * и все двести заданий получали «неизвестная ошибка».
+     *
+     * <p>Поймано прогоном подключения: CDN прежней системы перестал отвечать
+     * на обоих портах, и перенос двухсот снимков отчитался ровно ничем.
+     */
+    static String reason(Throwable e) {
+        if (e instanceof java.net.UnknownHostException) {
+            return "источник не найден по имени: " + e.getMessage();
+        }
+        if (e instanceof java.net.ConnectException
+                || e instanceof java.net.http.HttpConnectTimeoutException) {
+            // Сообщения у этих исключений может не быть вовсе, а сказать надо:
+            // «не отвечает» — это про повтор, а не про новые ссылки.
+            return "источник не отвечает (" + e.getClass().getSimpleName() + ")";
+        }
+        if (e instanceof java.net.http.HttpTimeoutException) {
+            return "источник не ответил вовремя";
+        }
+        String message = e.getMessage();
+        return message == null || message.isBlank()
+                ? e.getClass().getSimpleName()
+                : message;
     }
 
     private long countBy(String status) {

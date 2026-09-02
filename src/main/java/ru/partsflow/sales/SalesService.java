@@ -164,6 +164,9 @@ public class SalesService {
                                Long dealSourceId, List<ItemRequest> items,
                                List<ServiceRequest> services) {
 
+        requireCustomer(customerId);
+        requireDealSource(dealSourceId);
+
         Deal deal = new Deal(customerId, managerId);
         deal.setCreatedBy(managerId);
         // Откуда пришла продажа. Заполняется при каждой сделке, а не только
@@ -250,6 +253,16 @@ public class SalesService {
      * и сейчас (продавец завёл заказ дважды), и позже, когда заказы поедут
      * из API площадки: доставка там будет at-least-once, как и всюду.
      *
+     * <p><b>Одновременный повтор проверку не проходит, и это половина
+     * защиты.</b> Между чтением и вставкой второй запрос ещё ничего не видит:
+     * дубля не появляется — его отбивает {@code deal_external_order_uk}, —
+     * но наружу летело «Операция нарушает целостность данных». Продавец
+     * нажимает «Принять заказ» второй раз, потому что первое нажатие
+     * не показало результата, и получает ответ про поломку сервера на заказ,
+     * который уже принят. {@link #replayOrderAfterConflict} перечитывает
+     * прежнюю сделку и отдаёт её — то же лечение, что у приёмки и у ссылки
+     * на снимок, и болезнь одна.
+     *
      * @param replyDeadline до какого момента площадка ждёт ответа; у Дрома
      *                      по защищённой сделке это трое рабочих суток,
      *                      после чего деньги возвращаются покупателю
@@ -267,18 +280,21 @@ public class SalesService {
         if (items == null || items.isEmpty()) {
             throw new IllegalArgumentException("В заказе нет позиций");
         }
+        // Обрезается один раз и на всё: пишется в сделку обрезанный номер,
+        // а искался прежде тот, что пришёл, — номер с лишним пробелом
+        // не находил своей же сделки и уходил на повторное заведение.
+        String number = orderNo.strip();
 
-        Deal existing = dealRepository.findByMarketplaceAndExternalOrderNo(marketplace, orderNo)
-                .orElse(null);
-        if (existing != null) {
-            return new AcceptedOrder(detachable(existing), true, List.of());
+        AcceptedOrder replayed = replayOrder(marketplace, number);
+        if (replayed != null) {
+            return replayed;
         }
 
         Deal deal = new Deal(customerId, managerId);
         deal.setCreatedBy(managerId);
         deal.setDealSourceId(dealSourceId);
         deal.setDeliveryNote(deliveryNote);
-        deal.fromMarketplace(marketplace, orderNo.strip(),
+        deal.fromMarketplace(marketplace, number,
                 replyDeadline != null ? replyDeadline : defaultReplyDeadline());
 
         for (ItemRequest item : items) {
@@ -299,6 +315,13 @@ public class SalesService {
                 reservationRepository.reserve(item.partId(), item.warehouseId(), item.quantity());
             }
             deal.reserve(reservedUntil != null ? reservedUntil : defaultReserveUntil(replyDeadline));
+        } else {
+            // Позиция обязана говорить правду о том, отложил ли под неё склад.
+            // Умолчание «зарезервирована» верно для обычной продажи, где резерв
+            // ставится тут же; здесь оно превращало отмену заказа в попытку
+            // снять несуществующий резерв, то есть в 409 на единственное
+            // действие, которое с необеспеченным заказом можно сделать.
+            deal.markUnreserved();
         }
 
         Deal saved = detachable(dealRepository.saveAndFlush(deal));
@@ -407,6 +430,25 @@ public class SalesService {
      * @param missing  чего не хватило на складе; пусто — заказ обеспечен
      */
     public record AcceptedOrder(Deal deal, boolean replayed, List<String> missing) {
+    }
+
+    /**
+     * Прежняя сделка после одновременного повтора.
+     *
+     * <p>Читается новой транзакцией: та, в которой случилось нарушение
+     * уникальности, помечена на откат, и запрос из неё не пройдёт. Та же
+     * причина, что у {@code IntakeService.replayAfterConflict}.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
+                   readOnly = true)
+    public AcceptedOrder replayOrderAfterConflict(String marketplace, String orderNo) {
+        return replayOrder(marketplace, orderNo);
+    }
+
+    private AcceptedOrder replayOrder(String marketplace, String orderNo) {
+        return dealRepository.findByMarketplaceAndExternalOrderNo(marketplace, orderNo)
+                .map(existing -> new AcceptedOrder(detachable(existing), true, List.of()))
+                .orElse(null);
     }
 
     /**
@@ -703,6 +745,33 @@ public class SalesService {
     }
 
     /**
+     * Деньги по закрытой сделке не принимаются — ни в кассу, ни зачётом.
+     *
+     * <p>Отменённая не состоялась, возвращённая закрыта встречным документом:
+     * платить не за что. Пока проверки не было, оба пути пропускали такую
+     * оплату молча — отменённая сделка получала приход в кассу, которого
+     * вечером не сойдётся с ящиком, а зачёт списывал деньги <b>со счёта
+     * клиента</b> в счёт товара, который тот сам принёс обратно. Второе
+     * не ловила даже сверка: {@code v_account_discrepancy} знает про
+     * отменённую с невозвращённой оплатой, а про возвращённую — нет.
+     *
+     * <p>Проверка стоит здесь, а не только в нулевом долге: с {@code debt()
+     * == 0} приём денег не отказал бы, а тихо положил всю сумму на лицевой
+     * счёт — то есть сделал бы не то, что просили, и без единого слова.
+     */
+    private void requireOpen(Deal deal) {
+        if (deal.getStatus().isClosed()) {
+            throw new IllegalStateException(
+                    "Сделка %s закрыта (%s): платить по ней не за что"
+                            .formatted(deal.getNumber(), statusWord(deal.getStatus())));
+        }
+    }
+
+    private static String statusWord(DealStatus status) {
+        return status == DealStatus.CANCELLED ? "отменена" : "возвращена";
+    }
+
+    /**
      * Оплата сделки.
      *
      * <p>Переплата не отбрасывается и не превращается в отрицательный долг:
@@ -712,6 +781,7 @@ public class SalesService {
     @Transactional
     public Payment takePayment(Long dealId, BigDecimal amount, Long paymentSourceId, Long managerId) {
         Deal deal = requireDeal(dealId);
+        requireOpen(deal);
 
         Payment payment = new Payment(PaymentDirection.IN, amount, deal.getCustomerId());
         payment.setDealId(dealId);
@@ -756,8 +826,19 @@ public class SalesService {
      * числа, иначе «минус тысяча» и «тысяча со знаком минус» перестают
      * различаться при чтении глазами.
      */
+    /**
+     * Остаток счёта существующего клиента.
+     *
+     * <p>Проверка есть и на чтении, а не только на записи: без неё счёт
+     * несуществующего клиента отвечал «баланс 0 ₽» — то есть утверждал
+     * что-то о деньгах того, кого нет. Продавец, открывший не того клиента,
+     * читает это как «за ним ничего не числится» и говорит покупателю,
+     * что аванса у него нет. Пустой журнал и отсутствующий клиент — разные
+     * вещи, и различать их обязан сервер: на экране они выглядят одинаково.
+     */
     @Transactional(readOnly = true)
     public BigDecimal accountBalance(Long customerId) {
+        requireExistingCustomer(customerId);
         return accountRepository.findByCustomerIdOrderByIdDesc(customerId).stream()
                 .map(CustomerAccountEntry::signedAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -765,6 +846,7 @@ public class SalesService {
 
     @Transactional(readOnly = true)
     public List<CustomerAccountEntry> accountEntries(Long customerId) {
+        requireExistingCustomer(customerId);
         return accountRepository.findByCustomerIdOrderByIdDesc(customerId);
     }
 
@@ -783,6 +865,7 @@ public class SalesService {
     @Transactional
     public Deal payFromAccount(Long dealId, BigDecimal amount, Long managerId) {
         Deal deal = requireDeal(dealId);
+        requireOpen(deal);
         if (deal.getCustomerId() == null) {
             throw new IllegalStateException(
                     "У сделки нет клиента: списывать не с чего");
@@ -790,6 +873,14 @@ public class SalesService {
         if (amount == null || amount.signum() <= 0) {
             throw new IllegalArgumentException("Сумма зачёта должна быть больше нуля");
         }
+        // Сначала сделка, потом клиент — порядок обязателен. Отмена, возврат
+        // и приём денег пишут запись счёта уже после того, как Hibernate
+        // отправил правку сделки, то есть держат строку сделки и просят
+        // клиента (внешний ключ берёт на нём FOR KEY SHARE). Возьми мы клиента
+        // первым, два продавца по одной сделке встали бы друг против друга
+        // насмерть, и Postgres убил бы одного из них.
+        lockDeal(dealId);
+        lockCustomer(deal.getCustomerId());
 
         BigDecimal balance = accountBalance(deal.getCustomerId());
         if (balance.compareTo(amount) < 0) {
@@ -836,6 +927,7 @@ public class SalesService {
     @Transactional
     public CustomerAccountEntry withdrawFromAccount(Long customerId, BigDecimal amount,
                                                     Long paymentSourceId, Long managerId) {
+        lockCustomer(customerId);
         if (amount == null || amount.signum() <= 0) {
             throw new IllegalArgumentException("Сумма выдачи должна быть больше нуля");
         }
@@ -887,6 +979,7 @@ public class SalesService {
     @Transactional
     public CustomerAccountEntry correctAccount(Long customerId, BigDecimal amount,
                                                String reason, Long managerId) {
+        lockCustomer(customerId);
         if (amount == null || amount.signum() == 0) {
             throw new IllegalArgumentException("Правка на ноль ничего не меняет");
         }
@@ -914,6 +1007,10 @@ public class SalesService {
     @Transactional
     public CustomerAccountEntry topUpAccount(Long customerId, BigDecimal amount,
                                              Long paymentSourceId, Long managerId) {
+        // Клиент обязан существовать: иначе деньги ложатся на счёт, которого
+        // нет, и отказ приходит как «нарушает целостность данных» — продавцу
+        // непонятно, ошибся он или сломался сервер.
+        requireExistingCustomer(customerId);
         Payment payment = new Payment(PaymentDirection.IN, amount, customerId);
         payment.setPaymentSourceId(paymentSourceId);
         payment.setCreatedBy(managerId);
@@ -983,6 +1080,78 @@ public class SalesService {
     private Deal requireDeal(Long dealId) {
         return dealRepository.findById(dealId)
                 .orElseThrow(() -> new IllegalArgumentException("Сделка не найдена: " + dealId));
+    }
+
+    /**
+     * Клиент обязан существовать, и сказать об этом надо словами.
+     *
+     * <p>Деталь и услуга проверялись, клиент — нет: он доезжал до внешнего
+     * ключа и возвращался как «Операция нарушает целостность данных».
+     * Продавец по такому ответу идёт искать поломку сервера, стоя перед
+     * покупателем.
+     *
+     * <p>Пусто — законно: у заказа с площадки клиента нет, покупателя она
+     * не называет.
+     */
+    private void requireCustomer(Long customerId) {
+        if (customerId == null) {
+            return;
+        }
+        requireExistingCustomer(customerId);
+    }
+
+    /** То же, но клиент обязателен: у денег на счёте владелец есть всегда. */
+    private void requireExistingCustomer(Long customerId) {
+        if (customerId == null) {
+            throw new IllegalArgumentException("Не указан клиент");
+        }
+        Integer found = jdbc.queryForObject(
+                "SELECT count(*) FROM customer WHERE id = ?", Integer.class, customerId);
+        if (found == null || found == 0) {
+            throw new IllegalArgumentException("Клиент не найден: " + customerId);
+        }
+    }
+
+    /**
+     * Клиент под блокировкой строки: для всего, что смотрит на остаток счёта
+     * и потом пишет.
+     *
+     * <p>Остаток считается по журналу — а значит проверка «хватает» и запись
+     * это два действия, и между ними встаёт второй продавец. Замерено живьём:
+     * счёт в 1000 ₽ и две одновременные выдачи по 1000 дали **два расхода
+     * по 1000**, остаток минус тысяча и два нарушения в
+     * {@code v_account_discrepancy}. Оба ответа при этом 201 — продавец
+     * дважды увидел успех, а деньги ушли настоящие.
+     *
+     * <p>Инструкцией это не закрыть, в отличие от остатка склада. Там условие
+     * ставится в {@code WHERE} у {@code UPDATE}, и Postgres перечитывает
+     * строку после снятия блокировки; здесь мы **вставляем** запись, блокировать
+     * нечего, и условие в insert проверялось бы по своему снимку, не видя
+     * чужой невидимой строки. Поэтому строка клиента — та самая точка,
+     * за которую операции счёта выстраиваются в очередь.
+     *
+     * <p>Берётся она **до** сделки во всех трёх местах: обратный порядок
+     * с чем-нибудь, что идёт от сделки к счёту, даёт взаимную блокировку.
+     */
+    private void lockCustomer(Long customerId) {
+        requireExistingCustomer(customerId);
+        jdbc.queryForObject("SELECT id FROM customer WHERE id = ? FOR UPDATE",
+                Long.class, customerId);
+    }
+
+    /** Строка сделки: берётся перед клиентом, чтобы порядок был один у всех. */
+    private void lockDeal(Long dealId) {
+        jdbc.queryForObject("SELECT id FROM deal WHERE id = ? FOR UPDATE", Long.class, dealId);
+    }
+
+    /** Источник сделки — из справочника; пусто значит «не указан». */
+    private void requireDealSource(Long dealSourceId) {
+        if (dealSourceId == null) {
+            return;
+        }
+        if (!dealSources.existsById(dealSourceId)) {
+            throw new IllegalArgumentException("Источник сделки не найден: " + dealSourceId);
+        }
     }
 
     private Part requirePart(Long partId) {

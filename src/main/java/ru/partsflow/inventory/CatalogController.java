@@ -1,5 +1,7 @@
 package ru.partsflow.inventory;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotEmpty;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -9,6 +11,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import ru.partsflow.platform.security.CurrentUser;
 
 import java.util.List;
 import java.util.Map;
@@ -32,11 +35,14 @@ public class CatalogController {
 
     private final CatalogService catalog;
     private final PhotoStorage storage;
+    private final PartService parts;
 
     public CatalogController(CatalogService catalog,
-                             PhotoStorage storage) {
+                             PhotoStorage storage,
+                             PartService parts) {
         this.catalog = catalog;
         this.storage = storage;
+        this.parts = parts;
     }
 
     @GetMapping
@@ -64,7 +70,8 @@ public class CatalogController {
                 sort, desc, Math.max(page, 0), Math.min(Math.max(size, 1), MAX_SIZE), after);
 
         return new View(found.total(), catalog.warehouses(),
-                found.rows().stream().map(this::rowOf).toList());
+                found.rows().stream().map(this::rowOf).toList(),
+                CatalogService.filterableColumns());
     }
 
     /**
@@ -168,6 +175,66 @@ public class CatalogController {
     }
 
     /**
+     * Правка всего, что попало в отбор, — а не одной отмеченной страницы.
+     *
+     * <p><b>Зачем.</b> Отметить можно только то, что на экране, а на экране
+     * пятьдесят строк. После переезда без колонки «Выгружать» включить
+     * публикацию надо всему складу: у живого клиента это 35 841 позиция,
+     * то есть семьсот семнадцать страниц, причём выделение сбрасывается
+     * на каждой. До тех пор прайс уезжает пустым — 55 байт вместо
+     * двадцати мегабайт, — и площадка молча не заводит ни одного
+     * объявления. Сама возможность была написана с самого начала: правка
+     * списком принимает хоть весь склад и проходит его за двадцать секунд.
+     * Не было только способа дотянуться до неё с экрана — та же порода
+     * ошибки, что с экранами сотрудников, складов, кабинета площадки
+     * и ссылки на прайс.
+     *
+     * <p><b>Отбор описан теми же параметрами, что страница и выгрузка.</b>
+     * Не ради краткости: правка обязана тронуть ровно то, что владелец
+     * видел на экране. Свой набор параметров разошёлся бы с витриной
+     * на первой же новой колонке, и владелец правил бы одно, а менялось
+     * бы другое — заметить это можно только пересчётом склада.
+     *
+     * <p>Набор полей тот же закрытый {@code BULK_FIELDS}: шире становится
+     * не то, <i>что</i> можно изменить, а только <i>скольким</i> позициям.
+     * Сколько именно, экран показывает до нажатия — это и есть защита,
+     * потому что отменить правку нечем, кроме восстановления из бэкапа.
+     *
+     * <p>Пустой отбор — это весь склад, и так и задумано: именно он нужен
+     * после переезда. А вот отбор, не нашедший ничего, отвергается: «изменено
+     * 0» владелец прочитает как «сделано», и ошибку в отборе он не заметит.
+     */
+    @PostMapping("/bulk")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public BulkResult bulk(@RequestParam(required = false) String q,
+                           @RequestParam(defaultValue = "true") boolean reserved,
+                           @RequestParam(defaultValue = "false") boolean missing,
+                           @RequestParam(required = false) List<Long> warehouses,
+                           @RequestParam(required = false) Long brandId,
+                           @RequestParam(required = false) Long modelId,
+                           @RequestParam(required = false) String body,
+                           @RequestParam(required = false) String engine,
+                           @RequestParam(required = false) List<String> filter,
+                           @RequestParam(required = false) List<String> find,
+                           @Valid @RequestBody BulkByFilter request) {
+
+        List<Long> ids = catalog.idsMatching(q, reserved, missing, warehouses,
+                new CatalogService.Vehicle(brandId, modelId, body, engine),
+                columnsOf(filter), columnsOf(find));
+        if (ids.isEmpty()) {
+            throw new IllegalArgumentException("Отбор не нашёл ни одной позиции");
+        }
+        return new BulkResult(parts.updateAll(ids, request.changes(), CurrentUser.memberId()));
+    }
+
+    /** Только изменения: что править, сказано параметрами отбора. */
+    public record BulkByFilter(@NotEmpty Map<String, Object> changes) {
+    }
+
+    public record BulkResult(int changed) {
+    }
+
+    /**
      * Отбор приходит парами «колонка:значение» — по одной на каждый фильтр.
      *
      * <p>Разделитель ищется первым: в значении двоеточие встречается,
@@ -245,7 +312,14 @@ public class CatalogController {
         }
     }
 
-    public record View(long total, List<CatalogService.Warehouse> warehouses, List<Row> rows) {
+    /**
+     * @param filterable по каким колонкам отбор делается. Экран открывает меню
+     *                   только у них: у остальных сервер отвечает отказом,
+     *                   а отказ, проглоченный молча, выглядит как «отбор
+     *                   не сработал» на целом складе
+     */
+    public record View(long total, List<CatalogService.Warehouse> warehouses, List<Row> rows,
+                       java.util.Set<String> filterable) {
     }
 
     public record Row(Long id, String code, String title, String qualityGrade, String condition,

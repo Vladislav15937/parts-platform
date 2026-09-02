@@ -195,7 +195,27 @@ class PartNameControllerTest extends PostgresTestBase {
         // такое не находят, и без поиска разбор встанет.
         mvc.perform(get("/api/part-names/kinds?q=запасное").session(login("vladelec")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].name").value("Запасное колесо"));
+                .andExpect(jsonPath("$.items[0].name").value("Запасное колесо"))
+                // Список короче предела — значит это всё найденное.
+                .andExpect(jsonPath("$.total").value(1));
+    }
+
+    /**
+     * Обрезанная выдача эталонов говорит, что она обрезана.
+     *
+     * <p>Предел — два десятка, а в поставляемом справочнике по слову «датчик»
+     * эталонов 21: один не показан вовсе. Разбирающий, не найдя нужного,
+     * решает, что такого эталона нет, и оставляет написание неразобранным
+     * либо берёт похожий — а одно сопоставление правит сотни карточек
+     * и назад не откатывается.
+     */
+    @Test
+    @DisplayName("Поиск эталона говорит, сколько подошло всего")
+    void kindSearchTellsHowManyMatched() throws Exception {
+        mvc.perform(get("/api/part-names/kinds?q=датчик").session(login("vladelec")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(20))
+                .andExpect(jsonPath("$.total").value(org.hamcrest.Matchers.greaterThan(20)));
     }
 
     @Test

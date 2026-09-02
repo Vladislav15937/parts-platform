@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -221,6 +222,62 @@ class DromFeedControllerTest extends PostgresTestBase {
                 .andExpect(status().isForbidden());
     }
 
+    /**
+     * Условие по чужой колонке отбивается словами при сохранении.
+     *
+     * <p><b>Зачем.</b> Списки колонок у запчастей и у колёс разные: у колеса
+     * нет стороны, у запчасти нет сезона. Принятое молча чужое условие
+     * ломается не при сохранении, а при заборе прайса — то есть у площадки,
+     * и молча: до появления проверки она получала пустой файл, читала его
+     * как «товаров нет» и снимала объявления. Владелец при этом видел
+     * сохранённый отбор и ничего подозрительного.
+     */
+    @Test
+    @DisplayName("Условие по колонке чужой линии товара не сохраняется")
+    void alienColumnIsRefusedOnSave() throws Exception {
+        mvc.perform(put("/api/marketplace-accounts/" + accountId + "/filter")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"columns\":{\"season\":\"летняя\"}}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("season")));
+
+        // А своя колонка сохраняется как была: проверка не должна перекрыть
+        // то, ради чего отбор и заведён.
+        mvc.perform(put("/api/marketplace-accounts/" + accountId + "/filter")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"columns\":{\"section\":\"A-01\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.filterColumns.section").value("A-01"));
+    }
+
+    /**
+     * Ссылка отдаётся полным адресом, а не одним путём.
+     *
+     * <p>Её передают человеку на той стороне — инструкция так и говорит,
+     * «передать ссылку техспециалисту площадки». По {@code /feeds/drom/…}
+     * он не сходит никуда, и владельцу приходилось дописывать домен руками.
+     * Домен сервер знает: тот же {@code app.public-url} уже подставляется
+     * в ссылки на снимки внутри самого прайса.
+     *
+     * <p>Путь при этом остаётся: по нему прайс качается с того же источника,
+     * где открыт экран, и в разработке это единственный работающий адрес.
+     */
+    @Test
+    @DisplayName("Ссылка на прайс отдаётся полным адресом")
+    void feedUrlIsAbsolute() throws Exception {
+        mvc.perform(get("/api/marketplace-accounts/" + accountId + "/feed-url")
+                        .session(login("owner")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.path").value(feedPath))
+                .andExpect(jsonPath("$.url")
+                        .value(org.hamcrest.Matchers.startsWith("http")))
+                .andExpect(jsonPath("$.url")
+                        .value(org.hamcrest.Matchers.endsWith(feedPath)));
+    }
+
     @Test
     @DisplayName("Две выгрузки одной площадки отдают разный товар")
     void feedsAreFilteredIndependently() throws Exception {
@@ -415,7 +472,7 @@ class DromFeedControllerTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        return body.replaceAll("^\\{\"path\":\"(.*)\"\\}$", "$1");
+        return pathOf(body);
     }
 
     private String rotate() throws Exception {
@@ -424,7 +481,20 @@ class DromFeedControllerTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        return body.replaceAll("^\\{\"path\":\"(.*)\"\\}$", "$1");
+        return pathOf(body);
+    }
+
+    /**
+     * Путь из ответа.
+     *
+     * <p>Именно разбором поля, а не «всё между кавычками»: рядом с путём
+     * теперь едет полный адрес, и наивное выдирание захватывало его вместе
+     * с закрывающей скобкой.
+     */
+    private static String pathOf(String body) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"path\":\"([^\"]*)\"").matcher(body);
+        return m.find() ? m.group(1) : null;
     }
 
     private void register(long id, String schema, String code) {
