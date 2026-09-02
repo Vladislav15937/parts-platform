@@ -6,7 +6,8 @@
 
 ```bash
 docker compose up -d
-./verify.sh          # полная проверка на чистой базе
+./verify.sh          # полная проверка на чистой базе (нужен Docker)
+./check-changelog.py # статика: номера, включения, неизменяемость выпущенного
 ```
 
 ## Структура
@@ -23,6 +24,7 @@ liquibase-catalog.properties
 liquibase-tenant.properties
 docker-compose.yml            — отдельная база под verify.sh
 verify.sh                     — прогон и проверка инвариантов
+check-changelog.py            — статическая проверка набора, без базы
 ```
 
 ## Запуск
