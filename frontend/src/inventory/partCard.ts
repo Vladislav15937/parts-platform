@@ -77,10 +77,23 @@ export function cardFields(row: CatalogRow): Array<[string, string]> {
   return rows;
 }
 
+/**
+ * Поколение и его годы — одной строкой, но без повтора.
+ *
+ * <p>В поставляемом справочнике поколение **называется** диапазоном лет:
+ * все 12 430 записей — «1986—1990», «1966—н.в.». Приписывая к имени те же
+ * годы из соседних колонок, карточка печатала «2006—2008 2006—2008» — одно
+ * и то же дважды, будто это две разные величины. Годы дописываются, только
+ * если имя их не содержит: у поколения с настоящим именем («XV40») они
+ * по-прежнему нужны.
+ */
 function generationOf(row: CatalogRow): string | null {
   const years = row.yearFrom === null ? null : `${row.yearFrom}—${row.yearTo ?? ''}`;
   if (row.generation === null || row.generation === '') return years;
-  return years === null ? row.generation : `${row.generation} ${years}`;
+  if (years === null || row.generation.includes(String(row.yearFrom))) {
+    return row.generation;
+  }
+  return `${row.generation} ${years}`;
 }
 
 function day(value: string | null): string | null {
