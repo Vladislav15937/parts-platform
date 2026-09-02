@@ -39,9 +39,13 @@ interface Props {
  * то, чего избегает выгрузка витрины, где стороны пишутся «Задн.» и «Лев.».
  */
 const KINDS: Record<string, string> = {
+  // Слово в слово с SupplyKinds на сервере: подпись «Поставка №5» собирают
+  // и там (витрина, колёса, история, карточка машины), и здесь. Стережёт
+  // WordingConsistencyTest — до него сервер звал OTHER «Поставкой»,
+  // а форма заведения «Прочим».
   CONTAINER: 'Контейнер',
   PURCHASE: 'Закупка',
-  OTHER: 'Прочее',
+  OTHER: 'Поставка',
 };
 
 const STATUSES: Record<string, string> = {
@@ -94,7 +98,7 @@ export function SupplyList({ supplies, online, onChanged }: Props) {
                 <td>{STATUSES[supply.status] ?? supply.status}</td>
                 <td>
                   {supply.arrivedOn !== null ? (
-                    supply.arrivedOn
+                    day(supply.arrivedOn)
                   ) : (
                     // Дата стоит в поле до нажатия, а не подставляется молча
                     // на сервере: контейнер отмечают и задним числом, а
@@ -206,4 +210,17 @@ export function SupplyList({ supplies, online, onChanged }: Props) {
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Дата как везде на экранах: «30.08.2026», а не «2026-08-30».
+ *
+ * <p>Разбирается строкой, а не через {@code new Date(...)}: у даты без времени
+ * тот разбирает её как полночь UTC, и западнее Гринвича `toLocaleDateString`
+ * показывает вчерашний день. Партия, приехавшая тридцатого, у клиента
+ * с отрицательным смещением значилась бы приехавшей двадцать девятого.
+ */
+function day(iso: string): string {
+  const [year, month, date] = iso.split('-');
+  return date === undefined ? iso : `${date}.${month}.${year}`;
 }

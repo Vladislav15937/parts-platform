@@ -107,7 +107,9 @@ class PartHistoryHttpTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 // Свежее сверху: историю читают с конца.
                 .andExpect(jsonPath("$.changes[0].fields[0].label").value("Цена"))
-                .andExpect(jsonPath("$.changes[0].fields[0].before").value("4500.00"))
+                // Число приведено к общему виду: до этого стояло «4500.00 → 5200» —
+                // одна и та же величина в двух написаниях в одной строке.
+                .andExpect(jsonPath("$.changes[0].fields[0].before").value("4500"))
                 .andExpect(jsonPath("$.changes[0].fields[0].after").value("5200"))
                 // Автор подписан: до этой правки app.user_id не выставлял никто,
                 // и в audit_log.changed_by у всех записей стоял null.
@@ -139,6 +141,35 @@ class PartHistoryHttpTest extends PostgresTestBase {
      * ни по журналу, ни по документу — в документ никто не пойдёт, историю
      * карточки открывают именно затем, чтобы разобраться.
      */
+    /**
+     * Цена изменилась, себестоимость — нет, и в ленте это видно так же.
+     *
+     * <p><b>Зачем.</b> Снимки сравнивались текстом, а Postgres хранит
+     * {@code numeric} со своей точностью: форма отдаёт {@code 1200.0},
+     * в базе лежит {@code 1200.00}, и в ленту попадала строка
+     * «Себестоимость: было 1200.00, стало 1200.0». Это правка денег, которой
+     * не было, — у поля, ради которого историю и открывают. Живой прогон
+     * показал её на первой же правке цены.
+     */
+    @Test
+    @DisplayName("Себестоимость, записанная с другой точностью, правкой не считается")
+    void sameNumberInAnotherScaleIsNotAChange() throws Exception {
+        MockHttpSession owner = login("vladelec");
+
+        mvc.perform(put("/api/parts/%d".formatted(partId)).with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price":5200,"costPrice":1200.0,"published":true}"""))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/api/parts/%d/history".formatted(partId)).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changes[0].fields[0].label").value("Цена"))
+                // Единственное изменившееся поле — цена. Была бы вторая строка,
+                // это и есть та самая выдуманная правка себестоимости.
+                .andExpect(jsonPath("$.changes[0].fields.length()").value(1));
+    }
+
     @Test
     @DisplayName("Причина списания видна в истории")
     void writeOffReasonIsListed() throws Exception {

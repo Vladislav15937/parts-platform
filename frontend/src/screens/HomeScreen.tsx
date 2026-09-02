@@ -113,6 +113,13 @@ export function HomeScreen() {
   // первое сканирование случится в ангаре, где её уже не будет.
   useEffect(warmUpDecoder, []);
 
+  // Заголовок вкладки — тот же раздел, что и в верхней полосе. Пока он был
+  // прибит к «Приёмке» в index.html, владелец с открытыми складом, продажей
+  // и отчётами видел три одинаковые вкладки и искал нужную перебором.
+  useEffect(() => {
+    document.title = `${sectionName(tab)} — PartsFlow`;
+  }, [tab]);
+
   const role = state.status === 'authenticated' ? state.me.role : null;
 
   useEffect(() => {

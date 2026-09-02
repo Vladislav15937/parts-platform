@@ -313,7 +313,7 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
             <select value={supplyKind} onChange={(e) => setSupplyKind(e.target.value)}>
               <option value="CONTAINER">Контейнер</option>
               <option value="PURCHASE">Закупка</option>
-              <option value="OTHER">Прочее</option>
+              <option value="OTHER">Поставка</option>
             </select>
           </label>
           <label className="field">

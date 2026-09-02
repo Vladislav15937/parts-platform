@@ -8,6 +8,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
+import ru.partsflow.shared.SupplyKinds;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -66,6 +68,30 @@ class WordingConsistencyTest {
     }
 
     /** Путь от корня репозитория: тесты Maven запускает из него. */
+    /**
+     * Виды поставки на экране и на сервере — одни и те же слова.
+     *
+     * <p><b>Зачем.</b> «CONTAINER №18» показывалось владельцу в семи местах
+     * сразу: витрина (таблица, список значений отбора, скачанный файл),
+     * вкладка колёс (те же три) и история карточки. Починено это было
+     * однажды — в карточке машины, у которой была своя копия словаря, —
+     * и именно копия оставила остальные шесть без исправления. Теперь
+     * словарь один ({@code SupplyKinds}), но у экрана заведения поставки
+     * свой список: он рисует те же виды в выпадающем списке, и разойдись
+     * они — владелец завёл бы «Прочее», а увидел бы «Поставка».
+     */
+    @Test
+    @DisplayName("Виды поставки названы одинаково на сервере и на экране")
+    void supplyKindWordsMatch() throws IOException {
+        String client = read(Path.of("frontend/src/screens/SupplyList.tsx"));
+
+        SupplyKinds.titles().forEach((code, title) -> {
+            assertThat(client)
+                    .as("экран поставок не знает вида «%s» (%s)", title, code)
+                    .contains(code + ": '" + title + "'");
+        });
+    }
+
     private static String read(Path path) throws IOException {
         assertThat(path).as("файл, по которому сверяются слова, исчез").exists();
         return Files.readString(path);
