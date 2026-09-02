@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import ru.partsflow.shared.SupplyKinds;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -217,10 +218,8 @@ public class WheelService {
                          WHERE ph2.part_id = p.id AND ph2.status = 'PROCESSED')         AS photo_count,
                        (SELECT o.raw_number FROM part_oem o
                          WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
-                       CASE WHEN s.id IS NULL THEN NULL
-                            ELSE s.kind || ' №' || s.number
-                                 || coalesce(' | ' || to_char(s.arrived_on, 'DD.MM.YYYY'), '')
-                       END AS supply,
+                       """
+                       + SupplyKinds.sqlLabelWithArrival("s") + " AS supply," + """
                        -- Только подтверждённый снимок: у оборванной загрузки
                        -- и у неподтверждённой записи файла в хранилище нет,
                        -- и в колонке «Превью» висит битая картинка. Прайс
@@ -538,8 +537,9 @@ public class WheelService {
             Map.entry("description", "p.description"),
             Map.entry("note", "p.note"),
             Map.entry("section", "p.section"),
-            Map.entry("supply", "CASE WHEN s.id IS NULL THEN NULL"
-                    + " ELSE s.kind || ' №' || s.number END"),
+            // Тем же выражением, каким колонка выводится: разойдись они —
+            // выбранное из списка значение не находило бы ничего.
+            Map.entry("supply", SupplyKinds.sqlLabelWithArrival("s")),
             Map.entry("partName", "pn.name"),
             Map.entry("condition", "CASE p.condition WHEN 'NEW' THEN 'новая'"
                     + " WHEN 'USED' THEN 'б/у' WHEN 'REFURBISHED' THEN 'восстановленная' END"),
@@ -612,10 +612,8 @@ public class WheelService {
                          WHERE ph.part_id = p.id AND ph.status = 'PROCESSED') AS photo_count,
                        (SELECT o.raw_number FROM part_oem o
                          WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
-                       CASE WHEN s.id IS NULL THEN NULL
-                            ELSE s.kind || ' №' || s.number
-                                 || coalesce(' | ' || to_char(s.arrived_on, 'DD.MM.YYYY'), '')
-                       END AS supply""" + stock + """
+                       """
+                       + SupplyKinds.sqlLabelWithArrival("s") + " AS supply" + stock + """
 
                   FROM part p
                   JOIN part_wheel w ON w.part_id = p.id

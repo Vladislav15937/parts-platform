@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import ru.partsflow.shared.SupplyKinds;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -446,8 +447,9 @@ public class CatalogService {
             Map.entry("marking", "p.marking"),
             Map.entry("note", "p.note"),
             Map.entry("section", "p.section"),
-            Map.entry("supply", "CASE WHEN s.id IS NULL THEN NULL"
-                    + " ELSE s.kind || ' №' || s.number END"),
+            // Тем же выражением, каким колонка выводится: разойдись они —
+            // выбранное из списка значение не находило бы ничего.
+            Map.entry("supply", SupplyKinds.sqlLabelWithArrival("s")),
             Map.entry("published", "CASE WHEN p.is_published THEN 'Везде' ELSE 'Нет' END"),
             Map.entry("barcode", "p.barcode"),
             Map.entry("legacy", "p.legacy_code"),
@@ -714,10 +716,8 @@ public class CatalogService {
                        -- Поставка и комплектация — для карточки позиции.
                        -- Читаются вместе со строкой: карточка открывается
                        -- по нажатию и второй запрос ради двух полей не делает.
-                       CASE WHEN s.id IS NULL THEN NULL
-                            ELSE s.kind || ' №' || s.number
-                                 || coalesce(' | ' || to_char(s.arrived_on, 'DD.MM.YYYY'), '')
-                       END AS supply,
+                       """
+                       + SupplyKinds.sqlLabelWithArrival("s") + " AS supply," + """
                        nullif(concat_ws(', ',
                            CASE d.steering WHEN 'RIGHT' THEN 'правый руль'
                                            WHEN 'LEFT' THEN 'левый руль' END,
@@ -904,10 +904,8 @@ public class CatalogService {
                          WHERE tm.id = p.price_changed_by) AS price_changed_by_name,
                        (SELECT count(*) FROM part_photo ph
                          WHERE ph.part_id = p.id AND ph.status = 'PROCESSED') AS photo_count,
-                       CASE WHEN sp.id IS NULL THEN NULL
-                            ELSE sp.kind || ' №' || sp.number
-                                 || coalesce(' | ' || to_char(sp.arrived_on, 'DD.MM.YYYY'), '')
-                       END AS supply_label,
+                       """
+                       + SupplyKinds.sqlLabelWithArrival("sp") + " AS supply_label," + """
                        nullif(concat_ws(', ',
                            CASE d.steering WHEN 'RIGHT' THEN 'правый руль'
                                            WHEN 'LEFT' THEN 'левый руль' END,

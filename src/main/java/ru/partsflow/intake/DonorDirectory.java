@@ -1,5 +1,6 @@
 package ru.partsflow.intake;
 
+import ru.partsflow.shared.SupplyKinds;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
@@ -150,9 +151,6 @@ public class DonorDirectory {
     private static final Map<String, String> DRIVE =
             Map.of("FWD", "Передний", "RWD", "Задний", "AWD", "Полный");
 
-    private static final Map<String, String> SUPPLY_KINDS =
-            Map.of("CONTAINER", "Контейнер", "PURCHASE", "Закупка", "OTHER", "Поставка");
-
     /**
      * Поставка словами, а не кодом.
      *
@@ -160,12 +158,15 @@ public class DonorDirectory {
      * по-русски — а поставка уходила как «CONTAINER №16». Это внутреннее
      * представление на экране, ровно то, чего избегает выгрузка витрины,
      * где стороны пишутся «Задн.» и «Лев.», а не `REAR` и `LEFT`.
+     *
+     * <p>Словарь общий ({@link SupplyKinds}), а не свой: своя копия здесь
+     * и была причиной того, что починили одну поверхность из семи.
      */
     private static String supply(String kind, String number) {
         if (number == null) {
             return null;
         }
-        return label(SUPPLY_KINDS, kind) + " №" + number;
+        return SupplyKinds.label(kind, number);
     }
 
     private static final Map<String, String> TRANSMISSIONS = Map.of(

@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import ru.partsflow.shared.SupplyKinds;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -139,21 +140,46 @@ public class PartHistoryService {
         return new History(changes(partId, money), movements(partId));
     }
 
+    /**
+     * Число приводится к общему виду — один раз и для сравнения, и для показа.
+     *
+     * <p>Снимки сравнивались текстом, а Postgres хранит {@code numeric} со своей
+     * точностью: правка цены, не тронувшая себестоимость, оставляла в ленте
+     * строку «Себестоимость: было 1200.00, стало 1200.0». Это одно и то же
+     * число в разном написании — и правка денег, которой не было, у поля,
+     * ради которого историю и открывают. Заодно уходит разнобой в показе:
+     * «было 4700.00, стало 5200» читается как две разные величины.
+     *
+     * <p>Нечисловое сравнивается и показывается как есть: заметка «1 200»
+     * с пробелом числом не является, и приводить её не к чему.
+     */
+    private static String normalized(String value) {
+        return "CASE WHEN " + value + " ~ '^-?[0-9]+(\\.[0-9]+)?$'"
+                + " THEN trim_scale((" + value + ")::numeric)::text"
+                + " ELSE " + value + " END";
+    }
+
     // ------------------------------------------------------------------ правки
 
     private List<Change> changes(long partId, boolean money) {
         String columns = String.join(",", visibleFields(money));
 
+        String was = normalized("a.old_value ->> f.key");
+        String now = normalized("a.new_value ->> f.key");
+
         List<Diff> diffs = jdbc.query("""
                         SELECT a.id, a.changed_at, m.display_name AS author, f.key,
-                               a.old_value ->> f.key AS was,
-                               a.new_value ->> f.key AS now
+                        """ + was + """
+                            AS was,
+                        """ + now + """
+                            AS now
                           FROM audit_log a
                           CROSS JOIN unnest(string_to_array(?, ',')) AS f(key)
                           LEFT JOIN tenant_member m ON m.id = a.changed_by
                          WHERE a.table_name = 'part' AND a.record_id = ?
                            AND a.operation = 'UPDATE'
-                           AND (a.old_value ->> f.key) IS DISTINCT FROM (a.new_value ->> f.key)
+                           AND\s""" + was + " IS DISTINCT FROM " + now + """
+
                          ORDER BY a.changed_at DESC, a.id DESC,
                                   array_position(string_to_array(?, ','), f.key)""",
                 (rs, i) -> new Diff(rs.getLong("id"),
@@ -236,7 +262,8 @@ public class PartHistoryService {
             case "part_kind_id" ->
                     "SELECT id, name AS title FROM catalog.part_kind WHERE id IN (%s)";
             case "supply_id" ->
-                    "SELECT id, kind || ' №' || number AS title FROM supply WHERE id IN (%s)";
+                    "SELECT id, " + SupplyKinds.sqlLabel("supply")
+                            + " AS title FROM supply WHERE id IN (%s)";
             default -> null;
         };
         if (sql == null) {

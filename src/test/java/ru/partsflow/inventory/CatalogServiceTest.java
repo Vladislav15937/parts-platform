@@ -92,6 +92,46 @@ class CatalogServiceTest extends PostgresTestBase {
         assertThat(sold).isNotNull();
     }
 
+    /**
+     * Поставка на витрине названа словом, а не кодом.
+     *
+     * <p><b>Зачем.</b> «CONTAINER №18» на экране — внутреннее представление
+     * перед человеком, ровно то, чего избегает выгрузка витрины, где стороны
+     * пишутся «Задн.» и «Лев.». Один раз это уже чинили — в карточке машины,
+     * у которой была своя копия словаря, — и именно копия оставила без
+     * исправления остальные шесть поверхностей: таблицу витрины, список
+     * значений её отбора, скачанный файл и те же три у колёс.
+     *
+     * <p>Список значений сверяется тем же выражением, каким колонка выводится:
+     * разойдись они — выбранное из списка значение не находило бы ничего.
+     */
+    @Test
+    @DisplayName("Поставка на витрине и в отборе названа словом, а не кодом")
+    void supplyIsNamedInWords() {
+        Long partId = inTenant(() -> {
+            Long supply = jdbc.queryForObject("""
+                    INSERT INTO supply (kind, number, arrived_on)
+                    VALUES ('CONTAINER', '18', DATE '2026-08-30') RETURNING id""", Long.class);
+            Long donor = jdbc.queryForObject("""
+                    INSERT INTO donor (public_code, brand_id, supply_id)
+                    VALUES ('ВИТР-1', ?, ?) RETURNING id""", Long.class, BRAND, supply);
+            Long id = part("Фара из контейнера", 1);
+            jdbc.update("UPDATE part SET donor_id = ? WHERE id = ?", donor, id);
+            return id;
+        });
+
+        var row = rowOf(partId, "Фара из контейнера");
+        assertThat(row.supply())
+                .as("поставка ушла на экран кодом")
+                .isEqualTo("Контейнер №18 | 30.08.2026");
+
+        // То же слово обязано быть в списке значений отбора — иначе выбранное
+        // в меню не найдёт ничего, а причина будет видна только в SQL.
+        assertThat(inTenant(() -> catalog.values("supply")))
+                .as("список значений отбора говорит кодом")
+                .contains("Контейнер №18 | 30.08.2026");
+    }
+
     @Test
     @DisplayName("Остаток приходит по складам, а не одним числом")
     void stockIsPerWarehouse() {
