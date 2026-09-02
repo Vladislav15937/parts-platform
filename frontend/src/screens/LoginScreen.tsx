@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ApiError } from '../api/client';
 import { useSession } from '../auth/SessionProvider';
@@ -18,6 +18,12 @@ import { useSession } from '../auth/SessionProvider';
 const COMPANY_KEY = 'partsflow.company';
 
 export function LoginScreen() {
+  // Заголовок вкладки возвращается к входу: он следует за разделом, и после
+  // потери сессии на экране входа осталось бы «Очередь отправки — PartsFlow».
+  useEffect(() => {
+    document.title = 'Вход — PartsFlow';
+  }, []);
+
   const { signIn, state } = useSession();
   const [company, setCompany] = useState(() => localStorage.getItem(COMPANY_KEY) ?? '');
   const [login, setLogin] = useState('');

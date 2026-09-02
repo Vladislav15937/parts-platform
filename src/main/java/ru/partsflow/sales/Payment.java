@@ -1,5 +1,7 @@
 package ru.partsflow.sales;
 
+import org.hibernate.annotations.Generated;
+import org.hibernate.generator.EventType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -49,6 +51,8 @@ public class Payment {
 
     private String comment;
 
+    /** Момент оплаты ставит база; без этого ответ на оплату уходит с null. */
+    @Generated(event = EventType.INSERT)
     @Column(name = "paid_at", insertable = false, updatable = false)
     private Instant paidAt;
 

@@ -222,7 +222,12 @@ class SalesControllerTest extends PostgresTestBase {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"amount\":6000}"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.amount").value(6000));
+                .andExpect(jsonPath("$.amount").value(6000))
+                // Момент оплаты ставит база, и вычитывать его обязан Hibernate —
+                // как номер документа. Иначе ответ на оплату уходит с null,
+                // а тип на клиенте объявляет строку: первый же экран, решивший
+                // показать время платежа, нарисует «01.01.1970».
+                .andExpect(jsonPath("$.paidAt").isNotEmpty());
 
         // Округлили вверх, отдали лишнюю тысячу — обычное дело на разборке.
         assertThat(accountBalance())

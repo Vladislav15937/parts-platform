@@ -1,5 +1,7 @@
 package ru.partsflow.sales;
 
+import org.hibernate.annotations.Generated;
+import org.hibernate.generator.EventType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -50,6 +52,13 @@ public class CustomerAccountEntry {
     @Column(name = "created_by")
     private Long createdBy;
 
+    /**
+     * Момент ставит база, и вычитывать его обязан Hibernate — как номер
+     * документа. Иначе запись, только что положенная на счёт, уходит наружу
+     * с {@code createdAt: null}, а журнал счёта показывают датой: экран
+     * спасает лишь то, что он перечитывает счёт запросом.
+     */
+    @Generated(event = EventType.INSERT)
     @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
 
