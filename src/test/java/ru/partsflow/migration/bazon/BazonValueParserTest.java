@@ -370,4 +370,26 @@ class BazonValueParserTest {
             assertThat(BazonValueParser.parseInteger("0")).isZero();
         }
     }
+
+    /**
+     * «Везде» — то самое написание, а не экзотика.
+     *
+     * <p>Так колонка «Выгружать» подписана в таблице товаров прежней системы,
+     * и наша витрина списана с неё слово в слово. То есть значение, которое
+     * вернее всего и придёт в выгрузке, читалось как непонятное — и клиент,
+     * включивший колонку по инструкции, получал весь склад без разрешения
+     * публиковать: прайс уезжал пустым при полностью рабочем коде. Хуже, чем
+     * отсутствие колонки: там предупреждение есть, здесь его не было.
+     */
+    @Test
+    @DisplayName("«Везде» означает «выгружать», а незнакомое слово — не «нет»")
+    void publishFlagUnderstandsTheWordFromTheCabinet() {
+        assertThat(BazonValueParser.parsePublishFlag("Везде")).isTrue();
+        assertThat(BazonValueParser.parsePublishFlag("везде")).isTrue();
+        assertThat(BazonValueParser.parsePublishFlag("Нет")).isFalse();
+
+        // Непонятое остаётся непонятым, а не превращается в «нет»: решение
+        // принимает вызывающий, и он же обязан сказать об этом человеку.
+        assertThat(BazonValueParser.parsePublishFlag("на всех площадках")).isNull();
+    }
 }

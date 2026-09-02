@@ -160,6 +160,13 @@ public class Deal {
     @Column(name = "created_by")
     private Long createdBy;
 
+    /**
+     * Момент создания ставит база, и Hibernate обязан его вычитать — как
+     * и номер документа. Без этого только что созданная сделка возвращается
+     * наружу с {@code createdAt: null}, а тип на клиенте объявляет строку:
+     * первый же экран, который решит показать дату, нарисует «01.01.1970».
+     */
+    @Generated(event = EventType.INSERT)
     @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
 

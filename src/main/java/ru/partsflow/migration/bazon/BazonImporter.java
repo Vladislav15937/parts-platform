@@ -706,6 +706,26 @@ public final class BazonImporter {
                 + "либо включите выгрузку отбором на витрине склада");
     }
 
+    /**
+     * Колонка «Выгружать» есть, а её значения не разобраны.
+     *
+     * <p>Тише и хуже, чем отсутствие колонки: там предупреждение есть, здесь
+     * его не было. Непонятое значение молча означает «не публиковать», и склад
+     * уезжает на площадку пустым — узнают об этом по исчезнувшим объявлениям
+     * через несколько дней. Значение называется дословно: по нему видно,
+     * что именно писала прежняя система, и парсеру можно добавить слово.
+     */
+    private static void warnUnknownPublishValues(ImportReport report, java.util.Set<String> values) {
+        if (values.isEmpty()) {
+            return;
+        }
+        report.problem(1, "колонка «Выгружать» заполнена значениями, которых перенос "
+                + "не понимает: " + String.join(", ", values)
+                + ". Эти позиции импортированы без разрешения публиковать — "
+                + "включите выгрузку отбором на витрине склада и сообщите разработчику "
+                + "написание, чтобы оно понималось впредь");
+    }
+
     // ---------- товары ----------
 
     private void importParts(Path catalogCsv, long categoryId,
@@ -714,6 +734,10 @@ public final class BazonImporter {
                              ImportReport report) throws SQLException {
 
         boolean publishFlagMissing;
+        // Значения колонки «Выгружать», которых парсер не знает. Пустой список —
+        // либо колонки нет вовсе (о ней предупреждает отдельная проверка), либо
+        // всё разобрано.
+        java.util.Set<String> unknownPublishValues = new java.util.LinkedHashSet<>();
         List<BazonWarehouseColumns.Warehouse> warehouseColumns;
         try (InputStream in = Files.newInputStream(catalogCsv);
              BazonCsvReader reader = new BazonCsvReader(in)) {
@@ -771,7 +795,7 @@ public final class BazonImporter {
                         savepoint = c.setSavepoint();
 
                         Object[] values = partValues(row, donorSupplies, donors, partNames);
-                        Long partId = insertPart(insertPart, values, row, categoryId);
+                        Long partId = insertPart(insertPart, values, row, unknownPublishValues, categoryId);
                         if (partId == null) {
                             // Уже загружена. Не пропускаем целиком, как раньше:
                             // дозаполняем пустое, дописываем номера и ставим
@@ -814,6 +838,7 @@ public final class BazonImporter {
         if (publishFlagMissing) {
             warnPublishFlagMissing(report);
         }
+        warnUnknownPublishValues(report, unknownPublishValues);
     }
 
 
@@ -948,6 +973,7 @@ public final class BazonImporter {
     }
 
     private Long insertPart(PreparedStatement ps, Object[] values, BazonCsvReader.Row row,
+                            java.util.Set<String> unknownPublish,
                             long categoryId) throws SQLException {
 
         var years = BazonValueParser.parseYearRange(row.get("Год выпуска"));
@@ -966,7 +992,15 @@ public final class BazonImporter {
         // в выгрузке нет, публикацию не включаем — выложить чужой склад
         // на площадку по своей инициативе нельзя. О пропаже предупреждает
         // warnIfPublishFlagMissing.
-        Boolean publish = BazonValueParser.parsePublishFlag(row.get("Выгружать"));
+        String publishRaw = row.get("Выгружать");
+        Boolean publish = BazonValueParser.parsePublishFlag(publishRaw);
+        if (publish == null && publishRaw != null && !publishRaw.isBlank()) {
+            // Молчать тут нельзя: непонятое значение гасит публикацию всему
+            // складу, а предупреждение об отсутствующей колонке не сработает —
+            // колонка-то на месте. Владелец узнал бы об этом по пустому прайсу
+            // через несколько дней.
+            unknownPublish.add(publishRaw.trim());
+        }
         ps.setBoolean(at, Boolean.TRUE.equals(publish));
 
         try (ResultSet rs = ps.executeQuery()) {

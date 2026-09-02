@@ -75,6 +75,11 @@ public class DealReturn {
     @Column(name = "created_by")
     private Long createdBy;
 
+    /**
+     * Как и у сделки: момент ставит база, и вычитывать его обязан Hibernate.
+     * Ответ на оформление возврата иначе уходит с {@code createdAt: null}.
+     */
+    @Generated(event = EventType.INSERT)
     @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
 
