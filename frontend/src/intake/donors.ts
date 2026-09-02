@@ -20,6 +20,8 @@ export interface DonorEntry {
   vin: string | null;
   status: DonorStatus;
   note: string | null;
+  /** Где машина стоит: ряд, площадка, бокс. Свободный текст владельца. */
+  location: string | null;
 }
 
 export type DonorStatus = 'PURCHASED' | 'DISMANTLING' | 'DISMANTLED' | 'SCRAPPED';
@@ -107,4 +109,48 @@ export function registerSupply(
     method: 'POST',
     body: { number, kind, supplierName },
   });
+}
+
+/**
+ * Переставляет машину: «где она стоит».
+ *
+ * <p><b>Зачем.</b> `POST /api/intake/donors/{id}/location` написан с самого
+ * начала, поле приезжало в карточку — а звать этот путь было некому, и
+ * показывать значение тоже негде. На площадке с полусотней машин «где она
+ * стоит» это единственный способ её найти, и держалось оно в голове того,
+ * кто её ставил. Найдено перебором эндпоинтов против того, что зовёт
+ * фронтенд (`tools/endpoint-coverage.py`).
+ *
+ * <p>Пустая строка законна: машину увезли, и «неизвестно где» честнее
+ * прежнего ряда, которого там уже нет.
+ */
+export function moveDonor(id: number, location: string): Promise<unknown> {
+  return request<unknown>(
+    `/api/intake/donors/${id}/location?location=${encodeURIComponent(location)}`,
+    { method: 'POST' },
+  );
+}
+
+/**
+ * Отмечает, что партия приехала.
+ *
+ * <p>Дата приходит явно, а не подставляется сервером. Он умеет и без неё —
+ * тогда встанет сегодняшняя, — но контейнер отмечают и задним числом,
+ * а подставленное молча значение читается как факт: приёмщик его не видит
+ * и не оспаривает. На экране оно стоит в поле перед нажатием.
+ */
+export function markSupplyArrived(id: number, on: string): Promise<unknown> {
+  return request<unknown>(`/api/intake/supplies/${id}/arrived?on=${on}`, { method: 'POST' });
+}
+
+/**
+ * Машины, пришедшие этой партией: «что было в контейнере».
+ *
+ * <p>Отдаёт тот же список, что и экран машин, — с номером клиента, маркой
+ * и заметкой. Прежде этот путь возвращал внутренний код, которого владелец
+ * никогда не видел: столбец шестнадцатеричных знаков вместо «350 · Toyota
+ * Camry 2007». Ровно на этом краснел отчёт окупаемости.
+ */
+export function donorsOfSupply(id: number): Promise<DonorEntry[]> {
+  return request<DonorEntry[]>(`/api/intake/supplies/${id}/donors`);
 }

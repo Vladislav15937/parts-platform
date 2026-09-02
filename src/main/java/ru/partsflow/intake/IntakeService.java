@@ -124,12 +124,6 @@ public class IntakeService {
         return donors.saveAndFlush(donor);
     }
 
-    /** Машины одной поставки: контейнер разбирают целиком. */
-    @Transactional(readOnly = true)
-    public List<Donor> donorsOf(Long supplyId) {
-        return donors.findBySupplyIdOrderByIdAsc(supplyId);
-    }
-
     @Transactional
     public Donor startDismantling(Long donorId) {
         Donor donor = requireDonor(donorId);
