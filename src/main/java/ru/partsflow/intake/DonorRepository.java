@@ -11,8 +11,5 @@ public interface DonorRepository extends JpaRepository<Donor, Long> {
 
     Optional<Donor> findByVin(String vin);
 
-    /** Машины одной поставки: контейнер разбирают целиком. */
-    List<Donor> findBySupplyIdOrderByIdAsc(Long supplyId);
-
     List<Donor> findByStatusOrderByIdDesc(Donor.DonorStatus status);
 }

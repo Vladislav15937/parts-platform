@@ -1,6 +1,7 @@
 package ru.partsflow.intake;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,26 +33,46 @@ public class DonorDirectory {
      */
     @Transactional(readOnly = true)
     public List<Entry> all() {
-        return jdbc.query("""
-                SELECT d.id, d.public_code, d.legacy_code, d.vin, d.year, d.status, d.note,
-                       b.name AS brand, m.name AS model
-                  FROM donor d
-                  LEFT JOIN catalog.brand b ON b.id = d.brand_id
-                  LEFT JOIN catalog.model m ON m.id = d.model_id
-                 ORDER BY d.id DESC""",
-                (rs, i) -> new Entry(
-                        rs.getLong("id"),
-                        // Тот же выбор, что в карточке машины и в отчёте
-                        // окупаемости: клиент зовёт машину своим номером.
-                        rs.getString("legacy_code") == null
-                                ? rs.getString("public_code") : rs.getString("legacy_code"),
-                        rs.getString("brand"),
-                        rs.getString("model"),
-                        rs.getObject("year") == null ? null : rs.getInt("year"),
-                        rs.getString("vin"),
-                        rs.getString("status"),
-                        rs.getString("note")));
+        return jdbc.query(LIST + " ORDER BY d.id DESC", ROW);
     }
+
+    /**
+     * Машины одной поставки: контейнер разбирают целиком, и «что пришло этой
+     * партией» — вопрос, ради которого поставки и заведены.
+     *
+     * <p><b>Тот же запрос, что и список машин, а не свой.</b> Своим он отдавал
+     * бы машину под другим именем: {@code DonorView} несёт внутренний
+     * {@code public_code}, и экран показал бы владельцу столбец
+     * шестнадцатеричных кодов, которых он никогда не видел. Ровно на этом
+     * краснел отчёт окупаемости, пока не начал звать машину так, как её зовёт
+     * клиент. Две подписи одной машины разошлись бы на первой же правке.
+     */
+    @Transactional(readOnly = true)
+    public List<Entry> ofSupply(long supplyId) {
+        return jdbc.query(LIST + " WHERE d.supply_id = ? ORDER BY d.id DESC", ROW, supplyId);
+    }
+
+    private static final String LIST = """
+            SELECT d.id, d.public_code, d.legacy_code, d.vin, d.year, d.status, d.note,
+                   d.location,
+                   b.name AS brand, m.name AS model
+              FROM donor d
+              LEFT JOIN catalog.brand b ON b.id = d.brand_id
+              LEFT JOIN catalog.model m ON m.id = d.model_id""";
+
+    private static final RowMapper<Entry> ROW = (rs, i) -> new Entry(
+            rs.getLong("id"),
+            // Тот же выбор, что в карточке машины и в отчёте
+            // окупаемости: клиент зовёт машину своим номером.
+            rs.getString("legacy_code") == null
+                    ? rs.getString("public_code") : rs.getString("legacy_code"),
+            rs.getString("brand"),
+            rs.getString("model"),
+            rs.getObject("year") == null ? null : rs.getInt("year"),
+            rs.getString("vin"),
+            rs.getString("status"),
+            rs.getString("note"),
+            rs.getString("location"));
 
     /**
      * Машина, с которой снята позиция, — для её карточки.
@@ -181,7 +202,8 @@ public class DonorDirectory {
      *             и наш внутренний, если машину завели уже у нас
      */
     public record Entry(long id, String code, String brand, String model,
-                        Integer year, String vin, String status, String note) {
+                        Integer year, String vin, String status, String note,
+                        String location) {
     }
 
     /**

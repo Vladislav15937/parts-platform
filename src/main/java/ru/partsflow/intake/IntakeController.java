@@ -192,9 +192,15 @@ public class IntakeController {
         return ResponseEntity.status(HttpStatus.CREATED).body(ReceiptView.of(receipt));
     }
 
+    /**
+     * Машины, пришедшие этой партией.
+     *
+     * <p>Отдаёт тот же список, что и экран машин, а не {@code DonorView}:
+     * тот несёт внутренний код, которого владелец никогда не видел.
+     */
     @GetMapping("/supplies/{id}/donors")
-    public List<DonorView> donorsOfSupply(@PathVariable Long id) {
-        return intake.donorsOf(id).stream().map(DonorView::of).toList();
+    public List<DonorDirectory.Entry> donorsOfSupply(@PathVariable Long id) {
+        return donorDirectory.ofSupply(id);
     }
 
     // ---------- запросы ----------

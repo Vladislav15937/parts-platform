@@ -172,6 +172,41 @@ class DonorCostServiceTest extends PostgresTestBase {
                 .isEqualTo("350");
     }
 
+    /**
+     * Машины партии — «что пришло этим контейнером».
+     *
+     * <p>Вопрос, ради которого поставки и заведены: по партии разбирают, что
+     * из контейнера ещё не продано. Отдаётся тем же запросом, что и список
+     * машин, а не своим: прежний путь возвращал внутренний {@code public_code},
+     * и владелец увидел бы столбец шестнадцатеричных знаков вместо «350».
+     * Ровно на этом краснел отчёт окупаемости.
+     */
+    @Test
+    @DisplayName("Машины партии названы номером клиента и чужих не захватывают")
+    void supplyDonorsAreNamedAsTheOwnerNamesThem() {
+        long supplyId = inTenant(() -> {
+            jdbc.update("UPDATE donor SET supply_id = NULL");
+            jdbc.update("DELETE FROM supply");
+            Long ours = jdbc.queryForObject("""
+                    INSERT INTO supply (kind, number) VALUES ('CONTAINER', '18')
+                    RETURNING id""", Long.class);
+            Long other = jdbc.queryForObject("""
+                    INSERT INTO supply (kind, number) VALUES ('CONTAINER', '19')
+                    RETURNING id""", Long.class);
+            jdbc.update("UPDATE donor SET legacy_code = '350', supply_id = ? WHERE id = ?",
+                    ours, donorId);
+            jdbc.update("""
+                    INSERT INTO donor (public_code, brand_id, supply_id)
+                    VALUES ('ТЕСТ-2', ?, ?)""", brandId, other);
+            return ours;
+        });
+
+        assertThat(inTenant(() -> directory.ofSupply(supplyId)))
+                .singleElement()
+                .extracting(DonorDirectory.Entry::code)
+                .isEqualTo("350");
+    }
+
     private <T> T inTenant(Supplier<T> action) {
         try {
             TenantContext.set(TENANT);

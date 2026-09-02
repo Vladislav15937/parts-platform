@@ -15,6 +15,7 @@ import type { Reference } from '../reference/reference';
 import { DonorCosts } from './DonorCosts';
 import {
   donorTitle,
+  moveDonor,
   listDonors,
   registerSupply,
   startDismantling,
@@ -23,6 +24,7 @@ import {
 } from '../intake/donors';
 import { ScanOverlay } from '../scan/ScanOverlay';
 import { shown } from '../ui/plural';
+import { SupplyList } from './SupplyList';
 
 /**
  * Заведение машины-донора.
@@ -49,6 +51,10 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
   // не во что, а после — покупка, эвакуатор и разбор идут отдельными
   // платежами и в разные дни.
   const [costsOf, setCostsOf] = useState<number | null>(null);
+  // Где стоит машина — правится прямо в строке: значение и поле ввода
+  // в одной клетке, иначе владелец ищет, куда делась строка после нажатия.
+  const [movingId, setMovingId] = useState<number | null>(null);
+  const [place, setPlace] = useState('');
   const [donors, setDonors] = useState<DonorEntry[]>([]);
   const [query, setQuery] = useState('');
   const [supplyNumber, setSupplyNumber] = useState('');
@@ -123,7 +129,11 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
   const found = needle === ''
     ? donors
     : donors.filter((donor) =>
-        `${donorTitle(donor)} ${donor.vin ?? ''}`.toLowerCase().includes(needle));
+        // Ищется по тому же, что видно в строке, плюс VIN. Место попало
+        // сюда вместе с колонкой: «покажи всё, что стоит во втором ряду» —
+        // вопрос, который задают, стоя на площадке.
+        `${donorTitle(donor)} ${donor.location ?? ''} ${donor.vin ?? ''}`
+          .toLowerCase().includes(needle));
 
   const models = modelsOf(catalog, brand?.id ?? null);
   const generations = generationsOf(catalog, modelId);
@@ -381,7 +391,7 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
         <input
           type="search"
           value={query}
-          placeholder="Найти машину — номер, марка, модель, заметка, VIN"
+          placeholder="Найти машину — номер, марка, модель, заметка, место, VIN"
           onChange={(e) => setQuery(e.target.value)}
         />
         {query.trim() !== '' && (
@@ -398,6 +408,7 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
             <tr>
               <th>Машина</th>
               <th>Состояние</th>
+              <th>Где стоит</th>
               <th />
             </tr>
           </thead>
@@ -407,6 +418,47 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
               <tr>
                 <td>{donorTitle(donor)}</td>
                 <td>{statusTitle(donor.status)}</td>
+                {/* Где стоит машина. Поле заполнялось только запросом к API
+                    и не показывалось нигде — на площадке в полсотни машин
+                    это единственный способ её найти, и держалось оно
+                    в голове того, кто её ставил. */}
+                <td>
+                  {movingId === donor.id ? (
+                    <span className="filter-row">
+                      <input
+                        autoFocus
+                        aria-label={`Где стоит ${donorTitle(donor)}`}
+                        value={place}
+                        placeholder="ряд 2, место 14"
+                        onChange={(e) => setPlace(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void moveTo(donor.id);
+                          if (e.key === 'Escape') setMovingId(null);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        disabled={busy || !online}
+                        onClick={() => void moveTo(donor.id)}
+                      >
+                        Сохранить
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="button--ghost"
+                      onClick={() => {
+                        setMovingId(donor.id);
+                        setPlace(donor.location ?? '');
+                      }}
+                    >
+                      {donor.location !== null && donor.location !== ''
+                        ? donor.location
+                        : 'не указано'}
+                    </button>
+                  )}
+                </td>
                 <td className="filter-row">
                   {donor.status === 'PURCHASED' && (
                     <button
@@ -434,7 +486,7 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
                   и не видел ничего, кроме сменившейся надписи на кнопке. */}
               {costsOf === donor.id && (
                 <tr>
-                  <td colSpan={3}>
+                  <td colSpan={4}>
                     <DonorCosts donorId={donor.id} title={donorTitle(donor)} />
                   </td>
                 </tr>
@@ -451,6 +503,12 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
           IntakeReferenceServiceTest. А у переехавшего клиента разобраны
           все 440 машин: прочитав прежний текст, он решил бы, что принимать
           на них нельзя вовсе, и заводил бы детали без машины. */}
+      <hr />
+
+      <SupplyList supplies={reference.supplies} online={online} onChanged={onChanged} />
+
+      <hr />
+
       <p className="note">
         Деталь принимают на машину, которую разбирают или уже разобрали:
         вернуться за забытой мелочью через неделю — обычное дело. А купленной
@@ -529,6 +587,25 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
       setDonors(await listDonors());
     } catch {
       // Машины не догрузились — форма заведения от этого не ломается.
+    }
+  }
+
+  /**
+   * Переставляет машину. Список перечитывается целиком: место видно в строке,
+   * и оставить на экране прежнее значит показать владельцу площадку,
+   * которой уже нет.
+   */
+  async function moveTo(id: number): Promise<void> {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await moveDonor(id, place.trim());
+      setMovingId(null);
+      await reloadDonors();
+    } catch (cause) {
+      setMessage(describe(cause, 'Переставить машину не удалось'));
+    } finally {
+      setBusy(false);
     }
   }
 
