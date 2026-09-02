@@ -39,13 +39,16 @@ public class StockLedger {
     private final StockMovementRepository movements;
     private final EntityManager entityManager;
     private final PartChangeLog partChanges;
+    private final StockNaming naming;
 
     public StockLedger(StockMovementRepository movements,
                        EntityManager entityManager,
-                       PartChangeLog partChanges) {
+                       PartChangeLog partChanges,
+                       StockNaming naming) {
         this.movements = movements;
         this.entityManager = entityManager;
         this.partChanges = partChanges;
+        this.naming = naming;
     }
 
     /**
@@ -151,18 +154,19 @@ public class StockLedger {
             // Молча пропустив, мы получили бы журнал, по которому со склада
             // уносили то, чего там нет.
             return new IllegalStateException(
-                    "Нет остатка детали %d на складе %d: списывать нечего"
-                            .formatted(movement.getPartId(), movement.getFromWarehouseId()));
+                    "На складе %s нет остатка: %s — списывать нечего"
+                            .formatted(naming.warehouse(movement.getFromWarehouseId()),
+                                    naming.part(movement.getPartId())));
         }
 
         BigDecimal qty = (BigDecimal) rows.get(0)[0];
         BigDecimal reserved = (BigDecimal) rows.get(0)[1];
         return new StockReservationRepository.InsufficientStockException(
-                "На складе %d свободно %s, а требуется %s: деталь %d"
-                        .formatted(movement.getFromWarehouseId(),
+                "На складе %s свободно %s, а требуется %s: %s"
+                        .formatted(naming.warehouse(movement.getFromWarehouseId()),
                                 plain(qty.subtract(reserved)),
                                 plain(movement.getQtyDelta().abs()),
-                                movement.getPartId()),
+                                naming.part(movement.getPartId())),
                 null);
     }
 

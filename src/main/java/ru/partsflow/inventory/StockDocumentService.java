@@ -21,17 +21,20 @@ public class StockDocumentService {
     private final StockReservationRepository stock;
     private final PartChangeLog partChanges;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+    private final StockNaming naming;
 
     public StockDocumentService(StockDocumentRepository documents,
                                StockLedger ledger,
                                StockReservationRepository stock,
                                PartChangeLog partChanges,
-                               org.springframework.jdbc.core.JdbcTemplate jdbc) {
+                               org.springframework.jdbc.core.JdbcTemplate jdbc,
+                                StockNaming naming) {
         this.documents = documents;
         this.ledger = ledger;
         this.stock = stock;
         this.partChanges = partChanges;
         this.jdbc = jdbc;
+        this.naming = naming;
     }
 
     @Transactional
@@ -143,10 +146,11 @@ public class StockDocumentService {
                 stock.availableQuantity(line.getPartId(), document.getWarehouseId());
         if (available.compareTo(line.getQty()) < 0) {
             throw new StockReservationRepository.InsufficientStockException(
-                    "На складе свободно %s, а требуется %s: деталь %d"
-                            .formatted(available.stripTrailingZeros().toPlainString(),
+                    "На складе %s свободно %s, а требуется %s: %s"
+                            .formatted(naming.warehouse(document.getWarehouseId()),
+                                    available.stripTrailingZeros().toPlainString(),
                                     line.getQty().stripTrailingZeros().toPlainString(),
-                                    line.getPartId()),
+                                    naming.part(line.getPartId())),
                     null);
         }
     }

@@ -154,7 +154,18 @@ class WriteOffTest extends PostgresTestBase {
                 .andExpect(status().isConflict())
                 .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
 
+        // Отказ называет склад и деталь так, как их зовёт человек: «деталь 6»
+        // и «склад 1» — внутренние номера, которых кладовщик никогда не видел,
+        // а увозит он документом несколько позиций сразу и должен понять,
+        // на какой споткнулся.
         assertThat(message).contains("свободно 0").contains("требуется 2");
+        assertThat(message)
+                .as("отказ назвал деталь внутренним номером")
+                .contains(titleOf(partId))
+                .doesNotContain("деталь " + partId);
+        assertThat(message)
+                .as("отказ не назвал склад")
+                .contains(warehouseName());
         assertThat(onHand(partId)).isEqualByComparingTo("2");
     }
 
@@ -257,6 +268,16 @@ class WriteOffTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 .andReturn();
         return (MockHttpSession) result.getRequest().getSession(false);
+    }
+
+    private String titleOf(long id) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT title FROM part WHERE id = ?", String.class, id));
+    }
+
+    private String warehouseName() {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT name FROM warehouse WHERE id = ?", String.class, warehouseId));
     }
 
     private <T> T inTenant(Supplier<T> body) {

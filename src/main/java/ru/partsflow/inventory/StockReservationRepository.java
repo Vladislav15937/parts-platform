@@ -46,10 +46,13 @@ public class StockReservationRepository {
 
     private final EntityManager entityManager;
     private final PartChangeLog partChanges;
+    private final StockNaming naming;
 
-    public StockReservationRepository(EntityManager entityManager, PartChangeLog partChanges) {
+    public StockReservationRepository(EntityManager entityManager, PartChangeLog partChanges,
+                                      StockNaming naming) {
         this.entityManager = entityManager;
         this.partChanges = partChanges;
+        this.naming = naming;
     }
 
     /**
@@ -80,8 +83,12 @@ public class StockReservationRepository {
 
         if (updated == 0) {
             throw new InsufficientStockException(
-                    "Недостаточно свободного остатка: деталь %d, склад %d, требуется %s"
-                            .formatted(partId, warehouseId, quantity));
+                    // Продавец стоит перед покупателем: «деталь 6, склад 1»
+                    // не говорит ему ни что кончилось, ни где смотреть.
+                    "Недостаточно свободного остатка на складе %s: нужно %s — %s"
+                            .formatted(naming.warehouse(warehouseId),
+                                    quantity.stripTrailingZeros().toPlainString(),
+                                    naming.part(partId)));
         }
 
         // На площадку уезжает свободный остаток, а не общий: отложенная деталь
@@ -110,8 +117,10 @@ public class StockReservationRepository {
             // безобидная операция: молча пропустив его, мы оставим деталь
             // заблокированной навсегда.
             throw new InsufficientStockException(
-                    "Нечего снимать с резерва: деталь %d, склад %d, требуется %s"
-                            .formatted(partId, warehouseId, quantity));
+                    "Нечего снимать с резерва на складе %s: требуется %s — %s"
+                            .formatted(naming.warehouse(warehouseId),
+                                    quantity.stripTrailingZeros().toPlainString(),
+                                    naming.part(partId)));
         }
 
         partChanges.changed(partId);
