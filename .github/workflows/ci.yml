@@ -45,6 +45,21 @@ jobs:
       - name: db/check-changelog.py
         run: ./db/check-changelog.py
 
+  endpoints:
+    name: Эндпоинты и экраны
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # «Эндпоинт без экрана — это отсутствующая возможность» находилось
+      # восемь раз подряд, и каждый раз одинаково: не чтением кода, а попыткой
+      # пройти сценарий и упереться в то, что кнопки нет. Написанный и покрытый
+      # тестами эндпоинт при этом выглядит работающей возможностью в любом
+      # отчёте — поэтому сверка идёт перебором, а не внимательностью.
+      - name: tools/endpoint-coverage.py
+        run: ./tools/endpoint-coverage.py
+
   migrations:
     name: Миграции на чистой базе
     runs-on: ubuntu-latest
