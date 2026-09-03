@@ -45,6 +45,19 @@ describe('колонки витрины', () => {
     expect(value('sideLr', row())).toBe('');
   });
 
+  it('рестайлинг не повторяет поколение', () => {
+    // Обе колонки показывали один диапазон в каждой строке: имя поколения
+    // в поставляемом справочнике и есть диапазон лет («1986—1990» у всех
+    // 12 430 записей), а «Рестайлинг» складывал те же годы из соседних полей.
+    // Владелец читал их как два разных факта. Данных о рестайлинге у нас нет
+    // (`catalog.generation.is_restyling` не заполнен ни у одной записи),
+    // и колонка говорит об этом прочерком.
+    const r = row({ generation: '2006—2008', yearFrom: 2006, yearTo: 2008 });
+    expect(value('generation', r)).toBe('2006—2008');
+    expect(value('restyling', r)).toBe('—');
+    expect(value('restyling', r)).not.toBe(value('generation', r));
+  });
+
   it('состояние берётся из оценки, а при её отсутствии — из вида', () => {
     expect(value('quality', row({ qualityGrade: 'C' }))).toBe('C');
     expect(value('quality', row({ condition: 'NEW' }))).toBe('новая');
