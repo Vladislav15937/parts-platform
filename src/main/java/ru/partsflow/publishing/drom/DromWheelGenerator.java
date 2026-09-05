@@ -237,12 +237,17 @@ public class DromWheelGenerator {
     /** Итератор поверх курсора: строки не накапливаются. */
     private static final class OfferCursor implements Iterator<DromWheelOffer> {
 
-        private static final int MAX_PHOTOS = 10;
-
         private final ResultSet resultSet;
         private final String photoBase;
 
-        /** Как собирается файл: наценка на прайс-лист и округление. */
+        /**
+         * Как собирается файл: наценка на прайс-лист, округление и число
+         * снимков в объявлении.
+         *
+         * <p>Настройка, доехавшая до прайса запчастей и не доехавшая сюда,
+         * даёт два файла одного клиента, собранные по разным правилам, —
+         * и увидеть это можно будет только на чужом сайте.
+         */
         private final ru.partsflow.publishing.FeedSettings settings;
 
         private Boolean hasNext;
@@ -306,7 +311,7 @@ public class DromWheelGenerator {
                     spike(rs.getString("season")),
                     year(rs),
                     used ? wearPercent(rs.getBigDecimal("wear_mm")) : null,
-                    photoLinks(rs.getString("photo_ids"), photoBase));
+                    photoLinks(rs.getString("photo_ids"), photoBase, settings));
         }
 
         /**
@@ -434,12 +439,14 @@ public class DromWheelGenerator {
             return Math.min(percent, 100);
         }
 
-        private static List<String> photoLinks(String ids, String base) {
+        /** Число снимков задаёт выгрузка; ноль у неё — «без ограничения». */
+        private static List<String> photoLinks(String ids, String base,
+                                               ru.partsflow.publishing.FeedSettings settings) {
             if (base == null || ids == null || ids.isBlank()) {
                 return List.of();
             }
             return java.util.Arrays.stream(ids.split(","))
-                    .limit(MAX_PHOTOS)
+                    .limit(settings.photosPerOffer())
                     .map(id -> base + id + ".jpg")
                     .toList();
         }
