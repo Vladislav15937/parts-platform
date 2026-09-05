@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
+import { count, plural } from '../ui/plural';
 import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
 import {
@@ -101,10 +102,26 @@ export function SellerScreen({ canSell, role }: Props) {
   // приезжает через неделю. Без поиска по клиенту до его сделки не добраться.
   const [finding, setFinding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Куда уводит нажатие на счётчик. Блок оформления лежит под списком
+  // находок, и добираться до него прокруткой — то самое, ради чего
+  // счётчик и заводили.
+  const basket = useRef<HTMLHeadingElement>(null);
 
   return (
     <section className="card">
-      <h2>Продажа</h2>
+      {/* Шапка экрана не уезжает вместе со списком: «фара» — это полсотни
+          показанных строк, то есть два экрана прокрутки вниз и столько же
+          обратно за каждой следующей деталью. Всё это время продавец
+          не знал, сколько набрал и на сколько: единственным подтверждением
+          была смена слова на кнопке строки. */}
+      <div className="seller-head">
+        <h2>Продажа</h2>
+        <BasketBadge
+          lines={lines}
+          services={services}
+          onOpen={() => basket.current?.scrollIntoView?.({ block: 'start' })}
+        />
+      </div>
 
       <form
         className="row"
@@ -181,7 +198,7 @@ export function SellerScreen({ canSell, role }: Props) {
       {lines.length > 0 && (
         <>
           <hr />
-          <h3>В сделку</h3>
+          <h3 ref={basket}>В сделку</h3>
           <ul className="stock-list">
             {lines.map((line, index) => (
               <li key={index} className="stock-row">
@@ -382,6 +399,46 @@ export function SellerScreen({ canSell, role }: Props) {
       setError(describe(cause, 'Сделка не оформлена'));
     }
   }
+}
+
+/**
+ * Счётчик корзины в шапке экрана.
+ *
+ * <p>Пустая корзина не молчит и не показывает ноль: ноль читается как
+ * «система чего-то не знает», а продавцу нужно понять, что делать. Слова
+ * те же, что у ориентира, — переходящий клиент читает их не задумываясь.
+ *
+ * <p>Сумма считается тем же `basketTotal`, что и «Итого» под списком.
+ * Два числа на одном экране, посчитанные разными выражениями, рано или
+ * поздно разойдутся — и разойдутся молча, в момент разговора с клиентом.
+ * Значит и услуги входят в обе: продавец называет то, что клиент заплатит.
+ */
+function BasketBadge({
+  lines,
+  services,
+  onOpen,
+}: {
+  lines: BasketLine[];
+  services: ServiceLine[];
+  onOpen: () => void;
+}) {
+  if (lines.length === 0) {
+    return (
+      <span className="basket-badge basket-badge--empty">
+        Список пуст
+        <span className="muted"> · Выберите товары для продажи</span>
+      </span>
+    );
+  }
+
+  return (
+    <button type="button" className="basket-badge" onClick={onOpen}>
+      В сделку: {count(lines.length)}{' '}
+      {plural(lines.length, 'позиция', 'позиции', 'позиций')}
+      {' · '}
+      {count(basketTotal(lines, services))} ₽
+    </button>
+  );
 }
 
 /**
