@@ -138,6 +138,38 @@ describe('разрез по машине на экране отчётов', () =
     await waitFor(() => expect(screen.getByText('Ничего не найдено')).toBeTruthy());
   });
 
+  it('пока грузится новая вкладка, подвал не называет числа прошлой', async () => {
+    // Ответ «Продано» задержан: проверяем именно окно между нажатием
+    // и приходом страницы. Задержка тут не «подождать на всякий случай»,
+    // а само условие ошибки — без неё окно закрывается мгновенно.
+    let releaseSold: () => void = () => {};
+    const heldSold = new Promise<void>((resolve) => { releaseSold = resolve; });
+    const ready = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes('tab=sold')) {
+        await heldSold;
+      }
+      return ready(input, init);
+    });
+
+    render(<ReportsScreen canRead />);
+    await pickMachine();
+    await waitFor(() => expect(text()).toContain('розничнаястоимость—1168350'));
+
+    fireEvent.click(screen.getByText('Продано'));
+
+    // Слово уже от «Продано», а числа оставались от «Поступило»: экран
+    // читался как «162 товара: продано — 1 168 350». Ни одно из этих чисел
+    // к продажам отношения не имеет, а владелец на этом экране сравнивает
+    // деньги. Ждём смены слова — без ожидания проверка проходит на первом
+    // тике, когда нажатие ещё не обработано, то есть на сломанном коде тоже.
+    await waitFor(() => expect(text()).toContain('продано'));
+    expect(text()).not.toContain('продано—1168350');
+
+    releaseSold();
+    await waitFor(() => expect(text()).toContain('24товара(24шт.):продано—331716'));
+  });
+
   async function pickMachine() {
     const machine = await screen.findByLabelText(/Машина/);
     await waitFor(() => expect(machine.querySelectorAll('option')).toHaveLength(2));

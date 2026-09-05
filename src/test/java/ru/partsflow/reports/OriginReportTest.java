@@ -263,6 +263,53 @@ class OriginReportTest extends PostgresTestBase {
      * Машина, с которой сняли четыре позиции: продана, списана, лежит
      * и заведена без прихода. Плюс вторая машина без единой продажи.
      */
+    @Test
+    @DisplayName("Частично проданная позиция расходится с выручкой — известное расхождение")
+    void partiallySoldPartDivergesFromRevenue() throws Exception {
+        prepare();
+
+        // Своя машина, а не общая фикстура: соседние проверки закрепляют
+        // равенство сумм, и частичная продажа в общих данных ломала бы их —
+        // тем самым расхождением, которое здесь и описывается.
+        Long wheelDonor = inTenant(TENANT, () -> donor("РАЗРЕЗ-3", "Ford Focus"));
+        Long pair = inTenant(TENANT, () -> {
+            Long kind = jdbc.queryForObject(
+                    "SELECT id FROM catalog.part_kind ORDER BY id LIMIT 1", Long.class);
+            Long wheels = part("Колесо", 1000, 2, wheelDonor, null, kind);
+            stock(wheels, 2);
+            return wheels;
+        });
+
+        long deal = createDeal(pair);                       // одно колесо из двух
+        mvc.perform(post("/api/deals/" + deal + "/issue").with(csrf()).session(seller))
+                .andExpect(status().isOk());
+
+        JsonNode sold = tab("/api/reports/donors/" + wheelDonor + "/items?tab=sold");
+        JsonNode remaining = tab("/api/reports/donors/" + wheelDonor + "/items?tab=remaining");
+        BigDecimal revenue = inTenant(TENANT, () -> jdbc.queryForObject(
+                "SELECT revenue FROM v_donor_profitability WHERE donor_id = ?",
+                BigDecimal.class, wheelDonor));
+
+        // Деньги за проданное колесо в окупаемости есть.
+        assertThat(revenue)
+                .as("продажа половины позиции не попала в revenue")
+                .isEqualByComparingTo("900");
+
+        // А на вкладке «Продано» — нет: `StockLedger` держит позицию
+        // `IN_STOCK`, пока остаток больше нуля, а вкладка отбирает по `SOLD`.
+        // Владелец читает на одном экране «выручено 900» и «продано — 0»,
+        // и самой продажи в списке строк не видит вовсе.
+        assertThat(items(sold))
+                .as("расхождение исчезло: проверьте, не пора ли снять оговорку "
+                        + "в reports/CLAUDE.md и в корневом CLAUDE.md")
+                .isZero();
+        assertThat(amount(sold)).isEqualByComparingTo("0");
+
+        // Оставшееся колесо при этом на месте — половина позиции не пропала.
+        assertThat(items(remaining)).isEqualTo(1);
+        assertThat(quantity(remaining)).isEqualByComparingTo("1");
+    }
+
     private void prepare() throws Exception {
         if (prepared) {
             return;
