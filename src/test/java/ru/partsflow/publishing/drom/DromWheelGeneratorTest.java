@@ -315,6 +315,49 @@ class DromWheelGeneratorTest extends PostgresTestBase {
                 .isEqualTo(xml.split("<offer>", -1).length - 1);
     }
 
+    /**
+     * Число снимков действует и на колёсный прайс.
+     *
+     * <p>Настройка, доехавшая до прайса запчастей и не доехавшая сюда, даёт
+     * два файла одного клиента, собранные по разным правилам, — а колёса
+     * у площадки размещаются отдельным прайс-листом со своей ценой
+     * размещения. Заметить расхождение можно было бы только по чужому сайту.
+     */
+    @Test
+    @DisplayName("Число снимков выгрузки действует и на прайс колёс")
+    void photoLimitAppliesToWheelsToo() {
+        BigDecimal from = new BigDecimal("993000");
+        BigDecimal to = new BigDecimal("994000");
+        Long partId = tyre("Снимки: шина летняя", "993100", "SUMMER",
+                205, 55, "16", 91, "V", "6");
+        inTenant(() -> {
+            for (int i = 0; i < 5; i++) {
+                jdbc.update("""
+                        INSERT INTO part_photo (part_id, s3_key, sort_order, is_main, status)
+                        VALUES (?, ?, ?, ?, 'PROCESSED')""",
+                        partId, "t_000096/parts/%d/snimok-%d.jpg".formatted(partId, i),
+                        i, i == 0);
+            }
+            return null;
+        });
+
+        DromPriceGenerator.FeedFilter mine = new DromPriceGenerator.FeedFilter(
+                from, to, java.util.List.of(), java.util.List.of(),
+                java.util.List.of(), false, java.util.List.of(), false);
+
+        String xml = inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeTo(out, mine, "https://example.org/photo/",
+                    new ru.partsflow.publishing.FeedSettings(null, null, 2));
+            return out.toString(StandardCharsets.UTF_8);
+        });
+
+        assertThat(xml.split("<picture>", -1).length - 1)
+                .as("колёсный прайс не знает про число снимков — два файла "
+                        + "одного клиента собраны по разным правилам")
+                .isEqualTo(2);
+    }
+
     // ---------- фикстуры ----------
 
     private Long wheelPart(String title, String price) {

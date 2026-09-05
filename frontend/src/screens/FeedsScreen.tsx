@@ -31,6 +31,7 @@ import {
   setFeedFileName,
   setFilter,
   setSettings,
+  wholeOrNull,
   type Feed,
   type FeedFilter,
 } from '../publishing/feeds';
@@ -172,6 +173,10 @@ function FeedCard({
     feed.settings?.pricePercent == null ? '' : String(feed.settings.pricePercent));
   const [priceRounding, setPriceRounding] = useState(
     feed.settings?.priceRounding == null ? '' : String(feed.settings.priceRounding));
+  // Пусто — «не задано», то есть прежние десять. Ноль — «без ограничения»,
+  // и превращать одно в другое здесь нельзя: на сервере это разные ответы.
+  const [photoLimit, setPhotoLimit] = useState(
+    feed.settings?.photoLimit == null ? '' : String(feed.settings.photoLimit));
 
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState<number | null>(null);
@@ -238,22 +243,29 @@ function FeedCard({
   }
 
   /**
-   * Наценка и округление сохраняются отдельно от отбора.
+   * Настройки сборки прайса сохраняются отдельно от отбора.
    *
    * <p>Это разные решения: отбор меняет состав прайса, наценка — цену в нём.
    * Одной кнопкой они сохранялись бы двумя запросами, и владелец не понял бы,
    * что именно не сохранилось, если бы не прошёл один из них.
+   *
+   * <p><b>Уезжают все настройки разом, а не одно правленое поле.</b> Сервер
+   * кладёт их слиянием по составу объекта, и запрос с одним полем записал бы
+   * соседним `null`: сохранив число снимков, владелец потерял бы наценку —
+   * и узнал бы об этом с чужого сайта. Поэтому у каждой кнопки своё
+   * сообщение об отказе, но тело запроса одно и то же.
    */
-  async function savePrice() {
+  async function saveSettings(refused: string) {
     setBusy(true);
     try {
       await setSettings(feed.id, {
         pricePercent: decimalOrNull(pricePercent),
         priceRounding: decimalOrNull(priceRounding),
+        photoLimit: wholeOrNull(photoLimit),
       });
       onChanged();
     } catch (cause) {
-      onError(describe(cause, 'Цена прайса не сохранена'));
+      onError(describe(cause, refused));
     } finally {
       setBusy(false);
     }
@@ -577,8 +589,38 @@ function FeedCard({
             </select>
           </label>
 
-          <button type="button" disabled={busy} onClick={() => void savePrice()}>
+          <button type="button" disabled={busy}
+                  onClick={() => void saveSettings('Цена прайса не сохранена')}>
             Сохранить цену прайса
+          </button>
+        </div>
+      </fieldset>
+
+      {/* Сколько снимков уходит в объявление — тоже настройка сборки файла,
+          а не отбора. Предел в десять был зашит в сборку прайса, то есть
+          правка его означала релиз, а площадки считают снимки по-разному:
+          где-то десять лишние, где-то мало. */}
+      <fieldset className="choices">
+        <legend>Снимки в объявлении — пусто значит десять</legend>
+        <p className="note">
+          Ноль — без ограничения: уедут все снимки позиции. Уходят они
+          в том же порядке, в каком показываются, — главный первым.
+        </p>
+
+        <div className="filter-row">
+          <label className="field">
+            Число фотографий в объявлении
+            <input
+              inputMode="numeric"
+              value={photoLimit}
+              placeholder="например, 3"
+              onChange={(e) => setPhotoLimit(e.target.value)}
+            />
+          </label>
+
+          <button type="button" disabled={busy}
+                  onClick={() => void saveSettings('Число снимков не сохранено')}>
+            Сохранить число снимков
           </button>
         </div>
       </fieldset>

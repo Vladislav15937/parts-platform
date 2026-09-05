@@ -43,6 +43,14 @@ export interface FeedSettings {
   pricePercent: number | null;
   /** Шаг округления результата; пусто или ноль — не округлять. */
   priceRounding: number | null;
+  /**
+   * Сколько снимков уходит в объявление.
+   *
+   * <p>`null` — не задано, и уезжают прежние десять: настройка появилась
+   * позже прайсов, и молча изменить их она не должна. Ноль — без
+   * ограничения, уедут все снимки позиции.
+   */
+  photoLimit: number | null;
 }
 
 /** «Округлять до» — те же шаги, что у системы, с которой переходят клиенты. */
@@ -220,11 +228,25 @@ export function setSettings(id: number, settings: FeedSettingsInput): Promise<Fe
 export interface FeedSettingsInput {
   pricePercent: string | null;
   priceRounding: string | null;
+  photoLimit: string | null;
 }
 
 /** Запятая в поле — та же десятичная точка: на телефоне её и набирают. */
 export function decimalOrNull(typed: string): string | null {
   const clean = typed.trim().replace(',', '.');
+  return clean === '' ? null : clean;
+}
+
+/**
+ * Целое из поля — или «не задано».
+ *
+ * <p>Отдельно от `decimalOrNull`, потому что запятую тут исправлять нечего:
+ * снимков бывает три, а не три с половиной, и «3,5» должно уехать на сервер
+ * как есть и получить отказ, а не превратиться в число, которого владелец
+ * не набирал.
+ */
+export function wholeOrNull(typed: string): string | null {
+  const clean = typed.trim();
   return clean === '' ? null : clean;
 }
 

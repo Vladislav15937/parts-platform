@@ -46,15 +46,35 @@ import java.math.RoundingMode;
  *                      и по телефону
  * @param priceRounding шаг округления результата; {@code null} или ноль —
  *                      не округлять
+ * @param photoLimit    сколько снимков уходит в объявление; {@code null} —
+ *                      прежние десять, ноль — без ограничения. Площадки
+ *                      считают снимки по-разному, и продавцы пользуются ими
+ *                      по-разному: где-то десять лишние, где-то мало.
+ *                      До этого предел был зашит в сборке прайса, и правка
+ *                      его означала релиз
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
-public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding) {
+public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
+                           Integer photoLimit) {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
+    /**
+     * Сколько ссылок на снимки уходит в объявление, пока владелец не сказал
+     * иначе.
+     *
+     * <p>Десять — то, что было зашито в оба генератора с самого начала;
+     * появление настройки не должно молча изменить прайс тем, кто её
+     * не трогал. Больше в объявление всё равно не уедет, а у переехавшего
+     * клиента снимков в среднем пять с половиной на позицию: при тридцати
+     * пяти тысячах позиций каждая лишняя ссылка — лишний мегабайт в файле,
+     * который площадка забирает целиком.
+     */
+    public static final int DEFAULT_PHOTO_LIMIT = 10;
+
     /** Ничего не задано: прайс собирается так, как собирался всегда. */
     public static FeedSettings none() {
-        return new FeedSettings(null, null);
+        return new FeedSettings(null, null, null);
     }
 
     /**
@@ -111,7 +131,30 @@ public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding) {
         if (priceRounding != null && priceRounding.signum() < 0) {
             throw new IllegalArgumentException("Шаг округления не бывает отрицательным");
         }
+        if (photoLimit != null && photoLimit < 0) {
+            // Не придирка к вводу: отрицательный предел уронил бы сборку файла
+            // посреди записи ответа — заголовки уже отправлены, и площадка
+            // получит 200 с нулём байт, то есть команду снять все объявления.
+            throw new IllegalArgumentException(
+                    "Число снимков не бывает отрицательным: ноль означает «без ограничения»");
+        }
         return this;
+    }
+
+    /**
+     * Сколько ссылок на снимки уходит в один {@code <offer>}.
+     *
+     * <p>Ноль — «без ограничения», как у системы, с которой переходят
+     * клиенты, а не «ни одного»: объявление без фотографии на разборке
+     * не продаёт, и прочитать ноль как запрет значило бы обезглавить прайс
+     * молча. Не задано — прежние десять: настройка появилась сегодня,
+     * а прайсы у клиентов собираются с прошлого месяца.
+     */
+    public int photosPerOffer() {
+        if (photoLimit == null) {
+            return DEFAULT_PHOTO_LIMIT;
+        }
+        return photoLimit == 0 ? Integer.MAX_VALUE : photoLimit;
     }
 
     /**
