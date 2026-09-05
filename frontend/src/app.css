@@ -1563,6 +1563,11 @@ hr {
   content: '○';
 }
 
+/* Статус «Выполнен» в реестре возвратов — зелёным, как «на связи». */
+.status-done {
+  color: var(--ok);
+}
+
 .mark__link {
   padding: 0;
   border: none;

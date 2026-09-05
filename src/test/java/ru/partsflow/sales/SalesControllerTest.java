@@ -524,6 +524,228 @@ class SalesControllerTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.items[0].partId").value(staying));
     }
 
+    /**
+     * Реестр возвратов: список видит документы разных сделок, а не только
+     * открытой.
+     *
+     * <p>Тег в причине изолирует эту проверку от возвратов, заведённых
+     * другими тестами в той же схеме, — фикстуры их не чистят, поэтому
+     * общий счётчик по всей таблице был бы случайным числом.
+     */
+    @Test
+    @DisplayName("Реестр возвратов видит документы разных сделок")
+    void returnsListedAcrossDeals() throws Exception {
+        String tag = "реестр-обзор";
+        MockHttpSession session = login("seller");
+
+        long dealA = createDeal(partWithStock("Амортизатор передний", 1));
+        long itemA = firstItemId(dealA, session);
+        mvc.perform(post("/api/deals/" + dealA + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals/" + dealA + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"%s a",
+                                 "items":[{"dealItemId":%d,"restocked":true}]}"""
+                                .formatted(warehouse, tag, itemA)))
+                .andExpect(status().isCreated());
+
+        long dealB = createDeal(partWithStock("Амортизатор задний", 1));
+        long itemB = firstItemId(dealB, session);
+        mvc.perform(post("/api/deals/" + dealB + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals/" + dealB + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"%s b",
+                                 "items":[{"dealItemId":%d,"restocked":true}]}"""
+                                .formatted(warehouse, tag, itemB)))
+                .andExpect(status().isCreated());
+
+        mvc.perform(get("/api/deals/returns?q=" + tag).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(2))
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.totalAmount").value(10000))
+                // Свежие сверху: последний оформленный возврат идёт первой строкой.
+                .andExpect(jsonPath("$.items[0].dealId").value((int) dealB))
+                .andExpect(jsonPath("$.items[0].customerName").value("Автосервис"))
+                .andExpect(jsonPath("$.items[0].dealNumber").isNumber())
+                .andExpect(jsonPath("$.items[1].dealId").value((int) dealA));
+    }
+
+    @Test
+    @DisplayName("Поиск по номеру сделки — точное совпадение")
+    void returnsSearchByDealNumberIsExact() throws Exception {
+        MockHttpSession session = login("seller");
+        long dealId = createDeal(partWithStock("Стекло лобовое", 1));
+        long itemId = firstItemId(dealId, session);
+        mvc.perform(post("/api/deals/" + dealId + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals/" + dealId + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"поиск-по-номеру",
+                                 "items":[{"dealItemId":%d,"restocked":true}]}"""
+                                .formatted(warehouse, itemId)))
+                .andExpect(status().isCreated());
+
+        Long dealNumber = inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM deal WHERE id = ?", Long.class, dealId));
+
+        mvc.perform(get("/api/deals/returns?q=" + dealNumber).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].dealId").value((int) dealId));
+    }
+
+    @Test
+    @DisplayName("Поиск по причине — вхождение, найдёт по куску слова")
+    void returnsSearchByReasonSubstring() throws Exception {
+        MockHttpSession session = login("seller");
+        long dealId = createDeal(partWithStock("Подшипник ступицы", 1));
+        long itemId = firstItemId(dealId, session);
+        mvc.perform(post("/api/deals/" + dealId + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals/" + dealId + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"скрипит-хвост-73920",
+                                 "items":[{"dealItemId":%d,"restocked":true}]}"""
+                                .formatted(warehouse, itemId)))
+                .andExpect(status().isCreated());
+
+        mvc.perform(get("/api/deals/returns?q=хвост-73920").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].reason").value("скрипит-хвост-73920"));
+    }
+
+    @Test
+    @DisplayName("Брак виден флагом restocked=false, и деньги вернулись")
+    void returnsCarryRestockedFlag() throws Exception {
+        MockHttpSession session = login("seller");
+        long dealId = createDeal(partWithStock("Радиатор печки", 1));
+        long itemId = firstItemId(dealId, session);
+        mvc.perform(post("/api/deals/" + dealId + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals/" + dealId + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"брак-флаг-58204",
+                                 "items":[{"dealItemId":%d,"restocked":false}]}"""
+                                .formatted(warehouse, itemId)))
+                .andExpect(status().isCreated());
+
+        mvc.perform(get("/api/deals/returns?q=брак-флаг-58204").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].restocked").value(false));
+    }
+
+    /**
+     * Отменённый возврат остаётся в счёте по отбору, а из суммы уходит.
+     *
+     * <p>{@code cancelReturn} в API отклоняет завершённый документ, а
+     * возврат завершается в той же транзакции, что и создаётся, — то есть
+     * отменённых через обычный путь не бывает. Строка помечается напрямую,
+     * это проверка самого запроса выборки, а не бизнес-сценария.
+     */
+    @Test
+    @DisplayName("Сумма отменённого возврата не входит в подвал, а счёт — входит")
+    void returnsFooterExcludesCancelledAmount() throws Exception {
+        MockHttpSession session = login("seller");
+        long dealId = createDeal(partWithStock("Насос гидроусилителя", 1));
+        long itemId = firstItemId(dealId, session);
+        mvc.perform(post("/api/deals/" + dealId + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals/" + dealId + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"отменённый-возврат-11029",
+                                 "items":[{"dealItemId":%d,"restocked":true}]}"""
+                                .formatted(warehouse, itemId)))
+                .andExpect(status().isCreated());
+
+        inTenant(() -> jdbc.update(
+                "UPDATE deal_return SET status = 'CANCELLED' WHERE deal_id = ?", dealId));
+
+        mvc.perform(get("/api/deals/returns?q=отменённый-возврат-11029").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].status").value("CANCELLED"))
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.totalAmount").value(0));
+    }
+
+    @Test
+    @DisplayName("Клиент у сделки пуст — customerId пуст и в реестре возвратов")
+    void returnsCarryNullCustomer() throws Exception {
+        MockHttpSession session = login("seller");
+        long dealId = createDeal(partWithStock("Ремень ГРМ", 1));
+        long itemId = firstItemId(dealId, session);
+        mvc.perform(post("/api/deals/" + dealId + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals/" + dealId + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"без-клиента-40217",
+                                 "items":[{"dealItemId":%d,"restocked":true}]}"""
+                                .formatted(warehouse, itemId)))
+                .andExpect(status().isCreated());
+
+        // Возврат наследует клиента сделки при создании (SalesService.registerReturn);
+        // здесь проверяется само чтение — что LEFT JOIN не роняет строку
+        // и не путает «нет клиента» с ошибкой запроса.
+        inTenant(() -> jdbc.update("UPDATE deal_return SET customer_id = NULL WHERE deal_id = ?", dealId));
+
+        mvc.perform(get("/api/deals/returns?q=без-клиента-40217").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].customerId").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.items[0].customerName").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    /**
+     * Растущий предел вместо курсора: {@code size} режет строки, а счётчик
+     * по отбору остаётся полным — иначе владелец решит, что возвратов
+     * меньше, чем на самом деле.
+     */
+    @Test
+    @DisplayName("Предел режет выдачу, но не счётчик по отбору")
+    void returnsSizeLimitsRowsNotTotal() throws Exception {
+        String tag = "предел-хвост-92831";
+        MockHttpSession session = login("seller");
+
+        for (int i = 0; i < 2; i++) {
+            long dealId = createDeal(partWithStock("Свеча зажигания " + i, 1));
+            long itemId = firstItemId(dealId, session);
+            mvc.perform(post("/api/deals/" + dealId + "/issue").with(csrf()).session(session))
+                    .andExpect(status().isOk());
+            mvc.perform(post("/api/deals/" + dealId + "/returns").with(csrf()).session(session)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"warehouseId":%d,"reason":"%s",
+                                     "items":[{"dealItemId":%d,"restocked":true}]}"""
+                                    .formatted(warehouse, tag, itemId)))
+                    .andExpect(status().isCreated());
+        }
+
+        mvc.perform(get("/api/deals/returns?q=" + tag + "&size=1").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.total").value(2));
+    }
+
+    @Test
+    @DisplayName("Кладовщик и «Просмотр» реестр возвратов не видят")
+    void returnsHiddenFromStorekeeperAndViewer() throws Exception {
+        inTenant(() -> member("storekeeper", "Кладовщик", "STOREKEEPER"));
+
+        mvc.perform(get("/api/deals/returns").session(login("storekeeper")))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/deals/returns").session(login("viewer")))
+                .andExpect(status().isForbidden());
+    }
+
     private long firstItemId(long dealId, MockHttpSession session) throws Exception {
         var result = mvc.perform(get("/api/deals/" + dealId).session(session))
                 .andExpect(status().isOk())

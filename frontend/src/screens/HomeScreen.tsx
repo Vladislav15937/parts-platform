@@ -14,6 +14,7 @@ import { InventoryScreen } from './InventoryScreen';
 import { InventoryReconcile } from './InventoryReconcile';
 import { OutboxScreen } from './OutboxScreen';
 import { SellerScreen } from './SellerScreen';
+import { ReturnsScreen } from './ReturnsScreen';
 import { DeliveryScreen } from './DeliveryScreen';
 import { LabelsScreen } from './LabelsScreen';
 import { ReportsScreen } from './ReportsScreen';
@@ -66,6 +67,7 @@ type Tab =
   | 'intake'
   | 'donor'
   | 'sales'
+  | 'returns'
   | 'inventory'
   | 'outbox'
   | 'import'
@@ -108,6 +110,10 @@ export function HomeScreen() {
   // возвращаются покупателю. Заказ, о котором продавец не узнал, — это
   // не просто несделанная работа, а потерянные деньги и баллы рейтинга.
   const [awaitingOrders, setAwaitingOrders] = useState(0);
+  // Куда открыть сделку, найденную в реестре возвратов: тот же экран
+  // продажи открывает её карточкой, как при поиске «Найти сделку клиента»,
+  // а не заводит второй способ показать документ.
+  const [openDealId, setOpenDealId] = useState<number | null>(null);
 
   // Запасной распознаватель тянем сразу после входа, пока связь заведомо есть:
   // первое сканирование случится в ангаре, где её уже не будет.
@@ -199,6 +205,15 @@ export function HomeScreen() {
             onClick={() => setTab('orders')}
           >
             Заказы{awaitingOrders > 0 && ` · ${awaitingOrders}`}
+          </button>
+        )}
+        {SELLING_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
+            className={tab === 'returns' ? 'rail__item rail__item--active' : 'rail__item'}
+            onClick={() => setTab('returns')}
+          >
+            Возвраты
           </button>
         )}
         <button
@@ -363,13 +378,27 @@ export function HomeScreen() {
 
       {tab === 'sales' &&
         (connected ? (
-          <SellerScreen canSell={SELLING_ROLES.includes(state.me.role)} role={state.me.role} />
+          <SellerScreen
+            canSell={SELLING_ROLES.includes(state.me.role)}
+            role={state.me.role}
+            openDealId={openDealId}
+            onDealOpened={() => setOpenDealId(null)}
+          />
         ) : (
           <p className="note note--error">
             Нет связи. Продажа без неё невозможна: остаток из кэша — это деталь,
             которой уже нет, а отложенная в телефоне сделка ничего не резервирует.
           </p>
         ))}
+
+      {tab === 'returns' && (
+        <ReturnsScreen
+          onOpenDeal={(dealId) => {
+            setOpenDealId(dealId);
+            setTab('sales');
+          }}
+        />
+      )}
 
       {tab === 'catalog' && <CatalogScreen role={state.me.role} />}
 
@@ -498,6 +527,7 @@ function sectionName(tab: string): string {
     case 'donor': return 'Машины';
     case 'sales': return 'Продажа';
     case 'orders': return 'Заказы с площадок';
+    case 'returns': return 'Возвраты';
     case 'catalog': return 'Склад';
     case 'wheels': return 'Шины и диски';
     case 'inventory': return 'Пересчёт склада';
