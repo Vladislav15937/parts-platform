@@ -22,6 +22,7 @@ import {
   payDealFromAccount,
   registerReturn,
   returnable,
+  returnWarehouseDefault,
   returnsOf,
   roomFor,
   searchCustomers,
@@ -918,7 +919,12 @@ function DealCard({
 
       {issued.length > 0 && (
         <ReturnPanel
+          // Ключ по сделке: панель стоит на одном месте дерева, и без него
+          // выбранный склад, причина и брак переезжают в чужую сделку —
+          // ровно как переезжали отметки и сообщение до сброса в useEffect.
+          key={deal.id}
           chosen={chosen}
+          defaultWarehouseId={returnWarehouseDefault(deal)}
           canSell={canSell}
           onReturn={(warehouseId, lines, reason, refundToAccount) =>
             void act(async () => {
@@ -1094,19 +1100,26 @@ function TransferPanel({
  * <p>Брак — один флажок на весь документ, а не на строку. Смешанный возврат
  * (часть на склад, часть в утиль) оформляют двумя документами: так видно,
  * что именно списали, а сам случай редкий.
+ *
+ * @param defaultWarehouseId склад, откуда деталь выдали. Пусто — выдавали
+ *                           с разных, и угадывать нельзя: продавец жмёт
+ *                           «Оформить» не глядя, а деталь потом ищут
+ *                           по прежнему адресу
  */
 function ReturnPanel({
   chosen,
   canSell,
+  defaultWarehouseId,
   onReturn,
 }: {
   chosen: DealItem[];
   canSell: boolean;
+  defaultWarehouseId: number | null;
   onReturn: (warehouseId: number, lines: ReturnLine[], reason: string,
              refundToAccount: boolean) => void;
 }) {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
-  const [warehouseId, setWarehouseId] = useState<number | null>(null);
+  const [warehouseId, setWarehouseId] = useState<number | null>(defaultWarehouseId);
   const [reason, setReason] = useState('');
   const [toAccount, setToAccount] = useState(false);
   const [broken, setBroken] = useState(false);
@@ -1116,9 +1129,16 @@ function ReturnPanel({
     void listWarehouses()
       .then((loaded) => {
         setWarehouses(loaded);
-        setWarehouseId((current) => current ?? loaded[0]?.id ?? null);
+        // Склад выдачи мог быть закрыт с тех пор, а список не загрузиться
+        // вовсе. И то и другое — пустое поле на экране; считать его
+        // выбранным значит оформить возврат туда, чего продавец не видит.
+        setWarehouseId((current) =>
+          current !== null && loaded.some((w) => w.id === current) ? current : null);
       })
-      .catch(() => setWarehouses([]));
+      .catch(() => {
+        setWarehouses([]);
+        setWarehouseId(null);
+      });
   }, []);
 
   const ready = canSell && chosen.length > 0 && warehouseId !== null;
@@ -1136,8 +1156,13 @@ function ReturnPanel({
         Склад возврата
         <select
           value={warehouseId ?? ''}
-          onChange={(e) => setWarehouseId(Number(e.target.value))}
+          onChange={(e) =>
+            setWarehouseId(e.target.value === '' ? null : Number(e.target.value))
+          }
         >
+          {/* Пустая строка нужна, только пока выбирать обязан человек:
+              выбрав склад, вернуться в «ничего» он уже не должен. */}
+          {warehouseId === null && <option value="">— выберите склад —</option>}
           {warehouses.map((w) => (
             <option key={w.id} value={w.id}>
               {w.name}
@@ -1145,6 +1170,11 @@ function ReturnPanel({
           ))}
         </select>
       </label>
+      {warehouseId === null && (
+        <p className="note">
+          Склад не подставлен — выберите, куда клиент привёз деталь.
+        </p>
+      )}
       <p className="note">
         Не обязан совпадать со складом выдачи: клиент приезжает туда, куда ему
         удобно, а деталь встаёт на ту полку, где он её оставил.
