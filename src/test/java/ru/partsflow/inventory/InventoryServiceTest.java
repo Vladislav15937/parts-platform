@@ -79,7 +79,7 @@ class InventoryServiceTest extends PostgresTestBase {
     void openSnapshotsStock() {
         Long partId = partWithStock("Фара левая", 3);
 
-        InventorySession session = inTenant(() -> inventory.open(warehouse, null));
+        InventorySession session = inTenant(() -> inventory.open(warehouse, null, null));
 
         assertThat(session.getStatus()).isEqualTo(InventorySession.SessionStatus.OPEN);
         assertThat(session.getStartedAt()).as("момент открытия не вычитан из БД").isNotNull();
@@ -94,7 +94,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Сошедшаяся позиция движений не порождает")
     void matchingCountProducesNoMovement() {
         Long partId = partWithStock("Бампер передний", 2);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("2"), null));
         inTenant(() -> inventory.finishCounting(sessionId));
@@ -109,7 +109,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Недостача списывается корректировкой")
     void shortageIsWrittenOff() {
         Long partId = partWithStock("Стартер 1NZ-FE", 5);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("3"), null));
         inTenant(() -> inventory.finishCounting(sessionId));
@@ -152,7 +152,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Одновременное проведение пересчёта списывает недостачу один раз")
     void concurrentApplyWritesTheShortageOnce() throws Exception {
         Long partId = partWithStock("Радиатор одновременный", 20);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
         inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("18"), null));
         inTenant(() -> inventory.finishCounting(sessionId));
 
@@ -202,7 +202,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Одновременный подсчёт позиции вне снимка не теряет работу")
     void concurrentCountOfAnUnlistedPartRetries() throws Exception {
         Long inSnapshot = partWithStock("Бампер в снимке", 1);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
         // Деталь заводится после открытия сессии: в снимок она не попала,
         // и строку для неё создаст первый же подсчёт.
         Long found = partWithStock("Фара, найденная на полке", 1);
@@ -261,7 +261,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Недостача до нуля закрывает карточку, а не оставляет её в наличии")
     void shortageToZeroClosesThePart() {
         Long partId = partWithStock("Фара, которой не нашли", 1);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         inTenant(() -> inventory.count(sessionId, partId, BigDecimal.ZERO, null));
         inTenant(() -> inventory.finishCounting(sessionId));
@@ -280,7 +280,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Частичная недостача карточку не закрывает")
     void partialShortageKeepsThePart() {
         Long partId = partWithStock("Стартер, недосчитались одного", 3);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("2"), null));
         inTenant(() -> inventory.finishCounting(sessionId));
@@ -325,7 +325,7 @@ class InventoryServiceTest extends PostgresTestBase {
             return null;
         });
 
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
         inTenant(() -> inventory.count(sessionId, promised, BigDecimal.ZERO, null));
         inTenant(() -> inventory.count(sessionId, other, BigDecimal.ZERO, null));
         inTenant(() -> inventory.finishCounting(sessionId));
@@ -367,7 +367,7 @@ class InventoryServiceTest extends PostgresTestBase {
             return null;
         });
 
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
         inTenant(() -> inventory.count(sessionId, promised, BigDecimal.ZERO, null));
         inTenant(() -> inventory.count(sessionId, other, BigDecimal.ONE, null));
         inTenant(() -> inventory.finishCounting(sessionId));
@@ -395,7 +395,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Излишек приходуется корректировкой")
     void surplusIsAdded() {
         Long partId = partWithStock("Генератор 2AZ-FE", 1);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("4"), null));
         inTenant(() -> inventory.finishCounting(sessionId));
@@ -408,7 +408,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Продажа во время пересчёта не превращается в недостачу")
     void saleDuringCountingIsNotShortage() {
         Long partId = partWithStock("Капот Camry V40", 10);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         // Кладовщик считает полку и находит все десять — учёт с фактом сошёлся.
         inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("10"), null));
@@ -437,7 +437,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Продажа до подсчёта уже учтена: недостачи нет")
     void saleBeforeCountingIsAccountedFor() {
         Long partId = partWithStock("Радиатор кондиционера", 10);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         // Сначала продали две, потом кладовщик дошёл до полки и нашёл восемь.
         // Время движения явное по той же причине: иначе продажа могла оказаться
@@ -458,7 +458,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Подсчёт из офлайн-очереди сравнивается с моментом подсчёта, а не получения")
     void offlineCountUsesItsOwnMoment() {
         Long partId = partWithStock("Бампер передний", 10);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
         backdateSession(sessionId, Duration.ofHours(2));
 
         // Кладовщик посчитал десять час назад — всё сошлось. Связи в ангаре
@@ -483,7 +483,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Продажа после подсчёта не прячет недостачу")
     void saleAfterOfflineCountStaysShortage() {
         Long partId = partWithStock("Крыло переднее левое", 10);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
         backdateSession(sessionId, Duration.ofHours(2));
 
         // Час назад кладовщик нашёл на полке восемь вместо десяти — недостача.
@@ -506,7 +506,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Давность больше возраста сессии подрезается до её открытия")
     void impossibleAgeIsClamped() {
         Long partId = partWithStock("Радиатор основной", 10);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         sale(partId, warehouse, 2);
 
@@ -526,7 +526,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Перемещение на другой склад не считается недостачей дважды")
     void moveIsAccountedPerWarehouse() {
         Long partId = partWithStock("Дверь задняя левая", 4);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         // Две уехали на второй склад до подсчёта.
         inTenant(() -> ledger.record(StockMovement.move(
@@ -547,7 +547,7 @@ class InventoryServiceTest extends PostgresTestBase {
     void uncountedLineIsNotWrittenOff() {
         Long counted = partWithStock("Крыло переднее правое", 2);
         Long skipped = partWithStock("Поддомкратник", 7);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         inTenant(() -> inventory.count(sessionId, counted, new BigDecimal("2"), null));
         inTenant(() -> inventory.finishCounting(sessionId));
@@ -563,7 +563,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Посчитанный ноль — это недостача, а не пропуск")
     void countedZeroIsShortage() {
         Long partId = partWithStock("Ступица передняя", 3);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         inTenant(() -> inventory.count(sessionId, partId, BigDecimal.ZERO, null));
         inTenant(() -> inventory.finishCounting(sessionId));
@@ -580,7 +580,7 @@ class InventoryServiceTest extends PostgresTestBase {
     void unknownPartBecomesSurplusLine() {
         partWithStock("Фара правая", 1);
         Long unknown = partWithStock("Найдена на полке", 0);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         inTenant(() -> inventory.count(sessionId, unknown, new BigDecimal("2"), null));
         inTenant(() -> inventory.finishCounting(sessionId));
@@ -593,18 +593,126 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Вторая инвентаризация того же склада не открывается")
     void secondSessionOnSameWarehouseIsRejected() {
         partWithStock("Амортизатор", 1);
-        inTenant(() -> inventory.open(warehouse, null));
+        inTenant(() -> inventory.open(warehouse, null, null));
 
         // Две сессии дадут двойную корректировку на одно расхождение.
-        assertThatThrownBy(() -> inTenant(() -> inventory.open(warehouse, null)))
+        assertThatThrownBy(() -> inTenant(() -> inventory.open(warehouse, null, null)))
                 .hasMessageContaining("уже идёт инвентаризация");
+    }
+
+    /**
+     * Открытие ячейкой снимает только её позиции — это и есть весь смысл
+     * пересчёта одной полки: документ на весь склад никто не закрывает.
+     */
+    @Test
+    @DisplayName("Открытие по ячейке берёт только её позиции")
+    void openByCellFiltersLines() {
+        Long cellA = cell("А-01-1");
+        Long cellB = cell("А-01-2");
+        Long inA = partWithStock("Фара левая", 2, cellA);
+        partWithStock("Бампер передний", 1, cellB);
+
+        InventorySession session = inTenant(() -> inventory.open(warehouse, cellA, null));
+
+        assertThat(session.getLines()).singleElement()
+                .satisfies(line -> assertThat(line.getPartId()).isEqualTo(inA));
+    }
+
+    /** «Без адреса» берёт позиции без ячейки, а не любые. */
+    @Test
+    @DisplayName("Открытие «без адреса» берёт позиции без ячейки")
+    void openWithNoCellSentinelFiltersUnaddressed() {
+        Long cellA = cell("А-02-1");
+        Long unaddressed = partWithStock("Дверь передняя", 1, null);
+        partWithStock("Капот", 1, cellA);
+
+        InventorySession session =
+                inTenant(() -> inventory.open(warehouse, InventoryService.NO_CELL, null));
+
+        assertThat(session.getLines()).singleElement()
+                .satisfies(line -> assertThat(line.getPartId()).isEqualTo(unaddressed));
+    }
+
+    @Test
+    @DisplayName("Ячейка чужого склада не принимается")
+    void openRejectsCellFromAnotherWarehouse() {
+        Long foreign = inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO storage_cell (warehouse_id, code) VALUES (?, 'B-01-1') RETURNING id",
+                Long.class, otherWarehouse));
+
+        assertThatThrownBy(() -> inTenant(() -> inventory.open(warehouse, foreign, null)))
+                .hasMessageContaining("не найдена на складе");
+    }
+
+    /**
+     * «Найдено товаров: N» на форме открытия считает тем же условием,
+     * что и само открытие — иначе счётчик и лист обхода разойдутся.
+     */
+    @Test
+    @DisplayName("Счётчик формы совпадает с листом обхода после открытия")
+    void countPositionsMatchesOpen() {
+        Long cellA = cell("А-03-1");
+        partWithStock("Фара правая", 1, cellA);
+        partWithStock("Бампер задний", 1, null);
+
+        assertThat(inTenant(() -> inventory.countPositions(warehouse, null))).isEqualTo(2);
+        assertThat(inTenant(() -> inventory.countPositions(warehouse, cellA))).isEqualTo(1);
+        assertThat(inTenant(() -> inventory.countPositions(warehouse, InventoryService.NO_CELL)))
+                .isEqualTo(1);
+    }
+
+    /**
+     * «Продолжить начатую» подхватывает сессию только с той же выборкой.
+     *
+     * <p>Своей колонки под выбор нет, поэтому сверка идёт по фактическому
+     * адресу строк: сессия, открытая по ячейке А, не даст ни одной строки
+     * с ячейкой Б.
+     */
+    @Test
+    @DisplayName("Открытая сессия находится только по своей выборке")
+    void openSessionOfMatchesSameSelection() {
+        Long cellA = cell("А-04-1");
+        Long cellB = cell("А-04-2");
+        partWithStock("Стекло лобовое", 1, cellA);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, cellA, null).getId());
+
+        assertThat(inTenant(() -> inventory.openSessionOf(warehouse, cellA))).isPresent();
+        assertThat(inTenant(() -> inventory.openSessionOf(warehouse, null)))
+                .as("«Любая» шире любой уже открытой выборки")
+                .isPresent();
+        assertThat(inTenant(() -> inventory.openSessionOf(warehouse, cellB)))
+                .as("сессия открыта по другой ячейке")
+                .isEmpty();
+
+        assertThat(inTenant(() -> inventory.openSessionOf(warehouse, cellA)).get().getId())
+                .isEqualTo(sessionId);
+    }
+
+    /**
+     * Список кодов сессии охватывает весь склад, а не только её выборку —
+     * иначе сканер не отличит «деталь в другой ячейке» от «код не найден».
+     */
+    @Test
+    @DisplayName("Коды сессии видят весь склад, а не только выбранную ячейку")
+    void warehouseCodesCoverWholeWarehouse() {
+        Long cellA = cell("А-05-1");
+        Long cellB = cell("А-05-2");
+        Long inA = partWithStock("Радиатор", 1, cellA);
+        Long inB = partWithStock("Кондиционер", 1, cellB);
+        Long sessionId = inTenant(() -> inventory.open(warehouse, cellA, null).getId());
+
+        List<InventoryService.WarehouseCode> codes = inTenant(() -> inventory.warehouseCodes(sessionId));
+
+        assertThat(codes).extracting(InventoryService.WarehouseCode::partId)
+                .as("сессия открыта по ячейке А, но код нужен по всему складу")
+                .contains(inA, inB);
     }
 
     @Test
     @DisplayName("Незавершённый пересчёт не проводится")
     void openSessionCannotBeApplied() {
         partWithStock("Фильтр воздушный", 1);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         assertThatThrownBy(() -> inTenant(() -> inventory.apply(sessionId)))
                 .hasMessageContaining("состоянии OPEN");
@@ -614,7 +722,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Проведённую инвентаризацию не отменяют")
     void appliedSessionCannotBeCancelled() {
         Long partId = partWithStock("Тормозной диск", 2);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
         inTenant(() -> inventory.count(sessionId, partId, BigDecimal.ONE, null));
         inTenant(() -> inventory.finishCounting(sessionId));
         inTenant(() -> inventory.apply(sessionId));
@@ -649,7 +757,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Проданное сразу после подсчёта не превращается в недостачу")
     void saleRightAfterCountIsNotCountedBeforeIt() {
         Long partId = partWithStock("Клапан EGR", 5);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
 
         // Считаем ровно то, что лежит: расхождения нет.
         inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("5"), null));
@@ -667,7 +775,7 @@ class InventoryServiceTest extends PostgresTestBase {
     @DisplayName("Расхождения считаются одинаково до и после проведения")
     void discrepanciesAreStableAfterApply() {
         Long partId = partWithStock("Насос омывателя", 5);
-        Long sessionId = inTenant(() -> inventory.open(warehouse, null).getId());
+        Long sessionId = inTenant(() -> inventory.open(warehouse, null, null).getId());
         inTenant(() -> inventory.count(sessionId, partId, new BigDecimal("4"), null));
         inTenant(() -> inventory.finishCounting(sessionId));
 
@@ -688,15 +796,27 @@ class InventoryServiceTest extends PostgresTestBase {
     // ---------- фикстуры ----------
 
     private Long partWithStock(String title, int qty) {
+        return partWithStock(title, qty, null);
+    }
+
+    /** С привязкой к ячейке — для проверок выборки при открытии пересчёта. */
+    private Long partWithStock(String title, int qty, Long cellId) {
         return inTenant(() -> {
             Long partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price, cost_price)
                     VALUES (NULL, ?, 5000, 2000) RETURNING id""", Long.class, title);
             if (qty > 0) {
-                ledger.record(StockMovement.intake(partId, java.math.BigDecimal.valueOf(qty), warehouse, null));
+                ledger.record(StockMovement.intake(
+                        partId, java.math.BigDecimal.valueOf(qty), warehouse, cellId));
             }
             return partId;
         });
+    }
+
+    private Long cell(String code) {
+        return inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO storage_cell (warehouse_id, code) VALUES (?, ?) RETURNING id",
+                Long.class, warehouse, code));
     }
 
     private void sale(Long partId, Long warehouseId, int qty) {
