@@ -278,6 +278,139 @@ class DromFeedControllerTest extends PostgresTestBase {
                         .value(org.hamcrest.Matchers.endsWith(feedPath)));
     }
 
+    /**
+     * Имя файла — читаемый хвост ссылки, а не пропуск по ней.
+     *
+     * <p><b>Зачем.</b> Адрес прописывает в кабинете площадки её техспециалист
+     * руками, и хвост из сорока случайных символов токена он переносит
+     * с ошибками — а ошибку видно только по тому, что объявления
+     * не появились: о неверном адресе площадка не сообщает никому.
+     *
+     * <p>Проверяются обе стороны сразу: по названному адресу прайс отдаётся,
+     * а подделанный секрет с тем же именем файла по-прежнему 404. Секрет
+     * остаётся отдельной частью пути, имя его не заменяет.
+     */
+    @Test
+    @DisplayName("Ссылка кончается заданным именем, а доступ по-прежнему даёт токен")
+    void namedLinkServesTheFeed() throws Exception {
+        setFileName(accountId, "drom-parts.xml").andExpect(status().isOk());
+
+        String named = pathOf(mvc.perform(
+                        get("/api/marketplace-accounts/" + accountId + "/feed-url")
+                                .session(login("owner")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+
+        assertThat(named).endsWith("/drom-parts.xml");
+        assertThat(mvc.perform(get(named))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString())
+                .contains("Фара левая Camry");
+
+        // Подделанный секрет с верным именем файла не открывает ничего:
+        // имя подписывает ссылку, а не заменяет токен.
+        mvc.perform(get("/feeds/drom/feedco/%s/drom-parts.xml".formatted("z".repeat(43))))
+                .andExpect(status().isNotFound());
+
+        // И прежний адрес продолжает работать: имя не меняет секрет,
+        // а смена ссылки — отдельное действие, которое останавливает выгрузку
+        // до тех пор, пока новый адрес не пропишет техспециалист площадки.
+        mvc.perform(get(feedPath)).andExpect(status().isOk());
+    }
+
+    /**
+     * Занятое имя отвечает словами и называет, у какой выгрузки оно стоит.
+     *
+     * <p>Само по себе нарушение уникального индекса читается как «Операция
+     * нарушает целостность данных»: ни что случилось, ни что делать. А искать
+     * владельцу надо именно ту выгрузку, у которой имя уже стоит, — прайсов
+     * на Дром у него пять.
+     */
+    @Test
+    @DisplayName("Занятое имя файла называет выгрузку, у которой оно стоит")
+    void takenFileNameIsAnsweredWithWords() throws Exception {
+        setFileName(accountId, "drom-parts.xml").andExpect(status().isOk());
+        Long second = inTenant(TENANT, () -> jdbc.queryForObject("""
+                INSERT INTO marketplace_account (marketplace, title, settings)
+                VALUES ('DROM', 'Дром: низкая цена', '{}'::jsonb) RETURNING id""", Long.class));
+
+        setFileName(second, "drom-parts.xml")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("drom-parts.xml")))
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("Кабинет")));
+
+        // На соседней площадке то же имя свободно: адреса у них разные,
+        // и путать нечего — как и с названием выгрузки.
+        Long avito = inTenant(TENANT, () -> jdbc.queryForObject("""
+                INSERT INTO marketplace_account (marketplace, title, settings)
+                VALUES ('AVITO', 'Авито: основной', '{}'::jsonb) RETURNING id""", Long.class));
+        setFileName(avito, "drom-parts.xml").andExpect(status().isOk());
+    }
+
+    /**
+     * Незаданное имя — {@code NULL}, а не пустая строка.
+     *
+     * <p>Пустых строк в уникальном индексе может быть только одна, и вторая
+     * выгрузка без имени получила бы отказ на ровном месте. Ровно этим болел
+     * снятый штрихкод: пусто означает «не заполнено», а не значение.
+     */
+    @Test
+    @DisplayName("Двум выгрузкам без имени файла ничто не мешает")
+    void emptyNamesDoNotCollide() throws Exception {
+        Long second = inTenant(TENANT, () -> jdbc.queryForObject("""
+                INSERT INTO marketplace_account (marketplace, title, settings)
+                VALUES ('DROM', 'Дром: без имени', '{}'::jsonb) RETURNING id""", Long.class));
+
+        setFileName(accountId, "").andExpect(status().isOk());
+        setFileName(second, "").andExpect(status().isOk());
+
+        assertThat(inTenant(TENANT, () -> jdbc.queryForList(
+                "SELECT id FROM marketplace_account WHERE feed_file_name = ''")))
+                .as("пустая строка записана вместо NULL — второй такой выгрузки "
+                        + "уникальный индекс уже не пропустит")
+                .isEmpty();
+    }
+
+    /**
+     * Имя, которого нельзя в адресе, отбивается до сохранения.
+     *
+     * <p>Сохранённое, оно дало бы ссылку, которая не открывается, и узнать
+     * об этом можно было бы только от площадки — то есть через дни
+     * и через объявления, которых нет.
+     */
+    @Test
+    @DisplayName("Пробелы и кириллица в имени файла отбиваются словами")
+    void impossibleFileNameIsRefused() throws Exception {
+        setFileName(accountId, "прайс дрома.xml")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("пробел")));
+
+        setFileName(accountId, "прайс.xml")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("латинские")));
+
+        // Ссылка при этом осталась прежней: отказ на сохранении ничего
+        // не меняет.
+        mvc.perform(get("/api/marketplace-accounts/" + accountId + "/feed-url")
+                        .session(login("owner")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.path").value(feedPath));
+    }
+
+    @Test
+    @DisplayName("Имя файла задаёт владелец, а не управляющий")
+    void fileNameIsOwnerBusiness() throws Exception {
+        mvc.perform(put("/api/marketplace-accounts/" + accountId + "/feed-file")
+                        .with(csrf()).session(login("manager"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"fileName\":\"drom-parts.xml\"}"))
+                .andExpect(status().isForbidden());
+    }
+
     @Test
     @DisplayName("Две выгрузки одной площадки отдают разный товар")
     void feedsAreFilteredIndependently() throws Exception {
@@ -605,6 +738,15 @@ class DromFeedControllerTest extends PostgresTestBase {
                 INSERT INTO part (category_id, title, price, cost_price, is_published)
                 VALUES (1, ?, ?, 100, true) RETURNING id""", Long.class, title, price);
         ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
+    }
+
+    /** Пустое имя — это снятие имени, а не пустая строка в базе. */
+    private org.springframework.test.web.servlet.ResultActions setFileName(Long id, String name)
+            throws Exception {
+        return mvc.perform(put("/api/marketplace-accounts/" + id + "/feed-file")
+                .with(csrf()).session(login("owner"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"fileName\":\"%s\"}".formatted(name)));
     }
 
     private String rotate(Long id) throws Exception {
