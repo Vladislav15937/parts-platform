@@ -202,6 +202,41 @@ class MarketplaceCredentialsTest extends PostgresTestBase {
                 .andExpect(status().isBadRequest());
     }
 
+    /**
+     * Отметка о заборе доезжает до экрана — и доезжает строкой.
+     *
+     * <p>Прогон через HTTP, а не вызов сервиса: ровно на этом переходе
+     * ломались ответы контроллеров, и тест, зовущий сервис напрямую, этого
+     * не видит. Тип на клиенте — утверждение, а не проверка: объявив дату
+     * строкой и получив число, экран падает уже в браузере, как это было
+     * с ценой в отборе выгрузки.
+     *
+     * <p>Пусто здесь — «не забирали ни разу», и приезжать оно обязано именно
+     * пустотой: подставленный ноль превратился бы на экране в «01.01.1970».
+     */
+    @Test
+    @DisplayName("Отметка о заборе приезжает в список строкой, а пусто — пустотой")
+    void downloadMarkIsServedToTheScreen() throws Exception {
+        String never = mvc.perform(get("/api/marketplace-accounts").session(login("owner")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(never)
+                .as("выгрузка, которую не забирали, приехала с каким-то временем")
+                .contains("\"lastDownloadAt\":null");
+
+        inTenant(() -> jdbc.update("""
+                UPDATE marketplace_account SET last_feed_download_at = now()
+                 WHERE id = ?""", accountId));
+
+        String taken = mvc.perform(get("/api/marketplace-accounts").session(login("owner")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(taken)
+                .as("отметка уехала числом — браузер прочитает его как миллисекунды "
+                        + "от 1970 года и покажет чужую дату")
+                .containsPattern("\"lastDownloadAt\":\"\\d{4}-\\d{2}-\\d{2}T");
+    }
+
     private void setSecret(String login, String secret) throws Exception {
         mvc.perform(put("/api/marketplace-accounts/" + accountId + "/credentials")
                         .with(csrf()).session(login(login))

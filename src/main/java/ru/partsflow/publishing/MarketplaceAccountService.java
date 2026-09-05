@@ -51,6 +51,7 @@ public class MarketplaceAccountService {
     public List<Account> list() {
         return jdbc.query("""
                 SELECT id, marketplace, title, status, last_sync_at IS NOT NULL AS synced,
+                       last_feed_download_at,
                        last_error, credentials IS NOT NULL AS has_credentials,
                        credentials, feed_token IS NOT NULL AS has_feed,
                        product_line,
@@ -78,6 +79,8 @@ public class MarketplaceAccountService {
                         // их владелец сам и задаёт с экрана.
                         FeedSettings.parse(rs.getString("settings")),
                         rs.getString("last_error"),
+                        instant(rs.getObject("last_feed_download_at",
+                                java.time.OffsetDateTime.class)),
                         rs.getBigDecimal("price_from"),
                         rs.getBigDecimal("price_to"),
                         textList(rs.getArray("conditions")),
@@ -123,6 +126,17 @@ public class MarketplaceAccountService {
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new IllegalArgumentException("Отбор выгрузки не записывается", e);
         }
+    }
+
+    /**
+     * Момент времени или {@code null}.
+     *
+     * <p>{@code null} здесь означает «не забирали ни разу», а не «ноль»:
+     * подставленная эпоха Unix превратилась бы на экране в «01.01.1970» —
+     * поломку на месте честного ответа.
+     */
+    private static java.time.Instant instant(java.time.OffsetDateTime at) {
+        return at == null ? null : at.toInstant();
     }
 
     private static List<String> textList(java.sql.Array array) throws SQLException {
@@ -373,6 +387,12 @@ public class MarketplaceAccountService {
      * @param plaintextSecret секрет лежит незашифрованным — его надо перезаписать
      */
     /**
+     * @param lastDownloadAt когда площадка последний раз забрала прайс
+     *                       по постоянной ссылке; пусто — не забирала ни разу.
+     *                       Это <b>не</b> {@code last_sync_at}: та колонка про
+     *                       «мы отправили дельту», а здесь «у нас забрали»,
+     *                       и на вопрос «прайс вообще уехал?» отвечает только
+     *                       второе
      * @param priceFrom   пусто — без нижней границы, а не «ноль»
      * @param conditions  пусто — любое состояние детали
      * @param warehouseIds пусто — все склады
@@ -380,7 +400,8 @@ public class MarketplaceAccountService {
     public record Account(Long id, String marketplace, String title, String status,
                           boolean hasCredentials, boolean plaintextSecret, boolean hasFeed,
                           String productLine, FeedSettings settings,
-                          String lastError, java.math.BigDecimal priceFrom,
+                          String lastError, java.time.Instant lastDownloadAt,
+                          java.math.BigDecimal priceFrom,
                           java.math.BigDecimal priceTo, List<String> conditions,
                           List<Long> warehouseIds, List<Long> kindIds, boolean kindsExcluded,
                           List<Long> brandIds, boolean brandsExcluded,

@@ -23,6 +23,7 @@ import {
   countMatching,
   createFeed,
   decimalOrNull,
+  downloadMark,
   filterSummary,
   listFeeds,
   rotateFeedUrl,
@@ -322,6 +323,9 @@ function FeedCard({
         </span>
       </div>
       <p className="muted">{filterSummary(feed)}</p>
+      {/* Первым делом спрашивают не про отбор, а про то, уехал ли прайс
+          вообще: до этой строки ответ жил только в логах приложения. */}
+      <p className="muted">{downloadMark(feed)}</p>
 
       {feed.lastError && <p className="note note--error">{feed.lastError}</p>}
 

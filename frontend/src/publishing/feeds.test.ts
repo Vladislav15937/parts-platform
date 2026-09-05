@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterSummary, type Feed } from './feeds';
+import { downloadMark, filterSummary, type Feed } from './feeds';
 
 /**
  * Как выгрузка описывает свой отбор в списке.
@@ -22,6 +22,7 @@ function feed(overrides: Partial<Feed> = {}): Feed {
     productLine: 'PART',
     settings: { pricePercent: null, priceRounding: null },
     lastError: null,
+    lastDownloadAt: null,
     priceFrom: null,
     priceTo: null,
     conditions: [],
@@ -76,5 +77,33 @@ describe('сводка отбора выгрузки', () => {
     const summary = filterSummary(feed({ priceTo: 1000, warehouseIds: [1, 2] }));
     expect(summary).toContain(`до ${rub(1000)} ₽`);
     expect(summary).toContain('складов: 2');
+  });
+});
+
+/**
+ * Отметка о заборе прайса.
+ *
+ * <p>Месяц пишется словом и своей таблицей: короткое имя из `Intl` зависит
+ * от сборки ICU («сент.» против «сен»), и экран показывал бы в браузере
+ * не то, что в тестах. Число вместо слова тоже не годится — «04.09» рядом
+ * со временем читается как ещё одно время.
+ */
+describe('когда площадка последний раз забирала прайс', () => {
+  it('называет день и время', () => {
+    // Местное время: забор идёт ночью, и час здесь смысловой.
+    const at = new Date(2026, 8, 4, 22, 30).toISOString();
+    expect(downloadMark(feed({ lastDownloadAt: at }))).toBe('Скачан 04 сен, 22:30');
+  });
+
+  it('день и час дополняются нулём до двух знаков', () => {
+    // «4 сен, 9:5» — не время, а опечатка на глаз владельца.
+    const at = new Date(2026, 0, 4, 9, 5).toISOString();
+    expect(downloadMark(feed({ lastDownloadAt: at }))).toBe('Скачан 04 янв, 09:05');
+  });
+
+  it('у незабранной выгрузки отвечает словами, а не пустотой', () => {
+    // Ни пусто, ни «01.01.1970»: первое читается как «экран не знает»,
+    // второе — как поломка, и обе догадки уводят от настоящего ответа.
+    expect(downloadMark(feed({ lastDownloadAt: null }))).toBe('Прайс не забирали');
   });
 });

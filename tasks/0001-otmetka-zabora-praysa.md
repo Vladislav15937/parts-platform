@@ -1,8 +1,8 @@
 ---
 id: 0001
 title: Владелец видит, когда площадка последний раз забирала прайс
-status: новая
-assignee: —
+status: в работе
+assignee: coder
 source: разведка 05.09.2026, §9 bazon-parity
 pr: —
 ---

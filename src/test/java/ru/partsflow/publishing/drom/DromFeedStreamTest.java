@@ -119,6 +119,82 @@ class DromFeedStreamTest extends PostgresTestBase {
                 .isNotEqualTo(200);
     }
 
+    /**
+     * Отметка о заборе — единственный след, который остаётся после того,
+     * как площадка забрала прайс.
+     *
+     * <p>Без неё на вопрос «прайс вообще уехал?» отвечал разработчик через
+     * {@code docker logs}: контроллер писал строку в лог и больше никуда.
+     * То есть клиент ждал человека, чтобы узнать факт, который система знает.
+     *
+     * <p>Проверяется живым запросом через настоящий Tomcat, а не вызовом
+     * метода: отметка ставится после того, как тело ответа дописано, и в этом
+     * весь смысл — о полузабранном прайсе она отвечала бы «да».
+     */
+    @Test
+    @DisplayName("После забора прайса у выгрузки стоит отметка со временем")
+    void downloadIsMarked() {
+        assertThat(mark()).as("отметка стоит до первого забора").isNull();
+
+        assertThat(get().getStatusCode().value()).isEqualTo(200);
+
+        assertThat(mark())
+                .as("прайс уехал, а следа не осталось — на вопрос «забрали ли» "
+                        + "снова отвечает разработчик по логам")
+                .isNotNull();
+    }
+
+    @Test
+    @DisplayName("Второй забор обновляет отметку, а не оставляет первую")
+    void secondDownloadMovesTheMark() {
+        get();
+        java.time.Instant first = mark();
+
+        get();
+
+        assertThat(mark())
+                .as("отметка застыла на первом заборе: по ней прайс выглядит "
+                        + "заброшенным при исправной выгрузке")
+                .isAfter(first);
+    }
+
+    /**
+     * Отмечается та выгрузка, за которой пришли.
+     *
+     * <p>Прайс-листов у клиента пять, и отметка, поставленная всем сразу,
+     * отвечает про чужую ссылку — то есть врёт ровно там, где её и смотрят:
+     * «этот прайс не забирают уже неделю» превращается в «всё в порядке».
+     */
+    @Test
+    @DisplayName("Отметка ставится только той выгрузке, чей прайс забрали")
+    void onlyTheFetchedFeedIsMarked() {
+        inTenant(() -> jdbc.update("""
+                INSERT INTO marketplace_account (marketplace, title, settings, feed_token)
+                VALUES ('DROM', 'Соседняя', '{"packetId":"2"}'::jsonb, ?)""",
+                "s".repeat(43)));
+
+        get();
+
+        assertThat(mark()).as("забранный прайс остался без отметки").isNotNull();
+        assertThat(markOf("Соседняя"))
+                .as("забор одного прайса отметил и соседний")
+                .isNull();
+    }
+
+    /** Отметка выгрузки из фикстуры; {@code null} — не забирали. */
+    private java.time.Instant mark() {
+        return markOf("Поток");
+    }
+
+    private java.time.Instant markOf(String title) {
+        // OffsetDateTime, а не Instant: драйвер Postgres отдаёт timestamptz
+        // именно им, и запрошенный Instant кончился бы отказом преобразования.
+        java.time.OffsetDateTime at = inTenant(() -> jdbc.queryForObject(
+                "SELECT last_feed_download_at FROM marketplace_account WHERE title = ?",
+                java.time.OffsetDateTime.class, title));
+        return at == null ? null : at.toInstant();
+    }
+
     private ResponseEntity<String> get() {
         return http.getForEntity(
                 "http://localhost:%d/feeds/drom/streamco/%s.xml".formatted(port, token),
