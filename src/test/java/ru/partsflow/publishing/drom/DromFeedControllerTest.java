@@ -662,6 +662,145 @@ class DromFeedControllerTest extends PostgresTestBase {
     }
 
     /**
+     * Сколько снимков уходит в объявление, решает владелец выгрузки.
+     *
+     * <p><b>Зачем.</b> Предел в десять был зашит в сборку прайса, то есть
+     * правка его означала релиз, а площадки считают снимки по-разному:
+     * где-то десять лишние, где-то мало. Проверяется вся дорога разом —
+     * экран сохраняет настройку, она ложится в
+     * {@code marketplace_account.settings}, оттуда её читает выдача прайса.
+     *
+     * <p>И три вещи сразу, каждая из которых стоит дороже самой настройки:
+     * обрезка берёт <b>первые</b> снимки по порядку показа (первую ссылку
+     * площадка ставит обложкой объявления, и случайная обложка хуже
+     * отсутствующей), ноль означает «без ограничения», а не «ни одного»,
+     * и незаданная настройка оставляет прежние десять — иначе у клиентов,
+     * которые её не трогали, прайс молча изменился бы.
+     */
+    @Test
+    @DisplayName("Число снимков в объявлении задаёт выгрузка")
+    void photoLimitBelongsToTheFeed() throws Exception {
+        // Своё имя на каждый прогон: позиции между прогонами не чистятся —
+        // журнал движений неизменяем, приход не удалить, — и одноимённая
+        // из прошлого прогона нашлась бы в прайсе первой, без единого снимка.
+        String run = java.util.UUID.randomUUID().toString().substring(0, 8);
+        String name = "Прайс: восемь снимков " + run;
+        Long partId = inTenant(TENANT, () -> pricedPartId(name, 6000));
+        // Главный снимок заведён не первым по расстановке: иначе «первые три»
+        // и «три случайных» в этом тесте выглядели бы одинаково.
+        java.util.List<Long> shown = inTenant(TENANT, () -> photos(partId, 8, 5));
+
+        Long limitedId = inTenant(TENANT, () -> jdbc.queryForObject("""
+                INSERT INTO marketplace_account (marketplace, title, settings)
+                VALUES ('DROM', 'Дром: три снимка', '{"packetId":"556"}'::jsonb)
+                RETURNING id""", Long.class));
+        String limitedFeed = rotate(limitedId);
+
+        // Настройка задаётся с экрана, а не запросом в базу.
+        mvc.perform(put("/api/marketplace-accounts/" + limitedId + "/settings")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"photoLimit\":3}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.settings.photoLimit").value(3));
+
+        String three = offerOf(mvc.perform(get(limitedFeed))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(), name);
+
+        assertThat(photoLinksIn(three))
+                .as("выгрузка отдала не три снимка — предел так и остался зашитым")
+                .isEqualTo(3);
+        assertThat(three)
+                .as("обрезка взяла не первые снимки: обложкой объявления "
+                        + "площадка ставит первую ссылку")
+                .contains("/photo/%d.jpg".formatted(shown.get(0)))
+                .contains("/photo/%d.jpg".formatted(shown.get(1)))
+                .contains("/photo/%d.jpg".formatted(shown.get(2)))
+                .doesNotContain("/photo/%d.jpg".formatted(shown.get(3)));
+
+        // Ноль — «без ограничения», как у системы, с которой переходят
+        // клиенты. Прочитанный как «ни одного», он оставил бы объявления
+        // без фотографий, а на разборке продаёт именно фотография.
+        mvc.perform(put("/api/marketplace-accounts/" + limitedId + "/settings")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"photoLimit\":0}"))
+                .andExpect(status().isOk());
+
+        assertThat(photoLinksIn(offerOf(mvc.perform(get(limitedFeed))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(), name)))
+                .as("ноль прочитан как «ни одного» или как прежние десять")
+                .isEqualTo(8);
+
+        // Соседняя выгрузка настройки не задавала: у неё прежние десять,
+        // и появление поля не должно менять её прайс молча.
+        String many = "Прайс: двенадцать снимков " + run;
+        Long richId = inTenant(TENANT, () -> pricedPartId(many, 7000));
+        inTenant(TENANT, () -> photos(richId, 12, 0));
+
+        assertThat(photoLinksIn(offerOf(mvc.perform(get(feedPath))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(), many)))
+                .as("у выгрузки без настройки число снимков изменилось само")
+                .isEqualTo(10);
+    }
+
+    /**
+     * Отрицательное число снимков отбивается словами, а не пятисоткой
+     * посреди файла.
+     *
+     * <p>Пропущенное, оно уронило бы сборку прайса после того, как заголовки
+     * ответа отправлены: площадка получает 200 и ноль байт, а пустой прайс
+     * она понимает буквально — «товаров нет» — и снимает объявления вместе
+     * с накопленными просмотрами.
+     */
+    @Test
+    @DisplayName("Отрицательное число снимков не сохраняется")
+    void negativePhotoLimitIsRefused() throws Exception {
+        mvc.perform(put("/api/marketplace-accounts/" + accountId + "/settings")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"photoLimit\":-1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("без ограничения")));
+    }
+
+    /** Сколько ссылок на снимки стоит в одном {@code <offer>}. */
+    private int photoLinksIn(String offer) {
+        return offer.split("<photo>", -1).length - 1;
+    }
+
+    /**
+     * Снимки позиции в том порядке, в каком их показывает прайс: главный
+     * первым, дальше по расстановке.
+     *
+     * @param mainAt какой по счёту снимок отмечен главным — он и обязан
+     *               оказаться первой ссылкой
+     * @return номера снимков в порядке показа
+     */
+    private java.util.List<Long> photos(Long partId, int count, int mainAt) {
+        java.util.List<Long> ids = new java.util.ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            ids.add(jdbc.queryForObject("""
+                    INSERT INTO part_photo (part_id, s3_key, sort_order, is_main, status)
+                    VALUES (?, ?, ?, ?, 'PROCESSED') RETURNING id""",
+                    Long.class, partId,
+                    "t_000066/parts/%d/snimok-%d.jpg".formatted(partId, i), i, i == mainAt));
+        }
+        java.util.List<Long> shown = new java.util.ArrayList<>();
+        shown.add(ids.get(mainAt));
+        for (int i = 0; i < count; i++) {
+            if (i != mainAt) {
+                shown.add(ids.get(i));
+            }
+        }
+        return shown;
+    }
+
+    /**
      * Настройки кладутся слиянием, а не заменой.
      *
      * <p>Рядом в тех же настройках лежит номер прайс-листа в кабинете

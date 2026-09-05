@@ -20,7 +20,7 @@ class FeedSettingsTest {
     @Test
     @DisplayName("Наценка с округлением: 4 500 уезжает как 4 950")
     void markupWithRounding() {
-        FeedSettings tenPercent = new FeedSettings(new BigDecimal("10"), new BigDecimal("10"));
+        FeedSettings tenPercent = new FeedSettings(new BigDecimal("10"), new BigDecimal("10"), null);
 
         assertThat(tenPercent.priceFor(new BigDecimal("4500.00")))
                 .isEqualByComparingTo("4950");
@@ -29,7 +29,7 @@ class FeedSettingsTest {
     @Test
     @DisplayName("Округление идёт вверх до шага, а не отбрасыванием")
     void roundingGoesUp() {
-        FeedSettings tenPercent = new FeedSettings(new BigDecimal("10"), new BigDecimal("10"));
+        FeedSettings tenPercent = new FeedSettings(new BigDecimal("10"), new BigDecimal("10"), null);
 
         // 4 505 + 10 % = 4 955,50. Вниз — это 4 950, то есть деталь, отданная
         // дешевле, чем владелец задал; узнает он об этом от покупателя,
@@ -43,7 +43,7 @@ class FeedSettingsTest {
     void discountLowersPrice() {
         // Ровно то, что стоит у живого клиента на прайсе Авито: −20 %
         // на комиссию площадки.
-        FeedSettings discount = new FeedSettings(new BigDecimal("-20"), null);
+        FeedSettings discount = new FeedSettings(new BigDecimal("-20"), null, null);
 
         assertThat(discount.priceFor(new BigDecimal("5000.00")))
                 .isEqualByComparingTo("4000");
@@ -62,7 +62,7 @@ class FeedSettingsTest {
     @Test
     @DisplayName("Одно округление без наценки тоже работает")
     void roundingAloneWorks() {
-        FeedSettings toHundred = new FeedSettings(null, new BigDecimal("100"));
+        FeedSettings toHundred = new FeedSettings(null, new BigDecimal("100"), null);
 
         assertThat(toHundred.priceFor(new BigDecimal("4501.00")))
                 .isEqualByComparingTo("4600");
@@ -71,7 +71,7 @@ class FeedSettingsTest {
     @Test
     @DisplayName("Наценка на «цену не назначили» цены не создаёт")
     void zeroPriceStaysZero() {
-        FeedSettings tenPercent = new FeedSettings(new BigDecimal("10"), new BigDecimal("10"));
+        FeedSettings tenPercent = new FeedSettings(new BigDecimal("10"), new BigDecimal("10"), null);
 
         // Ноль у нас означает незаполненное поле — в выгрузке прежней системы
         // он стоит именно там. Округлив его вверх до шага, мы получили бы
@@ -83,7 +83,7 @@ class FeedSettingsTest {
     @Test
     @DisplayName("Скидка в сто процентов отбивается словами, а не обнуляет цену")
     void fullDiscountIsRefused() {
-        assertThatThrownBy(() -> new FeedSettings(new BigDecimal("-100"), null).validated())
+        assertThatThrownBy(() -> new FeedSettings(new BigDecimal("-100"), null, null).validated())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("0 ₽");
     }
@@ -105,7 +105,7 @@ class FeedSettingsTest {
     void writesOnlyItsOwnKeys() {
         // Настройки кладутся слиянием (settings || …), и объект, несущий
         // чужие ключи, затёр бы их значениями по умолчанию.
-        assertThat(new FeedSettings(new BigDecimal("10"), null).toJson())
+        assertThat(new FeedSettings(new BigDecimal("10"), null, null).toJson())
                 .contains("pricePercent")
                 .doesNotContain("packetId");
     }
