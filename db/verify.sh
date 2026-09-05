@@ -117,14 +117,41 @@ TRG=$($PSQL -tAc "SELECT count(*) FROM pg_trigger t
                     JOIN pg_namespace n ON n.oid = c.relnamespace
                    WHERE n.nspname = 't_000042' AND NOT t.tgisinternal;")
 [ "$TRG" = "0" ] || fail "в схеме арендатора остались триггеры: $TRG"
+# pg_proc не различает функции и процедуры: prokind 'f' и 'p' лежат в одной
+# таблице. Значит «у меня не функция, а процедура» этой проверкой отбивается
+# так же — и это правильно, потому что говорит она то же самое другими словами.
 FN=$($PSQL -tAc "SELECT count(*) FROM pg_proc p
                    JOIN pg_namespace n ON n.oid = p.pronamespace
                   WHERE n.nspname = 't_000042';")
-[ "$FN" = "0" ] || fail "в схеме арендатора остались функции: $FN"
+[ "$FN" = "0" ] || fail "в схеме арендатора остались функции или процедуры: $FN"
+
+# Правила (CREATE RULE) — третий способ спрятать логику в базе: они молча
+# переписывают запрос, и увидеть подмену можно только в схеме.
+RUL=$($PSQL -tAc "SELECT count(*) FROM pg_rules WHERE schemaname = 't_000042';")
+[ "$RUL" = "0" ] || fail "в схеме арендатора остались правила: $RUL"
 GEN=$($PSQL -tAc "SELECT count(*) FROM information_schema.columns
                    WHERE table_schema = 't_000042' AND is_generated = 'ALWAYS';")
 [ "$GEN" = "0" ] || fail "в схеме арендатора остались генерируемые колонки: $GEN"
-ok "триггеров, функций и генерируемых колонок нет"
+ok "триггеров, функций, процедур, правил и генерируемых колонок нет"
+
+# Общая схема catalog проверяется отдельно и по-другому: там осталась ровно
+# одна функция — normalize_oem. Не логика, а след истории: changeset
+# tenant/004 неизменяем и при заведении нового арендатора проигрывается вместе
+# с генерируемой колонкой, которую тут же снимает tenant/051. Без функции
+# падает провижининг.
+#
+# Проверяется не «мало», а «ровно эта»: счётчик пропустил бы вторую, заведённую
+# рядом, а именно так логика и возвращается — по одной функции за раз.
+CAT=$($PSQL -tAc "SELECT coalesce(string_agg(p.proname, ',' ORDER BY p.proname), '')
+                    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                   WHERE n.nspname = 'catalog';")
+[ "$CAT" = "normalize_oem" ] || fail "в catalog не то, что ожидалось: «$CAT» вместо «normalize_oem»"
+CTRG=$($PSQL -tAc "SELECT count(*) FROM pg_trigger t
+                     JOIN pg_class c ON c.oid = t.tgrelid
+                     JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'catalog' AND NOT t.tgisinternal;")
+[ "$CTRG" = "0" ] || fail "в общей схеме catalog появились триггеры: $CTRG"
+ok "в catalog только normalize_oem и ни одного триггера"
 
 step "6. Идемпотентность повторного update"
 $LB --changelog-file=changelog/db.changelog-tenant.xml $CRED \
