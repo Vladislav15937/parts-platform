@@ -4,7 +4,7 @@ title: Имя файла прайса придумывает владелец
 status: в работе
 assignee: migrator
 source: разведка 05.09.2026, §9 bazon-parity
-pr: —
+pr: 33
 ---
 
 ## Что человек сможет
