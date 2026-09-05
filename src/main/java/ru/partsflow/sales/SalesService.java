@@ -1068,6 +1068,40 @@ public class SalesService {
         return withItems(dealRepository.findExpiredReservations(Instant.now()));
     }
 
+    /**
+     * Продлевает срок резерва: клиент позвонил и попросил подержать ещё.
+     *
+     * <p>Склад это не двигает — товар и так отложен под того же клиента,
+     * меняется только число, до которого его держат.
+     *
+     * <p>Пишется в историю документа отдельной строкой: через неделю
+     * «почему деталь всё ещё лежит» спрашивают именно по ней, и ответом
+     * должно быть «продлил Пётр третьего числа», а не молча изменившаяся
+     * дата в карточке.
+     */
+    @Transactional
+    public Deal extendReservation(Long dealId, Instant until, Long managerId) {
+        Deal deal = requireDeal(dealId);
+        deal.extendReservation(until);
+
+        Deal saved = detachable(dealRepository.saveAndFlush(deal));
+        log(saved, "RESERVATION_EXTENDED", "Срок резерва продлён до " + dayOf(until), managerId);
+        return saved;
+    }
+
+    /**
+     * Дата словами для истории документа: «8 сентября».
+     *
+     * <p>Тем же видом, что и в карточке продавца: одна и та же величина,
+     * записанная в двух местах по-разному, читается как две разные.
+     */
+    private static String dayOf(Instant moment) {
+        return java.time.format.DateTimeFormatter
+                .ofPattern("d MMMM", java.util.Locale.of("ru"))
+                .withZone(java.time.ZoneOffset.UTC)
+                .format(moment);
+    }
+
     @Transactional(readOnly = true)
     public List<DocumentEvent> history(Long dealId) {
         return eventRepository.findByDocumentTypeAndDocumentIdOrderByIdAsc("DEAL", dealId);
