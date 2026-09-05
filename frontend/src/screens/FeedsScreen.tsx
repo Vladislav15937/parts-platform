@@ -28,6 +28,7 @@ import {
   listFeeds,
   rotateFeedUrl,
   setCredentials,
+  setFeedFileName,
   setFilter,
   setSettings,
   type Feed,
@@ -162,6 +163,8 @@ function FeedCard({
   const [warehouseIds, setWarehouseIds] = useState<number[]>(feed.warehouseIds);
   const [link, setLink] = useState<FeedLink | null>(null);
   const [secret, setSecret] = useState('');
+  // Имя файла прайса: пусто — имени не задавали, и ссылка кончается токеном.
+  const [fileName, setFileName] = useState(feed.feedFileName ?? '');
 
   // Настройки сборки прайса — через String по той же причине, что и цена:
   // с сервера они приходят числом, а поле правится строкой.
@@ -274,6 +277,28 @@ function FeedCard({
       onChanged();
     } catch (cause) {
       onError(describe(cause, 'Ссылка не сменилась'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Сохраняет имя файла и сразу перечитывает ссылку.
+   *
+   * <p>Ради ссылки имя и задают: показать «сохранено», оставив на экране
+   * прежний адрес, значило бы заставить владельца гадать, попало ли имя
+   * в ссылку, — а перенести в кабинет площадки он должен именно её.
+   */
+  async function saveFileName() {
+    setBusy(true);
+    try {
+      await setFeedFileName(feed.id, fileName.trim());
+      if (feed.hasFeed) {
+        setLink(await feedUrl(feed.id));
+      }
+      onChanged();
+    } catch (cause) {
+      onError(describe(cause, 'Имя файла не сохранено'));
     } finally {
       setBusy(false);
     }
@@ -609,6 +634,27 @@ function FeedCard({
             </p>
           </>
         )}
+        {/* Имя файла — читаемый хвост адреса. Техспециалист площадки
+            переносит ссылку руками, и сорок случайных символов токена
+            в конце он переписывает с ошибками: заметить это можно только
+            по тому, что объявления не появились. Секрет при этом остаётся
+            на месте — сохранение имени выгрузку не останавливает. */}
+        <label className="field">
+          Имя файла прайса
+          <input
+            value={fileName}
+            placeholder="drom-parts.xml"
+            onChange={(e) => setFileName(e.target.value)}
+          />
+        </label>
+        <p className="note">
+          Латинские буквы, цифры и дефис — это часть адреса. Пусто — ссылка
+          кончается секретом, как раньше.
+        </p>
+        <button type="button" className="button--ghost" disabled={busy}
+                onClick={() => void saveFileName()}>
+          {feed.feedFileName ? 'Сохранить имя файла' : 'Задать имя файла'}
+        </button>
         <button type="button" className="button--ghost" disabled={busy}
                 onClick={() => void rotate()}>
           {feed.hasFeed ? 'Сменить ссылку' : 'Выдать ссылку'}

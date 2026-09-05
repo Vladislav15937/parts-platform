@@ -472,12 +472,17 @@ public class SalesController {
      * @param externalOrderNo номер заказа у площадки — его называет покупатель
      * @param replyDeadline срок ответа площадке; у Дрома пропущенный означает
      *                      возврат денег покупателю
+     * @param warehouseId   склад выдачи сделки. Экран возврата подставляет
+     *                      его складом возврата: угаданный первым попавшимся
+     *                      ставит деталь на чужую полку, а искать её будут
+     *                      по прежнему адресу. Пусто — колонку никто
+     *                      не заполняет, и откуда ушёл товар, знают позиции
      */
     public record DealView(Long id, Long number, Long customerId, Long managerId,
                            DealStatus status, Instant reservedUntil,
                            BigDecimal totalAmount, BigDecimal paidAmount, BigDecimal debt,
                            Instant createdAt, Instant issuedAt,
-                           Long dealSourceId,
+                           Long dealSourceId, Long warehouseId,
                            String marketplace, String externalOrderNo,
                            Instant replyDeadline, Instant orderAcceptedAt,
                            String deliveryNote, List<ItemView> items,
@@ -489,7 +494,7 @@ public class SalesController {
                     deal.getManagerId(), deal.getStatus(), deal.getReservedUntil(),
                     deal.getTotalAmount(), deal.getPaidAmount(), deal.debt(),
                     deal.getCreatedAt(), deal.getIssuedAt(),
-                    deal.getDealSourceId(),
+                    deal.getDealSourceId(), deal.getWarehouseId(),
                     deal.getMarketplace(), deal.getExternalOrderNo(),
                     deal.getReplyDeadline(), deal.getOrderAcceptedAt(),
                     deal.getDeliveryNote(),

@@ -19,6 +19,9 @@ function feed(overrides: Partial<Feed> = {}): Feed {
     hasCredentials: false,
     plaintextSecret: false,
     hasFeed: true,
+    // Имени файла не задавали: ссылка кончается токеном — рабочее состояние,
+    // а не незаполненное поле.
+    feedFileName: null,
     productLine: 'PART',
     settings: { pricePercent: null, priceRounding: null },
     lastError: null,

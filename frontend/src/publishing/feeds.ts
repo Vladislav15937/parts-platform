@@ -56,6 +56,14 @@ export interface Feed {
   hasCredentials: boolean;
   plaintextSecret: boolean;
   hasFeed: boolean;
+  /**
+   * Читаемое имя файла в конце ссылки — «drom-parts.xml».
+   *
+   * <p>`null` — имени не задавали, и ссылка кончается токеном. Это рабочее
+   * состояние, а не незаполненное поле: имя нужно тому, кто переносит адрес
+   * в кабинет площадки руками.
+   */
+  feedFileName: string | null;
   /** Что уезжает: «PART» — запчасти, «WHEEL» — шины и диски. */
   productLine: 'PART' | 'WHEEL';
   /** Как собирается файл: наценка на прайс-лист и округление. */
@@ -241,6 +249,25 @@ export interface FeedLink {
 
 export function feedUrl(id: number): Promise<FeedLink> {
   return request<FeedLink>(`/api/marketplace-accounts/${id}/feed-url`);
+}
+
+/**
+ * Задаёт имя файла прайса — читаемый хвост ссылки.
+ *
+ * <p>Адрес прописывает в кабинете площадки её техспециалист руками, и хвост
+ * из сорока случайных символов он переносит с ошибками — а ошибку видно
+ * только по тому, что объявления не появились. Секрет при этом остаётся
+ * на месте: смены ссылки тут не происходит, прежний адрес продолжает
+ * работать.
+ *
+ * <p>Пустое поле снимает имя. Уезжает оно пустой строкой, а сервер пишет
+ * `NULL`: две выгрузки без имени не должны сталкиваться в уникальном индексе.
+ */
+export function setFeedFileName(id: number, fileName: string): Promise<Feed> {
+  return request<Feed>(`/api/marketplace-accounts/${id}/feed-file`, {
+    method: 'PUT',
+    body: { fileName },
+  });
 }
 
 export function rotateFeedUrl(id: number): Promise<FeedLink> {

@@ -147,6 +147,39 @@ public class MarketplaceAccountController {
     public record CountView(long parts) {
     }
 
+    /**
+     * Задаёт или снимает имя файла прайса.
+     *
+     * <p>Ссылку прописывает в кабинете площадки её техспециалист руками,
+     * и адрес, кончающийся сорока случайными символами токена, он переносит
+     * с ошибками — а ошибку видно только по тому, что объявления
+     * не появились. Имя файла — читаемый хвост, который сверяют глазами;
+     * секрет остаётся отдельной частью пути.
+     *
+     * <p>Владельцу, как и сама ссылка: это адрес, который уходит наружу.
+     *
+     * <p><b>Занятое имя отвечает словами.</b> Проверка чтением в сервисе
+     * ловит обычный повтор, одновременный отбивает индекс — и тогда мы
+     * перечитываем, кем имя занято, новой транзакцией: прежняя помечена
+     * на откат. Тот же приём, что у повтора приёмки и заказа с площадки,
+     * и та же причина: индекс защищает данные, а не человека.
+     */
+    @PutMapping("/{id}/feed-file")
+    @PreAuthorize("hasRole('OWNER')")
+    public MarketplaceAccountService.Account setFeedFileName(
+            @PathVariable Long id, @RequestBody FeedFileRequest request) {
+        try {
+            return accounts.setFeedFileName(id, request.fileName());
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            throw new IllegalArgumentException(
+                    accounts.nameConflictMessage(id, request.fileName()));
+        }
+    }
+
+    /** @param fileName пусто — имя снимается, и ссылка снова кончается токеном */
+    public record FeedFileRequest(String fileName) {
+    }
+
     @PostMapping("/{id}/feed-url")
     @PreAuthorize("hasRole('OWNER')")
     public FeedUrlView rotateFeedUrl(@PathVariable Long id, HttpServletRequest request) {
