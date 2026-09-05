@@ -367,6 +367,58 @@ export function expiredReservations(): Promise<Deal[]> {
 }
 
 /**
+ * Продление срока резерва: клиент позвонил и попросил подержать ещё.
+ *
+ * <p>Склад это не двигает — товар и так отложен под того же клиента.
+ * Просроченный резерв продлевается тоже: у живого клиента просрочена
+ * половина отложенных сделок, и звонок приходит как раз по ним.
+ */
+export function extendReservation(dealId: number, reservedUntil: string): Promise<Deal> {
+  return request<Deal>(`/api/deals/${dealId}/reservation`, {
+    method: 'POST',
+    body: { reservedUntil },
+  });
+}
+
+/**
+ * Конец выбранного дня в местном времени.
+ *
+ * <p>Поле выбора даты отдаёт «2026-09-12» без времени, а держать товар
+ * до полуночи этого дня — не то же самое, что до его начала: резерв «до
+ * двенадцатого» в разговоре означает, что двенадцатого он ещё держится.
+ * Местное время, а не UTC: `new Date('2026-09-12')` — это полночь по
+ * Гринвичу, то есть на востоке страны уже тринадцатое.
+ */
+export function endOfDay(date: string): string {
+  const [year, month, day] = date.split('-');
+  return new Date(Number(year), Number(month) - 1, Number(day), 23, 59, 59).toISOString();
+}
+
+/**
+ * Срок резерва для показа: до какого числа держим и не вышел ли срок.
+ *
+ * <p>Пусто у всего, кроме отложенной сделки: у выданной и отменённой срок
+ * уже ни о чём — товар либо у клиента, либо снова на полке, — и дата рядом
+ * с ними читается как обещание, которого никто не давал.
+ *
+ * <p>Просроченный не показывает вчерашнее число: «до 3 сентября» пятого
+ * продавец прочтёт как срок, а это очередь на обзвон. Резерв при этом
+ * не снимается сам — «до завтра» на разборке часто значит «до послезавтра».
+ */
+export function reservationTerm(
+  deal: Deal, now: number = Date.now(),
+): { day: string; expired: boolean } | null {
+  if (deal.status !== 'RESERVED' || deal.reservedUntil === null) {
+    return null;
+  }
+  const until = new Date(deal.reservedUntil);
+  return {
+    day: until.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }),
+    expired: until.getTime() < now,
+  };
+}
+
+/**
  * Заказ, оформленный покупателем на площадке.
  *
  * <p>Заводится руками: продавец видит заказ в кабинете Дрома и переносит его

@@ -179,6 +179,24 @@ public class SalesController {
         return views(sales.expiredReservations());
     }
 
+    /**
+     * Продление срока резерва.
+     *
+     * <p>Продлевает продавец, а не только владелец: это его разговор
+     * с клиентом — «подержите до пятницы» говорят тому, кто взял трубку,
+     * и отправлять его за владельцем значит не продлить вовсе.
+     */
+    @PostMapping("/{id}/reservation")
+    @PreAuthorize(SELLS)
+    public DealView extendReservation(@PathVariable Long id,
+                                      @Valid @RequestBody ExtendReservationRequest request) {
+        return view(sales.extendReservation(id, request.reservedUntil(), CurrentUser.memberId()));
+    }
+
+    /** @param reservedUntil до какого момента держим товар. Пусто — продлевать нечем */
+    public record ExtendReservationRequest(@NotNull Instant reservedUntil) {
+    }
+
     @PostMapping("/{id}/issue")
     @PreAuthorize(ISSUES)
     public DealView issue(@PathVariable Long id) {
