@@ -284,6 +284,78 @@ export function returnsOf(dealId: number): Promise<ReturnDoc[]> {
 }
 
 /**
+ * Строка реестра возвратов: обзор без входа в сделку клиента.
+ *
+ * <p>Раньше единственным списком был {@link returnsOf} — по открытой сделке,
+ * то есть только если уже известны клиент и его сделка. Продавец, сменившийся
+ * со смены, свой же возврат найти не мог: искать разговором «кто вернул
+ * деталь через неделю» не с чем.
+ */
+export interface ReturnListRow {
+  id: number;
+  number: number | null;
+  createdAt: string;
+  dealId: number;
+  dealNumber: number | null;
+  customerId: number | null;
+  /** Пусто — у сделки нет клиента; экран показывает «Частное лицо». */
+  customerName: string | null;
+  warehouseId: number | null;
+  /**
+   * Склад, на который принят товар. У брака ({@code !restocked}) на склад
+   * ничего не вставало, и экран показывает это словами, а не адресом.
+   */
+  warehouseName: string | null;
+  restocked: boolean;
+  status: string;
+  amount: string;
+  reason: string | null;
+}
+
+/**
+ * @param total       сколько нашлось по отбору — список может быть обрезан пределом
+ * @param totalAmount сумма найденного без отменённых возвратов
+ */
+export interface ReturnsPage {
+  items: ReturnListRow[];
+  total: number;
+  totalAmount: string;
+}
+
+/**
+ * Реестр возвратов.
+ *
+ * <p>Вместо курсора — растущий предел {@code size}: список читают с конца
+ * и вглубь не листают, а строка вычисляется тем же условием, что и подвал
+ * таблицы (количество и сумма), — иначе они разойдутся на первой же правке.
+ *
+ * @param query поиск: точное совпадение по номеру сделки, вхождение —
+ *              по клиенту и по причине
+ * @param from  начало периода (ISO-момент); пусто — с начала времён
+ * @param to    конец периода (ISO-момент); пусто — по текущий момент
+ * @param size  сколько строк вернуть
+ */
+export function listReturns(
+  query: string,
+  from: string,
+  to: string,
+  size = 50,
+): Promise<ReturnsPage> {
+  const params = new URLSearchParams();
+  if (query.trim() !== '') {
+    params.set('q', query.trim());
+  }
+  if (from !== '') {
+    params.set('from', from);
+  }
+  if (to !== '') {
+    params.set('to', to);
+  }
+  params.set('size', String(size));
+  return request<ReturnsPage>(`/api/deals/returns?${params.toString()}`);
+}
+
+/**
  * Переносит позиции в новую сделку.
  *
  * <p>Клиент забирает половину сейчас, остальное оставляет на потом. Резерв
@@ -378,6 +450,18 @@ export function extendReservation(dealId: number, reservedUntil: string): Promis
     method: 'POST',
     body: { reservedUntil },
   });
+}
+
+/**
+ * Начало выбранного дня в местном времени.
+ *
+ * <p>Пара к {@link endOfDay}: отбор «с» по возвратам берёт полночь того же
+ * дня по местному времени, а не по Гринвичу — иначе на востоке страны
+ * начало периода сдвинулось бы на день назад.
+ */
+export function startOfDay(date: string): string {
+  const [year, month, day] = date.split('-');
+  return new Date(Number(year), Number(month) - 1, Number(day), 0, 0, 0).toISOString();
 }
 
 /**
