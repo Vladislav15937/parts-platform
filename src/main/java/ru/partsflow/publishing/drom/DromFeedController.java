@@ -69,11 +69,49 @@ public class DromFeedController {
         this.publicUrl = publicUrl;
     }
 
+    /**
+     * Тот же прайс по адресу с читаемым именем файла в конце.
+     *
+     * <p><b>Имя файла подписывает ссылку, а не открывает её.</b> Доступ
+     * по-прежнему даёт только токен: подделанный секрет с верным именем
+     * отвечает 404, как и раньше. Имя нужно человеку — техспециалист
+     * площадки переносит адрес руками, и «…/drom-yardt-parts.xml» он
+     * сверяет глазами, а сорок случайных символов в конце переписывает
+     * с ошибками.
+     *
+     * <p><b>Поэтому имя в адресе и не сверяется с записанным.</b> Иначе
+     * переименование файла тихо становилось бы остановкой выгрузки: прежний
+     * адрес, уже прописанный в кабинете площадки, начал бы отвечать 404,
+     * и заметить это можно было бы только по исчезнувшим объявлениям.
+     * Смена ссылки — отдельное осознанное действие, и это не оно.
+     */
+    @GetMapping(value = "/feeds/drom/{company}/{token}/{file}.xml", produces = "application/xml")
+    public void namedFeed(@PathVariable String company,
+                          @PathVariable String token,
+                          @PathVariable String file,
+                          HttpServletRequest request,
+                          HttpServletResponse response) throws IOException {
+        serve(company, token, file + ".xml", request, response);
+    }
+
     @GetMapping(value = "/feeds/drom/{company}/{token}.xml", produces = "application/xml")
     public void feed(@PathVariable String company,
                      @PathVariable String token,
                      HttpServletRequest request,
                      HttpServletResponse response) throws IOException {
+        serve(company, token, null, request, response);
+    }
+
+    /**
+     * @param fileName имя, под которым файл предлагается сохранить; {@code null} —
+     *                 адрес без имени, и остаётся прежнее {@code price.xml}.
+     *                 Заливка файлом руками — единственный быстрый способ
+     *                 показать принятую деталь сегодня, и владелец кладёт
+     *                 в кабинет площадки именно скачанный файл
+     */
+    private void serve(String company, String token, String fileName,
+                       HttpServletRequest request,
+                       HttpServletResponse response) throws IOException {
 
         String schema = schemaOf(company);
         DromAccountReader.Account account = schema == null ? null : accountFor(schema, token);
@@ -114,7 +152,12 @@ public class DromFeedController {
         response.setHeader("Cache-Control", "no-store");
         // Content-Length заранее неизвестен — прайс собирается на лету.
         // Без него ответ уйдёт chunked, и это правильное поведение.
-        response.setHeader("Content-Disposition", "inline; filename=\"price.xml\"");
+        // Имя из адреса берётся только тогда, когда оно того же вида, что
+        // и записанное владельцем: в заголовок ответа не должно попадать
+        // ничего, что человек сумел набрать в строке браузера.
+        response.setHeader("Content-Disposition", "inline; filename=\"%s\""
+                .formatted(ru.partsflow.publishing.FeedFileName.isValid(fileName)
+                        ? fileName : "price.xml"));
 
         TenantContext.set(schema);
         try (OutputStream out = response.getOutputStream()) {
