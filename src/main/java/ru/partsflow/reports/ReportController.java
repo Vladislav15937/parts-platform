@@ -59,6 +59,18 @@ public class ReportController {
         return new SourceReport(period.toString(), reports.salesBySource(period));
     }
 
+    /**
+     * Сводка: сколько лежит на складе и сколько висит в незакрытых сделках.
+     *
+     * <p>Шесть чисел без единой настройки — намеренно. Это первое, что владелец
+     * спрашивает с утра, и период тут не при чём: остаток и незакрытые сделки
+     * существуют «сейчас», а не за месяц.
+     */
+    @GetMapping("/summary")
+    public ReportService.Summary summary() {
+        return reports.summary();
+    }
+
     @GetMapping("/donors")
     public DonorReport donors() {
         return new DonorReport(reports.donorProfitability(DONOR_LIMIT), reports.donorTotals());
