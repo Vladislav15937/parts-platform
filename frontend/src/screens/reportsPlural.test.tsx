@@ -31,6 +31,13 @@ describe('склонение на экране отчётов', () => {
       if (url.includes('/reports/sources')) {
         return json({ month: '2026-08', rows: [] });
       }
+      if (url.includes('/reports/summary')) {
+        return json({
+          parts: { qty: 0, amount: 0 },
+          wheels: { qty: 0, amount: 0 },
+          deals: { count: 0, amount: 0, prepaid: 0 },
+        });
+      }
       return json({ totals: { donors: 0, totalCost: 0, revenue: 0, stockValue: 0 }, rows: [] });
     }));
   });

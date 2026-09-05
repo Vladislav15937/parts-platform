@@ -143,8 +143,52 @@ function parse(month: string): [number, number] {
 }
 
 /** Рубли без копеек: в отчёте важен порядок, а не последние два знака. */
-export function money(value: string | null): string {
+export function money(value: string | number | null): string {
   return `${Math.round(Number(value ?? 0)).toLocaleString('ru-RU')} ₽`;
+}
+
+/**
+ * Сводка: что лежит на складе и что висит в незакрытых сделках.
+ *
+ * <p>Первый вопрос владельца разборки — «сколько у меня сейчас на складе
+ * в деньгах», и остальные четыре отчёта на него не отвечают: они все про
+ * прошлое. Периода здесь нет и не должно быть: остаток и незакрытые сделки
+ * существуют «сейчас».
+ *
+ * <p>Числа приходят числами, а не строками: `numeric` из Postgres Jackson
+ * отдаёт числом JSON, и объявить их строкой значит получить падение
+ * на первом же `.trim()` — так уже было у цены на экране выгрузок.
+ */
+export interface StockLine {
+  /**
+   * Сколько физически лежит на всех складах вместе — не свободный остаток.
+   * Отложенная под клиента деталь с полки не делась, и вычесть её значило бы
+   * показать владельцу недостачу ровно на объём отложенного.
+   */
+  qty: number;
+  /** Во сколько это оценено по розничной цене. */
+  amount: number;
+}
+
+export interface Summary {
+  parts: StockLine;
+  /** Колёса отдельной строкой: они продаются сезоном, и на них смотрят отдельно. */
+  wheels: StockLine;
+  deals: {
+    count: number;
+    amount: number;
+    /** Сколько по этим сделкам уже внесено: разница — то, что ещё должны. */
+    prepaid: number;
+  };
+}
+
+export function summary(): Promise<Summary> {
+  return request<Summary>('/api/reports/summary');
+}
+
+/** «35 773 шт.» — количество на складе с разделителем разрядов. */
+export function pieces(value: number): string {
+  return `${value.toLocaleString('ru-RU')} шт.`;
 }
 
 /**

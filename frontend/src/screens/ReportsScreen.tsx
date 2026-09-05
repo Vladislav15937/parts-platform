@@ -6,7 +6,9 @@ import {
   donorProfitability,
   managerSales,
   money,
+  pieces,
   salesBySource,
+  summary,
   unknownShare,
   monthName,
   monthOf,
@@ -17,6 +19,7 @@ import type {
   ManagerReport,
   SettlementReport,
   SourceReport,
+  Summary,
 } from '../reports/reports';
 
 /**
@@ -47,6 +50,9 @@ export function ReportsScreen({ canRead }: Props) {
   // Расчёты с клиентами: авансы, долги и сверка. Число обязательств без
   // ответа «сходится ли» — спокойствие без основания.
   const [settlements, setSettlements] = useState<SettlementReport | null>(null);
+  // Сводно: сколько лежит на складе и сколько висит в незакрытых сделках.
+  // Единственный блок экрана без периода — оба числа существуют «сейчас».
+  const [overview, setOverview] = useState<Summary | null>(null);
 
   useEffect(() => {
     void managerSales(month)
@@ -69,6 +75,9 @@ export function ReportsScreen({ canRead }: Props) {
     void customerSettlements()
       .then(setSettlements)
       .catch((cause) => setError(describe(cause, 'Расчёты с клиентами не загрузились')));
+    void summary()
+      .then(setOverview)
+      .catch((cause) => setError(describe(cause, 'Сводка не загрузилась')));
   }, []);
 
   if (!canRead) {
@@ -88,6 +97,82 @@ export function ReportsScreen({ canRead }: Props) {
       <h2>Отчёты</h2>
       {error !== null && <p className="note note--error">{error}</p>}
 
+      {/* Сводно идёт первым блоком: «сколько у меня сейчас на складе
+          в деньгах» — то, с чего владелец разборки начинает день, а все
+          остальные отчёты здесь про прошлое. Настроек нет намеренно:
+          у остатка и незакрытых сделок нет периода, они существуют
+          «сейчас», и месяц над ними был бы враньём. */}
+      <h3>Сводно</h3>
+
+      {/* «Загружаем…» — пока грузим, а не пока пусто: иначе при отказе
+          надпись висит вечно, а причина лежит рядом непоказанной. */}
+      {overview === null && error === null && <p className="note">Загружаем…</p>}
+
+      {overview !== null && (
+        <>
+          <h4>Остаток товара</h4>
+          <div className="table-scroll">
+            <table className="report">
+              <thead>
+                <tr>
+                  <th>Вид товара</th>
+                  <th className="num">Количество</th>
+                  <th className="num">Сумма по розничной цене</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Запчасти</td>
+                  <td className="num">{pieces(overview.parts.qty)}</td>
+                  <td className="num">{money(overview.parts.amount)}</td>
+                </tr>
+                {/* Колёса отдельной строкой, а не в общей куче: они продаются
+                    сезоном, и владелец смотрит на них отдельно. */}
+                <tr>
+                  <td>Шины и диски</td>
+                  <td className="num">{pieces(overview.wheels.qty)}</td>
+                  <td className="num">{money(overview.wheels.amount)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p className="note">
+            Считается то, что физически лежит на полке, по всем складам вместе, —
+            вместе с отложенным под клиентов: обещанная деталь со склада никуда
+            не делась. Позиция без цены попадает в количество и не попадает
+            в сумму.
+          </p>
+
+          <h4>Сделки в работе</h4>
+          <div className="table-scroll">
+            <table className="report">
+              <tbody>
+                <tr>
+                  <td>Количество</td>
+                  <td className="num">{pieces(overview.deals.count)}</td>
+                </tr>
+                <tr>
+                  <td>На сумму</td>
+                  <td className="num">{money(overview.deals.amount)}</td>
+                </tr>
+                <tr>
+                  <td>Сумма предоплат</td>
+                  <td className="num">{money(overview.deals.prepaid)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p className="note">
+            В работе — незакрытые: собираются, отложены или ждут клиента
+            на складе выдачи. Выданная сделка отсюда уходит вместе с товаром
+            со склада.
+          </p>
+        </>
+      )}
+
+      <hr />
       <h3>Продажи по менеджерам</h3>
       <div className="row row--between">
         <button type="button" className="button--ghost" onClick={() => setMonth(shiftMonth(month, -1))}>

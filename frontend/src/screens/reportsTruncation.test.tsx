@@ -30,6 +30,13 @@ describe('обрезанные списки отчётов', () => {
       if (url.includes('/reports/managers') || url.includes('/reports/sources')) {
         return json({ month: '2026-08', rows: [] });
       }
+      if (url.includes('/reports/summary')) {
+        return json({
+          parts: { qty: 0, amount: 0 },
+          wheels: { qty: 0, amount: 0 },
+          deals: { count: 0, amount: 0, prepaid: 0 },
+        });
+      }
       return json({
         totals: { donors: 441, totalCost: 230000, revenue: 6500, stockValue: 96308477 },
         rows: rows(50, (i) => ({ donorId: i, publicCode: `D${i}`, legacyCode: String(i),

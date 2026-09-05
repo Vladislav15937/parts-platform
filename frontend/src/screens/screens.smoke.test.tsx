@@ -60,6 +60,11 @@ describe('экраны открываются', () => {
                 advances: 0, debts: 0, withAdvance: 0, withDebt: 0, problems: [],
                 donors: 0, totalCost: 0, revenue: 0, stockValue: 0,
               },
+              // Сводка приходит собранной всегда, даже у пустого арендатора:
+              // отсутствующие карточки — это падение на «undefined.qty».
+              parts: { qty: 0, amount: 0 },
+              wheels: { qty: 0, amount: 0 },
+              deals: { count: 0, amount: 0, prepaid: 0 },
             }
           : EMPTY;
       return new Response(JSON.stringify(body), {

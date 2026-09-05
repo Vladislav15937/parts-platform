@@ -3,11 +3,16 @@ package ru.partsflow.reports;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.sales.DealStatus;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Отчёты владельца.
@@ -191,6 +196,105 @@ public class ReportService {
         return new SettlementTotals(
                 totals.advances(), totals.debts(), totals.withAdvance(), totals.withDebt(),
                 totals.customers(), discrepancies());
+    }
+
+    /**
+     * Сводка: что лежит на складе и что висит в незакрытых сделках.
+     *
+     * <p>Первый вопрос владельца разборки — «сколько у меня сейчас на складе
+     * в деньгах», и до этого на него не отвечал никто: все отчёты про прошлое.
+     *
+     * <p><b>Считается {@code qty}, а не свободный остаток.</b> Вопрос здесь —
+     * сколько лежит на полке, а не сколько можно продать: отложенная под
+     * клиента деталь никуда со склада не делась, и вычесть её значило бы
+     * показать владельцу недостачу ровно на объём отложенного. Разница видна
+     * только тому, кто знает, что резерв вообще есть, — поэтому она и стоит
+     * отдельной проверкой.
+     *
+     * <p>Запчасти и колёса — разными строками: колёса продаются сезоном,
+     * и владелец смотрит на них отдельно. Обе строки собираются всегда,
+     * даже когда база не вернула по ним ничего: у свежего арендатора ответ
+     * должен быть нулём, а не отсутствующим полем.
+     *
+     * <p>Цена берётся розничная и незаполненная считается нулём. Деталь без
+     * цены при этом остаётся в количестве: она лежит на полке независимо
+     * от того, оценили её или нет.
+     */
+    @Transactional(readOnly = true)
+    public Summary summary() {
+        Map<String, StockLine> byLine = jdbc.query("""
+                SELECT p.product_line                                          AS product_line,
+                       COALESCE(sum(s.qty), 0)                                 AS qty,
+                       -- До копейки: остаток numeric(12,3) на цену numeric(14,2)
+                       -- даёт пять знаков после запятой, и наружу уходило бы
+                       -- «2000.00000» — деньги такими не бывают.
+                       round(COALESCE(sum(s.qty * COALESCE(p.price, 0)), 0), 2) AS amount
+                  FROM part_stock s
+                  JOIN part p ON p.id = s.part_id
+                 GROUP BY p.product_line""",
+                (rs, i) -> Map.entry(rs.getString("product_line"),
+                        new StockLine(rs.getBigDecimal("qty"), rs.getBigDecimal("amount"))))
+                .stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+
+        return new Summary(
+                byLine.getOrDefault("PART", StockLine.EMPTY),
+                byLine.getOrDefault("WHEEL", StockLine.EMPTY),
+                openDeals());
+    }
+
+    /**
+     * Сделки в работе: сколько их, на сколько и сколько по ним уже внесено.
+     *
+     * <p>Состояния берутся у самой сделки ({@link DealStatus#holdsStock()}),
+     * а не переписываются списком: выданная сделка — уже не работа, а её
+     * выпадение отсюда обязано случиться ровно тогда же, когда товар уходит
+     * со склада. Свой список разошёлся бы с продажами на первом новом
+     * состоянии, и разошёлся бы молча.
+     *
+     * <p>Внесённое читается из {@code paid_amount}, а не складывается
+     * по платежам: зачёт с лицевого счёта платежа не создаёт — деньги
+     * получены раньше, — и сумма по журналу платежей занизила бы предоплаты
+     * ровно на зачтённые авансы.
+     */
+    private OpenDeals openDeals() {
+        List<String> open = Arrays.stream(DealStatus.values())
+                .filter(DealStatus::holdsStock)
+                .map(Enum::name)
+                .toList();
+        String places = String.join(", ", Collections.nCopies(open.size(), "?"));
+
+        return jdbc.queryForObject("""
+                SELECT count(*)                       AS deals,
+                       COALESCE(sum(total_amount), 0) AS amount,
+                       COALESCE(sum(paid_amount), 0)  AS prepaid
+                  FROM deal
+                 WHERE status IN (%s)""".formatted(places),
+                (rs, i) -> new OpenDeals(
+                        rs.getInt("deals"),
+                        rs.getBigDecimal("amount"),
+                        rs.getBigDecimal("prepaid")),
+                open.toArray());
+    }
+
+    /**
+     * @param qty    сколько штук физически лежит на всех складах вместе
+     * @param amount во сколько это оценено по розничной цене
+     */
+    public record StockLine(BigDecimal qty, BigDecimal amount) {
+
+        /** Вида товара на складе нет вовсе — это ноль, а не отсутствие ответа. */
+        static final StockLine EMPTY = new StockLine(BigDecimal.ZERO, BigDecimal.ZERO);
+    }
+
+    /**
+     * @param prepaid сколько по этим сделкам уже внесено. Отдельно от суммы:
+     *                владелец смотрит на разницу — это то, что ему ещё должны
+     */
+    public record OpenDeals(int count, BigDecimal amount, BigDecimal prepaid) {
+    }
+
+    public record Summary(StockLine parts, StockLine wheels, OpenDeals deals) {
     }
 
     /** Нарушенные инварианты расчётов. Пусто — деньги сходятся. */
