@@ -1,8 +1,8 @@
 ---
 id: 0002
 title: Наценка или скидка на прайс-лист, не трогающая цену на складе
-status: новая
-assignee: —
+status: в работе
+assignee: coder
 source: разведка 05.09.2026, §9 bazon-parity
 pr: —
 ---

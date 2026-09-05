@@ -19,13 +19,16 @@ import {
   feedUrl,
   filterableColumns,
   CONDITIONS,
+  ROUNDING_STEPS,
   countMatching,
   createFeed,
+  decimalOrNull,
   filterSummary,
   listFeeds,
   rotateFeedUrl,
   setCredentials,
   setFilter,
+  setSettings,
   type Feed,
   type FeedFilter,
 } from '../publishing/feeds';
@@ -158,6 +161,14 @@ function FeedCard({
   const [warehouseIds, setWarehouseIds] = useState<number[]>(feed.warehouseIds);
   const [link, setLink] = useState<FeedLink | null>(null);
   const [secret, setSecret] = useState('');
+
+  // Настройки сборки прайса — через String по той же причине, что и цена:
+  // с сервера они приходят числом, а поле правится строкой.
+  const [pricePercent, setPricePercent] = useState(
+    feed.settings?.pricePercent == null ? '' : String(feed.settings.pricePercent));
+  const [priceRounding, setPriceRounding] = useState(
+    feed.settings?.priceRounding == null ? '' : String(feed.settings.priceRounding));
+
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState<number | null>(null);
 
@@ -217,6 +228,28 @@ function FeedCard({
       onChanged();
     } catch (cause) {
       onError(describe(cause, 'Отбор не сохранён'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Наценка и округление сохраняются отдельно от отбора.
+   *
+   * <p>Это разные решения: отбор меняет состав прайса, наценка — цену в нём.
+   * Одной кнопкой они сохранялись бы двумя запросами, и владелец не понял бы,
+   * что именно не сохранилось, если бы не прошёл один из них.
+   */
+  async function savePrice() {
+    setBusy(true);
+    try {
+      await setSettings(feed.id, {
+        pricePercent: decimalOrNull(pricePercent),
+        priceRounding: decimalOrNull(priceRounding),
+      });
+      onChanged();
+    } catch (cause) {
+      onError(describe(cause, 'Цена прайса не сохранена'));
     } finally {
       setBusy(false);
     }
@@ -473,6 +506,52 @@ function FeedCard({
         {filterable !== null && filterable.length === 0 && (
           <p className="muted">Список колонок не прочитан — обновите страницу</p>
         )}
+      </fieldset>
+
+      {/* Цена в прайсе — настройка сборки файла, а не отбора.
+          Площадка берёт комиссию, и продавцы закладывают её в цену
+          объявления: у живого клиента на прайсе Авито стоит −20 %. Без этого
+          заложить комиссию можно было только испортив цену для прилавка —
+          то есть для того же товара в зале и по телефону. */}
+      <fieldset className="choices">
+        <legend>Цена в прайсе — пусто значит как на складе</legend>
+        <p className="note">
+          Наценка или скидка действует только на этот прайс-лист. На складе,
+          на витрине и у продавца цена остаётся прежней.
+        </p>
+
+        <div className="filter-row">
+          <label className="field">
+            Наценка или скидка, %
+            <input
+              inputMode="decimal"
+              value={pricePercent}
+              placeholder="например, -20"
+              onChange={(e) => setPricePercent(e.target.value)}
+            />
+          </label>
+
+          {/* Шаги те же, что у системы, с которой переходят клиенты:
+              «5 940» вместо «5 938,20» — цена, которую продавец назовёт
+              по телефону не запинаясь. Округление идёт вверх: вниз оно
+              однажды отдаст деталь дешевле, чем владелец задал. */}
+          <label className="field">
+            Округлять до
+            <select
+              value={priceRounding}
+              onChange={(e) => setPriceRounding(e.target.value)}
+            >
+              <option value="">не округлять</option>
+              {ROUNDING_STEPS.map((step) => (
+                <option key={step} value={step}>{step}</option>
+              ))}
+            </select>
+          </label>
+
+          <button type="button" disabled={busy} onClick={() => void savePrice()}>
+            Сохранить цену прайса
+          </button>
+        </div>
       </fieldset>
 
       <div className="filter-row">

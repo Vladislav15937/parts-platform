@@ -25,7 +25,8 @@ import java.util.List;
 public class DromAccountReader {
 
     private static final String SQL = """
-            SELECT id, feed_token, settings ->> 'packetId' AS packet_id, credentials,
+            SELECT id, feed_token, settings ->> 'packetId' AS packet_id,
+                   settings::text AS settings, credentials,
                    product_line,
                    price_from, price_to, conditions, warehouse_ids,
                    kind_ids, kinds_excluded, brand_ids, brands_excluded,
@@ -60,6 +61,7 @@ public class DromAccountReader {
                 rs.getString("packet_id"),
                 rs.getBytes("credentials"),
                 rs.getString("product_line"),
+                ru.partsflow.publishing.FeedSettings.parse(rs.getString("settings")),
                 new DromPriceGenerator.FeedFilter(
                         rs.getBigDecimal("price_from"),
                         rs.getBigDecimal("price_to"),
@@ -103,9 +105,15 @@ public class DromAccountReader {
      *                    не завёл технический специалист площадки, и слать
      *                    некуда
      * @param credentials ключ кабинета как он лежит в базе, зашифрованным
+     * @param settings    как собирается файл: наценка на прайс и округление.
+     *                    Читаются здесь, потому что и прайс, и дельта обязаны
+     *                    собираться одними и теми же — иначе полный забор
+     *                    поставит на площадке одну цену, а первая же дельта
+     *                    перебьёт её другой
      */
     public record Account(long id, String feedToken, String packetId, byte[] credentials,
                           String productLine,
+                          ru.partsflow.publishing.FeedSettings settings,
                           DromPriceGenerator.FeedFilter filter) {
 
         /** Выгрузка шин и дисков — у неё свой формат и свой генератор. */

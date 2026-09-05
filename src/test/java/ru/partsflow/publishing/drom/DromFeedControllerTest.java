@@ -427,6 +427,147 @@ class DromFeedControllerTest extends PostgresTestBase {
         assertThat(body).contains("Фара левая Camry");
     }
 
+    /**
+     * Наценка на прайс-лист меняет цену в файле и больше нигде.
+     *
+     * <p><b>Зачем.</b> Площадка берёт комиссию, и продавцы закладывают её
+     * в цену объявления: у живого клиента на прайсе Авито стоит −20 %.
+     * Пока задать это было негде, заложить комиссию можно было только
+     * испортив цену товара — то есть подняв её и для прилавка, и для звонка
+     * по телефону.
+     *
+     * <p>Проверяется вся дорога разом: экран сохраняет настройку, она ложится
+     * в {@code marketplace_account.settings}, оттуда её читает выдача прайса.
+     * И три вещи, каждая из которых стоит дороже самой наценки: цена товара
+     * не изменилась, соседняя выгрузка отдаёт прежнюю цену, а «цену
+     * не назначили» наценка не превращает в цену.
+     */
+    @Test
+    @DisplayName("Наценка выгрузки меняет цену в прайсе и не трогает склад")
+    void markupChangesThePriceInTheFeedOnly() throws Exception {
+        Long round = inTenant(TENANT, () -> pricedPartId("Прайс: наценка ровная", 4500));
+        Long odd = inTenant(TENANT, () -> pricedPartId("Прайс: наценка с копейками", 4505));
+        Long free = inTenant(TENANT, () -> pricedPartId("Прайс: цену не назначили", 0));
+
+        Long markedUpId = inTenant(TENANT, () -> jdbc.queryForObject("""
+                INSERT INTO marketplace_account (marketplace, title, settings)
+                VALUES ('DROM', 'Дром: с наценкой', '{"packetId":"555"}'::jsonb)
+                RETURNING id""", Long.class));
+        String markedUpFeed = rotate(markedUpId);
+
+        // Настройка задаётся с экрана, а не запросом в базу: восемь раз подряд
+        // возможность оказывалась написанной и недоступной человеку.
+        mvc.perform(put("/api/marketplace-accounts/" + markedUpId + "/settings")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"pricePercent\":10,\"priceRounding\":10}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.settings.pricePercent").value(10));
+
+        String marked = mvc.perform(get(markedUpFeed))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(offerOf(marked, "Прайс: наценка ровная"))
+                .as("наценка не доехала до прайса — комиссия площадки уйдёт из кармана")
+                .contains("<price>4950.00</price>");
+        // 4 505 + 10 % = 4 955,50, и округление до десятки идёт вверх:
+        // вниз оно однажды отдаст деталь дешевле, чем владелец задал.
+        assertThat(offerOf(marked, "Прайс: наценка с копейками"))
+                .as("округление отбросило копейки вместо того, чтобы поднять до шага")
+                .contains("<price>4960.00</price>");
+        // Ноль у нас означает «цену не назначили»: наценка на незаполненное
+        // поле дала бы цену там, где её нет.
+        assertThat(marked)
+                .as("позиция без цены уехала в прайс — «0 ₽» это обещание отдать даром")
+                .doesNotContain("Прайс: цену не назначили");
+
+        // Соседняя выгрузка отдаёт тот же товар за его цену: процент
+        // принадлежит прайс-листу, а не товару, и протечь между выгрузками
+        // не может — иначе одна настройка меняет цену во всех пяти прайсах
+        // живого клиента разом.
+        String plain = mvc.perform(get(feedPath))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(offerOf(plain, "Прайс: наценка ровная"))
+                .as("наценка одной выгрузки протекла в соседнюю")
+                .contains("<price>4500.00</price>");
+
+        // И главное: на складе, на витрине и у продавца цена прежняя.
+        // Иначе комиссия площадки поднимет цену тому же товару в зале
+        // и по телефону — ровно то, ради чего настройка и заведена.
+        assertThat(inTenant(TENANT, () -> jdbc.queryForObject(
+                "SELECT price FROM part WHERE id = ?", java.math.BigDecimal.class, round)))
+                .as("наценка выгрузки изменила цену товара на складе")
+                .isEqualByComparingTo("4500");
+        assertThat(inTenant(TENANT, () -> jdbc.queryForObject(
+                "SELECT price FROM part WHERE id = ?", java.math.BigDecimal.class, odd)))
+                .isEqualByComparingTo("4505");
+        assertThat(inTenant(TENANT, () -> jdbc.queryForObject(
+                "SELECT price FROM part WHERE id = ?", java.math.BigDecimal.class, free)))
+                .isEqualByComparingTo("0");
+    }
+
+    /**
+     * Скидка в сто процентов — это «0 ₽» в объявлении, и отбивается она
+     * словами.
+     *
+     * <p>Отказ базы или молча уехавший ноль здесь одинаково плохи: первое
+     * не говорит человеку ничего, второе — публичное обещание отдать деталь
+     * даром, за которым идут звонки.
+     */
+    @Test
+    @DisplayName("Скидка в 100 % не сохраняется и объясняет почему")
+    void fullDiscountIsRefusedWithWords() throws Exception {
+        mvc.perform(put("/api/marketplace-accounts/" + accountId + "/settings")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"pricePercent\":-100}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("0 ₽")));
+    }
+
+    /**
+     * Настройки кладутся слиянием, а не заменой.
+     *
+     * <p>Рядом в тех же настройках лежит номер прайс-листа в кабинете
+     * площадки. Затерев его, мы выключили бы дельты по API целиком —
+     * и заметить это нечем: очередь отметок разгребается, журнал публикаций
+     * пуст, всё выглядит работающим, а площадка узнаёт о продаже только
+     * с полным забором, то есть через трое суток.
+     */
+    @Test
+    @DisplayName("Наценка не затирает номер прайс-листа площадки")
+    void savingSettingsKeepsThePacketId() throws Exception {
+        mvc.perform(put("/api/marketplace-accounts/" + accountId + "/settings")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"pricePercent\":5}"))
+                .andExpect(status().isOk());
+
+        assertThat(inTenant(TENANT, () -> jdbc.queryForObject(
+                "SELECT settings ->> 'packetId' FROM marketplace_account WHERE id = ?",
+                String.class, accountId)))
+                .as("номер прайс-листа стёрт сохранением наценки — дельты по API "
+                        + "перестанут уходить, и заметить это нечем")
+                .isEqualTo("777");
+    }
+
+    /** Позиция с ценой и остатком; возвращает её номер. */
+    private Long pricedPartId(String title, int price) {
+        Long branch = jdbc.queryForObject(
+                "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class);
+        Long warehouse = jdbc.queryForObject(
+                "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Склад') RETURNING id",
+                Long.class, branch);
+        Long partId = jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price, cost_price, is_published)
+                VALUES (1, ?, ?, 100, true) RETURNING id""", Long.class, title, price);
+        ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
+        return partId;
+    }
+
     @Test
     @DisplayName("Справочник видов отдаётся целиком, а не поиском")
     void kindsAreServedWhole() throws Exception {

@@ -116,6 +116,38 @@ class DromDeltaSenderTest extends PostgresTestBase {
                 .contains("<available>false</available>");
     }
 
+    /**
+     * Дельта собирается настройками своей выгрузки — теми же, что и прайс.
+     *
+     * <p><b>Зачем.</b> Дельта несёт текущее состояние позиции и перебивает
+     * то, что стоит на площадке. Уйдя без наценки, она вернула бы объявлению
+     * складскую цену через несколько секунд после того, как полный прайс
+     * поставил цену с наценкой, — и владелец увидел бы это только на чужом
+     * сайте, по цене без комиссии площадки.
+     *
+     * <p>Та же болезнь, что была у отбора: собранная не так, как прайс, дельта
+     * рассказывает площадке не то, что рассказал файл.
+     */
+    @Test
+    @DisplayName("Дельта уходит с наценкой выгрузки, а не со складской ценой")
+    void deltaCarriesTheFeedPrice() {
+        Long accountId = account("12345", "ключ-кабинета");
+        inTenant(() -> jdbc.update("""
+                UPDATE marketplace_account
+                   SET settings = settings || '{"pricePercent": 10, "priceRounding": 10}'::jsonb
+                 WHERE id = ?""", accountId));
+        Long partId = part("Стартер с наценкой", true);
+        long dealId = issuedDeal(partId);
+
+        assertThat(inTenant(() -> sender.onDealIssued(dealId))).isTrue();
+
+        // Цена позиции 5 000, наценка 10 % — площадка обязана увидеть 5 500,
+        // то же самое, что стоит в полном прайсе этой выгрузки.
+        assertThat(capturedDelta())
+                .as("дельта вернула объявлению складскую цену — наценка прайса стёрта")
+                .contains("<price>5500.00</price>");
+    }
+
     @Test
     @DisplayName("В дельту попадают только позиции этой сделки")
     void deltaCarriesOnlyDealItems() {

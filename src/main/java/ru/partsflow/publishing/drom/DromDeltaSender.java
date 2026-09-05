@@ -141,9 +141,15 @@ public class DromDeltaSender {
         // Выгрузка колёс собирается своим генератором: у шины свои поля,
         // и дельта обязана быть в том же формате, что и полный прайс —
         // площадка разбирает её той же настройкой.
+        // Настройками той же выгрузки, что и полный прайс. Дельта несёт
+        // текущее состояние и перебивает то, что стоит на площадке: уйдя
+        // без наценки, она вернула бы объявлению складскую цену через
+        // несколько секунд после того, как прайс поставил цену с наценкой.
         int offers = target.account().isWheelFeed()
-                ? wheelGenerator.writeDelta(delta, partIds, target.account().filter())
-                : priceGenerator.writeDelta(delta, partIds, target.account().filter());
+                ? wheelGenerator.writeDelta(delta, partIds, target.account().filter(),
+                        target.account().settings())
+                : priceGenerator.writeDelta(delta, partIds, target.account().filter(),
+                        target.account().settings());
         if (offers == 0) {
             // Ни одна позиция не проходит отбор этой выгрузки — слать нечего.
             // Обычный случай: пять прайс-листов по ценовым диапазонам, деталь
