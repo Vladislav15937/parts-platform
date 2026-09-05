@@ -1,4 +1,5 @@
 import { request } from '../api/client';
+import { count, goods } from '../ui/plural';
 
 /**
  * Отчёты владельца.
@@ -230,4 +231,112 @@ export interface SettlementReport {
 
 export function customerSettlements(): Promise<SettlementReport> {
   return request<SettlementReport>('/api/reports/customers');
+}
+
+/**
+ * Что поступило с машины и с партии — позициями.
+ *
+ * <p>Числа по машине владелец видит и так: «продано на 331 716, лежит
+ * на 835 600». Спросить «а что именно лежит» было нельзя — за этим он уходил
+ * в склад и собирал отбор руками. По партии не было и чисел, а контейнер
+ * из Японии окупается ровно так же, как машина.
+ *
+ * <p>Вкладки — не четыре независимых отбора, а разбиение: «Поступило»
+ * складывается из остальных трёх до последней позиции. Разойдись они,
+ * владелец получил бы два разных ответа на один вопрос.
+ */
+export type OriginTab = 'received' | 'sold' | 'written-off' | 'remaining';
+
+export interface OriginItem {
+  partId: number;
+  /** Номер, по которому позицию видно на витрине; внутренний id не говорит ничего. */
+  publicCode: string | null;
+  /** Вид детали из справочника. Пусто — наименование не распознано. */
+  kind: string | null;
+  title: string;
+  /** Смысл зависит от вкладки: принято, продано, списано или лежит. */
+  quantity: number;
+  price: number | null;
+  costPrice: number | null;
+  supplyNumber: string | null;
+  /** День без времени: «2026-09-05». Разбирать его через `new Date` нельзя. */
+  date: string | null;
+}
+
+export interface OriginTotals {
+  /** Число позиций. Штук бывает больше: у позиции из четырёх колёс их четыре. */
+  items: number;
+  quantity: number;
+  amount: number;
+}
+
+export interface OriginPage {
+  rows: OriginItem[];
+  totals: OriginTotals;
+  /** С какой позиции продолжать. Пусто — показано всё. */
+  nextAfter: number | null;
+}
+
+export interface SupplyOption {
+  id: number;
+  kind: string;
+  number: string;
+  supplierName: string | null;
+  status: string;
+  arrivedOn: string | null;
+}
+
+export function donorItems(
+  donorId: number,
+  tab: OriginTab,
+  after: number | null,
+): Promise<OriginPage> {
+  return request<OriginPage>(`/api/reports/donors/${donorId}/items?tab=${tab}${from(after)}`);
+}
+
+/** `supplyId` пусто — товар без поставки: отдельный разрез, а не «все подряд». */
+export function supplyItems(
+  supplyId: number | null,
+  tab: OriginTab,
+  after: number | null,
+): Promise<OriginPage> {
+  const which = supplyId === null ? '' : `&supplyId=${supplyId}`;
+  return request<OriginPage>(`/api/reports/supplies/items?tab=${tab}${which}${from(after)}`);
+}
+
+/** Партии для выбора — все, включая закрытые: про закрытую и спрашивают. */
+export function reportSupplies(): Promise<{ rows: SupplyOption[] }> {
+  return request<{ rows: SupplyOption[] }>('/api/reports/supplies');
+}
+
+function from(after: number | null): string {
+  return after === null ? '' : `&after=${after}`;
+}
+
+/**
+ * Подвал вкладки — теми же словами, что у системы, с которой к нам переходят:
+ * «162 товара (162 шт.): розничная стоимость — 1 168 350».
+ *
+ * <p>У «Продано» сумма другая по смыслу — это цена продажи, а не прайс, —
+ * и слово поэтому другое. Числа два, потому что вопроса тоже два: сколько
+ * позиций и сколько штук; у позиции из четырёх колёс они не совпадают.
+ */
+export function originFooter(tab: OriginTab, totals: OriginTotals): string {
+  const what = tab === 'sold' ? 'продано' : 'розничная стоимость';
+  return `${goods(totals.items)} (${pieces(totals.quantity)}): `
+    + `${what} — ${count(Math.round(totals.amount))}`;
+}
+
+/**
+ * Дата как везде на экранах: «05.09.2026», а не «2026-09-05».
+ *
+ * <p>Разбирается строкой, а не через `new Date`: у даты без времени тот
+ * читает её как полночь UTC, и западнее Гринвича показывает вчерашний день.
+ */
+export function day(iso: string | null): string {
+  if (iso === null) {
+    return '—';
+  }
+  const [year, month, date] = iso.split('-');
+  return date === undefined ? iso : `${date}.${month}.${year}`;
 }

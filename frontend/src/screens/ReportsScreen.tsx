@@ -1,14 +1,21 @@
 import { useEffect, useState } from 'react';
 import { plural, shown } from '../ui/plural';
 import { ApiError } from '../api/client';
+import { donorTitle, listDonors } from '../intake/donors';
+import type { DonorEntry } from '../intake/donors';
 import {
   customerSettlements,
+  day,
+  donorItems,
   donorProfitability,
   managerSales,
   money,
+  originFooter,
   pieces,
+  reportSupplies,
   salesBySource,
   summary,
+  supplyItems,
   unknownShare,
   monthName,
   monthOf,
@@ -17,9 +24,13 @@ import {
 import type {
   DonorReport,
   ManagerReport,
+  OriginItem,
+  OriginPage,
+  OriginTab,
   SettlementReport,
   SourceReport,
   Summary,
+  SupplyOption,
 } from '../reports/reports';
 
 /**
@@ -41,6 +52,24 @@ interface Props {
   canRead: boolean;
 }
 
+/**
+ * Что выбрано в разрезе: машина или партия.
+ *
+ * <p>Партия с пустым номером — «поставка не указана»: товар, заведённый
+ * без партии. Это отдельный разрез, а не «все подряд».
+ */
+type Origin =
+  | { kind: 'donor'; id: number }
+  | { kind: 'supply'; id: number | null };
+
+/** Вкладки в том же порядке и теми же словами, что у ориентира. */
+const TABS: Array<[OriginTab, string]> = [
+  ['received', 'Поступило'],
+  ['sold', 'Продано'],
+  ['written-off', 'Списано'],
+  ['remaining', 'Остатки'],
+];
+
 export function ReportsScreen({ canRead }: Props) {
   const [month, setMonth] = useState(monthOf(new Date()));
   const [managers, setManagers] = useState<ManagerReport | null>(null);
@@ -53,6 +82,20 @@ export function ReportsScreen({ canRead }: Props) {
   // Сводно: сколько лежит на складе и сколько висит в незакрытых сделках.
   // Единственный блок экрана без периода — оба числа существуют «сейчас».
   const [overview, setOverview] = useState<Summary | null>(null);
+
+  // Разрез по машине и по партии: что поступило, что продано, что списано
+  // и что лежит до сих пор — позициями, а не числами.
+  const [origin, setOrigin] = useState<Origin | null>(null);
+  const [tab, setTab] = useState<OriginTab>('received');
+  const [page, setPage] = useState<OriginPage | null>(null);
+  // Строки копятся: «Показать ещё» дописывает страницу, а не заменяет её.
+  const [items, setItems] = useState<OriginItem[]>([]);
+  const [loadingItems, setLoadingItems] = useState(false);
+  const [itemsError, setItemsError] = useState<string | null>(null);
+  const [donorList, setDonorList] = useState<DonorEntry[]>([]);
+  const [supplyList, setSupplyList] = useState<SupplyOption[]>([]);
+  // У переехавшего клиента 441 машина: списком их не пролистать.
+  const [donorFind, setDonorFind] = useState('');
 
   useEffect(() => {
     void managerSales(month)
@@ -78,7 +121,48 @@ export function ReportsScreen({ canRead }: Props) {
     void summary()
       .then(setOverview)
       .catch((cause) => setError(describe(cause, 'Сводка не загрузилась')));
+    // Списки для выбора: машины — те же, что на экране машин, партии —
+    // все, включая закрытые. Про закрытый контейнер и спрашивают
+    // «окупился ли», а справочник приёмки такие прячет.
+    void listDonors()
+      .then(setDonorList)
+      .catch((cause) => setError(describe(cause, 'Список машин не загрузился')));
+    void reportSupplies()
+      .then((loaded) => setSupplyList(loaded.rows))
+      .catch((cause) => setError(describe(cause, 'Список поставок не загрузился')));
   }, []);
+
+  useEffect(() => {
+    if (origin === null) {
+      setPage(null);
+      setItems([]);
+      return;
+    }
+    setLoadingItems(true);
+    setItemsError(null);
+    void loadItems(origin, tab, null)
+      .then((loaded) => {
+        setPage(loaded);
+        setItems(loaded.rows);
+      })
+      .catch((cause) => setItemsError(describe(cause, 'Позиции не загрузились')))
+      .finally(() => setLoadingItems(false));
+  }, [origin, tab]);
+
+  /** «Показать ещё»: дописывает следующую страницу, не трогая итог. */
+  function more() {
+    if (origin === null || page === null || page.nextAfter === null) {
+      return;
+    }
+    setLoadingItems(true);
+    void loadItems(origin, tab, page.nextAfter)
+      .then((loaded) => {
+        setPage(loaded);
+        setItems((shownRows) => [...shownRows, ...loaded.rows]);
+      })
+      .catch((cause) => setItemsError(describe(cause, 'Позиции не загрузились')))
+      .finally(() => setLoadingItems(false));
+  }
 
   if (!canRead) {
     return (
@@ -440,8 +524,187 @@ export function ReportsScreen({ canRead }: Props) {
         Убыточные сверху. Минус у свежей машины — это ещё не убыток: смотрите,
         сколько с неё продано и на сколько осталось на складе.
       </p>
+
+      {/* Разрез до позиций: числа по машине владелец видит и так, а вот
+          «что именно лежит» спрашивать было негде — за этим он уходил
+          в склад и собирал отбор руками. По партии не было и чисел. */}
+      <hr />
+      <h3>Что поступило с машины и с поставки</h3>
+
+      <div className="row">
+        {/* 441 машина списком — это тридцать четыре экрана подряд.
+            Ищется по тому же, чем машина подписана в строке. */}
+        <label>
+          Найти машину
+          <input
+            type="search"
+            value={donorFind}
+            placeholder="номер, марка или заметка"
+            onChange={(e) => setDonorFind(e.target.value)}
+          />
+        </label>
+
+        <label>
+          Машина
+          <select
+            value={origin !== null && origin.kind === 'donor' ? String(origin.id) : ''}
+            onChange={(e) => setOrigin(
+              e.target.value === '' ? null : { kind: 'donor', id: Number(e.target.value) },
+            )}
+          >
+            <option value="">— выберите машину —</option>
+            {donorList.filter((d) => matches(d, donorFind)).map((d) => (
+              <option key={d.id} value={d.id}>{donorTitle(d)}</option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Поставка
+          <select
+            value={supplyValue(origin)}
+            onChange={(e) => setOrigin(supplyOrigin(e.target.value))}
+          >
+            <option value="">— выберите поставку —</option>
+            {/* Товар без партии — отдельный разрез, а не «все подряд»:
+                у переехавшего клиента это всё, что заводили руками. */}
+            <option value="none">- не указана -</option>
+            {supplyList.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.supplierName ?? s.number}
+                {s.supplierName !== null && ` · ${s.number}`}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {origin === null && (
+        <p className="note">
+          Выберите машину или поставку — покажем, что с неё поступило, что
+          продано, что списано и что лежит до сих пор.
+        </p>
+      )}
+
+      {origin !== null && (
+        <>
+          {/* Открытая вкладка выделена тем же способом, что на экране
+              этикеток: без этого по экрану не понять, какая из четырёх
+              открыта, — а цифры на всех четырёх выглядят одинаково
+              правдоподобно. Поймано живым прогоном. */}
+          <div className="tabs">
+            {TABS.map(([code, title]) => (
+              <button
+                key={code}
+                type="button"
+                className={code === tab ? 'tab tab--active' : 'tab'}
+                aria-pressed={code === tab}
+                onClick={() => setTab(code)}
+              >
+                {title}
+              </button>
+            ))}
+          </div>
+
+          {itemsError !== null && <p className="note note--error">{itemsError}</p>}
+
+          {/* «Загружаем…» — пока грузим, а не пока пусто. */}
+          {loadingItems && itemsError === null && items.length === 0 && (
+            <p className="note">Загружаем…</p>
+          )}
+
+          {page !== null && items.length === 0 && !loadingItems && itemsError === null && (
+            <p className="note">Ничего не найдено</p>
+          )}
+
+          {items.length > 0 && (
+            <div className="table-scroll">
+              <table className="report">
+                <thead>
+                  <tr>
+                    <th>Номер</th>
+                    <th>Тип запчасти</th>
+                    <th>Наименование</th>
+                    <th className="num">Количество</th>
+                    <th className="num">Цена</th>
+                    <th className="num">Себестоимость</th>
+                    <th>Номер поступления</th>
+                    <th>Дата</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((row) => (
+                    <tr key={row.partId}>
+                      <td>{row.publicCode ?? '—'}</td>
+                      {/* Прочерк, а не пусто: наименование не распознано,
+                          и это правда о карточке. */}
+                      <td>{row.kind ?? '—'}</td>
+                      <td>{row.title}</td>
+                      <td className="num">{pieces(row.quantity)}</td>
+                      <td className="num">{row.price === null ? '—' : money(row.price)}</td>
+                      <td className="num">
+                        {row.costPrice === null ? '—' : money(row.costPrice)}
+                      </td>
+                      <td>{row.supplyNumber ?? '—'}</td>
+                      <td>{day(row.date)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Подвал считает всю вкладку, а не показанную страницу: сумма
+              первой сотни, выданная за итог, — враньё тем более наглядное,
+              чем больше партия. Поэтому рядом и сказано, сколько показано. */}
+          {page !== null && items.length > 0 && (
+            <p className="note">
+              <strong>{originFooter(tab, page.totals)}</strong>
+              {items.length < page.totals.items && (
+                <> · показаны {shown(items.length, page.totals.items,
+                  'товар', 'товара', 'товаров')}</>
+              )}
+            </p>
+          )}
+
+          {page !== null && page.nextAfter !== null && (
+            <button type="button" onClick={more} disabled={loadingItems}>
+              Показать ещё
+            </button>
+          )}
+        </>
+      )}
     </section>
   );
+}
+
+/** Машина ищется по тому же, чем подписана в строке, плюс VIN. */
+function matches(donor: DonorEntry, find: string): boolean {
+  const needle = find.trim().toLowerCase();
+  if (needle === '') {
+    return true;
+  }
+  return `${donorTitle(donor)} ${donor.vin ?? ''}`.toLowerCase().includes(needle);
+}
+
+function supplyValue(origin: Origin | null): string {
+  if (origin === null || origin.kind !== 'supply') {
+    return '';
+  }
+  return origin.id === null ? 'none' : String(origin.id);
+}
+
+function supplyOrigin(value: string): Origin | null {
+  if (value === '') {
+    return null;
+  }
+  return { kind: 'supply', id: value === 'none' ? null : Number(value) };
+}
+
+function loadItems(origin: Origin, tab: OriginTab, after: number | null): Promise<OriginPage> {
+  return origin.kind === 'donor'
+    ? donorItems(origin.id, tab, after)
+    : supplyItems(origin.id, tab, after);
 }
 
 /** Сколько позиций месяца остались без себестоимости — по всем менеджерам. */
