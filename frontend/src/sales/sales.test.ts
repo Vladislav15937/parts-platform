@@ -3,6 +3,7 @@ import {
   basketTotal,
   hoursUntilDeadline,
   returnable,
+  returnWarehouseDefault,
   roomFor,
   transferable,
 } from './sales';
@@ -116,6 +117,11 @@ describe('итог корзины', () => {
  * Отказ придёт от сервера, но объяснять его будет продавец клиенту.
  */
 function dealWith(...statuses: string[]): Deal {
+  return dealFrom(statuses.map((status) => ({ status, warehouseId: 10 })));
+}
+
+function dealFrom(items: { status: string; warehouseId: number }[],
+                  warehouseId: number | null = null): Deal {
   return {
     id: 1,
     number: 7,
@@ -128,21 +134,22 @@ function dealWith(...statuses: string[]): Deal {
     debt: '5000',
     createdAt: '2026-07-30T10:00:00Z',
     issuedAt: null,
+    warehouseId,
     marketplace: null,
     externalOrderNo: null,
     replyDeadline: null,
     orderAcceptedAt: null,
     deliveryNote: null,
     services: [],
-    items: statuses.map((status, at) => ({
+    items: items.map((item, at) => ({
       id: at + 1,
       partId: 100 + at,
       title: `деталь ${at}`,
       quantity: '1',
       price: '5000',
       discount: null,
-      warehouseId: 10,
-      status,
+      warehouseId: item.warehouseId,
+      status: item.status,
     })),
   };
 }
@@ -163,6 +170,38 @@ describe('строки сделки, доступные к действию', ()
     // обоих видов. Попади возвращённая в список — деталь встанет на склад
     // дважды, а деньги уйдут клиенту дважды.
     expect(returnable(dealWith('ISSUED', 'RETURNED')).map((i) => i.id)).toEqual([1]);
+  });
+});
+
+/**
+ * Склад возврата подставляется тем, откуда деталь выдали.
+ *
+ * <p>Подставлялся первый склад ответа сервера, а тот отсортирован
+ * по названию: сделка, выданная с «Основного», открывала возврат
+ * с «Дальним». Ошибка тихая — поле заполнено и выглядит осмысленно, —
+ * а находят её, когда деталь ищут на прежней полке и не находят.
+ */
+describe('склад возврата по умолчанию', () => {
+  it('берётся со склада выдачи сделки', () => {
+    expect(returnWarehouseDefault(dealFrom([{ status: 'ISSUED', warehouseId: 10 }], 7)))
+      .toBe(7);
+  });
+
+  it('без него — со склада, откуда ушли выданные позиции', () => {
+    expect(returnWarehouseDefault(dealFrom([
+      { status: 'ISSUED', warehouseId: 10 },
+      { status: 'ISSUED', warehouseId: 10 },
+      // Снятая позиция никуда не уезжала и на склад возврата не влияет.
+      { status: 'CANCELLED', warehouseId: 20 },
+    ]))).toBe(10);
+  });
+
+  it('позиции с разных складов не дают умолчания вовсе', () => {
+    // Пусто честнее, чем наугад: промах будет таким же тихим.
+    expect(returnWarehouseDefault(dealFrom([
+      { status: 'ISSUED', warehouseId: 10 },
+      { status: 'ISSUED', warehouseId: 20 },
+    ]))).toBeNull();
   });
 });
 
