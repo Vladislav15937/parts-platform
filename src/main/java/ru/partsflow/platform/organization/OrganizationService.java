@@ -45,6 +45,14 @@ public class OrganizationService {
                 (rs, i) -> new Branch(rs.getLong("id"), rs.getString("name")), name.strip());
     }
 
+    /**
+     * Склады в предсказуемом порядке.
+     *
+     * <p>Названия ничем не ограничены, и два одинаковых склада в одном филиале
+     * могли бы меняться местами между запросами: список, порядок которого
+     * зависит от плана, продавец не запомнит глазами и не повторит в жалобе.
+     * Последним ключом поэтому идёт идентификатор.
+     */
     @Transactional(readOnly = true)
     public List<Warehouse> warehouses() {
         return jdbc.query("""
@@ -53,7 +61,7 @@ public class OrganizationService {
                          WHERE c.warehouse_id = w.id AND c.is_active) AS cells
                   FROM warehouse w
                   JOIN branch b ON b.id = w.branch_id
-                 ORDER BY b.name, w.name""", OrganizationService::warehouse);
+                 ORDER BY b.name, w.name, w.id""", OrganizationService::warehouse);
     }
 
     @Transactional

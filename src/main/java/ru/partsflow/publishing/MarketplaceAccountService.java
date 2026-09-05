@@ -54,6 +54,7 @@ public class MarketplaceAccountService {
                        last_feed_download_at,
                        last_error, credentials IS NOT NULL AS has_credentials,
                        credentials, feed_token IS NOT NULL AS has_feed,
+                       feed_file_name,
                        product_line,
                        settings::text AS settings,
                        price_from, price_to, conditions, warehouse_ids,
@@ -73,6 +74,9 @@ public class MarketplaceAccountService {
                         rs.getBoolean("has_credentials")
                                 && !SecretCipher.isEncrypted(rs.getBytes("credentials")),
                         rs.getBoolean("has_feed"),
+                        // Пусто — имени не задавали, и ссылка кончается токеном:
+                        // это рабочее состояние, а не незаполненное поле.
+                        rs.getString("feed_file_name"),
                         rs.getString("product_line"),
                         // Ключ кабинета лежит в соседней колонке и наружу
                         // не выходит; настройки сборки прайса — не секрет,
@@ -347,25 +351,116 @@ public class MarketplaceAccountService {
     }
 
     /**
+     * Задаёт или снимает имя файла прайса — читаемый хвост постоянной ссылки.
+     *
+     * <p><b>Отдельным действием от смены ссылки, и секрета не трогает.</b>
+     * Смена токена останавливает выгрузку до тех пор, пока новый адрес
+     * не пропишет техспециалист площадки; переименование файла заводит
+     * второй, читаемый адрес к тому же прайсу, а прежний продолжает работать —
+     * иначе правка имени тихо становилась бы остановкой выгрузки.
+     *
+     * <p><b>Занятое имя отвечает словами и называет, кем занято.</b> Само
+     * по себе нарушение уникального индекса — это «Операция нарушает
+     * целостность данных»: ни что случилось, ни что делать. А искать владельцу
+     * надо именно ту выгрузку, у которой это имя уже стоит.
+     */
+    @Transactional
+    public Account setFeedFileName(Long id, String typed) {
+        String name = FeedFileName.normalize(typed);
+        String marketplace = marketplaceOf(id);
+
+        if (name != null) {
+            takenBy(marketplace, name, id).ifPresent(title -> {
+                throw new IllegalArgumentException(occupied(name, title));
+            });
+        }
+        /*
+         * Проверка чтением выше ловит обычный повтор, но не одновременный:
+         * между чтением и записью второй ещё ничего не видит. Данные защищает
+         * индекс, а нарушение его уходит наружу — контроллер перечитывает,
+         * кем занято имя, и отвечает теми же словами. Само по себе нарушение
+         * читается как «Операция нарушает целостность данных», то есть
+         * не говорит ни что случилось, ни что делать.
+         */
+        jdbc.update("UPDATE marketplace_account SET feed_file_name = ? WHERE id = ?", name, id);
+        return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
+    }
+
+    /**
+     * Кем занято имя — прочитанное новой транзакцией.
+     *
+     * <p>Прежняя к этому моменту помечена на откат нарушением уникальности,
+     * и запрос из неё не пройдёт. Та же причина, что у повтора приёмки
+     * и у повтора заказа с площадки.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
+                   readOnly = true)
+    public String nameConflictMessage(Long id, String typed) {
+        String name = FeedFileName.normalize(typed);
+        if (name == null) {
+            return "Имя файла не сохранено";
+        }
+        return takenBy(marketplaceOf(id), name, id)
+                .map(title -> occupied(name, title))
+                .orElse("Имя файла «%s» уже занято другой выгрузкой".formatted(name));
+    }
+
+    private static String occupied(String name, String title) {
+        return "Имя файла «%s» занято выгрузкой «%s»: у каждой ссылки свой файл, "
+                .formatted(name, title)
+                + "иначе техспециалист площадки перепутает два адреса, "
+                + "различающихся только секретом посередине";
+    }
+
+    /** Название выгрузки, у которой это имя уже стоит. Пусто — свободно. */
+    private Optional<String> takenBy(String marketplace, String name, Long exceptId) {
+        List<String> found = jdbc.queryForList("""
+                SELECT title FROM marketplace_account
+                 WHERE marketplace = ? AND feed_file_name = ?
+                   AND (?::bigint IS NULL OR id <> ?::bigint)""",
+                String.class, marketplace, name, exceptId, exceptId);
+        return found.isEmpty() ? Optional.empty() : Optional.of(found.get(0));
+    }
+
+    private String marketplaceOf(Long id) {
+        List<String> found = jdbc.queryForList(
+                "SELECT marketplace FROM marketplace_account WHERE id = ?", String.class, id);
+        if (found.isEmpty()) {
+            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+        }
+        return found.get(0);
+    }
+
+    /**
      * Путь к прайсу, который прописывают в кабинете площадки.
      *
      * <p>Код компании берётся из реестра по текущей схеме, а не из параметра:
      * подставленный снаружи, он дал бы ссылку, ведущую к чужому арендатору —
      * точнее, к отказу, но искать причину пришлось бы долго.
+     *
+     * <p>Имя файла, если оно задано, становится последним куском адреса:
+     * его человек и сверяет глазами, перенося ссылку в кабинет площадки.
+     * Секрет при этом остаётся отдельной частью пути — он и открывает доступ,
+     * а имя только подписывает ссылку.
      */
     @Transactional(readOnly = true)
     public Optional<String> feedPath(long accountId) {
         String companyCode = jdbc.queryForObject(
                 "SELECT code FROM public.tenant_registry WHERE schema_name = ?",
                 String.class, TenantContext.require());
-        List<String> found = jdbc.query(
-                "SELECT feed_token FROM marketplace_account WHERE id = ?",
-                (rs, i) -> rs.getString("feed_token"), accountId);
+        List<String[]> found = jdbc.query(
+                "SELECT feed_token, feed_file_name FROM marketplace_account WHERE id = ?",
+                (rs, i) -> new String[] {rs.getString("feed_token"), rs.getString("feed_file_name")},
+                accountId);
 
-        if (found.isEmpty() || found.get(0) == null) {
+        if (found.isEmpty() || found.get(0)[0] == null) {
             return Optional.empty();
         }
-        return Optional.of("/feeds/drom/%s/%s.xml".formatted(companyCode, found.get(0)));
+        String token = found.get(0)[0];
+        String fileName = found.get(0)[1];
+        return Optional.of(fileName == null
+                ? "/feeds/drom/%s/%s.xml".formatted(companyCode, token)
+                : "/feeds/drom/%s/%s/%s".formatted(companyCode, token, fileName));
     }
 
     /**
@@ -393,12 +488,15 @@ public class MarketplaceAccountService {
      *                       «мы отправили дельту», а здесь «у нас забрали»,
      *                       и на вопрос «прайс вообще уехал?» отвечает только
      *                       второе
+     * @param feedFileName читаемое имя файла в конце ссылки; пусто — имени
+     *                     не задавали, и ссылка кончается токеном
      * @param priceFrom   пусто — без нижней границы, а не «ноль»
      * @param conditions  пусто — любое состояние детали
      * @param warehouseIds пусто — все склады
      */
     public record Account(Long id, String marketplace, String title, String status,
                           boolean hasCredentials, boolean plaintextSecret, boolean hasFeed,
+                          String feedFileName,
                           String productLine, FeedSettings settings,
                           String lastError, java.time.Instant lastDownloadAt,
                           java.math.BigDecimal priceFrom,

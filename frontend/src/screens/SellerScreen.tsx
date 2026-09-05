@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
+import { count, plural } from '../ui/plural';
 import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
 import {
@@ -22,6 +23,7 @@ import {
   payDealFromAccount,
   registerReturn,
   returnable,
+  returnWarehouseDefault,
   returnsOf,
   roomFor,
   searchCustomers,
@@ -101,10 +103,26 @@ export function SellerScreen({ canSell, role }: Props) {
   // приезжает через неделю. Без поиска по клиенту до его сделки не добраться.
   const [finding, setFinding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Куда уводит нажатие на счётчик. Блок оформления лежит под списком
+  // находок, и добираться до него прокруткой — то самое, ради чего
+  // счётчик и заводили.
+  const basket = useRef<HTMLHeadingElement>(null);
 
   return (
     <section className="card">
-      <h2>Продажа</h2>
+      {/* Шапка экрана не уезжает вместе со списком: «фара» — это полсотни
+          показанных строк, то есть два экрана прокрутки вниз и столько же
+          обратно за каждой следующей деталью. Всё это время продавец
+          не знал, сколько набрал и на сколько: единственным подтверждением
+          была смена слова на кнопке строки. */}
+      <div className="seller-head">
+        <h2>Продажа</h2>
+        <BasketBadge
+          lines={lines}
+          services={services}
+          onOpen={() => basket.current?.scrollIntoView?.({ block: 'start' })}
+        />
+      </div>
 
       <form
         className="row"
@@ -181,7 +199,7 @@ export function SellerScreen({ canSell, role }: Props) {
       {lines.length > 0 && (
         <>
           <hr />
-          <h3>В сделку</h3>
+          <h3 ref={basket}>В сделку</h3>
           <ul className="stock-list">
             {lines.map((line, index) => (
               <li key={index} className="stock-row">
@@ -382,6 +400,46 @@ export function SellerScreen({ canSell, role }: Props) {
       setError(describe(cause, 'Сделка не оформлена'));
     }
   }
+}
+
+/**
+ * Счётчик корзины в шапке экрана.
+ *
+ * <p>Пустая корзина не молчит и не показывает ноль: ноль читается как
+ * «система чего-то не знает», а продавцу нужно понять, что делать. Слова
+ * те же, что у ориентира, — переходящий клиент читает их не задумываясь.
+ *
+ * <p>Сумма считается тем же `basketTotal`, что и «Итого» под списком.
+ * Два числа на одном экране, посчитанные разными выражениями, рано или
+ * поздно разойдутся — и разойдутся молча, в момент разговора с клиентом.
+ * Значит и услуги входят в обе: продавец называет то, что клиент заплатит.
+ */
+function BasketBadge({
+  lines,
+  services,
+  onOpen,
+}: {
+  lines: BasketLine[];
+  services: ServiceLine[];
+  onOpen: () => void;
+}) {
+  if (lines.length === 0) {
+    return (
+      <span className="basket-badge basket-badge--empty">
+        Список пуст
+        <span className="muted"> · Выберите товары для продажи</span>
+      </span>
+    );
+  }
+
+  return (
+    <button type="button" className="basket-badge" onClick={onOpen}>
+      В сделку: {count(lines.length)}{' '}
+      {plural(lines.length, 'позиция', 'позиции', 'позиций')}
+      {' · '}
+      {count(basketTotal(lines, services))} ₽
+    </button>
+  );
 }
 
 /**
@@ -918,7 +976,12 @@ function DealCard({
 
       {issued.length > 0 && (
         <ReturnPanel
+          // Ключ по сделке: панель стоит на одном месте дерева, и без него
+          // выбранный склад, причина и брак переезжают в чужую сделку —
+          // ровно как переезжали отметки и сообщение до сброса в useEffect.
+          key={deal.id}
           chosen={chosen}
+          defaultWarehouseId={returnWarehouseDefault(deal)}
           canSell={canSell}
           onReturn={(warehouseId, lines, reason, refundToAccount) =>
             void act(async () => {
@@ -1094,19 +1157,26 @@ function TransferPanel({
  * <p>Брак — один флажок на весь документ, а не на строку. Смешанный возврат
  * (часть на склад, часть в утиль) оформляют двумя документами: так видно,
  * что именно списали, а сам случай редкий.
+ *
+ * @param defaultWarehouseId склад, откуда деталь выдали. Пусто — выдавали
+ *                           с разных, и угадывать нельзя: продавец жмёт
+ *                           «Оформить» не глядя, а деталь потом ищут
+ *                           по прежнему адресу
  */
 function ReturnPanel({
   chosen,
   canSell,
+  defaultWarehouseId,
   onReturn,
 }: {
   chosen: DealItem[];
   canSell: boolean;
+  defaultWarehouseId: number | null;
   onReturn: (warehouseId: number, lines: ReturnLine[], reason: string,
              refundToAccount: boolean) => void;
 }) {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
-  const [warehouseId, setWarehouseId] = useState<number | null>(null);
+  const [warehouseId, setWarehouseId] = useState<number | null>(defaultWarehouseId);
   const [reason, setReason] = useState('');
   const [toAccount, setToAccount] = useState(false);
   const [broken, setBroken] = useState(false);
@@ -1116,9 +1186,16 @@ function ReturnPanel({
     void listWarehouses()
       .then((loaded) => {
         setWarehouses(loaded);
-        setWarehouseId((current) => current ?? loaded[0]?.id ?? null);
+        // Склад выдачи мог быть закрыт с тех пор, а список не загрузиться
+        // вовсе. И то и другое — пустое поле на экране; считать его
+        // выбранным значит оформить возврат туда, чего продавец не видит.
+        setWarehouseId((current) =>
+          current !== null && loaded.some((w) => w.id === current) ? current : null);
       })
-      .catch(() => setWarehouses([]));
+      .catch(() => {
+        setWarehouses([]);
+        setWarehouseId(null);
+      });
   }, []);
 
   const ready = canSell && chosen.length > 0 && warehouseId !== null;
@@ -1136,8 +1213,13 @@ function ReturnPanel({
         Склад возврата
         <select
           value={warehouseId ?? ''}
-          onChange={(e) => setWarehouseId(Number(e.target.value))}
+          onChange={(e) =>
+            setWarehouseId(e.target.value === '' ? null : Number(e.target.value))
+          }
         >
+          {/* Пустая строка нужна, только пока выбирать обязан человек:
+              выбрав склад, вернуться в «ничего» он уже не должен. */}
+          {warehouseId === null && <option value="">— выберите склад —</option>}
           {warehouses.map((w) => (
             <option key={w.id} value={w.id}>
               {w.name}
@@ -1145,6 +1227,11 @@ function ReturnPanel({
           ))}
         </select>
       </label>
+      {warehouseId === null && (
+        <p className="note">
+          Склад не подставлен — выберите, куда клиент привёз деталь.
+        </p>
+      )}
       <p className="note">
         Не обязан совпадать со складом выдачи: клиент приезжает туда, куда ему
         удобно, а деталь встаёт на ту полку, где он её оставил.
