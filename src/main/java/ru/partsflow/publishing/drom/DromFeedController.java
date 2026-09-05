@@ -121,9 +121,11 @@ public class DromFeedController {
             // Выгрузка знает, чем торгует: у шин свой формат со своими полями,
             // и площадка сама требует держать их отдельным прайс-листом.
             String base = photoBase(request, company, token);
+            // Отбор говорит, что уедет; настройки — каким оно уедет: наценка
+            // на прайс-лист и округление принадлежат выгрузке, а не товару.
             int offers = account.isWheelFeed()
-                    ? wheels.writeTo(out, account.filter(), base)
-                    : generator.writeTo(out, account.filter(), base);
+                    ? wheels.writeTo(out, account.filter(), base, account.settings())
+                    : generator.writeTo(out, account.filter(), base, account.settings());
             log.info("Дром забрал прайс арендатора {} ({}): {} позиций",
                     schema, account.isWheelFeed() ? "колёса" : "запчасти", offers);
         } finally {

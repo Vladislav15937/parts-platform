@@ -8,6 +8,7 @@ import ru.partsflow.inventory.LateralSide;
 import ru.partsflow.inventory.LongitudinalSide;
 import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.VerticalSide;
+import ru.partsflow.publishing.FeedSettings;
 
 import javax.xml.stream.XMLStreamException;
 import java.io.OutputStream;
@@ -261,7 +262,7 @@ public class DromPriceGenerator {
      */
     @Transactional(readOnly = true)
     public int writeTo(OutputStream out) {
-        return write(out, null, FeedFilter.everything(), null);
+        return write(out, null, FeedFilter.everything(), null, FeedSettings.none());
     }
 
     /**
@@ -274,7 +275,7 @@ public class DromPriceGenerator {
      */
     @Transactional(readOnly = true)
     public int writeTo(OutputStream out, FeedFilter filter) {
-        return write(out, null, filter, null);
+        return write(out, null, filter, null, FeedSettings.none());
     }
 
     /**
@@ -292,7 +293,26 @@ public class DromPriceGenerator {
      */
     @Transactional(readOnly = true)
     public int writeTo(OutputStream out, FeedFilter filter, String photoBase) {
-        return write(out, null, filter, photoBase);
+        return write(out, null, filter, photoBase, FeedSettings.none());
+    }
+
+    /**
+     * Прайс одной выгрузки с её настройками сборки.
+     *
+     * <p>Отбор говорит, <b>что</b> уедет, настройки — <b>каким</b> оно уедет:
+     * наценка или скидка на прайс-лист и округление результата. Цена на складе,
+     * на витрине и у продавца при этом не меняется — тот же товар в зале
+     * и по телефону продаётся за свои деньги, а комиссию площадки владелец
+     * закладывает только в объявление.
+     *
+     * <p>Аннотация повторена намеренно: {@code @Transactional} перегрузкой
+     * не наследуется, и метод без неё уходит {@code JdbcTemplate}'ом
+     * в {@code public} — пятая ловушка того же вида в этом проекте.
+     */
+    @Transactional(readOnly = true)
+    public int writeTo(OutputStream out, FeedFilter filter, String photoBase,
+                       FeedSettings settings) {
+        return write(out, null, filter, photoBase, settings);
     }
 
     /**
@@ -355,7 +375,7 @@ public class DromPriceGenerator {
      */
     @Transactional(readOnly = true)
     public int writeDelta(OutputStream out, List<Long> partIds) {
-        return writeDelta(out, partIds, FeedFilter.everything());
+        return writeDelta(out, partIds, FeedFilter.everything(), FeedSettings.none());
     }
 
     /**
@@ -368,6 +388,21 @@ public class DromPriceGenerator {
      */
     @Transactional(readOnly = true)
     public int writeDelta(OutputStream out, List<Long> partIds, FeedFilter filter) {
+        return writeDelta(out, partIds, filter, FeedSettings.none());
+    }
+
+    /**
+     * Дельта одной выгрузки — её отбором и её настройками сборки.
+     *
+     * <p><b>Настройки обязательны здесь ровно так же, как отбор.</b> Дельта
+     * несёт текущее состояние позиции и перебивает то, что стоит на площадке:
+     * уйдя без наценки, она вернула бы объявлению складскую цену через
+     * несколько секунд после того, как полный прайс поставил цену с наценкой,
+     * — и владелец увидел бы это только на чужом сайте.
+     */
+    @Transactional(readOnly = true)
+    public int writeDelta(OutputStream out, List<Long> partIds, FeedFilter filter,
+                          FeedSettings settings) {
         if (partIds == null || partIds.isEmpty()) {
             return 0;
         }
@@ -375,10 +410,11 @@ public class DromPriceGenerator {
         // что позиция продана или подешевела, — объявление и его фотографии
         // у Дрома уже есть. Отсутствие необязательного элемента сменой формата
         // не является: позиции без снимков и в полном прайсе идут без него.
-        return write(out, partIds, filter, null);
+        return write(out, partIds, filter, null, settings);
     }
 
-    private int write(OutputStream out, List<Long> partIds, FeedFilter filter, String photoBase) {
+    private int write(OutputStream out, List<Long> partIds, FeedFilter filter, String photoBase,
+                      FeedSettings settings) {
         Session session = entityManager.unwrap(Session.class);
 
         // Условия по колонкам витрины: их собирает сам отбор витрины, чтобы
@@ -447,7 +483,7 @@ public class DromPriceGenerator {
                     statement.setArray(next, connection.createArrayOf("bigint", partIds.toArray()));
                 }
                 try (ResultSet rs = statement.executeQuery()) {
-                    return writer.write(out, new OfferCursor(rs, photoBase));
+                    return writer.write(out, new OfferCursor(rs, photoBase, settings));
                 }
             } catch (XMLStreamException e) {
                 // doReturningWork пропускает только SQLException; заворачиваем,
@@ -471,11 +507,26 @@ public class DromPriceGenerator {
 
         private final ResultSet resultSet;
         private final String photoBase;
+
+        /**
+         * Как собирается файл: наценка на прайс-лист и округление.
+         *
+         * <p>Применяются здесь, а не в SQL, и не в писателе. Не в SQL —
+         * потому что отбор по цене спрашивает про цену склада («от 50 000 ₽»
+         * значит «дорогой товар», а не «дорогое объявление»), и умножение
+         * внутри запроса сдвинуло бы границы отбора у всех выгрузок разом.
+         * Не в писателе — потому что {@link DromOffer} по своему определению
+         * это «ровно те данные, что уходят в один offer»: цена в нём обязана
+         * быть той, которую увидит покупатель.
+         */
+        private final FeedSettings settings;
+
         private Boolean hasNext;
 
-        private OfferCursor(ResultSet resultSet, String photoBase) {
+        private OfferCursor(ResultSet resultSet, String photoBase, FeedSettings settings) {
             this.resultSet = resultSet;
             this.photoBase = photoBase;
+            this.settings = settings;
         }
 
         @Override
@@ -497,7 +548,7 @@ public class DromPriceGenerator {
             }
             hasNext = null;
             try {
-                return map(resultSet, photoBase);
+                return map(resultSet, photoBase, settings);
             } catch (SQLException e) {
                 throw new IllegalStateException("Не удалось прочитать позицию прайса", e);
             }
@@ -518,13 +569,16 @@ public class DromPriceGenerator {
                     .toList();
         }
 
-        private static DromOffer map(ResultSet rs, String photoBase) throws SQLException {
+        private static DromOffer map(ResultSet rs, String photoBase, FeedSettings settings)
+                throws SQLException {
             return new DromOffer(
                     rs.getString("public_code"),
                     rs.getString("title"),
                     rs.getString("part_kind"),
                     rs.getString("description"),
-                    rs.getBigDecimal("price"),
+                    // Цена объявления, а не складская: наценку площадки
+                    // владелец закладывает в прайс-лист, а не в товар.
+                    settings.priceFor(rs.getBigDecimal("price")),
                     rs.getBigDecimal("qty_available"),
                     enumOf(PartCondition.class, rs.getString("condition")),
                     rs.getString("manufacturer"),

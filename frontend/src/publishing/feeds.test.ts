@@ -20,6 +20,7 @@ function feed(overrides: Partial<Feed> = {}): Feed {
     plaintextSecret: false,
     hasFeed: true,
     productLine: 'PART',
+    settings: { pricePercent: null, priceRounding: null },
     lastError: null,
     priceFrom: null,
     priceTo: null,

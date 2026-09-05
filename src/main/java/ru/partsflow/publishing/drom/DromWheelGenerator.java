@@ -128,11 +128,29 @@ public class DromWheelGenerator {
      */
     @Transactional(readOnly = true)
     public int writeTo(OutputStream out, DromPriceGenerator.FeedFilter filter, String photoBase) {
-        return write(out, null, filter, photoBase);
+        return write(out, null, filter, photoBase, ru.partsflow.publishing.FeedSettings.none());
+    }
+
+    /**
+     * Прайс колёс с настройками сборки выгрузки.
+     *
+     * <p>Наценка на прайс-лист принадлежит выгрузке, а не товару, и колёсная
+     * выгрузка тут ничем не отличается от выгрузки запчастей: у неё своя цена
+     * размещения на площадке и своя комиссия. Поле, показанное на экране, но
+     * не применённое к колёсам, было бы обещанием, которого нет.
+     *
+     * <p>Аннотация повторена: {@code @Transactional} перегрузкой
+     * не наследуется.
+     */
+    @Transactional(readOnly = true)
+    public int writeTo(OutputStream out, DromPriceGenerator.FeedFilter filter, String photoBase,
+                       ru.partsflow.publishing.FeedSettings settings) {
+        return write(out, null, filter, photoBase, settings);
     }
 
     private int write(OutputStream out, List<Long> partIds,
-                      DromPriceGenerator.FeedFilter filter, String photoBase) {
+                      DromPriceGenerator.FeedFilter filter, String photoBase,
+                      ru.partsflow.publishing.FeedSettings settings) {
         Session session = entityManager.unwrap(Session.class);
 
         // Условия по колонкам вкладки — в конец, перед отбором дельты:
@@ -177,7 +195,7 @@ public class DromWheelGenerator {
                 }
 
                 try (ResultSet rs = statement.executeQuery()) {
-                    return writer.write(out, new OfferCursor(rs, photoBase));
+                    return writer.write(out, new OfferCursor(rs, photoBase, settings));
                 }
             } catch (XMLStreamException e) {
                 throw new SQLException("Не удалось записать прайс колёс", e);
@@ -195,10 +213,25 @@ public class DromWheelGenerator {
     @Transactional(readOnly = true)
     public int writeDelta(OutputStream out, List<Long> partIds,
                           DromPriceGenerator.FeedFilter filter) {
+        return writeDelta(out, partIds, filter, ru.partsflow.publishing.FeedSettings.none());
+    }
+
+    /**
+     * Дельта колёс — отбором и настройками своей выгрузки.
+     *
+     * <p>Настройки тут так же обязательны, как отбор: дельта несёт текущее
+     * состояние и перебивает то, что стоит на площадке. Уйдя без наценки,
+     * она вернула бы объявлению складскую цену через несколько секунд после
+     * того, как полный прайс поставил цену с наценкой.
+     */
+    @Transactional(readOnly = true)
+    public int writeDelta(OutputStream out, List<Long> partIds,
+                          DromPriceGenerator.FeedFilter filter,
+                          ru.partsflow.publishing.FeedSettings settings) {
         if (partIds == null || partIds.isEmpty()) {
             return 0;
         }
-        return write(out, partIds, filter, null);
+        return write(out, partIds, filter, null, settings);
     }
 
     /** Итератор поверх курсора: строки не накапливаются. */
@@ -208,11 +241,17 @@ public class DromWheelGenerator {
 
         private final ResultSet resultSet;
         private final String photoBase;
+
+        /** Как собирается файл: наценка на прайс-лист и округление. */
+        private final ru.partsflow.publishing.FeedSettings settings;
+
         private Boolean hasNext;
 
-        private OfferCursor(ResultSet resultSet, String photoBase) {
+        private OfferCursor(ResultSet resultSet, String photoBase,
+                            ru.partsflow.publishing.FeedSettings settings) {
             this.resultSet = resultSet;
             this.photoBase = photoBase;
+            this.settings = settings;
         }
 
         @Override
@@ -234,13 +273,15 @@ public class DromWheelGenerator {
             }
             hasNext = null;
             try {
-                return map(resultSet, photoBase);
+                return map(resultSet, photoBase, settings);
             } catch (SQLException e) {
                 throw new IllegalStateException("Не удалось прочитать позицию прайса колёс", e);
             }
         }
 
-        private static DromWheelOffer map(ResultSet rs, String photoBase) throws SQLException {
+        private static DromWheelOffer map(ResultSet rs, String photoBase,
+                                          ru.partsflow.publishing.FeedSettings settings)
+                throws SQLException {
             String kind = rs.getString("kind");
             boolean used = "USED".equals(rs.getString("condition"));
 
@@ -256,7 +297,9 @@ public class DromWheelGenerator {
                     // покупатель берёт и одну запаску.
                     1,
                     rs.getBigDecimal("qty_available"),
-                    rs.getBigDecimal("price"),
+                    // Цена объявления, а не складская: наценка принадлежит
+                    // прайс-листу, а колесо на складе стоит по-прежнему.
+                    settings.priceFor(rs.getBigDecimal("price")),
                     used ? "Б/у" : "Новая",
                     season(rs.getString("season")),
                     rs.getBoolean("light_truck") ? "Грузовая" : "Легковая",

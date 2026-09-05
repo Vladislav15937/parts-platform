@@ -54,6 +54,7 @@ public class MarketplaceAccountService {
                        last_error, credentials IS NOT NULL AS has_credentials,
                        credentials, feed_token IS NOT NULL AS has_feed,
                        product_line,
+                       settings::text AS settings,
                        price_from, price_to, conditions, warehouse_ids,
                        kind_ids, kinds_excluded, brand_ids, brands_excluded,
                        filter_columns::text AS filter_columns,
@@ -72,6 +73,10 @@ public class MarketplaceAccountService {
                                 && !SecretCipher.isEncrypted(rs.getBytes("credentials")),
                         rs.getBoolean("has_feed"),
                         rs.getString("product_line"),
+                        // Ключ кабинета лежит в соседней колонке и наружу
+                        // не выходит; настройки сборки прайса — не секрет,
+                        // их владелец сам и задаёт с экрана.
+                        FeedSettings.parse(rs.getString("settings")),
                         rs.getString("last_error"),
                         rs.getBigDecimal("price_from"),
                         rs.getBigDecimal("price_to"),
@@ -262,6 +267,33 @@ public class MarketplaceAccountService {
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
     }
 
+    /**
+     * Меняет настройки сборки прайса: наценку на прайс-лист и округление.
+     *
+     * <p><b>Отдельно от отбора, потому что это разные вопросы.</b> Отбор
+     * говорит, какой товар уедет в этот прайс-лист; настройки — каким он
+     * уедет. Цена на складе, на витрине и у продавца от них не меняется:
+     * площадка берёт комиссию, и закладывать её в цену товара значило бы
+     * поднять цену и в зале, и по телефону.
+     *
+     * <p><b>Слиянием, а не заменой.</b> В тех же настройках лежит номер
+     * прайс-листа в кабинете площадки ({@code packetId}), и записанный
+     * целиком объект стёр бы его — дельты перестали бы уходить вовсе,
+     * а по экрану этого не видно: очередь разгребается, журнал публикаций
+     * пуст, всё выглядит работающим.
+     */
+    @Transactional
+    public Account setSettings(Long id, FeedSettings settings) {
+        FeedSettings checked = (settings == null ? FeedSettings.none() : settings).validated();
+        int updated = jdbc.update(
+                "UPDATE marketplace_account SET settings = settings || ?::jsonb WHERE id = ?",
+                checked.toJson(), id);
+        if (updated == 0) {
+            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+        }
+        return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
+    }
+
     /** Заводит или заменяет секрет кабинета. Возврата наружу у него нет. */
     @Transactional
     public void setCredentials(long accountId, String secret) {
@@ -347,7 +379,8 @@ public class MarketplaceAccountService {
      */
     public record Account(Long id, String marketplace, String title, String status,
                           boolean hasCredentials, boolean plaintextSecret, boolean hasFeed,
-                          String productLine, String lastError, java.math.BigDecimal priceFrom,
+                          String productLine, FeedSettings settings,
+                          String lastError, java.math.BigDecimal priceFrom,
                           java.math.BigDecimal priceTo, List<String> conditions,
                           List<Long> warehouseIds, List<Long> kindIds, boolean kindsExcluded,
                           List<Long> brandIds, boolean brandsExcluded,
