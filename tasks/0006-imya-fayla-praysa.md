@@ -1,7 +1,7 @@
 ---
 id: 0006
 title: Имя файла прайса придумывает владелец
-status: в работе
+status: слита
 assignee: migrator
 source: разведка 05.09.2026, §9 bazon-parity
 pr: 33
