@@ -17,3 +17,4 @@ backups/
 
 # Токен бота тревог: секрет, а не конфигурация.
 ops/secrets/
+.claude/worktrees/
