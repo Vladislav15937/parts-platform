@@ -18,6 +18,7 @@ import type {
   WarehouseCode,
 } from '../inventory/inventory';
 import { rememberCount } from '../inventory/inventory';
+import { ApiError } from '../api/client';
 import type { Reference } from '../reference/reference';
 import { resolveScan } from '../scan/codes';
 import { ScanOverlay } from '../scan/ScanOverlay';
@@ -106,9 +107,14 @@ export function InventoryScreen({ reference, onCount }: Props) {
           setFound({ status: 'ok', value });
         }
       })
-      .catch(() => {
+      .catch((cause: unknown) => {
         if (requestId.current === id) {
-          setFound({ status: 'error', message: 'Не удалось посчитать' });
+          setFound({
+            status: 'error',
+            message: cause instanceof ApiError && cause.message !== ''
+              ? cause.message
+              : 'Не удалось посчитать',
+          });
         }
       });
   }, [warehouseId, scopeCell]);
@@ -163,7 +169,7 @@ export function InventoryScreen({ reference, onCount }: Props) {
 
         {warehouseId !== '' && (
           <p className="note">
-            {found.status === 'loading' && 'Считаем…'}
+            {found.status === 'loading' && 'Загружаем…'}
             {found.status === 'error' && found.message}
             {found.status === 'ok' && `Найдено товаров: ${found.value}`}
           </p>
@@ -375,7 +381,7 @@ function CountGroup({
   onSubmit: (line: InventoryLine, qty: string) => void;
 }) {
   if (lines.length === 0) {
-    return <p className="muted">Пусто</p>;
+    return <p className="muted">Ничего не найдено</p>;
   }
   return (
     <ul className="count-list">
@@ -416,7 +422,6 @@ function CountRow({
     <li className={status === 'scanned' ? 'count-row count-row--done' : 'count-row'}>
       <div className="count-title">
         {line.title}
-        {line.cellCode !== null && <span className="muted"> · {line.cellCode}</span>}
         {status !== 'problem' && <span className="muted"> · учёт {line.qtyExpected}</span>}
         {count !== undefined && <span className="muted"> · посчитано {count.qty}</span>}
         {' '}
