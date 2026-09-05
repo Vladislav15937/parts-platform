@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getAll, remove, STORE_OUTBOX } from '../storage/db';
 import { enqueue, listOutbox, processOutbox } from '../outbox/outbox';
 import type { OutboxRecord } from '../outbox/outbox';
-import { cellsOf, linesOfCell } from './inventory';
-import type { InventoryLine } from './inventory';
+import { cellsOf, linesOfCell, resolvePartScan, statusOf } from './inventory';
+import type { InventoryLine, LocalCount, WarehouseCode } from './inventory';
 
 /**
  * Подсчёты в очереди.
@@ -120,5 +120,76 @@ describe('лист обхода', () => {
 
   it('в ячейке видно только её содержимое', () => {
     expect(linesOfCell(lines, 10).map((l) => l.partId)).toEqual([1, 2]);
+  });
+});
+
+/**
+ * Три состояния строки — три группы на экране.
+ *
+ * <p>«Вне списка» узнаётся по учётному нулю: строку с таким учётом заводит
+ * только скан детали, которой не было в снимке при открытии, а обычная
+ * строка листа обхода нуля в учёте не имеет никогда (снимок берёт только
+ * позиции с {@code qty > 0}).
+ */
+describe('статус строки', () => {
+  const unscanned: InventoryLine = {
+    partId: 1, title: 'Фара левая', cellId: 10, cellCode: 'А-01-1',
+    qtyExpected: '2', qtyCounted: null,
+  };
+  const outOfList: InventoryLine = {
+    partId: 2, title: 'Бампер', cellId: 11, cellCode: 'А-01-2',
+    qtyExpected: '0', qtyCounted: null,
+  };
+
+  it('без внесённого факта — «не сканирован»', () => {
+    expect(statusOf(unscanned, {})).toBe('unscanned');
+  });
+
+  it('с внесённым фактом — «отсканирован», даже нулевым', () => {
+    const counts: Record<string, LocalCount> = { '1': { qty: '0', countedAt: Date.now() } };
+    expect(statusOf(unscanned, counts)).toBe('scanned');
+  });
+
+  it('учётный ноль — «вне списка», и факт тут ни при чём', () => {
+    // Строка появилась только что через скан — факт у неё уже есть,
+    // но группа определяется не им, а тем, что учёта не было вовсе.
+    const counts: Record<string, LocalCount> = { '2': { qty: '1', countedAt: Date.now() } };
+    expect(statusOf(outOfList, counts)).toBe('problem');
+  });
+});
+
+/**
+ * Разбор скана детали: три исхода из таблицы задачи 0019.
+ */
+describe('скан штрихкода детали', () => {
+  const codes: WarehouseCode[] = [
+    { partId: 1, title: 'Фара левая', publicCode: '000123', barcode: null, cellId: 10, cellCode: 'А-01-1' },
+    { partId: 2, title: 'Бампер', publicCode: '000456', barcode: '4600123456789', cellId: 11, cellCode: 'А-01-2' },
+  ];
+  const listed: InventoryLine[] = [
+    { partId: 1, title: 'Фара левая', cellId: 10, cellCode: 'А-01-1', qtyExpected: '2', qtyCounted: null },
+  ];
+
+  it('код позиции из листа — «listed»', () => {
+    expect(resolvePartScan(codes, listed, '000123')).toEqual({ kind: 'listed', partId: 1 });
+  });
+
+  it('код по владельческому штрихкоду тоже находится', () => {
+    expect(resolvePartScan(codes, listed, '4600123456789'))
+      .toEqual({ kind: 'unlisted', code: codes[1] });
+  });
+
+  it('деталь есть на складе, но не в листе — «unlisted»', () => {
+    // Партid 2 есть в кодах склада, но не в переданном листе сессии.
+    const match = resolvePartScan(codes, listed, '000456');
+    expect(match.kind).toBe('unlisted');
+  });
+
+  it('код неизвестен на этом складе — «not-found»', () => {
+    expect(resolvePartScan(codes, listed, '999999')).toEqual({ kind: 'not-found' });
+  });
+
+  it('регистр и пробелы не мешают найти код', () => {
+    expect(resolvePartScan(codes, listed, ' 000123 ')).toEqual({ kind: 'listed', partId: 1 });
   });
 });
