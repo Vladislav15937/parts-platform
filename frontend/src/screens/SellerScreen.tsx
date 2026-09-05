@@ -8,7 +8,10 @@ import {
   cancelDeal,
   createCustomer,
   createDeal,
+  endOfDay,
+  extendReservation,
   historyOf,
+  reservationTerm,
   shareDeal,
   receiveOrder,
   serviceKinds,
@@ -717,18 +720,30 @@ function DealFinder({
 
       {deals !== null && deals.length > 0 && (
         <ul className="suggestions">
-          {deals.map((d) => (
-            <li key={d.id}>
-              <button type="button" className="button--ghost" onClick={() => onPick(d)}>
-                №{d.number ?? d.id} · {statusName(d.status)}
-                <span className="muted">
-                  {' '}
-                  · {Number(d.totalAmount).toLocaleString('ru-RU')} ₽ ·{' '}
-                  {new Date(d.createdAt).toLocaleDateString('ru-RU')}
-                </span>
-              </button>
-            </li>
-          ))}
+          {deals.map((d) => {
+            // Срок резерва в той же строке, что и статус: «отложена» без
+            // числа не говорит ничего — освободится деталь завтра или через
+            // неделю, из списка не понять. Просроченных у живого клиента
+            // больше половины, и красное здесь — это очередь на обзвон.
+            const line = reservationTerm(d);
+            return (
+              <li key={d.id}>
+                <button type="button" className="button--ghost" onClick={() => onPick(d)}>
+                  №{d.number ?? d.id} · {statusName(d.status)}
+                  {line !== null && (
+                    <span className={line.expired ? 'note--error' : 'muted'}>
+                      {line.expired ? ' · срок истёк' : ` · до ${line.day}`}
+                    </span>
+                  )}
+                  <span className="muted">
+                    {' '}
+                    · {Number(d.totalAmount).toLocaleString('ru-RU')} ₽ ·{' '}
+                    {new Date(d.createdAt).toLocaleDateString('ru-RU')}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
@@ -784,6 +799,9 @@ function DealCard({
   onError: (message: string) => void;
 }) {
   const [amount, setAmount] = useState('');
+  // До какого числа продлить резерв. Пусто до выбора: подставленная дата
+  // означала бы, что о ней кто-то договорился с клиентом вместо продавца.
+  const [until, setUntil] = useState('');
   const [picked, setPicked] = useState<number[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [docs, setDocs] = useState<ReturnDoc[]>([]);
@@ -806,6 +824,10 @@ function DealCard({
   // с товаром, который обещан клиенту и никуда не денется.
   const open = deal.status === 'RESERVED' || deal.status === 'DRAFT';
   const chosen = selectable.filter((item) => picked.includes(item.id));
+  // Срок резерва: у выданной и отменённой его нет вовсе — товар либо
+  // у клиента, либо снова на полке, и дата рядом с ними обещала бы то,
+  // чего никто не обещал.
+  const term = reservationTerm(deal);
 
   useEffect(() => {
     // Прежние возвраты по сделке: без них продавец оформит второй возврат
@@ -819,6 +841,9 @@ function DealCard({
     // «Возврат №1 оформлен» читается как возврат по ней.
     setNotice(null);
     setPicked([]);
+    // Набранная дата — про прежнюю сделку: оставшись, она продлила бы
+    // чужой резерв до числа, которого по нему никто не называл.
+    setUntil('');
 
     // Счёт принадлежит клиенту, а не сделке: у сделки без клиента его нет.
     setAccount(null);
@@ -833,6 +858,45 @@ function DealCard({
       <h3>
         Сделка №{deal.number ?? deal.id} · {statusName(deal.status)}
       </h3>
+
+      {/* Срок резерва — сразу под номером, как у ориентира. Без него карточка
+          говорила «отложена» и всё: продавец не знал, освободится деталь
+          завтра или через неделю, и клиенту ответить не мог. Просроченный
+          красным и словами: вчерашнее число рядом со словом «отложено»
+          читается как срок, а это очередь на обзвон. */}
+      {term !== null && (
+        <p className={term.expired ? 'note note--error' : 'note'}>
+          {term.expired ? 'Отложено · срок истёк' : `Отложено до ${term.day}`}
+        </p>
+      )}
+
+      {/* Продление — здесь же, где срок и прочитан: клиент звонит и просит
+          подержать ещё, и уводить продавца за этим на другой экран значит
+          не продлить вовсе. Дата не подставляется: до какого числа держим,
+          знает только тот, кто говорил с клиентом. */}
+      {term !== null && (
+        <div className="row">
+          <input
+            type="date"
+            aria-label={`Продлить резерв по сделке №${deal.number ?? deal.id} до`}
+            min={todayISO()}
+            value={until}
+            onChange={(e) => setUntil(e.target.value)}
+          />
+          <button
+            type="button"
+            className="button--ghost"
+            disabled={!canSell || until === ''}
+            onClick={() => void act(async () => {
+              await extendReservation(deal.id, endOfDay(until));
+              setUntil('');
+            })}
+          >
+            Продлить
+          </button>
+        </div>
+      )}
+
       <p className="note">
         Сумма {Number(deal.totalAmount).toLocaleString('ru-RU')} ₽ · оплачено{' '}
         {Number(deal.paidAmount).toLocaleString('ru-RU')} ₽ · долг{' '}
@@ -1312,6 +1376,23 @@ function ReturnPanel({
       toAccount,
     );
   }
+}
+
+/**
+ * Сегодня для нижней границы выбора даты.
+ *
+ * <p>Резерв продлевают вперёд: вчерашнее число сервер отклонит, и узнавать
+ * об этом после нажатия — значит терять разговор с клиентом на линии.
+ */
+function todayISO(): string {
+  const now = new Date();
+  // Местная дата, а не UTC: `toISOString` восточнее Гринвича вечером даёт
+  // завтрашний день, и «сегодня» в поле оказалось бы недоступно.
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
 }
 
 function itemStatusName(status: string): string {

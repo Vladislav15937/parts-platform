@@ -21,6 +21,7 @@ import java.math.BigDecimal;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -334,6 +335,77 @@ class SalesControllerTest extends PostgresTestBase {
                 .andExpect(jsonPath("$[0].name").value("Пётр"));
     }
 
+    /**
+     * Продление срока резерва.
+     *
+     * <p>Число в базе стояло с самого начала, а продлить его было нечем:
+     * клиент звонит и просит подержать до пятницы, а продавцу ответить
+     * на это в системе некуда. Проверяется всё вместе — что срок сдвинулся
+     * в базе, что об этом сказано в истории документа именем автора,
+     * и что продлевать умеет продавец, а не только владелец.
+     */
+    @Test
+    @DisplayName("Срок резерва продлевается продавцом и пишется в историю")
+    void extendsReservation() throws Exception {
+        Long partId = partWithStock("Фара левая", 1);
+        MockHttpSession session = login("seller");
+        long dealId = createDeal(partId);
+
+        java.time.Instant before = reservedUntilOf(dealId);
+        java.time.Instant until = java.time.Instant.now().plus(java.time.Duration.ofDays(10));
+
+        mvc.perform(post("/api/deals/" + dealId + "/reservation").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reservedUntil\":\"%s\"}".formatted(until)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RESERVED"));
+
+        assertThat(reservedUntilOf(dealId))
+                .as("срок не сдвинулся: продавец сказал клиенту «подержим», а система нет")
+                .isAfter(before)
+                .isCloseTo(until, within(1, java.time.temporal.ChronoUnit.SECONDS));
+
+        // Через неделю «почему деталь всё ещё лежит» спрашивают именно здесь,
+        // и ответом должно быть «продлил Продавец», а не молча изменившаяся дата.
+        // Явная кодировка: ответ идёт без charset в Content-Type, и по умолчанию
+        // тело читается как ISO-8859-1 — русский текст превращается в кракозябры,
+        // и проверка падает на исправном коде.
+        String history = mvc.perform(get("/api/deals/" + dealId + "/history").session(session))
+                .andExpect(status().isOk())
+                .andReturn().getResponse()
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(history)
+                .as("продление не попало в историю документа")
+                .contains("Срок резерва продлён до " + java.time.format.DateTimeFormatter
+                        .ofPattern("d MMMM", java.util.Locale.of("ru"))
+                        .withZone(java.time.ZoneOffset.UTC).format(until))
+                .contains("\"authorName\":\"Продавец\"");
+    }
+
+    /**
+     * Закрытой сделке продлевать нечего.
+     *
+     * <p>Товар либо у клиента, либо снова на полке, и дата в таком документе
+     * обещала бы то, чего никто не обещал. Отказ словами, а не пятисотка:
+     * продавец по «ошибке сервера» идёт искать поломку.
+     */
+    @Test
+    @DisplayName("Отменённой сделке срок не продлевают")
+    void refusesToExtendClosedDeal() throws Exception {
+        Long partId = partWithStock("Фара правая", 1);
+        MockHttpSession session = login("seller");
+        long dealId = createDeal(partId);
+
+        mvc.perform(post("/api/deals/" + dealId + "/cancel").with(csrf()).session(session))
+                .andExpect(status().isOk());
+
+        mvc.perform(post("/api/deals/" + dealId + "/reservation").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reservedUntil\":\"%s\"}"
+                                .formatted(java.time.Instant.now().plus(java.time.Duration.ofDays(2)))))
+                .andExpect(status().isConflict());
+    }
+
     @Test
     @DisplayName("Позиция сделки несёт наименование, а не только номер детали")
     void itemsCarryTitle() throws Exception {
@@ -515,6 +587,12 @@ class SalesControllerTest extends PostgresTestBase {
             ledger.record(StockMovement.intake(partId, java.math.BigDecimal.valueOf(qty), warehouse, null));
             return partId;
         });
+    }
+
+    private java.time.Instant reservedUntilOf(long dealId) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT reserved_until FROM deal WHERE id = ?",
+                java.sql.Timestamp.class, dealId)).toInstant();
     }
 
     private BigDecimal reservedOf(Long partId) {
