@@ -1,8 +1,8 @@
 ---
 id: 0005
 title: Число фотографий в объявлении задаёт владелец
-status: новая
-assignee: —
+status: в работе
+assignee: coder
 source: разведка 05.09.2026, §9 bazon-parity
 pr: —
 ---

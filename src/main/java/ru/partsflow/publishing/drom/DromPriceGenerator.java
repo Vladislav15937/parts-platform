@@ -496,15 +496,6 @@ public class DromPriceGenerator {
     /** Итератор поверх курсора: строки не накапливаются. */
     private static final class OfferCursor implements Iterator<DromOffer> {
 
-        /**
-         * Больше десяти снимков в объявление всё равно не уедет, а прайс они
-         * растят на ровном месте: у переехавшего клиента их в среднем пять
-         * с половиной на позицию, и при тридцати пяти тысячах позиций каждая
-         * лишняя ссылка — это лишний мегабайт в файле, который площадка
-         * забирает целиком.
-         */
-        private static final int MAX_PHOTOS = 10;
-
         private final ResultSet resultSet;
         private final String photoBase;
 
@@ -558,13 +549,20 @@ public class DromPriceGenerator {
          * Ссылки на снимки — постоянные адреса нашей выдачи, а не подписанные
          * ссылки в хранилище. Подписанная живёт часы и протухнет между
          * заборами прайса, а объявление с мёртвой картинкой площадка снимает.
+         *
+         * <p>Сколько их уедет, задаёт выгрузка ({@code photoLimit}): площадки
+         * считают снимки по-разному, и десять зашитых были решением за
+         * владельца. Порядок при этом прежний и не случайный — главный снимок
+         * первым, дальше по расстановке: обрезка берёт первые, а первую ссылку
+         * площадка ставит обложкой объявления.
          */
-        private static List<String> photoLinks(String ids, String base) {
+        private static List<String> photoLinks(String ids, String base,
+                                               ru.partsflow.publishing.FeedSettings settings) {
             if (base == null || ids == null || ids.isBlank()) {
                 return List.of();
             }
             return java.util.Arrays.stream(ids.split(","))
-                    .limit(MAX_PHOTOS)
+                    .limit(settings.photosPerOffer())
                     .map(id -> base + id + ".jpg")
                     .toList();
         }
@@ -590,7 +588,7 @@ public class DromPriceGenerator {
                     rs.getString("color"),
                     rs.getString("marking"),
                     rs.getString("warehouses"),
-                    photoLinks(rs.getString("photo_ids"), photoBase),
+                    photoLinks(rs.getString("photo_ids"), photoBase, settings),
                     rs.getString("car_brand"),
                     rs.getString("car_model"),
                     rs.getString("body_code"),
