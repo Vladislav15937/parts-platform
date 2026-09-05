@@ -194,8 +194,9 @@ Claude Code подхватывает вложенный `CLAUDE.md` сам, ко
 | `docs/frontend-rules.md` | Как здесь пишут фронтенд: правда экрана о себе, офлайн, телефон первым |
 | `tools/dev-up.sh` | Поднять всё с нуля до заведённой компании, одной командой |
 | `tools/api.sh` | Сессия к API с CSRF: `. tools/api.sh` и дальше `g`, `p`, `pc` |
+| `tools/can-start.sh` | Можно ли начинать: зелёная ли `main`. Красная — стоп для всех |
 | `tools/checks.sh` | Живые сверки: расхождения в данных, две поверхности поиска, счётчики выгрузок, целостность страниц |
-| `.claude/agents/` | Восемь агентов: `planner`, `coder`, `sweep`, `migrator`, `live-run`, `reviewer`, `doc-check`, `ops` |
+| `.claude/agents/` | Девять агентов: `planner`, `coder`, `sweep`, `migrator`, `live-run`, `reviewer`, `doc-check`, `ops`, `triage` |
 
 Первые два — до первой правки. Предметное знание отсюда и из памяток,
 порядок работы — оттуда.
