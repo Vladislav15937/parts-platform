@@ -19,6 +19,7 @@ import {
 } from '../inventory/catalog';
 import { PartCard } from './PartCard';
 import { BulkEditForm } from './BulkEditForm';
+import { BulkMoveForm } from './BulkMoveForm';
 import { count, goods } from '../ui/plural';
 import { ColumnMenu } from './ColumnMenu';
 import { VehiclePicker } from './VehiclePicker';
@@ -39,6 +40,9 @@ import { VehiclePicker } from './VehiclePicker';
  * не может.
  */
 const SIZE = 50;
+
+/** Кто перевозит между складами. Тот же список в @PreAuthorize у POST /api/stock/moves. */
+const MOVE_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
 
 /** Название колонки для чипа отбора: ключ ничего не говорит владельцу. */
 function columnTitle(key: string): string {
@@ -92,6 +96,9 @@ export function CatalogScreen({ role }: { role: string }) {
    */
   const [whole, setWhole] = useState(false);
   const [editing, setEditing] = useState(false);
+  // Перевозка пачкой — свой режим формы, отдельно от правки: кладовщик
+  // видит эту кнопку, а «Изменить» (цена, секция) — нет, роль другая.
+  const [movingBulk, setMovingBulk] = useState(false);
   // Какая колонка сейчас набирается и какая показывает меню: открытых
   // больше одной быть не может — они перекрывают друг друга.
   const [typing, setTyping] = useState<string | null>(null);
@@ -281,9 +288,26 @@ export function CatalogScreen({ role }: { role: string }) {
               setChosen([]);
               setWhole(false);
               setEditing(false);
+              setMovingBulk(false);
             }}
           >
             {selecting ? 'Выйти из правки' : 'Правка списком'}
+          </button>
+        )}
+        {/* Кладовщик правку ценой и секцией не делает — «Правка списком»
+            ему не показана вовсе, — но перевозит наравне с владельцем:
+            деталь у него в руках. Свой вход в тот же режим отметки строк. */}
+        {role === 'STOREKEEPER' && (
+          <button
+            type="button"
+            className="button--ghost"
+            onClick={() => {
+              setSelecting(!selecting);
+              setChosen([]);
+              setMovingBulk(false);
+            }}
+          >
+            {selecting ? 'Отменить' : 'Отметить позиции'}
           </button>
         )}
         {/* Ссылкой, а не кнопкой с запросом: файл на двенадцать мегабайт
@@ -373,22 +397,35 @@ export function CatalogScreen({ role }: { role: string }) {
           появившись, она сдвигает таблицу вниз, и следующее нажатие попадает
           в соседнюю строку — снимая то, что было только что выбрано. Та же
           ловушка, что с накладкой снимков. Поймано живым прогоном. */}
-      {selecting && !editing && (
+      {selecting && !editing && !movingBulk && (
         <div className="filter-row">
           <span className="note">
             {whole ? `Выбран весь отбор: ${count(page?.total ?? 0)}`
               : chosen.length === 0 ? 'Отметьте позиции'
               : `Выбрано ${chosen.length}`}
           </span>
-          <button type="button" disabled={!whole && chosen.length === 0}
-                  onClick={() => setEditing(true)}>
-            Изменить
-          </button>
+          {(role === 'OWNER' || role === 'MANAGER') && (
+            <button type="button" disabled={!whole && chosen.length === 0}
+                    onClick={() => setEditing(true)}>
+              Изменить
+            </button>
+          )}
+          {/* Перевозка не берёт «весь отбор»: пачка в тридцать пять тысяч
+              позиций через два склада — это уже не то, что отмечают
+              на витрине руками, а отдельная задача. Отмечают до пары сотен. */}
+          {!whole && MOVE_ROLES.includes(role) && (
+            <button type="button" className="button--ghost"
+                    disabled={chosen.length === 0}
+                    onClick={() => setMovingBulk(true)}>
+              Перевезти
+            </button>
+          )}
           {/* Весь отбор — единственный способ тронуть больше страницы.
               Кнопка стоит рядом с отметками, а не в настройках: нужна она
               ровно тогда, когда владелец уже понял, что отмечать придётся
-              семьсот страниц. */}
-          {!whole && page !== null && page.total > page.rows.length && (
+              семьсот страниц. Перевозке она не служит — только правке. */}
+          {(role === 'OWNER' || role === 'MANAGER') && !whole
+            && page !== null && page.total > page.rows.length && (
             <button type="button" className="button--ghost"
                     onClick={() => { setWhole(true); setChosen([]); }}>
               Выбрать весь отбор ({count(page.total)})
@@ -415,6 +452,21 @@ export function CatalogScreen({ role }: { role: string }) {
             load(query);
           }}
           onCancel={() => setEditing(false)}
+        />
+      )}
+
+      {movingBulk && (
+        <BulkMoveForm
+          rows={(page?.rows ?? []).filter((r) => chosen.includes(r.id))}
+          warehouses={warehouses}
+          onDone={(notice) => {
+            setMovingBulk(false);
+            setSelecting(false);
+            setChosen([]);
+            setNotice(notice);
+            load(query);
+          }}
+          onCancel={() => setMovingBulk(false)}
         />
       )}
 

@@ -7,6 +7,8 @@ import jakarta.validation.constraints.Positive;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -35,26 +37,33 @@ import java.util.List;
 public class StockMoveController {
 
     private final StockDocumentService documents;
+    private final MoveJournalService journal;
 
-    public StockMoveController(StockDocumentService documents) {
+    public StockMoveController(StockDocumentService documents, MoveJournalService journal) {
         this.documents = documents;
+        this.journal = journal;
     }
 
     @PostMapping
     @PreAuthorize("hasAnyRole('OWNER','MANAGER','STOREKEEPER')")
     public ResponseEntity<MoveView> move(@Valid @RequestBody MoveRequest request) {
-        StockDocument document = StockDocument.move(
-                request.fromWarehouseId(), request.toWarehouseId());
-        document.setCreatedBy(CurrentUser.memberId());
-        document.setNote(request.note());
+        StockDocumentService.MoveOutcome outcome = documents.moveBatch(
+                request.fromWarehouseId(), request.toWarehouseId(),
+                request.items(), request.note(), CurrentUser.memberId());
+        return ResponseEntity.status(HttpStatus.CREATED).body(MoveView.of(outcome));
+    }
 
-        for (MoveItem item : request.items()) {
-            document.addLine(item.partId(), item.quantity(), item.toCellId());
-        }
+    /** Журнал перевозок: документы, свежие сверху. Состав — по нажатию на строку. */
+    @GetMapping
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER','STOREKEEPER')")
+    public List<MoveJournalService.MoveDocument> journal() {
+        return journal.list();
+    }
 
-        StockDocument saved = documents.save(document);
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(MoveView.of(documents.complete(saved.getId())));
+    @GetMapping("/{id}/lines")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER','STOREKEEPER')")
+    public List<MoveJournalService.MoveLine> journalLines(@PathVariable Long id) {
+        return journal.lines(id);
     }
 
     /**
@@ -72,14 +81,26 @@ public class StockMoveController {
                               String note) {
     }
 
+    /**
+     * @param notMoved позиции, которые не поехали, потому что часть остатка
+     *                 обещана покупателю; для успешной перевозки — пустой список
+     */
     public record MoveView(Long id, Long number, Long fromWarehouseId, Long toWarehouseId,
-                           String status, Instant completedAt, int items) {
+                           String status, Instant completedAt, int items,
+                           List<SkippedItemView> notMoved) {
 
-        static MoveView of(StockDocument document) {
+        static MoveView of(StockDocumentService.MoveOutcome outcome) {
+            StockDocument document = outcome.document();
             return new MoveView(document.getId(), document.getNumber(),
                     document.getWarehouseId(), document.getToWarehouseId(),
                     document.getStatus().name(), document.getCompletedAt(),
-                    document.getLines().size());
+                    document.getLines().size(),
+                    outcome.skipped().stream()
+                            .map(item -> new SkippedItemView(item.partId(), item.publicCode()))
+                            .toList());
         }
+    }
+
+    public record SkippedItemView(Long partId, String publicCode) {
     }
 }
