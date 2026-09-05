@@ -78,8 +78,17 @@ export function InventoryScreen({ reference, onCount }: Props) {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Экран уходит с вкладки не дожидаясь ответа IndexedDB или сервера —
+  // офлайн-хранилище и счётчик формы отвечают не мгновенно, — и без сторожа
+  // асинхронный колбэк правит состояние уже размонтированного компонента.
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
+
   const reload = useCallback(async () => {
     const local = await loadLocal();
+    if (!mounted.current) {
+      return;
+    }
     setSession(local.session);
     setLines(local.lines);
     setCounts(local.counts);
@@ -103,12 +112,12 @@ export function InventoryScreen({ reference, onCount }: Props) {
     setFound({ status: 'loading' });
     void countPositions(Number(warehouseId), resolveCellId(scopeCell))
       .then((value) => {
-        if (requestId.current === id) {
+        if (mounted.current && requestId.current === id) {
           setFound({ status: 'ok', value });
         }
       })
       .catch((cause: unknown) => {
-        if (requestId.current === id) {
+        if (mounted.current && requestId.current === id) {
           setFound({
             status: 'error',
             message: cause instanceof ApiError && cause.message !== ''
@@ -294,6 +303,9 @@ export function InventoryScreen({ reference, onCount }: Props) {
     // Сначала локально: экран обязан показать пройденную полку немедленно,
     // не дожидаясь связи, которой в ангаре нет.
     const count = await rememberCount(line.partId, qty);
+    if (!mounted.current) {
+      return;
+    }
     setCounts((prev) => ({ ...prev, [String(line.partId)]: count }));
     onCount(session.id, line, qty, count.countedAt);
   }
@@ -303,7 +315,9 @@ export function InventoryScreen({ reference, onCount }: Props) {
     const current = counts[String(line.partId)];
     const next = String((current === undefined ? 0 : Number(current.qty)) + 1);
     await submit(line, next);
-    setNote(noteText);
+    if (mounted.current) {
+      setNote(noteText);
+    }
   }
 
   function applyCellScan(text: string): void {
@@ -344,6 +358,9 @@ export function InventoryScreen({ reference, onCount }: Props) {
       qtyCounted: null,
     };
     void rememberUnlistedLine(newLine).then(() => {
+      if (!mounted.current) {
+        return;
+      }
       setLines((prev) => (prev.some((l) => l.partId === newLine.partId) ? prev : [...prev, newLine]));
       void scanLine(newLine, 'Вне списка');
     });
