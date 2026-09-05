@@ -26,6 +26,15 @@ CHANGELOG = os.path.join(ROOT, "db", "changelog")
 NS = {"lb": "http://www.liquibase.org/xml/ns/dbchangelog"}
 MANIFESTS = ["db.changelog-catalog.xml", "db.changelog-tenant.xml"]
 
+# Что считается логикой в базе. Процедуры тоже: pg_proc не различает их
+# с функциями, и «у меня не функция, а процедура» — не исключение, а способ
+# сказать то же самое другими словами. Правила (CREATE RULE) — третий способ:
+# они переписывают запрос молча, и увидеть это можно только в схеме.
+LOGIC_IN_DB = re.compile(
+    r'\bCREATE\s+(?:OR\s+REPLACE\s+)?'
+    r'(?:CONSTRAINT\s+)?(FUNCTION|PROCEDURE|TRIGGER|RULE)\b',
+    re.IGNORECASE)
+
 problems = []
 
 
@@ -103,6 +112,38 @@ def main():
             if cid in ids:
                 fail(f"changeset {cid} объявлен дважды: {ids[cid]} и {path}")
             ids[cid] = path
+
+    # 3б. Логики в базе не заводить. Правило записано в корневом CLAUDE.md,
+    #     и до сих пор его держал только db/verify.sh — то есть полный прогон
+    #     с Docker, отвечающий про конечное состояние схемы, а не про то,
+    #     какой changeset его испортил. Здесь то же правило ловится статически
+    #     и называет файл.
+    #
+    #     Смотрим только НОВЫЕ changeset'ы и только прямой ход: исторические
+    #     заводили триггеры законно (их сняли tenant/049 и /051), а строки
+    #     --rollback возвращают прежнее состояние и обязаны их содержать —
+    #     мост отката tenant/054 весь из них и состоит.
+    code, _ = git("rev-parse", "--verify", "-q", base)
+    if code == 0:
+        _, mb = git("merge-base", "HEAD", base)
+        mb = mb.strip()
+        for path in sorted(on_disk):
+            rel = f"db/changelog/{path}"
+            code, _ = git("cat-file", "-e", f"{mb}:{rel}")
+            if code == 0:
+                continue                      # выпущенный: историю не судим
+            for i, line in enumerate(open(os.path.join(CHANGELOG, path),
+                                          encoding="utf-8"), 1):
+                bare = line.strip()
+                if bare.startswith("--rollback") or bare.startswith("--comment"):
+                    continue
+                m = LOGIC_IN_DB.search(bare)
+                if m:
+                    fail(f"{path}:{i}: {m.group(1).upper()} — логика в базе. "
+                         f"Она живёт в Java: триггер невидим оттуда, откуда "
+                         f"наблюдают его последствия, отладчик через него "
+                         f"не проходит, тест на сервис его не покрывает. "
+                         f"Причины и цена переноса — docs/triggers-to-java.md")
 
     # 4. Выпущенное не трогать. Liquibase считает чек-сумму по содержимому,
     #    включая текст отката и комментарии, — правка валит накат у всех,
