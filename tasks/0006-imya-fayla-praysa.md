@@ -1,8 +1,8 @@
 ---
 id: 0006
 title: Имя файла прайса придумывает владелец
-status: новая
-assignee: —
+status: в работе
+assignee: migrator
 source: разведка 05.09.2026, §9 bazon-parity
 pr: —
 ---
