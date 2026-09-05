@@ -138,7 +138,7 @@ class DromFeedStreamTest extends PostgresTestBase {
 
         assertThat(get().getStatusCode().value()).isEqualTo(200);
 
-        assertThat(mark())
+        assertThat(awaitMark(java.util.Objects::nonNull))
                 .as("прайс уехал, а следа не осталось — на вопрос «забрали ли» "
                         + "снова отвечает разработчик по логам")
                 .isNotNull();
@@ -148,11 +148,11 @@ class DromFeedStreamTest extends PostgresTestBase {
     @DisplayName("Второй забор обновляет отметку, а не оставляет первую")
     void secondDownloadMovesTheMark() {
         get();
-        java.time.Instant first = mark();
+        java.time.Instant first = awaitMark(java.util.Objects::nonNull);
 
         get();
 
-        assertThat(mark())
+        assertThat(awaitMark(at -> at != null && at.isAfter(first)))
                 .as("отметка застыла на первом заборе: по ней прайс выглядит "
                         + "заброшенным при исправной выгрузке")
                 .isAfter(first);
@@ -175,7 +175,11 @@ class DromFeedStreamTest extends PostgresTestBase {
 
         get();
 
-        assertThat(mark()).as("забранный прайс остался без отметки").isNotNull();
+        // Ожидание здесь работает и на вторую проверку: дождавшись отметки
+        // забранного прайса, мы знаем, что запрос доработан до конца, —
+        // и пустота у соседнего значит «не отметили», а не «ещё не успели».
+        assertThat(awaitMark(java.util.Objects::nonNull))
+                .as("забранный прайс остался без отметки").isNotNull();
         assertThat(markOf("Соседняя"))
                 .as("забор одного прайса отметил и соседний")
                 .isNull();
@@ -184,6 +188,43 @@ class DromFeedStreamTest extends PostgresTestBase {
     /** Отметка выгрузки из фикстуры; {@code null} — не забирали. */
     private java.time.Instant mark() {
         return markOf("Поток");
+    }
+
+    /**
+     * Отметка, дождавшись обещанного состояния.
+     *
+     * <p><b>Ждать обязательно, и это не украшение теста.</b> Отметка ставится
+     * <b>после</b> того, как закрыт поток ответа, — так и задумано: о прайсе,
+     * оборвавшемся на середине, она отвечала бы «забрали». Но закрытый поток
+     * означает, что тело уже у клиента: {@code get()} возвращается, пока поток
+     * запроса ещё идёт к {@code markDownloaded}. Проверка сразу после
+     * {@code get()} читает базу раньше, чем сервер в неё написал, и падает
+     * на исправном коде — на медленной машине чаще, чем на быстрой.
+     *
+     * <p>Ровно это уронило {@code main} 5 сентября 2026: три метода этого
+     * класса упали на CI при зелёном прогоне у себя. Воспроизведено
+     * пятидесятимиллисекундной задержкой перед {@code markDownloaded} — те же
+     * три метода, те же строки.
+     *
+     * <p><b>Ожидание не ослабляет проверку.</b> Не дождавшись, метод отдаёт
+     * последнее прочитанное, и утверждение падает со своим прежним
+     * сообщением: сломанной отметки никакое ожидание не создаст. Проверено
+     * снятием вызова {@code markDownloaded} — все три метода падают.
+     */
+    private java.time.Instant awaitMark(
+            java.util.function.Predicate<java.time.Instant> reached) {
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+        java.time.Instant at = mark();
+        while (!reached.test(at) && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            at = mark();
+        }
+        return at;
     }
 
     private java.time.Instant markOf(String title) {
