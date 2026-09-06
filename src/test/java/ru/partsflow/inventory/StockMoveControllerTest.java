@@ -21,6 +21,7 @@ import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -43,6 +44,9 @@ class StockMoveControllerTest extends PostgresTestBase {
 
     @Autowired
     private StockLedger ledger;
+
+    @Autowired
+    private StockReservationRepository reservations;
 
     @Autowired
     private MockMvc mvc;
@@ -188,6 +192,94 @@ class StockMoveControllerTest extends PostgresTestBase {
                 .andExpect(status().isForbidden());
 
         assertThat(qtyAt(partId, toWarehouse)).isEqualByComparingTo("0");
+    }
+
+    /**
+     * Пачка со ста двумя вещами удобна для отчёта, но невозможна в тесте —
+     * достаточно двух: одна отложена покупателю, другая свободна.
+     * Обещанная не должна тянуть за собой всю пачку в 409, как раньше.
+     */
+    @Test
+    @DisplayName("Перевозка пачкой: отложенная позиция не едет, остальные — одним документом")
+    void bulkMoveSkipsReservedItemAndMovesTheRest() throws Exception {
+        Long free = partWithStock("Фара свободная", 3);
+        Long reserved = partWithStock("Фара отложенная", 2);
+        inTenant(() -> {
+            reservations.reserve(reserved, fromWarehouse, new BigDecimal("2"));
+            return null;
+        });
+        String reservedCode = inTenant(() -> jdbc.queryForObject(
+                "SELECT public_code FROM part WHERE id = ?", String.class, reserved));
+
+        mvc.perform(post("/api/stock/moves").with(csrf()).session(login("vladelec"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fromWarehouseId":%d,"toWarehouseId":%d,"note":"партия",
+                                 "items":[{"partId":%d,"quantity":3},{"partId":%d,"quantity":2}]}"""
+                                .formatted(fromWarehouse, toWarehouse, free, reserved)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.items").value(1))
+                .andExpect(jsonPath("$.notMoved.length()").value(1))
+                .andExpect(jsonPath("$.notMoved[0].partId").value(reserved))
+                .andExpect(jsonPath("$.notMoved[0].publicCode").value(reservedCode));
+
+        assertThat(qtyAt(free, toWarehouse)).isEqualByComparingTo("3");
+        assertThat(qtyAt(free, fromWarehouse)).isEqualByComparingTo("0");
+        // Отложенная осталась на месте — ни граммом меньше, ни граммом больше.
+        assertThat(qtyAt(reserved, fromWarehouse)).isEqualByComparingTo("2");
+        assertThat(qtyAt(reserved, toWarehouse)).isEqualByComparingTo("0");
+    }
+
+    /** Журнал: документы, свежие сверху, с именами склада и автора, а не номерами. */
+    @Test
+    @DisplayName("Журнал перевозок отдаёт документ с именами и примечанием")
+    void journalListsMoveDocuments() throws Exception {
+        Long partId = partWithStock("Стойка для журнала", 4);
+
+        mvc.perform(post("/api/stock/moves").with(csrf()).session(login("vladelec"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fromWarehouseId":%d,"toWarehouseId":%d,"note":"пробный завоз",
+                                 "items":[{"partId":%d,"quantity":4}]}"""
+                                .formatted(fromWarehouse, toWarehouse, partId)))
+                .andExpect(status().isCreated());
+
+        mvc.perform(get("/api/stock/moves").session(login("kladovshchik")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].fromWarehouse").value("Ткацкая"))
+                .andExpect(jsonPath("$[0].toWarehouse").value("Ангар"))
+                .andExpect(jsonPath("$[0].lines").value(1))
+                .andExpect(jsonPath("$[0].note").value("пробный завоз"))
+                .andExpect(jsonPath("$[0].author").value("Владелец"));
+
+        // Продавец перевозку не видит вовсе — та же роль, что и на POST.
+        mvc.perform(get("/api/stock/moves").session(login("prodavets")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("Состав документа: публичный код, наименование и количество каждой строки")
+    void journalLinesReturnComposition() throws Exception {
+        Long partId = partWithStock("Радиатор для состава", 2);
+        String publicCode = inTenant(() -> jdbc.queryForObject(
+                "SELECT public_code FROM part WHERE id = ?", String.class, partId));
+
+        String body = mvc.perform(post("/api/stock/moves").with(csrf()).session(login("vladelec"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fromWarehouseId":%d,"toWarehouseId":%d,
+                                 "items":[{"partId":%d,"quantity":2}]}"""
+                                .formatted(fromWarehouse, toWarehouse, partId)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        Number documentId = com.jayway.jsonpath.JsonPath.read(body, "$.id");
+
+        mvc.perform(get("/api/stock/moves/" + documentId + "/lines").session(login("vladelec")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].partId").value(partId))
+                .andExpect(jsonPath("$[0].publicCode").value(publicCode))
+                .andExpect(jsonPath("$[0].title").value("Радиатор для состава"))
+                .andExpect(jsonPath("$[0].qty").value(2));
     }
 
     private Long partWithStock(String title, int qty) {

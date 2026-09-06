@@ -23,6 +23,7 @@ import { OrdersScreen } from './OrdersScreen';
 import { FeedsScreen } from './FeedsScreen';
 import { WheelsScreen } from './WheelsScreen';
 import { CatalogScreen } from './CatalogScreen';
+import { StockMovesScreen } from './StockMovesScreen';
 import { ordersAwaitingReply } from '../sales/sales';
 import { unmatchedNames } from '../catalog/partNames';
 import { deadLetters } from '../events/deadLetters';
@@ -53,6 +54,14 @@ const NAMING_ROLES = ['OWNER', 'MANAGER'];
 const LABEL_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
 
 /**
+ * Кто перевозит между складами и смотрит журнал перевозок. Тот же список
+ * в @PreAuthorize у POST /api/stock/moves: перевозит кладовщик наравне
+ * с владельцем — деталь у него в руках, и перестановка между складами —
+ * работа, а не расход.
+ */
+const MOVE_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
+
+/**
  * Кто заводит данные: приёмка, машины, пересчёт, очередь отправки.
  *
  * <p>Здесь все, кроме «Просмотра». Роль эта названа владельцу «только
@@ -76,6 +85,7 @@ type Tab =
   | 'orders'
   | 'catalog'
   | 'wheels'
+  | 'moves'
   | 'feeds'
   | 'delivery'
   | 'labels'
@@ -237,6 +247,15 @@ export function HomeScreen() {
             onClick={() => setTab('inventory')}
           >
             Пересчёт
+          </button>
+        )}
+        {MOVE_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
+            className={tab === 'moves' ? 'rail__item rail__item--active' : 'rail__item'}
+            onClick={() => setTab('moves')}
+          >
+            Перевозки
           </button>
         )}
         {WRITING_ROLES.includes(state.me.role) && (
@@ -410,6 +429,9 @@ export function HomeScreen() {
       {tab === 'feeds' && NAMING_ROLES.includes(state.me.role)
         && <FeedsScreen role={state.me.role} />}
 
+      {tab === 'moves' && MOVE_ROLES.includes(state.me.role)
+        && <StockMovesScreen role={state.me.role} />}
+
       {tab === 'orders' && (
         <OrdersScreen canSell={SELLING_ROLES.includes(state.me.role)} />
       )}
@@ -531,6 +553,7 @@ function sectionName(tab: string): string {
     case 'catalog': return 'Склад';
     case 'wheels': return 'Шины и диски';
     case 'inventory': return 'Пересчёт склада';
+    case 'moves': return 'Перевозки';
     case 'outbox': return 'Очередь отправки';
     case 'import': return 'Загрузка склада';
     case 'names': return 'Нераспознанные наименования';

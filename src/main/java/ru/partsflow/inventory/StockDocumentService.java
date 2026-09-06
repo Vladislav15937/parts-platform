@@ -3,7 +3,10 @@ package ru.partsflow.inventory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Проведение складских документов.
@@ -41,6 +44,77 @@ public class StockDocumentService {
     public StockDocument save(StockDocument document) {
         requireReferences(document);
         return documents.saveAndFlush(document);
+    }
+
+    /**
+     * Перевозит пачку одним документом, пропуская позиции, которых на складе
+     * не хватает: отложенные покупателю не едут, а остальные всё равно
+     * переезжают одним движением.
+     *
+     * <p><b>Зачем пре-проверка, если {@code complete()} и так её делает.</b>
+     * Без неё пачка в двести позиций, где одна отложена, откатывалась бы
+     * целиком — кладовщик получал 409 на весь документ и набирал сто
+     * девяносто девять позиций заново руками. Здесь читаем свободный остаток
+     * заранее и строим документ только из того, что поедет.
+     *
+     * <p>Сторожем при этом остаётся сам {@code complete()}: между проверкой
+     * и записью движения встанет второй продавец, и в этом (редком) случае
+     * отказ будет как раньше — на весь документ. Это не read-modify-write
+     * над остатком: мы ничего не пишем по результатам чтения, только решаем,
+     * какие строки предложить документу, а хватает ли их на самом деле,
+     * решает та же инструкция в {@code WHERE}, что и всегда.
+     *
+     * <p>Если не может уехать ни одна позиция (в частности — единственная,
+     * как раньше делала карточка), не подменяем документ пустым: строим его
+     * из исходных строк как есть, и {@code complete()} откажет тем же
+     * способом, что и до этой правки, — той же ошибкой на тот же случай.
+     */
+    @Transactional
+    public MoveOutcome moveBatch(Long fromWarehouseId, Long toWarehouseId,
+                                 List<StockMoveController.MoveItem> items,
+                                 String note, Long createdBy) {
+        List<StockMoveController.MoveItem> insufficient = new ArrayList<>();
+        for (StockMoveController.MoveItem item : items) {
+            BigDecimal available = stock.availableQuantity(item.partId(), fromWarehouseId);
+            if (available.compareTo(item.quantity()) < 0) {
+                insufficient.add(item);
+            }
+        }
+
+        List<StockMoveController.MoveItem> toMove = items;
+        if (!insufficient.isEmpty() && insufficient.size() < items.size()) {
+            toMove = items.stream().filter(item -> !insufficient.contains(item)).toList();
+        }
+
+        StockDocument document = StockDocument.move(fromWarehouseId, toWarehouseId);
+        document.setCreatedBy(createdBy);
+        document.setNote(note);
+        for (StockMoveController.MoveItem item : toMove) {
+            document.addLine(item.partId(), item.quantity(), item.toCellId());
+        }
+
+        StockDocument saved = save(document);
+        StockDocument completed = complete(saved.getId());
+
+        List<SkippedItem> skipped = toMove == items
+                ? List.of()
+                : insufficient.stream()
+                        .map(item -> new SkippedItem(item.partId(), publicCodeOf(item.partId())))
+                        .toList();
+        return new MoveOutcome(completed, skipped);
+    }
+
+    private String publicCodeOf(Long partId) {
+        return jdbc.queryForObject(
+                "SELECT public_code FROM part WHERE id = ?", String.class, partId);
+    }
+
+    /** Итог перевозки пачкой: сам документ и то, что в него не попало. */
+    public record MoveOutcome(StockDocument document, List<SkippedItem> skipped) {
+    }
+
+    /** Позиция, которая не поехала, потому что часть остатка обещана покупателю. */
+    public record SkippedItem(Long partId, String publicCode) {
     }
 
     /**
