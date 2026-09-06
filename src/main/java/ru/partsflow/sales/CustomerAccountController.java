@@ -13,10 +13,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import ru.partsflow.platform.security.CurrentUser;
+import ru.partsflow.platform.security.MemberService;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Лицевой счёт клиента.
@@ -34,25 +36,41 @@ public class CustomerAccountController {
     private static final String SELLS = "hasAnyRole('OWNER','MANAGER','SELLER')";
 
     private final SalesService sales;
+    private final DealRepository deals;
+    private final MemberService members;
 
-    public CustomerAccountController(SalesService sales) {
+    public CustomerAccountController(SalesService sales, DealRepository deals,
+                                     MemberService members) {
         this.sales = sales;
+        this.deals = deals;
+        this.members = members;
     }
 
     /**
-     * Остаток и журнал операций.
+     * Остаток и журнал операций — целиком, не восемь последних: вкладка
+     * «Движения по счёту» карточки клиента (задача 0022) показывает весь
+     * журнал, а прежде экран продавца обрезал его сам ({@code slice(0, 8)}
+     * в {@code SellerScreen}). Здесь по-прежнему нет предела — счёт одного
+     * клиента не дорастает до тысяч строк, в отличие от склада целиком.
      *
-     * <p>Пока читать счёт было нечем, переплата уходила на него молча:
-     * деньги клиента в системе есть, а увидеть их продавец не мог — то есть
-     * при следующем приезде клиент про свою тысячу помнил, а система нет.
+     * <p>Имя автора и номер сделки резолвятся одним запросом на всю выдачу,
+     * как и наименования в других реестрах: «автор 3» и «сделка 7» вместо
+     * имени и номера документа ничего не говорят тому, кто их разбирает.
      */
     @GetMapping
     @PreAuthorize(SELLS)
     public AccountView account(@PathVariable Long customerId) {
+        List<CustomerAccountEntry> entries = sales.accountEntries(customerId);
+        Map<Long, String> authorNames = members.namesOf(
+                entries.stream().map(CustomerAccountEntry::getCreatedBy).toList());
+        Map<Long, Long> dealNumbers = deals.findAllById(
+                        entries.stream().map(CustomerAccountEntry::getDealId)
+                                .filter(java.util.Objects::nonNull).distinct().toList())
+                .stream().collect(java.util.stream.Collectors.toMap(Deal::getId, Deal::getNumber));
         return new AccountView(
                 customerId,
                 sales.accountBalance(customerId),
-                sales.accountEntries(customerId).stream().map(EntryView::of).toList());
+                entries.stream().map(e -> EntryView.of(e, authorNames, dealNumbers)).toList());
     }
 
     @PostMapping("/top-up")
@@ -117,15 +135,36 @@ public class CustomerAccountController {
     /**
      * @param signedAmount сумма со знаком: журнал читают глазами, и «−500»
      *                     понятнее, чем «500, тип DEAL_PAYMENT»
+     * @param dealNumber   номер сделки, к которой относится движение; пусто —
+     *                     движение не связано со сделкой (пополнение, выдача,
+     *                     правка)
+     * @param authorName   кто сделал движение; пусто — фоновый процесс,
+     *                     у которого автора нет и быть не может
      */
     public record EntryView(Long id, Long customerId, AccountEntryType entryType,
                             BigDecimal amount, BigDecimal signedAmount,
-                            String comment, Instant createdAt) {
+                            String comment, Instant createdAt,
+                            Long dealNumber, String authorName) {
 
+        /** Для одиночной записи сразу после операции — имя и номер сделки не нужны там. */
         static EntryView of(CustomerAccountEntry entry) {
+            return of(entry, Map.of(), Map.of());
+        }
+
+        static EntryView of(CustomerAccountEntry entry, Map<Long, String> authorNames,
+                            Map<Long, Long> dealNumbers) {
+            // Ключ поиска, а не только карта, может быть пуст: у пополнения,
+            // выдачи и правки сделки нет вовсе. Map.of() (в отличие от HashMap)
+            // бросает NullPointerException уже на попытке найти null-ключ —
+            // поэтому проверка идёт до обращения к карте, а не полагается
+            // на то, что там лежит пустая карта конкретной реализации.
+            Long dealId = entry.getDealId();
+            Long authorId = entry.getCreatedBy();
             return new EntryView(entry.getId(), entry.getCustomerId(), entry.getEntryType(),
                     entry.getAmount(), entry.signedAmount(),
-                    entry.getComment(), entry.getCreatedAt());
+                    entry.getComment(), entry.getCreatedAt(),
+                    dealId == null ? null : dealNumbers.get(dealId),
+                    authorId == null ? null : authorNames.get(authorId));
         }
     }
 }

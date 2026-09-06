@@ -593,9 +593,15 @@ class SalesControllerTest extends PostgresTestBase {
         Long dealNumber = inTenant(() -> jdbc.queryForObject(
                 "SELECT number FROM deal WHERE id = ?", Long.class, dealId));
 
+        // Точный матч по номеру идёт в одном OR с вхождением по причине
+        // (§ реестра возвратов): при большом числе сделок в общей схеме
+        // теста номер вроде «31» иногда оказывается подстрокой чужой причины
+        // вроде «предел-хвост-92831» — это законное поведение отбора, а не
+        // повод по нему проверять count(*). Свежий возврат идёт первым
+        // (ORDER BY r.id DESC), и именно это здесь проверяется — точный
+        // номер нашёл нужный документ, а не единственный документ вообще.
         mvc.perform(get("/api/deals/returns?q=" + dealNumber).session(session))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items.length()").value(1))
                 .andExpect(jsonPath("$.items[0].dealId").value((int) dealId));
     }
 
@@ -744,6 +750,116 @@ class SalesControllerTest extends PostgresTestBase {
                 .andExpect(status().isForbidden());
         mvc.perform(get("/api/deals/returns").session(login("viewer")))
                 .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Вкладка «Возвраты» карточки клиента (задача 0022) переиспользует
+     * {@code GET /api/deals/returns}, только с добавленным {@code customerId}:
+     * возврат другого клиента попадать в неё не должен.
+     */
+    @Test
+    @DisplayName("Отбор по customerId показывает только возвраты этого клиента")
+    void returnsFilteredByCustomerId() throws Exception {
+        MockHttpSession session = login("seller");
+        Long otherCustomer = inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO customer (name) VALUES ('Другой клиент') RETURNING id", Long.class));
+
+        long dealMine = createDeal(partWithStock("Зеркало моё", 1));
+        long itemMine = firstItemId(dealMine, session);
+        mvc.perform(post("/api/deals/" + dealMine + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals/" + dealMine + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"мой-возврат-без-цифр",
+                                 "items":[{"dealItemId":%d,"restocked":true}]}"""
+                                .formatted(warehouse, itemMine)))
+                .andExpect(status().isCreated());
+
+        Long partOther = partWithStock("Зеркало чужое", 1);
+        long dealOther = createDealForCustomer(partOther, otherCustomer, session);
+        long itemOther = firstItemId(dealOther, session);
+        mvc.perform(post("/api/deals/" + dealOther + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals/" + dealOther + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"чужой-возврат-без-цифр",
+                                 "items":[{"dealItemId":%d,"restocked":true}]}"""
+                                .formatted(warehouse, itemOther)))
+                .andExpect(status().isCreated());
+
+        mvc.perform(get("/api/deals/returns?customerId=" + customer).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[*].reason")
+                        .value(org.hamcrest.Matchers.everyItem(
+                                org.hamcrest.Matchers.not("чужой-возврат-без-цифр"))));
+
+        mvc.perform(get("/api/deals/returns?customerId=" + otherCustomer).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].reason").value("чужой-возврат-без-цифр"));
+    }
+
+    /**
+     * Платёж по сделке несёт номер сделки, а пополнение счёта — нет: у него
+     * сделки не было вовсе, и «По сделке» на экране обязано быть пустым,
+     * а не нулём.
+     */
+    @Test
+    @DisplayName("Платежи клиента: с номером сделки и без него")
+    void paymentsOfCustomerListed() throws Exception {
+        MockHttpSession session = login("seller");
+        Long partId = partWithStock("Радиатор для платежа", 1);
+        long dealId = createDeal(partId);
+        mvc.perform(post("/api/deals/" + dealId + "/payments").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amount\":5000}"))
+                .andExpect(status().isCreated());
+
+        mvc.perform(post("/api/customers/" + customer + "/account/top-up").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amount\":1000}"))
+                .andExpect(status().isCreated());
+
+        mvc.perform(get("/api/deals/payments?customerId=" + customer).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                // Свежие сверху: пополнение сделано вторым.
+                .andExpect(jsonPath("$[0].dealId").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$[0].dealNumber").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$[1].dealId").value((int) dealId))
+                .andExpect(jsonPath("$[1].dealNumber").isNumber());
+    }
+
+    /**
+     * «Ответственный» в карточке клиента показывает имя, а не идентификатор —
+     * {@code GET /api/members}, откуда его можно взять на клиенте, доступен
+     * только владельцу, а вкладку «Сделки» видит и продавец.
+     */
+    @Test
+    @DisplayName("Сделка несёт имя ответственного, а не только его id")
+    void dealCarriesManagerName() throws Exception {
+        Long partId = partWithStock("Помпа для ответственного", 1);
+        long dealId = createDeal(partId);
+
+        mvc.perform(get("/api/deals?customerId=" + customer).session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].managerId").value(sellerId))
+                .andExpect(jsonPath("$[0].managerName").value("Продавец"));
+    }
+
+    private long createDealForCustomer(Long partId, Long customerId, MockHttpSession session)
+            throws Exception {
+        var result = mvc.perform(post("/api/deals").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customerId":%d,"items":[{"partId":%d,"quantity":1,"warehouseId":%d}]}"""
+                                .formatted(customerId, partId, warehouse)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String body = result.getResponse().getContentAsString();
+        return Long.parseLong(body.replaceAll("^\\{\"id\":(\\d+).*$", "$1"));
     }
 
     private long firstItemId(long dealId, MockHttpSession session) throws Exception {

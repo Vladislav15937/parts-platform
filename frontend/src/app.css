@@ -553,6 +553,19 @@ button:disabled {
   border-color: var(--accent);
 }
 
+/* Подменю «Платежи / Движения по счёту» — слева, колонкой, а не строкой
+   вкладок сверху: это выбор внутри вкладки «Платежи», а не соседний раздел. */
+.tabs--vertical {
+  flex-direction: column;
+  flex: 0 0 auto;
+}
+
+@media (min-width: 900px) {
+  .tabs--vertical {
+    width: 220px;
+  }
+}
+
 .row {
   display: flex;
   gap: 0.75rem;
@@ -819,6 +832,32 @@ hr {
   min-height: 0;
   flex-shrink: 0;
   margin: 0;
+}
+
+/* Карточка клиента: форма слева, лицевой счёт справа. На телефоне — колонка,
+   как и остальные карточки; счёт становится второй колонкой только там, где
+   для двух колонок хватает места (900px — общая граница таблиц и форм). */
+.customer-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+@media (min-width: 900px) {
+  .customer-layout {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+
+  .customer-layout > .customer-main {
+    flex: 2;
+    min-width: 0;
+  }
+
+  .customer-layout > .customer-account {
+    flex: 1;
+    min-width: 260px;
+  }
 }
 
 /* Поиск чужой сделки отделён от продажи: это другой разговор с клиентом. */

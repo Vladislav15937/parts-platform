@@ -276,12 +276,14 @@ public class SalesController {
      * вовсе. Роли те же, что у продажи: оформляет возврат продавец, ему же
      * и искать.
      *
-     * @param q    поиск: точное совпадение по номеру сделки, вхождение —
-     *             по клиенту и по причине
-     * @param from начало периода; пусто — с начала времён
-     * @param to   конец периода (исключая); пусто — по текущий момент
-     * @param size сколько строк вернуть; список читают с конца и не листают
-     *             вглубь, поэтому вместо курсора — растущий предел
+     * @param q          поиск: точное совпадение по номеру сделки, вхождение —
+     *                   по клиенту и по причине
+     * @param from       начало периода; пусто — с начала времён
+     * @param to         конец периода (исключая); пусто — по текущий момент
+     * @param size       сколько строк вернуть; список читают с конца и не листают
+     *                   вглубь, поэтому вместо курсора — растущий предел
+     * @param customerId непусто — только возвраты этого клиента: вкладка
+     *                   «Возвраты» карточки клиента (задача 0022)
      */
     @GetMapping("/returns")
     @PreAuthorize(SELLS)
@@ -289,8 +291,23 @@ public class SalesController {
             @RequestParam(value = "q", required = false) String q,
             @RequestParam(value = "from", required = false) String from,
             @RequestParam(value = "to", required = false) String to,
-            @RequestParam(value = "size", defaultValue = "50") int size) {
-        return sales.listReturns(q, parseInstant(from), parseInstant(to), size);
+            @RequestParam(value = "size", defaultValue = "50") int size,
+            @RequestParam(value = "customerId", required = false) Long customerId) {
+        return sales.listReturns(q, parseInstant(from), parseInstant(to), size, customerId);
+    }
+
+    /**
+     * Платежи клиента — вкладка «Платежи» карточки клиента (задача 0022).
+     *
+     * <p>Соседний путь про деньги того же клиента —
+     * {@code GET /api/customers/{id}/account} — отдаёт журнал лицевого счёта,
+     * это другая книга: платёж это факт кассы, счёт — обязательство перед
+     * клиентом.
+     */
+    @GetMapping("/payments")
+    @PreAuthorize(SELLS)
+    public List<SalesService.PaymentRow> paymentsOfCustomer(@RequestParam Long customerId) {
+        return sales.paymentsOfCustomer(customerId);
     }
 
     /**
@@ -442,7 +459,14 @@ public class SalesController {
                 .collect(java.util.stream.Collectors.toMap(
                         ru.partsflow.sales.ServiceKind::getId,
                         ru.partsflow.sales.ServiceKind::getName));
-        return deals.stream().map(deal -> DealView.of(deal, titles, serviceNames)).toList();
+        // Имя ответственного — как и наименования выше, одним запросом на всю
+        // выдачу: вкладка «Сделки» карточки клиента (задача 0022) показывает
+        // «Ответственный» по имени, а /api/members, откуда его можно было бы
+        // взять на клиенте, доступен только владельцу.
+        Map<Long, String> managerNames = members.namesOf(deals.stream()
+                .map(Deal::getManagerId)
+                .toList());
+        return deals.stream().map(deal -> DealView.of(deal, titles, serviceNames, managerNames)).toList();
     }
 
     private DealView view(Deal deal) {
@@ -538,7 +562,13 @@ public class SalesController {
      *                      по прежнему адресу. Пусто — колонку никто
      *                      не заполняет, и откуда ушёл товар, знают позиции
      */
+    /**
+     * @param managerName имя ответственного продавца/менеджера; пусто —
+     *                    сотрудника удалили или сделка ещё не привязана
+     *                    (заказ с площадки до принятия)
+     */
     public record DealView(Long id, Long number, Long customerId, Long managerId,
+                           String managerName,
                            DealStatus status, Instant reservedUntil,
                            BigDecimal totalAmount, BigDecimal paidAmount, BigDecimal debt,
                            Instant createdAt, Instant issuedAt,
@@ -549,9 +579,10 @@ public class SalesController {
                            List<ServiceLineView> services) {
 
         static DealView of(Deal deal, Map<Long, String> titles,
-                           Map<Long, String> serviceNames) {
+                           Map<Long, String> serviceNames, Map<Long, String> managerNames) {
             return new DealView(deal.getId(), deal.getNumber(), deal.getCustomerId(),
-                    deal.getManagerId(), deal.getStatus(), deal.getReservedUntil(),
+                    deal.getManagerId(), managerNames.get(deal.getManagerId()),
+                    deal.getStatus(), deal.getReservedUntil(),
                     deal.getTotalAmount(), deal.getPaidAmount(), deal.debt(),
                     deal.getCreatedAt(), deal.getIssuedAt(),
                     deal.getDealSourceId(), deal.getWarehouseId(),
