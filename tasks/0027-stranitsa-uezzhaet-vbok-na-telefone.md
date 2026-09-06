@@ -1,8 +1,8 @@
 ---
 id: 0027
 title: Страница уезжает вбок на телефоне: общий `div.row` шире экрана на 18 пикселей
-status: новая
-assignee: —
+status: в работе
+assignee: claude (сессия session_01WjWxMz6H18Hr8P73aqBLzr)
 source: разбор PR #51 (задача 0020), 6 сентября 2026 — замерено
 pr: —
 ---
