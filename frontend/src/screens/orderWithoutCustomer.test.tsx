@@ -37,7 +37,9 @@ describe('заказ с площадки', () => {
   });
 
   it('кнопка оживает от номера заказа, а не от клиента', async () => {
-    const { container } = render(<SellerScreen canSell role="OWNER" />);
+    const { container } = render(
+      <SellerScreen canSell role="OWNER" company="test" memberId={1} />,
+    );
 
     const search = container.querySelector('input')!;
     fireEvent.input(search, { target: { value: 'бампер' } });

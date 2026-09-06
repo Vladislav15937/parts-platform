@@ -9,9 +9,12 @@ import {
   createCustomer,
   createDeal,
   deal as fetchDealById,
+  defaultPaymentSource,
   endOfDay,
   extendReservation,
   historyOf,
+  paymentSources,
+  rememberPaymentSource,
   reservationTerm,
   shareDeal,
   receiveOrder,
@@ -38,6 +41,7 @@ import {
 import type { CustomerAccount,
   HistoryEntry,
   DealSource as DealSourceRow,
+  PaymentSourceEntry,
   ServiceLine,
   BasketLine,
   Customer,
@@ -63,6 +67,11 @@ interface Props {
   canSell: boolean;
   /** Роль вошедшего: правку остатка делает не продавец. */
   role: string;
+  /** Схема арендатора — часть ключа, которым запоминается источник платежа. */
+  company: string;
+  /** Сотрудник в сессии — вторая часть того же ключа: за кассой стоят разные
+   *  продавцы, и умолчание одного не должно навязываться другому. */
+  memberId: number;
   /**
    * Сделка, которую надо открыть сразу, — реестр возвратов ведёт сюда
    * нажатием на номер в колонке «По сделке». Тот же путь, что и «Найти
@@ -73,7 +82,9 @@ interface Props {
   onDealOpened?: () => void;
 }
 
-export function SellerScreen({ canSell, role, openDealId = null, onDealOpened }: Props) {
+export function SellerScreen({
+  canSell, role, company, memberId, openDealId = null, onDealOpened,
+}: Props) {
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState<StockRow[]>([]);
   /**
@@ -99,6 +110,10 @@ export function SellerScreen({ canSell, role, openDealId = null, onDealOpened }:
   const [marketplace, setMarketplace] = useState('');
   const [orderNo, setOrderNo] = useState('');
   const [note, setNote] = useState('');
+  // Источники платежей — для оплаты, возврата денег из кассы и операций
+  // по лицевому счёту разом: справочник один на все три места, где спрашивают
+  // «чем заплатили».
+  const [paymentSourceList, setPaymentSourceList] = useState<PaymentSourceEntry[]>([]);
 
   useEffect(() => {
     void serviceKinds()
@@ -109,6 +124,11 @@ export function SellerScreen({ canSell, role, openDealId = null, onDealOpened }:
     void dealSources()
       .then(setSources)
       .catch(() => setSources([]));
+    // Молча и здесь: источников платежей может не быть ни одного, и оплата
+    // тогда работает как раньше — без выпадающего списка.
+    void paymentSources()
+      .then(setPaymentSourceList)
+      .catch(() => setPaymentSourceList([]));
   }, []);
   const [deal, setDeal] = useState<Deal | null>(null);
   // Возврат и перенос случаются не в тот же разговор, что продажа: клиент
@@ -190,6 +210,9 @@ export function SellerScreen({ canSell, role, openDealId = null, onDealOpened }:
       {finding && (
         <DealFinder
           role={role}
+          company={company}
+          memberId={memberId}
+          paymentSourceList={paymentSourceList}
           onPick={(found) => {
             setDeal(found);
             setFinding(false);
@@ -361,6 +384,9 @@ export function SellerScreen({ canSell, role, openDealId = null, onDealOpened }:
         <DealCard
           deal={deal}
           canSell={canSell}
+          company={company}
+          memberId={memberId}
+          paymentSourceList={paymentSourceList}
           onChanged={setDeal}
           onError={setError}
         />
@@ -620,10 +646,16 @@ function DealFinder({
   onPick,
   onError,
   role,
+  company,
+  memberId,
+  paymentSourceList,
 }: {
   onPick: (deal: Deal) => void;
   onError: (message: string) => void;
   role: string;
+  company: string;
+  memberId: number;
+  paymentSourceList: PaymentSourceEntry[];
 }) {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [deals, setDeals] = useState<Deal[] | null>(null);
@@ -631,6 +663,14 @@ function DealFinder({
   // деньгами и без покупки — «верните, что осталось».
   const [account, setAccount] = useState<CustomerAccount | null>(null);
   const [cash, setCash] = useState('');
+  const activeSources = paymentSourceList.filter((s) => !s.archived);
+  const [paymentSourceId, setPaymentSourceId] = useState<number | null>(() =>
+    defaultPaymentSource(paymentSourceList, company, memberId));
+
+  useEffect(() => {
+    setPaymentSourceId(defaultPaymentSource(paymentSourceList, company, memberId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paymentSourceList]);
   // Правка — отдельно от денег: она ни на что не опирается, кроме решения,
   // и отвечает за неё тот, кто отвечает за деньги.
   const [fixing, setFixing] = useState(false);
@@ -663,10 +703,29 @@ function DealFinder({
               placeholder="сумма"
               onChange={(e) => setCash(e.target.value)}
             />
+            {/* Списка нет вовсе, если источников не заведено ни одного:
+                операция работает как раньше, без способа. */}
+            {activeSources.length > 0 && (
+              <select
+                aria-label="Источник платежа"
+                value={paymentSourceId ?? ''}
+                onChange={(e) =>
+                  setPaymentSourceId(e.target.value === '' ? null : Number(e.target.value))
+                }
+              >
+                <option value="">не указан</option>
+                {activeSources.map((source) => (
+                  <option key={source.id} value={source.id}>
+                    {source.name}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               type="button"
               disabled={cash.trim() === ''}
-              onClick={() => void money(() => topUpAccount(account.customerId, cash.trim()))}
+              onClick={() => void money(() =>
+                topUpAccount(account.customerId, cash.trim(), paymentSourceId))}
             >
               Положить
             </button>
@@ -677,7 +736,8 @@ function DealFinder({
               type="button"
               className="button--ghost"
               disabled={cash.trim() === '' || account.balance <= 0}
-              onClick={() => void money(() => withdrawFromAccount(account.customerId, cash.trim()))}
+              onClick={() => void money(() =>
+                withdrawFromAccount(account.customerId, cash.trim(), paymentSourceId))}
             >
               Выдать
             </button>
@@ -796,6 +856,9 @@ function DealFinder({
     }
     try {
       await action();
+      if (paymentSourceId !== null) {
+        rememberPaymentSource(company, memberId, paymentSourceId);
+      }
       setCash('');
       setAccount(await accountOf(customer.id));
     } catch (cause) {
@@ -819,15 +882,24 @@ function entryName(type: string): string {
 function DealCard({
   deal,
   canSell,
+  company,
+  memberId,
+  paymentSourceList,
   onChanged,
   onError,
 }: {
   deal: Deal;
   canSell: boolean;
+  company: string;
+  memberId: number;
+  paymentSourceList: PaymentSourceEntry[];
   onChanged: (deal: Deal) => void;
   onError: (message: string) => void;
 }) {
   const [amount, setAmount] = useState('');
+  const activePaymentSources = paymentSourceList.filter((s) => !s.archived);
+  const [paymentSourceId, setPaymentSourceId] = useState<number | null>(() =>
+    defaultPaymentSource(paymentSourceList, company, memberId));
   // До какого числа продлить резерв. Пусто до выбора: подставленная дата
   // означала бы, что о ней кто-то договорился с клиентом вместо продавца.
   const [until, setUntil] = useState('');
@@ -873,12 +945,17 @@ function DealCard({
     // Набранная дата — про прежнюю сделку: оставшись, она продлила бы
     // чужой резерв до числа, которого по нему никто не называл.
     setUntil('');
+    // Умолчание пересчитывается на каждую сделку — оно детерминировано
+    // (прошлый выбор продавца или первый по алфавиту), и держать выбор
+    // от чужой сделки незачем.
+    setPaymentSourceId(defaultPaymentSource(paymentSourceList, company, memberId));
 
     // Счёт принадлежит клиенту, а не сделке: у сделки без клиента его нет.
     setAccount(null);
     if (deal.customerId !== null) {
       void accountOf(deal.customerId).then(setAccount).catch(() => setAccount(null));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deal.id, deal.customerId]);
 
   return (
@@ -991,10 +1068,34 @@ function DealCard({
           placeholder="принять оплату"
           onChange={(e) => setAmount(e.target.value)}
         />
+        {/* Списка нет вовсе, если источников не заведено ни одного — оплата
+            тогда работает как раньше, с paymentSourceId: null. Он не
+            обязателен: кнопка «Оплата» из-за него не гаснет. */}
+        {activePaymentSources.length > 0 && (
+          <select
+            aria-label="Источник платежа"
+            value={paymentSourceId ?? ''}
+            onChange={(e) =>
+              setPaymentSourceId(e.target.value === '' ? null : Number(e.target.value))
+            }
+          >
+            <option value="">не указан</option>
+            {activePaymentSources.map((source) => (
+              <option key={source.id} value={source.id}>
+                {source.name}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           type="button"
           disabled={!canSell || amount.trim() === ''}
-          onClick={() => void act(() => payDeal(deal.id, amount.trim()))}
+          onClick={() => void act(async () => {
+            await payDeal(deal.id, amount.trim(), paymentSourceId);
+            if (paymentSourceId !== null) {
+              rememberPaymentSource(company, memberId, paymentSourceId);
+            }
+          })}
         >
           Оплата
         </button>
@@ -1076,10 +1177,15 @@ function DealCard({
           chosen={chosen}
           defaultWarehouseId={returnWarehouseDefault(deal)}
           canSell={canSell}
-          onReturn={(warehouseId, lines, reason, refundToAccount) =>
+          paymentSourceList={activePaymentSources}
+          defaultPaymentSourceId={paymentSourceId}
+          onReturn={(warehouseId, lines, reason, refundToAccount, returnSourceId) =>
             void act(async () => {
               const doc = await registerReturn(deal.id, warehouseId, lines, reason,
-                refundToAccount);
+                refundToAccount, returnSourceId);
+              if (!refundToAccount && returnSourceId !== null) {
+                rememberPaymentSource(company, memberId, returnSourceId);
+              }
               setPicked([]);
               setNotice(
                 `Возврат №${doc.number ?? doc.id} на `
@@ -1260,13 +1366,19 @@ function ReturnPanel({
   chosen,
   canSell,
   defaultWarehouseId,
+  paymentSourceList,
+  defaultPaymentSourceId,
   onReturn,
 }: {
   chosen: DealItem[];
   canSell: boolean;
   defaultWarehouseId: number | null;
+  /** Неархивные источники платежей — тот же список, что и у оплаты. */
+  paymentSourceList: PaymentSourceEntry[];
+  /** Умолчание: тот же источник, что выбран сейчас у оплаты сделки. */
+  defaultPaymentSourceId: number | null;
   onReturn: (warehouseId: number, lines: ReturnLine[], reason: string,
-             refundToAccount: boolean) => void;
+             refundToAccount: boolean, paymentSourceId: number | null) => void;
 }) {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [warehouseId, setWarehouseId] = useState<number | null>(defaultWarehouseId);
@@ -1274,6 +1386,11 @@ function ReturnPanel({
   const [toAccount, setToAccount] = useState(false);
   const [broken, setBroken] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // Источник имеет смысл только для денег из кассы: зачисление на счёт
+  // платежа не создаёт (см. sales/CLAUDE.md — «Зачёт с лицевого счёта
+  // не создаёт платежа», то же верно для возврата на счёт).
+  const [paymentSourceId, setPaymentSourceId] =
+    useState<number | null>(defaultPaymentSourceId);
 
   useEffect(() => {
     void listWarehouses()
@@ -1367,6 +1484,28 @@ function ReturnPanel({
         Деньги на лицевой счёт, а не из кассы
       </label>
 
+      {/* Источник платежа — только для денег из кассы: зачисление на счёт
+          платежа не создаёт, и спрашивать здесь нечего. Списка нет вовсе,
+          если источников не заведено ни одного. */}
+      {!toAccount && paymentSourceList.length > 0 && (
+        <label>
+          Источник платежа
+          <select
+            value={paymentSourceId ?? ''}
+            onChange={(e) =>
+              setPaymentSourceId(e.target.value === '' ? null : Number(e.target.value))
+            }
+          >
+            <option value="">не указан</option>
+            {paymentSourceList.map((source) => (
+              <option key={source.id} value={source.id}>
+                {source.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
       {confirming ? (
         <div className="row">
           <button type="button" disabled={!ready} onClick={submit}>
@@ -1403,6 +1542,7 @@ function ReturnPanel({
       chosen.map((item) => ({ dealItemId: item.id, restocked: !broken })),
       reason.trim(),
       toAccount,
+      toAccount ? null : paymentSourceId,
     );
   }
 }

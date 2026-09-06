@@ -111,6 +111,141 @@ export function dealSources(): Promise<DealSource[]> {
   return request<DealSource[]>('/api/deals/sources');
 }
 
+/**
+ * Источник платежа: способ приёма денег — «ККМ», «Карта Сбер», «В долг».
+ *
+ * <p>Отдельный тип от {@link DealSource}: тот про то, откуда пришла продажа,
+ * этот про то, чем заплатили, и путать их нельзя — оба справочника правятся
+ * на экране «Настройки» независимо.
+ *
+ * @param sourceType одно из пяти значений схемы (`CASH`, `BANK_ACCOUNT`,
+ *                   `ACQUIRING`, `CREDIT`, `MARKETPLACE`) либо пусто —
+ *                   «Не указан». Подпись для экрана — в {@link PAYMENT_SOURCE_TYPES}.
+ */
+export interface PaymentSourceEntry {
+  id: number;
+  name: string;
+  sourceType: string | null;
+  archived: boolean;
+}
+
+/**
+ * Значение типа → подпись на экране, дословно из задачи 0024. Тот же
+ * словарь и для колонки «Тип источника» в таблице, и для выпадающего
+ * списка при заведении: разъехавшись, они дали бы значение, которое один
+ * список показывает, а другой не предлагает.
+ */
+export const PAYMENT_SOURCE_TYPES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: '', label: 'Не указан' },
+  { value: 'CASH', label: 'Наличный расчёт' },
+  { value: 'BANK_ACCOUNT', label: 'Расчётный счёт' },
+  { value: 'ACQUIRING', label: 'Интернет-эквайринг' },
+  { value: 'CREDIT', label: 'В долг' },
+  { value: 'MARKETPLACE', label: 'Площадка' },
+];
+
+export function paymentSourceTypeLabel(type: string | null): string {
+  return PAYMENT_SOURCE_TYPES.find((t) => t.value === (type ?? ''))?.label ?? (type ?? 'Не указан');
+}
+
+/** Все источники платежей, включая архивные — для экрана «Настройки». */
+export function paymentSources(): Promise<PaymentSourceEntry[]> {
+  return request<PaymentSourceEntry[]>('/api/payment-sources');
+}
+
+export function createPaymentSource(
+  name: string, sourceType: string | null,
+): Promise<PaymentSourceEntry> {
+  return request<PaymentSourceEntry>('/api/payment-sources', {
+    method: 'POST',
+    body: { name, sourceType: sourceType === '' ? null : sourceType },
+  });
+}
+
+export function archivePaymentSource(id: number): Promise<PaymentSourceEntry> {
+  return request<PaymentSourceEntry>(`/api/payment-sources/${id}/archive`, { method: 'POST' });
+}
+
+export function unarchivePaymentSource(id: number): Promise<PaymentSourceEntry> {
+  return request<PaymentSourceEntry>(`/api/payment-sources/${id}/unarchive`, { method: 'POST' });
+}
+
+/**
+ * Строка справочника источников сделок для экрана «Настройки» — то же самое,
+ * что {@link DealSource}, но с признаком архивности: тот тип отдаёт только
+ * активные для выпадающего списка при продаже, а здесь нужна таблица целиком.
+ */
+export interface DealSourceEntry {
+  id: number;
+  name: string;
+  archived: boolean;
+}
+
+export function dealSourceEntries(): Promise<DealSourceEntry[]> {
+  return request<DealSourceEntry[]>('/api/deal-sources');
+}
+
+export function createDealSourceEntry(name: string): Promise<DealSourceEntry> {
+  return request<DealSourceEntry>('/api/deal-sources', { method: 'POST', body: { name } });
+}
+
+export function archiveDealSourceEntry(id: number): Promise<DealSourceEntry> {
+  return request<DealSourceEntry>(`/api/deal-sources/${id}/archive`, { method: 'POST' });
+}
+
+export function unarchiveDealSourceEntry(id: number): Promise<DealSourceEntry> {
+  return request<DealSourceEntry>(`/api/deal-sources/${id}/unarchive`, { method: 'POST' });
+}
+
+/**
+ * Умолчание источника платежа для продавца: тот, которым он платил в прошлый
+ * раз, а при первой в жизни оплате — первый неархивный по алфавиту.
+ *
+ * <p>За кассой стоит один и тот же человек, и девять оплат из десяти идут
+ * одним способом — спрашивать его каждый раз незачем. Список уже приходит
+ * отсортированным по имени (`ORDER BY name`), но сортируется здесь и на
+ * клиенте: полагаться на порядок ответа сервера молча — значит однажды
+ * разойтись с ним при правке запроса.
+ */
+export function defaultPaymentSource(
+  sources: PaymentSourceEntry[], company: string, memberId: number,
+): number | null {
+  const active = [...sources.filter((s) => !s.archived)]
+    .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  const remembered = lastPaymentSource(company, memberId);
+  if (remembered !== null && active.some((s) => s.id === remembered)) {
+    return remembered;
+  }
+  return active.length > 0 ? active[0]!.id : null;
+}
+
+/**
+ * Запоминает выбранный источник — ключ на арендатора и на сотрудника: войдя
+ * другой компанией или другим продавцом на том же устройстве, читать чужое
+ * умолчание нельзя, как и с локальными данными приёмки.
+ */
+export function rememberPaymentSource(company: string, memberId: number, sourceId: number): void {
+  try {
+    localStorage.setItem(paymentSourceKey(company, memberId), String(sourceId));
+  } catch {
+    // localStorage может быть недоступен (приватное окно) — умолчание тогда
+    // просто не запомнится, а оплата всё равно проходит.
+  }
+}
+
+function lastPaymentSource(company: string, memberId: number): number | null {
+  try {
+    const raw = localStorage.getItem(paymentSourceKey(company, memberId));
+    return raw === null ? null : Number(raw);
+  } catch {
+    return null;
+  }
+}
+
+function paymentSourceKey(company: string, memberId: number): string {
+  return `partsflow.lastPaymentSource.${company}.${memberId}`;
+}
+
 export function serviceKinds(): Promise<ServiceKind[]> {
   return request<ServiceKind[]>('/api/deals/services');
 }
@@ -217,8 +352,13 @@ export function cancelDeal(dealId: number, reason: string): Promise<Deal> {
   return request<Deal>(`/api/deals/${dealId}/cancel`, { method: 'POST', body: { reason } });
 }
 
-export function payDeal(dealId: number, amount: string): Promise<unknown> {
-  return request(`/api/deals/${dealId}/payments`, { method: 'POST', body: { amount } });
+export function payDeal(
+  dealId: number, amount: string, paymentSourceId: number | null = null,
+): Promise<unknown> {
+  return request(`/api/deals/${dealId}/payments`, {
+    method: 'POST',
+    body: { amount, paymentSourceId },
+  });
 }
 
 /** Позиция, которую возвращают. */
@@ -272,10 +412,11 @@ export function registerReturn(
   items: ReturnLine[],
   reason: string,
   refundToAccount = false,
+  paymentSourceId: number | null = null,
 ): Promise<ReturnDoc> {
   return request<ReturnDoc>(`/api/deals/${dealId}/returns`, {
     method: 'POST',
-    body: { warehouseId, items, reason, refundToAccount },
+    body: { warehouseId, items, reason, refundToAccount, paymentSourceId },
   });
 }
 
@@ -650,18 +791,22 @@ export function payDealFromAccount(dealId: number, amount: string): Promise<unkn
  * <p>В отличие от зачёта создаёт расход в кассе: там деньги остаются у нас
  * и меняют назначение, здесь уходят клиенту.
  */
-export function withdrawFromAccount(customerId: number, amount: string): Promise<unknown> {
+export function withdrawFromAccount(
+  customerId: number, amount: string, paymentSourceId: number | null = null,
+): Promise<unknown> {
   return request(`/api/customers/${customerId}/account/withdraw`, {
     method: 'POST',
-    body: { amount },
+    body: { amount, paymentSourceId },
   });
 }
 
 /** Пополнение счёта: клиент оставил деньги авансом. */
-export function topUpAccount(customerId: number, amount: string): Promise<unknown> {
+export function topUpAccount(
+  customerId: number, amount: string, paymentSourceId: number | null = null,
+): Promise<unknown> {
   return request(`/api/customers/${customerId}/account/top-up`, {
     method: 'POST',
-    body: { amount },
+    body: { amount, paymentSourceId },
   });
 }
 
