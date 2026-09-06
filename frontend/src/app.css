@@ -761,6 +761,44 @@ hr {
   opacity: 0.55;
 }
 
+/* Архивный источник платежа или сделки: остаётся в списке, но не работой дня. */
+.row--archived {
+  opacity: 0.55;
+}
+
+/* Экран «Настройки»: подменю слева, содержимое раздела справа. */
+.settings-layout {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 220px;
+  flex-shrink: 0;
+}
+
+.settings-content {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Ниже кабинетной ширины подменю ложится сверху: рядом с содержимым ему
+   уже не хватает места, как и полям формы приёмки. */
+@media (max-width: 899px) {
+  .settings-layout {
+    flex-direction: column;
+  }
+
+  .settings-nav {
+    flex-direction: row;
+    width: 100%;
+  }
+}
+
 .count-title {
   margin-bottom: 6px;
 }

@@ -3,6 +3,7 @@ import { useSession } from '../auth/SessionProvider';
 import { useOutbox } from '../outbox/useOutbox';
 import { MembersScreen } from './MembersScreen';
 import { OrganizationScreen } from './OrganizationScreen';
+import { SettingsScreen } from './SettingsScreen';
 import { ReferencePanel } from '../reference/ReferencePanel';
 import { useReference } from '../reference/useReference';
 import { warmUpDecoder } from '../scan/decoder';
@@ -102,6 +103,7 @@ type Tab =
   | 'labels'
   | 'members'
   | 'organization'
+  | 'settings'
   | 'reference';
 
 export function HomeScreen() {
@@ -348,6 +350,15 @@ export function HomeScreen() {
             Склады
           </button>
         )}
+        {state.me.role === 'OWNER' && (
+          <button
+            type="button"
+            className={tab === 'settings' ? 'rail__item rail__item--active' : 'rail__item'}
+            onClick={() => setTab('settings')}
+          >
+            Настройки
+          </button>
+        )}
         <button
           type="button"
           className={tab === 'reference' ? 'rail__item rail__item--active' : 'rail__item'}
@@ -411,6 +422,8 @@ export function HomeScreen() {
           <SellerScreen
             canSell={SELLING_ROLES.includes(state.me.role)}
             role={state.me.role}
+            company={state.me.companySchema}
+            memberId={state.me.memberId}
             openDealId={openDealId}
             onDealOpened={() => setOpenDealId(null)}
           />
@@ -545,6 +558,8 @@ export function HomeScreen() {
 
       {tab === 'organization' && <OrganizationScreen />}
 
+      {tab === 'settings' && state.me.role === 'OWNER' && <SettingsScreen />}
+
       {tab === 'reference' && <ReferencePanel />}
 
           <button type="button" className="button--ghost" onClick={signOut}>
@@ -577,6 +592,7 @@ function sectionName(tab: string): string {
     case 'labels': return 'Этикетки';
     case 'members': return 'Сотрудники';
     case 'organization': return 'Филиалы и склады';
+    case 'settings': return 'Настройки';
     default: return 'Справочники';
   }
 }

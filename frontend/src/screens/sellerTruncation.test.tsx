@@ -35,7 +35,7 @@ describe('обрезанная выдача продавца', () => {
   });
 
   it('называет, сколько осталось за списком', async () => {
-    render(<SellerScreen canSell role="SELLER" />);
+    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
 
     const input = document.querySelector('input') as HTMLInputElement;
     setNative(input, 'фара');

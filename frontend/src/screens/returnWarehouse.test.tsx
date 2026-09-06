@@ -25,7 +25,7 @@ describe('склад возврата', () => {
   beforeEach(() => stubApi([issuedItem(1, 2), issuedItem(2, 2)]));
 
   it('подставлен склад выдачи, а не первый из списка', async () => {
-    render(<SellerScreen canSell role="SELLER" />);
+    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
     await openDeal();
 
     // «Дальний» приходит первым — он и подставлялся до правки, при том что
@@ -35,7 +35,7 @@ describe('склад возврата', () => {
   });
 
   it('продавец меняет склад руками — остаётся выбранный', async () => {
-    render(<SellerScreen canSell role="SELLER" />);
+    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
     await openDeal();
     await waitFor(() => expect(warehouseSelect().value).toBe('2'));
 
@@ -45,7 +45,7 @@ describe('склад возврата', () => {
   });
 
   it('подсказка про несовпадение со складом выдачи осталась', async () => {
-    render(<SellerScreen canSell role="SELLER" />);
+    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
     await openDeal();
 
     await waitFor(() => expect(notes().some((t) => t.includes('Не обязан совпадать')))
@@ -54,7 +54,7 @@ describe('склад возврата', () => {
 
   it('позиции с двух складов — умолчания нет, и сказано почему', async () => {
     stubApi([issuedItem(1, 2), issuedItem(2, 5)]);
-    render(<SellerScreen canSell role="SELLER" />);
+    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
     await openDeal();
 
     // Угадать нельзя: пусто честнее.

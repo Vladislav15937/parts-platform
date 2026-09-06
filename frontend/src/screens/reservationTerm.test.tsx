@@ -51,7 +51,7 @@ describe('срок резерва у продавца', () => {
   });
 
   it('показывает срок в списке сделок клиента и в карточке', async () => {
-    render(<SellerScreen canSell role="SELLER" />);
+    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
     await pickCustomer();
 
     const lines = () => [...document.querySelectorAll('.suggestions button')]
@@ -69,7 +69,7 @@ describe('срок резерва у продавца', () => {
   });
 
   it('просроченный срок в карточке говорит словами и красным', async () => {
-    render(<SellerScreen canSell role="SELLER" />);
+    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
     await pickCustomer();
     await waitFor(() => expect(document.querySelectorAll('.suggestions button').length).toBe(2));
 
@@ -85,7 +85,7 @@ describe('срок резерва у продавца', () => {
   });
 
   it('продлевает срок из карточки', async () => {
-    render(<SellerScreen canSell role="SELLER" />);
+    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
     await pickCustomer();
     await waitFor(() => expect(document.querySelectorAll('.suggestions button').length).toBe(2));
     fireEvent.click(document.querySelectorAll('.suggestions button')[0] as HTMLElement);
