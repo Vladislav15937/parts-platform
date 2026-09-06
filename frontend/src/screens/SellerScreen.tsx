@@ -936,6 +936,25 @@ function DealCard({
   // чего никто не обещал.
   const term = reservationTerm(deal);
 
+  const debt = Number(deal.debt);
+  const entered = amount.trim();
+  const payment = Number(entered);
+  // Почему принять оплату нельзя — одним выражением на кнопку и на подпись
+  // под ней: разойдись они, серая кнопка снова начнёт молчать о своей
+  // причине или назовёт не ту.
+  const obstacle = paymentObstacle(deal, debt, entered, payment);
+  const overpayment = obstacle === null ? payment - debt : 0;
+
+  // Сумма к оплате подставляется остатком долга: полная оплата — самый
+  // частый случай на разборке (человек приехал и забрал), и продавец
+  // набирал руками те же пять цифр, которые строкой выше уже прочитал.
+  // Пересчитывается и после частичной оплаты — иначе в поле осталась бы
+  // внесённая тысяча, и следующее нажатие приняло бы её второй раз.
+  useEffect(() => {
+    setAmount(debt > 0 ? String(debt) : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deal.id, debt]);
+
   useEffect(() => {
     // Прежние возвраты по сделке: без них продавец оформит второй возврат
     // на ту же деталь и узнает об отказе сервера вместо ответа клиенту.
@@ -1095,9 +1114,9 @@ function DealCard({
         )}
         <button
           type="button"
-          disabled={!canSell || amount.trim() === ''}
+          disabled={!canSell || obstacle !== null}
           onClick={() => void act(async () => {
-            await payDeal(deal.id, amount.trim(), paymentSourceId);
+            await payDeal(deal.id, entered, paymentSourceId);
             if (paymentSourceId !== null) {
               rememberPaymentSource(company, memberId, paymentSourceId);
             }
@@ -1106,6 +1125,23 @@ function DealCard({
           Оплата
         </button>
       </div>
+
+      {/* Серая кнопка обязана говорить, почему она серая: продавец стоит
+          перед покупателем и второй раз нажимает ровно потому, что первое
+          нажатие не ответило ничем. */}
+      {obstacle !== null && <p className="note">{obstacle}</p>}
+
+      {/* Переплата — законная операция (округлили вверх, отдали лишнюю
+          тысячу), поэтому кнопка не гаснет. Но узнать о ней продавец должен
+          до нажатия, а не из выросшего остатка на счёте клиента. У сделки
+          без клиента счёта нет — говорить про него там значило бы обещать
+          то, чего не будет. */}
+      {overpayment > 0 && deal.customerId !== null && (
+        <p className="note">
+          Это больше долга на {overpayment.toLocaleString('ru-RU')} ₽ —
+          лишнее уйдёт на лицевой счёт клиента.
+        </p>
+      )}
 
       {/* Зачёт с лицевого счёта — отдельной кнопкой, а не галочкой в оплате:
           денег в кассу при нём не поступает, они получены раньше. Сумма
@@ -1578,6 +1614,33 @@ function itemStatusName(status: string): string {
     CANCELLED: 'снята',
   };
   return names[status] ?? status.toLowerCase();
+}
+
+/**
+ * Что мешает принять оплату — словами, или `null`, если ничто не мешает.
+ *
+ * <p>Одно место на кнопку и на подпись под ней: пока условие кнопки жило
+ * само по себе, серая кнопка не говорила ничего — ни при пустом поле,
+ * ни у закрытой сделки, ни у закрытого долга. Причины разведены, потому
+ * что читаются они по-разному: у отменённой сделки долга нет не потому,
+ * что за неё заплатили, и «долг закрыт» там было бы неправдой.
+ */
+function paymentObstacle(
+  deal: Deal, debt: number, entered: string, payment: number,
+): string | null {
+  if (deal.status === 'CANCELLED' || deal.status === 'RETURNED') {
+    return `Сделка ${statusName(deal.status)} — платить по ней не за что.`;
+  }
+  if (!(debt > 0)) {
+    return 'Долг закрыт — принимать по этой сделке нечего.';
+  }
+  if (entered === '') {
+    return 'Впишите сумму — по пустому полю оплата не пройдёт.';
+  }
+  if (!Number.isFinite(payment) || payment <= 0) {
+    return 'Оплата на ноль ничего не меняет — впишите сумму больше нуля.';
+  }
+  return null;
 }
 
 function statusName(status: string): string {
