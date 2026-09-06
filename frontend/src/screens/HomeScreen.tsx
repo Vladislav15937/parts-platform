@@ -29,6 +29,17 @@ import { StockMovesScreen } from './StockMovesScreen';
 import { ordersAwaitingReply } from '../sales/sales';
 import { unmatchedNames } from '../catalog/partNames';
 import { deadLetters } from '../events/deadLetters';
+import {
+  LABEL_ROLES,
+  MOVE_ROLES,
+  NAMING_ROLES,
+  SELLING_ROLES,
+  TABS,
+  WRITING_ROLES,
+  sectionName,
+  visibleTo,
+  type Tab,
+} from './tabs';
 
 /**
  * Оболочка после входа.
@@ -40,74 +51,6 @@ import { deadLetters } from '../events/deadLetters';
  * <p>Роутера по-прежнему нет: три вкладки переключаются состоянием. Адреса
  * экранов приёмщику не нужны, ссылками он не делится.
  */
-/** Кто имеет право продавать. Тот же список стоит на сервере в @PreAuthorize. */
-const SELLING_ROLES = ['OWNER', 'MANAGER', 'SELLER'];
-
-/**
- * Кто правит справочник наименований и смотрит отчёты. Тот же список
- * в @PreAuthorize: в отчётах лежат зарплатная база смены и себестоимость.
- */
-const NAMING_ROLES = ['OWNER', 'MANAGER'];
-
-/**
- * Кто печатает этикетки. Кладовщик здесь есть: подписывать стеллажи —
- * его работа, и гонять за этим владельца значит не подписать их вовсе.
- */
-const LABEL_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
-
-/**
- * Кто перевозит между складами и смотрит журнал перевозок. Тот же список
- * в @PreAuthorize у POST /api/stock/moves: перевозит кладовщик наравне
- * с владельцем — деталь у него в руках, и перестановка между складами —
- * работа, а не расход.
- */
-const MOVE_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
-
-/**
- * Кто заводит данные: приёмка, машины, пересчёт, очередь отправки.
- *
- * <p>Здесь все, кроме «Просмотра». Роль эта названа владельцу «только
- * смотреть», и заводят её тому, кому дают посмотреть; форма приёмки,
- * открытая ей, — это работа, которую сервер отобьёт, а очередь пометит
- * «требует внимания». Экран, называющий действие и не дающий его сделать,
- * хуже отсутствующего экрана.
- */
-const WRITING_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER', 'SELLER'];
-
-/**
- * Кто видит вкладку «Пересчёт»: все, кто заводит данные, и «Просмотр».
- *
- * <p>Журнал пересчётов раньше был недоступен «Просмотру» вовсе — вкладки
- * не было. А журнал склада ссылается на пересчёт («Пересчёт №4»), и
- * посмотреть, что тогда считали, — не то же самое, что провести или
- * отменить: то же разделение, что и на сервере (`InventoryController.READS`
- * против `RECONCILES`).
- */
-const INVENTORY_ROLES = [...WRITING_ROLES, 'VIEWER'];
-
-type Tab =
-  | 'intake'
-  | 'donor'
-  | 'sales'
-  | 'returns'
-  | 'customers'
-  | 'inventory'
-  | 'outbox'
-  | 'import'
-  | 'names'
-  | 'reports'
-  | 'orders'
-  | 'catalog'
-  | 'wheels'
-  | 'moves'
-  | 'feeds'
-  | 'delivery'
-  | 'labels'
-  | 'members'
-  | 'organization'
-  | 'settings'
-  | 'reference';
-
 export function HomeScreen() {
   const { state, signOut } = useSession();
   const online = useOnline();
@@ -194,189 +137,36 @@ export function HomeScreen() {
   const connected = (outbox.reachedServer ?? online) && !state.offline;
   const unsent = outbox.records.length;
 
+  // Числа на вкладках. Их четыре, и все четыре про накопившееся, о чём
+  // иначе никто не узнает: вкладка — единственное место, где о нём сказано.
+  const badges: Partial<Record<Tab, number>> = {
+    orders: awaitingOrders,
+    outbox: unsent,
+    names: unmatched,
+    delivery: undelivered,
+  };
+
   return (
     <div className="app">
+      {/* Рельс собирается из общего перечня разделов (`tabs.ts`), а не из
+          двадцати одного блока JSX подряд: второй перечень — в названии
+          раздела или в проверке раскладки — разошёлся бы с этим на первом
+          же новом экране, и разошёлся бы молча. */}
       <nav className="rail">
         <div className="rail__brand">PartsFlow</div>
-        {WRITING_ROLES.includes(state.me.role) && (
-          <button
-            type="button"
-            className={tab === 'intake' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('intake')}
-          >
-            Приёмка
-          </button>
-        )}
-        {WRITING_ROLES.includes(state.me.role) && (
-          <button
-            type="button"
-            className={tab === 'donor' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('donor')}
-          >
-            Машина
-          </button>
-        )}
-        <button
-          type="button"
-          className={tab === 'sales' ? 'rail__item rail__item--active' : 'rail__item'}
-          onClick={() => setTab('sales')}
-        >
-          Продажа
-        </button>
-        {SELLING_ROLES.includes(state.me.role) && (
-          <button
-            type="button"
-            className={tab === 'orders' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('orders')}
-          >
-            Заказы{awaitingOrders > 0 && ` · ${awaitingOrders}`}
-          </button>
-        )}
-        {SELLING_ROLES.includes(state.me.role) && (
-          <button
-            type="button"
-            className={tab === 'returns' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('returns')}
-          >
-            Возвраты
-          </button>
-        )}
-        {SELLING_ROLES.includes(state.me.role) && (
-          <button
-            type="button"
-            className={tab === 'customers' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('customers')}
-          >
-            Клиенты
-          </button>
-        )}
-        <button
-          type="button"
-          className={tab === 'catalog' ? 'rail__item rail__item--active' : 'rail__item'}
-          onClick={() => setTab('catalog')}
-        >
-          Склад
-        </button>
-        <button
-          type="button"
-          className={tab === 'wheels' ? 'rail__item rail__item--active' : 'rail__item'}
-          onClick={() => setTab('wheels')}
-        >
-          Шины и диски
-        </button>
-        {INVENTORY_ROLES.includes(state.me.role) && (
-          <button
-            type="button"
-            className={tab === 'inventory' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('inventory')}
-          >
-            Пересчёт
-          </button>
-        )}
-        {MOVE_ROLES.includes(state.me.role) && (
-          <button
-            type="button"
-            className={tab === 'moves' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('moves')}
-          >
-            Перевозки
-          </button>
-        )}
-        {WRITING_ROLES.includes(state.me.role) && (
-          <button
-            type="button"
-            className={tab === 'outbox' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('outbox')}
-          >
-            Очередь{unsent > 0 && ` · ${unsent}`}
-          </button>
-        )}
-        {WRITING_ROLES.includes(state.me.role) && (
-          <button
-            type="button"
-            className={tab === 'import' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('import')}
-          >
-            Загрузка
-          </button>
-        )}
-        <button
-          type="button"
-          className={tab === 'names' ? 'rail__item rail__item--active' : 'rail__item'}
-          onClick={() => setTab('names')}
-        >
-          Наименования{unmatched > 0 && ` · ${unmatched}`}
-        </button>
-        {NAMING_ROLES.includes(state.me.role) && (
-          <button
-            type="button"
-            className={tab === 'reports' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('reports')}
-          >
-            Отчёты
-          </button>
-        )}
-        {NAMING_ROLES.includes(state.me.role) && (
-          <button
-            type="button"
-            className={tab === 'feeds' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('feeds')}
-          >
-            Выгрузки
-          </button>
-        )}
-        {NAMING_ROLES.includes(state.me.role) && (
-          <button
-            type="button"
-            className={tab === 'delivery' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('delivery')}
-          >
-            Доставка{undelivered > 0 && ` · ${undelivered}`}
-          </button>
-        )}
-        {LABEL_ROLES.includes(state.me.role) && (
-          <button
-            type="button"
-            className={tab === 'labels' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('labels')}
-          >
-            Этикетки
-          </button>
-        )}
-        {state.me.role === 'OWNER' && (
-          <button
-            type="button"
-            className={tab === 'members' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('members')}
-          >
-            Сотрудники
-          </button>
-        )}
-        {state.me.role === 'OWNER' && (
-          <button
-            type="button"
-            className={tab === 'organization' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('organization')}
-          >
-            Склады
-          </button>
-        )}
-        {state.me.role === 'OWNER' && (
-          <button
-            type="button"
-            className={tab === 'settings' ? 'rail__item rail__item--active' : 'rail__item'}
-            onClick={() => setTab('settings')}
-          >
-            Настройки
-          </button>
-        )}
-        <button
-          type="button"
-          className={tab === 'reference' ? 'rail__item rail__item--active' : 'rail__item'}
-          onClick={() => setTab('reference')}
-        >
-          Справочники
-        </button>
+        {TABS.filter((spec) => visibleTo(spec, state.me.role)).map((spec) => {
+          const count = badges[spec.id] ?? 0;
+          return (
+            <button
+              key={spec.id}
+              type="button"
+              className={tab === spec.id ? 'rail__item rail__item--active' : 'rail__item'}
+              onClick={() => setTab(spec.id)}
+            >
+              {spec.label}{count > 0 && ` · ${count}`}
+            </button>
+          );
+        })}
       </nav>
 
       <div className="app__main">
@@ -592,33 +382,6 @@ export function HomeScreen() {
       </div>
     </div>
   );
-}
-
-/** Название раздела в верхней полосе: видно, где ты, не считая вкладки. */
-function sectionName(tab: string): string {
-  switch (tab) {
-    case 'intake': return 'Приёмка';
-    case 'donor': return 'Машины';
-    case 'sales': return 'Продажа';
-    case 'orders': return 'Заказы с площадок';
-    case 'returns': return 'Возвраты';
-    case 'customers': return 'Клиенты';
-    case 'catalog': return 'Склад';
-    case 'wheels': return 'Шины и диски';
-    case 'inventory': return 'Пересчёт склада';
-    case 'moves': return 'Перевозки';
-    case 'outbox': return 'Очередь отправки';
-    case 'import': return 'Загрузка склада';
-    case 'names': return 'Нераспознанные наименования';
-    case 'reports': return 'Отчёты';
-    case 'feeds': return 'Выгрузки на площадки';
-    case 'delivery': return 'Доставка событий';
-    case 'labels': return 'Этикетки';
-    case 'members': return 'Сотрудники';
-    case 'organization': return 'Филиалы и склады';
-    case 'settings': return 'Настройки';
-    default: return 'Справочники';
-  }
 }
 
 function roleName(role: string): string {
