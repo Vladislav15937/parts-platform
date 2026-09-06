@@ -26,6 +26,8 @@ function feed(overrides: Partial<Feed> = {}): Feed {
     settings: { pricePercent: null, priceRounding: null, photoLimit: null },
     lastError: null,
     lastDownloadAt: null,
+    // Живая: удалённая в обычный список не приходит вовсе.
+    deletedAt: null,
     priceFrom: null,
     priceTo: null,
     conditions: [],

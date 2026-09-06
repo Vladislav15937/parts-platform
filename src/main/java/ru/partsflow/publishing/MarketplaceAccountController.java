@@ -7,12 +7,14 @@ import org.springframework.http.ResponseEntity;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -49,10 +51,82 @@ public class MarketplaceAccountController {
         this.publicUrl = publicUrl;
     }
 
+    /**
+     * Выгрузки списком.
+     *
+     * @param deleted удалённые вместо живых. Отдельным ответом, а не общим
+     *                списком с признаком: удалённой выгрузки нет ни в списке,
+     *                ни в счётчиках — иначе «удалена» означало бы «помечена»,
+     *                а владелец пересчитывал бы свои прайс-листы глазами.
+     *                Спрашивают их ради истории: «эта выгрузка вообще работала
+     *                и когда её последний раз забирали»
+     */
     @GetMapping
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public List<MarketplaceAccountService.Account> list() {
-        return accounts.list();
+    public List<MarketplaceAccountService.Account> list(
+            @RequestParam(name = "deleted", defaultValue = "false") boolean deleted) {
+        return deleted ? accounts.deleted() : accounts.list();
+    }
+
+    /**
+     * Переименовывает выгрузку.
+     *
+     * <p>Ссылка на прайс при этом не меняется — и не должна: её прописывает
+     * в кабинете площадки техспециалист руками, а название владелец правит
+     * у себя на экране. Связать одно с другим значило бы превратить
+     * исправление опечатки в остановку выгрузки на несколько дней.
+     *
+     * <p>Занятое название отвечает словами, а одновременный повтор отбивает
+     * уникальный индекс — тогда ответ собирается по тому, что набрали.
+     */
+    @PutMapping("/{id}/title")
+    @PreAuthorize("hasRole('OWNER')")
+    public MarketplaceAccountService.Account rename(@PathVariable Long id,
+                                                    @RequestBody TitleRequest request) {
+        try {
+            return accounts.rename(id, request.title());
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            throw new IllegalArgumentException(accounts.titleConflictMessage(request.title()));
+        }
+    }
+
+    /** @param title новое название; пустое отвергается — выгрузка без имени неразличима */
+    public record TitleRequest(String title) {
+    }
+
+    /**
+     * Включает выгрузку или выключает её.
+     *
+     * <p>Выключенная не отдаёт прайс вовсе и не получает дельт: площадка
+     * видит, что выгрузки нет. Не пустым прайсом — тот она читает как «этих
+     * товаров больше нет» и снимает объявления вместе с просмотрами, за
+     * которые владелец платит.
+     */
+    @PutMapping("/{id}/status")
+    @PreAuthorize("hasRole('OWNER')")
+    public MarketplaceAccountService.Account setStatus(@PathVariable Long id,
+                                                       @RequestBody StatusRequest request) {
+        return accounts.setStatus(id, request.status());
+    }
+
+    /** @param status «ACTIVE» — включена, «PAUSED» — выключена; третьего нет */
+    public record StatusRequest(String status) {
+    }
+
+    /**
+     * Удаляет выгрузку — пометкой, а не удалением строки.
+     *
+     * <p>Решение владельца продукта от 5 сентября 2026: удаление уносит
+     * историю отправок, а спрашивают именно её. Помеченная не отдаётся
+     * по ссылке, не видна в списке и не занимает ни названия, ни имени файла;
+     * отметки о заборе прайса и об отправках остаются и доступны через
+     * {@code GET /api/marketplace-accounts?deleted=true}.
+     */
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<Void> delete(@PathVariable Long id) {
+        accounts.delete(id);
+        return ResponseEntity.noContent().build();
     }
 
     /**

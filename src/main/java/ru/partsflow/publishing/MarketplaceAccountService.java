@@ -47,11 +47,46 @@ public class MarketplaceAccountService {
         this.wheels = wheels;
     }
 
+    /**
+     * Живые выгрузки — те, что владелец видит списком.
+     *
+     * <p>Удалённая сюда не попадает, и это половина того, что значит слово
+     * «удалена»: строка остаётся ради истории отправок, а списка и счётчиков
+     * для неё больше нет. Вторая половина — в {@link ru.partsflow.publishing.drom.DromAccountReader}:
+     * по ссылке она тоже не отдаётся.
+     */
     @Transactional(readOnly = true)
     public List<Account> list() {
+        return query("deleted_at IS NULL");
+    }
+
+    /**
+     * Удалённые выгрузки — только чтобы ответить про историю.
+     *
+     * <p>Решение владельца продукта от 5 сентября 2026: помечать удалённой,
+     * а не удалять запись. Удаление уносит отметки о заборе прайса
+     * и об отправках, а спрашивают именно их — «эта выгрузка вообще работала
+     * и когда её последний раз забирали». Строка, удалённая полгода назад,
+     * отвечает на такой вопрос лучше, чем её отсутствие; отвечать на него
+     * запросом в базу через разработчика — это ровно та зависимость
+     * от человека, ради устранения которой заведена и сама отметка о заборе.
+     */
+    @Transactional(readOnly = true)
+    public List<Account> deleted() {
+        return query("deleted_at IS NOT NULL");
+    }
+
+    /**
+     * @param where условие о живости строки; собирается здесь, а не приходит
+     *              снаружи — подставлять в SQL чужой текст тут нечего.
+     *              Разделители вокруг него написаны явными строками:
+     *              текстовый блок срезает пробел в конце строки, и «WHERE»
+     *              склеилось бы с условием в одно слово
+     */
+    private List<Account> query(String where) {
         return jdbc.query("""
                 SELECT id, marketplace, title, status, last_sync_at IS NOT NULL AS synced,
-                       last_feed_download_at,
+                       last_feed_download_at, deleted_at,
                        last_error, credentials IS NOT NULL AS has_credentials,
                        credentials, feed_token IS NOT NULL AS has_feed,
                        feed_file_name,
@@ -61,8 +96,8 @@ public class MarketplaceAccountService {
                        kind_ids, kinds_excluded, brand_ids, brands_excluded,
                        filter_columns::text AS filter_columns,
                        filter_words::text AS filter_words
-                  FROM marketplace_account
-                 ORDER BY marketplace, title""",
+                  FROM marketplace_account"""
+                + " WHERE " + where + " ORDER BY marketplace, title",
                 (rs, i) -> new Account(
                         rs.getLong("id"),
                         rs.getString("marketplace"),
@@ -84,6 +119,8 @@ public class MarketplaceAccountService {
                         FeedSettings.parse(rs.getString("settings")),
                         rs.getString("last_error"),
                         instant(rs.getObject("last_feed_download_at",
+                                java.time.OffsetDateTime.class)),
+                        instant(rs.getObject("deleted_at",
                                 java.time.OffsetDateTime.class)),
                         rs.getBigDecimal("price_from"),
                         rs.getBigDecimal("price_to"),
@@ -191,7 +228,7 @@ public class MarketplaceAccountService {
                        kind_ids = ?::bigint[], kinds_excluded = ?,
                        brand_ids = ?::bigint[], brands_excluded = ?,
                        filter_columns = ?::jsonb, filter_words = ?::jsonb
-                 WHERE id = ?""",
+                 WHERE id = ? AND deleted_at IS NULL""",
                 priceFrom, priceTo,
                 conditions == null || conditions.isEmpty() ? null : arrayLiteral(conditions),
                 warehouseIds == null || warehouseIds.isEmpty() ? null : arrayLiteral(warehouseIds),
@@ -222,7 +259,8 @@ public class MarketplaceAccountService {
 
     private String productLineOf(Long id) {
         List<String> found = jdbc.queryForList(
-                "SELECT product_line FROM marketplace_account WHERE id = ?", String.class, id);
+                "SELECT product_line FROM marketplace_account WHERE id = ? AND deleted_at IS NULL",
+                String.class, id);
         if (found.isEmpty()) {
             throw new IllegalArgumentException("Выгрузка не найдена: " + id);
         }
@@ -264,15 +302,13 @@ public class MarketplaceAccountService {
         // повторится — а ответ «Операция нарушает целостность данных»
         // не говорит ни что случилось, ни что делать. Проверка ради текста,
         // сторожем остаётся индекс.
-        Integer taken = jdbc.queryForObject("""
-                SELECT count(*) FROM marketplace_account
-                 WHERE marketplace = ? AND title = ?""",
-                Integer.class, marketplace, title.strip());
-        if (taken != null && taken > 0) {
-            throw new IllegalArgumentException(
-                    "Выгрузка «%s» на этой площадке уже заведена: у названия своя ссылка "
-                            .formatted(title.strip()) + "на прайс, и двух одинаковых быть не может");
-        }
+        //
+        // Удалённые не занимают названий: имя, оставшееся за невидимой
+        // строкой, отвечало бы отказом, который называет запись, которой
+        // владелец не видит.
+        titleTakenBy(marketplace, title.strip(), null).ifPresent(taken -> {
+            throw new IllegalArgumentException(titleOccupied(title.strip()));
+        });
 
         Long id = jdbc.queryForObject("""
                 INSERT INTO marketplace_account (marketplace, title, settings, product_line)
@@ -304,11 +340,140 @@ public class MarketplaceAccountService {
     public Account setSettings(Long id, FeedSettings settings) {
         FeedSettings checked = (settings == null ? FeedSettings.none() : settings).validated();
         int updated = jdbc.update(
-                "UPDATE marketplace_account SET settings = settings || ?::jsonb WHERE id = ?",
+                "UPDATE marketplace_account SET settings = settings || ?::jsonb\n                   WHERE id = ? AND deleted_at IS NULL",
                 checked.toJson(), id);
         if (updated == 0) {
             throw new IllegalArgumentException("Выгрузка не найдена: " + id);
         }
+        return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
+    }
+
+    /**
+     * Переименовывает выгрузку. Ссылку на прайс это не трогает.
+     *
+     * <p><b>И не должно трогать.</b> Адрес прописан в кабинете площадки её
+     * техспециалистом руками, а название — это то, как владелец различает свои
+     * пять прайс-листов у себя на экране. Связать одно с другим значило бы
+     * превратить исправление опечатки в остановку выгрузки на несколько дней.
+     *
+     * <p>Название занято — отвечаем словами, как и при заведении: «Операция
+     * нарушает целостность данных» не говорит ни что случилось, ни что делать.
+     * Обычный повтор ловит проверка чтением, одновременный — уникальный индекс,
+     * и тогда те же слова собирает контроллер по набранному названию.
+     */
+    @Transactional
+    public Account rename(Long id, String typed) {
+        String title = typed == null ? "" : typed.strip();
+        if (title.isBlank()) {
+            throw new IllegalArgumentException("Название выгрузки обязательно");
+        }
+        titleTakenBy(marketplaceOf(id), title, id).ifPresent(taken -> {
+            throw new IllegalArgumentException(titleOccupied(title));
+        });
+
+        int updated = jdbc.update(
+                "UPDATE marketplace_account SET title = ? WHERE id = ? AND deleted_at IS NULL",
+                title, id);
+        if (updated == 0) {
+            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+        }
+        return reload(id);
+    }
+
+    /**
+     * Включает выгрузку или выключает её.
+     *
+     * <p><b>Выключенная не отдаёт прайс вовсе, а не отдаёт пустой.</b> Пустой
+     * файл площадка читает буквально — «этих товаров больше нет» — и снимает
+     * объявления вместе с накопленными просмотрами, за которые владелец
+     * платит. Прайс-лист закрывают на сезон, и просмотры должны пережить
+     * закрытие: отсутствие ответа площадка попробует позже, пустой ответ
+     * исполнит немедленно.
+     *
+     * <p>Дельты по API выключенная тоже не получает: и выдача прайса,
+     * и отправка дельт читают выгрузки одним {@code DromAccountReader},
+     * и разъехаться они не могут по построению.
+     *
+     * <p>Значения два, хотя в колонке их три: {@code ERROR} пишет не человек,
+     * а неудачная отправка, и предлагать его владельцу значило бы дать ему
+     * способ соврать самому себе про состояние выгрузки.
+     */
+    @Transactional
+    public Account setStatus(Long id, String typed) {
+        String status = typed == null ? "" : typed.strip().toUpperCase(java.util.Locale.ROOT);
+        if (!"ACTIVE".equals(status) && !"PAUSED".equals(status)) {
+            throw new IllegalArgumentException(
+                    "Выгрузку можно включить или выключить, третьего состояния нет: " + typed);
+        }
+        int updated = jdbc.update(
+                "UPDATE marketplace_account SET status = ? WHERE id = ? AND deleted_at IS NULL",
+                status, id);
+        if (updated == 0) {
+            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+        }
+        return reload(id);
+    }
+
+    /**
+     * Удаляет выгрузку — пометкой, а не удалением строки.
+     *
+     * <p><b>Решение владельца продукта от 5 сентября 2026</b>
+     * (`tasks/0003-vygruzku-mozhno-vyklyuchit.md`, раздел «Что известно»):
+     * удаление уносит историю отправок, а спрашивают именно её — «эта выгрузка
+     * вообще работала и когда её последний раз забирали». Строка, удалённая
+     * полгода назад, отвечает на такой вопрос лучше, чем её отсутствие.
+     *
+     * <p>Пометка при этом обязана значить удаление, а не «спрятали»: по ссылке
+     * прайс не отдаётся, в списке и счётчиках выгрузки нет, а название и имя
+     * файла освобождаются — уникальность у обоих частичная, «среди живых»
+     * (changeset {@code tenant/061}). Иначе завести новую выгрузку с тем же
+     * именем было бы нельзя, а отказ называл бы запись, которой владелец
+     * не видит.
+     *
+     * <p>Ссылка закрывается тем же условием, что и выключение, — чтением
+     * выгрузок в {@code DromAccountReader}: второй способ закрыть её (снять
+     * токен) разошёлся бы с первым и стёр бы то, чем строка опознаётся
+     * в истории.
+     */
+    @Transactional
+    public void delete(Long id) {
+        int updated = jdbc.update(
+                "UPDATE marketplace_account SET deleted_at = now() WHERE id = ? AND deleted_at IS NULL",
+                id);
+        if (updated == 0) {
+            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+        }
+    }
+
+    /** Название выгрузки, у которой это имя уже стоит. Пусто — свободно. */
+    private Optional<String> titleTakenBy(String marketplace, String title, Long exceptId) {
+        List<String> found = jdbc.queryForList("""
+                SELECT title FROM marketplace_account
+                 WHERE marketplace = ? AND title = ? AND deleted_at IS NULL
+                   AND (?::bigint IS NULL OR id <> ?::bigint)""",
+                String.class, marketplace, title, exceptId, exceptId);
+        return found.isEmpty() ? Optional.empty() : Optional.of(found.get(0));
+    }
+
+    private static String titleOccupied(String title) {
+        return "Выгрузка «%s» на этой площадке уже заведена: у названия своя ссылка "
+                .formatted(title) + "на прайс, и двух одинаковых быть не может";
+    }
+
+    /**
+     * Что ответить, когда название отбил уникальный индекс.
+     *
+     * <p>Без запроса в базу, в отличие от имени файла прайса: там надо назвать
+     * <b>чужую</b> выгрузку, у которой имя уже стоит, а тут занятое название
+     * и есть то, что владелец только что набрал. Лишний запрос вдобавок
+     * пришлось бы делать новой транзакцией — прежняя помечена на откат.
+     */
+    public String titleConflictMessage(String typed) {
+        return titleOccupied(typed == null ? "" : typed.strip());
+    }
+
+    /** Строка после правки. Отдаётся тем же составом, что и список. */
+    private Account reload(Long id) {
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
     }
 
@@ -318,7 +483,7 @@ public class MarketplaceAccountService {
         if (secret == null || secret.isBlank()) {
             throw new IllegalArgumentException("Пустой ключ кабинета не имеет смысла");
         }
-        int updated = jdbc.update("UPDATE marketplace_account SET credentials = ? WHERE id = ?",
+        int updated = jdbc.update("UPDATE marketplace_account SET credentials = ?\n                   WHERE id = ? AND deleted_at IS NULL",
                 cipher.encrypt(secret), accountId);
 
         if (updated == 0) {
@@ -343,7 +508,8 @@ public class MarketplaceAccountService {
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
 
         int updated = jdbc.update(
-                "UPDATE marketplace_account SET feed_token = ? WHERE id = ?", token, accountId);
+                "UPDATE marketplace_account SET feed_token = ? WHERE id = ? AND deleted_at IS NULL",
+                token, accountId);
         if (updated == 0) {
             throw new IllegalArgumentException("Кабинет не найден: " + accountId);
         }
@@ -382,7 +548,12 @@ public class MarketplaceAccountService {
          * читается как «Операция нарушает целостность данных», то есть
          * не говорит ни что случилось, ни что делать.
          */
-        jdbc.update("UPDATE marketplace_account SET feed_file_name = ? WHERE id = ?", name, id);
+        int updated = jdbc.update(
+                "UPDATE marketplace_account SET feed_file_name = ? WHERE id = ? AND deleted_at IS NULL",
+                name, id);
+        if (updated == 0) {
+            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+        }
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
     }
 
@@ -416,7 +587,7 @@ public class MarketplaceAccountService {
     private Optional<String> takenBy(String marketplace, String name, Long exceptId) {
         List<String> found = jdbc.queryForList("""
                 SELECT title FROM marketplace_account
-                 WHERE marketplace = ? AND feed_file_name = ?
+                 WHERE marketplace = ? AND feed_file_name = ? AND deleted_at IS NULL
                    AND (?::bigint IS NULL OR id <> ?::bigint)""",
                 String.class, marketplace, name, exceptId, exceptId);
         return found.isEmpty() ? Optional.empty() : Optional.of(found.get(0));
@@ -424,7 +595,8 @@ public class MarketplaceAccountService {
 
     private String marketplaceOf(Long id) {
         List<String> found = jdbc.queryForList(
-                "SELECT marketplace FROM marketplace_account WHERE id = ?", String.class, id);
+                "SELECT marketplace FROM marketplace_account WHERE id = ? AND deleted_at IS NULL",
+                String.class, id);
         if (found.isEmpty()) {
             throw new IllegalArgumentException("Выгрузка не найдена: " + id);
         }
@@ -449,7 +621,7 @@ public class MarketplaceAccountService {
                 "SELECT code FROM public.tenant_registry WHERE schema_name = ?",
                 String.class, TenantContext.require());
         List<String[]> found = jdbc.query(
-                "SELECT feed_token, feed_file_name FROM marketplace_account WHERE id = ?",
+                "SELECT feed_token, feed_file_name FROM marketplace_account\n                   WHERE id = ? AND deleted_at IS NULL",
                 (rs, i) -> new String[] {rs.getString("feed_token"), rs.getString("feed_file_name")},
                 accountId);
 
@@ -490,6 +662,10 @@ public class MarketplaceAccountService {
      *                       второе
      * @param feedFileName читаемое имя файла в конце ссылки; пусто — имени
      *                     не задавали, и ссылка кончается токеном
+     * @param deletedAt   когда выгрузку удалили; пусто — живая. Удалённая
+     *                    не отдаётся по ссылке и не видна в списке, но время
+     *                    удаления и есть ответ на вопрос про историю:
+     *                    «до какого дня этот прайс работал»
      * @param priceFrom   пусто — без нижней границы, а не «ноль»
      * @param conditions  пусто — любое состояние детали
      * @param warehouseIds пусто — все склады
@@ -499,6 +675,7 @@ public class MarketplaceAccountService {
                           String feedFileName,
                           String productLine, FeedSettings settings,
                           String lastError, java.time.Instant lastDownloadAt,
+                          java.time.Instant deletedAt,
                           java.math.BigDecimal priceFrom,
                           java.math.BigDecimal priceTo, List<String> conditions,
                           List<Long> warehouseIds, List<Long> kindIds, boolean kindsExcluded,
