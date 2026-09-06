@@ -1,7 +1,7 @@
 ---
 id: 0003
 title: Выгрузку можно переименовать, выключить и удалить
-status: готово
+status: слита
 assignee: migrator
 source: разведка 05.09.2026, §9 bazon-parity
 pr: 61
