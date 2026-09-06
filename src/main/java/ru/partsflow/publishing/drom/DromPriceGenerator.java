@@ -62,6 +62,11 @@ public class DromPriceGenerator {
                    -- а покупатель до правки не видел вовсе.
                    p.text_block,
                    p.video_url,
+                   -- Цена установки сама по себе внутренняя и в объявление
+                   -- не идёт: наружу уходит только строка приписки, и только
+                   -- если владелец включил её у этой выгрузки. NULL и ноль
+                   -- значат «услуги нет», а не «бесплатно».
+                   p.installation_price,
                    -- Вид детали отдельным полем: по нему площадка кладёт товар
                    -- в раздел. Пока его не было, ей оставалось угадывать
                    -- по заголовку, а угадывает она не всегда.
@@ -596,7 +601,11 @@ public class DromPriceGenerator {
                     year(rs),
                     rs.getBoolean("from_donor"),
                     rs.getString("text_block"),
-                    rs.getString("video_url"));
+                    rs.getString("video_url"),
+                    // Приписка про установку: решение выгрузки, а не позиции.
+                    // Выключена или цены нет — null, и описание собирается
+                    // ровно как раньше.
+                    settings.installationNoteFor(rs.getBigDecimal("installation_price")));
         }
 
         /** Года у контрактной детали нет, а {@code getInt} отдаёт на это ноль. */

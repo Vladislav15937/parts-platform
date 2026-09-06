@@ -199,6 +199,13 @@ public class DromPriceWriter {
      *
      * <p>Ничего не выдумываем: в описание попадает только то, что владелец
      * ввёл сам. Пустые поля не дают ни строки, ни подписи.
+     *
+     * <p><b>Стоимость установки идёт перед ссылкой на ролик, а не после.</b>
+     * Ссылка обязана оставаться последней — за ней текста уже не читают, —
+     * а приписка про установку это утверждение о товаре, того же рода,
+     * что и текстовый блок. Решает про неё выгрузка: строка приезжает
+     * готовой (см. {@code FeedSettings.installationNoteFor}), потому что
+     * включена приписка или нет — свойство прайс-листа, а не позиции.
      */
     private static String append(String description, DromOffer offer) {
         List<String> parts = new java.util.ArrayList<>();
@@ -207,6 +214,9 @@ public class DromPriceWriter {
         }
         if (offer.textBlock() != null && !offer.textBlock().isBlank()) {
             parts.add(offer.textBlock().strip());
+        }
+        if (offer.installationNote() != null && !offer.installationNote().isBlank()) {
+            parts.add(offer.installationNote().strip());
         }
         if (offer.videoUrl() != null && !offer.videoUrl().isBlank()) {
             parts.add("Видео: " + offer.videoUrl().strip());

@@ -36,6 +36,13 @@ import java.util.List;
  *                     и до правки не доходил до покупателя вовсе: владелец
  *                     писал, а видел это только он сам
  * @param videoUrl     ссылка на ролик о детали, тоже из прежней системы
+ * @param installationNote готовая строка про стоимость установки — та,
+ *                     что владелец включил у этой выгрузки, уже с подставленной
+ *                     ценой. Именно строка, а не сама цена: {@code DromOffer}
+ *                     по определению «ровно те данные, что уходят в один
+ *                     offer», и цена установки — поле внутреннее, решение
+ *                     о её показе принадлежит выгрузке, а не позиции.
+ *                     {@code null} — приписка выключена либо услуги нет
  */
 public record DromOffer(
         String orderCode,
@@ -63,7 +70,8 @@ public record DromOffer(
         Integer year,
         boolean fromDonor,
         String textBlock,
-        String videoUrl) {
+        String videoUrl,
+        String installationNote) {
 
     public boolean isAvailable() {
         return availableQty != null && availableQty.signum() > 0;

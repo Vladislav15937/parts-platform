@@ -52,10 +52,21 @@ import java.math.RoundingMode;
  *                      по-разному: где-то десять лишние, где-то мало.
  *                      До этого предел был зашит в сборке прайса, и правка
  *                      его означала релиз
+ * @param installationNote дописывать ли к описанию объявления стоимость
+ *                      установки этой детали. {@code null} и {@code false} —
+ *                      не дописывать: настройка появилась позже прайсов,
+ *                      и молча приписать строку к чужим объявлениям она
+ *                      не должна. Услуга у клиента заведена и стоит денег,
+ *                      а покупатель о ней не знал вовсе: поле «Цена
+ *                      установки» есть в карточке и в отборе, а до объявления
+ *                      не доезжало ни одной строкой
+ * @param installationTemplate текст приписки с подстановкой {@code {цена}};
+ *                      пусто — {@link #DEFAULT_INSTALLATION_TEMPLATE}
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
-                           Integer photoLimit) {
+                           Integer photoLimit, Boolean installationNote,
+                           String installationTemplate) {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -72,9 +83,31 @@ public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
      */
     public static final int DEFAULT_PHOTO_LIMIT = 10;
 
+    /**
+     * Куда в тексте приписки встаёт стоимость установки.
+     *
+     * <p>По-русски и словом, а не именем чужого поля: текст пишет владелец
+     * в поле на экране, и подстановка вида {@code {{Sparepart.InstallationPrice}}}
+     * — это имя сущности той системы, из которой клиент переезжает,
+     * а не нашей.
+     */
+    public static final String PRICE_PLACEHOLDER = "{цена}";
+
+    /**
+     * Текст приписки, пока владелец не написал свой.
+     *
+     * <p>Повторяет формулировку ориентира («Стоимость установки на нашем
+     * автосервисе: …р.»), потому что клиенты переходят оттуда и ждут тех же
+     * слов в своих объявлениях. Поле на экране заполнено этим текстом сразу:
+     * приписка, включённая с пустым текстом, была бы включённой возможностью,
+     * которая ничего не делает.
+     */
+    public static final String DEFAULT_INSTALLATION_TEMPLATE =
+            "Стоимость установки на нашем автосервисе: " + PRICE_PLACEHOLDER + " р.";
+
     /** Ничего не задано: прайс собирается так, как собирался всегда. */
     public static FeedSettings none() {
-        return new FeedSettings(null, null, null);
+        return new FeedSettings(null, null, null, null, null);
     }
 
     /**
@@ -138,7 +171,48 @@ public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
             throw new IllegalArgumentException(
                     "Число снимков не бывает отрицательным: ноль означает «без ограничения»");
         }
+        if (Boolean.TRUE.equals(installationNote)
+                && installationTemplate != null && !installationTemplate.isBlank()
+                && !installationTemplate.contains(PRICE_PLACEHOLDER)) {
+            // Приписка без подстановки — это включённая настройка, которая
+            // не делает того, ради чего её включили: покупатель прочтёт
+            // «стоимость установки» и не увидит суммы. Отказ словами, потому
+            // что молча уехавший такой текст заметят только на чужом сайте.
+            throw new IllegalArgumentException(
+                    "В тексте приписки нет подстановки " + PRICE_PLACEHOLDER
+                            + " — цена установки в объявление не попадёт");
+        }
         return this;
+    }
+
+    /**
+     * Строка про стоимость установки, которая допишется к описанию.
+     *
+     * <p><b>Ноль и пусто означают «услуги нет», а не «бесплатно».</b> В
+     * выгрузке прежней системы незаполненная «Установка» приходит нулём,
+     * и у прогонного клиента таких было 367 позиций из 381 — changeset
+     * {@code tenant/040} их вычистил в {@code NULL} именно поэтому. Написать
+     * «Стоимость установки: 0 р.» значит пообещать покупателю бесплатную
+     * работу от лица разборки, которая её не обещала.
+     *
+     * @return {@code null}, если приписка выключена или цены установки нет;
+     *         тогда описание собирается как раньше — ни строки, ни подписи
+     */
+    public String installationNoteFor(BigDecimal installationPrice) {
+        if (!Boolean.TRUE.equals(installationNote)) {
+            return null;
+        }
+        if (installationPrice == null || installationPrice.signum() <= 0) {
+            return null;
+        }
+        String template = installationTemplate == null || installationTemplate.isBlank()
+                ? DEFAULT_INSTALLATION_TEMPLATE
+                : installationTemplate.strip();
+        // stripTrailingZeros убирает «.00» из numeric(14,2), а toPlainString
+        // не даёт ему превратиться в «1.5E+3»: в объявлении это цена, а не
+        // запись числа.
+        return template.replace(PRICE_PLACEHOLDER,
+                installationPrice.stripTrailingZeros().toPlainString());
     }
 
     /**

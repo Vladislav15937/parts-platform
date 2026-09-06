@@ -19,6 +19,8 @@ import {
   feedUrl,
   filterableColumns,
   CONDITIONS,
+  DEFAULT_INSTALLATION_TEMPLATE,
+  PRICE_PLACEHOLDER,
   ROUNDING_STEPS,
   countMatching,
   createFeed,
@@ -246,6 +248,14 @@ function FeedCard({
   const [photoLimit, setPhotoLimit] = useState(
     feed.settings?.photoLimit == null ? '' : String(feed.settings.photoLimit));
 
+  // Приписка про стоимость установки. Поле текста открывается заполненным
+  // умолчанием: включённая приписка с пустым текстом ничего не допишет,
+  // и владелец решит, что переключатель не работает.
+  const [installationNote, setInstallationNote] = useState(
+    feed.settings?.installationNote === true);
+  const [installationTemplate, setInstallationTemplate] = useState(
+    feed.settings?.installationTemplate ?? DEFAULT_INSTALLATION_TEMPLATE);
+
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState<number | null>(null);
 
@@ -336,6 +346,9 @@ function FeedCard({
         pricePercent: decimalOrNull(pricePercent),
         priceRounding: decimalOrNull(priceRounding),
         photoLimit: wholeOrNull(photoLimit),
+        installationNote,
+        installationTemplate: installationTemplate.trim() === ''
+          ? null : installationTemplate,
       });
       onChanged();
     } catch (cause) {
@@ -754,6 +767,53 @@ function FeedCard({
           <button type="button" disabled={busy}
                   onClick={() => void saveSettings('Число снимков не сохранено')}>
             Сохранить число снимков
+          </button>
+        </div>
+      </fieldset>
+
+      {/* Стоимость установки в объявлении. Услуга у клиента заведена и стоит
+          денег: поле «Цена установки» есть в карточке и в отборе выгрузки,
+          а до объявления не доезжало ни одной строкой — то есть услуга была
+          невидима ровно там, где её покупают. Позиция без цены установки
+          строки не получает: пусто у нас значит «услуги нет», а не
+          «бесплатно». */}
+      <fieldset className="choices">
+        <legend>Стоимость установки — приписка к описанию</legend>
+        <p className="note">
+          Дописывается в конец описания объявления. Товар, у которого цена
+          установки не заполнена, уезжает без этой строки. Место цены
+          в тексте — {PRICE_PLACEHOLDER}.
+        </p>
+
+        {/* Подпись длинная, а флажки отбора выше стоят с `nowrap` — рассчитан
+            он на «новые» и «б/у». Без переноса эта фраза не сжимается
+            и уводит вбок всю страницу на телефоне. */}
+        <label className="choice--wrap">
+          <input
+            type="checkbox"
+            checked={installationNote}
+            onChange={(e) => setInstallationNote(e.target.checked)}
+          />
+          Дописывать стоимость установки к описанию
+        </label>
+
+        {/* Поле стоит прямым элементом набора, а не внутри `filter-row`:
+            ряд внутри `.choices` шириной с содержимое, и поле фразы
+            в нём обрезается на середине — владелец видит начало того,
+            что пишет, и не видит, чем это кончается. */}
+        <label className="field field--sentence">
+          Текст приписки
+          <input
+            value={installationTemplate}
+            placeholder={DEFAULT_INSTALLATION_TEMPLATE}
+            onChange={(e) => setInstallationTemplate(e.target.value)}
+          />
+        </label>
+
+        <div className="filter-row">
+          <button type="button" disabled={busy}
+                  onClick={() => void saveSettings('Приписка не сохранена')}>
+            Сохранить приписку
           </button>
         </div>
       </fieldset>
