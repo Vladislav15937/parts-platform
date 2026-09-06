@@ -51,6 +51,14 @@ public class InventoryController {
     /** Сведение расхождений: недостача превращается в убыток. */
     private static final String RECONCILES = "hasAnyRole('OWNER','MANAGER')";
 
+    /**
+     * Список и карточка пересчёта — только смотреть. «Просмотру» это доступно
+     * наравне с владельцем и менеджером: журнал склада ссылается на пересчёт
+     * («Пересчёт №4»), и посмотреть, что тогда считали, — не то же самое,
+     * что провести или отменить.
+     */
+    private static final String READS = "hasAnyRole('OWNER','MANAGER','VIEWER')";
+
     private final InventoryService inventory;
 
     public InventoryController(InventoryService inventory) {
@@ -104,6 +112,38 @@ public class InventoryController {
     @GetMapping("/sessions/{id}/lines")
     public List<InventoryService.Line> lines(@PathVariable Long id) {
         return inventory.lines(id);
+    }
+
+    /**
+     * Список пересчётов для воронки владельца: «В работе», «Выполненные»,
+     * «Отменённые» и «Все пересчёты» — до этого закрытый пересчёт нельзя
+     * было найти вовсе, ни списком, ни по номеру.
+     *
+     * @param status один из {@link InventorySession.SessionStatus} либо пусто — все статусы
+     */
+    @PreAuthorize(READS)
+    @GetMapping("/sessions")
+    public List<InventoryService.SessionSummary> sessions(
+            @RequestParam(required = false) String status) {
+        return inventory.listSessions(parseStatus(status));
+    }
+
+    /** Одна сессия любого статуса — открывается нажатием на строку списка. */
+    @PreAuthorize(READS)
+    @GetMapping("/sessions/{id}")
+    public InventoryService.SessionSummary session(@PathVariable Long id) {
+        return inventory.sessionSummary(id);
+    }
+
+    private InventorySession.SessionStatus parseStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return null;
+        }
+        try {
+            return InventorySession.SessionStatus.valueOf(status);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Неизвестный статус пересчёта: " + status);
+        }
     }
 
     /**

@@ -37,6 +37,54 @@ export interface InventorySession {
 }
 
 /**
+ * Строка списка пересчётов — журнал, а не поиск по складу.
+ *
+ * <p>До этого закрытый пересчёт нельзя было найти вовсе: экран умел искать
+ * только открытую сессию по складу, а журнал склада на пересчёт ссылается
+ * («Пересчёт №4») и после проведения, и после отмены.
+ */
+export interface SessionSummary {
+  id: number;
+  warehouseId: number;
+  warehouseName: string;
+  /** Склад и ячейка словами: «Основной · A-01-03» или «Основной · весь склад». */
+  selection: string;
+  status: 'OPEN' | 'COUNTED' | 'APPLIED' | 'CANCELLED';
+  startedAt: string;
+  appliedAt: string | null;
+  lines: number;
+  counted: number;
+}
+
+/** Пункты воронки слева, в порядке, заданном задачей. */
+export const SESSION_FUNNEL = [
+  { key: 'OPEN', label: 'В работе' },
+  { key: 'COUNTED', label: 'Выполненные' },
+  { key: 'CANCELLED', label: 'Отменённые' },
+  { key: 'ALL', label: 'Все пересчёты' },
+] as const;
+
+export type SessionFunnelKey = (typeof SESSION_FUNNEL)[number]['key'];
+
+export const SESSION_STATUS_LABEL: Record<SessionSummary['status'], string> = {
+  OPEN: 'Идёт подсчёт',
+  COUNTED: 'Подсчёт завершён',
+  APPLIED: 'Проведён',
+  CANCELLED: 'Отменён',
+};
+
+/** Список пересчётов по воронке — «Все пересчёты» шлёт запрос без фильтра. */
+export function listSessions(funnel: SessionFunnelKey): Promise<SessionSummary[]> {
+  const query = funnel === 'ALL' ? '' : `?status=${funnel}`;
+  return request<SessionSummary[]>(`/api/inventory/sessions${query}`);
+}
+
+/** Одна сессия любого статуса — открывается нажатием на строку списка. */
+export function sessionSummary(sessionId: number): Promise<SessionSummary> {
+  return request<SessionSummary>(`/api/inventory/sessions/${sessionId}`);
+}
+
+/**
  * Сентинел «без адреса» — тот же, что на сервере ({@code InventoryService.NO_CELL}).
  * Настоящие ячейки нумеруются с единицы, поэтому ноль безопасно означает
  * «позиции без ячейки» и не путается с «любая» ({@code undefined}).

@@ -214,6 +214,92 @@ class InventoryHttpTest extends PostgresTestBase {
                 .andExpect(status().isOk());
     }
 
+    /**
+     * Журнал пересчётов: закрытый документ можно найти списком, чего раньше
+     * не умел ни один эндпоинт — {@code /sessions/open} отдаёт только
+     * открытую сессию по складу.
+     */
+    @Test
+    @DisplayName("Список пересчётов находит любой статус, а выборка называет ячейку")
+    void sessionsListFindsAnyStatus() throws Exception {
+        MockHttpSession owner = login("vladelec");
+
+        Long cellId = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO storage_cell (warehouse_id, code) VALUES (?, 'A-01-1') RETURNING id""",
+                Long.class, warehouseId));
+        Long cellPartId = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price) VALUES (1, 'Дверь для пересчёта', 3000)
+                RETURNING id""", Long.class));
+        inTenant(() -> {
+            ledger.record(StockMovement.intake(
+                    cellPartId, new java.math.BigDecimal("1"), warehouseId, cellId));
+            return null;
+        });
+
+        // Пересчёт одной ячейки — открыт и сразу отменён, чтобы попасть
+        // в воронку «Отменённые», а не «В работе».
+        String openedCell = mvc.perform(post("/api/inventory/sessions").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"warehouseId\":%d,\"cellId\":%d}".formatted(warehouseId, cellId)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        long cellSessionId = Long.parseLong(openedCell.replaceAll(".*\"id\":(\\d+).*", "$1"));
+        mvc.perform(post("/api/inventory/sessions/%d/cancel".formatted(cellSessionId))
+                        .with(csrf()).session(owner))
+                .andExpect(status().isOk());
+
+        // Пересчёт всего склада остаётся открытым — «В работе».
+        String openedAll = mvc.perform(post("/api/inventory/sessions").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"warehouseId\":%d}".formatted(warehouseId)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        long allSessionId = Long.parseLong(openedAll.replaceAll(".*\"id\":(\\d+).*", "$1"));
+
+        // Без фильтра — оба, новые сверху.
+        mvc.perform(get("/api/inventory/sessions").session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].id").value(allSessionId))
+                .andExpect(jsonPath("$[1].id").value(cellSessionId));
+
+        // Воронка «В работе» находит только открытый, весь склад.
+        mvc.perform(get("/api/inventory/sessions?status=OPEN").session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(allSessionId))
+                .andExpect(jsonPath("$[0].selection").value("Ткацкая · весь склад"));
+
+        // Воронка «Отменённые» находит закрытый пересчёт ячейки — то, что
+        // раньше не находилось вовсе ни списком, ни по номеру.
+        mvc.perform(get("/api/inventory/sessions?status=CANCELLED").session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(cellSessionId))
+                .andExpect(jsonPath("$[0].status").value("CANCELLED"))
+                .andExpect(jsonPath("$[0].selection").value("Ткацкая · A-01-1"));
+
+        // Карточка одной сессии — тот же набор полей, по любому статусу.
+        mvc.perform(get("/api/inventory/sessions/%d".formatted(cellSessionId)).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.warehouseName").value("Ткацкая"))
+                .andExpect(jsonPath("$.selection").value("Ткацкая · A-01-1"))
+                .andExpect(jsonPath("$.lines").value(1))
+                .andExpect(jsonPath("$.counted").value(0));
+
+        // Неизвестный статус — 400 с объяснением, а не 500: это ошибка
+        // вызывающего, офлайн-очередь такое не должна повторять вечно.
+        mvc.perform(get("/api/inventory/sessions?status=NOPE").session(owner))
+                .andExpect(status().isBadRequest());
+
+        // «Просмотр» читает список наравне с владельцем — журнал ссылается
+        // на пересчёт, и посмотреть, что тогда считали, это не то же самое,
+        // что провести или отменить.
+        MockHttpSession viewer = login("smotrjaschiy");
+        mvc.perform(get("/api/inventory/sessions").session(viewer))
+                .andExpect(status().isOk());
+    }
+
     @Test
     @DisplayName("Открытая сессия склада отдаётся, а не пятисоткой")
     void openSessionIsReadable() throws Exception {
@@ -236,6 +322,7 @@ class InventoryHttpTest extends PostgresTestBase {
         // недостачу в убыток.
         member("vladelec", "Владелец", "OWNER");
         member("prodavec", "Продавец", "SELLER");
+        member("smotrjaschiy", "Наблюдатель", "VIEWER");
     }
 
     private void member(String login, String name, String role) {

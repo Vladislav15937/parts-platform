@@ -11,9 +11,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Инвентаризация: сверка факта с учётом.
@@ -376,6 +378,147 @@ public class InventoryService {
         }
         Long wanted = cellId == NO_CELL ? null : cellId;
         return lines.stream().allMatch(line -> java.util.Objects.equals(line.getCellId(), wanted));
+    }
+
+    /**
+     * Список пересчётов — владелец находит любой, не только открытый.
+     *
+     * <p>До этого экран умел искать сессию только по складу через {@link
+     * #openSessionOf}, то есть исключительно открытую: проведённый вчера
+     * пересчёт открыть было нельзя ни списком, ни по номеру, хотя журнал
+     * склада на него ссылается ({@code ref_type = 'INVENTORY'}). Список
+     * читается напрямую, а не через сущности — по той же причине, что
+     * и лист обхода: строки нужны только для показа.
+     *
+     * @param status фильтр воронки, {@code null} — все статусы разом
+     */
+    @Transactional(readOnly = true)
+    public List<SessionSummary> listSessions(InventorySession.SessionStatus status) {
+        return status == null
+                ? querySummaries("")
+                : querySummaries(" WHERE s.status = ?", status.name());
+    }
+
+    /** Одна сессия любого статуса — карточка списка открывает её нажатием на строку. */
+    @Transactional(readOnly = true)
+    public SessionSummary sessionSummary(Long sessionId) {
+        List<SessionSummary> found = querySummaries(" WHERE s.id = ?", sessionId);
+        if (found.isEmpty()) {
+            throw new IllegalArgumentException("Инвентаризация не найдена: " + sessionId);
+        }
+        return found.get(0);
+    }
+
+    private List<SessionSummary> querySummaries(String where, Object... params) {
+        // %s, а не склейка текстовых блоков "..." + where + "...": закрывающие
+        // кавычки второго блока стоят на строке содержимого, и стрипается весь
+        // отступ — «?» и «GROUP» слипаются в «?GROUP» без единого пробела между
+        // ними, а компилятор молчит. Уже ловили это дважды на других запросах.
+        String sql = """
+                SELECT s.id, s.warehouse_id, w.name AS warehouse_name, s.status,
+                       s.started_at, s.applied_at,
+                       count(l.part_id) AS lines_count,
+                       count(l.qty_counted) AS counted_count
+                  FROM inventory_session s
+                  JOIN warehouse w ON w.id = s.warehouse_id
+                  LEFT JOIN inventory_line l ON l.session_id = s.id
+                %s
+                 GROUP BY s.id, s.warehouse_id, w.name, s.status, s.started_at, s.applied_at
+                 ORDER BY s.id DESC""".formatted(where);
+        List<SummaryRow> rows = jdbc.query(sql,
+                (rs, i) -> new SummaryRow(rs.getLong("id"), rs.getLong("warehouse_id"),
+                        rs.getString("warehouse_name"),
+                        InventorySession.SessionStatus.valueOf(rs.getString("status")),
+                        rs.getTimestamp("started_at").toInstant(),
+                        rs.getTimestamp("applied_at") == null
+                                ? null : rs.getTimestamp("applied_at").toInstant(),
+                        rs.getInt("lines_count"), rs.getLong("counted_count")),
+                params);
+
+        Map<Long, String> selections = selectionPartsOf(rows.stream().map(SummaryRow::id).toList());
+        return rows.stream()
+                .map(r -> new SessionSummary(r.id(), r.warehouseId(), r.warehouseName(),
+                        r.warehouseName() + " · " + selections.getOrDefault(r.id(), "весь склад"),
+                        r.status(), r.startedAt(), r.appliedAt(), r.lines(), r.counted()))
+                .toList();
+    }
+
+    /**
+     * Выборка каждой сессии из фактического адреса её строк — своей колонки
+     * под это нет (см. {@link #matchesSelection}), а заводить её ради одной
+     * колонки списка не стоит: значение и так лежит в строках.
+     *
+     * <p>Сессия, открытая одной ячейкой, заводит строки только с её
+     * {@code cell_id} ({@link #open}), поэтому единственное встреченное
+     * значение и есть выборка; несколько разных значений бывают только
+     * у пересчёта всего склада. Та же неоднозначность, что у «Продолжить
+     * начатую»: склад без ячеек вовсе или с одним, целиком без адресов,
+     * не отличить от намеренного «Без адреса» — точное различение потребовало
+     * бы миграции ради поля, дублирующего строки.
+     */
+    private Map<Long, String> selectionPartsOf(List<Long> sessionIds) {
+        if (sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        String sessionIn = sessionIds.stream().map(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(","));
+
+        Map<Long, Set<Long>> cellsBySession = new HashMap<>();
+        jdbc.query("SELECT DISTINCT session_id, cell_id FROM inventory_line "
+                        + "WHERE session_id IN (" + sessionIn + ")",
+                rs -> {
+                    long sid = rs.getLong("session_id");
+                    Long cellId = rs.getObject("cell_id") == null ? null : rs.getLong("cell_id");
+                    cellsBySession.computeIfAbsent(sid, k -> new HashSet<>()).add(cellId);
+                });
+
+        Map<Long, String> result = new HashMap<>();
+        Map<Long, Long> needsCode = new HashMap<>();
+        for (Map.Entry<Long, Set<Long>> e : cellsBySession.entrySet()) {
+            Set<Long> cells = e.getValue();
+            if (cells.size() != 1) {
+                result.put(e.getKey(), "весь склад");
+                continue;
+            }
+            Long only = cells.iterator().next();
+            if (only == null) {
+                result.put(e.getKey(), "без адреса");
+            } else {
+                needsCode.put(e.getKey(), only);
+            }
+        }
+        if (!needsCode.isEmpty()) {
+            String cellIn = needsCode.values().stream().distinct().map(String::valueOf)
+                    .collect(java.util.stream.Collectors.joining(","));
+            Map<Long, String> codes = new HashMap<>();
+            jdbc.query("SELECT id, code FROM storage_cell WHERE id IN (" + cellIn + ")",
+                    rs -> { codes.put(rs.getLong("id"), rs.getString("code")); });
+            needsCode.forEach((sessionId, cellId) ->
+                    result.put(sessionId, codes.getOrDefault(cellId, "ячейка " + cellId)));
+        }
+        // Сессии без единой строки (снятие сняли раньше первого подсчёта
+        // не бывает, а вот пустая ячейка бывает) остаются без записи —
+        // вызывающий код читает это как «весь склад» по умолчанию.
+        return result;
+    }
+
+    private record SummaryRow(Long id, Long warehouseId, String warehouseName,
+                              InventorySession.SessionStatus status,
+                              Instant startedAt, Instant appliedAt,
+                              int lines, long counted) {
+    }
+
+    /**
+     * Строка списка пересчётов — то, что видно в таблице и в карточке одной
+     * сессии, без захода в строки.
+     *
+     * @param selection склад и ячейка словами: «Основной · A-01-03»,
+     *                  «Основной · весь склад» или «Основной · без адреса»
+     */
+    public record SessionSummary(Long id, Long warehouseId, String warehouseName, String selection,
+                                 InventorySession.SessionStatus status,
+                                 Instant startedAt, Instant appliedAt,
+                                 int lines, long counted) {
     }
 
     /**

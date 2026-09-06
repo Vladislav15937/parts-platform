@@ -31,7 +31,13 @@ describe('отмена пересчёта', () => {
       if (url.includes('/discrepancies')) {
         return json([]);
       }
-      if (url.includes('/api/inventory/sessions')) {
+      // Журнал пересчётов — свой список, отдельно от поиска по складу:
+      // без этой ветки он попадал бы в общий разбор ниже и получал
+      // одиночный объект сессии там, где ждёт массив.
+      if (url.includes('/api/inventory/sessions?')) {
+        return json([]);
+      }
+      if (url.includes('/api/inventory/sessions/open')) {
         return json({ id: 15, warehouseId: 2, status: 'COUNTED',
                       lines: 36072, counted: 4 });
       }

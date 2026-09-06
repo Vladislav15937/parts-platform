@@ -553,6 +553,44 @@ button:disabled {
   border-color: var(--accent);
 }
 
+/*
+ * Воронка журнала пересчётов — колонка слева от таблицы, как в кабинете
+ * ориентира, а не строка вкладок сверху: список статусов короткий и не
+ * должен спорить с таблицей за высоту.
+ */
+.funnel-layout {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.funnel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 11rem;
+}
+
+.funnel__item {
+  text-align: left;
+  min-height: 40px;
+  padding: 0 0.75rem;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+}
+
+.funnel__item--active {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.funnel-body {
+  flex: 1;
+  min-width: 0;
+}
+
 .row {
   display: flex;
   gap: 0.75rem;
