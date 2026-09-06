@@ -108,6 +108,33 @@ describe('сумма оплаты подставлена долгом', () => {
     expect(payButton().disabled).toBe(true);
     expect(document.body.textContent).toContain('больше нуля');
   });
+
+  // Закрытая сделка приходит с нулевым долгом (`Deal.debt()` отдаёт ноль
+  // у отменённой и возвращённой: товара у клиента нет, платить не за что),
+  // то есть кнопка гаснет и без отдельной ветки. Проверяется здесь не серость
+  // кнопки, а **какими словами** она объяснена: «Долг закрыт» у сделки,
+  // за которую никто не платил, — неправда, и продавец по ней пойдёт искать
+  // несуществующий платёж. Оба статуса вместе: ветка одна, а слово берётся
+  // из статуса, и опечатка во втором иначе осталась бы незамеченной.
+  it('у закрытой сделки причина названа закрытием, а не закрытым долгом', async () => {
+    const closed = [['CANCELLED', 'отменена'], ['RETURNED', 'возвращена']] as const;
+
+    for (const [status, word] of closed) {
+      sent = stubApi({ total: '5200', paid: '0', status });
+      render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+      await openDeal();
+
+      expect(amountInput().value).toBe('');
+      expect(payButton().disabled).toBe(true);
+      expect(document.body.textContent)
+        .toContain(`Сделка ${word} — платить по ней не за что.`);
+      expect(document.body.textContent).not.toContain('Долг закрыт');
+      expect(sent.payment).toBeNull();
+
+      cleanup();
+      localStorage.clear();
+    }
+  });
 });
 
 /** Доходит до карточки отложенной сделки через клиента, как продавец. */
@@ -162,15 +189,23 @@ interface Sent {
  * сделку, и без настоящего пересчёта долга проверка «в поле встал остаток»
  * зеленела бы на любой подставленной сумме.
  */
-function stubApi({ total, paid }: { total: string; paid: string }): Sent {
+function stubApi(
+  { total, paid, status = 'RESERVED' }:
+    { total: string; paid: string; status?: string },
+): Sent {
   const sent: Sent = { payment: null };
   const state = { paid: Number(paid) };
+  // Долг закрытой сделки сервер отдаёт нулём (`Deal.debt()`): товара
+  // у клиента нет, платить не за что. Заглушка обязана это повторять —
+  // иначе проверка на отменённой сделке шла бы по данным, которых
+  // не бывает, и падала бы не на том утверждении.
+  const closed = status === 'CANCELLED' || status === 'RETURNED';
   const dealOf = () => ({
-    id: 19, number: 19, customerId: 1, managerId: null, status: 'RESERVED',
+    id: 19, number: 19, customerId: 1, managerId: null, status,
     reservedUntil: null,
     totalAmount: total,
     paidAmount: String(state.paid),
-    debt: String(Math.max(Number(total) - state.paid, 0)),
+    debt: String(closed ? 0 : Math.max(Number(total) - state.paid, 0)),
     createdAt: '2026-09-01T10:00:00Z',
     issuedAt: null,
     warehouseId: null,
