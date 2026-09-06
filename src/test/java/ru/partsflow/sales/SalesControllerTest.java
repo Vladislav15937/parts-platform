@@ -643,6 +643,16 @@ class SalesControllerTest extends PostgresTestBase {
     @DisplayName("Поиск по номеру сделки — точное совпадение")
     void returnsSearchByDealNumberIsExact() throws Exception {
         MockHttpSession session = login("seller");
+        // Номер нужен многозначный: утверждение теста — «поиск по 41 не нашёл
+        // сделку №417», и при однозначном номере отрезать от него нечего.
+        // Сколько сделок завели соседи по схеме, зависит от того, весь класс
+        // запустили или один метод, поэтому номер задаётся, а не достаётся.
+        // greatest не даёт откатить последовательность назад, если соседи
+        // уже ушли дальше, — иначе номера начали бы повторяться.
+        inTenant(() -> jdbc.queryForObject(
+                "SELECT setval('deal_number_seq',"
+                        + " greatest((SELECT last_value FROM deal_number_seq), 416))",
+                Long.class));
         long dealId = createDeal(partWithStock("Стекло лобовое", 1));
         long itemId = firstItemId(dealId, session);
         mvc.perform(post("/api/deals/" + dealId + "/issue").with(csrf()).session(session))
@@ -658,16 +668,27 @@ class SalesControllerTest extends PostgresTestBase {
         Long dealNumber = inTenant(() -> jdbc.queryForObject(
                 "SELECT number FROM deal WHERE id = ?", Long.class, dealId));
 
-        // Точный матч по номеру идёт в одном OR с вхождением по причине
-        // (§ реестра возвратов): при большом числе сделок в общей схеме
-        // теста номер вроде «31» иногда оказывается подстрокой чужой причины
-        // вроде «предел-хвост-92831» — это законное поведение отбора, а не
-        // повод по нему проверять count(*). Свежий возврат идёт первым
-        // (ORDER BY r.id DESC), и именно это здесь проверяется — точный
-        // номер нашёл нужный документ, а не единственный документ вообще.
+        // Свежий возврат идёт первым (ORDER BY r.id DESC): точный номер нашёл
+        // нужный документ. Само по себе это ещё не про точность — вхождение
+        // находит его тоже, — поэтому доказывает следующая проверка.
         mvc.perform(get("/api/deals/returns?q=" + dealNumber).session(session))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].dealId").value((int) dealId));
+
+        // А точность держится отрицанием: номер без последней цифры — это
+        // подстрока номера, но не номер. Причина возврата («поиск-по-номеру»)
+        // и имя клиента («Автосервис») цифр не содержат, значит попасть
+        // в выдачу по этому запросу сделка может только веткой номера —
+        // и попадёт ровно тогда, когда сравнение перестанет быть точным.
+        // Считать строки тут нельзя: схема у класса общая, и сколько чужих
+        // причин с цифровым хвостом («предел-хвост-92831») подойдёт под «41»,
+        // зависит от порядка запуска. Отсутствие своей строки — не зависит.
+        String prefix = String.valueOf(dealNumber);
+        prefix = prefix.substring(0, prefix.length() - 1);
+        mvc.perform(get("/api/deals/returns?q=" + prefix).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[?(@.dealId == " + dealId + ")]",
+                        org.hamcrest.Matchers.hasSize(0)));
     }
 
     @Test
