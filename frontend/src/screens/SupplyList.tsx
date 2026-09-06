@@ -79,70 +79,74 @@ export function SupplyList({ supplies, online, onChanged }: Props) {
     <>
       <h3>Поставки</h3>
       {failure !== null && <p className="note note--error">{failure}</p>}
-      <table>
-        <thead>
-          <tr>
-            <th>Партия</th>
-            <th>Поставщик</th>
-            <th>Состояние</th>
-            <th>Приход</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {supplies.map((supply) => (
-            <Fragment key={supply.id}>
-              <tr>
-                <td>{`${KINDS[supply.kind] ?? supply.kind} №${supply.number}`}</td>
-                <td>{supply.supplierName ?? '—'}</td>
-                <td>{STATUSES[supply.status] ?? supply.status}</td>
-                <td>
-                  {supply.arrivedOn !== null ? (
-                    day(supply.arrivedOn)
-                  ) : (
-                    // Дата стоит в поле до нажатия, а не подставляется молча
-                    // на сервере: контейнер отмечают и задним числом, а
-                    // невидимое значение читается как факт.
-                    <input
-                      type="date"
-                      aria-label={`Дата прихода партии №${supply.number}`}
-                      value={dates[supply.id] ?? today()}
-                      onChange={(e) =>
-                        setDates({ ...dates, [supply.id]: e.target.value })}
-                    />
-                  )}
-                </td>
-                <td className="filter-row">
-                  {supply.arrivedOn === null && (
+      {/* Та же обёртка, что у таблицы машин: поставки живут на том же экране,
+          и без неё вбок уезжает он целиком — вместе с уже обёрнутой таблицей. */}
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Партия</th>
+              <th>Поставщик</th>
+              <th>Состояние</th>
+              <th>Приход</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {supplies.map((supply) => (
+              <Fragment key={supply.id}>
+                <tr>
+                  <td>{`${KINDS[supply.kind] ?? supply.kind} №${supply.number}`}</td>
+                  <td>{supply.supplierName ?? '—'}</td>
+                  <td>{STATUSES[supply.status] ?? supply.status}</td>
+                  <td>
+                    {supply.arrivedOn !== null ? (
+                      day(supply.arrivedOn)
+                    ) : (
+                      // Дата стоит в поле до нажатия, а не подставляется молча
+                      // на сервере: контейнер отмечают и задним числом, а
+                      // невидимое значение читается как факт.
+                      <input
+                        type="date"
+                        aria-label={`Дата прихода партии №${supply.number}`}
+                        value={dates[supply.id] ?? today()}
+                        onChange={(e) =>
+                          setDates({ ...dates, [supply.id]: e.target.value })}
+                      />
+                    )}
+                  </td>
+                  <td className="filter-row">
+                    {supply.arrivedOn === null && (
+                      <button
+                        type="button"
+                        className="button--ghost"
+                        disabled={!online || busyId === supply.id}
+                        onClick={() => void arrive(supply)}
+                      >
+                        {busyId === supply.id ? 'Отмечаем…' : 'Отметить приход'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="button--ghost"
-                      disabled={!online || busyId === supply.id}
-                      onClick={() => void arrive(supply)}
+                      onClick={() => void toggle(supply.id)}
                     >
-                      {busyId === supply.id ? 'Отмечаем…' : 'Отметить приход'}
+                      {openId === supply.id ? 'Свернуть' : 'Машины'}
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    className="button--ghost"
-                    onClick={() => void toggle(supply.id)}
-                  >
-                    {openId === supply.id ? 'Свернуть' : 'Машины'}
-                  </button>
-                </td>
-              </tr>
-              {/* Раскрывается под своей же строкой, как затраты по машине:
-                  результат нажатия обязан быть виден там, где нажали. */}
-              {openId === supply.id && (
-                <tr>
-                  <td colSpan={5}>{content()}</td>
+                  </td>
                 </tr>
-              )}
-            </Fragment>
-          ))}
-        </tbody>
-      </table>
+                {/* Раскрывается под своей же строкой, как затраты по машине:
+                    результат нажатия обязан быть виден там, где нажали. */}
+                {openId === supply.id && (
+                  <tr>
+                    <td colSpan={5}>{content()}</td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 
