@@ -285,14 +285,28 @@ export function InventoryScreen({ reference, onCount }: Props) {
         : await findOpenSession(Number(warehouseId), cellId);
 
       if (opened === null) {
-        setNote('На этом складе инвентаризация не открыта');
+        // Тот же сторож, что ниже: ответ сервера приходит после того,
+        // как кладовщик мог уйти с вкладки.
+        if (mounted.current) {
+          setNote('На этом складе инвентаризация не открыта');
+        }
         return;
       }
       await reload();
     } catch (error) {
-      setNote(error instanceof Error ? error.message : 'Не удалось открыть');
+      if (mounted.current) {
+        setNote(error instanceof Error ? error.message : 'Не удалось открыть');
+      }
     } finally {
-      setBusy(false);
+      // Сторож нужен именно здесь: `finally` выполняется и на том пути,
+      // где экран уже ушёл с вкладки, пока сервер отвечал на открытие
+      // сессии. Прочие колбэки этого экрана прикрыты с самого хотфикса
+      // размонтирования, а этот — единственный, который остался открытым,
+      // и он же валил прогон: «ReferenceError: window is not defined»
+      // из `setBusy` в размонтированном компоненте.
+      if (mounted.current) {
+        setBusy(false);
+      }
     }
   }
 
