@@ -143,15 +143,54 @@ class SalesControllerTest extends PostgresTestBase {
         assertThat(reservedOf(partId)).isEqualByComparingTo("0");
     }
 
+    /**
+     * До задачи 0022 сделку читал любой вошедший — «цена и наличие нужны
+     * всем». Это верно про склад, но сделка несёт клиента, суммы, оплаченное
+     * и долг, и роль «Просмотр», которой закрыты все прочие пути к клиенту,
+     * получала здесь то же самое с другой стороны. Читает теперь тот, кто
+     * может по сделке действовать: продавец и кладовщик, который её выдаёт.
+     */
     @Test
-    @DisplayName("Смотреть сделки может любой вошедший")
-    void viewerCanRead() throws Exception {
+    @DisplayName("Сделку читает тот, кто может по ней действовать, а не «Просмотр»")
+    void dealReadableByActingRolesOnly() throws Exception {
         Long partId = partWithStock("Капот", 1);
         long dealId = createDeal(partId);
+        inTenant(() -> member("storekeeper", "Кладовщик", "STOREKEEPER"));
 
-        mvc.perform(get("/api/deals/" + dealId).session(login("viewer")))
+        mvc.perform(get("/api/deals/" + dealId).session(login("seller")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("RESERVED"));
+
+        // Кладовщик выдаёт товар со склада — документ, по которому он выдаёт,
+        // он обязан видеть.
+        mvc.perform(get("/api/deals/" + dealId).session(login("storekeeper")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RESERVED"));
+
+        mvc.perform(get("/api/deals/" + dealId).session(login("viewer")))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Вкладка «Сделки» карточки клиента — это {@code GET /api/deals?customerId=},
+     * и роли у неё те же, что у самого раздела «Клиенты»
+     * ({@code CustomerController.READS}). Пока проверки не было, кладовщик
+     * и «Просмотр» получали историю покупок с суммами и долгом, хотя
+     * {@code GET /api/customers/directory} и {@code /{id}} им закрыты: пункт
+     * приёмки 10 задачи 0022 был выполнен на витрине и нарушен у продавца.
+     */
+    @Test
+    @DisplayName("Историю сделок клиента кладовщик и «Просмотр» не видят")
+    void customerDealsHiddenFromStorekeeperAndViewer() throws Exception {
+        inTenant(() -> member("storekeeper", "Кладовщик", "STOREKEEPER"));
+
+        mvc.perform(get("/api/deals?customerId=" + customer).session(login("storekeeper")))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/deals?customerId=" + customer).session(login("viewer")))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(get("/api/deals?customerId=" + customer).session(login("seller")))
+                .andExpect(status().isOk());
     }
 
     @Test

@@ -457,6 +457,8 @@ export function HomeScreen() {
       {tab === 'customers' && SELLING_ROLES.includes(state.me.role) && (
         <CustomersScreen
           role={state.me.role}
+          company={state.me.companySchema}
+          memberId={state.me.memberId}
           onOpenDeal={(dealId) => {
             setOpenDealId(dealId);
             setTab('sales');

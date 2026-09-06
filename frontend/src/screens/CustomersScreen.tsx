@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { count } from '../ui/plural';
+import { useMounted } from '../ui/useMounted';
 import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
 import {
@@ -10,8 +11,11 @@ import {
   customerOf,
   customerPayments,
   dealsOf,
+  defaultPaymentSource,
   listCustomers,
   listReturns,
+  paymentSources,
+  rememberPaymentSource,
   topUpAccount,
   updateCustomer,
   withdrawFromAccount,
@@ -22,6 +26,7 @@ import type {
   CustomersPage,
   Deal,
   PaymentRow,
+  PaymentSourceEntry,
   ReturnListRow,
   ReturnsPage,
 } from '../sales/sales';
@@ -42,9 +47,14 @@ import type {
  */
 export function CustomersScreen({
   role,
+  company,
+  memberId,
   onOpenDeal,
 }: {
   role: string;
+  /** Схема арендатора и сотрудник — ключ, которым помнится источник платежа. */
+  company: string;
+  memberId: number;
   onOpenDeal: (dealId: number) => void;
 }) {
   const canManage = role === 'OWNER' || role === 'MANAGER';
@@ -55,6 +65,8 @@ export function CustomersScreen({
       <CustomerCard
         customerId={selected}
         role={role}
+        company={company}
+        memberId={memberId}
         canManage={canManage}
         onBack={() => setSelected(null)}
         onOpenDeal={onOpenDeal}
@@ -68,6 +80,7 @@ export function CustomersScreen({
 const PAGE = 50;
 
 function CustomerList({ onOpen }: { onOpen: (id: number) => void }) {
+  const mounted = useMounted();
   const [query, setQuery] = useState('');
   const [size, setSize] = useState(PAGE);
   const [page, setPage] = useState<CustomersPage | null>(null);
@@ -193,22 +206,33 @@ function CustomerList({ onOpen }: { onOpen: (id: number) => void }) {
 
   async function load(limit: number): Promise<void> {
     try {
-      setPage(await listCustomers(query, limit));
+      const loaded = await listCustomers(query, limit);
+      if (!mounted.current) {
+        return;
+      }
+      setPage(loaded);
       setError(null);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : 'Список не загрузился');
+      if (mounted.current) {
+        setError(cause instanceof ApiError ? cause.message : 'Список не загрузился');
+      }
     }
   }
 
   async function addCustomer(): Promise<void> {
     try {
       const created = await createCustomer(newName.trim(), newPhone.trim());
+      if (!mounted.current) {
+        return;
+      }
       setAdding(false);
       setNewName('');
       setNewPhone('');
       onOpen(created.id);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : 'Клиент не заведён');
+      if (mounted.current) {
+        setError(cause instanceof ApiError ? cause.message : 'Клиент не заведён');
+      }
     }
   }
 }
@@ -235,16 +259,21 @@ type CardTab = 'client' | 'deals' | 'returns' | 'payments';
 function CustomerCard({
   customerId,
   role,
+  company,
+  memberId,
   canManage,
   onBack,
   onOpenDeal,
 }: {
   customerId: number;
   role: string;
+  company: string;
+  memberId: number;
   canManage: boolean;
   onBack: () => void;
   onOpenDeal: (dealId: number) => void;
 }) {
+  const mounted = useMounted();
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<CardTab>('client');
@@ -260,7 +289,10 @@ function CustomerCard({
         ← Клиенты
       </button>
 
-      <h2>{customer?.name ?? 'Без имени'}</h2>
+      {/* Заголовок ждёт ответа сервера: «Без имени» — это настоящий клиент,
+          заведённый в разговоре одним телефоном, и писать те же слова, пока
+          имя ещё едет, значит утверждать про клиента то, чего не знаем. */}
+      {customer !== null && <h2>{customer.name ?? 'Без имени'}</h2>}
 
       {error !== null && <p className="note note--error">{error}</p>}
 
@@ -304,6 +336,8 @@ function CustomerCard({
               customer={customer}
               canManage={canManage}
               role={role}
+              company={company}
+              memberId={memberId}
               onSaved={setCustomer}
             />
           )}
@@ -317,10 +351,16 @@ function CustomerCard({
 
   async function load(): Promise<void> {
     try {
-      setCustomer(await customerOf(customerId));
+      const loaded = await customerOf(customerId);
+      if (!mounted.current) {
+        return;
+      }
+      setCustomer(loaded);
       setError(null);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : 'Клиент не загрузился');
+      if (mounted.current) {
+        setError(cause instanceof ApiError ? cause.message : 'Клиент не загрузился');
+      }
     }
   }
 }
@@ -335,13 +375,18 @@ function ClientTab({
   customer,
   canManage,
   role,
+  company,
+  memberId,
   onSaved,
 }: {
   customer: CustomerDetail;
   canManage: boolean;
   role: string;
+  company: string;
+  memberId: number;
   onSaved: (customer: CustomerDetail) => void;
 }) {
+  const mounted = useMounted();
   const [name, setName] = useState(customer.name ?? '');
   const [phone, setPhone] = useState(customer.phone ?? '');
   const [email, setEmail] = useState(customer.email ?? '');
@@ -417,7 +462,12 @@ function ClientTab({
       </div>
 
       <div className="customer-account">
-        <AccountPanel customerId={customer.id} role={role} />
+        <AccountPanel
+          customerId={customer.id}
+          role={role}
+          company={company}
+          memberId={memberId}
+        />
       </div>
     </div>
   );
@@ -426,7 +476,7 @@ function ClientTab({
     setError(null);
     setSaving(true);
     try {
-      const saved = await updateCustomer(customer.id, {
+      const saved: CustomerDetail = await updateCustomer(customer.id, {
         name: name.trim(),
         phone: phone.trim(),
         email: email.trim(),
@@ -436,11 +486,17 @@ function ClientTab({
         inn: isCompany ? inn.trim() : '',
         companyName: isCompany ? companyName.trim() : '',
       });
-      onSaved(saved);
+      if (mounted.current) {
+        onSaved(saved);
+      }
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : 'Не удалось сохранить');
+      if (mounted.current) {
+        setError(cause instanceof ApiError ? cause.message : 'Не удалось сохранить');
+      }
     } finally {
-      setSaving(false);
+      if (mounted.current) {
+        setSaving(false);
+      }
     }
   }
 }
@@ -496,20 +552,63 @@ function Field({
  * под заказ, — резерв в системе только товарный ({@code Deal.reservedUntil}).
  * Прочерк здесь честнее нуля: ноль утверждал бы, что резерва нет, а мы
  * этого не знаем и знать не можем без такого понятия в модели.
+ *
+ * <p><b>Источник платежа спрашивается здесь так же, как в {@code DealFinder}
+ * после задачи 0024.</b> «Положить» и «Выдать» создают настоящий платёж
+ * ({@code new Payment(...)} в {@code SalesService}), и без способа владелец
+ * не сведёт кассу: приняли переводом, вернули наличными — по журналу
+ * это неотличимо. Правка остатка платежа не создаёт вовсе (деньги
+ * не двигались), поэтому она идёт с {@code withSource = false} и выбранный
+ * источник не запоминает.
  */
-function AccountPanel({ customerId, role }: { customerId: number; role: string }) {
+function AccountPanel({
+  customerId,
+  role,
+  company,
+  memberId,
+}: {
+  customerId: number;
+  role: string;
+  company: string;
+  memberId: number;
+}) {
+  const mounted = useMounted();
   const [account, setAccount] = useState<CustomerAccount | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
   const [cash, setCash] = useState('');
+  const [sources, setSources] = useState<PaymentSourceEntry[]>([]);
+  const [paymentSourceId, setPaymentSourceId] = useState<number | null>(null);
   const [fixing, setFixing] = useState(false);
   const [fixAmount, setFixAmount] = useState('');
   const [fixReason, setFixReason] = useState('');
+
+  const activeSources = sources.filter((s) => !s.archived);
 
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customerId]);
+
+  useEffect(() => {
+    void paymentSources()
+      .then((loaded) => {
+        if (!mounted.current) {
+          return;
+        }
+        setSources(loaded);
+        setPaymentSourceId(defaultPaymentSource(loaded, company, memberId));
+      })
+      // Молчаливый отказ намеренно: без справочника операция идёт как раньше,
+      // с `paymentSourceId: null`, и красная строка про источники посреди
+      // разбора долга сказала бы не о том, зачем сюда пришли.
+      .catch(() => {
+        if (mounted.current) {
+          setSources([]);
+        }
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [company, memberId]);
 
   return (
     <div className="card">
@@ -533,10 +632,29 @@ function AccountPanel({ customerId, role }: { customerId: number; role: string }
             placeholder="сумма"
             onChange={(e) => setCash(e.target.value)}
           />
+          {/* Списка нет вовсе, если источников не заведено ни одного:
+              операция работает как раньше, без способа. */}
+          {activeSources.length > 0 && (
+            <select
+              aria-label="Источник платежа"
+              value={paymentSourceId ?? ''}
+              onChange={(e) =>
+                setPaymentSourceId(e.target.value === '' ? null : Number(e.target.value))
+              }
+            >
+              <option value="">не указан</option>
+              {activeSources.map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.name}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             type="button"
             disabled={cash.trim() === ''}
-            onClick={() => void money(() => topUpAccount(customerId, cash.trim()))}
+            onClick={() => void money(() =>
+              topUpAccount(customerId, cash.trim(), paymentSourceId))}
           >
             Положить
           </button>
@@ -544,7 +662,8 @@ function AccountPanel({ customerId, role }: { customerId: number; role: string }
             type="button"
             className="button--ghost"
             disabled={cash.trim() === '' || account === null || account.balance <= 0}
-            onClick={() => void money(() => withdrawFromAccount(customerId, cash.trim()))}
+            onClick={() => void money(() =>
+              withdrawFromAccount(customerId, cash.trim(), paymentSourceId))}
           >
             Выдать
           </button>
@@ -574,7 +693,7 @@ function AccountPanel({ customerId, role }: { customerId: number; role: string }
                 setFixing(false);
                 setFixAmount('');
                 setFixReason('');
-              })}
+              }, false)}
             >
               Поправить
             </button>
@@ -593,20 +712,41 @@ function AccountPanel({ customerId, role }: { customerId: number; role: string }
 
   async function load(): Promise<void> {
     try {
-      setAccount(await accountOf(customerId));
+      const loaded = await accountOf(customerId);
+      if (!mounted.current) {
+        return;
+      }
+      setAccount(loaded);
       setError(null);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : 'Счёт не загрузился');
+      if (mounted.current) {
+        setError(cause instanceof ApiError ? cause.message : 'Счёт не загрузился');
+      }
     }
   }
 
-  async function money(action: () => Promise<unknown>): Promise<void> {
+  /**
+   * @param withSource операция создала платёж, и способ у него есть. У правки
+   *                   остатка платежа нет вовсе (деньги не двигались), и
+   *                   запоминать при ней выбранный источник значит подставлять
+   *                   продавцу умолчание, которым он не платил, — то же
+   *                   правило, что в `DealFinder`.
+   */
+  async function money(action: () => Promise<unknown>, withSource = true): Promise<void> {
     try {
       await action();
+      if (withSource && paymentSourceId !== null) {
+        rememberPaymentSource(company, memberId, paymentSourceId);
+      }
+      if (!mounted.current) {
+        return;
+      }
       setCash('');
       await load();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : 'Операция по счёту не прошла');
+      if (mounted.current) {
+        setError(cause instanceof ApiError ? cause.message : 'Операция по счёту не прошла');
+      }
     }
   }
 }
@@ -619,6 +759,7 @@ function DealsTab({
   customerId: number;
   onOpenDeal: (dealId: number) => void;
 }) {
+  const mounted = useMounted();
   const [deals, setDeals] = useState<Deal[] | null>(null);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -626,14 +767,21 @@ function DealsTab({
   useEffect(() => {
     void Promise.all([dealsOf(customerId), listWarehouses()])
       .then(([loaded, houses]) => {
+        if (!mounted.current) {
+          return;
+        }
         setDeals(loaded);
         setWarehouses(houses);
         setError(null);
       })
       .catch((cause) => {
+        if (!mounted.current) {
+          return;
+        }
         setDeals([]);
         setError(cause instanceof ApiError ? cause.message : 'Сделки не загрузились');
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customerId]);
 
   if (deals === null) {
@@ -710,6 +858,7 @@ function ReturnsTab({
   customerId: number;
   onOpenDeal: (dealId: number) => void;
 }) {
+  const mounted = useMounted();
   const [size, setSize] = useState(PAGE);
   const [page, setPage] = useState<ReturnsPage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -764,10 +913,16 @@ function ReturnsTab({
 
   async function load(limit: number): Promise<void> {
     try {
-      setPage(await listReturns('', '', '', limit, customerId));
+      const loaded = await listReturns('', '', '', limit, customerId);
+      if (!mounted.current) {
+        return;
+      }
+      setPage(loaded);
       setError(null);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : 'Возвраты не загрузились');
+      if (mounted.current) {
+        setError(cause instanceof ApiError ? cause.message : 'Возвраты не загрузились');
+      }
     }
   }
 }
@@ -836,6 +991,7 @@ function PaymentsTab({ customerId }: { customerId: number }) {
 }
 
 function PaymentsList({ customerId }: { customerId: number }) {
+  const mounted = useMounted();
   const [rows, setRows] = useState<PaymentRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<PaymentsFilter>('ALL');
@@ -843,13 +999,20 @@ function PaymentsList({ customerId }: { customerId: number }) {
   useEffect(() => {
     void customerPayments(customerId)
       .then((loaded) => {
+        if (!mounted.current) {
+          return;
+        }
         setRows(loaded);
         setError(null);
       })
       .catch((cause) => {
+        if (!mounted.current) {
+          return;
+        }
         setRows([]);
         setError(cause instanceof ApiError ? cause.message : 'Платежи не загрузились');
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customerId]);
 
   if (rows === null) {
@@ -932,19 +1095,27 @@ function PaymentsList({ customerId }: { customerId: number }) {
  * до тысяч строк).
  */
 function AccountMovements({ customerId }: { customerId: number }) {
+  const mounted = useMounted();
   const [account, setAccount] = useState<CustomerAccount | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void accountOf(customerId)
       .then((loaded) => {
+        if (!mounted.current) {
+          return;
+        }
         setAccount(loaded);
         setError(null);
       })
       .catch((cause) => {
+        if (!mounted.current) {
+          return;
+        }
         setAccount(null);
         setError(cause instanceof ApiError ? cause.message : 'Движения не загрузились');
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customerId]);
 
   if (account === null) {

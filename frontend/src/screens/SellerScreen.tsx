@@ -194,16 +194,23 @@ export function SellerScreen({
         </button>
       </form>
 
-      <button
-        type="button"
-        className="button--ghost"
-        onClick={() => {
-          setFinding(!finding);
-          setError(null);
-        }}
-      >
-        {finding ? 'Скрыть поиск сделки' : 'Найти сделку клиента'}
-      </button>
+      {/* Кнопка, которая ничего не сделает, не показывается: история сделок
+          клиента (`GET /api/deals?customerId=`) закрыта теми же ролями, что
+          и раздел «Клиенты», — кладовщик и «Просмотр» получили бы отказ
+          на первом же выбранном клиенте. Поиск товара выше при этом остаётся
+          всем: цена и наличие нужны и приёмщику. */}
+      {canSell && (
+        <button
+          type="button"
+          className="button--ghost"
+          onClick={() => {
+            setFinding(!finding);
+            setError(null);
+          }}
+        >
+          {finding ? 'Скрыть поиск сделки' : 'Найти сделку клиента'}
+        </button>
+      )}
 
       {error !== null && <p className="note note--error">{error}</p>}
 

@@ -156,6 +156,33 @@ class CustomerControllerTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.balance").value(-400));
     }
 
+    /**
+     * Задача обещает поиск «по имени, телефону или почте», и колонка «Почта»
+     * в списке стоит — а отбор шёл только по имени и цифрам телефона: почту
+     * видно и найти по ней нельзя. Клиента-юрлицо в переписке зовут именно
+     * почтой, и по ней его и ищут.
+     */
+    @Test
+    @DisplayName("Клиент находится по части почты, а не только по имени и телефону")
+    void directoryFindsByEmail() throws Exception {
+        Long id = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO customer (name, phone, email)
+                VALUES ('Сервис Восток', '+79995553311', 'zakupki@vostok-service.ru')
+                RETURNING id""", Long.class));
+
+        // Часть почты, не встречающаяся ни в имени, ни в телефоне: найтись
+        // строка может только отбором по email.
+        mvc.perform(get("/api/customers/directory?q=vostok-service").session(login("owner")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(id));
+
+        // Регистр не важен: почту диктуют по телефону как придётся.
+        mvc.perform(get("/api/customers/directory?q=ZAKUPKI@VOSTOK").session(login("owner")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].id").value(id));
+    }
+
     @Test
     @DisplayName("Директория считает найденное отдельно от предела выдачи")
     void directorySizeLimitsRowsNotTotal() throws Exception {
