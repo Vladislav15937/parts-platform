@@ -580,6 +580,12 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 // Внутреннее: на площадку не идёт.
                 new Field("min_price", new BigDecimal("100"), false),
                 new Field("cost_price", new BigDecimal("200"), false),
+                // Цена установки сама по себе внутренняя и остаётся ею:
+                // наружу от неё уходит только приписка к описанию, и только
+                // если владелец включил её у выгрузки. Прайс здесь собирается
+                // без настроек — значит поле обязано молчать, как и раньше
+                // (включённую приписку стережёт
+                // DromFeedControllerTest.installationNoteBelongsToTheFeed).
                 new Field("installation_price", new BigDecimal("300"), false),
                 new Field("note", "лежит с краю", false),
                 new Field("section", "01-02-03", false),

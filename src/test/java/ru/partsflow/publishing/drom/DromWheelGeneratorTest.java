@@ -348,7 +348,7 @@ class DromWheelGeneratorTest extends PostgresTestBase {
         String xml = inTenant(() -> {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             generator.writeTo(out, mine, "https://example.org/photo/",
-                    new ru.partsflow.publishing.FeedSettings(null, null, 2));
+                    new ru.partsflow.publishing.FeedSettings(null, null, 2, null, null));
             return out.toString(StandardCharsets.UTF_8);
         });
 
