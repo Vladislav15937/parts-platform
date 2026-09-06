@@ -7,6 +7,8 @@ import {
   finishCounting,
   findOpenSession,
   listSessions,
+  noteEditable,
+  saveSessionNote,
   sessionSummary,
   SESSION_FUNNEL,
   SESSION_STATUS_LABEL,
@@ -46,6 +48,10 @@ import type { Reference } from '../reference/reference';
  */
 export function InventoryReconcile({ reference, role }: { reference: Reference; role?: string }) {
   const canReconcile = role === undefined || role === 'OWNER' || role === 'MANAGER';
+  // Комментарий пишет и кладовщик — тот, кто ходил по полкам: то же
+  // разделение, что на сервере (`InventoryController.COMMENTS` против
+  // `RECONCILES`). «Просмотр» его только читает.
+  const canComment = canReconcile || role === 'STOREKEEPER';
 
   // --- журнал: воронка слева, список справа ---
   const [funnel, setFunnel] = useState<SessionFunnelKey>('OPEN');
@@ -72,6 +78,11 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
   const [rows, setRows] = useState<Discrepancy[] | null>(null);
   const [applied, setApplied] = useState<Applied | null>(null);
   const [note, setNote] = useState('');
+  // Черновик комментария отдельно от сохранённого: пока не нажали
+  // «Сохранить», набранное ещё не факт, а кнопка гаснет ровно тогда,
+  // когда сохранять нечего.
+  const [noteDraft, setNoteDraft] = useState('');
+  const [noteSaved, setNoteSaved] = useState('');
   const [busy, setBusy] = useState(false);
   // Отмена выбрасывает работу смены — спрашиваем вторым нажатием.
   const [cancelling, setCancelling] = useState(false);
@@ -121,10 +132,12 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
                       <td>{row.selection}</td>
                       <td>{SESSION_STATUS_LABEL[row.status]}</td>
                       <td>{row.counted} из {row.lines}</td>
-                      {/* Комментарий пока негде хранить — своей колонки
-                          у сессии нет, задача 0020 закрыта наполовину,
-                          подробности в отчёте по ней. */}
-                      <td />
+                      {/* Ради него в журнал и заходят: номер с датой говорят,
+                          что документ был, а «83619 не найден» — зачем его
+                          открывали. Пусто остаётся пустым, а не прочерком:
+                          «не писали» тут не вопрос, на который мы не знаем
+                          ответа, а обычное состояние половины строк. */}
+                      <td>{row.note ?? ''}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -174,10 +187,54 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
       {session !== null && (
         <>
           <p className="note">
-            Сессия {session.id} · {SESSION_STATUS_LABEL[session.status as SessionSummary['status']]
-              ?? session.status}
+            Сессия {session.id} · {SESSION_STATUS_LABEL[session.status]}
             {' '}· строк {session.lines} · посчитано {session.counted}
           </p>
+
+          {/*
+            * Комментарий — под шапкой сведений, как и в задаче.
+            *
+            * Правится, пока пересчёт не проведён и не отменён: закрытый
+            * документ показывается текстом, потому что приписка задним
+            * числом объясняла бы уже случившееся не тем, что видел писавший.
+            * Условие то же, что на сервере (`noteEditable`), — поле, которое
+            * сервер отобьёт, хуже отсутствующего.
+            *
+            * У закрытого без комментария блока нет вовсе: пустая подпись
+            * «Комментарий» с прочерком — это строка, которая ничего
+            * не сообщает, а таких на экране и так хватает.
+            */}
+          {canComment && noteEditable(session.status) ? (
+            <div className="field">
+              <label htmlFor="session-note">Комментарий</label>
+              <textarea
+                id="session-note"
+                rows={2}
+                value={noteDraft}
+                disabled={busy}
+                onChange={(e) => {
+                  setNoteDraft(e.target.value);
+                  // «Комментарий сохранён» рядом с изменённым текстом
+                  // говорит неправду о том, что лежит на сервере.
+                  setNoteSaved('');
+                }}
+              />
+              <div className="row">
+                <button
+                  type="button"
+                  disabled={busy || noteDraft === (session.note ?? '')}
+                  onClick={() => void saveNote()}
+                >
+                  Сохранить комментарий
+                </button>
+                {noteSaved !== '' && <span className="note">{noteSaved}</span>}
+              </div>
+            </div>
+          ) : (
+            session.note !== null && (
+              <p className="note">Комментарий: {session.note}</p>
+            )
+          )}
 
           {canReconcile && session.status === 'OPEN' && (
             <>
@@ -292,9 +349,11 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
     setDone('');
     setApplied(null);
     setCancelling(false);
+    setNoteSaved('');
     try {
       const found = await sessionSummary(id);
       setSession(found);
+      setNoteDraft(found.note ?? '');
       setWarehouseId(found.warehouseId);
       setRows(found.status !== 'OPEN' ? await discrepanciesOf(found.id) : null);
     } catch (cause) {
@@ -312,6 +371,35 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
       // Список — не главный путь сразу после успешного действия: если
       // страница действия уже сказала «готово», молчаливый повтор при случае
       // следующей смены воронки дешевле второй красной строки поверх первой.
+    }
+  }
+
+  /**
+   * Сохраняет комментарий и перечитывает журнал.
+   *
+   * <p>Список обновляется здесь, а не молча: колонка «Комментарий» — это
+   * то, ради чего в журнал заходят, и оставить в ней прежний текст рядом
+   * с новым в поле значило бы показать два ответа на один вопрос.
+   */
+  async function saveNote(): Promise<void> {
+    if (session === null) {
+      return;
+    }
+    setBusy(true);
+    setNote('');
+    try {
+      const saved = await saveSessionNote(session.id, noteDraft);
+      setSession(saved);
+      // Сервер стирает пустое в null и срезает пробелы по краям —
+      // черновик берётся из его ответа, иначе кнопка осталась бы
+      // нажимаемой на том, что уже сохранено.
+      setNoteDraft(saved.note ?? '');
+      setNoteSaved('Комментарий сохранён');
+      void refreshList();
+    } catch (cause) {
+      setNote(describe(cause, 'Не удалось сохранить комментарий'));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -347,10 +435,12 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
     setBusy(true);
     setNote('');
     setDone('');
+    setNoteSaved('');
     setApplied(null);
     try {
       const found = await findOpenSession(warehouseId);
       setSession(found);
+      setNoteDraft(found?.note ?? '');
       if (found === null) {
         setNote('На этом складе пересчёт не открыт');
         setRows(null);
@@ -392,6 +482,13 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
       const result = await applySession(session.id);
       setApplied(result);
       setRows(await discrepanciesOf(session.id));
+      // Статус перечитывается, а не выводится из успеха: проведение
+      // построчное, и застрявшая на резерве строка оставляет сессию
+      // «завершённой». Без этого шапка и комментарий говорили бы
+      // «подсчёт завершён, правьте» о документе, который сервер уже закрыл.
+      const after = await sessionSummary(session.id);
+      setSession(after);
+      setNoteDraft(after.note ?? '');
       setNote('');
       void refreshList();
     } catch (cause) {

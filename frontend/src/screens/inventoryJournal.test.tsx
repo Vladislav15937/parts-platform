@@ -92,6 +92,63 @@ describe('журнал пересчётов', () => {
     expect(screen.queryByRole('button', { name: 'Отменить пересчёт' })).toBeNull();
   });
 
+  /**
+   * Пункт приёмки 6: комментарий, написанный тем, кто ходил по складу,
+   * виден владельцу в колонке списка. Ради него в журнал и заходят.
+   */
+  it('комментарий виден в колонке списка и сохраняется у живого пересчёта', async () => {
+    const posted: string[] = [];
+    stubApi({
+      onList: () => [row({ id: 7, status: 'OPEN', note: '83619 не найден' })],
+      onSummary: (id) => row({ id, status: 'OPEN', note: '83619 не найден' }),
+      onNote: (body) => {
+        posted.push(body);
+        return row({ id: 7, status: 'OPEN', note: 'Катушки не считали' });
+      },
+    });
+
+    render(<InventoryReconcile reference={reference()} />);
+
+    // В колонке списка — то, что написал человек.
+    expect(await screen.findByText('83619 не найден')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Идёт подсчёт'));
+    await waitFor(() => expect(screen.getByText(/Сессия 7/)).toBeTruthy());
+
+    // У живого пересчёта это поле ввода, а не текст.
+    const field = screen.getByLabelText('Комментарий') as HTMLTextAreaElement;
+    expect(field.value).toBe('83619 не найден');
+
+    fireEvent.change(field, { target: { value: 'Катушки не считали' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить комментарий' }));
+
+    await waitFor(() => expect(posted).toEqual(['{"note":"Катушки не считали"}']));
+    await waitFor(() => expect(screen.getByText('Комментарий сохранён')).toBeTruthy());
+  });
+
+  /**
+   * Пункт приёмки 7: у проведённого пересчёта комментарий показан текстом,
+   * а не полем ввода. Приписка задним числом объясняла бы уже случившееся
+   * не тем, что видел писавший, — и сервер её отобьёт: кнопка, которую
+   * отобьют, хуже отсутствующей.
+   */
+  it('у проведённого пересчёта комментарий показан текстом, а не полем', async () => {
+    stubApi({
+      onList: () => [row({ id: 8, status: 'APPLIED', note: 'Все на месте' })],
+      onSummary: (id) => row({ id, status: 'APPLIED', note: 'Все на месте' }),
+      onDiscrepancies: () => [],
+    });
+
+    render(<InventoryReconcile reference={reference()} />);
+
+    fireEvent.click(await screen.findByText('Проведён'));
+    await waitFor(() => expect(screen.getByText(/Сессия 8/)).toBeTruthy());
+
+    expect(screen.getByText('Комментарий: Все на месте')).toBeTruthy();
+    expect(screen.queryByLabelText('Комментарий')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Сохранить комментарий' })).toBeNull();
+  });
+
   it('«Просмотр» видит журнал, но не сводит расхождения даже у открытого', async () => {
     stubApi({
       onList: () => [row({ id: 3, status: 'OPEN' })],
@@ -121,13 +178,15 @@ interface Row {
   appliedAt: string | null;
   lines: number;
   counted: number;
+  /** Комментарий человека или `null` — пустой строки сервер не отдаёт. */
+  note: string | null;
 }
 
 function row(overrides: Partial<Row> = {}): Row {
   return {
     id: 1, warehouseId: 2, warehouseName: 'Ткацкая', selection: 'Ткацкая · весь склад',
     status: 'OPEN', startedAt: '2026-09-05T10:00:00Z', appliedAt: null,
-    lines: 1, counted: 0,
+    lines: 1, counted: 0, note: null,
     ...overrides,
   };
 }
@@ -143,9 +202,14 @@ function stubApi(handlers: {
   onList?: (query: string) => Row[];
   onSummary?: (id: number) => Row;
   onDiscrepancies?: () => unknown[];
+  /** Тело запроса приходит как есть — проверяем, что именно уехало на сервер. */
+  onNote?: (body: string) => Row;
 }): void {
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.endsWith('/note') && handlers.onNote) {
+      return json(handlers.onNote(String(init?.body ?? '')));
+    }
     if (url.includes('/discrepancies')) {
       return json(handlers.onDiscrepancies?.() ?? []);
     }

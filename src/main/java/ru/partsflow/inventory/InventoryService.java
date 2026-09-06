@@ -416,14 +416,15 @@ public class InventoryService {
         // ними, а компилятор молчит. Уже ловили это дважды на других запросах.
         String sql = """
                 SELECT s.id, s.warehouse_id, w.name AS warehouse_name, s.status,
-                       s.started_at, s.applied_at,
+                       s.started_at, s.applied_at, s.note,
                        count(l.part_id) AS lines_count,
                        count(l.qty_counted) AS counted_count
                   FROM inventory_session s
                   JOIN warehouse w ON w.id = s.warehouse_id
                   LEFT JOIN inventory_line l ON l.session_id = s.id
                 %s
-                 GROUP BY s.id, s.warehouse_id, w.name, s.status, s.started_at, s.applied_at
+                 GROUP BY s.id, s.warehouse_id, w.name, s.status, s.started_at, s.applied_at,
+                          s.note
                  ORDER BY s.id DESC""".formatted(where);
         List<SummaryRow> rows = jdbc.query(sql,
                 (rs, i) -> new SummaryRow(rs.getLong("id"), rs.getLong("warehouse_id"),
@@ -432,15 +433,34 @@ public class InventoryService {
                         rs.getTimestamp("started_at").toInstant(),
                         rs.getTimestamp("applied_at") == null
                                 ? null : rs.getTimestamp("applied_at").toInstant(),
-                        rs.getInt("lines_count"), rs.getLong("counted_count")),
+                        rs.getInt("lines_count"), rs.getLong("counted_count"),
+                        rs.getString("note")),
                 params);
 
         Map<Long, String> selections = selectionPartsOf(rows.stream().map(SummaryRow::id).toList());
         return rows.stream()
                 .map(r -> new SessionSummary(r.id(), r.warehouseId(), r.warehouseName(),
                         r.warehouseName() + " · " + selections.getOrDefault(r.id(), "весь склад"),
-                        r.status(), r.startedAt(), r.appliedAt(), r.lines(), r.counted()))
+                        r.status(), r.startedAt(), r.appliedAt(), r.lines(), r.counted(), r.note()))
                 .toList();
+    }
+
+    /**
+     * Комментарий человека к пересчёту — то, ради чего в журнал заходят.
+     *
+     * <p>Пишет его тот, кто ходил по складу (роли — в {@code
+     * InventoryController.COMMENTS}), и пишет по ходу подсчёта: номер и дата
+     * говорят, что документ был, а «83619 не найден» — зачем его открывали.
+     *
+     * <p>Правило «пока не закрыт» держит сама сессия ({@link
+     * InventorySession#changeNote}), а не проверка здесь: инвариант должен
+     * жить в одном месте, иначе второй вызывающий его обойдёт.
+     */
+    @Transactional
+    public InventorySession changeNote(Long sessionId, String note) {
+        InventorySession session = require(sessionId);
+        session.changeNote(note);
+        return detachable(sessions.saveAndFlush(session));
     }
 
     /**
@@ -505,7 +525,7 @@ public class InventoryService {
     private record SummaryRow(Long id, Long warehouseId, String warehouseName,
                               InventorySession.SessionStatus status,
                               Instant startedAt, Instant appliedAt,
-                              int lines, long counted) {
+                              int lines, long counted, String note) {
     }
 
     /**
@@ -514,11 +534,14 @@ public class InventoryService {
      *
      * @param selection склад и ячейка словами: «Основной · A-01-03»,
      *                  «Основной · весь склад» или «Основной · без адреса»
+     * @param note      комментарий человека или {@code null}, если его нет.
+     *                  Пустой строки тут не бывает — см. {@link
+     *                  InventorySession#changeNote}
      */
     public record SessionSummary(Long id, Long warehouseId, String warehouseName, String selection,
                                  InventorySession.SessionStatus status,
                                  Instant startedAt, Instant appliedAt,
-                                 int lines, long counted) {
+                                 int lines, long counted, String note) {
     }
 
     /**

@@ -300,6 +300,82 @@ class InventoryHttpTest extends PostgresTestBase {
                 .andExpect(status().isOk());
     }
 
+    /**
+     * Комментарий к пересчёту — пункты приёмки 6 и 7 задачи 0020.
+     *
+     * <p>Ради него в журнал пересчётов и заходят: номер с датой говорят,
+     * что документ был, а «83619 не найден» — зачем его открывали. Пишет
+     * его тот, кто ходил по складу, поэтому проверяется кладовщиком,
+     * а читается владельцем — в колонке списка.
+     *
+     * <p>Отдельно проверяется, что пустой комментарий становится
+     * {@code NULL}, а не пустой строкой. В этом проекте на разнице
+     * «не заполнено» и «значение» спотыкались дважды — на снятом штрихкоде
+     * и на нулевой цене установки, — и оба раза пустое выдавало себя
+     * за ответ человека.
+     */
+    @Test
+    @DisplayName("Комментарий пишет кладовщик, пустой стирается в NULL, закрытый не правится")
+    void sessionNoteIsWrittenReadAndFrozen() throws Exception {
+        MockHttpSession owner = login("vladelec");
+
+        String opened = mvc.perform(post("/api/inventory/sessions").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"warehouseId\":%d}".formatted(warehouseId)))
+                .andExpect(status().isCreated())
+                // Пересчёт без комментария — пусто, а не пустая строка.
+                .andExpect(jsonPath("$.note").isEmpty())
+                .andReturn().getResponse().getContentAsString();
+        long sessionId = Long.parseLong(opened.replaceAll(".*\"id\":(\\d+).*", "$1"));
+        String noteUrl = "/api/inventory/sessions/%d/note".formatted(sessionId);
+
+        // Пишет кладовщик: «83619 не найден» знает тот, кто стоял у полки.
+        // Пробелы по краям срезаются — иначе «  » сохранилось бы значением.
+        MockHttpSession keeper = login("kladovshchik");
+        mvc.perform(post(noteUrl).with(csrf()).session(keeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"  83619 не найден  \"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.note").value("83619 не найден"));
+
+        // Пункт приёмки 6: написанное кладовщиком видно владельцу в списке.
+        mvc.perform(get("/api/inventory/sessions?status=OPEN").session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(sessionId))
+                .andExpect(jsonPath("$[0].note").value("83619 не найден"));
+        mvc.perform(get("/api/inventory/sessions/%d".formatted(sessionId)).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.note").value("83619 не найден"));
+
+        // Стёртый комментарий — NULL, а не пустая строка: спрашиваем базу,
+        // потому что снаружи «» и null выглядят одинаково пусто.
+        mvc.perform(post(noteUrl).with(csrf()).session(keeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"   \"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.note").isEmpty());
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT note FROM inventory_session WHERE id = ?", String.class, sessionId)))
+                .isNull();
+
+        // Продавец по складу не ходит и пересчёт не комментирует.
+        mvc.perform(post(noteUrl).with(csrf()).session(login("prodavec"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"а я тут был\"}"))
+                .andExpect(status().isForbidden());
+
+        // Пункт приёмки 7: закрытый пересчёт не комментируют. Ответ —
+        // 409 со словами, а не пятисотка: пишут комментарий с телефона,
+        // а офлайн-очередь повторяет 5xx вечно.
+        mvc.perform(post("/api/inventory/sessions/%d/cancel".formatted(sessionId))
+                        .with(csrf()).session(owner))
+                .andExpect(status().isOk());
+        mvc.perform(post(noteUrl).with(csrf()).session(keeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"уже поздно\"}"))
+                .andExpect(status().isConflict());
+    }
+
     @Test
     @DisplayName("Открытая сессия склада отдаётся, а не пятисоткой")
     void openSessionIsReadable() throws Exception {

@@ -27,13 +27,29 @@ export interface InventoryLine {
   qtyCounted: string | null;
 }
 
+/**
+ * Статус пересчёта — ровно те четыре значения, что живут в базе и в Java
+ * ({@code InventorySession.SessionStatus}, ограничение
+ * `inventory_session_status_ck`).
+ *
+ * <p>Тип, а не `string`: пока статус был строкой, показ его человеку
+ * приходилось страховать запасным `?? session.status`, то есть внутренним
+ * написанием «COUNTED» вместо «Подсчёт завершён». С union'ом
+ * {@link SESSION_STATUS_LABEL} покрывает все случаи, и запасной путь
+ * не нужен вовсе — а новый статус, если он появится, уронит сборку здесь,
+ * а не покажет своё имя кладовщику.
+ */
+export type SessionStatus = 'OPEN' | 'COUNTED' | 'APPLIED' | 'CANCELLED';
+
 export interface InventorySession {
   id: number;
   warehouseId: number;
-  status: string;
+  status: SessionStatus;
   startedAt: string;
   lines: number;
   counted: number;
+  /** Комментарий человека или `null`. Пустой строки не бывает — сервер её стирает. */
+  note: string | null;
 }
 
 /**
@@ -49,11 +65,16 @@ export interface SessionSummary {
   warehouseName: string;
   /** Склад и ячейка словами: «Основной · A-01-03» или «Основной · весь склад». */
   selection: string;
-  status: 'OPEN' | 'COUNTED' | 'APPLIED' | 'CANCELLED';
+  status: SessionStatus;
   startedAt: string;
   appliedAt: string | null;
   lines: number;
   counted: number;
+  /**
+   * Комментарий человека — то, ради чего в журнал заходят: «83619 не найден»,
+   * «Не сканировали». `null` — не писали вовсе.
+   */
+  note: string | null;
 }
 
 /** Пункты воронки слева, в порядке, заданном задачей. */
@@ -66,12 +87,37 @@ export const SESSION_FUNNEL = [
 
 export type SessionFunnelKey = (typeof SESSION_FUNNEL)[number]['key'];
 
-export const SESSION_STATUS_LABEL: Record<SessionSummary['status'], string> = {
+export const SESSION_STATUS_LABEL: Record<SessionStatus, string> = {
   OPEN: 'Идёт подсчёт',
   COUNTED: 'Подсчёт завершён',
   APPLIED: 'Проведён',
   CANCELLED: 'Отменён',
 };
+
+/**
+ * Правится ли комментарий: закрытый пересчёт показывает его текстом.
+ *
+ * <p>То же условие, что на сервере ({@code InventorySession.changeNote}):
+ * проведение записало корректировки в журнал, отмена выбросила лист обхода,
+ * и приписка задним числом объясняла бы случившееся не тем, что видел
+ * писавший. Кнопка, которую сервер отобьёт, хуже отсутствующей.
+ */
+export function noteEditable(status: SessionStatus): boolean {
+  return status !== 'APPLIED' && status !== 'CANCELLED';
+}
+
+/**
+ * Пишет комментарий к пересчёту.
+ *
+ * <p>Пустая строка стирает его: сервер приводит её к `NULL`, и «не заполнено»
+ * не выдаёт себя за ответ человека.
+ */
+export function saveSessionNote(sessionId: number, note: string): Promise<InventorySession> {
+  return request<InventorySession>(`/api/inventory/sessions/${sessionId}/note`, {
+    method: 'POST',
+    body: { note },
+  });
+}
 
 /** Список пересчётов по воронке — «Все пересчёты» шлёт запрос без фильтра. */
 export function listSessions(funnel: SessionFunnelKey): Promise<SessionSummary[]> {

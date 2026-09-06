@@ -59,6 +59,15 @@ public class InventoryController {
      */
     private static final String READS = "hasAnyRole('OWNER','MANAGER','VIEWER')";
 
+    /**
+     * Комментарий к пересчёту: те же, что сводят расхождения, плюс кладовщик.
+     *
+     * <p>Пишет его тот, кто ходил по складу: «83619 не найден» знает человек
+     * у полки, а не тот, кто потом смотрит расхождения. «Просмотра» тут нет —
+     * роль называется владельцу «только смотреть».
+     */
+    private static final String COMMENTS = "hasAnyRole('OWNER','MANAGER','STOREKEEPER')";
+
     private final InventoryService inventory;
 
     public InventoryController(InventoryService inventory) {
@@ -133,6 +142,20 @@ public class InventoryController {
     @GetMapping("/sessions/{id}")
     public InventoryService.SessionSummary session(@PathVariable Long id) {
         return inventory.sessionSummary(id);
+    }
+
+    /**
+     * Комментарий к пересчёту — свободный текст, необязательный.
+     *
+     * <p>Правится, пока пересчёт не проведён и не отменён; закрытый отвечает
+     * 409 со словами, а не пятисоткой. Пустое тело стирает комментарий
+     * в {@code NULL} — «не заполнено» и «человек написал пусто» обязаны
+     * отличаться.
+     */
+    @PreAuthorize(COMMENTS)
+    @PostMapping("/sessions/{id}/note")
+    public SessionView note(@PathVariable Long id, @RequestBody NoteRequest request) {
+        return SessionView.of(inventory.changeNote(id, request.note()));
     }
 
     private InventorySession.SessionStatus parseStatus(String status) {
@@ -232,14 +255,24 @@ public class InventoryController {
                                @PositiveOrZero Long countedAgoMs) {
     }
 
+    /**
+     * @param note комментарий человека или {@code null}. Едет и сюда, а не
+     *             только в {@code SessionSummary}: сведения открывают двумя
+     *             путями — строкой журнала и поиском открытой сессии
+     *             по складу, — и поле, приезжающее лишь одним, показывало бы
+     *             пустой комментарий там, где он написан
+     */
+    public record NoteRequest(String note) {
+    }
+
     public record SessionView(Long id, Long warehouseId, InventorySession.SessionStatus status,
                               Instant startedAt, Instant appliedAt,
-                              int lines, long counted) {
+                              int lines, long counted, String note) {
 
         static SessionView of(InventorySession session) {
             return new SessionView(session.getId(), session.getWarehouseId(), session.getStatus(),
                     session.getStartedAt(), session.getAppliedAt(),
-                    session.getLines().size(), session.countedLines().size());
+                    session.getLines().size(), session.countedLines().size(), session.getNote());
         }
     }
 
