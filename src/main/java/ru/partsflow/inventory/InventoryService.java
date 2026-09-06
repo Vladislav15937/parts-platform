@@ -379,6 +379,232 @@ public class InventoryService {
     }
 
     /**
+     * Сколько строк журнала отдаётся разом.
+     *
+     * <p>Предел нужен не ради экрана, а ради базы: у ориентира журнал
+     * инвентаризаций — 1 924 документа, и пересчёт всего склада у клиента
+     * с 36 тысячами позиций даёт 36 тысяч строк {@code inventory_line}.
+     * Без предела каждое переключение воронки собирало бы счётчики по всему
+     * журналу целиком, то есть по сотням тысяч строк — при том что человек
+     * смотрит первый экран.
+     *
+     * <p>Двести, а не пятьдесят: журнал листают глазами сверху вниз, ища
+     * «когда эту полку считали в последний раз», и при пересчёте полки
+     * через день двести строк — это больше года работы. Число названо
+     * в подвале честно: показанное меньше найденного — экран об этом
+     * говорит, а не молчит.
+     */
+    private static final int SESSION_PAGE = 200;
+
+    /**
+     * Список пересчётов — владелец находит любой, не только открытый.
+     *
+     * <p>До этого экран умел искать сессию только по складу через {@link
+     * #openSessionOf}, то есть исключительно открытую: проведённый вчера
+     * пересчёт открыть было нельзя ни списком, ни по номеру, хотя журнал
+     * склада на него ссылается ({@code ref_type = 'INVENTORY'}). Список
+     * читается напрямую, а не через сущности — по той же причине, что
+     * и лист обхода: строки нужны только для показа.
+     *
+     * <p><b>Статусов в воронке несколько, а не один.</b> «Выполненные» — это
+     * и {@code COUNTED}, и {@code APPLIED}: нормально закрытый пересчёт
+     * всегда проведён, и воронка, накрывающая один лишь {@code COUNTED},
+     * отвечала бы пустотой на главный вопрос журнала — «когда эту полку
+     * считали в последний раз». Группировку задаёт экран
+     * ({@code SESSION_FUNNEL}), сервер просто отбирает по набору.
+     *
+     * @param statuses фильтр воронки; пусто — все статусы разом
+     */
+    @Transactional(readOnly = true)
+    public SessionPage listSessions(List<InventorySession.SessionStatus> statuses) {
+        if (statuses.isEmpty()) {
+            return new SessionPage(querySummaries("", SESSION_PAGE),
+                    jdbc.queryForObject("SELECT count(*) FROM inventory_session", Long.class));
+        }
+        String where = " WHERE s.status IN (%s)".formatted(
+                String.join(", ", java.util.Collections.nCopies(statuses.size(), "?")));
+        Object[] params = statuses.stream().map(Enum::name).toArray();
+        return new SessionPage(querySummaries(where, SESSION_PAGE, params),
+                jdbc.queryForObject("SELECT count(*) FROM inventory_session s" + where,
+                        Long.class, params));
+    }
+
+    /** Одна сессия любого статуса — карточка списка открывает её нажатием на строку. */
+    @Transactional(readOnly = true)
+    public SessionSummary sessionSummary(Long sessionId) {
+        List<SessionSummary> found = querySummaries(" WHERE s.id = ?", 1, sessionId);
+        if (found.isEmpty()) {
+            // Словом экрана, а не базы: вкладка называется «Пересчёт»,
+            // и «Инвентаризация не найдена» человек читает как сообщение
+            // о чём-то другом.
+            throw new IllegalArgumentException("Пересчёт не найден: " + sessionId);
+        }
+        return found.get(0);
+    }
+
+    private List<SessionSummary> querySummaries(String where, int limit, Object... params) {
+        // %s, а не склейка текстовых блоков "..." + where + "...": закрывающие
+        // кавычки второго блока стоят на строке содержимого, и стрипается весь
+        // отступ — «?» и «GROUP» слипаются в «?GROUP» без единого пробела между
+        // ними, а компилятор молчит. Уже ловили это дважды на других запросах.
+        //
+        // Отбор страницы стоит отдельным шагом (page), а счётчики считаются
+        // только по ней: соединение с inventory_line до предела прошло бы
+        // по всем строкам журнала — у клиента, пересчитывающего склад
+        // целиком, это 36 тысяч строк на документ.
+        //
+        // Выборка (ячейка) берётся тем же проходом: отдельный
+        // «SELECT DISTINCT session_id, cell_id» был вторым чтением тех же
+        // строк ради значения, которое агрегат и так знает.
+        String sql = """
+                WITH page AS (
+                    SELECT s.id
+                      FROM inventory_session s
+                    %s
+                     ORDER BY s.id DESC
+                     LIMIT %d
+                )
+                SELECT s.id, s.warehouse_id, w.name AS warehouse_name, s.status,
+                       s.started_at, s.applied_at, s.note,
+                       count(l.part_id) AS lines_count,
+                       count(l.qty_counted) AS counted_count,
+                       count(DISTINCT l.cell_id) AS placed_cells,
+                       min(l.cell_id) AS one_cell,
+                       bool_or(l.part_id IS NOT NULL AND l.cell_id IS NULL) AS has_unplaced
+                  FROM inventory_session s
+                  JOIN warehouse w ON w.id = s.warehouse_id
+                  LEFT JOIN inventory_line l ON l.session_id = s.id
+                 WHERE s.id IN (SELECT id FROM page)
+                 GROUP BY s.id, s.warehouse_id, w.name, s.status, s.started_at, s.applied_at,
+                          s.note
+                 ORDER BY s.id DESC""".formatted(where, limit);
+        List<SummaryRow> rows = jdbc.query(sql,
+                (rs, i) -> new SummaryRow(rs.getLong("id"), rs.getLong("warehouse_id"),
+                        rs.getString("warehouse_name"),
+                        InventorySession.SessionStatus.valueOf(rs.getString("status")),
+                        rs.getTimestamp("started_at").toInstant(),
+                        rs.getTimestamp("applied_at") == null
+                                ? null : rs.getTimestamp("applied_at").toInstant(),
+                        rs.getInt("lines_count"), rs.getLong("counted_count"),
+                        rs.getString("note"),
+                        rs.getInt("placed_cells"),
+                        rs.getObject("one_cell") == null ? null : rs.getLong("one_cell"),
+                        rs.getBoolean("has_unplaced")),
+                params);
+
+        Map<Long, String> codes = cellCodesOf(rows);
+        return rows.stream()
+                .map(r -> new SessionSummary(r.id(), r.warehouseId(), r.warehouseName(),
+                        r.warehouseName() + " · " + selectionOf(r, codes),
+                        r.status(), r.startedAt(), r.appliedAt(), r.lines(), r.counted(), r.note()))
+                .toList();
+    }
+
+    /**
+     * Комментарий человека к пересчёту — то, ради чего в журнал заходят.
+     *
+     * <p>Пишет его тот, кто ходил по складу (роли — в {@code
+     * InventoryController.COMMENTS}), и пишет по ходу подсчёта: номер и дата
+     * говорят, что документ был, а «83619 не найден» — зачем его открывали.
+     *
+     * <p>Правило «пока не закрыт» держит сама сессия ({@link
+     * InventorySession#changeNote}), а не проверка здесь: инвариант должен
+     * жить в одном месте, иначе второй вызывающий его обойдёт.
+     */
+    @Transactional
+    public InventorySession changeNote(Long sessionId, String note) {
+        InventorySession session = require(sessionId);
+        session.changeNote(note);
+        return detachable(sessions.saveAndFlush(session));
+    }
+
+    /**
+     * Выборка сессии из фактического адреса её строк — своей колонки под это
+     * нет (см. {@link #matchesSelection}), а заводить её ради одной колонки
+     * списка не стоит: значение и так лежит в строках.
+     *
+     * <p>Сессия, открытая одной ячейкой, заводит строки только с её
+     * {@code cell_id} ({@link #open}), поэтому единственное встреченное
+     * значение и есть выборка; несколько разных значений бывают только
+     * у пересчёта всего склада. Та же неоднозначность, что у «Продолжить
+     * начатую»: склад без ячеек вовсе или с одним, целиком без адресов,
+     * не отличить от намеренного «Без адреса» — точное различение потребовало
+     * бы миграции ради поля, дублирующего строки.
+     *
+     * <p>Сессия без единой строки (пустая ячейка бывает) читается как «весь
+     * склад»: адреса, по которому её назвать, у неё нет вовсе.
+     */
+    private String selectionOf(SummaryRow row, Map<Long, String> codes) {
+        int distinct = row.placedCells() + (row.hasUnplaced() ? 1 : 0);
+        if (distinct != 1) {
+            return "весь склад";
+        }
+        if (row.hasUnplaced()) {
+            return "без адреса";
+        }
+        Long cellId = row.oneCell();
+        return codes.getOrDefault(cellId, "ячейка " + cellId);
+    }
+
+    /** Коды ячеек только тех сессий страницы, у которых выборка — одна ячейка. */
+    private Map<Long, String> cellCodesOf(List<SummaryRow> rows) {
+        List<Long> cellIds = rows.stream()
+                .filter(r -> r.placedCells() == 1 && !r.hasUnplaced())
+                .map(SummaryRow::oneCell)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        if (cellIds.isEmpty()) {
+            return Map.of();
+        }
+        String cellIn = cellIds.stream().map(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(","));
+        Map<Long, String> codes = new HashMap<>();
+        jdbc.query("SELECT id, code FROM storage_cell WHERE id IN (" + cellIn + ")",
+                rs -> { codes.put(rs.getLong("id"), rs.getString("code")); });
+        return codes;
+    }
+
+    /**
+     * @param placedCells  сколько разных ячеек встречено в строках (NULL не в счёт)
+     * @param oneCell      наименьшая из них — она же единственная, когда {@code placedCells == 1}
+     * @param hasUnplaced  есть ли строки без ячейки
+     */
+    private record SummaryRow(Long id, Long warehouseId, String warehouseName,
+                              InventorySession.SessionStatus status,
+                              Instant startedAt, Instant appliedAt,
+                              int lines, long counted, String note,
+                              int placedCells, Long oneCell, boolean hasUnplaced) {
+    }
+
+    /**
+     * Страница журнала: показанное и сколько всего есть в воронке.
+     *
+     * <p>Общее число едет вместе со страницей — как у витрины склада
+     * и вкладки колёс. Подвал обязан говорить, сколько пересчётов в воронке,
+     * а не сколько строк влезло: счётчик, считающий показанное, врёт ровно
+     * на то, чего не видно, и узнать об этом по экрану нельзя никак.
+     */
+    public record SessionPage(List<SessionSummary> rows, long total) {
+    }
+
+    /**
+     * Строка списка пересчётов — то, что видно в таблице и в карточке одной
+     * сессии, без захода в строки.
+     *
+     * @param selection склад и ячейка словами: «Основной · A-01-03»,
+     *                  «Основной · весь склад» или «Основной · без адреса»
+     * @param note      комментарий человека или {@code null}, если его нет.
+     *                  Пустой строки тут не бывает — см. {@link
+     *                  InventorySession#changeNote}
+     */
+    public record SessionSummary(Long id, Long warehouseId, String warehouseName, String selection,
+                                 InventorySession.SessionStatus status,
+                                 Instant startedAt, Instant appliedAt,
+                                 int lines, long counted, String note) {
+    }
+
+    /**
      * Код детали → позиция, по всему складу сессии (не только по её выборке).
      *
      * <p>Отдаётся целиком, как и лист обхода: скан обязан работать без связи,
@@ -493,7 +719,7 @@ public class InventoryService {
         // одновременных проведения читают пустой оба и списывают недостачу
         // дважды. Подробности — у findByIdForUpdate.
         InventorySession session = sessions.findByIdForUpdate(sessionId).orElseThrow(
-                () -> new IllegalArgumentException("Инвентаризация не найдена: " + sessionId));
+                () -> new IllegalArgumentException("Пересчёт не найден: " + sessionId));
         Instant now = Instant.now();
 
         int adjusted = 0;
@@ -637,7 +863,7 @@ public class InventoryService {
 
     private InventorySession require(Long sessionId) {
         return sessions.findById(sessionId).orElseThrow(
-                () -> new IllegalArgumentException("Инвентаризация не найдена: " + sessionId));
+                () -> new IllegalArgumentException("Пересчёт не найден: " + sessionId));
     }
 
     /**

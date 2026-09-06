@@ -51,6 +51,36 @@ public class InventoryController {
     /** Сведение расхождений: недостача превращается в убыток. */
     private static final String RECONCILES = "hasAnyRole('OWNER','MANAGER')";
 
+    /**
+     * Список и карточка пересчёта — только смотреть. «Просмотру» это доступно
+     * наравне с владельцем и менеджером: журнал склада ссылается на пересчёт
+     * («Пересчёт №4»), и посмотреть, что тогда считали, — не то же самое,
+     * что провести или отменить.
+     */
+    private static final String READS = "hasAnyRole('OWNER','MANAGER','VIEWER')";
+
+    /**
+     * Комментарий к пересчёту. «Просмотра» тут нет — роль называется
+     * владельцу «только смотреть».
+     *
+     * <p><b>Кладовщика тут нет пока, и это не то, чего хотела задача.</b>
+     * Задача 0020 называет роли дословно — «те же, что у „Завершить
+     * подсчёт“, плюс кладовщик: пишет его тот, кто ходил», — и по существу
+     * это верно: «83619 не найден» знает человек у полки, а не тот, кто
+     * потом смотрит расхождения. Но поверхности у кладовщика нет ни одной:
+     * журнал пересчётов ему не показывают ({@code HomeScreen}), а обход
+     * полок с телефона поля комментария не имеет — где ему там стоять,
+     * задача не описывает, и это решение владельца продукта, а не наше.
+     *
+     * <p>Право без поверхности выбрано худшим из двух: {@code
+     * tools/endpoint-coverage.py} сверяет пути, а не роли, и висящее право
+     * читается следующим как рабочий путь, покрытый экраном, — при том что
+     * кладовщик не может даже прочитать написанное. Возвращать его сюда
+     * надо вместе с экраном, одной веткой, чтобы право и его поверхность
+     * доказывались вместе.
+     */
+    private static final String COMMENTS = "hasAnyRole('OWNER','MANAGER')";
+
     private final InventoryService inventory;
 
     public InventoryController(InventoryService inventory) {
@@ -104,6 +134,71 @@ public class InventoryController {
     @GetMapping("/sessions/{id}/lines")
     public List<InventoryService.Line> lines(@PathVariable Long id) {
         return inventory.lines(id);
+    }
+
+    /**
+     * Список пересчётов для воронки владельца: «В работе», «Выполненные»,
+     * «Отменённые» и «Все пересчёты» — до этого закрытый пересчёт нельзя
+     * было найти вовсе, ни списком, ни по номеру.
+     *
+     * <p><b>Статусов принимается несколько.</b> Воронка «Выполненные» — это
+     * и {@code COUNTED}, и {@code APPLIED}: нормально закрытый пересчёт всегда
+     * проведён, и фильтр по одному статусу оставлял бы проведённый документ
+     * вне всех воронок, кроме «Все пересчёты». Группировку задаёт экран
+     * (`SESSION_FUNNEL` в `inventory.ts`), а сервер отбирает по набору —
+     * иначе имена воронок пришлось бы знать обеим сторонам, и они разошлись
+     * бы на первой правке.
+     *
+     * @param status статусы {@link InventorySession.SessionStatus} через
+     *               повтор параметра либо пусто — все статусы
+     */
+    @PreAuthorize(READS)
+    @GetMapping("/sessions")
+    public InventoryService.SessionPage sessions(
+            @RequestParam(required = false) List<String> status) {
+        return inventory.listSessions(parseStatuses(status));
+    }
+
+    /** Одна сессия любого статуса — открывается нажатием на строку списка. */
+    @PreAuthorize(READS)
+    @GetMapping("/sessions/{id}")
+    public InventoryService.SessionSummary session(@PathVariable Long id) {
+        return inventory.sessionSummary(id);
+    }
+
+    /**
+     * Комментарий к пересчёту — свободный текст, необязательный.
+     *
+     * <p>Правится, пока пересчёт не проведён и не отменён; закрытый отвечает
+     * 409 со словами, а не пятисоткой. Пустое тело стирает комментарий
+     * в {@code NULL} — «не заполнено» и «человек написал пусто» обязаны
+     * отличаться.
+     */
+    @PreAuthorize(COMMENTS)
+    @PostMapping("/sessions/{id}/note")
+    public SessionView note(@PathVariable Long id, @RequestBody NoteRequest request) {
+        return SessionView.of(inventory.changeNote(id, request.note()));
+    }
+
+    private List<InventorySession.SessionStatus> parseStatuses(List<String> statuses) {
+        if (statuses == null) {
+            return List.of();
+        }
+        return statuses.stream()
+                .filter(s -> s != null && !s.isBlank())
+                .map(InventoryController::parseStatus)
+                .distinct()
+                .toList();
+    }
+
+    private static InventorySession.SessionStatus parseStatus(String status) {
+        try {
+            return InventorySession.SessionStatus.valueOf(status);
+        } catch (IllegalArgumentException e) {
+            // 400 со словами, а не 500: это ошибка вызывающего, и повторять
+            // её вечно офлайн-очереди незачем.
+            throw new IllegalArgumentException("Неизвестный статус пересчёта: " + status);
+        }
     }
 
     /**
@@ -192,14 +287,24 @@ public class InventoryController {
                                @PositiveOrZero Long countedAgoMs) {
     }
 
+    /**
+     * @param note комментарий человека или {@code null}. Едет и сюда, а не
+     *             только в {@code SessionSummary}: сведения открывают двумя
+     *             путями — строкой журнала и поиском открытой сессии
+     *             по складу, — и поле, приезжающее лишь одним, показывало бы
+     *             пустой комментарий там, где он написан
+     */
+    public record NoteRequest(String note) {
+    }
+
     public record SessionView(Long id, Long warehouseId, InventorySession.SessionStatus status,
                               Instant startedAt, Instant appliedAt,
-                              int lines, long counted) {
+                              int lines, long counted, String note) {
 
         static SessionView of(InventorySession session) {
             return new SessionView(session.getId(), session.getWarehouseId(), session.getStatus(),
                     session.getStartedAt(), session.getAppliedAt(),
-                    session.getLines().size(), session.countedLines().size());
+                    session.getLines().size(), session.countedLines().size(), session.getNote());
         }
     }
 

@@ -66,6 +66,20 @@ public class InventorySession {
     @Column(name = "applied_at")
     private Instant appliedAt;
 
+    /**
+     * Комментарий человека к пересчёту: «83619 не найден», «Не сканировали».
+     *
+     * <p>Ради него в журнал пересчётов и заходят: номер и дата говорят,
+     * что документ был, а зачем его открывали и чем кончилось — только он.
+     *
+     * <p>Пусто — это {@code null}, а не пустая строка. Разница не
+     * косметическая: «не заполнено» и «значение» в этом проекте уже
+     * расходились дважды — на снятом штрихкоде и на нулевой цене установки, —
+     * и оба раза пустая строка выдавала себя за ответ человека.
+     */
+    @Column(name = "note")
+    private String note;
+
     /** {@code nullable = false} — иначе Hibernate вставит строку без ссылки на сессию. */
     @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
     @JoinColumn(name = "session_id", nullable = false)
@@ -141,6 +155,28 @@ public class InventorySession {
         this.status = SessionStatus.CANCELLED;
     }
 
+    /**
+     * Пишет комментарий, пока пересчёт живой.
+     *
+     * <p>Закрытый документ не комментируют: проведение записало корректировки
+     * в журнал движений, отмена выбросила лист обхода, и приписка задним
+     * числом объясняла бы уже случившееся не тем, что видел писавший.
+     *
+     * <p>Отказ — {@link IllegalStateException}, то есть 409 со словами,
+     * а не пятисотка: пишут комментарий с телефона, а офлайн-очередь
+     * повторяет 5xx вечно.
+     *
+     * <p>Пустой текст стирает комментарий в {@code null}, а не кладёт пустую
+     * строку: «не заполнено» обязано отличаться от «человек написал пусто».
+     */
+    public void changeNote(String text) {
+        if (status == SessionStatus.APPLIED || status == SessionStatus.CANCELLED) {
+            throw new IllegalStateException(
+                    "Комментарий пишут, пока пересчёт не проведён и не отменён");
+        }
+        this.note = text == null || text.isBlank() ? null : text.strip();
+    }
+
     public boolean isOpen() {
         return status == SessionStatus.OPEN;
     }
@@ -181,6 +217,11 @@ public class InventorySession {
 
     public Instant getAppliedAt() {
         return appliedAt;
+    }
+
+    /** {@code null} — комментария нет; пустой строки тут не бывает. */
+    public String getNote() {
+        return note;
     }
 
     public List<InventoryLine> getLines() {

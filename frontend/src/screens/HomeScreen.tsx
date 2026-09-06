@@ -73,6 +73,17 @@ const MOVE_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
  */
 const WRITING_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER', 'SELLER'];
 
+/**
+ * Кто видит вкладку «Пересчёт»: все, кто заводит данные, и «Просмотр».
+ *
+ * <p>Журнал пересчётов раньше был недоступен «Просмотру» вовсе — вкладки
+ * не было. А журнал склада ссылается на пересчёт («Пересчёт №4»), и
+ * посмотреть, что тогда считали, — не то же самое, что провести или
+ * отменить: то же разделение, что и на сервере (`InventoryController.READS`
+ * против `RECONCILES`).
+ */
+const INVENTORY_ROLES = [...WRITING_ROLES, 'VIEWER'];
+
 type Tab =
   | 'intake'
   | 'donor'
@@ -242,7 +253,7 @@ export function HomeScreen() {
         >
           Шины и диски
         </button>
-        {WRITING_ROLES.includes(state.me.role) && (
+        {INVENTORY_ROLES.includes(state.me.role) && (
           <button
             type="button"
             className={tab === 'inventory' ? 'rail__item rail__item--active' : 'rail__item'}
@@ -449,7 +460,18 @@ export function HomeScreen() {
         <OrdersScreen canSell={SELLING_ROLES.includes(state.me.role)} />
       )}
 
-      {tab === 'inventory' &&
+      {/* Журнал пересчётов — над обходом полок и сведением расхождений:
+          список документов это то, с чего теперь начинают вкладку, а не
+          поиск открытой сессии по складу. Владельцу, менеджеру и «Просмотру» —
+          сведение расхождений компонент сам показывает только первым двум. */}
+      {tab === 'inventory' && status.kind === 'ready'
+        && ['OWNER', 'MANAGER', 'VIEWER'].includes(state.me.role) && (
+          <InventoryReconcile reference={status.reference} role={state.me.role} />
+        )}
+
+      {/* Обход полок сканером — не «Просмотру»: экран называет действие,
+          которое сервер эту роль отобьёт. */}
+      {tab === 'inventory' && WRITING_ROLES.includes(state.me.role) &&
         (status.kind === 'ready' ? (
           <InventoryScreen
             reference={status.reference}
@@ -467,14 +489,6 @@ export function HomeScreen() {
             вкладку «Справочники».
           </p>
         ))}
-
-      {/* Сведение расхождений — владельцу и менеджеру: списанная недостача
-          это убыток, и решение принимает тот, кто отвечает за склад.
-          Кладовщик обходит полки и вносит факт. */}
-      {tab === 'inventory' && status.kind === 'ready'
-        && ['OWNER', 'MANAGER'].includes(state.me.role) && (
-          <InventoryReconcile reference={status.reference} />
-        )}
 
       {tab === 'outbox' && (
         <OutboxScreen

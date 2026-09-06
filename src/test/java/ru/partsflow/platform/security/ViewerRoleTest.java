@@ -125,6 +125,11 @@ class ViewerRoleTest extends PostgresTestBase {
                 .andExpect(status().isOk());
         mvc.perform(get("/api/intake/reference").session(session))
                 .andExpect(status().isOk());
+        // Журнал пересчётов — тоже: ссылку «Пересчёт №4» в истории карточки
+        // должен открыть кто угодно с доступом посмотреть, не только тот,
+        // кто вправе провести или отменить.
+        mvc.perform(get("/api/inventory/sessions").session(session))
+                .andExpect(status().isOk());
     }
 
     /**
