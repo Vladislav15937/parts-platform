@@ -92,7 +92,11 @@ public class PaymentSourceService {
         int updated = jdbc.update(
                 "UPDATE payment_source SET is_archived = ? WHERE id = ?", archived, id);
         if (updated == 0) {
-            throw new IllegalArgumentException("Источник платежа не найден: " + id);
+            // Номер строки в базе владельцу не говорит ничего: он нажал
+            // на строку таблицы, а не набирал идентификатор. Единственный
+            // способ сюда попасть — строку убрали, пока список был открыт.
+            throw new IllegalArgumentException(
+                    "Источник платежа не найден — обновите страницу, список устарел");
         }
         return list().stream().filter(s -> s.id().equals(id)).findFirst().orElseThrow();
     }

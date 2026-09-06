@@ -77,7 +77,9 @@ public class DealSourceService {
         int updated = jdbc.update(
                 "UPDATE deal_source SET is_archived = ? WHERE id = ?", archived, id);
         if (updated == 0) {
-            throw new IllegalArgumentException("Источник сделки не найден: " + id);
+            // Без номера строки: см. ту же правку в PaymentSourceService.
+            throw new IllegalArgumentException(
+                    "Источник сделки не найден — обновите страницу, список устарел");
         }
         return list().stream().filter(s -> s.id().equals(id)).findFirst().orElseThrow();
     }

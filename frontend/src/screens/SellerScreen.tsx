@@ -769,7 +769,7 @@ function DealFinder({
                     setFixing(false);
                     setFixAmount('');
                     setFixReason('');
-                  })}
+                  }, false)}
                 >
                   Поправить
                 </button>
@@ -850,13 +850,19 @@ function DealFinder({
     setAccount(await accountOf(picked.id).catch(() => null));
   }
 
-  async function money(action: () => Promise<unknown>): Promise<void> {
+  /**
+   * @param withSource операция создала платёж и способ у него есть.
+   *                   У правки остатка платежа нет вовсе (деньги не двигались),
+   *                   и запоминать при ней выбранный в списке источник значит
+   *                   подставлять продавцу умолчание, которым он не платил.
+   */
+  async function money(action: () => Promise<unknown>, withSource = true): Promise<void> {
     if (customer === null) {
       return;
     }
     try {
       await action();
-      if (paymentSourceId !== null) {
+      if (withSource && paymentSourceId !== null) {
         rememberPaymentSource(company, memberId, paymentSourceId);
       }
       setCash('');

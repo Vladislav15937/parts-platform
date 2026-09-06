@@ -226,42 +226,121 @@ class SourceRegistryControllerTest extends PostgresTestBase {
         MockHttpSession ownerSession = login("owner");
         long sourceId = createPaymentSource(ownerSession, "ККМ", "CASH");
 
-        Long customerId = inTenant(() -> jdbc.queryForObject(
-                "INSERT INTO customer (name) VALUES ('Клиент') RETURNING id", Long.class));
-        Long branch = inTenant(() -> jdbc.queryForObject(
-                "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class));
-        Long warehouse = inTenant(() -> jdbc.queryForObject(
-                "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Склад') RETURNING id",
-                Long.class, branch));
-        Long partId = inTenant(() -> jdbc.queryForObject("""
-                INSERT INTO part (category_id, title, price, cost_price)
-                VALUES (1, 'Фара', 5000, 2000) RETURNING id""", Long.class));
-        inTenant(() -> {
-            ledger.record(StockMovement.intake(
-                    partId, java.math.BigDecimal.ONE, warehouse, null));
-            return null;
-        });
-
         MockHttpSession sellerSession = login("seller");
-        String dealBody = "{\"customerId\":" + customerId + ",\"items\":[{\"partId\":" + partId
-                + ",\"quantity\":1,\"warehouseId\":" + warehouse + "}]}";
-        var created = mvc.perform(post("/api/deals").with(csrf()).session(sellerSession)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(dealBody))
-                .andExpect(status().isCreated())
-                .andReturn();
-        long dealId = Long.parseLong(created.getResponse().getContentAsString()
-                .replaceAll("^\\{\"id\":(\\d+).*$", "$1"));
+        Fixture fixture = deal(sellerSession);
 
-        mvc.perform(post("/api/deals/" + dealId + "/payments").with(csrf()).session(sellerSession)
+        mvc.perform(post("/api/deals/" + fixture.dealId() + "/payments")
+                        .with(csrf()).session(sellerSession)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"amount":1000,"paymentSourceId":%d}""".formatted(sourceId)))
                 .andExpect(status().isCreated());
 
         Long stored = inTenant(() -> jdbc.queryForObject(
-                "SELECT payment_source_id FROM payment WHERE deal_id = ?", Long.class, dealId));
+                "SELECT payment_source_id FROM payment WHERE deal_id = ?",
+                Long.class, fixture.dealId()));
         assertThat(stored).isEqualTo(sourceId);
+    }
+
+    /**
+     * Возврат денег из кассы — вторая из трёх поверхностей, где выбирают способ.
+     *
+     * <p>Проверяется отдельно от оплаты, а не «заодно»: `SalesService.refund`
+     * кладёт источник в свой собственный {@link Payment}, и снятое
+     * с фронтенда поле перестало бы доезжать сюда, не задев ни одной проверки
+     * на оплате сделки. Возврат при этом идёт **из кассы**: зачисление
+     * на лицевой счёт платежа не создаёт вовсе, и спрашивать там способ
+     * нечего.
+     */
+    @Test
+    @DisplayName("Возврат денег из кассы записывает выбранный источник")
+    void cashRefundRecordsChosenSource() throws Exception {
+        MockHttpSession ownerSession = login("owner");
+        long cash = createPaymentSource(ownerSession, "ККМ", "CASH");
+        long bank = createPaymentSource(ownerSession, "р/с Альфа банк", "BANK_ACCOUNT");
+
+        MockHttpSession sellerSession = login("seller");
+        Fixture fixture = deal(sellerSession);
+
+        mvc.perform(post("/api/deals/" + fixture.dealId() + "/payments")
+                        .with(csrf()).session(sellerSession)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"amount":5000,"paymentSourceId":%d}""".formatted(bank)))
+                .andExpect(status().isCreated());
+        mvc.perform(post("/api/deals/" + fixture.dealId() + "/issue")
+                        .with(csrf()).session(sellerSession))
+                .andExpect(status().isOk());
+
+        Long itemId = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM deal_item WHERE deal_id = ?", Long.class, fixture.dealId()));
+
+        mvc.perform(post("/api/deals/" + fixture.dealId() + "/returns")
+                        .with(csrf()).session(sellerSession)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"items":[{"dealItemId":%d,"restocked":true}],\
+                                "reason":"Не подошла","refundToAccount":false,\
+                                "paymentSourceId":%d}"""
+                                .formatted(fixture.warehouseId(), itemId, cash)))
+                .andExpect(status().isCreated());
+
+        Long refundSource = inTenant(() -> jdbc.queryForObject(
+                "SELECT payment_source_id FROM payment WHERE deal_id = ? AND direction = 'OUT'",
+                Long.class, fixture.dealId()));
+        assertThat(refundSource).as("возврат из кассы записан способом, которым отдали деньги")
+                .isEqualTo(cash);
+
+        // Приход остался при своём источнике: два платежа по одной сделке
+        // не обязаны идти одним способом — приняли переводом, вернули наличными.
+        Long paymentSource = inTenant(() -> jdbc.queryForObject(
+                "SELECT payment_source_id FROM payment WHERE deal_id = ? AND direction = 'IN'",
+                Long.class, fixture.dealId()));
+        assertThat(paymentSource).isEqualTo(bank);
+    }
+
+    /**
+     * Лицевой счёт — третья поверхность, и обе её операции создают платёж.
+     *
+     * <p>Пополнение и выдача проверяются одним тестом, потому что второе
+     * возможно только после первого: выдать со счёта больше остатка нельзя.
+     */
+    @Test
+    @DisplayName("Пополнение и выдача лицевого счёта записывают выбранный источник")
+    void accountOperationsRecordChosenSource() throws Exception {
+        MockHttpSession ownerSession = login("owner");
+        long cash = createPaymentSource(ownerSession, "ККМ", "CASH");
+        long bank = createPaymentSource(ownerSession, "р/с Альфа банк", "BANK_ACCOUNT");
+
+        Long customerId = inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO customer (name) VALUES ('Клиент') RETURNING id", Long.class));
+
+        MockHttpSession sellerSession = login("seller");
+        mvc.perform(post("/api/customers/" + customerId + "/account/top-up")
+                        .with(csrf()).session(sellerSession)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"amount":1000,"paymentSourceId":%d}""".formatted(bank)))
+                .andExpect(status().isCreated());
+
+        mvc.perform(post("/api/customers/" + customerId + "/account/withdraw")
+                        .with(csrf()).session(sellerSession)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"amount":400,"paymentSourceId":%d}""".formatted(cash)))
+                .andExpect(status().isCreated());
+
+        Long topUpSource = inTenant(() -> jdbc.queryForObject("""
+                SELECT payment_source_id FROM payment
+                WHERE customer_id = ? AND direction = 'IN'""", Long.class, customerId));
+        assertThat(topUpSource).as("пополнение записано способом, которым принесли деньги")
+                .isEqualTo(bank);
+
+        Long withdrawSource = inTenant(() -> jdbc.queryForObject("""
+                SELECT payment_source_id FROM payment
+                WHERE customer_id = ? AND direction = 'OUT'""", Long.class, customerId));
+        assertThat(withdrawSource).as("выдача записана способом, которым отдали деньги")
+                .isEqualTo(cash);
     }
 
     // ---------------------------------------------------------------
@@ -325,6 +404,40 @@ class SourceRegistryControllerTest extends PostgresTestBase {
     }
 
     // ---------------------------------------------------------------
+
+    /** Что нужно, чтобы дойти до денег: клиент, склад и оформленная сделка. */
+    private record Fixture(long customerId, long warehouseId, long dealId) {
+    }
+
+    /** Клиент, склад, деталь на остатке и отложенная сделка на 5 000 ₽. */
+    private Fixture deal(MockHttpSession sellerSession) throws Exception {
+        Long customerId = inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO customer (name) VALUES ('Клиент') RETURNING id", Long.class));
+        Long branch = inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class));
+        Long warehouse = inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Склад') RETURNING id",
+                Long.class, branch));
+        Long partId = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price, cost_price)
+                VALUES (1, 'Фара', 5000, 2000) RETURNING id""", Long.class));
+        inTenant(() -> {
+            ledger.record(StockMovement.intake(
+                    partId, java.math.BigDecimal.ONE, warehouse, null));
+            return null;
+        });
+
+        String dealBody = "{\"customerId\":" + customerId + ",\"items\":[{\"partId\":" + partId
+                + ",\"quantity\":1,\"warehouseId\":" + warehouse + "}]}";
+        var created = mvc.perform(post("/api/deals").with(csrf()).session(sellerSession)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(dealBody))
+                .andExpect(status().isCreated())
+                .andReturn();
+        long dealId = Long.parseLong(created.getResponse().getContentAsString()
+                .replaceAll("^\\{\"id\":(\\d+).*$", "$1"));
+        return new Fixture(customerId, warehouse, dealId);
+    }
 
     private long createPaymentSource(MockHttpSession session, String name, String type)
             throws Exception {
