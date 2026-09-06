@@ -35,7 +35,7 @@ describe('отмена пересчёта', () => {
       // без этой ветки он попадал бы в общий разбор ниже и получал
       // одиночный объект сессии там, где ждёт массив.
       if (url.includes('/api/inventory/sessions?')) {
-        return json([]);
+        return json({ rows: [], total: 0 });
       }
       if (url.includes('/api/inventory/sessions/open')) {
         return json({ id: 15, warehouseId: 2, status: 'COUNTED',

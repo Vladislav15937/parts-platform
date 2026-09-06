@@ -77,13 +77,32 @@ export interface SessionSummary {
   note: string | null;
 }
 
-/** Пункты воронки слева, в порядке, заданном задачей. */
+/**
+ * Пункты воронки слева, в порядке, заданном задачей, и статусы, которые
+ * каждый накрывает.
+ *
+ * <p><b>«Выполненные» — это и «Подсчёт завершён», и «Проведён».</b> Нормально
+ * закрытый пересчёт всегда `APPLIED`: завершение подсчёта — промежуточный
+ * шаг, а не конец. Пока воронка накрывала один `COUNTED`, проведённый
+ * документ не попадал ни в одну из трёх — только в «Все пересчёты», — то есть
+ * главный вопрос журнала «когда эту полку считали в последний раз и что тогда
+ * написали» отвечал пустотой.
+ *
+ * <p>Группировка живёт здесь, а не на сервере: сервер отбирает по набору
+ * статусов, и имена воронок ему знать незачем — иначе два списка разошлись бы
+ * на первой правке, как уже расходились белые списки вида товара и свойств
+ * колеса.
+ */
 export const SESSION_FUNNEL = [
-  { key: 'OPEN', label: 'В работе' },
-  { key: 'COUNTED', label: 'Выполненные' },
-  { key: 'CANCELLED', label: 'Отменённые' },
-  { key: 'ALL', label: 'Все пересчёты' },
-] as const;
+  { key: 'OPEN', label: 'В работе', statuses: ['OPEN'] },
+  { key: 'DONE', label: 'Выполненные', statuses: ['COUNTED', 'APPLIED'] },
+  { key: 'CANCELLED', label: 'Отменённые', statuses: ['CANCELLED'] },
+  { key: 'ALL', label: 'Все пересчёты', statuses: [] },
+] as const satisfies readonly {
+  key: string;
+  label: string;
+  statuses: readonly SessionStatus[];
+}[];
 
 export type SessionFunnelKey = (typeof SESSION_FUNNEL)[number]['key'];
 
@@ -119,10 +138,29 @@ export function saveSessionNote(sessionId: number, note: string): Promise<Invent
   });
 }
 
-/** Список пересчётов по воронке — «Все пересчёты» шлёт запрос без фильтра. */
-export function listSessions(funnel: SessionFunnelKey): Promise<SessionSummary[]> {
-  const query = funnel === 'ALL' ? '' : `?status=${funnel}`;
-  return request<SessionSummary[]>(`/api/inventory/sessions${query}`);
+/**
+ * Страница журнала: показанные строки и сколько всего в воронке.
+ *
+ * <p>Общее число едет вместе со страницей — как у витрины склада и вкладки
+ * колёс. Подвал считает по нему, а не по длине списка: счётчик, считающий
+ * показанное, врёт ровно на то, чего не видно.
+ */
+export interface SessionPage {
+  rows: SessionSummary[];
+  total: number;
+}
+
+/**
+ * Список пересчётов по воронке — «Все пересчёты» шлёт запрос без фильтра,
+ * остальные перечисляют свои статусы повтором параметра.
+ */
+export function listSessions(funnel: SessionFunnelKey): Promise<SessionPage> {
+  const chosen = SESSION_FUNNEL.find((f) => f.key === funnel);
+  const statuses: readonly SessionStatus[] = chosen?.statuses ?? [];
+  const query = statuses.length === 0
+    ? ''
+    : `?${statuses.map((s) => `status=${s}`).join('&')}`;
+  return request<SessionPage>(`/api/inventory/sessions${query}`);
 }
 
 /** Одна сессия любого статуса — открывается нажатием на строку списка. */

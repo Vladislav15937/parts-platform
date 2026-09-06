@@ -218,6 +218,13 @@ class InventoryHttpTest extends PostgresTestBase {
      * Журнал пересчётов: закрытый документ можно найти списком, чего раньше
      * не умел ни один эндпоинт — {@code /sessions/open} отдаёт только
      * открытую сессию по складу.
+     *
+     * <p><b>Проведённый пересчёт проверяется отдельно, и это главное.</b>
+     * Нормально закрытый документ всегда {@code APPLIED}: «подсчёт завершён» —
+     * промежуточный шаг. Пока воронка «Выполненные» слала один
+     * {@code status=COUNTED}, проведённый пересчёт не попадал ни в одну
+     * воронку, кроме «Все пересчёты», — то есть главный вопрос журнала
+     * («когда эту полку считали в последний раз») отвечал пустотой.
      */
     @Test
     @DisplayName("Список пересчётов находит любой статус, а выборка называет ячейку")
@@ -248,36 +255,66 @@ class InventoryHttpTest extends PostgresTestBase {
                         .with(csrf()).session(owner))
                 .andExpect(status().isOk());
 
-        // Пересчёт всего склада остаётся открытым — «В работе».
-        String openedAll = mvc.perform(post("/api/inventory/sessions").with(csrf()).session(owner)
+        // Пересчёт всего склада, проведённый до конца, — «Проведён».
+        long appliedSessionId = openWholeWarehouse(owner);
+        mvc.perform(post("/api/inventory/sessions/%d/counts".formatted(appliedSessionId))
+                        .with(csrf()).session(owner)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"warehouseId\":%d}".formatted(warehouseId)))
-                .andExpect(status().isCreated())
-                .andReturn().getResponse().getContentAsString();
-        long allSessionId = Long.parseLong(openedAll.replaceAll(".*\"id\":(\\d+).*", "$1"));
+                        .content("{\"partId\":%d,\"qty\":2}".formatted(partId)))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/inventory/sessions/%d/finish".formatted(appliedSessionId))
+                        .with(csrf()).session(owner))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/inventory/sessions/%d/apply".formatted(appliedSessionId))
+                        .with(csrf()).session(owner))
+                .andExpect(status().isOk());
 
-        // Без фильтра — оба, новые сверху.
+        // Ещё один — завершён, но не проведён: «Подсчёт завершён».
+        long countedSessionId = openWholeWarehouse(owner);
+        mvc.perform(post("/api/inventory/sessions/%d/finish".formatted(countedSessionId))
+                        .with(csrf()).session(owner))
+                .andExpect(status().isOk());
+
+        // И последний остаётся открытым — «В работе».
+        long allSessionId = openWholeWarehouse(owner);
+
+        // Без фильтра — все четыре, новые сверху, и общее число рядом.
         mvc.perform(get("/api/inventory/sessions").session(owner))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(2))
-                .andExpect(jsonPath("$[0].id").value(allSessionId))
-                .andExpect(jsonPath("$[1].id").value(cellSessionId));
+                .andExpect(jsonPath("$.total").value(4))
+                .andExpect(jsonPath("$.rows.length()").value(4))
+                .andExpect(jsonPath("$.rows[0].id").value(allSessionId))
+                .andExpect(jsonPath("$.rows[3].id").value(cellSessionId));
 
         // Воронка «В работе» находит только открытый, весь склад.
         mvc.perform(get("/api/inventory/sessions?status=OPEN").session(owner))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(1))
-                .andExpect(jsonPath("$[0].id").value(allSessionId))
-                .andExpect(jsonPath("$[0].selection").value("Ткацкая · весь склад"));
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.rows.length()").value(1))
+                .andExpect(jsonPath("$.rows[0].id").value(allSessionId))
+                .andExpect(jsonPath("$.rows[0].selection").value("Ткацкая · весь склад"));
+
+        // Воронка «Выполненные» — оба закрытых по-хорошему статуса разом.
+        // Проведённый обязан быть здесь: воронка по одному COUNTED оставляла
+        // его вне всех воронок, кроме «Все пересчёты».
+        mvc.perform(get("/api/inventory/sessions?status=COUNTED&status=APPLIED").session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.rows.length()").value(2))
+                .andExpect(jsonPath("$.rows[0].id").value(countedSessionId))
+                .andExpect(jsonPath("$.rows[0].status").value("COUNTED"))
+                .andExpect(jsonPath("$.rows[1].id").value(appliedSessionId))
+                .andExpect(jsonPath("$.rows[1].status").value("APPLIED"));
 
         // Воронка «Отменённые» находит закрытый пересчёт ячейки — то, что
         // раньше не находилось вовсе ни списком, ни по номеру.
         mvc.perform(get("/api/inventory/sessions?status=CANCELLED").session(owner))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(1))
-                .andExpect(jsonPath("$[0].id").value(cellSessionId))
-                .andExpect(jsonPath("$[0].status").value("CANCELLED"))
-                .andExpect(jsonPath("$[0].selection").value("Ткацкая · A-01-1"));
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.rows.length()").value(1))
+                .andExpect(jsonPath("$.rows[0].id").value(cellSessionId))
+                .andExpect(jsonPath("$.rows[0].status").value("CANCELLED"))
+                .andExpect(jsonPath("$.rows[0].selection").value("Ткацкая · A-01-1"));
 
         // Карточка одной сессии — тот же набор полей, по любому статусу.
         mvc.perform(get("/api/inventory/sessions/%d".formatted(cellSessionId)).session(owner))
@@ -291,6 +328,14 @@ class InventoryHttpTest extends PostgresTestBase {
         // вызывающего, офлайн-очередь такое не должна повторять вечно.
         mvc.perform(get("/api/inventory/sessions?status=NOPE").session(owner))
                 .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/inventory/sessions?status=OPEN&status=NOPE").session(owner))
+                .andExpect(status().isBadRequest());
+
+        // Несуществующий пересчёт называется словом экрана, а не базы:
+        // вкладка везде говорит «Пересчёт».
+        mvc.perform(get("/api/inventory/sessions/999999").session(owner))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Пересчёт не найден: 999999"));
 
         // «Просмотр» читает список наравне с владельцем — журнал ссылается
         // на пересчёт, и посмотреть, что тогда считали, это не то же самое,
@@ -301,12 +346,18 @@ class InventoryHttpTest extends PostgresTestBase {
     }
 
     /**
-     * Комментарий к пересчёту — пункты приёмки 6 и 7 задачи 0020.
+     * Комментарий к пересчёту — пункт приёмки 7 задачи 0020.
      *
      * <p>Ради него в журнал пересчётов и заходят: номер с датой говорят,
-     * что документ был, а «83619 не найден» — зачем его открывали. Пишет
-     * его тот, кто ходил по складу, поэтому проверяется кладовщиком,
-     * а читается владельцем — в колонке списка.
+     * что документ был, а «83619 не найден» — зачем его открывали.
+     *
+     * <p><b>Кладовщик его пока не пишет, и это не то, чего хотела задача.</b>
+     * Пункт 6 («комментарий, написанный кладовщиком на телефоне») требует
+     * поверхности на телефоне, которой задача не описывает, — вопрос
+     * владельцу продукта. Право без поверхности снято: висящее право
+     * `endpoint-coverage` не ловит (он сверяет пути, а не роли), и следующий
+     * читает его как рабочий путь с экраном. Проверяется поэтому отказ —
+     * чтобы возврат права заметили вместе с этим тестом.
      *
      * <p>Отдельно проверяется, что пустой комментарий становится
      * {@code NULL}, а не пустой строкой. В этом проекте на разнице
@@ -315,7 +366,7 @@ class InventoryHttpTest extends PostgresTestBase {
      * за ответ человека.
      */
     @Test
-    @DisplayName("Комментарий пишет кладовщик, пустой стирается в NULL, закрытый не правится")
+    @DisplayName("Комментарий пишет владелец, пустой стирается в NULL, закрытый не правится")
     void sessionNoteIsWrittenReadAndFrozen() throws Exception {
         MockHttpSession owner = login("vladelec");
 
@@ -329,27 +380,34 @@ class InventoryHttpTest extends PostgresTestBase {
         long sessionId = Long.parseLong(opened.replaceAll(".*\"id\":(\\d+).*", "$1"));
         String noteUrl = "/api/inventory/sessions/%d/note".formatted(sessionId);
 
-        // Пишет кладовщик: «83619 не найден» знает тот, кто стоял у полки.
         // Пробелы по краям срезаются — иначе «  » сохранилось бы значением.
-        MockHttpSession keeper = login("kladovshchik");
-        mvc.perform(post(noteUrl).with(csrf()).session(keeper)
+        mvc.perform(post(noteUrl).with(csrf()).session(owner)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"note\":\"  83619 не найден  \"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.note").value("83619 не найден"));
 
-        // Пункт приёмки 6: написанное кладовщиком видно владельцу в списке.
+        // Написанное видно в колонке списка — ради этого журнал и открывают.
         mvc.perform(get("/api/inventory/sessions?status=OPEN").session(owner))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].id").value(sessionId))
-                .andExpect(jsonPath("$[0].note").value("83619 не найден"));
+                .andExpect(jsonPath("$.rows[0].id").value(sessionId))
+                .andExpect(jsonPath("$.rows[0].note").value("83619 не найден"));
+
+        // Кладовщику отказ, пока у него нет поверхности: право, которым
+        // неоткуда воспользоваться, читается следующим как рабочий путь.
+        // Появится экран — вернётся и право, одной веткой с ним.
+        MockHttpSession keeper = login("kladovshchik");
+        mvc.perform(post(noteUrl).with(csrf()).session(keeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"я тут ходил\"}"))
+                .andExpect(status().isForbidden());
         mvc.perform(get("/api/inventory/sessions/%d".formatted(sessionId)).session(owner))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.note").value("83619 не найден"));
 
         // Стёртый комментарий — NULL, а не пустая строка: спрашиваем базу,
         // потому что снаружи «» и null выглядят одинаково пусто.
-        mvc.perform(post(noteUrl).with(csrf()).session(keeper)
+        mvc.perform(post(noteUrl).with(csrf()).session(owner)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"note\":\"   \"}"))
                 .andExpect(status().isOk())
@@ -370,7 +428,7 @@ class InventoryHttpTest extends PostgresTestBase {
         mvc.perform(post("/api/inventory/sessions/%d/cancel".formatted(sessionId))
                         .with(csrf()).session(owner))
                 .andExpect(status().isOk());
-        mvc.perform(post(noteUrl).with(csrf()).session(keeper)
+        mvc.perform(post(noteUrl).with(csrf()).session(owner)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"note\":\"уже поздно\"}"))
                 .andExpect(status().isConflict());
@@ -390,6 +448,16 @@ class InventoryHttpTest extends PostgresTestBase {
                         .session(session))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lines").value(1));
+    }
+
+    /** Пересчёт всего склада, открытый заново: одновременно открытая на складе одна. */
+    private long openWholeWarehouse(MockHttpSession session) throws Exception {
+        String opened = mvc.perform(post("/api/inventory/sessions").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"warehouseId\":%d}".formatted(warehouseId)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        return Long.parseLong(opened.replaceAll(".*\"id\":(\\d+).*", "$1"));
     }
 
     private void member() {

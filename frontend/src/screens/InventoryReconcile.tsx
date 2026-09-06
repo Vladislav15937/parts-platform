@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
   applySession,
@@ -16,8 +16,10 @@ import {
   type Discrepancy,
   type InventorySession,
   type SessionFunnelKey,
-  type SessionSummary,
+  type SessionPage,
 } from '../inventory/inventory';
+import { count as num, shown } from '../ui/plural';
+import { shortDate } from '../ui/shortDate';
 import type { Reference } from '../reference/reference';
 
 /**
@@ -48,22 +50,41 @@ import type { Reference } from '../reference/reference';
  */
 export function InventoryReconcile({ reference, role }: { reference: Reference; role?: string }) {
   const canReconcile = role === undefined || role === 'OWNER' || role === 'MANAGER';
-  // Комментарий пишет и кладовщик — тот, кто ходил по полкам: то же
-  // разделение, что на сервере (`InventoryController.COMMENTS` против
-  // `RECONCILES`). «Просмотр» его только читает.
-  const canComment = canReconcile || role === 'STOREKEEPER';
+  // Комментарий пишет тот же, кто сводит расхождения: то же разделение,
+  // что на сервере (`InventoryController.COMMENTS`). «Просмотр» его только
+  // читает. Кладовщика тут нет — у него нет поверхности, откуда писать,
+  // и права на сервере тоже нет; см. комментарий у `COMMENTS`.
+  const canComment = canReconcile;
+
+  /*
+   * Сторож размонтирования — тот же приём, что в `InventoryScreen`, и та же
+   * причина: `main` краснела на этом дважды. Ответ сервера приходит после
+   * того, как человек ушёл с вкладки, и `setState` в размонтированном
+   * компоненте валит прогон необработанным отказом («window is not defined»),
+   * а не проверкой.
+   *
+   * Значение возвращается в `true` в теле эффекта, а не только гасится
+   * в уборке: `StrictMode` в разработке прогоняет эффекты дважды
+   * (setup → cleanup → setup), и без этого экран остался бы мёртвым
+   * навсегда — «Загружаем…» без конца и погашенные кнопки.
+   */
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   // --- журнал: воронка слева, список справа ---
   const [funnel, setFunnel] = useState<SessionFunnelKey>('OPEN');
-  const [list, setList] = useState<SessionSummary[] | null>(null);
+  const [page, setPage] = useState<SessionPage | null>(null);
   const [listNote, setListNote] = useState('');
 
   useEffect(() => {
     let ignore = false;
-    setList(null);
+    setPage(null);
     setListNote('');
     listSessions(funnel)
-      .then((found) => { if (!ignore) setList(found); })
+      .then((found) => { if (!ignore) setPage(found); })
       .catch((cause) => {
         if (!ignore) setListNote(describe(cause, 'Не удалось загрузить список пересчётов'));
       });
@@ -110,43 +131,64 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
 
         <div className="funnel-body">
           {listNote !== '' && <p className="note note--error">{listNote}</p>}
-          {list === null && listNote === '' && <p className="note">Загружаем…</p>}
-          {list !== null && (
-            list.length === 0 ? (
+          {page === null && listNote === '' && <p className="note">Загружаем…</p>}
+          {page !== null && (
+            page.rows.length === 0 ? (
               <p className="note">Пересчётов пока не было</p>
             ) : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Номер/дата</th>
-                    <th>Выборка</th>
-                    <th>Статус</th>
-                    <th>Посчитано</th>
-                    <th>Комментарий</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {list.map((row) => (
-                    <tr key={row.id} className="row--clickable" onClick={() => void openRow(row.id)}>
-                      <td>{row.id}<br /><span className="muted">{shortDate(row.startedAt)}</span></td>
-                      <td>{row.selection}</td>
-                      <td>{SESSION_STATUS_LABEL[row.status]}</td>
-                      <td>{row.counted} из {row.lines}</td>
-                      {/* Ради него в журнал и заходят: номер с датой говорят,
-                          что документ был, а «83619 не найден» — зачем его
-                          открывали. Пусто остаётся пустым, а не прочерком:
-                          «не писали» тут не вопрос, на который мы не знаем
-                          ответа, а обычное состояние половины строк. */}
-                      <td>{row.note ?? ''}</td>
+              /* Пять колонок рядом с воронкой на телефоне не помещаются,
+                 а без этой обёртки вбок уезжает вся страница вместе
+                 с рельсом — записанная ловушка проекта. Прокручивается
+                 таблица внутри своих границ. */
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Номер/дата</th>
+                      <th>Выборка</th>
+                      <th>Статус</th>
+                      <th>Посчитано</th>
+                      <th>Комментарий</th>
                     </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr>
-                    <td colSpan={5}>Пересчётов: {list.length}</td>
-                  </tr>
-                </tfoot>
-              </table>
+                  </thead>
+                  <tbody>
+                    {page.rows.map((row) => (
+                      <tr key={row.id} className="row--clickable"
+                          onClick={() => void openRow(row.id)}>
+                        <td>
+                          {row.id}<br />
+                          <span className="muted">{shortDate(row.startedAt)}</span>
+                        </td>
+                        <td>{row.selection}</td>
+                        <td>{SESSION_STATUS_LABEL[row.status]}</td>
+                        <td>{row.counted} из {row.lines}</td>
+                        {/* Ради него в журнал и заходят: номер с датой говорят,
+                            что документ был, а «83619 не найден» — зачем его
+                            открывали. Пусто остаётся пустым, а не прочерком:
+                            «не писали» тут не вопрос, на который мы не знаем
+                            ответа, а обычное состояние половины строк. */}
+                        <td>{row.note ?? ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    {/* Счёт по воронке целиком, а не по показанному: журнал
+                        отдаётся страницей, и счётчик, считающий строки экрана,
+                        врал бы ровно на то, чего не видно. */}
+                    <tr>
+                      <td colSpan={5}>Пересчётов: {num(page.total)}</td>
+                    </tr>
+                    {page.rows.length < page.total && (
+                      <tr>
+                        <td colSpan={5} className="muted">
+                          Показаны первые {shown(page.rows.length, page.total,
+                            'пересчёт', 'пересчёта', 'пересчётов')}
+                        </td>
+                      </tr>
+                    )}
+                  </tfoot>
+                </table>
+              </div>
             )
           )}
         </div>
@@ -352,21 +394,32 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
     setNoteSaved('');
     try {
       const found = await sessionSummary(id);
+      const discrepancies = found.status !== 'OPEN' ? await discrepanciesOf(found.id) : null;
+      if (!mounted.current) {
+        return;
+      }
       setSession(found);
       setNoteDraft(found.note ?? '');
       setWarehouseId(found.warehouseId);
-      setRows(found.status !== 'OPEN' ? await discrepanciesOf(found.id) : null);
+      setRows(discrepancies);
     } catch (cause) {
-      setNote(describe(cause, 'Не удалось открыть пересчёт'));
+      if (mounted.current) {
+        setNote(describe(cause, 'Не удалось открыть пересчёт'));
+      }
     } finally {
-      setBusy(false);
+      if (mounted.current) {
+        setBusy(false);
+      }
     }
   }
 
   /** Перечитывает журнал после действия, сменившего статус сессии. */
   async function refreshList(): Promise<void> {
     try {
-      setList(await listSessions(funnel));
+      const found = await listSessions(funnel);
+      if (mounted.current) {
+        setPage(found);
+      }
     } catch {
       // Список — не главный путь сразу после успешного действия: если
       // страница действия уже сказала «готово», молчаливый повтор при случае
@@ -389,17 +442,23 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
     setNote('');
     try {
       const saved = await saveSessionNote(session.id, noteDraft);
-      setSession(saved);
-      // Сервер стирает пустое в null и срезает пробелы по краям —
-      // черновик берётся из его ответа, иначе кнопка осталась бы
-      // нажимаемой на том, что уже сохранено.
-      setNoteDraft(saved.note ?? '');
-      setNoteSaved('Комментарий сохранён');
-      void refreshList();
+      if (mounted.current) {
+        setSession(saved);
+        // Сервер стирает пустое в null и срезает пробелы по краям —
+        // черновик берётся из его ответа, иначе кнопка осталась бы
+        // нажимаемой на том, что уже сохранено.
+        setNoteDraft(saved.note ?? '');
+        setNoteSaved('Комментарий сохранён');
+        void refreshList();
+      }
     } catch (cause) {
-      setNote(describe(cause, 'Не удалось сохранить комментарий'));
+      if (mounted.current) {
+        setNote(describe(cause, 'Не удалось сохранить комментарий'));
+      }
     } finally {
-      setBusy(false);
+      if (mounted.current) {
+        setBusy(false);
+      }
     }
   }
 
@@ -414,17 +473,23 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
     setBusy(true);
     try {
       await cancelOnServer(session.id);
-      setSession(null);
-      setRows(null);
-      setApplied(null);
-      setCancelling(false);
-      setNote('');
-      setDone('Пересчёт отменён — склад не изменился. Можно открыть новый.');
-      void refreshList();
+      if (mounted.current) {
+        setSession(null);
+        setRows(null);
+        setApplied(null);
+        setCancelling(false);
+        setNote('');
+        setDone('Пересчёт отменён — склад не изменился. Можно открыть новый.');
+        void refreshList();
+      }
     } catch (cause) {
-      setNote(cause instanceof ApiError ? cause.message : 'Отменить не удалось');
+      if (mounted.current) {
+        setNote(cause instanceof ApiError ? cause.message : 'Отменить не удалось');
+      }
     } finally {
-      setBusy(false);
+      if (mounted.current) {
+        setBusy(false);
+      }
     }
   }
 
@@ -439,20 +504,26 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
     setApplied(null);
     try {
       const found = await findOpenSession(warehouseId);
+      const discrepancies = found !== null && found.status !== 'OPEN'
+        ? await discrepanciesOf(found.id)
+        : null;
+      if (!mounted.current) {
+        return;
+      }
       setSession(found);
       setNoteDraft(found?.note ?? '');
+      setRows(discrepancies);
       if (found === null) {
         setNote('На этом складе пересчёт не открыт');
-        setRows(null);
-      } else if (found.status !== 'OPEN') {
-        setRows(await discrepanciesOf(found.id));
-      } else {
-        setRows(null);
       }
     } catch (cause) {
-      setNote(describe(cause, 'Не удалось найти пересчёт'));
+      if (mounted.current) {
+        setNote(describe(cause, 'Не удалось найти пересчёт'));
+      }
     } finally {
-      setBusy(false);
+      if (mounted.current) {
+        setBusy(false);
+      }
     }
   }
 
@@ -462,14 +533,22 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
     }
     setBusy(true);
     try {
-      setSession(await finishCounting(session.id));
-      setRows(await discrepanciesOf(session.id));
-      setNote('');
-      void refreshList();
+      const finished = await finishCounting(session.id);
+      const discrepancies = await discrepanciesOf(session.id);
+      if (mounted.current) {
+        setSession(finished);
+        setRows(discrepancies);
+        setNote('');
+        void refreshList();
+      }
     } catch (cause) {
-      setNote(describe(cause, 'Не удалось завершить подсчёт'));
+      if (mounted.current) {
+        setNote(describe(cause, 'Не удалось завершить подсчёт'));
+      }
     } finally {
-      setBusy(false);
+      if (mounted.current) {
+        setBusy(false);
+      }
     }
   }
 
@@ -480,40 +559,30 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
     setBusy(true);
     try {
       const result = await applySession(session.id);
-      setApplied(result);
-      setRows(await discrepanciesOf(session.id));
+      const discrepancies = await discrepanciesOf(session.id);
       // Статус перечитывается, а не выводится из успеха: проведение
       // построчное, и застрявшая на резерве строка оставляет сессию
       // «завершённой». Без этого шапка и комментарий говорили бы
       // «подсчёт завершён, правьте» о документе, который сервер уже закрыл.
       const after = await sessionSummary(session.id);
-      setSession(after);
-      setNoteDraft(after.note ?? '');
-      setNote('');
-      void refreshList();
+      if (mounted.current) {
+        setApplied(result);
+        setRows(discrepancies);
+        setSession(after);
+        setNoteDraft(after.note ?? '');
+        setNote('');
+        void refreshList();
+      }
     } catch (cause) {
-      setNote(describe(cause, 'Не удалось провести'));
+      if (mounted.current) {
+        setNote(describe(cause, 'Не удалось провести'));
+      }
     } finally {
-      setBusy(false);
+      if (mounted.current) {
+        setBusy(false);
+      }
     }
   }
-}
-
-/**
- * Дата коротким словом месяца: «05 сен 26».
- *
- * <p>Своя таблица месяцев, а не `Intl`: короткое имя в `ru-RU` зависит
- * от сборки ICU («сент.» против «сен»), и экран показывал бы разное
- * в браузере и в тестах.
- */
-const MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн',
-  'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
-
-function shortDate(iso: string): string {
-  const at = new Date(iso);
-  const day = String(at.getDate()).padStart(2, '0');
-  const year = String(at.getFullYear()).slice(-2);
-  return `${day} ${MONTHS[at.getMonth()]} ${year}`;
 }
 
 function describe(cause: unknown, fallback: string): string {
