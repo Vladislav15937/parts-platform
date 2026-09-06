@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useMounted } from '../ui/useMounted';
 import {
   countPositions,
   findOpenSession,
@@ -81,8 +82,8 @@ export function InventoryScreen({ reference, onCount }: Props) {
   // Экран уходит с вкладки не дожидаясь ответа IndexedDB или сервера —
   // офлайн-хранилище и счётчик формы отвечают не мгновенно, — и без сторожа
   // асинхронный колбэк правит состояние уже размонтированного компонента.
-  const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   const reload = useCallback(async () => {
     const local = await loadLocal();
@@ -298,12 +299,8 @@ export function InventoryScreen({ reference, onCount }: Props) {
         setNote(error instanceof Error ? error.message : 'Не удалось открыть');
       }
     } finally {
-      // Сторож нужен именно здесь: `finally` выполняется и на том пути,
-      // где экран уже ушёл с вкладки, пока сервер отвечал на открытие
-      // сессии. Прочие колбэки этого экрана прикрыты с самого хотфикса
-      // размонтирования, а этот — единственный, который остался открытым,
-      // и он же валил прогон: «ReferenceError: window is not defined»
-      // из `setBusy` в размонтированном компоненте.
+      // `finally` выполняется и на том пути, где кладовщик ушёл с вкладки,
+      // пока сервер отвечал, — поэтому сторож нужен и здесь.
       if (mounted.current) {
         setBusy(false);
       }
