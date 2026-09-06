@@ -269,6 +269,48 @@ public class SalesController {
     }
 
     /**
+     * Реестр возвратов: все документы, а не только по открытой сделке.
+     *
+     * <p>До этого экрана возврат было не найти иначе, чем через клиента и его
+     * сделку — продавец, оформивший его в чужую смену, найти его не мог
+     * вовсе. Роли те же, что у продажи: оформляет возврат продавец, ему же
+     * и искать.
+     *
+     * @param q    поиск: точное совпадение по номеру сделки, вхождение —
+     *             по клиенту и по причине
+     * @param from начало периода; пусто — с начала времён
+     * @param to   конец периода (исключая); пусто — по текущий момент
+     * @param size сколько строк вернуть; список читают с конца и не листают
+     *             вглубь, поэтому вместо курсора — растущий предел
+     */
+    @GetMapping("/returns")
+    @PreAuthorize(SELLS)
+    public SalesService.ReturnsPage returns(
+            @RequestParam(value = "q", required = false) String q,
+            @RequestParam(value = "from", required = false) String from,
+            @RequestParam(value = "to", required = false) String to,
+            @RequestParam(value = "size", defaultValue = "50") int size) {
+        return sales.listReturns(q, parseInstant(from), parseInstant(to), size);
+    }
+
+    /**
+     * Границы периода приходят строкой, а не {@code Instant}: неявная
+     * конвертация Spring для этого типа не гарантирована, а нарушение
+     * формата обязано отвечать словами — «неверная дата», а не пятисоткой
+     * на разборе параметра.
+     */
+    private static Instant parseInstant(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Instant.parse(value);
+        } catch (java.time.format.DateTimeParseException e) {
+            throw new IllegalArgumentException("Неверный формат даты: " + value);
+        }
+    }
+
+    /**
      * Отмена возврата.
      *
      * <p>Возможна, пока возврат не завершён: клиент передумал, деталь уехала

@@ -15,6 +15,11 @@ describe('склонение на экране отчётов', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      // Список машин для разреза по машине и партии приезжает массивом:
+      // подсунуть объект значит уронить экран там, где в жизни он работает.
+      if (url.includes('/intake/donors')) {
+        return json([]);
+      }
       if (url.includes('/reports/customers')) {
         return json({
           totals: {

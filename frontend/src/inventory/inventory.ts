@@ -1,5 +1,6 @@
 import { request } from '../api/client';
 import { get, put, STORE_INVENTORY } from '../storage/db';
+import { normalizeCode } from '../scan/codes';
 
 /**
  * Инвентаризация с телефона.
@@ -36,6 +37,29 @@ export interface InventorySession {
 }
 
 /**
+ * Сентинел «без адреса» — тот же, что на сервере ({@code InventoryService.NO_CELL}).
+ * Настоящие ячейки нумеруются с единицы, поэтому ноль безопасно означает
+ * «позиции без ячейки» и не путается с «любая» ({@code undefined}).
+ */
+export const NO_CELL_ID = 0;
+
+/**
+ * Код детали по всему складу сессии, а не только по её выборке.
+ *
+ * <p>Нужен сканеру детали: лист обхода при выборке по ячейке содержит только
+ * её позиции, и без списка кодов всего склада нельзя отличить «деталь лежит
+ * в другой ячейке» от «код не найден на этом складе».
+ */
+export interface WarehouseCode {
+  partId: number;
+  title: string;
+  publicCode: string | null;
+  barcode: string | null;
+  cellId: number | null;
+  cellCode: string | null;
+}
+
+/**
  * Внесённый подсчёт, ещё не подтверждённый сервером.
  *
  * <p>Момент подсчёта хранится по часам устройства и на сервер как момент
@@ -51,21 +75,35 @@ export interface LocalCount {
 const KEY_SESSION = 'session';
 const KEY_LINES = 'lines';
 const KEY_COUNTS = 'counts';
+const KEY_CODES = 'codes';
 
-/** Открывает инвентаризацию склада. Только онлайн: снимок остатка делает сервер. */
-export async function openSession(warehouseId: number): Promise<InventorySession> {
+/**
+ * Открывает инвентаризацию склада — целиком или одной ячейкой. Только
+ * онлайн: снимок остатка делает сервер.
+ *
+ * @param cellId {@code undefined} — «Любая» (весь склад, как раньше);
+ *               {@link NO_CELL_ID} — «Без адреса»; иначе — конкретная ячейка
+ */
+export async function openSession(
+  warehouseId: number,
+  cellId?: number,
+): Promise<InventorySession> {
   const session = await request<InventorySession>('/api/inventory/sessions', {
     method: 'POST',
-    body: { warehouseId },
+    body: { warehouseId, cellId },
   });
   await adopt(session);
   return session;
 }
 
-/** Подхватывает уже открытую сессию: обход мог начать другой кладовщик. */
-export async function findOpenSession(warehouseId: number): Promise<InventorySession | null> {
+/** Подхватывает уже открытую сессию с той же выборкой: обход мог начать другой кладовщик. */
+export async function findOpenSession(
+  warehouseId: number,
+  cellId?: number,
+): Promise<InventorySession | null> {
+  const query = cellId === undefined ? '' : `&cellId=${cellId}`;
   const session = await request<InventorySession | undefined>(
-    `/api/inventory/sessions/open?warehouseId=${warehouseId}`,
+    `/api/inventory/sessions/open?warehouseId=${warehouseId}${query}`,
   );
   if (session === undefined) {
     return null;
@@ -74,18 +112,35 @@ export async function findOpenSession(warehouseId: number): Promise<InventorySes
   return session;
 }
 
+/** Сколько позиций попадёт в лист обхода при этой выборке — счётчик формы открытия. */
+export async function countPositions(warehouseId: number, cellId?: number): Promise<number> {
+  const query = cellId === undefined ? '' : `&cellId=${cellId}`;
+  const result = await request<{ count: number }>(
+    `/api/inventory/count?warehouseId=${warehouseId}${query}`,
+  );
+  return result.count;
+}
+
 /**
- * Забирает лист обхода и кладёт локально.
+ * Забирает лист обхода и коды всего склада, кладёт локально.
  *
  * <p>Подсчёты при этом сбрасываются: они относились к прежней сессии, и перенос
  * их в новую означал бы зачесть вчерашний обход за сегодняшний.
+ *
+ * <p>Коды склада — не только выборки сессии — нужны сканеру детали, чтобы
+ * отличить «деталь в другой ячейке» от «код не найден», и должны быть
+ * под рукой офлайн, поэтому забираются вместе с листом, а не по запросу.
  */
 async function adopt(session: InventorySession): Promise<void> {
   const stored = await get<InventorySession>(STORE_INVENTORY, KEY_SESSION);
-  const lines = await request<InventoryLine[]>(`/api/inventory/sessions/${session.id}/lines`);
+  const [lines, codes] = await Promise.all([
+    request<InventoryLine[]>(`/api/inventory/sessions/${session.id}/lines`),
+    request<WarehouseCode[]>(`/api/inventory/sessions/${session.id}/codes`),
+  ]);
 
   await put(STORE_INVENTORY, session, KEY_SESSION);
   await put(STORE_INVENTORY, lines, KEY_LINES);
+  await put(STORE_INVENTORY, codes, KEY_CODES);
   if (stored?.id !== session.id) {
     await put(STORE_INVENTORY, {}, KEY_COUNTS);
   }
@@ -95,16 +150,19 @@ export async function loadLocal(): Promise<{
   session: InventorySession | null;
   lines: InventoryLine[];
   counts: Record<string, LocalCount>;
+  codes: WarehouseCode[];
 }> {
-  const [session, lines, counts] = await Promise.all([
+  const [session, lines, counts, codes] = await Promise.all([
     get<InventorySession>(STORE_INVENTORY, KEY_SESSION),
     get<InventoryLine[]>(STORE_INVENTORY, KEY_LINES),
     get<Record<string, LocalCount>>(STORE_INVENTORY, KEY_COUNTS),
+    get<WarehouseCode[]>(STORE_INVENTORY, KEY_CODES),
   ]);
   return {
     session: session ?? null,
     lines: lines ?? [],
     counts: counts ?? {},
+    codes: codes ?? [],
   };
 }
 
@@ -117,10 +175,27 @@ export async function rememberCount(partId: number, qty: string): Promise<LocalC
   return count;
 }
 
+/**
+ * Добавляет локально позицию, которой не было в листе, — найденный сканом
+ * излишек («вне списка»).
+ *
+ * <p>Пишется в тот же список, что и лист обхода, а не только в состояние
+ * экрана: иначе перезапуск приложения до ухода очереди на сервер потерял бы
+ * строку, а с ней и то, что кладовщик уже прошёл эту деталь сканером.
+ */
+export async function rememberUnlistedLine(line: InventoryLine): Promise<void> {
+  const lines = (await get<InventoryLine[]>(STORE_INVENTORY, KEY_LINES)) ?? [];
+  if (lines.some((l) => l.partId === line.partId)) {
+    return;
+  }
+  await put(STORE_INVENTORY, [...lines, line], KEY_LINES);
+}
+
 /** Забывает локальную сессию: обход завершён или отменён. */
 export async function forgetSession(): Promise<void> {
   await put(STORE_INVENTORY, {}, KEY_COUNTS);
   await put(STORE_INVENTORY, [], KEY_LINES);
+  await put(STORE_INVENTORY, [], KEY_CODES);
   await put(STORE_INVENTORY, undefined, KEY_SESSION);
 }
 
@@ -145,6 +220,60 @@ export function cellsOf(lines: InventoryLine[]): { id: number | null; code: stri
   return Array.from(seen, ([id, code]) => ({ id, code })).sort((a, b) =>
     a.code.localeCompare(b.code, 'ru'),
   );
+}
+
+/**
+ * Три состояния строки пересчёта — три группы и статуса на экране.
+ *
+ * <p>«Вне списка» узнаётся по учётному нулю ({@code qtyExpected === 0}),
+ * а не по отдельному флагу: строку с таким учётом заводит только скан детали,
+ * которой не было в снимке при открытии ({@code open()} берёт только позиции
+ * с {@code qty > 0}), — обычная строка листа обхода нуля в учёте не имеет
+ * никогда.
+ */
+export type LineStatus = 'unscanned' | 'problem' | 'scanned';
+
+export function statusOf(line: InventoryLine, counts: Record<string, LocalCount>): LineStatus {
+  if (Number(line.qtyExpected) === 0) {
+    return 'problem';
+  }
+  return counts[String(line.partId)] === undefined ? 'unscanned' : 'scanned';
+}
+
+/**
+ * Разбирает скан штрихкода детали против кодов всего склада сессии.
+ *
+ * <p>Ищет и по коду товара (наши этикетки), и по владельческому штрихкоду
+ * (этикетка производителя): на разборке нет единого источника, и продавец
+ * либо кладовщик читает то, что наклеено на детали. Совпавшая деталь,
+ * которой нет среди строк текущей выборки, — «вне списка», а не «неизвестно»:
+ * она лежит на этом же складе, просто в другом месте.
+ */
+export type PartScanMatch =
+  | { kind: 'listed'; partId: number }
+  | { kind: 'unlisted'; code: WarehouseCode }
+  | { kind: 'not-found' };
+
+export function resolvePartScan(
+  codes: WarehouseCode[],
+  lines: InventoryLine[],
+  text: string,
+): PartScanMatch {
+  const scanned = normalizeCode(text);
+  if (scanned === '') {
+    return { kind: 'not-found' };
+  }
+  const found = codes.find(
+    (c) =>
+      (c.publicCode !== null && normalizeCode(c.publicCode) === scanned) ||
+      (c.barcode !== null && normalizeCode(c.barcode) === scanned),
+  );
+  if (found === undefined) {
+    return { kind: 'not-found' };
+  }
+  return lines.some((line) => line.partId === found.partId)
+    ? { kind: 'listed', partId: found.partId }
+    : { kind: 'unlisted', code: found };
 }
 
 /**

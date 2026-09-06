@@ -658,6 +658,124 @@ public class SalesService {
     }
 
     /**
+     * Реестр возвратов: все документы обзором, а не только по открытой сделке.
+     *
+     * <p>До этого экрана возврат было не найти иначе, чем через клиента
+     * и его сделку — продавец, сменившийся со смены, найти его не мог вовсе.
+     * Отбор общий на все три способа поиска, которыми владелец печатает
+     * то, что помнит, не выбирая заранее, что именно это — номер, имя
+     * или причина.
+     *
+     * <p>Список читают с конца и не листают вглубь: вместо курсора —
+     * растущий предел {@code limit} с постоянным {@code OFFSET 0}, и это
+     * не костыль, а то же свойство, ради которого курсор обычно и нужен —
+     * база не читает и не отбрасывает то, что уже показано.
+     *
+     * @param query поиск: точное совпадение по номеру сделки, вхождение —
+     *              по имени клиента и по причине
+     * @param from  начало периода по {@code created_at}; пусто — с начала времён
+     * @param to    конец периода (исключая); пусто — по текущий момент
+     * @param limit сколько строк вернуть
+     */
+    @Transactional(readOnly = true)
+    public ReturnsPage listReturns(String query, Instant from, Instant to, int limit) {
+        StringBuilder where = new StringBuilder(" WHERE 1=1");
+        List<Object> args = new ArrayList<>();
+        if (from != null) {
+            where.append(" AND r.created_at >= ?");
+            args.add(java.sql.Timestamp.from(from));
+        }
+        if (to != null) {
+            where.append(" AND r.created_at < ?");
+            args.add(java.sql.Timestamp.from(to));
+        }
+        if (query != null && !query.isBlank()) {
+            String term = query.strip();
+            String like = "%" + term + "%";
+            Long number = parseNumber(term);
+            if (number != null) {
+                where.append(" AND (d.number = ? OR c.name ILIKE ? OR r.reason ILIKE ?)");
+                args.add(number);
+                args.add(like);
+                args.add(like);
+            } else {
+                where.append(" AND (c.name ILIKE ? OR r.reason ILIKE ?)");
+                args.add(like);
+                args.add(like);
+            }
+        }
+
+        // Разделители — явной строкой, а не отступом текстового блока: блок,
+        // чьи закрывающие кавычки стоят на строке содержимого, срезает весь
+        // общий отступ, и «r.reason» + joins склеивается в «r.reasonFROM» —
+        // один слитный идентификатор вместо конца списка колонок и ключевого
+        // слова. Здесь ловится тестом, а не только грамматикой Postgres:
+        // «count(*)» перед тем же блоком не ломается — скобка отделяет
+        // токены и без пробела, — и до строкового запроса ошибка не доезжала.
+        String joins = " FROM deal_return r"
+                + " JOIN deal d ON d.id = r.deal_id"
+                + " LEFT JOIN customer c ON c.id = r.customer_id"
+                + " LEFT JOIN warehouse w ON w.id = r.warehouse_id";
+
+        long total = jdbc.queryForObject("SELECT count(*)" + joins + where, Long.class, args.toArray());
+        // Отменённый возврат в счёт по отбору входит, а в сумму — нет: строка
+        // видна списком, но деньги по ней не двигались по-настоящему.
+        BigDecimal totalAmount = jdbc.queryForObject(
+                "SELECT coalesce(sum(r.amount), 0)" + joins + where + " AND r.status <> 'CANCELLED'",
+                BigDecimal.class, args.toArray());
+
+        List<Object> rowArgs = new ArrayList<>(args);
+        rowArgs.add(limit);
+        List<ReturnListRow> rows = jdbc.query(
+                "SELECT r.id, r.number, r.created_at, r.deal_id, d.number AS deal_number,"
+                        + " r.customer_id, c.name AS customer_name,"
+                        + " r.warehouse_id, w.name AS warehouse_name, r.restocked,"
+                        + " r.status, r.amount, r.reason"
+                        + joins + where
+                        + " ORDER BY r.id DESC LIMIT ?",
+                (rs, i) -> new ReturnListRow(
+                        rs.getLong("id"), rs.getLong("number"), rs.getTimestamp("created_at").toInstant(),
+                        rs.getLong("deal_id"), rs.getLong("deal_number"),
+                        (Long) rs.getObject("customer_id"), rs.getString("customer_name"),
+                        (Long) rs.getObject("warehouse_id"), rs.getString("warehouse_name"),
+                        rs.getBoolean("restocked"), ReturnStatus.valueOf(rs.getString("status")),
+                        rs.getBigDecimal("amount"), rs.getString("reason")),
+                rowArgs.toArray());
+
+        return new ReturnsPage(rows, total, totalAmount);
+    }
+
+    private static Long parseNumber(String term) {
+        try {
+            return Long.parseLong(term);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Строка реестра возвратов.
+     *
+     * @param customerName  пусто — у сделки нет клиента; экран показывает
+     *                      «Частное лицо»
+     * @param warehouseName склад, на который принят товар; у брака
+     *                      ({@code !restocked}) на склад ничего не вставало,
+     *                      и экран показывает это словами, а не адресом
+     */
+    public record ReturnListRow(Long id, Long number, Instant createdAt, Long dealId, Long dealNumber,
+                                Long customerId, String customerName,
+                                Long warehouseId, String warehouseName, boolean restocked,
+                                ReturnStatus status, BigDecimal amount, String reason) {
+    }
+
+    /**
+     * @param total       сколько нашлось по отбору — список может быть обрезан пределом
+     * @param totalAmount сумма найденного без отменённых возвратов
+     */
+    public record ReturnsPage(List<ReturnListRow> items, long total, BigDecimal totalAmount) {
+    }
+
+    /**
      * Сумма к возврату по позиции. Считается от строки сделки, а не от текущей
      * цены запчасти: клиенту возвращают то, что он заплатил, включая скидку.
      */

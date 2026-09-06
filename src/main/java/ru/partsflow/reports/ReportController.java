@@ -2,6 +2,7 @@ package ru.partsflow.reports;
 
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -32,8 +33,11 @@ public class ReportController {
 
     private final ReportService reports;
 
-    public ReportController(ReportService reports) {
+    private final OriginReportService origins;
+
+    public ReportController(ReportService reports, OriginReportService origins) {
         this.reports = reports;
+        this.origins = origins;
     }
 
     /**
@@ -74,6 +78,51 @@ public class ReportController {
     @GetMapping("/donors")
     public DonorReport donors() {
         return new DonorReport(reports.donorProfitability(DONOR_LIMIT), reports.donorTotals());
+    }
+
+    /**
+     * Позиции одной машины: что поступило, что продано, что списано,
+     * что лежит до сих пор.
+     *
+     * <p>Числа по машине были и раньше — «продано на 331 716, лежит
+     * на 835 600», — а спросить «что именно лежит» было нельзя: владелец
+     * уходил в склад и собирал отбор руками.
+     *
+     * @param after позиция, после которой продолжать. Курсором, а не номером
+     *              страницы: у контейнера бывает несколько тысяч позиций
+     */
+    @GetMapping("/donors/{donorId}/items")
+    public OriginReportService.Page donorItems(
+            @PathVariable long donorId,
+            @RequestParam(defaultValue = "received") String tab,
+            @RequestParam(required = false) Long after,
+            @RequestParam(required = false) Integer size) {
+        return origins.donorItems(donorId, OriginReportService.Tab.of(tab), after, size);
+    }
+
+    /**
+     * То же по партии.
+     *
+     * @param supplyId пусто — товар без поставки: у переехавшего клиента это
+     *                 всё, что заводили руками, и такой разрез он спрашивает
+     *                 наравне с остальными
+     */
+    @GetMapping("/supplies/items")
+    public OriginReportService.Page supplyItems(
+            @RequestParam(required = false) Long supplyId,
+            @RequestParam(defaultValue = "received") String tab,
+            @RequestParam(required = false) Long after,
+            @RequestParam(required = false) Integer size) {
+        return origins.supplyItems(supplyId, OriginReportService.Tab.of(tab), after, size);
+    }
+
+    /** Партии для выбора — все, включая закрытые: про закрытую и спрашивают. */
+    @GetMapping("/supplies")
+    public SupplyList supplies() {
+        return new SupplyList(origins.supplies());
+    }
+
+    public record SupplyList(List<OriginReportService.SupplyOption> rows) {
     }
 
     /**

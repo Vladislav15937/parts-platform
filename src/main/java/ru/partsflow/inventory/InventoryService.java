@@ -39,6 +39,17 @@ public class InventoryService {
 
     private static final Logger log = LoggerFactory.getLogger(InventoryService.class);
 
+    /**
+     * Сентинел «без адреса» для выборки при открытии.
+     *
+     * <p>{@code cellId == null} значит «любая» (весь склад, как раньше)
+     * и не путается с настоящей ячейкой: реальные ячейки нумеруются
+     * с единицы ({@code GENERATED ALWAYS AS IDENTITY}), поэтому ноль
+     * безопасно означает «cell_id IS NULL» и никогда не совпадёт
+     * с существующим идентификатором.
+     */
+    static final long NO_CELL = 0L;
+
     private final InventorySessionRepository sessions;
     private final StockLedger ledger;
     private final JdbcTemplate jdbc;
@@ -61,15 +72,26 @@ public class InventoryService {
     }
 
     /**
-     * Открывает инвентаризацию и снимает учётный остаток склада.
+     * Открывает инвентаризацию и снимает учётный остаток склада — целиком
+     * или одной ячейкой.
      *
-     * <p>В строки попадает всё, что учёт считает лежащим на складе. Позиции
-     * с нулевым остатком не попадают: инвентаризация отвечает на вопрос
-     * «то ли лежит, что мы думаем», а не «нет ли на складе чего-то, чего
-     * мы не знаем» — на последний отвечает найденный излишек, вносимый руками.
+     * <p>В строки попадает всё, что учёт считает лежащим в этой выборке.
+     * Позиции с нулевым остатком не попадают: инвентаризация отвечает
+     * на вопрос «то ли лежит, что мы думаем», а не «нет ли на складе
+     * чего-то, чего мы не знаем» — на последний отвечает найденный излишек,
+     * вносимый сканом или руками.
+     *
+     * <p><b>Выборка ячейкой — весь смысл пересчёта одной полки.</b> Документ
+     * на весь склад в 33 676 позиций никто не закрывает: обход идёт неделями,
+     * а без «Завершить подсчёт» нельзя провести расхождения. Одна полка —
+     * это минуты, а не недели.
+     *
+     * @param cellId {@code null} — весь склад, как раньше; {@link #NO_CELL} —
+     *               «без адреса»; иначе — конкретная ячейка, которая обязана
+     *               принадлежать этому складу
      */
     @Transactional
-    public InventorySession open(Long warehouseId, Long authorId) {
+    public InventorySession open(Long warehouseId, Long cellId, Long authorId) {
         // Склад проверяется словами: чужой номер доезжал до внешнего ключа
         // и возвращался как «Операция нарушает целостность данных» — то есть
         // кладовщик получал сообщение о поломке сервера там, где ошибся
@@ -79,6 +101,15 @@ public class InventoryService {
                 "SELECT count(*) FROM warehouse WHERE id = ?", Integer.class, warehouseId);
         if (exists == null || exists == 0) {
             throw new IllegalArgumentException("Склад не найден: " + warehouseId);
+        }
+        if (cellId != null && cellId != NO_CELL) {
+            Integer cellExists = jdbc.queryForObject(
+                    "SELECT count(*) FROM storage_cell WHERE id = ? AND warehouse_id = ?",
+                    Integer.class, cellId, warehouseId);
+            if (cellExists == null || cellExists == 0) {
+                throw new IllegalArgumentException(
+                        "Ячейка %d не найдена на складе %d".formatted(cellId, warehouseId));
+            }
         }
 
         List<InventorySession> alreadyOpen = sessions.findByWarehouseIdAndStatus(
@@ -90,19 +121,51 @@ public class InventoryService {
         }
 
         InventorySession session = new InventorySession(warehouseId, authorId);
-        jdbc.query("""
-                SELECT part_id, qty, cell_id
-                  FROM part_stock
-                 WHERE warehouse_id = ? AND qty > 0
-                 ORDER BY part_id""",
-                rs -> {
-                    session.addLine(rs.getLong("part_id"),
-                            rs.getBigDecimal("qty"),
-                            rs.getObject("cell_id") == null ? null : rs.getLong("cell_id"));
-                },
-                warehouseId);
+        queryPositions(warehouseId, cellId, "part_id, qty, cell_id", rs ->
+                session.addLine(rs.getLong("part_id"),
+                        rs.getBigDecimal("qty"),
+                        rs.getObject("cell_id") == null ? null : rs.getLong("cell_id")));
 
         return detachable(sessions.saveAndFlush(session));
+    }
+
+    /**
+     * «Найдено товаров: N» на форме открытия — тем же условием, что и {@link
+     * #open}. Разойдись они, счётчик и лист обхода не совпадут, и владелец
+     * решит, что часть позиций потерялась.
+     */
+    @Transactional(readOnly = true)
+    public long countPositions(Long warehouseId, Long cellId) {
+        if (warehouseId == null) {
+            return 0;
+        }
+        String condition = cellCondition(cellId);
+        String sql = "SELECT count(*) FROM part_stock WHERE warehouse_id = ? AND qty > 0"
+                + condition;
+        Long total = condition.contains("?")
+                ? jdbc.queryForObject(sql, Long.class, warehouseId, cellId)
+                : jdbc.queryForObject(sql, Long.class, warehouseId);
+        return total == null ? 0 : total;
+    }
+
+    /** Условие ячейки для {@code WHERE ... part_stock}, общее для счётчика и открытия. */
+    private String cellCondition(Long cellId) {
+        if (cellId == null) {
+            return "";
+        }
+        return cellId == NO_CELL ? " AND cell_id IS NULL" : " AND cell_id = ?";
+    }
+
+    private void queryPositions(Long warehouseId, Long cellId, String select,
+                                org.springframework.jdbc.core.RowCallbackHandler handler) {
+        String condition = cellCondition(cellId);
+        String sql = "SELECT " + select + " FROM part_stock WHERE warehouse_id = ? AND qty > 0"
+                + condition + " ORDER BY part_id";
+        if (condition.contains("?")) {
+            jdbc.query(sql, handler, warehouseId, cellId);
+        } else {
+            jdbc.query(sql, handler, warehouseId);
+        }
     }
 
     /**
@@ -280,13 +343,69 @@ public class InventoryService {
                 sessionId);
     }
 
-    /** Открытая инвентаризация склада, если она есть. */
+    /**
+     * Открытая инвентаризация склада с той же выборкой, если она есть.
+     *
+     * <p>Своей колонки под выбор при открытии нет — она дублировала бы то,
+     * что уже лежит в строках, и потребовала бы миграции ради этого. Вместо
+     * неё сверяем с фактическим адресом строк: сессия, открытая по конкретной
+     * ячейке, не заводит ни одной строки с другим {@code cell_id} (см.
+     * {@link #open}), и наоборот не бывает. «Любая» подходит всегда — она
+     * шире любой уже открытой выборки, а на складе разрешена только одна
+     * открытая сессия, так что более точное совпадение искать не из чего.
+     */
     @Transactional(readOnly = true)
-    public Optional<InventorySession> openSessionOf(Long warehouseId) {
+    public Optional<InventorySession> openSessionOf(Long warehouseId, Long cellId) {
         return sessions.findByWarehouseIdAndStatus(
                 warehouseId, InventorySession.SessionStatus.OPEN).stream()
                 .findFirst()
+                .filter(session -> matchesSelection(session, cellId))
                 .map(this::detachable);
+    }
+
+    private boolean matchesSelection(InventorySession session, Long cellId) {
+        if (cellId == null) {
+            return true;
+        }
+        List<InventoryLine> lines = session.getLines();
+        if (lines.isEmpty()) {
+            // Выборка без единой позиции (пустая ячейка) не говорит ничего
+            // о том, чем она была открыта — пропустить кладовщика дальше
+            // дешевле, чем заставить его вслепую гадать со «складом занят».
+            return true;
+        }
+        Long wanted = cellId == NO_CELL ? null : cellId;
+        return lines.stream().allMatch(line -> java.util.Objects.equals(line.getCellId(), wanted));
+    }
+
+    /**
+     * Код детали → позиция, по всему складу сессии (не только по её выборке).
+     *
+     * <p>Отдаётся целиком, как и лист обхода: скан обязан работать без связи,
+     * а различить «деталь лежит в другой ячейке этого же склада» (группа
+     * «С проблемами») и «код не найден на этом складе» может только клиент,
+     * у которого есть весь список кодов склада, а не только выбранной ячейки.
+     */
+    @Transactional(readOnly = true)
+    public List<WarehouseCode> warehouseCodes(Long sessionId) {
+        InventorySession session = require(sessionId);
+        return jdbc.query("""
+                SELECT p.id AS part_id, p.title, p.public_code, p.barcode,
+                       ps.cell_id, c.code AS cell_code
+                  FROM part_stock ps
+                  JOIN part p ON p.id = ps.part_id
+                  LEFT JOIN storage_cell c ON c.id = ps.cell_id
+                 WHERE ps.warehouse_id = ? AND ps.qty > 0""",
+                (rs, i) -> new WarehouseCode(rs.getLong("part_id"), rs.getString("title"),
+                        rs.getString("public_code"), rs.getString("barcode"),
+                        rs.getObject("cell_id") == null ? null : rs.getLong("cell_id"),
+                        rs.getString("cell_code")),
+                session.getWarehouseId());
+    }
+
+    /** Строка кода детали для сканера — код товара и владельческий штрихкод разом. */
+    public record WarehouseCode(Long partId, String title, String publicCode, String barcode,
+                                Long cellId, String cellCode) {
     }
 
     /**

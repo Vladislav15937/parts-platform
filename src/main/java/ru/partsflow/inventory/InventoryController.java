@@ -60,8 +60,23 @@ public class InventoryController {
     @PreAuthorize(COUNTS)
     @PostMapping("/sessions")
     public ResponseEntity<SessionView> open(@Valid @RequestBody OpenRequest request) {
-        InventorySession session = inventory.open(request.warehouseId(), CurrentUser.memberId());
+        InventorySession session = inventory.open(
+                request.warehouseId(), request.cellId(), CurrentUser.memberId());
         return ResponseEntity.status(HttpStatus.CREATED).body(SessionView.of(session));
+    }
+
+    /**
+     * «Найдено товаров: N» на форме открытия — до какой-либо сессии.
+     *
+     * <p>Считает тем же условием, что и {@link #open}: иначе счётчик и лист
+     * обхода после открытия разойдутся, и кладовщик решит, что часть позиций
+     * потерялась.
+     */
+    @PreAuthorize(COUNTS)
+    @GetMapping("/count")
+    public PositionCount count(@RequestParam Long warehouseId,
+                               @RequestParam(required = false) Long cellId) {
+        return new PositionCount(inventory.countPositions(warehouseId, cellId));
     }
 
     /** Фактическое количество по позиции. Ноль — это недостача, а не пропуск. */
@@ -91,13 +106,41 @@ public class InventoryController {
         return inventory.lines(id);
     }
 
-    /** Открытая инвентаризация склада: телефон подхватывает начатый обход. */
+    /**
+     * Открытая инвентаризация склада с той же выборкой: телефон подхватывает
+     * начатый обход.
+     *
+     * <p>«С той же выборкой» проверяется по фактическому адресу строк сессии
+     * ({@link InventoryService#openSessionOf}), а не по отдельному полю: своя
+     * колонка под выбор потребовала бы миграции ради значения, которое и так
+     * лежит в строках. На складе может быть открыта только одна сессия сразу
+     * (см. {@link InventoryService#open}), так что несовпадение выборки просто
+     * не отдаёт её — кладовщик увидит «инвентаризация не открыта» и откроет
+     * новую своей ячейкой, где и разберётся с чужой.
+     */
     @PreAuthorize(COUNTS)
     @GetMapping("/sessions/open")
-    public ResponseEntity<SessionView> openSession(@RequestParam Long warehouseId) {
-        return inventory.openSessionOf(warehouseId)
+    public ResponseEntity<SessionView> openSession(@RequestParam Long warehouseId,
+                                                    @RequestParam(required = false) Long cellId) {
+        return inventory.openSessionOf(warehouseId, cellId)
                 .map(session -> ResponseEntity.ok(SessionView.of(session)))
                 .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    /**
+     * Код детали → позиция, по всему складу сессии, а не только по её выборке.
+     *
+     * <p>Нужен, чтобы отличить скан «деталь лежит в другой ячейке этого же
+     * склада» (группа «С проблемами») от «код не найден на этом складе»:
+     * лист обхода при выборке по ячейке содержит только её позиции, и без
+     * этого списка сканер не отличил бы одно от другого. Отдаётся целиком —
+     * так же, как лист обхода, — потому что сканирование обязано работать
+     * без связи.
+     */
+    @PreAuthorize(COUNTS)
+    @GetMapping("/sessions/{id}/codes")
+    public List<InventoryService.WarehouseCode> codes(@PathVariable Long id) {
+        return inventory.warehouseCodes(id);
     }
 
     /**
@@ -124,7 +167,16 @@ public class InventoryController {
         return SessionView.of(inventory.cancel(id));
     }
 
-    public record OpenRequest(@NotNull Long warehouseId) {
+    /**
+     * @param cellId выборка при открытии. {@code null} — весь склад, как
+     *               раньше. {@link InventoryService#NO_CELL} — «без адреса»
+     *               (позиции без ячейки). Иначе — конкретная ячейка
+     */
+    public record OpenRequest(@NotNull Long warehouseId, Long cellId) {
+    }
+
+    /** Счётчик формы открытия: сколько позиций попадёт в лист при этой выборке. */
+    public record PositionCount(long count) {
     }
 
     /**

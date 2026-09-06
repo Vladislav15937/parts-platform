@@ -240,6 +240,12 @@ button:disabled {
   background: #fee2e2;
 }
 
+/* Не сканирован: серым, не как отказ и не как готово. */
+.badge--muted {
+  color: var(--muted);
+  background: var(--line);
+}
+
 .note {
   margin: 0;
   color: var(--muted);
@@ -1561,6 +1567,11 @@ hr {
 
 .mark--off::before {
   content: '○';
+}
+
+/* Статус «Выполнен» в реестре возвратов — зелёным, как «на связи». */
+.status-done {
+  color: var(--ok);
 }
 
 .mark__link {

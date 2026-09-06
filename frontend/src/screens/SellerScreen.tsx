@@ -8,6 +8,7 @@ import {
   cancelDeal,
   createCustomer,
   createDeal,
+  deal as fetchDealById,
   endOfDay,
   extendReservation,
   historyOf,
@@ -62,9 +63,17 @@ interface Props {
   canSell: boolean;
   /** Роль вошедшего: правку остатка делает не продавец. */
   role: string;
+  /**
+   * Сделка, которую надо открыть сразу, — реестр возвратов ведёт сюда
+   * нажатием на номер в колонке «По сделке». Тот же путь, что и «Найти
+   * сделку клиента», только найдена она не здесь, а на другой вкладке.
+   */
+  openDealId?: number | null;
+  /** Сделка открыта — вкладке возвратов больше нечего просить. */
+  onDealOpened?: () => void;
 }
 
-export function SellerScreen({ canSell, role }: Props) {
+export function SellerScreen({ canSell, role, openDealId = null, onDealOpened }: Props) {
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState<StockRow[]>([]);
   /**
@@ -110,6 +119,26 @@ export function SellerScreen({ canSell, role }: Props) {
   // находок, и добираться до него прокруткой — то самое, ради чего
   // счётчик и заводили.
   const basket = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    if (openDealId === null) {
+      return;
+    }
+    void fetchDealById(openDealId)
+      .then((found) => {
+        setDeal(found);
+        setFinding(false);
+        // Корзина от прежнего разговора к чужой сделке отношения не имеет —
+        // то же самое, что делает выбор в DealFinder.
+        setLines([]);
+        setRows([]);
+        setFound(0);
+        setError(null);
+      })
+      .catch((cause) => setError(describe(cause, 'Сделка не открылась')))
+      .finally(() => onDealOpened?.());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openDealId]);
 
   return (
     <section className="card">
