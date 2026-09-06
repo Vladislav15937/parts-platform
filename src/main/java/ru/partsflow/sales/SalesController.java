@@ -601,7 +601,7 @@ public class SalesController {
         static DealView of(Deal deal, Map<Long, String> titles,
                            Map<Long, String> serviceNames, Map<Long, String> managerNames) {
             return new DealView(deal.getId(), deal.getNumber(), deal.getCustomerId(),
-                    deal.getManagerId(), managerNames.get(deal.getManagerId()),
+                    deal.getManagerId(), nameOf(deal.getManagerId(), managerNames),
                     deal.getStatus(), deal.getReservedUntil(),
                     deal.getTotalAmount(), deal.getPaidAmount(), deal.debt(),
                     deal.getCreatedAt(), deal.getIssuedAt(),
@@ -615,6 +615,25 @@ public class SalesController {
                                     serviceNames.get(s.getServiceId()),
                                     s.getQuantity(), s.getPrice()))
                             .toList());
+        }
+
+        /**
+         * Имя ответственного, когда его может не быть вовсе.
+         *
+         * <p><b>Проверка `null` до обращения к карте, а не после.</b>
+         * {@code MemberService.namesOf} на пустом списке идентификаторов
+         * возвращает {@code Map.of()}, а неизменяемые карты запрещают
+         * {@code null}-ключи и проверяют это на каждом чтении: {@code get(null)}
+         * бросает {@code NullPointerException}, а не отдаёт {@code null}, как
+         * обычная {@code HashMap}. Значит выдача, в которой **у всех** сделок
+         * ответственного нет, уходила пятисоткой — а пустой {@code managerId}
+         * контракт допускает сам (сотрудника удалили, заказ с площадки
+         * до принятия). Ровно тот же капкан, что уже был у
+         * {@code EntryView.of} в лицевом счёте, и лечится он тем же:
+         * проверкой ключа, а не выбором сорта пустой карты.
+         */
+        private static String nameOf(Long managerId, Map<Long, String> managerNames) {
+            return managerId == null ? null : managerNames.get(managerId);
         }
     }
 

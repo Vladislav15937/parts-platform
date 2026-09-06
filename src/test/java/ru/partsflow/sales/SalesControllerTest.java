@@ -172,6 +172,32 @@ class SalesControllerTest extends PostgresTestBase {
     }
 
     /**
+     * Сделка без ответственного отдаётся, а не падает пятисоткой.
+     *
+     * <p>Колонка {@code manager_id} допускает пусто, и контракт {@code DealView}
+     * это прямо называет: сотрудника удалили или заказ с площадки ещё
+     * не принят. Но имя резолвилось {@code managerNames.get(managerId)},
+     * а {@code namesOf} на выдаче, где ответственного нет **ни у одной**
+     * сделки, возвращает {@code Map.of()} — неизменяемая карта на
+     * {@code get(null)} бросает {@code NullPointerException}. Найдено живым
+     * прогоном (сделка, заведённая записью в базу без менеджера, отвечала
+     * 500 владельцу), а не тестом: все тесты и все экраны заводят сделку
+     * через сессию, где ответственный есть всегда.
+     */
+    @Test
+    @DisplayName("Сделка без ответственного отдаётся с пустым именем, а не пятисоткой")
+    void dealWithoutManagerIsReadable() throws Exception {
+        Long orphan = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO deal (customer_id, status, total_amount, paid_amount)
+                VALUES (?, 'RESERVED', 1000, 0) RETURNING id""", Long.class, customer));
+
+        mvc.perform(get("/api/deals/" + orphan).session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.managerId").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.managerName").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    /**
      * Вкладка «Сделки» карточки клиента — это {@code GET /api/deals?customerId=},
      * и роли у неё те же, что у самого раздела «Клиенты»
      * ({@code CustomerController.READS}). Пока проверки не было, кладовщик
