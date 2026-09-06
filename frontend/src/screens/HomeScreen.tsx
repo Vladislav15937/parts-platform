@@ -16,6 +16,7 @@ import { InventoryReconcile } from './InventoryReconcile';
 import { OutboxScreen } from './OutboxScreen';
 import { SellerScreen } from './SellerScreen';
 import { ReturnsScreen } from './ReturnsScreen';
+import { CustomersScreen } from './CustomersScreen';
 import { DeliveryScreen } from './DeliveryScreen';
 import { LabelsScreen } from './LabelsScreen';
 import { ReportsScreen } from './ReportsScreen';
@@ -89,6 +90,7 @@ type Tab =
   | 'donor'
   | 'sales'
   | 'returns'
+  | 'customers'
   | 'inventory'
   | 'outbox'
   | 'import'
@@ -237,6 +239,15 @@ export function HomeScreen() {
             onClick={() => setTab('returns')}
           >
             Возвраты
+          </button>
+        )}
+        {SELLING_ROLES.includes(state.me.role) && (
+          <button
+            type="button"
+            className={tab === 'customers' ? 'rail__item rail__item--active' : 'rail__item'}
+            onClick={() => setTab('customers')}
+          >
+            Клиенты
           </button>
         )}
         <button
@@ -443,6 +454,18 @@ export function HomeScreen() {
         />
       )}
 
+      {tab === 'customers' && SELLING_ROLES.includes(state.me.role) && (
+        <CustomersScreen
+          role={state.me.role}
+          company={state.me.companySchema}
+          memberId={state.me.memberId}
+          onOpenDeal={(dealId) => {
+            setOpenDealId(dealId);
+            setTab('sales');
+          }}
+        />
+      )}
+
       {tab === 'catalog' && <CatalogScreen role={state.me.role} />}
 
       {tab === 'wheels' && (
@@ -579,6 +602,7 @@ function sectionName(tab: string): string {
     case 'sales': return 'Продажа';
     case 'orders': return 'Заказы с площадок';
     case 'returns': return 'Возвраты';
+    case 'customers': return 'Клиенты';
     case 'catalog': return 'Склад';
     case 'wheels': return 'Шины и диски';
     case 'inventory': return 'Пересчёт склада';

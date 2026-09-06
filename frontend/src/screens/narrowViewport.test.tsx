@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
+import { CustomersScreen } from './CustomersScreen';
 import { DonorCosts } from './DonorCosts';
 import { DonorScreen } from './DonorScreen';
 import { IntakeScreen } from './IntakeScreen';
@@ -77,7 +78,12 @@ describe('на телефоне страница не уезжает вбок', 
     vi.unstubAllGlobals();
   });
 
-  const screens: Array<[string, () => JSX.Element]> = [
+  /**
+   * Третьим элементом — что нажать, чтобы ряд вообще появился на экране.
+   * Форма заведения клиента спрятана до нажатия «Добавить клиента», и без
+   * этого шага проверка мерила бы экран, на котором мерить нечего.
+   */
+  const screens: Array<[string, () => JSX.Element, (() => Promise<void>)?]> = [
     // Тот самый экран, на котором находка замерена: «Склад» и «Найти пересчёт»
     // одной строкой.
     ['Пересчёт', () => <InventoryReconcile reference={reference()} />],
@@ -86,6 +92,11 @@ describe('на телефоне страница не уезжает вбок', 
       <DonorScreen reference={reference()} online onChanged={() => {}} />
     )],
     ['Затраты по машине', () => <DonorCosts donorId={1} title="Toyota Camry" />],
+    ['Клиенты', () => (
+      <CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />
+    ), async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Добавить клиента' }));
+    }],
     ['Сотрудники', () => <MembersScreen />],
     ['Склады', () => <OrganizationScreen />],
     ['Настройки', () => <SettingsScreen />],
@@ -103,9 +114,10 @@ describe('на телефоне страница не уезжает вбок', 
     )],
   ];
 
-  it.each(screens)('%s помещается в экран 386', async (name, make) => {
+  it.each(screens)('%s помещается в экран 386', async (name, make, prepare) => {
     const { container } = render(make());
     await waitFor(() => expect(container.textContent).not.toBe(''));
+    if (prepare !== undefined) await prepare();
 
     // Без этого проверка была бы пустой: экран без `div.row` ничего
     // не доказывает про `div.row`.
