@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useMounted } from '../ui/useMounted';
 import {
   countPositions,
   findOpenSession,
@@ -81,8 +82,8 @@ export function InventoryScreen({ reference, onCount }: Props) {
   // Экран уходит с вкладки не дожидаясь ответа IndexedDB или сервера —
   // офлайн-хранилище и счётчик формы отвечают не мгновенно, — и без сторожа
   // асинхронный колбэк правит состояние уже размонтированного компонента.
-  const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   const reload = useCallback(async () => {
     const local = await loadLocal();
@@ -285,14 +286,24 @@ export function InventoryScreen({ reference, onCount }: Props) {
         : await findOpenSession(Number(warehouseId), cellId);
 
       if (opened === null) {
-        setNote('На этом складе инвентаризация не открыта');
+        // Тот же сторож, что ниже: ответ сервера приходит после того,
+        // как кладовщик мог уйти с вкладки.
+        if (mounted.current) {
+          setNote('На этом складе инвентаризация не открыта');
+        }
         return;
       }
       await reload();
     } catch (error) {
-      setNote(error instanceof Error ? error.message : 'Не удалось открыть');
+      if (mounted.current) {
+        setNote(error instanceof Error ? error.message : 'Не удалось открыть');
+      }
     } finally {
-      setBusy(false);
+      // `finally` выполняется и на том пути, где кладовщик ушёл с вкладки,
+      // пока сервер отвечал, — поэтому сторож нужен и здесь.
+      if (mounted.current) {
+        setBusy(false);
+      }
     }
   }
 

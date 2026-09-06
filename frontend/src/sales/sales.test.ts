@@ -1,13 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   basketTotal,
+  defaultPaymentSource,
   hoursUntilDeadline,
+  paymentSourceTypeLabel,
+  rememberPaymentSource,
   returnable,
   returnWarehouseDefault,
   roomFor,
   transferable,
 } from './sales';
-import type { BasketLine, Deal, StockRow } from './sales';
+import type { BasketLine, Deal, PaymentSourceEntry, StockRow } from './sales';
 
 /**
  * Расчёты экрана продавца.
@@ -237,5 +240,74 @@ describe('срок ответа площадке', () => {
     // Ноль прочитался бы как «время вышло»: у обычной продажи срока ответа
     // нет вовсе, и торопить продавца по ней не с чем.
     expect(hoursUntilDeadline(dealWith(), now)).toBeNull();
+  });
+});
+
+/**
+ * Умолчание источника платежа: тот, которым продавец платил в прошлый раз,
+ * а при первой в жизни оплате — первый неархивный по алфавиту.
+ *
+ * <p>Ключ на арендатора и на сотрудника: за кассой стоит один и тот же
+ * человек, и девять оплат из десяти идут одним способом, но другая компания
+ * или другой продавец на этом же устройстве не должны видеть чужое умолчание.
+ */
+describe('умолчание источника платежа', () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  function source(id: number, name: string, archived = false): PaymentSourceEntry {
+    return { id, name, sourceType: null, archived };
+  }
+
+  it('первая оплата — первый неархивный источник по алфавиту', () => {
+    const sources = [source(2, 'Карта Сбер'), source(1, 'ККМ')];
+    expect(defaultPaymentSource(sources, 't_1', 5)).toBe(2);
+  });
+
+  it('архивный источник в умолчание не попадает', () => {
+    const sources = [source(1, 'Авито доставка', true), source(2, 'ККМ')];
+    expect(defaultPaymentSource(sources, 't_1', 5)).toBe(2);
+  });
+
+  it('без источников умолчания нет', () => {
+    expect(defaultPaymentSource([], 't_1', 5)).toBeNull();
+  });
+
+  it('запомненный источник побеждает первый по алфавиту', () => {
+    const sources = [source(1, 'ККМ'), source(2, 'Карта Сбер')];
+    rememberPaymentSource('t_1', 5, 2);
+    expect(defaultPaymentSource(sources, 't_1', 5)).toBe(2);
+  });
+
+  it('запомненный источник, ушедший в архив, не подставляется', () => {
+    // Архивная строка сохраняется у прежних платежей, но предлагать её
+    // как умолчание для новой оплаты нельзя — списка для выбора она уже
+    // не входит.
+    const sources = [source(1, 'ККМ'), source(2, 'Карта Сбер', true)];
+    rememberPaymentSource('t_1', 5, 2);
+    expect(defaultPaymentSource(sources, 't_1', 5)).toBe(1);
+  });
+
+  it('ключ на компанию: чужая компания на том же устройстве не видит умолчание', () => {
+    const sources = [source(1, 'Авито доставка'), source(2, 'ККМ')];
+    rememberPaymentSource('t_1', 5, 2);
+    expect(defaultPaymentSource(sources, 't_2', 5)).toBe(1);
+  });
+
+  it('ключ на сотрудника: другой продавец на том же устройстве не видит умолчание', () => {
+    const sources = [source(1, 'Авито доставка'), source(2, 'ККМ')];
+    rememberPaymentSource('t_1', 5, 2);
+    expect(defaultPaymentSource(sources, 't_1', 6)).toBe(1);
+  });
+});
+
+describe('подпись типа источника платежа', () => {
+  it('пять значений схемы и пусто — дословно из задачи 0024', () => {
+    expect(paymentSourceTypeLabel('CASH')).toBe('Наличный расчёт');
+    expect(paymentSourceTypeLabel('BANK_ACCOUNT')).toBe('Расчётный счёт');
+    expect(paymentSourceTypeLabel('ACQUIRING')).toBe('Интернет-эквайринг');
+    expect(paymentSourceTypeLabel('CREDIT')).toBe('В долг');
+    expect(paymentSourceTypeLabel('MARKETPLACE')).toBe('Площадка');
+    expect(paymentSourceTypeLabel(null)).toBe('Не указан');
   });
 });

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { endOfDay, listReturns, startOfDay } from '../sales/sales';
 import type { ReturnListRow, ReturnsPage } from '../sales/sales';
+import { shortDate } from '../ui/shortDate';
 
 /**
  * Реестр возвратов: обзор без входа в сделку клиента.
@@ -167,19 +168,3 @@ function money(value: string): string {
   return `${Number(value).toLocaleString('ru-RU')} ₽`;
 }
 
-/**
- * Дата коротким словом месяца: «05 сен 26».
- *
- * <p>Своя таблица месяцев, а не `Intl`: короткое имя в `ru-RU` зависит
- * от сборки ICU («сент.» против «сен»), и экран показывал бы разное
- * в браузере и в тестах.
- */
-const MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн',
-  'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
-
-function shortDate(iso: string): string {
-  const at = new Date(iso);
-  const day = String(at.getDate()).padStart(2, '0');
-  const year = String(at.getFullYear()).slice(-2);
-  return `${day} ${MONTHS[at.getMonth()]} ${year}`;
-}

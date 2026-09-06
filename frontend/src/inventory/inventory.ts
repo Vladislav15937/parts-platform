@@ -27,13 +27,145 @@ export interface InventoryLine {
   qtyCounted: string | null;
 }
 
+/**
+ * Статус пересчёта — ровно те четыре значения, что живут в базе и в Java
+ * ({@code InventorySession.SessionStatus}, ограничение
+ * `inventory_session_status_ck`).
+ *
+ * <p>Тип, а не `string`: пока статус был строкой, показ его человеку
+ * приходилось страховать запасным `?? session.status`, то есть внутренним
+ * написанием «COUNTED» вместо «Подсчёт завершён». С union'ом
+ * {@link SESSION_STATUS_LABEL} покрывает все случаи, и запасной путь
+ * не нужен вовсе — а новый статус, если он появится, уронит сборку здесь,
+ * а не покажет своё имя кладовщику.
+ */
+export type SessionStatus = 'OPEN' | 'COUNTED' | 'APPLIED' | 'CANCELLED';
+
 export interface InventorySession {
   id: number;
   warehouseId: number;
-  status: string;
+  status: SessionStatus;
   startedAt: string;
   lines: number;
   counted: number;
+  /** Комментарий человека или `null`. Пустой строки не бывает — сервер её стирает. */
+  note: string | null;
+}
+
+/**
+ * Строка списка пересчётов — журнал, а не поиск по складу.
+ *
+ * <p>До этого закрытый пересчёт нельзя было найти вовсе: экран умел искать
+ * только открытую сессию по складу, а журнал склада на пересчёт ссылается
+ * («Пересчёт №4») и после проведения, и после отмены.
+ */
+export interface SessionSummary {
+  id: number;
+  warehouseId: number;
+  warehouseName: string;
+  /** Склад и ячейка словами: «Основной · A-01-03» или «Основной · весь склад». */
+  selection: string;
+  status: SessionStatus;
+  startedAt: string;
+  appliedAt: string | null;
+  lines: number;
+  counted: number;
+  /**
+   * Комментарий человека — то, ради чего в журнал заходят: «83619 не найден»,
+   * «Не сканировали». `null` — не писали вовсе.
+   */
+  note: string | null;
+}
+
+/**
+ * Пункты воронки слева, в порядке, заданном задачей, и статусы, которые
+ * каждый накрывает.
+ *
+ * <p><b>«Выполненные» — это и «Подсчёт завершён», и «Проведён».</b> Нормально
+ * закрытый пересчёт всегда `APPLIED`: завершение подсчёта — промежуточный
+ * шаг, а не конец. Пока воронка накрывала один `COUNTED`, проведённый
+ * документ не попадал ни в одну из трёх — только в «Все пересчёты», — то есть
+ * главный вопрос журнала «когда эту полку считали в последний раз и что тогда
+ * написали» отвечал пустотой.
+ *
+ * <p>Группировка живёт здесь, а не на сервере: сервер отбирает по набору
+ * статусов, и имена воронок ему знать незачем — иначе два списка разошлись бы
+ * на первой правке, как уже расходились белые списки вида товара и свойств
+ * колеса.
+ */
+export const SESSION_FUNNEL = [
+  { key: 'OPEN', label: 'В работе', statuses: ['OPEN'] },
+  { key: 'DONE', label: 'Выполненные', statuses: ['COUNTED', 'APPLIED'] },
+  { key: 'CANCELLED', label: 'Отменённые', statuses: ['CANCELLED'] },
+  { key: 'ALL', label: 'Все пересчёты', statuses: [] },
+] as const satisfies readonly {
+  key: string;
+  label: string;
+  statuses: readonly SessionStatus[];
+}[];
+
+export type SessionFunnelKey = (typeof SESSION_FUNNEL)[number]['key'];
+
+export const SESSION_STATUS_LABEL: Record<SessionStatus, string> = {
+  OPEN: 'Идёт подсчёт',
+  COUNTED: 'Подсчёт завершён',
+  APPLIED: 'Проведён',
+  CANCELLED: 'Отменён',
+};
+
+/**
+ * Правится ли комментарий: закрытый пересчёт показывает его текстом.
+ *
+ * <p>То же условие, что на сервере ({@code InventorySession.changeNote}):
+ * проведение записало корректировки в журнал, отмена выбросила лист обхода,
+ * и приписка задним числом объясняла бы случившееся не тем, что видел
+ * писавший. Кнопка, которую сервер отобьёт, хуже отсутствующей.
+ */
+export function noteEditable(status: SessionStatus): boolean {
+  return status !== 'APPLIED' && status !== 'CANCELLED';
+}
+
+/**
+ * Пишет комментарий к пересчёту.
+ *
+ * <p>Пустая строка стирает его: сервер приводит её к `NULL`, и «не заполнено»
+ * не выдаёт себя за ответ человека.
+ */
+export function saveSessionNote(sessionId: number, note: string): Promise<InventorySession> {
+  return request<InventorySession>(`/api/inventory/sessions/${sessionId}/note`, {
+    method: 'POST',
+    body: { note },
+  });
+}
+
+/**
+ * Страница журнала: показанные строки и сколько всего в воронке.
+ *
+ * <p>Общее число едет вместе со страницей — как у витрины склада и вкладки
+ * колёс. Подвал считает по нему, а не по длине списка: счётчик, считающий
+ * показанное, врёт ровно на то, чего не видно.
+ */
+export interface SessionPage {
+  rows: SessionSummary[];
+  total: number;
+}
+
+/**
+ * Список пересчётов по воронке — «Все пересчёты» шлёт запрос без фильтра,
+ * остальные перечисляют свои статусы повтором параметра.
+ */
+export function listSessions(funnel: SessionFunnelKey): Promise<SessionPage> {
+  const chosen = SESSION_FUNNEL.find((f) => f.key === funnel);
+  const statuses: readonly SessionStatus[] = chosen?.statuses ?? [];
+  const query = statuses.length === 0
+    ? ''
+    : `?${statuses.map((s) => `status=${s}`).join('&')}`;
+  return request<SessionPage>(`/api/inventory/sessions${query}`);
+}
+
+/** Одна сессия любого статуса — открывается нажатием на строку списка. */
+export function sessionSummary(sessionId: number): Promise<SessionSummary> {
+  return request<SessionSummary>(`/api/inventory/sessions/${sessionId}`);
 }
 
 /**

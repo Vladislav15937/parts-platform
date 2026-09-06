@@ -47,7 +47,7 @@ describe('корзина продавца', () => {
   });
 
   it('после нажатия говорит «уже в сделке», а не «нет свободных»', async () => {
-    render(<SellerScreen canSell role="SELLER" />);
+    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
     await search();
 
     const buttons = () => [...document.querySelectorAll('.stock-row button')]
@@ -71,7 +71,7 @@ describe('корзина продавца', () => {
    * живым прогоном на продаже шины.
    */
   it('не пишет «показаны первые 0» при пустом списке', async () => {
-    render(<SellerScreen canSell role="SELLER" />);
+    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
     await search();
 
     const notice = () => [...document.querySelectorAll('p')]

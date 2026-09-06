@@ -39,7 +39,8 @@ describe('открытие сделки из реестра возвратов',
     }));
 
     render(
-      <SellerScreen canSell role="SELLER" openDealId={77} onDealOpened={onDealOpened} />,
+      <SellerScreen canSell role="SELLER" company="test" memberId={1}
+                    openDealId={77} onDealOpened={onDealOpened} />,
     );
 
     await waitFor(() => expect(screen.getByText(/Сделка №77/)).toBeTruthy());
