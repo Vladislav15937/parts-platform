@@ -143,15 +143,80 @@ class SalesControllerTest extends PostgresTestBase {
         assertThat(reservedOf(partId)).isEqualByComparingTo("0");
     }
 
+    /**
+     * До задачи 0022 сделку читал любой вошедший — «цена и наличие нужны
+     * всем». Это верно про склад, но сделка несёт клиента, суммы, оплаченное
+     * и долг, и роль «Просмотр», которой закрыты все прочие пути к клиенту,
+     * получала здесь то же самое с другой стороны. Читает теперь тот, кто
+     * может по сделке действовать: продавец и кладовщик, который её выдаёт.
+     */
     @Test
-    @DisplayName("Смотреть сделки может любой вошедший")
-    void viewerCanRead() throws Exception {
+    @DisplayName("Сделку читает тот, кто может по ней действовать, а не «Просмотр»")
+    void dealReadableByActingRolesOnly() throws Exception {
         Long partId = partWithStock("Капот", 1);
         long dealId = createDeal(partId);
+        inTenant(() -> member("storekeeper", "Кладовщик", "STOREKEEPER"));
 
-        mvc.perform(get("/api/deals/" + dealId).session(login("viewer")))
+        mvc.perform(get("/api/deals/" + dealId).session(login("seller")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("RESERVED"));
+
+        // Кладовщик выдаёт товар со склада — документ, по которому он выдаёт,
+        // он обязан видеть.
+        mvc.perform(get("/api/deals/" + dealId).session(login("storekeeper")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RESERVED"));
+
+        mvc.perform(get("/api/deals/" + dealId).session(login("viewer")))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Сделка без ответственного отдаётся, а не падает пятисоткой.
+     *
+     * <p>Колонка {@code manager_id} допускает пусто, и контракт {@code DealView}
+     * это прямо называет: сотрудника удалили или заказ с площадки ещё
+     * не принят. Но имя резолвилось {@code managerNames.get(managerId)},
+     * а {@code namesOf} на выдаче, где ответственного нет **ни у одной**
+     * сделки, возвращает {@code Map.of()} — неизменяемая карта на
+     * {@code get(null)} бросает {@code NullPointerException}. Найдено живым
+     * прогоном (сделка, заведённая записью в базу без менеджера, отвечала
+     * 500 владельцу), а не тестом: все тесты и все экраны заводят сделку
+     * через сессию, где ответственный есть всегда.
+     */
+    @Test
+    @DisplayName("Сделка без ответственного отдаётся с пустым именем, а не пятисоткой")
+    void dealWithoutManagerIsReadable() throws Exception {
+        Long orphan = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO deal (customer_id, status, total_amount, paid_amount)
+                VALUES (?, 'RESERVED', 1000, 0) RETURNING id""", Long.class, customer));
+
+        mvc.perform(get("/api/deals/" + orphan).session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.managerId").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.managerName").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    /**
+     * Вкладка «Сделки» карточки клиента — это {@code GET /api/deals?customerId=},
+     * и роли у неё те же, что у самого раздела «Клиенты»
+     * ({@code CustomerController.READS}). Пока проверки не было, кладовщик
+     * и «Просмотр» получали историю покупок с суммами и долгом, хотя
+     * {@code GET /api/customers/directory} и {@code /{id}} им закрыты: пункт
+     * приёмки 10 задачи 0022 был выполнен на витрине и нарушен у продавца.
+     */
+    @Test
+    @DisplayName("Историю сделок клиента кладовщик и «Просмотр» не видят")
+    void customerDealsHiddenFromStorekeeperAndViewer() throws Exception {
+        inTenant(() -> member("storekeeper", "Кладовщик", "STOREKEEPER"));
+
+        mvc.perform(get("/api/deals?customerId=" + customer).session(login("storekeeper")))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/deals?customerId=" + customer).session(login("viewer")))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(get("/api/deals?customerId=" + customer).session(login("seller")))
+                .andExpect(status().isOk());
     }
 
     @Test
@@ -578,6 +643,16 @@ class SalesControllerTest extends PostgresTestBase {
     @DisplayName("Поиск по номеру сделки — точное совпадение")
     void returnsSearchByDealNumberIsExact() throws Exception {
         MockHttpSession session = login("seller");
+        // Номер нужен многозначный: утверждение теста — «поиск по 41 не нашёл
+        // сделку №417», и при однозначном номере отрезать от него нечего.
+        // Сколько сделок завели соседи по схеме, зависит от того, весь класс
+        // запустили или один метод, поэтому номер задаётся, а не достаётся.
+        // greatest не даёт откатить последовательность назад, если соседи
+        // уже ушли дальше, — иначе номера начали бы повторяться.
+        inTenant(() -> jdbc.queryForObject(
+                "SELECT setval('deal_number_seq',"
+                        + " greatest((SELECT last_value FROM deal_number_seq), 416))",
+                Long.class));
         long dealId = createDeal(partWithStock("Стекло лобовое", 1));
         long itemId = firstItemId(dealId, session);
         mvc.perform(post("/api/deals/" + dealId + "/issue").with(csrf()).session(session))
@@ -593,10 +668,27 @@ class SalesControllerTest extends PostgresTestBase {
         Long dealNumber = inTenant(() -> jdbc.queryForObject(
                 "SELECT number FROM deal WHERE id = ?", Long.class, dealId));
 
+        // Свежий возврат идёт первым (ORDER BY r.id DESC): точный номер нашёл
+        // нужный документ. Само по себе это ещё не про точность — вхождение
+        // находит его тоже, — поэтому доказывает следующая проверка.
         mvc.perform(get("/api/deals/returns?q=" + dealNumber).session(session))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items.length()").value(1))
                 .andExpect(jsonPath("$.items[0].dealId").value((int) dealId));
+
+        // А точность держится отрицанием: номер без последней цифры — это
+        // подстрока номера, но не номер. Причина возврата («поиск-по-номеру»)
+        // и имя клиента («Автосервис») цифр не содержат, значит попасть
+        // в выдачу по этому запросу сделка может только веткой номера —
+        // и попадёт ровно тогда, когда сравнение перестанет быть точным.
+        // Считать строки тут нельзя: схема у класса общая, и сколько чужих
+        // причин с цифровым хвостом («предел-хвост-92831») подойдёт под «41»,
+        // зависит от порядка запуска. Отсутствие своей строки — не зависит.
+        String prefix = String.valueOf(dealNumber);
+        prefix = prefix.substring(0, prefix.length() - 1);
+        mvc.perform(get("/api/deals/returns?q=" + prefix).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[?(@.dealId == " + dealId + ")]",
+                        org.hamcrest.Matchers.hasSize(0)));
     }
 
     @Test
@@ -744,6 +836,116 @@ class SalesControllerTest extends PostgresTestBase {
                 .andExpect(status().isForbidden());
         mvc.perform(get("/api/deals/returns").session(login("viewer")))
                 .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Вкладка «Возвраты» карточки клиента (задача 0022) переиспользует
+     * {@code GET /api/deals/returns}, только с добавленным {@code customerId}:
+     * возврат другого клиента попадать в неё не должен.
+     */
+    @Test
+    @DisplayName("Отбор по customerId показывает только возвраты этого клиента")
+    void returnsFilteredByCustomerId() throws Exception {
+        MockHttpSession session = login("seller");
+        Long otherCustomer = inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO customer (name) VALUES ('Другой клиент') RETURNING id", Long.class));
+
+        long dealMine = createDeal(partWithStock("Зеркало моё", 1));
+        long itemMine = firstItemId(dealMine, session);
+        mvc.perform(post("/api/deals/" + dealMine + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals/" + dealMine + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"мой-возврат-без-цифр",
+                                 "items":[{"dealItemId":%d,"restocked":true}]}"""
+                                .formatted(warehouse, itemMine)))
+                .andExpect(status().isCreated());
+
+        Long partOther = partWithStock("Зеркало чужое", 1);
+        long dealOther = createDealForCustomer(partOther, otherCustomer, session);
+        long itemOther = firstItemId(dealOther, session);
+        mvc.perform(post("/api/deals/" + dealOther + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals/" + dealOther + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"чужой-возврат-без-цифр",
+                                 "items":[{"dealItemId":%d,"restocked":true}]}"""
+                                .formatted(warehouse, itemOther)))
+                .andExpect(status().isCreated());
+
+        mvc.perform(get("/api/deals/returns?customerId=" + customer).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[*].reason")
+                        .value(org.hamcrest.Matchers.everyItem(
+                                org.hamcrest.Matchers.not("чужой-возврат-без-цифр"))));
+
+        mvc.perform(get("/api/deals/returns?customerId=" + otherCustomer).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].reason").value("чужой-возврат-без-цифр"));
+    }
+
+    /**
+     * Платёж по сделке несёт номер сделки, а пополнение счёта — нет: у него
+     * сделки не было вовсе, и «По сделке» на экране обязано быть пустым,
+     * а не нулём.
+     */
+    @Test
+    @DisplayName("Платежи клиента: с номером сделки и без него")
+    void paymentsOfCustomerListed() throws Exception {
+        MockHttpSession session = login("seller");
+        Long partId = partWithStock("Радиатор для платежа", 1);
+        long dealId = createDeal(partId);
+        mvc.perform(post("/api/deals/" + dealId + "/payments").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amount\":5000}"))
+                .andExpect(status().isCreated());
+
+        mvc.perform(post("/api/customers/" + customer + "/account/top-up").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amount\":1000}"))
+                .andExpect(status().isCreated());
+
+        mvc.perform(get("/api/deals/payments?customerId=" + customer).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                // Свежие сверху: пополнение сделано вторым.
+                .andExpect(jsonPath("$[0].dealId").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$[0].dealNumber").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$[1].dealId").value((int) dealId))
+                .andExpect(jsonPath("$[1].dealNumber").isNumber());
+    }
+
+    /**
+     * «Ответственный» в карточке клиента показывает имя, а не идентификатор —
+     * {@code GET /api/members}, откуда его можно взять на клиенте, доступен
+     * только владельцу, а вкладку «Сделки» видит и продавец.
+     */
+    @Test
+    @DisplayName("Сделка несёт имя ответственного, а не только его id")
+    void dealCarriesManagerName() throws Exception {
+        Long partId = partWithStock("Помпа для ответственного", 1);
+        long dealId = createDeal(partId);
+
+        mvc.perform(get("/api/deals?customerId=" + customer).session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].managerId").value(sellerId))
+                .andExpect(jsonPath("$[0].managerName").value("Продавец"));
+    }
+
+    private long createDealForCustomer(Long partId, Long customerId, MockHttpSession session)
+            throws Exception {
+        var result = mvc.perform(post("/api/deals").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customerId":%d,"items":[{"partId":%d,"quantity":1,"warehouseId":%d}]}"""
+                                .formatted(customerId, partId, warehouse)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String body = result.getResponse().getContentAsString();
+        return Long.parseLong(body.replaceAll("^\\{\"id\":(\\d+).*$", "$1"));
     }
 
     private long firstItemId(long dealId, MockHttpSession session) throws Exception {

@@ -58,6 +58,14 @@ export interface Deal {
   number: number | null;
   customerId: number;
   managerId: number | null;
+  /**
+   * Имя ответственного. Пусто — сотрудника удалили, или заказ с площадки
+   * ещё не принят и привязки нет вовсе. Читается на сервере одним запросом
+   * на всю выдачу: `GET /api/members`, откуда его можно было бы взять
+   * на клиенте, доступен только владельцу, а вкладку «Сделки» карточки
+   * клиента видит и продавец.
+   */
+  managerName: string | null;
   status: string;
   reservedUntil: string | null;
   totalAmount: string;
@@ -299,6 +307,96 @@ export function createCustomer(name: string, phone: string): Promise<Customer> {
   return request<Customer>('/api/customers', { method: 'POST', body: { name, phone } });
 }
 
+/**
+ * Карточка клиента целиком — поля, которые до раздела «Клиенты» лежали
+ * в схеме и не были доступны ни на одном экране: почта, тип, ИНН,
+ * название организации, примечание и заметка.
+ *
+ * @param note       заметка для себя — нигде не выводится
+ * @param publicNote примечание клиенту — печатается в накладной. Перепутать
+ *                   их местами значит показать клиенту чужую заметку.
+ * @param balance    **не** остаток лицевого счёта: чистая позиция клиента —
+ *                   остаток счёта минус долг по выданным и не оплаченным
+ *                   целиком сделкам. То, что отдаёт {@link accountOf}
+ *                   (подпись «На счету» в карточке), в минус не уходит
+ *                   ни одной операцией, и колонка «Баланс» на нём никогда
+ *                   не показала бы должника красным. Путать их нельзя —
+ *                   это разные книги
+ */
+export interface CustomerDetail {
+  id: number;
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  customerType: string;
+  note: string | null;
+  publicNote: string | null;
+  inn: string | null;
+  companyName: string | null;
+  balance: number;
+}
+
+/**
+ * Раздел «Клиенты»: список с балансом, растущий предел вместо курсора —
+ * тот же приём, что у реестра возвратов ({@link listReturns}).
+ */
+export interface CustomersPage {
+  items: CustomerDetail[];
+  total: number;
+}
+
+export function listCustomers(query: string, size = 50): Promise<CustomersPage> {
+  const params = new URLSearchParams();
+  if (query.trim() !== '') {
+    params.set('q', query.trim());
+  }
+  params.set('size', String(size));
+  return request<CustomersPage>(`/api/customers/directory?${params.toString()}`);
+}
+
+export function customerOf(customerId: number): Promise<CustomerDetail> {
+  return request<CustomerDetail>(`/api/customers/${customerId}`);
+}
+
+/**
+ * Правка карточки — владельцу и менеджеру. Продавец её видит, но сохранить
+ * не может: телефон в чужой сделке поправить он не должен.
+ */
+export function updateCustomer(
+  customerId: number,
+  fields: {
+    name: string;
+    phone: string;
+    email: string;
+    publicNote: string;
+    note: string;
+    customerType: string;
+    inn: string;
+    companyName: string;
+  },
+): Promise<CustomerDetail> {
+  return request<CustomerDetail>(`/api/customers/${customerId}`, {
+    method: 'PUT',
+    body: fields,
+  });
+}
+
+/** Платёж клиента — касса, а не движение лицевого счёта ({@link AccountEntry}). */
+export interface PaymentRow {
+  id: number;
+  paidAt: string;
+  dealId: number | null;
+  /** Пусто — платёж без сделки: пополнение или выдача со счёта. */
+  dealNumber: number | null;
+  amount: string;
+  direction: string;
+  comment: string | null;
+}
+
+export function customerPayments(customerId: number): Promise<PaymentRow[]> {
+  return request<PaymentRow[]>(`/api/deals/payments?customerId=${customerId}`);
+}
+
 export interface BasketLine {
   row: StockRow;
   quantity: number;
@@ -470,17 +568,21 @@ export interface ReturnsPage {
  * и вглубь не листают, а строка вычисляется тем же условием, что и подвал
  * таблицы (количество и сумма), — иначе они разойдутся на первой же правке.
  *
- * @param query поиск: точное совпадение по номеру сделки, вхождение —
- *              по клиенту и по причине
- * @param from  начало периода (ISO-момент); пусто — с начала времён
- * @param to    конец периода (ISO-момент); пусто — по текущий момент
- * @param size  сколько строк вернуть
+ * @param query      поиск: точное совпадение по номеру сделки, вхождение —
+ *                   по клиенту и по причине
+ * @param from       начало периода (ISO-момент); пусто — с начала времён
+ * @param to         конец периода (ISO-момент); пусто — по текущий момент
+ * @param size       сколько строк вернуть
+ * @param customerId непусто — только возвраты этого клиента: вкладка
+ *                   «Возвраты» карточки клиента переиспользует этот же
+ *                   запрос, а не заводит свой
  */
 export function listReturns(
   query: string,
   from: string,
   to: string,
   size = 50,
+  customerId: number | null = null,
 ): Promise<ReturnsPage> {
   const params = new URLSearchParams();
   if (query.trim() !== '') {
@@ -493,6 +595,9 @@ export function listReturns(
     params.set('to', to);
   }
   params.set('size', String(size));
+  if (customerId !== null) {
+    params.set('customerId', String(customerId));
+  }
   return request<ReturnsPage>(`/api/deals/returns?${params.toString()}`);
 }
 
@@ -760,6 +865,10 @@ export interface AccountEntry {
   signedAmount: number;
   comment: string | null;
   createdAt: string;
+  /** Номер сделки; пусто — движение к сделке не относится (пополнение, выдача, правка). */
+  dealNumber: number | null;
+  /** Кто сделал движение; пусто — движение сделал фоновый процесс. */
+  authorName: string | null;
 }
 
 export interface CustomerAccount {

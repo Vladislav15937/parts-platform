@@ -675,16 +675,23 @@ public class SalesService {
      * не костыль, а то же свойство, ради которого курсор обычно и нужен —
      * база не читает и не отбрасывает то, что уже показано.
      *
-     * @param query поиск: точное совпадение по номеру сделки, вхождение —
-     *              по имени клиента и по причине
-     * @param from  начало периода по {@code created_at}; пусто — с начала времён
-     * @param to    конец периода (исключая); пусто — по текущий момент
-     * @param limit сколько строк вернуть
+     * @param query      поиск: точное совпадение по номеру сделки, вхождение —
+     *                   по имени клиента и по причине
+     * @param from       начало периода по {@code created_at}; пусто — с начала времён
+     * @param to         конец периода (исключая); пусто — по текущий момент
+     * @param limit      сколько строк вернуть
+     * @param customerId непусто — только возвраты этого клиента; вкладка «Возвраты»
+     *                   в карточке клиента (задача 0022) переиспользует этот же
+     *                   запрос, а не заводит свой
      */
     @Transactional(readOnly = true)
-    public ReturnsPage listReturns(String query, Instant from, Instant to, int limit) {
+    public ReturnsPage listReturns(String query, Instant from, Instant to, int limit, Long customerId) {
         StringBuilder where = new StringBuilder(" WHERE 1=1");
         List<Object> args = new ArrayList<>();
+        if (customerId != null) {
+            where.append(" AND r.customer_id = ?");
+            args.add(customerId);
+        }
         if (from != null) {
             where.append(" AND r.created_at >= ?");
             args.add(java.sql.Timestamp.from(from));
@@ -755,6 +762,37 @@ public class SalesService {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    /**
+     * Платежи клиента: касса, а не движения лицевого счёта.
+     *
+     * <p>Вкладка «Платежи» карточки клиента (задача 0022) показывает их рядом
+     * с журналом счёта, но это разные вещи — платёж это факт кассы (кто внёс
+     * и кто получил деньги), а движение счёта это обязательство перед
+     * клиентом. У платежа без сделки ({@code dealId == null}) номер сделки
+     * пуст — это пополнение или выдача со счёта, а не оплата документа.
+     */
+    @Transactional(readOnly = true)
+    public List<PaymentRow> paymentsOfCustomer(Long customerId) {
+        requireExistingCustomer(customerId);
+        return jdbc.query(
+                "SELECT p.id, p.paid_at, p.deal_id, d.number AS deal_number,"
+                        + " p.amount, p.direction, p.comment"
+                        + " FROM payment p"
+                        + " LEFT JOIN deal d ON d.id = p.deal_id"
+                        + " WHERE p.customer_id = ?"
+                        + " ORDER BY p.id DESC",
+                (rs, i) -> new PaymentRow(rs.getLong("id"), rs.getTimestamp("paid_at").toInstant(),
+                        (Long) rs.getObject("deal_id"), (Long) rs.getObject("deal_number"),
+                        rs.getBigDecimal("amount"), PaymentDirection.valueOf(rs.getString("direction")),
+                        rs.getString("comment")),
+                customerId);
+    }
+
+    /** @param dealNumber пусто — платёж без сделки: пополнение или выдача со счёта */
+    public record PaymentRow(Long id, Instant paidAt, Long dealId, Long dealNumber,
+                             BigDecimal amount, PaymentDirection direction, String comment) {
     }
 
     /**

@@ -38,8 +38,11 @@ import java.util.Map;
  * не годится.
  *
  * <p>Роли: продаёт продавец, выдаёт ещё и кладовщик — товар со склада отдаёт
- * он. Смотреть может любой вошедший: цена и наличие нужны всем, включая
- * приёмщика, которого спрашивают «а сколько такая стоит».
+ * он. <b>Читать сделку может тот, кто может по ней действовать</b>, а не любой
+ * вошедший, как было до задачи 0022: «цена и наличие нужны всем» — это про
+ * склад, и пути склада открыты по-прежнему, а сделка несёт клиента, суммы
+ * и долг. История покупателя ({@link #byCustomer}) — и вовсе вкладка раздела
+ * «Клиенты», и роли у неё те же.
  */
 @RestController
 @RequestMapping("/api/deals")
@@ -156,13 +159,32 @@ public class SalesController {
         return view(sales.acceptOrder(id, CurrentUser.memberId()));
     }
 
+    /**
+     * Одна сделка целиком.
+     *
+     * <p><b>Читает тот, кто может по ней действовать</b> — те же роли, что
+     * выдают ({@link #ISSUES}), а не «любой вошедший», как было до задачи 0022.
+     * Прежнее правило объяснялось тем, что цена и наличие нужны всем, включая
+     * приёмщика: это верно про склад, и пути склада остались открытыми. Сделка
+     * же — документ продажи: в ней клиент, суммы, оплаченное и долг, и роль
+     * «Просмотр», которой закрыты все прочие пути к клиенту
+     * ({@code CustomerController}), получала здесь то же самое с другой стороны.
+     */
     @GetMapping("/{id}")
+    @PreAuthorize(ISSUES)
     public DealView get(@PathVariable Long id) {
         return view(sales.require(id));
     }
 
-    /** Сделки клиента — история покупок, свежие сверху. */
+    /**
+     * Сделки клиента — история покупок, свежие сверху.
+     *
+     * <p>Роли те же, что у раздела «Клиенты»: это и есть его вкладка «Сделки».
+     * Кладовщика тут нет и с выдачей это не спорит — выдают конкретный
+     * документ, а не перебирают историю покупателя с суммами и долгом.
+     */
     @GetMapping
+    @PreAuthorize(SELLS)
     public List<DealView> byCustomer(@RequestParam Long customerId) {
         return views(sales.ofCustomer(customerId));
     }
@@ -276,12 +298,14 @@ public class SalesController {
      * вовсе. Роли те же, что у продажи: оформляет возврат продавец, ему же
      * и искать.
      *
-     * @param q    поиск: точное совпадение по номеру сделки, вхождение —
-     *             по клиенту и по причине
-     * @param from начало периода; пусто — с начала времён
-     * @param to   конец периода (исключая); пусто — по текущий момент
-     * @param size сколько строк вернуть; список читают с конца и не листают
-     *             вглубь, поэтому вместо курсора — растущий предел
+     * @param q          поиск: точное совпадение по номеру сделки, вхождение —
+     *                   по клиенту и по причине
+     * @param from       начало периода; пусто — с начала времён
+     * @param to         конец периода (исключая); пусто — по текущий момент
+     * @param size       сколько строк вернуть; список читают с конца и не листают
+     *                   вглубь, поэтому вместо курсора — растущий предел
+     * @param customerId непусто — только возвраты этого клиента: вкладка
+     *                   «Возвраты» карточки клиента (задача 0022)
      */
     @GetMapping("/returns")
     @PreAuthorize(SELLS)
@@ -289,8 +313,23 @@ public class SalesController {
             @RequestParam(value = "q", required = false) String q,
             @RequestParam(value = "from", required = false) String from,
             @RequestParam(value = "to", required = false) String to,
-            @RequestParam(value = "size", defaultValue = "50") int size) {
-        return sales.listReturns(q, parseInstant(from), parseInstant(to), size);
+            @RequestParam(value = "size", defaultValue = "50") int size,
+            @RequestParam(value = "customerId", required = false) Long customerId) {
+        return sales.listReturns(q, parseInstant(from), parseInstant(to), size, customerId);
+    }
+
+    /**
+     * Платежи клиента — вкладка «Платежи» карточки клиента (задача 0022).
+     *
+     * <p>Соседний путь про деньги того же клиента —
+     * {@code GET /api/customers/{id}/account} — отдаёт журнал лицевого счёта,
+     * это другая книга: платёж это факт кассы, счёт — обязательство перед
+     * клиентом.
+     */
+    @GetMapping("/payments")
+    @PreAuthorize(SELLS)
+    public List<SalesService.PaymentRow> paymentsOfCustomer(@RequestParam Long customerId) {
+        return sales.paymentsOfCustomer(customerId);
     }
 
     /**
@@ -442,7 +481,14 @@ public class SalesController {
                 .collect(java.util.stream.Collectors.toMap(
                         ru.partsflow.sales.ServiceKind::getId,
                         ru.partsflow.sales.ServiceKind::getName));
-        return deals.stream().map(deal -> DealView.of(deal, titles, serviceNames)).toList();
+        // Имя ответственного — как и наименования выше, одним запросом на всю
+        // выдачу: вкладка «Сделки» карточки клиента (задача 0022) показывает
+        // «Ответственный» по имени, а /api/members, откуда его можно было бы
+        // взять на клиенте, доступен только владельцу.
+        Map<Long, String> managerNames = members.namesOf(deals.stream()
+                .map(Deal::getManagerId)
+                .toList());
+        return deals.stream().map(deal -> DealView.of(deal, titles, serviceNames, managerNames)).toList();
     }
 
     private DealView view(Deal deal) {
@@ -537,8 +583,12 @@ public class SalesController {
      *                      ставит деталь на чужую полку, а искать её будут
      *                      по прежнему адресу. Пусто — колонку никто
      *                      не заполняет, и откуда ушёл товар, знают позиции
+     * @param managerName   имя ответственного продавца/менеджера; пусто —
+     *                      сотрудника удалили или сделка ещё не привязана
+     *                      (заказ с площадки до принятия)
      */
     public record DealView(Long id, Long number, Long customerId, Long managerId,
+                           String managerName,
                            DealStatus status, Instant reservedUntil,
                            BigDecimal totalAmount, BigDecimal paidAmount, BigDecimal debt,
                            Instant createdAt, Instant issuedAt,
@@ -549,9 +599,10 @@ public class SalesController {
                            List<ServiceLineView> services) {
 
         static DealView of(Deal deal, Map<Long, String> titles,
-                           Map<Long, String> serviceNames) {
+                           Map<Long, String> serviceNames, Map<Long, String> managerNames) {
             return new DealView(deal.getId(), deal.getNumber(), deal.getCustomerId(),
-                    deal.getManagerId(), deal.getStatus(), deal.getReservedUntil(),
+                    deal.getManagerId(), nameOf(deal.getManagerId(), managerNames),
+                    deal.getStatus(), deal.getReservedUntil(),
                     deal.getTotalAmount(), deal.getPaidAmount(), deal.debt(),
                     deal.getCreatedAt(), deal.getIssuedAt(),
                     deal.getDealSourceId(), deal.getWarehouseId(),
@@ -564,6 +615,25 @@ public class SalesController {
                                     serviceNames.get(s.getServiceId()),
                                     s.getQuantity(), s.getPrice()))
                             .toList());
+        }
+
+        /**
+         * Имя ответственного, когда его может не быть вовсе.
+         *
+         * <p><b>Проверка `null` до обращения к карте, а не после.</b>
+         * {@code MemberService.namesOf} на пустом списке идентификаторов
+         * возвращает {@code Map.of()}, а неизменяемые карты запрещают
+         * {@code null}-ключи и проверяют это на каждом чтении: {@code get(null)}
+         * бросает {@code NullPointerException}, а не отдаёт {@code null}, как
+         * обычная {@code HashMap}. Значит выдача, в которой **у всех** сделок
+         * ответственного нет, уходила пятисоткой — а пустой {@code managerId}
+         * контракт допускает сам (сотрудника удалили, заказ с площадки
+         * до принятия). Ровно тот же капкан, что уже был у
+         * {@code EntryView.of} в лицевом счёте, и лечится он тем же:
+         * проверкой ключа, а не выбором сорта пустой карты.
+         */
+        private static String nameOf(Long managerId, Map<Long, String> managerNames) {
+            return managerId == null ? null : managerNames.get(managerId);
         }
     }
 
