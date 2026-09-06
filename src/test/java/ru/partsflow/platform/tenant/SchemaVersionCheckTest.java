@@ -8,6 +8,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.DefaultApplicationArguments;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import ru.partsflow.support.PostgresTestBase;
@@ -82,7 +83,7 @@ class SchemaVersionCheckTest extends PostgresTestBase {
         catchUpEveryoneElse();
         register(FIRST_ID, "старьё");
 
-        check.report();
+        runCheck();
 
         assertThat(warnings())
                 .as("предупреждения об отставших схемах нет — приложение поднялось "
@@ -106,9 +107,11 @@ class SchemaVersionCheckTest extends PostgresTestBase {
             register(id, "старьё");
         }
 
-        check.report();
+        runCheck();
 
         assertThat(warnings())
+                .as("имена не обрезаны или обрезаны молча: строка на девять схем "
+                        + "не читается, а без числа остальных не понять масштаба")
                 .anySatisfy(message -> assertThat(message)
                         .contains("4 из")
                         .contains("(t_000198, t_000199, t_000200 и ещё 1)"));
@@ -120,12 +123,21 @@ class SchemaVersionCheckTest extends PostgresTestBase {
         catchUpEveryoneElse();
         register(FIRST_ID, migrator.expectedVersion());
 
-        check.report();
+        runCheck();
 
         assertThat(warnings())
                 .as("предупреждение при совпадающих версиях: проверка, зеленеющая "
                         + "на всём подряд, приучает не читать строку рядом")
                 .isEmpty();
+    }
+
+    /**
+     * Зовётся именно {@code run}, а не тело проверки: тест на тело доказывает
+     * тело, а не то, что приложение зовёт его при старте. Проверено подделкой —
+     * опустошённый {@code run()} обязан валить эти проверки.
+     */
+    private void runCheck() {
+        check.run(new DefaultApplicationArguments());
     }
 
     /**
