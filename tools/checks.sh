@@ -86,6 +86,11 @@ gc /api/marketplace-accounts >/dev/null
 python3 - <<'PY' > /tmp/accounts.txt
 import json
 for a in json.load(open('/tmp/last.json')):
+    # Выключенная выгрузка прайса не отдаёт вовсе — и это верно: площадка
+    # должна понять, что её нет. Сравнивать счётчик с несуществующим файлом
+    # значит краснеть на исправном поведении.
+    if a.get('status') != 'ACTIVE':
+        continue
     print(a['id'], a['productLine'], a['title'].replace(' ', '_'))
 PY
 while read -r id line title; do

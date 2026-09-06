@@ -23,14 +23,20 @@ import {
   countMatching,
   createFeed,
   decimalOrNull,
+  deleteFeed,
+  deletedMark,
   downloadMark,
   filterSummary,
+  listDeletedFeeds,
   listFeeds,
+  renameFeed,
   rotateFeedUrl,
   setCredentials,
   setFeedFileName,
+  setFeedStatus,
   setFilter,
   setSettings,
+  statusLabel,
   wholeOrNull,
   type Feed,
   type FeedFilter,
@@ -127,6 +133,7 @@ export function FeedsScreen({ role }: { role: string }) {
           <FeedCard
             key={feed.id}
             feed={feed}
+            role={role}
             warehouses={warehouses}
             kinds={kinds}
             brands={brands}
@@ -135,12 +142,71 @@ export function FeedsScreen({ role }: { role: string }) {
           />
         ))}
       </ul>
+
+      <DeletedFeeds />
     </section>
+  );
+}
+
+/**
+ * Удалённые выгрузки — ради истории, и только.
+ *
+ * <p>Удаление помечает строку, а не убирает её: удалить запись значило бы
+ * унести отметки о заборе прайса и об отправках, а спрашивают именно их —
+ * «эта выгрузка вообще работала и когда её последний раз забирали». Строка,
+ * удалённая полгода назад, отвечает на такой вопрос лучше, чем её отсутствие;
+ * оставить ответ только в базе значило бы, что за ним снова идут
+ * к разработчику — ровно та зависимость, ради устранения которой заведена
+ * и сама отметка о заборе.
+ *
+ * <p>Свёрнутым разделом и запросом по раскрытию: в обычной работе удалённые
+ * не нужны и не должны мешаться среди живых, а список их короткий.
+ */
+function DeletedFeeds() {
+  const [gone, setGone] = useState<Feed[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  return (
+    <details onToggle={(e) => {
+      if ((e.target as HTMLDetailsElement).open && gone === null) {
+        void listDeletedFeeds()
+          .then(setGone)
+          .catch(() => setFailed(true));
+      }
+    }}>
+      <summary>Удалённые выгрузки</summary>
+      <p className="note">
+        Удалённая выгрузка не отдаёт прайс и не занимает ни названия, ни имени
+        файла — но помнит, когда площадка последний раз забирала у неё прайс.
+      </p>
+      {failed && <p className="note note--error">Удалённые выгрузки не загрузились</p>}
+      {gone !== null && gone.length === 0 && !failed && (
+        <p className="muted">Удалённых выгрузок нет</p>
+      )}
+      {gone !== null && gone.length > 0 && (
+        <ul className="cards">
+          {gone.map((feed) => (
+            <li className="card" key={feed.id}>
+              <div className="order-head">
+                <strong>{feed.title}</strong>
+                <span>
+                  {feed.marketplace === 'AVITO' ? 'Авито' : 'Дром'}
+                  {feed.productLine === 'WHEEL' ? ' · шины и диски' : ''}
+                </span>
+              </div>
+              <p className="muted">{deletedMark(feed)}</p>
+              <p className="muted">{downloadMark(feed)}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
   );
 }
 
 function FeedCard({
   feed,
+  role,
   warehouses,
   kinds,
   brands,
@@ -148,6 +214,8 @@ function FeedCard({
   onError,
 }: {
   feed: Feed;
+  /** Выключает и удаляет выгрузку только владелец: это остановка канала продаж. */
+  role: string;
   warehouses: Warehouse[];
   kinds: PartKind[];
   brands: Brand[];
@@ -180,6 +248,12 @@ function FeedCard({
 
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState<number | null>(null);
+
+  // Название правится тут же, где показано: ссылки это не касается вовсе.
+  const [title, setTitle] = useState(feed.title);
+  // Удаление спрашивает подтверждение и называет, что именно удаляется:
+  // выгрузок у владельца пять, и различаются они только названием.
+  const [confirming, setConfirming] = useState(false);
 
   // Свои условия владельца — те же колонки, какими он смотрит склад.
   const [columns, setColumns] = useState<Record<string, string>>(
@@ -282,6 +356,54 @@ function FeedCard({
     }
   }
 
+  /**
+   * Переименование.
+   *
+   * <p>Ссылку не перечитываем и не показываем — она не менялась, и намекать
+   * на обратное значило бы отправить владельца заново договариваться
+   * с техспециалистом площадки.
+   */
+  async function rename() {
+    setBusy(true);
+    try {
+      await renameFeed(feed.id, title.trim());
+      onChanged();
+    } catch (cause) {
+      onError(describe(cause, 'Название не сохранено'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function switchTo(status: 'ACTIVE' | 'PAUSED') {
+    setBusy(true);
+    try {
+      await setFeedStatus(feed.id, status);
+      onChanged();
+    } catch (cause) {
+      onError(describe(cause,
+        status === 'PAUSED' ? 'Выгрузка не выключена' : 'Выгрузка не включена'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setBusy(true);
+    try {
+      await deleteFeed(feed.id);
+      // Карточка исчезнет вместе с перечитанным списком, но подтверждение
+      // закрываем сами: отказ оставил бы его открытым, и владелец нажал бы
+      // «Удалить» второй раз, не поняв, что первое не прошло.
+      setConfirming(false);
+      onChanged();
+    } catch (cause) {
+      onError(describe(cause, 'Выгрузка не удалена'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function rotate() {
     setBusy(true);
     try {
@@ -363,6 +485,17 @@ function FeedCard({
       {/* Первым делом спрашивают не про отбор, а про то, уехал ли прайс
           вообще: до этой строки ответ жил только в логах приложения. */}
       <p className="muted">{downloadMark(feed)}</p>
+
+      {/* Выключенная выгрузка выглядела бы работающей: отбор на месте, ссылка
+          на месте, отметка о заборе на месте — а прайс площадка не забирает
+          вовсе. Поэтому состояние сказано словами и рядом сказано, что оно
+          значит для площадки. */}
+      {feed.status === 'PAUSED' && (
+        <p className="note">
+          Выгрузка выключена: площадка получает «прайса нет» и объявления
+          остаются на месте, пока её не включат обратно.
+        </p>
+      )}
 
       {feed.lastError && <p className="note note--error">{feed.lastError}</p>}
 
@@ -750,6 +883,101 @@ function FeedCard({
           {feed.hasCredentials ? 'Заменить ключ' : 'Сохранить ключ'}
         </button>
       </details>
+
+      {/*
+        * Переименовать, выключить и удалить.
+        *
+        * Выключить прайс-лист было нечем вовсе: его закрывают на сезон или
+        * отказываются от него, а ссылка оставалась живой — площадка
+        * продолжала забирать товар, которого клиент там видеть не хочет.
+        * Единственным обходным путём была смена ссылки, то есть поломка
+        * адреса, уже прописанного в кабинете площадки, без единого слова
+        * о том, почему он перестал работать.
+        *
+        * Только владельцу: это остановка канала продаж, а отбор и цену
+        * прайса правит и управляющий.
+        */}
+      {role === 'OWNER' && (
+        <fieldset className="choices">
+          <legend>Название и состояние</legend>
+
+          <div className="filter-row">
+            <label className="field">
+              Название
+              <input
+                value={title}
+                placeholder="например, Дром: основной"
+                onChange={(e) => setTitle(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="button--ghost"
+              disabled={busy || title.trim() === '' || title.trim() === feed.title}
+              onClick={() => void rename()}
+            >
+              Переименовать
+            </button>
+          </div>
+          <p className="note">
+            Ссылка на прайс от переименования не меняется: её прописывает
+            в кабинете площадки техспециалист руками, и правка названия
+            не должна останавливать выгрузку.
+          </p>
+
+          <div className="filter-row">
+            <span className="muted">Состояние: {statusLabel(feed)}</span>
+            <button
+              type="button"
+              className="button--ghost"
+              disabled={busy}
+              onClick={() => void switchTo(feed.status === 'PAUSED' ? 'ACTIVE' : 'PAUSED')}
+            >
+              {feed.status === 'PAUSED' ? 'Включить выгрузку' : 'Выключить выгрузку'}
+            </button>
+            {!confirming && (
+              <button
+                type="button"
+                className="button--ghost"
+                disabled={busy}
+                onClick={() => setConfirming(true)}
+              >
+                Удалить выгрузку
+              </button>
+            )}
+          </div>
+          <p className="note">
+            Выключенная выгрузка не отдаёт прайс вовсе — площадка понимает,
+            что его нет, и объявления остаются. Пустой прайс она поняла бы
+            как «снять всё», вместе с накопленными просмотрами.
+          </p>
+
+          {/* Подтверждение называет, что именно удаляется: прайс-листов
+              у владельца пять, и различаются они только названием. */}
+          {confirming && (
+            <div className="note note--error">
+              <p>
+                Удалить выгрузку «{feed.title}»
+                {feed.feedFileName ? ` (${feed.feedFileName})` : ''}? Ссылка
+                перестанет работать, и площадка больше не заберёт по ней прайс.
+                Отметки о заборе останутся в разделе «Удалённые выгрузки»,
+                а название и имя файла освободятся.
+              </p>
+              <button type="button" disabled={busy} onClick={() => void remove()}>
+                Да, удалить «{feed.title}»
+              </button>
+              <button
+                type="button"
+                className="button--ghost"
+                disabled={busy}
+                onClick={() => setConfirming(false)}
+              >
+                Отмена
+              </button>
+            </div>
+          )}
+        </fieldset>
+      )}
     </li>
   );
 
