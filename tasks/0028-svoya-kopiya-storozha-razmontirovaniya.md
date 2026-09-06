@@ -1,8 +1,8 @@
 ---
 id: 0028
 title: `InventoryReconcile` держит свою копию сторожа размонтирования вместо общего `useMounted`
-status: новая
-assignee: —
+status: в работе
+assignee: coder
 source: разбор PR #51 (задача 0020), 6 сентября 2026
 pr: —
 ---
