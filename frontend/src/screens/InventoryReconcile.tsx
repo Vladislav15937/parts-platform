@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
   applySession,
@@ -20,6 +20,7 @@ import {
 } from '../inventory/inventory';
 import { count as num, shown } from '../ui/plural';
 import { shortDate } from '../ui/shortDate';
+import { useMounted } from '../ui/useMounted';
 import type { Reference } from '../reference/reference';
 
 /**
@@ -56,23 +57,8 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
   // и права на сервере тоже нет; см. комментарий у `COMMENTS`.
   const canComment = canReconcile;
 
-  /*
-   * Сторож размонтирования — тот же приём, что в `InventoryScreen`, и та же
-   * причина: `main` краснела на этом дважды. Ответ сервера приходит после
-   * того, как человек ушёл с вкладки, и `setState` в размонтированном
-   * компоненте валит прогон необработанным отказом («window is not defined»),
-   * а не проверкой.
-   *
-   * Значение возвращается в `true` в теле эффекта, а не только гасится
-   * в уборке: `StrictMode` в разработке прогоняет эффекты дважды
-   * (setup → cleanup → setup), и без этого экран остался бы мёртвым
-   * навсегда — «Загружаем…» без конца и погашенные кнопки.
-   */
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   // --- журнал: воронка слева, список справа ---
   const [funnel, setFunnel] = useState<SessionFunnelKey>('OPEN');
