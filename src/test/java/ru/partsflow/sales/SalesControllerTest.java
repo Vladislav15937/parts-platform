@@ -219,6 +219,81 @@ class SalesControllerTest extends PostgresTestBase {
                 .andExpect(status().isOk());
     }
 
+    /**
+     * Возвраты сделки и её журнал — та же комната, что и сама сделка,
+     * и запирать её надо со всех сторон разом (задача 0029).
+     *
+     * <p>Задача 0022 закрыла {@code GET /api/deals/{id}}, а два соседних пути
+     * по тому же идентификатору остались без единой аннотации: «Просмотр»,
+     * получивший 403 на карточку сделки, читал суммы и причины её возвратов
+     * и весь её журнал — с {@code message} («оплата 7 500») и с именем автора.
+     * То есть защита обходилась соседним путём, а не подбором прав.
+     *
+     * <p>Проверяется с обеих сторон: закрытой роли — 403, действующим —
+     * 200, иначе правка, закрывшая путь всем, прошла бы тоже.
+     *
+     * <p>Двумя тестами, а не циклом по двум путям: у обоих отказ выглядит
+     * одинаково («Status expected:&lt;403&gt; but was:&lt;200&gt;»), и в цикле
+     * он приходил бы с одной и той же строки — по нему нельзя было бы
+     * сказать, какая из двух аннотаций отвалилась.
+     */
+    @Test
+    @DisplayName("Возвраты сделки читает тот же, кто и саму сделку")
+    void dealReturnsFollowTheDealItself() throws Exception {
+        Long partId = partWithStock("Стекло лобовое", 1);
+        long dealId = createDeal(partId);
+        inTenant(() -> member("storekeeper", "Кладовщик", "STOREKEEPER"));
+
+        mvc.perform(get("/api/deals/" + dealId + "/returns").session(login("seller")))
+                .andExpect(status().isOk());
+        // Кладовщик выдаёт по этой сделке товар и видит её карточку —
+        // её разделы обязаны открываться ему вместе с ней.
+        mvc.perform(get("/api/deals/" + dealId + "/returns").session(login("storekeeper")))
+                .andExpect(status().isOk());
+        mvc.perform(get("/api/deals/" + dealId + "/returns").session(login("viewer")))
+                .andExpect(status().isForbidden());
+    }
+
+    /** См. {@link #dealReturnsFollowTheDealItself()} — тот же разбор. */
+    @Test
+    @DisplayName("Журнал сделки читает тот же, кто и саму сделку")
+    void dealHistoryFollowsTheDealItself() throws Exception {
+        Long partId = partWithStock("Стекло заднее", 1);
+        long dealId = createDeal(partId);
+        inTenant(() -> member("storekeeper", "Кладовщик", "STOREKEEPER"));
+
+        mvc.perform(get("/api/deals/" + dealId + "/history").session(login("seller")))
+                .andExpect(status().isOk());
+        mvc.perform(get("/api/deals/" + dealId + "/history").session(login("storekeeper")))
+                .andExpect(status().isOk());
+        mvc.perform(get("/api/deals/" + dealId + "/history").session(login("viewer")))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Просроченные резервы — выборка чужих документов пачкой, а не один
+     * документ, по которому кладовщик выдаёт товар: роли те же, что
+     * у истории покупателя ({@code GET /api/deals?customerId=}).
+     *
+     * <p>До задачи 0029 путь отдавал полные {@code DealView} — клиента,
+     * суммы, оплаченное и долг по каждой отложенной сделке — любому
+     * вошедшему, включая «Просмотр», которому закрыта и одна сделка,
+     * и раздел «Клиенты» целиком.
+     */
+    @Test
+    @DisplayName("Просроченные резервы — продавцу, а не кладовщику и «Просмотру»")
+    void expiredReservationsAreForSellingRoles() throws Exception {
+        inTenant(() -> member("storekeeper", "Кладовщик", "STOREKEEPER"));
+
+        mvc.perform(get("/api/deals/expired-reservations").session(login("seller")))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/api/deals/expired-reservations").session(login("storekeeper")))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/deals/expired-reservations").session(login("viewer")))
+                .andExpect(status().isForbidden());
+    }
+
     @Test
     @DisplayName("Без входа продажи не видны")
     void anonymousIsRejected() throws Exception {
