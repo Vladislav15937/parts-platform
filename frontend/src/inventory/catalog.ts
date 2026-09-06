@@ -567,6 +567,43 @@ export function movePart(
   });
 }
 
+/** Позиция, которая не поехала пачкой: часть остатка обещана покупателю. */
+export interface MoveSkipped {
+  partId: number;
+  publicCode: string;
+}
+
+export interface MoveBulkResult {
+  number: number;
+  /** Сколько строк реально вошло в документ. */
+  items: number;
+  notMoved: MoveSkipped[];
+}
+
+/**
+ * Перевозка пачкой: весь остаток каждой отмеченной позиции со склада-
+ * источника на склад-приёмник, одним документом.
+ *
+ * <p>Количество не спрашивается — пачкой везут всё, что лежит на складе-
+ * источнике; частичную перевозку («две из пяти») по-прежнему делают
+ * из карточки, через {@link movePart}.
+ *
+ * <p>Позиция, отложенная под клиента, в документ не попадает: сервер решает
+ * это сам и возвращает список пропущенного в {@code notMoved} — тот же 409,
+ * что и раньше, только не на весь документ, а по конкретным строкам.
+ */
+export function movePartsBulk(
+  fromWarehouseId: number,
+  toWarehouseId: number,
+  items: Array<{ partId: number; quantity: number; toCellId: number | null }>,
+  note: string | null,
+): Promise<MoveBulkResult> {
+  return request<MoveBulkResult>('/api/stock/moves', {
+    method: 'POST',
+    body: { fromWarehouseId, toWarehouseId, note, items },
+  });
+}
+
 /**
  * Поля карточки, которые правит человек.
  *
