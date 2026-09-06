@@ -122,6 +122,40 @@ class CustomerControllerTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.items[0].balance").value(1500));
     }
 
+    /**
+     * «Баланс» в списке обязан уметь стать отрицательным, иначе пункт 7
+     * критерия приёмки («клиент с долгом показывает отрицательный баланс
+     * красным») недостижим ни при каком состоянии системы: ни одна операция
+     * со счётом (`top-up`, `withdraw`, `correct`) не уводит его журнал
+     * в минус — это отдельный, проверенный инвариант. Долг приходит только
+     * от выданной и не оплаченной целиком сделки.
+     */
+    @Test
+    @DisplayName("Клиент с долгом по выданной сделке показывает отрицательный баланс")
+    void directoryShowsDebtAsNegativeBalance() throws Exception {
+        Long id = inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO customer (name) VALUES ('Клиент с долгом') RETURNING id", Long.class));
+        Long managerId = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM tenant_member WHERE login = 'owner'", Long.class));
+        inTenant(() -> sales.topUpAccount(id, new java.math.BigDecimal("300"), null, managerId));
+        // Сделка выдана и оплачена частично — деталь у клиента, 700 ₽ он ещё
+        // должен. Заводится прямой записью, а не через полный путь продажи:
+        // здесь важно только итоговое состояние документа, а не то, как
+        // до него дошли (это уже проверено в SalesControllerTest/DealConcurrencyTest).
+        inTenant(() -> jdbc.update("""
+                INSERT INTO deal (customer_id, manager_id, status, total_amount, paid_amount)
+                VALUES (?, ?, 'ISSUED', 1000, 300)""", id, managerId));
+
+        mvc.perform(get("/api/customers/directory?q=" + "Клиент с долгом").session(login("owner")))
+                .andExpect(status().isOk())
+                // Аванс 300 минус долг 700 — минус 400, а не минус 700
+                // и не плюс 300: обе величины складываются в одну позицию.
+                .andExpect(jsonPath("$.items[0].balance").value(-400));
+
+        mvc.perform(get("/api/customers/" + id).session(login("owner")))
+                .andExpect(jsonPath("$.balance").value(-400));
+    }
+
     @Test
     @DisplayName("Директория считает найденное отдельно от предела выдачи")
     void directorySizeLimitsRowsNotTotal() throws Exception {

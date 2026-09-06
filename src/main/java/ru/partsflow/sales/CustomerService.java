@@ -73,12 +73,15 @@ public class CustomerService {
      * загрузки только на добавленные строки, а не на всю пройденную глубину,
      * как было бы с {@code OFFSET}.
      *
-     * <p>Баланс не хранится полем — колонку {@code customer.balance} убрали
-     * вместе с триггером, который её вёл и который врал (changeset
-     * {@code tenant-045}: пополнение и выдача складывались одним знаком).
-     * Здесь остаток агрегируется в SQL одним запросом на всю страницу,
-     * а не через {@link SalesService#accountBalance} по каждой строке:
-     * список — это сотни клиентов, и запрос на строку был бы N+1.
+     * <p><b>Баланс здесь — не остаток лицевого счёта</b> (тот показывает
+     * карточка отдельно, подписью «На счету», и он никогда не уходит в минус —
+     * зачесть больше остатка нельзя ни одной операцией). Это чистая позиция,
+     * как у ориентира: аванс на счёте минус долг по выданным и неоплаченным
+     * сделкам, — только так «клиент с долгом» вообще может показаться
+     * отрицательным числом. Формула та же, что в {@code v_customer_settlement}
+     * (`account_balance - debt`), только оба слагаемых остаются одним SQL-
+     * агрегатом на всю страницу, а не вызовом {@link SalesService#accountBalance}
+     * на строку: список — это сотни клиентов, и запрос на строку был бы N+1.
      */
     @Transactional(readOnly = true)
     public CustomersPage directory(String query, int limit) {
@@ -105,19 +108,22 @@ public class CustomerService {
         rowArgs.add(limit);
         List<CustomerDetail> items = jdbc.query(
                 "SELECT c.id, c.name, c.phone, c.email, c.customer_type, c.note, c.public_note,"
-                        + " c.inn, c.company_name, COALESCE(bal.balance, 0) AS balance"
+                        + " c.inn, c.company_name, " + NET_BALANCE_EXPR + " AS balance"
                         + from + where + " ORDER BY c.id DESC LIMIT ?",
                 CustomerService::mapDetail, rowArgs.toArray());
 
         return new CustomersPage(items, total);
     }
 
-    /** Карточка клиента: все поля разом, включая остаток лицевого счёта. */
+    /**
+     * Карточка клиента: все поля разом, включая чистую позицию по счёту
+     * и долгу (см. {@link #directory} — то же выражение).
+     */
     @Transactional(readOnly = true)
     public CustomerDetail getDetail(Long id) {
         List<CustomerDetail> found = jdbc.query(
                 "SELECT c.id, c.name, c.phone, c.email, c.customer_type, c.note, c.public_note,"
-                        + " c.inn, c.company_name, COALESCE(bal.balance, 0) AS balance"
+                        + " c.inn, c.company_name, " + NET_BALANCE_EXPR + " AS balance"
                         + " FROM customer c " + BALANCE_JOIN
                         + " WHERE c.id = ?",
                 CustomerService::mapDetail, id);
@@ -160,10 +166,20 @@ public class CustomerService {
         return getDetail(id);
     }
 
+    /** Чистая позиция: остаток счёта минус долг по выданным сделкам. */
+    private static final String NET_BALANCE_EXPR =
+            "COALESCE(bal.balance, 0) - COALESCE(debt.debt, 0)";
+
     /**
-     * Агрегат журнала лицевого счёта — то же выражение, что в
-     * {@code v_account_discrepancy} и {@code v_customer_settlement}: пополнение,
-     * возврат по сделке и правка прибавляют, оплата и выдача вычитают.
+     * Два независимых агрегата, оба — те же выражения, что уже стоят
+     * в {@code v_customer_settlement}: остаток журнала (там же, где
+     * {@code v_account_discrepancy}: пополнение, возврат по сделке и правка
+     * прибавляют, оплата и выдача вычитают) и долг по сделкам, которые
+     * уже отдали клиенту, но не оплачены целиком. Пока товар не выдан —
+     * это не долг, а обещание, и требовать по нему нечего (то же правило,
+     * что у {@code Deal.debt()}, только вьюха и эта директория читают его
+     * сами SQL-агрегатом: звать сервис на каждую строку страницы значило бы
+     * N+1 на сотнях клиентов).
      */
     private static final String BALANCE_JOIN =
             "LEFT JOIN (SELECT customer_id, sum(CASE entry_type"
@@ -172,7 +188,11 @@ public class CustomerService {
             + " WHEN 'CORRECTION' THEN amount"
             + " ELSE -amount END) AS balance"
             + " FROM customer_account_entry GROUP BY customer_id) bal"
-            + " ON bal.customer_id = c.id ";
+            + " ON bal.customer_id = c.id "
+            + "LEFT JOIN (SELECT customer_id, sum(total_amount - paid_amount) AS debt"
+            + " FROM deal WHERE status = 'ISSUED' AND total_amount > paid_amount"
+            + " GROUP BY customer_id) debt"
+            + " ON debt.customer_id = c.id ";
 
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.strip();
@@ -200,7 +220,10 @@ public class CustomerService {
      *
      * @param note       заметка для себя — нигде не печатается
      * @param publicNote примечание клиенту — печатается в накладной
-     * @param balance    остаток лицевого счёта, считанный по журналу
+     * @param balance    чистая позиция: остаток лицевого счёта минус долг
+     *                    по выданным и не оплаченным целиком сделкам —
+     *                    не то же самое, что «На счету» в карточке (тот
+     *                    только журнал и в минус не уходит)
      */
     public record CustomerDetail(Long id, String name, String phone, String email,
                                  String customerType, String note, String publicNote,
