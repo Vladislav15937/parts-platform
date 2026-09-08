@@ -35,6 +35,7 @@ export type Tab =
   | 'feeds'
   | 'delivery'
   | 'labels'
+  | 'journal'
   | 'members'
   | 'organization'
   | 'settings'
@@ -109,6 +110,19 @@ export const INVENTORY_ROLES = [...WRITING_ROLES, 'VIEWER'];
 const OWNER_ONLY = ['OWNER'];
 
 /**
+ * Кто читает журнал действий. Тот же список в `@PreAuthorize`
+ * у `OrganizationAuditController`.
+ *
+ * <p>Владелец и «Ревизор» — роль, заведённая ровно для этого решением
+ * владельца продукта от 8 сентября 2026 (задача 0043): «все действия внутри
+ * одной организации должны быть видны владельцу и тем, кому владелец
+ * разрешил это». Менеджера здесь нет намеренно: журнал заводят в том числе
+ * затем, чтобы проверять распоряжающихся складом и деньгами, и раздать его
+ * вместе с полномочиями значит не раздать вовсе.
+ */
+export const JOURNAL_ROLES = ['OWNER', 'AUDITOR'];
+
+/**
  * Порядок здесь — порядок кнопок на рельсе. Приёмка первой: с неё начинают
  * смену, и открывается приложение на ней.
  */
@@ -134,6 +148,9 @@ export const TABS: readonly TabSpec[] = [
   { id: 'feeds', label: 'Выгрузки', section: 'Выгрузки на площадки', roles: NAMING_ROLES },
   { id: 'delivery', label: 'Доставка', section: 'Доставка событий', roles: NAMING_ROLES },
   { id: 'labels', label: 'Этикетки', section: 'Этикетки', roles: LABEL_ROLES },
+  // Перед разделами владельца: журнал — про людей компании, и открывают его
+  // оттуда же, откуда смотрят на сотрудников.
+  { id: 'journal', label: 'Журнал', section: 'Журнал действий', roles: JOURNAL_ROLES },
   { id: 'members', label: 'Сотрудники', section: 'Сотрудники', roles: OWNER_ONLY },
   { id: 'organization', label: 'Склады', section: 'Филиалы и склады', roles: OWNER_ONLY },
   { id: 'settings', label: 'Настройки', section: 'Настройки', roles: OWNER_ONLY },

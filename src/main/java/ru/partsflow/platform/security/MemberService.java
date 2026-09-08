@@ -31,8 +31,18 @@ public class MemberService {
      */
     private static final int MIN_PASSWORD_LENGTH = 8;
 
+    /**
+     * Роли, которые владелец может выдать сотруднику.
+     *
+     * <p>{@code AUDITOR} — «Ревизор», читатель журнала действий: решение
+     * владельца продукта от 8 сентября 2026 (tasks/0043) о том, что доступ
+     * к журналу даёт роль, а не именное разрешение. Ничего не меняет —
+     * изменяющие методы в {@code SecurityConfig} перечисляют разрешённые
+     * роли, а не запрещённую, и роль, не внесённая в тот список, работает
+     * как «Просмотр».
+     */
     private static final Set<String> ROLES =
-            Set.of("OWNER", "MANAGER", "STOREKEEPER", "SELLER", "VIEWER");
+            Set.of("OWNER", "MANAGER", "STOREKEEPER", "SELLER", "VIEWER", "AUDITOR");
 
     private final JdbcTemplate jdbc;
     private final PasswordEncoder passwordEncoder;

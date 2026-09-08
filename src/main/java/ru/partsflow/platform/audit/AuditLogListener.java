@@ -62,8 +62,9 @@ public class AuditLogListener
 
     private static final String INSERT = """
             INSERT INTO audit_log
-                (table_name, record_id, operation, old_value, new_value, changed_by)
-            VALUES (?, ?, ?, ?::jsonb, ?::jsonb, ?)""";
+                (table_name, record_id, operation, old_value, new_value,
+                 changed_by, changed_by_role)
+            VALUES (?, ?, ?, ?::jsonb, ?::jsonb, ?, ?)""";
 
     @Override
     public void onPostInsert(PostInsertEvent event) {
@@ -115,6 +116,10 @@ public class AuditLogListener
                 } else {
                     statement.setLong(6, author);
                 }
+                // Роль пишется снимком, а не берётся ссылкой при чтении: её
+                // переписывают на месте, и подтянутая сегодня она соврёт про
+                // вчерашнюю правку. Пусто — фоновая задача, и это законно.
+                statement.setString(7, CurrentAuthor.role());
                 statement.executeUpdate();
             }
         });

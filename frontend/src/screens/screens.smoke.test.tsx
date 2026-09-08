@@ -11,6 +11,7 @@ import { UnmatchedScreen } from './UnmatchedScreen';
 import { OrdersScreen } from './OrdersScreen';
 import { DeliveryScreen } from './DeliveryScreen';
 import { LabelsScreen } from './LabelsScreen';
+import { AuditJournalScreen } from './AuditJournalScreen';
 
 /**
  * Дымовой проход по экранам: отрисовались ли и не упали ли на первом запросе.
@@ -90,6 +91,7 @@ describe('экраны открываются', () => {
     ['Заказы', () => <OrdersScreen canSell />],
     ['Доставка', () => <DeliveryScreen canManage onTotalChanged={() => {}} />],
     ['Этикетки', () => <LabelsScreen canPrint />],
+    ['Журнал действий', () => <AuditJournalScreen />],
   ];
 
   it.each(screens)('%s отрисовывается и не падает на пустом ответе', async (name, make) => {
