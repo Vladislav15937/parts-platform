@@ -20,6 +20,7 @@ export type Tab =
   | 'intake'
   | 'donor'
   | 'sales'
+  | 'deals'
   | 'orders'
   | 'returns'
   | 'customers'
@@ -115,6 +116,10 @@ export const TABS: readonly TabSpec[] = [
   { id: 'intake', label: 'Приёмка', section: 'Приёмка', roles: WRITING_ROLES },
   { id: 'donor', label: 'Машина', section: 'Машины', roles: WRITING_ROLES },
   { id: 'sales', label: 'Продажа', section: 'Продажа', roles: ANYONE },
+  // Сразу за «Продажей»: это её оборотная сторона — то, что уже отложено
+  // и ждёт действия. Роли те же, что у эндпоинта (`SalesController.SELLS`):
+  // список несёт клиента, суммы и долг по всему складу.
+  { id: 'deals', label: 'Сделки', section: 'Сделки', roles: SELLING_ROLES },
   { id: 'orders', label: 'Заказы', section: 'Заказы с площадок', roles: SELLING_ROLES },
   { id: 'returns', label: 'Возвраты', section: 'Возвраты', roles: SELLING_ROLES },
   { id: 'customers', label: 'Клиенты', section: 'Клиенты', roles: SELLING_ROLES },

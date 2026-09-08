@@ -200,6 +200,66 @@ public class SalesController {
     }
 
     /**
+     * Список сделок продавца: воронка по состоянию, поиск, отбор «мои».
+     *
+     * <p>До него у продавца была ровно одна дорога к чужой сделке — «Найти
+     * сделку клиента», и она спрашивала только клиента. «Я вчера у вас
+     * откладывал, фамилия Петров» работало, если фамилия записана так же,
+     * как её сейчас произнесли; «мне звонили, деталь номер такой-то»
+     * не работало вовсе.
+     *
+     * <p><b>Роль {@code SELLS}, а не {@code ISSUES}</b> — по правилу задачи
+     * 0029, записанному в javadoc класса: <b>выборка чужих документов пачкой
+     * идёт за историей покупателя</b> ({@link #byCustomer}), потому что это
+     * клиент, суммы, оплаченное и срок резерва по всему складу, а не тот
+     * единственный документ, по которому кладовщик выдаёт товар.
+     *
+     * <p>Статусы принимаются набором, повтором параметра — как у журнала
+     * пересчётов: имена воронок знает экран, сервер отбирает по состояниям.
+     * Иначе список воронок пришлось бы держать в двух местах, и он разошёлся
+     * бы на первой правке.
+     *
+     * @param status состояния сделки; пусто — все разом (воронка «Все»)
+     * @param q      поиск: номер сделки точно, клиент и публичный код детали —
+     *               вхождением
+     * @param mine   только свои сделки: продавец чаще ищет своё, но чужое ему
+     *               тоже нужно — возвращают не тому, кто продавал
+     * @param size   сколько строк вернуть; список читают с конца и вглубь
+     *               не листают, поэтому вместо курсора — растущий предел
+     */
+    @GetMapping("/registry")
+    @PreAuthorize(SELLS)
+    public SalesService.DealsPage registry(
+            @RequestParam(value = "status", required = false) List<String> status,
+            @RequestParam(value = "q", required = false) String q,
+            @RequestParam(value = "mine", defaultValue = "false") boolean mine,
+            @RequestParam(value = "size", defaultValue = "50") int size) {
+        return sales.listDeals(parseStatuses(status), q,
+                mine ? CurrentUser.memberId() : null, size);
+    }
+
+    private static List<DealStatus> parseStatuses(List<String> statuses) {
+        if (statuses == null) {
+            return List.of();
+        }
+        return statuses.stream()
+                .filter(s -> s != null && !s.isBlank())
+                .map(SalesController::parseStatus)
+                .distinct()
+                .toList();
+    }
+
+    private static DealStatus parseStatus(String status) {
+        try {
+            return DealStatus.valueOf(status);
+        } catch (IllegalArgumentException e) {
+            // 400 со словами, а не 500: это ошибка вызывающего, и разбирать
+            // её человеку придётся по тексту ответа, а не по стектрейсу.
+            throw new IllegalArgumentException("Неизвестное состояние сделки: " + status);
+        }
+    }
+
+    /**
      * Просроченные резервы.
      *
      * <p>Экран для продавца, а не фоновая задача: снимать резерв автоматически
