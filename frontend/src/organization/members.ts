@@ -16,7 +16,7 @@ export interface Member {
   lastLoginAt: string | null;
 }
 
-export type Role = 'OWNER' | 'MANAGER' | 'STOREKEEPER' | 'SELLER' | 'VIEWER';
+export type Role = 'OWNER' | 'MANAGER' | 'STOREKEEPER' | 'SELLER' | 'VIEWER' | 'AUDITOR';
 
 /**
  * Что делает роль. Показывается рядом с выбором: «менеджер» и «продавец»
@@ -29,6 +29,7 @@ export const ROLES: Array<{ role: Role; title: string; can: string }> = [
   { role: 'SELLER', title: 'Продавец', can: 'поиск, продажа, возврат — без отчётов' },
   { role: 'STOREKEEPER', title: 'Кладовщик', can: 'приёмка, пересчёт, этикетки' },
   { role: 'VIEWER', title: 'Просмотр', can: 'только смотреть' },
+  { role: 'AUDITOR', title: 'Ревизор', can: 'журнал действий — кто что менял' },
 ];
 
 export function roleTitle(role: string): string {
