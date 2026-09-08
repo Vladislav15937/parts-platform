@@ -104,6 +104,54 @@ export function unknownShare(report: SourceReport): number {
   return unknown / total;
 }
 
+/**
+ * Строка отчёта «Платежи по источникам» — задача 0046.
+ *
+ * <p>Отвечает на вопрос «сколько прошло наличными, сколько картой, сколько
+ * осталось в долг». Считается **источник**, а не его тип: у владельца бывает
+ * две карты разных банков, и по выписке он сверяет каждую отдельно.
+ *
+ * <p>{@code sourceName} пустой — способ у платежа не записан: до задачи 0024
+ * источник не писали вовсе. Это отдельная строка, а не «прочее», и в итог
+ * она входит.
+ *
+ * <p>Числа приходят числами: `numeric` из Postgres Jackson отдаёт числом JSON,
+ * и объявить их строкой значит получить падение на первом же `.trim()` —
+ * так уже было у цены на экране выгрузок.
+ */
+export interface PaymentSourceRow {
+  sourceId: number | null;
+  sourceName: string | null;
+  sourceType: string | null;
+  /** Источник снят с работы. Из отчёта он не уходит: платежи по нему были. */
+  archived: boolean;
+  payments: number;
+  incoming: number;
+  outgoing: number;
+  /** Приход минус расход: сколько этим способом реально осталось за месяц. */
+  total: number;
+}
+
+export interface PaymentReport {
+  month: string;
+  rows: PaymentSourceRow[];
+  /**
+   * Итог за период, посчитанный **независимо от строк** — по всем платежам
+   * месяца, без группировки. Сложенные строки обязаны дать то же самое;
+   * разойдись они, отчёт отвечает на один вопрос двумя числами.
+   */
+  totals: {
+    payments: number;
+    incoming: number;
+    outgoing: number;
+    total: number;
+  };
+}
+
+export function paymentsBySource(month: string): Promise<PaymentReport> {
+  return request<PaymentReport>(`/api/reports/payments?month=${month}`);
+}
+
 export function managerSales(month: string): Promise<ManagerReport> {
   return request<ManagerReport>(`/api/reports/managers?month=${month}`);
 }

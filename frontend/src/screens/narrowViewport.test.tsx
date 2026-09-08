@@ -25,7 +25,9 @@ import { UnmatchedScreen } from './UnmatchedScreen';
 import { WheelsScreen } from './WheelsScreen';
 import { ReferencePanel } from '../reference/ReferencePanel';
 import { TABS, type Tab } from './tabs';
-import { PHONE_WIDTH, closeBrowser, measurePage, openBrowser } from '../test/narrowViewport';
+import {
+  PHONE_WIDTH, closeBrowser, measurePage, measureWidths, openBrowser,
+} from '../test/narrowViewport';
 
 /**
  * Ни один раздел приложения не уезжает вбок на телефоне (задача 0032).
@@ -138,8 +140,25 @@ const DONORS = [
   },
 ];
 
+/**
+ * Склады — с длинным названием, потому что называет их клиент.
+ *
+ * <p>«Ткацкая» и «Дальний» помещаются в телефон при любой вёрстке, и на них
+ * проверка молчала: `<select>` в Chrome шириной с самый длинный пункт, а тут
+ * пункт короткий. У живого клиента склад называется «Основной склад
+ * на Ткацкой, бокс 3 (второй этаж)» — и на нём «Колёса» уезжали вбок на 529
+ * при 390 (задача 0041), а «Выгрузки» до того на 465 при 390 (задача 0031).
+ *
+ * <p>До 0041 длинное имя стояло в отдельной проверке, только для «Выгрузок»:
+ * в общей фикстуре оно валило «Колёса», а это была другая задача. Теперь
+ * исключений нет, и имя стоит в общей — то есть длину меряют **все** разделы,
+ * а не тот, про который вспомнили. Это ровно то, ради чего заведён перебор.
+ */
 const WAREHOUSES = [
-  { id: 1, branchId: 1, name: 'Ткацкая', branchName: 'Основной склад', cells: 128 },
+  {
+    id: 1, branchId: 1, name: 'Основной склад на Ткацкой, бокс 3 (второй этаж)',
+    branchName: 'Основной склад', cells: 128,
+  },
   { id: 2, branchId: 1, name: '54 YARD', branchName: 'Основной склад', cells: 0 },
 ];
 
@@ -201,7 +220,10 @@ const DEALS = {
 const REFERENCE = {
   loadedAt: '2026-09-07T09:00:00Z',
   warehouses: [
-    { id: 1, name: 'Ткацкая', cells: [{ id: 7, code: 'A-01-1', zone: null }] },
+    {
+      id: 1, name: 'Основной склад на Ткацкой, бокс 3 (второй этаж)',
+      cells: [{ id: 7, code: 'A-01-1', zone: null }],
+    },
     { id: 2, name: '54 YARD', cells: [] },
   ],
   supplies: SUPPLIES,
@@ -230,6 +252,31 @@ const REPORT = {
 };
 
 /**
+ * Платежи по источникам: пустой ответ не мерил бы ничего — ширину таблице
+ * задаёт самая длинная клетка. Названия здесь такие, какие владелец пишет
+ * себе сам («Интернет-эквайринг Авито доставка»), плюс строка без источника:
+ * такие платежи есть у каждого, кто переехал до задачи 0024.
+ */
+const PAYMENTS = {
+  month: '2026-08',
+  rows: [
+    {
+      sourceId: 1, sourceName: 'Карта Сбербанк 4276', sourceType: 'BANK_ACCOUNT',
+      archived: false, payments: 34, incoming: 402000, outgoing: 0, total: 402000,
+    },
+    {
+      sourceId: 2, sourceName: 'Интернет-эквайринг Авито доставка', sourceType: 'ACQUIRING',
+      archived: false, payments: 112, incoming: 315400, outgoing: 12500, total: 302900,
+    },
+    {
+      sourceId: null, sourceName: null, sourceType: null,
+      archived: false, payments: 7, incoming: 9600, outgoing: 0, total: 9600,
+    },
+  ],
+  totals: { payments: 153, incoming: 727000, outgoing: 12500, total: 714500 },
+};
+
+/**
  * Пустой ответ на всё остальное: сторож меряет раздел, а не его содержимое.
  * Списки приходят массивом, страницы и отчёты — объектом, и подсунуть одно
  * вместо другого значит проверить не тот путь.
@@ -245,6 +292,7 @@ const RESPONSES: Array<[string, unknown]> = [
   ['/api/organization/warehouses', WAREHOUSES],
   ['/api/organization/branches', []],
   ['/api/reports/supplies', { rows: SUPPLIES }],
+  ['/api/reports/payments', PAYMENTS],
   ['/api/reports/', REPORT],
   ['/api/members', MEMBERS],
   ['/api/marketplace-accounts', FEEDS],
@@ -376,46 +424,48 @@ describe('на телефоне ни один раздел не уезжает �
   );
 
   /**
-   * Склад с длинным названием — тоже данные клиента, и меряется отдельно.
+   * Обратная сторона той же правки: поле переносится, а не сжимается.
    *
-   * <p>Общий обход выше идёт на фикстурах «Ткацкая» и «54 YARD»: на них
-   * отбор выгрузки по складам помещается в телефон при любой вёрстке.
-   * А называет склады клиент — «Основной склад на Ткацкой, бокс 3
-   * (второй этаж)» — и подпись флажка, шедшая неразрывной строкой,
-   * уводила «Выгрузки» вбок на 465 при 390. Уводила не сама подпись:
-   * `fieldset` в таблице стилей браузера имеет `min-inline-size: min-content`,
-   * то есть рамка отбора **растёт** под свой минимум, а не обрезает его.
+   * <p><b>Почему одной проверки ширины страницы мало.</b> Уезд вбок лечится
+   * двумя способами, и один из них хуже болезни: разрешить полю сжиматься
+   * (`min-width: 0`) и не оставить признака переноса. Страница тогда
+   * помещается в телефон идеально — а поля формы колеса садятся в один ряд
+   * по 84 пикселя, и приёмщик не видит, что вводит. Сторож выше такую
+   * «починку» пропустит: он меряет страницу, а не поле.
    *
-   * <p>Длинное имя стоит здесь, а не в общей фикстуре, намеренно: на общей
-   * оно уводит вбок ещё и «Колёса» (529 при 390) — та же болезнь в списке
-   * выбора склада, но другой раздел и другая задача.
+   * <p>Поэтому здесь меряется само поле. Порог — 250 пикселей при экране 390:
+   * это заметно больше сжатых 84 (основа 0) и 152 (основа 8rem), которые
+   * давали пробные варианты правки, и заметно меньше 280, которые поле
+   * занимает, когда ряд перенесён. Флажки исключены: подпись у них короткая,
+   * и ширина им не нужна — по той же причине, по какой они исключены
+   * из правила в `app.css`.
+   *
+   * <p>Число полей проверяется отдельно: пустая выборка прошла бы любое
+   * утверждение о ширине, а форма, переставшая рисоваться, — ровно та
+   * поломка, которую тест обязан замечать.
    */
-  it('«Выгрузки» помещаются и со складом, названным длинно', async () => {
-    const long = [
-      { id: 1, branchId: 1, name: 'Основной склад на Ткацкой, бокс 3 (второй этаж)', branchName: 'Основной склад', cells: 128 },
-      { id: 2, branchId: 1, name: '54 YARD', branchName: 'Основной склад', cells: 0 },
-    ];
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      const body = url.includes('/api/organization/warehouses')
-        ? long
-        : RESPONSES.find(([path]) => url.includes(path))?.[1] ?? EMPTY;
-      return new Response(JSON.stringify(body), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }));
-
-    const { container } = render(<FeedsScreen role="OWNER" />);
+  it('поля формы колеса переносятся, а не сжимаются', async () => {
+    const { container } = render(<WheelsScreen canIntake role="OWNER" />);
     await waitFor(() => expect(container.textContent).not.toBe(''));
 
-    const { scrollWidth, clientWidth } = await measurePage(await settled(container));
+    const widths = await measureWidths(
+      await settled(container),
+      '.card .filter-row .field:not(.field--check)',
+    );
+
     expect(
-      scrollWidth,
-      `«Выгрузки» уезжают вбок на ${scrollWidth - clientWidth} пикселей, когда склад `
-      + `назван длинно (scrollWidth ${scrollWidth} при clientWidth ${clientWidth}, `
-      + `экран ${PHONE_WIDTH})`,
-    ).toBe(clientWidth);
+      widths.length,
+      'Формы колеса на экране нет вовсе — мерить нечего, и проверка ниже '
+      + 'прошла бы сама собой.',
+    ).toBeGreaterThanOrEqual(12);
+
+    const squeezed = widths.filter((width) => width < 250);
+    expect(
+      squeezed,
+      `Поля формы колеса сжаты, а не перенесены: ${squeezed.length} из `
+      + `${widths.length} уже 250 пикселей при экране ${PHONE_WIDTH}. `
+      + 'В такое поле не видно, что вводишь.',
+    ).toEqual([]);
   }, 30_000);
 
   it('меряет все разделы, а не те, до которых дошли руки', () => {

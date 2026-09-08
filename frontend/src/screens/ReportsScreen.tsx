@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { plural, shown } from '../ui/plural';
+import { count, plural, shown } from '../ui/plural';
 import { ApiError } from '../api/client';
 import { donorTitle, listDonors } from '../intake/donors';
 import type { DonorEntry } from '../intake/donors';
@@ -11,6 +11,7 @@ import {
   managerSales,
   money,
   originFooter,
+  paymentsBySource,
   pieces,
   reportSupplies,
   salesBySource,
@@ -27,11 +28,13 @@ import type {
   OriginItem,
   OriginPage,
   OriginTab,
+  PaymentReport,
   SettlementReport,
   SourceReport,
   Summary,
   SupplyOption,
 } from '../reports/reports';
+import { paymentSourceTypeLabel } from '../sales/sales';
 
 /**
  * Отчёты владельца.
@@ -75,6 +78,8 @@ export function ReportsScreen({ canRead }: Props) {
   const [managers, setManagers] = useState<ManagerReport | null>(null);
   const [donors, setDonors] = useState<DonorReport | null>(null);
   const [sources, setSources] = useState<SourceReport | null>(null);
+  // Платежи по источникам: чем платили и сколько этим способом прошло.
+  const [payments, setPayments] = useState<PaymentReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Расчёты с клиентами: авансы, долги и сверка. Число обязательств без
   // ответа «сходится ли» — спокойствие без основания.
@@ -109,6 +114,14 @@ export function ReportsScreen({ canRead }: Props) {
     void salesBySource(month)
       .then(setSources)
       .catch((cause) => setError(describe(cause, 'Отчёт по каналам не загрузился')));
+  }, [month]);
+
+  useEffect(() => {
+    // Тот же месяц: «сколько прошло наличными» владелец смотрит рядом
+    // с выручкой, и разные периоды на соседних таблицах сравнивать нельзя.
+    void paymentsBySource(month)
+      .then(setPayments)
+      .catch((cause) => setError(describe(cause, 'Платежи по источникам не загрузились')));
   }, [month]);
 
   useEffect(() => {
@@ -365,6 +378,75 @@ export function ReportsScreen({ canRead }: Props) {
           не отмечают Дром» отсюда выглядят одинаково.
         </p>
       )}
+
+      {/* Платежи по источникам: «сколько прошло наличными, сколько картой,
+          сколько осталось в долг» — до этого источник у платежа писался
+          и не читался нигде. Месяц тот же, что у соседних блоков. */}
+      <hr />
+      <h3>Платежи по источникам</h3>
+
+      {payments !== null && payments.rows.length === 0 && (
+        <p className="note">За этот месяц платежей не было.</p>
+      )}
+
+      {payments !== null && payments.rows.length > 0 && (
+        <div className="table-scroll">
+          <table className="report">
+            <thead>
+              <tr>
+                <th>Источник</th>
+                <th className="num">Платежей</th>
+                <th className="num">Приход</th>
+                <th className="num">Расход</th>
+                <th className="num">Итог</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payments.rows.map((row) => (
+                <tr key={row.sourceId ?? 'none'}>
+                  <td>
+                    {/* Не «прочее»: способ у платежа не записан, и лечится
+                        это привычкой продавца, а не переименованием строки. */}
+                    {row.sourceName ?? 'источник не указан'}
+                    {row.sourceType !== null && (
+                      <span className="muted"> · {paymentSourceTypeLabel(row.sourceType)}</span>
+                    )}
+                    {/* Архивный источник из отчёта не исчезает — платежи
+                        по нему были, — но сказать об этом надо: иначе
+                        владелец пойдёт искать его в справочнике. */}
+                    {row.archived && <span className="muted"> · в архиве</span>}
+                  </td>
+                  {/* С разделителем разрядов: у живого клиента платежей
+                      за месяц бывает пять тысяч, и «5124» читается хуже. */}
+                  <td className="num">{count(row.payments)}</td>
+                  <td className="num">{money(row.incoming)}</td>
+                  {/* Прочерк, а не ноль: расхода этим способом не было. */}
+                  <td className="num">{row.outgoing === 0 ? '—' : money(row.outgoing)}</td>
+                  <td className={row.total < 0 ? 'num negative' : 'num'}>{money(row.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {payments !== null && payments.totals.payments > 0 && (
+        <p className="note">
+          <strong>
+            Всего за месяц: {count(payments.totals.payments)}{' '}
+            {plural(payments.totals.payments, 'платёж', 'платежа', 'платежей')} ·
+            приход {money(payments.totals.incoming)} ·
+            расход {money(payments.totals.outgoing)} ·
+            итог {money(payments.totals.total)}
+          </strong>
+        </p>
+      )}
+
+      <p className="note">
+        Приход и расход разными числами: возврат денег из кассы уменьшает
+        то, что этим способом осталось, но не отменяет принятого. Итог считается
+        по всем платежам месяца — сумма строк обязана с ним сходиться.
+      </p>
 
       <hr />
       <h3>Расчёты с клиентами</h3>
