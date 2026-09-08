@@ -132,6 +132,39 @@ export interface PageWidth {
 }
 
 /**
+ * Ширины отдельных элементов, а не страницы целиком.
+ *
+ * <p><b>Зачем отдельно от `measurePage`.</b> Ширина страницы отвечает
+ * на вопрос «уезжает ли вбок», и только на него. Обратная сторона той же
+ * правки — «поле не сжато до нечитаемого» — ей не видна вовсе: ряд, в котором
+ * двенадцать полей сели по 84 пикселя, помещается в телефон идеально
+ * (замерено на пробном варианте правки 0041). Проверять это надо тем же
+ * настоящим браузером и на той же разметке: jsdom здесь снова отдал бы нули.
+ */
+export async function measureWidths(
+  screenHtml: string,
+  selector: string,
+  width = PHONE_WIDTH,
+): Promise<number[]> {
+  if (browser === null) throw new Error('openBrowser() не вызван');
+  const page = await browser.newPage();
+  try {
+    await page.setViewport({ width, height: 2000 });
+    await page.setContent(
+      `<!doctype html><meta charset="utf-8"><style>${CSS}</style>${shell(screenHtml)}`,
+      { waitUntil: 'load' },
+    );
+    return await page.evaluate(
+      (css: string) => [...document.querySelectorAll(css)]
+        .map((element) => Math.round(element.getBoundingClientRect().width)),
+      selector,
+    );
+  } finally {
+    await page.close();
+  }
+}
+
+/**
  * Ставит разметку экрана в оболочку приложения, открывает её при заданной
  * ширине и возвращает ширину прокрутки страницы против ширины окна.
  */
