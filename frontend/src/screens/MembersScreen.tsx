@@ -57,51 +57,56 @@ export function MembersScreen() {
         // не повторяем, но и не выдаём неудачу за ожидание.
         error !== '' ? null : <p className="note">Загружаем…</p>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Логин</th>
-              <th>Имя</th>
-              <th>Роль</th>
-              <th>Последний вход</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {members.map((member) => (
-              <tr key={member.id} className={member.active ? undefined : 'muted'}>
-                <td>{member.login}</td>
-                <td>{member.displayName ?? '—'}</td>
-                <td>{roleTitle(member.role)}</td>
-                <td>
-                  {member.lastLoginAt === null
-                    ? 'не входил'
-                    : new Date(member.lastLoginAt).toLocaleString('ru-RU')}
-                </td>
-                <td className="filter-row">
-                  <button
-                    type="button"
-                    className="button--ghost"
-                    disabled={busy}
-                    onClick={() => void resetPassword(member)}
-                  >
-                    Сменить пароль
-                  </button>
-                  {/* Кнопка есть и у владельца: последнего отобьёт сервер
-                      с объяснением, а второго выключить — обычное дело. */}
-                  <button
-                    type="button"
-                    className="button--ghost"
-                    disabled={busy}
-                    onClick={() => void toggle(member)}
-                  >
-                    {member.active ? 'Выключить' : 'Включить'}
-                  </button>
-                </td>
+        // Прокручивается таблица внутри своей обёртки, а не страница:
+        // пять колонок с датой последнего входа и двумя кнопками в телефон
+        // не помещаются, а без обёртки вбок уезжал весь экран.
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Логин</th>
+                <th>Имя</th>
+                <th>Роль</th>
+                <th>Последний вход</th>
+                <th />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {members.map((member) => (
+                <tr key={member.id} className={member.active ? undefined : 'muted'}>
+                  <td>{member.login}</td>
+                  <td>{member.displayName ?? '—'}</td>
+                  <td>{roleTitle(member.role)}</td>
+                  <td>
+                    {member.lastLoginAt === null
+                      ? 'не входил'
+                      : new Date(member.lastLoginAt).toLocaleString('ru-RU')}
+                  </td>
+                  <td className="filter-row">
+                    <button
+                      type="button"
+                      className="button--ghost"
+                      disabled={busy}
+                      onClick={() => void resetPassword(member)}
+                    >
+                      Сменить пароль
+                    </button>
+                    {/* Кнопка есть и у владельца: последнего отобьёт сервер
+                        с объяснением, а второго выключить — обычное дело. */}
+                    <button
+                      type="button"
+                      className="button--ghost"
+                      disabled={busy}
+                      onClick={() => void toggle(member)}
+                    >
+                      {member.active ? 'Выключить' : 'Включить'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <div className="card">
