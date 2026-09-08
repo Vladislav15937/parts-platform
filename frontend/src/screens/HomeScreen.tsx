@@ -27,10 +27,12 @@ import { FeedsScreen } from './FeedsScreen';
 import { WheelsScreen } from './WheelsScreen';
 import { CatalogScreen } from './CatalogScreen';
 import { StockMovesScreen } from './StockMovesScreen';
+import { AuditJournalScreen } from './AuditJournalScreen';
 import { ordersAwaitingReply } from '../sales/sales';
 import { unmatchedNames } from '../catalog/partNames';
 import { deadLetters } from '../events/deadLetters';
 import {
+  JOURNAL_ROLES,
   LABEL_ROLES,
   MOVE_ROLES,
   NAMING_ROLES,
@@ -377,6 +379,11 @@ export function HomeScreen() {
           </p>
         ))}
 
+      {/* Журнал действий — владельцу и «Ревизору»: роль проверяется здесь
+          так же явно, как у остальных разделов, а `visibleTo` управляет
+          только кнопкой на рельсе. */}
+      {tab === 'journal' && JOURNAL_ROLES.includes(state.me.role) && <AuditJournalScreen />}
+
       {tab === 'members' && <MembersScreen />}
 
       {tab === 'organization' && <OrganizationScreen />}
@@ -404,6 +411,8 @@ function roleName(role: string): string {
       return 'кладовщик';
     case 'SELLER':
       return 'продавец';
+    case 'AUDITOR':
+      return 'ревизор';
     default:
       return 'просмотр';
   }

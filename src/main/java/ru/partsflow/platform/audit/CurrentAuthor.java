@@ -1,6 +1,7 @@
 package ru.partsflow.platform.audit;
 
 import ru.partsflow.platform.security.CurrentUser;
+import ru.partsflow.platform.security.TenantPrincipal;
 
 /**
  * Автор правки для журнала изменений.
@@ -23,5 +24,21 @@ final class CurrentAuthor {
     /** @return идентификатор вошедшего либо {@code null} — фоновая задача */
     static Long get() {
         return CurrentUser.memberId();
+    }
+
+    /**
+     * Роль вошедшего на момент правки.
+     *
+     * <p>Снимком рядом с автором, а не ссылкой на {@code tenant_member.role}:
+     * роль переписывается на месте, истории у неё нет, и подтянутая при чтении
+     * она соврёт задним числом. Сотрудника переводят из продавцов в менеджеры,
+     * и запись «менеджер уронил цену» станет неправдой о человеке — при
+     * полностью исправном журнале. Решение владельца продукта от 8 сентября
+     * 2026, tasks/0043.
+     *
+     * @return роль вошедшего либо {@code null} — фоновая задача
+     */
+    static String role() {
+        return CurrentUser.get().map(TenantPrincipal::role).orElse(null);
     }
 }
