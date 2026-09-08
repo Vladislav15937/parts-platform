@@ -61,34 +61,40 @@ export function OrganizationScreen() {
 
       {error !== '' && <p className="note note--error">{error}</p>}
 
-      <table>
-        <thead>
-          <tr>
-            <th>Склад</th>
-            <th>Филиал</th>
-            <th className="num">Ячеек</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {warehouses.map((warehouse) => (
-            <tr key={warehouse.id}>
-              <td>{warehouse.name}</td>
-              <td>{warehouse.branchName ?? '—'}</td>
-              <td className="num">{warehouse.cells}</td>
-              <td>
-                <button
-                  type="button"
-                  className="button--ghost"
-                  onClick={() => void openCells(warehouse.id)}
-                >
-                  {opened === warehouse.id ? 'Свернуть' : 'Ячейки'}
-                </button>
-              </td>
+      {/* Третий табличный экран того же класса: на 390 он укладывается
+          впритык, а на раннере CI с другим шрифтом давал 415 — то есть
+          до края его доводит смена шрифта или название склада подлиннее.
+          Прокручивается таблица, а не страница. */}
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Склад</th>
+              <th>Филиал</th>
+              <th className="num">Ячеек</th>
+              <th />
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {warehouses.map((warehouse) => (
+              <tr key={warehouse.id}>
+                <td>{warehouse.name}</td>
+                <td>{warehouse.branchName ?? '—'}</td>
+                <td className="num">{warehouse.cells}</td>
+                <td>
+                  <button
+                    type="button"
+                    className="button--ghost"
+                    onClick={() => void openCells(warehouse.id)}
+                  >
+                    {opened === warehouse.id ? 'Свернуть' : 'Ячейки'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       {opened !== null && (
         <div className="card">

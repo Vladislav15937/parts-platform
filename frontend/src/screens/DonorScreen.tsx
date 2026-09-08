@@ -403,98 +403,103 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
               : `Показано ${shown(found.length, donors.length)}`}
           </p>
         )}
-        <table>
-          <thead>
-            <tr>
-              <th>Машина</th>
-              <th>Состояние</th>
-              <th>Где стоит</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {found.map((donor) => (
-              <Fragment key={donor.id}>
+        {/* Прокручивается таблица внутри своей обёртки, а не страница: у машины
+            длинное имя («Toyota Land Cruiser Prado 2008 · №261») и две кнопки
+            в строке, и без обёртки вбок уезжал весь экран. */}
+        <div className="table-scroll">
+          <table>
+            <thead>
               <tr>
-                <td>{donorTitle(donor)}</td>
-                <td>{statusTitle(donor.status)}</td>
-                {/* Где стоит машина. Поле заполнялось только запросом к API
-                    и не показывалось нигде — на площадке в полсотни машин
-                    это единственный способ её найти, и держалось оно
-                    в голове того, кто её ставил. */}
-                <td>
-                  {movingId === donor.id ? (
-                    <span className="filter-row">
-                      <input
-                        autoFocus
-                        aria-label={`Где стоит ${donorTitle(donor)}`}
-                        value={place}
-                        placeholder="ряд 2, место 14"
-                        onChange={(e) => setPlace(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') void moveTo(donor.id);
-                          if (e.key === 'Escape') setMovingId(null);
-                        }}
-                      />
+                <th>Машина</th>
+                <th>Состояние</th>
+                <th>Где стоит</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {found.map((donor) => (
+                <Fragment key={donor.id}>
+                <tr>
+                  <td>{donorTitle(donor)}</td>
+                  <td>{statusTitle(donor.status)}</td>
+                  {/* Где стоит машина. Поле заполнялось только запросом к API
+                      и не показывалось нигде — на площадке в полсотни машин
+                      это единственный способ её найти, и держалось оно
+                      в голове того, кто её ставил. */}
+                  <td>
+                    {movingId === donor.id ? (
+                      <span className="filter-row">
+                        <input
+                          autoFocus
+                          aria-label={`Где стоит ${donorTitle(donor)}`}
+                          value={place}
+                          placeholder="ряд 2, место 14"
+                          onChange={(e) => setPlace(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') void moveTo(donor.id);
+                            if (e.key === 'Escape') setMovingId(null);
+                          }}
+                        />
+                        <button
+                          type="button"
+                          disabled={busy || !online}
+                          onClick={() => void moveTo(donor.id)}
+                        >
+                          Сохранить
+                        </button>
+                      </span>
+                    ) : (
                       <button
                         type="button"
-                        disabled={busy || !online}
-                        onClick={() => void moveTo(donor.id)}
+                        className="button--ghost"
+                        onClick={() => {
+                          setMovingId(donor.id);
+                          setPlace(donor.location ?? '');
+                        }}
                       >
-                        Сохранить
+                        {donor.location !== null && donor.location !== ''
+                          ? donor.location
+                          : 'не указано'}
                       </button>
-                    </span>
-                  ) : (
+                    )}
+                  </td>
+                  <td className="filter-row">
+                    {donor.status === 'PURCHASED' && (
+                      <button
+                        type="button"
+                        className="button--ghost"
+                        disabled={busy || !online}
+                        onClick={() => void toDismantling(donor.id)}
+                      >
+                        В разбор
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="button--ghost"
-                      onClick={() => {
-                        setMovingId(donor.id);
-                        setPlace(donor.location ?? '');
-                      }}
+                      onClick={() => setCostsOf(costsOf === donor.id ? null : donor.id)}
                     >
-                      {donor.location !== null && donor.location !== ''
-                        ? donor.location
-                        : 'не указано'}
+                      {costsOf === donor.id ? 'Свернуть' : 'Затраты'}
                     </button>
-                  )}
-                </td>
-                <td className="filter-row">
-                  {donor.status === 'PURCHASED' && (
-                    <button
-                      type="button"
-                      className="button--ghost"
-                      disabled={busy || !online}
-                      onClick={() => void toDismantling(donor.id)}
-                    >
-                      В разбор
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="button--ghost"
-                    onClick={() => setCostsOf(costsOf === donor.id ? null : donor.id)}
-                  >
-                    {costsOf === donor.id ? 'Свернуть' : 'Затраты'}
-                  </button>
-                </td>
-              </tr>
-              {/* Затраты раскрываются под своей же строкой. Пока блок стоял
-                  после таблицы, у клиента с 441 машиной он открывался
-                  за одиннадцать экранов вниз — замерено: строка на 17 995
-                  пикселе, блок на 27 756. Владелец нажимал «Затраты»
-                  и не видел ничего, кроме сменившейся надписи на кнопке. */}
-              {costsOf === donor.id && (
-                <tr>
-                  <td colSpan={4}>
-                    <DonorCosts donorId={donor.id} title={donorTitle(donor)} />
                   </td>
                 </tr>
-              )}
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
+                {/* Затраты раскрываются под своей же строкой. Пока блок стоял
+                    после таблицы, у клиента с 441 машиной он открывался
+                    за одиннадцать экранов вниз — замерено: строка на 17 995
+                    пикселе, блок на 27 756. Владелец нажимал «Затраты»
+                    и не видел ничего, кроме сменившейся надписи на кнопке. */}
+                {costsOf === donor.id && (
+                  <tr>
+                    <td colSpan={4}>
+                      <DonorCosts donorId={donor.id} title={donorTitle(donor)} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
         </>
       )}
       {/* «Только в разборе» было неправдой: справочник приёмки отдаёт
