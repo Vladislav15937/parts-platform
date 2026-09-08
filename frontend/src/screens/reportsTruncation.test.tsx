@@ -32,8 +32,15 @@ describe('обрезанные списки отчётов', () => {
                                     phone: null, accountBalance: 0, debt: 10, unpaidDeals: 1 })),
         });
       }
-      if (url.includes('/reports/managers') || url.includes('/reports/sources')) {
-        return json({ month: '2026-08', rows: [] });
+      // Платежи по источникам названы отдельно, а не отданы общему ответу
+      // внизу: тот отвечает строками окупаемости машин, и экран, читающий
+      // у строки число платежей, падает на чужой форме.
+      if (url.includes('/reports/managers') || url.includes('/reports/sources')
+          || url.includes('/reports/payments')) {
+        return json({
+          month: '2026-08', rows: [],
+          totals: { payments: 0, incoming: 0, outgoing: 0, total: 0 },
+        });
       }
       if (url.includes('/reports/summary')) {
         return json({
