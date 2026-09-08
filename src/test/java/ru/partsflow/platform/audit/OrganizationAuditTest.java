@@ -228,6 +228,34 @@ class OrganizationAuditTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.total").value(0));
     }
 
+    /**
+     * «Показать ещё» не предлагается, когда дальше ничего нет.
+     *
+     * <p>Считать «страница набралась полной» здесь мало: последняя страница
+     * набирается полной ровно так же, и кнопка вернула бы те же самые строки.
+     * Кнопка, которая ничего не делает, в этом проекте гасится — то же
+     * правило, по которому погашены кнопки открытия пересчёта.
+     */
+    @Test
+    @DisplayName("Кнопка «Показать ещё» не обещает того, чего нет")
+    void nothingMoreIsNotOffered() throws Exception {
+        changePrice("ivanov", "4500");
+        changePrice("ivanov", "4600");
+        MockHttpSession session = login("vladelec");
+
+        // Страница ровно по размеру найденного: набралась полной, а дальше
+        // ничего нет. Счёт «набралась полной — значит есть ещё» здесь и врёт.
+        mvc.perform(get("/api/organization/audit").param("size", "2").session(session))
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.items.length()").value(2))
+                .andExpect(jsonPath("$.more").value(false));
+
+        // А когда записей больше, чем помещается, — обещает.
+        mvc.perform(get("/api/organization/audit").param("size", "1").session(session))
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.more").value(true));
+    }
+
     /** Неразобранная дата — ошибка запроса, а не поломка сервера. */
     @Test
     @DisplayName("Кривая дата периода отвечает четырёхсотым, а не пятисоткой")

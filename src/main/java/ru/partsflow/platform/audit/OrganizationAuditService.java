@@ -279,7 +279,12 @@ public class OrganizationAuditService {
                 withWatched(pageArgs));
 
         fillChanges(entries);
-        boolean more = entries.size() == size;
+        // «Есть что показать дальше» считается по найденному, а не по тому,
+        // что страница набралась полной: последняя страница набирается полной
+        // ровно так же, и «Показать ещё» на ней вернуло бы те же строки —
+        // кнопка, которая ничего не делает. Счёт здесь ещё не обрезан
+        // потолком, поэтому при упёршемся счёте условие верно само собой.
+        boolean more = total > entries.size();
         return new Journal(entries, Math.min(total, COUNT_CAP), total > COUNT_CAP,
                 more, filterable());
     }
