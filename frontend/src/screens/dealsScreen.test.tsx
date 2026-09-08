@@ -193,7 +193,10 @@ function row(overrides: Partial<Row> = {}): Row {
 }
 
 function stubApi(page: { items: Row[]; total: number }) {
-  const fetch = vi.fn(async () => new Response(JSON.stringify(page), {
+  // Параметр объявлен, хотя ответ от него не зависит: без него `mock.calls`
+  // выводится как массив пустых кортежей, и `calls[0][0]` не собирается —
+  // а именно адрес запроса здесь и проверяется.
+  const fetch = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify(page), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   }));
