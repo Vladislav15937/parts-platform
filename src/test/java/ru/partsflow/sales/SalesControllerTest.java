@@ -1010,6 +1010,159 @@ class SalesControllerTest extends PostgresTestBase {
                 .andExpect(jsonPath("$[0].managerName").value("Продавец"));
     }
 
+    /**
+     * Главная проверка задачи 0014: пути от товара к сделке в системе
+     * не существовало вовсе.
+     *
+     * <p>«Мне звонили, деталь номер такой-то» — обычный звонок на разборке,
+     * и ответить на него было нечем: продавец добирался до чужой сделки
+     * только через имя клиента, записанное кем-то другим.
+     *
+     * <p>Утверждение положительное — но ветка поиска по коду детали здесь
+     * единственная, которая может его выполнить: код детали это двенадцать
+     * шестнадцатеричных знаков, он не разбирается в число (ветка номера
+     * сделки отпадает) и не встречается в имени клиента. Убери ветку —
+     * выдача пуста.
+     */
+    @Test
+    @DisplayName("Сделка находится по публичному коду детали")
+    void registryFindsDealByPartPublicCode() throws Exception {
+        Long partId = partWithStock("Фара для поиска по коду", 1);
+        long dealId = createDeal(partId);
+        String code = publicCodeOf(partId);
+
+        mvc.perform(get("/api/deals/registry?q=" + code).session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(dealId)).isNotEmpty())
+                .andExpect(jsonPath("$.items[?(@.id == %d)].status".formatted(dealId))
+                        .value("RESERVED"));
+    }
+
+    /**
+     * Код детали, которой нет ни в одной сделке, — пусто, а не «что-нибудь
+     * похожее». Экран показывает это словами «Ничего не найдено».
+     *
+     * <p>Отрицательное утверждение, и потому оно сторожит: ослабь отбор
+     * до «покажем всё, если ничего не совпало» — и оно упадёт. Схема
+     * у класса общая и данные в ней накапливаются, так что счёт строк
+     * здесь верен только потому, что код уникален и в чужие поля попасть
+     * не может.
+     */
+    @Test
+    @DisplayName("Код детали, которой нет в сделках, — ничего не найдено")
+    void registryFindsNothingByCodeOfUnsoldPart() throws Exception {
+        Long lonely = partWithStock("Деталь без сделки", 1);
+
+        mvc.perform(get("/api/deals/registry?q=" + publicCodeOf(lonely)).session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(0))
+                .andExpect(jsonPath("$.total").value(0));
+    }
+
+    /**
+     * Воронка разводит состояния: выданная сделка не висит в «Отложенных»,
+     * а в «Выданных» и «Всех» — есть.
+     */
+    @Test
+    @DisplayName("Выданная сделка уходит из «Отложенных» в «Выданные»")
+    void registryFunnelSeparatesIssuedFromReserved() throws Exception {
+        MockHttpSession session = login("seller");
+        Long partId = partWithStock("Кулиса для воронки", 1);
+        long dealId = createDeal(partId);
+        String code = publicCodeOf(partId);
+
+        mvc.perform(get("/api/deals/registry?status=RESERVED&q=" + code).session(session))
+                .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(dealId)).isNotEmpty());
+
+        mvc.perform(post("/api/deals/" + dealId + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/api/deals/registry?status=RESERVED&q=" + code).session(session))
+                .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(dealId)).isEmpty());
+        mvc.perform(get("/api/deals/registry?status=ISSUED&q=" + code).session(session))
+                .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(dealId)).isNotEmpty());
+        mvc.perform(get("/api/deals/registry?q=" + code).session(session))
+                .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(dealId)).isNotEmpty());
+    }
+
+    /**
+     * Отбор «мои» показывает свои сделки и не показывает чужие.
+     *
+     * <p>Утверждение здесь двустороннее намеренно: «моя нашлась» верно
+     * и при отключённом отборе, а сторожит только «чужая не нашлась».
+     */
+    @Test
+    @DisplayName("Отбор «мои» не показывает сделку другого продавца")
+    void registryMineHidesOtherSellersDeal() throws Exception {
+        Long mine = partWithStock("Радиатор мой", 1);
+        Long alien = partWithStock("Радиатор чужой", 1);
+        long dealMine = createDeal(mine);
+        long dealAlien = createDeal(alien);
+        Long otherSeller = inTenant(() -> member("seller2", "Второй продавец", "SELLER"));
+        inTenant(() -> jdbc.update("UPDATE deal SET manager_id = ? WHERE id = ?",
+                otherSeller, dealAlien));
+
+        MockHttpSession session = login("seller");
+        mvc.perform(get("/api/deals/registry?mine=true&q=" + publicCodeOf(mine)).session(session))
+                .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(dealMine)).isNotEmpty());
+        mvc.perform(get("/api/deals/registry?mine=true&q=" + publicCodeOf(alien)).session(session))
+                .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(dealAlien)).isEmpty());
+        mvc.perform(get("/api/deals/registry?q=" + publicCodeOf(alien)).session(session))
+                .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(dealAlien)).isNotEmpty())
+                .andExpect(jsonPath("$.items[?(@.id == %d)].managerName".formatted(dealAlien))
+                        .value("Второй продавец"));
+    }
+
+    /**
+     * Роль та же, что у истории покупателя: это выборка чужих документов
+     * пачкой — клиент, суммы, оплаченное, — а не тот единственный документ,
+     * по которому кладовщик выдаёт товар (правило задачи 0029).
+     */
+    @Test
+    @DisplayName("Список сделок закрыт кладовщику и «Просмотру»")
+    void registryHiddenFromStorekeeperAndViewer() throws Exception {
+        inTenant(() -> member("storekeeper", "Кладовщик", "STOREKEEPER"));
+
+        mvc.perform(get("/api/deals/registry").session(login("storekeeper")))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/deals/registry").session(login("viewer")))
+                .andExpect(status().isForbidden());
+    }
+
+    /** Неизвестное состояние — 400 со словами, а не пятисотка на разборе. */
+    @Test
+    @DisplayName("Неизвестное состояние в воронке — 400 со словами")
+    void registryRejectsUnknownStatus() throws Exception {
+        mvc.perform(get("/api/deals/registry?status=ОТЛОЖЕНА").session(login("seller")))
+                .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * Себестоимости и наценки в списке нет: он открыт продавцу, а это
+     * отчёты владельца. Проверяется по телу ответа, а не по составу record'а —
+     * поле, добавленное «на всякий случай», приедет именно телом.
+     */
+    @Test
+    @DisplayName("Список не отдаёт себестоимость и наценку")
+    void registryCarriesNoCostPrice() throws Exception {
+        Long partId = partWithStock("Насос без себестоимости", 1);
+        createDeal(partId);
+
+        String body = mvc.perform(get("/api/deals/registry?q=" + publicCodeOf(partId))
+                        .session(login("seller")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(body)
+                .as("в списке продавца не должно быть закупочной цены и наценки")
+                .doesNotContain("cost").doesNotContain("margin").doesNotContain("profit");
+    }
+
+    private String publicCodeOf(Long partId) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT public_code FROM part WHERE id = ?", String.class, partId));
+    }
+
     private long createDealForCustomer(Long partId, Long customerId, MockHttpSession session)
             throws Exception {
         var result = mvc.perform(post("/api/deals").with(csrf()).session(session)

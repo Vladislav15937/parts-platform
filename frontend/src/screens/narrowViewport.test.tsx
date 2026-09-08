@@ -3,6 +3,7 @@ import { act, cleanup, render, waitFor } from '@testing-library/react';
 
 import { CatalogScreen } from './CatalogScreen';
 import { CustomersScreen } from './CustomersScreen';
+import { DealsScreen } from './DealsScreen';
 import { DeliveryScreen } from './DeliveryScreen';
 import { DonorScreen } from './DonorScreen';
 import { FeedsScreen } from './FeedsScreen';
@@ -169,6 +170,33 @@ const FEEDS = [
   },
 ];
 
+/**
+ * Сделки для раздела «Сделки»: шесть колонок, и ширину им задаёт содержимое —
+ * имя клиента, имя ответственного и сумма. На пустой выдаче таблицы нет вовсе,
+ * и замер зеленел бы на любой вёрстке.
+ */
+const DEALS = {
+  total: 74,
+  items: [
+    {
+      id: 8, number: 8, createdAt: '2026-09-05T20:01:00Z',
+      customerId: 3, customerName: 'Автосервис на Русской',
+      totalAmount: '34500.00', paidAmount: '12000.00',
+      status: 'RESERVED', reservedUntil: '2026-09-12T20:59:59Z',
+      managerId: 7, managerName: 'Владимир Петров',
+    },
+    // Заказ с площадки: клиента у него нет, ответственного — тоже, пока
+    // его не приняли. Строка обязана меряться и в таком виде.
+    {
+      id: 9, number: 9, createdAt: '2026-09-06T08:12:00Z',
+      customerId: null, customerName: null,
+      totalAmount: '4500.00', paidAmount: '4500.00',
+      status: 'ISSUED', reservedUntil: null,
+      managerId: null, managerName: null,
+    },
+  ],
+};
+
 /** Справочники приёмки — те же, что экран забирает одним запросом. */
 const REFERENCE = {
   loadedAt: '2026-09-07T09:00:00Z',
@@ -220,6 +248,7 @@ const RESPONSES: Array<[string, unknown]> = [
   ['/api/reports/', REPORT],
   ['/api/members', MEMBERS],
   ['/api/marketplace-accounts', FEEDS],
+  ['/api/deals/registry', DEALS],
   ['/api/deals/sources', []],
   ['/api/deals/services', []],
   ['/api/deals/orders', []],
@@ -266,6 +295,7 @@ describe('на телефоне ни один раздел не уезжает �
     sales: () => (
       <SellerScreen canSell role="OWNER" company="t_1" memberId={7} openDealId={null} />
     ),
+    deals: () => <DealsScreen onOpenDeal={() => {}} />,
     orders: () => <OrdersScreen canSell />,
     returns: () => <ReturnsScreen onOpenDeal={() => {}} />,
     customers: () => (

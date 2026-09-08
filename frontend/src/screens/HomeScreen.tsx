@@ -15,6 +15,7 @@ import { InventoryScreen } from './InventoryScreen';
 import { InventoryReconcile } from './InventoryReconcile';
 import { OutboxScreen } from './OutboxScreen';
 import { SellerScreen } from './SellerScreen';
+import { DealsScreen } from './DealsScreen';
 import { ReturnsScreen } from './ReturnsScreen';
 import { CustomersScreen } from './CustomersScreen';
 import { DeliveryScreen } from './DeliveryScreen';
@@ -234,6 +235,15 @@ export function HomeScreen() {
             которой уже нет, а отложенная в телефоне сделка ничего не резервирует.
           </p>
         ))}
+
+      {tab === 'deals' && SELLING_ROLES.includes(state.me.role) && (
+        <DealsScreen
+          onOpenDeal={(dealId) => {
+            setOpenDealId(dealId);
+            setTab('sales');
+          }}
+        />
+      )}
 
       {tab === 'returns' && (
         <ReturnsScreen

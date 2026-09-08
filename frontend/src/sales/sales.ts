@@ -685,6 +685,117 @@ export function expiredReservations(): Promise<Deal[]> {
 }
 
 /**
+ * Воронка списка сделок: слова — на экране, состояния — на сервере.
+ *
+ * <p>Группировку задаёт здесь клиент, а сервер отбирает по набору состояний
+ * (`?status=A&status=B`) — тот же приём, что у журнала пересчётов. Знай имена
+ * воронок обе стороны, они разошлись бы на первой правке, и воронка молча
+ * перестала бы находить.
+ *
+ * <p>По умолчанию открыты отложенные: это то, что требует действия. `READY`,
+ * `DRAFT` и `RETURNED` попадают только в «Все» — первое не ставит ни один
+ * путь в системе, второе живёт на вкладке «Заказы» (необеспеченный заказ
+ * с площадки), третье закрыто встречным документом.
+ */
+export const DEAL_FUNNEL = [
+  { key: 'RESERVED', label: 'Отложенные', statuses: ['RESERVED'] },
+  { key: 'ISSUED', label: 'Выданные', statuses: ['ISSUED'] },
+  { key: 'CANCELLED', label: 'Отменённые', statuses: ['CANCELLED'] },
+  { key: 'ALL', label: 'Все', statuses: [] },
+] as const satisfies readonly { key: string; label: string; statuses: readonly string[] }[];
+
+export type DealFunnelKey = (typeof DEAL_FUNNEL)[number]['key'];
+
+/**
+ * Состояние сделки словом человека.
+ *
+ * <p>`READY` здесь нет намеренно: этот статус не ставит ни один путь системы
+ * (`Deal.markReady` не зовут ниоткуда), и слово для состояния, которого
+ * не бывает, было бы выдумкой. Появится — появится и оно.
+ */
+export function dealStatusName(status: string): string {
+  const names: Record<string, string> = {
+    DRAFT: 'Черновик',
+    RESERVED: 'Отложена',
+    ISSUED: 'Выдана',
+    CANCELLED: 'Отменена',
+    RETURNED: 'Возвращена',
+  };
+  return names[status] ?? status;
+}
+
+/**
+ * Строка списка сделок.
+ *
+ * <p>Себестоимости и наценки здесь нет: список открыт продавцу, а это
+ * отчёты владельца.
+ *
+ * @see listDeals
+ */
+export interface DealListRow {
+  id: number;
+  number: number | null;
+  createdAt: string;
+  customerId: number | null;
+  /** Пусто — у сделки нет клиента: заказ с площадки покупателя не называет. */
+  customerName: string | null;
+  totalAmount: string;
+  paidAmount: string;
+  status: string;
+  /** Срок резерва (задача 0012); показывается только у отложенной. */
+  reservedUntil: string | null;
+  managerId: number | null;
+  /** Пусто — ответственного нет: сотрудника удалили либо заказ не принят. */
+  managerName: string | null;
+}
+
+/**
+ * @param total сколько нашлось по отбору — список обрезан пределом, и подвал
+ *              обязан назвать, сколько показано из скольких
+ */
+export interface DealsPage {
+  items: DealListRow[];
+  total: number;
+}
+
+/**
+ * Список сделок продавца.
+ *
+ * <p>Единственной дорогой к чужой сделке была ссылка «Найти сделку клиента»,
+ * и она спрашивала только клиента: «мне звонили, деталь номер такой-то»
+ * не работало вовсе.
+ *
+ * <p>Вместо курсора — растущий предел `size`, как у реестра возвратов:
+ * список читают с конца и вглубь не листают.
+ *
+ * @param funnel воронка по состоянию; «Все» отдаёт все состояния разом
+ * @param query  поиск: номер сделки точно, клиент и публичный код детали —
+ *               вхождением
+ * @param mine   только свои сделки; чужие продавцу тоже нужны — возвращают
+ *               не тому, кто продавал
+ * @param size   сколько строк вернуть
+ */
+export function listDeals(
+  funnel: DealFunnelKey,
+  query: string,
+  mine: boolean,
+  size = 50,
+): Promise<DealsPage> {
+  const params = new URLSearchParams();
+  for (const status of DEAL_FUNNEL.find((f) => f.key === funnel)?.statuses ?? []) {
+    params.append('status', status);
+  }
+  if (query.trim() !== '') {
+    params.set('q', query.trim());
+  }
+  if (mine) {
+    params.set('mine', 'true');
+  }
+  params.set('size', String(size));
+  return request<DealsPage>(`/api/deals/registry?${params.toString()}`);
+}
+
+/**
  * Продление срока резерва: клиент позвонил и попросил подержать ещё.
  *
  * <p>Склад это не двигает — товар и так отложен под того же клиента.
@@ -736,7 +847,7 @@ export function endOfDay(date: string): string {
  * не снимается сам — «до завтра» на разборке часто значит «до послезавтра».
  */
 export function reservationTerm(
-  deal: Deal, now: number = Date.now(),
+  deal: { status: string; reservedUntil: string | null }, now: number = Date.now(),
 ): { day: string; expired: boolean } | null {
   if (deal.status !== 'RESERVED' || deal.reservedUntil === null) {
     return null;

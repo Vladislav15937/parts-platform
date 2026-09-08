@@ -765,6 +765,142 @@ public class SalesService {
     }
 
     /**
+     * Список сделок для продавца: воронка по состоянию, поиск, отбор «мои».
+     *
+     * <p>До этого экрана единственной дорогой к чужой сделке была ссылка
+     * «Найти сделку клиента», и она спрашивала <b>только клиента</b>.
+     * Продавец, вышедший на смену, не видел ни что отложено вчера,
+     * ни что просрочено, ни сколько сделок висит на нём самом; а на звонок
+     * «мне звонили, деталь номер такой-то» ответить было нечем вовсе —
+     * пути от товара к сделке в системе не существовало.
+     *
+     * <p><b>Поиск — три ветки через {@code UNION}, а не три условия через
+     * {@code OR}.</b> С {@code OR} планировщик берёт индекс, только если
+     * проиндексированы все ветки, и всё равно мажет с кардинальностью
+     * {@code '%…%'}; с {@code UNION} каждая идёт своим — номер сделки
+     * уникальным {@code deal_number_uk}, имя клиента триграммным
+     * {@code customer_name_trgm}, код детали триграммным
+     * {@code part_code_trgm}. Тот же приём и по той же причине, что
+     * в поиске продавца и на витрине склада.
+     *
+     * <p><b>Номер сделки сравнивается точно, код детали и клиент —
+     * вхождением.</b> Номер человек называет целиком («восьмая»), и подстрока
+     * от него находит чужие документы; имя клиента и код детали называют
+     * по памяти и по кускам.
+     *
+     * <p>Вместо курсора — растущий предел, как у реестра возвратов: список
+     * читают с конца и вглубь не листают, и {@code OFFSET} здесь всегда ноль.
+     *
+     * <p>Себестоимости и наценки в строке нет: это отчёты владельца, а список
+     * открыт продавцу.
+     *
+     * @param statuses воронка; пусто — все состояния разом. Группировку задаёт
+     *                 экран ({@code DEAL_FUNNEL}), сервер отбирает по набору —
+     *                 иначе имена воронок пришлось бы знать обеим сторонам,
+     *                 и они разошлись бы на первой правке
+     * @param query    поиск: точное совпадение по номеру сделки, вхождение —
+     *                 по имени клиента и по публичному коду детали
+     * @param managerId непусто — только сделки этого сотрудника (отбор «мои»)
+     * @param limit    сколько строк вернуть
+     */
+    @Transactional(readOnly = true)
+    public DealsPage listDeals(List<DealStatus> statuses, String query, Long managerId, int limit) {
+        StringBuilder where = new StringBuilder(" WHERE 1=1");
+        List<Object> args = new ArrayList<>();
+        if (!statuses.isEmpty()) {
+            where.append(" AND d.status IN (")
+                    .append(String.join(", ", java.util.Collections.nCopies(statuses.size(), "?")))
+                    .append(")");
+            statuses.forEach(status -> args.add(status.name()));
+        }
+        if (managerId != null) {
+            where.append(" AND d.manager_id = ?");
+            args.add(managerId);
+        }
+        if (query != null && !query.isBlank()) {
+            String term = query.strip();
+            String like = "%" + term + "%";
+            List<String> branches = new ArrayList<>();
+            Long number = parseNumber(term);
+            if (number != null) {
+                branches.add("SELECT id FROM deal WHERE number = ?");
+                args.add(number);
+            }
+            branches.add("SELECT d2.id FROM deal d2"
+                    + " JOIN customer c2 ON c2.id = d2.customer_id"
+                    + " WHERE c2.name ILIKE ?");
+            args.add(like);
+            branches.add("SELECT i.deal_id FROM deal_item i"
+                    + " JOIN part p ON p.id = i.part_id"
+                    + " WHERE p.public_code ILIKE ?");
+            args.add(like);
+            where.append(" AND d.id IN (").append(String.join(" UNION ", branches)).append(")");
+        }
+
+        // Разделители — явной строкой, а не отступом текстового блока:
+        // записанная ловушка модуля, из-за которой «r.reason» + joins однажды
+        // склеилось в «r.reasonFROM». Компилятор про это молчит всегда.
+        String joins = " FROM deal d"
+                + " LEFT JOIN customer c ON c.id = d.customer_id"
+                + " LEFT JOIN tenant_member m ON m.id = d.manager_id";
+
+        long total = jdbc.queryForObject("SELECT count(*)" + joins + where,
+                Long.class, args.toArray());
+
+        List<Object> rowArgs = new ArrayList<>(args);
+        rowArgs.add(limit);
+        List<DealListRow> rows = jdbc.query(
+                "SELECT d.id, d.number, d.created_at, d.customer_id, c.name AS customer_name,"
+                        + " d.total_amount, d.paid_amount, d.status, d.reserved_until,"
+                        + " d.manager_id, m.display_name AS manager_name"
+                        + joins + where
+                        + " ORDER BY d.id DESC LIMIT ?",
+                (rs, i) -> new DealListRow(
+                        rs.getLong("id"), rs.getLong("number"),
+                        rs.getTimestamp("created_at").toInstant(),
+                        (Long) rs.getObject("customer_id"), rs.getString("customer_name"),
+                        rs.getBigDecimal("total_amount"), rs.getBigDecimal("paid_amount"),
+                        DealStatus.valueOf(rs.getString("status")),
+                        rs.getTimestamp("reserved_until") == null
+                                ? null : rs.getTimestamp("reserved_until").toInstant(),
+                        (Long) rs.getObject("manager_id"), rs.getString("manager_name")),
+                rowArgs.toArray());
+
+        return new DealsPage(rows, total);
+    }
+
+    /**
+     * Строка списка сделок.
+     *
+     * <p>Имя ответственного берётся {@code LEFT JOIN}'ом, а не картой имён
+     * поверх выдачи: у сделки без ответственного (сотрудника удалили, заказ
+     * с площадки ещё не принят) карта уже дважды оборачивалась пятисоткой —
+     * {@code Map.of().get(null)} бросает {@code NullPointerException}.
+     * Соединение такой ловушки не имеет вовсе.
+     *
+     * @param customerName пусто — у сделки нет клиента (заказ с площадки);
+     *                     экран показывает это словами
+     * @param reservedUntil срок резерва (задача 0012). Показывается только
+     *                      у отложенной: у выданной и отменённой он уже
+     *                      ни о чём, а дата рядом с ними читается как
+     *                      обещание, которого никто не давал
+     * @param managerName  пусто — ответственного нет
+     */
+    public record DealListRow(Long id, Long number, Instant createdAt,
+                              Long customerId, String customerName,
+                              BigDecimal totalAmount, BigDecimal paidAmount,
+                              DealStatus status, Instant reservedUntil,
+                              Long managerId, String managerName) {
+    }
+
+    /**
+     * @param total сколько нашлось по отбору — список обрезан пределом,
+     *              и подвал обязан назвать, сколько показано из скольких
+     */
+    public record DealsPage(List<DealListRow> items, long total) {
+    }
+
+    /**
      * Платежи клиента: касса, а не движения лицевого счёта.
      *
      * <p>Вкладка «Платежи» карточки клиента (задача 0022) показывает их рядом
