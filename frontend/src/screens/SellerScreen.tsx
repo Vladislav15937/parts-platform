@@ -38,6 +38,7 @@ import {
   transferable,
   transferItems,
 } from '../sales/sales';
+import { dealItemStatusName, dealStatusNameLower } from '../sales/dealStatus';
 import type { CustomerAccount,
   HistoryEntry,
   DealSource as DealSourceRow,
@@ -825,7 +826,7 @@ function DealFinder({
             return (
               <li key={d.id}>
                 <button type="button" className="button--ghost" onClick={() => onPick(d)}>
-                  №{d.number ?? d.id} · {statusName(d.status)}
+                  №{d.number ?? d.id} · {dealStatusNameLower(d.status)}
                   {line !== null && (
                     <span className={line.expired ? 'note--error' : 'muted'}>
                       {line.expired ? ' · срок истёк' : ` · до ${line.day}`}
@@ -994,7 +995,7 @@ function DealCard({
     <>
       <hr />
       <h3>
-        Сделка №{deal.number ?? deal.id} · {statusName(deal.status)}
+        Сделка №{deal.number ?? deal.id} · {dealStatusNameLower(deal.status)}
       </h3>
 
       {/* Срок резерва — сразу под номером, как у ориентира. Без него карточка
@@ -1062,7 +1063,7 @@ function DealCard({
               {item.title ?? `деталь ${item.partId}`}
               <span className="muted">
                 {' '}
-                · {Number(item.quantity)} шт · {itemStatusName(item.status)}
+                · {Number(item.quantity)} шт · {dealItemStatusName(item.status)}
               </span>
             </label>
             <div className="stock-action">
@@ -1613,16 +1614,6 @@ function todayISO(): string {
   ].join('-');
 }
 
-function itemStatusName(status: string): string {
-  const names: Record<string, string> = {
-    RESERVED: 'отложена',
-    ISSUED: 'выдана',
-    RETURNED: 'возвращена',
-    CANCELLED: 'снята',
-  };
-  return names[status] ?? status.toLowerCase();
-}
-
 /**
  * Что мешает принять оплату — словами, или `null`, если ничто не мешает.
  *
@@ -1636,7 +1627,7 @@ function paymentObstacle(
   deal: Deal, debt: number, entered: string, payment: number,
 ): string | null {
   if (deal.status === 'CANCELLED' || deal.status === 'RETURNED') {
-    return `Сделка ${statusName(deal.status)} — платить по ней не за что.`;
+    return `Сделка ${dealStatusNameLower(deal.status)} — платить по ней не за что.`;
   }
   if (!(debt > 0)) {
     return 'Долг закрыт — принимать по этой сделке нечего.';
@@ -1648,17 +1639,6 @@ function paymentObstacle(
     return 'Оплата на ноль ничего не меняет — впишите сумму больше нуля.';
   }
   return null;
-}
-
-function statusName(status: string): string {
-  const names: Record<string, string> = {
-    DRAFT: 'черновик',
-    RESERVED: 'отложена',
-    ISSUED: 'выдана',
-    CANCELLED: 'отменена',
-    RETURNED: 'возвращена',
-  };
-  return names[status] ?? status.toLowerCase();
 }
 
 /**
