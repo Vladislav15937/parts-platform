@@ -108,6 +108,114 @@ public class ReportService {
     }
 
     /**
+     * Деньги по источникам платежа за месяц: сколько прошло наличными,
+     * сколько картой, сколько осталось в долг.
+     *
+     * <p><b>Группируется по самому источнику, а не по его типу.</b> У владельца
+     * бывает две карты разных банков, и «Карта Сбер» против «Карта Т-Банк» —
+     * разные строки, хотя тип у обеих один: по типу он не сверяет выписку.
+     *
+     * <p><b>Архивный источник из отчёта не исчезает.</b> Отбор идёт по платежам,
+     * а не по справочнику: платежи по снятому с работы способу были, и период
+     * бывает прошлым. Отфильтруй мы `is_archived`, месяц молча недосчитался бы
+     * их суммы — то есть отчёт перестал бы сходиться ровно тогда, когда
+     * владелец наводит порядок в справочнике.
+     *
+     * <p><b>Платёж без источника — своя строка, а не выброшенный.</b> До задачи
+     * 0024 источник не писали вовсе, и таких платежей у переехавшего клиента
+     * целая история. Выкинь их отбором — сумма по строкам перестанет сходиться
+     * с итогом за тот же период, и владелец получит два разных ответа
+     * на один вопрос. Поэтому связь со справочником — `LEFT JOIN`.
+     *
+     * <p>Приход и расход разными числами: сумма у платежа всегда положительная,
+     * знак несёт {@code direction}. Сложенные вместе, возврат из кассы и приём
+     * денег дали бы «прошло наличными» больше, чем было на самом деле.
+     *
+     * <p>Старая колонка {@code payment_type} (`CASH`/`CARD`/…) здесь намеренно
+     * не используется: она перечисляла способы до появления справочника
+     * и двух карт разных банков не различает вовсе.
+     */
+    @Transactional(readOnly = true)
+    public List<PaymentSourceRow> paymentsBySource(YearMonth month) {
+        return jdbc.query("""
+                SELECT p.payment_source_id                                             AS source_id,
+                       ps.name                                                         AS source_name,
+                       ps.source_type                                                  AS source_type,
+                       COALESCE(ps.is_archived, false)                                 AS archived,
+                       count(*)                                                        AS payments,
+                       COALESCE(sum(p.amount) FILTER (WHERE p.direction = 'IN'), 0)    AS incoming,
+                       COALESCE(sum(p.amount) FILTER (WHERE p.direction = 'OUT'), 0)   AS outgoing
+                  FROM payment p
+                  LEFT JOIN payment_source ps ON ps.id = p.payment_source_id
+                 WHERE p.paid_at >= ?::date
+                   AND p.paid_at < ?::date
+                 GROUP BY p.payment_source_id, ps.name, ps.source_type, ps.is_archived
+                 ORDER BY incoming DESC, outgoing DESC, source_name NULLS LAST""",
+                (rs, i) -> new PaymentSourceRow(
+                        rs.getObject("source_id", Long.class),
+                        rs.getString("source_name"),
+                        rs.getString("source_type"),
+                        rs.getBoolean("archived"),
+                        rs.getInt("payments"),
+                        rs.getBigDecimal("incoming"),
+                        rs.getBigDecimal("outgoing")),
+                month.atDay(1), month.plusMonths(1).atDay(1));
+    }
+
+    /**
+     * Итог по деньгам за тот же месяц — отдельным запросом, а не суммой строк.
+     *
+     * <p>В этом весь смысл проверки: сложенные на экране строки сойдутся сами
+     * с собой при любом отборе, а разъехавшуюся выборку показывает только число,
+     * посчитанное независимо — по всем платежам периода, без группировки
+     * и без справочника.
+     */
+    @Transactional(readOnly = true)
+    public PaymentTotals paymentTotals(YearMonth month) {
+        return jdbc.queryForObject("""
+                SELECT count(*)                                                      AS payments,
+                       COALESCE(sum(amount) FILTER (WHERE direction = 'IN'), 0)      AS incoming,
+                       COALESCE(sum(amount) FILTER (WHERE direction = 'OUT'), 0)     AS outgoing
+                  FROM payment
+                 WHERE paid_at >= ?::date
+                   AND paid_at < ?::date""",
+                (rs, i) -> new PaymentTotals(
+                        rs.getInt("payments"),
+                        rs.getBigDecimal("incoming"),
+                        rs.getBigDecimal("outgoing")),
+                month.atDay(1), month.plusMonths(1).atDay(1));
+    }
+
+    /**
+     * @param sourceName пусто — способ у платежа не записан. Отдельная строка,
+     *                   а не «прочее»: это незаполненное поле, и пока таких
+     *                   платежей много, остальным строкам верить нельзя
+     * @param archived   источник снят с работы. Из отчёта он не уходит:
+     *                   платежи по нему были, и период бывает прошлым
+     * @param total      приход минус расход — то, что этим способом реально
+     *                   осталось у владельца за месяц
+     */
+    public record PaymentSourceRow(Long sourceId, String sourceName, String sourceType,
+                                   boolean archived, int payments,
+                                   BigDecimal incoming, BigDecimal outgoing, BigDecimal total) {
+
+        public PaymentSourceRow(Long sourceId, String sourceName, String sourceType,
+                                boolean archived, int payments,
+                                BigDecimal incoming, BigDecimal outgoing) {
+            this(sourceId, sourceName, sourceType, archived, payments,
+                    incoming, outgoing, incoming.subtract(outgoing));
+        }
+    }
+
+    public record PaymentTotals(int payments, BigDecimal incoming, BigDecimal outgoing,
+                                BigDecimal total) {
+
+        public PaymentTotals(int payments, BigDecimal incoming, BigDecimal outgoing) {
+            this(payments, incoming, outgoing, incoming.subtract(outgoing));
+        }
+    }
+
+    /**
      * Окупаемость доноров: сколько вложено, сколько выручено, сколько ещё лежит.
      *
      * <p>Убыточные сверху — это то, на что владелец смотрит. Но «убыток»

@@ -44,6 +44,14 @@ describe('сводка на экране отчётов', () => {
       if (url.includes('/reports/donors')) {
         return json({ totals: { donors: 0, totalCost: 0, revenue: 0, stockValue: 0 }, rows: [] });
       }
+      // Платежи по источникам едут с итогом: общий ответ ниже его не несёт,
+      // а экран читает поля итога напрямую — как у машин и у расчётов.
+      if (url.includes('/reports/payments')) {
+        return json({
+          month: '2026-08', rows: [],
+          totals: { payments: 0, incoming: 0, outgoing: 0, total: 0 },
+        });
+      }
       return json({ month: '2026-08', rows: [] });
     }));
   });

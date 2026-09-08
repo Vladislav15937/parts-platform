@@ -36,6 +36,13 @@ describe('склонение на экране отчётов', () => {
       if (url.includes('/reports/sources')) {
         return json({ month: '2026-08', rows: [] });
       }
+      // Платежи по источникам едут с итогом — общий ответ ниже его не несёт.
+      if (url.includes('/reports/payments')) {
+        return json({
+          month: '2026-08', rows: [],
+          totals: { payments: 0, incoming: 0, outgoing: 0, total: 0 },
+        });
+      }
       if (url.includes('/reports/summary')) {
         return json({
           parts: { qty: 0, amount: 0 },
