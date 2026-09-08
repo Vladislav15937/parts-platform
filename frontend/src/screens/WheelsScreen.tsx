@@ -25,6 +25,7 @@ import type { SetRequest, WheelPage, WheelQuery, WheelRow } from '../inventory/w
 import { PartCard } from './PartCard';
 import { ColumnMenu } from './ColumnMenu';
 import { BulkEditForm } from './BulkEditForm';
+import { EXPORT_ROLES } from './tabs';
 
 /**
  * Шины и диски: своя вкладка, как в кабинете Bazon.
@@ -248,10 +249,15 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
           </button>
         )}
         {/* Ссылкой, а не кнопкой с запросом: файл качает браузер, показывая
-            ход, и вкладка при этом жива. */}
-        <a className="button--ghost" href={wheelExportUrl(query)} download>
-          Скачать таблицу
-        </a>
+            ход, и вкладка при этом жива.
+
+            Роли те же, что у выгрузки склада, и по той же причине: вкладку
+            смотрят все вошедшие, а файл — это опись имущества. */}
+        {EXPORT_ROLES.includes(role) && (
+          <a className="button--ghost" href={wheelExportUrl(query)} download>
+            Скачать таблицу
+          </a>
+        )}
       </div>
 
       {/* Панель показывается на весь режим правки, а не с первого выбранного:

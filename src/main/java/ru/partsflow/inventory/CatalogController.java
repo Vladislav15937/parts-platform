@@ -33,6 +33,29 @@ public class CatalogController {
     /** Больше двухсот строк за раз не отдаём: экран столько всё равно не покажет. */
     private static final int MAX_SIZE = 200;
 
+    /**
+     * Кто скачивает склад одним файлом.
+     *
+     * <p>Витрина открыта всем вошедшим — продавцу нужна цена и наличие,
+     * кладовщику полка, — а файл это другое: опись всего имущества разборки
+     * одним нажатием. Первые десять клиентов — компании из одного города,
+     * которые общаются между собой, и ушедший кладовщик с таким файлом
+     * это готовый прайс конкурента. Себестоимости в нём нет
+     * (`CatalogService.exportHeader` пройден построчно), но есть вся
+     * номенклатура с ценами, поставками, заметками и остатками
+     * по каждому складу.
+     *
+     * <p>Список — тот же, что у отчётов: решение владельца продукта
+     * от 9 сентября 2026, `tasks/0050-vygruzka-sklada-dostupna-vsem.md`.
+     *
+     * <p><b>Это заплатка, и названа заплаткой намеренно.</b> Задача 0044
+     * заменяет жёсткие роли полномочиями; когда она придёт, проверка
+     * становится полномочием «скачивать таблицу» и роли отсюда уходят.
+     * Оставить оба способа значит решать одно двумя местами, которые
+     * разойдутся на первой правке.
+     */
+    static final String EXPORTS = "hasAnyRole('OWNER','MANAGER')";
+
     private final CatalogService catalog;
     private final PhotoStorage storage;
     private final PartService parts;
@@ -255,7 +278,15 @@ public class CatalogController {
         return columns;
     }
 
+    /**
+     * Выгрузка витрины в таблицу.
+     *
+     * <p>Проверка роли стоит аннотацией, то есть до `getOutputStream()`:
+     * отдав первый байт, статус уже не сменить — отказ уехал бы двухсотым
+     * с пустым файлом.
+     */
     @GetMapping("/export")
+    @PreAuthorize(EXPORTS)
     public void export(@RequestParam(required = false) String q,
                        @RequestParam(defaultValue = "true") boolean reserved,
                        @RequestParam(defaultValue = "false") boolean missing,

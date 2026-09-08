@@ -76,8 +76,15 @@ public class WheelController {
      * <p>Ссылкой, а не запросом из скрипта: файл качает браузер, показывая
      * ход, и вкладка при этом жива. Отбор тот же, что у страницы — скачанный
      * файл обязан совпасть с тем, что владелец видел на экране.
+     *
+     * <p>Роли те же, что у выгрузки склада, и по той же причине: вкладка
+     * открыта всем вошедшим, а файл — опись имущества. Список общий
+     * с `CatalogController.EXPORTS`, чтобы две выгрузки одного склада
+     * не разъехались на первой правке. Проверка стоит аннотацией, то есть
+     * до `getOutputStream()`: отдав первый байт, статус уже не сменить.
      */
     @GetMapping("/export")
+    @PreAuthorize(CatalogController.EXPORTS)
     public void export(@RequestParam(required = false) String q,
                        @RequestParam(required = false) String kind,
                        @RequestParam(defaultValue = "false") boolean missing,
