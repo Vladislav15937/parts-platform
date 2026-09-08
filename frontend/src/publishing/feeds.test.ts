@@ -23,7 +23,13 @@ function feed(overrides: Partial<Feed> = {}): Feed {
     // а не незаполненное поле.
     feedFileName: null,
     productLine: 'PART',
-    settings: { pricePercent: null, priceRounding: null, photoLimit: null },
+    settings: {
+      pricePercent: null,
+      priceRounding: null,
+      photoLimit: null,
+      installationNote: null,
+      installationTemplate: null,
+    },
     lastError: null,
     lastDownloadAt: null,
     // Живая: удалённая в обычный список не приходит вовсе.

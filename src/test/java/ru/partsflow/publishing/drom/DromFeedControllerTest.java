@@ -748,6 +748,123 @@ class DromFeedControllerTest extends PostgresTestBase {
     }
 
     /**
+     * Стоимость установки дописывается к описанию объявления.
+     *
+     * <p><b>Зачем.</b> Поле «Цена установки» есть в карточке и даже в отборе
+     * выгрузки, а до объявления не доезжало ни одной строкой: услуга заведена,
+     * стоит денег и невидима там, где её покупают.
+     *
+     * <p>Проверяется вся дорога разом — экран сохраняет настройку, она ложится
+     * в {@code marketplace_account.settings}, оттуда её читает выдача прайса, —
+     * и четыре состояния, каждое из которых на живом складе встречается:
+     * позиция с ценой установки, позиция без неё, позиция с нулём (в выгрузке
+     * прежней системы незаполненная «Установка» приходит именно нулём)
+     * и соседняя выгрузка, которая приписку не включала.
+     */
+    @Test
+    @DisplayName("Стоимость установки уезжает в описание только там, где включена")
+    void installationNoteBelongsToTheFeed() throws Exception {
+        // Своё имя на каждый прогон: позиции между прогонами не чистятся —
+        // журнал движений неизменяем, приход не удалить.
+        String run = java.util.UUID.randomUUID().toString().substring(0, 8);
+        String priced = "Прайс: услуга есть " + run;
+        String unpriced = "Прайс: услуги нет " + run;
+        String zeroed = "Прайс: услуга нулём " + run;
+
+        inTenant(TENANT, () -> {
+            jdbc.update("UPDATE part SET installation_price = 1500 WHERE id = ?",
+                    pricedPartId(priced, 6000));
+            pricedPartId(unpriced, 6100);
+            jdbc.update("UPDATE part SET installation_price = 0 WHERE id = ?",
+                    pricedPartId(zeroed, 6200));
+            return null;
+        });
+
+        Long noteId = inTenant(TENANT, () -> jdbc.queryForObject("""
+                INSERT INTO marketplace_account (marketplace, title, settings)
+                VALUES ('DROM', 'Дром: с установкой', '{"packetId":"558"}'::jsonb)
+                RETURNING id""", Long.class));
+        String noteFeed = rotate(noteId);
+
+        assertThat(offerOf(feedOf(noteFeed), priced))
+                .as("приписка появилась в прайсе до того, как её включили")
+                .doesNotContain("Стоимость установки");
+
+        // Включает владелец с экрана, а не запросом в базу: настройка без
+        // места, откуда ею воспользоваться, — это отсутствующая возможность.
+        mvc.perform(put("/api/marketplace-accounts/" + noteId + "/settings")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"installationNote": true,
+                                 "installationTemplate":
+                                   "Стоимость установки на нашем автосервисе: {цена} р."}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.settings.installationNote").value(true));
+
+        String feed = feedOf(noteFeed);
+
+        assertThat(offerOf(feed, priced))
+                .as("цена установки так и не доехала до объявления")
+                .contains("Стоимость установки на нашем автосервисе: 1500 р.");
+        assertThat(offerOf(feed, unpriced))
+                .as("у позиции без цены установки в объявлении появилась строка "
+                        + "про услугу, которой нет")
+                .doesNotContain("Стоимость установки");
+        assertThat(offerOf(feed, zeroed))
+                .as("ноль прочитан как «бесплатно»: объявление обещает покупателю "
+                        + "работу даром от лица разборки, которая её не обещала")
+                .doesNotContain("Стоимость установки");
+
+        // Соседняя выгрузка приписку не включала: появление настройки
+        // не должно менять чужие прайсы молча.
+        assertThat(offerOf(feedOf(feedPath), priced))
+                .as("приписка уехала в выгрузку, у которой её не включали")
+                .doesNotContain("Стоимость установки");
+
+        // Выключение — это отсутствие строки, а не пустая «Стоимость установки:».
+        mvc.perform(put("/api/marketplace-accounts/" + noteId + "/settings")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"installationNote": false,
+                                 "installationTemplate":
+                                   "Стоимость установки на нашем автосервисе: {цена} р."}"""))
+                .andExpect(status().isOk());
+
+        assertThat(offerOf(feedOf(noteFeed), priced))
+                .as("выключенная приписка продолжает уезжать в объявление")
+                .doesNotContain("Стоимость установки");
+    }
+
+    /**
+     * Текст приписки без подстановки цены отбивается словами.
+     *
+     * <p>Пропущенный, он даёт включённую настройку, которая не делает того,
+     * ради чего её включили: покупатель читает про стоимость установки
+     * и не видит суммы, а владелец узнаёт об этом с чужого сайта.
+     */
+    @Test
+    @DisplayName("Приписка без подстановки цены не сохраняется")
+    void installationTemplateWithoutPlaceholderIsRefused() throws Exception {
+        mvc.perform(put("/api/marketplace-accounts/" + accountId + "/settings")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"installationNote\":true,"
+                                + "\"installationTemplate\":\"Установка недорого\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("{цена}")));
+    }
+
+    /** Прайс целиком: тело ответа по постоянной ссылке выгрузки. */
+    private String feedOf(String path) throws Exception {
+        return mvc.perform(get(path))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+    }
+
+    /**
      * Отрицательное число снимков отбивается словами, а не пятисоткой
      * посреди файла.
      *

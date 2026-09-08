@@ -61,7 +61,16 @@ describe('наценка на прайс-лист', () => {
     // в нём, и сохранять их одной кнопкой значит не знать, что не сохранилось.
     expect(saved?.url).toContain('/api/marketplace-accounts/7/settings');
     expect(saved?.body, 'наценка не доехала до сервера — прайс уедет прежней ценой')
-      .toEqual({ pricePercent: '10', priceRounding: '10', photoLimit: null });
+      .toEqual({
+        pricePercent: '10',
+        priceRounding: '10',
+        photoLimit: null,
+        // Приписка про установку уезжает тем же телом: настройки кладутся
+        // слиянием по составу объекта, и кнопка, отправляющая одну наценку,
+        // стёрла бы текст, который владелец сам написал.
+        installationNote: false,
+        installationTemplate: 'Стоимость установки на нашем автосервисе: {цена} р.',
+      });
   });
 
   it('стёртое поле означает «как на складе», а не ноль', async () => {
@@ -76,7 +85,13 @@ describe('наценка на прайс-лист', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить цену прайса' }));
 
     await waitFor(() => expect(saved).not.toBeNull());
-    expect(saved?.body).toEqual({ pricePercent: null, priceRounding: null, photoLimit: null });
+    expect(saved?.body).toEqual({
+      pricePercent: null,
+      priceRounding: null,
+      photoLimit: null,
+      installationNote: false,
+      installationTemplate: 'Стоимость установки на нашем автосервисе: {цена} р.',
+    });
   });
 
   it('заданная наценка видна в полях, а не только в базе', async () => {

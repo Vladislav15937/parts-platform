@@ -59,8 +59,16 @@ describe('число снимков в объявлении', () => {
     expect(saved?.url).toContain('/api/marketplace-accounts/7/settings');
     // Наценка обязана уехать в том же теле: настройки кладутся слиянием
     // по составу объекта, и без неё прайс-лист потерял бы свои −20 %.
+    // Приписка про установку — там же и по той же причине: сохранив число
+    // снимков, владелец не должен потерять текст, который сам написал.
     expect(saved?.body, 'сохранение числа снимков стёрло наценку выгрузки')
-      .toEqual({ pricePercent: '-20', priceRounding: null, photoLimit: '3' });
+      .toEqual({
+        pricePercent: '-20',
+        priceRounding: null,
+        photoLimit: '3',
+        installationNote: true,
+        installationTemplate: 'Поставим за {цена} ₽',
+      });
   });
 
   it('ноль уезжает нулём, а не пустотой', async () => {
@@ -101,7 +109,13 @@ describe('число снимков в объявлении', () => {
       feedFileName: null,
       lastError: null,
       lastDownloadAt: null,
-      settings: { pricePercent: -20, priceRounding: null, photoLimit: 4 },
+      settings: {
+        pricePercent: -20,
+        priceRounding: null,
+        photoLimit: 4,
+        installationNote: true,
+        installationTemplate: 'Поставим за {цена} ₽',
+      },
       priceFrom: null,
       priceTo: null,
       conditions: [],
