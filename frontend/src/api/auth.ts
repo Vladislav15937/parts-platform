@@ -5,7 +5,7 @@ export interface Me {
   memberId: number;
   login: string;
   displayName: string;
-  role: 'OWNER' | 'MANAGER' | 'STOREKEEPER' | 'SELLER' | 'VIEWER';
+  role: 'OWNER' | 'MANAGER' | 'STOREKEEPER' | 'SELLER' | 'VIEWER' | 'AUDITOR';
   companySchema: string;
 }
 

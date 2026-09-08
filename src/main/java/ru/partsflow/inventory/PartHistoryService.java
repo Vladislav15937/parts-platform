@@ -1,6 +1,6 @@
 package ru.partsflow.inventory;
 
-import ru.partsflow.shared.SupplyKinds;
+import ru.partsflow.shared.AuditedColumns;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,71 +48,21 @@ import java.util.Set;
 public class PartHistoryService {
 
     /**
-     * Поля, изменение которых видно человеку, и как они называются.
+     * Поля, изменение которых видно человеку, и как они называются, —
+     * в {@code shared.AuditedColumns}, а не здесь.
      *
-     * <p>Порядок задаёт порядок вывода внутри одной правки: сначала то, ради
-     * чего карточку чаще всего и открывают.
+     * <p>Тот же словарь читает журнал действий организации
+     * ({@code platform.audit.OrganizationAuditService}): владелец, увидевший
+     * там «Оценка состояния», открывает эту карточку и обязан увидеть то же
+     * слово. Копия разошлась бы не в момент копирования, а позже — когда
+     * правят одну из двух.
+     *
+     * <p>Себестоимость и минимальная цена — деньги владельца, а карточку
+     * открывает и продавец: они не «скрываются на экране», а не приезжают
+     * с сервера. Остаток же и статус не показываются в первой ленте вовсе —
+     * они целиком во второй, и дублировать их значит вернуть ту самую кашу,
+     * ради которой лент две.
      */
-    private static final Map<String, String> FIELDS = new LinkedHashMap<>();
-
-    static {
-        FIELDS.put("price", "Цена");
-        FIELDS.put("min_price", "Минимальная цена");
-        FIELDS.put("cost_price", "Себестоимость");
-        FIELDS.put("installation_price", "Стоимость установки");
-        FIELDS.put("title", "Наименование");
-        FIELDS.put("condition", "Состояние");
-        FIELDS.put("quality_grade", "Оценка состояния");
-        FIELDS.put("description", "Комментарий");
-        FIELDS.put("note", "Заметка");
-        FIELDS.put("section", "Секция");
-        FIELDS.put("is_published", "Выгружать");
-        FIELDS.put("storage_cell_id", "Ячейка");
-        FIELDS.put("donor_id", "Донор");
-        FIELDS.put("part_kind_id", "Вид детали");
-        FIELDS.put("supply_id", "Поставка");
-        FIELDS.put("manufacturer", "Производитель");
-        FIELDS.put("marking", "Маркировка");
-        FIELDS.put("color", "Цвет");
-        FIELDS.put("barcode", "Ст. баркод");
-        FIELDS.put("legacy_code", "Старые данные");
-        FIELDS.put("side_lr", "Левый / Правый");
-        FIELDS.put("side_fr", "Передний / Задний");
-        FIELDS.put("side_ud", "Верхний / Нижний");
-        FIELDS.put("video_url", "Видео");
-        FIELDS.put("text_block", "Текстовый блок");
-        FIELDS.put("weight_kg", "Вес, кг");
-        FIELDS.put("length_mm", "Длина, мм");
-        FIELDS.put("width_mm", "Ширина, мм");
-        FIELDS.put("height_mm", "Высота, мм");
-        FIELDS.put("package_weight_kg", "Вес в упаковке, кг");
-        FIELDS.put("package_length_mm", "Длина упаковки, мм");
-        FIELDS.put("package_width_mm", "Ширина упаковки, мм");
-        FIELDS.put("package_height_mm", "Высота упаковки, мм");
-        FIELDS.put("product_line", "Вид товара");
-    }
-
-    /** Деньги владельца: продавцу эти правки не отдаются вовсе. */
-    private static final Set<String> OWNER_ONLY = Set.of("cost_price", "min_price");
-
-    /** В снимке лежит идентификатор, человеку нужно имя. */
-    private static final Set<String> REFERENCES =
-            Set.of("storage_cell_id", "donor_id", "part_kind_id", "supply_id");
-
-    private static final Map<String, String> CONDITIONS =
-            Map.of("NEW", "Новая", "USED", "Б/у", "REFURBISHED", "Восстановленная");
-
-    private static final Map<String, String> GRADES = Map.of(
-            "AS_NEW", "Как новая", "NO_DEFECTS", "Без дефектов",
-            "WITH_DEFECTS", "С дефектами", "NEEDS_REPAIR", "Требует ремонт");
-
-    private static final Map<String, String> SIDES = Map.of(
-            "LEFT", "Левый", "RIGHT", "Правый", "FRONT", "Передний",
-            "REAR", "Задний", "UPPER", "Верхний", "LOWER", "Нижний");
-
-    private static final Map<String, String> LINES = Map.of(
-            "PART", "Запчасть", "TYRE", "Шина", "DISC", "Диск", "WHEEL", "Колесо");
-
     private static final Map<String, String> MOVEMENTS = Map.of(
             "INTAKE", "Поступление", "MOVE", "Перемещение", "SALE", "Продажа",
             "RETURN", "Возврат", "WRITE_OFF", "Списание",
@@ -140,32 +90,13 @@ public class PartHistoryService {
         return new History(changes(partId, money), movements(partId));
     }
 
-    /**
-     * Число приводится к общему виду — один раз и для сравнения, и для показа.
-     *
-     * <p>Снимки сравнивались текстом, а Postgres хранит {@code numeric} со своей
-     * точностью: правка цены, не тронувшая себестоимость, оставляла в ленте
-     * строку «Себестоимость: было 1200.00, стало 1200.0». Это одно и то же
-     * число в разном написании — и правка денег, которой не было, у поля,
-     * ради которого историю и открывают. Заодно уходит разнобой в показе:
-     * «было 4700.00, стало 5200» читается как две разные величины.
-     *
-     * <p>Нечисловое сравнивается и показывается как есть: заметка «1 200»
-     * с пробелом числом не является, и приводить её не к чему.
-     */
-    private static String normalized(String value) {
-        return "CASE WHEN " + value + " ~ '^-?[0-9]+(\\.[0-9]+)?$'"
-                + " THEN trim_scale((" + value + ")::numeric)::text"
-                + " ELSE " + value + " END";
-    }
-
     // ------------------------------------------------------------------ правки
 
     private List<Change> changes(long partId, boolean money) {
         String columns = String.join(",", visibleFields(money));
 
-        String was = normalized("a.old_value ->> f.key");
-        String now = normalized("a.new_value ->> f.key");
+        String was = AuditedColumns.normalized("a.old_value ->> f.key");
+        String now = AuditedColumns.normalized("a.new_value ->> f.key");
 
         List<Diff> diffs = jdbc.query("""
                         SELECT a.id, a.changed_at, m.display_name AS author, f.key,
@@ -197,9 +128,9 @@ public class PartHistoryService {
             Change change = byAudit.computeIfAbsent(diff.auditId(),
                     id -> new Change(diff.at(), diff.author(), null, new ArrayList<>()));
             Map<Long, String> lookup = titles.getOrDefault(diff.column(), Map.of());
-            change.fields().add(new Field(FIELDS.get(diff.column()),
-                    display(diff.column(), diff.was(), lookup),
-                    display(diff.column(), diff.now(), lookup)));
+            change.fields().add(new Field(AuditedColumns.PART.get(diff.column()),
+                    AuditedColumns.display(diff.column(), diff.was(), lookup),
+                    AuditedColumns.display(diff.column(), diff.now(), lookup)));
         }
 
         List<Change> changes = new ArrayList<>(byAudit.values());
@@ -208,8 +139,8 @@ public class PartHistoryService {
     }
 
     private List<String> visibleFields(boolean money) {
-        return FIELDS.keySet().stream()
-                .filter(column -> money || !OWNER_ONLY.contains(column))
+        return AuditedColumns.PART.keySet().stream()
+                .filter(column -> money || !AuditedColumns.MONEY.contains(column))
                 .toList();
     }
 
@@ -237,7 +168,7 @@ public class PartHistoryService {
     private Map<String, Map<Long, String>> resolveReferences(List<Diff> diffs) {
         Map<String, Set<Long>> wanted = new HashMap<>();
         for (Diff diff : diffs) {
-            if (!REFERENCES.contains(diff.column())) {
+            if (!AuditedColumns.REFERENCES.contains(diff.column())) {
                 continue;
             }
             Set<Long> ids = wanted.computeIfAbsent(diff.column(), k -> new LinkedHashSet<>());
@@ -246,35 +177,8 @@ public class PartHistoryService {
         }
 
         Map<String, Map<Long, String>> titles = new HashMap<>();
-        wanted.forEach((column, ids) -> titles.put(column, titlesOf(column, ids)));
+        wanted.forEach((column, ids) -> titles.put(column, AuditedColumns.titlesOf(jdbc, column, ids)));
         return titles;
-    }
-
-    private Map<Long, String> titlesOf(String column, Set<Long> ids) {
-        if (ids.isEmpty()) {
-            return Map.of();
-        }
-        String sql = switch (column) {
-            case "storage_cell_id" -> "SELECT id, code AS title FROM storage_cell WHERE id IN (%s)";
-            case "donor_id" -> """
-                    SELECT id, coalesce(legacy_code, public_code) AS title
-                      FROM donor WHERE id IN (%s)""";
-            case "part_kind_id" ->
-                    "SELECT id, name AS title FROM catalog.part_kind WHERE id IN (%s)";
-            case "supply_id" ->
-                    "SELECT id, " + SupplyKinds.sqlLabel("supply")
-                            + " AS title FROM supply WHERE id IN (%s)";
-            default -> null;
-        };
-        if (sql == null) {
-            return Map.of();
-        }
-        Map<Long, String> found = new HashMap<>();
-        jdbc.query(sql.formatted(placeholders(ids)),
-                (org.springframework.jdbc.core.RowCallbackHandler)
-                        rs -> found.put(rs.getLong("id"), rs.getString("title")),
-                ids.toArray());
-        return found;
     }
 
     private static void addId(Set<Long> into, String raw) {
@@ -286,33 +190,6 @@ public class PartHistoryService {
         } catch (NumberFormatException ignored) {
             // Не идентификатор — покажется как есть.
         }
-    }
-
-    private static String display(String column, String raw, Map<Long, String> lookup) {
-        if (raw == null) {
-            return null;
-        }
-        if (REFERENCES.contains(column)) {
-            try {
-                // Ссылка на то, чего уже нет, — не повод показать пустоту:
-                // номер говорит больше прочерка.
-                return lookup.getOrDefault(Long.parseLong(raw), "№" + raw);
-            } catch (NumberFormatException e) {
-                return raw;
-            }
-        }
-        return switch (column) {
-            case "condition" -> CONDITIONS.getOrDefault(raw, raw);
-            case "quality_grade" -> GRADES.getOrDefault(raw, raw);
-            case "side_lr", "side_fr", "side_ud" -> SIDES.getOrDefault(raw, raw);
-            case "product_line" -> LINES.getOrDefault(raw, raw);
-            case "is_published" -> "true".equals(raw) ? "да" : "нет";
-            default -> raw;
-        };
-    }
-
-    private static String placeholders(Collection<Long> ids) {
-        return String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
     }
 
     /**

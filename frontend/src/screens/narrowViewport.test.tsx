@@ -21,6 +21,7 @@ import { ReturnsScreen } from './ReturnsScreen';
 import { SellerScreen } from './SellerScreen';
 import { SettingsScreen } from './SettingsScreen';
 import { StockMovesScreen } from './StockMovesScreen';
+import { AuditJournalScreen } from './AuditJournalScreen';
 import { UnmatchedScreen } from './UnmatchedScreen';
 import { WheelsScreen } from './WheelsScreen';
 import { ReferencePanel } from '../reference/ReferencePanel';
@@ -284,11 +285,61 @@ const PAYMENTS = {
 const EMPTY: Record<string, unknown> = { total: 0, rows: [], warehouses: [], items: [] };
 
 /** Путь → ответ. Первое совпадение по вхождению, поэтому порядок значим. */
+/**
+ * Журнал действий: длинные строки клиента, а не удобные для теста.
+ *
+ * <p>Ширину этой таблицы задаёт самое длинное название детали и самое
+ * длинное имя сотрудника, а на прогонных «Фара» и «Иванов» экран
+ * укладывается в телефон при любой вёрстке — ровно так «Колёса» и уезжали
+ * вбок у клиента, оставаясь зелёными на стенде (задача 0041).
+ */
+const JOURNAL = {
+  total: 3,
+  capped: false,
+  more: true,
+  filterable: ['author', 'field'],
+  items: [
+    {
+      id: 3, at: '2026-09-08T17:42:00Z',
+      author: 'Владимир Петров', authorRole: 'MANAGER',
+      kind: 'Товар',
+      subject: 'Фара передняя левая Toyota Land Cruiser Prado 150 рестайлинг',
+      subjectCode: 'A7K3M2', context: null, action: null,
+      changes: [
+        { table: 'part', column: 'price', label: 'Цена', before: '5000', after: '4500' },
+        {
+          table: 'part', column: 'storage_cell_id', label: 'Ячейка',
+          before: 'Основной склад на Ткацкой, бокс 3 (второй этаж) — А-12',
+          after: 'Основной склад на Ткацкой, бокс 3 (второй этаж) — Б-04',
+        },
+      ],
+    },
+    {
+      id: 2, at: '2026-09-08T16:10:00Z',
+      author: null, authorRole: null,
+      kind: 'Сделка', subject: 'Мару Групп Владивосток', subjectCode: '№1274',
+      context: null, action: null,
+      changes: [
+        { table: 'deal', column: 'status', label: 'Состояние', before: 'RESERVED', after: 'CANCELLED' },
+      ],
+    },
+    {
+      id: 1, at: '2026-09-08T09:05:00Z',
+      author: 'Екатерина Александрова', authorRole: 'STOREKEEPER',
+      kind: 'Платёж', subject: null, subjectCode: 'запись №88',
+      context: 'Сделка №1274', action: 'Платёж записан', changes: [],
+    },
+  ],
+};
+
 const RESPONSES: Array<[string, unknown]> = [
   ['/api/intake/reference', REFERENCE],
   ['/api/intake/donors', DONORS],
   ['/api/catalog/vehicles', VEHICLES],
   ['/api/import/bazon/photos', { total: 0, pending: 0, broken: 0 }],
+  ['/api/organization/audit/values', ['Товар', 'Сделка', 'Позиция сделки',
+    'Платёж', 'Затрата по машине']],
+  ['/api/organization/audit', JOURNAL],
   ['/api/organization/warehouses', WAREHOUSES],
   ['/api/organization/branches', []],
   ['/api/reports/supplies', { rows: SUPPLIES }],
@@ -360,6 +411,7 @@ describe('на телефоне ни один раздел не уезжает �
       </>
     ),
     moves: () => <StockMovesScreen role="OWNER" />,
+    journal: () => <AuditJournalScreen />,
     outbox: () => (
       <OutboxScreen
         records={[{
