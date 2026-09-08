@@ -230,6 +230,31 @@ const REPORT = {
 };
 
 /**
+ * Платежи по источникам: пустой ответ не мерил бы ничего — ширину таблице
+ * задаёт самая длинная клетка. Названия здесь такие, какие владелец пишет
+ * себе сам («Интернет-эквайринг Авито доставка»), плюс строка без источника:
+ * такие платежи есть у каждого, кто переехал до задачи 0024.
+ */
+const PAYMENTS = {
+  month: '2026-08',
+  rows: [
+    {
+      sourceId: 1, sourceName: 'Карта Сбербанк 4276', sourceType: 'BANK_ACCOUNT',
+      archived: false, payments: 34, incoming: 402000, outgoing: 0, total: 402000,
+    },
+    {
+      sourceId: 2, sourceName: 'Интернет-эквайринг Авито доставка', sourceType: 'ACQUIRING',
+      archived: false, payments: 112, incoming: 315400, outgoing: 12500, total: 302900,
+    },
+    {
+      sourceId: null, sourceName: null, sourceType: null,
+      archived: false, payments: 7, incoming: 9600, outgoing: 0, total: 9600,
+    },
+  ],
+  totals: { payments: 153, incoming: 727000, outgoing: 12500, total: 714500 },
+};
+
+/**
  * Пустой ответ на всё остальное: сторож меряет раздел, а не его содержимое.
  * Списки приходят массивом, страницы и отчёты — объектом, и подсунуть одно
  * вместо другого значит проверить не тот путь.
@@ -245,6 +270,7 @@ const RESPONSES: Array<[string, unknown]> = [
   ['/api/organization/warehouses', WAREHOUSES],
   ['/api/organization/branches', []],
   ['/api/reports/supplies', { rows: SUPPLIES }],
+  ['/api/reports/payments', PAYMENTS],
   ['/api/reports/', REPORT],
   ['/api/members', MEMBERS],
   ['/api/marketplace-accounts', FEEDS],

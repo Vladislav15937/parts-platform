@@ -89,6 +89,14 @@ describe('разрез по машине на экране отчётов', () =
           deals: { count: 0, amount: 0, prepaid: 0 },
         });
       }
+      // Платежи по источникам едут с итогом: общий ответ ниже его не несёт,
+      // а экран читает поля итога напрямую — как у машин и у расчётов.
+      if (url.includes('/reports/payments')) {
+        return json({
+          month: '2026-08', rows: [],
+          totals: { payments: 0, incoming: 0, outgoing: 0, total: 0 },
+        });
+      }
       return json({ month: '2026-08', rows: [] });
     }));
   });

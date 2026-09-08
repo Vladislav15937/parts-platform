@@ -64,6 +64,33 @@ public class ReportController {
     }
 
     /**
+     * Деньги по источникам платежа за месяц.
+     *
+     * <p>Отвечает на вопрос «сколько прошло наличными, сколько картой, сколько
+     * осталось в долг» — не поднимая каждую сделку. До этого источник у платежа
+     * писался (задача 0024) и не читался нигде: возможность была закрыта
+     * наполовину.
+     *
+     * <p>Итог едет вместе со строками и считается независимо от них: сумма
+     * по источникам, не сходящаяся с итогом за тот же период, означает
+     * разъехавшиеся выборки, и увидеть это можно только рядом.
+     *
+     * @param month месяц вида {@code 2026-09}. Пусто — текущий, как и у
+     *              соседних отчётов: владелец смотрит их рядом
+     */
+    @GetMapping("/payments")
+    public PaymentReport payments(@RequestParam(required = false) String month) {
+        YearMonth period = parseMonth(month);
+        return new PaymentReport(period.toString(),
+                reports.paymentsBySource(period), reports.paymentTotals(period));
+    }
+
+    public record PaymentReport(String month,
+                                List<ReportService.PaymentSourceRow> rows,
+                                ReportService.PaymentTotals totals) {
+    }
+
+    /**
      * Сводка: сколько лежит на складе и сколько висит в незакрытых сделках.
      *
      * <p>Шесть чисел без единой настройки — намеренно. Это первое, что владелец
