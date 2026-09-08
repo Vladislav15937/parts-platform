@@ -1,7 +1,7 @@
 ---
 id: 0004
 title: Стоимость установки дописывается к описанию объявления
-status: готово
+status: слита
 assignee: coder
 source: разведка 05.09.2026, §9 bazon-parity
 pr: 74
