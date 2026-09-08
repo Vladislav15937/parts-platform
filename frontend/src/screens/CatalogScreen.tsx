@@ -23,6 +23,7 @@ import { BulkMoveForm } from './BulkMoveForm';
 import { count, goods } from '../ui/plural';
 import { ColumnMenu } from './ColumnMenu';
 import { VehiclePicker } from './VehiclePicker';
+import { EXPORT_ROLES } from './tabs';
 
 /**
  * Витрина склада: таблица товаров, как её видит владелец.
@@ -311,10 +312,17 @@ export function CatalogScreen({ role }: { role: string }) {
           </button>
         )}
         {/* Ссылкой, а не кнопкой с запросом: файл на двенадцать мегабайт
-            качает браузер, показывая ход, и вкладка при этом жива. */}
-        <a className="button--ghost" href={exportUrl(query)} download>
-          Скачать таблицу
-        </a>
+            качает браузер, показывая ход, и вкладка при этом жива.
+
+            Не всем, кому открыт экран: в файле вся номенклатура разом.
+            Прячется здесь и отбивается на сервере — спрятанная кнопка
+            при открытом адресе это не защита, а закрытый адрес при видимой
+            кнопке — обещание, которое не выполняется. */}
+        {EXPORT_ROLES.includes(role) && (
+          <a className="button--ghost" href={exportUrl(query)} download>
+            Скачать таблицу
+          </a>
+        )}
       </div>
 
       {/* Накладка со снимками — вне таблицы: внутри её обрезал бы контейнер

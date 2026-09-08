@@ -33,6 +33,9 @@ public class WheelController {
 
     private static final String INTAKES = "hasAnyRole('OWNER','MANAGER','STOREKEEPER')";
 
+    /** Кто скачивает вкладку таблицей. Тот же список у витрины склада и у отчётов. */
+    private static final String EXPORTS = "hasAnyRole('OWNER','MANAGER')";
+
     private final WheelService wheels;
     private final CatalogService catalog;
     private final PhotoStorage storage;
@@ -76,7 +79,14 @@ public class WheelController {
      * <p>Ссылкой, а не запросом из скрипта: файл качает браузер, показывая
      * ход, и вкладка при этом жива. Отбор тот же, что у страницы — скачанный
      * файл обязан совпасть с тем, что владелец видел на экране.
+     *
+     * <p>Владельцу и менеджеру — тем же, кому открыты отчёты, и по той же
+     * причине, что у витрины склада ({@code CatalogController.export}):
+     * вкладка открыта всем вошедшим, но один файл со всей номенклатурой —
+     * это опись имущества, а не просмотр цены. Заплатка до задачи 0044:
+     * там появится полномочие «скачивать таблицу», и роли отсюда уйдут.
      */
+    @PreAuthorize(EXPORTS)
     @GetMapping("/export")
     public void export(@RequestParam(required = false) String q,
                        @RequestParam(required = false) String kind,
