@@ -20,6 +20,7 @@ import {
   updateCustomer,
   withdrawFromAccount,
 } from '../sales/sales';
+import { dealStatusName } from '../sales/dealStatus';
 import type {
   CustomerAccount,
   CustomerDetail,
@@ -834,16 +835,6 @@ function DealsTab({
       </p>
     </>
   );
-}
-
-function dealStatusName(status: string): string {
-  switch (status) {
-    case 'DRAFT': return 'Черновик';
-    case 'RESERVED': return 'Отложена';
-    case 'ISSUED': return 'Выдана';
-    case 'CANCELLED': return 'Отменена';
-    default: return status;
-  }
 }
 
 /**

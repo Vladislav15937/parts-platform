@@ -707,24 +707,6 @@ export const DEAL_FUNNEL = [
 export type DealFunnelKey = (typeof DEAL_FUNNEL)[number]['key'];
 
 /**
- * Состояние сделки словом человека.
- *
- * <p>`READY` здесь нет намеренно: этот статус не ставит ни один путь системы
- * (`Deal.markReady` не зовут ниоткуда), и слово для состояния, которого
- * не бывает, было бы выдумкой. Появится — появится и оно.
- */
-export function dealStatusName(status: string): string {
-  const names: Record<string, string> = {
-    DRAFT: 'Черновик',
-    RESERVED: 'Отложена',
-    ISSUED: 'Выдана',
-    CANCELLED: 'Отменена',
-    RETURNED: 'Возвращена',
-  };
-  return names[status] ?? status;
-}
-
-/**
  * Строка списка сделок.
  *
  * <p>Себестоимости и наценки здесь нет: список открыт продавцу, а это

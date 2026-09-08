@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
   DEAL_FUNNEL,
-  dealStatusName,
   listDeals,
   reservationTerm,
 } from '../sales/sales';
+import { dealStatusName } from '../sales/dealStatus';
 import type { DealFunnelKey, DealListRow, DealsPage } from '../sales/sales';
 import { count, shown } from '../ui/plural';
 import { shortDate } from '../ui/shortDate';

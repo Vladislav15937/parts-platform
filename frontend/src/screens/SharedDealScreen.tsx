@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { request } from '../api/client';
+import { sharedDealStatusName } from '../sales/dealStatus';
 
 /**
  * Сделка глазами покупателя: то, что открывается по ссылке от продавца.
@@ -27,15 +28,6 @@ interface SharedDeal {
   debt: string;
   items: SharedItem[];
 }
-
-const STATUS: Record<string, string> = {
-  DRAFT: 'оформляется',
-  RESERVED: 'отложено',
-  READY: 'готово к выдаче',
-  ISSUED: 'выдано',
-  CANCELLED: 'отменено',
-  RETURNED: 'возвращено',
-};
 
 export function SharedDealScreen({ company, token }: { company: string; token: string }) {
   const [deal, setDeal] = useState<SharedDeal | null>(null);
@@ -70,7 +62,7 @@ export function SharedDealScreen({ company, token }: { company: string; token: s
       <h2>Заказ {deal.number === null ? '' : `№ ${deal.number}`}</h2>
 
       <p className="note">
-        {STATUS[deal.status] ?? deal.status}
+        {sharedDealStatusName(deal.status)}
         {deal.reservedUntil !== null && deal.status === 'RESERVED' && (
           <> до {new Date(deal.reservedUntil).toLocaleDateString('ru-RU')}</>
         )}
