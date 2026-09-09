@@ -5,6 +5,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.platform.session.LoginSessions;
+import ru.partsflow.platform.session.SessionRevocations;
+import ru.partsflow.platform.tenant.TenantContext;
 
 import java.time.Instant;
 import java.util.Collection;
@@ -46,10 +49,15 @@ public class MemberService {
 
     private final JdbcTemplate jdbc;
     private final PasswordEncoder passwordEncoder;
+    private final LoginSessions sessions;
+    private final SessionRevocations revocations;
 
-    public MemberService(JdbcTemplate jdbc, PasswordEncoder passwordEncoder) {
+    public MemberService(JdbcTemplate jdbc, PasswordEncoder passwordEncoder,
+                         LoginSessions sessions, SessionRevocations revocations) {
         this.jdbc = jdbc;
         this.passwordEncoder = passwordEncoder;
+        this.sessions = sessions;
+        this.revocations = revocations;
     }
 
     @Transactional
@@ -101,9 +109,21 @@ public class MemberService {
      * он не знает) либо сам сотрудник в уже подтверждённой сессии. Требовать
      * старый имеет смысл против угона сессии, но это отдельный разговор
      * и отдельный эндпоинт «сменить свой пароль».
+     *
+     * <p><b>Смена пароля закрывает сессии, и это главный её смысл.</b>
+     * «Смена пароля — всегда, это главный сценарий „меня взломали“»
+     * (docs/sessions.md, §6; ответы владельца продукта от 9 сентября 2026).
+     * Пока сессии оставались живыми, смена пароля не выгоняла угонщика вовсе:
+     * он продолжал работать под старой cookie до конца дня, а владелец считал,
+     * что доступ закрыт.
+     *
+     * @param actingSessionKey сессия, из которой меняют пароль: её оставляем
+     *                         работать. Наказывать выходом того, кто как раз
+     *                         всё сделал правильно, — верный способ отучить
+     *                         менять пароли
      */
     @Transactional
-    public void changePassword(Long memberId, String newPassword) {
+    public void changePassword(Long memberId, String newPassword, String actingSessionKey) {
         requirePassword(newPassword);
 
         int updated = jdbc.update("""
@@ -114,6 +134,7 @@ public class MemberService {
         if (updated == 0) {
             throw new IllegalArgumentException("Сотрудник не найден: " + memberId);
         }
+        revokeSessions(memberId, "смена пароля", actingSessionKey);
     }
 
     /**
@@ -133,6 +154,31 @@ public class MemberService {
         if (updated == 0) {
             throw new IllegalArgumentException("Сотрудник не найден: " + memberId);
         }
+        if (!active) {
+            // Выключенный сотрудник до этого дня доработывал смену: роль
+            // и признак «работает» лежат в сессии снимком, и выключение
+            // учётной записи их не касалось — оно закрывало только следующий
+            // вход. Уволенный уходил с открытым кабинетом.
+            revokeSessions(memberId, "сотрудник выключен", null);
+        }
+    }
+
+    /**
+     * Закрыть сессии сотрудника: в журнале и на самом деле.
+     *
+     * <p>Двумя действиями, и оба нужны. Запись в журнале отвечает на вопрос
+     * «почему его вышибло» через неделю; отметка в памяти закрывает доступ
+     * на ближайшем же запросе — сессия наблюдаема только тогда, когда с ней
+     * приходят, и раньше этого её не закрыть ничем.
+     *
+     * <p>Порядок такой: сначала журнал (он в транзакции и откатится вместе
+     * с ней), потом отметка. Обратный порядок при откате оставил бы закрытыми
+     * сессии сотрудника, которому пароль так и не сменили.
+     */
+    private void revokeSessions(Long memberId, String detail, String actingSessionKey) {
+        String schema = TenantContext.require();
+        sessions.revoke(schema, memberId, detail, actingSessionKey);
+        revocations.revoke(schema, memberId, actingSessionKey);
     }
 
     /**
