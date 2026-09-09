@@ -33,6 +33,36 @@ public class PhotoService {
     /** Сколько ждём подтверждения, прежде чем счесть загрузку оборванной. */
     private static final Duration ABANDONED_AFTER = Duration.ofHours(1);
 
+    /** Сколько знаков наименования оставляем в имени архива. */
+    private static final int NAME_LIMIT = 60;
+
+    /**
+     * Кириллица в латиницу для имени файла.
+     *
+     * <p>Имя уходит в мессенджер и на чужие устройства, а там кодировку
+     * имени файла в архиве и в заголовке ответа разбирают кто во что горазд:
+     * «Фара левая.zip» приезжает то вопросами, то «????». Латиница читается
+     * везде одинаково.
+     */
+    private static final java.util.Map<Character, String> TRANSLIT = java.util.Map.ofEntries(
+            java.util.Map.entry('а', "a"), java.util.Map.entry('б', "b"),
+            java.util.Map.entry('в', "v"), java.util.Map.entry('г', "g"),
+            java.util.Map.entry('д', "d"), java.util.Map.entry('е', "e"),
+            java.util.Map.entry('ё', "e"), java.util.Map.entry('ж', "zh"),
+            java.util.Map.entry('з', "z"), java.util.Map.entry('и', "i"),
+            java.util.Map.entry('й', "y"), java.util.Map.entry('к', "k"),
+            java.util.Map.entry('л', "l"), java.util.Map.entry('м', "m"),
+            java.util.Map.entry('н', "n"), java.util.Map.entry('о', "o"),
+            java.util.Map.entry('п', "p"), java.util.Map.entry('р', "r"),
+            java.util.Map.entry('с', "s"), java.util.Map.entry('т', "t"),
+            java.util.Map.entry('у', "u"), java.util.Map.entry('ф', "f"),
+            java.util.Map.entry('х', "h"), java.util.Map.entry('ц', "c"),
+            java.util.Map.entry('ч', "ch"), java.util.Map.entry('ш', "sh"),
+            java.util.Map.entry('щ', "sch"), java.util.Map.entry('ъ', ""),
+            java.util.Map.entry('ы', "y"), java.util.Map.entry('ь', ""),
+            java.util.Map.entry('э', "e"), java.util.Map.entry('ю', "yu"),
+            java.util.Map.entry('я', "ya"));
+
     private final PartPhotoRepository photos;
     private final PartRepository parts;
     private final PhotoStorage storage;
@@ -200,6 +230,117 @@ public class PhotoService {
     }
 
     /**
+     * Состав архива снимков карточки: как назвать файл и что в него класть.
+     *
+     * <p>Читает только базу и ничего не качает: в хранилище ходит
+     * {@link #writeArchive}, уже вне транзакции. Транзакция, ждущая S3, —
+     * это соединение из пула, удерживаемое на время чужого таймаута.
+     *
+     * <p>Главный снимок идёт первым — покупателю отправляют «сначала общий
+     * вид», — а остальные в том же порядке, в каком стоят в полосе миниатюр
+     * ({@code sort_order}), где главный как раз не первый.
+     *
+     * @throws IllegalStateException если подтверждённых снимков нет: пустой
+     *         архив выглядит как удавшееся скачивание, после которого
+     *         продавец ищет файлы в «Загрузках»
+     */
+    @Transactional(readOnly = true)
+    public Archive archiveOf(Long partId) {
+        Part part = parts.findById(partId).orElseThrow(
+                () -> new IllegalArgumentException("Запчасть не найдена: " + partId));
+
+        List<PartPhoto> confirmed = photos.findByPartIdOrderBySortOrderAscIdAsc(partId).stream()
+                .filter(PartPhoto::isConfirmed)
+                .toList();
+        if (confirmed.isEmpty()) {
+            throw new IllegalStateException("У этой позиции нет снимков — скачивать нечего");
+        }
+
+        List<PartPhoto> ordered = new java.util.ArrayList<>(confirmed.size());
+        confirmed.stream().filter(PartPhoto::isMain).forEach(ordered::add);
+        confirmed.stream().filter(photo -> !photo.isMain()).forEach(ordered::add);
+
+        List<Entry> entries = new java.util.ArrayList<>(ordered.size());
+        for (int at = 0; at < ordered.size(); at++) {
+            String key = ordered.get(at).getS3Key();
+            entries.add(new Entry("%02d%s".formatted(at + 1, extensionOf(key)), key));
+        }
+        return new Archive(archiveName(part.getPublicCode(), part.getTitle()), entries);
+    }
+
+    /**
+     * Пишет архив в поток ответа.
+     *
+     * <p>Без транзакции намеренно: здесь только хранилище и сеть. И без
+     * сборки в память — снимков у позиции девять, но действие может позвать
+     * и робот, а каждый снимок это сотни килобайт.
+     *
+     * <p>Пропавший объект пропускается с записью в лог, а не роняет ответ:
+     * заголовки уже отправлены, статус сменить нельзя, и оборванный поток
+     * дал бы битый архив вместо архива без одного снимка. Случай редкий —
+     * в состав идут только подтверждённые, у которых приложение файл
+     * видело, — но снимок могли удалить, пока архив собирался.
+     */
+    public void writeArchive(Archive archive, java.io.OutputStream out) throws java.io.IOException {
+        try (var zip = new java.util.zip.ZipOutputStream(out)) {
+            // Снимки уже сжаты: дефлейт даёт те же байты и лишнюю работу
+            // на каждое скачивание.
+            zip.setLevel(java.util.zip.Deflater.NO_COMPRESSION);
+            for (Entry entry : archive.entries()) {
+                try (java.io.InputStream file = storage.open(entry.key())) {
+                    zip.putNextEntry(new java.util.zip.ZipEntry(entry.name()));
+                    file.transferTo(zip);
+                    zip.closeEntry();
+                } catch (software.amazon.awssdk.services.s3.model.NoSuchKeyException e) {
+                    log.warn("Архив снимков: объекта {} в хранилище нет, пропускаем",
+                            entry.key());
+                }
+            }
+        }
+    }
+
+    /**
+     * Имя файла архива: публичный код и наименование.
+     *
+     * <p>Латиницей, потому что файл уходит в мессенджер и на чужие
+     * устройства, а «Загрузки» — общая папка: код впереди отвечает
+     * на вопрос «что это», даже когда наименование обрезано.
+     */
+    private static String archiveName(String code, String title) {
+        String slug = slugify(title);
+        return (slug.isEmpty() ? code : code + "-" + slug) + ".zip";
+    }
+
+    /** Кириллица в латиницу, всё прочее — в дефис. */
+    private static String slugify(String title) {
+        if (title == null) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder();
+        for (char c : title.toLowerCase(java.util.Locale.ROOT).toCharArray()) {
+            String piece = TRANSLIT.get(c);
+            if (piece != null) {
+                out.append(piece);
+            } else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+                out.append(c);
+            } else if (!out.isEmpty() && out.charAt(out.length() - 1) != '-') {
+                out.append('-');
+            }
+        }
+        while (!out.isEmpty() && out.charAt(out.length() - 1) == '-') {
+            out.setLength(out.length() - 1);
+        }
+        // Наименование бывает длиной в строку («Фара левая Toyota Camry
+        // 2007 в сборе»), а имя файла читают одним взглядом.
+        return out.length() > NAME_LIMIT ? out.substring(0, NAME_LIMIT) : out.toString();
+    }
+
+    private static String extensionOf(String key) {
+        int dot = key.lastIndexOf('.');
+        return dot < 0 ? ".jpg" : key.substring(dot);
+    }
+
+    /**
      * Чистит оборванные загрузки: ссылку выдали, подтверждения не было.
      *
      * @return сколько записей убрано
@@ -242,5 +383,13 @@ public class PhotoService {
 
     /** Фотография для карточки: ссылка подписана и живёт ограниченное время. */
     public record PhotoView(Long photoId, boolean main, String url) {
+    }
+
+    /** Что отдать одним файлом: имя архива и его состав по порядку. */
+    public record Archive(String fileName, List<Entry> entries) {
+    }
+
+    /** Снимок внутри архива: как назван в нём и где лежит в хранилище. */
+    public record Entry(String name, String key) {
     }
 }

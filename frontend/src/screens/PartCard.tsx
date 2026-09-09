@@ -18,7 +18,7 @@ import {
   type Warehouse,
 } from '../inventory/catalog';
 import { cardFields } from '../inventory/partCard';
-import { deletePhoto, makeMainPhoto, uploadPhoto } from '../inventory/photos';
+import { deletePhoto, makeMainPhoto, photoArchiveUrl, uploadPhoto } from '../inventory/photos';
 import { PartCellBlock } from './PartCellBlock';
 import { PartEditForm } from './PartEditForm';
 import { PartLabelPrint } from './PartLabelPrint';
@@ -662,9 +662,6 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
             </div>
           ) : (
           <div className="card-view__photos">
-            {main === undefined && !uploading && (
-              <p className="muted">Снимков нет</p>
-            )}
             {main !== undefined && (
               <>
                 <div className="card-view__frame">
@@ -703,6 +700,31 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
                   </div>
                 )}
               </>
+            )}
+
+            {/* Скачивание — всем, кто открыл карточку: это ровно те снимки,
+                которые он и так видит. Пока их не было пачкой, продавец
+                девять раз открывал снимок стрелкой и девять раз сохранял
+                его правой кнопкой — минута механической работы на глазах
+                у ждущего на линии покупателя. */}
+            {!uploading && (
+              <div className="card-view__download">
+                {photos.length > 0 ? (
+                  <a className="button--ghost" href={photoArchiveUrl(row.id)} download>
+                    Скачать все фото
+                  </a>
+                ) : (
+                  <>
+                    <button type="button" className="button--ghost" disabled>
+                      Скачать все фото
+                    </button>
+                    {/* Погашенная кнопка называет причину — как «Печать
+                        штрих-кода» у позиции без номера: серая кнопка
+                        без объяснения читается как поломка. */}
+                    <p className="note">Снимков нет — скачивать нечего</p>
+                  </>
+                )}
+              </div>
             )}
 
             {/* Досъёмка: снимок делают телефоном при приёмке, но деталь,
