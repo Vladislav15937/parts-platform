@@ -44,7 +44,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class LoginSessionTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000124";
+    /**
+     * Своя схема, ничья больше.
+     *
+     * <p>Была {@code t_000124}, и её же взял {@code SoldItemsReportTest}.
+     * Пока обе фикстуры заводили разных людей, это ничего не значило; но обе
+     * заводят логин {@code vladelec} — там он «Владелец», здесь «Пётр
+     * Владельцев», — а помощник {@code member} ищет по логину и найденного
+     * не переименовывает. Кто из двух классов отработал первым, тот и назвал
+     * владельца, и отбор журнала честно отдавал чужое имя. Падало при этом
+     * не то, что виновато: сам отчёт продаж оставался зелёным.
+     */
+    private static final String TENANT = "t_000125";
     private static final String COMPANY = "sessco";
     private static final String PASSWORD = "пароль-длинный";
 
@@ -77,10 +88,10 @@ class LoginSessionTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
-        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 124");
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 125");
         jdbc.update("""
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
-                VALUES (124, ?, 'Разборка на Ткацкой', ?)""", TENANT, COMPANY);
+                VALUES (125, ?, 'Разборка на Ткацкой', ?)""", TENANT, COMPANY);
 
         inTenant(() -> {
             member("vladelec", "Пётр Владельцев", "OWNER");
@@ -429,8 +440,18 @@ class LoginSessionTest extends PostgresTestBase {
             // Пароль и признак «работает» возвращаются к исходным: соседний
             // метод мог сменить одно и выключить другое, а порядок методов
             // не гарантирован.
-            jdbc.update("UPDATE tenant_member SET password_hash = ?, is_active = true WHERE id = ?",
-                    passwordEncoder.encode(PASSWORD), found.get(0));
+            //
+            // Имя и роль — тоже, и это не про соседний метод, а про соседний
+            // класс. Фикстура, молча принявшая чужое имя для своего логина,
+            // подставляет проверкам не того человека: отбор журнала отдавал
+            // «Владелец» вместо «Пётр Владельцев», и красный тест указывал
+            // не на виноватого. Пишем то, что назвали, а не то, что нашли.
+            jdbc.update("""
+                            UPDATE tenant_member
+                               SET password_hash = ?, is_active = true,
+                                   display_name = ?, role = ?
+                             WHERE id = ?""",
+                    passwordEncoder.encode(PASSWORD), displayName, role, found.get(0));
             return found.get(0);
         }
         return jdbc.queryForObject("""
