@@ -901,6 +901,229 @@ public class SalesService {
     }
 
     /**
+     * Колонки доски сделок по состояниям — порядок и слова.
+     *
+     * <p><b>Слова здесь, а не на экране, и это расхождение с воронкой
+     * списка.</b> У воронки группировку задаёт клиент ({@code DEAL_FUNNEL}
+     * знает имена, сервер принимает набор состояний) — иначе имена воронок
+     * пришлось бы знать обеим сторонам. Здесь наоборот: группу вычисляет
+     * {@code CASE} в SQL, и название той же группы, написанное вторым
+     * списком на экране, разошлось бы с ним молча — ровно как расходились
+     * белые списки колонок. Группа и её имя — одна вещь, и живут они
+     * в одном месте.
+     *
+     * <p>Названия дословно из задачи 0052 («Новая сделка · Истек срок ·
+     * Ждет оплаты · Частично оплачен · Готов к выдаче»): по ним переходящий
+     * клиент узнаёт свой экран.
+     */
+    private static final List<BoardStage> BOARD_STAGES = List.of(
+            new BoardStage("NEW", "Новая сделка"),
+            new BoardStage("EXPIRED", "Истек срок"),
+            new BoardStage("AWAITING_PAYMENT", "Ждет оплаты"),
+            new BoardStage("PARTLY_PAID", "Частично оплачен"),
+            new BoardStage("READY", "Готов к выдаче"));
+
+    /** Незакрытая сделка: товар ещё числится обещанным, и по ней есть работа. */
+    private static final String BOARD_OPEN = " d.status IN ('DRAFT', 'RESERVED', 'READY')";
+
+    /**
+     * Сколько карточек отдаётся в колонке.
+     *
+     * <p>Счётчик над колонкой считает всё, что в неё попало, а карточек едет
+     * не больше сотни: у живого клиента в «Истек срок» полсотни, но резерв
+     * не снимается сам, и за год их накопится сколько угодно. Экран говорит,
+     * что список обрезан, — молчащая обрезка это то же враньё, что «Показаны
+     * первые 50» без числа найденного.
+     */
+    private static final int BOARD_CARDS = 100;
+
+    /**
+     * Доска сделок по состояниям: пять колонок со счётчиками.
+     *
+     * <p><b>Зачем она рядом со списком.</b> Список отвечает на «покажи все
+     * сделки», а первый вопрос продавца на смене другой — «что мне сегодня
+     * делать». Воронка списка на него не отвечает: чтобы узнать, сколько
+     * выданных, надо переключиться на «Выданные» и потерять из виду
+     * отложенные, а стадий «ждёт оплаты», «частично оплачен» и «истёк срок»
+     * у неё нет вовсе — её пункты это статус документа, а не стадия работы
+     * над ним.
+     *
+     * <p><b>Стадия вычисляется, а не хранится.</b> Всё, из чего она
+     * складывается — состояние документа, оплаченное против суммы и срок
+     * резерва, — уже лежит в строке; хранимая стадия разъехалась бы с этими
+     * тремя на первой же оплате, и разъехалась бы молча. По той же причине
+     * колонка «Готов к выдаче» не зовёт {@link Deal#markReady()}: полная
+     * оплата при невыданном товаре — это и есть «готов», а переход, который
+     * никто не нажимает, дал бы пустую колонку рядом с оплаченными сделками.
+     *
+     * <p><b>{@code CASE} — потому что колонка обязана быть ровно одна.</b>
+     * Пять отдельных запросов с условиями, написанными по одному, дают
+     * сделку в двух колонках сразу (или ни в одной) при первой же правке
+     * одного из них, и сумма счётчиков перестаёт сходиться с числом
+     * незакрытых сделок — а именно эти числа продавец и читает за секунду.
+     * {@code CASE} берёт первую подошедшую ветку по устройству языка,
+     * и доказывать тут нечего.
+     *
+     * <p><b>«Истек срок» — тот же набор, что у {@link #expiredReservations()}
+     * ({@code GET /api/deals/expired-reservations}).</b> Условие повторено
+     * дословно ({@code status = 'RESERVED'} и срок в прошлом) и стоит
+     * <b>раньше</b> ветки «Готов к выдаче»: оплаченная сделка с просроченным
+     * резервом остаётся просроченной, иначе два ответа на один вопрос
+     * разошлись бы. Стережёт это {@code DealBoardTest}, сверяющий счётчик
+     * колонки с числом строк того эндпоинта.
+     *
+     * @param warehouseId склад выдачи; пусто — все. Отбирается по складам
+     *                    позиций ({@code deal_item.warehouse_id}), а не
+     *                    по {@code deal.warehouse_id}: ту колонку не пишет
+     *                    никто, и отбор по ней не нашёл бы ничего никогда
+     * @param sourceId    источник сделки; пусто — все
+     * @param managerId   ответственный; пусто — все
+     */
+    @Transactional(readOnly = true)
+    public DealBoard dealBoard(Long warehouseId, Long sourceId, Long managerId) {
+        List<Object> args = new ArrayList<>();
+        args.add(java.sql.Timestamp.from(Instant.now()));
+
+        StringBuilder where = new StringBuilder(" WHERE" + BOARD_OPEN);
+        if (warehouseId != null) {
+            where.append(" AND EXISTS (SELECT 1 FROM deal_item i"
+                    + " WHERE i.deal_id = d.id AND i.warehouse_id = ?)");
+            args.add(warehouseId);
+        }
+        if (sourceId != null) {
+            where.append(" AND d.deal_source_id = ?");
+            args.add(sourceId);
+        }
+        if (managerId != null) {
+            where.append(" AND d.manager_id = ?");
+            args.add(managerId);
+        }
+
+        // Разделители — явной строкой, а не отступом текстового блока:
+        // записанная ловушка проекта, из-за которой склейка однажды дала
+        // «r.reasonFROM». Компилятор про это молчит всегда.
+        String stage = " CASE"
+                + " WHEN d.status = 'DRAFT' THEN 'NEW'"
+                + " WHEN d.status = 'RESERVED' AND d.reserved_until IS NOT NULL"
+                + " AND d.reserved_until < ? THEN 'EXPIRED'"
+                + " WHEN d.status = 'READY'"
+                + " OR (d.total_amount > 0 AND d.paid_amount >= d.total_amount) THEN 'READY'"
+                + " WHEN d.paid_amount <= 0 THEN 'AWAITING_PAYMENT'"
+                + " ELSE 'PARTLY_PAID'"
+                + " END AS stage";
+
+        String inner = "SELECT" + stage
+                + ", d.id, d.number, d.created_at, c.name AS customer_name,"
+                + " d.total_amount, d.paid_amount, d.status, d.reserved_until"
+                + " FROM deal d"
+                + " LEFT JOIN customer c ON c.id = d.customer_id"
+                + where;
+
+        // Счёт колонки и её карточки — одно окно над одной выборкой. Посчитай
+        // их разными запросами, и счётчик разойдётся со списком на первой
+        // правке условия: продавец прочтёт «Истек срок 58» над другими
+        // пятьюдесятью восемью.
+        List<Object> rowArgs = new ArrayList<>(args);
+        rowArgs.add(BOARD_CARDS);
+        java.util.Map<String, List<BoardCard>> cards = new java.util.HashMap<>();
+        java.util.Map<String, Long> counts = new java.util.HashMap<>();
+        jdbc.query("SELECT * FROM (SELECT s.*,"
+                        + " row_number() OVER (PARTITION BY stage ORDER BY id DESC) AS rn,"
+                        + " count(*) OVER (PARTITION BY stage) AS cnt"
+                        + " FROM (" + inner + ") s) w"
+                        + " WHERE rn <= ?"
+                        + " ORDER BY stage, id DESC",
+                (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+                    String key = rs.getString("stage");
+                    counts.put(key, rs.getLong("cnt"));
+                    cards.computeIfAbsent(key, k -> new ArrayList<>()).add(new BoardCard(
+                            rs.getLong("id"), rs.getLong("number"),
+                            rs.getTimestamp("created_at").toInstant(),
+                            rs.getString("customer_name"),
+                            rs.getBigDecimal("total_amount"), rs.getBigDecimal("paid_amount"),
+                            DealStatus.valueOf(rs.getString("status")),
+                            rs.getTimestamp("reserved_until") == null
+                                    ? null : rs.getTimestamp("reserved_until").toInstant()));
+                },
+                rowArgs.toArray());
+
+        List<BoardColumn> columns = BOARD_STAGES.stream()
+                .map(s -> new BoardColumn(s.key(), s.title(),
+                        counts.getOrDefault(s.key(), 0L),
+                        cards.getOrDefault(s.key(), List.of())))
+                .toList();
+
+        return new DealBoard(columns, boardOptions(
+                "SELECT DISTINCT w.id, w.name AS name FROM warehouse w"
+                        + " JOIN deal_item i ON i.warehouse_id = w.id"
+                        + " JOIN deal d ON d.id = i.deal_id"),
+                boardOptions("SELECT DISTINCT s.id, s.name AS name FROM deal_source s"
+                        + " JOIN deal d ON d.deal_source_id = s.id"),
+                boardOptions("SELECT DISTINCT m.id, m.display_name AS name"
+                        + " FROM tenant_member m"
+                        + " JOIN deal d ON d.manager_id = m.id"));
+    }
+
+    /**
+     * Значения отбора — те, что встретились в незакрытых сделках, и считает
+     * их сервер.
+     *
+     * <p>Список, собранный на экране из показанных карточек, назвал бы только
+     * то, что уместилось в сотню; список, написанный на клиенте отдельно,
+     * разошёлся бы с отбором молча — то же правило, по которому значения
+     * отбора витрины приезжают вместе со страницей.
+     *
+     * <p>Считаются они <b>до</b> отбора, а не после: сузив доску одним
+     * складом, продавец обязан по-прежнему видеть остальные — иначе
+     * поставленный отбор снять нечем, кроме перезагрузки. Ровно это уже
+     * случалось на витрине склада.
+     */
+    private List<BoardOption> boardOptions(String select) {
+        return jdbc.query(select + " WHERE" + BOARD_OPEN + " ORDER BY name",
+                (rs, i) -> new BoardOption(rs.getLong("id"), rs.getString("name")));
+    }
+
+    private record BoardStage(String key, String title) {
+    }
+
+    /**
+     * Доска целиком: колонки и значения трёх отборов.
+     *
+     * @param warehouses склады выдачи, встретившиеся в незакрытых сделках
+     * @param sources    источники сделок
+     * @param managers   ответственные
+     */
+    public record DealBoard(List<BoardColumn> columns, List<BoardOption> warehouses,
+                            List<BoardOption> sources, List<BoardOption> managers) {
+    }
+
+    /**
+     * @param count сколько сделок в колонке — всех, а не показанных: это то
+     *              самое число над колонкой, ради которого доска и нужна
+     * @param cards первые сто карточек колонки
+     */
+    public record BoardColumn(String key, String title, long count, List<BoardCard> cards) {
+    }
+
+    /**
+     * Карточка колонки.
+     *
+     * <p>Позиций и услуг здесь нет намеренно: доска — обзор, а не документ,
+     * и полторы сотни сделок с их составом это N+1 на каждый вход продавца
+     * в смену. Нажатие открывает сделку, и вот там она приезжает целиком.
+     *
+     * @param customerName пусто — клиента у сделки нет (заказ с площадки),
+     *                     и карточка тогда не говорит о нём ничего
+     */
+    public record BoardCard(Long id, Long number, Instant createdAt, String customerName,
+                            BigDecimal totalAmount, BigDecimal paidAmount,
+                            DealStatus status, Instant reservedUntil) {
+    }
+
+    public record BoardOption(Long id, String name) {
+    }
+
+    /**
      * Платежи клиента: касса, а не движения лицевого счёта.
      *
      * <p>Вкладка «Платежи» карточки клиента (задача 0022) показывает их рядом
