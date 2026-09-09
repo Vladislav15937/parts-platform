@@ -346,6 +346,26 @@ public class CatalogService {
     public record ColumnFilter(String sql, List<Object> args) {
     }
 
+    /**
+     * Оценка состояния словами — одно выражение на всех, кто её показывает
+     * и по ней отбирает.
+     *
+     * <p>Читателей теперь двое: колонка «Оценка состояния» витрины и отбор
+     * поиска продавца (задача 0010). Копия здесь означала бы две правды
+     * об одном и том же: разойдись они на букву — выбранное из списка
+     * значение перестало бы находить что-либо, а причина была бы видна
+     * только в SQL. Ровно так уже расходились словари состояний сделки
+     * и белые списки свойств колеса.
+     *
+     * <p>Позиция названа {@code p} — выражение годится любому запросу,
+     * где алиас таблицы {@code part} тот же.
+     */
+    public static final String QUALITY_GRADE = "CASE p.quality_grade"
+            + " WHEN 'EXCELLENT' THEN 'отличное' WHEN 'GOOD' THEN 'хорошее'"
+            + " WHEN 'FAIR' THEN 'удовлетворительное' WHEN 'POOR' THEN 'плохое'"
+            + " ELSE CASE p.condition WHEN 'NEW' THEN 'новая' WHEN 'USED' THEN 'б/у'"
+            + " WHEN 'REFURBISHED' THEN 'восстановленная' END END";
+
     /** Незаполненное поле и «заполнено хоть чем-то» — тоже ответы на вопрос. */
     public static final String EMPTY = "\u2014пусто\u2014";
     public static final String PRESENT = "\u2014не пусто\u2014";
@@ -416,11 +436,7 @@ public class CatalogService {
             Map.entry("code", "p.public_code"),
             Map.entry("title", "p.title"),
             Map.entry("partName", "pn.name"),
-            Map.entry("quality", "CASE p.quality_grade"
-                    + " WHEN 'EXCELLENT' THEN 'отличное' WHEN 'GOOD' THEN 'хорошее'"
-                    + " WHEN 'FAIR' THEN 'удовлетворительное' WHEN 'POOR' THEN 'плохое'"
-                    + " ELSE CASE p.condition WHEN 'NEW' THEN 'новая' WHEN 'USED' THEN 'б/у'"
-                    + " WHEN 'REFURBISHED' THEN 'восстановленная' END END"),
+            Map.entry("quality", QUALITY_GRADE),
             // Состояние отбирается отдельно от оценки: «б/у» и «отличное» —
             // разные вопросы, и на вкладке колёс отбор по состоянию есть
             // с самого начала, как и в отборе выгрузок. На витрине его
