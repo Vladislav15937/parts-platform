@@ -24,6 +24,7 @@ export type Tab =
   | 'orders'
   | 'returns'
   | 'customers'
+  | 'payments'
   | 'catalog'
   | 'wheels'
   | 'inventory'
@@ -152,6 +153,10 @@ export const TABS: readonly TabSpec[] = [
   { id: 'orders', label: 'Заказы', section: 'Заказы с площадок', roles: SELLING_ROLES },
   { id: 'returns', label: 'Возвраты', section: 'Возвраты', roles: SELLING_ROLES },
   { id: 'customers', label: 'Клиенты', section: 'Клиенты', roles: SELLING_ROLES },
+  // Реестр кассы (задача 0045) — рядом с клиентами и сделками, потому что
+  // деньги приходят оттуда, но роли у него отчётные: в списке видно всё,
+  // чем живёт компания, включая возвраты и выдачи с лицевых счетов.
+  { id: 'payments', label: 'Платежи', section: 'Платежи', roles: NAMING_ROLES },
   { id: 'catalog', label: 'Склад', section: 'Склад', roles: ANYONE },
   { id: 'wheels', label: 'Шины и диски', section: 'Шины и диски', roles: ANYONE },
   { id: 'inventory', label: 'Пересчёт', section: 'Пересчёт склада', roles: INVENTORY_ROLES },

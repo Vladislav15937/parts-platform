@@ -12,6 +12,7 @@ import { OrdersScreen } from './OrdersScreen';
 import { DeliveryScreen } from './DeliveryScreen';
 import { LabelsScreen } from './LabelsScreen';
 import { AuditJournalScreen } from './AuditJournalScreen';
+import { PaymentsScreen } from './PaymentsScreen';
 
 /**
  * Дымовой проход по экранам: отрисовались ли и не упали ли на первом запросе.
@@ -92,6 +93,9 @@ describe('экраны открываются', () => {
     ['Доставка', () => <DeliveryScreen canManage onTotalChanged={() => {}} />],
     ['Этикетки', () => <LabelsScreen canPrint />],
     ['Журнал действий', () => <AuditJournalScreen />],
+    // Пустой ответ здесь — арендатор первого дня: реестр кассы обязан
+    // сказать «платежей ещё не было», а не упасть на подвале с суммами.
+    ['Платежи', () => <PaymentsScreen onOpenDeal={() => {}} />],
   ];
 
   it.each(screens)('%s отрисовывается и не падает на пустом ответе', async (name, make) => {
