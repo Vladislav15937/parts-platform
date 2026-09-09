@@ -348,8 +348,22 @@ public class SoldItemsReportService {
         return value == null ? "" : value.toPlainString();
     }
 
+    /**
+     * Дата в файле пишется так же, как на экране, и так же, как в выгрузке
+     * склада: `05.09.2026`, а не `2026-09-05`.
+     *
+     * <p>ISO-вид — внутреннее представление. Файл открывают в Excel и читают
+     * глазами, и дата в нём обязана быть на том же языке, что и на экране,
+     * иначе один и тот же день выглядит двумя разными. Формат взят
+     * у {@code CatalogService.day} — не переписан рядом своими словами:
+     * две записи одного правила расходятся молча, и в этом проекте уже
+     * расходились (таблица месяцев, копии словаря состояний).
+     */
     private static String day(Timestamp value) {
-        return value == null ? "" : value.toLocalDateTime().toLocalDate().toString();
+        return value == null ? "" : java.time.format.DateTimeFormatter
+                .ofPattern("dd.MM.yyyy")
+                .withZone(java.time.ZoneId.systemDefault())
+                .format(value.toInstant());
     }
 
     /**

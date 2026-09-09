@@ -327,6 +327,15 @@ class SoldItemsReportTest extends PostgresTestBase {
         // Состояние словом: файл открывают в Excel и читают глазами,
         // и «USED» там означал бы утечку внутреннего представления.
         assertThat(all).contains("б/у").doesNotContain("USED");
+        // И дата — тем же языком, что на экране: «05.09.2026», а не
+        // «2026-09-05». ISO-вид внутреннее представление; в файле,
+        // который открывают в Excel, один и тот же день не должен
+        // выглядеть двумя разными. Рядом, в выгрузке склада, это
+        // правило уже действует — здесь оно было нарушено, и поймал
+        // его разбор, а не тест: формат даты не проверялся вовсе.
+        assertThat(all)
+                .as("дата в файле в ISO-виде — на экране она «05.09.2026»")
+                .doesNotContainPattern("\\d{4}-\\d{2}-\\d{2}");
 
         String narrowed = mvc.perform(
                         get("/api/reports/sold-items/export?warehouseId=" + farWarehouse)
