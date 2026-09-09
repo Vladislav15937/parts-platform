@@ -366,6 +366,21 @@ public class CatalogService {
             + " ELSE CASE p.condition WHEN 'NEW' THEN 'новая' WHEN 'USED' THEN 'б/у'"
             + " WHEN 'REFURBISHED' THEN 'восстановленная' END END";
 
+    /**
+     * Состояние словами — то же выражение и там, где по нему отбирают,
+     * и там, где его показывают.
+     *
+     * <p>Отдельно от оценки состояния выше: «б/у» и «отличное» — разные
+     * вопросы. Читателей двое: отбор витрины и отчёт по проданным позициям
+     * (задача 0054), которому слово нужно и на экране, и в скачанном файле —
+     * код {@code USED} там означал бы утечку внутреннего представления
+     * в таблицу, которую открывают в Excel и читают глазами.
+     *
+     * <p>Позиция названа {@code p}, как и у {@link #QUALITY_GRADE}.
+     */
+    public static final String CONDITION = "CASE p.condition WHEN 'NEW' THEN 'новая'"
+            + " WHEN 'USED' THEN 'б/у' WHEN 'REFURBISHED' THEN 'восстановленная' END";
+
     /** Незаполненное поле и «заполнено хоть чем-то» — тоже ответы на вопрос. */
     public static final String EMPTY = "\u2014пусто\u2014";
     public static final String PRESENT = "\u2014не пусто\u2014";
@@ -442,8 +457,7 @@ public class CatalogService {
             // с самого начала, как и в отборе выгрузок. На витрине его
             // не было вовсе — то есть «покажи всё новое» владелец задать
             // не мог, хотя колонка перед глазами.
-            Map.entry("condition", "CASE p.condition WHEN 'NEW' THEN 'новая'"
-                    + " WHEN 'USED' THEN 'б/у' WHEN 'REFURBISHED' THEN 'восстановленная' END"),
+            Map.entry("condition", CONDITION),
             Map.entry("brand", "b.name"),
             Map.entry("model", "m.name"),
             Map.entry("generation", "g.name"),

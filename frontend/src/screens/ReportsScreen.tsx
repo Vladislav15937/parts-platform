@@ -6,6 +6,7 @@ import type { DonorEntry } from '../intake/donors';
 import {
   customerSettlements,
   day,
+  dayOf,
   donorItems,
   donorProfitability,
   managerSales,
@@ -15,12 +16,17 @@ import {
   pieces,
   reportSupplies,
   salesBySource,
+  soldFilterSet,
+  soldFooter,
+  soldItems,
+  soldItemsExportUrl,
   summary,
   supplyItems,
   unknownShare,
   monthName,
   monthOf,
   shiftMonth,
+  NO_SOLD_FILTER,
 } from '../reports/reports';
 import type {
   DonorReport,
@@ -30,10 +36,15 @@ import type {
   OriginTab,
   PaymentReport,
   SettlementReport,
+  SoldItem,
+  SoldItemsFilter,
+  SoldItemsPage,
   SourceReport,
   Summary,
   SupplyOption,
 } from '../reports/reports';
+import { listWarehouses } from '../organization/warehouses';
+import type { Warehouse } from '../organization/warehouses';
 import { paymentSourceTypeLabel } from '../sales/sales';
 
 /**
@@ -102,6 +113,18 @@ export function ReportsScreen({ canRead }: Props) {
   // У переехавшего клиента 441 машина: списком их не пролистать.
   const [donorFind, setDonorFind] = useState('');
 
+  // Проданные позиции строками: за сколько ушла, во сколько обошлась,
+  // сколько на ней заработали. Набранное живёт отдельно от отправленного —
+  // отбор уходит в запрос по «Показать», а не по каждой цифре в поле даты.
+  const [soldDraft, setSoldDraft] = useState<SoldItemsFilter>(NO_SOLD_FILTER);
+  const [soldFilter, setSoldFilter] = useState<SoldItemsFilter>(NO_SOLD_FILTER);
+  const [soldPage, setSoldPage] = useState<SoldItemsPage | null>(null);
+  const [sold, setSold] = useState<SoldItem[]>([]);
+  const [soldManagers, setSoldManagers] = useState<Array<{ id: number; name: string }>>([]);
+  const [loadingSold, setLoadingSold] = useState(false);
+  const [soldError, setSoldError] = useState<string | null>(null);
+  const [warehouseList, setWarehouseList] = useState<Warehouse[]>([]);
+
   useEffect(() => {
     void managerSales(month)
       .then(setManagers)
@@ -143,7 +166,47 @@ export function ReportsScreen({ canRead }: Props) {
     void reportSupplies()
       .then((loaded) => setSupplyList(loaded.rows))
       .catch((cause) => setError(describe(cause, 'Список поставок не загрузился')));
+    // Склады для отбора проданного: список сегодняшний, а не из справочника
+    // приёмки, который телефон держит в IndexedDB с понедельника.
+    void listWarehouses()
+      .then(setWarehouseList)
+      .catch((cause) => setError(describe(cause, 'Список складов не загрузился')));
   }, []);
+
+  // Проданные позиции: первая страница по нынешнему отбору. Строки прошлого
+  // отбора снимаются до запроса, а не по его приходу, — иначе между нажатием
+  // «Показать» и ответом экран показывает прежние строки под новым подвалом.
+  useEffect(() => {
+    setSoldPage(null);
+    setSold([]);
+    setLoadingSold(true);
+    setSoldError(null);
+    void soldItems(soldFilter, null)
+      .then((loaded) => {
+        setSoldPage(loaded);
+        setSold(loaded.rows);
+        // Список продавцов едет только с первой страницей: он считается
+        // по всем продажам, а не по отобранным, и меняться ему не с чего.
+        setSoldManagers(loaded.managers);
+      })
+      .catch((cause) => setSoldError(describe(cause, 'Проданные позиции не загрузились')))
+      .finally(() => setLoadingSold(false));
+  }, [soldFilter]);
+
+  /** «Показать ещё»: дописывает следующую страницу, не трогая итог. */
+  function moreSold() {
+    if (soldPage === null || soldPage.nextAfter === null) {
+      return;
+    }
+    setLoadingSold(true);
+    void soldItems(soldFilter, soldPage.nextAfter)
+      .then((loaded) => {
+        setSoldPage(loaded);
+        setSold((shownRows) => [...shownRows, ...loaded.rows]);
+      })
+      .catch((cause) => setSoldError(describe(cause, 'Проданные позиции не загрузились')))
+      .finally(() => setLoadingSold(false));
+  }
 
   useEffect(() => {
     if (origin === null) {
@@ -616,6 +679,221 @@ export function ReportsScreen({ canRead }: Props) {
         сколько с неё продано и на сколько осталось на складе.
       </p>
 
+      {/* Проданные позиции строками. Себестоимость каждой строки лежит
+          в снимке с самого начала, а построчно её не было видно нигде:
+          «сколько мы заработали на запчастях с этого контейнера», «на чём
+          мы теряем» и «кто продаёт в минус» спрашивали у разработчика
+          с SQL. Свой отбор с периодом, а не месяц сверху: вопрос сюда
+          приходят задавать про год и про контейнер. */}
+      <hr />
+      <h3>Проданные позиции</h3>
+
+      <form
+        className="row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setSoldFilter(soldDraft);
+        }}
+      >
+        <label>
+          Продано с
+          <input
+            type="date"
+            value={soldDraft.from}
+            onChange={(e) => setSoldDraft({ ...soldDraft, from: e.target.value })}
+          />
+        </label>
+        <label>
+          по
+          <input
+            type="date"
+            value={soldDraft.to}
+            onChange={(e) => setSoldDraft({ ...soldDraft, to: e.target.value })}
+          />
+        </label>
+        <label>
+          Склад выдачи
+          <select
+            value={soldDraft.warehouseId}
+            onChange={(e) => setSoldDraft({ ...soldDraft, warehouseId: e.target.value })}
+          >
+            <option value="">— все склады —</option>
+            {warehouseList.map((w) => (
+              <option key={w.id} value={w.id}>{w.name}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Ответственный
+          <select
+            value={soldDraft.managerId}
+            onChange={(e) => setSoldDraft({ ...soldDraft, managerId: e.target.value })}
+          >
+            <option value="">— все —</option>
+            {/* Кто продавал, а не весь список сотрудников: отбор,
+                предлагающий человека без единой продажи, врёт. */}
+            {soldManagers.map((m) => (
+              <option key={m.id} value={m.id}>{m.name}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Машина
+          <select
+            value={soldDraft.donorId}
+            onChange={(e) => setSoldDraft({ ...soldDraft, donorId: e.target.value })}
+          >
+            <option value="">— все машины —</option>
+            {donorList.map((d) => (
+              <option key={d.id} value={d.id}>{donorTitle(d)}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Поставка
+          <select
+            value={soldDraft.supplyId}
+            onChange={(e) => setSoldDraft({ ...soldDraft, supplyId: e.target.value })}
+          >
+            <option value="">— все поставки —</option>
+            {supplyList.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.supplierName ?? s.number}
+                {s.supplierName !== null && ` · ${s.number}`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="submit">Показать</button>
+        {/* Снимается весь отбор одной кнопкой: снимать шесть полей
+            по одному — то же, что не снимать вовсе. */}
+        {soldFilterSet(soldDraft) && (
+          <button
+            type="button"
+            className="button--ghost"
+            onClick={() => {
+              setSoldDraft(NO_SOLD_FILTER);
+              setSoldFilter(NO_SOLD_FILTER);
+            }}
+          >
+            Снять отбор
+          </button>
+        )}
+      </form>
+
+      {soldError !== null && <p className="note note--error">{soldError}</p>}
+
+      {/* «Загружаем…» — пока грузим, а не пока пусто. */}
+      {loadingSold && soldError === null && sold.length === 0 && (
+        <p className="note">Загружаем…</p>
+      )}
+
+      {soldPage !== null && sold.length === 0 && !loadingSold && soldError === null && (
+        <p className="note">
+          {soldFilterSet(soldFilter)
+            ? 'По этому отбору продаж нет'
+            : 'Продаж пока не было'}
+        </p>
+      )}
+
+      {sold.length > 0 && (
+        <div className="table-scroll">
+          <table className="report">
+            <thead>
+              <tr>
+                <th>Дата выдачи</th>
+                <th>Сделка</th>
+                <th>Номер товара</th>
+                <th>Наименование</th>
+                <th>Состояние</th>
+                <th className="num">Цена продажи</th>
+                <th className="num">Себестоимость</th>
+                <th className="num">Выгода</th>
+                <th className="num">Количество</th>
+                <th>Склад выдачи</th>
+                <th>Ответственный</th>
+                <th>Поставка</th>
+                <th>Номер донора</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sold.map((row) => (
+                <tr key={row.itemId}>
+                  <td>{dayOf(row.soldAt)}</td>
+                  <td>{row.dealNumber}</td>
+                  <td>{row.publicCode ?? '—'}</td>
+                  <td>{row.title}</td>
+                  <td>{row.condition ?? '—'}</td>
+                  <td className="num">
+                    {money(row.price)}
+                    {/* Прежняя цена зачёркнутой — как у ориентира: продают
+                        и со скидкой, и с наценкой, и по одной цене продажи
+                        этого не видно вовсе. */}
+                    {row.listPrice !== row.price && (
+                      <div className="muted"><s>{money(row.listPrice)}</s></div>
+                    )}
+                  </td>
+                  {/* Прочерк, а не ноль: «закупки не было» и «досталась
+                      даром» — разные утверждения. */}
+                  <td className="num">
+                    {row.costPrice === null ? '—' : money(row.costPrice)}
+                  </td>
+                  <td className={row.profit !== null && row.profit < 0 ? 'num negative' : 'num'}>
+                    {row.profit === null ? '—' : money(row.profit)}
+                  </td>
+                  <td className="num">{pieces(row.quantity)}</td>
+                  <td>{row.warehouse ?? '—'}</td>
+                  <td>{row.manager ?? '—'}</td>
+                  <td>{row.supplyNumber ?? '—'}</td>
+                  <td>{row.donorCode ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Подвал считает весь отбор, а не показанную страницу: сумма первой
+          сотни, выданная за итог, — враньё тем более наглядное, чем больше
+          отобранное. Поэтому рядом и сказано, сколько показано. */}
+      {soldPage !== null && sold.length > 0 && (
+        <p className="note">
+          <strong>{soldFooter(soldPage.totals)}</strong>
+          {sold.length < soldPage.totals.items && (
+            <> · показаны {shown(sold.length, soldPage.totals.items,
+              'товар', 'товара', 'товаров')}</>
+          )}
+        </p>
+      )}
+
+      {soldPage !== null && soldPage.totals.withoutCost > 0 && (
+        <p className="note">
+          Позиций без закупочной цены: {soldPage.totals.withoutCost}. В себестоимость
+          и выгоду они не вошли — склад, загруженный из таблицы, приходит без закупок,
+          и посчитанная по ним прибыль была бы завышена на всю их стоимость.
+        </p>
+      )}
+
+      <div className="row">
+        {soldPage !== null && soldPage.nextAfter !== null && (
+          <button type="button" onClick={moreSold} disabled={loadingSold}>
+            Показать ещё
+          </button>
+        )}
+        {/* Ссылкой, а не запросом: файл качает браузер, показывая ход,
+            и вкладка при этом жива. Роль не проверяется здесь отдельно —
+            раздел «Отчёты» и так открыт только владельцу и менеджеру,
+            и тот же список стоит в @PreAuthorize у эндпоинта.
+
+            Обычной ссылкой, а не `button--ghost`: тот выглядит кнопкой
+            только внутри `.screen--wide .filter-row`, а «Отчёты» стоят
+            на `.card` — здесь от него остаётся пустая рамка с подчёркнутым
+            текстом поверх. Замерено в браузере: 108×44 с текстом по верху. */}
+        <a href={soldItemsExportUrl(soldFilter)} download>
+          Скачать таблицу
+        </a>
+      </div>
+
       {/* Разрез до позиций: числа по машине владелец видит и так, а вот
           «что именно лежит» спрашивать было негде — за этим он уходил
           в склад и собирал отбор руками. По партии не было и чисел. */}
@@ -717,7 +995,10 @@ export function ReportsScreen({ canRead }: Props) {
                     <th>Тип запчасти</th>
                     <th>Наименование</th>
                     <th className="num">Количество</th>
-                    <th className="num">Цена</th>
+                    {/* На «Продано» это цена сделки, а не прайс карточки,
+                        и колонка обязана называться тем, что показывает:
+                        подвал там считается по настоящим продажам. */}
+                    <th className="num">{tab === 'sold' ? 'Цена продажи' : 'Цена'}</th>
                     <th className="num">Себестоимость</th>
                     <th>Номер поступления</th>
                     <th>Дата</th>

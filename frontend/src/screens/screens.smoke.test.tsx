@@ -61,7 +61,12 @@ describe('экраны открываются', () => {
               totals: {
                 advances: 0, debts: 0, withAdvance: 0, withDebt: 0, problems: [],
                 donors: 0, totalCost: 0, revenue: 0, stockValue: 0,
+                items: 0, quantity: 0, cost: 0, profit: 0, withoutCost: 0,
               },
+              // Список продавцов у проданных позиций: отсутствующий — это
+              // падение на «undefined.map», то есть проверка формы ответа,
+              // а не экрана.
+              managers: [],
               // Сводка приходит собранной всегда, даже у пустого арендатора:
               // отсутствующие карточки — это падение на «undefined.qty».
               parts: { qty: 0, amount: 0 },

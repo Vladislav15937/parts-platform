@@ -362,6 +362,136 @@ function from(after: number | null): string {
 }
 
 /**
+ * Проданная позиция — строка, а не сделка.
+ *
+ * <p>Всё денежное здесь из сделки, а не из карточки: цена сегодня — это
+ * не та, за которую деталь ушла в июле, а себестоимость донора могли
+ * переоценить задним числом.
+ */
+export interface SoldItem {
+  itemId: number;
+  /** Момент выдачи сделки со временем — не день без времени. */
+  soldAt: string;
+  dealId: number;
+  dealNumber: number;
+  partId: number;
+  publicCode: string | null;
+  title: string;
+  /** Словом («б/у»), а не кодом: словарь один — тот же, что у витрины. */
+  condition: string | null;
+  /** Цена продажи за штуку. */
+  price: number;
+  /** Цена до скидки. Равна `price` — скидки не было, и зачёркивать нечего. */
+  listPrice: number;
+  quantity: number;
+  /** Снимок себестоимости. Пусто — закупки у позиции не было. */
+  costPrice: number | null;
+  /** Цена продажи минус себестоимость, за штуку. Пусто там же, где пуста она. */
+  profit: number | null;
+  warehouse: string | null;
+  manager: string | null;
+  supplyNumber: string | null;
+  donorCode: string | null;
+}
+
+export interface SoldItemsTotals {
+  items: number;
+  quantity: number;
+  revenue: number;
+  cost: number;
+  profit: number;
+  /** Сколько строк не вошло в себестоимость и выгоду: молчать об этом нельзя. */
+  withoutCost: number;
+}
+
+export interface SoldItemsPage {
+  rows: SoldItem[];
+  /** По всему отбору, а не по показанной странице. */
+  totals: SoldItemsTotals;
+  /** Метка продолжения. Пусто — показано всё. Непрозрачная: её считает сервер. */
+  nextAfter: string | null;
+  /** Кто продавал — по всем продажам, а не по отобранным. Едет с первой страницей. */
+  managers: Array<{ id: number; name: string }>;
+}
+
+/**
+ * Отбор проданного. Пустой — всё за всё время: отчёт открывают именно этим
+ * вопросом, и месяц умолчанием отвечал бы на другой.
+ */
+export interface SoldItemsFilter {
+  from: string;
+  to: string;
+  warehouseId: string;
+  managerId: string;
+  donorId: string;
+  supplyId: string;
+}
+
+export const NO_SOLD_FILTER: SoldItemsFilter = {
+  from: '', to: '', warehouseId: '', managerId: '', donorId: '', supplyId: '',
+};
+
+export function soldFilterSet(filter: SoldItemsFilter): boolean {
+  return Object.values(filter).some((value) => value !== '');
+}
+
+function soldParams(filter: SoldItemsFilter): URLSearchParams {
+  const params = new URLSearchParams();
+  Object.entries(filter).forEach(([key, value]) => {
+    if (value !== '') {
+      params.set(key, value);
+    }
+  });
+  return params;
+}
+
+export function soldItems(
+  filter: SoldItemsFilter,
+  after: string | null,
+): Promise<SoldItemsPage> {
+  const params = soldParams(filter);
+  if (after !== null) {
+    params.set('after', after);
+  }
+  return request<SoldItemsPage>(`/api/reports/sold-items?${params.toString()}`);
+}
+
+/**
+ * Адрес выгрузки — ссылкой, а не запросом: файл качает браузер, показывая
+ * ход, и вкладка при этом жива. Отбор тот же, что у страницы: скачанный файл
+ * обязан совпасть с тем, что владелец видел на экране.
+ */
+export function soldItemsExportUrl(filter: SoldItemsFilter): string {
+  return `/api/reports/sold-items/export?${soldParams(filter).toString()}`;
+}
+
+/**
+ * Подвал проданного — по всему отбору.
+ *
+ * <p>Выручка отдельно от выгоды: строки без себестоимости в выгоду не входят,
+ * и сложить одно с другим значило бы назвать прибылью выручку.
+ *
+ * <p>Когда закупки нет **ни у одной** отобранной строки, себестоимость
+ * и выгода показываются прочерком, а не нулём: «закупка не заведена»
+ * и «продали в ноль» — разные утверждения, и второе владелец читает как
+ * работу впустую. То же правило, что у колонки «Наценка» в продажах
+ * по менеджерам. Частичный случай прочерка не требует: там сумма настоящая,
+ * а сколько строк в неё не вошло, сказано отдельной строкой под таблицей.
+ */
+export function soldFooter(totals: SoldItemsTotals): string {
+  const known = totals.items > totals.withoutCost;
+  return `${goods(totals.items)} (${pieces(totals.quantity)}): `
+    + `продано на ${count(Math.round(totals.revenue))} · `
+    + `себестоимость ${known ? count(Math.round(totals.cost)) : '—'} · `
+    + `выгода ${known ? count(Math.round(totals.profit)) : '—'}`;
+}
+
+/** Дата выдачи: «05.09.2026». Момент со временем — `new Date` читает верно. */
+export function dayOf(moment: string): string {
+  return new Date(moment).toLocaleDateString('ru-RU');
+}
+
+/**
  * Подвал вкладки — теми же словами, что у системы, с которой к нам переходят:
  * «162 товара (162 шт.): розничная стоимость — 1 168 350».
  *

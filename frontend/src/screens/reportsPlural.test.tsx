@@ -50,6 +50,20 @@ describe('склонение на экране отчётов', () => {
           deals: { count: 0, amount: 0, prepaid: 0 },
         });
       }
+      // Склады для отбора проданных позиций приезжают массивом:
+      // подсунуть объект значит уронить экран там, где он работает.
+      if (url.includes('/organization/warehouses')) {
+        return json([]);
+      }
+      // Проданные позиции: свой итог и свой список продавцов. Общий ответ
+      // ниже отдаёт строки окупаемости машин, и экран падал бы на «managers
+      // не массив» — из чужого файла и с чужим стеком.
+      if (url.includes('/reports/sold-items')) {
+        return json({
+          rows: [], nextAfter: null, managers: [],
+          totals: { items: 0, quantity: 0, revenue: 0, cost: 0, profit: 0, withoutCost: 0 },
+        });
+      }
       return json({ totals: { donors: 0, totalCost: 0, revenue: 0, stockValue: 0 }, rows: [] });
     }));
   });
