@@ -70,6 +70,8 @@ describe('наценка на прайс-лист', () => {
         // стёрла бы текст, который владелец сам написал.
         installationNote: false,
         installationTemplate: 'Стоимость установки на нашем автосервисе: {цена} р.',
+        expectedGoods: false,
+        expectedGoodsNote: null,
       });
   });
 
@@ -91,6 +93,8 @@ describe('наценка на прайс-лист', () => {
       photoLimit: null,
       installationNote: false,
       installationTemplate: 'Стоимость установки на нашем автосервисе: {цена} р.',
+      expectedGoods: false,
+      expectedGoodsNote: null,
     });
   });
 
