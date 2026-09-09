@@ -105,7 +105,10 @@ class PaymentRegistryTest extends PostgresTestBase {
             jdbc.update("DELETE FROM payment");
             jdbc.update("DELETE FROM payment_source");
             member("vladelec", "Владелец", "OWNER");
+            member("menedzher", "Менеджер", "MANAGER");
             member("prodavets", "Продавец", "SELLER");
+            member("kladovshchik", "Кладовщик", "STOREKEEPER");
+            member("smotryashchiy", "Смотрящий", "VIEWER");
             Long branch = jdbc.queryForObject(
                     "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class);
             warehouse = jdbc.queryForObject(
@@ -235,14 +238,27 @@ class PaymentRegistryTest extends PostgresTestBase {
                 .isEqualByComparingTo(total(week, "income").subtract(total(week, "expense")));
     }
 
-    /** Роль та же, что у отчётов: в кассе видно всё, чем живёт компания. */
+    /**
+     * Роль та же, что у отчётов: в кассе видно всё, чем живёт компания.
+     *
+     * <p><b>Перебором по всем пяти ролям, а не по двум.</b> Первая редакция
+     * проверяла владельца и продавца, а про менеджера и про кладовщика
+     * с «Просмотром» отвечала аннотация — то есть доказательством был
+     * прочитанный код, а не поведение. Образец рядом:
+     * {@code CustomerControllerTest} закрывает раздел «Клиенты» тем же
+     * перебором. Найдено разбором PR #108.
+     */
     @Test
-    @DisplayName("Реестр кассы видит владелец, но не продавец")
-    void sellerCannotReadTheRegistry() throws Exception {
-        mvc.perform(get("/api/payments").session(login("prodavets")))
-                .andExpect(status().isForbidden());
-        mvc.perform(get("/api/payments").session(login("vladelec")))
-                .andExpect(status().isOk());
+    @DisplayName("Реестр кассы видят владелец и менеджер, остальные — нет")
+    void registryIsOpenToOwnerAndManagerOnly() throws Exception {
+        for (String allowed : List.of("vladelec", "menedzher")) {
+            mvc.perform(get("/api/payments").session(login(allowed)))
+                    .andExpect(status().isOk());
+        }
+        for (String denied : List.of("prodavets", "kladovshchik", "smotryashchiy")) {
+            mvc.perform(get("/api/payments").session(login(denied)))
+                    .andExpect(status().isForbidden());
+        }
     }
 
     /** Незнакомая воронка отвечает словами, а не пятисоткой на разборе. */
