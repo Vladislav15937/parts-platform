@@ -35,9 +35,13 @@ public class ReportController {
 
     private final OriginReportService origins;
 
-    public ReportController(ReportService reports, OriginReportService origins) {
+    private final SoldItemsReportService soldItems;
+
+    public ReportController(ReportService reports, OriginReportService origins,
+                            SoldItemsReportService soldItems) {
         this.reports = reports;
         this.origins = origins;
+        this.soldItems = soldItems;
     }
 
     /**
@@ -141,6 +145,109 @@ public class ReportController {
             @RequestParam(required = false) Long after,
             @RequestParam(required = false) Integer size) {
         return origins.supplyItems(supplyId, OriginReportService.Tab.of(tab), after, size);
+    }
+
+    /**
+     * Проданные позиции строками: за сколько ушла, во сколько обошлась,
+     * сколько на ней заработали.
+     *
+     * <p>Себестоимость каждой строки лежит в снимке с самого начала, а увидеть
+     * её построчно было негде: «сколько мы заработали на запчастях с этого
+     * контейнера» и «кто продаёт в минус» спрашивали у разработчика с SQL.
+     *
+     * <p>Пустой отбор — всё проданное за всё время: отчёт открывают именно
+     * этим вопросом, и месяц умолчанием был бы ответом на другой.
+     *
+     * @param after метка продолжения из прошлой страницы. Курсором, а не
+     *              номером страницы: у живого клиента 82 549 проданных позиций
+     */
+    @GetMapping("/sold-items")
+    public SoldItemsReportService.Page soldItems(
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) Long warehouseId,
+            @RequestParam(required = false) Long managerId,
+            @RequestParam(required = false) Long donorId,
+            @RequestParam(required = false) Long supplyId,
+            @RequestParam(required = false) String after,
+            @RequestParam(required = false) Integer size) {
+        return soldItems.page(filterOf(from, to, warehouseId, managerId, donorId, supplyId),
+                after, size);
+    }
+
+    /**
+     * То же таблицей.
+     *
+     * <p>Проверка роли стоит на классе, то есть до {@code getOutputStream()},
+     * и это не порядок ради красоты: отдав первый байт, статус ответа
+     * уже не сменить — отказ уехал бы двухсотым с себестоимостью внутри.
+     */
+    @GetMapping("/sold-items/export")
+    public void soldItemsExport(
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) Long warehouseId,
+            @RequestParam(required = false) Long managerId,
+            @RequestParam(required = false) Long donorId,
+            @RequestParam(required = false) Long supplyId,
+            jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
+
+        var filter = filterOf(from, to, warehouseId, managerId, donorId, supplyId);
+
+        response.setContentType("text/csv");
+        response.setCharacterEncoding("UTF-8");
+        response.setHeader("Content-Disposition", "attachment; filename=\"prodano.csv\"");
+
+        var out = new java.io.BufferedWriter(
+                new java.io.OutputStreamWriter(response.getOutputStream(),
+                        java.nio.charset.StandardCharsets.UTF_8), 1 << 16);
+        // Метка порядка байтов: без неё Excel открывает файл в кодировке
+        // системы и показывает кракозябры.
+        out.write('﻿');
+        writeRow(out, SoldItemsReportService.exportHeader());
+        soldItems.export(filter, cells -> writeRow(out, cells));
+        out.flush();
+    }
+
+    private static void writeRow(java.io.Writer out, List<String> cells) {
+        try {
+            for (int at = 0; at < cells.size(); at++) {
+                if (at > 0) {
+                    out.write(';');
+                }
+                // Кавычки вокруг всего: в наименованиях встречаются и точка
+                // с запятой, и перенос строки, и сами кавычки — «фара 5"».
+                out.write('"');
+                out.write(cells.get(at).replace("\"", "\"\""));
+                out.write('"');
+            }
+            out.write('\n');
+        } catch (java.io.IOException cause) {
+            // Обрыв на середине выгрузки — обычное дело: скачивающий закрыл
+            // вкладку. Заворачиваем, чтобы не тащить проверяемое исключение
+            // через обход курсора.
+            throw new java.io.UncheckedIOException(cause);
+        }
+    }
+
+    private static SoldItemsReportService.Filter filterOf(
+            String from, String to, Long warehouseId, Long managerId,
+            Long donorId, Long supplyId) {
+        return new SoldItemsReportService.Filter(day(from, "from"), day(to, "to"),
+                warehouseId, managerId, donorId, supplyId);
+    }
+
+    private static java.time.LocalDate day(String value, String name) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return java.time.LocalDate.parse(value);
+        } catch (DateTimeParseException cause) {
+            // 400, а не 500: это ошибка запроса, и клиент должен её различать.
+            throw new IllegalArgumentException(
+                    "Дата «%s» указывается как 2026-09-01, а не «%s»".formatted(name, value));
+        }
     }
 
     /** Партии для выбора — все, включая закрытые: про закрытую и спрашивают. */

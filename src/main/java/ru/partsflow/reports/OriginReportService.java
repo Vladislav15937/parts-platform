@@ -65,30 +65,48 @@ public class OriginReportService {
 
         /** Всё, что числится за машиной или партией: {@code parts_total}. */
         RECEIVED("received", "TRUE",
-                "COALESCE(got.qty, 0)", "COALESCE(got.qty, 0) * COALESCE(p.price, 0)"),
+                "COALESCE(got.qty, 0)", "COALESCE(got.qty, 0) * COALESCE(p.price, 0)",
+                "p.price", "p.cost_price"),
 
-        /** Остаток обнулён продажей: {@code parts_sold}. Сумма — по цене продажи. */
+        /**
+         * Остаток обнулён продажей: {@code parts_sold}. Сумма — по цене продажи.
+         *
+         * <p>И цена в строке — тоже: до задачи 0054 строка показывала
+         * {@code p.price} и {@code p.cost_price} из карточки, то есть нынешний
+         * прайс, а подвал считался по настоящим продажам. Владелец, сложивший
+         * колонку «Цена» глазами, подвала не получал, а данная при продаже
+         * скидка не была видна вовсе.
+         */
         SOLD("sold", "p.status = 'SOLD'",
-                "COALESCE(sold.qty, 0)", "COALESCE(sold.amount, 0)"),
+                "COALESCE(sold.qty, 0)", "COALESCE(sold.amount, 0)",
+                "round(sold.amount / NULLIF(sold.qty, 0), 2)",
+                "round(sold.cost / NULLIF(sold.qty, 0), 2)"),
 
         /** Остаток обнулён списанием. Сумма — по розничной цене: продажи не было. */
         WRITTEN_OFF("written-off", "p.status = 'WRITTEN_OFF'",
-                "COALESCE(off.qty, 0)", "COALESCE(off.qty, 0) * COALESCE(p.price, 0)"),
+                "COALESCE(off.qty, 0)", "COALESCE(off.qty, 0) * COALESCE(p.price, 0)",
+                "p.price", "p.cost_price"),
 
         /** Не продано и не списано — то, что лежит до сих пор: {@code stock_value}. */
         REMAINING("remaining", "p.status NOT IN ('SOLD', 'WRITTEN_OFF')",
-                "p.qty_on_hand", "p.qty_on_hand * COALESCE(p.price, 0)");
+                "p.qty_on_hand", "p.qty_on_hand * COALESCE(p.price, 0)",
+                "p.price", "p.cost_price");
 
         private final String code;
         private final String condition;
         private final String quantity;
         private final String amount;
+        private final String price;
+        private final String costPrice;
 
-        Tab(String code, String condition, String quantity, String amount) {
+        Tab(String code, String condition, String quantity, String amount,
+            String price, String costPrice) {
             this.code = code;
             this.condition = condition;
             this.quantity = quantity;
             this.amount = amount;
+            this.price = price;
+            this.costPrice = costPrice;
         }
 
         public String code() {
@@ -150,7 +168,8 @@ public class OriginReportService {
     private static final String SOLD_JOIN = """
             LEFT JOIN (SELECT di.part_id,
                               sum(di.quantity)                          AS qty,
-                              sum(di.price * di.quantity - di.discount) AS amount
+                              sum(di.price * di.quantity - di.discount) AS amount,
+                              sum(di.cost_price_snapshot * di.quantity) AS cost
                          FROM deal_item di
                          JOIN deal dl ON dl.id = di.deal_id
                         WHERE dl.status = 'ISSUED' AND di.status = 'ISSUED'
@@ -238,8 +257,11 @@ public class OriginReportService {
 
         List<Item> rows = jdbc.query("""
                 SELECT p.id, p.public_code, k.name AS kind, p.title,
-                """ + "       " + tab.quantity + " AS qty,\n" + """
-                       p.price, p.cost_price,
+                """ + "       " + tab.quantity + " AS qty,\n"
+                // Цена и себестоимость проданного — из сделки, а не из карточки:
+                // разделитель явной строкой, иначе текстовый блок съест отступ.
+                + "       " + tab.price + " AS price,\n"
+                + "       " + tab.costPrice + " AS cost_price,\n" + """
                        s.number AS supply_number,
                        p.created_at::date AS created_on
                   FROM part p
@@ -306,6 +328,12 @@ public class OriginReportService {
      *                   не распознано, и это правда о карточке
      * @param quantity   смысл зависит от вкладки: принято, продано, списано
      *                   или лежит — по той же величине считается и подвал
+     * @param price      на «Продано» — цена продажи за штуку, на остальных
+     *                   вкладках розничная из карточки. Иначе строка и подвал
+     *                   говорили бы о разном: подвал там считается по сделкам
+     * @param costPrice  на «Продано» — снимок себестоимости на момент продажи,
+     *                   на остальных — нынешняя из карточки. Переоценка донора
+     *                   задним числом не должна переписывать прошлую прибыль
      * @param supplyNumber номер партии, которой позиция пришла
      * @param date       день, когда позицию завели
      */

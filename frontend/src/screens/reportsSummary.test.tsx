@@ -52,6 +52,19 @@ describe('сводка на экране отчётов', () => {
           totals: { payments: 0, incoming: 0, outgoing: 0, total: 0 },
         });
       }
+      // Склады для отбора проданных позиций приезжают массивом:
+      // подсунуть объект значит уронить экран там, где он работает.
+      if (url.includes('/organization/warehouses')) {
+        return json([]);
+      }
+      // Проданные позиции: свой итог и свой список продавцов — общий ответ
+      // ниже их не несёт, а экран читает и то и другое напрямую.
+      if (url.includes('/reports/sold-items')) {
+        return json({
+          rows: [], nextAfter: null, managers: [],
+          totals: { items: 0, quantity: 0, revenue: 0, cost: 0, profit: 0, withoutCost: 0 },
+        });
+      }
       return json({ month: '2026-08', rows: [] });
     }));
   });

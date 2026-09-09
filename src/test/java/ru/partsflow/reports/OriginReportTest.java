@@ -158,6 +158,46 @@ class OriginReportTest extends PostgresTestBase {
     }
 
     /**
+     * Строка «Продано» говорит о том же, что и её подвал.
+     *
+     * <p>До задачи 0054 строка показывала {@code p.price} и {@code p.cost_price}
+     * из карточки, а подвал считался по настоящим продажам: фара с прайсом
+     * 1 000 продана за 900, и владелец, сложивший колонку «Цена» глазами,
+     * получал 1 000 против 900 в подвале. Какое из чисел верное, по экрану
+     * понять было нельзя, а данная при продаже скидка не была видна вовсе.
+     *
+     * <p>Себестоимость там же и по той же причине: снимок на момент продажи,
+     * а не нынешняя закупка карточки — переоценка донора задним числом
+     * не должна переписывать прибыль прошлых месяцев.
+     */
+    @Test
+    @DisplayName("На «Продано» цена в строке — цена продажи, и сумма сходится с подвалом")
+    void soldRowShowsTheSalePriceAndAddsUpToTheFooter() throws Exception {
+        JsonNode sold = donorTab("sold");
+        JsonNode row = sold.path("rows").get(0);
+
+        assertThat(row.path("title").asText()).isEqualTo("Фара");
+        assertThat(row.path("price").decimalValue())
+                .as("в строке стоит прайс карточки, а не цена, за которую продали")
+                .isEqualByComparingTo("900");
+        // Себестоимость тоже из сделки. Расхождения на этой фикстуре нет —
+        // закупку после продажи здесь никто не правил, — и стерегут его
+        // не эти строки, а `SoldItemsReportTest`, где карточку правят
+        // намеренно. Здесь важно, что снимок доезжает и не пуст.
+        assertThat(row.path("costPrice").decimalValue()).isEqualByComparingTo("700");
+
+        BigDecimal byRows = BigDecimal.ZERO;
+        for (JsonNode line : sold.path("rows")) {
+            byRows = byRows.add(line.path("price").decimalValue()
+                    .multiply(line.path("quantity").decimalValue()));
+        }
+        assertThat(byRows)
+                .as("строка и подвал говорят о разном: сложенная колонка «Цена» "
+                        + "не даёт суммы продаж из подвала")
+                .isEqualByComparingTo(amount(sold));
+    }
+
+    /**
      * Машина без единой продажи.
      *
      * <p>Свежий донор — обычное дело, и вкладка «Продано» у него пуста.
