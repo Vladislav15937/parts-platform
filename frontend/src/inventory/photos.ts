@@ -61,3 +61,19 @@ export function makeMainPhoto(partId: number, photoId: number): Promise<void> {
 export function deletePhoto(partId: number, photoId: number): Promise<void> {
   return request<void>(`/api/parts/${partId}/photos/${photoId}`, { method: 'DELETE' });
 }
+
+/**
+ * Адрес архива со всеми снимками позиции.
+ *
+ * <p>Ссылкой, а не запросом через `request`: браузер обязан **сохранить**
+ * файл, а не отдать его коду — имя файла сервер называет в заголовке ответа,
+ * и повторять его здесь значило бы завести второе место, где оно считается.
+ * Так же сделаны выгрузки витрины и колёс.
+ *
+ * <p>Собирает архив сервер: ссылки на снимки подписанные и короткоживущие,
+ * а девять параллельных скачиваний с телефона по мобильной связи кончаются
+ * отказом на половине.
+ */
+export function photoArchiveUrl(partId: number): string {
+  return `/api/parts/${partId}/photos/archive`;
+}
