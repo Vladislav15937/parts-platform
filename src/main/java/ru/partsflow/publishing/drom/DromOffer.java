@@ -43,6 +43,12 @@ import java.util.List;
  *                     offer», и цена установки — поле внутреннее, решение
  *                     о её показе принадлежит выгрузке, а не позиции.
  *                     {@code null} — приписка выключена либо услуги нет
+ * @param expectedNote готовая строка про то, что товар ещё в пути — та,
+ *                     что владелец написал у этой выгрузки. Встаёт
+ *                     <b>первой</b> в описании: остальное рассказывает
+ *                     про деталь, а это — про то, когда её забрать.
+ *                     {@code null} — товар уже на складе либо выгрузка
+ *                     ожидаемый товар не выгружает
  */
 public record DromOffer(
         String orderCode,
@@ -71,7 +77,8 @@ public record DromOffer(
         boolean fromDonor,
         String textBlock,
         String videoUrl,
-        String installationNote) {
+        String installationNote,
+        String expectedNote) {
 
     public boolean isAvailable() {
         return availableQty != null && availableQty.signum() > 0;

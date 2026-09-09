@@ -254,7 +254,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
 
         long counted = inTenant(() -> accounts.countMatching(
                 null, null, null, null, null, false, null, false, "PART",
-                java.util.Map.of(), java.util.Map.of()));
+                java.util.Map.of(), java.util.Map.of(), false));
         long offers = price().split("<offer>", -1).length - 1;
 
         assertThat(counted)
@@ -324,7 +324,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         long counted = inTenant(() -> accounts.countMatching(
                 null, null, null, null, null, false,
                 java.util.List.of(brandId), false, "PART",
-                java.util.Map.of(), java.util.Map.of()));
+                java.util.Map.of(), java.util.Map.of(), false));
         assertThat(counted)
                 .as("счётчик считает марку не так, как генератор")
                 .isEqualTo(onlyToyota.split("<offer>", -1).length - 1);
@@ -458,7 +458,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
 
         long counted = inTenant(() -> accounts.countMatching(
                 null, null, null, null, null, false, null, false, "PART",
-                java.util.Map.of("section", "A-01"), java.util.Map.of()));
+                java.util.Map.of("section", "A-01"), java.util.Map.of(), false));
         assertThat(counted)
                 .as("счётчик считает не тем условием, каким собирается прайс")
                 .isEqualTo(xml.split("<offer>", -1).length - 1);
@@ -681,6 +681,193 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         assertThat(offerOf(name))
                 .contains("<description>Только описание.</description>")
                 .doesNotContain("Видео:");
+    }
+
+    /**
+     * Товар, которого ещё нет на складе, уезжает только по решению выгрузки.
+     *
+     * <p>Решение владельца продукта от 5 сентября 2026: «выгружаем с припиской
+     * "ожидается поступление"». Товар в пути никому не обещан — его можно
+     * продавать, покупателю лишь надо сказать, что придётся подождать.
+     * Поэтому проверяются обе стороны сразу: без переключателя такой позиции
+     * в прайсе нет вовсе (появление настройки не меняет чужие прайсы молча),
+     * а с переключателем она уезжает <b>доступной</b> и с припиской в начале
+     * описания. Нулём её отдавать нельзя: ноль в колонке количества Дром
+     * читает как «товар удалить», и объявление, ради которого всё
+     * затевалось, не появилось бы вовсе.
+     *
+     * <p>Здесь же сверяется счётчик. Настройка живёт не в колонках отбора,
+     * то есть счётчику она приезжает отдельно, — а счётчик, считающий не тем
+     * условием, что генератор, в этом модуле врал уже дважды.
+     */
+    @Test
+    @DisplayName("Товар в пути уезжает в прайс, только если выгрузка его выгружает")
+    void goodsInTransitFollowTheFeedSetting() {
+        String awaited = "Прайс: бампер из контейнера";
+        String abandoned = "Прайс: черновик без поставки";
+        Long partId = expectedPart(awaited, new BigDecimal("12000"), "EXPECTED");
+        // Черновик, заведённый и брошенный: поставки в пути у него нет,
+        // и переключатель не обязан выгружать заодно и его.
+        part(abandoned, new BigDecimal("9000"), true);
+
+        assertThat(price())
+                .as("товар, которого ещё нет на складе, уехал в прайс без спроса")
+                .doesNotContain(awaited);
+
+        String xml = priceWith(expects("Ожидается поступление, срок — три недели"));
+
+        assertThat(xml)
+                .as("товар по ожидаемой поставке в прайс так и не попал")
+                .contains("<name>" + awaited + "</name>")
+                .as("вместе с ним уехал черновик, поставки в пути не имеющий")
+                .doesNotContain(abandoned);
+
+        String offer = offerIn(xml, awaited);
+        assertThat(offer)
+                .as("товар в пути уехал нулём — Дром читает это как «снять объявление»")
+                .contains("<quantity>1</quantity>")
+                .contains("<available>true</available>");
+        assertThat(descriptionIn(offer))
+                .as("приписка обязана стоять в начале описания, а не после него")
+                .startsWith("Ожидается поступление, срок — три недели");
+
+        long counted = inTenant(() -> accounts.countMatching(
+                null, null, null, null, null, false, null, false, "PART",
+                java.util.Map.of(), java.util.Map.of(), true));
+        assertThat(counted)
+                .as("счётчик обещает не то число, которое уедет площадке")
+                .isEqualTo(xml.split("<offer>", -1).length - 1);
+
+        // Дельта собирается теми же настройками: уйдя без них, она завела бы
+        // в прайс-листе объявление, которого владелец не заводил.
+        assertThat(descriptionIn(offerIn(deltaWith(expects("Ожидается поступление")), awaited)))
+                .as("дельта уносит товар в пути без приписки")
+                .startsWith("Ожидается поступление");
+    }
+
+    /**
+     * Пришедшая поставка снимает приписку — товар становится обычным.
+     *
+     * <p>Проверяется приходом, а не сменой статуса поставки в отрыве от него:
+     * приписка обязана исчезнуть ровно тогда, когда деталь легла на полку.
+     */
+    @Test
+    @DisplayName("Пришедшая поставка снимает приписку про ожидание")
+    void arrivedSupplyDropsTheNote() {
+        String name = "Прайс: фара из контейнера";
+        Long partId = expectedPart(name, new BigDecimal("7000"), "EXPECTED");
+
+        assertThat(descriptionIn(offerIn(priceWith(expects("Ожидается поступление")), name)))
+                .startsWith("Ожидается поступление");
+
+        inTenant(() -> jdbc.update(
+                "UPDATE supply SET status = 'ARRIVED', arrived_on = current_date"
+                        + " WHERE id = (SELECT supply_id FROM part WHERE id = ?)", partId));
+        intake(partId, warehouse, 1);
+
+        String offer = offerIn(priceWith(expects("Ожидается поступление")), name);
+        assertThat(descriptionIn(offer))
+                .as("приписка осталась на товаре, который уже лежит на складе")
+                .doesNotContain("Ожидается поступление");
+        assertThat(offer).contains("<available>true</available>");
+    }
+
+    /**
+     * Переключатель без текста приписки не выгружает ничего.
+     *
+     * <p>Пустой текст отбивается при сохранении, но настройки в базу может
+     * положить и перенос, и запрос мимо экрана. Товар, уехавший без слов
+     * о том, что его ещё нет, — это объявление, по которому покупатель
+     * приедет за деталью, лежащей в контейнере.
+     */
+    @Test
+    @DisplayName("Включённый переключатель без текста товар в пути не выгружает")
+    void switchWithoutNoteShipsNothing() {
+        String name = "Прайс: радиатор из контейнера";
+        expectedPart(name, new BigDecimal("5500"), "IN_TRANSIT");
+
+        String xml = priceWith(new ru.partsflow.publishing.FeedSettings(
+                null, null, null, null, null, true, "   "));
+
+        assertThat(xml)
+                .as("товар в пути уехал без объяснения, почему его нет на складе")
+                .doesNotContain(name);
+    }
+
+    /**
+     * Принятая деталь — обычный товар, даже если поставку не отметили пришедшей.
+     *
+     * <p>Поймано живым прогоном, а не тестом: «прибыла» нажимают не всегда
+     * и не сразу — контейнер разгрузили, товар приняли, а отметка осталась
+     * на завтра. Пока «в пути» считалось по одной поставке, такая деталь
+     * получала приписку «ожидается поступление», лёжа на полке, и уезжала
+     * с количеством из карточки вместо настоящего остатка: покупателю
+     * обещают ждать то, что можно забрать сегодня, а площадке называют
+     * не тот остаток.
+     */
+    @Test
+    @DisplayName("Принятый товар по неотмеченной поставке — обычный, без приписки")
+    void receivedGoodsAreOrdinaryEvenIfSupplyNotMarked() {
+        String name = "Прайс: стойка из неотмеченного контейнера";
+        Long partId = expectedPart(name, new BigDecimal("4300"), "IN_TRANSIT");
+        // Поставку прибывшей не отмечали — а товар уже приняли на склад.
+        intake(partId, warehouse, 2);
+
+        String offer = offerIn(priceWith(expects("Ожидается поступление")), name);
+
+        assertThat(descriptionIn(offer))
+                .as("деталь лежит на полке, а объявление обещает её ждать")
+                .doesNotContain("Ожидается поступление");
+        assertThat(offer)
+                .as("уехало количество из карточки вместо настоящего остатка")
+                .contains("<quantity>2</quantity>");
+    }
+
+    /** Настройки выгрузки, которая выгружает ожидаемый товар с этой припиской. */
+    private static ru.partsflow.publishing.FeedSettings expects(String note) {
+        return new ru.partsflow.publishing.FeedSettings(
+                null, null, null, null, null, true, note);
+    }
+
+    /** Позиция без остатка, привязанная к поставке в пути. */
+    private Long expectedPart(String title, BigDecimal price, String supplyStatus) {
+        return inTenant(() -> {
+            Long supplyId = jdbc.queryForObject("""
+                    INSERT INTO supply (kind, number, status)
+                    VALUES ('CONTAINER', ?, ?) RETURNING id""",
+                    Long.class, "К-" + title.hashCode(), supplyStatus);
+            return jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, cost_price,
+                                      is_published, supply_id)
+                    VALUES (1, ?, ?, 1000, true, ?) RETURNING id""",
+                    Long.class, title, price, supplyId);
+        });
+    }
+
+    private String priceWith(ru.partsflow.publishing.FeedSettings settings) {
+        return inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeTo(out, DromPriceGenerator.FeedFilter.everything(), null, settings);
+            return out.toString(StandardCharsets.UTF_8);
+        });
+    }
+
+    private String deltaWith(ru.partsflow.publishing.FeedSettings settings) {
+        return inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeDelta(out, java.util.List.of(
+                            jdbc.queryForObject("SELECT id FROM part WHERE title = ?",
+                                    Long.class, "Прайс: бампер из контейнера")),
+                    DromPriceGenerator.FeedFilter.everything(), settings);
+            return out.toString(StandardCharsets.UTF_8);
+        });
+    }
+
+    /** Описание объявления как оно уедет площадке. */
+    private static String descriptionIn(String offer) {
+        int at = offer.indexOf("<description>");
+        assertThat(at).as("описания в предложении нет вовсе").isNotNegative();
+        return offer.substring(at + "<description>".length(), offer.indexOf("</description>", at));
     }
 
     /** {@code null}, если позиции в прайсе нет вовсе: снятая с публикации исчезает. */
