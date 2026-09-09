@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { money, monthName, monthOf, shiftMonth,
+  soldFooter,
   unknownShare,
 } from './reports';
 
@@ -86,5 +87,31 @@ describe('доля продаж без источника', () => {
 
   it('пустой месяц не даёт деления на ноль', () => {
     expect(unknownShare(report([]))).toBe(0);
+  });
+});
+
+/**
+ * Подвал проданных позиций.
+ *
+ * <p>Ноль на месте себестоимости — утверждение о деньгах, которого никто
+ * не проверял: у склада, приехавшего из чужой таблицы, закупок нет вовсе,
+ * и «выгода 0» владелец читает как работу впустую. То же правило, что
+ * у колонки «Наценка» в продажах по менеджерам.
+ */
+describe('подвал проданных позиций', () => {
+  const totals = (items: number, withoutCost: number) => ({
+    items, withoutCost, quantity: items, revenue: 800 * items, cost: 0, profit: 0,
+  });
+
+  it('без единой закупки себестоимость и выгода — прочерк, а не ноль', () => {
+    const footer = soldFooter(totals(1, 1));
+    expect(footer).toContain('себестоимость —');
+    expect(footer).toContain('выгода —');
+    // Выручка при этом настоящая: её знают все строки.
+    expect(footer.replace(/\s/g, '')).toContain('проданона800');
+  });
+
+  it('когда закупка есть хоть у одной строки, суммы называются числами', () => {
+    expect(soldFooter(totals(2, 1))).toContain('себестоимость 0');
   });
 });

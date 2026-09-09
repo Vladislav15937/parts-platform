@@ -429,8 +429,44 @@ function boardColumn(key: string, title: string, size: number) {
   };
 }
 
+/**
+ * Проданные позиции: тринадцать колонок, и ширину им задаёт содержимое.
+ *
+ * <p>Наименование, склад и имя продавца стоят такими, какими бывают
+ * у клиента: на «Фаре» и «Иванове» таблица помещается в телефон при любой
+ * вёрстке. Вторая строка — продажа без себестоимости и без машины: склад,
+ * приехавший из чужой таблицы, приходит без закупок целиком, и строка
+ * с прочерками должна мериться тоже.
+ */
+const SOLD_ITEMS = {
+  rows: [
+    {
+      itemId: 501, soldAt: '2026-09-05T18:40:00Z', dealId: 9, dealNumber: 1274,
+      partId: 1, publicCode: 'A7K3M2',
+      title: 'Фара передняя левая Toyota Land Cruiser Prado 150 рестайлинг',
+      condition: 'б/у', price: 12500, listPrice: 14000, quantity: 1,
+      costPrice: 7000, profit: 5500,
+      warehouse: 'Основной склад на Ткацкой, бокс 3 (второй этаж)',
+      manager: 'Екатерина Александрова',
+      supplyNumber: 'К-18', donorCode: '261',
+    },
+    {
+      itemId: 502, soldAt: '2026-09-04T11:05:00Z', dealId: 8, dealNumber: 1270,
+      partId: 2, publicCode: 'B4C9Q1', title: 'Бампер передний',
+      condition: 'б/у', price: 4500, listPrice: 4500, quantity: 2,
+      costPrice: null, profit: null,
+      warehouse: 'Дальний', manager: null, supplyNumber: null, donorCode: null,
+    },
+  ],
+  totals: {
+    items: 82549, quantity: 91204, revenue: 307847216,
+    cost: 190400000, profit: 117447216, withoutCost: 1204,
+  },
+  nextAfter: '2026-09-04T11:05:00Z|502',
+  managers: [{ id: 1, name: 'Екатерина Александрова' }],
+};
+
 const RESPONSES: Array<[string, unknown]> = [
-  ['/api/deals/board', BOARD],
   ['/api/parts/stock', STOCK],
   ['/api/intake/reference', REFERENCE],
   ['/api/intake/donors', DONORS],
@@ -439,10 +475,12 @@ const RESPONSES: Array<[string, unknown]> = [
   ['/api/organization/audit/values', ['Товар', 'Сделка', 'Позиция сделки',
     'Платёж', 'Затрата по машине']],
   ['/api/organization/audit', JOURNAL],
+  ['/api/deals/board', BOARD],
   ['/api/organization/warehouses', WAREHOUSES],
   ['/api/organization/branches', []],
   ['/api/reports/supplies', { rows: SUPPLIES }],
   ['/api/reports/payments', PAYMENTS],
+  ['/api/reports/sold-items', SOLD_ITEMS],
   ['/api/reports/', REPORT],
   ['/api/members', MEMBERS],
   ['/api/marketplace-accounts', FEEDS],
@@ -669,6 +707,15 @@ describe('на телефоне ни один раздел не уезжает �
       + `уже 250 пикселей при экране ${PHONE_WIDTH}.`,
     ).toEqual([]);
   }, 30_000);
+
+  it('меряет все разделы, а не те, до которых дошли руки', () => {
+    const missed = Object.keys(RENDERERS).filter((id) => !measured.has(id));
+    expect(
+      missed,
+      `Эти разделы не измерены ни разу: ${missed.join(', ')}. Проверка, `
+      + 'не нашедшая экранов, зеленеет на чём угодно.',
+    ).toEqual([]);
+  });
 
   /**
    * Доска сделок — второе состояние раздела «Сделки», и обход до него
