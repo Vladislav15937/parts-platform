@@ -407,6 +407,24 @@ class SellerSearchTest extends PostgresTestBase {
                 .hasMessageContaining("левой");
     }
 
+    /**
+     * Та же проверка для «переднего и заднего» — класс закрывается целиком.
+     *
+     * <p>Код у обоих разборов один, и это как раз повод проверить оба:
+     * одинаковый код расходится при первой же правке, а отбор, молча
+     * отдавший пустоту, продавец читает как «нет такого» и отвечает так
+     * покупателю. Пробел назван разбором PR #111 и закрыт тем же приёмом,
+     * что и сторона.
+     */
+    @Test
+    @DisplayName("Неизвестное «перед/зад» отвергается словами")
+    void unknownPositionIsRejected() {
+        assertThatThrownBy(() -> inTenant(() -> parts.searchAvailable(
+                "фара", 50, filter().position("СПЕРЕДИ").build())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("передним");
+    }
+
     private List<Long> ids(PartService.StockSearch search) {
         return search.rows().stream().map(PartService.StockRow::partId).toList();
     }
@@ -443,6 +461,7 @@ class SellerSearchTest extends PostgresTestBase {
         private String brand;
         private Integer yearFrom;
         private String side;
+        private String position;
         private String sort;
         private boolean descending;
 
@@ -461,6 +480,11 @@ class SellerSearchTest extends PostgresTestBase {
             return this;
         }
 
+        FilterBuilder position(String value) {
+            this.position = value;
+            return this;
+        }
+
         FilterBuilder sort(String value, boolean desc) {
             this.sort = value;
             this.descending = desc;
@@ -468,7 +492,7 @@ class SellerSearchTest extends PostgresTestBase {
         }
 
         PartService.StockFilter build() {
-            return new PartService.StockFilter(brand, null, yearFrom, null, side, null,
+            return new PartService.StockFilter(brand, null, yearFrom, null, side, position,
                     null, null, null, null, sort, descending);
         }
     }
