@@ -6,7 +6,6 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.BadCredentialsException;
-import org.springframework.security.authentication.DisabledException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -66,10 +65,23 @@ public class MemberAuthenticationProvider implements AuthenticationProvider {
             // Одна формулировка на все случаи: не подсказываем, что именно
             // не сошлось.
             log.debug("Вход отклонён: компания {}, логин {}", request.getCompanyCode(), login);
-            throw new BadCredentialsException("Неверный код компании, логин или пароль");
+
+            // Схема уезжает вместе с отказом — но только когда компания есть.
+            // Журнал неудачных попыток ведётся внутри организации, и попытку
+            // с выдуманным кодом компании писать некуда: организации,
+            // которой её показать, не существует. Наружу это по-прежнему
+            // один и тот же 401 с пустым телом.
+            if (tenant == null) {
+                throw new BadCredentialsException("Неверный код компании, логин или пароль");
+            }
+            throw new LoginRejection.BadCredentials("Неверный код компании, логин или пароль",
+                    tenant.schemaName(),
+                    member == null ? null : member.id(),
+                    member == null ? null : member.role());
         }
         if (!member.active()) {
-            throw new DisabledException("Сотрудник отключён");
+            throw new LoginRejection.Disabled("Сотрудник отключён",
+                    tenant.schemaName(), member.id(), member.role());
         }
 
         touchLastLogin(tenant.schemaName(), member.id());

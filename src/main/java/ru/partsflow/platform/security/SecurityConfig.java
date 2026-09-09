@@ -16,6 +16,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
+import ru.partsflow.platform.session.LogoutRecorder;
 
 /**
  * Аутентификация: сессия в cookie.
@@ -38,7 +39,8 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http,
-                                           AuthenticationManager authenticationManager)
+                                           AuthenticationManager authenticationManager,
+                                           LogoutRecorder logoutRecorder)
             throws Exception {
 
         // CSRF-токен в cookie, читаемой скриптом: PWA обязана положить его
@@ -120,6 +122,13 @@ public class SecurityConfig {
                                 "OWNER", "MANAGER", "STOREKEEPER", "SELLER")
                         .anyRequest().authenticated())
                 .logout(l -> l.logoutUrl("/api/auth/logout")
+                        // Отметка о выходе ставится до того, как сессию убьют:
+                        // «Вышел в 18:03» — единственный из трёх исходов, про
+                        // который известно, что человек ушёл сам, и без этой
+                        // строки выход неотличим от истечения. Свои
+                        // обработчики Spring зовёт раньше того, который
+                        // уничтожает сессию.
+                        .addLogoutHandler(logoutRecorder)
                         .logoutSuccessHandler((req, res, a) -> res.setStatus(HttpStatus.NO_CONTENT.value())));
 
         return http.build();
