@@ -22,6 +22,7 @@ import {
   WHEEL_COLUMNS,
 } from '../inventory/wheels';
 import type { SetRequest, WheelPage, WheelQuery, WheelRow } from '../inventory/wheels';
+import { bulkNotice } from '../inventory/catalog';
 import { PartCard } from './PartCard';
 import { ColumnMenu } from './ColumnMenu';
 import { BulkEditForm } from './BulkEditForm';
@@ -285,10 +286,10 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         <BulkEditForm
           partIds={chosen}
           count={chosen.length}
-          onSaved={(changed) => {
+          onSaved={(changed, skipped) => {
             setBulk(false);
             setChosen([]);
-            setNotice(`Изменено позиций: ${changed}`);
+            setNotice(bulkNotice(changed, skipped));
             load();
           }}
           onCancel={() => setBulk(false)}

@@ -2173,6 +2173,12 @@ hr {
   font-weight: 600;
 }
 
+/* Насколько подвинулись деньги: «(−10 %)». Приглушённо — это не само
+   значение, а помощь глазу, которому иначе делить в уме. */
+.history__delta {
+  color: var(--muted);
+}
+
 .history__moves {
   width: 100%;
   border-collapse: collapse;

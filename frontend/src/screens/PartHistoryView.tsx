@@ -61,6 +61,13 @@ export function PartHistoryView({ history, tab, onTab }: {
                         <span className="history__was">{field.before ?? '—'}</span>
                         <span className="history__arrow">→</span>
                         <span className="history__now">{field.after ?? '—'}</span>
+                        {/* Насколько подвинулись деньги. Считает сервер
+                            по «было» и «стало»: «5 000 → 4 500» надо делить
+                            в уме, а разбираются с этим по два десятка строк
+                            за раз. */}
+                        {field.delta !== null && (
+                          <span className="history__delta">({field.delta})</span>
+                        )}
                       </li>
                     ))}
                   </ul>

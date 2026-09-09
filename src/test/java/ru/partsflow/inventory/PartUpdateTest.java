@@ -403,10 +403,10 @@ class PartUpdateTest extends PostgresTestBase {
         // Сервис зовут не только из контроллера, и проверка «есть что править»
         // должна стоять там, где операция.
         assertThatThrownBy(() -> inTenant(() ->
-                parts.updateAll(List.of(), Map.of("price", 1), ownerId)))
+                parts.updateAll(List.of(), Map.of("price", 1), Map.of(), ownerId)))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> inTenant(() ->
-                parts.updateAll(List.of(partId), Map.of(), ownerId)))
+                parts.updateAll(List.of(partId), Map.of(), Map.of(), ownerId)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -461,6 +461,267 @@ class PartUpdateTest extends PostgresTestBase {
                         .content("""
                                 {"partIds":[],"changes":{"price":1}}"""))
                 .andExpect(status().isBadRequest());
+    }
+
+    // ------------------------------------------- цена процентом и суммой
+
+    /**
+     * Цена двигается операцией, а не только новым числом.
+     *
+     * <p>Торг на разборке идёт словами «отдам за минус десять» и «скидка
+     * пятьсот, забирай сегодня». Пока поле принимало только готовое число,
+     * владелец считал 27 000 − 10 % в уме или в калькуляторе телефона —
+     * а ошибка в разряде здесь стоит детали, отданной за 2 700.
+     *
+     * <p>Считает сервер: тот же расчёт нужен правке списком, и две копии
+     * разошлись бы на первом округлении.
+     */
+    @Test
+    @DisplayName("«Уменьшить на %»: 27 000 минус десять процентов — это 24 300")
+    void priceDropsByPercent() throws Exception {
+        Long part = partWithPrice("27000");
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(put("/api/parts/" + part).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price":10,"priceOp":"DECREASE_PERCENT","published":true}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.price").value(24300.00));
+
+        assertThat(priceOf(part)).isEqualByComparingTo("24300");
+        // Площадке нужна дельта: цена в объявлении обязана уехать
+        // ровно та же, что владелец увидел в карточке.
+        assertThat(priceEvents(part)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("«Увеличить на сумму» и «Округлить до» считаются от прежней цены")
+    void priceGrowsByAmountAndRounds() throws Exception {
+        Long part = partWithPrice("24300");
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(put("/api/parts/" + part).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price":500,"priceOp":"INCREASE_AMOUNT","published":true}"""))
+                .andExpect(status().isOk());
+        assertThat(priceOf(part)).isEqualByComparingTo("24800");
+
+        // Арифметическое, а не всегда вверх: это цена, а не наценка.
+        // 24 800 до тысяч — 25 000, а 24 300 было бы 24 000.
+        mvc.perform(put("/api/parts/" + part).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price":1000,"priceOp":"ROUND_TO","published":true}"""))
+                .andExpect(status().isOk());
+        assertThat(priceOf(part)).isEqualByComparingTo("25000");
+    }
+
+    @Test
+    @DisplayName("Без операции поле по-прежнему принимает готовое число")
+    void plainNumberStillReplacesPrice() throws Exception {
+        Long part = partWithPrice("27000");
+        MockHttpSession session = login("vladelec");
+
+        // Самый частый случай остаётся одним движением: умолчание —
+        // «Изменить», и старое поведение обязано не сломаться.
+        mvc.perform(put("/api/parts/" + part).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price":30000,"published":true}"""))
+                .andExpect(status().isOk());
+
+        assertThat(priceOf(part)).isEqualByComparingTo("30000");
+    }
+
+    /**
+     * Отрицательной цены не бывает — и это отказ словами, а не ноль.
+     *
+     * <p>Ноль означал бы деталь, выставленную даром: нулевая цена в прайс
+     * не уезжает вовсе, объявление пропадает, и узнают об этом через
+     * несколько дней по опустевшей выдаче площадки.
+     */
+    @Test
+    @DisplayName("«Уменьшить на сумму» больше цены — отказ словами, цена цела")
+    void priceCannotGoNegative() throws Exception {
+        Long part = partWithPrice("24300");
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(put("/api/parts/" + part).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price":100000,"priceOp":"DECREASE_AMOUNT","published":true}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("Отрицательной цены не бывает")));
+
+        assertThat(priceOf(part)).isEqualByComparingTo("24300");
+    }
+
+    @Test
+    @DisplayName("«Уменьшить на 100 %» не молчит и не оставляет ноль")
+    void hundredPercentIsRefused() throws Exception {
+        Long part = partWithPrice("24300");
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(put("/api/parts/" + part).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price":100,"priceOp":"DECREASE_PERCENT","published":true}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("ноль")));
+
+        assertThat(priceOf(part)).isEqualByComparingTo("24300");
+    }
+
+    @Test
+    @DisplayName("Пустое значение операции цену не трогает, а пустой шаг округления — отказ")
+    void emptyOperandLeavesPriceAlone() throws Exception {
+        Long part = partWithPrice("24300");
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(put("/api/parts/" + part).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"priceOp":"DECREASE_PERCENT","published":true}"""))
+                .andExpect(status().isOk());
+        assertThat(priceOf(part)).isEqualByComparingTo("24300");
+
+        // Округление без шага — единственная операция, которую нельзя
+        // выполнить «никак»: промолчать значит сказать «сохранено» там,
+        // где ничего не произошло.
+        mvc.perform(put("/api/parts/" + part).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"priceOp":"ROUND_TO","published":true}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("шаг округления")));
+        assertThat(priceOf(part)).isEqualByComparingTo("24300");
+    }
+
+    /**
+     * Правка списком считает от прежней цены каждой позиции.
+     *
+     * <p>Это и есть общая переоценка, ради которой задача заведена: «подними
+     * всё, что лежит с зимы, на пять процентов». Сведённая к одному числу,
+     * она поставила бы всем позициям одну цену — то есть испортила бы склад
+     * ровно тем действием, которым его правят.
+     */
+    @Test
+    @DisplayName("Списком процент считается от своей цены у каждой позиции")
+    void bulkPercentCountsFromEachOwnPrice() throws Exception {
+        Long first = partWithPrice("27000");
+        Long second = partWithPrice("1000");
+        Long third = partWithPrice("555");
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[%d,%d,%d],"changes":{"price":10},
+                                 "operations":{"price":"DECREASE_PERCENT"}}"""
+                                .formatted(first, second, third)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changed").value(3))
+                .andExpect(jsonPath("$.skipped").value(0));
+
+        assertThat(priceOf(first)).isEqualByComparingTo("24300");
+        assertThat(priceOf(second)).isEqualByComparingTo("900");
+        // Округление до копеек явным правилом: 499,5 — это 499,50,
+        // а не 499,49999 из двоичной плавающей.
+        assertThat(priceOf(third)).isEqualByComparingTo("499.50");
+    }
+
+    /**
+     * Позиция с незаполненным полем не считается от нуля, и об этом говорят.
+     *
+     * <p>Придуманный ноль превратил бы «поднять на 5 %» в «поставить ноль»,
+     * то есть в снятое объявление. А «изменено 2» без слова о пропущенной
+     * читается как «сделано всем»: заметить иначе можно только сверкой
+     * склада руками.
+     */
+    @Test
+    @DisplayName("Позиция без цены пропускается, и это сказано числом")
+    void bulkSkipsPositionsWithoutBase() throws Exception {
+        Long withPrice = partWithPrice("1000");
+        Long without = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price)
+                VALUES (1, 'Крыло без цены', NULL) RETURNING id""", Long.class));
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[%d,%d],"changes":{"price":5},
+                                 "operations":{"price":"INCREASE_PERCENT"}}"""
+                                .formatted(withPrice, without)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.skipped").value(1));
+
+        assertThat(priceOf(withPrice)).isEqualByComparingTo("1050");
+        assertThat(priceOf(without)).isNull();
+    }
+
+    @Test
+    @DisplayName("Арифметика бывает только у денег")
+    void operationsAreForMoneyOnly() throws Exception {
+        MockHttpSession session = login("vladelec");
+
+        // «Увеличить заметку на 10 %» не значит ничего, а молча выполненная
+        // замена вместо неё — это стёртая заметка у сотни позиций.
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[%d],"changes":{"note":"10"},
+                                 "operations":{"note":"INCREASE_PERCENT"}}"""
+                                .formatted(partId)))
+                .andExpect(status().isBadRequest());
+
+        assertThat(note()).isEqualTo("скол на креплении");
+    }
+
+    /**
+     * История говорит не только «стало», но и насколько подвинулось.
+     *
+     * <p>«27 000 → 24 300» надо делить в уме, а разбираются с ценой по два
+     * десятка строк за раз. Это посчитанная разница, а не записанная
+     * операция: чем именно двигали цену, {@code audit_log} не хранит —
+     * он кладёт снимки строки, и своего поля под это у него нет.
+     */
+    @Test
+    @DisplayName("В истории у цены стоит, на сколько процентов она подвинулась")
+    void historyShowsHowFarThePriceMoved() throws Exception {
+        Long part = partWithPrice("27000");
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(put("/api/parts/" + part).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price":10,"priceOp":"DECREASE_PERCENT","published":true}"""))
+                .andExpect(status().isOk());
+
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/parts/" + part + "/history").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changes[0].fields[0].label").value("Цена"))
+                .andExpect(jsonPath("$.changes[0].fields[0].before").value("27000"))
+                .andExpect(jsonPath("$.changes[0].fields[0].after").value("24300"))
+                .andExpect(jsonPath("$.changes[0].fields[0].delta").value("−10 %"));
+    }
+
+    private Long partWithPrice(String price) {
+        return inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price, is_published)
+                VALUES (1, 'Фара Toyota Camry 2006 перед. прав. (б/у)', ?, true)
+                RETURNING id""", Long.class, new BigDecimal(price)));
+    }
+
+    private BigDecimal priceOf(Long part) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT price FROM part WHERE id = ?", BigDecimal.class, part));
     }
 
     private String sectionOf(Long part) {

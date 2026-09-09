@@ -225,14 +225,27 @@ public class CatalogController {
         if (ids.isEmpty()) {
             throw new IllegalArgumentException("Отбор не нашёл ни одной позиции");
         }
-        return new BulkResult(parts.updateAll(ids, request.changes(), CurrentUser.memberId()));
+        PartService.BulkOutcome outcome = parts.updateAll(ids, request.changes(),
+                request.operations(), CurrentUser.memberId());
+        return new BulkResult(outcome.changed(), outcome.skipped());
     }
 
-    /** Только изменения: что править, сказано параметрами отбора. */
-    public record BulkByFilter(@NotEmpty Map<String, Object> changes) {
+    /**
+     * Только изменения: что править, сказано параметрами отбора.
+     *
+     * @param operations что сделать с денежным полем — процент, сумма,
+     *                   округление. Считается от прежней цены каждой позиции,
+     *                   а не сводит весь отбор к одному числу
+     */
+    public record BulkByFilter(@NotEmpty Map<String, Object> changes,
+                               Map<String, PriceOperation> operations) {
     }
 
-    public record BulkResult(int changed) {
+    /**
+     * @param skipped у скольких позиций поле было пустым: арифметике не над
+     *                чем работать, и они не тронуты
+     */
+    public record BulkResult(int changed, int skipped) {
     }
 
     /**

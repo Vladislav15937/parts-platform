@@ -161,18 +161,28 @@ public class PartController {
     @PostMapping("/bulk")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public BulkResult updateAll(@Valid @RequestBody BulkRequest request) {
-        return new BulkResult(partService.updateAll(
-                request.partIds(), request.changes(), CurrentUser.memberId()));
+        PartService.BulkOutcome outcome = partService.updateAll(request.partIds(),
+                request.changes(), request.operations(), CurrentUser.memberId());
+        return new BulkResult(outcome.changed(), outcome.skipped());
     }
 
     /**
-     * @param changes только тронутые поля: непереданное не меняется
+     * @param changes    только тронутые поля: непереданное не меняется
+     * @param operations что сделать с денежным полем — процент, сумма,
+     *                   округление; непереданное означает «заменить»,
+     *                   то есть прежнее поведение
      */
     public record BulkRequest(@NotEmpty List<Long> partIds,
-                              @NotEmpty java.util.Map<String, Object> changes) {
+                              @NotEmpty java.util.Map<String, Object> changes,
+                              java.util.Map<String, PriceOperation> operations) {
     }
 
-    public record BulkResult(int changed) {
+    /**
+     * @param skipped у скольких позиций поле было пустым: считать процент
+     *                не от чего, и они не тронуты. Молчать об этом нельзя —
+     *                «изменено 40» читается как «сделано всем»
+     */
+    public record BulkResult(int changed, int skipped) {
     }
 
     /**
@@ -283,7 +293,12 @@ public class PartController {
                                 @PositiveOrZero Integer packageHeightMm,
                                 @PositiveOrZero BigDecimal packageWeightKg,
                                 Long storageCellId,
-                                boolean published) {
+                                boolean published,
+                                // Что сделать с ценой: «Изменить» (умолчание и прежнее
+                                // поведение), процент, сумма, округление. При арифметике
+                                // поле price несёт значение операции, а не новую цену, —
+                                // поэтому @PositiveOrZero на нём верен и там.
+                                PriceOperation priceOp) {
 
         static UpdateRequest of(Part part) {
             return new UpdateRequest(part.getPrice(), part.getMinPrice(), part.getCostPrice(),
@@ -292,7 +307,10 @@ public class PartController {
                     part.getManufacturer(), part.getColor(), part.getSection(), part.getBarcode(),
                     part.getWeightKg(), part.getLengthMm(), part.getWidthMm(), part.getHeightMm(),
                     part.getPackageLengthMm(), part.getPackageWidthMm(), part.getPackageHeightMm(),
-                    part.getPackageWeightKg(), part.getStorageCellId(), part.isPublished());
+                    part.getPackageWeightKg(), part.getStorageCellId(), part.isPublished(),
+                    // Форма открывается на «Изменить»: самый частый случай —
+                    // вписать новое число — остаётся одним движением.
+                    PriceOperation.SET);
         }
 
         PartService.PartUpdate toUpdate() {
@@ -300,7 +318,7 @@ public class PartController {
                     qualityGrade, description, note, textBlock, videoUrl, marking, manufacturer,
                     color, section, barcode, weightKg, lengthMm, widthMm, heightMm,
                     packageLengthMm, packageWidthMm, packageHeightMm, packageWeightKg,
-                    storageCellId, published);
+                    storageCellId, published, priceOp);
         }
     }
 

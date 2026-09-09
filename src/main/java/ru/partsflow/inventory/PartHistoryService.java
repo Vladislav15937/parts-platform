@@ -130,13 +130,67 @@ public class PartHistoryService {
             Map<Long, String> lookup = titles.getOrDefault(diff.column(), Map.of());
             change.fields().add(new Field(AuditedColumns.PART.get(diff.column()),
                     AuditedColumns.display(diff.column(), diff.was(), lookup),
-                    AuditedColumns.display(diff.column(), diff.now(), lookup)));
+                    AuditedColumns.display(diff.column(), diff.now(), lookup),
+                    delta(diff.column(), diff.was(), diff.now())));
         }
 
         List<Change> changes = new ArrayList<>(byAudit.values());
         created(partId).ifPresent(changes::add);
         return changes;
     }
+
+    /**
+     * Насколько подвинулись деньги: «5 000 → 4 500 (−10 %)».
+     *
+     * <p><b>Зачем.</b> Правку цены смотрят затем, чтобы понять, почему деталь
+     * ушла дешевле, — и два числа сами по себе на это не отвечают: «27 000 →
+     * 24 300» надо делить в уме, а разбираются с этим по два десятка строк
+     * за раз. Процент виден сразу и одинаково читается у детали за тысячу
+     * и за сто тысяч.
+     *
+     * <p><b>Это посчитанная разница, а не записанная операция, и разница
+     * между ними важна.</b> Какой операцией владелец двигал цену — процентом
+     * или новым числом, — не хранится нигде: {@code audit_log} кладёт снимки
+     * строки, и своего поля под «чем правили» у него нет. Поэтому строка
+     * говорит ровно то, что можно доказать двумя снимками: цена стала ниже
+     * на десять процентов. Утверждать «нажали „Уменьшить на %“» мы права
+     * не имеем — то же правило, по которому не подставляется автор
+     * и не выдумывается роль.
+     *
+     * <p>От пустого значения процент не считается: доли от «не заполнено»
+     * не бывает, и «+∞ %» на месте первой заведённой цены — это шум.
+     */
+    private static String delta(String column, String was, String now) {
+        if (!AMOUNTS.contains(column) || was == null || now == null) {
+            return null;
+        }
+        BigDecimal before;
+        BigDecimal after;
+        try {
+            before = new BigDecimal(was);
+            after = new BigDecimal(now);
+        } catch (NumberFormatException notANumber) {
+            return null;
+        }
+        if (before.signum() == 0) {
+            return null;
+        }
+        BigDecimal percent = after.subtract(before)
+                .multiply(HUNDRED)
+                .divide(before, 1, java.math.RoundingMode.HALF_UP)
+                .stripTrailingZeros();
+        if (percent.signum() == 0) {
+            return null;
+        }
+        String number = percent.abs().toPlainString().replace('.', ',');
+        return (percent.signum() < 0 ? "−" : "+") + number + " %";
+    }
+
+    private static final BigDecimal HUNDRED = new BigDecimal("100");
+
+    /** Поля, у которых процент разницы что-то значит: деньги, а не вес и не габарит. */
+    private static final Set<String> AMOUNTS =
+            Set.of("price", "min_price", "cost_price", "installation_price");
 
     private List<String> visibleFields(boolean money) {
         return AuditedColumns.PART.keySet().stream()
@@ -339,7 +393,12 @@ public class PartHistoryService {
     public record Change(Instant at, String author, String action, List<Field> fields) {
     }
 
-    public record Field(String label, String before, String after) {
+    /**
+     * @param delta насколько подвинулись деньги — «−10 %», «+5 %».
+     *              {@code null} у всего, что деньгами не является, и у правки
+     *              от пустого значения: процент от «не заполнено» не считается
+     */
+    public record Field(String label, String before, String after, String delta) {
     }
 
     public record Movement(Instant at, String type, BigDecimal qty, String document,

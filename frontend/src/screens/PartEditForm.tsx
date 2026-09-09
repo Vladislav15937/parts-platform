@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
-import { loadEditable, savePart, type PartEdit } from '../inventory/catalog';
+import {
+  loadEditable, savePart, priceOperationHint, PRICE_OPERATIONS,
+  type PartEdit, type PriceOperation,
+} from '../inventory/catalog';
 
 /**
  * Правка карточки товара.
@@ -17,6 +20,13 @@ import { loadEditable, savePart, type PartEdit } from '../inventory/catalog';
  *
  * <p>Пустое поле означает «очищено», а не «оставить как было»: форма уезжает
  * целиком. Иначе стереть заметку было бы невозможно.
+ *
+ * <p><b>Цена двигается операцией, а не только новым числом.</b> Торг
+ * на разборке идёт словами «минус десять» и «скинь пятьсот», и считать это
+ * в уме — ошибка в разряде ценой в деталь. Умолчание — «Изменить»: самый
+ * частый случай остаётся одним движением, арифметика лежит рядом.
+ * Считает сервер: тот же расчёт нужен правке списком, и две копии
+ * разошлись бы на первом округлении.
  */
 export function PartEditForm({ partId, onSaved, onCancel }: {
   partId: number;
@@ -26,11 +36,23 @@ export function PartEditForm({ partId, onSaved, onCancel }: {
   const [form, setForm] = useState<Draft | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [priceOp, setPriceOp] = useState<PriceOperation>('SET');
+  /**
+   * Цена, с которой форму открыли. Нужна, чтобы вернуть её в поле, когда
+   * владелец передумал считать процентом: набранные «10» на месте цены
+   * означали бы «поставить десять рублей».
+   */
+  const [loadedPrice, setLoadedPrice] = useState('');
 
   useEffect(() => {
     let alive = true;
     void loadEditable(partId)
-      .then((card) => { if (alive) setForm(draftOf(card)); })
+      .then((card) => {
+        if (!alive) return;
+        const draft = draftOf(card);
+        setForm(draft);
+        setLoadedPrice(draft.price);
+      })
       .catch(() => { if (alive) setError('Не удалось прочитать карточку'); });
     return () => { alive = false; };
   }, [partId]);
@@ -39,12 +61,24 @@ export function PartEditForm({ partId, onSaved, onCancel }: {
     setForm((f) => (f === null ? f : { ...f, [key]: value }));
   }
 
+  /**
+   * Смена операции чистит поле, а возврат к «Изменить» возвращает цену.
+   *
+   * <p>Оставленные в поле 27 000 при выбранном «Уменьшить на %» — это
+   * двадцать семь тысяч процентов, то есть отказ на ровном месте; а пустое
+   * поле при «Изменить» значит «цену не трогаем», и потерять её нельзя.
+   */
+  function changeOp(next: PriceOperation): void {
+    setPriceOp(next);
+    set('price', next === 'SET' ? loadedPrice : '');
+  }
+
   async function save(): Promise<void> {
     if (form === null) return;
     setError('');
     setSaving(true);
     try {
-      await savePart(partId, toEdit(form));
+      await savePart(partId, toEdit(form), priceOp);
       onSaved();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Не удалось сохранить');
@@ -67,7 +101,20 @@ export function PartEditForm({ partId, onSaved, onCancel }: {
     <div className="card-edit">
       <h4>Деньги</h4>
       <div className="card-edit__grid">
-        <Num label="Цена" value={form.price} onChange={(v) => set('price', v)} />
+        <div className="field">
+          Цена
+          <div className="row">
+            <select aria-label="Операция с ценой" value={priceOp}
+                    onChange={(e) => changeOp(e.target.value as PriceOperation)}>
+              {PRICE_OPERATIONS.map((op) => (
+                <option key={op.key} value={op.key}>{op.title}</option>
+              ))}
+            </select>
+            <input aria-label="Значение операции с ценой" inputMode="decimal"
+                   value={form.price} placeholder={priceOperationHint(priceOp)}
+                   onChange={(e) => set('price', e.target.value.replace(',', '.'))} />
+          </div>
+        </div>
         <Num label="Минимальная цена" value={form.minPrice}
              onChange={(v) => set('minPrice', v)} />
         <Num label="Себестоимость" value={form.costPrice}

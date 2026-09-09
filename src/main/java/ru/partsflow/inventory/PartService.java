@@ -252,20 +252,33 @@ public class PartService {
      * <p>Событие о смене цены уходит только когда цена действительно другая:
      * площадке незачем дельта на правку заметки, а {@code price_changed_at}
      * обязан означать «цену меняли», иначе по нему нельзя искать.
+     *
+     * <p><b>Цена приходит операцией, а не только готовым числом.</b>
+     * {@code priceOp} — «Изменить» (умолчание, прежнее поведение),
+     * «Увеличить/Уменьшить на %», «Увеличить/Уменьшить на сумму»,
+     * «Округлить до»; при арифметике поле {@code price} несёт не новую цену,
+     * а значение операции — процент, сумму или шаг. Считает
+     * {@link PriceOperation}, а не браузер: тот же расчёт нужен правке
+     * списком, и две копии разошлись бы на первом округлении.
      */
     @Transactional
     public Part update(Long partId, PartUpdate update, Long authorId) {
         Part part = partRepository.findById(partId)
                 .orElseThrow(() -> new IllegalArgumentException("Запчасть не найдена: " + partId));
 
-        if (update.price() != null && update.price().signum() < 0) {
+        PriceOperation priceOp = update.priceOp() == null ? PriceOperation.SET : update.priceOp();
+        if (!priceOp.arithmetic() && update.price() != null && update.price().signum() < 0) {
             throw new IllegalArgumentException("Цена не может быть отрицательной");
         }
 
-        boolean priceChanged = update.price() != null
-                && (part.getPrice() == null || part.getPrice().compareTo(update.price()) != 0);
+        // Отказ называет позицию так, как её зовёт человек: публичный код
+        // виден на витрине и на этикетке, внутренний номер — нигде.
+        BigDecimal wanted = priceOp.apply(part.getPrice(), update.price(),
+                "цена позиции " + part.getPublicCode());
+        boolean priceChanged = wanted != null
+                && (part.getPrice() == null || part.getPrice().compareTo(wanted) != 0);
         if (priceChanged) {
-            part.changePrice(update.price(), authorId);
+            part.changePrice(wanted, authorId);
         }
 
         part.setMinPrice(update.minPrice());
@@ -468,10 +481,26 @@ public class PartService {
      * действительно стала другой: площадке нужна дельта, а не отметка
      * о том, что кто-то открыл форму.
      *
-     * @return сколько карточек изменилось
+     * <p><b>Деньги правятся операцией, а не только готовым числом.</b>
+     * {@code operations} — что сделать с полем: заменить (умолчание),
+     * подвинуть процентом или суммой, округлить. Считается от прежнего
+     * значения <b>каждой</b> позиции, а не сводится к общему числу: «минус
+     * десять процентов» у трёх позиций даёт три разные цены. Расчёт тот же
+     * {@link PriceOperation}, что и в карточке, — две копии разошлись бы
+     * на первом округлении.
+     *
+     * <p><b>Позиция с незаполненным полем не трогается, а не считается
+     * от нуля.</b> Считать процент не от чего, а придуманный ноль превратил
+     * бы «поднять на 5 %» в «поставить ноль» — то есть в снятое объявление.
+     * Сколько таких, возвращается вызывающему: «изменено 40» без слова
+     * о пропущенных читается как «сделано всем».
+     *
+     * @return сколько карточек изменилось и у скольких арифметике не над чем
+     *         было работать
      */
     @Transactional
-    public int updateAll(List<Long> partIds, Map<String, Object> changes, Long authorId) {
+    public BulkOutcome updateAll(List<Long> partIds, Map<String, Object> changes,
+                                 Map<String, PriceOperation> operations, Long authorId) {
         if (partIds == null || partIds.isEmpty()) {
             throw new IllegalArgumentException("Не выбрано ни одной позиции");
         }
@@ -483,8 +512,21 @@ public class PartService {
                 throw new IllegalArgumentException("Это поле нельзя править списком: " + field);
             }
         }
+        Map<String, PriceOperation> ops = operations == null ? Map.of() : operations;
+        for (var op : ops.entrySet()) {
+            // Арифметика бывает только у денег: «увеличить заметку на 10 %»
+            // не значит ничего, а молча выполненная замена вместо неё —
+            // это стёртая заметка у сотни позиций.
+            if (op.getValue() != null && op.getValue().arithmetic()
+                    && !MONEY_FIELDS.contains(op.getKey())) {
+                throw new IllegalArgumentException(
+                        "Операция «%s» применима только к деньгам, а не к полю «%s»"
+                                .formatted(op.getValue().title(), op.getKey()));
+            }
+        }
 
         int changed = 0;
+        int skipped = 0;
         List<Long> touched = new java.util.ArrayList<>();
         for (Long partId : partIds) {
             Part part = partRepository.findById(partId).orElse(null);
@@ -493,11 +535,19 @@ public class PartService {
             }
             touched.add(partId);
             boolean priceChanged = false;
+            boolean nothingToCountFrom = false;
             for (var change : changes.entrySet()) {
-                priceChanged |= apply(part, change.getKey(), change.getValue(), authorId);
+                PriceOperation op = ops.getOrDefault(change.getKey(), PriceOperation.SET);
+                Applied applied = apply(part, change.getKey(), change.getValue(),
+                        op == null ? PriceOperation.SET : op, authorId);
+                priceChanged |= applied == Applied.PRICE_CHANGED;
+                nothingToCountFrom |= applied == Applied.SKIPPED;
             }
             part.touchedBy(authorId);
             changed++;
+            if (nothingToCountFrom) {
+                skipped++;
+            }
 
             if (priceChanged) {
                 eventPublisher.publish(DomainEvent.of(
@@ -508,25 +558,66 @@ public class PartService {
         // состояние, и правка сотни позиций уедет одной дельтой.
         partChanges.changed(touched);
 
-        log.info("Правка списком: позиций {}, полей {}", changed, changes.size());
-        return changed;
+        log.info("Правка списком: позиций {}, полей {}, пропущено пустых {}",
+                changed, changes.size(), skipped);
+        return new BulkOutcome(changed, skipped);
     }
 
-    /** @return правда, если это была смена цены на другую */
-    private boolean apply(Part part, String field, Object value, Long authorId) {
+    /**
+     * Итог правки списком.
+     *
+     * @param skipped у скольких позиций поле было пустым, и арифметике
+     *                не над чем работать: они не тронуты этим полем
+     */
+    public record BulkOutcome(int changed, int skipped) {
+    }
+
+    /** Что случилось с полем одной позиции. */
+    private enum Applied {
+        /** Поле записано (или менять было нечего — например пустое значение операции). */
+        CHANGED,
+        /** Цена стала другой: площадке нужна дельта. */
+        PRICE_CHANGED,
+        /** Считать не от чего: поле пустое, а операция арифметическая. */
+        SKIPPED
+    }
+
+    private Applied apply(Part part, String field, Object value, PriceOperation op,
+                          Long authorId) {
         switch (field) {
             case "price" -> {
-                BigDecimal price = decimal(value);
-                boolean other = price != null
-                        && (part.getPrice() == null || part.getPrice().compareTo(price) != 0);
+                Money money = money(op, part.getPrice(), value, part, "цена");
+                boolean other = money.change() && money.value() != null
+                        && (part.getPrice() == null
+                            || part.getPrice().compareTo(money.value()) != 0);
                 if (other) {
-                    part.changePrice(price, authorId);
+                    part.changePrice(money.value(), authorId);
                 }
-                return other;
+                return other ? Applied.PRICE_CHANGED
+                             : money.skipped() ? Applied.SKIPPED : Applied.CHANGED;
             }
-            case "minPrice" -> part.setMinPrice(decimal(value));
-            case "costPrice" -> part.setCostPrice(decimal(value));
-            case "installationPrice" -> part.setInstallationPrice(decimal(value));
+            case "minPrice" -> {
+                Money money = money(op, part.getMinPrice(), value, part, "минимальная цена");
+                if (money.change()) {
+                    part.setMinPrice(money.value());
+                }
+                return money.skipped() ? Applied.SKIPPED : Applied.CHANGED;
+            }
+            case "costPrice" -> {
+                Money money = money(op, part.getCostPrice(), value, part, "себестоимость");
+                if (money.change()) {
+                    part.setCostPrice(money.value());
+                }
+                return money.skipped() ? Applied.SKIPPED : Applied.CHANGED;
+            }
+            case "installationPrice" -> {
+                Money money = money(op, part.getInstallationPrice(), value, part,
+                        "цена установки");
+                if (money.change()) {
+                    part.setInstallationPrice(money.value());
+                }
+                return money.skipped() ? Applied.SKIPPED : Applied.CHANGED;
+            }
             case "qualityGrade" -> part.setQualityGrade(
                     value == null ? null : QualityGrade.valueOf(String.valueOf(value)));
             case "description" -> part.setDescription(text(value));
@@ -541,7 +632,40 @@ public class PartService {
             // они дали бы поле, которое одна пускает, а другая нет.
             default -> part.setPublished(Boolean.parseBoolean(String.valueOf(value)));
         }
-        return false;
+        return Applied.CHANGED;
+    }
+
+    /**
+     * Денежное поле после операции.
+     *
+     * <p>Один расчёт на четыре поля: цена, минимальная цена, себестоимость
+     * и цена установки двигаются одинаково, и четыре копии разошлись бы —
+     * как уже расходились копии словарей и белых списков.
+     *
+     * @param change  писать ли поле вовсе: при арифметике без значения менять
+     *                нечего, а при замене пустое означает «очистить»
+     * @param skipped считать было не от чего — поле у этой позиции пустое
+     */
+    private record Money(BigDecimal value, boolean change, boolean skipped) {
+    }
+
+    private static Money money(PriceOperation op, BigDecimal current, Object raw, Part part,
+                               String what) {
+        BigDecimal operand = decimal(raw);
+        if (!op.arithmetic()) {
+            // Прежнее поведение: пустое отмеченное поле — «очистить».
+            return new Money(operand, true, false);
+        }
+        if (op.hasOperand(operand) && current == null) {
+            // Пропускаем позицию, а не отказываем всей пачке: у склада
+            // после переезда себестоимость заполнена не у всех, и один
+            // прочерк не должен отменять правку тридцати тысяч позиций.
+            // Сколько пропущено, вызывающий скажет человеку.
+            return new Money(null, false, true);
+        }
+        BigDecimal next = op.apply(current, operand,
+                "%s позиции %s".formatted(what, part.getPublicCode()));
+        return next == null ? new Money(null, false, false) : new Money(next, true, false);
     }
 
     /**
@@ -556,6 +680,14 @@ public class PartService {
             "price", "minPrice", "costPrice", "installationPrice", "qualityGrade",
             "description", "note", "textBlock", "marking", "manufacturer", "color",
             "section", "published");
+
+    /**
+     * Поля, которые можно двигать процентом, суммой и округлением.
+     *
+     * <p>Подмножество {@code BULK_FIELDS}: арифметика бывает только у денег.
+     */
+    static final java.util.Set<String> MONEY_FIELDS = java.util.Set.of(
+            "price", "minPrice", "costPrice", "installationPrice");
 
     /**
      * Штрихкод не должен стоять у двух позиций сразу.
@@ -628,7 +760,11 @@ public class PartService {
                              Integer packageHeightMm,
                              BigDecimal packageWeightKg,
                              Long storageCellId,
-                             boolean published) {
+                             boolean published,
+                             // Что сделать с ценой: заменить (умолчание), подвинуть
+                             // процентом или суммой, округлить. При арифметике
+                             // price — значение операции, а не новая цена.
+                             PriceOperation priceOp) {
     }
 
     /**

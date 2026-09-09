@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { ApiError } from '../api/client';
 import {
-  BULK_FIELDS, savePartsBulk, savePartsBulkByFilter, type CatalogQuery,
+  BULK_FIELDS, PRICE_OPERATIONS, priceOperationHint, savePartsBulk, savePartsBulkByFilter,
+  type CatalogQuery, type PriceOperation,
 } from '../inventory/catalog';
 import { count as formatCount, positions } from '../ui/plural';
 
@@ -28,11 +29,19 @@ export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
   whole?: CatalogQuery | undefined;
   /** Сколько позиций тронем. У отбора это общее число, а не длина списка. */
   count: number;
-  onSaved: (changed: number) => void;
+  /** `skipped` — у скольких позиций денежное поле пустое: считать было не от чего. */
+  onSaved: (changed: number, skipped: number) => void;
   onCancel: () => void;
 }) {
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [values, setValues] = useState<Record<string, string>>({});
+  /**
+   * Что сделать с денежным полем: заменить (умолчание), процент, сумма,
+   * округление. Считается от прежнего значения каждой позиции, а не сводит
+   * отбор к общему числу: «минус десять процентов» у трёх позиций — три
+   * разные цены.
+   */
+  const [ops, setOps] = useState<Record<string, PriceOperation>>({});
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   // Правка всего отбора вторым нажатием: отменить её нечем, кроме
@@ -46,6 +55,17 @@ export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
   }
 
   const chosen = BULK_FIELDS.filter((f) => touched[f.key] === true);
+
+  /**
+   * Отмеченное поле с арифметикой, но без значения.
+   *
+   * <p>Кнопка, которая ничего не сделает, обязана быть погашена и назвать
+   * причину: без этого владелец выбирает «Уменьшить на %», не вводит числа,
+   * жмёт «Изменить 3 позиции» и получает «изменено 3» при неизменившихся
+   * ценах — то есть экран сообщает о работе, которой не было.
+   */
+  const emptyOperand = chosen.find((f) => f.kind === 'money'
+    && (ops[f.key] ?? 'SET') !== 'SET' && (values[f.key] ?? '').trim() === '');
 
   async function save(): Promise<void> {
     setError('');
@@ -70,10 +90,19 @@ export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
           changes[field.key] = raw.trim() === '' ? null : raw.trim();
         }
       }
+      // Операции уезжают только у денег и только не «Изменить»:
+      // непереданное означает прежнее поведение — замену значения.
+      const operations: Record<string, PriceOperation> = {};
+      for (const field of chosen) {
+        const op = ops[field.key] ?? 'SET';
+        if (field.kind === 'money' && op !== 'SET') {
+          operations[field.key] = op;
+        }
+      }
       const result = whole === undefined
-        ? await savePartsBulk(partIds, changes)
-        : await savePartsBulkByFilter(whole, changes);
-      onSaved(result.changed);
+        ? await savePartsBulk(partIds, changes, operations)
+        : await savePartsBulkByFilter(whole, changes, operations);
+      onSaved(result.changed, result.skipped);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Не удалось сохранить');
     } finally {
@@ -107,6 +136,19 @@ export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
               />
               {field.title}
             </label>
+            {touched[field.key] === true && field.kind === 'money' && (
+              <select
+                aria-label={`Операция: ${field.title}`}
+                value={ops[field.key] ?? 'SET'}
+                onChange={(e) => setOps({
+                  ...ops, [field.key]: e.target.value as PriceOperation,
+                })}
+              >
+                {PRICE_OPERATIONS.map((op) => (
+                  <option key={op.key} value={op.key}>{op.title}</option>
+                ))}
+              </select>
+            )}
             {touched[field.key] === true && (
               field.kind === 'flag' ? (
                 <select
@@ -120,7 +162,9 @@ export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
                 <input
                   inputMode={field.kind === 'money' ? 'decimal' : undefined}
                   value={values[field.key] ?? ''}
-                  placeholder={field.kind === 'money' ? '0' : 'оставить пустым — очистить'}
+                  placeholder={field.kind !== 'money' ? 'оставить пустым — очистить'
+                    : (ops[field.key] ?? 'SET') === 'SET' ? '0'
+                    : priceOperationHint(ops[field.key] ?? 'SET')}
                   onChange={(e) => setValues({ ...values, [field.key]: e.target.value })}
                 />
               )
@@ -129,12 +173,18 @@ export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
         ))}
       </div>
 
+      {emptyOperand !== undefined && (
+        <p className="note">
+          {`«${emptyOperand.title}»: не задано значение операции — вводить нечего.`}
+        </p>
+      )}
+
       {error !== '' && <p className="note note--error">{error}</p>}
 
       <div className="filter-row">
         <button
           type="button"
-          disabled={saving || chosen.length === 0}
+          disabled={saving || chosen.length === 0 || emptyOperand !== undefined}
           onClick={() => {
             if (whole !== undefined && !confirming) {
               setConfirming(true);
