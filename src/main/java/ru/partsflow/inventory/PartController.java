@@ -2,6 +2,7 @@ package ru.partsflow.inventory;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -206,6 +207,50 @@ public class PartController {
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public PartView update(@PathVariable Long id, @Valid @RequestBody UpdateRequest request) {
         return PartView.of(partService.update(id, request.toUpdate(), CurrentUser.memberId()));
+    }
+
+    /**
+     * Где позиция лежит: адрес полки по каждому складу.
+     *
+     * <p>Открыто всем вошедшим, как и остаток: «куда идти за деталью»
+     * спрашивает и продавец по телефону, и кладовщик у стеллажа. Переставить
+     * при этом может не всякий — см. {@link #changeCell}.
+     *
+     * <p>Своим запросом, а не строкой витрины: адрес у позиции на двух
+     * складах свой на каждом, а строка витрины про склады знает только
+     * остаток. Тем же запросом живёт и карточка колеса — она та же самая.
+     */
+    @GetMapping("/{id}/cells")
+    public List<PartService.PartCell> cells(@PathVariable Long id) {
+        return partService.cellsOf(id);
+    }
+
+    /**
+     * Переставить позицию на другую полку того же склада.
+     *
+     * <p><b>Роль — владелец, менеджер или кладовщик</b>, та же, что
+     * у перевозки между складами: деталь у кладовщика в руках, и перестановка
+     * на полку — работа, а не расход. Отдельная точка входа, а не поле
+     * в {@code PUT /api/parts/{id}}: там цена, минимальная цена
+     * и себестоимость, и открывать их кладовщику ради адреса нельзя.
+     *
+     * <p>Склад указывается явно: у позиции на двух складах две полки,
+     * и подставить «тот, который первый» значит поменять адрес там,
+     * куда никто не подходил.
+     */
+    @PutMapping("/{id}/cell")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER','STOREKEEPER')")
+    public PartService.PartCell changeCell(@PathVariable Long id,
+                                           @Valid @RequestBody CellRequest request) {
+        return partService.changeCell(id, request.warehouseId(), request.cellId(),
+                CurrentUser.memberId());
+    }
+
+    /**
+     * @param cellId пусто — «без адреса»: у клиента без полок ячеек нет вовсе,
+     *               и прочерк тут значит «не заведено», а не «не знаем»
+     */
+    public record CellRequest(@NotNull Long warehouseId, Long cellId) {
     }
 
     /**

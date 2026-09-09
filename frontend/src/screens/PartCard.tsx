@@ -19,6 +19,7 @@ import {
 } from '../inventory/catalog';
 import { cardFields } from '../inventory/partCard';
 import { deletePhoto, makeMainPhoto, uploadPhoto } from '../inventory/photos';
+import { PartCellBlock } from './PartCellBlock';
 import { PartEditForm } from './PartEditForm';
 import { PartLabelPrint } from './PartLabelPrint';
 import { LABEL_ROLES } from './tabs';
@@ -422,15 +423,16 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
             )}
 
             {/* Остаток по складам первым: продавец по телефону отвечает
-                «есть, лежит на Ткацкой», а не «сейчас посмотрю». */}
-            <div className="card-view__stock">
-              {warehouses.map((warehouse) => (
-                <div key={warehouse.id}>
-                  <span>{warehouse.name}</span>
-                  <b>{row.stock[String(warehouse.id)] ?? '—'}</b>
-                </div>
-              ))}
-            </div>
+                «есть, лежит на Ткацкой», а не «сейчас посмотрю». Рядом
+                с ним адрес полки — до машины и номеров: кладовщик открывает
+                карточку, чтобы узнать, куда идти. */}
+            <PartCellBlock
+              partId={row.id}
+              warehouses={warehouses}
+              stock={row.stock}
+              role={role}
+              onChanged={onChanged}
+            />
 
             <div className="card-view__price">
               {row.price === null ? '—' : row.price.toLocaleString('ru-RU')}

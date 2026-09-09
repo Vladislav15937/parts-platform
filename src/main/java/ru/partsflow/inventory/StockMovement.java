@@ -191,6 +191,45 @@ public class StockMovement {
         return movement;
     }
 
+    /**
+     * Перестановка на другую полку того же склада.
+     *
+     * <p>Остаток не меняется — меняется адрес, — поэтому {@code qty_delta}
+     * ноль. Схема такое движение разрешает прямо и с самого начала:
+     * {@code CHECK (qty_delta <> 0 OR movement_type = 'MOVE')}, и перекладка
+     * со стеллажа на стеллаж — ровно тот случай, ради которого оговорка
+     * в ней стоит.
+     *
+     * <p><b>Отдельным методом, а не {@link #move} с одинаковыми складами.</b>
+     * Тот отбивает совпадение намеренно: «перевезти на тот же склад» —
+     * это опечатка в документе перевозки, и снять там проверку значило бы
+     * молча разрешить её всем вызывающим. Операции разные, и имена у них
+     * разные: перевозка меняет склад, перестановка — полку.
+     *
+     * <p>Идёт она через {@link StockLedger}, как и всё остальное, что трогает
+     * {@code part_stock}: след «деталь ушла с А-01-1 на А-02-1» обязан быть
+     * в журнале склада — его и спрашивают, когда деталь не нашли на полке.
+     *
+     * @param fromCellId прежняя полка; {@code null} — «адреса не было»
+     * @param toCellId   новая; {@code null} — «без адреса», это снятие
+     */
+    public static StockMovement reshelve(Long partId, Long warehouseId,
+                                         Long fromCellId, Long toCellId) {
+        StockMovement movement = new StockMovement(partId, MovementType.MOVE, BigDecimal.ZERO);
+        movement.fromWarehouseId = warehouseId;
+        movement.toWarehouseId = warehouseId;
+        movement.fromCellId = fromCellId;
+        movement.toCellId = toCellId;
+        return movement;
+    }
+
+    /** Перестановка на полку того же склада — движение без остатка. */
+    public boolean isReshelve() {
+        return movementType == MovementType.MOVE
+                && fromWarehouseId != null
+                && fromWarehouseId.equals(toWarehouseId);
+    }
+
     public Long getId() {
         return id;
     }

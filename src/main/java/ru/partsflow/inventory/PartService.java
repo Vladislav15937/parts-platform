@@ -41,16 +41,22 @@ public class PartService {
     private final PartChangeLog partChanges;
     private final JdbcTemplate jdbc;
     private final VehicleWords vehicleWords;
+    /** Отказ называет деталь и склад теми же словами, что и перевозка. */
+    private final StockNaming naming;
+    /** В {@code part_stock} не пишет никто мимо журнала — перестановка тоже. */
+    private final StockLedger ledger;
 
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
                        PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc,
-                       VehicleWords vehicleWords) {
+                       VehicleWords vehicleWords, StockNaming naming, StockLedger ledger) {
         this.partRepository = partRepository;
         this.eventPublisher = eventPublisher;
         this.partNames = partNames;
         this.partChanges = partChanges;
         this.jdbc = jdbc;
         this.vehicleWords = vehicleWords;
+        this.naming = naming;
+        this.ledger = ledger;
     }
 
     /**
@@ -303,6 +309,145 @@ public class PartService {
                     "part", part.getId(), "part.price_changed.v1", payloadOf(part)));
         }
         return part;
+    }
+
+    /**
+     * Где позиция лежит: адрес полки по каждому складу.
+     *
+     * <p><b>Адрес — свойство раскладки, а не карточки.</b> Позиция, лежащая
+     * на двух складах, лежит на двух разных полках, и одним полем такое
+     * не записать: {@code part_stock.cell_id} у каждой строки свой.
+     * {@code part.storage_cell_id} при этом остаётся — его пишет приёмка
+     * и читает журнал изменений, — но как ответ на вопрос «где лежит»
+     * он верен только у позиции на одном складе.
+     *
+     * <p>Отдаются только склады, где строка раскладки есть: у склада,
+     * на котором позиции нет, адреса нет и быть не может — и предложить
+     * там перестановку значит предложить работу, которой не существует.
+     */
+    @Transactional(readOnly = true)
+    public List<PartCell> cellsOf(Long partId) {
+        return jdbc.query("""
+                SELECT s.warehouse_id, s.qty, c.id AS cell_id, c.code AS cell_code
+                  FROM part_stock s
+                  LEFT JOIN storage_cell c ON c.id = s.cell_id
+                 WHERE s.part_id = ?
+                 ORDER BY s.warehouse_id""",
+                (rs, i) -> new PartCell(rs.getLong("warehouse_id"),
+                        (Long) rs.getObject("cell_id"), rs.getString("cell_code"),
+                        rs.getBigDecimal("qty")),
+                partId);
+    }
+
+    /**
+     * Переставляет позицию на другую полку того же склада.
+     *
+     * <p><b>Зачем отдельно от {@link #update}.</b> Это самое частое движение
+     * на разборке после продажи: деталь сняли с полки, показали покупателю,
+     * положили обратно не туда; освободили стеллаж; собрали все фары в один
+     * ряд. Делает это кладовщик — деталь у него в руках, — а форма правки
+     * карточки закрыта владельцем и менеджером, и открывать её ради адреса
+     * значило бы показать кладовщику себестоимость и минимальную цену.
+     * Поэтому своя точка входа со своим списком ролей, а не расширение
+     * прежней.
+     *
+     * <p><b>По складу, а не сразу по всем.</b> У позиции на двух складах
+     * две полки, и тихо поменять адрес обеим — это соврать про ту, к которой
+     * никто не подходил.
+     *
+     * <p>{@code cellId == null} — «без адреса»: у клиента без полок ячеек
+     * нет вовсе, и требовать её нельзя. В базу это идёт NULL, а не пустое
+     * значение, — та же природа, что у снятого штрихкода.
+     *
+     * <p><b>Идёт движением через {@link StockLedger}, а не своим
+     * {@code UPDATE part_stock}.</b> Главное правило модуля — в раскладку
+     * не пишет никто мимо журнала, — и адрес полки из него не исключение:
+     * «деталь лежала на А-01-1, её там нет» разбирают именно журналом,
+     * а прямая правка не оставляет о перекладке ни строки. Движение —
+     * {@code MOVE} с нулевым количеством: остаток не менялся, менялся адрес,
+     * и схема такое разрешает прямо ({@code stock_movement_delta_ck}).
+     */
+    @Transactional
+    public PartCell changeCell(Long partId, Long warehouseId, Long cellId, Long authorId) {
+        Part part = partRepository.findById(partId)
+                .orElseThrow(() -> new IllegalArgumentException("Запчасть не найдена: " + partId));
+
+        String cellCode = null;
+        if (cellId != null) {
+            // Ячейка чужого склада доехала бы до внешнего ключа и вернулась
+            // как «Операция нарушает целостность данных» — по такому ответу
+            // кладовщик идёт искать поломку сервера.
+            cellCode = jdbc.query(
+                    "SELECT code FROM storage_cell WHERE id = ? AND warehouse_id = ?",
+                    rs -> rs.next() ? rs.getString("code") : null, cellId, warehouseId);
+            if (cellCode == null) {
+                throw new IllegalArgumentException(
+                        "Ячейки нет на складе %s".formatted(naming.warehouse(warehouseId)));
+            }
+        }
+
+        // Строка раскладки нужна дважды: чтобы отказать словами, если позиции
+        // на этом складе нет, и чтобы записать в журнал, с какой полки деталь
+        // ушла. «С А-01-1 на А-02-1» — это и есть ответ, за которым в журнал
+        // приходят; «стало А-02-1» без «было» на него не отвечает.
+        List<Placement> here = jdbc.query("""
+                        SELECT cell_id, qty FROM part_stock
+                         WHERE part_id = ? AND warehouse_id = ?""",
+                (rs, i) -> new Placement((Long) rs.getObject("cell_id"), rs.getBigDecimal("qty")),
+                partId, warehouseId);
+        if (here.isEmpty()) {
+            throw new IllegalArgumentException("На складе %s нет остатка: %s — переставлять нечего"
+                    .formatted(naming.warehouse(warehouseId), naming.part(partId)));
+        }
+        Placement was = here.get(0);
+
+        ledger.record(StockMovement.reshelve(partId, warehouseId, was.cellId(), cellId));
+
+        // А вот `part.storage_cell_id` — одно скалярное поле на весь товар,
+        // и полок у позиции столько, на скольких складах она лежит. Записав
+        // туда адрес ближнего склада поверх адреса дальнего, лента правок
+        // скажет «Ячейка: было Б-01-1, стало А-02-1» — про склад, к которому
+        // в этой операции никто не подходил. Поэтому пишем его только когда
+        // склад у позиции один и вопрос «где лежит» имеет один ответ;
+        // у позиции на двух складах след остаётся движением, где склад
+        // и обе полки названы явно.
+        //
+        // Через сущность, а не native SQL: журнал изменений пишет слушатель
+        // Hibernate, и правка мимо сессии в ленту правок не попадёт.
+        if (isOnlyWarehouse(partId, warehouseId)) {
+            part.setStorageCellId(cellId);
+            part.touchedBy(authorId);
+        }
+
+        return new PartCell(warehouseId, cellId, cellCode, was.qty());
+    }
+
+    /**
+     * Лежит ли позиция только на этом складе.
+     *
+     * <p>Считается по остатку, а не по наличию строки раскладки: строка
+     * с нулём остаётся после того, как со склада увезли всё, и позиция,
+     * когда-то лежавшая на дальнем, навсегда потеряла бы адрес в карточке.
+     */
+    private boolean isOnlyWarehouse(Long partId, Long warehouseId) {
+        Integer elsewhere = jdbc.queryForObject("""
+                        SELECT count(*) FROM part_stock
+                         WHERE part_id = ? AND warehouse_id <> ? AND qty > 0""",
+                Integer.class, partId, warehouseId);
+        return elsewhere == null || elsewhere == 0;
+    }
+
+    /** Строка раскладки до перестановки: с какой полки и сколько там лежит. */
+    private record Placement(Long cellId, BigDecimal qty) {
+    }
+
+    /**
+     * Адрес позиции на одном складе.
+     *
+     * @param cellId   пусто — «без адреса»: у клиента без полок ячеек нет вовсе
+     * @param cellCode код полки так, как он напечатан на этикетке
+     */
+    public record PartCell(Long warehouseId, Long cellId, String cellCode, BigDecimal qty) {
     }
 
     /**

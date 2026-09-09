@@ -36,6 +36,14 @@ export interface CatalogRow {
   manufacturer: string | null;
   marking: string | null;
   section: string | null;
+  /**
+   * Код ячейки хранения — не то же, что `section`. Ту клиент пишет руками
+   * своей нумерацией полок, а ячейку заводят складом, печатают на этикетке
+   * и сканируют. У позиции на двух складах адрес свой на каждом, и здесь
+   * стоит тот, который поставили последним; по складам его показывает
+   * карточка (`GET /api/parts/{id}/cells`).
+   */
+  cellCode: string | null;
   sideLr: string | null;
   sideFr: string | null;
   qty: number;
@@ -434,6 +442,12 @@ export const COLUMNS: Column[] = [
   { key: 'note', title: 'Заметка', value: (r) => text(r.note) },
   { key: 'marking', title: 'Маркировка', value: (r) => text(r.marking) },
   { key: 'section', title: 'Секция', sort: 'section', value: (r) => text(r.section) },
+  // Рядом с «Секцией», а не вместо неё: это разные поля. «Секция» — адрес
+  // в нумерации клиента, набранный руками, и у переехавшего заполнен именно
+  // он; «Ячейка» заводится складом, печатается на этикетке и сканируется.
+  // До этого код ячейки не показывался нигде, кроме ленты правок: узнать,
+  // где деталь лежит сейчас, можно было только если её когда-то переставляли.
+  { key: 'cell', title: 'Ячейка', value: (r) => text(r.cellCode) },
   // Дальше — то, чего не хватало до паритета с прежней системой. Сверено
   // с живым каталогом клиента: сорок две колонки против наших двадцати
   // четырёх.
@@ -564,6 +578,50 @@ export function movePart(
       note,
       items: [{ partId, quantity, toCellId }],
     },
+  });
+}
+
+/**
+ * Адрес позиции на одном складе.
+ *
+ * <p>`cellId` пусто — «без адреса»: у клиента без полок ячеек нет вовсе,
+ * и это «не заведено», а не «не знаем».
+ */
+export interface PartCell {
+  warehouseId: number;
+  cellId: number | null;
+  cellCode: string | null;
+  qty: number;
+}
+
+/**
+ * Где позиция лежит — по каждому складу, где она есть.
+ *
+ * <p>Своим запросом, а не строкой витрины: у позиции на двух складах две
+ * полки, а строка про склады знает только остаток. Тем же запросом живёт
+ * карточка колеса — она та же самая.
+ */
+export function loadPartCells(partId: number): Promise<PartCell[]> {
+  return request<PartCell[]>(`/api/parts/${partId}/cells`);
+}
+
+/**
+ * Переставляет позицию на другую полку того же склада.
+ *
+ * <p>Отдельно от правки карточки: переставляет кладовщик — деталь у него
+ * в руках, — а в форме правки лежат себестоимость и минимальная цена,
+ * которых ему видеть нельзя.
+ *
+ * <p>Склад передаётся явно: у позиции на двух складах адрес свой на каждом,
+ * и менять их обоим разом значит соврать про ту полку, к которой никто
+ * не подходил.
+ */
+export function changePartCell(
+  partId: number, warehouseId: number, cellId: number | null,
+): Promise<PartCell> {
+  return request<PartCell>(`/api/parts/${partId}/cell`, {
+    method: 'PUT',
+    body: { warehouseId, cellId },
   });
 }
 

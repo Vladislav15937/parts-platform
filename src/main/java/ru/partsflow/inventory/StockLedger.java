@@ -87,6 +87,11 @@ public class StockLedger {
      * остаток; а списание, выполненное после прихода, скроет нехватку.
      */
     private void apply(StockMovement movement) {
+        if (movement.isReshelve()) {
+            reshelve(movement);
+            return;
+        }
+
         if (movement.getFromWarehouseId() != null) {
             // Условие «хватает свободного» стоит в WHERE, а не проверяется
             // раньше отдельным чтением: между чтением и записью встаёт второй
@@ -131,6 +136,42 @@ public class StockLedger {
         }
 
         applyToPart(movement);
+    }
+
+    /**
+     * Перестановка на другую полку того же склада: остаток не трогаем,
+     * меняем адрес.
+     *
+     * <p><b>Своей веткой, а не общими шагами расхода и прихода.</b> Общий
+     * приход бережёт прежний адрес (`COALESCE(EXCLUDED.cell_id, …)`) — иначе
+     * приёмка без ячейки стирала бы полку, поставленную раньше, — а здесь
+     * снятый адрес обязан записаться NULL'ом: «без адреса» это «не заведено»,
+     * а не «оставить как было». Та же природа, что у снятого штрихкода.
+     *
+     * <p>{@code part} тут не трогается вовсе: остаток и статус не менялись,
+     * а {@code part.storage_cell_id} — одно поле на весь товар, и писать его
+     * можно только когда склад у позиции один. Это решает вызывающий, который
+     * знает склад; см. {@code PartService.changeCell}.
+     */
+    private void reshelve(StockMovement movement) {
+        int updated = entityManager.createNativeQuery("""
+                        UPDATE part_stock SET cell_id = :cell, updated_at = now()
+                         WHERE part_id = :part AND warehouse_id = :warehouse""")
+                .setParameter("cell", movement.getToCellId())
+                .setParameter("part", movement.getPartId())
+                .setParameter("warehouse", movement.getToWarehouseId())
+                .executeUpdate();
+
+        if (updated == 0) {
+            // Строки раскладки нет — значит позиции на этом складе нет вовсе,
+            // и переставлять нечего. Вызывающий проверяет это раньше ради
+            // внятного текста, но сторожем остаётся эта инструкция: журнал
+            // не должен помнить перекладку на складе, где детали не было.
+            throw new IllegalStateException(
+                    "На складе %s нет остатка: %s — переставлять нечего"
+                            .formatted(naming.warehouse(movement.getToWarehouseId()),
+                                    naming.part(movement.getPartId())));
+        }
     }
 
     /**

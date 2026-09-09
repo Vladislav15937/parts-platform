@@ -729,6 +729,17 @@ public class CatalogService {
                          WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
                        (SELECT string_agg(o.raw_number, ', ') FROM part_oem o
                          WHERE o.part_id = p.id AND NOT o.is_primary) AS crosses,
+                       -- Адрес полки. Код ячейки не доезжал до витрины вовсе:
+                       -- на экране был виден только `section` — текстовое поле,
+                       -- которое человек пишет руками, — а `storage_cell`,
+                       -- который наполняют приёмка и сканер, не показывался
+                       -- нигде, кроме ленты правок. То есть узнать, где деталь
+                       -- лежит сейчас, можно было только если её когда-то
+                       -- переставляли. Колонки две и обе нужны: у переехавшего
+                       -- клиента заполнена «Секция», у заведённого у нас —
+                       -- «Ячейка».
+                       (SELECT c.code FROM storage_cell c
+                         WHERE c.id = p.storage_cell_id) AS cell_code,
                        -- Поставка и комплектация — для карточки позиции.
                        -- Читаются вместе со строкой: карточка открывается
                        -- по нажатию и второй запрос ради двух полей не делает.
@@ -769,7 +780,8 @@ public class CatalogService {
                         rs.getBigDecimal("price"), rs.getBigDecimal("installation_price"),
                         rs.getString("color"), rs.getString("description"), rs.getString("note"),
                         rs.getString("manufacturer"), rs.getString("marking"),
-                        rs.getString("section"), rs.getString("side_lr"), rs.getString("side_fr"),
+                        rs.getString("section"), rs.getString("cell_code"),
+                        rs.getString("side_lr"), rs.getString("side_fr"),
                         rs.getBigDecimal("qty_on_hand"),
                         rs.getString("oem"), rs.getString("crosses"), rs.getString("photo_key"),
                         rs.getString("supply"), rs.getString("equipment"),
@@ -1090,6 +1102,12 @@ public class CatalogService {
                       BigDecimal price, BigDecimal installationPrice,
                       String color, String description, String note,
                       String manufacturer, String marking, String section,
+                      /**
+                       * Код ячейки хранения. Не то же, что {@code section}:
+                       * ту человек пишет руками своей нумерацией полок,
+                       * а ячейку заводят складом и печатают на этикетке.
+                       */
+                      String cellCode,
                       String sideLr, String sideFr, BigDecimal qty,
                       String oem, String crosses, String photoKey,
                       String supply, String equipment,
@@ -1114,7 +1132,8 @@ public class CatalogService {
         Row withStock(Map<Long, BigDecimal> found) {
             return new Row(id, code, title, qualityGrade, condition, brand, model, generation,
                     yearFrom, yearTo, body, engine, year, donorCode, price, installationPrice,
-                    color, description, note, manufacturer, marking, section, sideLr, sideFr,
+                    color, description, note, manufacturer, marking, section, cellCode,
+                    sideLr, sideFr,
                     qty, oem, crosses, photoKey, supply, equipment,
                     partName, published, barcode, legacyCode,
                     videoUrl, textBlock, weightKg, dimensions, packageDimensions,

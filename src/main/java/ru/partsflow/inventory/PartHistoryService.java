@@ -224,7 +224,13 @@ public class PartHistoryService {
                                -- не восстановить ничем, кроме этой строки.
                                coalesce(m.reason, d.note) AS reason,
                                d.number AS doc_number, d.doc_type, d.status AS doc_status,
+                               m.from_warehouse_id, m.to_warehouse_id,
                                wf.name AS from_warehouse, wt.name AS to_warehouse,
+                               -- Полки нужны перестановке: у неё склад один
+                               -- и тот же, и «Основной → Основной» не говорит
+                               -- ничего — а сказать надо, с какой полки
+                               -- на какую.
+                               cf.code AS from_cell, ct.code AS to_cell,
                                deal.number AS deal_number, ret.number AS return_number,
                                inv.id AS inventory_id,
                                who.display_name AS author
@@ -232,6 +238,8 @@ public class PartHistoryService {
                           LEFT JOIN stock_document d  ON d.id = m.document_id
                           LEFT JOIN warehouse wf      ON wf.id = m.from_warehouse_id
                           LEFT JOIN warehouse wt      ON wt.id = m.to_warehouse_id
+                          LEFT JOIN storage_cell cf   ON cf.id = m.from_cell_id
+                          LEFT JOIN storage_cell ct   ON ct.id = m.to_cell_id
                           LEFT JOIN deal              ON m.ref_type = 'DEAL' AND deal.id = m.ref_id
                           LEFT JOIN deal_return ret   ON m.ref_type = 'RETURN' AND ret.id = m.ref_id
                           -- Недостача объясняется пересчётом: без этого в ленте
@@ -249,7 +257,10 @@ public class PartHistoryService {
                                 rs.getObject("deal_number"), rs.getObject("return_number"),
                                 rs.getObject("inventory_id")),
                         label(DOC_STATUSES, rs.getString("doc_status")),
-                        warehouseOf(rs.getString("from_warehouse"), rs.getString("to_warehouse")),
+                        placeOf(rs.getString("from_warehouse"), rs.getString("to_warehouse"),
+                                (Long) rs.getObject("from_warehouse_id"),
+                                (Long) rs.getObject("to_warehouse_id"),
+                                rs.getString("from_cell"), rs.getString("to_cell")),
                         rs.getString("reason"),
                         rs.getString("author")),
                 partId);
@@ -280,11 +291,38 @@ public class PartHistoryService {
         return null;
     }
 
-    private static String warehouseOf(String from, String to) {
+    /**
+     * Где это произошло: склад, а у перестановки — ещё и обе полки.
+     *
+     * <p>Перестановка на другую полку того же склада записана движением
+     * с одинаковыми складами, и «Основной → Основной» не говорит ничего.
+     * Между тем это единственное место, где след перекладки виден человеку
+     * у позиции, лежащей на двух складах: лента правок про неё молчит
+     * намеренно — `part.storage_cell_id` одно поле на весь товар, и правка
+     * его сравнила бы полку одного склада с полкой другого.
+     *
+     * <p>Склады сравниваются по номеру, а не по названию: два склада могут
+     * называться одинаково, и «Ткацкая → Ткацкая» тогда стало бы
+     * перестановкой, которой не было.
+     */
+    private static String placeOf(String from, String to, Long fromId, Long toId,
+                                  String fromCell, String toCell) {
+        if (fromId != null && fromId.equals(toId)) {
+            return "%s · %s → %s".formatted(from, cellName(fromCell), cellName(toCell));
+        }
         if (from != null && to != null) {
             return from + " → " + to;
         }
         return from != null ? from : to;
+    }
+
+    /**
+     * Пусто — «без адреса», а не прочерк: у клиента без полок ячеек нет
+     * вовсе, и это «не заведено», а не «не знаем». Тем же словом называет
+     * пустой адрес карточка.
+     */
+    private static String cellName(String code) {
+        return code == null ? "без адреса" : code;
     }
 
     // ----------------------------------------------------------------- ответы

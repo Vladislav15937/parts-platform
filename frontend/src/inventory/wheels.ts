@@ -446,6 +446,9 @@ export function rowOfWheel(row: WheelRow): CatalogRow {
     // появляются две строки «Производитель»: React ругается на повторённый
     // ключ, а человек видит поле дважды.
     manufacturer: null, marking: null, section: w.section,
+    // Колонки «Ячейка» на вкладке колёс нет, а адрес карточка берёт своим
+    // запросом по складам (`GET /api/parts/{id}/cells`) — читать тут нечего.
+    cellCode: null,
     sideLr: null, sideFr: null, qty: Number(w.qty), oem: w.oem, crosses: null,
     photoUrl: row.photoUrl, supply: w.supply, equipment: null,
     partName: w.partName, published: w.published, barcode: w.barcode,
