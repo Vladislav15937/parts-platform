@@ -1,5 +1,6 @@
 package ru.partsflow.platform.security;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.http.HttpStatus;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import ru.partsflow.platform.session.SessionTrackingFilter;
 
 import java.util.List;
 
@@ -59,8 +61,12 @@ public class MemberController {
     @PostMapping("/{id}/password")
     @PreAuthorize("hasRole('OWNER') or #id == authentication.principal.memberId")
     public ResponseEntity<Void> changePassword(@PathVariable Long id,
-                                               @Valid @RequestBody PasswordRequest request) {
-        members.changePassword(id, request.password());
+                                               @Valid @RequestBody PasswordRequest request,
+                                               HttpServletRequest httpRequest) {
+        // Своя сессия называется явно: смена пароля закрывает все остальные,
+        // а того, кто её меняет, оставляет работать.
+        members.changePassword(id, request.password(),
+                SessionTrackingFilter.keyOf(httpRequest));
         return ResponseEntity.noContent().build();
     }
 
