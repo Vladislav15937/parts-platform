@@ -43,6 +43,7 @@ import type {
   Summary,
   SupplyOption,
 } from '../reports/reports';
+import { OriginCharts } from './OriginCharts';
 import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
 import { paymentSourceTypeLabel } from '../sales/sales';
@@ -108,6 +109,9 @@ export function ReportsScreen({ canRead }: Props) {
   const [items, setItems] = useState<OriginItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [itemsError, setItemsError] = useState<string | null>(null);
+  // Графики окупаемости во времени: окно поверх экрана, а не вкладка.
+  // «Окупилась ли» таблица отвечает, «когда» — только график.
+  const [charts, setCharts] = useState(false);
   const [donorList, setDonorList] = useState<DonorEntry[]>([]);
   const [supplyList, setSupplyList] = useState<SupplyOption[]>([]);
   // У переехавшего клиента 441 машина: списком их не пролистать.
@@ -977,18 +981,24 @@ export function ReportsScreen({ canRead }: Props) {
               этикеток: без этого по экрану не понять, какая из четырёх
               открыта, — а цифры на всех четырёх выглядят одинаково
               правдоподобно. Поймано живым прогоном. */}
-          <div className="tabs">
-            {TABS.map(([code, title]) => (
-              <button
-                key={code}
-                type="button"
-                className={code === tab ? 'tab tab--active' : 'tab'}
-                aria-pressed={code === tab}
-                onClick={() => setTab(code)}
-              >
-                {title}
-              </button>
-            ))}
+          <div className="row row--between">
+            <div className="tabs">
+              {TABS.map(([code, title]) => (
+                <button
+                  key={code}
+                  type="button"
+                  className={code === tab ? 'tab tab--active' : 'tab'}
+                  aria-pressed={code === tab}
+                  onClick={() => setTab(code)}
+                >
+                  {title}
+                </button>
+              ))}
+            </div>
+
+            {/* Окно поверх, а не отдельная вкладка: владелец смотрит график
+                и возвращается к позициям, не теряя выбранной машины. */}
+            <button type="button" onClick={() => setCharts(true)}>Графики</button>
           </div>
 
           {itemsError !== null && <p className="note note--error">{itemsError}</p>}
@@ -1060,10 +1070,41 @@ export function ReportsScreen({ canRead }: Props) {
               Показать ещё
             </button>
           )}
+
+          {charts && (
+            <OriginCharts
+              origin={origin}
+              title={originTitle(origin, donorList, supplyList)}
+              onClose={() => setCharts(false)}
+            />
+          )}
         </>
       )}
     </section>
   );
+}
+
+/**
+ * Чем разрез подписан в окне графиков — тем же, чем он выбран в списке.
+ *
+ * <p>Внутренний номер владельцу не говорит ничего: машину он знает
+ * по заметке или своему номеру, партию — по поставщику.
+ */
+function originTitle(origin: Origin, donors: DonorEntry[], supplies: SupplyOption[]): string {
+  if (origin.kind === 'donor') {
+    const donor = donors.find((d) => d.id === origin.id);
+    return donor === undefined ? 'машина' : donorTitle(donor);
+  }
+  if (origin.id === null) {
+    return 'поставка не указана';
+  }
+  const supply = supplies.find((s) => s.id === origin.id);
+  if (supply === undefined) {
+    return 'поставка';
+  }
+  return supply.supplierName === null
+    ? supply.number
+    : `${supply.supplierName} · ${supply.number}`;
 }
 
 /** Машина ищется по тому же, чем подписана в строке, плюс VIN. */

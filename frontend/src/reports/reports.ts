@@ -362,6 +362,74 @@ function from(after: number | null): string {
 }
 
 /**
+ * Точка месячной оси графика окупаемости.
+ *
+ * <p>Первые четыре величины накопительные: вопрос «окупилась ли и когда»
+ * читается пересечением линий, а не сравнением соседних столбиков. Пятая
+ * помесячная — из неё видно, выдохлась машина или ещё продаётся.
+ */
+export interface ChartPoint {
+  /** Месяц вида `2026-03`. Разбирать его через `new Date` нельзя. */
+  month: string;
+  /** «Планируемая сумма»: розничная стоимость всего поступившего. */
+  planned: number;
+  /** «Продано на сумму» накопительно. */
+  revenue: number;
+  /** «Себестоимость проданных» накопительно. */
+  soldCost: number;
+  /** «Себестоимость всех»: сколько вложено. */
+  totalCost: number;
+  /** Продано на сумму за сам месяц — столбец второго графика. */
+  monthRevenue: number;
+}
+
+/**
+ * @property points пусто — ни затрат, ни поступлений, ни продаж. Это
+ *   не «нет данных за период»: оси у такого графика нет вовсе.
+ */
+export interface OriginChart {
+  points: ChartPoint[];
+}
+
+export function donorChart(donorId: number): Promise<OriginChart> {
+  return request<OriginChart>(`/api/reports/donors/${donorId}/chart`);
+}
+
+/**
+ * `supplyId` пусто — товар без поставки: тот же разрез, что у вкладок.
+ *
+ * <p>Адрес без отбора написан отдельной строкой, а не склеен подстановкой:
+ * `tools/endpoint-coverage.py` ищет во фронтенде путь целиком, и
+ * `.../chart${which}` он читает как незнакомый адрес — то есть эндпоинт
+ * считался бы не имеющим экрана.
+ */
+export function supplyChart(supplyId: number | null): Promise<OriginChart> {
+  if (supplyId === null) {
+    return request<OriginChart>('/api/reports/supplies/chart');
+  }
+  return request<OriginChart>(`/api/reports/supplies/chart?supplyId=${supplyId}`);
+}
+
+/**
+ * Месяц оси коротко: «мар 26».
+ *
+ * <p>Разбирается строкой, а не через `new Date`: у даты без дня конструктор
+ * берёт полночь UTC, и западнее Гринвича «2026-03» стало бы февралём.
+ */
+export function axisMonth(month: string): string {
+  const [year, index] = month.split('-');
+  const at = Number(index) - 1;
+  const name = MONTHS_SHORT[at];
+  if (name === undefined || year === undefined) {
+    return month;
+  }
+  return `${name} ${year.slice(2)}`;
+}
+
+const MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'май', 'июн',
+  'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+
+/**
  * Проданная позиция — строка, а не сделка.
  *
  * <p>Всё денежное здесь из сделки, а не из карточки: цена сегодня — это

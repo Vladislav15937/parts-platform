@@ -1307,6 +1307,72 @@ hr {
   height: auto;
 }
 
+/* Окно графиков: шире подбора (в нём два поля на 48 месяцев) и по высоте
+   содержимого — второй график не должен обрезаться на полуслове. */
+.modal--charts {
+  width: min(52rem, 100%);
+  height: auto;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal--charts h3 {
+  margin: 0.25rem 0 0;
+  font-size: 1rem;
+}
+
+/* `.modal` — flex-колонка, а её дети по умолчанию сжимаются: на телефоне,
+   где окно упирается в 90vh, оба графика обрезались снизу на треть — сетка
+   есть, линий и подписей месяцев нет. Прокручиваться обязано окно целиком,
+   а не сплющиваться его содержимое. Замерено в узком viewport. */
+.modal--charts > * {
+  flex: none;
+}
+
+/* Прокручивается график внутри своей обёртки, а не страница под окном:
+   ось за четыре года жизни поставки — это 48 месяцев, и в телефон она
+   не поместится никогда. Без `max-width` обёртка растягивается
+   под содержимое, и прокручивать становится нечего. */
+.chart-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  align-items: center;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.chart-legend__item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.chart-swatch {
+  display: inline-block;
+  width: 1.1rem;
+  height: 0;
+  border-top: 3px solid currentColor;
+  border-radius: 2px;
+}
+
+/* Пунктирный ряд отличается начертанием, а не только цветом: у ориентира
+   пунктиром идут те два, которые почти всегда горизонтальны. */
+.chart-swatch--dashed {
+  border-top-style: dashed;
+}
+
+.chart-tick {
+  font-size: 10px;
+  fill: #667085;
+}
+
 .modal h2 {
   margin: 0;
   font-size: 1.1rem;
