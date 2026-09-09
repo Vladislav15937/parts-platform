@@ -37,6 +37,27 @@ public class PhotoService {
     private static final int NAME_LIMIT = 60;
 
     /**
+     * Имя файла-объяснения внутри архива.
+     *
+     * <p>Латиницей и заглавными: он лежит рядом с «01.jpg» и должен быть
+     * замечен без открытия, а кириллицу в именах записей архиваторы
+     * на чужих устройствах разбирают кто во что горазд — та же причина,
+     * что у имени самого архива.
+     */
+    private static final String NOTE_NAME = "NE-VSE-SNIMKI.txt";
+
+    /** Размер порции при переливании снимка из хранилища в архив. */
+    private static final int COPY_BUFFER = 16 * 1024;
+
+    /**
+     * Метка UTF-8 в начале файла-объяснения.
+     *
+     * <p>Константой, а не знаком в строке: сам символ невидим, и следующий
+     * читатель принял бы его за случайный мусор в исходнике и убрал.
+     */
+    private static final String BOM = "\uFEFF";
+
+    /**
      * Кириллица в латиницу для имени файла.
      *
      * <p>Имя уходит в мессенджер и на чужие устройства, а там кодировку
@@ -275,28 +296,143 @@ public class PhotoService {
      * сборки в память — снимков у позиции девять, но действие может позвать
      * и робот, а каждый снимок это сотни килобайт.
      *
-     * <p>Пропавший объект пропускается с записью в лог, а не роняет ответ:
-     * заголовки уже отправлены, статус сменить нельзя, и оборванный поток
-     * дал бы битый архив вместо архива без одного снимка. Случай редкий —
-     * в состав идут только подтверждённые, у которых приложение файл
-     * видело, — но снимок могли удалить, пока архив собирался.
+     * <p>Отказ хранилища не роняет ответ: заголовки уже отправлены, статус
+     * сменить нельзя, и брошенный поток дал бы битый архив вместо архива
+     * без одного снимка. Пропавший объект пропускается, оборвавшийся
+     * на середине закрывается годной записью — zip остаётся целым в обоих
+     * случаях.
+     *
+     * <p><b>А целый архив без части снимков выглядит как полный</b>, и это
+     * хуже отказа: продавец отправляет покупателю шесть фотографий вместо
+     * девяти и узнаёт об этом от него. Поэтому недочитанное называется
+     * файлом {@value #NOTE_NAME} внутри архива — при полном успехе его там
+     * нет: лишний файл в каждом архиве приучает не читать.
      */
     public void writeArchive(Archive archive, java.io.OutputStream out) throws java.io.IOException {
+        List<String> missing = new java.util.ArrayList<>();
+        List<String> truncated = new java.util.ArrayList<>();
         try (var zip = new java.util.zip.ZipOutputStream(out)) {
             // Снимки уже сжаты: дефлейт даёт те же байты и лишнюю работу
             // на каждое скачивание.
             zip.setLevel(java.util.zip.Deflater.NO_COMPRESSION);
             for (Entry entry : archive.entries()) {
-                try (java.io.InputStream file = storage.open(entry.key())) {
-                    zip.putNextEntry(new java.util.zip.ZipEntry(entry.name()));
-                    file.transferTo(zip);
-                    zip.closeEntry();
-                } catch (software.amazon.awssdk.services.s3.model.NoSuchKeyException e) {
-                    log.warn("Архив снимков: объекта {} в хранилище нет, пропускаем",
-                            entry.key());
-                }
+                copyInto(zip, entry, missing, truncated);
+            }
+            if (!missing.isEmpty() || !truncated.isEmpty()) {
+                writeNote(zip, archive.entries().size(), missing, truncated);
             }
         }
+    }
+
+    /**
+     * Переливает один снимок из хранилища в архив.
+     *
+     * <p>Байты идут своим циклом, а не {@code transferTo}: тот не различает,
+     * какая сторона отказала, — а стороны разные. Отказ <b>чтения</b>
+     * (объект пропал, соединение с хранилищем оборвалось) стоит одного
+     * снимка, остальные ещё можно отдать. Отказ <b>записи</b> — это ушедший
+     * клиент, и продолжать незачем: он летит наверх.
+     *
+     * <p>Запись начинается с первого прочитанного байта: снимок,
+     * не открывшийся вовсе, не оставляет в архиве файла в ноль байт — такой
+     * читается как «фотография испорчена», а не как «её здесь нет».
+     */
+    private void copyInto(java.util.zip.ZipOutputStream zip, Entry entry,
+                          List<String> missing, List<String> truncated)
+            throws java.io.IOException {
+
+        java.io.InputStream file;
+        try {
+            file = storage.open(entry.key());
+        } catch (software.amazon.awssdk.core.exception.SdkException e) {
+            log.warn("Архив снимков: объект {} не открылся ({}), файла в архиве не будет",
+                    entry.key(), e.getMessage());
+            missing.add(entry.name());
+            return;
+        }
+
+        boolean started = false;
+        try {
+            byte[] buffer = new byte[COPY_BUFFER];
+            while (true) {
+                int read;
+                try {
+                    read = file.read(buffer);
+                } catch (java.io.IOException
+                         | software.amazon.awssdk.core.exception.SdkException e) {
+                    log.warn("Архив снимков: чтение объекта {} оборвалось ({})",
+                            entry.key(), e.getMessage());
+                    (started ? truncated : missing).add(entry.name());
+                    return;
+                }
+                if (!started) {
+                    // Пустой объект тоже получает запись: он прочитан
+                    // целиком, и молча пропасть из архива не должен.
+                    zip.putNextEntry(new java.util.zip.ZipEntry(entry.name()));
+                    started = true;
+                }
+                if (read < 0) {
+                    return;
+                }
+                zip.write(buffer, 0, read);
+            }
+        } finally {
+            if (started) {
+                // Закрываем то, что успели записать: незакрытая запись
+                // делает нечитаемым весь архив, а не один снимок.
+                zip.closeEntry();
+            }
+            closeQuietly(file, entry.key());
+        }
+    }
+
+    /** Закрытие потока хранилища не должно уронить уже собранный архив. */
+    private static void closeQuietly(java.io.InputStream file, String key) {
+        try {
+            file.close();
+        } catch (java.io.IOException | software.amazon.awssdk.core.exception.SdkException e) {
+            log.warn("Архив снимков: поток объекта {} не закрылся ({})", key, e.getMessage());
+        }
+    }
+
+    /**
+     * Кладёт в архив объяснение, почему снимков меньше, чем в карточке.
+     *
+     * <p>Числом, а не одними именами: «не удалось прочитать 2 из 15» — это
+     * то, что продавец сверяет с полосой миниатюр, прежде чем отправлять
+     * файл покупателю.
+     *
+     * <p>С меткой UTF-8 в начале: файл открывают двойным нажатием
+     * в проводнике, а «Блокнот» без метки читает его однобайтовой кодировкой
+     * и показывает кракозябры — предупреждение, которое нельзя прочесть,
+     * не предупреждает. По той же причине имя файла латиницей, как и имя
+     * самого архива.
+     */
+    private static void writeNote(java.util.zip.ZipOutputStream zip, int total,
+                                  List<String> missing, List<String> truncated)
+            throws java.io.IOException {
+
+        // Метка UTF-8 (BOM) первым знаком — записана escape'ом намеренно:
+        // невидимый символ в исходнике следующий читатель принял бы
+        // за случайный мусор и убрал.
+        StringBuilder text = new StringBuilder(BOM);
+        text.append("В архиве не все снимки позиции.\n\n")
+                .append("Всего снимков в карточке: ").append(total).append('\n')
+                .append("Не удалось прочитать: ")
+                .append(missing.size() + truncated.size()).append('\n');
+        if (!missing.isEmpty()) {
+            text.append("В архив не попали: ").append(String.join(", ", missing)).append('\n');
+        }
+        if (!truncated.isEmpty()) {
+            text.append("Записаны не полностью и могут не открыться: ")
+                    .append(String.join(", ", truncated)).append('\n');
+        }
+        text.append("\nСами снимки остались в карточке позиции — попробуйте скачать архив\n")
+                .append("ещё раз. Если повторится, покажите этот файл администратору.\n");
+
+        zip.putNextEntry(new java.util.zip.ZipEntry(NOTE_NAME));
+        zip.write(text.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        zip.closeEntry();
     }
 
     /**
