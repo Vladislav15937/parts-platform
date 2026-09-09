@@ -97,6 +97,19 @@ describe('разрез по машине на экране отчётов', () =
           totals: { payments: 0, incoming: 0, outgoing: 0, total: 0 },
         });
       }
+      // Склады для отбора проданных позиций приезжают массивом:
+      // подсунуть объект значит уронить экран там, где он работает.
+      if (url.includes('/organization/warehouses')) {
+        return json([]);
+      }
+      // Проданные позиции: свой итог и свой список продавцов — общий ответ
+      // ниже их не несёт, а экран читает и то и другое напрямую.
+      if (url.includes('/reports/sold-items')) {
+        return json({
+          rows: [], nextAfter: null, managers: [],
+          totals: { items: 0, quantity: 0, revenue: 0, cost: 0, profit: 0, withoutCost: 0 },
+        });
+      }
       return json({ month: '2026-08', rows: [] });
     }));
   });
@@ -179,7 +192,10 @@ describe('разрез по машине на экране отчётов', () =
   });
 
   async function pickMachine() {
-    const machine = await screen.findByLabelText(/Машина/);
+    // Списков «Машина» на экране два: отбор проданных позиций и выбор
+    // разреза. Разрез стоит ниже — берём последний.
+    const machines = await screen.findAllByLabelText('Машина');
+    const machine = machines[machines.length - 1]!;
     await waitFor(() => expect(machine.querySelectorAll('option')).toHaveLength(2));
     fireEvent.change(machine, { target: { value: '7' } });
   }
