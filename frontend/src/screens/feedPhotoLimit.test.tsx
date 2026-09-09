@@ -68,6 +68,8 @@ describe('число снимков в объявлении', () => {
         photoLimit: '3',
         installationNote: true,
         installationTemplate: 'Поставим за {цена} ₽',
+        expectedGoods: false,
+        expectedGoodsNote: null,
       });
   });
 

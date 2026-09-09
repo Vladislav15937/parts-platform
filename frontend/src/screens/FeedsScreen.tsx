@@ -256,6 +256,15 @@ function FeedCard({
   const [installationTemplate, setInstallationTemplate] = useState(
     feed.settings?.installationTemplate ?? DEFAULT_INSTALLATION_TEMPLATE);
 
+  // Товар, по которому ожидается поступление. Поле текста открывается пустым
+  // намеренно: слова приписки выбирает владелец, а не мы, и подставленный
+  // здесь текст уехал бы к покупателю от его имени. Пустой текст при
+  // включённом переключателе сервер отбивает словами.
+  const [expectedGoods, setExpectedGoods] = useState(
+    feed.settings?.expectedGoods === true);
+  const [expectedGoodsNote, setExpectedGoodsNote] = useState(
+    feed.settings?.expectedGoodsNote ?? '');
+
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState<number | null>(null);
 
@@ -349,6 +358,9 @@ function FeedCard({
         installationNote,
         installationTemplate: installationTemplate.trim() === ''
           ? null : installationTemplate,
+        expectedGoods,
+        expectedGoodsNote: expectedGoodsNote.trim() === ''
+          ? null : expectedGoodsNote,
       });
       onChanged();
     } catch (cause) {
@@ -361,7 +373,10 @@ function FeedCard({
   async function count() {
     setBusy(true);
     try {
-      setMatching((await countMatching(current(), feed.productLine)).parts);
+      // Переключатель ожидаемого товара берётся из формы, как и весь отбор:
+      // счётчик, о нём не знающий, обещал бы меньше, чем уедет площадке.
+      setMatching((await countMatching(
+        current(), feed.productLine, expectedGoods)).parts);
     } catch (cause) {
       onError(describe(cause, 'Посчитать не удалось'));
     } finally {
@@ -817,6 +832,60 @@ function FeedCard({
           </button>
         </div>
       </fieldset>
+
+      {/* Товар, по которому ожидается поступление: он привязан к поставке
+          в пути и на складе его ещё нет. Решение владельца продукта
+          от 5 сентября 2026 — выгружать, но с припиской: товар в пути никому
+          не обещан, продавать его можно, покупателю лишь надо сказать, что
+          придётся подождать.
+
+          Колёсной выгрузке этого не показываем: в прайсе шин и дисков
+          элемента описания нет вовсе, приписку дописывать некуда — а без неё
+          такой товар уехал бы объявлением о детали, которой нет на складе. */}
+      {!wheels && (
+        <fieldset className="choices">
+          <legend>Товар в пути — выгружать с припиской</legend>
+          <p className="note">
+            Речь о товаре из поставки, которая ещё не приехала: на складе его
+            нет. Приписка встаёт в начало описания объявления и пропадает
+            сама, когда поставку отметят пришедшей.
+          </p>
+
+          {/* Подпись длинная, а флажки отбора выше стоят с `nowrap` —
+              рассчитан он на «новые» и «б/у». Без переноса эта фраза
+              не сжимается и уводит вбок всю страницу на телефоне. */}
+          <label className="choice--wrap">
+            <input
+              type="checkbox"
+              checked={expectedGoods}
+              onChange={(e) => setExpectedGoods(e.target.checked)}
+            />
+            Выгружать товары, по которым ожидается поступление
+          </label>
+
+          {/* Поле стоит прямым элементом набора, а не внутри `filter-row`:
+              ряд внутри `.choices` шириной с содержимое, и поле фразы в нём
+              обрезается на середине. */}
+          {/* Подпись не просто «Текст приписки»: такая уже стоит у стоимости
+              установки, и две одинаковые подписи на одном экране владелец
+              читает как одно и то же поле. */}
+          <label className="field field--sentence">
+            Текст приписки о поступлении
+            <input
+              value={expectedGoodsNote}
+              placeholder="например, ожидается поступление"
+              onChange={(e) => setExpectedGoodsNote(e.target.value)}
+            />
+          </label>
+
+          <div className="filter-row">
+            <button type="button" disabled={busy}
+                    onClick={() => void saveSettings('Товар в пути не сохранён')}>
+              Сохранить товар в пути
+            </button>
+          </div>
+        </fieldset>
+      )}
 
       <div className="filter-row">
         <button type="button" className="button--ghost" disabled={busy}

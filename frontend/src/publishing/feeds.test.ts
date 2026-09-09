@@ -29,6 +29,8 @@ function feed(overrides: Partial<Feed> = {}): Feed {
       photoLimit: null,
       installationNote: null,
       installationTemplate: null,
+      expectedGoods: null,
+      expectedGoodsNote: null,
     },
     lastError: null,
     lastDownloadAt: null,

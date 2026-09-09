@@ -857,6 +857,114 @@ class DromFeedControllerTest extends PostgresTestBase {
                         .value(org.hamcrest.Matchers.containsString("{цена}")));
     }
 
+    /**
+     * Товар по ожидаемой поставке — вся дорога: экран → jsonb → прайс.
+     *
+     * <p>Решение владельца продукта от 5 сентября 2026
+     * ({@code tasks/0007-tovar-v-peremeshchenii-v-obyavlenii.md}): «выгружаем
+     * с припиской "ожидается поступление"». Проверяется именно через
+     * {@code PUT /settings}, а не подстановкой jsonb в базу: настройка без
+     * места, откуда ею воспользоваться, — это отсутствующая возможность.
+     *
+     * <p>И проверяется соседняя выгрузка: появление переключателя не должно
+     * добавить товар в чужой прайс молча — узнали бы об этом с чужого сайта.
+     */
+    @Test
+    @DisplayName("Товар в пути уезжает с припиской, и только у той выгрузки, где включён")
+    void expectedGoodsBelongToTheFeed() throws Exception {
+        String run = java.util.UUID.randomUUID().toString().substring(0, 8);
+        String awaited = "Прайс: дверь из контейнера " + run;
+
+        Long partId = inTenant(TENANT, () -> {
+            Long supplyId = jdbc.queryForObject("""
+                    INSERT INTO supply (kind, number, status)
+                    VALUES ('CONTAINER', ?, 'IN_TRANSIT') RETURNING id""",
+                    Long.class, "К-" + run);
+            return jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, cost_price,
+                                      is_published, supply_id)
+                    VALUES (1, ?, 24000, 100, true, ?) RETURNING id""",
+                    Long.class, awaited, supplyId);
+        });
+
+        Long expectingId = inTenant(TENANT, () -> jdbc.queryForObject("""
+                INSERT INTO marketplace_account (marketplace, title, settings)
+                VALUES ('DROM', 'Дром: с ожидаемым', '{"packetId":"559"}'::jsonb)
+                RETURNING id""", Long.class));
+        String expectingFeed = rotate(expectingId);
+
+        assertThat(feedOf(expectingFeed))
+                .as("товар, которого ещё нет на складе, уехал до того, как это включили")
+                .doesNotContain(awaited);
+
+        mvc.perform(put("/api/marketplace-accounts/" + expectingId + "/settings")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"expectedGoods": true,
+                                 "expectedGoodsNote": "Ожидается поступление"}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.settings.expectedGoods").value(true));
+
+        String offer = offerOf(feedOf(expectingFeed), awaited);
+        assertThat(descriptionOf(offer))
+                .as("приписка обязана стоять в начале описания, а не после него")
+                .startsWith("Ожидается поступление");
+        assertThat(offer)
+                .as("товар в пути уехал нулём — Дром читает это как «снять объявление»")
+                .contains("<quantity>1</quantity>")
+                .contains("<available>true</available>");
+
+        assertThat(feedOf(feedPath))
+                .as("товар в пути уехал в выгрузку, у которой этого не включали")
+                .doesNotContain(awaited);
+
+        // Поставка пришла, товар принят на склад — приписки больше нет,
+        // товар обычный.
+        inTenant(TENANT, () -> {
+            jdbc.update("UPDATE supply SET status = 'ARRIVED', arrived_on = current_date"
+                    + " WHERE id = (SELECT supply_id FROM part WHERE id = ?)", partId);
+            Long branch = jdbc.queryForObject(
+                    "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class);
+            Long warehouse = jdbc.queryForObject(
+                    "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Склад') RETURNING id",
+                    Long.class, branch);
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
+            return null;
+        });
+
+        assertThat(descriptionOf(offerOf(feedOf(expectingFeed), awaited)))
+                .as("приписка осталась на товаре, который уже лежит на складе")
+                .doesNotContain("Ожидается поступление");
+    }
+
+    /**
+     * Переключатель без текста приписки отбивается словами до сохранения.
+     *
+     * <p>Пропущенный, он даёт объявление о товаре, которого на складе нет,
+     * без единого слова о том, почему его нет: покупатель приезжает
+     * за деталью, лежащей в контейнере. Умолчания у текста нет намеренно —
+     * слова приписки выбирает владелец.
+     */
+    @Test
+    @DisplayName("Пустая приписка при включённом переключателе не сохраняется")
+    void expectedGoodsWithoutNoteAreRefused() throws Exception {
+        mvc.perform(put("/api/marketplace-accounts/" + accountId + "/settings")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedGoods\":true,\"expectedGoodsNote\":\"  \"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("Текст приписки")));
+    }
+
+    /** Описание объявления как оно уедет площадке. */
+    private static String descriptionOf(String offer) {
+        int at = offer.indexOf("<description>");
+        assertThat(at).as("описания в предложении нет вовсе").isNotNegative();
+        return offer.substring(at + "<description>".length(), offer.indexOf("</description>", at));
+    }
+
     /** Прайс целиком: тело ответа по постоянной ссылке выгрузки. */
     private String feedOf(String path) throws Exception {
         return mvc.perform(get(path))
