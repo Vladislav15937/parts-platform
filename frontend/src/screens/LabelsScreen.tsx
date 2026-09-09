@@ -4,8 +4,7 @@ import { LabelSheet } from '../labels/LabelSheet';
 import {
   cellLabel,
   cellsOf,
-  LABEL_HEIGHT_MM,
-  LABEL_WIDTH_MM,
+  LABEL_SIZE_NOTE,
   partLabel,
   scannable,
 } from '../labels/labels';
@@ -257,9 +256,7 @@ export function LabelsScreen({ canPrint }: Props) {
         <hr />
 
         <p className="note">
-          К печати: {labels.length}. Размер этикетки — {LABEL_WIDTH_MM}×{LABEL_HEIGHT_MM} мм;
-          выставьте его в диалоге печати и уберите поля, иначе принтер ужмёт
-          штрихкод и сканер перестанет его брать.
+          К печати: {labels.length}. {LABEL_SIZE_NOTE}
         </p>
 
         <button type="button" disabled={labels.length === 0} onClick={() => window.print()}>
