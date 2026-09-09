@@ -87,6 +87,42 @@ public class PhotoController {
         return photos.of(partId);
     }
 
+    /**
+     * Все снимки позиции одним архивом.
+     *
+     * <p><b>Единственное место, где файл идёт через приложение</b>, и это
+     * не отступление от правила класса, а его следствие. Разговор продавца
+     * с покупателем кончается «скиньте фото», снимков у позиции шесть-девять,
+     * а ссылки на просмотр подписанные и короткоживущие: сохранять их
+     * приходилось по одной и сразу, девять раз, на глазах у ждущего
+     * на линии. Собрать архив в браузере нельзя по той же причине, по
+     * которой снимки грузятся по одному: девять параллельных скачиваний
+     * с телефона по мобильной связи кончаются отказом на половине.
+     *
+     * <p>Роль не проверяется — как и у просмотра снимков выше: в архиве
+     * ровно те же фотографии, которые открывший карточку и так видит.
+     * Это не выгрузка таблицы склада, где право унести содержимое файлом
+     * отделено от права смотреть на экран.
+     *
+     * <p><b>Состав читается до {@code getOutputStream()}.</b> Отдав первый
+     * байт, статус ответа уже не сменить: «снимков нет» уехало бы двухсоткой
+     * с пустым архивом внутри, а пустой архив продавец читает как удавшееся
+     * скачивание и идёт искать файлы в «Загрузках».
+     */
+    @GetMapping("/archive")
+    public void archive(@PathVariable Long partId,
+                        jakarta.servlet.http.HttpServletResponse response)
+            throws java.io.IOException {
+
+        PhotoService.Archive archive = photos.archiveOf(partId);
+
+        response.setContentType("application/zip");
+        response.setHeader("Content-Disposition",
+                "attachment; filename=\"" + archive.fileName() + "\"");
+
+        photos.writeArchive(archive, response.getOutputStream());
+    }
+
     @PostMapping("/{photoId}/main")
     public ResponseEntity<Void> makeMain(@PathVariable Long partId, @PathVariable Long photoId) {
         photos.makeMain(photoId);
