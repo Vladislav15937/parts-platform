@@ -1,5 +1,7 @@
 package ru.partsflow.platform.session;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -16,7 +18,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
 
+import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
+import java.util.List;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -293,17 +297,59 @@ class LoginSessionTest extends PostgresTestBase {
                 "SELECT end_reason FROM login_session WHERE outcome = 'SUCCESS'", String.class));
         assertThat(reason).isEqualTo("EXPIRED");
 
-        Boolean inThePast = inTenant(() -> jdbc.queryForObject("""
-                SELECT ended_at < now() - interval '1 hour' AND ended_at > last_seen_at
+        // Три утверждения, и каждое отбивает свой способ ошибиться. Первое —
+        // конец в прошлом, а не «сейчас»: время прохода уборки означало бы
+        // «работал до этой минуты». Второе и третье привязывают конец
+        // к последней активности: взяв started_at (вход был на час раньше),
+        // мы получили бы момент раньше самой активности, а взяв now() —
+        // позже её на два часа.
+        Boolean fromLastSeen = inTenant(() -> jdbc.queryForObject("""
+                SELECT ended_at < now() - interval '1 hour'
+                   AND ended_at > last_seen_at
+                   AND ended_at < last_seen_at + interval '1 hour'
                   FROM login_session WHERE outcome = 'SUCCESS'""", Boolean.class));
-        assertThat(inThePast)
-                .as("конец сессии — момент, когда она перестала быть действительной, "
-                        + "а не момент прохода уборки")
+        assertThat(fromLastSeen)
+                .as("конец сессии отсчитывается от последней активности — это момент, "
+                        + "когда она перестала быть действительной, а не момент прохода "
+                        + "уборки и не время входа")
                 .isTrue();
     }
 
     /**
-     * Отметка активности прорежена, и это требование задачи дословно.
+     * Первая половина требования об отметке активности: она вообще пишется.
+     *
+     * <p>Без неё соседняя проверка прореживания зеленеет на коде, который
+     * не отмечает <b>ничего</b>: {@code last_seen_at} ставится ещё при входе,
+     * и «отметка не двигается» выполняется сама собой. А без отметки нет
+     * ни длительности работы («работал до 18:00»), ни уборки зависших —
+     * та идёт как раз по этому полю.
+     *
+     * <p>Отметка отодвигается в прошлое запросом, а не ожиданием: проверяется
+     * то, что фильтр её <b>перепишет</b>, и для этого нужно, чтобы прежнее
+     * значение отличалось от нового.
+     */
+    @Test
+    @DisplayName("Отметка активности пишется при работе, а не только при входе")
+    void activityMarkIsWritten() throws Exception {
+        MockHttpSession seller = login("prodavec", CHROME_ON_WINDOWS);
+        inTenant(() -> jdbc.update("""
+                UPDATE login_session SET last_seen_at = now() - interval '2 hours'
+                 WHERE outcome = 'SUCCESS' AND login_attempted = 'prodavec'"""));
+
+        mvc.perform(get("/api/auth/me").session(seller)).andExpect(status().isOk());
+
+        Boolean fresh = inTenant(() -> jdbc.queryForObject("""
+                SELECT last_seen_at > now() - interval '1 minute' FROM login_session
+                 WHERE outcome = 'SUCCESS' AND login_attempted = 'prodavec'""", Boolean.class));
+        assertThat(fresh)
+                .as("запрос работающего сотрудника обязан двигать отметку активности: "
+                        + "по ней считается длительность и по ней же уборка отличает "
+                        + "брошенную сессию от живой")
+                .isTrue();
+    }
+
+    /**
+     * Вторая половина того же требования, и она дословно из задачи.
      *
      * <p>«Отметку активности нельзя обновлять на каждый запрос — это запись
      * в базу на каждый клик» (ответы владельца продукта от 9 сентября 2026).
@@ -325,6 +371,46 @@ class LoginSessionTest extends PostgresTestBase {
                 .as("пять запросов подряд — это пять записей в базу на каждого "
                         + "работающего сотрудника")
                 .isEqualTo(afterFirst);
+    }
+
+    /**
+     * Список отбора не растёт от чужого перебора паролей.
+     *
+     * <p>У журнала изменений «кто» берётся из `tenant_member` — их десятки,
+     * и число их задаёт владелец. Здесь рядом стоят логины, <b>введённые
+     * в форме входа</b>: сколько их будет, решает тот, кто подбирает пароль.
+     * Без потолка тысяча попыток даёт экрану владельца список на тысячу
+     * строк, набранный чужими руками, — и ровно тогда, когда журнал
+     * открывают по делу.
+     *
+     * <p>Свои при этом не теряются: сотрудник в списке остаётся, сколько бы
+     * ни было чужих логинов.
+     */
+    @Test
+    @DisplayName("Отбор «кто» не раздувается чужим перебором логинов")
+    void attemptedLoginsInFilterAreCapped() throws Exception {
+        MockHttpSession owner = login("vladelec", CHROME_ON_WINDOWS);
+        inTenant(() -> jdbc.update("""
+                INSERT INTO login_session (login_attempted, outcome, failure_reason, started_at)
+                SELECT 'podbor-' || i, 'FAILED', 'BAD_CREDENTIALS', now() - (i * interval '1 second')
+                  FROM generate_series(1, 150) AS i"""));
+
+        String body = mvc.perform(get("/api/organization/sessions/values")
+                        .param("column", "member").session(owner))
+                .andExpect(status().isOk())
+                // Явная кодировка: без неё MockMvc отдаёт тело как ISO-8859-1,
+                // и «Пётр Владельцев» превращается в кракозябры — проверка
+                // на длину при этом проходит, а на имя нет.
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        List<String> names = new ObjectMapper().readValue(body, new TypeReference<>() { });
+
+        assertThat(names)
+                .as("сто чужих логинов плюс сам вошедший владелец: список отбора "
+                        + "ограничен сотней последних, иначе его длину задаёт "
+                        + "подбиравший пароль, а не владелец")
+                .hasSize(101)
+                .as("свой человек из списка не выпадает, сколько бы ни было чужих")
+                .contains("Пётр Владельцев");
     }
 
     // ------------------------------------------------------------- служебное

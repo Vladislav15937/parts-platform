@@ -38,6 +38,16 @@ import java.util.List;
 @Service
 public class SessionJournalService {
 
+    /**
+     * Сколько чужих логинов предлагать отбором.
+     *
+     * <p>Сто — это уже «кто-то ломится», и разбирать их отбором по одному
+     * никто не станет: смотрят списком. Потолок нужен не ради этих ста,
+     * а ради того, чтобы экран владельца не скачивал десять тысяч строк,
+     * набранных чужим перебором паролей.
+     */
+    private static final int ATTEMPTED_CAP = 100;
+
     private final JdbcTemplate jdbc;
 
     public SessionJournalService(JdbcTemplate jdbc) {
@@ -132,6 +142,16 @@ public class SessionJournalService {
      * <p>С сервера, а не списком во фронтенде: перечисленный там, он разошёлся
      * бы с тем, что сервер ищет, и отбор перестал бы находить. Тот же довод,
      * что у меню колонки на витрине склада.
+     *
+     * <p><b>Половина этого списка приходит снаружи, и потому она ограничена.</b>
+     * У журнала изменений «кто» берётся из {@code tenant_member} — их десятки,
+     * и число их задаёт владелец. Здесь рядом стоят логины, <b>введённые
+     * в форме входа</b>: сколько их будет, решает не владелец, а тот, кто
+     * подбирает пароль, — тысяча попыток даёт тысячу разных строк, и список
+     * «всех» превращается в список подбиравшего. Поэтому сотрудники берутся
+     * все, а чужие логины — только последние {@value #ATTEMPTED_CAP}.
+     * Из самого журнала при этом не пропадает ни одна строка: отбор — это
+     * удобство, а список отказов целиком показывает «Только отказы».
      */
     @Transactional(readOnly = true)
     public List<String> values(String column) {
@@ -139,10 +159,19 @@ public class SessionJournalService {
             // Один список на сотрудников и на введённые при отказе логины:
             // спрашивают «кто заходил», а не «кто из заведённых заходил».
             case "member" -> jdbc.queryForList("""
-                    SELECT DISTINCT coalesce(m.display_name, s.login_attempted)
+                    SELECT DISTINCT m.display_name
                       FROM login_session s
-                      LEFT JOIN tenant_member m ON m.id = s.member_id
-                     ORDER BY 1""", String.class);
+                      JOIN tenant_member m ON m.id = s.member_id
+                     WHERE m.display_name IS NOT NULL
+                     UNION
+                    SELECT login_attempted FROM (
+                        SELECT login_attempted, max(started_at) AS last_at
+                          FROM login_session
+                         WHERE member_id IS NULL
+                         GROUP BY login_attempted
+                         ORDER BY last_at DESC
+                         LIMIT ?) recent
+                     ORDER BY 1""", String.class, ATTEMPTED_CAP);
             default -> List.of();
         };
     }

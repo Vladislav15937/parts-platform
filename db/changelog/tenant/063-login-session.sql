@@ -28,12 +28,36 @@
 -- CLAUDE.md.
 CREATE TABLE ${tenant.schema}.login_session
 (
-    id              bigserial PRIMARY KEY,
+    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 
     -- Пусто у отказа с неизвестным логином: человека, которого нет, не на кого
     -- сослаться. Сам введённый логин при этом сохраняется — по нему и видно,
     -- что подбирают.
-    member_id       bigint REFERENCES ${tenant.schema}.tenant_member (id),
+    --
+    -- ON DELETE SET NULL, а не запрет удаления: «при удалении сотрудника журнал
+    -- обычно обезличивают, а не удаляют — иначе рушится аудит» (docs/sessions.md,
+    -- §8, про 152-ФЗ). Запрет означал бы, что учётную запись, один раз вошедшую,
+    -- удалить нельзя уже никогда — включая требование человека удалить свои
+    -- данные, ради которого эта строка закона и написана.
+    --
+    -- Обезличенная строка остаётся осмысленной, и это проверено, а не обещано:
+    -- login_attempted лежит рядом с NOT NULL, member_role записан снимком,
+    -- время, адрес и устройство на месте — то есть уходит ссылка на человека,
+    -- которого больше нет, а не содержание записи. Из журнала она при этом
+    -- не пропадает и не зависает: автора обе выборки SessionJournalService
+    -- читают LEFT JOIN'ом, а уборка зависших идёт по времени последней
+    -- активности, а не по member_id.
+    --
+    -- ПОЧЕМУ ЗДЕСЬ ИНАЧЕ, ЧЕМ У deal.manager_id, stock_document.created_by
+    -- и inventory_session.started_by. Те стоят без ON DELETE по смыслу:
+    -- manager_id — зарплатная база смены, по нему группирует v_manager_sales,
+    -- и обнулённый молча перенёс бы выручку менеджера в безымянную строку
+    -- отчёта. Там запрет удаления и есть правильный ответ, а продуктовый ответ
+    -- на «сотрудник ушёл» — MemberService.setActive, а не удаление. Здесь
+    -- наоборот: журнал для того и заведён, чтобы пережить человека. Это два
+    -- разных правила, а не разнобой.
+    member_id       bigint REFERENCES ${tenant.schema}.tenant_member (id)
+                        ON DELETE SET NULL,
     login_attempted text        NOT NULL,
 
     -- Роль снимком, тем же решением, что у audit_log.changed_by_role: роль
@@ -92,19 +116,19 @@ COMMENT ON COLUMN ${tenant.schema}.login_session.session_key IS
     'Хеш идентификатора сессии, не сам идентификатор: журнал не должен становиться складом действующих ключей';
 
 -- Журнал открывают свежим сверху, и это его единственный порядок.
-CREATE INDEX login_session_started_idx
+CREATE INDEX login_session_started_ix
     ON ${tenant.schema}.login_session (started_at DESC);
 
 -- По нему ищут, кого отзывать при смене пароля, и кого закрывать уборкой
 -- зависших. Частичный: закрытых сессий со временем станет на порядки больше,
 -- чем открытых, и полный индекс рос бы вместе с историей.
-CREATE INDEX login_session_open_idx
+CREATE INDEX login_session_open_ix
     ON ${tenant.schema}.login_session (member_id)
     WHERE ended_at IS NULL AND outcome = 'SUCCESS';
 
 -- По ключу находят свою запись выход и отметка активности — то есть запрос
 -- на каждые несколько минут работы каждого сотрудника.
-CREATE INDEX login_session_key_idx
+CREATE INDEX login_session_key_ix
     ON ${tenant.schema}.login_session (session_key)
     WHERE session_key IS NOT NULL;
 

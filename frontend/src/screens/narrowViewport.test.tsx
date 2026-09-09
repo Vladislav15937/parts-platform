@@ -390,6 +390,48 @@ const STOCK = {
   ],
 };
 
+/**
+ * Журнал сессий: вкладка «Входы» того же экрана (вторая половина задачи 0043).
+ *
+ * <p>Строки длинные по той же причине, что и в журнале изменений: ширину
+ * задают имя сотрудника, разобранное устройство и причина отзыва — «Завершена:
+ * сотрудник выключен» вместе с «работал 3 ч 12 мин» это самая длинная клетка
+ * таблицы. На «Иванов · Chrome · Вышел» экран укладывается при любой вёрстке.
+ */
+const SESSIONS = {
+  total: 3,
+  more: true,
+  items: [
+    {
+      id: 3, who: 'Владимир Петров-Заречный', unknown: false, role: 'MANAGER',
+      at: '2026-09-09T09:14:00Z', lastSeenAt: '2026-09-09T12:26:00Z',
+      endedAt: '2026-09-09T12:30:00Z', endReason: 'REVOKED',
+      endDetail: 'сотрудник выключен',
+      success: true, failureReason: null,
+      device: 'Яндекс.Браузер · Windows',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        + ' (KHTML, like Gecko) Chrome/127.0.0.0 YaBrowser/24.7.0.0 Safari/537.36',
+      ip: '203.0.113.148',
+    },
+    {
+      id: 2, who: 'Севастьянова Александра', unknown: false, role: 'STOREKEEPER',
+      at: '2026-09-09T05:02:00Z', lastSeenAt: '2026-09-09T08:41:00Z',
+      endedAt: null, endReason: null, endDetail: null,
+      success: true, failureReason: null,
+      device: 'Chrome · Android',
+      userAgent: 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36',
+      ip: '198.51.100.7',
+    },
+    {
+      id: 1, who: 'administrator', unknown: true, role: null,
+      at: '2026-09-08T22:47:00Z', lastSeenAt: null,
+      endedAt: null, endReason: null, endDetail: null,
+      success: false, failureReason: 'BAD_CREDENTIALS',
+      device: null, userAgent: 'curl/8.4.0', ip: '203.0.113.9',
+    },
+  ],
+};
+
 const RESPONSES: Array<[string, unknown]> = [
   ['/api/parts/stock', STOCK],
   ['/api/intake/reference', REFERENCE],
@@ -399,6 +441,12 @@ const RESPONSES: Array<[string, unknown]> = [
   ['/api/organization/audit/values', ['Товар', 'Сделка', 'Позиция сделки',
     'Платёж', 'Затрата по машине']],
   ['/api/organization/audit', JOURNAL],
+  // Порядок значим — совпадение по вхождению: «/sessions» без уточнения
+  // перехватил бы и запрос значений отбора, и тот пришёл бы страницей
+  // вместо массива.
+  ['/api/organization/sessions/values', ['Владимир Петров-Заречный',
+    'Севастьянова Александра', 'administrator']],
+  ['/api/organization/sessions', SESSIONS],
   ['/api/organization/warehouses', WAREHOUSES],
   ['/api/organization/branches', []],
   ['/api/reports/supplies', { rows: SUPPLIES }],
@@ -628,6 +676,37 @@ describe('на телефоне ни один раздел не уезжает �
       `Поля отбора сжаты, а не перенесены: ${squeezed.length} из ${widths.length} `
       + `уже 250 пикселей при экране ${PHONE_WIDTH}.`,
     ).toEqual([]);
+  }, 30_000);
+
+  /**
+   * Вкладка «Входы» меряется отдельно, потому что перебор до неё не доходит.
+   *
+   * <p>Сторож открывает раздел в том виде, в каком тот открывается, а «Журнал
+   * действий» открывается на «Изменениях»: журнал сессий — вторая вкладка того
+   * же экрана, и ни один прогон её не видел бы. Таблица там своя, из пяти
+   * колонок, и самая длинная клетка — «Завершена: сотрудник выключен» вместе
+   * с длительностью работы.
+   *
+   * <p>Задача 0043 называет это прямо: экран табличный и длинный, значит
+   * `.table-scroll`, обёртка и проверка сторожем — иначе он войдёт в список
+   * экранов, уводящих страницу вбок.
+   */
+  it('вкладка «Входы» журнала не уводит страницу вбок', async () => {
+    const { container } = render(<AuditJournalScreen />);
+    await waitFor(() => expect(container.textContent).not.toBe(''));
+
+    fireEvent.click([...container.querySelectorAll('button')]
+      .find((b) => b.textContent === 'Входы') as HTMLButtonElement);
+    await waitFor(() => expect(container.textContent)
+      .toContain('Владимир Петров-Заречный'));
+
+    const html = await settled(container);
+    const { scrollWidth, clientWidth } = await measurePage(html);
+    expect(
+      scrollWidth,
+      `Журнал сессий уводит страницу вбок на ${scrollWidth - clientWidth} пикселей `
+      + `(scrollWidth ${scrollWidth} при clientWidth ${clientWidth}, экран ${PHONE_WIDTH})`,
+    ).toBe(clientWidth);
   }, 30_000);
 
   it('меряет все разделы, а не те, до которых дошли руки', () => {
