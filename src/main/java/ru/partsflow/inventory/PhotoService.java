@@ -412,9 +412,6 @@ public class PhotoService {
                                   List<String> missing, List<String> truncated)
             throws java.io.IOException {
 
-        // Метка UTF-8 (BOM) первым знаком — записана escape'ом намеренно:
-        // невидимый символ в исходнике следующий читатель принял бы
-        // за случайный мусор и убрал.
         StringBuilder text = new StringBuilder(BOM);
         text.append("В архиве не все снимки позиции.\n\n")
                 .append("Всего снимков в карточке: ").append(total).append('\n')
