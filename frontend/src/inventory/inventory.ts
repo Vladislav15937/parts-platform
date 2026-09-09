@@ -266,7 +266,7 @@ export async function countPositions(warehouseId: number, cellId?: number): Prom
 async function adopt(session: InventorySession): Promise<void> {
   const stored = await get<InventorySession>(STORE_INVENTORY, KEY_SESSION);
   const [lines, codes] = await Promise.all([
-    request<InventoryLine[]>(`/api/inventory/sessions/${session.id}/lines`),
+    linesOfSession(session.id),
     request<WarehouseCode[]>(`/api/inventory/sessions/${session.id}/codes`),
   ]);
 
@@ -463,6 +463,7 @@ export function cancelSession(sessionId: number): Promise<InventorySession> {
   });
 }
 
+/** Лист обхода. Зовёт его adopt — он выше по файлу, объявление поднимается. */
 export function linesOfSession(sessionId: number): Promise<InventoryLine[]> {
   return request<InventoryLine[]>(`/api/inventory/sessions/${sessionId}/lines`);
 }
