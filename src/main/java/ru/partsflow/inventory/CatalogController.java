@@ -86,7 +86,8 @@ public class CatalogController {
                 row.brand(), row.model(), row.generation(), row.yearFrom(), row.yearTo(),
                 row.body(), row.engine(), row.year(), row.donorCode(),
                 row.price(), row.installationPrice(), row.color(), row.description(), row.note(),
-                row.manufacturer(), row.marking(), row.section(), row.sideLr(), row.sideFr(),
+                row.manufacturer(), row.marking(), row.section(), row.cellCode(),
+                row.sideLr(), row.sideFr(),
                 row.qty(), row.oem(), row.crosses(),
                 row.photoKey() == null ? null : storage.presignView(row.photoKey()),
                 row.supply(), row.equipment(),
@@ -351,6 +352,12 @@ public class CatalogController {
                       java.math.BigDecimal price, java.math.BigDecimal installationPrice,
                       String color, String description, String note,
                       String manufacturer, String marking, String section,
+                      /**
+                       * Код ячейки хранения — не то же, что {@code section}:
+                       * ту клиент пишет руками своей нумерацией полок,
+                       * а ячейку заводят складом и печатают на этикетке.
+                       */
+                      String cellCode,
                       String sideLr, String sideFr, java.math.BigDecimal qty,
                       String oem, String crosses, String photoUrl,
                       String supply, String equipment,

@@ -127,6 +127,7 @@ function row(): CatalogRow {
     manufacturer: null,
     marking: null,
     section: null,
+    cellCode: null,
     sideLr: null,
     sideFr: null,
     qty: 1,
