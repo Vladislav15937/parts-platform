@@ -17,6 +17,7 @@ import { OutboxScreen } from './OutboxScreen';
 import { SellerScreen } from './SellerScreen';
 import { DealsScreen } from './DealsScreen';
 import { ReturnsScreen } from './ReturnsScreen';
+import { PaymentsScreen } from './PaymentsScreen';
 import { CustomersScreen } from './CustomersScreen';
 import { DeliveryScreen } from './DeliveryScreen';
 import { LabelsScreen } from './LabelsScreen';
@@ -249,6 +250,17 @@ export function HomeScreen() {
 
       {tab === 'returns' && (
         <ReturnsScreen
+          onOpenDeal={(dealId) => {
+            setOpenDealId(dealId);
+            setTab('sales');
+          }}
+        />
+      )}
+
+      {/* Касса компании — владельцу и менеджеру: в реестре видно всё,
+          включая возвраты покупателям и выдачи с лицевых счетов. */}
+      {tab === 'payments' && NAMING_ROLES.includes(state.me.role) && (
+        <PaymentsScreen
           onOpenDeal={(dealId) => {
             setOpenDealId(dealId);
             setTab('sales');

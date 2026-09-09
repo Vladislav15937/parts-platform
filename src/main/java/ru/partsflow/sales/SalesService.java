@@ -932,6 +932,134 @@ public class SalesService {
     }
 
     /**
+     * Реестр платежей: все деньги компании одним списком (задача 0045).
+     *
+     * <p>До него прочитать кассу было негде. Источник платежа система пишет
+     * с задачи 0024, а показывал его только отчёт по источникам — то есть
+     * суммы за месяц, а не сами платежи: на вопрос «что это за расход
+     * в четверг» ответить было нечем, кроме как поднимать сделку за сделкой.
+     * Соседний {@link #paymentsOfCustomer} спрашивает то же самое, но про
+     * одного клиента, а кассу сводят по всей компании.
+     *
+     * <p><b>Справочник источников подцеплен {@code LEFT JOIN}, и это
+     * не мелочь.</b> Отбор идёт по платежам, а не по справочнику: у платежа
+     * может не быть источника вовсе (до задачи 0024 его не писали, и у
+     * переехавшего клиента такова вся история), а сам источник может быть
+     * снят в архив — владелец наводит порядок в справочнике сегодня,
+     * а кассу сводит за прошлую неделю. Внутреннее соединение потеряло бы
+     * и то и другое молча.
+     *
+     * <p><b>Итог считается своим запросом, а не сложением строк.</b>
+     * Сложенные строки сходятся сами с собой при любой поломке отбора;
+     * число, посчитанное независимо по той же выборке, — единственное, что
+     * ловит разъехавшийся знак у расхода. Приход и расход при этом отдаются
+     * порознь: сумма платежа всегда положительная, знак несёт
+     * {@code direction}, и сложение дало бы «прошло через кассу» больше,
+     * чем было.
+     *
+     * <p>Вместо курсора — растущий предел, как у реестра возвратов и списка
+     * сделок: реестр читают с конца и вглубь не листают.
+     *
+     * @param direction непусто — только приход или только расход (воронка
+     *                  «Приходные»/«Расходные»); подвал считается по всей
+     *                  выборке отбора, воронку включая
+     * @param from      начало периода по {@code paid_at}; пусто — с начала времён
+     * @param to        конец периода (исключая); пусто — по текущий момент
+     * @param limit     сколько строк вернуть
+     */
+    @Transactional(readOnly = true)
+    public PaymentsPage listPayments(PaymentDirection direction, Instant from, Instant to,
+                                     int limit) {
+        StringBuilder where = new StringBuilder(" WHERE 1=1");
+        List<Object> args = new ArrayList<>();
+        if (direction != null) {
+            where.append(" AND p.direction = ?");
+            args.add(direction.name());
+        }
+        if (from != null) {
+            where.append(" AND p.paid_at >= ?");
+            args.add(java.sql.Timestamp.from(from));
+        }
+        if (to != null) {
+            where.append(" AND p.paid_at < ?");
+            args.add(java.sql.Timestamp.from(to));
+        }
+
+        // Разделители — явной строкой, а не отступом текстового блока: блок,
+        // чьи закрывающие кавычки стоят на строке содержимого, срезает весь
+        // общий отступ, и «p.source_name» + joins склеилось бы в один слитный
+        // идентификатор. Ловушка проекта, ловившая уже дважды.
+        String joins = " FROM payment p"
+                + " LEFT JOIN deal d ON d.id = p.deal_id"
+                + " LEFT JOIN customer c ON c.id = p.customer_id"
+                + " LEFT JOIN payment_source s ON s.id = p.payment_source_id";
+
+        Object[] filter = args.toArray();
+        long total = jdbc.queryForObject("SELECT count(*)" + joins + where, Long.class, filter);
+        BigDecimal income = jdbc.queryForObject(
+                "SELECT coalesce(sum(p.amount) FILTER (WHERE p.direction = 'IN'), 0)"
+                        + joins + where, BigDecimal.class, filter);
+        BigDecimal expense = jdbc.queryForObject(
+                "SELECT coalesce(sum(p.amount) FILTER (WHERE p.direction = 'OUT'), 0)"
+                        + joins + where, BigDecimal.class, filter);
+        // Итог — свой запрос со своим выражением, а не «приход минус расход»
+        // в Java: посчитанный из тех же двух чисел, он подтверждал бы только
+        // сам себя.
+        BigDecimal net = jdbc.queryForObject(
+                "SELECT coalesce(sum(CASE WHEN p.direction = 'IN' THEN p.amount"
+                        + " ELSE -p.amount END), 0)" + joins + where, BigDecimal.class, filter);
+
+        List<Object> rowArgs = new ArrayList<>(args);
+        rowArgs.add(limit);
+        List<PaymentListRow> rows = jdbc.query(
+                "SELECT p.id, p.paid_at, p.direction, p.amount, p.comment,"
+                        + " p.deal_id, d.number AS deal_number,"
+                        + " p.customer_id, c.name AS customer_name,"
+                        + " p.payment_source_id, s.name AS source_name"
+                        + joins + where
+                        + " ORDER BY p.id DESC LIMIT ?",
+                (rs, i) -> new PaymentListRow(
+                        rs.getLong("id"), rs.getTimestamp("paid_at").toInstant(),
+                        PaymentDirection.valueOf(rs.getString("direction")),
+                        rs.getBigDecimal("amount"), rs.getString("comment"),
+                        (Long) rs.getObject("deal_id"), (Long) rs.getObject("deal_number"),
+                        (Long) rs.getObject("customer_id"), rs.getString("customer_name"),
+                        (Long) rs.getObject("payment_source_id"), rs.getString("source_name")),
+                rowArgs.toArray());
+
+        return new PaymentsPage(rows, total, income, expense, net);
+    }
+
+    /**
+     * Строка реестра платежей.
+     *
+     * @param dealNumber   пусто — платёж без сделки: пополнение или выдача
+     *                     со счёта
+     * @param customerName пусто — клиента у платежа нет; так возвращают деньги
+     *                     по заказу с площадки, где покупатель не назван
+     * @param sourceName   пусто — способ не записан; это незаполненное поле,
+     *                     а не «прочее»: до задачи 0024 его не писали вовсе
+     */
+    public record PaymentListRow(Long id, Instant paidAt, PaymentDirection direction,
+                                 BigDecimal amount, String comment,
+                                 Long dealId, Long dealNumber,
+                                 Long customerId, String customerName,
+                                 Long sourceId, String sourceName) {
+    }
+
+    /**
+     * @param total   сколько нашлось по отбору — список обрезан пределом,
+     *                и подвал обязан назвать, сколько показано из скольких
+     * @param income  приход по всей выборке отбора
+     * @param expense расход по всей выборке отбора, числом положительным
+     * @param net     итог по той же выборке, посчитанный своим запросом:
+     *                приход минус расход
+     */
+    public record PaymentsPage(List<PaymentListRow> items, long total,
+                               BigDecimal income, BigDecimal expense, BigDecimal net) {
+    }
+
+    /**
      * Строка реестра возвратов.
      *
      * @param customerName  пусто — у сделки нет клиента; экран показывает
