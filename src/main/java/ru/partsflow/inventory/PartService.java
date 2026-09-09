@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -620,12 +621,40 @@ public class PartService {
 
     @Transactional(readOnly = true)
     public StockSearch searchAvailable(String query, int limit) {
+        return searchAvailable(query, limit, StockFilter.NONE);
+    }
+
+    /**
+     * Поиск продавца с отбором и порядком.
+     *
+     * <p><b>Транзакция обязательна и здесь, а не только у соседней
+     * перегрузки.</b> `search_path` выставляет провайдер соединений Hibernate
+     * внутри транзакции, а `JdbcTemplate`, вызванный снаружи, уходит в `public`
+     * и отвечает «relation part does not exist». Ровно так уже отвечала витрина
+     * после восстановления ячейки: перегрузку `list(...)` с курсором добавили
+     * без аннотации.
+     *
+     * <p><b>Отбор применяется к запросу в базу, а не к показанным строкам.</b>
+     * Список обрезан пятьюдесятью, а «фара» на живом складе находит 181:
+     * сузив уже показанное, «фара + Nissan» не нашла бы ничего при полке,
+     * полной ниссановских фар. Поэтому условия идут в тот же `WHERE`, что
+     * и текстовый поиск, и тем же условием считается число найденного.
+     */
+    @Transactional(readOnly = true)
+    public StockSearch searchAvailable(String query, int limit, StockFilter filter) {
         // «фара камри» приводится к «фара Camry», «225 55 18» — к размеру
         // по полям: покупатель звонит и говорит по-русски и словами.
         Match match = matchFor(query);
+        Narrowing narrowing = narrowingOf(filter);
         List<Object> args = new ArrayList<>(match.args());
-        // Ранжирование берёт тот же текст, что и поиск по словам.
-        args.add(match.rankText());
+        args.addAll(narrowing.args());
+        String order = orderBy(filter);
+        if (order == null) {
+            // Ранжирование берёт тот же текст, что и поиск по словам —
+            // и только когда порядок не задан продавцом: выбрав «цена
+            // по возрастанию», он спрашивает про цену, а не про совпадение.
+            args.add(match.rankText());
+        }
         args.add(limit);
         List<StockRow> rows = jdbc.query("""
                 SELECT p.id, p.public_code, p.title, p.price, p.status,
@@ -636,14 +665,20 @@ public class PartService {
                   JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
                   JOIN warehouse w ON w.id = s.warehouse_id
                   LEFT JOIN storage_cell c ON c.id = s.cell_id
-                """ + match.sql() + """
+                """ + match.sql() + narrowing.sql()
+                // Разделитель явной строкой, а не отступом текстового блока:
+                // у блока, чьи кавычки стоят на строке содержимого, срезается
+                // весь отступ, и «= ?» склеивалось с «ORDER BY» в «?ORDER BY» —
+                // отказ Postgres на грамматике, то есть пятисотка на живом
+                // запросе. Та же ловушка, что «ENDAS supply» у выгрузки колёс.
+                + "\n" + (order != null ? order : """
                  ORDER BY (s.qty - s.qty_reserved > 0) DESC,
                           ts_rank(to_tsvector('russian', coalesce(p.title, '') || ' '
                               || coalesce(p.description, '') || ' '
                               || coalesce(p.marking, '')),
                               plainto_tsquery('russian', ?)) DESC,
-                          p.id
-                 LIMIT ?""",
+                          p.id""")
+                + "\n LIMIT ?",
                 (rs, i) -> new StockRow(
                         rs.getLong("id"),
                         rs.getString("public_code"),
@@ -656,7 +691,7 @@ public class PartService {
                         rs.getBigDecimal("qty"),
                         rs.getBigDecimal("qty_reserved"),
                         rs.getBigDecimal("qty_available")),
-                // Ветки UNION, потом ранжирование, потом предел.
+                // Ветки UNION, потом отбор, потом ранжирование, потом предел.
                 args.toArray());
 
         // Сколько нашлось всего — тем же условием. Список обрезан
@@ -669,18 +704,216 @@ public class PartService {
         // Счёт стоит десять миллисекунд на складе в 35 841 позицию —
         // замерено. Когда список короче предела, он и есть всё найденное,
         // и лишний запрос был бы платой ни за что.
-        long total = rows.size() < limit ? rows.size() : countAvailable(match);
-        return new StockSearch(rows, total);
+        long total = rows.size() < limit ? rows.size() : countAvailable(match, narrowing);
+        return new StockSearch(rows, total, facetsOf(match));
     }
 
-    private long countAvailable(Match match) {
+    private long countAvailable(Match match, Narrowing narrowing) {
+        List<Object> args = new ArrayList<>(match.args());
+        args.addAll(narrowing.args());
         Long found = jdbc.queryForObject("""
                 SELECT count(*)
                   FROM part p
                   JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
-                """ + match.sql(),
-                Long.class, match.args().toArray());
+                """ + match.sql() + narrowing.sql(),
+                Long.class, args.toArray());
         return found == null ? 0 : found;
+    }
+
+    /**
+     * Из чего продавцу выбирать отбор — по найденному, а не по всему складу.
+     *
+     * <p>Это отличается от витрины владельца намеренно, и разница в вопросе.
+     * Владелец смотрит склад целиком, и список значений там полный: сужающийся
+     * не даёт снять один фильтр и поставить другой. Продавец же начинает
+     * с «фары» и сужает её — предложить ему все полторы сотни марок склада
+     * значило бы предложить выбирать из того, чего в найденном нет.
+     *
+     * <p>Считается по одному текстовому запросу, без уже поставленного
+     * отбора: иначе, выбрав Toyota, продавец не смог бы переключиться
+     * на Nissan — того в списке уже не было бы.
+     */
+    private Facets facetsOf(Match match) {
+        // Одним запросом, а не тремя: у каждого свой проход по найденному,
+        // а различных троек «марка · модель · оценка» в нём десятки.
+        List<String[]> found = jdbc.query("""
+                SELECT DISTINCT b.name AS brand, m.name AS model,
+                """ + CatalogService.QUALITY_GRADE + " AS grade" + """
+
+                  FROM part p
+                  JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
+                  LEFT JOIN donor d ON d.id = p.donor_id
+                  LEFT JOIN catalog.brand b ON b.id = d.brand_id
+                  LEFT JOIN catalog.model m ON m.id = d.model_id
+                """ + match.sql() + """
+                 ORDER BY 1, 2, 3""",
+                (rs, i) -> new String[]{
+                        rs.getString("brand"), rs.getString("model"), rs.getString("grade")},
+                match.args().toArray());
+
+        List<VehicleOption> vehicles = new ArrayList<>();
+        List<String> grades = new ArrayList<>();
+        for (String[] row : found) {
+            if (row[0] != null) {
+                VehicleOption option = new VehicleOption(row[0], row[1]);
+                if (!vehicles.contains(option)) {
+                    vehicles.add(option);
+                }
+            }
+            if (row[2] != null && !grades.contains(row[2])) {
+                grades.add(row[2]);
+            }
+        }
+        return new Facets(vehicles, grades);
+    }
+
+    /**
+     * Условие отбора и его параметры — вместе, чтобы выдача, счёт и списки
+     * значений брали одно и то же.
+     */
+    private record Narrowing(String sql, List<Object> args) {
+    }
+
+    /**
+     * Разрешённые порядки: имя из запроса → выражение SQL.
+     *
+     * <p>Белый список, а не подстановка: `ORDER BY` не принимает параметр,
+     * и пришедший текст в нём — это внедрение SQL. Неизвестное имя молча
+     * становится порядком по умолчанию (по совпадению), как на витрине.
+     */
+    private static final Map<String, String> STOCK_SORTS = Map.of(
+            "price", "p.price",
+            "intake", "p.created_at");
+
+    /**
+     * @return {@code null}, если порядок продавцом не задан, — тогда выдача
+     *         идёт по совпадению, как раньше
+     */
+    private static String orderBy(StockFilter filter) {
+        String column = filter.sort() == null ? null : STOCK_SORTS.get(filter.sort());
+        if (column == null) {
+            return null;
+        }
+        // NULLS LAST в обе стороны: цена бывает незаполненной, и по убыванию
+        // Postgres поставил бы такие строки первыми — продавец, спросивший
+        // «что подороже», получил бы список без цен.
+        // Вторым ключом номер позиции: без полного порядка одинаковые цены
+        // база вправе вернуть в любой последовательности.
+        return " ORDER BY " + column + (filter.descending() ? " DESC" : " ASC")
+                + " NULLS LAST, p.id";
+    }
+
+    /**
+     * Отбор продавца: марка, модель, год, стороны, склад, оценка и цена.
+     *
+     * <p>Марка, модель и год берутся у машины, с которой снята деталь, —
+     * тем же полем, каким названа колонка «Марка» на витрине владельца.
+     * У позиции без машины марки нет, и отбор по марке её не найдёт: это
+     * то же поведение, что у витрины, и продавец видит в списке ровно те
+     * марки, которые в найденном есть.
+     */
+    private static Narrowing narrowingOf(StockFilter filter) {
+        StringBuilder where = new StringBuilder();
+        List<Object> args = new ArrayList<>();
+
+        StringBuilder donor = new StringBuilder();
+        List<Object> donorArgs = new ArrayList<>();
+        if (notBlank(filter.brand())) {
+            donor.append(" AND b.name = ?");
+            donorArgs.add(filter.brand().strip());
+        }
+        if (notBlank(filter.model())) {
+            donor.append(" AND m.name = ?");
+            donorArgs.add(filter.model().strip());
+        }
+        if (filter.yearFrom() != null) {
+            donor.append(" AND d.year >= ?");
+            donorArgs.add(filter.yearFrom());
+        }
+        if (filter.yearTo() != null) {
+            donor.append(" AND d.year <= ?");
+            donorArgs.add(filter.yearTo());
+        }
+        if (!donor.isEmpty()) {
+            where.append("\n AND p.donor_id IN (SELECT d.id FROM donor d")
+                    .append(" LEFT JOIN catalog.brand b ON b.id = d.brand_id")
+                    .append(" LEFT JOIN catalog.model m ON m.id = d.model_id")
+                    .append(" WHERE true").append(donor).append(")");
+            args.addAll(donorArgs);
+        }
+
+        if (notBlank(filter.side())) {
+            where.append("\n AND p.side_lr = ?");
+            args.add(sideOf(filter.side()));
+        }
+        if (notBlank(filter.position())) {
+            where.append("\n AND p.side_fr = ?");
+            args.add(positionOf(filter.position()));
+        }
+        if (filter.warehouseId() != null) {
+            where.append("\n AND s.warehouse_id = ?");
+            args.add(filter.warehouseId());
+        }
+        if (notBlank(filter.grade())) {
+            // Тем же выражением, каким оценка названа на витрине и каким
+            // собран список значений: разойдись они — выбранное из списка
+            // не находило бы ничего.
+            where.append("\n AND ").append(CatalogService.QUALITY_GRADE).append(" = ?");
+            args.add(filter.grade().strip());
+        }
+        if (filter.priceFrom() != null) {
+            where.append("\n AND p.price >= ?");
+            args.add(filter.priceFrom());
+        }
+        if (filter.priceTo() != null) {
+            where.append("\n AND p.price <= ?");
+            args.add(filter.priceTo());
+        }
+        return new Narrowing(where.toString(), args);
+    }
+
+    private static boolean notBlank(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    // Значение проверяется, а не подставляется параметром молча: неизвестная
+    // сторона отдала бы пустую выдачу, и продавец читал бы её как «нет такого».
+    private static String sideOf(String value) {
+        try {
+            return LateralSide.valueOf(value.strip().toUpperCase(java.util.Locale.ROOT)).name();
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Сторона может быть только левой или правой");
+        }
+    }
+
+    private static String positionOf(String value) {
+        try {
+            return LongitudinalSide.valueOf(value.strip().toUpperCase(java.util.Locale.ROOT)).name();
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Может быть только передним или задним");
+        }
+    }
+
+    /**
+     * Чем продавец сужает найденное и в каком порядке хочет это видеть.
+     *
+     * <p>Одной записью, а не десятью параметрами метода: отбор один
+     * на выдачу, на счёт и на списки значений, и разъехаться им нельзя.
+     *
+     * @param sort       имя из белого списка {@link #STOCK_SORTS}; пусто —
+     *                   порядок по совпадению с запросом
+     * @param descending обратный порядок выбранной сортировки
+     */
+    public record StockFilter(String brand, String model,
+                              Integer yearFrom, Integer yearTo,
+                              String side, String position,
+                              Long warehouseId, String grade,
+                              BigDecimal priceFrom, BigDecimal priceTo,
+                              String sort, boolean descending) {
+
+        /** Ничего не сужено и порядок обычный — как было до появления отбора. */
+        public static final StockFilter NONE = new StockFilter(
+                null, null, null, null, null, null, null, null, null, null, null, false);
     }
 
     /**
@@ -688,8 +921,18 @@ public class PartService {
      *
      * @param total сколько нашлось всего; больше длины {@code rows} — список
      *              обрезан, и экран обязан об этом сказать
+     * @param facets из чего выбирать отбор: марки с моделями и оценки,
+     *               встречающиеся в найденном
      */
-    public record StockSearch(List<StockRow> rows, long total) {
+    public record StockSearch(List<StockRow> rows, long total, Facets facets) {
+    }
+
+    /** Значения отбора, встречающиеся в найденном. */
+    public record Facets(List<VehicleOption> vehicles, List<String> grades) {
+    }
+
+    /** Марка и модель машины, с которой снята найденная деталь. */
+    public record VehicleOption(String brand, String model) {
     }
 
     /** Строка выдачи продавцу: деталь на конкретном складе. */

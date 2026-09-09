@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
 import { CatalogScreen } from './CatalogScreen';
 import { CustomersScreen } from './CustomersScreen';
@@ -362,7 +362,36 @@ const JOURNAL = {
   ],
 };
 
+/**
+ * Выдача продавцу — с отбором, который экран рисует после поиска.
+ *
+ * <p>Ширину списков отбора задаёт содержимое: на «Toyota» и «Camry» ряд
+ * помещается в телефон при любой вёрстке, а марка с моделью у клиента
+ * бывают и такими. Та же причина, по которой в фикстуре складов стоит
+ * «Основной склад на Ткацкой, бокс 3 (второй этаж)».
+ */
+const STOCK = {
+  total: 181,
+  facets: {
+    vehicles: [
+      { brand: 'Mercedes-Benz', model: 'Sprinter Classic 411 CDI' },
+      { brand: 'Toyota', model: 'Land Cruiser Prado' },
+    ],
+    grades: ['б/у', 'восстановленная'],
+  },
+  rows: [
+    {
+      partId: 1, publicCode: 'A7K3M2',
+      title: 'Фара передняя левая Toyota Land Cruiser Prado 150 рестайлинг',
+      price: '12500', status: 'IN_STOCK', warehouseId: 1,
+      warehouseName: 'Основной склад на Ткацкой, бокс 3 (второй этаж)',
+      cellCode: 'A-01-1', qty: '1', qtyReserved: '0', qtyAvailable: '1',
+    },
+  ],
+};
+
 const RESPONSES: Array<[string, unknown]> = [
+  ['/api/parts/stock', STOCK],
   ['/api/intake/reference', REFERENCE],
   ['/api/intake/donors', DONORS],
   ['/api/catalog/vehicles', VEHICLES],
@@ -549,6 +578,55 @@ describe('на телефоне ни один раздел не уезжает �
       `Поля формы колеса сжаты, а не перенесены: ${squeezed.length} из `
       + `${widths.length} уже 250 пикселей при экране ${PHONE_WIDTH}. `
       + 'В такое поле не видно, что вводишь.',
+    ).toEqual([]);
+  }, 30_000);
+
+  /**
+   * Отбор продавца — состояние, в котором раздел «Продажа» открывается
+   * не сразу, и потому мимо обхода выше он проходит целиком.
+   *
+   * <p>Перебор меряет раздел в том виде, в каком тот открывается: у продавца
+   * это одно поле и кнопка «Найти», а десять списков отбора появляются
+   * только после поиска — то есть ровно тогда, когда продавец с телефона
+   * и работает. Ряд из десяти полей — это как раз тот случай, на котором
+   * уже уезжали вбок форма колеса (0041) и рамка отбора выгрузок (0031).
+   *
+   * <p>Мерится и то и другое: страница не шире экрана **и** поле не уже
+   * читаемого. Одной проверки ширины мало — уезд лечится и сжатием поля
+   * до 84 пикселей, в которое не видно, что вводишь.
+   */
+  it('отбор продавца переносится, а не уводит страницу вбок', async () => {
+    const { container } = render(
+      <SellerScreen canSell role="OWNER" company="t_1" memberId={7} openDealId={null} />,
+    );
+    await waitFor(() => expect(container.textContent).not.toBe(''));
+
+    const input = container.querySelector('input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'фара' } });
+    fireEvent.click([...container.querySelectorAll('button')]
+      .find((b) => b.textContent === 'Найти') as HTMLButtonElement);
+    await waitFor(() => expect(container.querySelectorAll('.filter-row .field').length)
+      .toBeGreaterThan(0));
+
+    const html = await settled(container);
+    const { scrollWidth, clientWidth } = await measurePage(html);
+    expect(
+      scrollWidth,
+      `Отбор продавца уводит страницу вбок на ${scrollWidth - clientWidth} пикселей `
+      + `(scrollWidth ${scrollWidth} при clientWidth ${clientWidth}, экран ${PHONE_WIDTH})`,
+    ).toBe(clientWidth);
+
+    const widths = await measureWidths(html, '.filter-row .field');
+    expect(
+      widths.length,
+      'Отбора на экране нет вовсе — мерить нечего, и проверка ниже прошла бы '
+      + 'сама собой.',
+    ).toBeGreaterThanOrEqual(10);
+    const squeezed = widths.filter((width) => width < 250);
+    expect(
+      squeezed,
+      `Поля отбора сжаты, а не перенесены: ${squeezed.length} из ${widths.length} `
+      + `уже 250 пикселей при экране ${PHONE_WIDTH}.`,
     ).toEqual([]);
   }, 30_000);
 

@@ -35,6 +35,7 @@ import {
   roomFor,
   searchCustomers,
   searchStock,
+  NO_STOCK_FILTER,
   transferable,
   transferItems,
 } from '../sales/sales';
@@ -50,6 +51,8 @@ import type { CustomerAccount,
   DealItem,
   ReturnDoc,
   ReturnLine,
+  StockFacets,
+  StockFilter,
   StockRow,
 } from '../sales/sales';
 
@@ -95,6 +98,21 @@ export function SellerScreen({
    */
   const [found, setFound] = useState(0);
   const [searching, setSearching] = useState(false);
+  /**
+   * Искали ли вообще. Пустой список получается двумя способами, и «Ничего
+   * не найдено» до первого запроса — утверждение о складе, которого никто
+   * не делал.
+   */
+  const [searched, setSearched] = useState(false);
+  // Чем сужено найденное. Отбор живёт рядом с запросом, а не внутри формы:
+  // от него зависит и то, что показано, и то, что написано в счётчике.
+  const [filter, setFilter] = useState<StockFilter>(NO_STOCK_FILTER);
+  // Из чего выбирать — считает сервер по найденному: марки всего склада
+  // это предложение выбрать то, чего в выдаче нет.
+  const [facets, setFacets] = useState<StockFacets | null>(null);
+  // Склады берутся целиком, а не из найденного: продавец спрашивает
+  // «а на Ткацкой есть?» и тогда, когда там ничего не нашлось.
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [lines, setLines] = useState<BasketLine[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
   // Заказ с площадки оформляется здесь же, а не отдельным экраном с той же
@@ -130,6 +148,11 @@ export function SellerScreen({
     void paymentSources()
       .then(setPaymentSourceList)
       .catch(() => setPaymentSourceList([]));
+    // Молча и здесь: без списка складов отбор по складу просто не предлагается,
+    // а поиск товара работает как раньше.
+    void listWarehouses()
+      .then(setWarehouses)
+      .catch(() => setWarehouses([]));
   }, []);
   const [deal, setDeal] = useState<Deal | null>(null);
   // Возврат и перенос случаются не в тот же разговор, что продажа: клиент
@@ -152,8 +175,7 @@ export function SellerScreen({
         // Корзина от прежнего разговора к чужой сделке отношения не имеет —
         // то же самое, что делает выбор в DealFinder.
         setLines([]);
-        setRows([]);
-        setFound(0);
+        forgetSearch();
         setError(null);
       })
       .catch((cause) => setError(describe(cause, 'Сделка не открылась')))
@@ -226,10 +248,23 @@ export function SellerScreen({
             setFinding(false);
             // Корзина от прежнего разговора к чужой сделке отношения не имеет.
             setLines([]);
-            setRows([]);
-            setFound(0);
+            forgetSearch();
           }}
           onError={setError}
+        />
+      )}
+
+      {/* Отбор показывается, как только искали, — и остаётся на месте при
+          пустой выдаче. Спрятать его вместе со строками значит запереть
+          продавца: отбор действует, «Ничего не найдено» ничего не объясняет,
+          а снять его нечем. Ровно это уже случилось на витрине склада, где
+          отборы снимались только в шапке таблицы. */}
+      {searched && (
+        <StockFilters
+          filter={filter}
+          facets={facets}
+          warehouses={warehouses}
+          onNarrow={narrow}
         />
       )}
 
@@ -243,6 +278,19 @@ export function SellerScreen({
           Показаны первые {rows.length} из {found} — уточните запрос,
           иначе нужная деталь может остаться за списком.
         </p>
+      )}
+
+      {/* А когда всё найденное видно, счётчик говорит именно это: сузив
+          отбором 181 позицию до шести, продавец обязан увидеть «Найдено 6»,
+          а не остаться с прежним «первые 50 из 181». */}
+      {rows.length > 0 && found <= rows.length && (
+        <p className="note">Найдено {count(found)}</p>
+      )}
+
+      {/* «Пусто» и «не смогли узнать» — разные вещи: причина отказа стоит
+          выше своей строкой, и повторять её словами про склад нельзя. */}
+      {searched && !searching && rows.length === 0 && error === null && (
+        <p className="note">Ничего не найдено</p>
       )}
 
       {rows.length > 0 && (
@@ -402,13 +450,22 @@ export function SellerScreen({
     </section>
   );
 
-  async function find(): Promise<void> {
+  /**
+   * Отбор уходит в запрос, а не сужает уже показанные строки.
+   *
+   * <p>Показано пятьдесят, а «фара» на живом складе находит 181: сузив
+   * показанное, продавец, которому сказали «фара на Ниссан», получил бы
+   * пустоту при полной полке ниссановских фар.
+   */
+  async function find(narrowing: StockFilter = filter): Promise<void> {
     setSearching(true);
     setError(null);
     try {
-      const result = await searchStock(query.trim());
+      const result = await searchStock(query.trim(), narrowing);
       setRows(result.rows);
       setFound(result.total);
+      setFacets(result.facets);
+      setSearched(true);
     } catch (cause) {
       setRows([]);
       setFound(0);
@@ -416,6 +473,27 @@ export function SellerScreen({
     } finally {
       setSearching(false);
     }
+  }
+
+  /** Смена отбора — это новый запрос: сузили в базе, а не на экране. */
+  function narrow(next: StockFilter): void {
+    setFilter(next);
+    void find(next);
+  }
+
+  /**
+   * Список убран — значит убран и отбор с подписями про найденное.
+   *
+   * <p>Иначе экран пишет «Ничего не найдено» там, где не искали, или
+   * «Показаны первые 0 из 17» при пустом месте: и то и другое —
+   * утверждение о складе, которого никто не делал.
+   */
+  function forgetSearch(): void {
+    setRows([]);
+    setFound(0);
+    setSearched(false);
+    setFilter(NO_STOCK_FILTER);
+    setFacets(null);
   }
 
   function add(row: StockRow): void {
@@ -460,10 +538,221 @@ export function SellerScreen({
       setLines([]);
       setServices(services.map((line) => ({ ...line, price: '' })));
       // Остаток изменился — показанный список уже врёт.
-      setRows([]);
-      setFound(0);
+      forgetSearch();
     } catch (cause) {
       setError(describe(cause, 'Сделка не оформлена'));
+    }
+  }
+}
+
+/**
+ * Отбор найденного: марка, модель, год, стороны, склад, оценка и цена.
+ *
+ * <p><b>Зачем.</b> «Фара» на живом складе — это 181 позиция и полсотни
+ * показанных строк, отличающихся одним кодом: «Фара Toyota Camry 2007
+ * (б/у) 1 500 ₽» пятьдесят раз подряд. Уточнять было нечем — поле одно,
+ * — и продавцу, которому сказали «фара на Камри 2007, левая», оставалось
+ * угадывать, какими словами это записано на складе, либо листать.
+ *
+ * <p><b>Марка и модель приходят с сервера, стороны заданы здесь.</b>
+ * Первые — то, что встретилось в найденном, и список их считает тот же
+ * запрос, что собрал выдачу: два списка разошлись бы молча. Стороны
+ * и порядок сортировки перечислены на месте — это не данные склада,
+ * а два значения перечисления, и спрашивать их у сервера незачем.
+ *
+ * <p>Списки применяются нажатием, «от–до» — по уходу из поля и по Enter:
+ * запрос на каждую цифру означал бы четыре похода на сервер, пока
+ * набирают «2007».
+ */
+function StockFilters({
+  filter, facets, warehouses, onNarrow,
+}: {
+  filter: StockFilter;
+  facets: StockFacets | null;
+  warehouses: Warehouse[];
+  onNarrow: (next: StockFilter) => void;
+}) {
+  // Набранное живёт отдельно от отправленного — тот же приём, что
+  // у поиска в реестре сделок (`draft` против `query`).
+  const [draft, setDraft] = useState<StockFilter>(filter);
+  useEffect(() => {
+    setDraft(filter);
+  }, [filter]);
+
+  const vehicles = facets?.vehicles ?? [];
+  const brands = [...new Set(vehicles.map((vehicle) => vehicle.brand))];
+  const models = [...new Set(vehicles
+    .filter((vehicle) => vehicle.brand === filter.brand && vehicle.model !== null)
+    .map((vehicle) => vehicle.model as string))];
+  const grades = facets?.grades ?? [];
+
+  // Порядок и направление — одно поле на экране: «по возрастанию цены»
+  // это один ответ на один вопрос, а не два.
+  const order = filter.sort === '' ? '' : `${filter.sort}${filter.desc ? '-desc' : ''}`;
+
+  return (
+    <form
+      className="filter-row"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onNarrow(draft);
+      }}
+    >
+      <label className="field">
+        Марка
+        <select
+          value={filter.brand}
+          disabled={brands.length === 0}
+          // Модель принадлежит марке: оставленная от прежней, она отдала бы
+          // пустую выдачу, и продавец решил бы, что ничего нет.
+          onChange={(e) => onNarrow({ ...filter, brand: e.target.value, model: '' })}
+        >
+          <option value="">Любая</option>
+          {brands.map((brand) => <option key={brand} value={brand}>{brand}</option>)}
+        </select>
+      </label>
+
+      <label className="field">
+        Модель
+        <select
+          value={filter.model}
+          disabled={filter.brand === '' || models.length === 0}
+          onChange={(e) => onNarrow({ ...filter, model: e.target.value })}
+        >
+          <option value="">Любая</option>
+          {models.map((model) => <option key={model} value={model}>{model}</option>)}
+        </select>
+      </label>
+
+      <label className="field">
+        Год выпуска, от
+        <input
+          type="number"
+          inputMode="numeric"
+          value={draft.yearFrom}
+          onChange={(e) => setDraft({ ...draft, yearFrom: e.target.value })}
+          onBlur={() => applyDraft()}
+        />
+      </label>
+      <label className="field">
+        Год выпуска, до
+        <input
+          type="number"
+          inputMode="numeric"
+          value={draft.yearTo}
+          onChange={(e) => setDraft({ ...draft, yearTo: e.target.value })}
+          onBlur={() => applyDraft()}
+        />
+      </label>
+
+      <label className="field">
+        Сторона
+        <select
+          value={filter.side}
+          onChange={(e) => onNarrow({ ...filter, side: e.target.value })}
+        >
+          <option value="">Любой</option>
+          <option value="LEFT">Левый</option>
+          <option value="RIGHT">Правый</option>
+        </select>
+      </label>
+
+      <label className="field">
+        Перед/зад
+        <select
+          value={filter.position}
+          onChange={(e) => onNarrow({ ...filter, position: e.target.value })}
+        >
+          <option value="">Любой</option>
+          <option value="FRONT">Передний</option>
+          <option value="REAR">Задний</option>
+        </select>
+      </label>
+
+      <label className="field">
+        Склад
+        <select
+          value={filter.warehouseId}
+          disabled={warehouses.length === 0}
+          onChange={(e) => onNarrow({ ...filter, warehouseId: e.target.value })}
+        >
+          <option value="">Любой</option>
+          {warehouses.map((warehouse) => (
+            <option key={warehouse.id} value={String(warehouse.id)}>{warehouse.name}</option>
+          ))}
+        </select>
+      </label>
+
+      <label className="field">
+        Состояние
+        <select
+          value={filter.grade}
+          disabled={grades.length === 0}
+          onChange={(e) => onNarrow({ ...filter, grade: e.target.value })}
+        >
+          <option value="">Любое</option>
+          {grades.map((grade) => <option key={grade} value={grade}>{grade}</option>)}
+        </select>
+      </label>
+
+      <label className="field">
+        Цена, от
+        <input
+          type="number"
+          inputMode="numeric"
+          value={draft.priceFrom}
+          onChange={(e) => setDraft({ ...draft, priceFrom: e.target.value })}
+          onBlur={() => applyDraft()}
+        />
+      </label>
+      <label className="field">
+        Цена, до
+        <input
+          type="number"
+          inputMode="numeric"
+          value={draft.priceTo}
+          onChange={(e) => setDraft({ ...draft, priceTo: e.target.value })}
+          onBlur={() => applyDraft()}
+        />
+      </label>
+
+      <label className="field">
+        Сортировка
+        <select
+          value={order}
+          onChange={(e) => {
+            const chosen = e.target.value;
+            onNarrow({
+              ...filter,
+              sort: chosen.replace('-desc', ''),
+              desc: chosen.endsWith('-desc'),
+            });
+          }}
+        >
+          <option value="">Сначала подходящие</option>
+          <option value="price">Цена: сначала дешёвые</option>
+          <option value="price-desc">Цена: сначала дорогие</option>
+          <option value="intake">Приняты: сначала давние</option>
+          <option value="intake-desc">Приняты: сначала свежие</option>
+        </select>
+      </label>
+
+      <button type="submit">Показать</button>
+      <button
+        type="button"
+        className="button--ghost"
+        onClick={() => onNarrow(NO_STOCK_FILTER)}
+      >
+        Сбросить отбор
+      </button>
+    </form>
+  );
+
+  /** Отправляется только изменившееся: иначе уход из поля перезапрашивает то же. */
+  function applyDraft(): void {
+    if (draft.yearFrom !== filter.yearFrom || draft.yearTo !== filter.yearTo
+        || draft.priceFrom !== filter.priceFrom || draft.priceTo !== filter.priceTo) {
+      onNarrow(draft);
     }
   }
 }

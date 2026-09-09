@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Поиск продавца находит то же, что и витрина владельца.
@@ -72,6 +73,10 @@ class SellerSearchTest extends PostgresTestBase {
             jdbc.update("DELETE FROM part_stock");
             jdbc.update("DELETE FROM stock_movement");
             jdbc.update("DELETE FROM part");
+            // Машины заводят тесты отбора, и своя на каждый прогон: иначе
+            // «Найдено 1» превращается в «найдено сколько-то» от прогона
+            // к прогону.
+            jdbc.update("DELETE FROM donor");
             Long branch = jdbc.queryForObject(
                     "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class);
             warehouseId = jdbc.queryForObject(
@@ -241,6 +246,231 @@ class SellerSearchTest extends PostgresTestBase {
         // Когда всё влезло, лишний запрос не нужен и число равно длине.
         PartService.StockSearch whole = inTenant(() -> parts.searchAvailable("фара", 50));
         assertThat(whole.total()).isEqualTo(whole.rows().size());
+    }
+
+    /**
+     * Главная проверка отбора: он применяется к запросу в базу, а не к тем
+     * строкам, что уже показаны.
+     *
+     * <p>Список обрезан пятьюдесятью строками, а «фара» на живом складе
+     * находит 181. Сузив показанное, продавец, которому сказали «фара
+     * на Ниссан», получил бы пустоту при полке, полной ниссановских фар:
+     * они остались за списком до того, как он успел назвать марку.
+     *
+     * <p>Поэтому ниссановская фара здесь заведена третьей, а предел
+     * поставлен в две строки: без отбора в базе она не показывается вовсе.
+     */
+    @Test
+    @DisplayName("Марка, которой нет в показанных строках, находится отбором")
+    void filtersInTheDatabaseAndNotInTheShownRows() {
+        // Ниссановская заводится последней: выдача идёт по совпадению,
+        // а при равном совпадении — по номеру позиции, и в две показанные
+        // строки попадают тойотовские. Это и есть живой случай — 50 из 181.
+        partOfVehicle("Фара Toyota Camry 2010 лев.",
+                "toyota", "Camry", 2010, "LEFT", "FRONT", 7000);
+        Long nissan = partOfVehicle("Фара Nissan Almera 2011 прав.",
+                "nissan", "Almera", 2011, "RIGHT", "FRONT", 5000);
+
+        List<Long> shown = inTenant(() -> parts.searchAvailable("фара", 2)).rows().stream()
+                .map(PartService.StockRow::partId).toList();
+        assertThat(shown)
+                .as("проверка бессмысленна, если искомое и так показано")
+                .doesNotContain(nissan);
+
+        PartService.StockSearch narrowed = inTenant(() -> parts.searchAvailable(
+                "фара", 2, filter().brand("Nissan").build()));
+
+        assertThat(ids(narrowed))
+                .as("отбор по марке не дошёл до запроса: ниссановская фара "
+                        + "осталась за списком, и продавец ответит «нет такого»")
+                .containsExactly(nissan);
+        assertThat(narrowed.total())
+                .as("счётчик считает не тем условием, каким собрана выдача")
+                .isEqualTo(1);
+    }
+
+    /** «Фара левая» — это половина разговора по телефону. */
+    @Test
+    @DisplayName("Сторона сужает выдачу, а снятая — возвращает всё")
+    void filtersBySide() {
+        Long left = partOfVehicle("Фара Toyota Camry 2010 лев.",
+                "toyota", "Camry", 2010, "LEFT", "FRONT", 7000);
+        Long right = partOfVehicle("Фара Toyota Camry 2010 прав.",
+                "toyota", "Camry", 2010, "RIGHT", "FRONT", 7500);
+
+        assertThat(ids(inTenant(() -> parts.searchAvailable(
+                "фара", 50, filter().side("LEFT").build()))))
+                .as("отбор по стороне не сузил выдачу")
+                .containsExactly(left);
+        assertThat(found("фара")).contains(left, right);
+    }
+
+    /** Два отбора сужают вместе, а не заменяют друг друга. */
+    @Test
+    @DisplayName("Марка и год работают вместе")
+    void filtersNarrowTogether() {
+        Long old = partOfVehicle("Фара Toyota Camry 2007 лев.",
+                "toyota", "Camry", 2007, "LEFT", "FRONT", 6000);
+        Long fresh = partOfVehicle("Фара Toyota Camry 2012 лев.",
+                "toyota", "Camry", 2012, "LEFT", "FRONT", 9000);
+        partOfVehicle("Фара Nissan Almera 2012 лев.",
+                "nissan", "Almera", 2012, "LEFT", "FRONT", 4000);
+
+        assertThat(ids(inTenant(() -> parts.searchAvailable(
+                "фара", 50, filter().brand("Toyota").yearFrom(2010).build()))))
+                .as("второй отбор заменил первый вместо того, чтобы сузить")
+                .containsExactly(fresh);
+        assertThat(old).isNotNull();
+    }
+
+    /** Отбор, под который ничего не подходит, отвечает пустотой, а не всем складом. */
+    @Test
+    @DisplayName("Отбор без подходящего отдаёт пусто")
+    void filterWithoutMatchesIsEmpty() {
+        partOfVehicle("Фара Toyota Camry 2010 лев.",
+                "toyota", "Camry", 2010, "LEFT", "FRONT", 7000);
+
+        PartService.StockSearch nothing = inTenant(() -> parts.searchAvailable(
+                "фара", 50, filter().brand("Nissan").build()));
+
+        assertThat(nothing.rows()).isEmpty();
+        assertThat(nothing.total()).isZero();
+    }
+
+    /** «Что подешевле» — вопрос, которым кончается половина разговоров. */
+    @Test
+    @DisplayName("Сортировка по цене работает в обе стороны и вместе с отбором")
+    void sortsByPrice() {
+        Long cheap = partOfVehicle("Фара Toyota Camry 2010 лев.",
+                "toyota", "Camry", 2010, "LEFT", "FRONT", 3000);
+        Long dear = partOfVehicle("Фара Toyota Camry 2011 прав.",
+                "toyota", "Camry", 2011, "RIGHT", "FRONT", 9000);
+
+        assertThat(ids(inTenant(() -> parts.searchAvailable(
+                "фара", 50, filter().brand("Toyota").sort("price", false).build()))))
+                .as("по возрастанию цены первой обязана идти дешёвая")
+                .containsExactly(cheap, dear);
+        assertThat(ids(inTenant(() -> parts.searchAvailable(
+                "фара", 50, filter().brand("Toyota").sort("price", true).build()))))
+                .as("по убыванию цены порядок обязан быть обратным")
+                .containsExactly(dear, cheap);
+    }
+
+    /**
+     * Выбирать продавцу предлагается то, что в найденном есть.
+     *
+     * <p>Предложить все полторы сотни марок склада — значит предложить
+     * выбрать то, чего в выдаче нет; список при этом считается по одному
+     * запросу, без уже поставленного отбора, иначе с Toyota нельзя
+     * переключиться на Nissan.
+     */
+    @Test
+    @DisplayName("Марки для отбора берутся из найденного, а не из первых строк")
+    void offersValuesFoundBeyondTheShownRows() {
+        partOfVehicle("Фара Nissan Almera 2011 прав.",
+                "nissan", "Almera", 2011, "RIGHT", "FRONT", 5000);
+        partOfVehicle("Фара Toyota Camry 2010 лев.",
+                "toyota", "Camry", 2010, "LEFT", "FRONT", 7000);
+
+        PartService.StockSearch cut = inTenant(() -> parts.searchAvailable("фара", 1));
+
+        assertThat(cut.rows()).hasSize(1);
+        assertThat(cut.facets().vehicles())
+                .as("список марок собран по показанной строке, а не по найденному")
+                .contains(new PartService.VehicleOption("Nissan", "Almera"),
+                        new PartService.VehicleOption("Toyota", "Camry"));
+        assertThat(cut.facets().grades())
+                .as("оценка состояния названа не теми словами, какими её "
+                        + "показывает витрина")
+                .contains("б/у");
+
+        // Отбор поставлен — список значений обязан остаться прежним, иначе
+        // с одной марки не переключиться на другую.
+        PartService.StockSearch narrowed = inTenant(() -> parts.searchAvailable(
+                "фара", 50, filter().brand("Toyota").build()));
+        assertThat(narrowed.facets().vehicles())
+                .contains(new PartService.VehicleOption("Nissan", "Almera"));
+    }
+
+    /**
+     * Неизвестная сторона — это 4xx со словами, а не пустая выдача.
+     *
+     * <p>Пустая читалась бы как «нет такого»: продавец ответил бы покупателю
+     * по сломанному отбору, ничего не заподозрив.
+     */
+    @Test
+    @DisplayName("Неизвестная сторона отвергается словами")
+    void unknownSideIsRejected() {
+        assertThatThrownBy(() -> inTenant(() -> parts.searchAvailable(
+                "фара", 50, filter().side("СЛЕВА").build())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("левой");
+    }
+
+    private List<Long> ids(PartService.StockSearch search) {
+        return search.rows().stream().map(PartService.StockRow::partId).toList();
+    }
+
+    /** Позиция со своей машиной: марка, модель и год — это отбор продавца. */
+    private Long partOfVehicle(String title, String brandSlug, String model, int year,
+                               String sideLr, String sideFr, int price) {
+        return inTenant(() -> {
+            Long brand = jdbc.queryForObject(
+                    "SELECT id FROM catalog.brand WHERE slug = ?", Long.class, brandSlug);
+            Long modelId = jdbc.queryForObject(
+                    "SELECT id FROM catalog.model WHERE brand_id = ? AND name = ?"
+                            + " ORDER BY id LIMIT 1", Long.class, brand, model);
+            Long donor = jdbc.queryForObject("""
+                    INSERT INTO donor (brand_id, model_id, year, status)
+                    VALUES (?, ?, ?, 'DISMANTLING') RETURNING id""",
+                    Long.class, brand, modelId, year);
+            Long id = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, is_published,
+                                      donor_id, side_lr, side_fr)
+                    VALUES (1, ?, ?, true, ?, ?, ?) RETURNING id""",
+                    Long.class, title, price, donor, sideLr, sideFr);
+            ledger.record(StockMovement.intake(id, BigDecimal.ONE, warehouseId, null));
+            return id;
+        });
+    }
+
+    private static FilterBuilder filter() {
+        return new FilterBuilder();
+    }
+
+    /** Отбор в тесте набирается по одному полю: их двенадцать. */
+    private static final class FilterBuilder {
+        private String brand;
+        private Integer yearFrom;
+        private String side;
+        private String sort;
+        private boolean descending;
+
+        FilterBuilder brand(String value) {
+            this.brand = value;
+            return this;
+        }
+
+        FilterBuilder yearFrom(Integer value) {
+            this.yearFrom = value;
+            return this;
+        }
+
+        FilterBuilder side(String value) {
+            this.side = value;
+            return this;
+        }
+
+        FilterBuilder sort(String value, boolean desc) {
+            this.sort = value;
+            this.descending = desc;
+            return this;
+        }
+
+        PartService.StockFilter build() {
+            return new PartService.StockFilter(brand, null, yearFrom, null, side, null,
+                    null, null, null, null, sort, descending);
+        }
     }
 
     private List<Long> found(String query) {

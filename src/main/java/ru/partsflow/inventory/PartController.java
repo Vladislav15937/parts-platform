@@ -85,14 +85,40 @@ public class PartController {
      * <p>Отдельно от {@code /search}: тот отдаёт карточку с общим остатком,
      * а продавать можно только то, что не обещано другому клиенту.
      */
+    /**
+     * @param brand      марка машины, с которой снята деталь
+     * @param sort       {@code price} или {@code intake}; пусто — по совпадению
+     * @param desc       обратный порядок выбранной сортировки
+     */
+    // Отбор параметрами запроса, а не телом: это по-прежнему чтение,
+    // и ссылка с готовым отбором обязана открываться повторно.
     @GetMapping("/stock")
     public PartService.StockSearch stock(@RequestParam("q") String query,
-                                         @RequestParam(value = "limit", defaultValue = "50") int limit) {
+                                         @RequestParam(value = "limit", defaultValue = "50") int limit,
+                                         @RequestParam(required = false) String brand,
+                                         @RequestParam(required = false) String model,
+                                         @RequestParam(required = false) Integer yearFrom,
+                                         @RequestParam(required = false) Integer yearTo,
+                                         @RequestParam(required = false) String side,
+                                         @RequestParam(required = false) String position,
+                                         @RequestParam(required = false) Long warehouseId,
+                                         @RequestParam(required = false) String grade,
+                                         @RequestParam(required = false) BigDecimal priceFrom,
+                                         @RequestParam(required = false) BigDecimal priceTo,
+                                         @RequestParam(required = false) String sort,
+                                         @RequestParam(defaultValue = "false") boolean desc) {
         // Вместе с числом найденного: список обрезан на полусотне, и экран
         // обязан об этом сказать. Продавец, глядя на обрезанный список,
         // отвечает покупателю «нет такого» с той же уверенностью, что и
         // на пустом, — только тут он ещё и думает, что посмотрел всё.
-        return partService.searchAvailable(query, limit);
+        //
+        // Отбор уходит в тот же запрос: сузив показанные пятьдесят строк,
+        // «фара + Nissan» не нашла бы ничего при полной полке ниссановских
+        // фар — именно потому, что режется всё до того, как продавец успел
+        // назвать марку.
+        return partService.searchAvailable(query, limit, new PartService.StockFilter(
+                brand, model, yearFrom, yearTo, side, position, warehouseId, grade,
+                priceFrom, priceTo, sort, desc));
     }
 
     @GetMapping("/by-oem/{number}")
