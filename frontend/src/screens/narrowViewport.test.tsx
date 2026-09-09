@@ -414,6 +414,9 @@ function boardColumn(key: string, title: string, size: number) {
     title,
     count: size,
     cards: Array.from({ length: size }, (_, i) => ({
+      // Стадию карточке даёт колонка — как и на сервере, где обе приходят
+      // одной строкой. Ею подписана карточка, значит ею задана и её ширина.
+      stage: key,
       id: i + 1,
       number: 70_026 + i,
       createdAt: '2026-09-04T20:01:00Z',

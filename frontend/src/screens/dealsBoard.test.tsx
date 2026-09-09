@@ -37,7 +37,7 @@ describe('доска сделок по состояниям', () => {
       // Слова и порядок — те, по которым переходящий клиент узнаёт экран.
       expect(headings()).toEqual([
         'Новая сделка 1', 'Истек срок 2', 'Ждет оплаты 1',
-        'Частично оплачен 1', 'Готов к выдаче 0',
+        'Частично оплачен 1', 'Готов к выдаче 1',
       ]);
       expect(String(fetch.mock.calls.at(-1)?.[0])).toContain('/api/deals/board');
     });
@@ -59,6 +59,31 @@ describe('доска сделок по состояниям', () => {
       // не говорит ничего, кроме того, что уже сказано колонкой.
       const waiting = await card('Ждет оплаты', '№11');
       expect(within(waiting).queryByText('0 ₽')).toBeNull();
+    });
+
+  /**
+   * <b>Здесь проверяется смысл подписи, а не наличие вёрстки.</b> Стадия
+   * «Готов к выдаче» вычисляется (оплачено полностью и не выдано), а документ
+   * у такой сделки так и остаётся `RESERVED` со сроком резерва — и карточка,
+   * подписанная сырым статусом, говорила «Отложена · до 15 сентября», то есть
+   * «ещё не оплачена, ждём до этой даты». Ровно противоположное тому, что она
+   * значит, и продавец читает именно так.
+   *
+   * <p>Поэтому утверждение — про **весь** список подписей карточки: проверка
+   * «слово „Готова к выдаче“ где-то есть» прошла бы и рядом с оставшимся
+   * сроком резерва.
+   */
+  it('готовая к выдаче подписана стадией, а не «Отложена» со сроком резерва',
+    async () => {
+      stubApi();
+      render(<DealsScreen onOpenDeal={() => {}} />);
+      fireEvent.click(screen.getByRole('button', { name: 'По статусам' }));
+
+      const ready = await card('Готов к выдаче', '№20');
+      expect(states(ready)).toEqual(['Готова к выдаче']);
+      // Внесённое у неё не показывается: это та же сумма, что строкой выше,
+      // и второй раз она не несёт ничего.
+      expect(within(ready).getAllByText('5 000 ₽')).toHaveLength(1);
     });
 
   it('просроченная говорит «срок истёк», а не вчерашним числом', async () => {
@@ -168,6 +193,16 @@ function headings(): string[] {
     .map((node) => (node.textContent ?? '').replace(/\s+/g, ' ').trim());
 }
 
+/**
+ * Всё, чем карточка подписана: состояние и срок. Списком, а не поиском
+ * отдельного слова, — иначе утверждение проходило бы рядом с лишней
+ * подписью, а именно лишняя подпись и врёт.
+ */
+function states(card: HTMLElement): string[] {
+  return Array.from(card.querySelectorAll('.deal-card__state'))
+    .map((node) => (node.textContent ?? '').trim());
+}
+
 /** Карточка с таким номером внутри названной колонки. */
 async function card(column: string, number: string): Promise<HTMLElement> {
   const head = await screen.findByText(new RegExp(`^${column}`));
@@ -195,7 +230,12 @@ function stubApi(options: { expiredUntil?: string; expiredCount?: number } = {})
       column('PARTLY_PAID', 'Частично оплачен', [
         { ...row(12), paidAmount: '2500.00', reservedUntil: soon },
       ]),
-      column('READY', 'Готов к выдаче', []),
+      // Готовая к выдаче — оплаченная целиком и не выданная, и документ
+      // у неё по-прежнему `RESERVED` со сроком резерва: пустая колонка
+      // здесь означала бы, что подпись такой карточки не проверяет никто.
+      column('READY', 'Готов к выдаче', [
+        { ...row(20), paidAmount: '5000.00', reservedUntil: soon },
+      ]),
     ],
     warehouses: [{ id: 2, name: 'Ткацкая' }],
     sources: [{ id: 3, name: 'Дром' }],
@@ -211,8 +251,19 @@ function stubApi(options: { expiredUntil?: string; expiredCount?: number } = {})
   return fetch;
 }
 
+/**
+ * Стадию карточке ставит колонка — как и на сервере, где и то и другое
+ * приходит одной строкой `CASE`. Проставь её фикстура отдельно, и карточка
+ * могла бы объявить себя не тем, в чём лежит, — состояние, которого
+ * не бывает.
+ */
 function column(key: string, title: string, cards: Card[], total?: number) {
-  return { key, title, count: total ?? cards.length, cards };
+  return {
+    key,
+    title,
+    count: total ?? cards.length,
+    cards: cards.map((card) => ({ ...card, stage: key })),
+  };
 }
 
 interface Card {

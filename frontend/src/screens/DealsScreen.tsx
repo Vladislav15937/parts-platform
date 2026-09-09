@@ -218,6 +218,29 @@ function Picker({
 }
 
 /**
+ * Что карточка говорит о себе — по стадии, а не по сырому статусу документа.
+ *
+ * <p><b>Стадия вычисляется, статус хранится, и у одной колонки они
+ * расходятся.</b> Полностью оплаченная невыданная сделка стоит в «Готов
+ * к выдаче», а документ у неё так и остаётся `RESERVED` со сроком резерва —
+ * и подписанная сырым статусом карточка говорила «Отложена до 15 сентября»,
+ * то есть «ещё не оплачена, ждём до этой даты». Ровно противоположное
+ * действительности, и человек читает именно так.
+ *
+ * <p>Названы здесь все пять стадий, а не одна сломанная: соответствие
+ * «стадия — состояние, о котором она говорит» — это то, что экран обязан
+ * знать про доску, и написанное для одной колонки вернуло бы ту же ошибку
+ * в соседней. Возвращать её тихо: вёрстка на месте, слова неверные.
+ */
+const BOARD_STAGE_STATUS: Record<string, string> = {
+  NEW: 'DRAFT',
+  EXPIRED: 'RESERVED',
+  AWAITING_PAYMENT: 'RESERVED',
+  PARTLY_PAID: 'RESERVED',
+  READY: 'READY',
+};
+
+/**
  * Карточка колонки.
  *
  * <p>Внесённое показывается только у частично оплаченной: у неоплаченной это
@@ -235,7 +258,12 @@ function BoardCard({
 }) {
   const paid = Number(card.paidAmount);
   const partly = paid > 0 && paid < Number(card.totalAmount);
-  const term = reservationTerm(card);
+  // Незнакомая стадия (сервер завёл шестую колонку, экран о ней ещё не знает)
+  // откатывается к состоянию документа: сырое состояние видно и объяснимо,
+  // выдуманное слово — нет. Та же причина, по которой `dealStatusName`
+  // возвращает незнакомый код как есть.
+  const state = BOARD_STAGE_STATUS[card.stage] ?? card.status;
+  const term = reservationTerm({ status: state, reservedUntil: card.reservedUntil });
   return (
     <button type="button" className="deal-card" onClick={() => onOpenDeal(card.id)}>
       <span className="deal-card__line">
@@ -248,8 +276,11 @@ function BoardCard({
       </span>
       {/* Состояние и срок — теми же словами и той же функцией, что в списке
           и в карточке сделки: копия правила «просроченный не показывает
-          вчерашнее число» разошлась бы с оригиналом на первой правке. */}
-      <span className="deal-card__state">{dealStatusName(card.status)}</span>
+          вчерашнее число» разошлась бы с оригиналом на первой правке.
+          Слово при этом берётся от стадии: у готовой к выдаче сделки
+          документ всё ещё «Отложена», и сроку резерва на ней взяться
+          неоткуда. */}
+      <span className="deal-card__state">{dealStatusName(state)}</span>
       {term !== null && (
         <span className={term.expired ? 'deal-card__state note--error' : 'deal-card__state muted'}>
           {term.expired ? 'срок истёк' : `до ${term.day}`}

@@ -852,6 +852,16 @@ export function historyOf(dealId: number): Promise<HistoryEntry[]> {
  * открывает сделку, и там она приезжает целиком.
  */
 export interface DealBoardCard {
+  /**
+   * Стадия, в которую карточку положил сервер, — ею карточка и подписана.
+   *
+   * <p>Стадия вычисляется, а `status` остаётся состоянием документа:
+   * у полностью оплаченной невыданной сделки он так и стоит `RESERVED`.
+   * Подписанная сырым статусом, карточка в колонке «Готов к выдаче»
+   * говорила бы «Отложена до 15 сентября» — то есть «ещё не оплачена,
+   * ждём до этой даты», прямо противоположное действительности.
+   */
+  stage: string;
   id: number;
   number: number | null;
   createdAt: string;
@@ -859,6 +869,7 @@ export interface DealBoardCard {
   customerName: string | null;
   totalAmount: string;
   paidAmount: string;
+  /** Состояние самого документа: по нему открывается сделка, но не подпись. */
   status: string;
   reservedUntil: string | null;
 }

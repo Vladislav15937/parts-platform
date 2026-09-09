@@ -5,7 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -55,9 +58,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p><b>Через HTTP, а не вызовом сервиса:</b> ответ уходит record'ами,
  * и класс в стиле record Jackson не сериализует — тест на сервис этого
  * не увидит.
+ *
+ * <p><b>Порядок методов задан, потому что сделки в схеме накапливаются.</b>
+ * Числа первого метода абсолютные — по всем незакрытым сделкам арендатора, —
+ * а последний набивает колонку сотней; запустись он раньше, упал бы соседний,
+ * к его правке отношения не имеющий. Это та же ловушка «схему на два теста
+ * не делить» из корневого {@code CLAUDE.md}, только этажом ниже — между
+ * методами одного класса; расселять их по схемам здесь дороже, чем назвать
+ * очередь.
  */
 @SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
 @AutoConfigureMockMvc
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class DealBoardTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000124";
@@ -124,6 +136,7 @@ class DealBoardTest extends PostgresTestBase {
      * платежей.
      */
     @Test
+    @Order(1)
     @DisplayName("Каждая незакрытая сделка попадает ровно в одну колонку, и счётчики сходятся")
     void boardSplitsOpenDealsIntoFiveColumns() throws Exception {
         MockHttpSession seller = login("prodavets");
@@ -220,6 +233,28 @@ class DealBoardTest extends PostgresTestBase {
         // У заказа с площадки покупателя нет, и выдумывать его нечем.
         assertThat(cardOf(board, draft).path("customerName").isNull()).isTrue();
 
+        // 5а. Карточка несёт свою стадию, и у готовой к выдаче она расходится
+        // с состоянием документа: оплачена целиком, но статус так и остался
+        // `RESERVED` со сроком резерва. Подписанная сырым статусом, такая
+        // карточка говорит «Отложена до 15 сентября» — то есть «ещё
+        // не оплачена, ждём до этой даты», ровно наоборот. Поэтому стадия
+        // едет в ответе, а не выводится экраном из статуса.
+        JsonNode readyCard = cardOf(board, ready);
+        assertThat(readyCard.path("stage").asText())
+                .as("карточке не с чем подписаться, кроме сырого статуса: %s", readyCard)
+                .isEqualTo("READY");
+        assertThat(readyCard.path("status").asText())
+                .as("документ готовой к выдаче сделки перестал быть отложенным — "
+                        + "проверка стадии больше ничего не доказывает")
+                .isEqualTo("RESERVED");
+        assertThat(readyCard.path("reservedUntil").isNull()).isFalse();
+        // И стадия карточки всегда равна колонке, в которой она лежит:
+        // разойдись они, экран подписал бы карточку не тем, во что её
+        // положил счётчик.
+        assertThat(stagesOutOfPlace(board))
+                .as("стадия карточки разошлась с колонкой: %s", board)
+                .isEmpty();
+
         // 6. «Истек срок» — тот же набор, что отдаёт эндпоинт просроченных
         // резервов. Сверяются номера, а не числа: равные счётчики при разных
         // наборах — то же расхождение, только незаметное.
@@ -256,6 +291,7 @@ class DealBoardTest extends PostgresTestBase {
 
     /** Роли те же, что у списка сделок: выборка чужих документов пачкой. */
     @Test
+    @Order(2)
     @DisplayName("Доску видят владелец, менеджер и продавец, остальные — нет")
     void boardIsOpenToTheSameRolesAsTheList() throws Exception {
         for (String allowed : List.of("vladelec", "menedzher", "prodavets")) {
@@ -266,6 +302,54 @@ class DealBoardTest extends PostgresTestBase {
             mvc.perform(get("/api/deals/board").session(login(denied)))
                     .andExpect(status().isForbidden());
         }
+    }
+
+    /**
+     * Счётчик над колонкой — это все её сделки, а карточек приезжает сотня.
+     *
+     * <p><b>Заглушкой это не проверяется вовсе:</b> экранный тест отвечает
+     * готовой доской, то есть подтверждает собственную фикстуру, а не запрос.
+     * Считает же колонку оконное выражение над той же выборкой, из которой
+     * режутся карточки, — и посчитай оно показанное, продавец прочёл бы
+     * «Ждет оплаты 100» там, где их сто пять, причём чем длиннее колонка,
+     * тем точнее выглядит враньё. Поэтому колонка набивается по-настоящему,
+     * а число сверяется с {@code count(*)} по базе.
+     *
+     * <p><b>Идёт последним, и это условие, а не порядок для красоты:</b> сотня
+     * незакрытых сделок сдвигает абсолютные числа соседнего метода — доска
+     * считает по всему арендатору.
+     */
+    @Test
+    @Order(3)
+    @DisplayName("Колонка длиннее сотни: счётчик считает всю, карточек приезжает сто")
+    void columnCounterCountsWholePartitionWhileCardsAreCapped() throws Exception {
+        MockHttpSession seller = login("prodavets");
+        long site = dealSource("Сайт");
+        long before = count(board(""), "Ждет оплаты");
+
+        // Одна деталь с остатком в 105 штук, а не 105 деталей: доска считает
+        // сделки, и запчасть под каждую стоила бы сотни лишних вставок ради
+        // того, что проверке безразлично.
+        Long partId = part("Болт для длинной колонки", nearWarehouse, 105);
+        for (int i = 0; i < 105; i++) {
+            createDeal(partId, nearWarehouse, site, seller);
+        }
+
+        JsonNode board = board("");
+        long open = inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM deal WHERE status IN ('DRAFT', 'RESERVED', 'READY')",
+                Long.class));
+
+        assertThat(count(board, "Ждет оплаты"))
+                .as("счётчик посчитал показанные карточки, а не всю колонку")
+                .isEqualTo(before + 105);
+        assertThat(idsIn(board, "Ждет оплаты"))
+                .as("колонка отдала не сотню карточек: доска не должна возить "
+                        + "всю просрочку живого клиента")
+                .hasSize(100);
+        assertThat(sum(board))
+                .as("сумма счётчиков разошлась с числом незакрытых сделок: %s", board)
+                .isEqualTo(open);
     }
 
     // ---------------------------------------------------------------
@@ -315,6 +399,24 @@ class DealBoardTest extends PostgresTestBase {
         board.path("columns").forEach(column ->
                 column.path("cards").forEach(card -> ids.add(card.path("id").asLong())));
         return ids;
+    }
+
+    /**
+     * Карточки, чья стадия не совпала с колонкой, где они лежат. Экран
+     * подписывает карточку по стадии, а счётчик считает по колонке —
+     * разойдись они, подпись говорила бы одно, а положение другое.
+     */
+    private static List<String> stagesOutOfPlace(JsonNode board) {
+        List<String> wrong = new ArrayList<>();
+        for (JsonNode column : board.path("columns")) {
+            for (JsonNode card : column.path("cards")) {
+                if (!column.path("key").asText().equals(card.path("stage").asText())) {
+                    wrong.add(card.path("id").asText() + ": " + card.path("stage").asText()
+                            + " в колонке " + column.path("key").asText());
+                }
+            }
+        }
+        return wrong;
     }
 
     private static List<String> names(JsonNode board, String field) {
@@ -382,11 +484,16 @@ class DealBoardTest extends PostgresTestBase {
     }
 
     private Long part(String title, Long warehouse) {
+        return part(title, warehouse, 1);
+    }
+
+    private Long part(String title, Long warehouse, int quantity) {
         return inTenant(() -> {
             Long partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price, cost_price)
                     VALUES (1, ?, 5000, 2000) RETURNING id""", Long.class, title);
-            ledger.record(StockMovement.intake(partId, BigDecimal.ONE, warehouse, null));
+            ledger.record(StockMovement.intake(
+                    partId, BigDecimal.valueOf(quantity), warehouse, null));
             return partId;
         });
     }

@@ -1037,7 +1037,7 @@ public class SalesService {
                     String key = rs.getString("stage");
                     counts.put(key, rs.getLong("cnt"));
                     cards.computeIfAbsent(key, k -> new ArrayList<>()).add(new BoardCard(
-                            rs.getLong("id"), rs.getLong("number"),
+                            key, rs.getLong("id"), rs.getLong("number"),
                             rs.getTimestamp("created_at").toInstant(),
                             rs.getString("customer_name"),
                             rs.getBigDecimal("total_amount"), rs.getBigDecimal("paid_amount"),
@@ -1112,10 +1112,23 @@ public class SalesService {
      * и полторы сотни сделок с их составом это N+1 на каждый вход продавца
      * в смену. Нажатие открывает сделку, и вот там она приезжает целиком.
      *
+     * @param stage        стадия, в которую карточку положил {@code CASE}, —
+     *                     из той же строки, что и сама карточка, поэтому
+     *                     разойтись с колонкой она не может. Экран подписывает
+     *                     карточку <b>по ней</b>, а не по {@code status}:
+     *                     стадия вычисляется, и у полностью оплаченной
+     *                     невыданной сделки документ так и остаётся
+     *                     {@code RESERVED} — подписанная сырым статусом,
+     *                     готовая к выдаче сделка читалась бы как «Отложена
+     *                     до 15 сентября», то есть противоположным смыслом
+     * @param status       состояние самого документа, а не стадия. Остаётся
+     *                     в ответе: по нему открывается сделка и им же
+     *                     объясняется, почему стадия отличается
      * @param customerName пусто — клиента у сделки нет (заказ с площадки),
      *                     и карточка тогда не говорит о нём ничего
      */
-    public record BoardCard(Long id, Long number, Instant createdAt, String customerName,
+    public record BoardCard(String stage, Long id, Long number, Instant createdAt,
+                            String customerName,
                             BigDecimal totalAmount, BigDecimal paidAmount,
                             DealStatus status, Instant reservedUntil) {
     }
