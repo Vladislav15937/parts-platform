@@ -124,6 +124,9 @@ export function ReportsScreen({ canRead }: Props) {
   const [loadingSold, setLoadingSold] = useState(false);
   const [soldError, setSoldError] = useState<string | null>(null);
   const [warehouseList, setWarehouseList] = useState<Warehouse[]>([]);
+  // Поиск машины в отборе проданного — свой, а не общий с разрезом ниже:
+  // это два разных вопроса, и набранное в одном не должно сужать другой.
+  const [soldDonorFind, setSoldDonorFind] = useState('');
 
   useEffect(() => {
     void managerSales(month)
@@ -737,6 +740,19 @@ export function ReportsScreen({ canRead }: Props) {
             ))}
           </select>
         </label>
+        {/* Тот же поиск, что у разреза ниже, и по той же причине: у клиента
+            441 машина, списком их не пролистать. Два выбора машины на одном
+            экране, из которых ищет только один, — это тот, который не ищет,
+            и есть недоделанный. */}
+        <label>
+          Найти машину
+          <input
+            type="search"
+            value={soldDonorFind}
+            placeholder="номер, марка или заметка"
+            onChange={(e) => setSoldDonorFind(e.target.value)}
+          />
+        </label>
         <label>
           Машина
           <select
@@ -744,7 +760,7 @@ export function ReportsScreen({ canRead }: Props) {
             onChange={(e) => setSoldDraft({ ...soldDraft, donorId: e.target.value })}
           >
             <option value="">— все машины —</option>
-            {donorList.map((d) => (
+            {donorList.filter((d) => matches(d, soldDonorFind)).map((d) => (
               <option key={d.id} value={d.id}>{donorTitle(d)}</option>
             ))}
           </select>
