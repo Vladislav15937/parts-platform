@@ -20,6 +20,8 @@ import {
 import { cardFields } from '../inventory/partCard';
 import { deletePhoto, makeMainPhoto, uploadPhoto } from '../inventory/photos';
 import { PartEditForm } from './PartEditForm';
+import { PartLabelPrint } from './PartLabelPrint';
+import { LABEL_ROLES } from './tabs';
 import { PartDonorView } from './PartDonorView';
 import { PartHistoryView } from './PartHistoryView';
 import { loadCached, modelsOf, type VehicleCatalog } from '../catalog/vehicles';
@@ -612,6 +614,20 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
                   Списать
                 </button>
               )
+            )}
+
+            {/* Этикетка печатается отсюда: деталь уже открыта, искать её
+                на другом экране незачем. Роли те же, что у экрана «Этикетки»
+                (`LABEL_ROLES`) — второй список разошёлся бы с первым. Ключ
+                по позиции: открыв следующую карточку, человек обязан увидеть
+                её наклейку, а не оставшуюся от предыдущей. */}
+            {!editing && LABEL_ROLES.includes(role) && (
+              <PartLabelPrint
+                key={row.id}
+                code={row.code}
+                title={row.title}
+                price={row.price}
+              />
             )}
 
             {!editing && row.description !== null && row.description !== '' && (
