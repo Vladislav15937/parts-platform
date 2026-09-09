@@ -215,7 +215,8 @@ public class MarketplaceAccountController {
                 request.conditions(), request.warehouseIds(),
                 request.kindIds(), request.kindsExcluded(),
                 request.brandIds(), request.brandsExcluded(),
-                request.productLine(), request.columns(), request.words()));
+                request.productLine(), request.columns(), request.words(),
+                request.expectedGoods()));
     }
 
     public record CountView(long parts) {
@@ -334,7 +335,24 @@ public class MarketplaceAccountController {
                                  */
                                 java.util.Map<String, String> columns,
                                 /** То же вхождением: набранное руками. */
-                                java.util.Map<String, String> words) {
+                                java.util.Map<String, String> words,
+                                /**
+                                 * Выгружать ли товар по ожидаемым поставкам.
+                                 *
+                                 * <p><b>Читает его только счётчик, а
+                                 * {@code setFilter} не читает вовсе —
+                                 * и это не забывчивость.</b> Переключатель
+                                 * живёт в настройках сборки
+                                 * ({@code FeedSettings.expectedGoods}),
+                                 * потому что неотделим от своей приписки;
+                                 * но состав прайса он меняет, а счётчик
+                                 * обязан считать тем же условием, что
+                                 * и генератор. Отсюда поле в запросе счёта:
+                                 * экран присылает то, что стоит в форме,
+                                 * ещё до сохранения — как и весь остальной
+                                 * отбор.
+                                 */
+                                boolean expectedGoods) {
     }
 
     /**

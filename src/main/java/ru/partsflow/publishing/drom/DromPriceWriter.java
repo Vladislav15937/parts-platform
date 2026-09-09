@@ -206,9 +206,21 @@ public class DromPriceWriter {
      * что и текстовый блок. Решает про неё выгрузка: строка приезжает
      * готовой (см. {@code FeedSettings.installationNoteFor}), потому что
      * включена приписка или нет — свойство прайс-листа, а не позиции.
+     *
+     * <p><b>А «ожидается поступление» идёт первой строкой, перед описанием.</b>
+     * Все остальные приписки рассказывают про деталь и потому дописываются
+     * в конец; эта рассказывает про то, когда деталь можно забрать, и ниже
+     * описания её прочитают последней или не прочитают вовсе — а объявление
+     * о товаре, которого на складе нет, без этой строки просто неправда.
+     * Решение владельца продукта от 5 сентября 2026
+     * ({@code tasks/0007-tovar-v-peremeshchenii-v-obyavlenii.md}): «выгружаем
+     * с припиской», и приписка стоит в начале.
      */
     private static String append(String description, DromOffer offer) {
         List<String> parts = new java.util.ArrayList<>();
+        if (offer.expectedNote() != null && !offer.expectedNote().isBlank()) {
+            parts.add(offer.expectedNote().strip());
+        }
         if (description != null && !description.isBlank()) {
             parts.add(description.strip());
         }

@@ -707,6 +707,12 @@ public class MarketplaceAccountService {
      * хотя генератор колёс их не применяет: экран их для колёсной выгрузки
      * и не показывает, а молча менять смысл параметра хуже, чем его
      * не прислать.
+     *
+     * @param expectedGoods выгрузка выгружает товар по ожидаемым поставкам.
+     *                      Приезжает отдельно от отбора, потому что живёт
+     *                      в настройках сборки, а не в колонках отбора, —
+     *                      но состав прайса меняет, и счётчик, о нём
+     *                      не знающий, обещал бы меньше, чем уедет
      */
     @Transactional(readOnly = true)
     public long countMatching(java.math.BigDecimal priceFrom, java.math.BigDecimal priceTo,
@@ -715,7 +721,8 @@ public class MarketplaceAccountService {
                               List<Long> brandIds, boolean brandsExcluded,
                               String productLine,
                               java.util.Map<String, String> columns,
-                              java.util.Map<String, String> words) {
+                              java.util.Map<String, String> words,
+                              boolean expectedGoods) {
         // Колонки отбираются тем же выражением, каким показаны на экране —
         // и у каждой линии товара своим: у колеса нет вида детали, у запчасти
         // нет сезона.
@@ -732,16 +739,30 @@ public class MarketplaceAccountService {
                         .map(ru.partsflow.inventory.CatalogService.ColumnFilter::args)
                         .orElseGet(List::of);
 
+        // Товар в пути считается только у выгрузки запчастей, и только когда
+        // она его выгружает. У колёсной выгрузки этого переключателя нет
+        // вовсе: в прайсе шин элемента описания не существует, а без приписки
+        // «ожидается поступление» такой товар уехал бы объявлением о детали,
+        // которой на складе нет. Счётчик обязан считать тем же условием, что
+        // и генератор, — в этом модуле он врал уже дважды именно на этом.
+        boolean inTransit = expectedGoods && "PART".equals(line(productLine));
+
         List<Object> args = new java.util.ArrayList<>(List.of());
         Long found = jdbc.queryForObject("""
                 SELECT count(*) FROM part p
                   LEFT JOIN donor d ON d.id = p.donor_id
+                  LEFT JOIN supply in_transit
+                         ON in_transit.id = p.supply_id
+                        AND in_transit.status IN ('EXPECTED', 'IN_TRANSIT')
                  WHERE p.is_published
                    -- Тем же условием, что и генератор: у каждой линии товара
                    -- свой прайс, и колесо в прайсе запчастей — чужая категория,
                    -- из которой объявление снимут.
                    AND p.product_line = ?::text
-                   AND p.status IN ('IN_STOCK', 'SOLD')
+                   AND p.status IN ${statuses}
+                   -- Черновик считается только тогда, когда он из поставки
+                   -- в пути: тем же условием, что и генератор.
+                   AND (p.status <> 'DRAFT' OR in_transit.id IS NOT NULL)
                    -- Тем же условием, что и генератор: нулевая цена в прайс
                    -- не идёт, потому что «0 ₽» в объявлении — обещание отдать
                    -- деталь даром, а на деле это незаполненное поле.
@@ -771,6 +792,9 @@ public class MarketplaceAccountService {
                                    OR EXISTS (SELECT 1 FROM part_applicability pa
                                                WHERE pa.part_id = p.id
                                                  AND pa.brand_id = ANY (?::bigint[]))) END)"""
+                .replace("${statuses}", inTransit
+                        ? "('IN_STOCK', 'SOLD', 'DRAFT')"
+                        : "('IN_STOCK', 'SOLD')")
                 + columnsSql,
                 Long.class,
                 argsOf(args, columnArgs,

@@ -261,7 +261,7 @@ class DromWheelGeneratorTest extends PostgresTestBase {
 
         long counted = inTenant(() -> accounts.countMatching(
                 from, to, null, null, null, false, null, false, "WHEEL",
-                java.util.Map.of(), java.util.Map.of()));
+                java.util.Map.of(), java.util.Map.of(), false));
         long offers = priceWithin(from, to).split("<offer>", -1).length - 1;
 
         assertThat(offers).as("в прайс колёс попали не обе шины").isEqualTo(2);
@@ -309,7 +309,7 @@ class DromWheelGeneratorTest extends PostgresTestBase {
 
         long counted = inTenant(() -> accounts.countMatching(
                 from, to, null, null, null, false, null, false, "WHEEL",
-                java.util.Map.of("season", "летняя"), java.util.Map.of()));
+                java.util.Map.of("season", "летняя"), java.util.Map.of(), false));
         assertThat(counted)
                 .as("счётчик колёс считает не тем условием, каким собирается прайс")
                 .isEqualTo(xml.split("<offer>", -1).length - 1);
@@ -348,7 +348,8 @@ class DromWheelGeneratorTest extends PostgresTestBase {
         String xml = inTenant(() -> {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             generator.writeTo(out, mine, "https://example.org/photo/",
-                    new ru.partsflow.publishing.FeedSettings(null, null, 2, null, null));
+                    new ru.partsflow.publishing.FeedSettings(null, null, 2, null, null,
+                            null, null));
             return out.toString(StandardCharsets.UTF_8);
         });
 

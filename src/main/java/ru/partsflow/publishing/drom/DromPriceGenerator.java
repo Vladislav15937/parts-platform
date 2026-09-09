@@ -72,7 +72,23 @@ public class DromPriceGenerator {
                    -- по заголовку, а угадывает она не всегда.
                    kind.name AS part_kind,
                    p.price,
-                   COALESCE(s.qty_available, 0) AS qty_available,
+                   -- Товар в пути: позиция <b>без остатка</b>, привязанная
+                   -- к поставке, которая ещё не приехала. Оба условия
+                   -- обязательны: поставку отмечают прибывшей не всегда
+                   -- и не сразу, и деталь, уже принятая по неотмеченному
+                   -- контейнеру, — обычный товар на полке. Считать её
+                   -- ожидаемой значило бы обещать покупателю ждать деталь,
+                   -- которая лежит на складе, и отдать площадке количество
+                   -- из карточки вместо настоящего остатка.
+                   --
+                   -- Уезжает такой товар числом из карточки, а не нулём
+                   -- со склада: ноль в колонке количества Дром читает как
+                   -- «товар удалить», то есть объявление, ради которого всё
+                   -- и затевалось, не появилось бы вовсе.
+                   CASE WHEN p.status = 'DRAFT' AND in_transit.id IS NOT NULL
+                        THEN p.quantity
+                        ELSE COALESCE(s.qty_available, 0) END AS qty_available,
+                   (p.status = 'DRAFT' AND in_transit.id IS NOT NULL) AS in_transit,
                    -- Где деталь лежит: покупателю это «куда ехать», и у клиента
                    -- с двумя филиалами на разных концах города вопрос не праздный.
                    -- Берётся из того же отбора, что и остаток: у прайса филиала
@@ -124,6 +140,13 @@ public class DromPriceGenerator {
                    GROUP BY ps.part_id
               ) s ON s.part_id = p.id
               LEFT JOIN donor d ON d.id = p.donor_id
+              -- Поставка, которая ещё не приехала. Джойн узкий намеренно:
+              -- «в пути» — это не любая позиция без остатка, а только та,
+              -- которую ждут контейнером. Позиция, заведённая черновиком
+              -- и брошенная, ни в какой прайс попадать не должна.
+              LEFT JOIN supply in_transit
+                     ON in_transit.id = p.supply_id
+                    AND in_transit.status IN ('EXPECTED', 'IN_TRANSIT')
               LEFT JOIN part_oem primary_oem
                      ON primary_oem.part_id = p.id AND primary_oem.is_primary
               LEFT JOIN (
@@ -166,6 +189,12 @@ public class DromPriceGenerator {
                -- Отдельная выгрузка для них — своя задача.
                AND p.product_line = 'PART'
                AND p.status IN ${statuses}
+               -- Черновик попадает в список статусов только у выгрузки,
+               -- которая ожидаемый товар выгружает, — а вот «черновик, но
+               -- не из поставки в пути» отсекается здесь и всегда. Без этого
+               -- переключатель выгружал бы заодно всё, что кто-то завёл
+               -- карточкой и не принял.
+               AND (p.status <> 'DRAFT' OR in_transit.id IS NOT NULL)
                -- Цена обязательна, и ноль в неё не годится: в выгрузке
                -- прежней системы ноль стоит там, где поле не заполняли,
                -- а в объявлении «0 ₽» — это публичное обещание отдать
@@ -226,6 +255,23 @@ public class DromPriceGenerator {
      * ровно то, что документация Дрома и называет удалением через API.
      */
     private static final String DELTA_STATUSES = "('IN_STOCK', 'SOLD', 'WRITTEN_OFF')";
+
+    /**
+     * Тот же список плюс черновик — для выгрузки, которая выгружает товар
+     * по ожидаемым поставкам.
+     *
+     * <p>Списком статусов, а не ещё одним параметром: он и так подставляется
+     * в запрос текстом ({@code ${statuses}}), а новое условие в середине
+     * {@code WHERE} сдвинуло бы номера всех параметров ниже — вместе
+     * с фильтром дельты. Ошибка при этом была бы тихой: запрос собирается,
+     * а сравнивается не то с не тем.
+     */
+    private static String statuses(String base, FeedSettings settings) {
+        if (!settings.expectsGoodsInTransit()) {
+            return base;
+        }
+        return base.substring(0, base.length() - 1) + ", 'DRAFT')";
+    }
 
     private static final String ORDER = " ORDER BY p.id";
 
@@ -433,7 +479,7 @@ public class DromPriceGenerator {
                 .orElseGet(List::of);
 
         String sql = SQL.replace("${statuses}",
-                partIds == null ? PRICE_STATUSES : DELTA_STATUSES)
+                statuses(partIds == null ? PRICE_STATUSES : DELTA_STATUSES, settings))
                 + columnsSql + (partIds == null ? "" : DELTA_FILTER) + ORDER;
 
         return session.doReturningWork(connection -> {
@@ -605,7 +651,10 @@ public class DromPriceGenerator {
                     // Приписка про установку: решение выгрузки, а не позиции.
                     // Выключена или цены нет — null, и описание собирается
                     // ровно как раньше.
-                    settings.installationNoteFor(rs.getBigDecimal("installation_price")));
+                    settings.installationNoteFor(rs.getBigDecimal("installation_price")),
+                    // «Ожидается поступление»: решение выгрузки, а не позиции,
+                    // и без него товар в пути в файл не попадает вовсе.
+                    settings.expectedNoteFor(rs.getBoolean("in_transit")));
         }
 
         /** Года у контрактной детали нет, а {@code getInt} отдаёт на это ноль. */
