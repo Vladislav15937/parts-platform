@@ -293,10 +293,80 @@ export interface HistoryEntry {
 export interface StockSearch {
   rows: StockRow[];
   total: number;
+  facets: StockFacets;
 }
 
-export function searchStock(query: string): Promise<StockSearch> {
-  return request<StockSearch>(`/api/parts/stock?q=${encodeURIComponent(query)}`);
+/**
+ * Из чего продавцу выбирать отбор.
+ *
+ * <p>Считается сервером по найденному, а не по всему складу: полторы сотни
+ * марок склада — это предложение выбрать то, чего в выдаче нет. Список при
+ * этом не сужается уже поставленным отбором, иначе с Toyota нельзя было бы
+ * переключиться на Nissan.
+ */
+export interface StockFacets {
+  vehicles: { brand: string; model: string | null }[];
+  grades: string[];
+}
+
+/**
+ * Чем продавец сужает найденное.
+ *
+ * <p>Всё строками: это состояние полей формы, а пустое поле означает
+ * «не задано». Число разбирает сервер — он же и отвечает отказом на то,
+ * что числом не является.
+ */
+export interface StockFilter {
+  brand: string;
+  model: string;
+  yearFrom: string;
+  yearTo: string;
+  side: string;
+  position: string;
+  warehouseId: string;
+  grade: string;
+  priceFrom: string;
+  priceTo: string;
+  /** `price`, `intake` или пусто — тогда порядок по совпадению с запросом. */
+  sort: string;
+  desc: boolean;
+}
+
+export const NO_STOCK_FILTER: StockFilter = {
+  brand: '', model: '', yearFrom: '', yearTo: '', side: '', position: '',
+  warehouseId: '', grade: '', priceFrom: '', priceTo: '', sort: '', desc: false,
+};
+
+/**
+ * Отбор уходит в запрос к серверу, а не применяется к показанным строкам.
+ *
+ * <p>Список обрезан пятьюдесятью, а «фара» на живом складе находит 181:
+ * сузив показанное, «фара + Nissan» не нашла бы ничего при полной полке
+ * ниссановских фар — они остались за списком до того, как продавец успел
+ * назвать марку.
+ */
+export function searchStock(
+  query: string, filter: StockFilter = NO_STOCK_FILTER,
+): Promise<StockSearch> {
+  const params = new URLSearchParams({ q: query });
+  const named: [string, string][] = [
+    ['brand', filter.brand], ['model', filter.model],
+    ['yearFrom', filter.yearFrom], ['yearTo', filter.yearTo],
+    ['side', filter.side], ['position', filter.position],
+    ['warehouseId', filter.warehouseId], ['grade', filter.grade],
+    ['priceFrom', filter.priceFrom], ['priceTo', filter.priceTo],
+    ['sort', filter.sort],
+  ];
+  for (const [name, value] of named) {
+    if (value.trim() !== '') {
+      params.set(name, value.trim());
+    }
+  }
+  // Направление без сортировки ничего не значит и в запросе не нужно.
+  if (filter.sort !== '' && filter.desc) {
+    params.set('desc', 'true');
+  }
+  return request<StockSearch>(`/api/parts/stock?${params.toString()}`);
 }
 
 export function searchCustomers(query: string): Promise<Customer[]> {
