@@ -467,6 +467,101 @@ export function customerPayments(customerId: number): Promise<PaymentRow[]> {
   return request<PaymentRow[]>(`/api/deals/payments?customerId=${customerId}`);
 }
 
+/**
+ * Воронка реестра платежей: слова — на экране, направление — на сервере.
+ *
+ * <p>Слова взяты из задачи 0045 дословно («Все · Приходные · Расходные»),
+ * а сервер отбирает по `direction`; тот же приём, что у воронки сделок
+ * и журнала пересчётов — знай обе стороны имена воронок, они разошлись бы
+ * на первой правке.
+ *
+ * <p>Открывается на «Все»: кассу сводят целиком, а не отдельно приход
+ * и отдельно расход.
+ */
+export const PAYMENT_FUNNEL = [
+  { key: 'ALL', label: 'Все', direction: '' },
+  { key: 'IN', label: 'Приходные', direction: 'IN' },
+  { key: 'OUT', label: 'Расходные', direction: 'OUT' },
+] as const satisfies readonly { key: string; label: string; direction: string }[];
+
+export type PaymentFunnelKey = (typeof PAYMENT_FUNNEL)[number]['key'];
+
+/**
+ * Строка реестра платежей.
+ *
+ * @see listPayments
+ */
+export interface PaymentListRow {
+  id: number;
+  paidAt: string;
+  /** `IN` — приход, `OUT` — расход; сумма всегда положительная. */
+  direction: string;
+  /**
+   * Число, а не строка: `numeric` из Postgres Jackson отдаёт **числом** JSON,
+   * и объявленная строкой цена уже роняла экран выгрузок на `.trim()` —
+   * компилятор верит объявлению и молчит.
+   */
+  amount: number;
+  comment: string | null;
+  dealId: number | null;
+  /** Пусто — платёж без сделки: пополнение или выдача со счёта. */
+  dealNumber: number | null;
+  customerId: number | null;
+  /** Пусто — клиента у платежа нет: так возвращают деньги по заказу площадки. */
+  customerName: string | null;
+  sourceId: number | null;
+  /** Пусто — способ не записан: до задачи 0024 его не писали вовсе. */
+  sourceName: string | null;
+}
+
+/**
+ * @param total   сколько нашлось по отбору — список обрезан пределом,
+ *                и подвал обязан назвать, сколько показано из скольких
+ * @param income  приход по всей выборке отбора
+ * @param expense расход по всей выборке отбора, числом положительным
+ * @param net     итог: приход минус расход, посчитанный сервером своим
+ *                запросом, а не сложением показанных строк
+ */
+export interface PaymentsPage {
+  items: PaymentListRow[];
+  total: number;
+  income: number;
+  expense: number;
+  net: number;
+}
+
+/**
+ * Реестр платежей — все деньги компании одним списком (задача 0045).
+ *
+ * <p>Вместо курсора — растущий предел `size`, как у реестра возвратов
+ * и списка сделок: реестр читают с конца и вглубь не листают.
+ *
+ * @param funnel воронка: все, приходные или расходные
+ * @param from   начало периода (ISO-момент); пусто — с начала времён
+ * @param to     конец периода (ISO-момент); пусто — по текущий момент
+ * @param size   сколько строк вернуть
+ */
+export function listPayments(
+  funnel: PaymentFunnelKey,
+  from: string,
+  to: string,
+  size = 50,
+): Promise<PaymentsPage> {
+  const params = new URLSearchParams();
+  const direction = PAYMENT_FUNNEL.find((f) => f.key === funnel)?.direction ?? '';
+  if (direction !== '') {
+    params.set('direction', direction);
+  }
+  if (from !== '') {
+    params.set('from', from);
+  }
+  if (to !== '') {
+    params.set('to', to);
+  }
+  params.set('size', String(size));
+  return request<PaymentsPage>(`/api/payments?${params.toString()}`);
+}
+
 export interface BasketLine {
   row: StockRow;
   quantity: number;

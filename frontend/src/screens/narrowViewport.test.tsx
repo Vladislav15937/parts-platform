@@ -18,6 +18,7 @@ import { OrganizationScreen } from './OrganizationScreen';
 import { OutboxScreen } from './OutboxScreen';
 import { ReportsScreen } from './ReportsScreen';
 import { ReturnsScreen } from './ReturnsScreen';
+import { PaymentsScreen } from './PaymentsScreen';
 import { SellerScreen } from './SellerScreen';
 import { SettingsScreen } from './SettingsScreen';
 import { StockMovesScreen } from './StockMovesScreen';
@@ -278,6 +279,35 @@ const PAYMENTS = {
 };
 
 /**
+ * Реестр платежей: семь колонок, и ширину им задаёт содержимое — имя клиента,
+ * название способа оплаты и комментарий. Имена здесь такие, какие пишет себе
+ * владелец («Интернет-эквайринг Авито доставка»), плюс строка без клиента,
+ * без сделки и без источника: так выглядит возврат по заказу площадки
+ * и платёж, приехавший переездом до задачи 0024.
+ */
+const PAYMENT_REGISTRY = {
+  total: 128,
+  income: 402000,
+  expense: 12500,
+  net: 389500,
+  items: [
+    {
+      id: 12, paidAt: '2026-09-05T20:01:00Z', direction: 'IN', amount: 34500,
+      comment: null, dealId: 8, dealNumber: 8,
+      customerId: 3, customerName: 'Автосервис на Русской',
+      sourceId: 2, sourceName: 'Интернет-эквайринг Авито доставка',
+    },
+    {
+      id: 11, paidAt: '2026-09-05T18:40:00Z', direction: 'OUT', amount: 4500,
+      comment: 'Отмена сделки 9: оплата возвращена',
+      dealId: null, dealNumber: null,
+      customerId: null, customerName: null,
+      sourceId: null, sourceName: null,
+    },
+  ],
+};
+
+/**
  * Пустой ответ на всё остальное: сторож меряет раздел, а не его содержимое.
  * Списки приходят массивом, страницы и отчёты — объектом, и подсунуть одно
  * вместо другого значит проверить не тот путь.
@@ -381,6 +411,7 @@ const RESPONSES: Array<[string, unknown]> = [
   ['/api/deals/services', []],
   ['/api/deals/orders', []],
   ['/api/payment-sources', []],
+  ['/api/payments', PAYMENT_REGISTRY],
   ['/api/part-names/kinds', []],
   ['/api/stock/moves', []],
 ];
@@ -426,6 +457,7 @@ describe('на телефоне ни один раздел не уезжает �
     deals: () => <DealsScreen onOpenDeal={() => {}} />,
     orders: () => <OrdersScreen canSell />,
     returns: () => <ReturnsScreen onOpenDeal={() => {}} />,
+    payments: () => <PaymentsScreen onOpenDeal={() => {}} />,
     customers: () => (
       <CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />
     ),
