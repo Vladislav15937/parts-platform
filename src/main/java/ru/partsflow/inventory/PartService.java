@@ -42,10 +42,12 @@ public class PartService {
     private final VehicleWords vehicleWords;
     /** Отказ называет деталь и склад теми же словами, что и перевозка. */
     private final StockNaming naming;
+    /** В {@code part_stock} не пишет никто мимо журнала — перестановка тоже. */
+    private final StockLedger ledger;
 
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
                        PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc,
-                       VehicleWords vehicleWords, StockNaming naming) {
+                       VehicleWords vehicleWords, StockNaming naming, StockLedger ledger) {
         this.partRepository = partRepository;
         this.eventPublisher = eventPublisher;
         this.partNames = partNames;
@@ -53,6 +55,7 @@ public class PartService {
         this.jdbc = jdbc;
         this.vehicleWords = vehicleWords;
         this.naming = naming;
+        this.ledger = ledger;
     }
 
     /**
@@ -355,10 +358,13 @@ public class PartService {
      * нет вовсе, и требовать её нельзя. В базу это идёт NULL, а не пустое
      * значение, — та же природа, что у снятого штрихкода.
      *
-     * <p>Пишется только {@code cell_id}: остаток и резерв в {@code part_stock}
-     * по-прежнему ведёт один {@link StockLedger}, и адрес полки к ним
-     * отношения не имеет — сверка {@code v_stock_discrepancy} от этой правки
-     * не меняется ни на строку.
+     * <p><b>Идёт движением через {@link StockLedger}, а не своим
+     * {@code UPDATE part_stock}.</b> Главное правило модуля — в раскладку
+     * не пишет никто мимо журнала, — и адрес полки из него не исключение:
+     * «деталь лежала на А-01-1, её там нет» разбирают именно журналом,
+     * а прямая правка не оставляет о перекладке ни строки. Движение —
+     * {@code MOVE} с нулевым количеством: остаток не менялся, менялся адрес,
+     * и схема такое разрешает прямо ({@code stock_movement_delta_ck}).
      */
     @Transactional
     public PartCell changeCell(Long partId, Long warehouseId, Long cellId, Long authorId) {
@@ -379,26 +385,59 @@ public class PartService {
             }
         }
 
-        int updated = jdbc.update("""
-                UPDATE part_stock SET cell_id = ?, updated_at = now()
-                 WHERE part_id = ? AND warehouse_id = ?""", cellId, partId, warehouseId);
-        if (updated == 0) {
+        // Строка раскладки нужна дважды: чтобы отказать словами, если позиции
+        // на этом складе нет, и чтобы записать в журнал, с какой полки деталь
+        // ушла. «С А-01-1 на А-02-1» — это и есть ответ, за которым в журнал
+        // приходят; «стало А-02-1» без «было» на него не отвечает.
+        List<Placement> here = jdbc.query("""
+                        SELECT cell_id, qty FROM part_stock
+                         WHERE part_id = ? AND warehouse_id = ?""",
+                (rs, i) -> new Placement((Long) rs.getObject("cell_id"), rs.getBigDecimal("qty")),
+                partId, warehouseId);
+        if (here.isEmpty()) {
             throw new IllegalArgumentException("На складе %s нет остатка: %s — переставлять нечего"
                     .formatted(naming.warehouse(warehouseId), naming.part(partId)));
         }
+        Placement was = here.get(0);
 
-        // Через сущность, а не тем же UPDATE: журнал изменений пишет слушатель
-        // Hibernate, и правка мимо сессии в историю карточки не попадёт —
-        // а «Ячейка: было А-01-1, стало А-02-1» и есть то, ради чего историю
-        // открывают, когда деталь не нашли на полке.
-        part.setStorageCellId(cellId);
-        part.touchedBy(authorId);
-        partChanges.changed(partId);
+        ledger.record(StockMovement.reshelve(partId, warehouseId, was.cellId(), cellId));
 
-        BigDecimal qty = jdbc.queryForObject(
-                "SELECT qty FROM part_stock WHERE part_id = ? AND warehouse_id = ?",
-                BigDecimal.class, partId, warehouseId);
-        return new PartCell(warehouseId, cellId, cellCode, qty);
+        // А вот `part.storage_cell_id` — одно скалярное поле на весь товар,
+        // и полок у позиции столько, на скольких складах она лежит. Записав
+        // туда адрес ближнего склада поверх адреса дальнего, лента правок
+        // скажет «Ячейка: было Б-01-1, стало А-02-1» — про склад, к которому
+        // в этой операции никто не подходил. Поэтому пишем его только когда
+        // склад у позиции один и вопрос «где лежит» имеет один ответ;
+        // у позиции на двух складах след остаётся движением, где склад
+        // и обе полки названы явно.
+        //
+        // Через сущность, а не native SQL: журнал изменений пишет слушатель
+        // Hibernate, и правка мимо сессии в ленту правок не попадёт.
+        if (isOnlyWarehouse(partId, warehouseId)) {
+            part.setStorageCellId(cellId);
+            part.touchedBy(authorId);
+        }
+
+        return new PartCell(warehouseId, cellId, cellCode, was.qty());
+    }
+
+    /**
+     * Лежит ли позиция только на этом складе.
+     *
+     * <p>Считается по остатку, а не по наличию строки раскладки: строка
+     * с нулём остаётся после того, как со склада увезли всё, и позиция,
+     * когда-то лежавшая на дальнем, навсегда потеряла бы адрес в карточке.
+     */
+    private boolean isOnlyWarehouse(Long partId, Long warehouseId) {
+        Integer elsewhere = jdbc.queryForObject("""
+                        SELECT count(*) FROM part_stock
+                         WHERE part_id = ? AND warehouse_id <> ? AND qty > 0""",
+                Integer.class, partId, warehouseId);
+        return elsewhere == null || elsewhere == 0;
+    }
+
+    /** Строка раскладки до перестановки: с какой полки и сколько там лежит. */
+    private record Placement(Long cellId, BigDecimal qty) {
     }
 
     /**

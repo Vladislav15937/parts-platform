@@ -17,6 +17,7 @@ import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -195,6 +196,104 @@ class PartCellHttpTest extends PostgresTestBase {
 
         assertThat(cellOf(nearId)).isEqualTo(second);
         assertThat(cellOf(farId)).as("адрес соседнего склада тронут").isEqualTo(farCell);
+    }
+
+    /**
+     * Перестановка обязана оставить след в журнале склада.
+     *
+     * <p>Главное правило модуля: в {@code part_stock} не пишет никто мимо
+     * {@link StockLedger}. Перестановка меняет ту же строку, и путь мимо
+     * журнала стоит ровно того, ради чего журнал ведут: «деталь лежала
+     * на А-01-1, её там нет» разбирают этой лентой, а прямой {@code UPDATE}
+     * не оставляет о перекладке ни строки — движения нет, спросить некого.
+     *
+     * <p>Ноль в количестве не оговорка, а сам случай: схема разрешает его
+     * прямо — {@code CHECK (qty_delta <> 0 OR movement_type = 'MOVE')}.
+     */
+    @Test
+    @DisplayName("Перестановка записана движением: MOVE, ноль, с какой полки на какую")
+    void reshelvingLeavesTraceInLedger() throws Exception {
+        mvc.perform(put("/api/parts/%d/cell".formatted(partId)).with(csrf())
+                        .session(login("kladovshchik"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"cellId":%d}""".formatted(nearId, second)))
+                .andExpect(status().isOk());
+
+        var moves = inTenant(() -> jdbc.queryForList("""
+                SELECT movement_type, qty_delta, from_warehouse_id, to_warehouse_id,
+                       from_cell_id, to_cell_id, created_by
+                  FROM stock_movement
+                 WHERE part_id = ? AND movement_type = 'MOVE'""", partId));
+
+        assertThat(moves)
+                .as("перестановки нет в журнале склада: движение не записано вовсе")
+                .hasSize(1);
+        var move = moves.get(0);
+        assertThat(((BigDecimal) move.get("qty_delta")).signum())
+                .as("перестановка сдвинула остаток, а должна была только адрес")
+                .isZero();
+        assertThat(move.get("from_warehouse_id")).isEqualTo(nearId);
+        assertThat(move.get("to_warehouse_id")).isEqualTo(nearId);
+        assertThat(move.get("from_cell_id")).as("не видно, с какой полки ушла").isEqualTo(first);
+        assertThat(move.get("to_cell_id")).as("не видно, на какую полку легла").isEqualTo(second);
+        assertThat(move.get("created_by")).as("движение без автора").isNotNull();
+
+        // И то же самое человеку — второй лентой истории, где ищут деталь:
+        // «Основной · А-01-1 → А-02-1», а не «Основной → Основной».
+        mvc.perform(get("/api/parts/%d/history".formatted(partId))
+                        .session(login("kladovshchik")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.movements[0].warehouse")
+                        .value("Основной · А-01-1 → А-02-1"))
+                .andExpect(jsonPath("$.movements[0].author").value("Кладовщик"));
+    }
+
+    /**
+     * История не сравнивает полку одного склада с полкой другого.
+     *
+     * <p>`part.storage_cell_id` — одно скалярное поле на весь товар, а полок
+     * у позиции столько, на скольких складах она лежит. Записав туда новый
+     * адрес ближнего склада поверх адреса дальнего, лента правок скажет
+     * «Ячейка: было Б-01-1, стало А-02-1» — про склад, к которому в этой
+     * операции никто не подходил. Это ровно тот класс, который задача 0034
+     * называет первым: адресов два, и сливать их нельзя.
+     */
+    @Test
+    @DisplayName("У позиции на двух складах история не выдаёт чужую полку за прежнюю")
+    void historyDoesNotCompareShelvesAcrossWarehouses() throws Exception {
+        inTenant(() -> {
+            ledger.record(StockMovement.intake(partId, BigDecimal.ONE, farId, farCell));
+            return null;
+        });
+
+        mvc.perform(put("/api/parts/%d/cell".formatted(partId)).with(csrf())
+                        .session(login("kladovshchik"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"cellId":%d}""".formatted(nearId, second)))
+                .andExpect(status().isOk());
+
+        // Кодировку задаём явно: без неё тело приезжает в кодировке платформы,
+        // все русские коды ячеек превращаются в кашу — и проверка «полки
+        // дальнего склада тут нет» проходит на любом коде, потому что искомого
+        // «Б-01-1» в каше нет никогда.
+        String body = mvc.perform(get("/api/parts/%d/history".formatted(partId))
+                        .session(login("kladovshchik")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+
+        List<String> before = com.jayway.jsonpath.JsonPath.read(body,
+                "$.changes[*].fields[?(@.label == 'Ячейка')].before");
+        assertThat(before)
+                .as("лента правок выдала полку дальнего склада за прежний адрес ближнего")
+                .doesNotContain("Б-01-1");
+
+        // След при этом остался — во второй ленте, где склад назван явно.
+        List<String> places = com.jayway.jsonpath.JsonPath.read(body, "$.movements[*].warehouse");
+        assertThat(places)
+                .as("перестановки не видно в истории вовсе")
+                .contains("Основной · А-01-1 → А-02-1");
     }
 
     /**
