@@ -207,7 +207,7 @@ public class CatalogController {
      */
     @PostMapping("/bulk")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public BulkResult bulk(@RequestParam(required = false) String q,
+    public PartController.BulkResult bulk(@RequestParam(required = false) String q,
                            @RequestParam(defaultValue = "true") boolean reserved,
                            @RequestParam(defaultValue = "false") boolean missing,
                            @RequestParam(required = false) List<Long> warehouses,
@@ -225,14 +225,24 @@ public class CatalogController {
         if (ids.isEmpty()) {
             throw new IllegalArgumentException("Отбор не нашёл ни одной позиции");
         }
-        return new BulkResult(parts.updateAll(ids, request.changes(), CurrentUser.memberId()));
+        PartService.BulkOutcome outcome = parts.updateAll(ids, request.changes(),
+                request.operations(), CurrentUser.memberId());
+        // Ответ тот же, что у правки отмеченного (POST /api/parts/bulk),
+        // и запись одна на два пути: экран у них общий, а разойдясь, они дали
+        // бы форму, которая после одного нажатия говорит о непрошедших,
+        // а после другого молчит.
+        return PartController.BulkResult.of(outcome);
     }
 
-    /** Только изменения: что править, сказано параметрами отбора. */
-    public record BulkByFilter(@NotEmpty Map<String, Object> changes) {
-    }
-
-    public record BulkResult(int changed) {
+    /**
+     * Только изменения: что править, сказано параметрами отбора.
+     *
+     * @param operations что сделать с денежным полем — процент, сумма,
+     *                   округление. Считается от прежней цены каждой позиции,
+     *                   а не сводит весь отбор к одному числу
+     */
+    public record BulkByFilter(@NotEmpty Map<String, Object> changes,
+                               Map<String, PriceOperation> operations) {
     }
 
     /**

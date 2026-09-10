@@ -92,6 +92,30 @@ class WordingConsistencyTest {
         });
     }
 
+    /**
+     * Операции с ценой названы на экране и в отказе одними словами.
+     *
+     * <p><b>Зачем.</b> Шесть пунктов списка сняты с системы, из которой
+     * приходят клиенты, и взяты дословно: «Увеличить на %», «Округлить до».
+     * Выбирает операцию человек на экране, а отказывает в ней сервер —
+     * «„Уменьшить на сумму“: цена сейчас 24 300…», — и если списки разойдутся,
+     * владелец получит отказ про операцию, которой он не выбирал.
+     *
+     * <p>Перебором по перечислению, а не по списку слов: новая операция
+     * попадает в проверку в тот же момент, когда её дописали в {@code enum}.
+     */
+    @Test
+    @DisplayName("Операции с ценой названы одинаково на сервере и на экране")
+    void priceOperationWordsMatch() throws IOException {
+        String client = read(CLIENT.resolve("catalog.ts"));
+
+        for (PriceOperation op : PriceOperation.values()) {
+            assertThat(client)
+                    .as("экран не знает операции «%s» (%s)", op.title(), op.name())
+                    .contains("key: '" + op.name() + "', title: '" + op.title() + "'");
+        }
+    }
+
     private static String read(Path path) throws IOException {
         assertThat(path).as("файл, по которому сверяются слова, исчез").exists();
         return Files.readString(path);

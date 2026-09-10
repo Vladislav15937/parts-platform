@@ -107,7 +107,7 @@ class PartChangeLogTest extends PostgresTestBase {
         drain();
 
         inTenant(() -> parts.updateAll(List.of(first, second),
-                Map.of("section", "Распродажа"), null));
+                Map.of("section", "Распродажа"), Map.of(), null));
 
         assertThat(marked()).containsExactlyInAnyOrder(first, second);
     }

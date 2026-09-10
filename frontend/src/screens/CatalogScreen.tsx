@@ -6,6 +6,7 @@ import {
   FILTER_EMPTY,
   FILTER_PRESENT,
   loadCatalog,
+  bulkNotice,
   loadPhotos,
   exportUrl,
   loadVisible,
@@ -461,11 +462,11 @@ export function CatalogScreen({ role }: { role: string }) {
           partIds={chosen}
           whole={whole ? query : undefined}
           count={whole ? (page?.total ?? 0) : chosen.length}
-          onSaved={(changed) => {
+          onSaved={(result) => {
             setEditing(false);
             setChosen([]);
             setWhole(false);
-            setNotice(`Изменено позиций: ${changed}`);
+            setNotice(bulkNotice(result));
             load(query);
           }}
           onCancel={() => setEditing(false)}

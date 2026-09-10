@@ -1,4 +1,5 @@
 import { request } from '../api/client';
+import { count, plural } from '../ui/plural';
 
 /**
  * Витрина склада: таблица товаров для владельца.
@@ -209,6 +210,12 @@ export interface HistoryField {
   label: string;
   before: string | null;
   after: string | null;
+  /**
+   * Насколько подвинулись деньги: «−10 %». Считает сервер по «было»
+   * и «стало» — не пересчитывать здесь: два счёта разойдутся на округлении.
+   * `null` — поле не денежное либо считать не от чего.
+   */
+  delta: string | null;
 }
 
 /**
@@ -715,11 +722,51 @@ export function loadEditable(partId: number): Promise<PartEdit> {
  * Иначе стереть заметку с экрана невозможно — пустое неотличимо
  * от непереданного.
  */
-export function savePart(partId: number, edit: PartEdit): Promise<{ price: number | null }> {
+export function savePart(
+  partId: number,
+  edit: PartEdit,
+  priceOp: PriceOperation = 'SET',
+): Promise<{ price: number | null }> {
   return request<{ price: number | null }>(`/api/parts/${partId}`, {
     method: 'PUT',
-    body: edit as unknown as Record<string, unknown>,
+    // При арифметике `price` несёт не новую цену, а значение операции —
+    // процент, сумму или шаг. Считает сервер: тот же расчёт нужен правке
+    // списком, и две копии разошлись бы на первом округлении.
+    body: { ...edit, priceOp } as unknown as Record<string, unknown>,
   });
+}
+
+/**
+ * Что сделать с ценой.
+ *
+ * <p>Шесть пунктов и умолчание «Изменить» — как в системе, из которой
+ * приходят клиенты: торг на разборке идёт словами «минус десять» и «скинь
+ * пятьсот», и считать это в уме — ошибка в разряде ценой в деталь.
+ *
+ * <p>Слова здесь и слова отказа на сервере ({@code PriceOperation}) —
+ * об одном и том же; расходиться им нельзя, и держит это
+ * {@code WordingConsistencyTest}.
+ */
+export type PriceOperation =
+  | 'SET'
+  | 'INCREASE_PERCENT'
+  | 'DECREASE_PERCENT'
+  | 'INCREASE_AMOUNT'
+  | 'DECREASE_AMOUNT'
+  | 'ROUND_TO';
+
+export const PRICE_OPERATIONS: Array<{ key: PriceOperation; title: string; hint: string }> = [
+  { key: 'SET', title: 'Изменить', hint: 'новая цена' },
+  { key: 'INCREASE_PERCENT', title: 'Увеличить на %', hint: 'процент' },
+  { key: 'DECREASE_PERCENT', title: 'Уменьшить на %', hint: 'процент' },
+  { key: 'INCREASE_AMOUNT', title: 'Увеличить на сумму', hint: 'сумма' },
+  { key: 'DECREASE_AMOUNT', title: 'Уменьшить на сумму', hint: 'сумма' },
+  { key: 'ROUND_TO', title: 'Округлить до', hint: 'шаг: 100, 500, 1000' },
+];
+
+/** Подсказка в поле значения: что именно вводить при этой операции. */
+export function priceOperationHint(op: PriceOperation): string {
+  return PRICE_OPERATIONS.find((o) => o.key === op)?.hint ?? '';
 }
 
 /**
@@ -735,11 +782,72 @@ export function savePart(partId: number, edit: PartEdit): Promise<{ price: numbe
 export function savePartsBulk(
   partIds: number[],
   changes: Record<string, string | number | boolean | null>,
-): Promise<{ changed: number }> {
-  return request<{ changed: number }>('/api/parts/bulk', {
+  operations: Record<string, PriceOperation> = {},
+): Promise<BulkResult> {
+  return request<BulkResult>('/api/parts/bulk', {
     method: 'POST',
-    body: { partIds, changes },
+    body: { partIds, changes, operations },
   });
+}
+
+/**
+ * Итог правки списком.
+ *
+ * `skipped` — у скольких позиций денежное поле было пустым: считать процент
+ * не от чего, и они не тронуты. Молчать об этом нельзя — «изменено 40»
+ * читается как «сделано всем».
+ *
+ * `rejected` — у скольких операция дала бы минус или ноль. Остальные при
+ * этом изменены: одна деталь за сто рублей не отменяет переоценку склада.
+ * `rejectedCodes` — первые из них поимённо (не все: их могут быть тысячи),
+ * `rejectedReason` — чем ответил расчёт на первой.
+ */
+export interface BulkResult {
+  changed: number;
+  skipped: number;
+  rejected: number;
+  rejectedCodes: string[];
+  rejectedReason: string | null;
+}
+
+/**
+ * Что сказать после правки списком — одними словами на складе и на колёсах.
+ *
+ * <p>Про пропущенные молчать нельзя: «Изменено позиций: 40» владелец читает
+ * как «сделано всем», а часть из них осталась с прежней ценой — потому что
+ * считать процент было не от чего. Заметить это иначе можно только сверкой
+ * склада вручную.
+ *
+ * <p>Про непрошедшие — тем более: у них операция дала бы минус или ноль.
+ * Их называют и числом, и поимённо: число говорит размер беды, а коды —
+ * куда идти смотреть. Всех не перечислить, поэтому хвост назван счётом.
+ */
+export function bulkNotice(result: BulkResult): string {
+  const parts = [`Изменено позиций: ${count(result.changed)}`];
+  // Не `skipped <= 0`: тип описывает, что обещал сервер, а не что пришло,
+  // и на ответе без поля сравнение с undefined даёт ложь — на экран уехало
+  // бы «у undefined позиций».
+  if (result.skipped > 0) {
+    parts.push(`у ${count(result.skipped)} `
+      + `${plural(result.skipped, 'позиции', 'позиций', 'позиций')}`
+      + ' поле не заполнено — считать проценты не от чего, они не тронуты');
+  }
+  if (result.rejected > 0) {
+    parts.push(`не прошли ${count(result.rejected)} `
+      + `${plural(result.rejected, 'позиция', 'позиции', 'позиций')}`
+      + `${namedCodes(result.rejected, result.rejectedCodes ?? [])}`
+      + ` — ${result.rejectedReason ?? 'операция дала бы минус или ноль'}`);
+  }
+  return parts.join(' · ');
+}
+
+/** «(A1, B2 и ещё 8)» — сколько поместилось, и сколько осталось за списком. */
+function namedCodes(total: number, codes: string[]): string {
+  if (codes.length === 0) {
+    return '';
+  }
+  const rest = total - codes.length;
+  return rest > 0 ? ` (${codes.join(', ')} и ещё ${count(rest)})` : ` (${codes.join(', ')})`;
 }
 
 /**
@@ -758,10 +866,11 @@ export function savePartsBulk(
 export function savePartsBulkByFilter(
   query: CatalogQuery,
   changes: Record<string, string | number | boolean | null>,
-): Promise<{ changed: number }> {
-  return request<{ changed: number }>(`/api/parts/catalog/bulk?${paramsOf(query).toString()}`, {
+  operations: Record<string, PriceOperation> = {},
+): Promise<BulkResult> {
+  return request<BulkResult>(`/api/parts/catalog/bulk?${paramsOf(query).toString()}`, {
     method: 'POST',
-    body: { changes },
+    body: { changes, operations },
   });
 }
 
