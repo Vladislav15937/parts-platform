@@ -20,6 +20,21 @@ declare const process: {
 };
 
 /**
+ * Запас по времени у проверок StrictMode задан явно, и это не «на всякий
+ * случай».
+ *
+ * <p>Умолчание `waitFor` — секунда, и её не хватает под нагрузкой: разбор
+ * поймал 1141 мс и три падения из девяти полных прогонов, всегда на этом
+ * же месте. Цепочка тут длиннее обычной — двойное монтирование StrictMode,
+ * кэш в IndexedDB и четыре запроса, — и в секунду укладывается не всегда.
+ *
+ * <p>Ирония, ради которой это и записано: тест, написанный против
+ * случайных падений, сам падал случайно. Тонкий запас по времени — тот же
+ * класс, что и незакрытый сторож: зелено, пока машина свободна.
+ */
+const ЖДАТЬ = { timeout: 5000 };
+
+/**
  * Сторож «экран ещё на месте» на экране выгрузок.
  *
  * <p><b>Почему именно этот экран.</b> Он ронял прогон живьём: 512 тестов
@@ -86,7 +101,7 @@ describe('сторож размонтирования на выгрузках', 
   it('в StrictMode список выгрузок доезжает, а не висит на «Загружаем выгрузки…»', async () => {
     render(<StrictMode><FeedsScreen role="OWNER" /></StrictMode>);
 
-    await waitFor(() => expect(screen.getByDisplayValue('Дром: основной')).toBeTruthy());
+    await waitFor(() => expect(screen.getByDisplayValue('Дром: основной')).toBeTruthy(), ЖДАТЬ);
     expect(screen.queryByText('Загружаем выгрузки…')).toBeNull();
   });
 
@@ -96,7 +111,7 @@ describe('сторож размонтирования на выгрузках', 
     // что складов у него нет, и выгрузил бы весь склад вместо одного.
     render(<StrictMode><FeedsScreen role="OWNER" /></StrictMode>);
 
-    await waitFor(() => expect(screen.getByLabelText('Ткацкая')).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText('Ткацкая')).toBeTruthy(), ЖДАТЬ);
     expect(screen.getByLabelText('Щёлковская')).toBeTruthy();
   });
 
@@ -107,10 +122,10 @@ describe('сторож размонтирования на выгрузках', 
     // что запись состояния дошла.
     render(<StrictMode><FeedsScreen role="OWNER" /></StrictMode>);
 
-    const brandSearch = await waitFor(() => brandQueryField());
+    const brandSearch = await waitFor(() => brandQueryField(), ЖДАТЬ);
     fireEvent.change(brandSearch, { target: { value: 'той' } });
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Тойота' })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Тойота' })).toBeTruthy(), ЖДАТЬ);
   });
 
   it('уход с вкладки посреди загрузки не будит снесённую среду', async () => {
