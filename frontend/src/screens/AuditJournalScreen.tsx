@@ -11,6 +11,7 @@ import { roleTitle } from '../organization/members';
 import { dealItemStatusName, dealStatusName } from '../sales/dealStatus';
 import { endOfDay, startOfDay } from '../sales/sales';
 import { ColumnMenu } from './ColumnMenu';
+import { SessionJournal } from './SessionJournal';
 import { count, plural } from '../ui/plural';
 import { shortDate } from '../ui/shortDate';
 import { useMounted } from '../ui/useMounted';
@@ -34,6 +35,40 @@ import { useMounted } from '../ui/useMounted';
  * четыре разошедшиеся копии. Пятой копии на сервере поэтому нет.
  */
 export function AuditJournalScreen() {
+  const [tab, setTab] = useState<'changes' | 'sessions'>('changes');
+
+  return (
+    <section className="screen screen--wide">
+      <h2>Журнал действий</h2>
+
+      {/* Две вкладки одного журнала, а не два раздела рельса. Спрашивают их
+          вместе и об одном и том же: «кто уронил цену» и «кто вообще заходил
+          в кабинет» — это один разговор, и начинается он с того, что владелец
+          заподозрил неладное. Права у вкладок поэтому одни и те же. */}
+      <div className="tabs">
+        <button
+          type="button"
+          className={tab === 'changes' ? 'tab tab--active' : 'tab'}
+          onClick={() => setTab('changes')}
+        >
+          Изменения
+        </button>
+        <button
+          type="button"
+          className={tab === 'sessions' ? 'tab tab--active' : 'tab'}
+          onClick={() => setTab('sessions')}
+        >
+          Входы
+        </button>
+      </div>
+
+      {tab === 'changes' ? <ChangesJournal /> : <SessionJournal />}
+    </section>
+  );
+}
+
+/** Что и кем менялось: то, что пишет слушатель Hibernate в `audit_log`. */
+function ChangesJournal() {
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState<JournalQuery>({});
   const [size, setSize] = useState(PAGE);
@@ -88,9 +123,7 @@ export function AuditJournalScreen() {
   }
 
   return (
-    <section className="screen screen--wide">
-      <h2>Журнал действий</h2>
-
+    <>
       <form
         className="filter-row filter-row--search"
         onSubmit={(e) => {
@@ -210,7 +243,7 @@ export function AuditJournalScreen() {
           onClose={() => setMenuFor(null)}
         />
       )}
-    </section>
+    </>
   );
 
   function menuColumn(key: string, title: string) {

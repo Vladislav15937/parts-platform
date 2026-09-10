@@ -845,8 +845,100 @@ export function historyOf(dealId: number): Promise<HistoryEntry[]> {
   return request<HistoryEntry[]>(`/api/deals/${dealId}/history`);
 }
 
-export function expiredReservations(): Promise<Deal[]> {
-  return request<Deal[]>('/api/deals/expired-reservations');
+/**
+ * Карточка колонки доски.
+ *
+ * <p>Позиций и услуг в ней нет: доска — обзор, а не документ. Нажатие
+ * открывает сделку, и там она приезжает целиком.
+ */
+export interface DealBoardCard {
+  /**
+   * Стадия, в которую карточку положил сервер, — ею карточка и подписана.
+   *
+   * <p>Стадия вычисляется, а `status` остаётся состоянием документа:
+   * у полностью оплаченной невыданной сделки он так и стоит `RESERVED`.
+   * Подписанная сырым статусом, карточка в колонке «Готов к выдаче»
+   * говорила бы «Отложена до 15 сентября» — то есть «ещё не оплачена,
+   * ждём до этой даты», прямо противоположное действительности.
+   */
+  stage: string;
+  id: number;
+  number: number | null;
+  createdAt: string;
+  /** Пусто — у сделки нет клиента: заказ с площадки покупателя не называет. */
+  customerName: string | null;
+  totalAmount: string;
+  paidAmount: string;
+  /** Состояние самого документа: по нему открывается сделка, но не подпись. */
+  status: string;
+  reservedUntil: string | null;
+}
+
+/**
+ * @param title слово колонки приходит с сервера — там же, где `CASE`
+ *              раскладывает по ним сделки: второй список названий на экране
+ *              разошёлся бы с ним молча
+ * @param count сколько сделок в колонке всего; карточек приезжает не больше
+ *              сотни, и экран обязан сказать, что список обрезан
+ */
+export interface DealBoardColumn {
+  key: string;
+  title: string;
+  count: number;
+  cards: DealBoardCard[];
+}
+
+/** Значение отбора: то, что встретилось в незакрытых сделках. */
+export interface DealBoardOption {
+  id: number;
+  name: string;
+}
+
+export interface DealBoard {
+  columns: DealBoardColumn[];
+  warehouses: DealBoardOption[];
+  sources: DealBoardOption[];
+  managers: DealBoardOption[];
+}
+
+/**
+ * Доска сделок по состояниям — первый экран смены у продавца.
+ *
+ * <p>Она отвечает на «что мне сегодня делать»: пять колонок со счётчиками
+ * над ними («Просрочено 58, ждут оплаты 4, готов к выдаче 1») читаются
+ * за секунду, тогда как воронка списка требует переключаться и терять
+ * из виду остальные.
+ *
+ * <p>Стадию считает сервер одним `CASE`, потому что сделка обязана попасть
+ * ровно в одну колонку; сюда же приезжают и значения трёх отборов —
+ * собранный на экране список разошёлся бы с тем, по чему сервер отбирает.
+ * Просроченные резервы (`GET /api/deals/expired-reservations`) — это её
+ * колонка «Истек срок», собранная тем же условием.
+ *
+ * @param warehouseId склад выдачи; пусто — все
+ * @param sourceId    источник сделки; пусто — все
+ * @param managerId   ответственный; пусто — все
+ */
+export function dealBoard(
+  warehouseId: number | null,
+  sourceId: number | null,
+  managerId: number | null,
+): Promise<DealBoard> {
+  const params = new URLSearchParams();
+  if (warehouseId !== null) {
+    params.set('warehouseId', String(warehouseId));
+  }
+  if (sourceId !== null) {
+    params.set('sourceId', String(sourceId));
+  }
+  if (managerId !== null) {
+    params.set('managerId', String(managerId));
+  }
+  // Путь отдельной строкой, а не внутри подстановки: сторож эндпоинтов
+  // сверяет литералы, и адрес, собранный из кусков, он не узнаёт — экран
+  // считался бы не зовущим его вовсе.
+  const query = params.toString();
+  return request<DealBoard>('/api/deals/board' + (query === '' ? '' : `?${query}`));
 }
 
 /**

@@ -391,6 +391,87 @@ const STOCK = {
 };
 
 /**
+ * Журнал сессий: вкладка «Входы» того же экрана (вторая половина задачи 0043).
+ *
+ * <p>Строки длинные по той же причине, что и в журнале изменений: ширину
+ * задают имя сотрудника, разобранное устройство и причина отзыва — «Завершена:
+ * сотрудник выключен» вместе с «работал 3 ч 12 мин» это самая длинная клетка
+ * таблицы. На «Иванов · Chrome · Вышел» экран укладывается при любой вёрстке.
+ */
+const SESSIONS = {
+  total: 3,
+  more: true,
+  items: [
+    {
+      id: 3, who: 'Владимир Петров-Заречный', unknown: false, role: 'MANAGER',
+      at: '2026-09-09T09:14:00Z', lastSeenAt: '2026-09-09T12:26:00Z',
+      endedAt: '2026-09-09T12:30:00Z', endReason: 'REVOKED',
+      endDetail: 'сотрудник выключен',
+      success: true, failureReason: null,
+      device: 'Яндекс.Браузер · Windows',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        + ' (KHTML, like Gecko) Chrome/127.0.0.0 YaBrowser/24.7.0.0 Safari/537.36',
+      ip: '203.0.113.148',
+    },
+    {
+      id: 2, who: 'Севастьянова Александра', unknown: false, role: 'STOREKEEPER',
+      at: '2026-09-09T05:02:00Z', lastSeenAt: '2026-09-09T08:41:00Z',
+      endedAt: null, endReason: null, endDetail: null,
+      success: true, failureReason: null,
+      device: 'Chrome · Android',
+      userAgent: 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36',
+      ip: '198.51.100.7',
+    },
+    {
+      id: 1, who: 'administrator', unknown: true, role: null,
+      at: '2026-09-08T22:47:00Z', lastSeenAt: null,
+      endedAt: null, endReason: null, endDetail: null,
+      success: false, failureReason: 'BAD_CREDENTIALS',
+      device: null, userAgent: 'curl/8.4.0', ip: '203.0.113.9',
+    },
+  ],
+};
+
+/**
+ * Доска сделок по состояниям: пять колонок и полсотни карточек в самой
+ * длинной — ровно то, что у живого клиента и лежит в «Истек срок».
+ * Ширину задаёт содержимое, поэтому имена и суммы здесь настоящей длины.
+ */
+const BOARD = {
+  columns: [
+    boardColumn('NEW', 'Новая сделка', 2),
+    boardColumn('EXPIRED', 'Истек срок', 58),
+    boardColumn('AWAITING_PAYMENT', 'Ждет оплаты', 4),
+    boardColumn('PARTLY_PAID', 'Частично оплачен', 7),
+    boardColumn('READY', 'Готов к выдаче', 1),
+  ],
+  warehouses: WAREHOUSES.map((w) => ({ id: w.id, name: w.name })),
+  sources: [{ id: 1, name: 'Дром' }, { id: 2, name: 'Сайт' }],
+  managers: [{ id: 7, name: 'Владимир Петров' }],
+};
+
+function boardColumn(key: string, title: string, size: number) {
+  return {
+    key,
+    title,
+    count: size,
+    cards: Array.from({ length: size }, (_, i) => ({
+      // Стадию карточке даёт колонка — как и на сервере, где обе приходят
+      // одной строкой. Ею подписана карточка, значит ею задана и её ширина.
+      stage: key,
+      id: i + 1,
+      number: 70_026 + i,
+      createdAt: '2026-09-04T20:01:00Z',
+      customerName: 'Мару Групп Владивосток',
+      totalAmount: '94050.00',
+      paidAmount: '45000.00',
+      status: 'RESERVED',
+      reservedUntil: '2026-09-12T20:59:59Z',
+    })),
+  };
+}
+
+/**
  * Проданные позиции: тринадцать колонок, и ширину им задаёт содержимое.
  *
  * <p>Наименование, склад и имя продавца стоят такими, какими бывают
@@ -436,6 +517,13 @@ const RESPONSES: Array<[string, unknown]> = [
   ['/api/organization/audit/values', ['Товар', 'Сделка', 'Позиция сделки',
     'Платёж', 'Затрата по машине']],
   ['/api/organization/audit', JOURNAL],
+  ['/api/deals/board', BOARD],
+  // Порядок важен: путь значений отбора длиннее и обязан стоять раньше,
+  // иначе `/api/organization/sessions` перехватил бы и его — и список
+  // значений приехал бы страницей вместо массива.
+  ['/api/organization/sessions/values', ['Владимир Петров-Заречный',
+    'Севастьянова Александра', 'administrator']],
+  ['/api/organization/sessions', SESSIONS],
   ['/api/organization/warehouses', WAREHOUSES],
   ['/api/organization/branches', []],
   ['/api/reports/supplies', { rows: SUPPLIES }],
@@ -665,6 +753,97 @@ describe('на телефоне ни один раздел не уезжает �
       squeezed,
       `Поля отбора сжаты, а не перенесены: ${squeezed.length} из ${widths.length} `
       + `уже 250 пикселей при экране ${PHONE_WIDTH}.`,
+    ).toEqual([]);
+  }, 30_000);
+
+  it('меряет все разделы, а не те, до которых дошли руки', () => {
+    const missed = Object.keys(RENDERERS).filter((id) => !measured.has(id));
+    expect(
+      missed,
+      `Эти разделы не измерены ни разу: ${missed.join(', ')}. Проверка, `
+      + 'не нашедшая экранов, зеленеет на чём угодно.',
+    ).toEqual([]);
+  });
+
+  /**
+   * Вкладка «Входы» меряется отдельно, потому что перебор до неё не доходит.
+   *
+   * <p>Сторож открывает раздел в том виде, в каком тот открывается, а «Журнал
+   * действий» открывается на «Изменениях»: журнал сессий — вторая вкладка того
+   * же экрана, и ни один прогон её не видел бы. Таблица там своя, из пяти
+   * колонок, и самая длинная клетка — «Завершена: сотрудник выключен» вместе
+   * с длительностью работы.
+   *
+   * <p>Задача 0043 называет это прямо: экран табличный и длинный, значит
+   * `.table-scroll`, обёртка и проверка сторожем — иначе он войдёт в список
+   * экранов, уводящих страницу вбок.
+   */
+  it('вкладка «Входы» журнала не уводит страницу вбок', async () => {
+    const { container } = render(<AuditJournalScreen />);
+    await waitFor(() => expect(container.textContent).not.toBe(''));
+
+    fireEvent.click([...container.querySelectorAll('button')]
+      .find((b) => b.textContent === 'Входы') as HTMLButtonElement);
+    await waitFor(() => expect(container.textContent)
+      .toContain('Владимир Петров-Заречный'));
+
+    const html = await settled(container);
+    const { scrollWidth, clientWidth } = await measurePage(html);
+    expect(
+      scrollWidth,
+      `Журнал сессий уводит страницу вбок на ${scrollWidth - clientWidth} пикселей `
+      + `(scrollWidth ${scrollWidth} при clientWidth ${clientWidth}, экран ${PHONE_WIDTH})`,
+    ).toBe(clientWidth);
+  }, 30_000);
+
+  it('меряет все разделы, а не те, до которых дошли руки', () => {
+    const missed = Object.keys(RENDERERS).filter((id) => !measured.has(id));
+    expect(
+      missed,
+      `Эти разделы не измерены ни разу: ${missed.join(', ')}. Проверка, `
+      + 'не нашедшая экранов, зеленеет на чём угодно.',
+    ).toEqual([]);
+  });
+
+  /**
+   * Доска сделок — второе состояние раздела «Сделки», и обход до него
+   * не дотягивается: раздел открывается списком, а «По статусам»
+   * переключают руками.
+   *
+   * <p>Пять колонок в телефон не помещаются никак — это не поломка, а форма
+   * доски: прокручиваться обязана она сама, а не страница вместе с рельсом
+   * и шапкой. Меряется поэтому и то и другое: страница не шире экрана
+   * **и** колонка не сжата. Одной проверки ширины мало — уезд лечится
+   * и сжатием колонок до полосок, в которых номер сделки и сумма
+   * превращаются в многоточия.
+   */
+  it('доска сделок прокручивается сама, а не уводит страницу вбок', async () => {
+    const { container } = render(<DealsScreen onOpenDeal={() => {}} />);
+    fireEvent.click([...container.querySelectorAll('button')]
+      .find((b) => b.textContent === 'По статусам') as HTMLButtonElement);
+    await waitFor(() => expect(container.querySelectorAll('.deal-board__column').length)
+      .toBe(5));
+
+    const html = await settled(container);
+    const { scrollWidth, clientWidth } = await measurePage(html);
+    expect(
+      scrollWidth,
+      `Доска уводит страницу вбок на ${scrollWidth - clientWidth} пикселей `
+      + `(scrollWidth ${scrollWidth} при clientWidth ${clientWidth}, экран ${PHONE_WIDTH})`,
+    ).toBe(clientWidth);
+
+    const widths = await measureWidths(html, '.deal-board__column');
+    expect(
+      widths.length,
+      'Колонок на доске нет вовсе — мерить нечего, и проверка ниже прошла бы '
+      + 'сама собой.',
+    ).toBe(5);
+    const squeezed = widths.filter((width) => width < 200);
+    expect(
+      squeezed,
+      `Колонки сжаты, а не прокручиваются: ${squeezed.length} из ${widths.length} `
+      + `уже 200 пикселей при экране ${PHONE_WIDTH}. В такой колонке номер `
+      + 'сделки и сумма — две строки многоточий.',
     ).toEqual([]);
   }, 30_000);
 

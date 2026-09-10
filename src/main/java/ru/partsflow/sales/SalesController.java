@@ -260,7 +260,38 @@ public class SalesController {
     }
 
     /**
+     * Доска сделок по состояниям: пять колонок со счётчиками.
+     *
+     * <p>Первый экран смены у продавца: он отвечает на «что мне сегодня
+     * делать», а не «покажи все сделки». Роль та же, что у списка
+     * ({@link #registry}), и по той же причине — это выборка чужих
+     * документов пачкой.
+     *
+     * <p>Отборы принимаются номерами справочников, а значения для них
+     * приезжают тем же ответом: собранный на клиенте список разошёлся бы
+     * с тем, по чему сервер отбирает.
+     *
+     * @param warehouseId склад выдачи; пусто — все
+     * @param sourceId    источник сделки; пусто — все
+     * @param managerId   ответственный; пусто — все
+     */
+    @GetMapping("/board")
+    @PreAuthorize(SELLS)
+    public SalesService.DealBoard board(
+            @RequestParam(value = "warehouseId", required = false) Long warehouseId,
+            @RequestParam(value = "sourceId", required = false) Long sourceId,
+            @RequestParam(value = "managerId", required = false) Long managerId) {
+        return sales.dealBoard(warehouseId, sourceId, managerId);
+    }
+
+    /**
      * Просроченные резервы.
+     *
+     * <p><b>Список их человеку показывает доска</b> ({@link #board}, колонка
+     * «Истек срок»), и она собирает его тем же условием — этот путь остался
+     * сверочным: разъехавшись, два ответа на один вопрос спорили бы между
+     * собой. Экрана, зовущего именно его, поэтому нет, и так написано
+     * в {@code tools/endpoint-coverage.py}.
      *
      * <p>Экран для продавца, а не фоновая задача: снимать резерв автоматически
      * нельзя — «до завтра» на разборке часто значит «до послезавтра», и деталь,
