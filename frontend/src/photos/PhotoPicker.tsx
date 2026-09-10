@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { resizePhoto, type ResizedPhoto } from './resize';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Съёмка детали.
@@ -27,6 +28,8 @@ const DEFAULT_MAX = 8;
 export function PhotoPicker({ photos, onChange, max = DEFAULT_MAX }: PhotoPickerProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   async function pick(event: React.ChangeEvent<HTMLInputElement>): Promise<void> {
     const files = Array.from(event.target.files ?? []);
@@ -40,9 +43,9 @@ export function PhotoPicker({ photos, onChange, max = DEFAULT_MAX }: PhotoPicker
     try {
       const room = Math.max(0, max - photos.length);
       const resized = await Promise.all(files.slice(0, room).map(resizePhoto));
-      onChange([...photos, ...resized]);
+      if (mounted.current) onChange([...photos, ...resized]);
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 

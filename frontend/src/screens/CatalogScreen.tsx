@@ -18,6 +18,7 @@ import {
   type PartPhoto,
 } from '../inventory/catalog';
 import { PartCard } from './PartCard';
+import { useMounted } from '../ui/useMounted';
 import { BulkEditForm } from './BulkEditForm';
 import { BulkMoveForm } from './BulkMoveForm';
 import { count, goods } from '../ui/plural';
@@ -80,6 +81,8 @@ export function CatalogScreen({ role }: { role: string }) {
   // контейнером — накладка превращалась в белую полоску сбоку.
   const [at, setAt] = useState<{ left: number; top: number } | null>(null);
   const [photos, setPhotos] = useState<PartPhoto[]>([]);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
   // Карточка позиции — по нажатию на строку.
   const [card, setCard] = useState<CatalogRow | null>(null);
   // Режим правки списком: флажки в строках и форма над таблицей. Отдельным
@@ -130,17 +133,23 @@ export function CatalogScreen({ role }: { role: string }) {
     setPhotos([]);
     // Ссылки подписанные и короткоживущие — берутся при показе, а не заранее
     // на все тридцать пять тысяч строк.
-    void loadPhotos(id).then(setPhotos).catch(() => setPhotos([]));
+    void loadPhotos(id)
+      .then((found) => { if (mounted.current) setPhotos(found); })
+      .catch(() => { if (mounted.current) setPhotos([]); });
   }
 
   const load = useCallback((next: CatalogQuery) => {
     loadCatalog(next)
       .then((found) => {
-        setPage(found);
-        setError('');
+        if (mounted.current) {
+          setPage(found);
+          setError('');
+        }
       })
-      .catch((cause) => setError(describe(cause, 'Склад не загрузился')));
-  }, []);
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Склад не загрузился'));
+      });
+  }, [mounted]);
 
   useEffect(() => load(query), [load, query]);
 

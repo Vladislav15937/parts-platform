@@ -47,6 +47,7 @@ import { OriginCharts } from './OriginCharts';
 import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
 import { paymentSourceTypeLabel } from '../sales/sales';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Отчёты владельца.
@@ -131,54 +132,74 @@ export function ReportsScreen({ canRead }: Props) {
   // Поиск машины в отборе проданного — свой, а не общий с разрезом ниже:
   // это два разных вопроса, и набранное в одном не должно сужать другой.
   const [soldDonorFind, setSoldDonorFind] = useState('');
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     void managerSales(month)
-      .then(setManagers)
-      .catch((cause) => setError(describe(cause, 'Отчёт по продажам не загрузился')));
-  }, [month]);
+      .then((found) => { if (mounted.current) setManagers(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Отчёт по продажам не загрузился'));
+      });
+  }, [month, mounted]);
 
   useEffect(() => {
     // Тот же месяц, что и у отчёта по менеджерам: владелец смотрит их рядом,
     // и разные периоды на соседних таблицах сравнивать нельзя.
     void salesBySource(month)
-      .then(setSources)
-      .catch((cause) => setError(describe(cause, 'Отчёт по каналам не загрузился')));
-  }, [month]);
+      .then((found) => { if (mounted.current) setSources(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Отчёт по каналам не загрузился'));
+      });
+  }, [month, mounted]);
 
   useEffect(() => {
     // Тот же месяц: «сколько прошло наличными» владелец смотрит рядом
     // с выручкой, и разные периоды на соседних таблицах сравнивать нельзя.
     void paymentsBySource(month)
-      .then(setPayments)
-      .catch((cause) => setError(describe(cause, 'Платежи по источникам не загрузились')));
-  }, [month]);
+      .then((found) => { if (mounted.current) setPayments(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Платежи по источникам не загрузились'));
+      });
+  }, [month, mounted]);
 
   useEffect(() => {
     void donorProfitability()
-      .then(setDonors)
-      .catch((cause) => setError(describe(cause, 'Отчёт по машинам не загрузился')));
+      .then((found) => { if (mounted.current) setDonors(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Отчёт по машинам не загрузился'));
+      });
     void customerSettlements()
-      .then(setSettlements)
-      .catch((cause) => setError(describe(cause, 'Расчёты с клиентами не загрузились')));
+      .then((found) => { if (mounted.current) setSettlements(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Расчёты с клиентами не загрузились'));
+      });
     void summary()
-      .then(setOverview)
-      .catch((cause) => setError(describe(cause, 'Сводка не загрузилась')));
+      .then((found) => { if (mounted.current) setOverview(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Сводка не загрузилась'));
+      });
     // Списки для выбора: машины — те же, что на экране машин, партии —
     // все, включая закрытые. Про закрытый контейнер и спрашивают
     // «окупился ли», а справочник приёмки такие прячет.
     void listDonors()
-      .then(setDonorList)
-      .catch((cause) => setError(describe(cause, 'Список машин не загрузился')));
+      .then((found) => { if (mounted.current) setDonorList(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Список машин не загрузился'));
+      });
     void reportSupplies()
-      .then((loaded) => setSupplyList(loaded.rows))
-      .catch((cause) => setError(describe(cause, 'Список поставок не загрузился')));
+      .then((loaded) => { if (mounted.current) setSupplyList(loaded.rows); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Список поставок не загрузился'));
+      });
     // Склады для отбора проданного: список сегодняшний, а не из справочника
     // приёмки, который телефон держит в IndexedDB с понедельника.
     void listWarehouses()
-      .then(setWarehouseList)
-      .catch((cause) => setError(describe(cause, 'Список складов не загрузился')));
-  }, []);
+      .then((found) => { if (mounted.current) setWarehouseList(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Список складов не загрузился'));
+      });
+  }, [mounted]);
 
   // Проданные позиции: первая страница по нынешнему отбору. Строки прошлого
   // отбора снимаются до запроса, а не по его приходу, — иначе между нажатием
@@ -190,15 +211,18 @@ export function ReportsScreen({ canRead }: Props) {
     setSoldError(null);
     void soldItems(soldFilter, null)
       .then((loaded) => {
+        if (!mounted.current) return;
         setSoldPage(loaded);
         setSold(loaded.rows);
         // Список продавцов едет только с первой страницей: он считается
         // по всем продажам, а не по отобранным, и меняться ему не с чего.
         setSoldManagers(loaded.managers);
       })
-      .catch((cause) => setSoldError(describe(cause, 'Проданные позиции не загрузились')))
-      .finally(() => setLoadingSold(false));
-  }, [soldFilter]);
+      .catch((cause) => {
+        if (mounted.current) setSoldError(describe(cause, 'Проданные позиции не загрузились'));
+      })
+      .finally(() => { if (mounted.current) setLoadingSold(false); });
+  }, [soldFilter, mounted]);
 
   /** «Показать ещё»: дописывает следующую страницу, не трогая итог. */
   function moreSold() {
@@ -208,11 +232,14 @@ export function ReportsScreen({ canRead }: Props) {
     setLoadingSold(true);
     void soldItems(soldFilter, soldPage.nextAfter)
       .then((loaded) => {
+        if (!mounted.current) return;
         setSoldPage(loaded);
         setSold((shownRows) => [...shownRows, ...loaded.rows]);
       })
-      .catch((cause) => setSoldError(describe(cause, 'Проданные позиции не загрузились')))
-      .finally(() => setLoadingSold(false));
+      .catch((cause) => {
+        if (mounted.current) setSoldError(describe(cause, 'Проданные позиции не загрузились'));
+      })
+      .finally(() => { if (mounted.current) setLoadingSold(false); });
   }
 
   useEffect(() => {
@@ -234,12 +261,15 @@ export function ReportsScreen({ canRead }: Props) {
     setItemsError(null);
     void loadItems(origin, tab, null)
       .then((loaded) => {
+        if (!mounted.current) return;
         setPage(loaded);
         setItems(loaded.rows);
       })
-      .catch((cause) => setItemsError(describe(cause, 'Позиции не загрузились')))
-      .finally(() => setLoadingItems(false));
-  }, [origin, tab]);
+      .catch((cause) => {
+        if (mounted.current) setItemsError(describe(cause, 'Позиции не загрузились'));
+      })
+      .finally(() => { if (mounted.current) setLoadingItems(false); });
+  }, [origin, tab, mounted]);
 
   /** «Показать ещё»: дописывает следующую страницу, не трогая итог. */
   function more() {
@@ -249,11 +279,14 @@ export function ReportsScreen({ canRead }: Props) {
     setLoadingItems(true);
     void loadItems(origin, tab, page.nextAfter)
       .then((loaded) => {
+        if (!mounted.current) return;
         setPage(loaded);
         setItems((shownRows) => [...shownRows, ...loaded.rows]);
       })
-      .catch((cause) => setItemsError(describe(cause, 'Позиции не загрузились')))
-      .finally(() => setLoadingItems(false));
+      .catch((cause) => {
+        if (mounted.current) setItemsError(describe(cause, 'Позиции не загрузились'));
+      })
+      .finally(() => { if (mounted.current) setLoadingItems(false); });
   }
 
   if (!canRead) {

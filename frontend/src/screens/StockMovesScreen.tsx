@@ -5,6 +5,7 @@ import { loadCatalog, NO_VEHICLE, type CatalogRow, type Warehouse } from '../inv
 import { EMPTY_WHEEL_QUERY, listWheels, rowOfWheel } from '../inventory/wheels';
 import { PartCard } from './PartCard';
 import { count, positions } from '../ui/plural';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Журнал перевозок между складами.
@@ -26,15 +27,21 @@ export function StockMovesScreen({ role }: { role: string }) {
   const [card, setCard] = useState<CatalogRow | null>(null);
   const [cardWarehouses, setCardWarehouses] = useState<Warehouse[]>([]);
   const [openError, setOpenError] = useState('');
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     loadMoveJournal()
       .then((found) => {
-        setDocuments(found);
-        setError('');
+        if (mounted.current) {
+          setDocuments(found);
+          setError('');
+        }
       })
-      .catch((cause) => setError(describe(cause, 'Журнал перевозок не загрузился')));
-  }, []);
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Журнал перевозок не загрузился'));
+      });
+  }, [mounted]);
 
   function toggle(id: number): void {
     if (expanded === id) {
@@ -46,12 +53,16 @@ export function StockMovesScreen({ role }: { role: string }) {
     setLinesLoading(true);
     loadMoveLines(id)
       .then((found) => {
-        setLines(found);
-        setLinesLoading(false);
+        if (mounted.current) {
+          setLines(found);
+          setLinesLoading(false);
+        }
       })
       .catch((cause) => {
-        setLinesError(describe(cause, 'Состав документа не загрузился'));
-        setLinesLoading(false);
+        if (mounted.current) {
+          setLinesError(describe(cause, 'Состав документа не загрузился'));
+          setLinesLoading(false);
+        }
       });
   }
 
@@ -71,6 +82,7 @@ export function StockMovesScreen({ role }: { role: string }) {
         warehouses: [], columns: { code }, words: {}, sort: 'code', desc: true,
         page: 0, size: 1,
       });
+      if (!mounted.current) return;
       const partRow = found.rows[0];
       if (partRow !== undefined) {
         setCard(partRow);
@@ -78,6 +90,7 @@ export function StockMovesScreen({ role }: { role: string }) {
         return;
       }
       const wheels = await listWheels({ ...EMPTY_WHEEL_QUERY, columns: { code } });
+      if (!mounted.current) return;
       const wheelRow = wheels.rows[0];
       if (wheelRow !== undefined) {
         setCard(rowOfWheel(wheelRow));
@@ -86,7 +99,7 @@ export function StockMovesScreen({ role }: { role: string }) {
       }
       setOpenError('Позиция не найдена — возможно, удалена');
     } catch (cause) {
-      setOpenError(describe(cause, 'Карточка не открылась'));
+      if (mounted.current) setOpenError(describe(cause, 'Карточка не открылась'));
     }
   }
 

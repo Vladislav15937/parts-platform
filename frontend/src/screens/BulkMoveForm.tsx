@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import { movePartsBulk, type CatalogRow, type Warehouse } from '../inventory/catalog';
 import { listCells, type Cell } from '../organization/warehouses';
 import { positions } from '../ui/plural';
+import { useMounted } from '../ui/useMounted';
 
 /** Склады, на которых у позиции лежит остаток. */
 function warehousesWithStock(row: CatalogRow): number[] {
@@ -66,6 +67,8 @@ export function BulkMoveForm({ rows, warehouses, onDone, onCancel }: {
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     if (toWarehouseId === null) {
@@ -74,8 +77,10 @@ export function BulkMoveForm({ rows, warehouses, onDone, onCancel }: {
       return;
     }
     setToCellId(null);
-    void listCells(toWarehouseId).then(setCells).catch(() => setCells([]));
-  }, [toWarehouseId]);
+    void listCells(toWarehouseId)
+      .then((found) => { if (mounted.current) setCells(found); })
+      .catch(() => { if (mounted.current) setCells([]); });
+  }, [toWarehouseId, mounted]);
 
   const movable = fromWarehouseId === null
     ? []
@@ -99,11 +104,14 @@ export function BulkMoveForm({ rows, warehouses, onDone, onCancel }: {
         ? `Перевезено: ${outcome.items}.`
         : `Перевезено: ${outcome.items}. Не поехали: ${outcome.notMoved.length} — `
           + `обещаны покупателю (${outcome.notMoved.map((s) => s.publicCode).join(', ')}).`;
-      onDone(notice);
+      if (mounted.current) onDone(notice);
     } catch (cause) {
-      setError(cause instanceof ApiError && cause.message ? cause.message : 'Перевезти не вышло');
+      if (mounted.current) {
+        setError(
+          cause instanceof ApiError && cause.message ? cause.message : 'Перевезти не вышло');
+      }
     } finally {
-      setSaving(false);
+      if (mounted.current) setSaving(false);
     }
   }
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { storageEstimate } from '../storage/db';
 import { suggestNames } from './reference';
 import { useReference } from './useReference';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Состояние справочников и проверка подсказок.
@@ -18,10 +19,12 @@ export function ReferencePanel() {
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [space, setSpace] = useState<{ usedMb: number; quotaMb: number } | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
-    void storageEstimate().then(setSpace);
-  }, [status]);
+    void storageEstimate().then((found) => { if (mounted.current) setSpace(found); });
+  }, [status, mounted]);
 
   if (status.kind === 'loading') {
     return <p className="note">Читаем локальные справочники…</p>;
@@ -119,7 +122,7 @@ export function ReferencePanel() {
     try {
       await refresh();
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 }

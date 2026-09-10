@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import { endOfDay, listReturns, startOfDay } from '../sales/sales';
 import type { ReturnListRow, ReturnsPage } from '../sales/sales';
 import { shortDate } from '../ui/shortDate';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Реестр возвратов: обзор без входа в сделку клиента.
@@ -28,6 +29,8 @@ export function ReturnsScreen({ onOpenDeal }: { onOpenDeal: (dealId: number) => 
   const [size, setSize] = useState(PAGE);
   const [page, setPage] = useState<ReturnsPage | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     void load(size);
@@ -121,10 +124,14 @@ export function ReturnsScreen({ onOpenDeal }: { onOpenDeal: (dealId: number) => 
         toDate === '' ? '' : endOfDay(toDate),
         limit,
       );
-      setPage(loaded);
-      setError(null);
+      if (mounted.current) {
+        setPage(loaded);
+        setError(null);
+      }
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : 'Список не загрузился');
+      if (mounted.current) {
+        setError(cause instanceof ApiError ? cause.message : 'Список не загрузился');
+      }
     }
   }
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, request } from '../api/client';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Затраты по машине: покупка, доставка, растаможка, разбор, хранение.
@@ -43,15 +44,21 @@ export function DonorCosts({ donorId, title }: { donorId: number; title: string 
   const [type, setType] = useState<CostType>('PURCHASE');
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   const reload = useCallback(() => {
     request<Cost[]>(`/api/intake/donors/${donorId}/costs`)
       .then((found) => {
-        setCosts(found);
-        setError('');
+        if (mounted.current) {
+          setCosts(found);
+          setError('');
+        }
       })
-      .catch((cause) => setError(describe(cause, 'Затраты не загрузились')));
-  }, [donorId]);
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Затраты не загрузились'));
+      });
+  }, [donorId, mounted]);
 
   useEffect(reload, [reload]);
 
@@ -141,29 +148,33 @@ export function DonorCosts({ donorId, title }: { donorId: number; title: string 
     setBusy(true);
     setError('');
     try {
-      setCosts(await request<Cost[]>(`/api/intake/donors/${donorId}/costs`, {
+      const found = await request<Cost[]>(`/api/intake/donors/${donorId}/costs`, {
         method: 'POST',
         body: { type, amount: Number(amount), note: note.trim() === '' ? null : note.trim() },
-      }));
-      setAmount('');
-      setNote('');
+      });
+      if (mounted.current) {
+        setCosts(found);
+        setAmount('');
+        setNote('');
+      }
     } catch (cause) {
-      setError(describe(cause, 'Затрата не записана'));
+      if (mounted.current) setError(describe(cause, 'Затрата не записана'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
   async function drop(id: number): Promise<void> {
     setBusy(true);
     try {
-      setCosts(await request<Cost[]>(`/api/intake/donors/${donorId}/costs/${id}`, {
+      const left = await request<Cost[]>(`/api/intake/donors/${donorId}/costs/${id}`, {
         method: 'DELETE',
-      }));
+      });
+      if (mounted.current) setCosts(left);
     } catch (cause) {
-      setError(describe(cause, 'Не убралось'));
+      if (mounted.current) setError(describe(cause, 'Не убралось'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 }
