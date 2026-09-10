@@ -714,6 +714,133 @@ button:disabled {
   }
 }
 
+/* Заголовок раздела и переключатель вида в одной строке, справа.
+   Переносится, а не сжимается: «Сделки» с двумя кнопками в 390 пикселей
+   не встают, а сжатая кнопка теряет своё слово — то же правило, что
+   у общего ряда `.row`. */
+.screen-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.screen-head h2 {
+  margin: 0;
+}
+
+/* Кнопка вида — по слову, а не в равную долю строки: `.tab` растягивается
+   (`flex: 1`), и «По статусам» ломалось на две строки при полутора тысячах
+   пикселей свободного места. Замерено в браузере. */
+.screen-head .tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Доска сделок по состояниям (задача 0052).
+
+   Прокручивается сама доска, а не страница: пять колонок в телефон
+   не помещаются никак, и без `max-width: 100%` обёртка растянулась бы
+   под содержимое — прокручивать стало бы нечего, а вбок уехала бы вся
+   страница вместе с рельсом. Ровно та ловушка, что у `.table-scroll`. */
+.deal-board {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  overflow-x: auto;
+  max-width: 100%;
+  min-width: 0;
+  padding-bottom: 0.25rem;
+}
+
+/* Колонка не сжимается под доску: сжатая, она превращает номер сделки
+   и сумму в две строки многоточий — а это ровно то, что продавец читает. */
+.deal-board__column {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 0 0 15rem;
+  max-width: 15rem;
+  padding: 0.5rem;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.deal-board__head {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.deal-board__count {
+  color: var(--muted);
+}
+
+/* Полсотни просроченных резервов — обычное состояние живого клиента,
+   и прокручиваться они обязаны внутри своей колонки: иначе доска
+   вытягивается вниз по самой длинной, и остальных четырёх не видно. */
+.deal-board__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+/* Карточка — кнопка: нажатие открывает сделку, и клавиатурой это должно
+   работать так же, как мышью. Значит и общие стили кнопки надо снять
+   целиком — иначе карточка синяя и в полсотни пикселей высотой. */
+.deal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: 100%;
+  min-height: 0;
+  padding: 0.5rem;
+  font: inherit;
+  text-align: left;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+/* Номер — синим, как ссылка: по нему сделку и открывают, хотя нажимается
+   карточка целиком. */
+.deal-card strong {
+  color: var(--accent);
+}
+
+/* Номер слева, сумма справа — как в кабинете: деньги глаз ищет у правого
+   края колонки, а не в середине строки. */
+.deal-card__line {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* Внесённое — вторым числом под суммой и другим цветом: два одинаковых
+   числа подряд читаются как одно. */
+.deal-card__paid {
+  color: #b54708;
+}
+
+.deal-card__state {
+  font-size: 0.9rem;
+}
+
+/* Клиент — подложкой внизу карточки, как в кабинете. У сделки без клиента
+   (заказ с площадки) полосы нет вовсе: «Без клиента» здесь заняло бы
+   строку, ничего не сказав. */
+.deal-card__customer {
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}
+
 /* Ряд формы переносится, а не сжимается и не вылезает за край.
    Без `flex-wrap` минимум строки — это сумма минимумов её элементов плюс
    зазор: у поля со складом это ширина самого длинного варианта списка,

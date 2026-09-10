@@ -433,6 +433,45 @@ const SESSIONS = {
 };
 
 /**
+ * Доска сделок по состояниям: пять колонок и полсотни карточек в самой
+ * длинной — ровно то, что у живого клиента и лежит в «Истек срок».
+ * Ширину задаёт содержимое, поэтому имена и суммы здесь настоящей длины.
+ */
+const BOARD = {
+  columns: [
+    boardColumn('NEW', 'Новая сделка', 2),
+    boardColumn('EXPIRED', 'Истек срок', 58),
+    boardColumn('AWAITING_PAYMENT', 'Ждет оплаты', 4),
+    boardColumn('PARTLY_PAID', 'Частично оплачен', 7),
+    boardColumn('READY', 'Готов к выдаче', 1),
+  ],
+  warehouses: WAREHOUSES.map((w) => ({ id: w.id, name: w.name })),
+  sources: [{ id: 1, name: 'Дром' }, { id: 2, name: 'Сайт' }],
+  managers: [{ id: 7, name: 'Владимир Петров' }],
+};
+
+function boardColumn(key: string, title: string, size: number) {
+  return {
+    key,
+    title,
+    count: size,
+    cards: Array.from({ length: size }, (_, i) => ({
+      // Стадию карточке даёт колонка — как и на сервере, где обе приходят
+      // одной строкой. Ею подписана карточка, значит ею задана и её ширина.
+      stage: key,
+      id: i + 1,
+      number: 70_026 + i,
+      createdAt: '2026-09-04T20:01:00Z',
+      customerName: 'Мару Групп Владивосток',
+      totalAmount: '94050.00',
+      paidAmount: '45000.00',
+      status: 'RESERVED',
+      reservedUntil: '2026-09-12T20:59:59Z',
+    })),
+  };
+}
+
+/**
  * Проданные позиции: тринадцать колонок, и ширину им задаёт содержимое.
  *
  * <p>Наименование, склад и имя продавца стоят такими, какими бывают
@@ -478,6 +517,7 @@ const RESPONSES: Array<[string, unknown]> = [
   ['/api/organization/audit/values', ['Товар', 'Сделка', 'Позиция сделки',
     'Платёж', 'Затрата по машине']],
   ['/api/organization/audit', JOURNAL],
+  ['/api/deals/board', BOARD],
   // Порядок важен: путь значений отбора длиннее и обязан стоять раньше,
   // иначе `/api/organization/sessions` перехватил бы и его — и список
   // значений приехал бы страницей вместо массива.
@@ -754,6 +794,57 @@ describe('на телефоне ни один раздел не уезжает �
       `Журнал сессий уводит страницу вбок на ${scrollWidth - clientWidth} пикселей `
       + `(scrollWidth ${scrollWidth} при clientWidth ${clientWidth}, экран ${PHONE_WIDTH})`,
     ).toBe(clientWidth);
+  }, 30_000);
+
+  it('меряет все разделы, а не те, до которых дошли руки', () => {
+    const missed = Object.keys(RENDERERS).filter((id) => !measured.has(id));
+    expect(
+      missed,
+      `Эти разделы не измерены ни разу: ${missed.join(', ')}. Проверка, `
+      + 'не нашедшая экранов, зеленеет на чём угодно.',
+    ).toEqual([]);
+  });
+
+  /**
+   * Доска сделок — второе состояние раздела «Сделки», и обход до него
+   * не дотягивается: раздел открывается списком, а «По статусам»
+   * переключают руками.
+   *
+   * <p>Пять колонок в телефон не помещаются никак — это не поломка, а форма
+   * доски: прокручиваться обязана она сама, а не страница вместе с рельсом
+   * и шапкой. Меряется поэтому и то и другое: страница не шире экрана
+   * **и** колонка не сжата. Одной проверки ширины мало — уезд лечится
+   * и сжатием колонок до полосок, в которых номер сделки и сумма
+   * превращаются в многоточия.
+   */
+  it('доска сделок прокручивается сама, а не уводит страницу вбок', async () => {
+    const { container } = render(<DealsScreen onOpenDeal={() => {}} />);
+    fireEvent.click([...container.querySelectorAll('button')]
+      .find((b) => b.textContent === 'По статусам') as HTMLButtonElement);
+    await waitFor(() => expect(container.querySelectorAll('.deal-board__column').length)
+      .toBe(5));
+
+    const html = await settled(container);
+    const { scrollWidth, clientWidth } = await measurePage(html);
+    expect(
+      scrollWidth,
+      `Доска уводит страницу вбок на ${scrollWidth - clientWidth} пикселей `
+      + `(scrollWidth ${scrollWidth} при clientWidth ${clientWidth}, экран ${PHONE_WIDTH})`,
+    ).toBe(clientWidth);
+
+    const widths = await measureWidths(html, '.deal-board__column');
+    expect(
+      widths.length,
+      'Колонок на доске нет вовсе — мерить нечего, и проверка ниже прошла бы '
+      + 'сама собой.',
+    ).toBe(5);
+    const squeezed = widths.filter((width) => width < 200);
+    expect(
+      squeezed,
+      `Колонки сжаты, а не прокручиваются: ${squeezed.length} из ${widths.length} `
+      + `уже 200 пикселей при экране ${PHONE_WIDTH}. В такой колонке номер `
+      + 'сделки и сумма — две строки многоточий.',
+    ).toEqual([]);
   }, 30_000);
 
   it('меряет все разделы, а не те, до которых дошли руки', () => {
