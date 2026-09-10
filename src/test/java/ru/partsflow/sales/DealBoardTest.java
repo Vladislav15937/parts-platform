@@ -72,7 +72,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class DealBoardTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000124";
+    private static final String TENANT = "t_000126";
 
     /** Слова и порядок колонок — дословно из критерия приёмки задачи 0052. */
     private static final List<String> TITLES = List.of(
@@ -105,10 +105,10 @@ class DealBoardTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
-        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 124");
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 126");
         jdbc.update("""
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
-                VALUES (124, ?, 'Разборка', 'doska')""", TENANT);
+                VALUES (126, ?, 'Разборка', 'doska')""", TENANT);
 
         inTenant(() -> {
             member("vladelec", "Владелец", "OWNER");
