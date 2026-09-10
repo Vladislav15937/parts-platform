@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { PartEditForm } from './PartEditForm';
 import { BulkEditForm } from './BulkEditForm';
 import { PartHistoryView } from './PartHistoryView';
+import { CatalogScreen } from './CatalogScreen';
 
 /**
  * Цена двигается процентом, суммой и округлением, а не только новым числом.
@@ -152,6 +153,86 @@ describe('история цены', () => {
     expect(screen.getByText('(−10 %)')).toBeTruthy();
   });
 });
+
+/**
+ * Непрошедшие позиции экран называет, а не прячет за «изменено N».
+ *
+ * <p><b>Зачем.</b> Головной сценарий — «скинь пятьсот со всего склада»
+ * по большому отбору. Позиции, у которых операция дала бы минус или ноль,
+ * пропускаются, остальные меняются, — и если экран об этом промолчит,
+ * владелец прочитает «Изменено позиций: 2» как «сделано всем» и узнает
+ * правду только сверкой склада руками.
+ *
+ * <p>Проверяется через экран, а не через сам расчёт строки: молчание
+ * рождается ровно на стыке — сервер посчитал, ответ приехал, показать
+ * забыли.
+ */
+describe('правка списком говорит о непрошедших', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === 'POST') {
+        return json({
+          changed: 2,
+          skipped: 0,
+          rejected: 3,
+          rejectedCodes: ['A-9', 'B-4'],
+          rejectedReason: '«Уменьшить на сумму» на 500: цена позиции A-9 сейчас 100,'
+            + ' и после операции получилось бы −400. Отрицательной цены не бывает'
+            + ' — ничего не изменено',
+        });
+      }
+      if (url.includes('/values')) return json([]);
+      if (url.includes('/api/catalog/vehicles') || url.includes('/api/intake/donors')) {
+        return json([]);
+      }
+      return json({
+        total: 5,
+        warehouses: [],
+        rows: [{ id: 1, publicCode: 'A-1', title: 'Фара', price: '100',
+                 stock: {}, photoCount: 0 }],
+      });
+    }));
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('называет их числом, поимённо и с причиной', async () => {
+    render(<CatalogScreen role="OWNER" />);
+    await waitFor(() => expect(document.querySelector('tbody tr')).toBeTruthy());
+
+    fireEvent.click(byText('button', 'Правка списком')!);
+    fireEvent.click(document.querySelector('tbody tr')!);
+    await waitFor(() => expect(screen.getByText('Выбрано 1')).toBeTruthy());
+    fireEvent.click(byText('button', 'Изменить')!);
+
+    const field = [...document.querySelectorAll('.bulk-field')]
+      .find((f) => f.textContent?.includes('Цена'))!;
+    fireEvent.click(field.querySelector('input[type=checkbox]')!);
+    fireEvent.change(screen.getByLabelText('Операция: Цена'),
+      { target: { value: 'DECREASE_AMOUNT' } });
+    fireEvent.change(field.querySelector('input:not([type=checkbox])')!,
+      { target: { value: '500' } });
+    fireEvent.click(byText('button', 'Изменить 1 позицию')!);
+
+    // Число — чтобы понять размер беды, коды — чтобы пойти посмотреть,
+    // причина — чтобы знать, что случилось. Хвост назван счётом: всех
+    // не перечислить, их могут быть тысячи.
+    const notice = await screen.findByText(/не прошли 3 позиции/);
+    expect(notice.textContent).toContain('A-9, B-4 и ещё 1');
+    expect(notice.textContent, 'экран промолчал о причине').toContain(
+      'Отрицательной цены не бывает');
+    expect(notice.textContent).toContain('Изменено позиций: 2');
+  });
+});
+
+function byText(tag: string, text: string): HTMLElement | undefined {
+  return [...document.querySelectorAll(tag)].find(
+    (b) => b.textContent === text) as HTMLElement | undefined;
+}
 
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), {

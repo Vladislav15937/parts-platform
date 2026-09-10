@@ -273,8 +273,12 @@ public class PartService {
 
         // Отказ называет позицию так, как её зовёт человек: публичный код
         // виден на витрине и на этикетке, внутренний номер — нигде.
+        // Пустая цена при арифметике — отказ словами, а не придуманный ноль:
+        // «поднять на 5 %» от ничего превратилось бы в «поставить ноль»,
+        // то есть в снятое объявление. Здесь правят одну карточку, и человек
+        // выбрал операцию именно ей — молчать нельзя.
         BigDecimal wanted = priceOp.apply(part.getPrice(), update.price(),
-                "цена позиции " + part.getPublicCode());
+                MoneyField.PRICE, part.getPublicCode());
         boolean priceChanged = wanted != null
                 && (part.getPrice() == null || part.getPrice().compareTo(wanted) != 0);
         if (priceChanged) {
@@ -495,8 +499,28 @@ public class PartService {
      * Сколько таких, возвращается вызывающему: «изменено 40» без слова
      * о пропущенных читается как «сделано всем».
      *
-     * @return сколько карточек изменилось и у скольких арифметике не над чем
-     *         было работать
+     * <p><b>Позиция, у которой операция дала бы минус или ноль, тоже
+     * пропускается — а не отменяет всю пачку.</b> Головной сценарий здесь
+     * один: «подними всё, что лежит с зимы, на пять процентов» по большому
+     * отбору — у переехавшего клиента это 35 841 позиция. Отбить его целиком
+     * из-за одной детали за сто рублей, попавшей под «скинуть пятьсот»,
+     * значит не сделать ничего и назвать человеку одну позицию из скольких-то:
+     * сколько там ещё таких, он не узнает, а править по одной ему нечем.
+     * Тот же довод и то же устройство, что у {@code moveBatch}: проблемные
+     * пропускаются, считаются отдельно и называются в ответе.
+     *
+     * <p>Пропускается при этом <b>вся позиция</b>, а не одно поле: применив
+     * ей заметку и не применив цену, мы оставили бы карточку в состоянии,
+     * которого никто не просил, и сказали бы «пропущена» о наполовину
+     * изменённой. Поэтому деньги считаются до правки, целиком.
+     *
+     * <p>Когда не прошла <b>ни одна</b> позиция, это уже не «частично
+     * сделано», а невыполнимый запрос: тогда отказ словами, чтобы человек
+     * увидел причину, а не «изменено 0». Так же поступает {@code moveBatch},
+     * когда отложены все строки.
+     *
+     * @return сколько карточек изменилось, у скольких арифметике не над чем
+     *         было работать и какие не прошли вовсе
      */
     @Transactional
     public BulkOutcome updateAll(List<Long> partIds, Map<String, Object> changes,
@@ -527,19 +551,38 @@ public class PartService {
 
         int changed = 0;
         int skipped = 0;
+        int rejected = 0;
+        List<String> rejectedCodes = new java.util.ArrayList<>();
+        String rejectedReason = null;
         List<Long> touched = new java.util.ArrayList<>();
         for (Long partId : partIds) {
             Part part = partRepository.findById(partId).orElse(null);
             if (part == null) {
                 continue;
             }
+
+            // Деньги считаются до правки и целиком: узнать, что позиция
+            // не проходит, надо раньше, чем ей записана заметка.
+            Map<String, Money> money;
+            try {
+                money = plannedMoney(part, changes, ops);
+            } catch (PriceOperation.Refused refused) {
+                rejected++;
+                if (rejectedCodes.size() < REJECTED_NAMED) {
+                    rejectedCodes.add(part.getPublicCode());
+                }
+                if (rejectedReason == null) {
+                    rejectedReason = refused.getMessage();
+                }
+                continue;
+            }
+
             touched.add(partId);
             boolean priceChanged = false;
             boolean nothingToCountFrom = false;
             for (var change : changes.entrySet()) {
-                PriceOperation op = ops.getOrDefault(change.getKey(), PriceOperation.SET);
                 Applied applied = apply(part, change.getKey(), change.getValue(),
-                        op == null ? PriceOperation.SET : op, authorId);
+                        money.get(change.getKey()), authorId);
                 priceChanged |= applied == Applied.PRICE_CHANGED;
                 nothingToCountFrom |= applied == Applied.SKIPPED;
             }
@@ -554,22 +597,81 @@ public class PartService {
                         "part", part.getId(), "part.price_changed.v1", payloadOf(part)));
             }
         }
+
+        // Не прошла ни одна — это невыполнимый запрос, а не частичная работа:
+        // «изменено 0» не говорит ни что случилось, ни что делать.
+        if (changed == 0 && rejected > 0) {
+            throw new IllegalArgumentException(rejected == 1 ? rejectedReason
+                    : "Ни одна из %d позиций не прошла операцию. Первая причина: %s"
+                            .formatted(rejected, rejectedReason));
+        }
+
         // Одной отметкой на позицию, а не по полю: площадке нужно текущее
         // состояние, и правка сотни позиций уедет одной дельтой.
         partChanges.changed(touched);
 
-        log.info("Правка списком: позиций {}, полей {}, пропущено пустых {}",
-                changed, changes.size(), skipped);
-        return new BulkOutcome(changed, skipped);
+        log.info("Правка списком: позиций {}, полей {}, пропущено пустых {}, не прошло {}",
+                changed, changes.size(), skipped, rejected);
+        return new BulkOutcome(changed, skipped, rejected, List.copyOf(rejectedCodes),
+                rejectedReason);
     }
+
+    /**
+     * Скольких непрошедших называем поимённо.
+     *
+     * <p>Не всех: под «скинуть пятьсот со всего склада» может не пройти
+     * половина из тридцати пяти тысяч, и список кодов такой длины — это ответ
+     * в мегабайт и экран, на котором не видно ничего. Числа хватает, чтобы
+     * понять размер беды, а имён — чтобы пойти и посмотреть, что это за
+     * позиции.
+     */
+    private static final int REJECTED_NAMED = 10;
 
     /**
      * Итог правки списком.
      *
-     * @param skipped у скольких позиций поле было пустым, и арифметике
-     *                не над чем работать: они не тронуты этим полем
+     * @param skipped       у скольких позиций поле было пустым, и арифметике
+     *                      не над чем работать: они не тронуты этим полем
+     * @param rejected      сколько позиций не прошло вовсе: операция дала бы
+     *                      им минус или ноль, и они не тронуты ни одним полем
+     * @param rejectedCodes первые из них поимённо — не все: см.
+     *                      {@link #REJECTED_NAMED}
+     * @param rejectedReason  чем ответил расчёт на первой такой позиции;
+     *                        {@code null}, если не прошедших нет
      */
-    public record BulkOutcome(int changed, int skipped) {
+    public record BulkOutcome(int changed, int skipped, int rejected,
+                              List<String> rejectedCodes, String rejectedReason) {
+    }
+
+    /**
+     * Что станет с денежными полями этой позиции.
+     *
+     * <p>Отдельным проходом до правки: {@link PriceOperation.Refused} здесь
+     * означает «позицию пропустить целиком», и узнать это надо раньше, чем
+     * ей записано хоть одно поле.
+     */
+    private static Map<String, Money> plannedMoney(Part part, Map<String, Object> changes,
+                                                   Map<String, PriceOperation> ops) {
+        Map<String, Money> planned = new java.util.HashMap<>();
+        for (var change : changes.entrySet()) {
+            MoneyField field = MoneyField.of(change.getKey());
+            if (field == null) {
+                continue;
+            }
+            PriceOperation op = ops.getOrDefault(change.getKey(), PriceOperation.SET);
+            planned.put(change.getKey(), money(op == null ? PriceOperation.SET : op,
+                    currentOf(part, field), change.getValue(), part, field));
+        }
+        return planned;
+    }
+
+    private static BigDecimal currentOf(Part part, MoneyField field) {
+        return switch (field) {
+            case PRICE -> part.getPrice();
+            case MIN_PRICE -> part.getMinPrice();
+            case COST_PRICE -> part.getCostPrice();
+            case INSTALLATION_PRICE -> part.getInstallationPrice();
+        };
     }
 
     /** Что случилось с полем одной позиции. */
@@ -582,11 +684,13 @@ public class PartService {
         SKIPPED
     }
 
-    private Applied apply(Part part, String field, Object value, PriceOperation op,
-                          Long authorId) {
+    /**
+     * @param money посчитанное {@link #plannedMoney} — для денежных полей
+     *              и только для них; у остальных {@code null}
+     */
+    private Applied apply(Part part, String field, Object value, Money money, Long authorId) {
         switch (field) {
             case "price" -> {
-                Money money = money(op, part.getPrice(), value, part, "цена");
                 boolean other = money.change() && money.value() != null
                         && (part.getPrice() == null
                             || part.getPrice().compareTo(money.value()) != 0);
@@ -597,22 +701,18 @@ public class PartService {
                              : money.skipped() ? Applied.SKIPPED : Applied.CHANGED;
             }
             case "minPrice" -> {
-                Money money = money(op, part.getMinPrice(), value, part, "минимальная цена");
                 if (money.change()) {
                     part.setMinPrice(money.value());
                 }
                 return money.skipped() ? Applied.SKIPPED : Applied.CHANGED;
             }
             case "costPrice" -> {
-                Money money = money(op, part.getCostPrice(), value, part, "себестоимость");
                 if (money.change()) {
                     part.setCostPrice(money.value());
                 }
                 return money.skipped() ? Applied.SKIPPED : Applied.CHANGED;
             }
             case "installationPrice" -> {
-                Money money = money(op, part.getInstallationPrice(), value, part,
-                        "цена установки");
                 if (money.change()) {
                     part.setInstallationPrice(money.value());
                 }
@@ -650,7 +750,7 @@ public class PartService {
     }
 
     private static Money money(PriceOperation op, BigDecimal current, Object raw, Part part,
-                               String what) {
+                               MoneyField what) {
         BigDecimal operand = decimal(raw);
         if (!op.arithmetic()) {
             // Прежнее поведение: пустое отмеченное поле — «очистить».
@@ -663,8 +763,7 @@ public class PartService {
             // Сколько пропущено, вызывающий скажет человеку.
             return new Money(null, false, true);
         }
-        BigDecimal next = op.apply(current, operand,
-                "%s позиции %s".formatted(what, part.getPublicCode()));
+        BigDecimal next = op.apply(current, operand, what, part.getPublicCode());
         return next == null ? new Money(null, false, false) : new Money(next, true, false);
     }
 
@@ -685,9 +784,10 @@ public class PartService {
      * Поля, которые можно двигать процентом, суммой и округлением.
      *
      * <p>Подмножество {@code BULK_FIELDS}: арифметика бывает только у денег.
+     * Считается по {@link MoneyField}, а не пишется вторым списком — иначе
+     * поле нашлось бы в одном и потерялось в другом.
      */
-    static final java.util.Set<String> MONEY_FIELDS = java.util.Set.of(
-            "price", "minPrice", "costPrice", "installationPrice");
+    static final java.util.Set<String> MONEY_FIELDS = MoneyField.keys();
 
     /**
      * Штрихкод не должен стоять у двух позиций сразу.

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ApiError } from '../api/client';
 import {
   BULK_FIELDS, PRICE_OPERATIONS, priceOperationHint, savePartsBulk, savePartsBulkByFilter,
-  type CatalogQuery, type PriceOperation,
+  type BulkResult, type CatalogQuery, type PriceOperation,
 } from '../inventory/catalog';
 import { count as formatCount, positions } from '../ui/plural';
 
@@ -29,8 +29,12 @@ export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
   whole?: CatalogQuery | undefined;
   /** Сколько позиций тронем. У отбора это общее число, а не длина списка. */
   count: number;
-  /** `skipped` — у скольких позиций денежное поле пустое: считать было не от чего. */
-  onSaved: (changed: number, skipped: number) => void;
+  /**
+   * Итог целиком, а не одно число: кроме изменённых, экран обязан сказать
+   * про пропущенные (поле пустое) и про непрошедшие (операция дала бы минус
+   * или ноль) — без них «изменено 40» читается как «сделано всем».
+   */
+  onSaved: (result: BulkResult) => void;
   onCancel: () => void;
 }) {
   const [touched, setTouched] = useState<Record<string, boolean>>({});
@@ -102,7 +106,7 @@ export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
       const result = whole === undefined
         ? await savePartsBulk(partIds, changes, operations)
         : await savePartsBulkByFilter(whole, changes, operations);
-      onSaved(result.changed, result.skipped);
+      onSaved(result);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Не удалось сохранить');
     } finally {

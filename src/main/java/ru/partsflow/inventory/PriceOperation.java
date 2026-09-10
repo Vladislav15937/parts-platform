@@ -22,6 +22,14 @@ import java.math.RoundingMode;
  * нулевая цена в прайс не уезжает, то есть объявление пропадёт, и владелец
  * узнает об этом через несколько дней по опустевшей выдаче площадки.
  *
+ * <p><b>Отказы здесь двух пород, и разница видна вызывающему.</b>
+ * {@link Refused} — про <b>одну позицию</b>: её цена такова, что операция
+ * дала бы минус или ноль. Правка списком такую позицию пропускает и называет
+ * человеку, а всю пачку не отменяет — иначе одна дешёвая деталь остановила бы
+ * переоценку всего склада. Обычное {@code IllegalArgumentException} — про
+ * <b>запрос целиком</b>: отрицательный процент или округление без шага
+ * не выполнимы ни у одной позиции, и делать половину работы тут нечего.
+ *
  * <p><b>Округление арифметическое, а не всегда вверх.</b> Это цена, а не
  * наценка: «округлить до 1000» от 24 800 даёт 25 000, от 24 300 — 24 000.
  * Всегда вверх было бы тихой наценкой в пользу продавца, о которой
@@ -73,12 +81,18 @@ public enum PriceOperation {
      * ровно как и раньше при пустой цене.
      *
      * @param current прежнее значение; {@code null} — считать не от чего,
-     *                и это отказ словами: пропускать такую позицию молча
+     *                и это {@link Refused}: пропускать такую позицию молча
      *                решает вызывающий, а не расчёт
      * @param operand что ввёл человек: процент, сумма или шаг округления
-     * @param subject как назвать поле и позицию в отказе — словами человека
+     * @param field   какое поле двигают: от него зависят слова отказа —
+     *                у себестоимости и цены разные последствия
+     * @param code    публичный код позиции: по нему её видно на витрине
+     *                и на этикетке, по внутреннему номеру — нигде
+     * @throws Refused операция невыполнима <b>у этой позиции</b>
+     * @throws IllegalArgumentException запрос невыполним ни у одной позиции
      */
-    public BigDecimal apply(BigDecimal current, BigDecimal operand, String subject) {
+    public BigDecimal apply(BigDecimal current, BigDecimal operand, MoneyField field,
+                            String code) {
         if (this == SET) {
             return operand;
         }
@@ -89,17 +103,18 @@ public enum PriceOperation {
             if (this == ROUND_TO) {
                 throw new IllegalArgumentException(
                         "«%s»: не задан шаг округления — например 100, 500 или 1000. %s не изменена"
-                                .formatted(title, capitalized(subject)));
+                                .formatted(title, capitalized(field.nominative())));
             }
             return null;
         }
         if (operand.signum() < 0) {
             throw new IllegalArgumentException(
                     "«%s»: значение не может быть отрицательным. %s не изменена"
-                            .formatted(title, capitalized(subject)));
+                            .formatted(title, capitalized(field.nominative())));
         }
+        String subject = "%s позиции %s".formatted(field.nominative(), code);
         if (current == null) {
-            throw new IllegalArgumentException(
+            throw new Refused(
                     "«%s»: %s не заполнена — считать не от чего".formatted(title, subject));
         }
 
@@ -114,17 +129,40 @@ public enum PriceOperation {
         };
 
         if (result.signum() < 0) {
-            throw new IllegalArgumentException(
-                    "«%s» на %s: %s сейчас %s, и после операции получилось бы %s. Отрицательной цены не бывает — ничего не изменено"
+            throw new Refused(
+                    "«%s» на %s: %s сейчас %s, и после операции получилось бы %s. Отрицательной %s не бывает — ничего не изменено"
                             .formatted(title, plain(operand), capitalized(subject),
-                                    plain(current), plain(result)));
+                                    plain(current), plain(result), field.genitive()));
         }
         if (result.signum() == 0) {
-            throw new IllegalArgumentException(
-                    "«%s» на %s: %s сейчас %s, и после операции получился бы ноль. Нулевая цена в прайс не уедет — поставьте цену числом"
-                            .formatted(title, plain(operand), capitalized(subject), plain(current)));
+            // Последствие называется только там, где оно есть: выдуманное
+            // хуже отсутствующего — по нему человек делает выводы о системе.
+            String means = field.zeroMeans() == null ? "" : field.zeroMeans() + ". ";
+            throw new Refused(
+                    "«%s» на %s: %s сейчас %s, и после операции получился бы ноль. %sПоставить ноль можно операцией «Изменить» — сейчас ничего не изменено"
+                            .formatted(title, plain(operand), capitalized(subject),
+                                    plain(current), means));
         }
         return result.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Операция невыполнима у <b>этой</b> позиции — но выполнима у соседних.
+     *
+     * <p>Отдельный тип нужен ровно за тем, чтобы правка списком отличала
+     * «дальше идти нельзя» от «эту пропустить». Одна деталь за сто рублей,
+     * попавшая в отбор «скинуть пятьсот со всего склада», не должна
+     * отменять переоценку тридцати тысяч позиций — тот же довод, по которому
+     * {@code StockDocumentService.moveBatch} везёт остальные, а отложенную
+     * называет вызывающему.
+     *
+     * <p>Наследует {@code IllegalArgumentException}, потому что вне пачки —
+     * в правке одной карточки — это обычный отказ словами, то есть 400.
+     */
+    public static class Refused extends IllegalArgumentException {
+        public Refused(String message) {
+            super(message);
+        }
     }
 
     /**

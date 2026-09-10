@@ -712,6 +712,240 @@ class PartUpdateTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.changes[0].fields[0].delta").value("−10 %"));
     }
 
+    /**
+     * Одна дешёвая позиция не отменяет переоценку всего склада.
+     *
+     * <p><b>Головной сценарий задачи.</b> «Подними всё, что лежит с зимы,
+     * на пять процентов» — по большому отбору, у переехавшего клиента это
+     * 35 841 позиция. Отбить пачку целиком из-за одной детали за сто рублей,
+     * попавшей под «скинуть пятьсот», значит не сделать ничего и назвать
+     * человеку одну позицию из скольких-то: сколько там ещё таких, он
+     * не узнает, а править их по одной ему нечем.
+     *
+     * <p>Так уже решено для перевозки пачкой ({@code moveBatch}): проблемная
+     * пропускается и называется вызывающему, остальные едут.
+     */
+    @Test
+    @DisplayName("Позиция, уходящая в минус, пропускается — остальные меняются")
+    void bulkKeepsGoodPositionsWhenOneWouldGoNegative() throws Exception {
+        Long rich = partWithPrice("1000");
+        Long cheap = partWithPrice("100");
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[%d,%d],"changes":{"price":500},
+                                 "operations":{"price":"DECREASE_AMOUNT"}}"""
+                                .formatted(rich, cheap)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changed").value(1))
+                .andExpect(jsonPath("$.rejected").value(1))
+                // Числа мало: «одна не прошла» из тридцати тысяч — это
+                // «пойди найди её». Публичный код виден на витрине.
+                .andExpect(jsonPath("$.rejectedCodes[0]").value(codeOf(cheap)))
+                .andExpect(jsonPath("$.rejectedReason").value(
+                        org.hamcrest.Matchers.containsString("Отрицательной цены не бывает")));
+
+        // Та, у которой всё было бы корректно, изменена — а не откачена
+        // вместе с соседкой.
+        assertThat(priceOf(rich)).isEqualByComparingTo("500");
+        assertThat(priceOf(cheap)).isEqualByComparingTo("100");
+    }
+
+    /**
+     * Не прошла ни одна — это отказ словами, а не «изменено 0».
+     *
+     * <p>Частичная работа кончается там, где работы не было вовсе: «изменено
+     * 0» не говорит ни что случилось, ни что делать. Так же поступает
+     * {@code moveBatch}, когда отложены все строки.
+     */
+    @Test
+    @DisplayName("Когда не прошла ни одна позиция — отказ с причиной")
+    void bulkRefusesWhenNoPositionPassed() throws Exception {
+        Long first = partWithPrice("100");
+        Long second = partWithPrice("200");
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[%d,%d],"changes":{"price":500},
+                                 "operations":{"price":"DECREASE_AMOUNT"}}"""
+                                .formatted(first, second)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("Ни одна из 2 позиций")));
+
+        assertThat(priceOf(first)).isEqualByComparingTo("100");
+        assertThat(priceOf(second)).isEqualByComparingTo("200");
+    }
+
+    /**
+     * Позиция пропускается целиком, а не одним полем.
+     *
+     * <p>Записав ей заметку и не записав цену, мы оставили бы карточку
+     * в состоянии, которого никто не просил, и сказали бы «пропущена»
+     * о наполовину изменённой.
+     */
+    @Test
+    @DisplayName("Непрошедшей позиции не меняются и остальные поля")
+    void rejectedPositionKeepsItsOtherFields() throws Exception {
+        Long rich = partWithPrice("1000");
+        Long cheap = partWithPrice("100");
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[%d,%d],
+                                 "changes":{"price":500,"section":"зима"},
+                                 "operations":{"price":"DECREASE_AMOUNT"}}"""
+                                .formatted(rich, cheap)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rejected").value(1));
+
+        assertThat(sectionOf(rich)).isEqualTo("зима");
+        assertThat(sectionOf(cheap)).isNull();
+    }
+
+    /**
+     * Округление арифметическое, а не всегда вверх.
+     *
+     * <p>Это цена, а не наценка прайс-листа: «до 1000» от 24 300 обязано дать
+     * 24 000. Всегда вверх было бы тихой наценкой в пользу продавца, о которой
+     * на экране не написано, — и заметить её можно только сложив прайс руками.
+     *
+     * <p>Отдельным методом от «24 800 → 25 000»: то число даёт 25 000
+     * и при округлении вверх, то есть проверяет только сам факт округления.
+     */
+    @Test
+    @DisplayName("«Округлить до 1000»: 24 300 — это 24 000, а не 25 000")
+    void roundsDownByArithmetic() throws Exception {
+        Long part = partWithPrice("24300");
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(put("/api/parts/" + part).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price":1000,"priceOp":"ROUND_TO","published":true}"""))
+                .andExpect(status().isOk());
+
+        assertThat(priceOf(part)).isEqualByComparingTo("24000");
+    }
+
+    /**
+     * Пустая цена — не ноль, и в карточке тоже.
+     *
+     * <p>Придуманный ноль превратил бы «поднять на 5 %» в «поставить ноль»,
+     * то есть в снятое объявление. Правка списком такую позицию пропускает
+     * молча (их там тридцать тысяч), а здесь человек выбрал операцию именно
+     * этой карточке — молчать нельзя, нужен отказ словами.
+     */
+    @Test
+    @DisplayName("В карточке процент от незаполненной цены — отказ, а не ноль")
+    void cardRefusesArithmeticOnEmptyPrice() throws Exception {
+        Long part = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price)
+                VALUES (1, 'Крыло без цены', NULL) RETURNING id""", Long.class));
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(put("/api/parts/" + part).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price":10,"priceOp":"DECREASE_PERCENT","published":true}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("не заполнена")));
+
+        assertThat(priceOf(part)).isNull();
+    }
+
+    /**
+     * Те же шесть операций — у всех четырёх денежных полей.
+     *
+     * <p>Код общий, но «то же самое, только по другому полю» этот проект
+     * ловил уже трижды: проверка, стоящая только на цене, не отвечает
+     * за минимальную цену, себестоимость и цену установки.
+     */
+    @Test
+    @DisplayName("Процентом и суммой двигаются все четыре денежных поля")
+    void bulkMovesEveryMoneyField() throws Exception {
+        Long part = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price, min_price, cost_price,
+                                  installation_price)
+                VALUES (1, 'Бампер', 10000, 8000, 5000, 2400) RETURNING id""", Long.class));
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[%d],
+                                 "changes":{"minPrice":10,"costPrice":500,
+                                            "installationPrice":1000},
+                                 "operations":{"minPrice":"DECREASE_PERCENT",
+                                               "costPrice":"INCREASE_AMOUNT",
+                                               "installationPrice":"ROUND_TO"}}"""
+                                .formatted(part)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changed").value(1));
+
+        assertThat(moneyOf(part, "min_price")).isEqualByComparingTo("7200");
+        assertThat(moneyOf(part, "cost_price")).isEqualByComparingTo("5500");
+        // Вниз, а не вверх: 2400 до тысяч — это 2000. Правило одно на все
+        // четыре поля, и проверять его надо не только на цене.
+        assertThat(moneyOf(part, "installation_price")).isEqualByComparingTo("2000");
+        // Цену не трогали — она и не тронулась.
+        assertThat(priceOf(part)).isEqualByComparingTo("10000");
+    }
+
+    /**
+     * Отказ называет своё поле и не придумывает последствий.
+     *
+     * <p>Пока слова были одни на все четыре поля, «уменьшить себестоимость
+     * до нуля» отвечало «Нулевая цена в прайс не уедет — поставьте цену
+     * числом»: себестоимости в прайсе нет и не было. Владелец, который
+     * поверит такому тексту, пойдёт искать несуществующую связь между
+     * себестоимостью и объявлением.
+     */
+    @Test
+    @DisplayName("Отказ по себестоимости говорит про себестоимость, а не про прайс")
+    void refusalNamesItsOwnField() throws Exception {
+        Long ok = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, cost_price)
+                VALUES (1, 'Дверь', 5000) RETURNING id""", Long.class));
+        Long zeroed = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, cost_price)
+                VALUES (1, 'Ручка', 500) RETURNING id""", Long.class));
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(post("/api/parts/bulk").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"partIds":[%d,%d],"changes":{"costPrice":500},
+                                 "operations":{"costPrice":"DECREASE_AMOUNT"}}"""
+                                .formatted(ok, zeroed)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rejectedReason").value(
+                        org.hamcrest.Matchers.containsString("Себестоимость позиции")))
+                .andExpect(jsonPath("$.rejectedReason").value(
+                        org.hamcrest.Matchers.not(
+                                org.hamcrest.Matchers.containsString("прайс"))));
+
+        assertThat(moneyOf(ok, "cost_price")).isEqualByComparingTo("4500");
+        assertThat(moneyOf(zeroed, "cost_price")).isEqualByComparingTo("500");
+    }
+
+    private String codeOf(Long part) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT public_code FROM part WHERE id = ?", String.class, part));
+    }
+
+    private BigDecimal moneyOf(Long part, String column) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT " + column + " FROM part WHERE id = ?", BigDecimal.class, part));
+    }
+
     private Long partWithPrice(String price) {
         return inTenant(() -> jdbc.queryForObject("""
                 INSERT INTO part (category_id, title, price, is_published)

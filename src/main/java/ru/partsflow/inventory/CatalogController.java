@@ -207,7 +207,7 @@ public class CatalogController {
      */
     @PostMapping("/bulk")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public BulkResult bulk(@RequestParam(required = false) String q,
+    public PartController.BulkResult bulk(@RequestParam(required = false) String q,
                            @RequestParam(defaultValue = "true") boolean reserved,
                            @RequestParam(defaultValue = "false") boolean missing,
                            @RequestParam(required = false) List<Long> warehouses,
@@ -227,7 +227,11 @@ public class CatalogController {
         }
         PartService.BulkOutcome outcome = parts.updateAll(ids, request.changes(),
                 request.operations(), CurrentUser.memberId());
-        return new BulkResult(outcome.changed(), outcome.skipped());
+        // Ответ тот же, что у правки отмеченного (POST /api/parts/bulk),
+        // и запись одна на два пути: экран у них общий, а разойдясь, они дали
+        // бы форму, которая после одного нажатия говорит о непрошедших,
+        // а после другого молчит.
+        return PartController.BulkResult.of(outcome);
     }
 
     /**
@@ -239,13 +243,6 @@ public class CatalogController {
      */
     public record BulkByFilter(@NotEmpty Map<String, Object> changes,
                                Map<String, PriceOperation> operations) {
-    }
-
-    /**
-     * @param skipped у скольких позиций поле было пустым: арифметике не над
-     *                чем работать, и они не тронуты
-     */
-    public record BulkResult(int changed, int skipped) {
     }
 
     /**

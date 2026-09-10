@@ -30,10 +30,13 @@ describe('правка всего отбора', () => {
       const url = String(input);
       if (init?.method === 'POST') {
         sent.push({ url, body: String(init.body ?? '') });
-        // `skipped` — сколько позиций арифметика не тронула: у ответа
-        // сервера оно есть всегда, и заглушка обязана отвечать той же
-        // формой, иначе экран проверяется не на том, что придёт.
-        return json({ changed: 35841, skipped: 0 });
+        // `skipped` и `rejected` — сколько позиций арифметика не тронула
+        // и сколько не прошло вовсе: у ответа сервера они есть всегда,
+        // и заглушка обязана отвечать той же формой, иначе экран
+        // проверяется не на том, что придёт.
+        return json({
+          changed: 35841, skipped: 0, rejected: 0, rejectedCodes: [], rejectedReason: null,
+        });
       }
       if (url.includes('/values')) return json([]);
       if (url.includes('/api/catalog/vehicles') || url.includes('/api/intake/donors')) {

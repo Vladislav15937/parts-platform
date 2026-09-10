@@ -796,10 +796,18 @@ export function savePartsBulk(
  * `skipped` — у скольких позиций денежное поле было пустым: считать процент
  * не от чего, и они не тронуты. Молчать об этом нельзя — «изменено 40»
  * читается как «сделано всем».
+ *
+ * `rejected` — у скольких операция дала бы минус или ноль. Остальные при
+ * этом изменены: одна деталь за сто рублей не отменяет переоценку склада.
+ * `rejectedCodes` — первые из них поимённо (не все: их могут быть тысячи),
+ * `rejectedReason` — чем ответил расчёт на первой.
  */
 export interface BulkResult {
   changed: number;
   skipped: number;
+  rejected: number;
+  rejectedCodes: string[];
+  rejectedReason: string | null;
 }
 
 /**
@@ -809,17 +817,37 @@ export interface BulkResult {
  * как «сделано всем», а часть из них осталась с прежней ценой — потому что
  * считать процент было не от чего. Заметить это иначе можно только сверкой
  * склада вручную.
+ *
+ * <p>Про непрошедшие — тем более: у них операция дала бы минус или ноль.
+ * Их называют и числом, и поимённо: число говорит размер беды, а коды —
+ * куда идти смотреть. Всех не перечислить, поэтому хвост назван счётом.
  */
-export function bulkNotice(changed: number, skipped: number): string {
-  const done = `Изменено позиций: ${count(changed)}`;
+export function bulkNotice(result: BulkResult): string {
+  const parts = [`Изменено позиций: ${count(result.changed)}`];
   // Не `skipped <= 0`: тип описывает, что обещал сервер, а не что пришло,
   // и на ответе без поля сравнение с undefined даёт ложь — на экран уехало
   // бы «у undefined позиций».
-  if (!(skipped > 0)) {
-    return done;
+  if (result.skipped > 0) {
+    parts.push(`у ${count(result.skipped)} `
+      + `${plural(result.skipped, 'позиции', 'позиций', 'позиций')}`
+      + ' поле не заполнено — считать проценты не от чего, они не тронуты');
   }
-  return `${done} · у ${count(skipped)} ${plural(skipped, 'позиции', 'позиций', 'позиций')}`
-    + ' поле не заполнено — считать проценты не от чего, они не тронуты';
+  if (result.rejected > 0) {
+    parts.push(`не прошли ${count(result.rejected)} `
+      + `${plural(result.rejected, 'позиция', 'позиции', 'позиций')}`
+      + `${namedCodes(result.rejected, result.rejectedCodes ?? [])}`
+      + ` — ${result.rejectedReason ?? 'операция дала бы минус или ноль'}`);
+  }
+  return parts.join(' · ');
+}
+
+/** «(A1, B2 и ещё 8)» — сколько поместилось, и сколько осталось за списком. */
+function namedCodes(total: number, codes: string[]): string {
+  if (codes.length === 0) {
+    return '';
+  }
+  const rest = total - codes.length;
+  return rest > 0 ? ` (${codes.join(', ')} и ещё ${count(rest)})` : ` (${codes.join(', ')})`;
 }
 
 /**

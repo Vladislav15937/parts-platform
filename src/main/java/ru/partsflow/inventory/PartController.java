@@ -163,7 +163,7 @@ public class PartController {
     public BulkResult updateAll(@Valid @RequestBody BulkRequest request) {
         PartService.BulkOutcome outcome = partService.updateAll(request.partIds(),
                 request.changes(), request.operations(), CurrentUser.memberId());
-        return new BulkResult(outcome.changed(), outcome.skipped());
+        return BulkResult.of(outcome);
     }
 
     /**
@@ -181,8 +181,21 @@ public class PartController {
      * @param skipped у скольких позиций поле было пустым: считать процент
      *                не от чего, и они не тронуты. Молчать об этом нельзя —
      *                «изменено 40» читается как «сделано всем»
+     * @param rejected сколько позиций не прошло операцию вовсе — у них она
+     *                 дала бы минус или ноль. Остальные при этом изменены:
+     *                 одна дешёвая деталь не отменяет переоценку склада
+     * @param rejectedCodes первые из них поимённо — по публичному коду
+     *                      позицию видно на витрине
+     * @param rejectedReason  чем ответил расчёт на первой такой позиции:
+     *                        число без причины не говорит, что делать
      */
-    public record BulkResult(int changed, int skipped) {
+    public record BulkResult(int changed, int skipped, int rejected,
+                             java.util.List<String> rejectedCodes, String rejectedReason) {
+
+        static BulkResult of(PartService.BulkOutcome outcome) {
+            return new BulkResult(outcome.changed(), outcome.skipped(), outcome.rejected(),
+                    outcome.rejectedCodes(), outcome.rejectedReason());
+        }
     }
 
     /**

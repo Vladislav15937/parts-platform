@@ -286,10 +286,10 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         <BulkEditForm
           partIds={chosen}
           count={chosen.length}
-          onSaved={(changed, skipped) => {
+          onSaved={(result) => {
             setBulk(false);
             setChosen([]);
-            setNotice(bulkNotice(changed, skipped));
+            setNotice(bulkNotice(result));
             load();
           }}
           onCancel={() => setBulk(false)}
