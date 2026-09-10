@@ -13,6 +13,7 @@ import {
   type Cell,
   type Warehouse,
 } from '../organization/warehouses';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Филиалы, склады и ячейки хранения.
@@ -39,16 +40,22 @@ export function OrganizationScreen() {
   const [opened, setOpened] = useState<number | null>(null);
   const [cells, setCells] = useState<Cell[]>([]);
   const [codes, setCodes] = useState('');
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   const reload = useCallback(() => {
     Promise.all([listBranches(), listWarehouses()])
       .then(([foundBranches, foundWarehouses]) => {
-        setBranches(foundBranches);
-        setWarehouses(foundWarehouses);
-        setError('');
+        if (mounted.current) {
+          setBranches(foundBranches);
+          setWarehouses(foundWarehouses);
+          setError('');
+        }
       })
-      .catch((cause) => setError(describe(cause, 'Не загрузилось')));
-  }, []);
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Не загрузилось'));
+      });
+  }, [mounted]);
 
   useEffect(reload, [reload]);
 
@@ -224,7 +231,8 @@ export function OrganizationScreen() {
     }
     setOpened(id);
     setCodes('');
-    setCells(await listCells(id).catch(() => []));
+    const found = await listCells(id).catch(() => []);
+    if (mounted.current) setCells(found);
   }
 
   async function addCells(): Promise<void> {
@@ -238,13 +246,16 @@ export function OrganizationScreen() {
       // склада значит стереть с экрана прежние — и счётчик в таблице
       // разойдётся с тем, что видно под ней.
       await createCells(opened, wanted, null);
-      setCells(await listCells(opened));
-      setCodes('');
-      reload();
+      const found = await listCells(opened);
+      if (mounted.current) {
+        setCells(found);
+        setCodes('');
+        reload();
+      }
     } catch (cause) {
-      setError(describe(cause, 'Ячейки не заведены'));
+      if (mounted.current) setError(describe(cause, 'Ячейки не заведены'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -252,12 +263,14 @@ export function OrganizationScreen() {
     setBusy(true);
     try {
       await createWarehouse(warehouseName.trim(), branchId);
-      setWarehouseName('');
-      reload();
+      if (mounted.current) {
+        setWarehouseName('');
+        reload();
+      }
     } catch (cause) {
-      setError(describe(cause, 'Склад не заведён'));
+      if (mounted.current) setError(describe(cause, 'Склад не заведён'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -265,12 +278,14 @@ export function OrganizationScreen() {
     setBusy(true);
     try {
       await createBranch(branchName.trim());
-      setBranchName('');
-      reload();
+      if (mounted.current) {
+        setBranchName('');
+        reload();
+      }
     } catch (cause) {
-      setError(describe(cause, 'Филиал не заведён'));
+      if (mounted.current) setError(describe(cause, 'Филиал не заведён'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 }

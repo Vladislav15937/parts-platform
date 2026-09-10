@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { request } from '../api/client';
 import { sharedDealStatusName } from '../sales/dealStatus';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Сделка глазами покупателя: то, что открывается по ссылке от продавца.
@@ -32,15 +33,17 @@ interface SharedDeal {
 export function SharedDealScreen({ company, token }: { company: string; token: string }) {
   const [deal, setDeal] = useState<SharedDeal | null>(null);
   const [missing, setMissing] = useState(false);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     void request<SharedDeal>(`/api/shared/${company}/${token}`)
-      .then(setDeal)
+      .then((found) => { if (mounted.current) setDeal(found); })
       // Просроченная и несуществующая ссылка неразличимы намеренно: клиенту
       // это одно и то же — «спросите у продавца», — а различие подсказывало бы
       // подбирающему, что он на верном пути.
-      .catch(() => setMissing(true));
-  }, [company, token]);
+      .catch(() => { if (mounted.current) setMissing(true); });
+  }, [company, token, mounted]);
 
   if (missing) {
     return (

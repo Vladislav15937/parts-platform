@@ -9,6 +9,7 @@ import {
   unmatchedNames,
 } from '../catalog/partNames';
 import type { PartKind, UnmatchedName } from '../catalog/partNames';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Разбор нераспознанных наименований.
@@ -42,6 +43,8 @@ export function UnmatchedScreen({ canManage, onTotalChanged }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     void load(size);
@@ -155,14 +158,17 @@ export function UnmatchedScreen({ canManage, onTotalChanged }: Props) {
       const result = await rematchNames();
       // Числом, а не «готово»: «сопоставил» и «ничего не изменилось» —
       // разные новости, и по экрану их иначе не различить.
+      if (!mounted.current) return;
       setDone(result.matched === 0
         ? 'Ни одно написание не совпало с эталоном — эти разбираются руками'
         : `Сопоставлено написаний: ${result.matched}, исправлено карточек: ${result.updated}`);
       await load(size);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : 'Пересопоставить не удалось');
+      if (mounted.current) {
+        setError(cause instanceof ApiError ? cause.message : 'Пересопоставить не удалось');
+      }
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -170,14 +176,16 @@ export function UnmatchedScreen({ canManage, onTotalChanged }: Props) {
     setLoading(true);
     try {
       const page = await unmatchedNames(0, pageSize);
-      setNames(page.items);
-      setTotal(page.total);
-      onTotalChanged(page.total);
-      setError(null);
+      if (mounted.current) {
+        setNames(page.items);
+        setTotal(page.total);
+        onTotalChanged(page.total);
+        setError(null);
+      }
     } catch (cause) {
-      setError(describe(cause, 'Список не загрузился'));
+      if (mounted.current) setError(describe(cause, 'Список не загрузился'));
     } finally {
-      setLoading(false);
+      if (mounted.current) setLoading(false);
     }
   }
 
@@ -185,6 +193,7 @@ export function UnmatchedScreen({ canManage, onTotalChanged }: Props) {
     setError(null);
     try {
       const result = await matchName(name.id, kind.id);
+      if (!mounted.current) return;
       setOpenId(null);
       // Число исправленных карточек — это и есть работа экрана. Без него
       // владелец не отличит «сопоставил» от «ничего не произошло».
@@ -197,7 +206,7 @@ export function UnmatchedScreen({ canManage, onTotalChanged }: Props) {
       );
       await load(size);
     } catch (cause) {
-      setError(describe(cause, 'Сопоставить не удалось'));
+      if (mounted.current) setError(describe(cause, 'Сопоставить не удалось'));
     }
   }
 }
@@ -248,13 +257,15 @@ function KindPicker({
    * как у правки списком и у отказа по заказу.
    */
   const [confirming, setConfirming] = useState<number | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     void suggestionsFor(partName.id)
-      .then(setSuggested)
-      .catch(() => setSuggested([]))
-      .finally(() => setAsked(true));
-  }, [partName.id]);
+      .then((found) => { if (mounted.current) setSuggested(found); })
+      .catch(() => { if (mounted.current) setSuggested([]); })
+      .finally(() => { if (mounted.current) setAsked(true); });
+  }, [partName.id, mounted]);
 
   return (
     <div className="picker">
@@ -400,10 +411,12 @@ function KindPicker({
     }
     try {
       const page = await searchKinds(term.trim());
-      setFound(page.items);
-      setFoundTotal(page.total);
+      if (mounted.current) {
+        setFound(page.items);
+        setFoundTotal(page.total);
+      }
     } catch (cause) {
-      onError(describe(cause, 'Поиск эталона не работает'));
+      if (mounted.current) onError(describe(cause, 'Поиск эталона не работает'));
     }
   }
 }

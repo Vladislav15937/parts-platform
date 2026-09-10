@@ -23,6 +23,7 @@ import {
 } from '../inventory/wheels';
 import type { SetRequest, WheelPage, WheelQuery, WheelRow } from '../inventory/wheels';
 import { PartCard } from './PartCard';
+import { useMounted } from '../ui/useMounted';
 import { ColumnMenu } from './ColumnMenu';
 import { BulkEditForm } from './BulkEditForm';
 import { EXPORT_ROLES } from './tabs';
@@ -94,18 +95,24 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
   // было ни поправить, ни списать, ни перевезти — витрина склада показывает
   // только запчасти.
   const [card, setCard] = useState<WheelRow | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   const load = useCallback(() => {
     listWheels(query)
-      .then(setPage)
-      .catch((cause) => setError(describe(cause, 'Список не загрузился')));
-  }, [query]);
+      .then((found) => { if (mounted.current) setPage(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Список не загрузился'));
+      });
+  }, [query, mounted]);
 
   useEffect(load, [load]);
 
   useEffect(() => {
-    void listWarehouses().then(setWarehouses).catch(() => setWarehouses([]));
-  }, []);
+    void listWarehouses()
+      .then((found) => { if (mounted.current) setWarehouses(found); })
+      .catch(() => { if (mounted.current) setWarehouses([]); });
+  }, [mounted]);
 
   function toggleColumn(key: string): void {
     const next = visible.includes(key)
@@ -538,6 +545,8 @@ function SetForm({
   const [warehouseId, setWarehouseId] = useState('');
   const [busy, setBusy] = useState(false);
   const [field, setField] = useState<Record<string, string>>({});
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   function set(name: string, value: string) {
     setField({ ...field, [name]: value });
@@ -583,12 +592,14 @@ function SetForm({
         price: value('price'),
       };
       const created = await createSet(body);
-      setField({});
-      onCreated(created.title, created.setNo);
+      if (mounted.current) {
+        setField({});
+        onCreated(created.title, created.setNo);
+      }
     } catch (cause) {
-      onError(describe(cause, 'Комплект не заведён'));
+      if (mounted.current) onError(describe(cause, 'Комплект не заведён'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 

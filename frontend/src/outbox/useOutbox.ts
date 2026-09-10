@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useMounted } from '../ui/useMounted';
 import { dropRecord, enqueue, listOutbox, processOutbox, retryRecord } from './outbox';
 import type { OutboxKind, OutboxRecord, PendingPhoto } from './outbox';
 
@@ -34,10 +35,13 @@ export function useOutbox(company?: string) {
    * <p>`null` — прохода ещё не было: показываем то, что знает браузер.
    */
   const [reachedServer, setReachedServer] = useState<boolean | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   const reload = useCallback(async () => {
-    setRecords(await listOutbox());
-  }, []);
+    const found = await listOutbox();
+    if (mounted.current) setRecords(found);
+  }, [mounted]);
 
   const flush = useCallback(async () => {
     // Пока неизвестно, в какой компании мы вошли, отправлять нельзя вовсе.
@@ -51,15 +55,17 @@ export function useOutbox(company?: string) {
       return { sent: 0, failed: 0, needsSignIn: false, foreign: 0 };
     }
     const result = await processOutbox(undefined, Date.now(), company);
-    setNeedsSignIn(result.needsSignIn);
-    // Прохода не было — о связи это не говорит ничего, прежний ответ
-    // затирать нельзя.
-    if (result.reachedServer !== undefined) {
-      setReachedServer(result.reachedServer);
+    if (mounted.current) {
+      setNeedsSignIn(result.needsSignIn);
+      // Прохода не было — о связи это не говорит ничего, прежний ответ
+      // затирать нельзя.
+      if (result.reachedServer !== undefined) {
+        setReachedServer(result.reachedServer);
+      }
     }
     await reload();
     return result;
-  }, [reload, company]);
+  }, [reload, company, mounted]);
 
   const add = useCallback(
     async (kind: OutboxKind, payload: unknown, title: string, photos?: PendingPhoto[]) => {

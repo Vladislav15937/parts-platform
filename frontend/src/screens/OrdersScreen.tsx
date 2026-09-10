@@ -6,6 +6,7 @@ import {
   ordersAwaitingReply,
   type Deal,
 } from '../sales/sales';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Заказы с площадок, по которым продавец ещё не ответил.
@@ -35,15 +36,19 @@ export function OrdersScreen({ canSell }: { canSell: boolean }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<number | null>(null);
   const [declining, setDeclining] = useState<number | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   const load = useCallback(() => {
     ordersAwaitingReply()
       .then((found) => {
-        setOrders(found);
-        setError('');
+        if (mounted.current) {
+          setOrders(found);
+          setError('');
+        }
       })
-      .catch((e: Error) => setError(e.message));
-  }, []);
+      .catch((e: Error) => { if (mounted.current) setError(e.message); });
+  }, [mounted]);
 
   useEffect(load, [load]);
 
@@ -62,12 +67,14 @@ export function OrdersScreen({ canSell }: { canSell: boolean }) {
       await cancelDeal(deal.id, deal.status === 'DRAFT'
         ? 'Обеспечить нечем: товара нет на складе'
         : 'Отказ по заказу с площадки');
-      setDeclining(null);
-      load();
+      if (mounted.current) {
+        setDeclining(null);
+        load();
+      }
     } catch (e) {
-      setError((e as Error).message);
+      if (mounted.current) setError((e as Error).message);
     } finally {
-      setBusy(null);
+      if (mounted.current) setBusy(null);
     }
   }
 
@@ -75,11 +82,11 @@ export function OrdersScreen({ canSell }: { canSell: boolean }) {
     setBusy(deal.id);
     try {
       await acceptOrder(deal.id);
-      load();
+      if (mounted.current) load();
     } catch (e) {
-      setError((e as Error).message);
+      if (mounted.current) setError((e as Error).message);
     } finally {
-      setBusy(null);
+      if (mounted.current) setBusy(null);
     }
   }
 

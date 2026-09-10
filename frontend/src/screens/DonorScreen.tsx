@@ -25,6 +25,7 @@ import {
 import { ScanOverlay } from '../scan/ScanOverlay';
 import { shown } from '../ui/plural';
 import { SupplyList } from './SupplyList';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Заведение машины-донора.
@@ -78,6 +79,8 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
 
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   // Список машин — с сервера, а не из офлайн-справочника: тот отдаёт
   // только те, с которых можно снимать (в разборе и разобранные),
@@ -89,19 +92,21 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
   useEffect(() => {
     void (async () => {
       const cached = await loadCached();
+      if (!mounted.current) return;
       setCatalog(cached);
       setLoading(false);
       // Обновляем молча и только при связи: экран обязан быть рабочим
       // немедленно, а справочник меняется с релизами, не за день.
       if (navigator.onLine && isStale(cached)) {
         try {
-          setCatalog(await refresh());
+          const fresh = await refresh();
+          if (mounted.current) setCatalog(fresh);
         } catch {
           // Не обновилось — работаем на том, что есть.
         }
       }
     })();
-  }, []);
+  }, [mounted]);
 
   if (loading) {
     return <section className="card">Загрузка справочника…</section>;
@@ -527,11 +532,12 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
   async function load(): Promise<void> {
     setLoading(true);
     try {
-      setCatalog(await refresh());
+      const fresh = await refresh();
+      if (mounted.current) setCatalog(fresh);
     } catch (cause) {
-      setMessage(describe(cause, 'Справочник не загрузился'));
+      if (mounted.current) setMessage(describe(cause, 'Справочник не загрузился'));
     } finally {
-      setLoading(false);
+      if (mounted.current) setLoading(false);
     }
   }
 
@@ -574,22 +580,27 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
     try {
       const created = await registerSupply(
         supplyNumber.trim(), supplyKind, supplier.trim() === '' ? null : supplier.trim());
-      setSupplyNumber('');
-      setSupplier('');
-      // Справочник приёмки перечитывается: без этого заведённая поставка
-      // не появится в списке ни здесь, ни у приёмщика на телефоне.
-      onChanged();
-      setMessage(`Поставка «${created.number}» заведена — её уже можно выбрать.`);
+      if (mounted.current) {
+        setSupplyNumber('');
+        setSupplier('');
+        // Справочник приёмки перечитывается: без этого заведённая поставка
+        // не появится в списке ни здесь, ни у приёмщика на телефоне.
+        onChanged();
+        setMessage(`Поставка «${created.number}» заведена — её уже можно выбрать.`);
+      }
     } catch (cause) {
-      setMessage(cause instanceof ApiError ? cause.message : 'Поставку завести не удалось');
+      if (mounted.current) {
+        setMessage(cause instanceof ApiError ? cause.message : 'Поставку завести не удалось');
+      }
     } finally {
-      setSending(false);
+      if (mounted.current) setSending(false);
     }
   }
 
   async function reloadDonors(): Promise<void> {
     try {
-      setDonors(await listDonors());
+      const found = await listDonors();
+      if (mounted.current) setDonors(found);
     } catch {
       // Машины не догрузились — форма заведения от этого не ломается.
     }
@@ -605,12 +616,13 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
     setMessage(null);
     try {
       await moveDonor(id, place.trim());
+      if (!mounted.current) return;
       setMovingId(null);
       await reloadDonors();
     } catch (cause) {
-      setMessage(describe(cause, 'Переставить машину не удалось'));
+      if (mounted.current) setMessage(describe(cause, 'Переставить машину не удалось'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -618,14 +630,15 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
     setBusy(true);
     try {
       await startDismantling(id);
+      if (!mounted.current) return;
       await reloadDonors();
       // Справочник приёмки берёт машины по состоянию: без обновления
       // поставленной в разбор машины на приёмке не появится.
       onChanged();
     } catch (cause) {
-      setMessage(describe(cause, 'Машина не поставлена в разбор'));
+      if (mounted.current) setMessage(describe(cause, 'Машина не поставлена в разбор'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -651,6 +664,7 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
         },
       });
 
+      if (!mounted.current) return;
       setMessage(`Машина заведена: ${created.publicCode}`);
       onChanged();
       void reloadDonors();
@@ -663,9 +677,9 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
       setVin('');
       setNote('');
     } catch (cause) {
-      setMessage(describe(cause, 'Машина не заведена'));
+      if (mounted.current) setMessage(describe(cause, 'Машина не заведена'));
     } finally {
-      setSending(false);
+      if (mounted.current) setSending(false);
     }
   }
 }

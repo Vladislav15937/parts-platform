@@ -8,6 +8,7 @@ import { ReferencePanel } from '../reference/ReferencePanel';
 import { useReference } from '../reference/useReference';
 import { warmUpDecoder } from '../scan/decoder';
 import { useOnline } from '../shell/useOnline';
+import { useMounted } from '../ui/useMounted';
 import { IntakeScreen } from './IntakeScreen';
 import { DonorScreen } from './DonorScreen';
 import { ImportScreen } from './ImportScreen';
@@ -86,6 +87,8 @@ export function HomeScreen() {
   // продажи открывает её карточкой, как при поиске «Найти сделку клиента»,
   // а не заводит второй способ показать документ.
   const [openDealId, setOpenDealId] = useState<number | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   // Запасной распознаватель тянем сразу после входа, пока связь заведомо есть:
   // первое сканирование случится в ангаре, где её уже не будет.
@@ -107,14 +110,14 @@ export function HomeScreen() {
       return;
     }
     void unmatchedNames(0, 1)
-      .then((page) => setUnmatched(page.total))
+      .then((page) => { if (mounted.current) setUnmatched(page.total); })
       // Молча: справочник — не то, ради чего стоит показывать ошибку
       // на весь экран сразу после входа.
-      .catch(() => setUnmatched(0));
+      .catch(() => { if (mounted.current) setUnmatched(0); });
     void deadLetters()
-      .then((page) => setUndelivered(page.total))
-      .catch(() => setUndelivered(0));
-  }, [role, online]);
+      .then((page) => { if (mounted.current) setUndelivered(page.total); })
+      .catch(() => { if (mounted.current) setUndelivered(0); });
+  }, [role, online, mounted]);
 
   useEffect(() => {
     // Заказы — продавцу, а не разбирающему справочник: у ролей разный список
@@ -123,9 +126,9 @@ export function HomeScreen() {
       return;
     }
     void ordersAwaitingReply()
-      .then((found) => setAwaitingOrders(found.length))
-      .catch(() => setAwaitingOrders(0));
-  }, [role, online]);
+      .then((found) => { if (mounted.current) setAwaitingOrders(found.length); })
+      .catch(() => { if (mounted.current) setAwaitingOrders(0); });
+  }, [role, online, mounted]);
 
   if (state.status !== 'authenticated') {
     return null;

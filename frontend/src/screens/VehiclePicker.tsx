@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLockedScroll } from '../ui/useLockedScroll';
+import { useMounted } from '../ui/useMounted';
 import { loadVehicleOptions, type VehicleOption } from '../inventory/catalog';
 import { NO_VEHICLE, type VehicleFilter } from '../inventory/catalog';
 
@@ -24,12 +25,14 @@ export function VehiclePicker({ chosen, onPick, onClose }: {
   const [error, setError] = useState('');
   const [draft, setDraft] = useState<VehicleFilter>(chosen);
   const [search, setSearch] = useState('');
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     loadVehicleOptions()
-      .then(setOptions)
-      .catch(() => setError('Список машин не загрузился'));
-  }, []);
+      .then((found) => { if (mounted.current) setOptions(found); })
+      .catch(() => { if (mounted.current) setError('Список машин не загрузился'); });
+  }, [mounted]);
 
   // Что осталось после уже сделанных шагов — из этого и строится очередной
   // список. Считать заново на каждом шаге дешевле, чем хранить дерево:

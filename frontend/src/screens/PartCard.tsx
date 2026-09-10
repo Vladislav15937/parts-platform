@@ -27,6 +27,7 @@ import { PartDonorView } from './PartDonorView';
 import { PartHistoryView } from './PartHistoryView';
 import { loadCached, modelsOf, type VehicleCatalog } from '../catalog/vehicles';
 import { listCells, type Cell } from '../organization/warehouses';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Карточка позиции — как в кабинете, на который клиент смотрит каждый день:
@@ -115,23 +116,33 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   const [vehicles, setVehicles] = useState<VehicleCatalog | null>(null);
   const [brandId, setBrandId] = useState<number | null>(null);
   const [modelId, setModelId] = useState<number | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
-    void loadPhotos(row.id).then(setPhotos).catch(() => setPhotos([]));
+    void loadPhotos(row.id)
+      .then((found) => { if (mounted.current) setPhotos(found); })
+      .catch(() => { if (mounted.current) setPhotos([]); });
     // Применимость нужна и на вкладке «Описание»: там стоит отметка,
     // задана она или нет, и отметка «сейчас узнаю» была бы бесполезной.
-    void loadApplicability(row.id).then(setFits).catch(() => setFits([]));
-    void loadCached().then(setVehicles).catch(() => setVehicles(null));
-  }, [row.id]);
+    void loadApplicability(row.id)
+      .then((found) => { if (mounted.current) setFits(found); })
+      .catch(() => { if (mounted.current) setFits([]); });
+    void loadCached()
+      .then((found) => { if (mounted.current) setVehicles(found); })
+      .catch(() => { if (mounted.current) setVehicles(null); });
+  }, [row.id, mounted]);
 
   useEffect(() => {
     if (tab !== 'history' || history !== null) {
       return;
     }
     void loadHistory(row.id)
-      .then(setHistory)
-      .catch(() => setHistory({ changes: [], movements: [] }));
-  }, [tab, history, row.id]);
+      .then((found) => { if (mounted.current) setHistory(found); })
+      .catch(() => {
+        if (mounted.current) setHistory({ changes: [], movements: [] });
+      });
+  }, [tab, history, row.id, mounted]);
 
   // Машина грузится по открытию вкладки: чаще всего карточку открывают ради
   // цены и снимка, а не ради того, какой у донора привод.
@@ -139,8 +150,10 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
     if (tab !== 'donor' || donor !== null) {
       return;
     }
-    void loadDonor(row.id).then(setDonor).catch(() => setDonor(null));
-  }, [tab, donor, row.id]);
+    void loadDonor(row.id)
+      .then((found) => { if (mounted.current) setDonor(found); })
+      .catch(() => { if (mounted.current) setDonor(null); });
+  }, [tab, donor, row.id, mounted]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -177,11 +190,14 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
       for (const file of Array.from(files)) {
         await uploadPhoto(row.id, file);
       }
-      setPhotos(await loadPhotos(row.id));
+      const found = await loadPhotos(row.id);
+      if (mounted.current) setPhotos(found);
     } catch (e) {
-      setPhotoError(e instanceof ApiError ? e.message : 'Снимок не загрузился');
+      if (mounted.current) {
+        setPhotoError(e instanceof ApiError ? e.message : 'Снимок не загрузился');
+      }
     } finally {
-      setUploading(false);
+      if (mounted.current) setUploading(false);
     }
   }
 
@@ -193,9 +209,12 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
       // не меняется (он по sort_order), а прыжок на первый показывал бы
       // чужую фотографию с той же кнопкой «Сделать главным» — как будто
       // нажатие не сработало.
-      setPhotos(await loadPhotos(row.id));
+      const found = await loadPhotos(row.id);
+      if (mounted.current) setPhotos(found);
     } catch (e) {
-      setPhotoError(e instanceof ApiError ? e.message : 'Не удалось назначить главным');
+      if (mounted.current) {
+        setPhotoError(e instanceof ApiError ? e.message : 'Не удалось назначить главным');
+      }
     }
   }
 
@@ -204,12 +223,16 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
     try {
       await deletePhoto(row.id, photoId);
       const left = await loadPhotos(row.id);
-      setPhotos(left);
-      // Удалённый мог быть последним в полосе: без сдвига экран показывал бы
-      // пустое место вместо снимка.
-      setShown((i) => Math.max(0, Math.min(i, left.length - 1)));
+      if (mounted.current) {
+        setPhotos(left);
+        // Удалённый мог быть последним в полосе: без сдвига экран показывал бы
+        // пустое место вместо снимка.
+        setShown((i) => Math.max(0, Math.min(i, left.length - 1)));
+      }
     } catch (e) {
-      setPhotoError(e instanceof ApiError ? e.message : 'Не удалось удалить снимок');
+      if (mounted.current) {
+        setPhotoError(e instanceof ApiError ? e.message : 'Не удалось удалить снимок');
+      }
     }
   }
 
@@ -217,7 +240,8 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   async function chooseTarget(id: number | null): Promise<void> {
     setMoveTo(id);
     setMoveCell(null);
-    setMoveCells(id === null ? [] : await listCells(id).catch(() => []));
+    const found = id === null ? [] : await listCells(id).catch(() => []);
+    if (mounted.current) setMoveCells(found);
   }
 
   async function move(): Promise<void> {
@@ -227,13 +251,15 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
     setMoveError('');
     try {
       await movePart(moveFrom, moveTo, row.id, Number(moveQty), moveCell, null);
-      onChanged();
+      if (mounted.current) onChanged();
     } catch (cause) {
       // 409 — «столько не лежит» или «обещано покупателю», и текст оттуда
       // называет числа.
-      setMoveError(cause instanceof ApiError && cause.message !== ''
-        ? cause.message
-        : 'Перевезти не вышло');
+      if (mounted.current) {
+        setMoveError(cause instanceof ApiError && cause.message !== ''
+          ? cause.message
+          : 'Перевезти не вышло');
+      }
     }
   }
 
@@ -244,13 +270,15 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
     setWriteOffError('');
     try {
       await writeOffPart(writeOffAt, row.id, Number(writeOffQty), reason.trim());
-      onChanged();
+      if (mounted.current) onChanged();
     } catch (cause) {
       // 409 — «обещано покупателю» или «столько не лежит», и текст оттуда
       // называет числа: без них человек идёт искать поломку сервера.
-      setWriteOffError(cause instanceof ApiError && cause.message !== ''
-        ? cause.message
-        : 'Списать не вышло');
+      if (mounted.current) {
+        setWriteOffError(cause instanceof ApiError && cause.message !== ''
+          ? cause.message
+          : 'Списать не вышло');
+      }
     }
   }
 
@@ -258,12 +286,15 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
     if (brandId === null) {
       return;
     }
-    setFits(await addApplicability(row.id, brandId, modelId));
+    const found = await addApplicability(row.id, brandId, modelId);
+    if (!mounted.current) return;
+    setFits(found);
     setModelId(null);
   }
 
   async function drop(id: number): Promise<void> {
-    setFits(await removeApplicability(row.id, id));
+    const left = await removeApplicability(row.id, id);
+    if (mounted.current) setFits(left);
   }
 
   useLockedScroll();

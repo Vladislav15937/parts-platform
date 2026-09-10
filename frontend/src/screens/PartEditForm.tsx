@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { loadEditable, savePart, type PartEdit } from '../inventory/catalog';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Правка карточки товара.
@@ -26,6 +27,8 @@ export function PartEditForm({ partId, onSaved, onCancel }: {
   const [form, setForm] = useState<Draft | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     let alive = true;
@@ -45,11 +48,13 @@ export function PartEditForm({ partId, onSaved, onCancel }: {
     setSaving(true);
     try {
       await savePart(partId, toEdit(form));
-      onSaved();
+      if (mounted.current) onSaved();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Не удалось сохранить');
+      if (mounted.current) {
+        setError(e instanceof ApiError ? e.message : 'Не удалось сохранить');
+      }
     } finally {
-      setSaving(false);
+      if (mounted.current) setSaving(false);
     }
   }
 

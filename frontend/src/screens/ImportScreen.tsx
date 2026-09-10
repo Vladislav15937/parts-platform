@@ -24,6 +24,7 @@ import type {
   Report,
 } from '../import/warehouseImport';
 import type { Reference } from '../reference/reference';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Перенос склада из таблицы.
@@ -55,6 +56,8 @@ export function ImportScreen({ reference, canImport }: Props) {
   const [requestId, setRequestId] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   if (!canImport) {
     return (
@@ -258,14 +261,16 @@ export function ImportScreen({ reference, canImport }: Props) {
     setBusy(true);
     try {
       const parsed = await previewFile(picked);
-      setPreview(parsed);
-      // Догадку сервера берём как отправную точку, но показываем целиком:
-      // подтверждает её человек, а не молчание.
-      setColumns(parsed.detected);
+      if (mounted.current) {
+        setPreview(parsed);
+        // Догадку сервера берём как отправную точку, но показываем целиком:
+        // подтверждает её человек, а не молчание.
+        setColumns(parsed.detected);
+      }
     } catch (cause) {
-      setError(describe(cause, 'Файл не разобрался'));
+      if (mounted.current) setError(describe(cause, 'Файл не разобрался'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -276,11 +281,12 @@ export function ImportScreen({ reference, canImport }: Props) {
     setBusy(true);
     setError(null);
     try {
-      setReport(await importFile(file, warehouseId, columns, requestId));
+      const done = await importFile(file, warehouseId, columns, requestId);
+      if (mounted.current) setReport(done);
     } catch (cause) {
-      setError(describe(cause, 'Загрузка не прошла'));
+      if (mounted.current) setError(describe(cause, 'Загрузка не прошла'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -315,13 +321,17 @@ function AfterImport({ reload }: { reload: number }) {
   const [fits, setFits] = useState<ParsedApplicability | null>(null);
   const [busy, setBusy] = useState<'photos' | 'fits' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
   // Останов читается из ref, а не из состояния: цикл живёт внутри одного
   // вызова и обновлённого состояния не увидит.
   const stop = useRef(false);
 
   useEffect(() => {
-    void photoStatus().then(setPhotos).catch(() => setPhotos(null));
-  }, [reload]);
+    void photoStatus()
+      .then((found) => { if (mounted.current) setPhotos(found); })
+      .catch(() => { if (mounted.current) setPhotos(null); });
+  }, [reload, mounted]);
 
   // Уход с раздела останавливает проход. Иначе цикл живёт дальше — промис
   // размонтированием не отменяется, — а кнопки «Остановить» на экране уже
@@ -421,6 +431,7 @@ function AfterImport({ reload }: { reload: number }) {
         // на грани таймаута терминатора и почти минута, в которую счётчик
         // на экране стоит. Замерено живьём: десять снимков в секунду.
         const next = await migratePhotos(200);
+        if (!mounted.current) return;
         setPhotos(next);
         // Очередь не сдвинулась — дальше ходить незачем: так выглядит
         // пачка, целиком легшая в неудачные, и без этой проверки цикл
@@ -431,21 +442,22 @@ function AfterImport({ reload }: { reload: number }) {
         left = next.pending;
       }
     } catch (cause) {
-      setError(describe(cause, 'Перенос фотографий не прошёл'));
+      if (mounted.current) setError(describe(cause, 'Перенос фотографий не прошёл'));
     } finally {
       stop.current = false;
-      setBusy(null);
+      if (mounted.current) setBusy(null);
     }
   }
 
   async function retry(): Promise<void> {
     setBusy('photos');
     try {
-      setPhotos(await retryPhotos());
+      const found = await retryPhotos();
+      if (mounted.current) setPhotos(found);
     } catch (cause) {
-      setError(describe(cause, 'Не удалось вернуть в очередь'));
+      if (mounted.current) setError(describe(cause, 'Не удалось вернуть в очередь'));
     } finally {
-      setBusy(null);
+      if (mounted.current) setBusy(null);
     }
   }
 
@@ -453,11 +465,12 @@ function AfterImport({ reload }: { reload: number }) {
     setBusy('fits');
     setError(null);
     try {
-      setFits(await applicabilityFromTitles());
+      const parsed = await applicabilityFromTitles();
+      if (mounted.current) setFits(parsed);
     } catch (cause) {
-      setError(describe(cause, 'Разбор применимости не прошёл'));
+      if (mounted.current) setError(describe(cause, 'Разбор применимости не прошёл'));
     } finally {
-      setBusy(null);
+      if (mounted.current) setBusy(null);
     }
   }
 }
@@ -477,6 +490,8 @@ function WheelImport({ reference }: { reference: Reference }) {
   const [result, setResult] = useState<WheelImportResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   return (
     <>
@@ -550,11 +565,12 @@ function WheelImport({ reference }: { reference: Reference }) {
     setBusy(true);
     setError(null);
     try {
-      setResult(await importWheels(file, warehouseId));
+      const done = await importWheels(file, warehouseId);
+      if (mounted.current) setResult(done);
     } catch (cause) {
-      setError(describe(cause, 'Перенос колёс не прошёл'));
+      if (mounted.current) setError(describe(cause, 'Перенос колёс не прошёл'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 }
@@ -565,6 +581,8 @@ function BazonImport({ onImported }: { onImported: () => void }) {
   const [result, setResult] = useState<BazonResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   return (
     <>
@@ -649,12 +667,15 @@ function BazonImport({ onImported }: { onImported: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      setResult(await importBazon(donors, catalog));
-      onImported();
+      const done = await importBazon(donors, catalog);
+      if (mounted.current) {
+        setResult(done);
+        onImported();
+      }
     } catch (cause) {
-      setError(describe(cause, 'Перенос не прошёл'));
+      if (mounted.current) setError(describe(cause, 'Перенос не прошёл'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 }

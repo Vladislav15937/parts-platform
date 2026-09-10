@@ -11,6 +11,7 @@ import {
   type Member,
   type Role,
 } from '../organization/members';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Сотрудники компании: кто входит и что видит.
@@ -32,15 +33,21 @@ export function MembersScreen() {
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [role, setRole] = useState<Role>('SELLER');
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   const reload = useCallback(() => {
     loadMembers()
       .then((found) => {
-        setMembers(found);
-        setError('');
+        if (mounted.current) {
+          setMembers(found);
+          setError('');
+        }
       })
-      .catch((cause) => setError(describe(cause, 'Сотрудники не загрузились')));
-  }, []);
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Сотрудники не загрузились'));
+      });
+  }, [mounted]);
 
   useEffect(reload, [reload]);
 
@@ -171,14 +178,16 @@ export function MembersScreen() {
     setError('');
     try {
       await createMember(login.trim(), password, displayName.trim(), role);
-      setLogin('');
-      setPassword('');
-      setDisplayName('');
-      reload();
+      if (mounted.current) {
+        setLogin('');
+        setPassword('');
+        setDisplayName('');
+        reload();
+      }
     } catch (cause) {
-      setError(describe(cause, 'Сотрудник не заведён'));
+      if (mounted.current) setError(describe(cause, 'Сотрудник не заведён'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -190,11 +199,11 @@ export function MembersScreen() {
     setBusy(true);
     try {
       await changePassword(member.id, next);
-      setError('');
+      if (mounted.current) setError('');
     } catch (cause) {
-      setError(describe(cause, 'Пароль не сменился'));
+      if (mounted.current) setError(describe(cause, 'Пароль не сменился'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -202,11 +211,11 @@ export function MembersScreen() {
     setBusy(true);
     try {
       await (member.active ? disableMember(member.id) : enableMember(member.id));
-      reload();
+      if (mounted.current) reload();
     } catch (cause) {
-      setError(describe(cause, 'Не вышло'));
+      if (mounted.current) setError(describe(cause, 'Не вышло'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 }

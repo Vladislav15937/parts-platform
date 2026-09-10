@@ -8,6 +8,7 @@ import {
   targetName,
 } from '../events/deadLetters';
 import type { DeadLetter } from '../events/deadLetters';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Что не доехало до площадок.
@@ -31,6 +32,8 @@ export function DeliveryScreen({ canManage, onTotalChanged }: Props) {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     void load();
@@ -121,13 +124,15 @@ export function DeliveryScreen({ canManage, onTotalChanged }: Props) {
     setLoading(true);
     try {
       const page = await deadLetters();
-      setItems(page.items);
-      onTotalChanged(page.total);
-      setError(null);
+      if (mounted.current) {
+        setItems(page.items);
+        onTotalChanged(page.total);
+        setError(null);
+      }
     } catch (cause) {
-      setError(describe(cause, 'Список не загрузился'));
+      if (mounted.current) setError(describe(cause, 'Список не загрузился'));
     } finally {
-      setLoading(false);
+      if (mounted.current) setLoading(false);
     }
   }
 
@@ -137,16 +142,18 @@ export function DeliveryScreen({ canManage, onTotalChanged }: Props) {
     setNotice(null);
     try {
       await retryDeadLetter(item.id);
+      if (!mounted.current) return;
       setNotice(`${eventName(item.eventType)} ушла на ${targetName(item.handler)}.`);
       await load();
     } catch (cause) {
+      if (!mounted.current) return;
       // 409 — это «причина не устранена», а не поломка сервера. Показать
       // «отправлено» там, где ничего не отправилось, хуже, чем не показать
       // ничего: владелец пойдёт дальше с неверной картиной.
       setError(describe(cause, 'Повторить не вышло'));
       await load();
     } finally {
-      setBusy(null);
+      if (mounted.current) setBusy(null);
     }
   }
 
@@ -154,12 +161,13 @@ export function DeliveryScreen({ canManage, onTotalChanged }: Props) {
     setBusy(item.id);
     try {
       await discardDeadLetter(item.id);
+      if (!mounted.current) return;
       setNotice(`${eventName(item.eventType)} снята с разбора без отправки.`);
       await load();
     } catch (cause) {
-      setError(describe(cause, 'Снять не вышло'));
+      if (mounted.current) setError(describe(cause, 'Снять не вышло'));
     } finally {
-      setBusy(null);
+      if (mounted.current) setBusy(null);
     }
   }
 }

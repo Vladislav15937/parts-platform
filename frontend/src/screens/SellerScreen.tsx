@@ -40,6 +40,7 @@ import {
   transferItems,
 } from '../sales/sales';
 import { dealItemStatusName, dealStatusNameLower } from '../sales/dealStatus';
+import { useMounted } from '../ui/useMounted';
 import type { CustomerAccount,
   HistoryEntry,
   DealSource as DealSourceRow,
@@ -133,27 +134,31 @@ export function SellerScreen({
   // по лицевому счёту разом: справочник один на все три места, где спрашивают
   // «чем заплатили».
   const [paymentSourceList, setPaymentSourceList] = useState<PaymentSourceEntry[]>([]);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     void serviceKinds()
-      .then((kinds) => setServices(kinds.map((kind) => ({ kind, price: '' }))))
+      .then((kinds) => {
+        if (mounted.current) setServices(kinds.map((kind) => ({ kind, price: '' })));
+      })
       // Молча: без справочника услуг продавать всё ещё можно, а красный
       // текст на весь экран из-за доставки — это про неверные приоритеты.
-      .catch(() => setServices([]));
+      .catch(() => { if (mounted.current) setServices([]); });
     void dealSources()
-      .then(setSources)
-      .catch(() => setSources([]));
+      .then((found) => { if (mounted.current) setSources(found); })
+      .catch(() => { if (mounted.current) setSources([]); });
     // Молча и здесь: источников платежей может не быть ни одного, и оплата
     // тогда работает как раньше — без выпадающего списка.
     void paymentSources()
-      .then(setPaymentSourceList)
-      .catch(() => setPaymentSourceList([]));
+      .then((found) => { if (mounted.current) setPaymentSourceList(found); })
+      .catch(() => { if (mounted.current) setPaymentSourceList([]); });
     // Молча и здесь: без списка складов отбор по складу просто не предлагается,
     // а поиск товара работает как раньше.
     void listWarehouses()
-      .then(setWarehouses)
-      .catch(() => setWarehouses([]));
-  }, []);
+      .then((found) => { if (mounted.current) setWarehouses(found); })
+      .catch(() => { if (mounted.current) setWarehouses([]); });
+  }, [mounted]);
   const [deal, setDeal] = useState<Deal | null>(null);
   // Возврат и перенос случаются не в тот же разговор, что продажа: клиент
   // приезжает через неделю. Без поиска по клиенту до его сделки не добраться.
@@ -170,6 +175,7 @@ export function SellerScreen({
     }
     void fetchDealById(openDealId)
       .then((found) => {
+        if (!mounted.current) return;
         setDeal(found);
         setFinding(false);
         // Корзина от прежнего разговора к чужой сделке отношения не имеет —
@@ -178,8 +184,10 @@ export function SellerScreen({
         forgetSearch();
         setError(null);
       })
-      .catch((cause) => setError(describe(cause, 'Сделка не открылась')))
-      .finally(() => onDealOpened?.());
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Сделка не открылась'));
+      })
+      .finally(() => { if (mounted.current) onDealOpened?.(); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openDealId]);
 
@@ -462,16 +470,20 @@ export function SellerScreen({
     setError(null);
     try {
       const result = await searchStock(query.trim(), narrowing);
-      setRows(result.rows);
-      setFound(result.total);
-      setFacets(result.facets);
-      setSearched(true);
+      if (mounted.current) {
+        setRows(result.rows);
+        setFound(result.total);
+        setFacets(result.facets);
+        setSearched(true);
+      }
     } catch (cause) {
-      setRows([]);
-      setFound(0);
-      setError(describe(cause, 'Не удалось выполнить поиск'));
+      if (mounted.current) {
+        setRows([]);
+        setFound(0);
+        setError(describe(cause, 'Не удалось выполнить поиск'));
+      }
     } finally {
-      setSearching(false);
+      if (mounted.current) setSearching(false);
     }
   }
 
@@ -518,6 +530,7 @@ export function SellerScreen({
         const result = await receiveOrder(
           marketplace, orderNo.trim(), customer?.id ?? null, lines, null, note, services,
           sourceId === '' ? null : Number(sourceId));
+        if (!mounted.current) return;
         setDeal(result.deal);
         if (result.replayed) {
           // Не ошибка: продавец мог завести заказ дважды. Правильный ответ —
@@ -532,15 +545,17 @@ export function SellerScreen({
         setOrderNo('');
         setNote('');
       } else {
-        setDeal(await createDeal(customer!.id, lines, services,
-          sourceId === '' ? null : Number(sourceId)));
+        const created = await createDeal(customer!.id, lines, services,
+          sourceId === '' ? null : Number(sourceId));
+        if (!mounted.current) return;
+        setDeal(created);
       }
       setLines([]);
       setServices(services.map((line) => ({ ...line, price: '' })));
       // Остаток изменился — показанный список уже врёт.
       forgetSearch();
     } catch (cause) {
-      setError(describe(cause, 'Сделка не оформлена'));
+      if (mounted.current) setError(describe(cause, 'Сделка не оформлена'));
     }
   }
 }
@@ -858,6 +873,8 @@ function CustomerPicker({
 }) {
   const [query, setQuery] = useState('');
   const [found, setFound] = useState<Customer[]>([]);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   if (customer !== null) {
     return (
@@ -909,10 +926,11 @@ function CustomerPicker({
       return;
     }
     try {
-      setFound(await searchCustomers(term.trim()));
+      const matched = await searchCustomers(term.trim());
+      if (mounted.current) setFound(matched);
     } catch {
       // Поиск клиента — не повод рушить экран: продавец заведёт нового.
-      setFound([]);
+      if (mounted.current) setFound([]);
     }
   }
 
@@ -924,9 +942,11 @@ function CustomerPicker({
     const isPhone = digits.length >= 6 && digits.length === term.replace(/[\s+()-]/g, '').length;
 
     try {
-      onPick(await createCustomer(isPhone ? 'Без имени' : term, isPhone ? term : ''));
+      const created = await createCustomer(
+        isPhone ? 'Без имени' : term, isPhone ? term : '');
+      if (mounted.current) onPick(created);
     } catch (cause) {
-      onError(describe(cause, 'Клиент не заведён'));
+      if (mounted.current) onError(describe(cause, 'Клиент не заведён'));
     }
   }
 }
@@ -963,6 +983,8 @@ function DealFinder({
   const activeSources = paymentSourceList.filter((s) => !s.archived);
   const [paymentSourceId, setPaymentSourceId] = useState<number | null>(() =>
     defaultPaymentSource(paymentSourceList, company, memberId));
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     setPaymentSourceId(defaultPaymentSource(paymentSourceList, company, memberId));
@@ -1137,14 +1159,18 @@ function DealFinder({
 
   async function load(picked: Customer): Promise<void> {
     try {
-      setDeals(await dealsOf(picked.id));
+      const found = await dealsOf(picked.id);
+      if (mounted.current) setDeals(found);
     } catch (cause) {
-      setDeals([]);
-      onError(describe(cause, 'Сделки не загрузились'));
+      if (mounted.current) {
+        setDeals([]);
+        onError(describe(cause, 'Сделки не загрузились'));
+      }
     }
     // Счёт грузим отдельно: сделок может не быть вовсе, а деньги на счету
     // при этом лежать — за ними и пришли.
-    setAccount(await accountOf(picked.id).catch(() => null));
+    const balance = await accountOf(picked.id).catch(() => null);
+    if (mounted.current) setAccount(balance);
   }
 
   /**
@@ -1162,10 +1188,13 @@ function DealFinder({
       if (withSource && paymentSourceId !== null) {
         rememberPaymentSource(company, memberId, paymentSourceId);
       }
-      setCash('');
-      setAccount(await accountOf(customer.id));
+      const balance = await accountOf(customer.id);
+      if (mounted.current) {
+        setCash('');
+        setAccount(balance);
+      }
     } catch (cause) {
-      onError(describe(cause, 'Операция по счёту не прошла'));
+      if (mounted.current) onError(describe(cause, 'Операция по счёту не прошла'));
     }
   }
 }
@@ -1217,6 +1246,8 @@ function DealCard({
   // деньги клиента остаются в системе невидимыми — при следующем приезде
   // про свою тысячу помнит только он.
   const [account, setAccount] = useState<CustomerAccount | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   const reserved = transferable(deal);
   const issued = returnable(deal);
@@ -1255,7 +1286,9 @@ function DealCard({
   useEffect(() => {
     // Прежние возвраты по сделке: без них продавец оформит второй возврат
     // на ту же деталь и узнает об отказе сервера вместо ответа клиенту.
-    void returnsOf(deal.id).then(setDocs).catch(() => setDocs([]));
+    void returnsOf(deal.id)
+      .then((found) => { if (mounted.current) setDocs(found); })
+      .catch(() => { if (mounted.current) setDocs([]); });
     // История — про прежнюю сделку: оставшись на экране, она приписала бы
     // этой сделке чужие действия.
     setHistory(null);
@@ -1275,7 +1308,9 @@ function DealCard({
     // Счёт принадлежит клиенту, а не сделке: у сделки без клиента его нет.
     setAccount(null);
     if (deal.customerId !== null) {
-      void accountOf(deal.customerId).then(setAccount).catch(() => setAccount(null));
+      void accountOf(deal.customerId)
+        .then((found) => { if (mounted.current) setAccount(found); })
+        .catch(() => { if (mounted.current) setAccount(null); });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deal.id, deal.customerId]);
@@ -1457,7 +1492,8 @@ function DealCard({
               onClick={() => void act(async () => {
                 const take = Math.min(account.balance, Number(deal.debt));
                 await payDealFromAccount(deal.id, String(take));
-                setAccount(await accountOf(account.customerId));
+                const balance = await accountOf(account.customerId);
+                if (mounted.current) setAccount(balance);
               })}
             >
               Зачесть {Math.min(account.balance, Number(deal.debt)).toLocaleString('ru-RU')} ₽
@@ -1525,12 +1561,14 @@ function DealCard({
               if (!refundToAccount && returnSourceId !== null) {
                 rememberPaymentSource(company, memberId, returnSourceId);
               }
+              const left = await returnsOf(deal.id);
+              if (!mounted.current) return;
               setPicked([]);
               setNotice(
                 `Возврат №${doc.number ?? doc.id} на `
                   + `${Number(doc.amount).toLocaleString('ru-RU')} ₽ оформлен.`,
               );
-              setDocs(await returnsOf(deal.id));
+              setDocs(left);
             })
           }
         />
@@ -1594,9 +1632,10 @@ function DealCard({
 
   async function makeShare(): Promise<void> {
     try {
-      setShare((await shareDeal(deal.id)).path);
+      const link = (await shareDeal(deal.id)).path;
+      if (mounted.current) setShare(link);
     } catch (cause) {
-      onError(describe(cause, 'Ссылка не выдана'));
+      if (mounted.current) onError(describe(cause, 'Ссылка не выдана'));
     }
   }
 
@@ -1605,9 +1644,10 @@ function DealCard({
       return;
     }
     try {
-      setHistory(await historyOf(deal.id));
+      const found = await historyOf(deal.id);
+      if (mounted.current) setHistory(found);
     } catch (cause) {
-      onError(describe(cause, 'История не загрузилась'));
+      if (mounted.current) onError(describe(cause, 'История не загрузилась'));
     }
   }
 
@@ -1617,17 +1657,20 @@ function DealCard({
       // Перечитываем со стороны сервера, а не собираем состояние сами:
       // оплата меняет и долг, и лицевой счёт, и считает это сервер.
       const deals = await dealsOf(deal.customerId);
+      if (!mounted.current) return;
       const fresh = deals.find((d) => d.id === deal.id);
       if (fresh !== undefined) {
         onChanged(fresh);
       }
     } catch (cause) {
+      if (!mounted.current) return;
       onError(describe(cause, 'Операция не выполнена'));
       // Сделку изменил кто-то ещё — показываем, во что она превратилась,
       // а не оставляем на экране состояние, которого уже нет. Иначе продавец
       // жмёт ту же кнопку второй раз и получает тот же отказ.
       if (cause instanceof ApiError && cause.status === 409) {
         const deals = await dealsOf(deal.customerId).catch(() => []);
+        if (!mounted.current) return;
         const fresh = deals.find((d) => d.id === deal.id);
         if (fresh !== undefined) {
           onChanged(fresh);
@@ -1730,10 +1773,13 @@ function ReturnPanel({
   // не создаёт платежа», то же верно для возврата на счёт).
   const [paymentSourceId, setPaymentSourceId] =
     useState<number | null>(defaultPaymentSourceId);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     void listWarehouses()
       .then((loaded) => {
+        if (!mounted.current) return;
         setWarehouses(loaded);
         // Склад выдачи мог быть закрыт с тех пор, а список не загрузиться
         // вовсе. И то и другое — пустое поле на экране; считать его
@@ -1742,10 +1788,11 @@ function ReturnPanel({
           current !== null && loaded.some((w) => w.id === current) ? current : null);
       })
       .catch(() => {
+        if (!mounted.current) return;
         setWarehouses([]);
         setWarehouseId(null);
       });
-  }, []);
+  }, [mounted]);
 
   const ready = canSell && chosen.length > 0 && warehouseId !== null;
 

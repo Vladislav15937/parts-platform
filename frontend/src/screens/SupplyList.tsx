@@ -10,6 +10,7 @@ import {
 } from '../intake/donors';
 import type { SupplyRef } from '../reference/reference';
 import { plural } from '../ui/plural';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Поставки: что заведено, что уже приехало и какие машины пришли партией.
@@ -65,6 +66,8 @@ export function SupplyList({ supplies, online, onChanged }: Props) {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [dates, setDates] = useState<Record<number, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   if (supplies.length === 0) {
     return (
@@ -187,12 +190,15 @@ export function SupplyList({ supplies, online, onChanged }: Props) {
     setCarsFailure(null);
     setLoadingCars(true);
     try {
-      setCars(await donorsOfSupply(id));
+      const found = await donorsOfSupply(id);
+      if (mounted.current) setCars(found);
     } catch (cause) {
-      setCarsFailure(
-        cause instanceof ApiError ? cause.message : 'Машины партии не загрузились');
+      if (mounted.current) {
+        setCarsFailure(
+          cause instanceof ApiError ? cause.message : 'Машины партии не загрузились');
+      }
     } finally {
-      setLoadingCars(false);
+      if (mounted.current) setLoadingCars(false);
     }
   }
 
@@ -203,11 +209,13 @@ export function SupplyList({ supplies, online, onChanged }: Props) {
       await markSupplyArrived(supply.id, dates[supply.id] ?? today());
       // Справочник перечитывается: без этого отметка не видна до перезагрузки
       // экрана, и приёмщик жмёт кнопку второй раз.
-      onChanged();
+      if (mounted.current) onChanged();
     } catch (cause) {
-      setFailure(cause instanceof ApiError ? cause.message : 'Отметить приход не удалось');
+      if (mounted.current) {
+        setFailure(cause instanceof ApiError ? cause.message : 'Отметить приход не удалось');
+      }
     } finally {
-      setBusyId(null);
+      if (mounted.current) setBusyId(null);
     }
   }
 }
