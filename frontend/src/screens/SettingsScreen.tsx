@@ -13,6 +13,7 @@ import {
   PAYMENT_SOURCE_TYPES,
 } from '../sales/sales';
 import type { DealSourceEntry, PaymentSourceEntry } from '../sales/sales';
+import { useMounted } from '../ui/useMounted';
 
 type Section = 'payment' | 'deal';
 
@@ -68,6 +69,8 @@ function PaymentSourcesPanel() {
   const [name, setName] = useState('');
   const [type, setType] = useState('');
   const [busy, setBusy] = useState(false);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     void load();
@@ -142,11 +145,16 @@ function PaymentSourcesPanel() {
 
   async function load(): Promise<void> {
     try {
-      setSources(await paymentSources());
-      setError('');
+      const found = await paymentSources();
+      if (mounted.current) {
+        setSources(found);
+        setError('');
+      }
     } catch (cause) {
-      setSources([]);
-      setError(describe(cause, 'Источники платежей не загрузились'));
+      if (mounted.current) {
+        setSources([]);
+        setError(describe(cause, 'Источники платежей не загрузились'));
+      }
     }
   }
 
@@ -155,13 +163,14 @@ function PaymentSourcesPanel() {
     setError('');
     try {
       await createPaymentSource(name.trim(), type === '' ? null : type);
+      if (!mounted.current) return;
       setName('');
       setType('');
       await load();
     } catch (cause) {
-      setError(describe(cause, 'Источник не заведён'));
+      if (mounted.current) setError(describe(cause, 'Источник не заведён'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -173,9 +182,9 @@ function PaymentSourcesPanel() {
       } else {
         await archivePaymentSource(source.id);
       }
-      await load();
+      if (mounted.current) await load();
     } catch (cause) {
-      setError(describe(cause, 'Не удалось изменить источник'));
+      if (mounted.current) setError(describe(cause, 'Не удалось изменить источник'));
     }
   }
 }
@@ -189,6 +198,8 @@ function DealSourcesPanel() {
   const [error, setError] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     void load();
@@ -244,11 +255,16 @@ function DealSourcesPanel() {
 
   async function load(): Promise<void> {
     try {
-      setSources(await dealSourceEntries());
-      setError('');
+      const found = await dealSourceEntries();
+      if (mounted.current) {
+        setSources(found);
+        setError('');
+      }
     } catch (cause) {
-      setSources([]);
-      setError(describe(cause, 'Источники сделок не загрузились'));
+      if (mounted.current) {
+        setSources([]);
+        setError(describe(cause, 'Источники сделок не загрузились'));
+      }
     }
   }
 
@@ -257,12 +273,13 @@ function DealSourcesPanel() {
     setError('');
     try {
       await createDealSourceEntry(name.trim());
+      if (!mounted.current) return;
       setName('');
       await load();
     } catch (cause) {
-      setError(describe(cause, 'Источник не заведён'));
+      if (mounted.current) setError(describe(cause, 'Источник не заведён'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -274,9 +291,9 @@ function DealSourcesPanel() {
       } else {
         await archiveDealSourceEntry(source.id);
       }
-      await load();
+      if (mounted.current) await load();
     } catch (cause) {
-      setError(describe(cause, 'Не удалось изменить источник'));
+      if (mounted.current) setError(describe(cause, 'Не удалось изменить источник'));
     }
   }
 }

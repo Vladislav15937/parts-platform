@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { cachedReference, refreshReference } from './reference';
 import type { Reference } from './reference';
+import { useMounted } from '../ui/useMounted';
 
 type Status =
   | { kind: 'loading' }
@@ -25,11 +26,15 @@ const STALE_AFTER_HOURS = 12;
 
 export function useReference() {
   const [status, setStatus] = useState<Status>({ kind: 'loading' });
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   const refresh = useCallback(async () => {
     try {
       const loaded = await refreshReference();
-      setStatus({ kind: 'ready', reference: loaded, stale: false });
+      if (mounted.current) {
+        setStatus({ kind: 'ready', reference: loaded, stale: false });
+      }
       return true;
     } catch (error) {
       const message =
@@ -38,14 +43,16 @@ export function useReference() {
           : 'Не удалось обновить справочники';
 
       // Локальные не выбрасываем: работать на устаревших можно, без них — нет.
-      setStatus((previous) =>
-        previous.kind === 'ready'
-          ? { ...previous, error: message }
-          : { kind: 'empty', error: message },
-      );
+      if (mounted.current) {
+        setStatus((previous) =>
+          previous.kind === 'ready'
+            ? { ...previous, error: message }
+            : { kind: 'empty', error: message },
+        );
+      }
       return false;
     }
-  }, []);
+  }, [mounted]);
 
   useEffect(() => {
     let cancelled = false;

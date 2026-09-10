@@ -5,6 +5,7 @@ import {
   type BulkResult, type CatalogQuery, type PriceOperation,
 } from '../inventory/catalog';
 import { count as formatCount, positions } from '../ui/plural';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Правка нескольких позиций разом.
@@ -53,6 +54,8 @@ export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
   // Отмеченные руками строки этого не требуют — их владелец только что
   // выбрал сам.
   const [confirming, setConfirming] = useState(false);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   function toggle(key: string): void {
     setTouched({ ...touched, [key]: touched[key] !== true });
@@ -106,11 +109,13 @@ export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
       const result = whole === undefined
         ? await savePartsBulk(partIds, changes, operations)
         : await savePartsBulkByFilter(whole, changes, operations);
-      onSaved(result);
+      if (mounted.current) onSaved(result);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Не удалось сохранить');
+      if (mounted.current) {
+        setError(e instanceof ApiError ? e.message : 'Не удалось сохранить');
+      }
     } finally {
-      setSaving(false);
+      if (mounted.current) setSaving(false);
     }
   }
 

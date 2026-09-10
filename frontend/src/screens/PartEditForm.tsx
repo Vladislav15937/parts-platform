@@ -4,6 +4,7 @@ import {
   loadEditable, savePart, priceOperationHint, PRICE_OPERATIONS,
   type PartEdit, type PriceOperation,
 } from '../inventory/catalog';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Правка карточки товара.
@@ -43,6 +44,8 @@ export function PartEditForm({ partId, onSaved, onCancel }: {
    * означали бы «поставить десять рублей».
    */
   const [loadedPrice, setLoadedPrice] = useState('');
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     let alive = true;
@@ -79,11 +82,13 @@ export function PartEditForm({ partId, onSaved, onCancel }: {
     setSaving(true);
     try {
       await savePart(partId, toEdit(form), priceOp);
-      onSaved();
+      if (mounted.current) onSaved();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Не удалось сохранить');
+      if (mounted.current) {
+        setError(e instanceof ApiError ? e.message : 'Не удалось сохранить');
+      }
     } finally {
-      setSaving(false);
+      if (mounted.current) setSaving(false);
     }
   }
 

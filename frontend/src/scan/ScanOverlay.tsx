@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createDecoder, hasNativeDecoder } from './decoder';
 import type { FrameDecoder } from './decoder';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Видоискатель сканера.
@@ -35,6 +36,8 @@ export function ScanOverlay({ onScan, onClose, hint }: ScanOverlayProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   // Через ref, а не через состояние: колбэк живёт внутри цикла кадров,
   // который не должен пересоздаваться при каждом рендере.
@@ -65,6 +68,7 @@ export function ScanOverlay({ onScan, onClose, hint }: ScanOverlayProps) {
         await video.play();
 
         decoder = await createDecoder();
+        if (!mounted.current) return;
         setLoading(false);
 
         const canvas = document.createElement('canvas');
@@ -96,6 +100,7 @@ export function ScanOverlay({ onScan, onClose, hint }: ScanOverlayProps) {
           }
         }
       } catch (cause) {
+        if (!mounted.current) return;
         setLoading(false);
         setError(describe(cause));
       }
@@ -110,7 +115,7 @@ export function ScanOverlay({ onScan, onClose, hint }: ScanOverlayProps) {
       // Именно каждую дорожку: остановка потока целиком не гасит камеру.
       stream?.getTracks().forEach((track) => track.stop());
     };
-  }, []);
+  }, [mounted]);
 
   return (
     <div className="scan-overlay">

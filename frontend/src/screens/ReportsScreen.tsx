@@ -43,9 +43,11 @@ import type {
   Summary,
   SupplyOption,
 } from '../reports/reports';
+import { OriginCharts } from './OriginCharts';
 import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
 import { paymentSourceTypeLabel } from '../sales/sales';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Отчёты владельца.
@@ -108,6 +110,9 @@ export function ReportsScreen({ canRead }: Props) {
   const [items, setItems] = useState<OriginItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [itemsError, setItemsError] = useState<string | null>(null);
+  // Графики окупаемости во времени: окно поверх экрана, а не вкладка.
+  // «Окупилась ли» таблица отвечает, «когда» — только график.
+  const [charts, setCharts] = useState(false);
   const [donorList, setDonorList] = useState<DonorEntry[]>([]);
   const [supplyList, setSupplyList] = useState<SupplyOption[]>([]);
   // У переехавшего клиента 441 машина: списком их не пролистать.
@@ -127,54 +132,74 @@ export function ReportsScreen({ canRead }: Props) {
   // Поиск машины в отборе проданного — свой, а не общий с разрезом ниже:
   // это два разных вопроса, и набранное в одном не должно сужать другой.
   const [soldDonorFind, setSoldDonorFind] = useState('');
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     void managerSales(month)
-      .then(setManagers)
-      .catch((cause) => setError(describe(cause, 'Отчёт по продажам не загрузился')));
-  }, [month]);
+      .then((found) => { if (mounted.current) setManagers(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Отчёт по продажам не загрузился'));
+      });
+  }, [month, mounted]);
 
   useEffect(() => {
     // Тот же месяц, что и у отчёта по менеджерам: владелец смотрит их рядом,
     // и разные периоды на соседних таблицах сравнивать нельзя.
     void salesBySource(month)
-      .then(setSources)
-      .catch((cause) => setError(describe(cause, 'Отчёт по каналам не загрузился')));
-  }, [month]);
+      .then((found) => { if (mounted.current) setSources(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Отчёт по каналам не загрузился'));
+      });
+  }, [month, mounted]);
 
   useEffect(() => {
     // Тот же месяц: «сколько прошло наличными» владелец смотрит рядом
     // с выручкой, и разные периоды на соседних таблицах сравнивать нельзя.
     void paymentsBySource(month)
-      .then(setPayments)
-      .catch((cause) => setError(describe(cause, 'Платежи по источникам не загрузились')));
-  }, [month]);
+      .then((found) => { if (mounted.current) setPayments(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Платежи по источникам не загрузились'));
+      });
+  }, [month, mounted]);
 
   useEffect(() => {
     void donorProfitability()
-      .then(setDonors)
-      .catch((cause) => setError(describe(cause, 'Отчёт по машинам не загрузился')));
+      .then((found) => { if (mounted.current) setDonors(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Отчёт по машинам не загрузился'));
+      });
     void customerSettlements()
-      .then(setSettlements)
-      .catch((cause) => setError(describe(cause, 'Расчёты с клиентами не загрузились')));
+      .then((found) => { if (mounted.current) setSettlements(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Расчёты с клиентами не загрузились'));
+      });
     void summary()
-      .then(setOverview)
-      .catch((cause) => setError(describe(cause, 'Сводка не загрузилась')));
+      .then((found) => { if (mounted.current) setOverview(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Сводка не загрузилась'));
+      });
     // Списки для выбора: машины — те же, что на экране машин, партии —
     // все, включая закрытые. Про закрытый контейнер и спрашивают
     // «окупился ли», а справочник приёмки такие прячет.
     void listDonors()
-      .then(setDonorList)
-      .catch((cause) => setError(describe(cause, 'Список машин не загрузился')));
+      .then((found) => { if (mounted.current) setDonorList(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Список машин не загрузился'));
+      });
     void reportSupplies()
-      .then((loaded) => setSupplyList(loaded.rows))
-      .catch((cause) => setError(describe(cause, 'Список поставок не загрузился')));
+      .then((loaded) => { if (mounted.current) setSupplyList(loaded.rows); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Список поставок не загрузился'));
+      });
     // Склады для отбора проданного: список сегодняшний, а не из справочника
     // приёмки, который телефон держит в IndexedDB с понедельника.
     void listWarehouses()
-      .then(setWarehouseList)
-      .catch((cause) => setError(describe(cause, 'Список складов не загрузился')));
-  }, []);
+      .then((found) => { if (mounted.current) setWarehouseList(found); })
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Список складов не загрузился'));
+      });
+  }, [mounted]);
 
   // Проданные позиции: первая страница по нынешнему отбору. Строки прошлого
   // отбора снимаются до запроса, а не по его приходу, — иначе между нажатием
@@ -186,15 +211,18 @@ export function ReportsScreen({ canRead }: Props) {
     setSoldError(null);
     void soldItems(soldFilter, null)
       .then((loaded) => {
+        if (!mounted.current) return;
         setSoldPage(loaded);
         setSold(loaded.rows);
         // Список продавцов едет только с первой страницей: он считается
         // по всем продажам, а не по отобранным, и меняться ему не с чего.
         setSoldManagers(loaded.managers);
       })
-      .catch((cause) => setSoldError(describe(cause, 'Проданные позиции не загрузились')))
-      .finally(() => setLoadingSold(false));
-  }, [soldFilter]);
+      .catch((cause) => {
+        if (mounted.current) setSoldError(describe(cause, 'Проданные позиции не загрузились'));
+      })
+      .finally(() => { if (mounted.current) setLoadingSold(false); });
+  }, [soldFilter, mounted]);
 
   /** «Показать ещё»: дописывает следующую страницу, не трогая итог. */
   function moreSold() {
@@ -204,11 +232,14 @@ export function ReportsScreen({ canRead }: Props) {
     setLoadingSold(true);
     void soldItems(soldFilter, soldPage.nextAfter)
       .then((loaded) => {
+        if (!mounted.current) return;
         setSoldPage(loaded);
         setSold((shownRows) => [...shownRows, ...loaded.rows]);
       })
-      .catch((cause) => setSoldError(describe(cause, 'Проданные позиции не загрузились')))
-      .finally(() => setLoadingSold(false));
+      .catch((cause) => {
+        if (mounted.current) setSoldError(describe(cause, 'Проданные позиции не загрузились'));
+      })
+      .finally(() => { if (mounted.current) setLoadingSold(false); });
   }
 
   useEffect(() => {
@@ -230,12 +261,15 @@ export function ReportsScreen({ canRead }: Props) {
     setItemsError(null);
     void loadItems(origin, tab, null)
       .then((loaded) => {
+        if (!mounted.current) return;
         setPage(loaded);
         setItems(loaded.rows);
       })
-      .catch((cause) => setItemsError(describe(cause, 'Позиции не загрузились')))
-      .finally(() => setLoadingItems(false));
-  }, [origin, tab]);
+      .catch((cause) => {
+        if (mounted.current) setItemsError(describe(cause, 'Позиции не загрузились'));
+      })
+      .finally(() => { if (mounted.current) setLoadingItems(false); });
+  }, [origin, tab, mounted]);
 
   /** «Показать ещё»: дописывает следующую страницу, не трогая итог. */
   function more() {
@@ -245,11 +279,14 @@ export function ReportsScreen({ canRead }: Props) {
     setLoadingItems(true);
     void loadItems(origin, tab, page.nextAfter)
       .then((loaded) => {
+        if (!mounted.current) return;
         setPage(loaded);
         setItems((shownRows) => [...shownRows, ...loaded.rows]);
       })
-      .catch((cause) => setItemsError(describe(cause, 'Позиции не загрузились')))
-      .finally(() => setLoadingItems(false));
+      .catch((cause) => {
+        if (mounted.current) setItemsError(describe(cause, 'Позиции не загрузились'));
+      })
+      .finally(() => { if (mounted.current) setLoadingItems(false); });
   }
 
   if (!canRead) {
@@ -977,18 +1014,24 @@ export function ReportsScreen({ canRead }: Props) {
               этикеток: без этого по экрану не понять, какая из четырёх
               открыта, — а цифры на всех четырёх выглядят одинаково
               правдоподобно. Поймано живым прогоном. */}
-          <div className="tabs">
-            {TABS.map(([code, title]) => (
-              <button
-                key={code}
-                type="button"
-                className={code === tab ? 'tab tab--active' : 'tab'}
-                aria-pressed={code === tab}
-                onClick={() => setTab(code)}
-              >
-                {title}
-              </button>
-            ))}
+          <div className="row row--between">
+            <div className="tabs">
+              {TABS.map(([code, title]) => (
+                <button
+                  key={code}
+                  type="button"
+                  className={code === tab ? 'tab tab--active' : 'tab'}
+                  aria-pressed={code === tab}
+                  onClick={() => setTab(code)}
+                >
+                  {title}
+                </button>
+              ))}
+            </div>
+
+            {/* Окно поверх, а не отдельная вкладка: владелец смотрит график
+                и возвращается к позициям, не теряя выбранной машины. */}
+            <button type="button" onClick={() => setCharts(true)}>Графики</button>
           </div>
 
           {itemsError !== null && <p className="note note--error">{itemsError}</p>}
@@ -1060,10 +1103,41 @@ export function ReportsScreen({ canRead }: Props) {
               Показать ещё
             </button>
           )}
+
+          {charts && (
+            <OriginCharts
+              origin={origin}
+              title={originTitle(origin, donorList, supplyList)}
+              onClose={() => setCharts(false)}
+            />
+          )}
         </>
       )}
     </section>
   );
+}
+
+/**
+ * Чем разрез подписан в окне графиков — тем же, чем он выбран в списке.
+ *
+ * <p>Внутренний номер владельцу не говорит ничего: машину он знает
+ * по заметке или своему номеру, партию — по поставщику.
+ */
+function originTitle(origin: Origin, donors: DonorEntry[], supplies: SupplyOption[]): string {
+  if (origin.kind === 'donor') {
+    const donor = donors.find((d) => d.id === origin.id);
+    return donor === undefined ? 'машина' : donorTitle(donor);
+  }
+  if (origin.id === null) {
+    return 'поставка не указана';
+  }
+  const supply = supplies.find((s) => s.id === origin.id);
+  if (supply === undefined) {
+    return 'поставка';
+  }
+  return supply.supplierName === null
+    ? supply.number
+    : `${supply.supplierName} · ${supply.number}`;
 }
 
 /** Машина ищется по тому же, чем подписана в строке, плюс VIN. */

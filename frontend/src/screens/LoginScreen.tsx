@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ApiError } from '../api/client';
 import { useSession } from '../auth/SessionProvider';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Вход.
@@ -30,6 +31,8 @@ export function LoginScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -39,13 +42,15 @@ export function LoginScreen() {
       await signIn({ company, login, password });
       localStorage.setItem(COMPANY_KEY, company);
     } catch (cause) {
-      setError(
-        cause instanceof ApiError && cause.kind === 'transient'
-          ? 'Нет связи с сервером'
-          : 'Неверный код компании, логин или пароль',
-      );
+      if (mounted.current) {
+        setError(
+          cause instanceof ApiError && cause.kind === 'transient'
+            ? 'Нет связи с сервером'
+            : 'Неверный код компании, логин или пароль',
+        );
+      }
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 

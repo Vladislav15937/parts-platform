@@ -4,6 +4,7 @@ import { ApiError, SESSION_LOST, ensureCsrfToken, refreshCsrfToken } from '../ap
 import * as auth from '../api/auth';
 import type { Credentials, Me } from '../api/auth';
 import { scopeTo } from '../storage/tenantScope';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Сессия приложения.
@@ -65,6 +66,8 @@ function forgetMe(): void {
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<SessionState>({ status: 'checking' });
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     let cancelled = false;
@@ -81,6 +84,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // кладовщик видел бы её лист обхода, ячейки и машины. Очередь
         // при этом не трогаем — в ней несделанная работа приёмщика.
         await scopeTo(current.companySchema);
+        if (cancelled || !mounted.current) {
+          return;
+        }
         setState({ status: 'authenticated', me: current, offline: false });
       } catch (error) {
         if (cancelled) {
@@ -109,7 +115,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [mounted]);
 
   /*
    * Сессия кончилась — просим войти заново, а не показываем «401» на каждом
@@ -156,8 +162,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const current = await auth.login(credentials);
     rememberMe(current);
     await scopeTo(current.companySchema);
-    setState({ status: 'authenticated', me: current, offline: false });
-  }, []);
+    if (mounted.current) {
+      setState({ status: 'authenticated', me: current, offline: false });
+    }
+  }, [mounted]);
 
   const signOut = useCallback(async () => {
     try {
@@ -166,9 +174,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       // Даже если выход не дошёл до сервера, локально считаем себя вышедшими:
       // иначе приёмщик остаётся в чужой смене.
       forgetMe();
-      setState({ status: 'anonymous' });
+      if (mounted.current) setState({ status: 'anonymous' });
     }
-  }, []);
+  }, [mounted]);
 
   return (
     <SessionContext.Provider value={{ state, signIn, signOut }}>{children}</SessionContext.Provider>

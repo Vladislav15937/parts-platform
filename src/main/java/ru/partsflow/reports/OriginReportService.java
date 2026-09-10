@@ -1,13 +1,18 @@
 package ru.partsflow.reports;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeSet;
 
 /**
  * Что поступило с машины и с поставки — позициями.
@@ -233,6 +238,163 @@ public class OriginReportService {
     }
 
     /**
+     * Окупаемость машины во времени: четыре накопительных ряда по месяцам.
+     *
+     * <p><b>Зачем.</b> Таблица «Окупаемость машин» отвечает «окупилась ли
+     * на сегодня», но не «когда» и не «с какой скоростью»: машина, отбившая
+     * вложенное за два месяца, и машина, отбившая столько же за два года,
+     * выглядят в ней одинаково. «За сколько окупается контейнер» — вопрос,
+     * вокруг которого у разборки крутится вся экономика.
+     *
+     * <p><b>Числа те же, что владелец уже видит.</b> Последняя точка
+     * «Продано на сумму» равна колонке «Выручено» из
+     * {@code v_donor_profitability}, «Себестоимость всех» — колонке
+     * «Вложено», а последняя точка «Планируемой суммы» — подвалу вкладки
+     * «Поступило». Разойдись они — график и таблица считают по-разному,
+     * и это хуже отсутствия графика.
+     */
+    @Transactional(readOnly = true)
+    public Chart donorChart(long donorId) {
+        return chart("p.donor_id = ?", List.of(donorId), """
+                SELECT to_char(date_trunc('month', incurred_on), 'YYYY-MM') AS ym,
+                       sum(amount) AS amount
+                  FROM donor_cost
+                 WHERE donor_id = ?
+                 GROUP BY 1""", List.of(donorId));
+    }
+
+    /**
+     * То же по партии.
+     *
+     * <p><b>«Вложено» у партии считается иначе, чем у машины, и это решение
+     * исполнителя.</b> Затрат у поставки в системе нет вовсе: таблица
+     * {@code donor_cost} есть только у машины, а у контейнера — ни закупки,
+     * ни доставки, ни растаможки. Поэтому вложенным здесь считается
+     * себестоимость поступившего товара ({@code cost_price} на принятое
+     * количество) — единственное число про деньги, которое у партии есть.
+     * Оно же роднит оба ряда себестоимости: «Себестоимость проданных»
+     * на этом графике — снимки тех же закупочных цен, то есть линии говорят
+     * об одном, и пересечение с выручкой читается верно.
+     *
+     * @param supplyId пусто — товар без поставки: отдельный разрез, а не
+     *                 «все подряд»
+     */
+    @Transactional(readOnly = true)
+    public Chart supplyChart(Long supplyId) {
+        String scope = supplyId == null ? "p.supply_id IS NULL" : "p.supply_id = ?";
+        List<Object> args = supplyId == null ? List.of() : List.of(supplyId);
+        return chart(scope, args, """
+                SELECT to_char(date_trunc('month', m.created_at), 'YYYY-MM') AS ym,
+                       sum(abs(m.qty_delta) * COALESCE(p.cost_price, 0)) AS amount
+                  FROM stock_movement m
+                  JOIN part p ON p.id = m.part_id
+                 WHERE m.movement_type = 'INTAKE'""" + " AND " + scope + "\n"
+                + " GROUP BY 1", args);
+    }
+
+    /**
+     * Сборка месячной оси.
+     *
+     * <p>Ось тянется от первого события до текущего месяца, а не за выбранный
+     * период: вопрос «когда окупилась» задают про всю жизнь машины. Месяц
+     * без событий на ней остаётся — накопительная линия в нём горизонтальна,
+     * и «выдохлась или ещё продаётся» видно как раз по длине полки.
+     *
+     * <p>Ряды накопительные, а столбцы — нет: сумма столбцов равна последней
+     * точке накопительной линии по построению, а не по совпадению.
+     */
+    private Chart chart(String scope, List<Object> scopeArgs,
+                        String investedSql, List<Object> investedArgs) {
+
+        // Планируемая сумма: розничная стоимость всего, что поступило.
+        // Считается по журналу, а не по part.quantity: то поле у принятой
+        // партией позиции остаётся единицей, а у перенесённой из предыдущей
+        // системы — единицей у всех 35 841.
+        Map<YearMonth, BigDecimal> planned = byMonth("""
+                SELECT to_char(date_trunc('month', m.created_at), 'YYYY-MM') AS ym,
+                       sum(abs(m.qty_delta) * COALESCE(p.price, 0)) AS amount
+                  FROM stock_movement m
+                  JOIN part p ON p.id = m.part_id
+                 WHERE m.movement_type = 'INTAKE'""" + " AND " + scope + "\n"
+                + " GROUP BY 1", scopeArgs);
+
+        // Выручка и себестоимость проданного — одним запросом и тем же
+        // условием, что и revenue во вьюхе: сделка выдана И позиция выдана.
+        // Дата — момент закрытия сделки; COALESCE на создание нужен затем,
+        // чтобы выручка не исчезала с оси из-за незаполненной даты: последняя
+        // точка обязана сходиться с «Выручено», а не «почти сходиться».
+        Map<YearMonth, BigDecimal> revenue = new HashMap<>();
+        Map<YearMonth, BigDecimal> soldCost = new HashMap<>();
+        jdbc.query("""
+                SELECT to_char(date_trunc('month',
+                           COALESCE(dl.closed_at, dl.created_at)), 'YYYY-MM') AS ym,
+                       sum(di.price * di.quantity - di.discount)  AS revenue,
+                       sum(di.cost_price_snapshot * di.quantity)  AS cost
+                  FROM deal_item di
+                  JOIN deal dl ON dl.id = di.deal_id
+                  JOIN part p ON p.id = di.part_id
+                 WHERE dl.status = 'ISSUED' AND di.status = 'ISSUED'""" + " AND " + scope + "\n"
+                + " GROUP BY 1",
+                (RowCallbackHandler) rs -> {
+                    YearMonth month = YearMonth.parse(rs.getString("ym"));
+                    revenue.put(month, zeroIfNull(rs.getBigDecimal("revenue")));
+                    soldCost.put(month, zeroIfNull(rs.getBigDecimal("cost")));
+                },
+                scopeArgs.toArray());
+
+        Map<YearMonth, BigDecimal> invested = byMonth(investedSql, investedArgs);
+
+        var months = new TreeSet<YearMonth>();
+        months.addAll(planned.keySet());
+        months.addAll(revenue.keySet());
+        months.addAll(invested.keySet());
+        if (months.isEmpty()) {
+            // Ни затрат, ни поступлений, ни продаж: рисовать нечего, и нули
+            // на пустой оси были бы утверждением о деньгах, которых не было.
+            return new Chart(List.of());
+        }
+
+        YearMonth last = months.last();
+        YearMonth today = YearMonth.now();
+        if (today.isAfter(last)) {
+            last = today;
+        }
+
+        List<Point> points = new ArrayList<>();
+        BigDecimal plannedSum = BigDecimal.ZERO;
+        BigDecimal revenueSum = BigDecimal.ZERO;
+        BigDecimal soldCostSum = BigDecimal.ZERO;
+        BigDecimal investedSum = BigDecimal.ZERO;
+        for (YearMonth month = months.first();
+             !month.isAfter(last);
+             month = month.plusMonths(1)) {
+
+            BigDecimal soldThisMonth = revenue.getOrDefault(month, BigDecimal.ZERO);
+            plannedSum = plannedSum.add(planned.getOrDefault(month, BigDecimal.ZERO));
+            revenueSum = revenueSum.add(soldThisMonth);
+            soldCostSum = soldCostSum.add(soldCost.getOrDefault(month, BigDecimal.ZERO));
+            investedSum = investedSum.add(invested.getOrDefault(month, BigDecimal.ZERO));
+
+            points.add(new Point(month.toString(), plannedSum, revenueSum,
+                    soldCostSum, investedSum, soldThisMonth));
+        }
+        return new Chart(points);
+    }
+
+    private Map<YearMonth, BigDecimal> byMonth(String sql, List<Object> args) {
+        Map<YearMonth, BigDecimal> rows = new HashMap<>();
+        jdbc.query(sql,
+                (RowCallbackHandler) rs -> rows.put(YearMonth.parse(rs.getString("ym")),
+                        zeroIfNull(rs.getBigDecimal("amount"))),
+                args.toArray());
+        return rows;
+    }
+
+    private static BigDecimal zeroIfNull(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    /**
      * Страница позиций и итог по всей вкладке.
      *
      * <p>Итог считается отдельным запросом по всей выборке, а не складывается
@@ -360,5 +522,40 @@ public class OriginReportService {
 
     public record SupplyOption(long id, String kind, String number, String supplierName,
                                String status, LocalDate arrivedOn) {
+    }
+
+    /**
+     * Точка месячной оси графика.
+     *
+     * <p>Первые четыре величины накопительные — вопрос «окупилась ли»
+     * читается пересечением линий, а не сравнением столбиков соседних
+     * месяцев. Пятая, наоборот, помесячная: из неё видно, выдохлась машина
+     * или ещё продаётся.
+     *
+     * @param month        месяц вида {@code 2026-03}
+     * @param planned      «Планируемая сумма»: розничная стоимость всего,
+     *                     что поступило, накопительно
+     * @param revenue      «Продано на сумму» накопительно; последняя точка
+     *                     равна колонке «Выручено» окупаемости
+     * @param soldCost     «Себестоимость проданных» накопительно: снимки
+     *                     закупочной цены на момент продажи, а не нынешняя
+     *                     цена карточки
+     * @param totalCost    «Себестоимость всех»: сколько вложено. У машины —
+     *                     затраты по ней ({@code donor_cost}), у партии —
+     *                     себестоимость поступившего
+     * @param monthRevenue продано на сумму за сам месяц — столбец второго
+     *                     графика
+     */
+    public record Point(String month, BigDecimal planned, BigDecimal revenue,
+                        BigDecimal soldCost, BigDecimal totalCost,
+                        BigDecimal monthRevenue) {
+    }
+
+    /**
+     * @param points пусто — по этой машине или партии не было ни затрат,
+     *               ни поступлений, ни продаж. Это не «нет данных за период»:
+     *               оси у графика в таком случае нет вовсе
+     */
+    public record Chart(List<Point> points) {
     }
 }

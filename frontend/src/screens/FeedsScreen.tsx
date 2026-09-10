@@ -8,6 +8,7 @@ import type { PartKind } from '../catalog/partNames';
 import { loadCached, refresh } from '../catalog/vehicles';
 import type { Brand } from '../catalog/vehicles';
 import { ColumnMenu } from './ColumnMenu';
+import { useMounted } from '../ui/useMounted';
 import {
   COLUMNS,
   FILTER_EMPTY,
@@ -74,31 +75,42 @@ export function FeedsScreen({ role }: { role: string }) {
   const [brands, setBrands] = useState<Brand[]>([]);
   const [error, setError] = useState('');
 
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
+
   const load = useCallback(() => {
     listFeeds()
       .then((found) => {
-        setFeeds(found);
-        setError('');
+        if (mounted.current) {
+          setFeeds(found);
+          setError('');
+        }
       })
-      .catch((cause) => setError(describe(cause, 'Выгрузки не загрузились')));
-  }, []);
+      .catch((cause) => {
+        if (mounted.current) {
+          setError(describe(cause, 'Выгрузки не загрузились'));
+        }
+      });
+  }, [mounted]);
 
   useEffect(load, [load]);
 
   useEffect(() => {
     void listWarehouses()
-      .then(setWarehouses)
+      .then((found) => { if (mounted.current) setWarehouses(found); })
       // Молча: без списка складов отбор по цене всё ещё работает.
-      .catch(() => setWarehouses([]));
+      .catch(() => { if (mounted.current) setWarehouses([]); });
 
-    void allKinds().then(setKinds).catch(() => setKinds([]));
+    void allKinds()
+      .then((found) => { if (mounted.current) setKinds(found); })
+      .catch(() => { if (mounted.current) setKinds([]); });
     // Марки уже лежат в кэше справочника машин — он предзагружен ради
     // приёмки. Второй запрос за тем же был бы данью привычке.
     void loadCached()
       .then((cached) => (cached ? cached.brands : refresh().then((v) => v.brands)))
-      .then(setBrands)
-      .catch(() => setBrands([]));
-  }, []);
+      .then((found) => { if (mounted.current) setBrands(found); })
+      .catch(() => { if (mounted.current) setBrands([]); });
+  }, [mounted]);
 
   if (feeds === null) {
     // Не удалось — так и говорим. Ошибка при загрузке оставляет состояние
@@ -167,13 +179,14 @@ export function FeedsScreen({ role }: { role: string }) {
 function DeletedFeeds() {
   const [gone, setGone] = useState<Feed[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const mounted = useMounted();
 
   return (
     <details onToggle={(e) => {
       if ((e.target as HTMLDetailsElement).open && gone === null) {
         void listDeletedFeeds()
-          .then(setGone)
-          .catch(() => setFailed(true));
+          .then((found) => { if (mounted.current) setGone(found); })
+          .catch(() => { if (mounted.current) setFailed(true); });
       }
     }}>
       <summary>Удалённые выгрузки</summary>
@@ -268,6 +281,9 @@ function FeedCard({
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState<number | null>(null);
 
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
+
   // Название правится тут же, где показано: ссылки это не касается вовсе.
   const [title, setTitle] = useState(feed.title);
   // Удаление спрашивает подтверждение и называет, что именно удаляется:
@@ -327,11 +343,11 @@ function FeedCard({
     setBusy(true);
     try {
       await setFilter(feed.id, current());
-      onChanged();
+      if (mounted.current) onChanged();
     } catch (cause) {
-      onError(describe(cause, 'Отбор не сохранён'));
+      if (mounted.current) onError(describe(cause, 'Отбор не сохранён'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -362,11 +378,11 @@ function FeedCard({
         expectedGoodsNote: expectedGoodsNote.trim() === ''
           ? null : expectedGoodsNote,
       });
-      onChanged();
+      if (mounted.current) onChanged();
     } catch (cause) {
-      onError(describe(cause, refused));
+      if (mounted.current) onError(describe(cause, refused));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -375,12 +391,13 @@ function FeedCard({
     try {
       // Переключатель ожидаемого товара берётся из формы, как и весь отбор:
       // счётчик, о нём не знающий, обещал бы меньше, чем уедет площадке.
-      setMatching((await countMatching(
-        current(), feed.productLine, expectedGoods)).parts);
+      const counted = (await countMatching(
+        current(), feed.productLine, expectedGoods)).parts;
+      if (mounted.current) setMatching(counted);
     } catch (cause) {
-      onError(describe(cause, 'Посчитать не удалось'));
+      if (mounted.current) onError(describe(cause, 'Посчитать не удалось'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -395,11 +412,11 @@ function FeedCard({
     setBusy(true);
     try {
       await renameFeed(feed.id, title.trim());
-      onChanged();
+      if (mounted.current) onChanged();
     } catch (cause) {
-      onError(describe(cause, 'Название не сохранено'));
+      if (mounted.current) onError(describe(cause, 'Название не сохранено'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -407,12 +424,14 @@ function FeedCard({
     setBusy(true);
     try {
       await setFeedStatus(feed.id, status);
-      onChanged();
+      if (mounted.current) onChanged();
     } catch (cause) {
-      onError(describe(cause,
-        status === 'PAUSED' ? 'Выгрузка не выключена' : 'Выгрузка не включена'));
+      if (mounted.current) {
+        onError(describe(cause,
+          status === 'PAUSED' ? 'Выгрузка не выключена' : 'Выгрузка не включена'));
+      }
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -423,24 +442,29 @@ function FeedCard({
       // Карточка исчезнет вместе с перечитанным списком, но подтверждение
       // закрываем сами: отказ оставил бы его открытым, и владелец нажал бы
       // «Удалить» второй раз, не поняв, что первое не прошло.
-      setConfirming(false);
-      onChanged();
+      if (mounted.current) {
+        setConfirming(false);
+        onChanged();
+      }
     } catch (cause) {
-      onError(describe(cause, 'Выгрузка не удалена'));
+      if (mounted.current) onError(describe(cause, 'Выгрузка не удалена'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
   async function rotate() {
     setBusy(true);
     try {
-      setLink(await rotateFeedUrl(feed.id));
-      onChanged();
+      const rotated = await rotateFeedUrl(feed.id);
+      if (mounted.current) {
+        setLink(rotated);
+        onChanged();
+      }
     } catch (cause) {
-      onError(describe(cause, 'Ссылка не сменилась'));
+      if (mounted.current) onError(describe(cause, 'Ссылка не сменилась'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -456,13 +480,14 @@ function FeedCard({
     try {
       await setFeedFileName(feed.id, fileName.trim());
       if (feed.hasFeed) {
-        setLink(await feedUrl(feed.id));
+        const fresh = await feedUrl(feed.id);
+        if (mounted.current) setLink(fresh);
       }
-      onChanged();
+      if (mounted.current) onChanged();
     } catch (cause) {
-      onError(describe(cause, 'Имя файла не сохранено'));
+      if (mounted.current) onError(describe(cause, 'Имя файла не сохранено'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -914,7 +939,9 @@ function FeedCard({
           чтобы узнать ссылку, приходилось её сломать. */}
       <details onToggle={(e) => {
         if ((e.target as HTMLDetailsElement).open && link === null && feed.hasFeed) {
-          void feedUrl(feed.id).then(setLink).catch(() => {});
+          void feedUrl(feed.id)
+            .then((fresh) => { if (mounted.current) setLink(fresh); })
+            .catch(() => {});
         }
       }}>
         <summary>Ссылка для площадки</summary>
@@ -1116,12 +1143,14 @@ function FeedCard({
       await setCredentials(feed.id, secret.trim());
       // Поле чистим сразу: ключ прочитать нельзя, и оставленный в поле
       // он выглядел бы как «мы его вам показываем».
-      setSecret('');
-      onChanged();
+      if (mounted.current) {
+        setSecret('');
+        onChanged();
+      }
     } catch (cause) {
-      onError(describe(cause, 'Ключ не сохранён'));
+      if (mounted.current) onError(describe(cause, 'Ключ не сохранён'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 }
@@ -1252,6 +1281,7 @@ function NewFeed({ onCreated }: { onCreated: () => void }) {
   const [productLine, setProductLine] = useState<'PART' | 'WHEEL'>('PART');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const mounted = useMounted();
 
   return (
     <div className="card">
@@ -1307,13 +1337,15 @@ function NewFeed({ onCreated }: { onCreated: () => void }) {
     setError('');
     try {
       await createFeed(title.trim(), packetId, productLine);
-      setTitle('');
-      setPacketId('');
-      onCreated();
+      if (mounted.current) {
+        setTitle('');
+        setPacketId('');
+        onCreated();
+      }
     } catch (cause) {
-      setError(describe(cause, 'Кабинет не заведён'));
+      if (mounted.current) setError(describe(cause, 'Кабинет не заведён'));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 }

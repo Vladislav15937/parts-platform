@@ -13,6 +13,7 @@ import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
 import { searchStock } from '../sales/sales';
 import { count } from '../ui/plural';
+import { useMounted } from '../ui/useMounted';
 
 /**
  * Печать этикеток.
@@ -43,18 +44,22 @@ export function LabelsScreen({ canPrint }: Props) {
   // нельзя — печатают по нему.
   const [partsFound, setPartsFound] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
 
   useEffect(() => {
     void listWarehouses()
       .then((loaded) => {
-        setWarehouses(loaded);
         // Склад не подставляется, как и на остальных экранах: первый
         // по имени у клиента с тремя складами оказывался пустым, и экран
         // печати встречал сообщением «На этом складе ячеек нет» — то есть
         // отвечал на вопрос, которого никто не задавал.
+        if (mounted.current) setWarehouses(loaded);
       })
-      .catch((cause) => setError(describe(cause, 'Склады не загрузились')));
-  }, []);
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Склады не загрузились'));
+      });
+  }, [mounted]);
 
   useEffect(() => {
     if (warehouseId === null) {
@@ -62,11 +67,15 @@ export function LabelsScreen({ canPrint }: Props) {
     }
     void cellsOf(warehouseId)
       .then((loaded) => {
-        setCells(loaded);
-        setPicked([]);
+        if (mounted.current) {
+          setCells(loaded);
+          setPicked([]);
+        }
       })
-      .catch((cause) => setError(describe(cause, 'Ячейки не загрузились')));
-  }, [warehouseId]);
+      .catch((cause) => {
+        if (mounted.current) setError(describe(cause, 'Ячейки не загрузились'));
+      });
+  }, [warehouseId, mounted]);
 
   if (!canPrint) {
     return (
@@ -274,14 +283,16 @@ export function LabelsScreen({ canPrint }: Props) {
     setError(null);
     try {
       const found = await searchStock(query.trim());
-      setPartsFound(found.total);
-      setPartLabels(
-        found.rows
-          .filter((row) => row.publicCode !== null)
-          .map((row) => partLabel(row.publicCode!, row.title, row.price)),
-      );
+      if (mounted.current) {
+        setPartsFound(found.total);
+        setPartLabels(
+          found.rows
+            .filter((row) => row.publicCode !== null)
+            .map((row) => partLabel(row.publicCode!, row.title, row.price)),
+        );
+      }
     } catch (cause) {
-      setError(describe(cause, 'Поиск не сработал'));
+      if (mounted.current) setError(describe(cause, 'Поиск не сработал'));
     }
   }
 }
