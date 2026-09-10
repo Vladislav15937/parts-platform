@@ -59,7 +59,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class OriginChartTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000125";
+    // Схема своя и проверена на занятость: номер, совпадающий с номером
+    // задачи или PR, — первое, что приходит в голову, и ровно так этот тест
+    // занял t_000125, уже принадлежавшую LoginSessionTest. Тот делит фикстуру
+    // логином `vladelec`, но с другим паролем, и вход отвечал 401 — но только
+    // в том порядке прогона, где сосед отработал первым.
+    private static final String TENANT = "t_000127";
 
     /** Месяцы фикстуры: продажи разнесены, чтобы накопление было видно. */
     private static final YearMonth MARCH = YearMonth.of(2026, 3);
@@ -98,7 +103,7 @@ class OriginChartTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() throws Exception {
-        register(125, TENANT, "grafik");
+        register(127, TENANT, "grafik");
         inTenant(TENANT, () -> {
             member("vladelec", "Владелец", "OWNER");
             member("prodavets", "Продавец", "SELLER");
