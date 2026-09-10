@@ -62,6 +62,9 @@ class PhotoArchiveStreamTest extends PostgresTestBase {
     private static final String TENANT = "t_000136";
     private static final String BUCKET = "parts-photos-archive-test";
 
+    /** Файл-объяснение внутри архива: он есть только тогда, когда есть о чём. */
+    private static final String NOTE = "NE-VSE-SNIMKI.txt";
+
     @SuppressWarnings("resource")
     private static final GenericContainer<?> MINIO =
             new GenericContainer<>("minio/minio:latest")
@@ -95,6 +98,9 @@ class PhotoArchiveStreamTest extends PostgresTestBase {
 
     @Autowired
     private PhotoService photos;
+
+    @Autowired
+    private PhotoStorage storage;
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -175,6 +181,39 @@ class PhotoArchiveStreamTest extends PostgresTestBase {
                 .isNotNull()
                 .isNotEmpty();
         assertThat(entriesOf(answer.getBody())).hasSize(3);
+        assertThat(entriesOf(answer.getBody()))
+                .as("объяснение про недочитанные снимки попало в архив, где всё "
+                        + "прочиталось: лишний файл в каждом архиве приучает не читать")
+                .doesNotContainKey(NOTE);
+    }
+
+    @Test
+    @DisplayName("Пропавший из хранилища снимок не ломает архив: остальные на месте")
+    void missingObjectLeavesTheRestOfTheArchiveReadable() {
+        // Снимок исчезает из хранилища между чтением состава и сборкой:
+        // запись в базе остаётся подтверждённой, объекта уже нет. Так
+        // выглядит удаление в S3 мимо приложения и потерянный объект.
+        // Второй по полосе — главный, значит пропадает 02.jpg.
+        storage.delete(keys.get(0));
+
+        ResponseEntity<byte[]> answer = download(partId, signIn("hozyain"));
+
+        assertThat(answer.getStatusCode().value()).isEqualTo(200);
+        Map<String, byte[]> inside = entriesOf(answer.getBody());
+        assertThat(inside.keySet())
+                .as("пропавший снимок унёс с собой остальные: покупателю "
+                        + "отправлять нечего, хотя фотографии в карточке есть")
+                .containsExactly("01.jpg", "03.jpg", NOTE);
+        assertThat(inside.get("01.jpg")).isEqualTo(bytesOf(2));
+        assertThat(inside.get("03.jpg")).isEqualTo(bytesOf(3));
+
+        String note = new String(inside.get(NOTE), StandardCharsets.UTF_8);
+        assertThat(note)
+                .as("архив без части снимков выглядит целым: продавец отправит "
+                        + "покупателю два снимка вместо трёх и не узнает об этом")
+                .contains("Всего снимков в карточке: 3")
+                .contains("Не удалось прочитать: 1")
+                .contains("02.jpg");
     }
 
     @Test
