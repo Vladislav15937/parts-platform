@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { endOfDay, listReturns, startOfDay } from '../sales/sales';
+import { customerName } from '../sales/dealStatus';
 import type { ReturnListRow, ReturnsPage } from '../sales/sales';
 import { shortDate } from '../ui/shortDate';
 import { useMounted } from '../ui/useMounted';
@@ -151,7 +152,10 @@ function Row({
         <strong>{row.number ?? row.id}</strong>
         <div className="muted">{shortDate(row.createdAt)}</div>
       </td>
-      <td>{row.customerName ?? 'Частное лицо'}</td>
+      {/* Слово то же самое, что было здесь с задачи 0021, — но взято общей
+          функцией: своё «Частное лицо» рядом с чужим «Без клиента» и было
+          тем расхождением, ради которого функция заведена (задача 0062). */}
+      <td>{customerName(row.customerName)}</td>
       <td>
         <button type="button" className="button--ghost" onClick={() => onOpenDeal(row.dealId)}>
           {row.dealNumber ?? row.dealId}

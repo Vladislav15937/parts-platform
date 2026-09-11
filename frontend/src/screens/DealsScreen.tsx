@@ -6,7 +6,7 @@ import {
   listDeals,
   reservationTerm,
 } from '../sales/sales';
-import { dealStageStatus, dealStatusName } from '../sales/dealStatus';
+import { customerName, dealStageStatus, dealStatusName } from '../sales/dealStatus';
 import type {
   DealBoard, DealBoardCard, DealBoardOption, DealFunnelKey, DealListRow, DealsPage,
 } from '../sales/sales';
@@ -449,8 +449,11 @@ function Row({
         <strong>№{row.number ?? row.id}</strong>
         <div className="muted">{shortDate(row.createdAt)}</div>
       </td>
-      {/* У заказа с площадки клиента нет вовсе — покупателя она не называет. */}
-      <td>{row.customerName ?? 'Без клиента'}</td>
+      {/* Покупатель, которого продавец не проставил, зовётся «Частным лицом» —
+          одним словом на всю систему (решение владельца от 12 сентября 2026,
+          задача 0062). Своё «Без клиента» здесь читалось как потерянные
+          данные, хотя это обычная розничная продажа. */}
+      <td>{customerName(row.customerName)}</td>
       <td className="num">{money(row.totalAmount)}</td>
       <td className="num">{money(row.paidAmount)}</td>
       <td>
