@@ -1,6 +1,7 @@
 package ru.partsflow.sales;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import ru.partsflow.shared.RetailCustomer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -56,6 +57,15 @@ public class CustomerService {
 
     @Transactional
     public Customer create(String name, String phone, String email, String customerType) {
+        // Второго «Частного лица» не заводим ни при каком входе: это
+        // контрагент розничной продажи, он один на арендатора. Сюда можно
+        // попасть, набрав то же имя руками (подсказка поиска не пришла —
+        // сеть моргнула), и вторая строка с тем же именем сделала бы
+        // подстановку по умолчанию неоднозначной, а отчёт по клиентам —
+        // двумя строками об одном.
+        if (RetailCustomer.NAME.equalsIgnoreCase(name.strip())) {
+            return retail();
+        }
         return jdbc.queryForObject("""
                 INSERT INTO customer (name, phone, email, customer_type)
                 VALUES (?, ?, ?, ?)
@@ -63,6 +73,78 @@ public class CustomerService {
                 CustomerService::map,
                 name.strip(), blankToNull(phone), blankToNull(email),
                 customerType == null || customerType.isBlank() ? "PERSON" : customerType);
+    }
+
+    /**
+     * Контрагент розничной продажи: заводится один раз на арендатора.
+     *
+     * <p>Половина продаж на разборке — человек с улицы, которому нечего
+     * заводить в справочник. Пока клиент был обязателен, продавец набирал
+     * имя и жал «Завести клиента», и справочник зарастал «мужиками
+     * на приоре»; теперь на его месте стоит один контрагент, на который
+     * ложатся печатные формы, возвраты и лицевой счёт, — {@code NULL}
+     * заставил бы ветвиться каждое из этих мест.
+     *
+     * <p><b>Заводит его провижининг</b> ({@code TenantProvisioning}), а этот
+     * метод — тот же контрагент для арендаторов, заведённых раньше правки:
+     * наполнить их схемы миграцией нельзя, не тронув {@code db/changelog}.
+     *
+     * <p><b>Блокировка нужна, потому что уникального индекса по имени нет.</b>
+     * Два продавца, открывшие экран продажи одновременно, прочитали бы «нет
+     * такого» оба и завели бы двух — то самое удвоение, ради которого
+     * контрагент и один. Условие в {@code WHERE} тут не помогает: строка
+     * ещё не существует, блокировать нечего, — та же причина, по которой
+     * остаток лицевого счёта проверяется под блокировкой строки клиента,
+     * а не внутри {@code INSERT}. Блокировка на время транзакции, ключ —
+     * имя схемы: у соседнего арендатора свой.
+     */
+    @Transactional
+    public Customer retail() {
+        List<Customer> existing = findRetail();
+        if (!existing.isEmpty()) {
+            return existing.get(0);
+        }
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtext(?))", rs -> null,
+                ru.partsflow.platform.tenant.TenantContext.require() + "/retail-customer");
+
+        // Перечитываем под блокировкой: пока её ждали, контрагента мог
+        // завести сосед.
+        List<Customer> afterLock = findRetail();
+        if (!afterLock.isEmpty()) {
+            return afterLock.get(0);
+        }
+        return jdbc.queryForObject("""
+                INSERT INTO customer (name, customer_type)
+                VALUES (?, 'PERSON')
+                RETURNING id, name, phone, email, customer_type""",
+                CustomerService::map, RetailCustomer.NAME);
+    }
+
+    /**
+     * Номер контрагента розничной продажи или {@code null}, если его ещё нет.
+     *
+     * <p>Только чтение: отчёты спрашивают «это он?» и заводить его не должны —
+     * арендатор, в котором ни разу не продавали, не обязан обзаводиться
+     * контрагентом от того, что владелец открыл отчёт.
+     */
+    @Transactional(readOnly = true)
+    public Long retailCustomerId() {
+        List<Customer> found = findRetail();
+        return found.isEmpty() ? null : found.get(0).id();
+    }
+
+    /**
+     * Самый ранний контрагент с этим именем.
+     *
+     * <p>{@code ORDER BY id} — на случай, если второй всё же появился
+     * (прямым SQL или переносом с прежней системы): все читатели тогда
+     * возьмут одного и того же, а не разных в зависимости от плана запроса.
+     */
+    private List<Customer> findRetail() {
+        return jdbc.query("""
+                SELECT id, name, phone, email, customer_type
+                  FROM customer WHERE name = ? ORDER BY id LIMIT 1""",
+                CustomerService::map, RetailCustomer.NAME);
     }
 
     /**
@@ -159,6 +241,21 @@ public class CustomerService {
         String type = customerType == null || customerType.isBlank() ? "PERSON" : customerType;
         if (!type.equals("PERSON") && !type.equals("COMPANY")) {
             throw new IllegalArgumentException("Неверный тип клиента: " + customerType);
+        }
+        // Имя — единственный признак, по которому система узнаёт контрагента
+        // розничной продажи (колонки-признака в схеме нет). Переименованный,
+        // он перестал бы находиться, и следующая продажа завела бы второго;
+        // чужая карточка, названная так же, стала бы неотличима от него.
+        // Остальные поля — телефон, почту, примечание — править можно.
+        Long retailId = retailCustomerId();
+        boolean renamingRetail = retailId != null && retailId.equals(id)
+                && !RetailCustomer.NAME.equalsIgnoreCase(name.strip());
+        boolean takingRetailName = (retailId == null || !retailId.equals(id))
+                && RetailCustomer.NAME.equalsIgnoreCase(name.strip());
+        if (renamingRetail || takingRetailName) {
+            throw new IllegalStateException(
+                    "«%s» — контрагент розничной продажи, он один и переименованию не подлежит"
+                            .formatted(RetailCustomer.NAME));
         }
 
         int updated = jdbc.update("""

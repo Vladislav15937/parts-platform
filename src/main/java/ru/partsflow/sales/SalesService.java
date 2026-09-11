@@ -43,6 +43,7 @@ public class SalesService {
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final DealSourceRepository dealSources;
     private final ru.partsflow.inventory.PartChangeLog partChanges;
+    private final CustomerService customers;
 
     public SalesService(DealRepository dealRepository,
                         DealReturnRepository dealReturnRepository,
@@ -56,7 +57,9 @@ public class SalesService {
                         ServiceKindRepository serviceKinds,
                         DealSourceRepository dealSources,
                         ru.partsflow.inventory.PartChangeLog partChanges,
+                        CustomerService customers,
                         org.springframework.jdbc.core.JdbcTemplate jdbc) {
+        this.customers = customers;
         this.dealRepository = dealRepository;
         this.dealReturnRepository = dealReturnRepository;
         this.paymentRepository = paymentRepository;
@@ -158,12 +161,26 @@ public class SalesService {
      * <p>Черновик без резерва почти не встречается: продавец разговаривает
      * с клиентом по телефону, и деталь нужно отложить в тот же момент, иначе
      * её продаст сосед за соседним столом.
+     *
+     * <p><b>Клиент необязателен: не названного подменяет контрагент
+     * розничной продажи.</b> Половина продаж — человек с улицы, и требовать
+     * до товара имя, которого он не называл, значит заставлять продавца
+     * выдумывать его («мужик на приоре») либо не давать оформить продажу
+     * вовсе. Подстановка стоит здесь, а не только на экране: пустой
+     * {@code customer_id} у обычной продажи означал бы ветвление в каждом
+     * месте, где к сделке приходят деньги, возврат и печатная форма.
+     * У заказа с площадки всё наоборот — там клиента нет по-настоящему,
+     * и подставлять его нельзя: это другой метод
+     * ({@link #registerMarketplaceOrder}), и он не тронут.
      */
     @Transactional
     public Deal createReserved(Long customerId, Long managerId, Instant reservedUntil,
                                Long dealSourceId, List<ItemRequest> items,
                                List<ServiceRequest> services) {
 
+        if (customerId == null) {
+            customerId = customers.retail().id();
+        }
         requireCustomer(customerId);
         requireDealSource(dealSourceId);
 
@@ -1787,6 +1804,76 @@ public class SalesService {
     @Transactional(readOnly = true)
     public List<Deal> expiredReservations() {
         return withItems(dealRepository.findExpiredReservations(Instant.now()));
+    }
+
+    /**
+     * Меняет контрагента сделки: «Частное лицо» оказалось Евгением Гридиным.
+     *
+     * <p>Так и устроен разговор на разборке: сначала товар, потом — если
+     * покупатель назвался — клиент. Сделка создаётся на контрагенте
+     * розничной продажи, и это единственный путь заменить его настоящим
+     * покупателем; проверки, при которых менять нельзя, живут в
+     * {@link Deal#changeCustomer}.
+     *
+     * <p><b>В историю документа это пишется отдельной строкой с обоими
+     * именами.</b> «Сделка была оформлена на кого-то другого» выясняется
+     * через недели, при возврате или разборе долга, и ответ «изменил Пётр,
+     * с „Частного лица“ на Гридина» должен читаться прямо из журнала —
+     * иначе остаётся молча изменившееся поле, по которому не восстановить
+     * ни кто, ни зачем.
+     */
+    @Transactional
+    public Deal changeCustomer(Long dealId, Long customerId, Long managerId) {
+        requireExistingCustomer(customerId);
+        Deal deal = requireDeal(dealId);
+        Long previous = deal.getCustomerId();
+        if (customerId.equals(previous)) {
+            // Ничего не меняется — и записи в историю быть не должно:
+            // строка «изменён контрагент с Гридина на Гридина» только мешает
+            // читать журнал.
+            return detachable(deal);
+        }
+        deal.changeCustomer(customerId);
+
+        Deal saved = detachable(dealRepository.saveAndFlush(deal));
+        log(saved, "CUSTOMER_CHANGED",
+                "Изменён контрагент с %s на %s".formatted(
+                        customerName(previous), customerName(customerId)),
+                managerId);
+        return saved;
+    }
+
+    /**
+     * Имена клиентов одним запросом на всю выдачу — как наименования
+     * запчастей и имена ответственных.
+     *
+     * <p>Пустые номера отбрасываются здесь, а не у вызывающего: у заказа
+     * с площадки клиента нет вовсе, и {@code IN (NULL)} тихо вернул бы
+     * пустую карту на всю страницу.
+     */
+    @Transactional(readOnly = true)
+    public java.util.Map<Long, String> customerNamesOf(List<Long> customerIds) {
+        List<Long> ids = customerIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return new java.util.HashMap<>();
+        }
+        java.util.Map<Long, String> names = new java.util.HashMap<>();
+        jdbc.query("SELECT id, name FROM customer WHERE id IN (%s)"
+                        .formatted(String.join(",", java.util.Collections.nCopies(ids.size(), "?"))),
+                rs -> {
+                    names.put(rs.getLong("id"), rs.getString("name"));
+                }, ids.toArray());
+        return names;
+    }
+
+    /** Имя клиента для истории документа; у заказа с площадки его нет вовсе. */
+    private String customerName(Long customerId) {
+        if (customerId == null) {
+            return "«без клиента»";
+        }
+        List<String> found = jdbc.queryForList(
+                "SELECT name FROM customer WHERE id = ?", String.class, customerId);
+        return found.isEmpty() ? "клиента " + customerId : found.get(0);
     }
 
     /**

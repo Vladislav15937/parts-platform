@@ -38,9 +38,17 @@ import java.util.stream.Collectors;
 public class ReportService {
 
     private final JdbcTemplate jdbc;
+    /**
+     * Нужен ровно затем, чтобы узнать номер контрагента розничной продажи:
+     * опознаётся он по имени, и второе место, где это имя написано, разошлось
+     * бы с первым молча — как уже расходились белые списки колонок и копии
+     * словаря состояний.
+     */
+    private final ru.partsflow.sales.CustomerService customers;
 
-    public ReportService(JdbcTemplate jdbc) {
+    public ReportService(JdbcTemplate jdbc, ru.partsflow.sales.CustomerService customers) {
         this.jdbc = jdbc;
+        this.customers = customers;
     }
 
     /**
@@ -260,6 +268,14 @@ public class ReportService {
      */
     @Transactional(readOnly = true)
     public List<SettlementRow> customerSettlements(int limit) {
+        // Контрагент розничной продажи помечается, а не выбрасывается
+        // из отчёта. За его строкой стоят сотни продаж людям с улицы, и
+        // «постоянный покупатель с сотней сделок» она не означает — но долг
+        // в ней настоящий: товар отдали и денег не взяли. Убрав строку,
+        // владелец увидел бы отчёт, который выглядит полным и не сходится
+        // с кассой ровно на неё, — то же правило, по которому сделки без
+        // источника идут строкой, а не пропадают из отчёта по каналам.
+        Long retailId = customers.retailCustomerId();
         return jdbc.query("""
                 SELECT customer_id, customer_name, phone,
                        account_balance, debt, unpaid_deals
@@ -272,7 +288,8 @@ public class ReportService {
                         rs.getString("phone"),
                         rs.getBigDecimal("account_balance"),
                         rs.getBigDecimal("debt"),
-                        rs.getInt("unpaid_deals")),
+                        rs.getInt("unpaid_deals"),
+                        retailId != null && retailId == rs.getLong("customer_id")),
                 limit);
     }
 
@@ -420,8 +437,15 @@ public class ReportService {
                         rs.getBigDecimal("amount")));
     }
 
+    /**
+     * @param retail это контрагент розничной продажи, а не постоянный
+     *               покупатель: за строкой стоят все продажи людям с улицы,
+     *               и складываются в ней долги разных людей. Помечается,
+     *               а не выбрасывается, — деньги в ней настоящие
+     */
     public record SettlementRow(Long customerId, String customerName, String phone,
-                                BigDecimal accountBalance, BigDecimal debt, int unpaidDeals) {
+                                BigDecimal accountBalance, BigDecimal debt, int unpaidDeals,
+                                boolean retail) {
     }
 
     /**

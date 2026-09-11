@@ -33,6 +33,8 @@ import {
   returnWarehouseDefault,
   returnsOf,
   roomFor,
+  retailCustomer,
+  changeDealCustomer,
   searchCustomers,
   searchStock,
   NO_STOCK_FILTER,
@@ -116,6 +118,16 @@ export function SellerScreen({
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [lines, setLines] = useState<BasketLine[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
+  /**
+   * Контрагент розничной продажи — тот, что подставлен в поле клиента,
+   * пока покупатель не назвался.
+   *
+   * <p>Держится отдельно от {@link customer}, потому что после каждой
+   * оформленной сделки поле возвращается к нему: следующий разговор
+   * начинается с чистого листа, а оставшийся прежний покупатель — это
+   * чужая фамилия в сделке, которую никто не перечитывает.
+   */
+  const [retail, setRetail] = useState<Customer | null>(null);
   // Заказ с площадки оформляется здесь же, а не отдельным экраном с той же
   // корзиной: продавец уже нашёл детали и выбрал клиента, и второй такой же
   // экран отличался бы двумя полями.
@@ -158,7 +170,23 @@ export function SellerScreen({
     void listWarehouses()
       .then((found) => { if (mounted.current) setWarehouses(found); })
       .catch(() => { if (mounted.current) setWarehouses([]); });
-  }, [mounted]);
+    // Контрагент розничной продажи — только тем, кто продаёт: остальным
+    // ролям экран открыт ради цены и наличия, и отказ по правам на запросе,
+    // которым они не пользуются, был бы красной строкой ни о чём.
+    if (canSell) {
+      void retailCustomer()
+        .then((found) => {
+          if (!mounted.current) return;
+          setRetail(found);
+          // Подставляем, только если продавец ещё никого не выбрал: ответ
+          // мог прийти позже, чем он начал набирать фамилию.
+          setCustomer((chosen) => chosen ?? found);
+        })
+        // Молча: без него продажа работает как раньше — клиента выбирают
+        // руками, и кнопка оформления скажет, что его не хватает.
+        .catch(() => { if (mounted.current) setRetail(null); });
+    }
+  }, [mounted, canSell]);
   const [deal, setDeal] = useState<Deal | null>(null);
   // Возврат и перенос случаются не в тот же разговор, что продажа: клиент
   // приезжает через неделю. Без поиска по клиенту до его сделки не добраться.
@@ -190,6 +218,10 @@ export function SellerScreen({
       .finally(() => { if (mounted.current) onDealOpened?.(); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openDealId]);
+
+  // Что мешает оформить. Считается один раз и используется дважды —
+  // условием кнопки и текстом под ней.
+  const orderBlock = orderObstacle(canSell, marketplace, orderNo, customer);
 
   return (
     <section className="card">
@@ -301,6 +333,19 @@ export function SellerScreen({
         <p className="note">Ничего не найдено</p>
       )}
 
+      {/* Почему у всех строк кнопка серая. Экран открыт каждой роли — цену
+          и наличие спрашивают и у приёмщика, — а продавать могут не все,
+          и без этой строки кладовщик видел полсотни погашенных кнопок
+          без единого слова о причине. Сказано один раз над списком,
+          а не в каждой строке: пятьдесят одинаковых упрёков читаются
+          как поломка. */}
+      {rows.length > 0 && !canSell && (
+        <p className="note">
+          Ваша роль не позволяет продавать — цену и наличие видно, а положить
+          товар в сделку нельзя.
+        </p>
+      )}
+
       {rows.length > 0 && (
         <ul className="stock-list">
           {rows.map((row) => (
@@ -372,7 +417,12 @@ export function SellerScreen({
             Итого: {basketTotal(lines, services).toLocaleString('ru-RU')} ₽
           </p>
 
-          <CustomerPicker customer={customer} onPick={setCustomer} onError={setError} />
+          <CustomerPicker
+            customer={customer}
+            onPick={setCustomer}
+            onClear={() => setCustomer(null)}
+            onError={setError}
+          />
 
           {sources.length > 0 && (
             <label className="field">
@@ -425,22 +475,17 @@ export function SellerScreen({
             </>
           )}
 
+          {/* Условие кнопки и текст под ней считает одно выражение: разойдись
+              они, кнопка снова начала бы молчать или называть не ту причину.
+              Тот же приём, что у «Оплаты» в карточке сделки. */}
           <button
             type="button"
-            /* Клиент обязателен обычной продаже — она ведётся с человеком,
-               который стоит у прилавка. У заказа с площадки клиента нет:
-               покупателя она не называет, и назначить его задним числом
-               нечем. Пока клиент требовался и здесь, принять заказ с экрана
-               было нельзя вовсе — продавец заводил фиктивного, чтобы кнопка
-               ожила, и в справочнике клиентов появлялся «Дром». */
-            disabled={!canSell
-              || (marketplace === '' && customer === null)
-              || (marketplace !== '' && orderNo.trim() === '')}
+            disabled={orderBlock !== null}
             onClick={() => void submit()}
           >
             {marketplace === '' ? 'Оформить и отложить' : 'Принять заказ'}
           </button>
-          {!canSell && <p className="note">Ваша роль не позволяет продавать</p>}
+          {orderBlock !== null && <p className="note">{orderBlock}</p>}
         </>
       )}
 
@@ -521,7 +566,7 @@ export function SellerScreen({
   }
 
   async function submit(): Promise<void> {
-    if (customer === null && marketplace === '') {
+    if (orderBlock !== null) {
       return;
     }
     setError(null);
@@ -545,12 +590,17 @@ export function SellerScreen({
         setOrderNo('');
         setNote('');
       } else {
-        const created = await createDeal(customer!.id, lines, services,
+        const created = await createDeal(customer?.id ?? null, lines, services,
           sourceId === '' ? null : Number(sourceId));
         if (!mounted.current) return;
         setDeal(created);
       }
       setLines([]);
+      // Следующий разговор начинается с чистого листа: оставшийся в поле
+      // покупатель предыдущей сделки уехал бы в следующую молча — поле
+      // заполнено и выглядит осмысленно, а смотрят на него как раз тогда,
+      // когда клиент назвался.
+      setCustomer(retail);
       setServices(services.map((line) => ({ ...line, price: '' })));
       // Остаток изменился — показанный список уже врёт.
       forgetSearch();
@@ -861,14 +911,24 @@ function StockItem({
   );
 }
 
-/** Найти позвонившего по телефону или завести его прямо в разговоре. */
+/**
+ * Найти позвонившего по телефону или завести его прямо в разговоре.
+ *
+ * <p>Поле не пустое: в нём стоит «Частное лицо», пока покупатель
+ * не назвался. Поэтому у выбранного клиента есть «Изменить» — иначе
+ * подставленного было бы не заменить вовсе, и продажа человеку с именем
+ * стала бы невозможной.
+ */
 function CustomerPicker({
   customer,
   onPick,
+  onClear,
   onError,
 }: {
   customer: Customer | null;
   onPick: (customer: Customer) => void;
+  /** Снять выбранного и вернуться к поиску. */
+  onClear: () => void;
   onError: (message: string) => void;
 }) {
   const [query, setQuery] = useState('');
@@ -881,6 +941,10 @@ function CustomerPicker({
       <p className="note">
         Клиент: {customer.name ?? 'без имени'}
         {customer.phone !== null && ` · ${customer.phone}`}
+        {' '}
+        <button type="button" className="button--ghost" onClick={onClear}>
+          Изменить
+        </button>
       </p>
     );
   }
@@ -1004,6 +1068,13 @@ function DealFinder({
           setCustomer(picked);
           void load(picked);
         }}
+        onClear={() => {
+          // Сделки и счёт — про прежнего клиента: оставшись на экране,
+          // они приписали бы следующему чужие покупки и чужие деньги.
+          setCustomer(null);
+          setDeals(null);
+          setAccount(null);
+        }}
         onError={onError}
       />
 
@@ -1061,6 +1132,13 @@ function DealFinder({
               Выдать
             </button>
           </div>
+          {/* Почему «Положить» и «Выдать» серые. До этой правки обе просто
+              гасли: продавец жмёт, ничего не происходит, и догадаться,
+              что мешает — пустое поле или пустой счёт, — можно только
+              перебором. */}
+          {accountObstacle(cash, account.balance) !== null && (
+            <p className="note">{accountObstacle(cash, account.balance)}</p>
+          )}
 
           {/* Правка остатка — владельцу и менеджеру. Продавец делает
               операции, опирающиеся на факт: принял, выдал, зачёл. Правка
@@ -1095,6 +1173,13 @@ function DealFinder({
                 <button type="button" className="button--ghost" onClick={() => setFixing(false)}>
                   Отмена
                 </button>
+                {/* Причина обязательна, и серая кнопка обязана это сказать:
+                    правка остатка — единственная операция, меняющая деньги
+                    клиента одним решением, и без «почему» через месяц её
+                    не отличить от ошибки. */}
+                {correctionObstacle(fixAmount, fixReason) !== null && (
+                  <p className="note">{correctionObstacle(fixAmount, fixReason)}</p>
+                )}
               </div>
             ) : (
               <button type="button" className="button--ghost" onClick={() => setFixing(true)}>
@@ -1245,6 +1330,10 @@ function DealCard({
   const [picked, setPicked] = useState<number[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [docs, setDocs] = useState<ReturnDoc[]>([]);
+  // Открыт ли подбор нового контрагента. Сделка заводится на «Частном лице»,
+  // а имя покупателя выясняется по ходу разговора — это обычный шаг,
+  // а не исправление ошибки.
+  const [changingCustomer, setChangingCustomer] = useState(false);
   // История подтягивается по раскрытию, а не с карточкой: на неё смотрят
   // при разборе спора, а не при каждой продаже.
   const [history, setHistory] = useState<HistoryEntry[] | null>(null);
@@ -1285,6 +1374,13 @@ function DealCard({
   // задача не говорит ничего.
   const reserveOnDocument = reservationTerm(deal) !== null;
 
+  // Когда контрагента ещё можно сменить: то же условие, что у сервера
+  // (`Deal.changeCustomer`) — документ не закрыт и денег по сделке
+  // не проходило. Платёж записан на прежнего клиента, и, переписав
+  // контрагента, мы оставили бы деньги одного человека в документе другого.
+  const customerChangeable = deal.status !== 'CANCELLED' && deal.status !== 'RETURNED'
+    && Number(deal.paidAmount) === 0;
+
   const debt = Number(deal.debt);
   const entered = amount.trim();
   const payment = Number(entered);
@@ -1318,6 +1414,9 @@ function DealCard({
     // «Возврат №1 оформлен» читается как возврат по ней.
     setNotice(null);
     setPicked([]);
+    // Открытый подбор клиента — про прежнюю сделку: оставшись, он сменил бы
+    // контрагента не у той, которую открыли.
+    setChangingCustomer(false);
     // Набранная дата — про прежнюю сделку: оставшись, она продлила бы
     // чужой резерв до числа, которого по нему никто не называл.
     setUntil('');
@@ -1354,6 +1453,61 @@ function DealCard({
         </p>
       )}
 
+      {/* Почему в карточке всё серое. Роль, не умеющая продавать, гасит
+          здесь каждую кнопку разом — «Выдать», «Отменить», «Продлить»,
+          «Оплата», «Зачесть», перенос и возврат, — и сказать об этом надо
+          один раз сверху, а не молчать у каждой. */}
+      {!canSell && (
+        <p className="note">
+          Ваша роль не позволяет продавать — по этой сделке доступен только
+          просмотр.
+        </p>
+      )}
+
+      {/* Контрагент и его смена. Порядок разговора на разборке — сначала
+          товар, потом (если покупатель назвался) клиент: сделка открывается
+          на «Частном лице», и заменить его настоящим покупателем надо
+          оттуда же, где сделку и открыли.
+
+          Кнопка показывается, только когда сервер такую смену примет, —
+          по тому же правилу, что и «Найти сделку клиента»: кнопка, которая
+          ничего не сделает, не показывается. Отказал бы он в двух случаях,
+          и оба про деньги: закрытый документ и сделка, по которой уже
+          проходили платежи (они записаны на прежнего клиента). */}
+      <p className="note">
+        Клиент: {deal.customerName ?? 'не указан'}
+        {canSell && customerChangeable && !changingCustomer && (
+          <>
+            {' '}
+            <button
+              type="button"
+              className="button--ghost"
+              onClick={() => setChangingCustomer(true)}
+            >
+              Изменить клиента
+            </button>
+          </>
+        )}
+      </p>
+
+      {changingCustomer && (
+        <div className="row">
+          <CustomerPicker
+            customer={null}
+            onPick={(picked) => void changeTo(picked)}
+            onClear={() => setChangingCustomer(false)}
+            onError={onError}
+          />
+          <button
+            type="button"
+            className="button--ghost"
+            onClick={() => setChangingCustomer(false)}
+          >
+            Отменить
+          </button>
+        </div>
+      )}
+
       {/* Продление — здесь же, где срок и прочитан: клиент звонит и просит
           подержать ещё, и уводить продавца за этим на другой экран значит
           не продлить вовсе. Дата не подставляется: до какого числа держим,
@@ -1378,6 +1532,11 @@ function DealCard({
           >
             Продлить
           </button>
+          {/* Дата не подставляется намеренно, поэтому кнопка при открытии
+              карточки всегда серая — и обязана сказать, чего ждёт. */}
+          {canSell && until === '' && (
+            <p className="note">Выберите дату — до какого числа держим товар.</p>
+          )}
         </div>
       )}
 
@@ -1542,6 +1701,17 @@ function DealCard({
           Отменить
         </button>
       </div>
+      {/* Обе кнопки гаснут на закрытом документе, и это не поломка:
+          выданную сделку возвращают, а не отменяют, а отменённую
+          и возвращённую трогать нечем. Раньше две серые кнопки стояли
+          рядом молча. */}
+      {canSell && !open && (
+        <p className="note">
+          {deal.status === 'ISSUED'
+            ? 'Товар уже выдан — отменить сделку нельзя, оформляется возврат ниже.'
+            : `Сделка ${dealStatusNameLower(deal.status)} — выдавать и отменять нечего.`}
+        </p>
+      )}
 
       {reserved.length > 0 && (
         <TransferPanel
@@ -1669,6 +1839,30 @@ function DealCard({
       if (mounted.current) setHistory(found);
     } catch (cause) {
       if (mounted.current) onError(describe(cause, 'История не загрузилась'));
+    }
+  }
+
+  /**
+   * Смена контрагента — мимо {@link act}, и это не небрежность.
+   *
+   * <p>Тот перечитывает сделку списком сделок **прежнего** клиента,
+   * а после смены её там уже нет: карточка осталась бы с прежним именем
+   * при изменённом документе. Сервер отдаёт изменённую сделку в ответе,
+   * и брать её оттуда — единственный способ не соврать.
+   */
+  async function changeTo(picked: Customer): Promise<void> {
+    try {
+      const fresh = await changeDealCustomer(deal.id, picked.id);
+      if (!mounted.current) return;
+      setChangingCustomer(false);
+      // Отдельного сообщения нет намеренно: имя стоит строкой выше
+      // («Клиент: Евгений Гридин»), и второе то же самое рядом ничего
+      // не добавляет. Проверено живым прогоном — там оно ещё и не доживает
+      // до экрана: эффект на смену клиента сбрасывает `notice` следующим
+      // тиком, как и всё прочее «про прежнюю сделку».
+      onChanged(fresh);
+    } catch (cause) {
+      if (mounted.current) onError(describe(cause, 'Клиент сделки не изменён'));
     }
   }
 
@@ -1980,6 +2174,65 @@ function todayISO(): string {
  * что читаются они по-разному: у отменённой сделки долга нет не потому,
  * что за неё заплатили, и «долг закрыт» там было бы неправдой.
  */
+/**
+ * Что мешает оформить продажу или принять заказ.
+ *
+ * <p>До этой правки кнопка просто гасла: клиент не выбран — серая
+ * и молчит. Продавец жмёт, ничего не происходит, и почему — он должен
+ * догадаться сам. Теперь клиент и не обязателен (в поле стоит «Частное
+ * лицо»), но причины остались: роль, не позволяющая продавать, очищенное
+ * руками поле клиента и заказ площадки без номера.
+ *
+ * <p>Возвращает `null`, когда оформлять можно, — тем же способом, что
+ * {@link paymentObstacle}: одно выражение на условие кнопки и на подпись
+ * под ней.
+ */
+function orderObstacle(
+  canSell: boolean, marketplace: string, orderNo: string, customer: Customer | null,
+): string | null {
+  if (!canSell) {
+    return 'Ваша роль не позволяет продавать.';
+  }
+  if (marketplace !== '') {
+    return orderNo.trim() === ''
+      ? 'Впишите номер заказа у площадки — по нему заказ и опознаётся.'
+      : null;
+  }
+  // Обычная продажа: клиент подставлен «Частным лицом» и обязателен только
+  // в том смысле, что поле нельзя оставить пустым, — нажав «Изменить»,
+  // продавец его очищает, и оформлять становится не на кого.
+  //
+  // Про дорогу назад сказано прямо: «оставьте „Частное лицо“» было бы
+  // неправдой — поля с ним на экране уже нет, — а найти его поиском можно,
+  // он такой же контрагент, как остальные. Поймано живым прогоном.
+  return customer === null
+    ? 'Выберите клиента — оформлять не на кого. «Частное лицо» найдётся тем же поиском.'
+    : null;
+}
+
+/** Что мешает положить деньги на счёт или выдать их. */
+function accountObstacle(cash: string, balance: number): string | null {
+  if (cash.trim() === '') {
+    return 'Впишите сумму — без неё ни положить, ни выдать нельзя.';
+  }
+  if (balance <= 0) {
+    return 'Выдавать нечего: на счету пусто. Положить можно.';
+  }
+  return null;
+}
+
+/** Что мешает поправить остаток счёта руками. */
+function correctionObstacle(amount: string, reason: string): string | null {
+  if (amount.trim() === '') {
+    return 'Впишите сумму правки — со знаком плюс или минус.';
+  }
+  if (reason.trim() === '') {
+    return 'Напишите причину: правка остатка без неё не проходит — через месяц '
+      + 'её не отличить от ошибки.';
+  }
+  return null;
+}
+
 function paymentObstacle(
   deal: Deal, debt: number, entered: string, payment: number,
 ): string | null {

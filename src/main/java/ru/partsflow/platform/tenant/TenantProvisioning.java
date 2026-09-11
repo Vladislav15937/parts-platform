@@ -109,6 +109,7 @@ public class TenantProvisioning {
             recordVersion(reserved.tenantId());
             createOwner(reserved.schema(), request);
             createFirstWarehouse(reserved.schema(), request.companyName());
+            createRetailCustomer(reserved.schema());
             activate(reserved.tenantId());
         } catch (RuntimeException e) {
             log.error("Провижининг арендатора {} ({}) сорвался, запись осталась "
@@ -252,6 +253,24 @@ public class TenantProvisioning {
 
         jdbc.update("INSERT INTO %s.warehouse (branch_id, name) VALUES (?, 'Основной')"
                 .formatted(schema), branchId);
+    }
+
+    /**
+     * Заводит контрагента розничной продажи.
+     *
+     * <p>В отличие от ячеек, этот справочник придумывать за клиента можно:
+     * «Частное лицо» — не его данные, а название того, кто покупает без
+     * заведения карточки, и подставлено оно в форму продажи с первого дня.
+     * Заводится один раз: дальше на него ссылаются сделки, и второго
+     * не появится (см. {@code CustomerService.retail}).
+     *
+     * <p>Имя берётся константой оттуда же: два написания «Частного лица»
+     * разошлись бы молча — провижининг завёл бы одно, а экран продажи искал
+     * бы другое и завёл бы второго при первой продаже.
+     */
+    private void createRetailCustomer(String schema) {
+        jdbc.update("INSERT INTO %s.customer (name, customer_type) VALUES (?, 'PERSON')"
+                .formatted(schema), ru.partsflow.shared.RetailCustomer.NAME);
     }
 
     private void activate(long tenantId) {
