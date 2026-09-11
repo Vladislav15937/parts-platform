@@ -483,6 +483,7 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
             {editing && (
               <PartEditForm
                 partId={row.id}
+                row={row}
                 onSaved={onChanged}
                 onCancel={() => setEditing(false)}
               />

@@ -2117,6 +2117,71 @@ hr {
   resize: vertical;
 }
 
+/* Строка правки карточки: «подпись — значение — Изменить». Пока строку
+   не раскрыли, в ней текст, и испортить нечего: форма уезжает PUT'ом
+   целиком, и пустое поле означает «очищено». */
+.card-edit__row {
+  display: flex;
+  /* На телефоне кнопка уходит под значение, а не растягивает строку вбок:
+     у flex-элемента min-width равен содержимому, и сжатие дало бы поле,
+     в котором не видно, что вводишь. */
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.card-edit__label {
+  flex: 0 0 11rem;
+  color: var(--muted);
+}
+
+.card-edit__value {
+  flex: 1 1 12rem;
+  min-width: 0;
+  /* Ссылка на ролик и кросс-номера длиннее строки: переносим, а не
+     растягиваем карточку. */
+  overflow-wrap: anywhere;
+}
+
+.card-edit__value input,
+.card-edit__value select,
+.card-edit__value textarea {
+  width: 100%;
+}
+
+.card-edit__value input[type='checkbox'] {
+  width: auto;
+}
+
+.card-edit__row .button--ghost {
+  border: none;
+  padding: 0 0.5rem;
+}
+
+/* Изменённое видно жёлтым — тем же, что «следующий шаг» в подборе.
+   Владелец обязан видеть, что именно он тронул, до сохранения: отменить
+   после него нечем. */
+.card-edit__row--changed {
+  background: #fef3c7;
+}
+
+.card-edit__counter {
+  margin: 0;
+  font-weight: 600;
+}
+
+@media (min-width: 900px) {
+  .card-edit__label {
+    flex-basis: 14rem;
+  }
+
+  .card-edit__row .button--ghost {
+    min-height: 28px;
+  }
+}
+
 /* Флажок рядом с подписью, а не над ней: подпись «Выгружать на площадки»
    над пустым квадратом читается как заголовок раздела. */
 .field--check {

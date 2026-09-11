@@ -66,6 +66,16 @@ export interface Deal {
    * клиента видит и продавец.
    */
   managerName: string | null;
+  /**
+   * Стадия работы над сделкой — та же, по которой раскладывается доска:
+   * `NEW`, `EXPIRED`, `AWAITING_PAYMENT`, `PARTLY_PAID`, `READY`. Считает
+   * её сервер одним выражением на весь проект; экран подписывает сделку
+   * по ней, а не по {@link Deal.status} (`dealStageStatus`).
+   *
+   * <p>Пусто у закрытой сделки — выданной, отменённой, возвращённой:
+   * стадии у неё нет, и слово берётся из состояния документа.
+   */
+  stage: string | null;
   status: string;
   reservedUntil: string | null;
   totalAmount: string;
