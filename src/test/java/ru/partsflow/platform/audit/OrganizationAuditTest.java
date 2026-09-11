@@ -37,7 +37,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class OrganizationAuditTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000119";
+    private static final String TENANT = "t_000147";
 
     @Autowired
     private MockMvc mvc;
@@ -61,10 +61,10 @@ class OrganizationAuditTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
-        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 119");
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 147");
         jdbc.update("""
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
-                VALUES (119, ?, 'Разборка', 'revizco')""", TENANT);
+                VALUES (147, ?, 'Разборка', 'revizco')""", TENANT);
 
         inTenant(() -> {
             member("vladelec", "Пётр Владельцев", "OWNER");

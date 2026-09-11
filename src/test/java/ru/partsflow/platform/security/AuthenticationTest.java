@@ -37,8 +37,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class AuthenticationTest extends PostgresTestBase {
 
-    private static final String TENANT_A = "t_000042";
-    private static final String TENANT_B = "t_000043";
+    private static final String TENANT_A = "t_000137";
+    private static final String TENANT_B = "t_000138";
 
     @Autowired
     private MockMvc mvc;
@@ -59,10 +59,10 @@ class AuthenticationTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
-        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id IN (42, 43)");
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id IN (137, 138)");
         jdbc.update("""
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
-                VALUES (42, ?, 'YARD Ткацкая', 'yardt'), (43, ?, 'Вторая разборка', 'second')""",
+                VALUES (137, ?, 'YARD Ткацкая', 'yardt'), (138, ?, 'Вторая разборка', 'second')""",
                 TENANT_A, TENANT_B);
 
         // Один и тот же логин у двух арендаторов: между клиентами он уникальным
@@ -198,7 +198,7 @@ class AuthenticationTest extends PostgresTestBase {
     @Test
     @DisplayName("Приостановленный арендатор не пускает никого")
     void suspendedTenantCannotLogIn() throws Exception {
-        jdbc.update("UPDATE public.tenant_registry SET status = 'SUSPENDED' WHERE tenant_id = 42");
+        jdbc.update("UPDATE public.tenant_registry SET status = 'SUSPENDED' WHERE tenant_id = 137");
 
         mvc.perform(post("/api/auth/login").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)

@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class StockReservationTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000042";
+    private static final String TENANT = "t_000140";
 
     private long warehouseId;
     private long otherWarehouseId;

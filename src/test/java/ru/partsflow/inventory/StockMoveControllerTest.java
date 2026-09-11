@@ -40,7 +40,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class StockMoveControllerTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000083";
+    private static final String TENANT = "t_000141";
 
     @Autowired
     private StockLedger ledger;
@@ -70,10 +70,10 @@ class StockMoveControllerTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
-        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 83");
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 141");
         jdbc.update("""
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
-                VALUES (83, ?, 'Разборка', 'moveco')""", TENANT);
+                VALUES (141, ?, 'Разборка', 'moveco')""", TENANT);
 
         inTenant(() -> {
             member("vladelec", "Владелец", "OWNER");

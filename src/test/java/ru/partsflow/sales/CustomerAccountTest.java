@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
 class CustomerAccountTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000089";
+    private static final String TENANT = "t_000145";
 
     @Autowired
     private ru.partsflow.inventory.StockLedger ledger;
