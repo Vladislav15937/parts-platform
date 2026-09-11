@@ -211,7 +211,7 @@ function card(): Record<string, unknown> {
 
 function row(): CatalogRow {
   return {
-    id: 7, code: 'B-40219', title: 'Фара левая Toyota Camry',
+    id: 7, number: 7, code: 'B-40219', title: 'Фара левая Toyota Camry',
     qualityGrade: 'GOOD', condition: 'USED',
     brand: 'Toyota', model: 'Camry', generation: null, yearFrom: null, yearTo: null,
     body: null, engine: null, year: 2007, donorCode: '261',

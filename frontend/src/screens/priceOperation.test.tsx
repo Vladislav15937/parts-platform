@@ -238,7 +238,7 @@ describe('правка списком говорит о непрошедших',
 /** Строка витрины: форма правки берёт из неё неправимые поля. */
 function row(): CatalogRow {
   return {
-    id: 7, code: 'B-40219', title: 'Фара левая Toyota Camry',
+    id: 7, number: 7, code: 'B-40219', title: 'Фара левая Toyota Camry',
     qualityGrade: null, condition: 'USED',
     brand: null, model: null, generation: null, yearFrom: null, yearTo: null,
     body: null, engine: null, year: null, donorCode: null,

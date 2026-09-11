@@ -337,6 +337,12 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
   {
     title: 'Общая информация',
     fields: [
+      // Номер, которым деталь называют в разговоре. Правке не подлежит —
+      // его раздаёт последовательность, и названный однажды человеку
+      // он обязан остаться тем же; спрятать его тут было нельзя,
+      // иначе форма правки теряет то, что видно в карточке.
+      { kind: 'locked', key: 'number', label: '№ позиции',
+        value: (r) => plainText(String(r.number)) },
       { kind: 'locked', key: 'code', label: 'Номер товара', value: (r) => plainText(r.code) },
       { kind: 'locked', key: 'condition', label: 'Состояние',
         value: (r) => (r.condition === null ? '' : CONDITION[r.condition] ?? r.condition) },

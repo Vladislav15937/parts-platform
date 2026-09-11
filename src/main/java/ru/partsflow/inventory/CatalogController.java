@@ -56,8 +56,13 @@ public class CatalogController {
                      @RequestParam(required = false) String engine,
                      @RequestParam(required = false) List<String> filter,
                      @RequestParam(required = false) List<String> find,
-                     @RequestParam(defaultValue = "code") String sort,
-                     @RequestParam(defaultValue = "true") boolean desc,
+                     /* Порядок по умолчанию — номер позиции по возрастанию:
+                        что заведено раньше, то выше. До задачи 0060 здесь
+                        стоял `code` — публичный код, шесть случайных байт, —
+                        то есть склад открывался случайной полусотней
+                        из тридцати пяти тысяч, новой при каждом заходе. */
+                     @RequestParam(defaultValue = "number") String sort,
+                     @RequestParam(defaultValue = "false") boolean desc,
                      @RequestParam(defaultValue = "0") int page,
                      @RequestParam(defaultValue = "50") int size,
                      /* Номер товара последней строки предыдущей страницы:
@@ -82,7 +87,8 @@ public class CatalogController {
      * счёт хеша, а не поход в хранилище.
      */
     private Row rowOf(CatalogService.Row row) {
-        return new Row(row.id(), row.code(), row.title(), row.qualityGrade(), row.condition(),
+        return new Row(row.id(), row.number(), row.code(), row.title(), row.qualityGrade(),
+                row.condition(),
                 row.brand(), row.model(), row.generation(), row.yearFrom(), row.yearTo(),
                 row.body(), row.engine(), row.year(), row.donorCode(),
                 row.price(), row.installationPrice(), row.color(), row.description(), row.note(),
@@ -299,8 +305,10 @@ public class CatalogController {
                        @RequestParam(required = false) String engine,
                        @RequestParam(required = false) List<String> filter,
                        @RequestParam(required = false) List<String> find,
-                       @RequestParam(defaultValue = "code") String sort,
-                       @RequestParam(defaultValue = "true") boolean desc,
+                       // Тот же порядок по умолчанию, что и у страницы:
+                       // скачанный файл обязан совпасть с экраном.
+                       @RequestParam(defaultValue = "number") String sort,
+                       @RequestParam(defaultValue = "false") boolean desc,
                        jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
 
         List<CatalogService.Warehouse> found = catalog.warehouses();
@@ -355,7 +363,13 @@ public class CatalogController {
                        java.util.Set<String> filterable) {
     }
 
-    public record Row(Long id, String code, String title, String qualityGrade, String condition,
+    public record Row(Long id,
+                      /**
+                       * Порядковый номер позиции — его показывают и называют
+                       * вслух. {@code id} наружу не идёт: он внутренний.
+                       */
+                      Long number,
+                      String code, String title, String qualityGrade, String condition,
                       String brand, String model, String generation,
                       Integer yearFrom, Integer yearTo, String body, String engine,
                       Integer year, String donorCode,
