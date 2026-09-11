@@ -38,7 +38,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * зарастал «мужиками на приоре»; теперь в форме стоит один контрагент
  * «Частное лицо», а имя покупателя выясняется после — если он назвался.
  *
- * <p><b>Схема своя ({@code t_000148}) и в ней не заведено ни одного
+ * <p><b>Схема своя ({@code t_000150}) и в ней не заведено ни одного
  * контрагента розничной продажи.</b> Так выглядит арендатор, созданный
  * раньше этой правки: {@code provisionTenants} накатывает миграции, а
  * провижининг, который «Частное лицо» и заводит, мимо. То есть проверяется
@@ -49,7 +49,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class RetailCustomerTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000148";
+    private static final String TENANT = "t_000150";
 
     @Autowired
     private MockMvc mvc;
@@ -75,10 +75,10 @@ class RetailCustomerTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
-        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 148");
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 150");
         jdbc.update("""
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
-                VALUES (148, ?, 'Разборка', 'retailco')""", TENANT);
+                VALUES (150, ?, 'Разборка', 'retailco')""", TENANT);
 
         inTenant(() -> {
             member("seller", "Продавец", "SELLER");
