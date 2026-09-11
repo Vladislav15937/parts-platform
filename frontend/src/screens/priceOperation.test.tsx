@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { PartEditForm } from './PartEditForm';
+import type { CatalogRow } from '../inventory/catalog';
 import { BulkEditForm } from './BulkEditForm';
 import { PartHistoryView } from './PartHistoryView';
 import { CatalogScreen } from './CatalogScreen';
@@ -49,8 +50,11 @@ describe('операция с ценой', () => {
   });
 
   it('в карточке шесть операций, умолчание — «Изменить»', async () => {
-    render(<PartEditForm partId={7} onSaved={() => {}} onCancel={() => {}} />);
-    await waitFor(() => expect(screen.getByDisplayValue('27000')).toBeTruthy());
+    render(<PartEditForm partId={7} row={row()} onSaved={() => {}} onCancel={() => {}} />);
+    // Цена раскрывается по «Изменить» у своей строки: до этого в карточке
+    // значения, а не поля ввода (задача 0038).
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Изменить: Цена'));
 
     const op = screen.getByLabelText('Операция с ценой') as HTMLSelectElement;
     expect([...op.options].map((o) => o.textContent)).toEqual([
@@ -63,8 +67,10 @@ describe('операция с ценой', () => {
   });
 
   it('отправляет операцию и её значение, а не посчитанную цену', async () => {
-    render(<PartEditForm partId={7} onSaved={() => {}} onCancel={() => {}} />);
-    await waitFor(() => expect(screen.getByDisplayValue('27000')).toBeTruthy());
+    render(<PartEditForm partId={7} row={row()} onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Изменить: Цена'));
+    expect(screen.getByDisplayValue('27000')).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('Операция с ценой'),
       { target: { value: 'DECREASE_PERCENT' } });
@@ -228,6 +234,25 @@ describe('правка списком говорит о непрошедших',
     expect(notice.textContent).toContain('Изменено позиций: 2');
   });
 });
+
+/** Строка витрины: форма правки берёт из неё неправимые поля. */
+function row(): CatalogRow {
+  return {
+    id: 7, code: 'B-40219', title: 'Фара левая Toyota Camry',
+    qualityGrade: null, condition: 'USED',
+    brand: null, model: null, generation: null, yearFrom: null, yearTo: null,
+    body: null, engine: null, year: null, donorCode: null,
+    price: 27000, installationPrice: null, color: null, description: null, note: 'скол',
+    manufacturer: null, marking: null, section: null, cellCode: null,
+    sideLr: null, sideFr: null,
+    qty: 1, oem: null, crosses: null, photoUrl: null, supply: null, equipment: null,
+    partName: null, published: true, barcode: null, legacyCode: null,
+    videoUrl: null, textBlock: null, weightKg: null, dimensions: null,
+    packageDimensions: null, packageWeightKg: null, createdAt: null, updatedAt: null,
+    updatedByName: null, priceChangedAt: null, priceChangedByName: null,
+    photoCount: 0, stock: {},
+  };
+}
 
 function byText(tag: string, text: string): HTMLElement | undefined {
   return [...document.querySelectorAll(tag)].find(
