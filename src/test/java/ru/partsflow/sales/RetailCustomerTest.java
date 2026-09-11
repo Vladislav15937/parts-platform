@@ -231,7 +231,7 @@ class RetailCustomerTest extends PostgresTestBase {
     private int retailRows() {
         return inTenant(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM customer WHERE name = ?", Integer.class,
-                CustomerService.RETAIL_NAME));
+                ru.partsflow.shared.RetailCustomer.NAME));
     }
 
     private long customerOfDeal(MockHttpSession session, Long partId) throws Exception {

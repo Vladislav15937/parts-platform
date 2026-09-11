@@ -1,6 +1,7 @@
 package ru.partsflow.sales;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import ru.partsflow.shared.RetailCustomer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -62,7 +63,7 @@ public class CustomerService {
         // сеть моргнула), и вторая строка с тем же именем сделала бы
         // подстановку по умолчанию неоднозначной, а отчёт по клиентам —
         // двумя строками об одном.
-        if (RETAIL_NAME.equalsIgnoreCase(name.strip())) {
+        if (RetailCustomer.NAME.equalsIgnoreCase(name.strip())) {
             return retail();
         }
         return jdbc.queryForObject("""
@@ -73,17 +74,6 @@ public class CustomerService {
                 name.strip(), blankToNull(phone), blankToNull(email),
                 customerType == null || customerType.isBlank() ? "PERSON" : customerType);
     }
-
-    /**
-     * Имя контрагента розничной продажи — того, что подставлен в форму
-     * по умолчанию.
-     *
-     * <p>Опознаётся он именно по имени: отдельной колонки-признака в схеме
-     * нет, а завести её может только {@code migrator}. Отсюда же запрет
-     * на переименование в {@link #update} — потеряв имя, система потеряла бы
-     * и самого контрагента, а следующая продажа завела бы второго.
-     */
-    public static final String RETAIL_NAME = "Частное лицо";
 
     /**
      * Контрагент розничной продажи: заводится один раз на арендатора.
@@ -127,7 +117,7 @@ public class CustomerService {
                 INSERT INTO customer (name, customer_type)
                 VALUES (?, 'PERSON')
                 RETURNING id, name, phone, email, customer_type""",
-                CustomerService::map, RETAIL_NAME);
+                CustomerService::map, RetailCustomer.NAME);
     }
 
     /**
@@ -154,7 +144,7 @@ public class CustomerService {
         return jdbc.query("""
                 SELECT id, name, phone, email, customer_type
                   FROM customer WHERE name = ? ORDER BY id LIMIT 1""",
-                CustomerService::map, RETAIL_NAME);
+                CustomerService::map, RetailCustomer.NAME);
     }
 
     /**
@@ -259,13 +249,13 @@ public class CustomerService {
         // Остальные поля — телефон, почту, примечание — править можно.
         Long retailId = retailCustomerId();
         boolean renamingRetail = retailId != null && retailId.equals(id)
-                && !RETAIL_NAME.equalsIgnoreCase(name.strip());
+                && !RetailCustomer.NAME.equalsIgnoreCase(name.strip());
         boolean takingRetailName = (retailId == null || !retailId.equals(id))
-                && RETAIL_NAME.equalsIgnoreCase(name.strip());
+                && RetailCustomer.NAME.equalsIgnoreCase(name.strip());
         if (renamingRetail || takingRetailName) {
             throw new IllegalStateException(
                     "«%s» — контрагент розничной продажи, он один и переименованию не подлежит"
-                            .formatted(RETAIL_NAME));
+                            .formatted(RetailCustomer.NAME));
         }
 
         int updated = jdbc.update("""

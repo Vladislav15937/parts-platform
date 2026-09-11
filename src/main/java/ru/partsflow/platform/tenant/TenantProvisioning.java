@@ -270,7 +270,7 @@ public class TenantProvisioning {
      */
     private void createRetailCustomer(String schema) {
         jdbc.update("INSERT INTO %s.customer (name, customer_type) VALUES (?, 'PERSON')"
-                .formatted(schema), ru.partsflow.sales.CustomerService.RETAIL_NAME);
+                .formatted(schema), ru.partsflow.shared.RetailCustomer.NAME);
     }
 
     private void activate(long tenantId) {

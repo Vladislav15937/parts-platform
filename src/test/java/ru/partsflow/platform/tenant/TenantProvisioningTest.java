@@ -86,7 +86,7 @@ class TenantProvisioningTest extends PostgresTestBase {
         // второй такой же контрагент разбил бы историю розницы пополам.
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM %s.customer WHERE name = ?".formatted(created.schemaName()),
-                Integer.class, ru.partsflow.sales.CustomerService.RETAIL_NAME))
+                Integer.class, ru.partsflow.shared.RetailCustomer.NAME))
                 .isEqualTo(1);
     }
 
