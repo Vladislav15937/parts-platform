@@ -245,7 +245,7 @@ describe('отбор вкладки колёс', () => {
     // Белый список сортировок лежит на сервере, и незнакомое имя молча
     // становится умолчанием: разъехавшись, экран показывал бы стрелку
     // на колонке, по которой не сортирует.
-    const SERVER = ['code', 'set', 'kind', 'diameter', 'tyreWidth', 'tyreHeight',
+    const SERVER = ['number', 'code', 'set', 'kind', 'diameter', 'tyreWidth', 'tyreHeight',
       'wear', 'season', 'madeYear', 'tyreBrand', 'discBrand', 'price', 'section', 'created'];
     const mine = WHEEL_COLUMNS.map((c) => c.sort).filter((s): s is string => s !== undefined);
     expect(mine.filter((s) => !SERVER.includes(s))).toEqual([]);

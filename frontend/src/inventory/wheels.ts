@@ -38,9 +38,9 @@ export function kindName(kind: string): string {
 export interface Wheel {
   id: number;
   /**
-   * Порядковый номер позиции. Колонки под него на этой вкладке нет —
-   * задача 0060 про витрину склада, — но карточка у колеса та же, что
-   * у запчасти, и номер в ней показывается настоящий.
+   * Порядковый номер позиции — тот, которым колесо называют в разговоре:
+   * «посмотри позицию 347». Нумерация общая с запчастями (`part.number`),
+   * и это главное: две нумерации рядом дали бы две «позиции 347».
    */
   number: number;
   publicCode: string | null;
@@ -152,8 +152,15 @@ export const FILTER_PRESENT = '\u2014не пусто\u2014';
 
 export const WHEEL_PAGE_SIZE = 50;
 
+/**
+ * Порядок по умолчанию — номер позиции по возрастанию, как на витрине
+ * склада: «что принято раньше, то выше». До этого вкладка открывалась
+ * номером комплекта по убыванию, то есть два соседних экрана открывались
+ * по-разному без причины, а колёса, заведённые поштучно, вовсе не имеют
+ * номера комплекта и уезжали в конец.
+ */
 export const EMPTY_WHEEL_QUERY: WheelQuery = {
-  q: '', kind: '', missing: false, columns: {}, words: {}, sort: 'set', desc: true, page: 0,
+  q: '', kind: '', missing: false, columns: {}, words: {}, sort: 'number', desc: false, page: 0,
 };
 
 /** Задан ли хоть один отбор: по этому экран решает, показывать ли «Сбросить». */
@@ -329,6 +336,14 @@ function flag(value: boolean | null): string {
 }
 
 export const WHEEL_COLUMNS: WheelColumn[] = [
+  // Первой колонкой и по ней же порядок по умолчанию — ровно как на витрине
+  // склада: колесо это та же `part`, и номер у него из той же нумерации.
+  // Два соседних экрана, открывающиеся по-разному, различаются без причины,
+  // а «позиция 347», названная по телефону, обязана значить одно и то же
+  // на обоих. Отбора по нему нет — тридцать пять тысяч значений в списке
+  // не выбирают, — поэтому `filter: false`, как у «Создан».
+  { key: 'number', title: '№ позиции', sort: 'number', numeric: true, filter: false,
+    value: (w) => text(w.number) },
   { key: 'code', title: 'Номер товара', sort: 'code', value: (w) => text(w.publicCode) },
   // Вторым столбцом, как в кабинете: колесо узнают по картинке — диски
   // различаются только рисунком, и словами его не опишешь.
@@ -398,7 +413,7 @@ export const WHEEL_COLUMNS: WheelColumn[] = [
  * остальное владелец включает сам, и выбор запоминается.
  */
 export const WHEEL_DEFAULT_VISIBLE = [
-  'code', 'photo', 'set', 'kind', 'diameter', 'tyreWidth', 'tyreHeight',
+  'number', 'code', 'photo', 'set', 'kind', 'diameter', 'tyreWidth', 'tyreHeight',
   'season', 'wear', 'tyreBrand', 'tyreModel', 'price', 'section',
 ];
 

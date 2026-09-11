@@ -594,7 +594,7 @@ public class WheelService {
         }
 
         String sql = """
-                SELECT p.public_code, p.title, p.price, p.condition, p.description,
+                SELECT p.number, p.public_code, p.title, p.price, p.condition, p.description,
                        p.note, p.section, p.is_published, p.barcode, p.legacy_code,
                        p.created_at, p.updated_at, p.price_changed_at,
                        w.kind, w.set_no, w.diameter, w.tyre_width, w.tyre_height,
@@ -632,6 +632,9 @@ public class WheelService {
             return ps;
         }, rs -> {
             List<String> cells = new java.util.ArrayList<>(List.of(
+                    // Первой колонкой, как и на экране: файл качают затем,
+                    // чтобы свериться с тем, что видно на вкладке.
+                    number(rs, "number"),
                     nullToEmpty(rs.getString("public_code")),
                     nullToEmpty(rs.getString("part_name")),
                     kindName(rs.getString("kind")),
@@ -691,6 +694,7 @@ public class WheelService {
     /** Заголовок выгрузки: те же колонки и в том же порядке, что на экране. */
     public static List<String> exportHeader(List<CatalogService.Warehouse> warehouses) {
         List<String> header = new java.util.ArrayList<>(List.of(
+                "№ позиции",
                 "Номер товара", "Наименование", "Товар", "Номер комплекта", "Диаметр",
                 "Тип шины", "Ширина шины", "Тип маркировки", "Тип протектора",
                 "Тип конструкции", "Высота шины", "Износ", "Производитель шины",
@@ -762,12 +766,19 @@ public class WheelService {
     private static String orderOf(String sort, boolean descending) {
         String column = SORTS.get(sort);
         if (column == null) {
-            return " ORDER BY w.set_no DESC NULLS LAST, p.id DESC";
+            // Умолчание то же, что у витрины склада: номер позиции
+            // по возрастанию, то есть порядок заведения. Прежним умолчанием
+            // был номер комплекта по убыванию — у колеса, заведённого
+            // поштучно, его нет вовсе, и такие уезжали в конец списка.
+            return " ORDER BY p.number ASC";
         }
         return " ORDER BY " + column + (descending ? " DESC" : " ASC") + " NULLS LAST, p.id DESC";
     }
 
     private static final Map<String, String> SORTS = Map.ofEntries(
+            // Номер позиции уникален и без пустых значений — вторичный ключ
+            // ему не нужен, но общий путь его добавляет, и вреда от этого нет.
+            Map.entry("number", "p.number"),
             Map.entry("code", "p.public_code"),
             Map.entry("set", "w.set_no"),
             Map.entry("kind", "w.kind"),
@@ -945,11 +956,10 @@ public class WheelService {
      */
     public record WheelRow(Long id,
                            /**
-                            * Порядковый номер позиции. Колонки под него
-                            * на вкладке колёс нет — задача 0060 про витрину
-                            * склада, — но карточка у колеса та же, что
-                            * у запчасти, и номер в ней обязан быть настоящим,
-                            * а не нулём.
+                            * Порядковый номер позиции — тот, которым колесо
+                            * называют вслух. Нумерация общая с запчастями:
+                            * своя у каждой линии товара дала бы две «позиции
+                            * 347» рядом (задача 0061).
                             */
                            Long number,
                            String publicCode, String title, BigDecimal price,
