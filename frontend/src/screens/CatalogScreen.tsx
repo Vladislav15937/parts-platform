@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
   COLUMNS,
@@ -9,8 +9,15 @@ import {
   bulkNotice,
   loadPhotos,
   exportUrl,
-  loadVisible,
-  saveVisible,
+  DEFAULT_VISIBLE,
+  defaultQuery,
+  loadView,
+  saveView,
+  withoutFilters,
+  withDefaultSort,
+  hasFilters,
+  isSorted,
+  viewKey,
   vehicleLabel,
   NO_VEHICLE,
   type CatalogPage,
@@ -56,21 +63,18 @@ export function CatalogScreen({ role }: { role: string }) {
   const [page, setPage] = useState<CatalogPage | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [visible, setVisible] = useState<string[]>(loadVisible);
+  const [visible, setVisible] = useState<string[]>(DEFAULT_VISIBLE);
   const [settings, setSettings] = useState(false);
-  const [query, setQuery] = useState<CatalogQuery>({
-    q: '',
-    vehicle: NO_VEHICLE,
-    reserved: true,
-    missing: false,
-    warehouses: [],
-    columns: {},
-    words: {},
-    sort: 'code',
-    desc: true,
-    page: 0,
-    size: SIZE,
-  });
+  const [query, setQuery] = useState<CatalogQuery>(() => defaultQuery(SIZE));
+  /*
+   * Настройка приехала — можно грузить склад.
+   *
+   * Без этого признака экран сначала показал бы склад умолчанием, а через
+   * мгновение перерисовал его сохранённым отбором: владелец успевает
+   * прочитать первую выдачу и решить, что отбор слетел. И лишний запрос
+   * по тридцати пяти тысячам позиций на каждое открытие.
+   */
+  const [restored, setRestored] = useState(false);
   const [search, setSearch] = useState('');
   const [picking, setPicking] = useState(false);
   // Снимки показываются по наведению, накладкой поверх таблицы.
@@ -152,7 +156,47 @@ export function CatalogScreen({ role }: { role: string }) {
       });
   }, [mounted]);
 
-  useEffect(() => load(query), [load, query]);
+  // Настройка экрана живёт на сервере, за сотрудником: «даже если он закрыл
+  // браузер, выключил компьютер, открыл в другом браузере или из другого
+  // места» (решение владельца продукта от 11 сентября 2026). localStorage,
+  // в котором до этой задачи лежал состав колонок, не даёт ни одного
+  // из трёх последних случаев.
+  // Снимок последней записанной настройки: перелистывание страниц меняет
+  // отбор ни на что, и писать в базу на каждую стрелку незачем.
+  const saved = useRef('');
+
+  useEffect(() => {
+    void loadView(SIZE)
+      .then((view) => {
+        if (mounted.current) {
+          setQuery(view.query);
+          setVisible(view.visible);
+          saved.current = viewKey(view);
+          setRestored(true);
+        }
+      });
+  }, [mounted]);
+
+  useEffect(() => {
+    if (restored) load(query);
+  }, [restored, load, query]);
+
+  /** Помнит ровно то, что сейчас на экране: порядок, отборы, колонки. */
+  function remember(nextQuery: CatalogQuery, nextVisible: string[]) {
+    // До восстановления писать нечего и опасно: нажатие, успевшее случиться
+    // раньше ответа сервера, записало бы поверх сохранённого умолчание —
+    // то есть стёрло бы настройку, которую как раз просили помнить.
+    if (!restored) {
+      return;
+    }
+    const view = { query: nextQuery, visible: nextVisible };
+    const key = viewKey(view);
+    if (key === saved.current) {
+      return;
+    }
+    saved.current = key;
+    void saveView(view);
+  }
 
   function change(patch: Partial<CatalogQuery>) {
     // Любая смена отбора возвращает на первую страницу: остаться на сорок
@@ -160,7 +204,11 @@ export function CatalogScreen({ role }: { role: string }) {
     // что ничего не нашлось.
     // Курсор живёт ровно один переход: смена отбора или прыжок по номеру
     // страницы его сбрасывают, иначе он указывал бы в прежнюю выдачу.
-    setQuery({ ...query, after: undefined, ...patch, page: patch.page ?? 0 });
+    const next = { ...query, after: undefined, ...patch, page: patch.page ?? 0 };
+    setQuery(next);
+    // Страница и курсор не запоминаются: «всё» сказано про то, как разложен
+    // экран, а не про то, где человек остановился.
+    remember(next, visible);
   }
 
   function toggleColumn(key: string) {
@@ -168,7 +216,7 @@ export function CatalogScreen({ role }: { role: string }) {
       ? visible.filter((k) => k !== key)
       : [...visible, key];
     setVisible(next);
-    saveVisible(next);
+    remember(query, next);
   }
 
   // Постоянные колонки не зависят от сохранённого выбора: настройка могла
@@ -287,6 +335,39 @@ export function CatalogScreen({ role }: { role: string }) {
             {columnTitle(key)}: «{value}» ✕
           </button>
         ))}
+        {/* Сброс — не удобство, а условие безопасности самой памяти: отбор
+            теперь переживает и браузер, и устройство, а значит владелец
+            открывает склад через неделю, видит «Ничего не найдено» и решает,
+            что склад пуст или сломан. Кнопка стоит здесь, а не в шапке
+            таблицы, ровно потому, что при пустой выдаче таблицы нет вовсе.
+
+            Две кнопки, а не одна: «сбросить отбор» и «сбросить сортировку» —
+            разные желания. Первое возвращает весь склад, второе — порядок
+            по умолчанию. Показываются, только когда есть что сбрасывать:
+            кнопка, которая ничего не меняет, хуже отсутствующей. */}
+        {hasFilters(query) && (
+          <button
+            type="button"
+            className="button--ghost"
+            onClick={() => {
+              // И набранный поиск тоже: «нажимающий „сбросить“ хочет увидеть
+              // весь склад» (решение владельца продукта от 11 сентября 2026).
+              setSearch('');
+              change(withoutFilters(query));
+            }}
+          >
+            Сбросить отбор
+          </button>
+        )}
+        {isSorted(query) && (
+          <button
+            type="button"
+            className="button--ghost"
+            onClick={() => change(withDefaultSort(query))}
+          >
+            Сбросить сортировку
+          </button>
+        )}
         <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
           Настроить таблицу
         </button>
@@ -674,9 +755,15 @@ export function CatalogScreen({ role }: { role: string }) {
               // Вперёд — от последней строки: серверу не придётся читать
               // и выбрасывать всё, что до неё. Назад и при прыжке курсора
               // нет, и страница берётся отступом, как раньше.
-              after: query.sort === 'code' && page !== null
-                ? (page.rows[page.rows.length - 1]?.code ?? undefined)
-                : undefined,
+              // Только по колонкам без пустых значений — номер позиции
+              // и номер товара: по колонке с NULL курсор не построить,
+              // сравнение с NULL не отвечает ни «больше», ни «меньше».
+              after: page === null ? undefined
+                : query.sort === 'number'
+                  ? String(page.rows[page.rows.length - 1]?.number ?? '')
+                  : query.sort === 'code'
+                    ? (page.rows[page.rows.length - 1]?.code ?? undefined)
+                    : undefined,
             })}
           >
             →

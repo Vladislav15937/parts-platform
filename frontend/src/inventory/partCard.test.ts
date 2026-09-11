@@ -4,7 +4,7 @@ import type { CatalogRow } from './catalog';
 
 function row(overrides: Partial<CatalogRow> = {}): CatalogRow {
   return {
-    id: 1, code: 'A1', title: 'Фара', qualityGrade: null, condition: 'USED',
+    id: 1, number: 12, code: 'A1', title: 'Фара', qualityGrade: null, condition: 'USED',
     brand: null, model: null, generation: null, yearFrom: null, yearTo: null,
     body: null, engine: null, year: null, donorCode: null,
     price: null, installationPrice: null, color: null, description: null, note: null,
@@ -32,7 +32,9 @@ describe('карточка товара', () => {
   it('не показывает пустые поля', () => {
     // Двадцать строк, из которых заполнены шесть, — это шесть строк,
     // потерянных среди прочерков.
-    expect(titles(row())).toEqual(['Номер товара', 'Состояние']);
+    // Номер позиции показывается всегда: он есть у каждой строки склада
+    // с самого её заведения, и это то, чем деталь называют в разговоре.
+    expect(titles(row())).toEqual(['№ позиции', 'Номер товара', 'Состояние']);
   });
 
   it('переводит состояние и стороны на язык кладовщика', () => {

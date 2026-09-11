@@ -45,6 +45,12 @@ public class CatalogService {
      * параметр, и любая подстановка пришедшего текста — дыра.
      */
     private static final Map<String, String> SORTS = Map.ofEntries(
+            // Порядок по умолчанию, и он же единственный осмысленный при
+            // открытии склада: номер позиции растёт вместе с заведением,
+            // то есть «что принято раньше, то выше». До задачи 0060 умолчанием
+            // был `code` — шесть случайных байт, — и владелец видел случайную
+            // полусотню из тридцати пяти тысяч, новую при каждом заходе.
+            Map.entry("number", "p.number"),
             Map.entry("code", "p.public_code"),
             Map.entry("title", "p.title"),
             Map.entry("price", "p.price"),
@@ -75,9 +81,14 @@ public class CatalogService {
      * заканчивается на {@code p.id DESC}.
      */
     private static String orderBy(String sort, boolean descending) {
-        String column = SORTS.getOrDefault(sort, "p.id");
+        // Сортировка не названа — умолчание, а не отказ: {@code Map.ofEntries}
+        // не принимает null даже на чтение и отвечает на него
+        // NullPointerException, то есть пятисоткой на витрине.
+        String column = sort == null ? "p.number" : SORTS.getOrDefault(sort, "p.number");
         String direction = descending ? " DESC" : " ASC";
-        return column.equals("p.id")
+        // Вторичный ключ не нужен только тем колонкам, что и так уникальны:
+        // внутреннему номеру и номеру позиции. Остальным он обязателен.
+        return column.equals("p.id") || column.equals("p.number")
                 ? column + direction
                 : column + direction + ", p.id" + direction;
     }
@@ -687,6 +698,22 @@ public class CatalogService {
                 Long.class, filter.args().toArray());
     }
 
+    /**
+     * Курсор страницы числом, а не текстом.
+     *
+     * <p>Приходит он строкой — параметр один на все сортировки, — и мусор
+     * в нём означает не отказ, а обычную страницу отступом: курсор это
+     * ускорение, а не условие отбора, и уронить из-за него витрину значит
+     * променять быстрый путь на отсутствующий.
+     */
+    private static Long cursorNumber(String after) {
+        try {
+            return Long.valueOf(after.strip());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
     private Page finish(StringBuilder where, List<Object> args, String sort,
                         boolean descending, int page, int size, String after) {
         String joins = JOINS;
@@ -714,12 +741,23 @@ public class CatalogService {
         if (after != null && !after.isBlank() && "code".equals(sort)) {
             pageWhere = " AND p.public_code " + (descending ? "<" : ">") + " ?";
             pageArgs.add(after);
+        } else if (after != null && !after.isBlank() && "number".equals(sort)) {
+            // Курсор по номеру позиции — тот же приём и по той же причине,
+            // что и по номеру товара: колонка уникальна и без пустых значений,
+            // значит следующая страница берётся от последней строки предыдущей,
+            // а не отступом. Порядок по умолчанию теперь этот, и подряд листают
+            // как раз его.
+            Long from = cursorNumber(after);
+            if (from != null) {
+                pageWhere = " AND p.number " + (descending ? "<" : ">") + " ?";
+                pageArgs.add(from);
+            }
         }
         pageArgs.add(size);
         pageArgs.add(pageWhere.isEmpty() ? (long) page * size : 0L);
 
         List<Row> rows = jdbc.query("""
-                SELECT p.id, p.public_code, p.title, p.quality_grade, p.condition,
+                SELECT p.id, p.number, p.public_code, p.title, p.quality_grade, p.condition,
                        b.name AS brand, m.name AS model,
                        g.name AS generation, g.year_from, g.year_to,
                        d.body_code, d.engine_code,
@@ -782,7 +820,8 @@ public class CatalogService {
                                ph.id LIMIT 1) AS photo_key
                 """ + joins + where + pageWhere + " ORDER BY " + order + " LIMIT ? OFFSET ?",
                 (rs, i) -> new Row(
-                        rs.getLong("id"), rs.getString("public_code"), rs.getString("title"),
+                        rs.getLong("id"), rs.getLong("number"),
+                        rs.getString("public_code"), rs.getString("title"),
                         rs.getString("quality_grade"), rs.getString("condition"),
                         rs.getString("brand"), rs.getString("model"),
                         rs.getString("generation"),
@@ -924,7 +963,7 @@ public class CatalogService {
         }
 
         String sql = """
-                SELECT p.public_code, p.title, p.quality_grade, p.condition,
+                SELECT p.number, p.public_code, p.title, p.quality_grade, p.condition,
                        b.name AS brand, m.name AS model, g.year_from, g.year_to,
                        d.body_code, d.engine_code, d.year,
                        COALESCE(d.legacy_code, d.public_code) AS donor_code,
@@ -985,6 +1024,10 @@ public class CatalogService {
             return ps;
         }, rs -> {
             List<String> cells = new ArrayList<>();
+            // Первой колонкой, как и на экране: по этому номеру деталь
+            // называют в разговоре, и файл открывают как раз затем, чтобы
+            // свериться с тем, что видно на витрине.
+            cells.add(number(rs, "number"));
             cells.add(text(rs, "public_code"));
             cells.add(text(rs, "title"));
             cells.add(text(rs, "quality_grade"));
@@ -1041,6 +1084,7 @@ public class CatalogService {
     /** Заголовок выгрузки: тот же состав и порядок, что у строк. */
     public static List<String> exportHeader(List<Warehouse> warehouses) {
         List<String> header = new ArrayList<>(List.of(
+                "№ позиции",
                 "Номер товара", "Запчасть", "Оценка состояния", "Марка", "Модель",
                 "Поколение с", "Поколение по", "Кузов", "Двигатель", "Год выпуска",
                 "Передний / Задний", "Левый / Правый", "Номер донора",
@@ -1109,7 +1153,14 @@ public class CatalogService {
      * @param stock остаток по складам: ключ — идентификатор склада. Колонок
      *              столько, сколько складов у клиента
      */
-    public record Row(Long id, String code, String title, String qualityGrade, String condition,
+    public record Row(Long id,
+                      /**
+                       * Порядковый номер позиции — тот, который называют вслух
+                       * («посмотри позицию 347»). Не {@code id}: тот внутренний
+                       * и наружу не показывается.
+                       */
+                      Long number,
+                      String code, String title, String qualityGrade, String condition,
                       String brand, String model, String generation,
                       Integer yearFrom, Integer yearTo, String body, String engine,
                       Integer year, String donorCode,
@@ -1144,7 +1195,8 @@ public class CatalogService {
                       Map<Long, BigDecimal> stock) {
 
         Row withStock(Map<Long, BigDecimal> found) {
-            return new Row(id, code, title, qualityGrade, condition, brand, model, generation,
+            return new Row(id, number, code, title, qualityGrade, condition, brand, model,
+                    generation,
                     yearFrom, yearTo, body, engine, year, donorCode, price, installationPrice,
                     color, description, note, manufacturer, marking, section, cellCode,
                     sideLr, sideFr,

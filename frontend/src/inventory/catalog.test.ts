@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { COLUMNS, DEFAULT_VISIBLE, loadVisible, type CatalogRow } from './catalog';
+import {
+  COLUMNS, DEFAULT_VISIBLE, DEFAULT_SORT, DEFAULT_DESC, defaultQuery,
+  hasFilters, isSorted, withDefaultSort, withoutFilters, viewKey,
+  type CatalogRow,
+} from './catalog';
 
 /**
  * Витрина склада: состав колонок и их значения.
@@ -10,7 +14,7 @@ import { COLUMNS, DEFAULT_VISIBLE, loadVisible, type CatalogRow } from './catalo
  */
 function row(overrides: Partial<CatalogRow> = {}): CatalogRow {
   return {
-    id: 1, code: 'A1', title: 'Фара', qualityGrade: null, condition: 'USED',
+    id: 1, number: 12, code: 'A1', title: 'Фара', qualityGrade: null, condition: 'USED',
     brand: null, model: null, generation: null, yearFrom: null, yearTo: null,
     body: null, engine: null, year: null, donorCode: null,
     price: null, installationPrice: null, color: null, description: null, note: null,
@@ -74,7 +78,7 @@ describe('колонки витрины', () => {
     // Двадцать три сразу — простыня, в которой не найти цену.
     expect(DEFAULT_VISIBLE.length).toBeLessThan(COLUMNS.length);
     expect(DEFAULT_VISIBLE).toContain('price');
-    expect(loadVisible().length).toBeGreaterThan(0);
+    expect(DEFAULT_VISIBLE).toContain('number');
   });
 });
 
@@ -133,10 +137,128 @@ describe('паритет колонок с прежней системой', () 
   // читается как «не заполнено», а ноль — как измеренный ноль.
   it('незаполненное не превращается в ноль и в null', () => {
     const empty = row();
+
     expect(value('weight', empty)).toBe('');
     expect(value('dimensions', empty)).toBe('');
     expect(value('photoCount', empty)).toBe('');
     expect(value('published', empty)).toBe('');
+  });
+});
+
+/**
+ * Порядок витрины по умолчанию (задача 0060).
+ *
+ * <p><b>Как выглядело для человека.</b> Экран открывался с `sort: 'code'`,
+ * а `code` — это `public_code`, шесть случайных байт. Владелец с тридцатью
+ * пятью тысячами позиций видел **случайную полусотню** — и завтра другую:
+ * позиция, стоявшая вчера второй сверху, сегодня не видна вовсе, и это
+ * читается как «пропала».
+ */
+describe('порядок витрины по умолчанию', () => {
+  it('открывается порядковым номером по возрастанию, а не случайным кодом', () => {
+    const open = defaultQuery(50);
+
+    // «Сортировать витрину по порядковому номеру 1. 2. 3. и тд» — решение
+    // владельца продукта от 11 сентября 2026.
+    expect(open.sort,
+      `витрина открывается сортировкой «${open.sort}» вместо «number»: `
+      + '«code» — это шесть случайных байт, то есть случайная полусотня '
+      + 'из тридцати пяти тысяч, новая при каждом заходе').toBe('number');
+    expect(open.desc,
+      'витрина открывается от последнего заведённого, а не от первого: '
+      + '«1. 2. 3. и тд» читается сверху вниз').toBe(false);
+    expect(DEFAULT_SORT).toBe('number');
+    expect(DEFAULT_DESC).toBe(false);
+  });
+
+  it('колонка номера есть и сортируется по нему же', () => {
+    const column = COLUMNS.find((c) => c.key === 'number');
+    expect(column, 'номера позиции нет среди колонок витрины').toBeTruthy();
+    // Разойдись имя сортировки колонки с тем, что принимает сервер, — нажатие
+    // на стрелку меняло бы порядок на неизвестный серверу, то есть молча
+    // на умолчание.
+    expect(column?.sort).toBe(DEFAULT_SORT);
+    expect(value('number', row({ number: 347 }))).toBe('347');
+  });
+});
+
+/**
+ * Две кнопки сброса — решение владельца продукта от 11 сентября 2026:
+ * «запоминать всё, и должна быть кнопка сбросить фильтры, сбросить
+ * сортировку».
+ *
+ * <p>Они здесь не удобство, а условие безопасности самой памяти: запомненный
+ * отбор переживает браузер и устройство, и владелец, открывший склад через
+ * неделю, видит «Ничего не найдено» и решает, что склад пуст или сломан.
+ */
+describe('сброс отбора и сортировки', () => {
+  const busy = {
+    ...defaultQuery(50),
+    q: 'фара',
+    reserved: false,
+    missing: true,
+    warehouses: [7],
+    columns: { brand: 'Toyota' },
+    words: { note: 'скол' },
+    vehicle: {
+      brandId: 3, brandName: 'Toyota', modelId: null, modelName: '', body: '', engine: '',
+    },
+    sort: 'price',
+    desc: true,
+    page: 4,
+  };
+
+  it('сброс отбора снимает и набранный поиск, а порядок оставляет', () => {
+    const clean = withoutFilters(busy);
+
+    // «Сбрасывать: нажимающий „сбросить“ хочет увидеть весь склад» — решение
+    // владельца продукта от 11 сентября 2026. Полумера хуже отсутствия кнопки:
+    // человек нажал и по-прежнему видит полсотни строк вместо склада.
+    expect(clean.q, 'набранный поиск пережил сброс отбора').toBe('');
+    expect(clean.columns).toEqual({});
+    expect(clean.words).toEqual({});
+    expect(clean.vehicle.brandId).toBeNull();
+    expect(clean.warehouses).toEqual([]);
+    expect(clean.reserved).toBe(true);
+    expect(clean.missing).toBe(false);
+    // Сортировка — другое желание и другая кнопка.
+    expect(clean.sort, 'сброс отбора сбросил заодно и порядок').toBe('price');
+    expect(clean.desc).toBe(true);
+    expect(hasFilters(clean)).toBe(false);
+  });
+
+  it('сброс сортировки возвращает порядок заведения и не трогает отбор', () => {
+    const ordered = withDefaultSort(busy);
+
+    expect(ordered.sort).toBe(DEFAULT_SORT);
+    expect(ordered.desc).toBe(DEFAULT_DESC);
+    expect(ordered.q, 'сброс сортировки снял заодно и отбор').toBe('фара');
+    expect(ordered.columns).toEqual({ brand: 'Toyota' });
+    expect(isSorted(ordered)).toBe(false);
+  });
+
+  it('кнопки показываются только когда есть что сбрасывать', () => {
+    // Кнопка, которая ничего не меняет, хуже отсутствующей.
+    expect(hasFilters(defaultQuery(50))).toBe(false);
+    expect(isSorted(defaultQuery(50))).toBe(false);
+    expect(hasFilters(busy)).toBe(true);
+    expect(isSorted(busy)).toBe(true);
+    // Каждое условие включает кнопку само по себе: «показывать отсутствующие»
+    // тоже сужает выдачу, а снять его при пустой таблице так же нечем.
+    expect(hasFilters({ ...defaultQuery(50), missing: true })).toBe(true);
+    expect(hasFilters({ ...defaultQuery(50), reserved: false })).toBe(true);
+    expect(hasFilters({ ...defaultQuery(50), warehouses: [1] })).toBe(true);
+  });
+
+  it('перелистывание не меняет запоминаемого', () => {
+    const visible = ['number', 'title'];
+    // Страница не запоминается: «всё» сказано про то, как разложен экран,
+    // а не про то, где человек остановился. Заодно это значит, что стрелка
+    // «вперёд» не пишет в базу ничего.
+    expect(viewKey({ query: { ...busy, page: 9, after: '12' }, visible }))
+      .toBe(viewKey({ query: busy, visible }));
+    expect(viewKey({ query: { ...busy, sort: 'title' }, visible }))
+      .not.toBe(viewKey({ query: busy, visible }));
   });
 });
 

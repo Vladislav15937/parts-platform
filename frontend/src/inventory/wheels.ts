@@ -37,6 +37,12 @@ export function kindName(kind: string): string {
 
 export interface Wheel {
   id: number;
+  /**
+   * Порядковый номер позиции. Колонки под него на этой вкладке нет —
+   * задача 0060 про витрину склада, — но карточка у колеса та же, что
+   * у запчасти, и номер в ней показывается настоящий.
+   */
+  number: number;
   publicCode: string | null;
   title: string;
   price: number | null;
@@ -435,7 +441,7 @@ export function saveWheelVisible(keys: string[]): void {
 export function rowOfWheel(row: WheelRow): CatalogRow {
   const w = row.wheel;
   return {
-    id: w.id, code: w.publicCode, title: w.title,
+    id: w.id, number: w.number, code: w.publicCode, title: w.title,
     qualityGrade: null, condition: w.condition,
     brand: null, model: null, generation: null, yearFrom: null, yearTo: null,
     body: null, engine: null, year: null, donorCode: w.donorCode,

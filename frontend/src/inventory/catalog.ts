@@ -16,6 +16,12 @@ export interface Warehouse {
 
 export interface CatalogRow {
   id: number;
+  /**
+   * Порядковый номер позиции — тот, который называют вслух: «посмотри
+   * позицию 347». Не `id`: тот внутренний и человеку не показывается.
+   * Не `code`: тот шесть случайных байт, он про этикетку и сканер.
+   */
+  number: number;
   code: string | null;
   title: string;
   qualityGrade: string | null;
@@ -398,6 +404,12 @@ function day(value: string | null): string {
 }
 
 export const COLUMNS: Column[] = [
+  // Первой колонкой и по ней же порядок по умолчанию: «посмотри позицию 347»
+  // — это то, чем на разборке называют деталь в разговоре друг с другом.
+  // Публичный код рядом остаётся: он про этикетку и сканер, Code128 кодирует
+  // его, а «347» — нет.
+  { key: 'number', title: '№ позиции', sort: 'number', numeric: true,
+    value: (r) => text(r.number) },
   { key: 'code', title: 'Номер товара', sort: 'code', value: (r) => text(r.code) },
   // Вторым столбцом, как в кабинете: по снимку деталь узнают быстрее,
   // чем по наименованию, — особенно когда наименований на складе тысяча.
@@ -506,40 +518,215 @@ export const COLUMNS: Column[] = [
  * включает сам и выбор запоминается.
  */
 export const DEFAULT_VISIBLE = [
-  'code', 'photo', 'title', 'brand', 'model', 'year', 'sideFr', 'sideLr', 'price', 'section',
+  'number', 'code', 'photo', 'title', 'brand', 'model', 'year', 'sideFr', 'sideLr',
+  'price', 'section',
 ];
 
-const STORAGE_KEY = 'catalog-columns';
-
 /**
- * Выбор колонок переживает перезагрузку.
+ * Порядок по умолчанию — номер позиции по возрастанию.
  *
- * <p>Настройка таблицы — работа на несколько минут, и терять её при каждом
- * заходе значит не дать ею пользоваться вовсе.
+ * <p>До задачи 0060 здесь стояло `sort: 'code', desc: true`, а `code` —
+ * это `public_code`, шесть случайных байт. То есть владелец, открывавший
+ * главный свой экран, видел **случайную полусотню** из тридцати пяти тысяч
+ * позиций, и завтра другую: позиция, стоявшая вчера второй сверху, сегодня
+ * не видна вовсе — и это читается как «пропала».
+ *
+ * <p>Решение владельца продукта от 11 сентября 2026: «сортировать витрину
+ * по порядковому номеру 1. 2. 3. и тд».
  */
-export function loadVisible(): string[] {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved === null) {
-      return DEFAULT_VISIBLE;
-    }
-    const parsed: unknown = JSON.parse(saved);
-    return Array.isArray(parsed) && parsed.every((k) => typeof k === 'string')
-      ? (parsed as string[])
-      : DEFAULT_VISIBLE;
-  } catch {
-    // Испорченная запись — не повод показать пустую таблицу.
-    return DEFAULT_VISIBLE;
-  }
+export const DEFAULT_SORT = 'number';
+export const DEFAULT_DESC = false;
+
+/** Витрина при первом открытии: ни отборов, ни набранного поиска. */
+export function defaultQuery(size: number): CatalogQuery {
+  return {
+    q: '',
+    vehicle: NO_VEHICLE,
+    reserved: true,
+    missing: false,
+    warehouses: [],
+    columns: {},
+    words: {},
+    sort: DEFAULT_SORT,
+    desc: DEFAULT_DESC,
+    page: 0,
+    size,
+  };
 }
 
-export function saveVisible(keys: string[]): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(keys));
-  } catch {
-    // Приватный режим браузера запрещает запись. Настройка не сохранится,
-    // но таблица работать не перестанет.
+/**
+ * Отбор снят целиком — включая набранный поиск.
+ *
+ * <p>Решение владельца продукта от 11 сентября 2026, дословно: «сбрасывать:
+ * нажимающий „сбросить“ хочет увидеть весь склад». Полумера здесь хуже
+ * отсутствия кнопки: человек нажал «сбросить», по-прежнему видит полсотни
+ * строк вместо склада и не понимает, что ещё держит выдачу.
+ *
+ * <p>Сортировку кнопка не трогает — это другое желание и другая кнопка.
+ */
+export function withoutFilters(query: CatalogQuery): CatalogQuery {
+  const clean = defaultQuery(query.size);
+  return { ...clean, sort: query.sort, desc: query.desc };
+}
+
+/** Порядок вернулся к умолчанию, отборы остались как были. */
+export function withDefaultSort(query: CatalogQuery): CatalogQuery {
+  return { ...query, sort: DEFAULT_SORT, desc: DEFAULT_DESC, after: undefined, page: 0 };
+}
+
+/**
+ * Есть ли что сбрасывать.
+ *
+ * <p>Кнопки показываются ровно тогда, когда им есть что сделать: кнопка,
+ * которая ничего не меняет, хуже отсутствующей. А при пустой выдаче отбор
+ * заведомо задан — значит кнопка на экране есть, и это главное: таблицы
+ * в этот момент нет вовсе, а её шапка — единственное место, где отбор
+ * до сих пор снимался.
+ */
+export function hasFilters(query: CatalogQuery): boolean {
+  return query.q.trim() !== ''
+    || query.vehicle.brandId !== null
+    || query.reserved !== true
+    || query.missing !== false
+    || query.warehouses.length > 0
+    || Object.keys(query.columns ?? {}).length > 0
+    || Object.keys(query.words ?? {}).length > 0;
+}
+
+export function isSorted(query: CatalogQuery): boolean {
+  return query.sort !== DEFAULT_SORT || query.desc !== DEFAULT_DESC;
+}
+
+/** Имя экрана в настройках сотрудника. */
+const SCREEN = 'catalog';
+
+/** Что витрина помнит за сотрудником: и отбор, и порядок, и колонки. */
+export interface CatalogView {
+  query: CatalogQuery;
+  visible: string[];
+}
+
+/**
+ * Настройка витрины живёт на сервере, а не в браузере.
+ *
+ * <p>Решение владельца продукта от 11 сентября 2026: помнить «для каждого
+ * отдельного пользователя всегда. Даже если он закрыл браузер, выключил
+ * компьютер, открыл в другом браузере или из другого места». `localStorage`
+ * не даёт ни одного из трёх последних случаев — а состав колонок до этой
+ * задачи хранился именно там.
+ *
+ * <p>Страницу не помним намеренно: «всё» сказано про то, как разложен экран,
+ * а не про то, где человек остановился. Открыть склад на сорок второй
+ * странице — это увидеть середину списка без объяснения, почему.
+ */
+export function loadView(size: number): Promise<CatalogView> {
+  return request<{ value: Record<string, unknown> | null }>(`/api/me/settings/${SCREEN}`)
+    .then((saved) => viewOf(saved.value, size))
+    // Настройка не приехала — экран обязан открыться. Умолчание тут
+    // не хуже того, что было до задачи: витрина при первом заходе
+    // выглядит именно так.
+    .catch(() => ({ query: defaultQuery(size), visible: DEFAULT_VISIBLE }));
+}
+
+/**
+ * Что именно запоминается.
+ *
+ * <p>Страницы и курсора здесь нет намеренно (см. {@link loadView}), и это же
+ * даёт второе: перелистывание не пишет ничего в базу, потому что запоминаемое
+ * от него не меняется.
+ */
+function memorable(view: CatalogView): Record<string, unknown> {
+  const { query } = view;
+  return {
+    visible: view.visible,
+    sort: query.sort,
+    desc: query.desc,
+    q: query.q,
+    reserved: query.reserved,
+    missing: query.missing,
+    warehouses: query.warehouses,
+    columns: query.columns,
+    words: query.words,
+    vehicle: query.vehicle,
+  };
+}
+
+/** Снимок запоминаемого строкой: по нему видно, менялось ли оно вообще. */
+export function viewKey(view: CatalogView): string {
+  return JSON.stringify(memorable(view));
+}
+
+export function saveView(view: CatalogView): Promise<unknown> {
+  return request<unknown>(`/api/me/settings/${SCREEN}`, {
+    method: 'PUT',
+    body: memorable(view),
+  // Отказ сохранения не должен ронять экран: настройка не применилась,
+  // склад работает. Ровно так же прежняя запись в localStorage молчала
+  // в приватном окне.
+  }).catch(() => null);
+}
+
+/**
+ * Разбор сохранённого — с недоверием к каждому полю.
+ *
+ * <p>Запись сделана прежней версией кода и пережила выкат: колонка могла
+ * исчезнуть, поле поменять тип. Испорченная настройка не повод показать
+ * пустую витрину — непонятое просто берётся умолчанием.
+ */
+function viewOf(saved: Record<string, unknown> | null, size: number): CatalogView {
+  const base = defaultQuery(size);
+  if (saved === null || typeof saved !== 'object') {
+    return { query: base, visible: DEFAULT_VISIBLE };
   }
+  const strings = (value: unknown): string[] =>
+    Array.isArray(value) && value.every((item) => typeof item === 'string')
+      ? (value as string[]) : [];
+  const record = (value: unknown): Record<string, string> => {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return {};
+    const pairs = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => typeof item === 'string') as Array<[string, string]>;
+    return Object.fromEntries(pairs);
+  };
+  const visible = strings(saved.visible);
+
+  return {
+    visible: visible.length > 0 ? visible : DEFAULT_VISIBLE,
+    query: {
+      ...base,
+      sort: typeof saved.sort === 'string' ? saved.sort : base.sort,
+      desc: typeof saved.desc === 'boolean' ? saved.desc : base.desc,
+      q: typeof saved.q === 'string' ? saved.q : base.q,
+      reserved: typeof saved.reserved === 'boolean' ? saved.reserved : base.reserved,
+      missing: typeof saved.missing === 'boolean' ? saved.missing : base.missing,
+      warehouses: Array.isArray(saved.warehouses)
+        ? saved.warehouses.filter((id): id is number => typeof id === 'number')
+        : base.warehouses,
+      columns: record(saved.columns),
+      words: record(saved.words),
+      vehicle: vehicleOf(saved.vehicle),
+    },
+  };
+}
+
+function vehicleOf(saved: unknown): VehicleFilter {
+  if (saved === null || typeof saved !== 'object') {
+    return NO_VEHICLE;
+  }
+  const value = saved as Record<string, unknown>;
+  const brandId = typeof value.brandId === 'number' ? value.brandId : null;
+  if (brandId === null) {
+    return NO_VEHICLE;
+  }
+  const str = (key: string): string =>
+    typeof value[key] === 'string' ? (value[key] as string) : '';
+  return {
+    brandId,
+    brandName: str('brandName'),
+    modelId: typeof value.modelId === 'number' ? value.modelId : null,
+    modelName: str('modelName'),
+    body: str('body'),
+    engine: str('engine'),
+  };
 }
 
 /**
