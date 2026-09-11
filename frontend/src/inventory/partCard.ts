@@ -87,7 +87,10 @@ export function cardFields(row: CatalogRow): Array<[string, string]> {
  * если имя их не содержит: у поколения с настоящим именем («XV40») они
  * по-прежнему нужны.
  */
-function generationOf(row: CatalogRow): string | null {
+// Экспортируется ради формы правки: там та же строка стоит неправимым
+// полем, и вторая копия правила «годы не печатаются дважды» разошлась бы
+// с этой на первой правке.
+export function generationOf(row: CatalogRow): string | null {
   const years = row.yearFrom === null ? null : `${row.yearFrom}—${row.yearTo ?? ''}`;
   if (row.generation === null || row.generation === '') return years;
   if (years === null || row.generation.includes(String(row.yearFrom))) {
