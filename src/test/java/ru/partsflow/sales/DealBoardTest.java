@@ -255,6 +255,34 @@ class DealBoardTest extends PostgresTestBase {
                 .as("стадия карточки разошлась с колонкой: %s", board)
                 .isEmpty();
 
+        // 5б. Та же стадия приезжает в самой сделке и в списке сделок клиента
+        // (задача 0058). Нажатие на карточку «Готов к выдаче» ведёт именно
+        // туда, и до правки продавец читал там «Сделка №N · отложена»
+        // и «Отложено до 15 сентября» — исправленное слово на доске
+        // и противоположный ему смысл через одно движение. Сверяется не текст
+        // «READY», а **равенство** со стадией карточки: вторая формула стадии,
+        // написанная рядом с первой, разошлась бы с ней молча, и проверка
+        // на записанное слово этого бы не увидела.
+        for (long id : List.of(ready, waiting, partly, expired, paidExpired, draft)) {
+            assertThat(stageOfDeal(id, seller))
+                    .as("стадия сделки %s разошлась с её же карточкой на доске", id)
+                    .isEqualTo(cardOf(board, id).path("stage").asText());
+        }
+        assertThat(stageOfDeal(ready, seller))
+                .as("готовой к выдаче сделке нечем подписаться, кроме сырого статуса")
+                .isEqualTo("READY");
+        // А у закрытой стадии нет вовсе: `CASE` назвал бы оплаченную выданную
+        // сделку «готовой к выдаче», и экран подписал бы выданное готовым
+        // к выдаче. Пусто означает «подписывай состоянием документа».
+        assertThat(dealById(issued, seller).path("stage").isNull())
+                .as("выданной сделке приписана стадия — экран назовёт её незакрытой")
+                .isTrue();
+        // И в списке сделок клиента — той же поверхности, где продавец
+        // выбирает чужую сделку, приехав через клиента.
+        assertThat(stageInCustomerList(ready, customer, seller))
+                .as("список сделок клиента не несёт стадии — строка подпишется статусом")
+                .isEqualTo("READY");
+
         // 6. «Истек срок» — тот же набор, что отдаёт эндпоинт просроченных
         // резервов. Сверяются номера, а не числа: равные счётчики при разных
         // наборах — то же расхождение, только незаметное.
@@ -455,6 +483,42 @@ class DealBoardTest extends PostgresTestBase {
             }
         }
         throw new AssertionError("сделки " + dealId + " нет на доске: " + board);
+    }
+
+    /**
+     * Стадия сделки так, как её получает карточка продавца
+     * ({@code GET /api/deals/{id}}).
+     *
+     * <p>Через HTTP, а не вызовом сервиса: ответ уходит record'ами, и класс
+     * в стиле record Jackson не сериализует — тест на сервис этого не увидит.
+     */
+    private String stageOfDeal(long dealId, MockHttpSession session) throws Exception {
+        return dealById(dealId, session).path("stage").asText();
+    }
+
+    private JsonNode dealById(long dealId, MockHttpSession session) throws Exception {
+        var result = mvc.perform(get("/api/deals/" + dealId).session(session))
+                .andExpect(status().isOk())
+                .andReturn();
+        return new ObjectMapper().readTree(result.getResponse().getContentAsByteArray());
+    }
+
+    /**
+     * Стадия той же сделки в списке сделок клиента — том самом, которым живёт
+     * {@code DealFinder} продавца.
+     */
+    private String stageInCustomerList(long dealId, long customerId, MockHttpSession session)
+            throws Exception {
+        var result = mvc.perform(get("/api/deals?customerId=" + customerId).session(session))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode rows = new ObjectMapper().readTree(result.getResponse().getContentAsByteArray());
+        for (JsonNode row : rows) {
+            if (row.path("id").asLong() == dealId) {
+                return row.path("stage").asText();
+            }
+        }
+        throw new AssertionError("сделки " + dealId + " нет в списке сделок клиента: " + rows);
     }
 
     private List<Long> expiredByEndpoint(MockHttpSession session) throws Exception {

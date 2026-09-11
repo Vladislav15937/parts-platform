@@ -131,6 +131,8 @@ function dealFrom(items: { status: string; warehouseId: number }[],
     customerId: 2,
     managerId: 3,
     managerName: 'Продавец',
+    // Выданная сделка стадии не имеет вовсе — работа по ней кончилась.
+    stage: null,
     status: 'ISSUED',
     reservedUntil: null,
     totalAmount: '5000',

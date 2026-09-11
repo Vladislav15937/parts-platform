@@ -39,7 +39,7 @@ import {
   transferable,
   transferItems,
 } from '../sales/sales';
-import { dealItemStatusName, dealStatusNameLower } from '../sales/dealStatus';
+import { dealItemStatusName, dealStageStatus, dealStatusNameLower } from '../sales/dealStatus';
 import { useMounted } from '../ui/useMounted';
 import type { CustomerAccount,
   HistoryEntry,
@@ -1129,15 +1129,22 @@ function DealFinder({
       {deals !== null && deals.length > 0 && (
         <ul className="suggestions">
           {deals.map((d) => {
+            // Слово — по стадии, а не по сырому статусу: оплаченная целиком
+            // и не выданная сделка остаётся `RESERVED` со сроком резерва,
+            // и строка про неё говорила «отложена · до 15 сентября», то есть
+            // «ещё не оплачена, ждём до этой даты» — ровно наоборот.
+            const state = dealStageStatus(d.stage, d.status);
             // Срок резерва в той же строке, что и статус: «отложена» без
             // числа не говорит ничего — освободится деталь завтра или через
             // неделю, из списка не понять. Просроченных у живого клиента
             // больше половины, и красное здесь — это очередь на обзвон.
-            const line = reservationTerm(d);
+            // Считается он от того же слова: у готовой к выдаче дату брать
+            // неоткуда, иначе поправка вернула бы половину прежнего обмана.
+            const line = reservationTerm({ status: state, reservedUntil: d.reservedUntil });
             return (
               <li key={d.id}>
                 <button type="button" className="button--ghost" onClick={() => onPick(d)}>
-                  №{d.number ?? d.id} · {dealStatusNameLower(d.status)}
+                  №{d.number ?? d.id} · {dealStatusNameLower(state)}
                   {line !== null && (
                     <span className={line.expired ? 'note--error' : 'muted'}>
                       {line.expired ? ' · срок истёк' : ` · до ${line.day}`}
@@ -1259,10 +1266,24 @@ function DealCard({
   // с товаром, который обещан клиенту и никуда не денется.
   const open = deal.status === 'RESERVED' || deal.status === 'DRAFT';
   const chosen = selectable.filter((item) => picked.includes(item.id));
+  // Чем подписан заголовок: стадией, а не сырым статусом. Нажатие на карточку
+  // «Готов к выдаче» на доске ведёт именно сюда, и до правки продавец читал
+  // исправленное там слово, а через одно движение — прежний обман: оплаченная
+  // целиком и не выданная сделка остаётся `RESERVED` со сроком резерва,
+  // то есть заголовок говорил «Сделка №20 · отложена», а строкой ниже стояло
+  // «Отложено до 15 сентября». Цифр рядом нет — сумма и оплата ниже
+  // по карточке, — и проверить это слово человеку было нечем.
+  const state = dealStageStatus(deal.stage, deal.status);
   // Срок резерва: у выданной и отменённой его нет вовсе — товар либо
   // у клиента, либо снова на полке, и дата рядом с ними обещала бы то,
-  // чего никто не обещал.
-  const term = reservationTerm(deal);
+  // чего никто не обещал. У готовой к выдаче — по той же причине: срок
+  // резерва рядом со словом «готова» читается как ожидание оплаты.
+  const term = reservationTerm({ status: state, reservedUntil: deal.reservedUntil });
+  // А продление остаётся доступным, пока резерв стоит на самом документе:
+  // товар и у оплаченной сделки лежит отложенным до этого числа, и убрать
+  // вместе со словом ещё и кнопку значило бы отнять возможность, о которой
+  // задача не говорит ничего.
+  const reserveOnDocument = reservationTerm(deal) !== null;
 
   const debt = Number(deal.debt);
   const entered = amount.trim();
@@ -1319,7 +1340,7 @@ function DealCard({
     <>
       <hr />
       <h3>
-        Сделка №{deal.number ?? deal.id} · {dealStatusNameLower(deal.status)}
+        Сделка №{deal.number ?? deal.id} · {dealStatusNameLower(state)}
       </h3>
 
       {/* Срок резерва — сразу под номером, как у ориентира. Без него карточка
@@ -1337,7 +1358,7 @@ function DealCard({
           подержать ещё, и уводить продавца за этим на другой экран значит
           не продлить вовсе. Дата не подставляется: до какого числа держим,
           знает только тот, кто говорил с клиентом. */}
-      {term !== null && (
+      {reserveOnDocument && (
         <div className="row">
           <input
             type="date"

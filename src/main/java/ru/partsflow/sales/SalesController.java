@@ -634,7 +634,14 @@ public class SalesController {
         Map<Long, String> managerNames = members.namesOf(deals.stream()
                 .map(Deal::getManagerId)
                 .toList());
-        return deals.stream().map(deal -> DealView.of(deal, titles, serviceNames, managerNames)).toList();
+        // Стадия — тем же выражением, что раскладывает доску сделок, и тоже
+        // одним запросом на всю выдачу. Считать её здесь, в Java, значило бы
+        // завести вторую формулу рядом с первой: разошлись бы они не при
+        // копировании, а на первой правке одной из них — и разошлись бы молча.
+        Map<Long, String> stages = sales.stagesOf(deals.stream().map(Deal::getId).toList());
+        return deals.stream()
+                .map(deal -> DealView.of(deal, titles, serviceNames, managerNames, stages))
+                .toList();
     }
 
     private DealView view(Deal deal) {
@@ -732,9 +739,19 @@ public class SalesController {
      * @param managerName   имя ответственного продавца/менеджера; пусто —
      *                      сотрудника удалили или сделка ещё не привязана
      *                      (заказ с площадки до принятия)
+     * @param stage         стадия работы над сделкой — та же, по которой
+     *                      раскладывается доска ({@code SalesService.stagesOf}).
+     *                      Экран подписывает сделку <b>по ней</b>, а не
+     *                      по {@code status}: у полностью оплаченной невыданной
+     *                      сделки документ так и остаётся {@code RESERVED}
+     *                      со сроком резерва, и подписанная сырым статусом,
+     *                      она читается как «Отложена до 15 сентября» — то есть
+     *                      «ещё не оплачена, ждём до этой даты», ровно наоборот.
+     *                      Пусто у закрытой сделки: стадии у неё нет, и слово
+     *                      берётся из состояния документа («выдана», «отменена»)
      */
     public record DealView(Long id, Long number, Long customerId, Long managerId,
-                           String managerName,
+                           String managerName, String stage,
                            DealStatus status, Instant reservedUntil,
                            BigDecimal totalAmount, BigDecimal paidAmount, BigDecimal debt,
                            Instant createdAt, Instant issuedAt,
@@ -745,9 +762,11 @@ public class SalesController {
                            List<ServiceLineView> services) {
 
         static DealView of(Deal deal, Map<Long, String> titles,
-                           Map<Long, String> serviceNames, Map<Long, String> managerNames) {
+                           Map<Long, String> serviceNames, Map<Long, String> managerNames,
+                           Map<Long, String> stages) {
             return new DealView(deal.getId(), deal.getNumber(), deal.getCustomerId(),
                     deal.getManagerId(), nameOf(deal.getManagerId(), managerNames),
+                    stageOf(deal.getId(), stages),
                     deal.getStatus(), deal.getReservedUntil(),
                     deal.getTotalAmount(), deal.getPaidAmount(), deal.debt(),
                     deal.getCreatedAt(), deal.getIssuedAt(),
@@ -780,6 +799,19 @@ public class SalesController {
          */
         private static String nameOf(Long managerId, Map<Long, String> managerNames) {
             return managerId == null ? null : managerNames.get(managerId);
+        }
+
+        /**
+         * Стадия сделки, когда её может не быть.
+         *
+         * <p>Проверка ключа до обращения к карте — по той же причине, что
+         * и у {@link #nameOf}: у закрытых сделок стадий нет вовсе, и карта
+         * тогда приезжает неизменяемой пустой, а та на {@code get(null)}
+         * бросает {@code NullPointerException}. Идентификатор пуст
+         * у несохранённой сделки.
+         */
+        private static String stageOf(Long dealId, Map<Long, String> stages) {
+            return dealId == null ? null : stages.get(dealId);
         }
     }
 
