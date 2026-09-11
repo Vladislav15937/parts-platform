@@ -938,6 +938,80 @@ public class SalesService {
     private static final int BOARD_CARDS = 100;
 
     /**
+     * Стадия сделки — одно выражение на весь проект.
+     *
+     * <p><b>Почему константой, а не строкой внутри {@link #dealBoard}.</b>
+     * Стадию читают уже две поверхности: доска (колонка и подпись карточки)
+     * и карточка самой сделки со списком сделок клиента
+     * ({@link #stagesOf(List)}). Вторая копия этих пяти веток разошлась бы
+     * с первой молча — и разошлась бы не при копировании, а позже, когда
+     * правят одну из них. В этом проекте так уже было трижды: белые списки
+     * колонок, копии словаря состояний, таблица месяцев.
+     *
+     * <p>Один параметр — «сейчас», для ветки просроченного резерва. Он идёт
+     * первым в списке колонок, значит и в аргументах запроса стоит первым.
+     *
+     * <p>Разделители — явной строкой, а не отступом текстового блока:
+     * записанная ловушка проекта, из-за которой склейка однажды дала
+     * «r.reasonFROM». Компилятор про это молчит всегда.
+     */
+    private static final String STAGE_CASE = " CASE"
+            + " WHEN d.status = 'DRAFT' THEN 'NEW'"
+            + " WHEN d.status = 'RESERVED' AND d.reserved_until IS NOT NULL"
+            + " AND d.reserved_until < ? THEN 'EXPIRED'"
+            + " WHEN d.status = 'READY'"
+            + " OR (d.total_amount > 0 AND d.paid_amount >= d.total_amount) THEN 'READY'"
+            + " WHEN d.paid_amount <= 0 THEN 'AWAITING_PAYMENT'"
+            + " ELSE 'PARTLY_PAID'"
+            + " END AS stage";
+
+    /**
+     * Стадия названных сделок — тем же {@code CASE}, что раскладывает доску.
+     *
+     * <p><b>Зачем это нужно за пределами доски.</b> Задача 0052 починила
+     * подпись карточки на доске, а те же слова стоят ещё в двух местах:
+     * в заголовке карточки сделки и в списке сделок клиента
+     * ({@code DealFinder}). Там они выводились из {@code status} без поправки
+     * на оплату — то есть полностью оплаченная и готовая к выдаче сделка
+     * называлась «отложена» и подписывалась «Отложено до 15 сентября»,
+     * ровно противоположным смыслом. Нажатие на карточку «Готов к выдаче»
+     * ведёт именно в эту карточку: продавец читал исправленное слово
+     * на доске и тут же, одним движением, исходный обман снова.
+     *
+     * <p><b>Закрытой сделки в ответе нет вовсе, и это не пропуск.</b>
+     * Стадия — про незакрытую сделку ({@code BOARD_OPEN}), и у выданной,
+     * отменённой или возвращённой её не существует: {@code CASE} назвал бы
+     * оплаченную выданную сделку «готовой к выдаче». Пусто означает
+     * «стадии нет, подписывай состоянием документа», и экран так и делает —
+     * «Сделка №20 · выдана».
+     *
+     * <p>Своя транзакция обязательна: {@code JdbcTemplate}, позванный
+     * снаружи, берёт соединение из пула напрямую и уходит в {@code public}.
+     *
+     * @param dealIds чьи стадии нужны; пустой список не ходит в базу вовсе
+     * @return стадия по идентификатору сделки; незакрытых в карте нет
+     */
+    @Transactional(readOnly = true)
+    public java.util.Map<Long, String> stagesOf(List<Long> dealIds) {
+        List<Long> ids = dealIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return java.util.Map.of();
+        }
+        List<Object> args = new ArrayList<>();
+        args.add(java.sql.Timestamp.from(Instant.now()));
+        args.addAll(ids);
+        java.util.Map<Long, String> stages = new java.util.HashMap<>();
+        jdbc.query("SELECT d.id," + STAGE_CASE + " FROM deal d"
+                        + " WHERE d.id IN (" + ids.stream().map(id -> "?")
+                        .collect(java.util.stream.Collectors.joining(", ")) + ")"
+                        + " AND" + BOARD_OPEN,
+                (org.springframework.jdbc.core.RowCallbackHandler) rs ->
+                        stages.put(rs.getLong("id"), rs.getString("stage")),
+                args.toArray());
+        return stages;
+    }
+
+    /**
      * Доска сделок по состояниям: пять колонок со счётчиками.
      *
      * <p><b>Зачем она рядом со списком.</b> Список отвечает на «покажи все
@@ -999,20 +1073,7 @@ public class SalesService {
             args.add(managerId);
         }
 
-        // Разделители — явной строкой, а не отступом текстового блока:
-        // записанная ловушка проекта, из-за которой склейка однажды дала
-        // «r.reasonFROM». Компилятор про это молчит всегда.
-        String stage = " CASE"
-                + " WHEN d.status = 'DRAFT' THEN 'NEW'"
-                + " WHEN d.status = 'RESERVED' AND d.reserved_until IS NOT NULL"
-                + " AND d.reserved_until < ? THEN 'EXPIRED'"
-                + " WHEN d.status = 'READY'"
-                + " OR (d.total_amount > 0 AND d.paid_amount >= d.total_amount) THEN 'READY'"
-                + " WHEN d.paid_amount <= 0 THEN 'AWAITING_PAYMENT'"
-                + " ELSE 'PARTLY_PAID'"
-                + " END AS stage";
-
-        String inner = "SELECT" + stage
+        String inner = "SELECT" + STAGE_CASE
                 + ", d.id, d.number, d.created_at, c.name AS customer_name,"
                 + " d.total_amount, d.paid_amount, d.status, d.reserved_until"
                 + " FROM deal d"
