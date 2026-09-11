@@ -36,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest
 class PhotoMigrationTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000042";
+    private static final String TENANT = "t_000139";
 
     /** Однопиксельный GIF: настоящие байты картинки, а не текст под видом её. */
     private static final byte[] IMAGE = {

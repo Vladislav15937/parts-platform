@@ -47,7 +47,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class PartUpdateTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000089";
+    private static final String TENANT = "t_000146";
 
     @Autowired
     private MockMvc mvc;
@@ -74,10 +74,10 @@ class PartUpdateTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
-        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 89");
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 146");
         jdbc.update("""
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
-                VALUES (89, ?, 'Разборка', 'editco')""", TENANT);
+                VALUES (146, ?, 'Разборка', 'editco')""", TENANT);
 
         inTenant(() -> {
             ownerId = member("vladelec", "Владелец", "OWNER");

@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
 class EventQueueMetricsTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000084";
+    private static final String TENANT = "t_000142";
 
     @Autowired
     private EventQueueMetrics metrics;
@@ -41,10 +41,10 @@ class EventQueueMetricsTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
-        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 84");
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 142");
         jdbc.update("""
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
-                VALUES (84, ?, 'Разборка', 'metrico')""", TENANT);
+                VALUES (142, ?, 'Разборка', 'metrico')""", TENANT);
         jdbc.execute("DELETE FROM " + TENANT + ".outbox");
         jdbc.execute("DELETE FROM " + TENANT + ".event_dead_letter");
     }

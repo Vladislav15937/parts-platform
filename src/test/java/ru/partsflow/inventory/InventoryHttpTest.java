@@ -45,7 +45,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class InventoryHttpTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000087";
+    private static final String TENANT = "t_000143";
 
     @Autowired
     private StockLedger ledger;
@@ -72,10 +72,10 @@ class InventoryHttpTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
-        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 87");
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 143");
         jdbc.update("""
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
-                VALUES (87, ?, 'Разборка', 'invco')""", TENANT);
+                VALUES (143, ?, 'Разборка', 'invco')""", TENANT);
 
         inTenant(() -> {
             jdbc.update("DELETE FROM inventory_line");
