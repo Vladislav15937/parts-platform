@@ -23,7 +23,7 @@ import {
  */
 function wheel(overrides: Partial<Wheel> = {}): Wheel {
   return {
-    id: 1, publicCode: null, title: '', price: null, status: 'IN_STOCK', qty: 1,
+    id: 1, number: 1, publicCode: null, title: '', price: null, status: 'IN_STOCK', qty: 1,
     kind: 'TYRE', setNo: null, diameter: null, tyreWidth: null, tyreHeight: null,
     construction: null, tyreType: null, season: null, wearMm: null, madeYear: null,
     discType: null, discWidth: null, offsetMm: null, boltPattern: null, hubBore: null,

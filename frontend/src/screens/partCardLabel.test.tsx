@@ -106,6 +106,7 @@ function props(row: CatalogRow) {
 function row(): CatalogRow {
   return {
     id: 42,
+    number: 42,
     code: 'B-40219',
     title: 'Фара левая Toyota Camry',
     qualityGrade: null,

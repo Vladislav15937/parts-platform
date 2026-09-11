@@ -612,7 +612,13 @@ class CatalogServiceTest extends PostgresTestBase {
             return null;
         });
 
-        var codes = rows.stream().map(row -> row.get(0)).toList();
+        // Номер товара стоит второй колонкой: первой с задачи 0060 идёт
+        // «№ позиции» — тот номер, которым деталь называют вслух. Индекс
+        // берётся из заголовка, а не числом: иначе следующая колонка,
+        // добавленная в начало, снова сдвинет проверку молча.
+        int at = CatalogService.exportHeader(inTenant(() -> catalog.warehouses()))
+                .indexOf("Номер товара");
+        var codes = rows.stream().map(row -> row.get(at)).toList();
         assertThat(codes).contains(codeOf(id)).doesNotContain(codeOf(other));
     }
 

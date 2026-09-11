@@ -198,7 +198,7 @@ public class WheelService {
         args.add((long) page * size);
 
         List<WheelRow> rows = jdbc.query("""
-                SELECT p.id, p.public_code, p.title, p.price, p.status, p.qty_on_hand,
+                SELECT p.id, p.number, p.public_code, p.title, p.price, p.status, p.qty_on_hand,
                        p.condition, p.description, p.note, p.section, p.is_published,
                        p.barcode, p.legacy_code, p.created_at, p.updated_at,
                        p.price_changed_at,
@@ -236,7 +236,8 @@ public class WheelService {
                   LEFT JOIN supply s ON s.id = p.supply_id
                 """ + filter.where() + orderOf(sort, descending) + " LIMIT ? OFFSET ?",
                 (rs, i) -> new WheelRow(
-                        rs.getLong("id"), rs.getString("public_code"), rs.getString("title"),
+                        rs.getLong("id"), rs.getLong("number"),
+                        rs.getString("public_code"), rs.getString("title"),
                         rs.getBigDecimal("price"), rs.getString("status"),
                         rs.getBigDecimal("qty_on_hand"),
                         rs.getString("kind"), (Integer) rs.getObject("set_no"),
@@ -942,7 +943,16 @@ public class WheelService {
      *
      * @param stock остаток по складам: ключ — идентификатор склада
      */
-    public record WheelRow(Long id, String publicCode, String title, BigDecimal price,
+    public record WheelRow(Long id,
+                           /**
+                            * Порядковый номер позиции. Колонки под него
+                            * на вкладке колёс нет — задача 0060 про витрину
+                            * склада, — но карточка у колеса та же, что
+                            * у запчасти, и номер в ней обязан быть настоящим,
+                            * а не нулём.
+                            */
+                           Long number,
+                           String publicCode, String title, BigDecimal price,
                            String status, BigDecimal qty,
                            String kind, Integer setNo, BigDecimal diameter,
                            Integer tyreWidth, Integer tyreHeight, String construction,
@@ -963,7 +973,8 @@ public class WheelService {
                            Map<Long, BigDecimal> stock) {
 
         WheelRow withStock(Map<Long, BigDecimal> byWarehouse) {
-            return new WheelRow(id, publicCode, title, price, status, qty, kind, setNo, diameter,
+            return new WheelRow(id, number, publicCode, title, price, status, qty, kind, setNo,
+                    diameter,
                     tyreWidth, tyreHeight, construction, tyreType, season, wearMm, madeYear,
                     discType, discWidth, offsetMm, boltPattern, hubBore, brand, model,
                     discBrand, discModel, markingType, treadType, runFlat, lightTruck, speedIndex, loadIndex,
