@@ -129,6 +129,7 @@ function dealFrom(items: { status: string; warehouseId: number }[],
     id: 1,
     number: 7,
     customerId: 2,
+    customerName: 'Частное лицо',
     managerId: 3,
     managerName: 'Продавец',
     // Выданная сделка стадии не имеет вовсе — работа по ней кончилась.

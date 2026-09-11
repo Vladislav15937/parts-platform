@@ -57,6 +57,13 @@ export interface Deal {
   id: number;
   number: number | null;
   customerId: number;
+  /**
+   * Имя контрагента. Пусто — клиента нет вовсе (заказ с площадки:
+   * покупателя она не называет). У обычной продажи здесь либо имя
+   * покупателя, либо «Частное лицо», и различить их можно только
+   * по имени — номер не говорит об этом ничего.
+   */
+  customerName: string | null;
   managerId: number | null;
   /**
    * Имя ответственного. Пусто — сотрудника удалили, или заказ с площадки
@@ -388,6 +395,17 @@ export function createCustomer(name: string, phone: string): Promise<Customer> {
 }
 
 /**
+ * Контрагент розничной продажи — тот, что стоит в форме по умолчанию.
+ *
+ * <p>Половина покупателей на разборке не называет себя, и заводить их
+ * в справочник нечем и незачем. Он один на компанию: повторный запрос
+ * возвращает того же.
+ */
+export function retailCustomer(): Promise<Customer> {
+  return request<Customer>('/api/customers/retail');
+}
+
+/**
  * Карточка клиента целиком — поля, которые до раздела «Клиенты» лежали
  * в схеме и не были доступны ни на одном экране: почта, тип, ИНН,
  * название организации, примечание и заметка.
@@ -579,8 +597,12 @@ export interface BasketLine {
   price: string;
 }
 
+/**
+ * Оформить продажу. Клиент необязателен: пусто — розничная продажа,
+ * и сервер подставит контрагента «Частное лицо».
+ */
 export function createDeal(
-  customerId: number,
+  customerId: number | null,
   lines: BasketLine[],
   services: ServiceLine[] = [],
   dealSourceId: number | null = null,
@@ -1055,6 +1077,20 @@ export function extendReservation(dealId: number, reservedUntil: string): Promis
   return request<Deal>(`/api/deals/${dealId}/reservation`, {
     method: 'POST',
     body: { reservedUntil },
+  });
+}
+
+/**
+ * Смена контрагента сделки: «Частное лицо» оказалось Гридиным.
+ *
+ * <p>Порядок разговора на разборке — сначала товар, потом (если назвался)
+ * клиент, поэтому это обычный шаг, а не исправление ошибки. Пишется
+ * в историю документа отдельной строкой с обоими именами.
+ */
+export function changeDealCustomer(dealId: number, customerId: number): Promise<Deal> {
+  return request<Deal>(`/api/deals/${dealId}/customer`, {
+    method: 'POST',
+    body: { customerId },
   });
 }
 

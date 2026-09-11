@@ -75,6 +75,22 @@ class TenantProvisioningTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("У нового арендатора сразу есть контрагент «Частное лицо», и он один")
+    void newTenantHasRetailContractor() {
+        TenantProvisioning.Result created = provisioning.provision(
+                new TenantProvisioning.Request(uniqueCode(), "Разборка",
+                        "vladelec", "пароль-владельца", "Владелец"));
+
+        // Половина продаж — человек с улицы, и первая же продажа должна
+        // оформляться без заведения карточки. Заводится он один раз:
+        // второй такой же контрагент разбил бы историю розницы пополам.
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM %s.customer WHERE name = ?".formatted(created.schemaName()),
+                Integer.class, ru.partsflow.sales.CustomerService.RETAIL_NAME))
+                .isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("Номер арендатора начинается с номера ячейки")
     void tenantNumberCarriesTheCell() {
         TenantProvisioning.Result created = provisioning.provision(

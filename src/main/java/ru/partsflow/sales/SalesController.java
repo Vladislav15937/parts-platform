@@ -329,6 +329,24 @@ public class SalesController {
     public record ExtendReservationRequest(@NotNull Instant reservedUntil) {
     }
 
+    /**
+     * Смена контрагента сделки.
+     *
+     * <p>Сделка заводится на «Частном лице», а имя покупателя выясняется
+     * по ходу разговора — и это обычный порядок, а не исправление ошибки.
+     * Роль та же, что у создания: меняет тот, кто продал.
+     */
+    @PostMapping("/{id}/customer")
+    @PreAuthorize(SELLS)
+    public DealView changeCustomer(@PathVariable Long id,
+                                   @Valid @RequestBody ChangeCustomerRequest request) {
+        return view(sales.changeCustomer(id, request.customerId(), CurrentUser.memberId()));
+    }
+
+    /** @param customerId новый контрагент. Пусто — менять не на кого */
+    public record ChangeCustomerRequest(@NotNull Long customerId) {
+    }
+
     @PostMapping("/{id}/issue")
     @PreAuthorize(ISSUES)
     public DealView issue(@PathVariable Long id) {
@@ -639,8 +657,16 @@ public class SalesController {
         // завести вторую формулу рядом с первой: разошлись бы они не при
         // копировании, а на первой правке одной из них — и разошлись бы молча.
         Map<Long, String> stages = sales.stagesOf(deals.stream().map(Deal::getId).toList());
+        // Имя клиента — тем же приёмом. Без него карточка сделки называет
+        // контрагента номером, а после того как «Частное лицо» стало
+        // умолчанием, именно по имени видно, розничная это продажа или
+        // покупатель назвался.
+        Map<Long, String> customerNames = sales.customerNamesOf(deals.stream()
+                .map(Deal::getCustomerId)
+                .toList());
         return deals.stream()
-                .map(deal -> DealView.of(deal, titles, serviceNames, managerNames, stages))
+                .map(deal -> DealView.of(deal, titles, serviceNames, managerNames, stages,
+                        customerNames))
                 .toList();
     }
 
@@ -648,7 +674,15 @@ public class SalesController {
         return views(List.of(deal)).getFirst();
     }
 
-    public record CreateRequest(@NotNull Long customerId,
+    /**
+     * @param customerId кто покупает. <b>Необязателен:</b> пусто означает
+     *                   розничную продажу, и сервер подставляет контрагента
+     *                   «Частное лицо». Половина продаж на разборке — человек
+     *                   с улицы, которому нечего заводить в справочник;
+     *                   пока поле было обязательным, продавец выдумывал имя,
+     *                   чтобы кнопка ожила
+     */
+    public record CreateRequest(Long customerId,
                                 /* Откуда пришла продажа: строка справочника источников. */
                                 Long dealSourceId,
                                 /* Пусто — резерв на трое суток. */
@@ -736,6 +770,11 @@ public class SalesController {
      *                      ставит деталь на чужую полку, а искать её будут
      *                      по прежнему адресу. Пусто — колонку никто
      *                      не заполняет, и откуда ушёл товар, знают позиции
+     * @param customerName  имя контрагента. Пусто — клиента нет вовсе (заказ
+     *                      с площадки: покупателя она не называет). У обычной
+     *                      продажи здесь либо имя покупателя, либо «Частное
+     *                      лицо» — и различить их можно только по имени,
+     *                      номер об этом не говорит ничего
      * @param managerName   имя ответственного продавца/менеджера; пусто —
      *                      сотрудника удалили или сделка ещё не привязана
      *                      (заказ с площадки до принятия)
@@ -750,7 +789,8 @@ public class SalesController {
      *                      Пусто у закрытой сделки: стадии у неё нет, и слово
      *                      берётся из состояния документа («выдана», «отменена»)
      */
-    public record DealView(Long id, Long number, Long customerId, Long managerId,
+    public record DealView(Long id, Long number, Long customerId, String customerName,
+                           Long managerId,
                            String managerName, String stage,
                            DealStatus status, Instant reservedUntil,
                            BigDecimal totalAmount, BigDecimal paidAmount, BigDecimal debt,
@@ -763,8 +803,9 @@ public class SalesController {
 
         static DealView of(Deal deal, Map<Long, String> titles,
                            Map<Long, String> serviceNames, Map<Long, String> managerNames,
-                           Map<Long, String> stages) {
+                           Map<Long, String> stages, Map<Long, String> customerNames) {
             return new DealView(deal.getId(), deal.getNumber(), deal.getCustomerId(),
+                    nameOf(deal.getCustomerId(), customerNames),
                     deal.getManagerId(), nameOf(deal.getManagerId(), managerNames),
                     stageOf(deal.getId(), stages),
                     deal.getStatus(), deal.getReservedUntil(),
@@ -783,7 +824,8 @@ public class SalesController {
         }
 
         /**
-         * Имя ответственного, когда его может не быть вовсе.
+         * Имя по номеру, когда номера может не быть вовсе, — ответственного
+         * и клиента (у заказа с площадки пусты оба).
          *
          * <p><b>Проверка `null` до обращения к карте, а не после.</b>
          * {@code MemberService.namesOf} на пустом списке идентификаторов
@@ -797,8 +839,8 @@ public class SalesController {
          * {@code EntryView.of} в лицевом счёте, и лечится он тем же:
          * проверкой ключа, а не выбором сорта пустой карты.
          */
-        private static String nameOf(Long managerId, Map<Long, String> managerNames) {
-            return managerId == null ? null : managerNames.get(managerId);
+        private static String nameOf(Long id, Map<Long, String> names) {
+            return id == null ? null : names.get(id);
         }
 
         /**

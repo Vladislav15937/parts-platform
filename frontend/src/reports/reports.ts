@@ -254,6 +254,13 @@ export interface SettlementRow {
   accountBalance: number;
   debt: number;
   unpaidDeals: number;
+  /**
+   * Контрагент розничной продажи, а не постоянный покупатель: за строкой
+   * стоят все продажи людям с улицы. Из отчёта он не выбрасывается —
+   * деньги в нём настоящие, — но и «сотня сделок» тут не про одного
+   * человека, и сказать об этом обязан экран.
+   */
+  retail: boolean;
 }
 
 export interface SettlementProblem {

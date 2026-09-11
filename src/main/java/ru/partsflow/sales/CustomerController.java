@@ -66,6 +66,23 @@ public class CustomerController {
         return customers.directory(query, size);
     }
 
+    /**
+     * Контрагент розничной продажи — тот, что подставлен в форму по умолчанию.
+     *
+     * <p>Путь до {@code /{id}}: иначе Spring прочитает «retail» как номер
+     * клиента и ответит отказом разбора.
+     *
+     * <p>Заводит его провижининг, но метод умеет и завести — у арендаторов,
+     * созданных раньше этой возможности, его нет, а наполнить их схемы
+     * миграцией нельзя. Отсюда и роли: те же, что продают, — заводит
+     * контрагента тот, кто открыл экран продажи.
+     */
+    @GetMapping("/retail")
+    @PreAuthorize(READS)
+    public CustomerService.Customer retail() {
+        return customers.retail();
+    }
+
     @GetMapping("/{id}")
     @PreAuthorize(READS)
     public CustomerService.CustomerDetail get(@PathVariable Long id) {

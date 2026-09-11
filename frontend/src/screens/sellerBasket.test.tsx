@@ -20,6 +20,13 @@ describe('корзина продавца', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      // Контрагент розничной продажи: он подставлен в поле клиента,
+      // и без него форма оформления осталась бы без клиента вовсе.
+      if (url.includes('/api/customers/retail')) {
+        return json({
+          id: 9, name: 'Частное лицо', phone: null, email: null, customerType: 'PERSON',
+        });
+      }
       if (url.includes('/api/customers?')) {
         return json([{ id: 1, name: 'Иванов Пётр', phone: '+79990001122' }]);
       }
@@ -83,13 +90,9 @@ describe('корзина продавца', () => {
     // Оформляем сделку: после неё список убирают, потому что остаток
     // изменился и показанное уже врёт.
     fireEvent.click(document.querySelector('.stock-row button') as HTMLElement);
-    const customer = [...document.querySelectorAll('input')]
-      .find((i) => i.placeholder === 'имя или телефон')!;
-    setNative(customer, 'Иванов');
+    // Клиента набирать не нужно: в поле стоит «Частное лицо» (задача 0011).
     await waitFor(() => expect([...document.querySelectorAll('button')]
-      .some((b) => (b.textContent ?? '').includes('Иванов'))).toBe(true));
-    fireEvent.click([...document.querySelectorAll('button')]
-      .find((b) => (b.textContent ?? '').includes('Иванов'))!);
+      .some((b) => b.textContent === 'Оформить и отложить')).toBe(true));
     fireEvent.click([...document.querySelectorAll('button')]
       .find((b) => b.textContent === 'Оформить и отложить')!);
 

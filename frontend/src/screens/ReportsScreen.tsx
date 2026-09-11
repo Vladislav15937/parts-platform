@@ -609,6 +609,15 @@ export function ReportsScreen({ canRead }: Props) {
                     <td>
                       {row.customerName ?? `клиент ${row.customerId}`}
                       {row.phone !== null && <span className="muted"> · {row.phone}</span>}
+                      {/* Строка розничного контрагента складывает долги
+                          разных людей с улицы. Без пометки владелец читает
+                          её как постоянного покупателя с сотней сделок
+                          и идёт звонить — а звонить некому. Выбросить её
+                          нельзя: деньги в ней настоящие, и отчёт без неё
+                          выглядел бы полным и не сходился с кассой. */}
+                      {row.retail && (
+                        <span className="muted"> · розничные продажи, не один покупатель</span>
+                      )}
                     </td>
                     <td className="num">
                       {row.accountBalance === 0
