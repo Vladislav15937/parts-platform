@@ -158,6 +158,50 @@ class OriginReportTest extends PostgresTestBase {
     }
 
     /**
+     * Строка вкладки несёт номер позиции — тот, которым её называют вслух.
+     *
+     * <p>Задача 0060 завела позиции порядковый номер, 0061 показала его
+     * на вкладке колёс и потребовала пройти <b>перебором</b> остальные
+     * поверхности, где позиция показана. Разрез по машине и по партии — одна
+     * из них: владелец открывает его затем, чтобы узнать, что именно с машины
+     * лежит, и дальше называет найденное работнику — «посмотри позицию 347».
+     * До этой правки в строке стоял только публичный код, а его не диктуют.
+     *
+     * <p>Сверяется <b>с самой колонкой</b> {@code part.number}, а не
+     * с записанным в тест числом: перепиши выражение — и обе стороны
+     * сдвинулись бы вместе. А чтобы подмена на внутренний {@code id}
+     * не прошла незамеченной, последовательность номеров в фикстуре сдвинута
+     * (см. {@code prepare()}): в свежей схеме id и номер совпали бы.
+     */
+    @Test
+    @DisplayName("Строка вкладки называет номер позиции, а не только публичный код")
+    void tabRowsCarryThePartNumber() throws Exception {
+        JsonNode remaining = donorTab("remaining");
+        JsonNode row = remaining.path("rows").get(0);
+
+        long partId = row.path("partId").asLong();
+        long expected = inTenant(TENANT, () -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, partId));
+
+        assertThat(row.has("number"))
+                .as("в строке вкладки нет номера позиции: %s", row.toString())
+                .isTrue();
+        assertThat(row.path("number").asLong())
+                .as("номер позиции в строке не тот, что у неё в карточке")
+                .isEqualTo(expected);
+
+        // Проверка имеет смысл только пока номер и внутренний id разведены:
+        // совпади они, подмена одного другим прошла бы зелёной.
+        assertThat(expected)
+                .as("номер позиции совпал с её id — сдвиг последовательности "
+                        + "в фикстуре потерялся, и проверка перестала ловить подмену")
+                .isNotEqualTo(partId);
+
+        // Публичный код рядом остался: он про этикетку и сканер.
+        assertThat(row.path("publicCode").asText()).isNotEmpty();
+    }
+
+    /**
      * Строка «Продано» говорит о том же, что и её подвал.
      *
      * <p>До задачи 0054 строка показывала {@code p.price} и {@code p.cost_price}
@@ -373,6 +417,12 @@ class OriginReportTest extends PostgresTestBase {
             supply = jdbc.queryForObject("""
                     INSERT INTO supply (kind, number, supplier_name, status)
                     VALUES ('CONTAINER', 'К-1', 'Armtek', 'ARRIVED') RETURNING id""", Long.class);
+
+            // Номер позиции и внутренний id намеренно разведены: в свежей
+            // схеме обе последовательности начинаются с единицы, и подмена
+            // `p.number` на `p.id` прошла бы незамеченной — строка отдавала бы
+            // верное число по неверной причине. Сдвиг на единицу это ловит.
+            jdbc.queryForObject("SELECT nextval('part_number_seq')", Long.class);
 
             donor = donor("РАЗРЕЗ-1", "Toyota Camry");
             donorWithoutSales = donor("РАЗРЕЗ-2", "Nissan Note");

@@ -369,9 +369,15 @@ export function SellerScreen({
               <li key={index} className="stock-row">
                 <div className="stock-info">
                   {line.row.title}
+                  {/* Номер позиции и здесь: набранную корзину продавец
+                      называет вслух — кладовщику, который пойдёт снимать
+                      с полки, или клиенту при сверке. До этого в строке
+                      не было ни номера, ни публичного кода, то есть назвать
+                      отобранное было нечем вовсе. */}
                   <span className="muted">
                     {' '}
-                    · {line.quantity} шт · {line.row.warehouseName}
+                    · №&nbsp;{line.row.number} · {line.quantity} шт
+                    {' '}· {line.row.warehouseName}
                   </span>
                 </div>
                 <div className="stock-action">
@@ -892,6 +898,10 @@ function StockItem({
     <li className="stock-row">
       <div className="stock-info">
         <strong>{row.title}</strong>
+        {/* Номер позиции перед публичным кодом — тем же порядком, каким они
+            стоят колонками на витрине. Продавец диктует в трубку именно
+            его: «7584A8FEAE3D» по телефону не произносят. */}
+        <span className="muted"> · №&nbsp;{row.number}</span>
         {row.publicCode !== null && <span className="muted"> · {row.publicCode}</span>}
         <div className="muted">
           {row.warehouseName}

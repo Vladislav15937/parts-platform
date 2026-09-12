@@ -24,6 +24,7 @@ import type { BasketLine, Deal, PaymentSourceEntry, StockRow } from './sales';
 function row(overrides: Partial<StockRow> = {}): StockRow {
   return {
     partId: 1,
+    number: 347,
     publicCode: 'A-1',
     title: 'Фара левая',
     price: '5000',

@@ -21,6 +21,11 @@ import { request } from '../api/client';
 /** Деталь на конкретном складе. Свободный остаток, а не статус карточки. */
 export interface StockRow {
   partId: number;
+  /**
+   * Порядковый номер позиции — тот, которым её называют вслух. Продавец
+   * и есть тот, кто произносит его в трубку: публичный код не диктуют.
+   */
+  number: number;
   publicCode: string | null;
   title: string;
   price: string | null;
