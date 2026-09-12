@@ -3,96 +3,67 @@ package ru.partsflow.platform.tenant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationRunner;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
-
 /**
- * Проверяет при старте, действует ли защита журналов.
+ * Говорит при старте, действует ли защита журналов.
  *
- * <p>Разделение ролей держится не на коде, а на настройке ячейки: забыли
- * переменные окружения — приложение поднимется владельцем схем и будет
- * работать как ни в чём не бывало, только журнал снова станет правиться
- * прямым SQL. Отличить одно от другого по поведению нельзя: склад работает
- * одинаково, а разница видна лишь в тот день, когда журнал предъявляют
- * как доказательство.
- *
- * <p>Поэтому приложение спрашивает у базы прямо: могу ли я переписать
- * движение склада? Если да — говорит об этом громко. Проверка стоит одного
- * запроса и не зависит от того, что написано в настройках: она смотрит
- * на фактические права той роли, под которой работает.
+ * <p>Приложение спрашивает у базы прямо: могу ли я переписать движение
+ * склада? Если да — говорит об этом громко. Почему спрашивается база,
+ * а не настройка, и почему смотрится один арендатор — в
+ * {@link JournalProtection}; здесь только вывод человеку в лог.
  *
  * <p>Запуск при этом не валится. Разработка и первые прогоны идут одной
  * ролью намеренно, и падение на старте означало бы, что локально ничего
- * не поднять без двух ролей.
+ * не поднять без двух ролей. Для выкладки этот же ответ отдаётся машинно —
+ * {@code /actuator/readiness}: «не готов для выкладки» и «не запускаться» —
+ * разные вещи.
  */
 @Component
 public class JournalProtectionCheck implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(JournalProtectionCheck.class);
 
-    /** Что должно быть неизменяемым: те же три таблицы, что и в SchemaGrants. */
-    private static final List<String> JOURNALS =
-            List.of("stock_movement", "audit_log", "customer_account_entry");
+    private final JournalProtection protection;
 
-    private final JdbcTemplate jdbc;
-
-    public JournalProtectionCheck(JdbcTemplate jdbc) {
-        this.jdbc = jdbc;
+    public JournalProtectionCheck(JournalProtection protection) {
+        this.protection = protection;
     }
 
     @Override
     public void run(org.springframework.boot.ApplicationArguments args) {
-        String schema;
-        try {
-            schema = jdbc.query("""
-                    SELECT schema_name FROM public.tenant_registry
-                     WHERE status = 'ACTIVE' ORDER BY tenant_id LIMIT 1""",
-                    rs -> rs.next() ? rs.getString(1) : null);
-        } catch (RuntimeException e) {
-            // Реестра ещё нет — ячейка поднимается впервые, проверять нечего.
-            return;
-        }
-        if (schema == null) {
+        JournalProtection.Status status = protection.status();
+
+        if (!status.checked()) {
+            // Ячейка без арендаторов или без реестра: проверять нечего,
+            // и молчание тут честнее строки «всё в порядке».
             return;
         }
 
-        List<String> writable = JOURNALS.stream()
-                .filter(journal -> canUpdate(schema, journal))
-                .toList();
+        if (status.locked()) {
+            log.info("Журналы защищены: рабочая роль {} не может править {} (проверено на {})",
+                    status.role(), JournalProtection.JOURNALS, status.schema());
+            return;
+        }
 
-        if (writable.isEmpty()) {
-            log.info("Журналы защищены: рабочая роль {} не может править {}",
-                    currentUser(), JOURNALS);
+        if (!status.reachable()) {
+            // Прав нет вовсе — журналы «защищены» заодно со складом. Сказать
+            // об этом надо именно так: тут не защита, тут неработающая ячейка,
+            // и лечится она накатом, который права и выдаёт.
+            log.warn("""
+                    Рабочая роль {} не дотягивается до схемы {}: прав нет ни на журналы, \
+                    ни на обычные таблицы. Ячейка в таком виде не работает — права на схемы \
+                    выдаёт накат: ops/migrate-tenants.sh""",
+                    status.role(), status.schema());
             return;
         }
 
         log.warn("""
                 Журналы правятся прямым SQL из приложения: {} доступны на UPDATE \
-                роли {}. Это законно в разработке и опасно в бою: «кто уронил цену» \
-                и «куда делась деталь» перестают быть доказательством. \
-                Включается разделение ролей — ops/create-roles.sh и переменные \
-                DB_USER, APP_DDL_*, APP_RUNTIME_ROLE""",
-                writable, currentUser());
-    }
-
-    private boolean canUpdate(String schema, String journal) {
-        try {
-            return Boolean.TRUE.equals(jdbc.queryForObject(
-                    "SELECT has_table_privilege(current_user, ?, 'UPDATE')",
-                    Boolean.class, schema + "." + journal));
-        } catch (RuntimeException e) {
-            // Таблицы нет или схема не мигрирована — не наш случай.
-            return false;
-        }
-    }
-
-    private String currentUser() {
-        try {
-            return jdbc.queryForObject("SELECT current_user", String.class);
-        } catch (RuntimeException e) {
-            return "неизвестна";
-        }
+                роли {} (проверено на {}). Это законно в разработке и опасно в бою: \
+                «кто уронил цену» и «куда делась деталь» перестают быть \
+                доказательством. Включается разделение ролей — ops/create-roles.sh \
+                и переменные DB_USER, APP_DDL_*, APP_RUNTIME_ROLE""",
+                status.writable(), status.role(), status.schema());
     }
 }
