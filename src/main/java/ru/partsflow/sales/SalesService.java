@@ -11,6 +11,7 @@ import ru.partsflow.platform.outbox.DomainEvent;
 import ru.partsflow.platform.outbox.DomainEventPublisher;
 import ru.partsflow.platform.outbox.EventPayloads;
 import ru.partsflow.platform.outbox.contract.DealEvent;
+import ru.partsflow.shared.RetailCustomer;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -1866,10 +1867,20 @@ public class SalesService {
         return names;
     }
 
-    /** Имя клиента для истории документа; у заказа с площадки его нет вовсе. */
+    /**
+     * Имя клиента для истории документа.
+     *
+     * <p>У сделки без контрагента (заказ с площадки, документ, заведённый
+     * до задачи 0011) это то же слово, что и везде, — «Частное лицо»:
+     * покупатель, которого продавец не проставил, зовётся одинаково на всех
+     * поверхностях (решение владельца продукта от 12 сентября 2026,
+     * `tasks/0062-pustoy-klient-zovetsya-odinakovo.md`). Своё «без клиента»
+     * было здесь четвёртым написанием того же, и читалось оно в журнале
+     * как утраченные данные, а не как розничная продажа.
+     */
     private String customerName(Long customerId) {
         if (customerId == null) {
-            return "«без клиента»";
+            return RetailCustomer.NAME;
         }
         List<String> found = jdbc.queryForList(
                 "SELECT name FROM customer WHERE id = ?", String.class, customerId);

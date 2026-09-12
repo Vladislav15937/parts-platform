@@ -41,7 +41,9 @@ import {
   transferable,
   transferItems,
 } from '../sales/sales';
-import { dealItemStatusName, dealStageStatus, dealStatusNameLower } from '../sales/dealStatus';
+import {
+  customerName, dealItemStatusName, dealStageStatus, dealStatusNameLower,
+} from '../sales/dealStatus';
 import { useMounted } from '../ui/useMounted';
 import type { CustomerAccount,
   HistoryEntry,
@@ -1479,13 +1481,18 @@ function DealCard({
           на «Частном лице», и заменить его настоящим покупателем надо
           оттуда же, где сделку и открыли.
 
+          Пустой клиент (заказ с площадки, сделка, заведённая до задачи 0011)
+          зовётся здесь «Частным лицом», как и везде: своё «не указан» было
+          третьим словом об одном и том же и читалось как незаполненное поле
+          (задача 0062).
+
           Кнопка показывается, только когда сервер такую смену примет, —
           по тому же правилу, что и «Найти сделку клиента»: кнопка, которая
           ничего не сделает, не показывается. Отказал бы он в двух случаях,
           и оба про деньги: закрытый документ и сделка, по которой уже
           проходили платежи (они записаны на прежнего клиента). */}
       <p className="note">
-        Клиент: {deal.customerName ?? 'не указан'}
+        Клиент: {customerName(deal.customerName)}
         {canSell && customerChangeable && !changingCustomer && (
           <>
             {' '}
