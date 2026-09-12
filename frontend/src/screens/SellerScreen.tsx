@@ -251,7 +251,7 @@ export function SellerScreen({
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="фара камри, бампер приора"
+          placeholder="фара камри, № 347, бампер приора"
           autoCapitalize="none"
         />
         <button type="submit" disabled={searching || query.trim() === ''}>

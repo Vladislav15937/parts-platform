@@ -904,6 +904,11 @@ public class PartService {
      * UNION, а не OR, и по той же причине, что на витрине: с OR планировщик
      * уходит в полный перебор. Триграммные индексы на public_code
      * и raw_number уже стоят (tenant/055) — они заводились для витрины.
+     *
+     * Место под %s — ветка номера позиции (задача 0064). Она приходит одной
+     * строкой из PartNumberQuery, общей с витриной: разойдись они, «позиция
+     * 347» нашлась бы у владельца и не нашлась у продавца — ровно та болезнь,
+     * что уже чинилась тут дважды.
      */
     /**
      * Условие поиска продавца — одно на выдачу и на счёт.
@@ -973,12 +978,21 @@ public class PartService {
                 wheelArgs.add("%" + size.text().strip() + "%");
             }
             return new Match(" WHERE p.id IN (SELECT part_id FROM part_wheel WHERE true"
-                    + wheels + ")", wheelArgs, size.text() == null ? "" : size.text());
+                    + wheels + ")", wheelArgs, size.text() == null ? "" : size.text(), null);
         }
 
         String like = "%" + text.strip() + "%";
-        return new Match(STOCK_SEARCH_MATCH.formatted(""),
-                new ArrayList<>(List.of(like, like, text, like)), text);
+        // Размер и номер позиции не встречаются вместе: голые цифры размером
+        // не разбираются вовсе (у шины нужен «/», у диаметра — «R»), поэтому
+        // ветка номера живёт только тут, в текстовом условии.
+        Long number = PartNumberQuery.parse(text);
+        List<Object> args = new ArrayList<>(List.of(like, like, text, like));
+        if (number != null) {
+            args.add(number);
+        }
+        return new Match(
+                STOCK_SEARCH_MATCH.formatted(number == null ? "" : PartNumberQuery.UNION_BRANCH),
+                args, text, number);
     }
 
     private static void appendSize(StringBuilder where, List<Object> args,
@@ -996,8 +1010,13 @@ public class PartService {
      *                 потому что при отборе по размеру их порядок другой —
      *                 брать «третий по счёту» значило бы однажды подставить
      *                 в {@code plainto_tsquery} ширину шины
+     * @param number номер позиции, если весь запрос — он; {@code null} иначе.
+     *               Лежит отдельно от параметров по той же причине, что
+     *               и текст ранжирования: в `ORDER BY` он подставляется
+     *               вторым разом, и брать его «последним из списка» значило
+     *               бы однажды поставить в порядок номер производителя
      */
-    private record Match(String sql, List<Object> args, String rankText) {
+    private record Match(String sql, List<Object> args, String rankText, Long number) {
     }
 
     @Transactional(readOnly = true)
@@ -1030,6 +1049,16 @@ public class PartService {
         List<Object> args = new ArrayList<>(match.args());
         args.addAll(narrowing.args());
         String order = orderBy(filter);
+        // Найденное по номеру позиции встаёт первым — и при заданном порядке
+        // тоже. Выдача обрезана полусотней, а «347» попадает ещё и в куски
+        // публичных кодов (шесть шестнадцатеричных байт) и в номера
+        // производителя: на живом складе таких десятки, и названная вслух
+        // позиция утонула бы в них ровно так же, как тонула до этой правки.
+        // Точное совпадение по уникальной колонке — это одна строка, и она
+        // и есть ответ на вопрос, а не одно из совпадений.
+        if (match.number() != null) {
+            args.add(match.number());
+        }
         if (order == null) {
             // Ранжирование берёт тот же текст, что и поиск по словам —
             // и только когда порядок не задан продавцом: выбрав «цена
@@ -1052,13 +1081,8 @@ public class PartService {
                 // весь отступ, и «= ?» склеивалось с «ORDER BY» в «?ORDER BY» —
                 // отказ Postgres на грамматике, то есть пятисотка на живом
                 // запросе. Та же ловушка, что «ENDAS supply» у выгрузки колёс.
-                + "\n" + (order != null ? order : """
-                 ORDER BY (s.qty - s.qty_reserved > 0) DESC,
-                          ts_rank(to_tsvector('russian', coalesce(p.title, '') || ' '
-                              || coalesce(p.description, '') || ' '
-                              || coalesce(p.marking, '')),
-                              plainto_tsquery('russian', ?)) DESC,
-                          p.id""")
+                + "\n ORDER BY " + (match.number() == null ? "" : "(p.number = ?) DESC, ")
+                + (order != null ? order : DEFAULT_STOCK_ORDER)
                 + "\n LIMIT ?",
                 (rs, i) -> new StockRow(
                         rs.getLong("id"),
@@ -1168,8 +1192,24 @@ public class PartService {
             "intake", "p.created_at");
 
     /**
+     * Порядок по умолчанию — по совпадению, свободное сначала.
+     *
+     * <p>Без «ORDER BY» в начале: перед ним может встать ключ точного
+     * совпадения по номеру позиции, и собирается строка в одном месте.
+     */
+    private static final String DEFAULT_STOCK_ORDER = """
+            (s.qty - s.qty_reserved > 0) DESC,
+                      ts_rank(to_tsvector('russian', coalesce(p.title, '') || ' '
+                          || coalesce(p.description, '') || ' '
+                          || coalesce(p.marking, '')),
+                          plainto_tsquery('russian', ?)) DESC,
+                      p.id""";
+
+    /**
      * @return {@code null}, если порядок продавцом не задан, — тогда выдача
-     *         идёт по совпадению, как раньше
+     *         идёт по совпадению, как раньше. Без «ORDER BY» в начале:
+     *         строку собирает вызывающий, чтобы вперёд мог встать ключ
+     *         точного совпадения по номеру позиции
      */
     private static String orderBy(StockFilter filter) {
         String column = filter.sort() == null ? null : STOCK_SORTS.get(filter.sort());
@@ -1181,8 +1221,7 @@ public class PartService {
         // «что подороже», получил бы список без цен.
         // Вторым ключом номер позиции: без полного порядка одинаковые цены
         // база вправе вернуть в любой последовательности.
-        return " ORDER BY " + column + (filter.descending() ? " DESC" : " ASC")
-                + " NULLS LAST, p.id";
+        return column + (filter.descending() ? " DESC" : " ASC") + " NULLS LAST, p.id";
     }
 
     /**
