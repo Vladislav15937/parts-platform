@@ -224,8 +224,11 @@ services:
     # Наружу не выставляется: к базе ходит только приложение. Для бэкапа
     # и разбора — docker compose exec, а не открытый в интернет 5432.
 
+  # Версия закреплена и образ взят с quay.io — почему, расписано
+  # в docker-compose.yml. Коротко: minio/minio с Docker Hub убран, а плавающий
+  # тег меняется под ногами. Версия здесь и в разработке обязана совпадать.
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -255,7 +258,10 @@ services:
   # только скрипт, из файла окружения, и повторять здесь тот же расчёт значит
   # однажды разойтись с ним и писать копию не туда.
   mc:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    # quay.io по той же причине, что и у minio выше: тег был закреплён
+    # с самого начала, но забирался с Docker Hub, откуда MinIO ушёл, — то есть
+    # бэкап фотографий сейчас не поднялся бы вовсе. Версия та же.
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     profiles: [backup]
     environment:
       # mc читает MC_HOST_<псевдоним> из окружения. Так ключи не попадают
