@@ -5,7 +5,7 @@ import type { PartEdit } from '../inventory/catalog';
 function card(overrides: Partial<PartEdit> = {}): PartEdit {
   return {
     price: 4500, minPrice: 4000, costPrice: 1200, installationPrice: null,
-    qualityGrade: 'GOOD', description: null, note: 'скол на креплении',
+    qualityGrade: 'NO_DEFECTS', description: null, note: 'скол на креплении',
     textBlock: null, videoUrl: null, marking: null, manufacturer: 'Toyota',
     color: null, section: null, barcode: null,
     weightKg: 3.5, lengthMm: 120, widthMm: 80, heightMm: 45,

@@ -63,9 +63,14 @@ describe('колонки витрины', () => {
     expect(value('restyling', r)).not.toBe(value('generation', r));
   });
 
-  it('состояние берётся из оценки, а при её отсутствии — из вида', () => {
-    expect(value('quality', row({ qualityGrade: 'C' }))).toBe('C');
-    expect(value('quality', row({ condition: 'NEW' }))).toBe('новая');
+  it('оценка состояния показана словом, а её отсутствие — пустотой', () => {
+    // Внутреннее имя в колонке — то же, что «REAR» вместо «Задн.»:
+    // владелец видел `NO_DEFECTS` рядом с переведённым «б/у».
+    expect(value('quality', row({ qualityGrade: 'NO_DEFECTS' }))).toBe('Без дефектов');
+    // Пусто — это «не оценена», а не состояние. Подставленное состояние
+    // отвечало на другой вопрос, и отбор по колонке предлагал «б/у».
+    expect(value('quality', row({ condition: 'NEW' }))).toBe('');
+    expect(value('quality', row({ qualityGrade: null, condition: 'USED' }))).toBe('');
   });
 
   it('цена без значения — пусто, а не ноль', () => {

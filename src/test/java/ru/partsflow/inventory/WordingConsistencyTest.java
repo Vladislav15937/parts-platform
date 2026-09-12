@@ -116,6 +116,37 @@ class WordingConsistencyTest {
         }
     }
 
+    /**
+     * Оценка состояния названа одними словами на экране и на сервере.
+     *
+     * <p><b>Зачем.</b> Словарей было три, и все три разные: {@code CASE}
+     * витрины переводил {@code EXCELLENT/GOOD/FAIR/POOR}, форма правки
+     * предлагала их же (и сервер отвечал «Запрос не разобран» на каждое),
+     * а карточка печатала {@code NO_DEFECTS} как есть. Ни одно из четырёх
+     * слов {@code CASE}'а в базе встретиться не могло — их не допускает
+     * {@code part_quality_grade_ck}.
+     *
+     * <p>Сведены они в {@link QualityGrade}; экран сверяется с ним отсюда.
+     * Связь здесь ровно та же, что у состояния выше: выбранное в меню слово
+     * уходит на сервер и сравнивается с тем, что собрано выражением. Разойдись
+     * они на букву — выбор из списка перестал бы находить что-либо, а причина
+     * была бы видна только в SQL.
+     *
+     * <p>Перебором по перечислению, а не по списку слов: новая градация
+     * попадает в проверку в тот же момент, когда её дописали в {@code enum}.
+     */
+    @Test
+    @DisplayName("Оценка состояния названа одинаково на сервере и на экране")
+    void qualityGradeWordsMatch() throws IOException {
+        String client = read(CLIENT.resolve("catalog.ts"));
+
+        for (QualityGrade grade : QualityGrade.values()) {
+            assertThat(client)
+                    .as("экран не знает оценки «%s» (%s)", grade.title(), grade.name())
+                    .contains("key: '" + grade.name() + "', title: '" + grade.title() + "'");
+        }
+    }
+
     private static String read(Path path) throws IOException {
         assertThat(path).as("файл, по которому сверяются слова, исчез").exists();
         return Files.readString(path);
