@@ -99,12 +99,57 @@ class CustomerControllerTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.balance").value(0));
     }
 
+    /**
+     * <p>И отвечает <b>без номера строки в базе</b> (задача 0065). Владелец
+     * нажал на строку списка, а не набирал идентификатор: «Клиент не найден:
+     * 999999» не говорит ему ни что случилось, ни что делать. Единственный
+     * способ сюда попасть — карточку открыли по списку, который устарел,
+     * и правильный ответ про это и говорит. Та же правка, что уже сделана
+     * у источников платежей и сделок ({@code PaymentSourceService}).
+     */
     @Test
     @DisplayName("Несуществующий клиент отвечает словами, а не пустой карточкой")
     void unknownCustomerRefused() throws Exception {
         mvc.perform(get("/api/customers/999999").session(login("owner")))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("не найден")));
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("не найден")))
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("999999"))))
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("список устарел")));
+    }
+
+    /**
+     * Лицевой счёт несуществующего клиента — то же самое, и это третье
+     * место (задача 0065): отказ живёт в {@code SalesService}, а не
+     * в {@code CustomerService}, и своим номером строки отвечал отдельно.
+     */
+    @Test
+    @DisplayName("Счёт несуществующего клиента не называет номер строки")
+    void unknownCustomerNotNamedByIdOnAccount() throws Exception {
+        mvc.perform(get("/api/customers/999999/account").session(login("owner")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("999999"))))
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("список устарел")));
+    }
+
+    /**
+     * Правка карточки отвечает тем же и так же — номера строки в базе
+     * в ответе нет (задача 0065).
+     */
+    @Test
+    @DisplayName("Правка несуществующего клиента не называет номер строки")
+    void unknownCustomerNotNamedByIdOnUpdate() throws Exception {
+        mvc.perform(put("/api/customers/999999").with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Кто-то\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("999999"))))
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("список устарел")));
     }
 
     @Test

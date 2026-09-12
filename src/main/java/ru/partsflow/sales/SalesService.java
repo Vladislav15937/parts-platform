@@ -1877,6 +1877,16 @@ public class SalesService {
      * `tasks/0062-pustoy-klient-zovetsya-odinakovo.md`). Своё «без клиента»
      * было здесь четвёртым написанием того же, и читалось оно в журнале
      * как утраченные данные, а не как розничная продажа.
+     *
+     * <p><b>Безымянный контрагент зовётся так же (задача 0065).</b>
+     * `customer.name` в схеме {@code NULL}-уемая, и строка уходила в журнал
+     * как есть: «Изменён контрагент с null на Гридина». Соседняя ветка того
+     * же выражения подставляла «клиента 42» — прямо номер строки в базе,
+     * который человеку не говорит ничего: по нему не найти никого, он
+     * меняется при переносе и не переживает восстановления в другую схему.
+     * Через приложение такой контрагент сегодня не заводится
+     * ({@code CustomerService.create} требует имени), а вот переносом
+     * и правкой мимо интерфейса — вполне.
      */
     private String customerName(Long customerId) {
         if (customerId == null) {
@@ -1884,7 +1894,9 @@ public class SalesService {
         }
         List<String> found = jdbc.queryForList(
                 "SELECT name FROM customer WHERE id = ?", String.class, customerId);
-        return found.isEmpty() ? "клиента " + customerId : found.get(0);
+        // Строки может не быть вовсе только у данных, приехавших мимо
+        // приложения: внешний ключ deal.customer_id удалить её не даёт.
+        return found.isEmpty() || found.get(0) == null ? RetailCustomer.NAME : found.get(0);
     }
 
     /**
@@ -1961,7 +1973,11 @@ public class SalesService {
         Integer found = jdbc.queryForObject(
                 "SELECT count(*) FROM customer WHERE id = ?", Integer.class, customerId);
         if (found == null || found == 0) {
-            throw new IllegalArgumentException("Клиент не найден: " + customerId);
+            // Без номера строки в базе: продавец выбрал клиента из списка,
+            // а не набирал идентификатор. Та же правка, что в
+            // CustomerService и в источниках платежей.
+            throw new IllegalArgumentException(
+                    "Клиент не найден — обновите страницу, список устарел");
         }
     }
 
