@@ -65,9 +65,9 @@ class CompanyReservationTest extends PostgresTestBase {
      * бы соседние проверки, к правке отношения не имеющие. Отставание здесь —
      * постоянное состояние схемы, а не шаг одного теста.
      */
-    private static final String BEHIND = "t_000153";
+    private static final String BEHIND = "t_000155";
 
-    private static final long BEHIND_ID = 153;
+    private static final long BEHIND_ID = 155;
 
     @Autowired
     private MockMvc mvc;
