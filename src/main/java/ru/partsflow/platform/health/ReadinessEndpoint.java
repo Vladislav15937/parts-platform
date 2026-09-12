@@ -5,8 +5,6 @@ import org.springframework.boot.actuate.endpoint.annotation.Endpoint;
 import org.springframework.boot.actuate.endpoint.annotation.ReadOperation;
 import org.springframework.boot.actuate.endpoint.web.WebEndpointResponse;
 import org.springframework.boot.actuate.endpoint.web.WebEndpointsSupplier;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import ru.partsflow.platform.tenant.JournalProtection;
@@ -56,6 +54,28 @@ import java.util.List;
  * внутри сети. Учётной записи при этом не спрашивает — у docker'а её нет
  * и быть не может, как и у сборщика метрик.
  *
+ * <p><b>Отдельной проверки «контекст поднялся» здесь нет, и это решение,
+ * а не упущение.</b> Отвечает этот адрес только после обновления контекста:
+ * Tomcat поднимается в самом его конце, когда все бины уже созданы, —
+ * то есть сам ответ и есть доказательство. Первая редакция держала рядом
+ * флаг «все {@code ApplicationRunner}'ы отработали», выставляемый
+ * по {@code ApplicationReadyEvent}; разбор PR #176 показал полным прогоном,
+ * что в части прогонов флаг остаётся {@code false} на весь тестовый класс.
+ * Причину установить не удалось — ни второй копии бина, ни другого
+ * слушателя того же события в коде нет, — поэтому конструкция снята:
+ * <b>проверка, которая краснеет на исправном приложении, будет выключена
+ * первой</b>, а выкладка, которая ждёт её вечно, хуже отсутствующей.
+ *
+ * <p>Заодно выяснилось, что обещание было сильнее правды: порядок
+ * {@code ApplicationRunner}'ов между собой не задан, и «все отработали»
+ * флаг не гарантировал. То, ради чего он стоял — окно, в котором накат
+ * общей схемы {@code catalog} ещё идёт, — закрыто по существу: без реестра
+ * арендаторов проверка схем отвечает «версии не проверены» и красит
+ * готовность. Остаётся узкое место: при перезапуске, когда реестр уже есть,
+ * а новому changeset'у общей схемы накатиться ещё нужно, готовность
+ * ответит «готов» на несколько секунд раньше правды. Названо здесь
+ * намеренно — молча это было бы обещанием, которого код не держит.
+ *
  * <p>Транзакция не нужна: все запросы идут в {@code public} — к реестру
  * и к правам, — а не в схему арендатора.
  */
@@ -73,17 +93,6 @@ public class ReadinessEndpoint {
      */
     private final ObjectProvider<WebEndpointsSupplier> webEndpoints;
 
-    /**
-     * Старт закончен: все {@code ApplicationRunner}'ы отработали.
-     *
-     * <p>Порт отвечает раньше этого момента — Tomcat поднимается на
-     * обновлении контекста, а накат общей схемы {@code catalog} идёт
-     * runner'ом после. Значит между «порт ответил» и «работать можно»
-     * есть окно, и выкладка, переключившая трафик в него, застанет
-     * приложение посреди миграции.
-     */
-    private volatile boolean started;
-
     public ReadinessEndpoint(JdbcTemplate jdbc, TenantMigrations migrations,
                              JournalProtection journals,
                              ObjectProvider<WebEndpointsSupplier> webEndpoints) {
@@ -91,11 +100,6 @@ public class ReadinessEndpoint {
         this.migrations = migrations;
         this.journals = journals;
         this.webEndpoints = webEndpoints;
-    }
-
-    @EventListener(ApplicationReadyEvent.class)
-    void applicationReady() {
-        started = true;
     }
 
     /**
@@ -108,16 +112,11 @@ public class ReadinessEndpoint {
      */
     @ReadOperation
     public WebEndpointResponse<Readiness> readiness() {
-        List<Check> checks = List.of(application(), database(), schemas(), journals(), metrics());
+        List<Check> checks = List.of(database(), schemas(), journals(), metrics());
         boolean ready = checks.stream().allMatch(Check::ok);
         return new WebEndpointResponse<>(new Readiness(ready, checks),
                 ready ? WebEndpointResponse.STATUS_OK
                       : WebEndpointResponse.STATUS_SERVICE_UNAVAILABLE);
-    }
-
-    private Check application() {
-        return new Check("application", started,
-                started ? "Старт завершён" : "Старт ещё идёт: стартовые шаги не закончены");
     }
 
     private Check database() {
@@ -125,7 +124,8 @@ public class ReadinessEndpoint {
             jdbc.queryForObject("SELECT 1", Integer.class);
             return new Check("database", true, "База отвечает");
         } catch (RuntimeException e) {
-            return new Check("database", false, "База не отвечает: " + e.getMessage());
+            return new Check("database", false,
+                    "База не отвечает: " + TenantMigrations.rootMessage(e));
         }
     }
 
@@ -134,8 +134,12 @@ public class ReadinessEndpoint {
         try {
             lag = migrations.lag();
         } catch (RuntimeException e) {
-            return new Check("schemas", false,
-                    "Версии схем арендаторов не проверены: " + e.getMessage());
+            // Причина берётся из самого глубокого исключения: обёртка Spring
+            // несёт в сообщении весь текст запроса, и ответ готовности
+            // превращался в простыню SQL вместо «реестра нет». Состояние
+            // достижимое — ячейка до наката общей схемы, проверено живьём.
+            return new Check("schemas", false, "Версии схем арендаторов не проверены: "
+                    + TenantMigrations.rootMessage(e));
         }
 
         if (lag.ok()) {
@@ -162,7 +166,8 @@ public class ReadinessEndpoint {
         try {
             status = journals.status();
         } catch (RuntimeException e) {
-            return new Check("journals", false, "Защита журналов не проверена: " + e.getMessage());
+            return new Check("journals", false,
+                    "Защита журналов не проверена: " + TenantMigrations.rootMessage(e));
         }
 
         if (status.problem() != null) {

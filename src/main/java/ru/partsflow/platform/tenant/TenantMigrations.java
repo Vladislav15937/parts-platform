@@ -313,8 +313,16 @@ public class TenantMigrations {
         return rest == 0 ? first : first + " и ещё " + rest;
     }
 
-    /** Причина отказа лежит в самом глубоком исключении, а не в обёртке. */
-    private static String rootMessage(Throwable e) {
+    /**
+     * Причина отказа лежит в самом глубоком исключении, а не в обёртке.
+     *
+     * <p>Открыт наружу, потому что то же нужно готовности приложения:
+     * обёртка Spring несёт в сообщении **весь текст запроса**, и «проверка
+     * не удалась» превращалась в ответ, где вместо причины стоит SQL.
+     * Postgres же говорит по делу — «отношение public.tenant_registry
+     * не существует».
+     */
+    public static String rootMessage(Throwable e) {
         Throwable cause = e;
         while (cause.getCause() != null) {
             cause = cause.getCause();

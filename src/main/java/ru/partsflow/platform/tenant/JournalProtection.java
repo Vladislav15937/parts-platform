@@ -95,7 +95,11 @@ public class JournalProtection {
         } catch (RuntimeException e) {
             // Реестра ещё нет — ячейка поднимается впервые. Отличать это
             // от недоступной базы не нужно: про базу отвечает своя проверка.
-            return new Status(currentUser(), null, false, List.of(), e.getMessage());
+            // Причина — из самого глубокого исключения: обёртка Spring несёт
+            // в сообщении весь текст запроса, и «проверить не удалось»
+            // читалось бы простынёй SQL вместо «реестра нет».
+            return new Status(currentUser(), null, false, List.of(),
+                    TenantMigrations.rootMessage(e));
         }
 
         if (schema == null) {
