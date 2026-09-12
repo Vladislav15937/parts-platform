@@ -185,6 +185,59 @@ class TenantProvisioningTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Номер получают все, кто пришёл за ним в один момент")
+    void everyoneGetsANumberUnderContention() throws Exception {
+        // Двенадцать, а не шесть, и барьер вместо надежды на планировщик.
+        // Полный прогон этого класса ошибок не доказывает: шесть заявок
+        // расходятся по времени сами — пул стартует их по очереди, победитель
+        // уходит создавать схему, — и лобовое столкновение случается редко.
+        // Здесь оно устраивается руками: все двенадцать читают «максимальный
+        // плюс один» одновременно.
+        //
+        // Двенадцать взяты не с потолка: каждый проигравший перечитывает
+        // тот же максимум и сталкивается со всеми остальными проигравшими,
+        // то есть за круг побеждает ровно один. Значит последнему из N нужно
+        // N попыток — и любая пачка больше RESERVE_ATTEMPTS получала отказ
+        // «Не удалось занять номер», хотя свободных номеров бесконечно.
+        // Десять разборок подряд заводят на ячейке при переносе клиентов.
+        int count = 12;
+        var codes = new java.util.ArrayList<String>();
+        for (int i = 0; i < count; i++) {
+            codes.add(uniqueCode());
+        }
+        var barrier = new java.util.concurrent.CyclicBarrier(count);
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(count);
+        var numbers = new java.util.ArrayList<Long>();
+        try {
+            var results = pool.invokeAll(codes.stream()
+                    .map(code -> (java.util.concurrent.Callable<Long>) () -> {
+                        barrier.await(30, java.util.concurrent.TimeUnit.SECONDS);
+                        // Только выдача номера: схему и миграции этот тест
+                        // не проверяет, а двенадцать накатов Liquibase стоили
+                        // бы минуту прогона и утопили бы гонку в своей работе.
+                        return provisioning.reserve(code, "Гонка " + code).tenantId();
+                    })
+                    .toList());
+
+            for (var result : results) {
+                numbers.add(result.get());
+            }
+        } finally {
+            pool.shutdownNow();
+            // За собой убираем: схем за этими записями нет, они держали
+            // только номер, а реестр общий на все контексты прогона.
+            for (String code : codes) {
+                jdbc.update("DELETE FROM public.tenant_registry WHERE code = ?", code);
+            }
+        }
+
+        assertThat(numbers)
+                .as("номера выданы всем и ни один не повторился")
+                .hasSize(count)
+                .doesNotHaveDuplicates();
+    }
+
+    @Test
     @DisplayName("Код компании проверяется: он станет поддоменом")
     void codeIsValidated() {
         assertThatThrownBy(() -> provisioning.provision(new TenantProvisioning.Request(
