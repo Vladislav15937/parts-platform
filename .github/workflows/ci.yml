@@ -77,6 +77,22 @@ jobs:
       - name: tools/test-schema-guard.py
         run: ./tools/test-schema-guard.py
 
+  worktrees:
+    name: Уборка рабочих деревьев
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # Инструмент сносит каталоги, и ошибается такой ровно один раз. Его
+      # самопроверка заводит настоящий временный репозиторий с настоящими
+      # копиями — грязной, слитой, брошенной, свежей — и прогоняет через
+      # них и решение, и снятие. Сам по себе он в CI не зовётся (копия там
+      # одна), а проверка его правил нужна здесь: без неё сторож, который
+      # не снимает чужую невыложенную работу, доживёт до первой правки.
+      - name: tools/worktrees-clean.py --самопроверка
+        run: ./tools/worktrees-clean.py --самопроверка
+
   migrations:
     name: Миграции на чистой базе
     runs-on: ubuntu-latest
