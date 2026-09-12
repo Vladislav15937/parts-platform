@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useLockedScroll } from '../ui/useLockedScroll';
 import { ApiError } from '../api/client';
 import {
@@ -20,6 +20,7 @@ import {
 import { cardFields } from '../inventory/partCard';
 import { deletePhoto, makeMainPhoto, photoArchiveUrl, uploadPhoto } from '../inventory/photos';
 import { PartCellBlock } from './PartCellBlock';
+import { PartQualityBlock } from './PartQualityBlock';
 import { PartEditForm } from './PartEditForm';
 import { PartLabelPrint } from './PartLabelPrint';
 import { LABEL_ROLES } from './tabs';
@@ -45,7 +46,7 @@ import { useMounted } from '../ui/useMounted';
 /** Дата без времени: в карточке время правки — шум. */
 
 export function PartCard({ row, warehouses, role, extraFields, applicability = true,
-                          onClose, onChanged, onDonorParts }: {
+                          quality = true, onClose, onChanged, onDonorParts }: {
   row: CatalogRow;
   warehouses: Warehouse[];
   role: string;
@@ -65,6 +66,15 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
    * работе, которой никто никогда не сделает.
    */
   applicability?: boolean;
+
+  /**
+   * Показывать ли оценку состояния. У колеса её нет: прайс площадки,
+   * из которого колёса и приезжают, шинной оценки не несёт, и строка
+   * вкладки её не читает (`rowOfWheel` ставит `null` всегда). Плашка
+   * «не оценена» с кнопкой на такой карточке предлагала бы записать
+   * значение, которого потом нигде не видно.
+   */
+  quality?: boolean;
   onClose: () => void;
   /** Склад изменился: списали или перевезли — витрину надо перечитать. */
   onChanged: () => void;
@@ -110,6 +120,15 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   // и себестоимость — продавец, торгующийся с покупателем, не должен уметь
   // подвинуть себе нижнюю границу.
   const [editing, setEditing] = useState(false);
+  /**
+   * Оценка, какой её видит карточка сейчас. Своя копия нужна ровно затем,
+   * чтобы плашка показала выбранное, не закрывая окно: остальные действия
+   * карточки меняют остаток и закрывают её, а тут поменялось одно поле,
+   * и исчезнувшее окно вместо плашки читалось бы как «не сохранилось».
+   */
+  const [grade, setGrade] = useState<string | null>(row.qualityGrade);
+  /** Оценку трогали — витрину за карточкой надо перечитать при закрытии. */
+  const [regraded, setRegraded] = useState(false);
   const [fits, setFits] = useState<Applicability[] | null>(null);
   // Справочник машин для добавления: он предзагружен и лежит в IndexedDB,
   // тянуть четыре с половиной тысячи моделей ради одной правки незачем.
@@ -155,10 +174,33 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
       .catch(() => { if (mounted.current) setDonor(null); });
   }, [tab, donor, row.id, mounted]);
 
+  // Карточку открывают подряд по нескольким позициям: оставшаяся оценка
+  // соседней означала бы плашку с чужим значением.
+  useEffect(() => {
+    setGrade(row.qualityGrade);
+    setRegraded(false);
+  }, [row.id, row.qualityGrade]);
+
+  /**
+   * Закрытие карточки: перечитать витрину, если оценку трогали.
+   *
+   * <p>`onChanged` у всех трёх экранов означает «закрыть и перечитать»,
+   * а `onClose` — просто закрыть. Оценка меняется, не закрывая окна,
+   * поэтому колонка «Оценка состояния» за карточкой остаётся старой —
+   * и обновляется ровно тогда, когда карточку закрывают.
+   */
+  const close = useCallback(() => {
+    if (regraded) {
+      onChanged();
+    } else {
+      onClose();
+    }
+  }, [regraded, onChanged, onClose]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose();
+        close();
       }
       if (e.key === 'ArrowRight') {
         setShown((i) => (i + 1) % Math.max(photos.length, 1));
@@ -169,9 +211,11 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, photos.length]);
+  }, [close, photos.length]);
 
-  const rows = [...(extraFields ?? []), ...cardFields(row)];
+  // Оценку берём из состояния: она могла смениться на этой же карточке,
+  // а `row` приезжает с витрины и о ней ещё не знает.
+  const rows = [...(extraFields ?? []), ...cardFields({ ...row, qualityGrade: grade })];
 
   const main = photos[shown];
 
@@ -300,11 +344,11 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   useLockedScroll();
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={close}>
       <div className="card-view" onClick={(event) => event.stopPropagation()}>
         <header className="card-view__head">
           <h2>{row.title}</h2>
-          <button type="button" className="button--ghost" onClick={onClose}>
+          <button type="button" className="button--ghost" onClick={close}>
             Закрыть
           </button>
         </header>
@@ -694,6 +738,18 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
             </div>
           ) : (
           <div className="card-view__photos">
+            {/* Над снимком, как в системе, из которой приходят клиенты:
+                оценка — это то, что покупатель читает сразу после цены
+                и фотографии, и ставят её, глядя на саму деталь. */}
+            {quality && (
+              <PartQualityBlock
+                partId={row.id}
+                grade={grade}
+                role={role}
+                onGraded={(next) => { setGrade(next); setRegraded(true); }}
+              />
+            )}
+
             {main !== undefined && (
               <>
                 <div className="card-view__frame">

@@ -518,6 +518,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
           role={role}
           extraFields={wheelFields(card.wheel)}
           applicability={false}
+          quality={false}
           onClose={() => setCard(null)}
           onChanged={() => {
             setCard(null);

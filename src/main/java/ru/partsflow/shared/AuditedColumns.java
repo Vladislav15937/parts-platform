@@ -3,6 +3,8 @@ package ru.partsflow.shared;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
 
+import ru.partsflow.inventory.QualityGrade;
+
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -167,9 +169,16 @@ public final class AuditedColumns {
     private static final Map<String, String> CONDITIONS =
             Map.of("NEW", "Новая", "USED", "Б/у", "REFURBISHED", "Восстановленная");
 
-    private static final Map<String, String> GRADES = Map.of(
-            "AS_NEW", "Как новая", "NO_DEFECTS", "Без дефектов",
-            "WITH_DEFECTS", "С дефектами", "NEEDS_REPAIR", "Требует ремонт");
+    /**
+     * Оценка состояния — словарём самого перечисления, а не копией здесь.
+     *
+     * <p>Копия тут была четвёртой из четырёх, и три остальные успели
+     * разойтись: витрина переводила значения, которых в базе не бывает,
+     * форма правки предлагала их же, а карточка печатала {@code NO_DEFECTS}
+     * как есть (задача 0033). Эта случайно совпадала — совпадение и есть
+     * худший вид связи: следующая правка слова его не переживёт.
+     */
+    private static final Map<String, String> GRADES = QualityGrade.titles();
 
     private static final Map<String, String> SIDES = Map.of(
             "LEFT", "Левый", "RIGHT", "Правый", "FRONT", "Передний",

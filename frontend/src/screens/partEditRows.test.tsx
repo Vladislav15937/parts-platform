@@ -200,7 +200,7 @@ function save(): HTMLButtonElement {
 function card(): Record<string, unknown> {
   return {
     price: 27000, minPrice: null, costPrice: null, installationPrice: null,
-    qualityGrade: 'GOOD', description: 'Фара в сборе', note: 'скол на креплении',
+    qualityGrade: 'NO_DEFECTS', description: 'Фара в сборе', note: 'скол на креплении',
     textBlock: null, videoUrl: null, marking: null, manufacturer: 'Toyota',
     color: null, section: null, barcode: null, weightKg: null, lengthMm: null,
     widthMm: null, heightMm: null, packageLengthMm: null, packageWidthMm: null,
@@ -212,7 +212,7 @@ function card(): Record<string, unknown> {
 function row(): CatalogRow {
   return {
     id: 7, number: 7, code: 'B-40219', title: 'Фара левая Toyota Camry',
-    qualityGrade: 'GOOD', condition: 'USED',
+    qualityGrade: 'NO_DEFECTS', condition: 'USED',
     brand: 'Toyota', model: 'Camry', generation: null, yearFrom: null, yearTo: null,
     body: null, engine: null, year: 2007, donorCode: '261',
     price: 27000, installationPrice: null, color: null, description: 'Фара в сборе',

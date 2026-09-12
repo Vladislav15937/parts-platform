@@ -389,6 +389,47 @@ class CatalogServiceTest extends PostgresTestBase {
                         .isIn("новая", "б/у", "восстановленная"));
     }
 
+    /**
+     * Колонка «Оценка состояния» отбирается по оценке, а не по состоянию.
+     *
+     * <p><b>Что было.</b> Выражение колонки переводило
+     * {@code EXCELLENT/GOOD/FAIR/POOR} — четыре значения, которых
+     * {@code part_quality_grade_ck} не допускает, — и потому {@code CASE}
+     * у каждой позиции склада уходил в запасную ветку по {@code condition}:
+     * список значений отбора состоял из одного «б/у». То есть меню колонки
+     * предлагало владельцу отобрать оценку по состоянию, а по настоящей
+     * оценке склад было не отобрать ни одним значением.
+     *
+     * <p>Проверяется отсюда, а не через карточку: список значений и отбор
+     * считаются одним выражением, и разойдись они — выбранное из меню
+     * не находило бы ничего.
+     */
+    @Test
+    @DisplayName("Оценка состояния отбирается по себе, а не по состоянию")
+    void qualityGradeIsFilteredByItselfNotByCondition() {
+        Long graded = part("Фара с оценкой", 1);
+        part("Фара без оценки", 1);
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET quality_grade = 'NO_DEFECTS' WHERE id = ?", graded));
+
+        var values = inTenant(() -> catalog.values("quality"));
+
+        assertThat(values).as("оценка показана внутренним именем, а не словом")
+                .contains("Без дефектов");
+        // Пустая оценка — это «не оценена», а не «б/у»: неоценённая деталь
+        // пряталась под состоянием, и владелец, выбрав «б/у», получал её
+        // в выдаче колонки «Оценка состояния».
+        assertThat(values).as("в списке значений оценки стоит состояние")
+                .doesNotContain("б/у", "новая", "восстановленная");
+
+        var found = titles(inTenant(() -> catalog.list(null, true, true, List.of(), null,
+                Map.of("quality", "Без дефектов"), Map.of(), "code", true, 0, 50)));
+
+        assertThat(found).as("выбранное из списка значение не нашло своей же позиции")
+                .contains("Фара с оценкой")
+                .doesNotContain("Фара без оценки");
+    }
+
     @Test
     @DisplayName("По колонке с пустыми значениями курсор не применяется")
     void cursorIsIgnoredForNullableSort() {
@@ -620,6 +661,42 @@ class CatalogServiceTest extends PostgresTestBase {
                 .indexOf("Номер товара");
         var codes = rows.stream().map(row -> row.get(at)).toList();
         assertThat(codes).contains(codeOf(id)).doesNotContain(codeOf(other));
+    }
+
+    /**
+     * В скачанном файле оценка — слово, а не внутреннее имя.
+     *
+     * <p>Та же причина, по которой стороны там пишутся «Задн.» и «Лев.»:
+     * файл открывают в Excel и читают глазами, и {@code NO_DEFECTS} в нём —
+     * утечка внутреннего представления к человеку. Выражение при этом одно
+     * с колонкой на экране, чтобы таблица и файл не разошлись.
+     */
+    @Test
+    @DisplayName("Оценка в скачанном файле названа словом")
+    void exportNamesQualityGradeInWords() {
+        Long id = part("Фара выгружаемая с оценкой", 1);
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET quality_grade = 'WITH_DEFECTS', section = 'Ж-7' WHERE id = ?",
+                id));
+
+        // Отбираем по секции, а не по оценке: сломайся выражение оценки —
+        // проверка обязана упасть словами «в файле стоит внутреннее имя»,
+        // а не «строк не нашлось». Отбор здесь только затем, чтобы в файл
+        // попала одна известная позиция.
+        List<List<String>> rows = new java.util.ArrayList<>();
+        inTenant(() -> {
+            catalog.export(null, true, false, List.of(), null,
+                    Map.of("section", "Ж-7"), Map.of(), "code", true,
+                    catalog.warehouses(), rows::add);
+            return null;
+        });
+
+        int at = CatalogService.exportHeader(inTenant(() -> catalog.warehouses()))
+                .indexOf("Оценка состояния");
+        assertThat(rows).isNotEmpty();
+        assertThat(rows.stream().map(row -> row.get(at)).toList())
+                .as("в файле стоит внутреннее имя оценки")
+                .containsOnly("С дефектами");
     }
 
     private String codeOf(Long id) {

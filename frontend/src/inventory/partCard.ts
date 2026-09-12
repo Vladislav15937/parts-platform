@@ -1,4 +1,4 @@
-import { CONDITION, type CatalogRow } from './catalog';
+import { CONDITION, qualityTitle, type CatalogRow } from './catalog';
 
 const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.' };
 const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.' };
@@ -31,7 +31,9 @@ export function cardFields(row: CatalogRow): Array<[string, string]> {
   add('Наименование', row.partName);
   add('Состояние', row.condition === null ? null : CONDITION[row.condition] ?? row.condition);
   add('Поставка', row.supply);
-  add('Оценка состояния', row.qualityGrade);
+  // Словом, а не кодом: в карточке стояло «NO_DEFECTS» рядом с переведённым
+  // «б/у» — внутреннее представление перед человеком (задача 0033).
+  add('Оценка состояния', qualityTitle(row.qualityGrade));
   add('Марка', row.brand);
   add('Модель', row.model);
   add('Модель кузова', row.body);

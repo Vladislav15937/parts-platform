@@ -367,10 +367,12 @@ class SellerSearchTest extends PostgresTestBase {
     @Test
     @DisplayName("Марки для отбора берутся из найденного, а не из первых строк")
     void offersValuesFoundBeyondTheShownRows() {
-        partOfVehicle("Фара Nissan Almera 2011 прав.",
+        Long graded = partOfVehicle("Фара Nissan Almera 2011 прав.",
                 "nissan", "Almera", 2011, "RIGHT", "FRONT", 5000);
         partOfVehicle("Фара Toyota Camry 2010 лев.",
                 "toyota", "Camry", 2010, "LEFT", "FRONT", 7000);
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET quality_grade = 'NO_DEFECTS' WHERE id = ?", graded));
 
         PartService.StockSearch cut = inTenant(() -> parts.searchAvailable("фара", 1));
 
@@ -382,7 +384,14 @@ class SellerSearchTest extends PostgresTestBase {
         assertThat(cut.facets().grades())
                 .as("оценка состояния названа не теми словами, какими её "
                         + "показывает витрина")
-                .contains("б/у");
+                .contains("Без дефектов");
+        // Состояние — другой вопрос, и подставлять его вместо оценки нельзя:
+        // до задачи 0033 этот список состоял из одного «б/у», то есть продавцу
+        // предлагали отобрать оценку по состоянию, а по самой оценке было
+        // нечем. Неоценённая позиция в список не попадает вовсе.
+        assertThat(cut.facets().grades())
+                .as("в списке оценок стоит состояние")
+                .doesNotContain("б/у", "новая", "восстановленная");
 
         // Отбор поставлен — список значений обязан остаться прежним, иначе
         // с одной марки не переключиться на другую.

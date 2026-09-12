@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
-  CONDITION, loadEditable, savePart, priceOperationHint, PRICE_OPERATIONS,
+  CONDITION, QUALITY, QUALITY_GRADES, loadEditable, savePart, priceOperationHint,
+  PRICE_OPERATIONS,
   type CatalogRow, type PartEdit, type PriceOperation,
 } from '../inventory/catalog';
 import { generationOf } from '../inventory/partCard';
@@ -242,7 +243,7 @@ function draftText(field: Field, form: Draft): string {
     case 'check':
       return form.published ? 'Да' : 'Нет';
     case 'grade':
-      return form.qualityGrade === '' ? '' : GRADES[form.qualityGrade] ?? form.qualityGrade;
+      return form.qualityGrade === '' ? '' : QUALITY[form.qualityGrade] ?? form.qualityGrade;
     case 'price':
     case 'num': {
       const raw = form[field.key];
@@ -298,8 +299,8 @@ function input(
         <select aria-label={field.label} autoFocus value={form.qualityGrade}
                 onChange={(e) => set('qualityGrade', e.target.value)}>
           <option value="">—</option>
-          {Object.entries(GRADES).map(([value, title]) => (
-            <option key={value} value={value}>{title}</option>
+          {QUALITY_GRADES.map((grade) => (
+            <option key={grade.key} value={grade.key}>{grade.title}</option>
           ))}
         </select>
       );
@@ -425,13 +426,6 @@ const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.
 function plainText(value: string | number | null): string {
   return value === null || value === undefined ? '' : String(value);
 }
-
-const GRADES: Record<string, string> = {
-  EXCELLENT: 'отличное',
-  GOOD: 'хорошее',
-  FAIR: 'удовлетворительное',
-  POOR: 'плохое',
-};
 
 /**
  * Черновик формы — строки, а не числа.
