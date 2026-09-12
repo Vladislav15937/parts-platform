@@ -115,7 +115,8 @@ public class ReadinessEndpoint {
         List<Check> checks = List.of(application(), database(), schemas(), journals(), metrics());
         boolean ready = checks.stream().allMatch(Check::ok);
         return new WebEndpointResponse<>(new Readiness(ready, checks),
-                ready ? WebEndpointResponse.STATUS_OK : 503);
+                ready ? WebEndpointResponse.STATUS_OK
+                      : WebEndpointResponse.STATUS_SERVICE_UNAVAILABLE);
     }
 
     private Check application() {
