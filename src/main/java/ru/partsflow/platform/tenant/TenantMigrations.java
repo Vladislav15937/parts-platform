@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Накат миграций на схемы уже заведённых арендаторов.
@@ -49,6 +50,9 @@ public class TenantMigrations {
     private static final Logger log = LoggerFactory.getLogger(TenantMigrations.class);
 
     private static final String LOCK = "tenant-migrations";
+
+    /** Сколько отставших схем называть по имени: дальше — числом. */
+    private static final int NAMED = 3;
 
     /**
      * Пятьсот схем по секунде — это восемь минут; час с запасом на случай,
@@ -199,6 +203,60 @@ public class TenantMigrations {
     }
 
     /**
+     * Кто <b>позади</b> поставляемой версии. Впереди — не отставшие.
+     *
+     * <p>Это другое утверждение, чем у {@link #status(boolean)}, и путать
+     * их нельзя. {@code status} отвечает «эта пара кода и схемы та, которую
+     * выкладывают» — сравнением на равенство, и ею проверяют выкладку.
+     * Здесь отвечают на вопрос «я могу обслуживать», и ответ несимметричный.
+     *
+     * <p><b>Почему несимметричный.</b> Порядок выкладки ставит накат схем
+     * до подъёма новой сборки, и всё это время людей обслуживает старая:
+     * сразу после наката схема оказывается впереди её версии. Считай мы
+     * готовность равенством — старая сборка объявила бы себя негодной
+     * в ту самую минуту, когда обязана работать, и выкладка погасила бы
+     * приложение сама, выполняя порядок, придуманный чтобы этого не
+     * допустить. Новая схема старый код обслуживает: миграции расширяющие,
+     * колонки добавлены, умолчания заданы. Обратное неверно — код,
+     * рассчитывающий на то, чего в схеме нет, и есть тот случай, когда
+     * площадка забирает пустой прайс.
+     *
+     * <p><b>По отметке в реестре, а не глубоким опросом.</b> Готовность
+     * спрашивают раз в несколько секунд; обход пятисот схем через Liquibase
+     * означал бы, что диагностика дороже работы. Отметка врёт только там,
+     * где в схему лазили руками, — и это тот же размен, что у
+     * {@link SchemaVersionCheck}.
+     *
+     * <p>Отметки нет или она не разбирается — арендатор считается
+     * отставшим: «не знаю» выдать за «годен» нельзя.
+     */
+    public Lag lag() {
+        String expected = migrator.expectedVersion();
+        int expectedCount = TenantSchemaMigrator.changeSetsIn(expected);
+
+        List<Tenant> tenants = jdbc.query("""
+                SELECT tenant_id, schema_name, schema_version
+                  FROM public.tenant_registry
+                 WHERE status IN ('ACTIVE', 'SUSPENDED')
+                 ORDER BY tenant_id""",
+                (rs, i) -> new Tenant(rs.getLong("tenant_id"), rs.getString("schema_name"),
+                        rs.getString("schema_version")));
+
+        List<TenantView> behind = new ArrayList<>();
+        int ahead = 0;
+        for (Tenant tenant : tenants) {
+            int actual = TenantSchemaMigrator.changeSetsIn(tenant.version());
+            if (actual < 0 || actual < expectedCount) {
+                behind.add(new TenantView(tenant.tenantId(), tenant.schema(),
+                        tenant.version(), null, null));
+            } else if (actual > expectedCount) {
+                ahead++;
+            }
+        }
+        return new Lag(expected, tenants.size(), ahead, behind);
+    }
+
+    /**
      * Отставшие по мнению самого Liquibase.
      *
      * <p>Отметка в реестре тут ни при чём: спрашивается каждая схема. Схема,
@@ -237,8 +295,34 @@ public class TenantMigrations {
                  WHERE tenant_id = ?""", version, tenantId);
     }
 
-    /** Причина отказа лежит в самом глубоком исключении, а не в обёртке. */
-    private static String rootMessage(Throwable e) {
+    /**
+     * Имена отставших схем для человека: первые три, остальные числом.
+     *
+     * <p>Девять схем в строку — это строка, которую не читают; первых трёх
+     * хватает, чтобы понять, кого смотреть, а число остальных — чтобы понять
+     * масштаб. Здесь, а не у каждого спрашивающего: об отставании говорят
+     * две поверхности — строка в логе при старте и готовность приложения, —
+     * и разойтись они не должны.
+     */
+    public static String namesOf(List<TenantView> behind) {
+        String first = behind.stream()
+                .limit(NAMED)
+                .map(TenantView::schema)
+                .collect(Collectors.joining(", "));
+        int rest = behind.size() - Math.min(NAMED, behind.size());
+        return rest == 0 ? first : first + " и ещё " + rest;
+    }
+
+    /**
+     * Причина отказа лежит в самом глубоком исключении, а не в обёртке.
+     *
+     * <p>Открыт наружу, потому что то же нужно готовности приложения:
+     * обёртка Spring несёт в сообщении **весь текст запроса**, и «проверка
+     * не удалась» превращалась в ответ, где вместо причины стоит SQL.
+     * Postgres же говорит по делу — «отношение public.tenant_registry
+     * не существует».
+     */
+    public static String rootMessage(Throwable e) {
         Throwable cause = e;
         while (cause.getCause() != null) {
             cause = cause.getCause();
@@ -265,6 +349,22 @@ public class TenantMigrations {
      *               который рассчитывает на новую схему
      */
     public record Status(String expectedVersion, int tenants, List<TenantView> behind) {
+    }
+
+    /**
+     * Ответ на «могу ли я обслуживать», см. {@link #lag()}.
+     *
+     * @param ahead  сколько схем впереди поставляемой версии. Не отставание,
+     *               а обычное состояние между накатом и подъёмом новой сборки;
+     *               названо числом потому, что молча проглоченное «впереди»
+     *               невозможно отличить от «версии совпали»
+     * @param behind кто позади. Пусто — обслуживать можно
+     */
+    public record Lag(String expectedVersion, int tenants, int ahead, List<TenantView> behind) {
+
+        public boolean ok() {
+            return behind.isEmpty();
+        }
     }
 
     /**

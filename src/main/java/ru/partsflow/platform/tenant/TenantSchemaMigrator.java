@@ -36,6 +36,9 @@ public class TenantSchemaMigrator {
 
     private final DataSource dataSource;
 
+    /** Версия артефакта: считается один раз, см. {@link #expectedVersion()}. */
+    private volatile String expectedVersion;
+
     public TenantSchemaMigrator(
             @SchemaOwnerDataSource.SchemaOwner DataSource dataSource) {
         this.dataSource = dataSource;
@@ -74,14 +77,54 @@ public class TenantSchemaMigrator {
      * читаемой человеком.
      *
      * <p>Одинаково для всех арендаторов, поэтому считается один раз на прогон.
+     *
+     * <p><b>И запоминается.</b> Changelog лежит внутри артефакта и в течение
+     * жизни процесса не меняется, а разбор его — соединение к базе и чтение
+     * всех файлов набора. Готовность приложения ({@code /actuator/readiness})
+     * спрашивают раз в несколько секунд: без памяти каждый опрос заново
+     * разбирал бы весь changelog.
      */
     public String expectedVersion() {
-        return inLiquibase(null, liquibase -> {
+        String known = expectedVersion;
+        if (known != null) {
+            return known;
+        }
+        String computed = inLiquibase(null, liquibase -> {
             List<ChangeSet> all = liquibase.getDatabaseChangeLog().getChangeSets();
             return all.isEmpty()
                     ? null
                     : all.size() + "/" + all.get(all.size() - 1).getId();
         });
+        expectedVersion = computed;
+        return computed;
+    }
+
+    /**
+     * Сколько changeset'ов стоит за отметкой версии.
+     *
+     * <p>Формат отметки задаёт {@link #expectedVersion()} — «число косая
+     * идентификатор», — и разбирается она здесь же: два места, знающие формат,
+     * разъедутся на первой же его правке.
+     *
+     * <p>Число сравнимо, идентификатор — нет, и на этом стоит правило
+     * «схема впереди — норма, схема позади — нет»: расширяющая миграция
+     * только добавляет changeset'ы, поэтому больше значит новее.
+     *
+     * @return {@code -1}, если отметки нет или она не разбирается. Это «не
+     *         знаю», а не «совпадает»: выдать неизвестное за годное значит
+     *         выложить код на схему, которой он не соответствует
+     */
+    public static int changeSetsIn(String version) {
+        if (version == null) {
+            return -1;
+        }
+        int slash = version.indexOf('/');
+        String count = slash < 0 ? version : version.substring(0, slash);
+        try {
+            return Integer.parseInt(count.strip());
+        } catch (NumberFormatException e) {
+            return -1;
+        }
     }
 
     /**

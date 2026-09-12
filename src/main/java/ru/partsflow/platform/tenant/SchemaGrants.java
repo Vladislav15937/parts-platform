@@ -7,7 +7,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;
-import java.util.List;
 
 /**
  * Права рантайм-роли на схему арендатора.
@@ -26,15 +25,16 @@ import java.util.List;
  * <p>Исправление ошибки в журнале при этом не исчезает — оно идёт встречной
  * записью, как и было задумано: неизменяемость журнала не мешает работе,
  * она мешает переписать историю.
+ *
+ * <p>Сам список журналов живёт в {@link JournalProtection#JOURNALS} — там,
+ * где его проверяют. Две копии одного перечня расходятся молча, и цена
+ * расхождения тут несимметричная: забытый здесь журнал остаётся
+ * изменяемым, а проверка при этом отвечает «защищены».
  */
 @Component
 public class SchemaGrants {
 
     private static final Logger log = LoggerFactory.getLogger(SchemaGrants.class);
-
-    /** Что нельзя менять после записи. */
-    private static final List<String> JOURNALS =
-            List.of("stock_movement", "audit_log", "customer_account_entry");
 
     private final JdbcTemplate owner;
     private final String runtimeRole;
@@ -70,7 +70,7 @@ public class SchemaGrants {
         owner.execute(
                 "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %s TO %s".formatted(schema, role));
 
-        for (String journal : JOURNALS) {
+        for (String journal : JournalProtection.JOURNALS) {
             owner.execute("REVOKE UPDATE, DELETE ON %s.%s FROM %s".formatted(schema, journal, role));
         }
         log.debug("Схема {}: права выданы роли {}, журналы заперты", schema, runtimeRole);

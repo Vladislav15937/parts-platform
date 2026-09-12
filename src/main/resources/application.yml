@@ -183,7 +183,12 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics
+        # readiness — готовность к работе (ReadinessEndpoint), а не живость:
+        # её спрашивает шаг выкладки, прежде чем гасить старую сборку.
+        # Не перечислив адрес здесь, получишь 401, как от несуществующего:
+        # ровно так и вышло однажды с метриками — конфигурация выглядела
+        # рабочей, а отдавать было нечем.
+        include: health,info,prometheus,metrics,readiness
   endpoint:
     health:
       show-details: when-authorized
