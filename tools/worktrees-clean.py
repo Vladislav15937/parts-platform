@@ -31,6 +31,23 @@ worktree», — и дирижёр снял его руками. Каждая к�
 файл: `.gitignore` уже убрал из счёта `target/` и `node_modules`, а всё,
 что осталось, — чья-то работа, пока не доказано обратное.
 
+**Незакоммиченным правкам работа не равна, и разбор нашёл два способа
+её потерять при чистом дереве.** Оба воспроизведены, оба закрыты.
+
+*Остановленный `rebase`.* У копии, где `rebase -i` ждёт человека,
+`git status --porcelain` пуст, HEAD отцеплен и ветки нет вовсе — то есть
+все прежние признаки говорили «пустая копия, снимай», а `git worktree
+remove` отвечал нулём и уносил `rebase-merge` со всем прогрессом. Работа
+тут лежит **состоянием операции**, а не файлами. Теперь копия с любой
+незавершённой операцией (`rebase`, `am`, `merge`, `cherry-pick`, `revert`,
+`bisect`, очередь `sequencer`) только называется — см. `OPERATIONS`.
+
+*Отцепленный HEAD с коммитами.* После коммита дерево чистое, а держит эти
+коммиты **только сама копия**: ветки у неё нет, и снятие оставляет их
+сиротами до ближайшего `git gc`. Инструмент при этом сам печатал «ветка
+останется» — оставаться было нечему. Теперь такая копия не снимается,
+а в причине написано, чем её спасти: `git branch <имя> <sha>`.
+
 **Второе правило — свежесть.** Рядом работают другие агенты, каждый
 в своей копии, и снесённое чужое дерево — это потерянная чужая волна.
 Копию, в которой что-то происходило за последние `--свежие` часов,
@@ -61,9 +78,11 @@ harness, называет процесс: `locked claude agent agent-… (pid 67
 
 Проверка самой проверки (`selftest`) идёт **перед каждым прогоном**:
 она заводит настоящий временный репозиторий с настоящими копиями —
-грязной, слитой, брошенной, свежей — и прогоняет через них решение
-и снятие целиком. Инструмент, который сносит лишнее, ошибается ровно
-один раз, и убедиться в обратном рассуждением нельзя.
+грязной, слитой, брошенной, свежей, с остановленным `rebase`
+и с отцепленным HEAD — и прогоняет через них решение **и** снятие
+целиком, после чего смотрит на файлы и ветки на диске. Инструмент,
+который сносит лишнее, ошибается ровно один раз, и убедиться
+в обратном рассуждением нельзя.
 """
 import argparse
 import os
@@ -83,6 +102,8 @@ KEEP, TAKE = "оставить", "снять"
 # Причины, по которым копия остаётся. Текст важен: по нему человек решает,
 # идти ли смотреть содержимое руками.
 WHY_DIRTY = "незакоммиченные правки"
+WHY_BUSY = "незавершённая операция git"
+WHY_ORPHAN = "коммиты, которых не держит ни одна ветка"
 
 
 class GitError(RuntimeError):
@@ -90,9 +111,18 @@ class GitError(RuntimeError):
 
 
 def git(*args, cwd=None, check=True):
+    """Вызов git. При отказе возвращает **причину**, а не пустую строку.
+
+    Причину отказа git пишет в stderr: «worktree contains modified files»,
+    «branch is not fully merged». Возвращая один `stdout`, мы теряли её ровно
+    в аварийном случае — отчёт говорил «НЕ снял — git отказался:» и обрывался
+    на двоеточии.
+    """
     p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
     if check and p.returncode:
         raise GitError(f"git {' '.join(args)}: {(p.stderr or p.stdout).strip()}")
+    if p.returncode:
+        return p.returncode, (p.stderr.strip() or p.stdout.strip())
     return p.returncode, p.stdout
 
 
@@ -177,6 +207,33 @@ def dirty_files(path):
     return [ln[3:] or ln for ln in out.splitlines()]
 
 
+# Незавершённая операция git: работа тут лежит **состоянием**, а не файлами.
+# Остановленный `rebase -i` при чистом дереве не даёт `git status --porcelain`
+# ни строчки, HEAD при этом отцеплен и ветки у копии нет вовсе — то есть все
+# прочие признаки говорят «пустая копия, снимай», а `git worktree remove`
+# отвечает нулём и уносит `rebase-merge` вместе со всем прогрессом.
+OPERATIONS = [
+    ("rebase-merge", "rebase остановлен (интерактивный или с конфликтом)"),
+    ("rebase-apply", "идёт rebase или am"),
+    ("sequencer", "очередь sequencer: rebase или cherry-pick списком"),
+    ("MERGE_HEAD", "слияние не завершено"),
+    ("CHERRY_PICK_HEAD", "cherry-pick не завершён"),
+    ("REVERT_HEAD", "revert не завершён"),
+    ("BISECT_LOG", "идёт bisect"),
+]
+
+
+def unfinished(path):
+    """Название незавершённой операции git в этой копии — или None."""
+    gitdir = gitdir_of(path)
+    if not gitdir:
+        return None
+    for name, label in OPERATIONS:
+        if os.path.exists(os.path.join(gitdir, name)):
+            return label
+    return None
+
+
 def main_refs(repo):
     """Чем считать `main`: местной веткой, ссылкой на origin — чем есть."""
     refs = [r for r in ("main", "origin/main")
@@ -187,6 +244,13 @@ def main_refs(repo):
 
 
 def merged(repo, head, refs):
+    """Слито ли — по предкам `main`.
+
+    Squash-слияние так не опознаётся: в `main` уезжает новый коммит, а не
+    предок ветки. Ошибка в безопасную сторону (копия останется), и подбирает
+    такие копии порог давности — но ветку у них инструмент не удалит,
+    и это правильно: доказать слитость squash'ем он не может.
+    """
     return any(git_ok("merge-base", "--is-ancestor", head, r, cwd=repo) for r in refs)
 
 
@@ -205,8 +269,8 @@ def inside(child, parent):
 def plan(repo, cwd=None, now=None, fresh_hours=FRESH_HOURS, stale_days=STALE_DAYS):
     """Решение по каждой копии. Ничего не меняет — только смотрит.
 
-    Порядок проверок и есть договор: грязь перебивает всё остальное,
-    свежесть — всё, кроме грязи.
+    Порядок проверок и есть договор: незавершённая операция и грязь
+    перебивают всё остальное, свежесть — всё, кроме них.
     """
     now = time.time() if now is None else now
     cwd = os.getcwd() if cwd is None else cwd
@@ -214,7 +278,7 @@ def plan(repo, cwd=None, now=None, fresh_hours=FRESH_HOURS, stale_days=STALE_DAY
     out = []
 
     for wt in worktrees(repo):
-        r = dict(wt, decision=KEEP, why="", dirty=[], age=None,
+        r = dict(wt, decision=KEEP, why="", dirty=[], age=None, unfinished=None,
                  merged=False, ahead=0, drop_branch=False)
         r["name"] = os.path.basename(r["path"].rstrip(os.sep))
         out.append(r)
@@ -233,6 +297,14 @@ def plan(repo, cwd=None, now=None, fresh_hours=FRESH_HOURS, stale_days=STALE_DAY
         # чтение оставляет следы во времени файлов, а решаем мы по нему.
         r["age"] = (now - last_touched(r["path"])) / 3600.0
 
+        # Раньше грязи: у остановленного rebase дерево бывает чистым,
+        # и тогда все прочие признаки говорят «снимай».
+        r["unfinished"] = unfinished(r["path"])
+        if r["unfinished"]:
+            r["why"] = (f"{WHY_BUSY}: {r['unfinished']} — работа тут "
+                        "состоянием, а не файлами")
+            continue
+
         r["dirty"] = dirty_files(r["path"])
         if r["dirty"] is None:
             r["why"] = "git не читает эту копию — разберитесь руками"
@@ -249,6 +321,16 @@ def plan(repo, cwd=None, now=None, fresh_hours=FRESH_HOURS, stale_days=STALE_DAY
 
         r["merged"] = merged(repo, r["head"], refs)
         r["ahead"] = 0 if r["merged"] else ahead(repo, r["head"], refs)
+
+        # Отцепленный HEAD с коммитами сверх main держит только сама копия:
+        # ветки у неё нет, и снятая копия оставляет коммиты сиротами —
+        # до ближайшего `git gc`, после которого их не вернуть ничем.
+        # «Ветка останется» тут было прямой неправдой: оставаться нечему.
+        if r["branch"] is None and not r["merged"]:
+            r["why"] = (f"{WHY_ORPHAN}: HEAD отцеплен, коммитов сверх main "
+                        f"{r['ahead']} — их не держит ни одна ветка. "
+                        f"Сохранить: git branch <имя> {(r['head'] or '')[:8]}")
+            continue
 
         if r["merged"]:
             r["decision"] = TAKE
@@ -274,14 +356,18 @@ def age_words(hours):
 def remove(repo, r):
     """Снять одну копию. Возвращает строки отчёта; ничего не делает молча.
 
-    Грязь перепроверяется **прямо перед снятием**: между показом и запуском
-    со `--снять` проходят минуты, и за них в копию мог кто-то сесть.
+    Грязь и незавершённая операция перепроверяются **прямо перед снятием**:
+    между показом и запуском со `--снять` проходят минуты, и за них в копию
+    мог кто-то сесть и начать rebase.
     """
     done = []
     if r["prunable"]:
         git("worktree", "prune", cwd=repo)
         return [f"{r['name']}: запись о пропавшем каталоге убрана"]
 
+    busy = unfinished(r["path"])
+    if busy:
+        return [f"{r['name']}: НЕ снял — {WHY_BUSY}: {busy}"]
     again = dirty_files(r["path"])
     if again:
         return [f"{r['name']}: НЕ снял — появились незакоммиченные правки "
@@ -294,8 +380,16 @@ def remove(repo, r):
     done.append(f"{r['name']}: снята")
 
     if r["drop_branch"] and r["branch"]:
-        # Только -d: он отказывается удалять неслитое. -D тут означал бы
-        # «снести чужую работу, если я ошибся веткой».
+        # Слитость перепроверяется своими ссылками на main — и это не лишняя
+        # осторожность: `git branch -d` сверяет слитость с HEAD **того места,
+        # откуда его зовут**, а зовут его из копии, стоящей на произвольной
+        # ветке. Своя проверка отвечает на нужный вопрос («слито в main»),
+        # а `-d` остаётся вторым замком: он откажется удалить неслитое.
+        # -D нет и не будет — он означал бы «снести, даже если я ошибся».
+        if not merged(repo, r["head"], main_refs(repo)):
+            done.append(f"    ветка {r['branch']} осталась: перед самым "
+                        f"удалением она уже не выглядит слитой в main")
+            return done
         rc, out = git("branch", "-d", r["branch"], cwd=repo, check=False)
         done.append(f"    ветка {r['branch']} " +
                     ("удалена" if rc == 0 else f"осталась: {out.strip()}"))
@@ -332,10 +426,13 @@ def show(rows, fresh_hours, stale_days):
         if r["dirty"] and len(r["dirty"]) > 5:
             print(f"        … и ещё {len(r['dirty']) - 5}")
 
-    if dirty:
-        print(f"\nС незакоммиченными правками: {len(dirty)}. Инструмент их "
-              f"не снимает никогда —\nсходите и посмотрите сами: там дважды "
-              f"находилась готовая невыложенная работа.")
+    unsaved = [r for r in keep
+               if r["dirty"] or r["unfinished"] or WHY_ORPHAN in r["why"]]
+    if unsaved:
+        print(f"\nС несохранённой работой: {len(unsaved)} "
+              f"(незакоммиченное — {len(dirty)}). Инструмент их не снимает "
+              f"никогда —\nсходите и посмотрите сами: там дважды находилась "
+              f"готовая невыложенная работа.")
     print(f"\nСвежее {fresh_hours} ч не трогаю вовсе; «давно» — от {stale_days} сут.")
 
 
@@ -380,6 +477,7 @@ def selftest():
         open(os.path.join(repo, "README"), "w").write("x\n")
         git("add", "-A", cwd=repo)
         git("commit", "-q", "-m", "первый", cwd=repo)
+        first_sha = git("rev-parse", "HEAD", cwd=repo)[1].strip()
 
         trees = os.path.join(root, "trees")
         os.makedirs(trees)
@@ -414,6 +512,62 @@ def selftest():
         young_wt = _wt(repo, trees, "molodaya", "feature/molodaya", {"f.txt": "f\n"})
         _age(young_wt, 1)
 
+        # Остановленный rebase при ЧИСТОМ дереве. Останавливаем `--exec false`:
+        # шаг применён, проверка провалилась, rebase ждёт человека. Ветки
+        # у копии в этот момент нет — HEAD отцеплен, — а `git status` пуст.
+        rebase_wt = _wt(repo, trees, "rebase-stoit", "feature/rebase", {"g.txt": "g\n"})
+        git("rebase", "--exec", "false", "main", cwd=rebase_wt, check=False)
+        rebase_marker = os.path.join(rebase_wt, "g.txt")
+        if not unfinished(rebase_wt):
+            fails.append("фикстура не завела остановленный rebase — "
+                         "проверка ниже ничего не доказывает")
+        if dirty_files(rebase_wt):
+            fails.append("фикстура остановленного rebase оказалась грязной — "
+                         "тогда её ловит прежнее правило, а не новое")
+        _age(rebase_wt, 5)
+
+        # Отцепленный HEAD с настоящим коммитом: дерево чистое, ветки нет,
+        # и коммит не держит ничего, кроме самой копии.
+        loose_wt = os.path.join(trees, "otcepleny")
+        git("worktree", "add", "--detach", loose_wt, "main", cwd=repo)
+        open(os.path.join(loose_wt, "h.txt"), "w", encoding="utf-8").write("h\n")
+        git("add", "-A", cwd=loose_wt)
+        git("-c", "user.email=t@t", "-c", "user.name=t",
+            "commit", "-q", "-m", "работа без ветки", cwd=loose_wt)
+        loose_sha = git("rev-parse", "HEAD", cwd=loose_wt)[1].strip()
+        held = git("branch", "--all", "--contains", loose_sha, cwd=repo, check=False)[1]
+        if held.strip():
+            fails.append("фикстура отцепленной копии оказалась под веткой "
+                         f"({held.split()[0]}) — терять там нечего, и проверка "
+                         "ниже ничего не доказывает")
+        _age(loose_wt, 5)
+
+        # Идущий bisect — и он тут не для полноты списка операций, а потому
+        # что остальные признаки на нём молчат **все**: дерево чистое, HEAD
+        # отцеплен на коммите, который уже в main, своих коммитов нет. То есть
+        # эту копию держит только сторож незавершённой операции, и снятие
+        # уносит найденную половину поиска.
+        bisect_wt = os.path.join(trees, "bisect-idet")
+        git("worktree", "add", "--detach", bisect_wt, "main", cwd=repo)
+        git("bisect", "start", cwd=bisect_wt, check=False)
+        git("bisect", "bad", "HEAD", cwd=bisect_wt, check=False)
+        git("bisect", "good", first_sha, cwd=bisect_wt, check=False)
+        bisect_sha = git("rev-parse", "HEAD", cwd=bisect_wt)[1].strip()
+        if not unfinished(bisect_wt):
+            fails.append("фикстура не завела bisect — проверка ниже "
+                         "ничего не доказывает")
+        if dirty_files(bisect_wt) or not merged(repo, bisect_sha, main_refs(repo)):
+            fails.append("фикстура bisect поймается другим правилом (грязь "
+                         "или коммиты сверх main) — она обязана проверять "
+                         "именно незавершённую операцию")
+        _age(bisect_wt, 5)
+
+        # Отцепленный HEAD без своих коммитов — просто стоит на main:
+        # терять нечего, такую снимаем.
+        plain_wt = os.path.join(trees, "otcepleny-pustoy")
+        git("worktree", "add", "--detach", plain_wt, "main", cwd=repo)
+        _age(plain_wt, 5)
+
         rows = {r["name"]: r for r in plan(repo, cwd=repo)}
         take = {n for n, r in rows.items() if r["decision"] == TAKE}
 
@@ -428,6 +582,15 @@ def selftest():
         want_kept("novyy-fayl", WHY_DIRTY)
         want_kept("svezhaya", "живой агент")
         want_kept("molodaya", "не слита")
+        want_kept("rebase-stoit", WHY_BUSY)
+        want_kept("bisect-idet", WHY_BUSY)
+        want_kept("otcepleny", WHY_ORPHAN)
+        if "git branch" not in rows.get("otcepleny", {}).get("why", ""):
+            fails.append("копия с осиротевшими коммитами оставлена, но чем "
+                         "их спасти — не сказано")
+        if "otcepleny-pustoy" not in take:
+            fails.append("отцепленная копия без своих коммитов не названа "
+                         "к снятию: терять в ней нечего, а место она держит")
         if "repo" in take:
             fails.append("главный рабочий каталог назван к снятию")
         if "slitaya" not in take:
@@ -450,6 +613,17 @@ def selftest():
             fails.append("снята копия с незакоммиченными правками")
         if not os.path.exists(os.path.join(new_wt, "chernovik.txt")):
             fails.append("снята копия с неотслеженным файлом")
+        if not os.path.exists(rebase_marker) or not unfinished(rebase_wt):
+            fails.append("снята копия с остановленным rebase — вместе с ней "
+                         "уходит весь прогресс операции")
+        if not unfinished(bisect_wt):
+            fails.append("снята копия с идущим bisect — найденная половина "
+                         "поиска уходит вместе с ней")
+        # Копия — единственное, что держит этот коммит (проверено при заводе
+        # фикстуры: под веткой он не лежит). Уйдёт копия — коммит осиротеет
+        # и пропадёт с ближайшим git gc, а вернуть его будет нечем.
+        if not os.path.exists(os.path.join(loose_wt, "h.txt")):
+            fails.append("снята копия с коммитами, которых не держит ни одна ветка")
         if os.path.exists(merged_wt):
             fails.append("слитая копия осталась на месте: снятия не произошло")
         if not os.path.exists(fresh_wt):
@@ -464,6 +638,13 @@ def selftest():
                          "это чья-то работа")
         if "feature/gryaznaya" not in left:
             fails.append("удалена ветка копии с незакоммиченными правками")
+
+        # Причина отказа git обязана доезжать до отчёта: без неё «НЕ снял —
+        # git отказался:» обрывается на двоеточии ровно в аварийном случае.
+        rc, out = git("branch", "-d", "feature/net-takoy", cwd=repo, check=False)
+        if rc == 0 or not out.strip():
+            fails.append("отказ git возвращается без причины — диагностика "
+                         "пропадает там, где она и нужна")
     except GitError as e:
         fails.append(f"проверка не отработала: {e}")
     finally:
@@ -492,8 +673,9 @@ def main():
             print("  •", line)
         return 1
     if args.selftest:
-        print("Грязные копии не снимаются, свежие не трогаются, "
-              "слитые уходят вместе с ветками.")
+        print("Не снимаются: грязные, с остановленной операцией git, "
+              "с коммитами без ветки и свежие.\nСлитые уходят вместе "
+              "с ветками, брошенные — без них.")
         return 0
 
     try:
