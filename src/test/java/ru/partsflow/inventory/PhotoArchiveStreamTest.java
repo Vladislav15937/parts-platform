@@ -65,9 +65,13 @@ class PhotoArchiveStreamTest extends PostgresTestBase {
     /** Файл-объяснение внутри архива: он есть только тогда, когда есть о чём. */
     private static final String NOTE = "NE-VSE-SNIMKI.txt";
 
+    // Версия закреплена, и образ взят с quay.io: minio/minio с Docker Hub убран —
+    // анонимный pull отвечает «repository does not exist», а на CI, где нет
+    // локального кэша, это ContainerFetchException. Отсюда красная main
+    // 12 сентября 2026. Почему именно так — в docker-compose.yml, там же версия.
     @SuppressWarnings("resource")
     private static final GenericContainer<?> MINIO =
-            new GenericContainer<>("minio/minio:latest")
+            new GenericContainer<>("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
                     .withExposedPorts(9000)
                     .withEnv("MINIO_ROOT_USER", "minioadmin")
                     .withEnv("MINIO_ROOT_PASSWORD", "minioadmin")
