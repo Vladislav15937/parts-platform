@@ -3,14 +3,15 @@ package ru.partsflow.platform.tenant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import org.springframework.beans.factory.annotation.Value;
 
 import javax.sql.DataSource;
-import java.sql.Connection;
-import java.sql.Statement;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
@@ -25,8 +26,9 @@ import java.util.regex.Pattern;
  * <p><b>Порядок жёсткий, и он не косметика.</b>
  *
  * <p>Сначала запись в реестре со статусом {@code PROVISIONING}: она резервирует
- * номер и код компании. Два одновременных создания иначе возьмут один номер —
- * уникальность стережёт база, а не проверка «а нет ли уже такого».
+ * номер и код компании. Номер выдаётся под блокировкой, а код стережёт
+ * уникальный индекс — но не проверка «а нет ли уже такого»
+ * (см. {@link #reserve}).
  *
  * <p>Потом схема и миграции. Всё это время арендатор невидим: релей outbox
  * идёт по {@code ACTIVE}, и полусозданная схема без таблицы {@code outbox}
@@ -61,17 +63,42 @@ public class TenantProvisioning {
     /**
      * Сколько раз пробовать занять номер.
      *
-     * <p>Пять: при заведении ячейки пачкой в несколько потоков столкновение
-     * случается на каждой десятой заявке, но подряд пять раз проиграть надо
-     * очень постараться. Больше — значит прятать настоящую проблему: если
-     * не хватает и пяти, арендаторов создают десятками в секунду, и об этом
-     * лучше узнать отказом.
+     * <p>Пять — и теперь это про тех, кто пишет в реестр <b>мимо</b>
+     * провижининга (накат руками, фикстура теста): свои заявки между собой
+     * больше не сталкиваются вовсе, они выстраиваются в очередь
+     * на {@link #NUMBER_LOCK}.
+     *
+     * <p><b>До 12 сентября 2026 это число было пределом одновременных
+     * заведений, и предел был пять.</b> Прежний расчёт считал столкновения
+     * независимыми — «на каждой десятой заявке, а подряд пять раз проиграть
+     * надо постараться», — но независимыми они не были: проигравший
+     * перечитывал <i>тот же</i> максимум и сталкивался со всеми остальными
+     * проигравшими, то есть за круг побеждал ровно один. Последнему из N
+     * заявок нужно было N попыток, и любая пачка больше пяти получала
+     * «Не удалось занять номер» при бесконечном запасе свободных номеров.
+     * Ловилось это красным CI раз в сотню прогонов (заявок в тесте шесть),
+     * а у клиента вылезло бы на десяти разборках, заводимых подряд.
      */
     private static final int RESERVE_ATTEMPTS = 5;
 
+    /**
+     * Рекомендательная блокировка на выдачу номера.
+     *
+     * <p>Ключ выведен из имени таблицы, а не взят числом с потолка: важно
+     * только, чтобы он совпал у всех, кто выдаёт номера в этой базе, —
+     * а {@code hashtext} от одной строки в одном кластере даёт одно число.
+     *
+     * <p>Блокировка <b>транзакционная</b> (снимается коммитом), а не
+     * сессионная. Сессионная протекла бы через PgBouncer в transaction mode
+     * ровно так же, как протекал бы {@code SET search_path}, — и держалась бы
+     * на чужом соединении до перезапуска.
+     */
+    private static final String NUMBER_LOCK =
+            "SELECT pg_advisory_xact_lock(hashtext('partsflow.tenant_registry.tenant_id'))";
+
     private final JdbcTemplate jdbc;
     private final SchemaGrants grants;
-    private final DataSource dataSource;
+    private final TransactionTemplate numbering;
     private final TenantSchemaMigrator migrator;
     private final PasswordEncoder passwordEncoder;
     private final long cellNumber;
@@ -85,7 +112,16 @@ public class TenantProvisioning {
                               @Value("${app.cell-number:1}") long cellNumber) {
         this.jdbc = new JdbcTemplate(dataSource);
         this.grants = grants;
-        this.dataSource = dataSource;
+        // Своя транзакция на выдачу номера, и своя же — по источнику:
+        // владельцем схем ходят четверо, менеджер транзакций Spring сидит
+        // на рабочем источнике и к этому отношения не имеет.
+        //
+        // REQUIRES_NEW, а не REQUIRED: снаружи транзакции нет и не должно
+        // быть (миграции длиннее любой разумной), но присоединись мы к чужой —
+        // нарушение уникальности пометило бы её на откат, и повтор попытки
+        // писал бы в мёртвую транзакцию.
+        this.numbering = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+        this.numbering.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.migrator = migrator;
         this.passwordEncoder = passwordEncoder;
         if (cellNumber < 1) {
@@ -125,17 +161,31 @@ public class TenantProvisioning {
     /**
      * Занимает номер и код компании.
      *
-     * <p><b>От гонки защищает первичный ключ, а не транзакция.</b> Два
-     * одновременных создания прочитают один и тот же «максимальный плюс один»
-     * при любом уровне изоляции ниже сериализуемого; проигравший получит отказ
-     * на вставке. Это и есть нужное поведение — тот же приём, что с ключом
-     * идемпотентности приёмки: уникальность стережёт база, а не проверка
-     * «нет ли уже такого».
+     * <p><b>Номер выдаётся под блокировкой, а не наперегонки.</b> «Максимальный
+     * плюс один» два одновременных создания читают одинаково при любом уровне
+     * изоляции ниже сериализуемого, и повтор тут не помогает: проигравший
+     * перечитывает тот же максимум и снова сталкивается со всеми остальными
+     * проигравшими. За круг побеждает ровно один, значит пачке из N заявок
+     * нужно N кругов — а кругов отмерено {@link #RESERVE_ATTEMPTS}.
+     * Отсюда отказ «Не удалось занять номер» при полном запасе свободных
+     * номеров: он приходил тем вернее, чем плотнее заводят клиентов.
      *
-     * <p>Оборачивать в {@code @Transactional} тут бессмысленно вдвойне: метод
-     * вызывается из того же бина, и аннотация прошла бы мимо прокси — молча.
+     * <p>Поэтому чтение максимума и вставка идут <b>одной транзакцией под
+     * {@link #NUMBER_LOCK}</b> — то же правило, что у остатка склада:
+     * проверка и изменение не разъезжаются. Ждущий блокировку стоит
+     * в очереди (миллисекунды: внутри два запроса и ни одного похода
+     * наружу), а не сжигает попытку.
+     *
+     * <p>Повтор при этом оставлен: блокировка рекомендательная, и тот, кто
+     * пишет в реестр мимо провижининга, о ней не знает. Но теперь пять
+     * попыток — это пять шансов против <i>чужой</i> записи, а не предел
+     * на число заводимых разом клиентов.
+     *
+     * <p>Нарушение уникальности ловится <b>снаружи</b> транзакции: прежняя
+     * помечена на откат, и перечитывать «занят ли код» в ней нельзя — то же
+     * правило, что у одновременного повтора приёмки.
      */
-    private Reserved reserve(String code, String companyName) {
+    Reserved reserve(String code, String companyName) {
         // Номер ячейки в старшем разряде: у второй ячейки арендаторы начинаются
         // с 2 000 001, а не с единицы. Иначе схемы t_000001 есть в обеих,
         // и дамп из одной нельзя развернуть в другую без переименования —
@@ -143,24 +193,24 @@ public class TenantProvisioning {
         // перебалансировке. Заодно по номеру видно, где искать клиента.
         long base = cellNumber * CELL_RANGE;
 
-        // Номер берётся «максимальный плюс один», и два одновременных создания
-        // прочитают одно и то же при любом уровне изоляции ниже сериализуемого.
-        // Уникальность стережёт первичный ключ — но проигравшему надо дать
-        // второй номер, а не отказ: при заведении ячейки заявки идут пачкой,
-        // и на двухстах арендаторах в четыре потока так терялась каждая
-        // десятая. Замерено нагрузочной пробой: 21 отказ на 195 заявок.
         for (int attempt = 1; attempt <= RESERVE_ATTEMPTS; attempt++) {
-            Long tenantId = jdbc.queryForObject("""
-                    SELECT GREATEST(COALESCE(max(tenant_id), 0), ?) + 1
-                      FROM public.tenant_registry""", Long.class, base);
-            String schema = "t_%06d".formatted(tenantId);
             try {
-                jdbc.update("""
-                        INSERT INTO public.tenant_registry
-                            (tenant_id, schema_name, company_name, code, status)
-                        VALUES (?, ?, ?, ?, 'PROVISIONING')""",
-                        tenantId, schema, companyName, code);
-                return new Reserved(tenantId, schema);
+                return numbering.execute(status -> {
+                    // Блокировка первой инструкцией транзакции: взятая после
+                    // чтения максимума, она защищала бы уже устаревшее число.
+                    jdbc.execute(NUMBER_LOCK);
+
+                    Long tenantId = jdbc.queryForObject("""
+                            SELECT GREATEST(COALESCE(max(tenant_id), 0), ?) + 1
+                              FROM public.tenant_registry""", Long.class, base);
+                    String schema = "t_%06d".formatted(tenantId);
+                    jdbc.update("""
+                            INSERT INTO public.tenant_registry
+                                (tenant_id, schema_name, company_name, code, status)
+                            VALUES (?, ?, ?, ?, 'PROVISIONING')""",
+                            tenantId, schema, companyName, code);
+                    return new Reserved(tenantId, schema);
+                });
             } catch (org.springframework.dao.DuplicateKeyException e) {
                 // Код занят — повторять бессмысленно, номер тут ни при чём.
                 // Это разные причины, и раньше они шли одним сообщением:
@@ -170,12 +220,16 @@ public class TenantProvisioning {
                     throw new IllegalStateException(
                             "Код компании «%s» занят".formatted(code), e);
                 }
-                log.debug("Номер {} увели параллельно, попытка {}", tenantId, attempt);
+                // Под блокировкой этого не бывает: значит в реестр написали
+                // мимо провижининга. Не debug: оператор массового заведения
+                // должен увидеть, что номера уводит кто-то ещё.
+                log.warn("Номер увели мимо провижининга, попытка {} из {}",
+                        attempt, RESERVE_ATTEMPTS);
             }
         }
         throw new IllegalStateException(
-                "Не удалось занять номер за %d попыток: арендаторов создают слишком много сразу"
-                        .formatted(RESERVE_ATTEMPTS));
+                ("Не удалось занять номер за %d попыток: в public.tenant_registry пишет "
+                        + "кто-то мимо провижининга").formatted(RESERVE_ATTEMPTS));
     }
 
     /** Занят ли код: отличает «повторять бессмысленно» от «номер увели». */
