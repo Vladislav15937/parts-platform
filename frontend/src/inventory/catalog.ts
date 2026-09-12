@@ -390,6 +390,49 @@ export const CONDITION: Record<string, string> = {
   REFURBISHED: 'восстановленная',
 };
 
+/**
+ * Оценка состояния: четыре градации с пояснением у каждой.
+ *
+ * <p>Список один на весь фронтенд — карточка, колонка витрины, форма правки.
+ * До задачи 0033 их было три и все разные: форма предлагала
+ * `EXCELLENT/GOOD/FAIR/POOR`, которых сервер не знает вовсе (и правка
+ * отваливалась целиком ответом «Запрос не разобран»), а карточка и колонка
+ * печатали `NO_DEFECTS` как есть.
+ *
+ * <p>Названия взяты дословно из системы, из которой приходят клиенты: они
+ * их узнаю́т, и деталь, переехавшая «Без дефектов», не должна называться
+ * «отличное». Сверяет их с сервером `WordingConsistencyTest` — слово,
+ * поправленное с одной стороны, иначе разошлось бы молча, и выбранное
+ * из списка перестало бы находиться.
+ *
+ * <p>Пояснения — наши слова, а не их текст: чужую формулировку мы
+ * не переносим, а признак выбора назвать надо, иначе приёмщик ставит
+ * оценку наугад.
+ */
+export const QUALITY_GRADES: Array<{ key: string; title: string; hint: string }> = [
+  { key: 'AS_NEW', title: 'Как новая',
+    hint: 'Полностью исправна, следов работы почти нет.' },
+  { key: 'NO_DEFECTS', title: 'Без дефектов',
+    hint: 'Износ минимальный, повреждений нет, ресурса осталось много.' },
+  { key: 'WITH_DEFECTS', title: 'С дефектами',
+    hint: 'Рабочая, но износ заметен: люфты, потёртости, сколы.' },
+  { key: 'NEEDS_REPAIR', title: 'Требует ремонт',
+    hint: 'Сломана или сильно повреждена: под ремонт или на запчасти.' },
+];
+
+/** То же словарём «код → слово»: по нему печатают уже поставленную оценку. */
+export const QUALITY: Record<string, string> = Object.fromEntries(
+  QUALITY_GRADES.map((grade) => [grade.key, grade.title]),
+);
+
+/**
+ * Оценка словом. Пусто — это «не оценена», и подставлять сюда состояние
+ * нельзя: «б/у» отвечает на другой вопрос (задача 0033).
+ */
+export function qualityTitle(grade: string | null): string {
+  return grade === null || grade === '' ? '' : QUALITY[grade] ?? grade;
+}
+
 function text(value: string | number | null): string {
   return value === null || value === undefined ? '' : String(value);
 }
@@ -415,8 +458,10 @@ export const COLUMNS: Column[] = [
   // чем по наименованию, — особенно когда наименований на складе тысяча.
   { key: 'photo', title: 'Превью', value: () => '', image: (r) => r.photoUrl, fixed: true },
   { key: 'title', title: 'Запчасть', sort: 'title', value: (r) => r.title },
-  { key: 'quality', title: 'Оценка состояния',
-    value: (r) => text(r.qualityGrade) || CONDITION[r.condition ?? ''] || '' },
+  // Оценка, а не состояние: «б/у» здесь стояло у всего склада — оценка
+  // не совпадала с сервером ни одним значением, и колонка молча показывала
+  // соседнее поле (задача 0033).
+  { key: 'quality', title: 'Оценка состояния', value: (r) => qualityTitle(r.qualityGrade) },
   { key: 'brand', title: 'Марка', sort: 'brand', value: (r) => text(r.brand) },
   { key: 'model', title: 'Модель', sort: 'model', value: (r) => text(r.model) },
   { key: 'generation', title: 'Поколение донора', value: (r) => text(r.generation) },

@@ -370,12 +370,16 @@ public class CatalogService {
      *
      * <p>Позиция названа {@code p} — выражение годится любому запросу,
      * где алиас таблицы {@code part} тот же.
+     *
+     * <p><b>Слова берутся у {@link QualityGrade}, а не пишутся здесь.</b>
+     * Пока они были написаны здесь, выражение переводило
+     * {@code EXCELLENT/GOOD/FAIR/POOR} — четыре значения, которых
+     * {@code part_quality_grade_ck} не допускает, — и {@code CASE} всегда
+     * уходил в запасную ветку по {@code p.condition}: в колонке «Оценка
+     * состояния» стояло «б/у», и его же предлагал список отбора. Запасной
+     * ветки больше нет: пустая оценка — это «не оценена» (задача 0033).
      */
-    public static final String QUALITY_GRADE = "CASE p.quality_grade"
-            + " WHEN 'EXCELLENT' THEN 'отличное' WHEN 'GOOD' THEN 'хорошее'"
-            + " WHEN 'FAIR' THEN 'удовлетворительное' WHEN 'POOR' THEN 'плохое'"
-            + " ELSE CASE p.condition WHEN 'NEW' THEN 'новая' WHEN 'USED' THEN 'б/у'"
-            + " WHEN 'REFURBISHED' THEN 'восстановленная' END END";
+    public static final String QUALITY_GRADE = QualityGrade.sqlLabel("p");
 
     /**
      * Состояние словами — то же выражение и там, где по нему отбирают,
@@ -963,7 +967,7 @@ public class CatalogService {
         }
 
         String sql = """
-                SELECT p.number, p.public_code, p.title, p.quality_grade, p.condition,
+                SELECT p.number, p.public_code, p.title, p.condition,
                        b.name AS brand, m.name AS model, g.year_from, g.year_to,
                        d.body_code, d.engine_code, d.year,
                        COALESCE(d.legacy_code, d.public_code) AS donor_code,
@@ -986,6 +990,12 @@ public class CatalogService {
                        (SELECT count(*) FROM part_photo ph
                          WHERE ph.part_id = p.id AND ph.status = 'PROCESSED') AS photo_count,
                        """
+                       // Оценка словом, как и стороны ниже: файл открывают
+                       // в Excel и читают глазами, и «NO_DEFECTS» там — та же
+                       // утечка внутреннего представления, что «REAR».
+                       // Выражение одно с колонкой на экране: второй копии
+                       // тут взяться неоткуда.
+                       + QUALITY_GRADE + " AS quality_grade,"
                        + SupplyKinds.sqlLabelWithArrival("sp") + " AS supply_label," + """
                        nullif(concat_ws(', ',
                            CASE d.steering WHEN 'RIGHT' THEN 'правый руль'

@@ -119,7 +119,7 @@ function answer(params: URLSearchParams): unknown {
       { brand: 'Nissan', model: 'Almera' },
       { brand: 'Toyota', model: 'Camry' },
     ],
-    grades: ['б/у', 'отличное'],
+    grades: ['Без дефектов', 'С дефектами'],
   };
   if (params.get('brand') === 'Nissan') {
     return { total: 1, facets, rows: [row(3, 'Фара Nissan Almera 2011 прав.')] };

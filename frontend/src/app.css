@@ -2474,3 +2474,86 @@ hr {
 .donor-view__parts b {
   font-size: 1.1rem;
 }
+
+/*
+ * Оценка состояния на карточке позиции (задача 0033).
+ *
+ * Плашка цветная намеренно: четыре градации различают глазами, а не
+ * чтением, — и разница между «Без дефектов» и «С дефектами» это разница
+ * в том, что покупатель прочитает в объявлении. Цвета от зелёного
+ * к красному, как и сам порядок градаций.
+ */
+.quality {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.quality__mark {
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  color: var(--accent-ink);
+  background: var(--muted);
+}
+
+.quality__mark--AS_NEW,
+.quality__option--AS_NEW { --grade: #15803d; }
+.quality__mark--NO_DEFECTS,
+.quality__option--NO_DEFECTS { --grade: #2e90fa; }
+.quality__mark--WITH_DEFECTS,
+.quality__option--WITH_DEFECTS { --grade: #b54708; }
+.quality__mark--NEEDS_REPAIR,
+.quality__option--NEEDS_REPAIR { --grade: #b91c1c; }
+
+.quality__mark[class*='quality__mark--'] {
+  background: var(--grade, var(--muted));
+}
+
+/* Список занимает всю ширину столбца: пояснение в две строки, а не в одну
+   на элемент ряда. */
+.quality__list {
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.quality__option {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--line-strong);
+  border-left: 4px solid var(--grade, var(--line-strong));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.quality__option.is-chosen {
+  border-color: var(--grade, var(--line-strong));
+  background: var(--surface-soft);
+}
+
+.quality__title {
+  font-weight: 600;
+}
+
+.quality__hint {
+  color: var(--muted);
+  white-space: normal;
+}
+
+.quality__note {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+}

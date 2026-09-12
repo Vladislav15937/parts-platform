@@ -219,7 +219,12 @@ public class CustomerService {
                         + " WHERE c.id = ?",
                 CustomerService::mapDetail, id);
         if (found.isEmpty()) {
-            throw new IllegalArgumentException("Клиент не найден: " + id);
+            // Без номера строки в базе: владелец нажал на строку списка,
+            // а не набирал идентификатор, и «999999» не говорит ему ни что
+            // случилось, ни что делать. Та же правка, что в
+            // PaymentSourceService и DealSourceService.
+            throw new IllegalArgumentException(
+                    "Клиент не найден — обновите страницу, список устарел");
         }
         return found.get(0);
     }
@@ -267,7 +272,9 @@ public class CustomerService {
                 blankToNull(publicNote), blankToNull(note), type,
                 blankToNull(inn), blankToNull(companyName), id);
         if (updated == 0) {
-            throw new IllegalArgumentException("Клиент не найден: " + id);
+            // Без номера строки: см. ту же правку в getDetail выше.
+            throw new IllegalArgumentException(
+                    "Клиент не найден — обновите страницу, список устарел");
         }
         return getDetail(id);
     }
