@@ -66,7 +66,9 @@ harness, называет процесс: `locked claude agent agent-… (pid 67
 **Что снимается.** Копия не своя, не главная, не грязная, не свежая — и:
 
   ветка слита в `main`     — работа уехала, держать копию незачем;
-                             такая ветка после снятия удаляется (`-d`);
+                             такая ветка после снятия удаляется —
+                             `update-ref -d`, а не `git branch -d`:
+                             почему именно так, написано у `drop_branch`;
   агента давно нет         — старше `--давно` суток. Ветка при этом
                              **остаётся**: коммиты, которых нет в `main`,
                              это чья-то работа, и снимаем мы каталог,
@@ -353,6 +355,53 @@ def age_words(hours):
     return f"{int(hours // 24)} сут"
 
 
+def without_hint(text):
+    """Отказ git без его же подсказки «run 'git branch -D …'».
+
+    Подсказку git даёт из лучших побуждений, но у нас она попадала в отчёт
+    дословно и звала человека доломать ровно то, от чего инструмент его
+    бережёт: `-D` сносит ветку, не спрашивая, слита ли она.
+    """
+    return " ".join(line for line in text.splitlines()
+                    if "branch -D" not in line and "sure you want" not in line).strip()
+
+
+def drop_branch(repo, branch):
+    """Удалить ветку слитой копии. Возвращает строки отчёта.
+
+    **Не `git branch -d`.** Тот сверяет слитость с HEAD **того места, откуда
+    его зовут**, а зовут его из главного каталога, который стоит на чём
+    угодно: в настоящем репозитории он в этот момент стоял на ветке доски.
+    Ветка, слитая в `main`, получала «not fully merged» и оставалась
+    навсегда — при том что отчёт заранее обещал «ветка уйдёт вместе
+    с копией». Обещание и поведение обязаны сходиться, а раз слитость
+    доказана нашей же `merged()` по `main`/`origin/main`, ссылка снимается
+    прямо: `update-ref -d` со старым значением — атомарно и без оглядки
+    на чужой HEAD. Ошибиться веткой он не даёт: если ссылка сдвинулась
+    между проверкой и удалением, git откажет.
+
+    Ценой уходит то, что `-d` делал сам, — поэтому оба его отказа
+    воспроизведены здесь явно: слитость сверяется заново, и отдельно
+    проверяется, что ветку не заняла другая копия. `-D` не появляется
+    нигде: он означал бы «снести, даже если я ошибся».
+    """
+    ref = "refs/heads/" + branch
+    rc, sha = git("rev-parse", "--verify", "--quiet", ref, cwd=repo, check=False)
+    sha = sha.strip()
+    if rc or not sha:
+        return [f"    ветка {branch} уже удалена"]
+    if not merged(repo, sha, main_refs(repo)):
+        return [f"    ветка {branch} осталась: перед самым удалением она уже "
+                f"не выглядит слитой в main"]
+    busy = [w["path"] for w in worktrees(repo) if w["branch"] == branch]
+    if busy:
+        return [f"    ветка {branch} осталась: её занимает копия {busy[0]}"]
+    rc, out = git("update-ref", "-d", ref, sha, cwd=repo, check=False)
+    if rc:
+        return [f"    ветка {branch} осталась: {without_hint(out)}"]
+    return [f"    ветка {branch} удалена"]
+
+
 def remove(repo, r):
     """Снять одну копию. Возвращает строки отчёта; ничего не делает молча.
 
@@ -376,23 +425,11 @@ def remove(repo, r):
         git("worktree", "unlock", r["path"], cwd=repo, check=False)
     rc, out = git("worktree", "remove", r["path"], cwd=repo, check=False)
     if rc:
-        return [f"{r['name']}: НЕ снял — git отказался: {out.strip()}"]
+        return [f"{r['name']}: НЕ снял — git отказался: {without_hint(out)}"]
     done.append(f"{r['name']}: снята")
 
     if r["drop_branch"] and r["branch"]:
-        # Слитость перепроверяется своими ссылками на main — и это не лишняя
-        # осторожность: `git branch -d` сверяет слитость с HEAD **того места,
-        # откуда его зовут**, а зовут его из копии, стоящей на произвольной
-        # ветке. Своя проверка отвечает на нужный вопрос («слито в main»),
-        # а `-d` остаётся вторым замком: он откажется удалить неслитое.
-        # -D нет и не будет — он означал бы «снести, даже если я ошибся».
-        if not merged(repo, r["head"], main_refs(repo)):
-            done.append(f"    ветка {r['branch']} осталась: перед самым "
-                        f"удалением она уже не выглядит слитой в main")
-            return done
-        rc, out = git("branch", "-d", r["branch"], cwd=repo, check=False)
-        done.append(f"    ветка {r['branch']} " +
-                    ("удалена" if rc == 0 else f"осталась: {out.strip()}"))
+        done += drop_branch(repo, r["branch"])
     elif r["branch"]:
         done.append(f"    ветка {r['branch']} осталась"
                     + (f": в ней {r['ahead']} коммит(ов) сверх main" if r["ahead"] else ""))
@@ -605,6 +642,19 @@ def selftest():
             fails.append("слитая ветка остаётся после снятия копии — "
                          "ветка после слияния должна исчезать")
 
+        # Главный каталог уводится с main — и это не выдумка ради полноты:
+        # в настоящем репозитории он в этот момент стоял на ветке доски.
+        # `git branch -d` сверяет слитость с HEAD того места, откуда его
+        # зовут, и на этой ветке отказал бы «not fully merged» ветке,
+        # которая в main слита. Дальше вся фаза снятия идёт отсюда.
+        slitaya_sha = git("rev-parse", "refs/heads/feature/slitaya", cwd=repo)[1].strip()
+        git("branch", "storonnyaya", first_sha, cwd=repo)
+        git("switch", "-q", "storonnyaya", cwd=repo)
+        if git_ok("merge-base", "--is-ancestor", slitaya_sha, "HEAD", cwd=repo):
+            fails.append("фикстура «ROOT не на main» не получилась: слитая ветка "
+                         "всё равно в HEAD главного каталога, и проверка ниже "
+                         "ничего не доказывает")
+
         # Снятие целиком: решение может быть верным, а руки — нет.
         for r in [rows[n] for n in sorted(take)]:
             remove(repo, r)
@@ -632,7 +682,10 @@ def selftest():
         # «*» — текущая ветка, «+» — занятая другой копией.
         left = {ln.strip().lstrip("*+ ") for ln in git("branch", cwd=repo)[1].splitlines()}
         if "feature/slitaya" in left:
-            fails.append("слитая ветка не удалена")
+            fails.append("слитая ветка не удалена — а главный каталог стоит "
+                         "не на main, и это ровно тот случай, в котором "
+                         "`git branch -d` отвечает «not fully merged» ветке, "
+                         "слитой в main")
         if "feature/broshennaya" not in left:
             fails.append("удалена неслитая ветка — коммиты, которых нет в main, "
                          "это чья-то работа")
