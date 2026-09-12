@@ -56,6 +56,19 @@ class CompanyReservationTest extends PostgresTestBase {
 
     private static final long TENANT_ID = 152;
 
+    /**
+     * Арендатор, не докатанный до {@code tenant/066}: у него нет таблицы
+     * настроек вовсе.
+     *
+     * <p>Своя схема, а не снос таблицы в {@link #TENANT}: порядок методов
+     * в классе не гарантирован, и снесённая посреди прогона таблица уронила
+     * бы соседние проверки, к правке отношения не имеющие. Отставание здесь —
+     * постоянное состояние схемы, а не шаг одного теста.
+     */
+    private static final String BEHIND = "t_000153";
+
+    private static final long BEHIND_ID = 153;
+
     @Autowired
     private MockMvc mvc;
 
@@ -73,39 +86,66 @@ class CompanyReservationTest extends PostgresTestBase {
 
     private Long warehouse;
     private Long customer;
+    private Long behindWarehouse;
+    private Long behindCustomer;
 
     @BeforeAll
     static void migrate() {
-        provisionTenants(TENANT);
+        provisionTenants(TENANT, BEHIND);
     }
 
     @BeforeEach
     void fixtures() {
-        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = ?", TENANT_ID);
-        jdbc.update("""
-                INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
-                VALUES (?, ?, 'Разборка', 'srokco')""", TENANT_ID, TENANT);
+        registry(TENANT_ID, TENANT, "srokco");
+        registry(BEHIND_ID, BEHIND, "otstal");
 
-        inTenant(() -> {
-            member("vladelec", "Владелец", "OWNER");
-            member("prodavec", "Продавец", "SELLER");
-            member("smotryashchiy", "Смотрящий", "VIEWER");
+        inTenant(TENANT, () -> {
+            members();
             // Настройка живёт между тестами класса, а каждый из них
             // рассчитывает на умолчание: три дня — то, с чем клиент приходит.
             jdbc.update("UPDATE company_setting SET reservation_days = 3");
 
-            if (warehouse == null) {
-                Long branch = jdbc.queryForObject(
-                        "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class);
-                warehouse = jdbc.queryForObject(
-                        "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Ткацкая') RETURNING id",
-                        Long.class, branch);
-                customer = jdbc.queryForObject(
-                        "INSERT INTO customer (name) VALUES ('Автосервис') RETURNING id",
-                        Long.class);
-            }
+            Long branch = jdbc.queryForObject(
+                    "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class);
+            warehouse = jdbc.queryForObject(
+                    "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Ткацкая') RETURNING id",
+                    Long.class, branch);
+            customer = jdbc.queryForObject(
+                    "INSERT INTO customer (name) VALUES ('Автосервис') RETURNING id",
+                    Long.class);
             return null;
         });
+
+        inTenant(BEHIND, () -> {
+            members();
+            // Схема, не докатанная до tenant/066. Снос, а не «строку удалить»:
+            // строку заводит тот же changeset, что и таблицу, — отставание
+            // выглядит именно так и никак иначе.
+            jdbc.update("DROP TABLE IF EXISTS company_setting");
+
+            Long branch = jdbc.queryForObject(
+                    "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class);
+            behindWarehouse = jdbc.queryForObject(
+                    "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Ткацкая') RETURNING id",
+                    Long.class, branch);
+            behindCustomer = jdbc.queryForObject(
+                    "INSERT INTO customer (name) VALUES ('Автосервис') RETURNING id",
+                    Long.class);
+            return null;
+        });
+    }
+
+    private void registry(long id, String schema, String code) {
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = ?", id);
+        jdbc.update("""
+                INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
+                VALUES (?, ?, 'Разборка', ?)""", id, schema, code);
+    }
+
+    private void members() {
+        member("vladelec", "Владелец", "OWNER");
+        member("prodavec", "Продавец", "SELLER");
+        member("smotryashchiy", "Смотрящий", "VIEWER");
     }
 
     @Test
@@ -210,39 +250,118 @@ class CompanyReservationTest extends PostgresTestBase {
                 .andExpect(status().isCreated())
                 .andReturn();
 
-        long dealId = Long.parseLong(result.getResponse().getContentAsString()
-                .replaceAll("^\\{\"deal\":\\{\"id\":(\\d+).*$", "$1"));
+        // Первый «id» в ответе заказа — это id сделки: она стоит первым полем
+        // OrderView. Почему поиском, а не срезом всей строки, — в idOf.
+        long dealId = idOf(result.getResponse().getContentAsString());
         assertThat(reservedUntilOf(dealId))
                 .as("настройка компании вмешалась в срок заказа площадки")
                 .isCloseTo(deadline, within(1, java.time.temporal.ChronoUnit.MINUTES));
     }
 
+    /**
+     * Отставшая схема продаёт как раньше, а не отвечает пятисоткой.
+     *
+     * <p><b>Это главная проверка правки после разбора PR #163.</b> До задачи
+     * 0049 создание сделки на схеме, не докатанной до `tenant/066`, работало
+     * всегда — срок брался константой. Заменив константу чтением таблицы,
+     * мы поставили на путь **каждой** сделки запрос к отношению, которого
+     * у отставшего арендатора нет: `BadSqlGrammarException` уходил в общий
+     * обработчик и превращался в 500 «Внутренняя ошибка» на самом частом
+     * действии продавца. То есть настройка срока резерва уронила бы продажи
+     * там, где раньше всё работало.
+     *
+     * <p>Проверяются три поверхности сразу, потому что ломались бы все три
+     * одинаково: продажа, чтение настроек владельцем и запись. У первых двух
+     * ответ — прежние три дня; у записи — <b>отказ словами</b>, а не молчаливое
+     * «сохранено»: сохранять некуда, и владелец, ушедший со страницы
+     * уверенным, что у него теперь сутки, узнал бы правду по отложенным
+     * на трое сделкам.
+     */
+    @Test
+    @DisplayName("Схема без настроек продаёт как раньше и объясняет, почему не сохраняет")
+    void behindSchemaStillSells() throws Exception {
+        Long partId = part(BEHIND, behindWarehouse, "Фара на отставшей схеме");
+        long dealId = createDeal("otstal", behindCustomer, behindWarehouse, partId);
+
+        assertThat(reservedUntilOf(BEHIND, dealId))
+                .as("сделка на отставшей схеме взяла не прежние три дня")
+                .isCloseTo(Instant.now().plus(Duration.ofDays(3)),
+                        within(1, java.time.temporal.ChronoUnit.HOURS));
+
+        MockHttpSession owner = login("otstal", "vladelec");
+        mvc.perform(get("/api/company/settings").session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reservationDays").value(3));
+
+        mvc.perform(put("/api/company/settings").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reservationDays\":1}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("не накатаны")));
+    }
+
     private long createDeal(Long partId) throws Exception {
-        var result = mvc.perform(post("/api/deals").with(csrf()).session(login("prodavec"))
+        return createDeal("srokco", customer, warehouse, partId);
+    }
+
+    /** Схему выбирает вход: она берётся из сессии, а не из запроса. */
+    private long createDeal(String company, Long buyer, Long stock, Long partId)
+            throws Exception {
+        var result = mvc.perform(post("/api/deals").with(csrf())
+                        .session(login(company, "prodavec"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"customerId":%d,
                                  "items":[{"partId":%d,"quantity":1,"warehouseId":%d}]}"""
-                                .formatted(customer, partId, warehouse)))
+                                .formatted(buyer, partId, stock)))
                 .andExpect(status().isCreated())
                 .andReturn();
-        return Long.parseLong(result.getResponse().getContentAsString()
-                .replaceAll("^\\{\"id\":(\\d+).*$", "$1"));
+        return idOf(result.getResponse().getContentAsString());
+    }
+
+    /**
+     * Номер из ответа достаётся поиском, а не {@code replaceAll("…​.*$")},
+     * и это не вкусовщина.
+     *
+     * <p>{@code getContentAsString()} читает тело <b>не</b> в UTF-8, поэтому
+     * кириллица приезжает побитой, — и среди побитых символов попадается
+     * U+0085 (NEL): «х» в UTF-8 это {@code D1 85}, а прочитанное по байту
+     * даёт {@code Ñ} и {@code NEL}. Для регулярного выражения Java это
+     * <b>разделитель строк</b>, который {@code .} не покрывает, и
+     * {@code ".*$"} перестаёт доходить до конца тела. Поймано живым прогоном:
+     * та же строка разбора работала на «Фара левая до правки» и отказала
+     * на «Фара на отставшей схеме» — разница ровно в букве «х».
+     */
+    private static long idOf(String body) {
+        var found = java.util.regex.Pattern.compile("\"id\"\\s*:\\s*(\\d+)").matcher(body);
+        if (!found.find()) {
+            throw new AssertionError("В ответе нет идентификатора: " + body);
+        }
+        return Long.parseLong(found.group(1));
     }
 
     private Long part(String title) {
-        return inTenant(() -> {
+        return part(TENANT, warehouse, title);
+    }
+
+    private Long part(String schema, Long stock, String title) {
+        return inTenant(schema, () -> {
             Long partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price, cost_price)
                     VALUES (1, ?, 5000, 2000) RETURNING id""", Long.class, title);
             ledger.record(StockMovement.intake(
-                    partId, java.math.BigDecimal.ONE, warehouse, null));
+                    partId, java.math.BigDecimal.ONE, stock, null));
             return partId;
         });
     }
 
     private Instant reservedUntilOf(long dealId) {
-        return inTenant(() -> jdbc.queryForObject(
+        return reservedUntilOf(TENANT, dealId);
+    }
+
+    private Instant reservedUntilOf(String schema, long dealId) {
+        return inTenant(schema, () -> jdbc.queryForObject(
                 "SELECT reserved_until FROM deal WHERE id = ?",
                 java.sql.Timestamp.class, dealId)).toInstant();
     }
@@ -260,18 +379,26 @@ class CompanyReservationTest extends PostgresTestBase {
     }
 
     private MockHttpSession login(String login) throws Exception {
+        return login("srokco", login);
+    }
+
+    private MockHttpSession login(String company, String login) throws Exception {
         var result = mvc.perform(post("/api/auth/login").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"company":"srokco","login":"%s","password":"пароль"}"""
-                                .formatted(login)))
+                                {"company":"%s","login":"%s","password":"пароль"}"""
+                                .formatted(company, login)))
                 .andExpect(status().isOk())
                 .andReturn();
         return (MockHttpSession) result.getRequest().getSession(false);
     }
 
     private <T> T inTenant(Supplier<T> body) {
-        TenantContext.set(TENANT);
+        return inTenant(TENANT, body);
+    }
+
+    private <T> T inTenant(String schema, Supplier<T> body) {
+        TenantContext.set(schema);
         try {
             return transactionTemplate.execute(status -> body.get());
         } finally {
