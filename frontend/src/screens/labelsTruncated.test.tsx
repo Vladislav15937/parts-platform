@@ -54,7 +54,7 @@ describe('этикетки деталей', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Детали' }));
     const field = await waitFor(() =>
-      screen.getByPlaceholderText('фара камри, бампер приора'));
+      screen.getByPlaceholderText('фара камри, № 347, бампер приора'));
     fireEvent.change(field, { target: { value: 'фара' } });
     fireEvent.click(screen.getByRole('button', { name: 'Найти' }));
 

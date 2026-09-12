@@ -43,7 +43,8 @@ final class PartNumberQuery {
      * поиска по одному складу обязаны находить одно и то же**, а неправ
      * всегда тот, о ком не спрашивали.
      */
-    static final String UNION_BRANCH = "\n                          UNION SELECT id FROM part WHERE number = ?";
+    static final String UNION_BRANCH =
+            "\n                          UNION SELECT id FROM part WHERE number = ?";
 
     private PartNumberQuery() {
     }

@@ -242,7 +242,7 @@ export function CatalogScreen({ role }: { role: string }) {
           Поиск
           <input
             value={search}
-            placeholder="номер товара, наименование или номер детали"
+            placeholder="№ позиции, номер товара, наименование или номер детали"
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && change({ q: search })}
           />
