@@ -221,9 +221,33 @@ services:
     expose:
       - "9092"
 
+  # Каталог архива WAL готовится отдельным разовым контейнером, и это
+  # не украшение. Каталог монтируется с хоста, docker создаёт отсутствующий
+  # от root, а archive_command выполняется пользователем postgres (uid 70):
+  # без подготовки архиватор получает «permission denied» на каждый сегмент.
+  # Молча это не проходит — неархивированный WAL накапливается в pg_wal
+  # и рано или поздно останавливает базу, — но узнать об этом в день, когда
+  # понадобилась точка возврата, значит потерять её.
+  #
+  # service_completed_successfully у postgres ниже: без права записи в архив
+  # базу лучше не поднимать вовсе.
+  wal-archive-init:
+    image: postgres:16-alpine
+    user: root
+    volumes:
+      - ${WAL_ARCHIVE_DIR:-${BACKUP_DIR:-./backups/${APP_CELL:-cell01}}/wal}:/wal-archive
+    command:
+      - sh
+      - -c
+      - mkdir -p /wal-archive && chown postgres:postgres /wal-archive && chmod 750 /wal-archive
+    restart: "no"
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    depends_on:
+      wal-archive-init:
+        condition: service_completed_successfully
     # Разделяемая память под параллельные планы. Умолчание Docker — 64 МБ,
     # и на ячейке в 500 арендаторов этого не хватает: обход системного
     # каталога идёт параллельными воркерами, и pg_dump всей базы падает
@@ -240,14 +264,47 @@ services:
     # Дамп по одному арендатору (ops/backup.sh) работал и без этого: он берёт
     # блокировки только своей схемы. Ломается ровно то, чем восстанавливают
     # ячейку целиком после потери диска.
-    command: >
-      postgres -c max_locks_per_transaction=512
+    #
+    # Архивация WAL — вторая половина бэкапа, и без неё точка возврата равна
+    # последнему ночному дампу: отказ в 18:00 стоил бы клиенту смены —
+    # принятых деталей, проданных позиций, принятых денег. Дампы по схемам
+    # при этом остаются: они возвращают ОДНОГО клиента, не трогая остальных
+    # (задача 0083), а архив WAL догоняет любой из них до минуты перед
+    # поломкой. Механизма два, и заменить один другим нельзя.
+    #
+    # Список, а не строка: archive_command содержит и пробелы, и `&&`,
+    # и разбор строки compose однажды разложит её не по тем аргументам.
+    # Сама команда — отдельный скрипт (ops/archive-wal.sh): ей нужны
+    # атомарность, сжатие и честный ответ на повтор, а это не одна строка.
+    #
+    # archive_timeout=300 — предел того, что теряется при гибели диска
+    # вместе с незакрытым сегментом: без него спокойная ячейка может
+    # не закрыть сегмент часами, и «точка возврата до минуты» превратится
+    # в «до утра». Плата — файл каждые пять минут, и он почти пустой;
+    # поэтому архив сжимается (см. скрипт).
+    command:
+      - postgres
+      - -c
+      - max_locks_per_transaction=512
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=/usr/local/bin/archive-wal.sh %p %f
+      - -c
+      - archive_timeout=300
     environment:
       POSTGRES_DB: parts
       POSTGRES_USER: ${DB_USER:?укажите DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?укажите DB_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Архив рядом с дампами, а не в томе базы: том умирает вместе с диском
+      # ячейки, а офсайт-шаг ops/backup.sh увозит наружу весь каталог бэкапов
+      # целиком — то есть архив уезжает вместе с дампами, без отдельной
+      # настройки. Путь совпадает с тем, что считают скрипты ops/: разойдясь,
+      # они начнут чистить и проверять не тот каталог, в который пишет база.
+      - ${WAL_ARCHIVE_DIR:-${BACKUP_DIR:-./backups/${APP_CELL:-cell01}}/wal}:/wal-archive
+      - ./ops/archive-wal.sh:/usr/local/bin/archive-wal.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d parts"]
       interval: 5s
