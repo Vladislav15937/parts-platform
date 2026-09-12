@@ -1,10 +1,10 @@
 ---
 id: 0063
 title: MinIO берётся плавающим `latest` — и от этого красная `main`
-status: новая
-assignee: —
+status: слита
+assignee: coder
 source: красная `main` 12 сентября 2026
-pr: —
+pr: 149
 ---
 
 ## Что случилось
