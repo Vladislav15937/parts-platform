@@ -52,10 +52,15 @@ class PhotoMigrationTest extends PostgresTestBase {
      * а не то, что метод позвался. Без своего MinIO контекст этого теста
      * смотрит в пустой localhost:9000 — локально там оказывается хранилище
      * из compose разработки, а на CI ничего. Ровно на этом прогон и покраснел.
+     *
+     * <p>Версия закреплена, и образ взят с quay.io: minio/minio с Docker Hub
+     * убран — анонимный pull отвечает «repository does not exist», а на CI,
+     * где нет локального кэша, это ContainerFetchException. Отсюда красная
+     * main 12 сентября 2026. Почему именно так — в docker-compose.yml.
      */
     @SuppressWarnings("resource")
     private static final GenericContainer<?> MINIO =
-            new GenericContainer<>("minio/minio:latest")
+            new GenericContainer<>("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
                     .withExposedPorts(9000)
                     .withEnv("MINIO_ROOT_USER", "minioadmin")
                     .withEnv("MINIO_ROOT_PASSWORD", "minioadmin")
