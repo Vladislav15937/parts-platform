@@ -148,6 +148,54 @@ class RetailCustomerTest extends PostgresTestBase {
                                 "Изменён контрагент с Частное лицо на Евгений Гридин")));
     }
 
+    /**
+     * Сделка, у которой контрагента нет вовсе, в истории зовётся тем же
+     * словом, что и везде, — «Частное лицо» (задача 0062, решение владельца
+     * продукта от 12 сентября 2026).
+     *
+     * <p>До этого история писала «Изменён контрагент с «без клиента» на …» —
+     * четвёртое написание одного и того же и единственное на сервере.
+     * Читают эту строку через недели, при разборе долга или возврата, и
+     * «без клиента» там выглядит как утраченные данные, а не как продажа,
+     * которую не оформляли на определённого покупателя.
+     *
+     * <p>Заказ с площадки — единственный путь завести такую сделку сегодня:
+     * обычной продаже сервер подставляет розничного контрагента сам.
+     */
+    @Test
+    @DisplayName("История сделки без контрагента называет его «Частным лицом»")
+    void historyCallsMissingCustomerRetail() throws Exception {
+        MockHttpSession session = login("seller");
+        Long partId = partWithStock("Бампер заказной", 1);
+
+        var order = mvc.perform(post("/api/deals/orders").session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"marketplace":"DROM","orderNo":"301-000-0062",
+                                 "items":[{"partId":%d,"quantity":1,"warehouseId":%d}]}"""
+                                .formatted(partId, warehouse)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.deal.customerId").doesNotExist())
+                .andReturn();
+        long dealId = com.jayway.jsonpath.JsonPath.<Number>read(
+                order.getResponse().getContentAsString(), "$.deal.id").longValue();
+
+        Long real = inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO customer (name) VALUES ('Ольга Покупательница') RETURNING id",
+                Long.class));
+
+        mvc.perform(post("/api/deals/" + dealId + "/customer").session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"customerId\":%d}".formatted(real)))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/api/deals/" + dealId + "/history").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.eventType == 'CUSTOMER_CHANGED')].message")
+                        .value(org.hamcrest.Matchers.hasItem(
+                                "Изменён контрагент с Частное лицо на Ольга Покупательница")));
+    }
+
     @Test
     @DisplayName("По оплаченной сделке контрагента не меняют — словами, а не пятисоткой")
     void customerIsNotChangedWhenMoneyMoved() throws Exception {

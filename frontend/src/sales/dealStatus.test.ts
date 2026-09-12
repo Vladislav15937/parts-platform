@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   DEAL_ITEM_STATUS_NAMES,
   DEAL_STATUS_NAMES,
+  NO_CUSTOMER_NAME,
   SHARED_DEAL_STATUS_NAMES,
+  customerName,
   dealItemStatusName,
   dealStatusName,
   dealStatusNameLower,
@@ -118,5 +120,54 @@ describe('копий словаря нет', () => {
       + ' как уже расходились «Клиенты» и экран продавца.'
       + ' Зовите dealStatusName / dealItemStatusName / sharedDealStatusName:',
     ).toEqual([]);
+  });
+});
+
+/**
+ * Пустой клиент называется одним словом (задача 0062).
+ *
+ * <p>Разошлись эти слова тем же способом, что и словари состояний: каждый
+ * экран написал свой `??`. Найденных было четыре — «Без клиента» в реестре
+ * сделок и в кассе, «Частное лицо» в возвратах, «не указан» в карточке
+ * сделки, — и трёх из них в списке задачи не было: их дал перебор.
+ *
+ * <p>Поэтому здесь перебор, а не проверка функции: функция возвращает то,
+ * что в ней написано, и следующее написание заведётся снова на экране.
+ * Ищется подстановка слова вместо пустого имени — `?? '…'` и
+ * `=== null ? '…'`; условный **показ** (`customerName !== null && …`)
+ * не ловится намеренно: он ничего не называет, а прячет строку, и на доске
+ * сделок это отдельное решение, о котором задача не говорит.
+ */
+describe('пустой клиент зовётся одним словом', () => {
+  const SOURCES = import.meta.glob('../**/*.{ts,tsx}', {
+    query: '?raw', eager: true, import: 'default',
+  }) as Record<string, string>;
+
+  const OWN_WORD = /customerName[^\n]*(\?\?\s*['"]|===?\s*null\s*\?\s*['"])/;
+
+  it('слово подставляется только в dealStatus.ts', () => {
+    expect(Object.keys(SOURCES).length, 'перебор не нашёл ни одного исходника')
+      .toBeGreaterThan(20);
+
+    const guilty = Object.entries(SOURCES)
+      .filter(([path]) => !/(^|\/)dealStatus\.(ts|test\.ts)$/.test(path))
+      .filter(([, text]) => text.split('\n').some((line) => OWN_WORD.test(line)))
+      .map(([path]) => path.replace('../', 'frontend/src/'))
+      .sort();
+
+    expect(
+      guilty,
+      'здесь своё слово для покупателя, которого не проставили, — а оно одно'
+      + ' на всю систему («Частное лицо», решение владельца от 12 сентября'
+      + ' 2026). Зовите customerName() из sales/dealStatus.ts:',
+    ).toEqual([]);
+  });
+
+  it('пусто — «Частное лицо», а имя доезжает как есть', () => {
+    expect(customerName(null)).toBe(NO_CUSTOMER_NAME);
+    expect(customerName(undefined)).toBe(NO_CUSTOMER_NAME);
+    // Контрагент с именем не переименовывается по дороге — в том числе
+    // сам розничный, у которого это имя настоящее.
+    expect(customerName('Автосервис на Русской')).toBe('Автосервис на Русской');
   });
 });

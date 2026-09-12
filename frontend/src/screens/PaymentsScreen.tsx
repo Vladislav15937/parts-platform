@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { PAYMENT_FUNNEL, endOfDay, listPayments, startOfDay } from '../sales/sales';
+import { customerName } from '../sales/dealStatus';
 import type { PaymentFunnelKey, PaymentListRow, PaymentsPage } from '../sales/sales';
 import { count, shown } from '../ui/plural';
 import { shortDate } from '../ui/shortDate';
@@ -190,9 +191,13 @@ function Row({
   return (
     <tr>
       <td>{shortDate(row.paidAt)}</td>
-      {/* У возврата по заказу с площадки клиента нет вовсе: площадка
-          покупателя не называет. */}
-      <td>{row.customerName ?? 'Без клиента'}</td>
+      {/* Платёж без клиента — это деньги по сделке, которую не оформляли
+          на определённого покупателя (розница, возврат по заказу площадки).
+          Зовётся он тем же словом, что и везде: «Частное лицо» (решение
+          владельца от 12 сентября 2026, задача 0062). Прежнее «Без клиента»
+          владелец, сводящий кассу, читал как другой смысл, чем «Частное
+          лицо» в реестре возвратов, — и шёл искать разницу, которой нет. */}
+      <td>{customerName(row.customerName)}</td>
       <td>
         {dealId === null ? (
           /* Платёж без сделки — это пополнение или выдача с лицевого счёта,
