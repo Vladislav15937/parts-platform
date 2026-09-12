@@ -58,21 +58,21 @@ import java.util.Map;
 @RequestMapping("/api/deals")
 public class SalesController {
 
-    /** Сколько держим резерв, если продавец не указал срок. */
-    private static final Duration DEFAULT_RESERVATION = Duration.ofDays(3);
-
     private static final String SELLS = "hasAnyRole('OWNER','MANAGER','SELLER')";
     private static final String ISSUES = "hasAnyRole('OWNER','MANAGER','SELLER','STOREKEEPER')";
 
     private final SalesService sales;
     private final PartService parts;
     private final ru.partsflow.platform.security.MemberService members;
+    private final ru.partsflow.platform.settings.CompanySettingsService companySettings;
 
     public SalesController(SalesService sales, PartService parts,
-                           ru.partsflow.platform.security.MemberService members) {
+                           ru.partsflow.platform.security.MemberService members,
+                           ru.partsflow.platform.settings.CompanySettingsService companySettings) {
         this.sales = sales;
         this.parts = parts;
         this.members = members;
+        this.companySettings = companySettings;
     }
 
     /**
@@ -81,13 +81,21 @@ public class SalesController {
      * <p>Черновика без резерва нет: продавец говорит с клиентом по телефону,
      * и деталь надо отложить в тот же момент, иначе её продаст сосед
      * за соседним столом.
+     *
+     * <p><b>Срок по умолчанию задаёт владелец, а не сборка</b> (задача 0049):
+     * трое суток подходили не всем — разборка с ходовыми деталями держит
+     * резерв сутки, иначе полка стоит, а разборка на редкие машины неделю,
+     * потому что клиент едет из другого города. Настройка читается на каждой
+     * сделке: поменянная сегодня, она действует со следующей продажи,
+     * а уже открытые сделки свой срок не меняют — он в них проставлен.
      */
     @PostMapping
     @PreAuthorize(SELLS)
     public ResponseEntity<DealView> create(@Valid @RequestBody CreateRequest request) {
         Instant until = request.reservedUntil() != null
                 ? request.reservedUntil()
-                : Instant.now().plus(DEFAULT_RESERVATION);
+                : Instant.now().plus(
+                        Duration.ofDays(companySettings.read().reservationDays()));
 
         Deal deal = sales.createReserved(
                 request.customerId(), CurrentUser.memberId(), until, request.dealSourceId(),
