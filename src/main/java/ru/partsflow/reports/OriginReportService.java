@@ -418,7 +418,7 @@ public class OriginReportService {
         args.add(limit + 1);
 
         List<Item> rows = jdbc.query("""
-                SELECT p.id, p.public_code, k.name AS kind, p.title,
+                SELECT p.id, p.number, p.public_code, k.name AS kind, p.title,
                 """ + "       " + tab.quantity + " AS qty,\n"
                 // Цена и себестоимость проданного — из сделки, а не из карточки:
                 // разделитель явной строкой, иначе текстовый блок съест отступ.
@@ -435,6 +435,7 @@ public class OriginReportService {
                 + " LIMIT ?",
                 (rs, i) -> new Item(
                         rs.getLong("id"),
+                        rs.getLong("number"),
                         rs.getString("public_code"),
                         rs.getString("kind"),
                         rs.getString("title"),
@@ -484,6 +485,9 @@ public class OriginReportService {
     /**
      * Строка вкладки.
      *
+     * @param number     порядковый номер позиции — тот, которым её называют
+     *                   вслух («посмотри позицию 347»). Общий с витриной
+     *                   и вкладкой колёс: нумерация у товара одна
      * @param publicCode номер, по которому позицию видно на витрине; внутренний
      *                   {@code id} владельцу не говорит ничего
      * @param kind       вид детали из справочника. Пусто — наименование
@@ -499,7 +503,7 @@ public class OriginReportService {
      * @param supplyNumber номер партии, которой позиция пришла
      * @param date       день, когда позицию завели
      */
-    public record Item(long partId, String publicCode, String kind, String title,
+    public record Item(long partId, long number, String publicCode, String kind, String title,
                        BigDecimal quantity, BigDecimal price, BigDecimal costPrice,
                        String supplyNumber, LocalDate date) {
     }

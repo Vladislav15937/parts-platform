@@ -1059,7 +1059,14 @@ export function ReportsScreen({ canRead }: Props) {
               <table className="report">
                 <thead>
                   <tr>
-                    <th>Номер</th>
+                    {/* Порядковый номер первым, как на витрине склада
+                        и на вкладке колёс: владелец, увидев позицию здесь,
+                        называет её работнику вслух. Соседняя колонка
+                        называется «Номер товара» тем же словом, что везде, —
+                        рядом с «№ позиции» прежнее «Номер» не говорит,
+                        какой из двух номеров в ней стоит. */}
+                    <th className="num">№ позиции</th>
+                    <th>Номер товара</th>
                     <th>Тип запчасти</th>
                     <th>Наименование</th>
                     <th className="num">Количество</th>
@@ -1075,6 +1082,7 @@ export function ReportsScreen({ canRead }: Props) {
                 <tbody>
                   {items.map((row) => (
                     <tr key={row.partId}>
+                      <td className="num">{row.number}</td>
                       <td>{row.publicCode ?? '—'}</td>
                       {/* Прочерк, а не пусто: наименование не распознано,
                           и это правда о карточке. */}

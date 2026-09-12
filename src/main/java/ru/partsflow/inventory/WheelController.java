@@ -60,8 +60,11 @@ public class WheelController {
                      @RequestParam(defaultValue = "false") boolean missing,
                      @RequestParam(required = false) List<String> filter,
                      @RequestParam(required = false) List<String> find,
-                     @RequestParam(defaultValue = "set") String sort,
-                     @RequestParam(defaultValue = "true") boolean desc,
+                     // Умолчание то же, что у витрины склада: номер позиции
+                     // по возрастанию. Экран присылает его явно, но запрос
+                     // без параметров обязан отвечать тем же порядком.
+                     @RequestParam(defaultValue = "number") String sort,
+                     @RequestParam(defaultValue = "false") boolean desc,
                      @RequestParam(defaultValue = "0") int page,
                      @RequestParam(defaultValue = "50") int size) {
 
@@ -93,8 +96,8 @@ public class WheelController {
                        @RequestParam(defaultValue = "false") boolean missing,
                        @RequestParam(required = false) List<String> filter,
                        @RequestParam(required = false) List<String> find,
-                       @RequestParam(defaultValue = "set") String sort,
-                       @RequestParam(defaultValue = "true") boolean desc,
+                       @RequestParam(defaultValue = "number") String sort,
+                       @RequestParam(defaultValue = "false") boolean desc,
                        jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
 
         List<CatalogService.Warehouse> found = catalog.warehouses();

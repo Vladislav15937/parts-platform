@@ -1038,7 +1038,7 @@ public class PartService {
         }
         args.add(limit);
         List<StockRow> rows = jdbc.query("""
-                SELECT p.id, p.public_code, p.title, p.price, p.status,
+                SELECT p.id, p.number, p.public_code, p.title, p.price, p.status,
                        w.id AS warehouse_id, w.name AS warehouse_name,
                        c.code AS cell_code,
                        s.qty, s.qty_reserved, s.qty - s.qty_reserved AS qty_available
@@ -1062,6 +1062,7 @@ public class PartService {
                 + "\n LIMIT ?",
                 (rs, i) -> new StockRow(
                         rs.getLong("id"),
+                        rs.getLong("number"),
                         rs.getString("public_code"),
                         rs.getString("title"),
                         rs.getBigDecimal("price"),
@@ -1316,8 +1317,14 @@ public class PartService {
     public record VehicleOption(String brand, String model) {
     }
 
-    /** Строка выдачи продавцу: деталь на конкретном складе. */
-    public record StockRow(Long partId, String publicCode, String title, BigDecimal price,
+    /**
+     * Строка выдачи продавцу: деталь на конкретном складе.
+     *
+     * @param number порядковый номер позиции — тот, которым её называют вслух.
+     *               Продавец как раз и есть тот, кто произносит его в трубку:
+     *               публичный код («7584A8FEAE3D») по телефону не диктуют
+     */
+    public record StockRow(Long partId, long number, String publicCode, String title, BigDecimal price,
                            String status, Long warehouseId, String warehouseName,
                            String cellCode, BigDecimal qty, BigDecimal qtyReserved,
                            BigDecimal qtyAvailable) {
