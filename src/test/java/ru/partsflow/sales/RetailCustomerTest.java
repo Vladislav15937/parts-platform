@@ -149,6 +149,48 @@ class RetailCustomerTest extends PostgresTestBase {
     }
 
     /**
+     * Контрагент без имени зовётся в истории словом, а не номером строки
+     * в базе (задача 0065).
+     *
+     * <p>`customer.name` в схеме {@code NULL}-уемая, и такая строка
+     * приезжает в историю как есть: «Изменён контрагент с null на Гридина»
+     * — а соседняя ветка того же выражения подставляла «клиента 42», то есть
+     * прямо номер строки. Читают эту строку через недели, при разборе долга
+     * или возврата: по номеру из базы не найти никого, он меняется при
+     * переносе и не переживает восстановления в другую схему.
+     *
+     * <p>Через приложение такой контрагент сегодня не заводится
+     * ({@code CustomerService.create} требует имени), поэтому строка
+     * ставится прямым запросом — так же, как она приезжает переносом
+     * или правкой мимо интерфейса.
+     */
+    @Test
+    @DisplayName("Контрагент без имени в истории — «Частное лицо», а не номер строки")
+    void historyCallsNamelessCustomerRetail() throws Exception {
+        MockHttpSession session = login("seller");
+        Long partId = partWithStock("Стойка безымянная", 1);
+
+        Long nameless = inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO customer (name) VALUES (NULL) RETURNING id", Long.class));
+        long dealId = dealOf(session, partId, nameless);
+
+        Long real = inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO customer (name) VALUES ('Игорь Назвавшийся') RETURNING id",
+                Long.class));
+
+        mvc.perform(post("/api/deals/" + dealId + "/customer").session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"customerId\":%d}".formatted(real)))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/api/deals/" + dealId + "/history").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.eventType == 'CUSTOMER_CHANGED')].message")
+                        .value(org.hamcrest.Matchers.hasItem(
+                                "Изменён контрагент с Частное лицо на Игорь Назвавшийся")));
+    }
+
+    /**
      * Сделка, у которой контрагента нет вовсе, в истории зовётся тем же
      * словом, что и везде, — «Частное лицо» (задача 0062, решение владельца
      * продукта от 12 сентября 2026).
@@ -304,6 +346,19 @@ class RetailCustomerTest extends PostgresTestBase {
                         .content("""
                                 {"items":[{"partId":%d,"quantity":1,"warehouseId":%d}]}"""
                                 .formatted(partId, warehouse)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        return idOf(result.getResponse().getContentAsString());
+    }
+
+    /** Сделка на названного контрагента: без него сервер подставит своего. */
+    private long dealOf(MockHttpSession session, Long partId, Long customerId) throws Exception {
+        var result = mvc.perform(post("/api/deals").session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customerId":%d,
+                                 "items":[{"partId":%d,"quantity":1,"warehouseId":%d}]}"""
+                                .formatted(customerId, partId, warehouse)))
                 .andExpect(status().isCreated())
                 .andReturn();
         return idOf(result.getResponse().getContentAsString());
