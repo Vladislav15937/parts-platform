@@ -206,6 +206,15 @@ public class CatalogService {
             // в полный перебор 35 841 строки: 744 мс на запрос и до 4,3 секунды
             // под нагрузкой. С UNION каждая ветка идёт своим индексом.
             // Замерено: 744 мс → 38 мс.
+            //
+            // Пятая ветка — номер позиции, и она точная (задача 0064). Номер
+            // завели затем, чтобы его называли вслух, а найти по нему было
+            // нельзя: «посмотри позицию 347» собеседник мог только долистать.
+            // Ветка появляется, только когда весь запрос — число: «фара 347»
+            // это по-прежнему текст. Подстрочного сравнения тут быть не может,
+            // иначе «347» притащило бы 1347, 3470 и 2347 — шум того же рода,
+            // от которого номер и спасает.
+            Long number = PartNumberQuery.parse(query);
             where.append("""
 
                      AND p.id IN (
@@ -216,12 +225,16 @@ public class CatalogService {
                                            || coalesce(description, '') || ' '
                                            || coalesce(marking, ''))
                                        @@ plainto_tsquery('russian', ?)
-                          UNION SELECT part_id FROM part_oem WHERE raw_number ILIKE ?)""");
+                          UNION SELECT part_id FROM part_oem WHERE raw_number ILIKE ?"""
+                    + (number == null ? "" : PartNumberQuery.UNION_BRANCH) + ")");
             String like = "%" + query.strip() + "%";
             args.add(like);
             args.add(like);
             args.add(query.strip());
             args.add(like);
+            if (number != null) {
+                args.add(number);
+            }
         }
         if (!withMissing) {
             where.append(" AND p.qty_on_hand > 0");

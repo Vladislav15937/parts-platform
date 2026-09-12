@@ -341,11 +341,26 @@ public class WheelService {
                 // расширяют его. Иначе «Dunlop зимняя» вернуло бы вдобавок
                 // все летние Dunlop и все зимние чужих марок — выдачу,
                 // которую продавец читает глазами.
+                // Номер позиции — третий способ назвать ту же строку (задача
+                // 0064), и он точный: «347» это позиция 347, а не всё, где эти
+                // три цифры встретились. Считается по всему остатку запроса,
+                // а не по отдельному слову: «dunlop 347» — это Dunlop с 347
+                // в заголовке, и номером позиции там названо не всё. Те же
+                // две поверхности рядом должны отвечать одинаково.
+                Long number = PartNumberQuery.parse(size.text());
                 for (String word : size.text().trim().split("\\s+")) {
-                    where.append(" AND (p.public_code ILIKE ? OR p.title ILIKE ?)");
                     String like = "%" + word + "%";
-                    args.add(like);
-                    args.add(like);
+                    if (number == null) {
+                        where.append(" AND (p.public_code ILIKE ? OR p.title ILIKE ?)");
+                        args.add(like);
+                        args.add(like);
+                    } else {
+                        where.append(" AND (p.public_code ILIKE ? OR p.title ILIKE ?"
+                                + " OR p.number = ?)");
+                        args.add(like);
+                        args.add(like);
+                        args.add(number);
+                    }
                 }
             }
         }
