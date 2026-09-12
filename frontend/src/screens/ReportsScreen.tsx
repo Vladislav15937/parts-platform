@@ -47,6 +47,7 @@ import { OriginCharts } from './OriginCharts';
 import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
 import { paymentSourceTypeLabel } from '../sales/sales';
+import { customerName } from '../sales/dealStatus';
 import { useMounted } from '../ui/useMounted';
 
 /**
@@ -607,7 +608,13 @@ export function ReportsScreen({ canRead }: Props) {
                 {settlements.rows.map((row) => (
                   <tr key={row.customerId}>
                     <td>
-                      {row.customerName ?? `клиент ${row.customerId}`}
+                      {/* Не «клиент 42»: номер строки в базе человеку
+                          не говорит ничего — по нему не найти никого
+                          ни поиском, ни в разговоре, и он не переживает
+                          переноса. Клиент без имени и есть розничный
+                          покупатель, которого не заводили карточкой,
+                          и зовётся он тем же словом, что везде. */}
+                      {customerName(row.customerName)}
                       {row.phone !== null && <span className="muted"> · {row.phone}</span>}
                       {/* Строка розничного контрагента складывает долги
                           разных людей с улицы. Без пометки владелец читает
