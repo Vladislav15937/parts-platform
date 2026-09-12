@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Накат миграций на схемы уже заведённых арендаторов.
@@ -49,6 +50,9 @@ public class TenantMigrations {
     private static final Logger log = LoggerFactory.getLogger(TenantMigrations.class);
 
     private static final String LOCK = "tenant-migrations";
+
+    /** Сколько отставших схем называть по имени: дальше — числом. */
+    private static final int NAMED = 3;
 
     /**
      * Пятьсот схем по секунде — это восемь минут; час с запасом на случай,
@@ -289,6 +293,24 @@ public class TenantMigrations {
                 UPDATE public.tenant_registry
                    SET schema_version = ?, migrated_at = now()
                  WHERE tenant_id = ?""", version, tenantId);
+    }
+
+    /**
+     * Имена отставших схем для человека: первые три, остальные числом.
+     *
+     * <p>Девять схем в строку — это строка, которую не читают; первых трёх
+     * хватает, чтобы понять, кого смотреть, а число остальных — чтобы понять
+     * масштаб. Здесь, а не у каждого спрашивающего: об отставании говорят
+     * две поверхности — строка в логе при старте и готовность приложения, —
+     * и разойтись они не должны.
+     */
+    public static String namesOf(List<TenantView> behind) {
+        String first = behind.stream()
+                .limit(NAMED)
+                .map(TenantView::schema)
+                .collect(Collectors.joining(", "));
+        int rest = behind.size() - Math.min(NAMED, behind.size());
+        return rest == 0 ? first : first + " и ещё " + rest;
     }
 
     /** Причина отказа лежит в самом глубоком исключении, а не в обёртке. */

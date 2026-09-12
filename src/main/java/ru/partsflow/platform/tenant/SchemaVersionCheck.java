@@ -7,7 +7,6 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * Говорит при старте, что код рассчитывает на схему новее накатанной.
@@ -42,13 +41,6 @@ import java.util.stream.Collectors;
 public class SchemaVersionCheck implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(SchemaVersionCheck.class);
-
-    /**
-     * Сколько имён называть. Девять схем в строку — это строка, которую
-     * не читают; первых трёх хватает, чтобы понять, кого смотреть, а число
-     * остальных — чтобы понять масштаб.
-     */
-    private static final int NAMED = 3;
 
     private final TenantMigrations migrations;
 
@@ -86,15 +78,7 @@ public class SchemaVersionCheck implements ApplicationRunner {
 
         log.warn("Схемы арендаторов отстали от кода: {} из {} ({}). "
                         + "Ожидается {}. Накатите: ops/migrate-tenants.sh",
-                behind.size(), status.tenants(), names(behind), status.expectedVersion());
-    }
-
-    private static String names(List<TenantMigrations.TenantView> behind) {
-        String first = behind.stream()
-                .limit(NAMED)
-                .map(TenantMigrations.TenantView::schema)
-                .collect(Collectors.joining(", "));
-        int rest = behind.size() - Math.min(NAMED, behind.size());
-        return rest == 0 ? first : first + " и ещё " + rest;
+                behind.size(), status.tenants(), TenantMigrations.namesOf(behind),
+                status.expectedVersion());
     }
 }

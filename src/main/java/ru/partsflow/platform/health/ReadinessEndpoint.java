@@ -13,7 +13,6 @@ import ru.partsflow.platform.tenant.JournalProtection;
 import ru.partsflow.platform.tenant.TenantMigrations;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * Готово ли приложение обслуживать людей — машинно, а не по хвосту лога.
@@ -63,9 +62,6 @@ import java.util.stream.Collectors;
 @Component
 @Endpoint(id = "readiness")
 public class ReadinessEndpoint {
-
-    /** Сколько отставших схем называть по имени: дальше — числом. */
-    private static final int NAMED = 3;
 
     private final JdbcTemplate jdbc;
     private final TenantMigrations migrations;
@@ -157,7 +153,7 @@ public class ReadinessEndpoint {
         return new Check("schemas", false,
                 "Схемы арендаторов позади версии %s: %d из %d (%s). Накатите: "
                         .formatted(lag.expectedVersion(), lag.behind().size(), lag.tenants(),
-                                names(lag.behind()))
+                                TenantMigrations.namesOf(lag.behind()))
                         + "ops/migrate-tenants.sh");
     }
 
@@ -229,15 +225,6 @@ public class ReadinessEndpoint {
                                 + "Prometheus в зависимостях либо адрес убран из "
                                 + "management.endpoints.web.exposure.include. Тревоги ячейки "
                                 + "при этом молчат, а выглядит это как исправная система");
-    }
-
-    private static String names(List<TenantMigrations.TenantView> behind) {
-        String first = behind.stream()
-                .limit(NAMED)
-                .map(TenantMigrations.TenantView::schema)
-                .collect(Collectors.joining(", "));
-        int rest = behind.size() - Math.min(NAMED, behind.size());
-        return rest == 0 ? first : first + " и ещё " + rest;
     }
 
     /**
