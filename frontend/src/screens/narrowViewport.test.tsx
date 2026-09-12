@@ -537,6 +537,7 @@ const RESPONSES: Array<[string, unknown]> = [
   ['/api/deals/services', []],
   ['/api/deals/orders', []],
   ['/api/payment-sources', []],
+  ['/api/company/settings', { reservationDays: 3 }],
   ['/api/payments', PAYMENT_REGISTRY],
   ['/api/part-names/kinds', []],
   ['/api/stock/moves', []],
@@ -845,6 +846,31 @@ describe('на телефоне ни один раздел не уезжает �
       + `уже 200 пикселей при экране ${PHONE_WIDTH}. В такой колонке номер `
       + 'сделки и сумма — две строки многоточий.',
     ).toEqual([]);
+  }, 30_000);
+
+  /**
+   * Раздел «Срок резервирования» меряется отдельно — по той же причине, что
+   * вкладка «Входы»: обход открывает «Настройки» на источниках платежей,
+   * и третий пункт подменю (задача 0049) ни один прогон не увидел бы.
+   *
+   * <p>Сам пункт при этом уже ломал страницу: третья кнопка не поместилась
+   * в ряд подменю на телефоне и увела вбок всё вместе с рельсом — 409 при
+   * 390. Лечится переносом (`flex-wrap` у `.settings-nav`), а не сжатием:
+   * по обрезанному названию не понять, куда нажимаешь.
+   */
+  it('раздел «Срок резервирования» не уводит страницу вбок', async () => {
+    const { container } = render(<SettingsScreen />);
+    fireEvent.click([...container.querySelectorAll('button')]
+      .find((b) => b.textContent === 'Срок резервирования') as HTMLButtonElement);
+    await waitFor(() => expect(container.textContent).toContain('3 дня'));
+
+    const html = await settled(container);
+    const { scrollWidth, clientWidth } = await measurePage(html);
+    expect(
+      scrollWidth,
+      `Срок резервирования уводит страницу вбок на ${scrollWidth - clientWidth} пикселей `
+      + `(scrollWidth ${scrollWidth} при clientWidth ${clientWidth}, экран ${PHONE_WIDTH})`,
+    ).toBe(clientWidth);
   }, 30_000);
 
   it('меряет все разделы, а не те, до которых дошли руки', () => {
