@@ -276,14 +276,134 @@ class WheelServiceTest extends PostgresTestBase {
         });
 
         // Отбор у выгрузки и у страницы общий: диск в файл не попал,
-        // а обе шины попали.
-        var codes = rows.stream().map(row -> row.get(0)).toList();
+        // а обе шины попали. Колонка ищется по заголовку, а не по номеру:
+        // номер сдвигается всякий раз, когда в начало приходит новая
+        // колонка, — так и случилось с «№ позиции» (задача 0061).
+        int code = WheelService.exportHeader(found).indexOf("Номер товара");
+        var codes = rows.stream().map(row -> row.get(code)).toList();
         assertThat(codes).containsAll(codesOf(tyres.partIds()))
                 .doesNotContainAnyElementsOf(codesOf(disc.partIds()));
         // Заголовок и строка обязаны быть одной длины: разъехавшись, файл
         // сдвигает значения на колонку, и цена приезжает в количество.
         assertThat(rows.get(0)).hasSameSizeAs(WheelService.exportHeader(found));
         assertThat(rows.get(0)).contains("Шина", "летняя", "Метрическая", "Направленный");
+    }
+
+    /**
+     * Номер позиции на вкладке колёс — задача 0061.
+     *
+     * <p><b>Что было для человека.</b> Задача 0060 завела позиции свой
+     * порядковый номер («посмотри позицию 347») и показала его на витрине
+     * склада. У колеса он тоже есть — колесо это та же {@code part}, — но
+     * вкладка «Шины и диски» собирает свой состав колонок, свою сортировку
+     * и своё умолчание, и номера там не было вовсе: назвать колесо цифрами
+     * в разговоре было нельзя.
+     *
+     * <p>Главное здесь — <b>общая нумерация</b>. Заведись у колеса своя,
+     * рядом появились бы две «позиции 347», и разговор про номер потерял
+     * бы смысл.
+     */
+    @Test
+    @DisplayName("Нумерация общая с запчастями: колесо после запчасти получает больший номер")
+    void numberingIsSharedWithParts() {
+        Long part = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price) VALUES (1, ?, 1000)
+                RETURNING id""", Long.class, "Фара, заведённая перед колесом"));
+        Long partNumber = inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, part));
+
+        var created = inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+        var wheel = rowOf(created.partIds().get(0));
+
+        assertThat(wheel.number())
+                .as("номер колеса (%s) не больше номера запчасти (%s), заведённой раньше: "
+                                + "у колёс своя нумерация, и «позиция %s» означает две разные "
+                                + "позиции", wheel.number(), partNumber, wheel.number())
+                .isGreaterThan(partNumber);
+    }
+
+    /**
+     * Порядок вкладки по умолчанию — тот же, что у витрины склада.
+     *
+     * <p>Два соседних экрана, открывающиеся по-разному, различаются без
+     * причины. Прежним умолчанием был номер комплекта по убыванию: колесо,
+     * заведённое поштучно, номера комплекта не имеет вовсе и уезжало в конец.
+     */
+    @Test
+    @DisplayName("Вкладка колёс открывается порядком заведения, а не номером комплекта")
+    void defaultOrderIsCreationOrder() {
+        List<Long> created = new java.util.ArrayList<>();
+        for (int at = 0; at < 3; at++) {
+            created.add(inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null))
+                    .partIds().get(0));
+        }
+
+        // Имя вне белого списка молча становится сортировкой по умолчанию —
+        // ею и проверяется умолчание.
+        List<Long> numbers = numbersOf(inTenant(() -> wheels.list(null, null, false,
+                Map.of(), Map.of(), "такой колонки нет", false, 0, 500).rows()), created);
+        assertThat(numbers)
+                .as("вкладка отдала порядок, отличный от порядка заведения: %s", numbers)
+                .isSorted();
+
+        // По возрастанию номера — то, что присылает экран.
+        assertThat(numbersOf(inTenant(() -> wheels.list(null, null, false,
+                Map.of(), Map.of(), "number", false, 0, 500).rows()), created))
+                .as("порядок по номеру позиции не возрастает — сортировки по нему нет")
+                .isSorted();
+
+        // И в обратную сторону: без номера в белом списке сортировок запрос
+        // молча уходит в умолчание, и направление перестаёт слушаться.
+        assertThat(numbersOf(inTenant(() -> wheels.list(null, null, false,
+                Map.of(), Map.of(), "number", true, 0, 500).rows()), created))
+                .as("порядок по номеру позиции по убыванию не убывает: "
+                        + "имени «number» нет в белом списке сортировок")
+                .isSortedAccordingTo(java.util.Comparator.reverseOrder());
+    }
+
+    /**
+     * Файл качают, чтобы свериться с экраном, — значит номер обязан быть
+     * и в нём, и на том же месте.
+     */
+    @Test
+    @DisplayName("Номер позиции стоит первой колонкой выгрузки колёс")
+    void exportCarriesTheNumberFirst() {
+        var created = inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null));
+        var wheel = rowOf(created.partIds().get(0));
+
+        var found = inTenant(() -> catalog.warehouses());
+        List<List<String>> rows = new java.util.ArrayList<>();
+        inTenant(() -> {
+            wheels.export(null, "TYRE", false, Map.of(), Map.of(), "number", false, found,
+                    rows::add);
+            return null;
+        });
+
+        var header = WheelService.exportHeader(found);
+        assertThat(header.indexOf("№ позиции"))
+                .as("колонки «№ позиции» в заголовке выгрузки колёс нет "
+                        + "или она стоит не первой: %s", header)
+                .isZero();
+        assertThat(rows.stream().map(row -> row.get(0)).toList())
+                .as("номера позиции в строке выгрузки нет")
+                .contains(String.valueOf(wheel.number()));
+    }
+
+    /** Строка вкладки по её позиции — номер в ней тот же, что в базе. */
+    private WheelService.WheelRow rowOf(Long partId) {
+        return inTenant(() -> wheels.list(null, null, false, Map.of(), Map.of(),
+                        "number", false, 0, 500).rows()).stream()
+                .filter(row -> row.id().equals(partId))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    /** Номера позиций страницы — только тех, что завёл сам тест. */
+    private static List<Long> numbersOf(List<WheelService.WheelRow> rows, List<Long> partIds) {
+        return rows.stream()
+                .filter(row -> partIds.contains(row.id()))
+                .map(WheelService.WheelRow::number)
+                .toList();
     }
 
     @Test
@@ -448,10 +568,12 @@ class WheelServiceTest extends PostgresTestBase {
 
         // Скачанный файл обязан совпасть с экраном: диск под отбор шины
         // не подходит и в файл не попал.
-        var codes = rows.stream().map(row -> row.get(0)).toList();
+        var header = WheelService.exportHeader(found);
+        var codes = rows.stream().map(row -> row.get(header.indexOf("Номер товара"))).toList();
         assertThat(codes).containsAll(codesOf(tyres.partIds()))
                 .doesNotContainAnyElementsOf(codesOf(disc.partIds()));
-        assertThat(rows).allSatisfy(row -> assertThat(row.get(2)).isEqualTo("Шина"));
+        assertThat(rows).allSatisfy(
+                row -> assertThat(row.get(header.indexOf("Товар"))).isEqualTo("Шина"));
     }
 
     /**

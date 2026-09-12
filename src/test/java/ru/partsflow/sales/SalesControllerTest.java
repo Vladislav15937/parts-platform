@@ -423,6 +423,47 @@ class SalesControllerTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.total").value(1));
     }
 
+    /**
+     * Выдача продавца называет номер позиции, а не только публичный код.
+     *
+     * <p>Задача 0060 завела позиции порядковый номер — решение владельца
+     * продукта названо там дословно: номер нужен, «чтобы человек мог
+     * применять человекочитаемые цифры для точной идентификации конкретной
+     * запчасти при общении с другими работниками». Продавец и есть тот
+     * работник — он держит трубку, — а в его выдаче стоял только публичный
+     * код («7584A8FEAE3D»), который по телефону не произносят вовсе.
+     *
+     * <p>Через HTTP, а не вызовом сервиса: до экрана число доезжает ответом,
+     * и потерянное поле видно только здесь.
+     *
+     * <p>Сверяется с самой колонкой {@code part.number}, а не с записанным
+     * числом. Номер при этом сдвинут относительно {@code id}: в свежей схеме
+     * обе последовательности начинаются с единицы, и подмена {@code p.number}
+     * на {@code p.id} прошла бы зелёной.
+     */
+    @Test
+    @DisplayName("Выдача продавца несёт номер позиции, которым её называют вслух")
+    void stockSearchCarriesThePartNumber() throws Exception {
+        // Сдвиг нумерации: без него id и номер у свежей позиции совпадают,
+        // и проверка зеленела бы на `p.id AS number`.
+        inTenant(() -> jdbc.queryForObject("SELECT nextval('part_number_seq')", Long.class));
+
+        Long partId = partWithStock("Радиатор печки", 1);
+        long number = inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, partId));
+
+        assertThat(number)
+                .as("номер позиции совпал с её id — проверка перестала ловить подмену")
+                .isNotEqualTo(partId);
+
+        mvc.perform(get("/api/parts/stock?q=радиатор печки").session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rows[0].partId").value(partId))
+                .andExpect(jsonPath("$.rows[0].number").value(number))
+                // Публичный код рядом остался: его читают с этикетки на детали.
+                .andExpect(jsonPath("$.rows[0].publicCode").isNotEmpty());
+    }
+
     @Test
     @DisplayName("Полностью отложенная деталь из поиска не исчезает")
     void fullyReservedIsStillVisible() throws Exception {

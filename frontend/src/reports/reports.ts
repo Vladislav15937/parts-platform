@@ -304,6 +304,11 @@ export type OriginTab = 'received' | 'sold' | 'written-off' | 'remaining';
 
 export interface OriginItem {
   partId: number;
+  /**
+   * Порядковый номер позиции — тот, которым её называют вслух
+   * («посмотри позицию 347»). Общий с витриной и вкладкой колёс.
+   */
+  number: number;
   /** Номер, по которому позицию видно на витрине; внутренний id не говорит ничего. */
   publicCode: string | null;
   /** Вид детали из справочника. Пусто — наименование не распознано. */
