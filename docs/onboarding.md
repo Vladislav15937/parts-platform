@@ -54,13 +54,21 @@
 вас необратимо.
 
 ```bash
-cp .env.example .env          # секреты, домены, APP_CELL, APP_CELL_NUMBER
-docker compose -f docker-compose.prod.yml up -d --build
+cp .env.example .env          # секреты, домены, APP_CELL, APP_CELL_NUMBER, APP_IMAGE_TAG
+docker compose -f docker-compose.prod.yml pull          # образ приезжает готовым из реестра
+docker compose -f docker-compose.prod.yml up -d
 ops/create-roles.sh           # рабочая роль: журналы приложению не принадлежат
 docker compose -f docker-compose.prod.yml up -d app    # перезапуск под ней
 ops/install-cron.sh           # пять задач: архив WAL, базовая копия, дампы, обе проверки
 ops/basebackup.sh             # первая базовая копия: без неё точки возврата нет
 ```
+
+**`APP_IMAGE_TAG` заполняется до первой команды.** Ячейка ничего не собирает:
+образ приложения собран один раз в CI и лежит в реестре. Тег — полный SHA
+коммита (`git rev-parse HEAD` в свежем клоне, если CI на нём зелёный; тот же
+SHA печатает задача «Публикация образа»). Незаполненный останавливает выкладку
+словами «укажите APP_IMAGE_TAG — SHA коммита, собранного CI», до запуска чего
+бы то ни было. Подробно — §деплой, «Как поднять».
 
 **Заведение ролей — не необязательный шаг.** Без него приложение ходит в базу
 владельцем всех таблиц, и «кто уронил цену» перестаёт быть вопросом
