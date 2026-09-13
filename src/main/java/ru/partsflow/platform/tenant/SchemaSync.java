@@ -299,11 +299,15 @@ public class SchemaSync {
 
         if (plan.mode() == Mode.CHECK) {
             if (!atTarget) {
+                // «Не хватает» считается ДО ЦЕЛИ, а не до конца набора:
+                // state.pending() отвечает про весь changelog, и при частичном
+                // --to число в логе было бы завышено — человек прочёл бы его
+                // как «накат сделает столько-то шагов», а накат сделает меньше.
                 problems.add(new Problem(tenant.schema(), state.applied() > target
                         ? "накатано " + state.applied() + " из " + target
                                 + ", лишних changeset'ов: " + (state.applied() - target)
                         : "накатано " + state.applied() + " из " + target
-                                + ", не хватает " + state.pending()));
+                                + ", не хватает " + (target - state.applied())));
             }
             return false;
         }

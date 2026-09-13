@@ -144,6 +144,33 @@ class SchemaSyncTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("При частичном --to «не хватает» считается до цели, а не до конца набора")
+    void shortfallIsCountedToTheTarget() {
+        register(158, TENANT);
+        int total = migrator.totalChangeSets();
+        // Схема на вершине, цель — на два шага ниже: до цели не хватает НУЛЯ,
+        // а до конца набора — тоже нуля. Опускаем на три и целимся в total-1:
+        // тогда до цели не хватает двух, а до конца набора — трёх.
+        migrator.rollbackLast(TENANT, 3);
+
+        SchemaSync.Result result = sync.run(
+                new SchemaSync.Plan(SchemaSync.Mode.CHECK, total - 1));
+
+        assertThat(result.problems()).anySatisfy(problem -> {
+            assertThat(problem.schema()).isEqualTo(TENANT);
+            assertThat(problem.reason())
+                    .as("число в логе взято до конца набора, а не до цели: человек "
+                            + "прочтёт его как «накат сделает столько шагов», "
+                            + "а накат сделает меньше")
+                    .isEqualTo("накатано " + (total - 3) + " из " + (total - 1)
+                            + ", не хватает 2");
+        });
+
+        // Схему возвращаем на вершину: класс делит её между методами.
+        assertThat(sync.run(SchemaSync.Plan.apply()).exitCode()).isZero();
+    }
+
+    @Test
     @DisplayName("Схема впереди образа названа по имени, и её не трогают")
     void aheadSchemaIsNamedAndLeftAlone() {
         register(159, AHEAD);
