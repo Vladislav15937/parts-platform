@@ -4,7 +4,7 @@ title: Мёртвая проверка в `MemberService.validate` и `DonorCost
 status: готово
 assignee: sweep
 source: находка исполнителя 0071, подтверждена разбором, 13 сентября 2026
-pr: 186
+pr: 189
 ---
 
 ## Что найдено
