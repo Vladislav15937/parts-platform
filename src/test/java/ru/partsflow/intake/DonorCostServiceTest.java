@@ -105,6 +105,33 @@ class DonorCostServiceTest extends PostgresTestBase {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    /**
+     * Незаполненный вид затрат — отказ словами, а не {@code NullPointerException}.
+     *
+     * <p>Проверка белым списком тут стояла с самого начала и была мертва:
+     * {@code TYPES} — это {@code Set.of}, а он на {@code null}-ключе бросает
+     * NPE, то есть до сообщения «Неизвестный вид затрат» управление
+     * не доходило вовсе. Снаружи это прикрывал {@code @NotBlank}
+     * в {@code IntakeController} — защита в другом файле, и через HTTP
+     * поэтому неотличима от настоящей: метод зовётся здесь напрямую.
+     *
+     * <p><b>Откат:</b> убрать проверку на пусто в {@code DonorCostService.add}
+     * — тест падает с {@code NullPointerException}, а не с отказом проверки.
+     */
+    @Test
+    @DisplayName("Незаполненный вид затрат — отказ словами, а не NPE")
+    void blankTypeIsRejectedWithWords() {
+        assertThatThrownBy(() -> inTenant(() ->
+                costs.add(donorId, null, new BigDecimal("1000"), null, null, null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Вид затрат обязателен");
+
+        assertThatThrownBy(() -> inTenant(() ->
+                costs.add(donorId, "   ", new BigDecimal("1000"), null, null, null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Вид затрат обязателен");
+    }
+
     // Отрицательная затрата уменьшает вложенное — машина в отчёте выглядит
     // выгоднее, чем была. Возврат оформляется не минусом здесь.
     @Test

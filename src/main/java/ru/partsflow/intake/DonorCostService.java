@@ -49,6 +49,14 @@ public class DonorCostService {
     @Transactional
     public List<Cost> add(long donorId, String type, BigDecimal amount, LocalDate on,
                           String note, Long authorId) {
+        // Пустой вид отбиваем до белого списка: TYPES — это Set.of, а он
+        // на null-ключе бросает NPE, то есть сообщение ниже при незаполненном
+        // виде не появлялось никогда. Снаружи это прикрывал @NotBlank
+        // в IntakeController — защита в другом файле, а сумму рядом
+        // на null проверяют явно.
+        if (type == null || type.isBlank()) {
+            throw new IllegalArgumentException("Вид затрат обязателен");
+        }
         if (!TYPES.contains(type)) {
             throw new IllegalArgumentException("Неизвестный вид затрат: " + type);
         }

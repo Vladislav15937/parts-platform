@@ -1,3 +1,15 @@
+# База под verify.sh — она же единственный её потребитель.
+#
+# Портов наружу не публикует НИ ОДИН сервис, и это не экономия: 5432 держит
+# среда разработки (корневой docker-compose.yml), а при нескольких рабочих
+# копиях разом — ещё и соседний прогон. Опубликованный порт делает проверку
+# общим ресурсом: она не запускается, пока сосед не погасит свою базу,
+# и разбор выносит вердикт по чтению кода вместо живого наката.
+# Публиковать нечего по существу: verify.sh ходит в базу через
+# `docker compose exec`, а Liquibase — из соседнего контейнера по сети
+# compose (`postgres:5432`). С хоста база достаётся тем же exec'ом:
+#   docker compose -p <проект> exec postgres psql -U app -d parts
+# Имя проекта печатает сам verify.sh — оно своё у каждой рабочей копии.
 services:
   postgres:
     image: postgres:16-alpine
@@ -5,8 +17,6 @@ services:
       POSTGRES_DB: parts
       POSTGRES_USER: app
       POSTGRES_PASSWORD: app
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app -d parts"]
       interval: 2s
