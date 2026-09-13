@@ -11,12 +11,27 @@
 #      арендатора не осталось ни триггеров, ни функций, ни генерируемых колонок
 #   6. Повторный update идемпотентен
 #   7. rollback отрабатывает
+#
+# Запускается, не спрашивая соседа: своя база у каждой рабочей копии, портов
+# хоста не занимает вовсе. Имя проекта compose печатается при подъёме — им же
+# гасят и открывают базу руками.
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-LB="docker compose exec -T liquibase liquibase"
-PSQL="docker compose exec -T postgres psql -U app -d parts -v ON_ERROR_STOP=1"
+# Имя проекта compose по умолчанию — имя каталога, то есть «db» у всех рабочих
+# копий разом. Два прогона из разных копий брали бы одни и те же контейнеры,
+# и `down -v` второго сносил бы базу под первым — молча и посреди наката.
+# Поэтому имя своё у каждой копии: читаемая часть от каталога, хвост от полного
+# пути, чтобы две одноимённые копии не сошлись. Оно детерминировано — повторный
+# прогон из той же копии подбирает свои же контейнеры, а не плодит новые.
+SLUG=$(printf '%s' "$(basename "$(dirname "$PWD")")" \
+        | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | cut -c1-20)
+PROJECT="verify-${SLUG}-$(printf '%s' "$PWD" | cksum | awk '{print $1}')"
+
+DC="docker compose -p $PROJECT"
+LB="$DC exec -T liquibase liquibase"
+PSQL="$DC exec -T postgres psql -U app -d parts -v ON_ERROR_STOP=1"
 URL="jdbc:postgresql://postgres:5432/parts"
 CRED="--username=app --password=app --url=$URL"
 
@@ -24,10 +39,21 @@ step() { printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
 ok()   { printf '\033[1;32m    OK: %s\033[0m\n' "$1"; }
 fail() { printf '\033[1;31m    FAIL: %s\033[0m\n' "$1"; exit 1; }
 
-step "Поднимаем чистую базу"
-docker compose down -v >/dev/null 2>&1 || true
-docker compose up -d
-until docker compose exec -T postgres pg_isready -U app -d parts >/dev/null 2>&1; do sleep 1; done
+step "0. Проверка не занимает портов хоста"
+# Порт хоста — общий ресурс: 5432 держит среда разработки, а при нескольких
+# рабочих копиях разом ещё и соседний прогон. Опубликовав его, проверка
+# перестаёт запускаться, пока сосед не погасит свою базу, — и разбор выносит
+# вердикт по чтению кода вместо живого наката (задача 0094). Обращения идут
+# через `exec` и по сети compose, публиковать нечего; строку `ports:` при этом
+# возвращают не задумываясь, поэтому здесь сторож, а не запись в памятке.
+PUBLISHED=$($DC config 2>/dev/null | grep -c 'published:' || true)
+[ "$PUBLISHED" = "0" ] || fail "compose проверки публикует порты хоста (строк «published»: $PUBLISHED) — прогон станет общим ресурсом, см. db/CLAUDE.md"
+ok "портов хоста не занимает"
+
+step "Поднимаем чистую базу ($PROJECT)"
+$DC down -v >/dev/null 2>&1 || true
+$DC up -d
+until $DC exec -T postgres pg_isready -U app -d parts >/dev/null 2>&1; do sleep 1; done
 ok "postgres готов"
 
 step "1. Каталог"
@@ -177,4 +203,5 @@ LEFT=$($PSQL -tAc "SELECT count(*) FROM information_schema.tables
 ok "схема вычищена до состояния «только служебные таблицы»"
 
 printf '\n\033[1;32mВсе проверки пройдены.\033[0m\n'
-printf 'Погасить: docker compose down -v\n'
+printf 'Погасить: docker compose -p %s down -v\n' "$PROJECT"
+printf 'Заглянуть в базу: docker compose -p %s exec postgres psql -U app -d parts\n' "$PROJECT"
