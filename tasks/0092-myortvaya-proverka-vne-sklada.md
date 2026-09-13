@@ -1,7 +1,7 @@
 ---
 id: 0092
 title: Мёртвая проверка в `MemberService.validate` и `DonorCostService.add` — защита живёт в другом файле
-status: готово
+status: слита
 assignee: sweep
 source: находка исполнителя 0071, подтверждена разбором, 13 сентября 2026
 pr: 189
