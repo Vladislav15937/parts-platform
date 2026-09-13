@@ -58,4 +58,8 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
 # иначе она увидит всю машину и её убьёт OOM killer.
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError"
 
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]
+# Аргументы доезжают до приложения, а не теряются. Без "$@" (и без "--",
+# который занимает место $0) `docker compose run app --schema-sync` отдал бы
+# флаг оболочке, та бы его молча проглотила — и одноразовый контейнер
+# миграций поднялся бы обычным приложением, заняв порт у работающего.
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar \"$@\"", "--"]

@@ -20,6 +20,19 @@ public class SchedulerConfig {
 
     @Bean
     public LockProvider lockProvider(DataSource dataSource) {
+        return cellLockProvider(dataSource);
+    }
+
+    /**
+     * Замок ячейки — одной настройкой на всех, кто его берёт.
+     *
+     * <p>Второй потребитель — контекст режима «привести схему и выйти»
+     * ({@code SchemaSyncConfig}). Замок работает ровно потому, что обе
+     * стороны смотрят в одну таблицу и считают время одинаково; разойдись
+     * настройки — контейнер миграций и работающее приложение взяли бы
+     * разные замки и спокойно пошли бы по одной схеме вдвоём.
+     */
+    public static LockProvider cellLockProvider(DataSource dataSource) {
         return new JdbcTemplateLockProvider(
                 JdbcTemplateLockProvider.Configuration.builder()
                         .withJdbcTemplate(new org.springframework.jdbc.core.JdbcTemplate(dataSource))
