@@ -8,8 +8,6 @@ import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import ru.partsflow.platform.security.CurrentUser;
@@ -18,14 +16,23 @@ import ru.partsflow.platform.security.TenantPrincipal;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Что происходит с живой сессией на каждом запросе: отметка активности
- * и проверка отзыва.
+ * Что происходит с живой сессией на каждом запросе: отметка активности.
  *
- * <p>Оба дела — про одно и то же: сессия существует ровно постольку, поскольку
- * с ней приходят, и наблюдать за ней можно только здесь. Разведённые по двум
- * фильтрам, они читали бы одни и те же атрибуты сессии дважды.
+ * <p>Сессия существует ровно постольку, поскольку с ней приходят, и наблюдать
+ * за ней можно только здесь.
+ *
+ * <p><b>Проверки отзыва здесь больше нет, и это не потеря.</b> До задачи 0080
+ * отзыв был отметкой в памяти экземпляра, и сверять её приходилось на каждом
+ * запросе. Теперь состояние сессии лежит в общей схеме ячейки, а отзыв —
+ * это удаление строки ({@link SessionRevocations}): отозванную сессию
+ * не находит уже {@code SessionRepositoryFilter}, и до этого места запрос
+ * доходит невошедшим — то есть получает тот же 401 с пустым телом, только
+ * на любом экземпляре, а не на том, где отзыв сделали.
  *
  * <p><b>Отметка активности прорежена, и это главное требование задачи.</b>
  * «Отметку активности нельзя обновлять на каждый запрос — это запись в базу
@@ -38,6 +45,21 @@ import java.time.Instant;
  * смены считается по последней активности, и ошибка в пару минут на границе
  * не меняет ни одного ответа, ради которого журнал открывают.
  *
+ * <p><b>Пометка о прореживании живёт в памяти экземпляра, а не в сессии, —
+ * и после переезда сессий в базу (0080) иначе нельзя.</b> Атрибут сессии
+ * теперь строка в общей схеме, то есть каждая пометка — запись в базу
+ * (ровно то, чего прореживание и избегает), а первая её запись ещё
+ * и не выдерживает одновременных запросов: шесть параллельных отправок
+ * офлайн-очереди с одной cookie вставляют один и тот же атрибут разом
+ * и получают нарушение первичного ключа — то есть <b>ошибку на успешную
+ * приёмку</b>. Поймано полным прогоном на {@code IntakeRetryHttpTest}
+ * и {@code MarketplaceOrderHttpTest}: оба проверяют ровно этот сценарий.
+ *
+ * <p>Состоянием сессии эта пометка не является: потеряв её при перезапуске,
+ * мы заплатим одной лишней записью в журнал на сессию, а не выходом
+ * человека. Гонки на ней нет — отмечается тот, кто выиграл
+ * {@code merge}.
+ *
  * <p><b>Фильтр стоит после цепочки Spring Security</b> (у неё порядок −100,
  * у обычного бина-фильтра — последний): до неё вошедшего ещё нет, и отмечать
  * было бы нечего.
@@ -49,12 +71,6 @@ public class SessionTrackingFilter extends OncePerRequestFilter {
 
     /** Суррогат сессии для журнала. Кладётся при входе, читается здесь. */
     public static final String KEY = "partsflow.session.key";
-
-    /** Когда вошли. Нужно отзыву: сессия, заведённая после него, законна. */
-    public static final String LOGGED_IN_AT = "partsflow.session.loggedInAt";
-
-    /** Когда в последний раз писали отметку активности в базу. */
-    private static final String MARKED_AT = "partsflow.session.markedAt";
 
     /**
      * Ключ сессии, из которой пришёл запрос.
@@ -70,13 +86,24 @@ public class SessionTrackingFilter extends OncePerRequestFilter {
     }
 
     private final LoginSessions sessions;
-    private final SessionRevocations revocations;
     private final Duration markEvery;
 
-    public SessionTrackingFilter(LoginSessions sessions, SessionRevocations revocations,
+    /**
+     * Когда по каждой сессии в последний раз писали отметку активности.
+     *
+     * <p>Своя у каждого экземпляра приложения, и это верно: прореживание —
+     * про то, как часто ходить в базу, а не про то, кто вошёл. Записей
+     * в ней не больше, чем сессий, которые работали за последние
+     * {@code markEvery}, — остальные выметает {@link #purge}.
+     */
+    private final Map<String, Instant> marked = new ConcurrentHashMap<>();
+
+    /** Когда в последний раз выметали устаревшие пометки. */
+    private final AtomicReference<Instant> purgedAt = new AtomicReference<>(Instant.EPOCH);
+
+    public SessionTrackingFilter(LoginSessions sessions,
                                  @Value("${app.sessions.activity-interval:2m}") Duration markEvery) {
         this.sessions = sessions;
-        this.revocations = revocations;
         this.markEvery = markEvery;
     }
 
@@ -91,40 +118,32 @@ public class SessionTrackingFilter extends OncePerRequestFilter {
             return;
         }
 
-        Object key = session.getAttribute(KEY);
-        Object loggedInAt = session.getAttribute(LOGGED_IN_AT);
         // Сессия, заведённая не входом (CSRF-токен до формы входа), журнала
         // не имеет — и это не ошибка, а её нормальное состояние.
-        if (!(key instanceof String sessionKey) || !(loggedInAt instanceof Instant enteredAt)) {
+        if (!(session.getAttribute(KEY) instanceof String sessionKey)) {
             chain.doFilter(request, response);
             return;
         }
 
-        if (revocations.revoked(principal.tenantSchema(), principal.memberId(),
-                sessionKey, enteredAt)) {
-            // Ровно то же, что видит невошедший: 401 с пустым телом. Клиент
-            // разбирает его как потерю сессии и уводит на вход, а не как
-            // ошибку запроса — офлайн-очередь при этом дожидается входа
-            // и работу приёмщика не теряет.
-            session.invalidate();
-            SecurityContextHolder.clearContext();
-            response.setStatus(HttpStatus.UNAUTHORIZED.value());
-            return;
-        }
-
-        markSeen(session, principal, sessionKey);
+        markSeen(principal, sessionKey);
         chain.doFilter(request, response);
     }
 
-    private void markSeen(HttpSession session, TenantPrincipal principal, String sessionKey) {
+    private void markSeen(TenantPrincipal principal, String sessionKey) {
         Instant now = Instant.now();
-        Object marked = session.getAttribute(MARKED_AT);
-        if (marked instanceof Instant last && last.plus(markEvery).isAfter(now)) {
+        purge(now);
+
+        // Пометка ставится до запроса, а не после: отказ базы не должен
+        // означать поход в неё на каждом следующем запросе. И ставится она
+        // одним действием: из двух одновременных запросов отмечается тот,
+        // чьё значение легло в карту, — сравнение по ссылке здесь точное,
+        // а «прочитали, сравнили, записали» пропустило бы обоих.
+        Instant winner = marked.merge(sessionKey, now,
+                (previous, candidate) -> previous.plus(markEvery).isAfter(candidate)
+                        ? previous : candidate);
+        if (winner != now) {
             return;
         }
-        // Пометка ставится до запроса, а не после: отказ базы не должен
-        // означать поход в неё на каждом следующем запросе.
-        session.setAttribute(MARKED_AT, now);
         try {
             sessions.markSeen(principal.tenantSchema(), sessionKey);
         } catch (RuntimeException e) {
@@ -132,5 +151,21 @@ public class SessionTrackingFilter extends OncePerRequestFilter {
             // а продавец продаёт.
             log.debug("Отметка активности не записана", e);
         }
+    }
+
+    /**
+     * Выметает пометки, которые уже ничего не прореживают.
+     *
+     * <p>Пометка старше {@code markEvery} не влияет ни на что: следующий
+     * запрос этой сессии всё равно пойдёт в базу. Проход идёт не чаще раза
+     * в тот же интервал — иначе обход карты стоил бы дороже самой записи,
+     * которой мы избегаем.
+     */
+    private void purge(Instant now) {
+        Instant previous = purgedAt.get();
+        if (previous.plus(markEvery).isAfter(now) || !purgedAt.compareAndSet(previous, now)) {
+            return;
+        }
+        marked.values().removeIf(at -> at.plus(markEvery).isBefore(now));
     }
 }

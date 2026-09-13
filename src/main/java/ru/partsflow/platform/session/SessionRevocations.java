@@ -1,16 +1,16 @@
 package ru.partsflow.platform.session;
 
-import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.session.FindByIndexNameSessionRepository;
+import org.springframework.session.Session;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
-import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Отозванные сессии: кого перестали пускать и с какого момента.
+ * Отзыв сессий сотрудника: смена пароля, выключение учётной записи.
  *
  * <p><b>Зачем.</b> «Смена пароля, смена прав и блокировка сотрудника обязаны
  * убивать сессии — иначе понижённый в правах доработает смену со старыми»
@@ -18,84 +18,79 @@ import java.util.concurrent.ConcurrentHashMap;
  * До этого выключенный сотрудник продолжал работать до конца дня: {@code
  * TenantPrincipal} лежит в сессии снимком, и выключение его не касалось.
  *
- * <p><b>Почему в памяти, а не запросом в базу на каждый запрос.</b> Сессии
- * у нас живут в памяти приложения (docs/sessions.md, §1) — то есть ровно там
- * же, где эта отметка, и переживают они ровно одно и то же: перезапуск
- * выкидывает и сессии, и отметки, и после него отзывать некого. Проверка же
- * запросом в базу — это поход в базу на каждый клик каждого сотрудника ради
- * события, случающегося раз в месяц.
+ * <p><b>Отзыв — это удаление сессии из общего хранилища, а не отметка
+ * в памяти.</b> До задачи 0080 здесь лежал {@code ConcurrentHashMap}
+ * «кого перестали пускать и с какого момента», и работал он ровно до второго
+ * экземпляра приложения: отметка оставалась там, где её поставили, а сосед
+ * пускал по той же cookie до истечения. То есть обещание «отозвали —
+ * и сессия умерла сразу» становилось ложью в тот день, когда экземпляров
+ * стало два, и узнать об этом было неоткуда. Теперь состояние сессии живёт
+ * в общей схеме ячейки ({@link SharedSessionStore}), и удалённую строку
+ * не находит ни один экземпляр — включая тот, который её и не видел.
  *
- * <p><b>«Немедленно» здесь означает «на следующем запросе», и сильнее быть
- * не может.</b> Cookie-сессия наблюдаема только тогда, когда с ней приходят;
- * тот же порядок у {@code SessionRegistry} Spring Security с его
- * {@code expireNow()}. Разница лишь в том, что здесь не нужен реестр живых
- * сессий: сравнивается время входа с временем отзыва.
+ * <p><b>«Немедленно» по-прежнему означает «на ближайшем запросе»</b>, и сильнее
+ * быть не может: cookie-сессия наблюдаема только тогда, когда с ней приходят.
+ * Разница в том, что теперь это верно для всех экземпляров, а не для одного.
  *
- * <p><b>Цена названа: отзыв действует на том экземпляре приложения, где отметка
- * поставлена.</b> При сессиях в памяти это не ограничение, а тавтология —
- * сессия и так существует только на одном экземпляре, том, где человек вошёл.
- * Появится общее хранилище сессий (docs/sessions.md, §1) — отметка переедет
- * туда же, одной правкой.
+ * <p><b>Сравнения времени входа больше нет — и его отсутствие важно.</b>
+ * Отметка в памяти жила дольше сессий, поэтому её приходилось сравнивать
+ * с временем входа: иначе смена пароля заперла бы сотрудника навсегда, убивая
+ * и те сессии, которыми он вошёл уже после неё. Удаление такого вопроса
+ * не ставит: убиваются ровно те сессии, что существуют сейчас, а заведённая
+ * следующей секундой законна по построению.
  */
 @Component
 public class SessionRevocations {
 
-    private final Map<String, Revocation> revoked = new ConcurrentHashMap<>();
+    private static final Logger log = LoggerFactory.getLogger(SessionRevocations.class);
 
-    /**
-     * Сколько держать отметку.
-     *
-     * <p>Сессия, которую не трогали дольше срока простоя, уже недействительна
-     * сама по себе — отзывать нечего, и отметка о ней только занимает память.
-     * Срок берётся тот же, что у сервлет-контейнера: разойдясь, они дали бы
-     * либо живую сессию без отметки, либо вечный список.
-     */
-    private final Duration keepFor;
+    private final FindByIndexNameSessionRepository<? extends Session> sessions;
 
-    public SessionRevocations(
-            @Value("${server.servlet.session.timeout:30m}") Duration sessionTimeout) {
-        // Запас на прореживание отметок активности и на неточность часов:
-        // отметка обязана пережить самую живучую сессию, а не сравняться с ней.
-        this.keepFor = sessionTimeout.plusMinutes(10);
+    public SessionRevocations(FindByIndexNameSessionRepository<? extends Session> sessions) {
+        this.sessions = sessions;
     }
 
     /**
      * Отозвать сессии сотрудника.
      *
+     * <p>Ищутся они по составному имени «схема и номер сотрудника»
+     * ({@link SharedSessionStore#principalIndex}), а не по логину: логин
+     * уникален только внутри арендатора, и отзыв по нему выключал бы
+     * однофамильца в чужой компании.
+     *
      * @param spareSessionKey сессия, из которой отзыв сделан: сотрудник,
-     *                        сменивший свой пароль, остаётся работать.
+     *                        сменивший свой пароль, остаётся работать —
+     *                        выкинуть того, кто как раз всё сделал правильно,
+     *                        верный способ отучить менять пароли.
      *                        {@code null} — отозвать все
+     * @return сколько сессий закрыто
      */
-    public void revoke(String schema, long memberId, String spareSessionKey) {
-        purgeExpired();
-        revoked.put(id(schema, memberId), new Revocation(Instant.now(), spareSessionKey));
+    public int revoke(String schema, long memberId, String spareSessionKey) {
+        Map<String, ? extends Session> found = sessions.findByPrincipalName(
+                SharedSessionStore.principalIndex(schema, memberId));
+
+        int revoked = 0;
+        for (Map.Entry<String, ? extends Session> entry : found.entrySet()) {
+            if (spared(entry.getValue(), spareSessionKey)) {
+                continue;
+            }
+            sessions.deleteById(entry.getKey());
+            revoked++;
+        }
+        log.debug("Арендатор {}, сотрудник {}: отозвано сессий {}", schema, memberId, revoked);
+        return revoked;
     }
 
     /**
-     * Пускать ли эту сессию дальше.
+     * Своя ли это сессия того, кто отзывает.
      *
-     * @param loggedInAt когда вошли. Сравнение по времени обязательно: без него
-     *                   отметка убивала бы и те сессии, которыми человек вошёл
-     *                   уже <b>после</b> отзыва — то есть смена пароля запирала
-     *                   бы сотрудника навсегда
+     * <p>Сравнивается суррогат из самой сессии, а не её идентификатор: именно
+     * его знает вызывающий — идентификатор наружу не отдаётся вовсе, чтобы
+     * журнал не становился складом действующих ключей.
      */
-    public boolean revoked(String schema, long memberId, String sessionKey, Instant loggedInAt) {
-        Revocation revocation = revoked.get(id(schema, memberId));
-        if (revocation == null || loggedInAt.isAfter(revocation.at())) {
-            return false;
-        }
-        return !Objects.equals(revocation.spareSessionKey(), sessionKey);
-    }
-
-    private void purgeExpired() {
-        Instant tooOld = Instant.now().minus(keepFor);
-        revoked.values().removeIf(revocation -> revocation.at().isBefore(tooOld));
-    }
-
-    private static String id(String schema, long memberId) {
-        return schema + '#' + memberId;
-    }
-
-    private record Revocation(Instant at, String spareSessionKey) {
+    private static boolean spared(Session session, String spareSessionKey) {
+        return spareSessionKey != null
+                && Objects.equals(session.getAttribute(SessionTrackingFilter.KEY),
+                                  spareSessionKey);
     }
 }

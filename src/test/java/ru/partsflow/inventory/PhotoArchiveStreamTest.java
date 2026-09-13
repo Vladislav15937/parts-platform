@@ -310,7 +310,9 @@ class PhotoArchiveStreamTest extends PostgresTestBase {
                         .formatted(login), headers),
                 String.class);
         assertThat(login1.getStatusCode().value()).as("вход не удался").isEqualTo(200);
-        return "JSESSIONID=" + cookie(login1, "JSESSIONID");
+        // Cookie сессии зовётся SESSION, а не JSESSIONID: состояние сессии
+        // живёт в общей схеме ячейки (задача 0080), и выдаёт её не Tomcat.
+        return "SESSION=" + cookie(login1, "SESSION");
     }
 
     private static String cookie(ResponseEntity<?> answer, String name) {

@@ -31,5 +31,6 @@
     <include file="catalog/018-vehicle-aliases.sql"     relativeToChangelogFile="true"/>
     <include file="catalog/019-tyre-brand-aliases.sql"  relativeToChangelogFile="true"/>
     <include file="catalog/020-uncategorized-category.sql" relativeToChangelogFile="true"/>
+    <include file="catalog/021-session-store.sql"       relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

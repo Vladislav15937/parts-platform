@@ -92,16 +92,16 @@ public class AuthController {
     /**
      * Отметка о входе и то, по чему её потом находят.
      *
-     * <p>Ключ и время входа кладутся в саму сессию: по ключу её узнают выход
-     * и отметка активности, по времени — отзыв прав (сессия, заведённая уже
-     * после отзыва, законна). Хранится хеш, а не идентификатор сессии —
-     * журнал не должен становиться складом действующих ключей.
+     * <p>Ключ кладётся в саму сессию: по нему её узнают выход, отметка
+     * активности и отзыв — он же отличает сессию, из которой отзыв делают,
+     * от всех остальных. Хранится хеш, а не идентификатор сессии: журнал
+     * не должен становиться складом действующих ключей, и сессия в общей
+     * схеме ячейки — тем более.
      */
     private void recordLogin(jakarta.servlet.http.HttpSession session, TenantPrincipal principal,
                              String ip, String userAgent) {
         String key = LoginSessions.key(session.getId());
         session.setAttribute(SessionTrackingFilter.KEY, key);
-        session.setAttribute(SessionTrackingFilter.LOGGED_IN_AT, java.time.Instant.now());
         sessions.recordLogin(principal.tenantSchema(), principal.memberId(), principal.login(),
                 principal.role(), key, ip, userAgent);
     }
