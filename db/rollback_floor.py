@@ -37,7 +37,7 @@ DECLARATION = os.path.join(CHANGELOG, "rollback-floor.properties")
 MANIFESTS = {"tenant": "db.changelog-tenant.xml"}
 
 
-class Разъехалось(Exception):
+class FloorMismatch(Exception):
     """Объявление границы не сходится с changelog'ом."""
 
 
@@ -69,7 +69,7 @@ def changesets(group="tenant"):
 def declared(group="tenant"):
     """Сырая строка объявления, например «122/tenant-054-rollback-bridge»."""
     if not os.path.exists(DECLARATION):
-        raise Разъехалось(
+        raise FloorMismatch(
             f"нет файла {os.path.relpath(DECLARATION, ROOT)} — граница отката "
             f"не объявлена вовсе, а инструменты на неё опираются")
     for line in open(DECLARATION, encoding="utf-8"):
@@ -79,7 +79,7 @@ def declared(group="tenant"):
         key, value = line.split("=", 1)
         if key.strip() == group:
             return value.strip()
-    raise Разъехалось(
+    raise FloorMismatch(
         f"{os.path.relpath(DECLARATION, ROOT)}: нет строки «{group}=…» — "
         f"граница для этого набора не объявлена")
 
@@ -93,23 +93,23 @@ def resolve(group="tenant", sets=None):
     """
     raw = declared(group)
     if "/" not in raw:
-        raise Разъехалось(
+        raise FloorMismatch(
             f"граница отката объявлена как «{raw}»: нужен формат "
             f"«число/идентификатор», как у отметки версии в реестре")
     number, cid = raw.split("/", 1)
     try:
         number = int(number.strip())
     except ValueError:
-        raise Разъехалось(f"граница отката объявлена как «{raw}»: "
-                          f"«{number}» — не число changeset'ов")
+        raise FloorMismatch(f"граница отката объявлена как «{raw}»: "
+                            f"«{number}» — не число changeset'ов")
     sets = sets if sets is not None else changesets(group)
     if not 1 <= number <= len(sets):
-        raise Разъехалось(
+        raise FloorMismatch(
             f"граница отката объявлена версией {number}, а в наборе "
             f"{len(sets)} changeset'ов")
     at = sets[number - 1][2]
     if at != cid.strip():
-        raise Разъехалось(
+        raise FloorMismatch(
             f"граница отката объявлена как «{raw}», а {number}-й changeset "
             f"набора — «{at}». Либо число, либо идентификатор устарели: "
             f"порядок наката сдвинулся, и граница указывает не туда")

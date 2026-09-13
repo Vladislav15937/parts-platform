@@ -638,10 +638,10 @@ def main():
         # Своя нумерация против нумерации границы: два разбора одного
         # манифеста, разойдясь, дали бы границу не на том changeset'е.
         if parse_version(floor[1], sets) != floor[0]:
-            raise rollback_floor.Разъехалось(
+            raise rollback_floor.FloorMismatch(
                 f"граница {floor[0]}/{floor[1]}: этот сторож считает "
                 f"«{floor[1]}» {parse_version(floor[1], sets)}-м changeset'ом")
-    except rollback_floor.Разъехалось as e:
+    except rollback_floor.FloorMismatch as e:
         print(f"Объявление границы отката не сходится: {e}")
         print("Граница живёт в db/changelog/rollback-floor.properties, "
               "довод — в db/CLAUDE.md.")

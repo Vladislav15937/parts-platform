@@ -242,7 +242,7 @@ def floor_problems(allowed=None, sets=None):
     problems = []
     try:
         number, cid = rollback_floor.resolve(sets=sets)
-    except rollback_floor.Разъехалось as e:
+    except rollback_floor.FloorMismatch as e:
         return [str(e)], None
 
     number_of = {c[2]: c[0] for c in sets}
@@ -811,14 +811,14 @@ def selftest():
         # 4. Сторож самой границы (задача 0102). Проверяется он на выдуманном
         #    наборе, потому что настоящий обязан быть зелёным: подделывать
         #    в нём нечего, а спросить надо именно «покраснеет ли».
-        сеты = [(1, "t/1.sql", "a"), (2, "t/2.sql", "b"), (3, "t/3.sql", "c")]
+        fake = [(1, "t/1.sql", "a"), (2, "t/2.sql", "b"), (3, "t/3.sql", "c")]
         saved_declared = rollback_floor.declared
         try:
-            def объявить(версия):
-                rollback_floor.declared = lambda group="tenant": версия
+            def declare(value):
+                rollback_floor.declared = lambda group="tenant": value
 
-            объявить("2/b")
-            problems, floor = floor_problems({"a": ()}, сеты)
+            declare("2/b")
+            problems, floor = floor_problems({"a": ()}, fake)
             if floor != 2:
                 failures.append("граница не разобралась на исправном "
                                 "объявлении")
@@ -828,12 +828,12 @@ def selftest():
                     "только на 1 — сторож принял границу выше доказанной, "
                     "то есть молча отнял у выкладки один шаг возврата")
 
-            problems, _ = floor_problems({"b": ()}, сеты)
+            problems, _ = floor_problems({"b": ()}, fake)
             if problems:
                 failures.append("ровная граница объявлена нарушением: "
                                 + " | ".join(problems)[:300])
 
-            problems, _ = floor_problems({"b": (), "c": ()}, сеты)
+            problems, _ = floor_problems({"b": (), "c": ()}, fake)
             if not problems:
                 failures.append(
                     "разрешённое расхождение ВЫШЕ границы принято — это тот "
@@ -842,16 +842,16 @@ def selftest():
                 failures.append("отказ не говорит, что расхождение выше "
                                 "границы: искать придётся глазами")
 
-            объявить("2/c")
-            problems, _ = floor_problems({"b": ()}, сеты)
+            declare("2/c")
+            problems, _ = floor_problems({"b": ()}, fake)
             if not problems:
                 failures.append(
                     "объявление «2/c» принято, хотя второй changeset набора — "
                     "«b»: пара разъехалась с changelog'ом, и обе половины "
                     "читались бы как разные места")
 
-            объявить("99/x")
-            problems, _ = floor_problems({"b": ()}, сеты)
+            declare("99/x")
+            problems, _ = floor_problems({"b": ()}, fake)
             if not problems:
                 failures.append("граница за пределами набора принята")
         finally:
