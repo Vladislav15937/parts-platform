@@ -1,0 +1,329 @@
+name: Выкладка на стенд
+
+# Кнопка раскатки: ИФТ, ПСИ, ПРОМ — форма в браузере, без терминала
+# и без Jenkins (решение владельца от 12 сентября 2026: второй сервис
+# пришлось бы держать правдивым — плагины, секреты, обновления, бэкапы).
+#
+# Что делает нажатие, по шагам — docs/deploy-button.md. Коротко: считает
+# план по ДВУМ версиям (что стоит на стенде и что выкладываем), везёт
+# на стенд настройки того же SHA, из которого собран образ, и запускает
+# там ops/deploy.sh — схема, новая сборка рядом, готовность, переключение,
+# четыре самопроверки, и только потом гаснет старая.
+#
+# ПРОМ здесь — за обязательным подтверждением владельца (GitHub Environments,
+# required reviewer). Механика выкладки на ПРОМ при этом НЕ ОКОНЧАТЕЛЬНА:
+# решением владельца от 14 сентября 2026 база там поедет копией вместе
+# со сборкой, а откат станет «остаться на старой базе» (задача 0112).
+# До неё ПРОМ идёт тем же путём, что и стенды, и это сказано вслух
+# в docs/deploy-button.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      stand:
+        description: 'Стенд'
+        required: true
+        type: choice
+        options: [ift, psi, prom]
+        default: ift
+      ref:
+        description: 'Ветка или SHA. Для ПСИ и ПРОМ — только полный SHA, зелёный в main'
+        required: true
+        type: string
+        default: main
+      migrations:
+        description: 'Миграции'
+        required: true
+        type: choice
+        options:
+          - 'накатить'
+          - 'не трогать'
+          - 'только миграции'
+        default: 'накатить'
+      data:
+        description: 'Данные (двух значений в системе ещё нет — выкладка остановится словами)'
+        required: true
+        type: choice
+        options:
+          - 'не трогать'
+          - 'обезличенный слепок прома'
+          - 'эталонный набор'
+        default: 'не трогать'
+
+concurrency:
+  # Две выкладки на один стенд одновременно — это два `up -d` и два
+  # переключения трафика вперемешку. Очередь, а не отмена: отменённая
+  # на середине выкладка оставила бы стенд в промежуточном состоянии.
+  group: deploy-${{ inputs.stand }}
+  cancel-in-progress: false
+
+jobs:
+  # Всё, что можно проверить ДО подтверждения владельца и до захода
+  # на машину: правила стенда, зелёный CI, наличие образа в реестре.
+  # Отказ здесь стоит секунды и никого не будит.
+  plan:
+    name: Проверки перед выкладкой
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Разбор ссылки
+        id: resolve
+        # Значение поля приходит от человека и НЕ подставляется в скрипт
+        # выражением: подстановка ${{ }} склеивается до запуска оболочки,
+        # то есть имя ветки становится кодом. Через окружение — не становится.
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin '+refs/heads/*:refs/remotes/origin/*' || true
+          if SHA=$(git rev-parse --verify "origin/$REF^{commit}" 2>/dev/null); then
+            echo "Ветка origin/$REF"
+          elif SHA=$(git rev-parse --verify "$REF^{commit}" 2>/dev/null); then
+            echo "Коммит $REF"
+          else
+            echo "::error::В репозитории нет ни ветки, ни коммита «$REF»"
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Выкладываем $SHA"
+
+      # «Зелёный в main» проверяется, а не доверяется: человек под давлением
+      # выберет ветку и на ПСИ, а отказ словами дешевле разбора того, что
+      # уехало на приёмку.
+      - name: Правила стенда
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.ref }}
+          STAND: ${{ inputs.stand }}
+          SHA: ${{ steps.resolve.outputs.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$STAND" = ift ]; then
+            echo "ИФТ: годится любая ветка — ограничений по main нет."
+            exit 0
+          fi
+
+          case "$REF" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+            *) echo "::error::На $STAND выкладывают только по SHA, а не по имени ветки «$REF»: ветка — движущаяся мишень, в неё может уехать ещё коммит прямо во время выкладки."
+               exit 1 ;;
+          esac
+
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::Коммита $SHA нет в main. На $STAND едет только слитое."
+            exit 1
+          fi
+
+          # Зелёный — это зелёный прогон CI ИМЕННО ЭТОГО коммита, а не
+          # «в ветке всё было хорошо».
+          DONE=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=20" \
+            --jq '[.workflow_runs[] | select(.conclusion != null) | .conclusion] | join(" ")')
+          echo "Прогоны CI по $SHA: ${DONE:-нет ни одного}"
+          case " $DONE " in
+            *" success "*) echo "CI по этому коммиту зелёный." ;;
+            *) echo "::error::Зелёного прогона CI по $SHA нет (${DONE:-прогонов нет вовсе}). На $STAND такое не выкладывают."
+               exit 1 ;;
+          esac
+
+      # Образ обязан УЖЕ лежать в реестре: ячейка ничего не собирает
+      # (задача 0074). Его отсутствие — это либо красный CI, либо ещё идущий
+      # прогон, и сказать об этом надо здесь, а не на машине через минуту
+      # ожидания healthcheck'а (задача 0109).
+      - name: Образ в реестре
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/$(echo "$REPO" | tr '[:upper:]' '[:lower:]'):$SHA"
+          if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "Образ на месте: $IMAGE"
+          else
+            echo "::error::Образа $IMAGE в реестре нет. Он публикуется только после ЗЕЛЁНЫХ проверок на push — значит прогон по этому коммиту либо красный, либо ещё идёт."
+            exit 1
+          fi
+
+      - name: Самопроверки инструментов выкладки
+        # Те же четыре, что гоняет CI на каждый push. Здесь они стоят потому,
+        # что кнопку нажимают с ветки: сломанный переключатель трафика
+        # обнаруживать на стенде поздно.
+        run: |
+          ./tools/deploy-plan.py --selftest
+          ./ops/deploy-checks.sh --selftest
+          ./ops/deploy.sh --selftest
+          ./ops/switch-build.sh --selftest
+
+  deploy:
+    name: Выкладка
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Секреты стенда и подтверждение владельца — отсюда. У `prom`
+    # в настройках репозитория стоит required reviewer: на живые данные
+    # клиента нажатие исполнителя не выкладывает ничего.
+    environment:
+      name: ${{ inputs.stand }}
+      url: ${{ vars.STAND_URL }}
+    env:
+      SSH: ssh -i ~/.ssh/id_deploy -o BatchMode=yes -p ${{ vars.DEPLOY_SSH_PORT || 22 }}
+      TARGET: ${{ secrets.DEPLOY_SSH_USER || 'deploy' }}@${{ secrets.DEPLOY_SSH_HOST }}
+      DIR: ${{ vars.DEPLOY_PATH || 'parts-platform' }}
+      SHA: ${{ needs.plan.outputs.sha }}
+    steps:
+      # Два дерева, и это не лишняя работа. ИНСТРУМЕНТ (планировщик версий)
+      # берётся с той ветки, на которой нажали кнопку: откатываясь на старый
+      # коммит, мы обязаны иметь сегодняшний планировщик, а в том коммите
+      # его может не быть вовсе. НАСТРОЙКИ ячейки (ops/ и боевой compose)
+      # берутся из ВЫКЛАДЫВАЕМОГО коммита — того же, из которого собран
+      # образ (задача 0111): иначе на машине окажется код одной версии
+      # и конфигурация терминатора другой, и этому не препятствует ничто.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          path: выкладываемое
+          fetch-depth: 1
+
+      - name: Есть ли на выкладываемом коммите инструмент выкладки
+        run: |
+          set -euo pipefail
+          if [ ! -x выкладываемое/ops/deploy.sh ]; then
+            echo "::error::В коммите $SHA нет ops/deploy.sh — он старше самой кнопки. Такую версию выкладывают руками по docs/pilot-server.md, «Повседневные команды»."
+            exit 1
+          fi
+
+      - name: Ключ к стенду
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          KNOWN: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          PORT: ${{ vars.DEPLOY_SSH_PORT || 22 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEY:-}" ] || [ -z "${HOST:-}" ]; then
+            echo "::error::У окружения «${{ inputs.stand }}» не заданы секреты DEPLOY_SSH_KEY и DEPLOY_SSH_HOST. Машины, домены и секреты стендов заводит владелец — docs/deploy-button.md, «Что должно быть на стенде»."
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          if [ -n "${KNOWN:-}" ]; then
+            printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+          else
+            # Принять любой ключ хоста значит согласиться отдать секреты
+            # тому, кто перехватил адрес. На стенде это терпимо и сказано
+            # вслух; на ПРОМ отпечаток обязан быть задан заранее.
+            ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+            echo "::warning::DEPLOY_SSH_KNOWN_HOSTS не задан — отпечаток хоста взят на месте, без предварительной проверки."
+          fi
+
+      - name: Что сейчас стоит на стенде
+        id: stand
+        run: |
+          set -euo pipefail
+          CURRENT=$($SSH "$TARGET" "cd '$DIR' && sed -n 's/^APP_IMAGE_TAG=//p' .env | tail -n1")
+          echo "Сейчас на стенде: ${CURRENT:-ничего}"
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+
+      # Обе версии, а не одна. Вниз мигрирует образ РАЗВЁРНУТОЙ СЕЙЧАС
+      # сборки: тела --rollback чужих changeset'ов лежат в чужом jar,
+      # и младший образ их не видит вовсе. Цена отката печатается здесь же,
+      # до того как что-нибудь тронуто.
+      - name: План по схеме
+        id: plan
+        env:
+          CURRENT: ${{ steps.stand.outputs.current }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin '+refs/heads/*:refs/remotes/origin/*' || true
+          if [ -n "$CURRENT" ]; then
+            ./tools/deploy-plan.py --github-output --target "$SHA" --current "$CURRENT" | tee /tmp/plan.txt
+          else
+            ./tools/deploy-plan.py --github-output --target "$SHA" --current-unknown | tee /tmp/plan.txt
+          fi
+
+      - name: Настройки на стенд
+        # rsync, а не `git pull` на машине: стенду не нужен ни репозиторий,
+        # ни доступ в интернет за ним. Исключения — это СОСТОЯНИЕ ячейки,
+        # а не настройки из репозитория: имя сборки под трафиком и секреты.
+        # Перезаписав active-build.caddy версией из репозитория, выкладка
+        # объявила бы активной синюю — и накат схем ушёл бы не в ту сборку,
+        # а трафик переключился бы не с той.
+        run: |
+          set -euo pipefail
+          rsync -az --delete --exclude 'active-build.caddy' --exclude 'secrets/' \
+            -e "$SSH" выкладываемое/ops/ "$TARGET:$DIR/ops/"
+          rsync -az -e "$SSH" выкладываемое/docker-compose.prod.yml "$TARGET:$DIR/"
+
+      - name: Ссылки на прайсы — на стенд файлом
+        # Постоянная ссылка выгрузки несёт в себе токен, то есть это секрет.
+        # Отдавать его аргументом команды нельзя: аргументы видит в `ps`
+        # любой, у кого есть учётка на машине (тем же доводом живёт
+        # ops/migrate-tenants.sh). Поэтому — потоком в файл под umask 077.
+        env:
+          FEEDS: ${{ secrets.DEPLOY_FEED_URLS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FEEDS:-}" ]; then
+            echo "::warning::DEPLOY_FEED_URLS не задан — четвёртая самопроверка (прайс не пуст) покраснит выкладку. Стенду без выгрузок поставьте значение «нет»."
+          fi
+          printf '%s\n' "${FEEDS:-}" | $SSH "$TARGET" "cd '$DIR' && umask 077 && cat > .deploy-feeds"
+
+      - name: Выкладка
+        env:
+          MIGRATIONS: ${{ inputs.migrations }}
+          DATA: ${{ inputs.data }}
+          STAND: ${{ inputs.stand }}
+          WHO: ${{ github.actor }}
+          MIGRATE_WITH: ${{ steps.plan.outputs.migrate_with }}
+          TO: ${{ steps.plan.outputs.to }}
+        run: |
+          set -euo pipefail
+          $SSH "$TARGET" \
+            "cd '$DIR' && DEPLOY_STAND='$STAND' DEPLOY_WHO='$WHO' ops/deploy.sh \
+               --tag '$SHA' --migrations '$MIGRATIONS' --data '$DATA' \
+               --migrate-with '$MIGRATE_WITH' ${TO:+--to $TO}"
+
+      # Прозрачность — это запись, а не кнопка: «что сейчас на ПСИ» обязано
+      # отвечаться без расспросов. Страница Environments показывает, кто
+      # и когда выкладывал; итог прогона — чем именно кончилось. Строка
+      # остаётся и у неудачной выкладки: разбираются как раз с ними.
+      - name: Запись о выкладке
+        if: always()
+        env:
+          STAND: ${{ inputs.stand }}
+          REF: ${{ inputs.ref }}
+          MIGRATIONS: ${{ inputs.migrations }}
+          DATA: ${{ inputs.data }}
+          WAS: ${{ steps.stand.outputs.current }}
+          STATUS: ${{ job.status }}
+          WHO: ${{ github.actor }}
+        run: |
+          {
+            echo "## Выкладка на $STAND"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Стенд | $STAND |"
+            echo "| Версия | \`$SHA\` |"
+            echo "| Откуда | $REF |"
+            echo "| Было | \`${WAS:-ничего}\` |"
+            echo "| Нажал | $WHO |"
+            echo "| Миграции | $MIGRATIONS |"
+            echo "| Данные | $DATA |"
+            echo "| Итог | $STATUS |"
+            echo ""
+            echo '```'
+            cat /tmp/plan.txt 2>/dev/null || echo 'план не считался'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
