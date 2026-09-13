@@ -103,7 +103,7 @@ ufw enable
 ```
 
 Управляющий контур провижининга **порта не занимает**: клиента заводят изнутри
-сети compose (`docker compose exec app wget … http://localhost:8080/…`, §клиент),
+сети compose (`docker compose exec "$(ops/switch-build.sh --current)" wget … http://localhost:8080/…`, §клиент),
 а снаружи `/api/provisioning` закрыт по адресам на самом Caddy. То есть
 firewall его не касается — но проверить, что снаружи он отвечает 404, всё равно
 надо (§клиент).
@@ -163,10 +163,11 @@ Prometheus и alertmanager. Ни JDK, ни node на этой машине не 
 
 Дальше — целиком `docs/deployment.md`, по шагам: `cp .env.example .env`,
 заполнить секреты и `APP_IMAGE_TAG`, забрать образы (`pull`) и поднять ячейку
-(`up -d`), `ops/create-roles.sh`, перезапуск app под рабочей ролью,
+(`up -d`), `ops/create-roles.sh`, перезапуск сборки под рабочей ролью,
 `ops/install-cron.sh`, `ops/basebackup.sh`.
 
 Что не забыть в `.env` (пустые в примере — обязательные): `APP_IMAGE_TAG`,
+`COMPOSE_PROFILES` (какие сборки поднимать — без неё не поднимется ни одной),
 `DB_PASSWORD`, `APP_CRYPTO_KEY`, `ACME_EMAIL`, `ALERT_TELEGRAM_CHAT_ID`,
 `APP_RUNTIME_ROLE` и `APP_DDL_*`, `OFFSITE_REMOTE`, плюс домены
 `APP_DOMAIN`/`S3_DOMAIN` и `PROVISIONING_ALLOW`. Каждую — зачем и что
@@ -195,7 +196,7 @@ Prometheus и alertmanager. Ни JDK, ни node на этой машине не 
       `WARN … правятся прямым SQL` (§деплой, шаг 3);
 - [ ] `curl -o /dev/null -w '%{http_code}' -X POST https://parts.<домен>/api/provisioning/tenants`
       отвечает **404** снаружи (управляющий контур закрыт по адресам);
-- [ ] тревога доходит: `docker stop <ячейка>-app-1`, через ~2 минуты сообщение
+- [ ] тревога доходит: `docker stop <ячейка>-app-blue-1`, через ~2 минуты сообщение
       в Telegram, `docker start` — снятие (§клиент);
 - [ ] число правил Prometheus совпадает с `grep -c 'alert:' ops/alerts.yml`
       (§клиент — Prometheus не перечитывает файл сам);

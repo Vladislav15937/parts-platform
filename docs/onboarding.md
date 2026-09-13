@@ -58,7 +58,7 @@ cp .env.example .env          # секреты, домены, APP_CELL, APP_CELL
 docker compose -f docker-compose.prod.yml pull          # образ приезжает готовым из реестра
 docker compose -f docker-compose.prod.yml up -d
 ops/create-roles.sh           # рабочая роль: журналы приложению не принадлежат
-docker compose -f docker-compose.prod.yml up -d app    # перезапуск под ней
+docker compose -f docker-compose.prod.yml up -d "$(ops/switch-build.sh --current)"   # перезапуск под ней
 ops/install-cron.sh           # пять задач: архив WAL, базовая копия, дампы, обе проверки
 ops/basebackup.sh             # первая базовая копия: без неё точки возврата нет
 ```
@@ -141,7 +141,7 @@ ops/backup.sh`. Позиционный аргумент у них разный (
 ## 2. Арендатор
 
 ```bash
-docker compose -f docker-compose.prod.yml exec app \
+docker compose -f docker-compose.prod.yml exec "$(ops/switch-build.sh --current)" \
   wget -qO- --header='Content-Type: application/json' \
     --post-data '{"token":"<APP_PROVISIONING_TOKEN>",
                   "companyCode":"yardt",
