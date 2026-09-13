@@ -430,8 +430,22 @@ public class CatalogService {
         return FILTERS.keySet();
     }
 
-    private static String columnExpression(String column) {
-        String expression = FILTERS.get(column);
+    /**
+     * Неназванная колонка — это «отбор по ней не делается», а не пятисотка.
+     *
+     * <p>{@code Map.ofEntries} неизменяема и на чтении по {@code null}-ключу
+     * бросает {@code NullPointerException}, а не отвечает «нет такого», —
+     * то есть проверка строкой ниже до этого не доживает, и вместо своего
+     * объяснения наружу уехала бы «Внутренняя ошибка». Отказ обязан
+     * объяснять: офлайн-очередь читает 5xx как повод повторять, а человек
+     * идёт искать поломку сервера.
+     *
+     * <p>Видимость пакетная, а не приватная, ради теста: снаружи {@code null}
+     * сюда не приходит — параметр запроса обязателен, — и позвать метод так
+     * может только он.
+     */
+    static String columnExpression(String column) {
+        String expression = column == null ? null : FILTERS.get(column);
         if (expression == null) {
             throw new IllegalArgumentException("По этой колонке отбор не делается: " + column);
         }
