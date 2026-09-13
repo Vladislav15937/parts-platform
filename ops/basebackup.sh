@@ -100,7 +100,7 @@ ok "поток целый"
     echo "снято: $STAMP"
     echo "начальный сегмент WAL: $START_WAL"
     echo "размер: $SIZE"
-    echo "разворот: ops/restore-pitr.sh --to 'ГГГГ-ММ-ДД ЧЧ:ММ:СС'"
+    echo "разворот: ops/restore-pitr.sh --to 'ГГГГ-ММ-ДД ЧЧ:ММ:СС ПОЯС'  (пояс обязателен: MSK, UTC, +03:00, local)"
 } > "$OUT/manifest.txt"
 : > "$OUT/READY"
 
@@ -159,4 +159,5 @@ printf '\n\033[1;32mБазовая копия снята: %s\033[0m\n' "$OUT"
 printf 'Окно возврата: от %s (копия %s) до последнего сегмента в архиве.\n' \
     "$(cat "$WINDOW_FROM/START_WAL")" "$(basename "$WINDOW_FROM")"
 printf 'Проверить цепочку: ops/wal-archive.sh --chain\n'
-printf 'Вернуться к моменту: ops/restore-pitr.sh --to "ГГГГ-ММ-ДД ЧЧ:ММ:СС"\n'
+printf 'Вернуться к моменту: ops/restore-pitr.sh --to "ГГГГ-ММ-ДД ЧЧ:ММ:СС ПОЯС"\n'
+printf 'Часовой пояс обязателен — MSK, UTC, +03:00 или local (пояс этой машины).\n'
