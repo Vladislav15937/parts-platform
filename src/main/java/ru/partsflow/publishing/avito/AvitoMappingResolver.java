@@ -27,6 +27,17 @@ public class AvitoMappingResolver {
     }
 
     public Mapping resolve(Long categoryId) {
+        // Позиция без категории — не исключение, а обычное состояние: категорию
+        // даёт эталонный вид детали, и пока наименование не сопоставлено
+        // со справочником, её нет вовсе (intake/CLAUDE.md). Ровно на этот
+        // случай и написан fallback ниже — но до него не доходило управление:
+        // ConcurrentHashMap.computeIfAbsent на null-ключе бросает NPE раньше,
+        // чем зовёт load. То есть обещание «одна незамапленная позиция
+        // не должна валить выгрузку всего склада» не выполнялось именно
+        // на той позиции, ради которой его писали.
+        if (categoryId == null) {
+            return Mapping.fallback();
+        }
         return cache.computeIfAbsent(categoryId, this::load);
     }
 
