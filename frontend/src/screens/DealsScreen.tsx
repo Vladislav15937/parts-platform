@@ -323,7 +323,7 @@ function DealsList({ onOpenDeal }: { onOpenDeal: (dealId: number) => void }) {
           Поиск
           <input
             value={draft}
-            placeholder="Номер сделки, клиент или код детали"
+            placeholder="Номер сделки, клиент, № позиции или код детали"
             onChange={(e) => setDraft(e.target.value)}
           />
         </label>
