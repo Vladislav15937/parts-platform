@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Properties;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.IntFunction;
 
 /**
  * Накат миграций на схему арендатора.
@@ -189,8 +190,16 @@ public class TenantSchemaMigrator {
      *                  чтобы сверку можно было спросить без соединения
      */
     static String checkedFloor(String declared, int total,
-                               java.util.function.IntFunction<String> versionAt) {
+                               IntFunction<String> versionAt) {
         int number = changeSetsIn(declared);
+        if (number < 0) {
+            // Формат и диапазон — разные беды, и общий отказ отправил бы
+            // читающего искать не там: «а в наборе 138 changeset'ов»
+            // на «не число» читается как «номер великоват».
+            throw new IllegalStateException("Граница отката объявлена как «"
+                    + declared + "»: нужен формат «число/идентификатор», как "
+                    + "у отметки версии в реестре: " + ROLLBACK_FLOOR);
+        }
         if (number < 1 || number > total) {
             throw new IllegalStateException("Граница отката объявлена как «"
                     + declared + "», а в наборе " + total + " changeset'ов: "

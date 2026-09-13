@@ -358,8 +358,12 @@ class SchemaSyncTest extends PostgresTestBase {
                 .hasMessageContaining("в наборе 3");
 
         assertThatThrownBy(() -> TenantSchemaMigrator.checkedFloor("не число", 3, versions))
-                .as("неразбираемая версия — это «не знаю», а не «подойдёт»")
-                .isInstanceOf(IllegalStateException.class);
+                .as("неразбираемая версия — это «не знаю», а не «подойдёт», "
+                        + "и отказ обязан назвать причину форматом, а не "
+                        + "числом changeset'ов в наборе: иначе читающий пойдёт "
+                        + "искать не там")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("формат");
     }
 
     private void register(long id, String schema) {
