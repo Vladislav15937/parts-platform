@@ -76,6 +76,8 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
+import rollback_floor
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHANGELOG = os.path.join(ROOT, "db", "changelog")
 MANIFEST = "db.changelog-tenant.xml"
@@ -429,11 +431,20 @@ def plural(n):
     return f"{n} changeset{chr(39)}{tail}" if tail else f"{n} changeset"
 
 
-def cost(sets, frm, to, out=print):
-    """Печатает, что снимет откат с версии frm до версии to."""
+def cost(sets, frm, to, out=print, floor=None):
+    """Печатает, что снимет откат с версии frm до версии to.
+
+    Ниже объявленной границы отката цена не печатается вовсе, и это не
+    строгость ради строгости (задача 0102): напечатанная цена читается как
+    «вот чем обойдётся, решайте», то есть как разрешение. Ниже границы решать
+    нечего — такой откат не делается, потому что схему он не возвращает.
+    """
     if to > frm:
         raise SystemExit(f"откат идёт вниз: версия «до» ({to}) не может быть "
                          f"больше версии «с» ({frm})")
+    if floor and to < floor[0]:
+        out(rollback_floor.refusal(to, floor[0], floor[1]))
+        return None
     steps = [cs for cs in sets if to < cs.number <= frm]
     steps.reverse()                       # откат идёт от новых к старым
     if not steps:
@@ -563,6 +574,31 @@ def selftest():
         failures.append("пометку сняли, и печать промолчала о том, что цена "
                         "не названа: молчание читается как «терять нечего»")
 
+    # 9. Ниже границы отката цена не печатается вовсе (задача 0102).
+    #    Напечатанная цена читается как «решайте», а решать там нечего:
+    #    такой откат схему не возвращает. Проверяется обоими краями — иначе
+    #    «отказ всегда» прошёл бы самопроверку и отменил инструмент целиком.
+    sets[0].mark, sets[1].mark = "склад", "кассу"
+    lines = []
+    answer = cost(sets, 3, 1, out=lines.append, floor=(2, "b"))
+    text = "\n".join(lines)
+    if answer is not None:
+        failures.append("откат ниже границы напечатал цену вместо отказа — "
+                        "то есть граница ни на что не влияет")
+    if "кассу" in text:
+        failures.append("отказ всё-таки напечатал цену: человек прочтёт её "
+                        "как разрешение откатиться")
+    if "2" not in text:
+        failures.append("отказ не называет границу — тогда непонятно, "
+                        "до какой версии откатиться можно")
+    lines = []
+    if cost(sets, 3, 1, out=lines.append, floor=(1, "a")) is None:
+        failures.append("откат ДО границы объявлен невозможным: граница "
+                        "запрещает ровно то, ради чего она и поставлена")
+    if "кассу" not in "\n".join(lines):
+        failures.append("откат до самой границы прошёл, а цену не назвал — "
+                        "значит отказ съел и разрешённый случай")
+
     return failures
 
 
@@ -587,17 +623,36 @@ def main():
             return 1
         print("Самопроверка пройдена: DROP COLUMN без пометки отбит, пометка "
               "с причиной принята,\nпустая — нет, у нового changeset'а цена "
-              "обязана стоять рядом с откатом,\nа снятая пометка пропадает "
-              "из печати цены.")
+              "обязана стоять рядом с откатом,\nснятая пометка пропадает "
+              "из печати цены, а откат ниже границы отбит\nотказом — при том "
+              "что откат до самой границы по-прежнему считается.")
         return 0
 
     sets = read()
 
+    # Граница отката разбирается здесь же, а не только в verify-rollback:
+    # эта задача CI идёт без Docker и за секунды, и разъехавшееся объявление
+    # обязано краснеть в ней, а не через две минуты наката.
+    try:
+        floor = rollback_floor.resolve()
+        # Своя нумерация против нумерации границы: два разбора одного
+        # манифеста, разойдясь, дали бы границу не на том changeset'е.
+        if parse_version(floor[1], sets) != floor[0]:
+            raise rollback_floor.Разъехалось(
+                f"граница {floor[0]}/{floor[1]}: этот сторож считает "
+                f"«{floor[1]}» {parse_version(floor[1], sets)}-м changeset'ом")
+    except rollback_floor.Разъехалось as e:
+        print(f"Объявление границы отката не сходится: {e}")
+        print("Граница живёт в db/changelog/rollback-floor.properties, "
+              "довод — в db/CLAUDE.md.")
+        return 1
+
     if args.count or args.to or args.frm:
         frm = parse_version(args.frm, sets) if args.frm else len(sets)
         to = (frm - args.count) if args.count else parse_version(args.to, sets)
-        cost(sets, frm, max(to, 0))
-        return 0
+        # None означает отказ: ниже границы у отката нет цены, а есть ответ
+        # «так не делается». Код возврата ненулевой — шаг выкладки читает его.
+        return 1 if cost(sets, frm, max(to, 0), floor=floor) is None else 0
 
     old, compared = released({cs.path for cs in sets})
     problems = check(sets, old)
@@ -614,6 +669,9 @@ def main():
           f"changeset'ов из {len(sets)}, чей откат теряет данные\n"
           f"({len(inline)} пометкой в самом changeset'е, "
           f"{len(risky) - len(inline)} — списком выпущенных).")
+    print(f"Нижняя граница отката: версия {floor[0]} ({floor[1]}) — "
+          f"ниже неё цена не печатается,\nпотому что такой откат не делается: "
+          f"схему он не возвращает (db/CLAUDE.md).")
     if not compared:
         print("  origin/main недоступен — новые changeset'ы от выпущенных "
               "не отличались, требование\n  «пометка рядом с откатом» "
