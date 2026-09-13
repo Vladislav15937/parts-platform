@@ -357,5 +357,5 @@ jobs:
         run: |
           echo "Образ: ${{ steps.image.outputs.ref }}"
           echo "Digest: $(docker manifest inspect -v '${{ steps.image.outputs.ref }}' \
-            | jq -r '.Descriptor.digest')"
+            | jq -r 'if type == "array" then .[0] else . end | .Descriptor.digest')"
           echo "Выкладка ячейки: APP_IMAGE_TAG=${{ github.sha }}"
