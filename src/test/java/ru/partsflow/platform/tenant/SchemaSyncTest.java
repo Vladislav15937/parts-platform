@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Режим «привести схемы к версии артефакта и выйти».
@@ -331,6 +332,34 @@ class SchemaSyncTest extends PostgresTestBase {
         assertThat(number)
                 .as("граница выше вершины набора — откатиться нельзя никуда")
                 .isLessThanOrEqualTo(migrator.totalChangeSets());
+    }
+
+    @Test
+    @DisplayName("Разъехавшееся объявление границы роняет инструмент, а не меняет место")
+    void brokenFloorDeclarationIsRefused() {
+        // Набор из трёх: версия N читается как «N/идентификатор N-го».
+        java.util.function.IntFunction<String> versions =
+                n -> n + "/" + new String[]{"a", "b", "c"}[n - 1];
+
+        assertThat(TenantSchemaMigrator.checkedFloor("2/b", 3, versions))
+                .as("исправное объявление не принято — тогда инструмент "
+                        + "не запустится ни разу")
+                .isEqualTo("2/b");
+
+        assertThatThrownBy(() -> TenantSchemaMigrator.checkedFloor("2/c", 3, versions))
+                .as("пара «число/идентификатор» разъехалась, а её приняли: "
+                        + "объявление читалось бы двумя способами, и однажды "
+                        + "это были бы разные места")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("разъехалось");
+
+        assertThatThrownBy(() -> TenantSchemaMigrator.checkedFloor("99/x", 3, versions))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("в наборе 3");
+
+        assertThatThrownBy(() -> TenantSchemaMigrator.checkedFloor("не число", 3, versions))
+                .as("неразбираемая версия — это «не знаю», а не «подойдёт»")
+                .isInstanceOf(IllegalStateException.class);
     }
 
     private void register(long id, String schema) {

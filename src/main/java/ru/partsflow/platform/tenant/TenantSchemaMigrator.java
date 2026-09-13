@@ -170,22 +170,39 @@ public class TenantSchemaMigrator {
         if (known != null) {
             return known;
         }
-        String declared = declaredFloor();
+        String declared = checkedFloor(declaredFloor(), totalChangeSets(), this::versionAt);
+        rollbackFloor = declared;
+        return declared;
+    }
+
+    /**
+     * Сверка объявления с набором, отделённая от базы намеренно.
+     *
+     * <p>Обе ветки отказа — «версии в наборе нет» и «пара разъехалась» —
+     * это правила про текст, и проверять их тестом, которому нужна база
+     * и Liquibase, значит не проверять вовсе: такой тест напишут один раз
+     * и на положительный случай. Питоновская половина того же объявления
+     * проверяется пятью подделками (`db/verify-rollback.py --selftest`),
+     * и эта обязана быть не слабее.
+     *
+     * @param versionAt как {@link #versionAt(int)} — вынесено параметром,
+     *                  чтобы сверку можно было спросить без соединения
+     */
+    static String checkedFloor(String declared, int total,
+                               java.util.function.IntFunction<String> versionAt) {
         int number = changeSetsIn(declared);
-        int total = totalChangeSets();
         if (number < 1 || number > total) {
             throw new IllegalStateException("Граница отката объявлена как «"
                     + declared + "», а в наборе " + total + " changeset'ов: "
                     + ROLLBACK_FLOOR);
         }
-        String at = versionAt(number);
+        String at = versionAt.apply(number);
         if (!at.equals(declared)) {
             throw new IllegalStateException("Граница отката объявлена как «"
                     + declared + "», а версия " + number + " этого набора — «"
                     + at + "». Объявление разъехалось с changelog'ом: "
                     + ROLLBACK_FLOOR);
         }
-        rollbackFloor = declared;
         return declared;
     }
 
