@@ -92,7 +92,7 @@ describe('список сделок продавца', () => {
     // Пусто вообще и пусто по отбору — разные утверждения.
     await waitFor(() => expect(screen.getByText('Сделок в этом состоянии нет')).toBeTruthy());
 
-    fireEvent.change(screen.getByPlaceholderText('Номер сделки, клиент или код детали'), {
+    fireEvent.change(screen.getByPlaceholderText('Номер сделки, клиент, № позиции или код детали'), {
       target: { value: '55747F0F91CD' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Найти' }));
@@ -102,6 +102,32 @@ describe('список сделок продавца', () => {
 
     const last = new URL(String(fetch.mock.calls.at(-1)?.[0]), 'http://x');
     expect(last.searchParams.get('q')).toBe('55747F0F91CD');
+  });
+
+  /**
+   * Задача 0069: искать сделку по номеру позиции теперь можно, и человек
+   * обязан об этом узнать с экрана — подсказка в поле единственное место,
+   * где сказано, что понимает поиск. Возможность, о которой не написано,
+   * равна отсутствующей: номер продиктовали по телефону, а продавец видит
+   * поле «Номер сделки, клиент или код детали» и такого номера туда
+   * не наберёт.
+   *
+   * <p>Номер уходит в запрос ровно тем, что набрали, — знак «№» разбирает
+   * сервер (`PartNumberQuery`), а не экран: два разбора разошлись бы.
+   */
+  it('поле поиска называет номер позиции и шлёт его как набрали', async () => {
+    const fetch = stubApi({ items: [], total: 0 });
+    render(<DealsScreen onOpenDeal={() => {}} />);
+    await waitFor(() => expect(screen.getByText('Сделок в этом состоянии нет')).toBeTruthy());
+
+    const field = screen.getByPlaceholderText(/№ позиции/);
+    fireEvent.change(field, { target: { value: '№ 347' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Найти' }));
+
+    await waitFor(() => {
+      const last = new URL(String(fetch.mock.calls.at(-1)?.[0]), 'http://x');
+      expect(last.searchParams.get('q')).toBe('№ 347');
+    });
   });
 
   it('воронка «Выданные» и отбор «мои» уходят в запрос', async () => {

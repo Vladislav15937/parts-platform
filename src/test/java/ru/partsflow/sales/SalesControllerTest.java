@@ -1101,6 +1101,78 @@ class SalesControllerTest extends PostgresTestBase {
     }
 
     /**
+     * Задача 0069: «мне звонили, позиция 347, вы её вчера откладывали».
+     *
+     * <p>Номер позиции завели ради разговора (0060), искать по нему научили
+     * склад (0064), а реестр сделок остался в стороне: до этой правки путь
+     * от произнесённого вслух номера к документу не существовал вовсе —
+     * публичного кода у звонящего нет (он на этикетке), номера сделки
+     * приезжающий не помнит.
+     *
+     * <p><b>Почему именно «№ 347», а не «347».</b> Форма со знаком номера —
+     * ровно та, что стоит в строке выдачи продавца и которую диктуют, —
+     * и она же делает проверку доказательной: {@code parseNumber} её
+     * в число не разбирает, значит ветка номера сделки отпадает, а имя
+     * клиента и публичный код такой подстроки не содержат. Выполнить
+     * утверждение может только новая ветка; сняв её, тест падает
+     * на ненайденной сделке. Голая цифра проверяется тем же вызовом
+     * следом — это то, что набирают чаще.
+     *
+     * <p><b>Запрос со знаком номера уходит параметром, а не в адресе</b>:
+     * MockMvc разбирает адрес как URI и плюс в пробел не превращает,
+     * в отличие от настоящего контейнера, — «№ 347» доехало бы как
+     * «№+347» и перестало быть номером ещё до разбора. Проверяется здесь
+     * разбор запроса, а не кодирование адреса; второе — за живым прогоном.
+     */
+    @Test
+    @DisplayName("Сделка находится по номеру позиции, названному вслух")
+    void registryFindsDealByPartNumber() throws Exception {
+        Long partId = partWithStock("Фара для поиска по номеру позиции", 1);
+        long dealId = createDeal(partId);
+        long number = partNumberOf(partId);
+
+        mvc.perform(get("/api/deals/registry").param("q", "№ " + number)
+                        .session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(dealId)).isNotEmpty());
+
+        mvc.perform(get("/api/deals/registry?q=" + number).session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(dealId)).isNotEmpty());
+    }
+
+    /**
+     * Номер, которого нет ни у одной позиции, — пустая выдача, а не пятисотка
+     * и не «покажем всё, раз ничего не совпало». Отрицательное утверждение,
+     * и потому оно сторожит: число заведомо за пределом обеих нумераций,
+     * так что ни сделка, ни позиция с ним не найдутся в общей схеме класса.
+     */
+    @Test
+    @DisplayName("Номер позиции, которого нет, — ничего не найдено, а не пятисотка")
+    void registryFindsNothingByUnknownPartNumber() throws Exception {
+        mvc.perform(get("/api/deals/registry?q=999000111").session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(0))
+                .andExpect(jsonPath("$.total").value(0));
+    }
+
+    /**
+     * Номер позиции, которая ни в одной сделке не стоит, сделок не выдаёт:
+     * ветка идёт через {@code deal_item}, а не «нашли позицию — показали всё».
+     */
+    @Test
+    @DisplayName("Номер позиции без сделки сделок не показывает")
+    void registryFindsNothingByNumberOfUnsoldPart() throws Exception {
+        Long lonely = partWithStock("Позиция без сделки по номеру", 1);
+        long number = partNumberOf(lonely);
+
+        mvc.perform(get("/api/deals/registry").param("q", "№ " + number)
+                        .session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(0));
+    }
+
+    /**
      * Воронка разводит состояния: выданная сделка не висит в «Отложенных»,
      * а в «Выданных» и «Всех» — есть.
      */
@@ -1197,6 +1269,12 @@ class SalesControllerTest extends PostgresTestBase {
         assertThat(body)
                 .as("в списке продавца не должно быть закупочной цены и наценки")
                 .doesNotContain("cost").doesNotContain("margin").doesNotContain("profit");
+    }
+
+    /** Порядковый номер позиции — тот, который называют вслух (задача 0060). */
+    private long partNumberOf(Long partId) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, partId));
     }
 
     private String publicCodeOf(Long partId) {
