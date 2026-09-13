@@ -1,19 +1,10 @@
 package ru.partsflow.platform.tenant;
 
-import liquibase.Contexts;
-import liquibase.Liquibase;
-import liquibase.database.Database;
-import liquibase.database.DatabaseFactory;
-import liquibase.database.jvm.JdbcConnection;
-import liquibase.resource.ClassLoaderResourceAccessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
-
-import javax.sql.DataSource;
-import java.sql.Connection;
 
 /**
  * Накат общей схемы {@code catalog} при старте.
@@ -29,8 +20,16 @@ import java.sql.Connection;
  * приложения, поднимающихся одновременно, не подерутся: первый мигрирует,
  * остальные ждут и видят, что делать нечего.
  *
+ * <p><b>«До первого запроса» — не то же самое, что «до первого ответа».</b>
+ * {@code ApplicationRunner} работает уже после того, как Tomcat принимает
+ * подключения, то есть окно «порт отвечает, схема догоняется» настоящее.
+ * Готовность приложения ({@code /actuator/readiness}) поэтому спрашивает
+ * не этот класс и не факт его запуска, а состояние самой схемы —
+ * {@link CatalogSchemaMigrator#pending()}.
+ *
  * <p>Выключается свойством — на случай, когда миграциями управляет внешний
- * оркестратор и приложению туда лезть не надо.
+ * оркестратор и приложению туда лезть не надо. Проверка готовности при этом
+ * остаётся: она спрашивает схему, а не того, кто её накатывает.
  */
 @Component
 @ConditionalOnProperty(name = "app.migrate-catalog-on-start", havingValue = "true",
@@ -39,30 +38,18 @@ public class CatalogMigrations implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(CatalogMigrations.class);
 
-    private static final String CHANGELOG = "db/changelog/db.changelog-catalog.xml";
+    private final CatalogSchemaMigrator migrator;
 
-    private final DataSource dataSource;
-
-    public CatalogMigrations(
-            @SchemaOwnerDataSource.SchemaOwner DataSource dataSource) {
-        // Владельцем, а не рантайм-ролью: DDL делает тот, кому принадлежат
-        // схемы, иначе разделение ролей бессмысленно.
-        this.dataSource = dataSource;
+    public CatalogMigrations(CatalogSchemaMigrator migrator) {
+        this.migrator = migrator;
     }
 
     @Override
     public void run(org.springframework.boot.ApplicationArguments args) {
-        try (Connection connection = dataSource.getConnection()) {
-            Database database = DatabaseFactory.getInstance()
-                    .findCorrectDatabaseImplementation(new JdbcConnection(connection));
-            database.setLiquibaseSchemaName("public");
-
-            try (Liquibase liquibase = new Liquibase(
-                    CHANGELOG, new ClassLoaderResourceAccessor(), database)) {
-                liquibase.update(new Contexts());
-            }
+        try {
+            migrator.migrate();
             log.info("Общая схема каталога актуальна");
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             // Падать намеренно: без каталога не заведётся ни один арендатор,
             // и приложение, поднявшееся без него, будет отвечать ошибками
             // на каждый вход — только не сразу и не понятно почему.

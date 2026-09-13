@@ -7,6 +7,7 @@ import org.springframework.boot.actuate.endpoint.web.WebEndpointResponse;
 import org.springframework.boot.actuate.endpoint.web.WebEndpointsSupplier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import ru.partsflow.platform.tenant.CatalogSchemaMigrator;
 import ru.partsflow.platform.tenant.JournalProtection;
 import ru.partsflow.platform.tenant.TenantMigrations;
 
@@ -68,13 +69,18 @@ import java.util.List;
  *
  * <p>Заодно выяснилось, что обещание было сильнее правды: порядок
  * {@code ApplicationRunner}'ов между собой не задан, и «все отработали»
- * флаг не гарантировал. То, ради чего он стоял — окно, в котором накат
- * общей схемы {@code catalog} ещё идёт, — закрыто по существу: без реестра
- * арендаторов проверка схем отвечает «версии не проверены» и красит
- * готовность. Остаётся узкое место: при перезапуске, когда реестр уже есть,
- * а новому changeset'у общей схемы накатиться ещё нужно, готовность
- * ответит «готов» на несколько секунд раньше правды. Названо здесь
- * намеренно — молча это было бы обещанием, которого код не держит.
+ * флаг не гарантировал.
+ *
+ * <p><b>А окно, ради которого флаг стоял, закрыто спрашиванием состояния,
+ * а не факта.</b> Первая редакция полагалась на то, что без реестра
+ * арендаторов проверка схем отвечает «версии не проверены»; при перезапуске
+ * на базе, где реестр уже есть, а новому changeset'у общей схемы накатиться
+ * ещё нужно, готовность отвечала «готов» на несколько секунд раньше правды —
+ * то есть трафик мог переключиться на сборку, у которой {@code catalog}
+ * ещё догоняется. Теперь про общую схему спрашивают её саму
+ * ({@link CatalogSchemaMigrator#pending()}), и правило из 0078 выполнено
+ * буквально: спрашивать надо то, что стартовые шаги делают, а не то, что
+ * они закончились (задача 0086).
  *
  * <p>Транзакция не нужна: все запросы идут в {@code public} — к реестру
  * и к правам, — а не в схему арендатора.
@@ -85,6 +91,7 @@ public class ReadinessEndpoint {
 
     private final JdbcTemplate jdbc;
     private final TenantMigrations migrations;
+    private final CatalogSchemaMigrator catalog;
     private final JournalProtection journals;
 
     /**
@@ -94,10 +101,12 @@ public class ReadinessEndpoint {
     private final ObjectProvider<WebEndpointsSupplier> webEndpoints;
 
     public ReadinessEndpoint(JdbcTemplate jdbc, TenantMigrations migrations,
+                             CatalogSchemaMigrator catalog,
                              JournalProtection journals,
                              ObjectProvider<WebEndpointsSupplier> webEndpoints) {
         this.jdbc = jdbc;
         this.migrations = migrations;
+        this.catalog = catalog;
         this.journals = journals;
         this.webEndpoints = webEndpoints;
     }
@@ -112,7 +121,7 @@ public class ReadinessEndpoint {
      */
     @ReadOperation
     public WebEndpointResponse<Readiness> readiness() {
-        List<Check> checks = List.of(database(), schemas(), journals(), metrics());
+        List<Check> checks = List.of(database(), catalog(), schemas(), journals(), metrics());
         boolean ready = checks.stream().allMatch(Check::ok);
         return new WebEndpointResponse<>(new Readiness(ready, checks),
                 ready ? WebEndpointResponse.STATUS_OK
@@ -127,6 +136,44 @@ public class ReadinessEndpoint {
             return new Check("database", false,
                     "База не отвечает: " + TenantMigrations.rootMessage(e));
         }
+    }
+
+    /**
+     * Принята ли общая схема ячейки.
+     *
+     * <p>Спрашивается схема, а не накат: {@code CatalogMigrations} —
+     * {@code ApplicationRunner}, то есть он работает уже после того, как
+     * Tomcat начал отвечать, и «порт открылся» тут не значит ничего.
+     * До задачи 0086 эту дыру прикрывало совпадение: на новой ячейке реестра
+     * арендаторов ещё нет, и проверка схем краснела сама. При перезапуске
+     * реестр есть — и готовность отвечала «да», пока общая схема догонялась.
+     *
+     * <p>Стоит перед проверкой схем арендаторов намеренно: реестр лежит
+     * в {@code public} и заводится этим же changelog'ом, так что «версии
+     * не проверены» ниже — следствие, а причина называется здесь.
+     */
+    private Check catalog() {
+        CatalogSchemaMigrator.Pending pending;
+        try {
+            pending = catalog.pending();
+        } catch (RuntimeException e) {
+            // Истории наката нет вовсе — ячейку поднимают впервые, и общая
+            // схема ещё не создана. Причина — из самого глубокого исключения:
+            // обёртка несёт в себе весь текст запроса.
+            return new Check("catalog", false,
+                    "Общая схема catalog не проверена: " + TenantMigrations.rootMessage(e));
+        }
+
+        if (pending.ok()) {
+            return new Check("catalog", true,
+                    "Общая схема catalog принята целиком: changeset'ов %d"
+                            .formatted(pending.total()));
+        }
+        return new Check("catalog", false,
+                "Общая схема catalog принята не целиком: не хватает %d из %d (%s). "
+                        .formatted(pending.missing().size(), pending.total(), pending.names())
+                        + "Накат идёт при старте приложения — дождитесь его; если "
+                        + "не заканчивается, смотрите лог CatalogMigrations");
     }
 
     private Check schemas() {
