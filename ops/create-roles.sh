@@ -49,6 +49,16 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT SELECT ON TABLES TO $APP_RUNTIM
 GRANT USAGE ON SCHEMA public TO $APP_RUNTIME_ROLE;
 GRANT SELECT ON public.tenant_registry TO $APP_RUNTIME_ROLE;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.shedlock TO $APP_RUNTIME_ROLE;
+
+-- Хранилище сессий (catalog/021, задача 0080): состояние сессии живёт
+-- в общей схеме ячейки, и рабочая роль пишет туда на каждом входе.
+-- Без этих прав ячейка не пускает никого — сессию некуда записать.
+-- Те же права выдаёт и накат общей схемы (SchemaGrants.applyCellTables):
+-- скрипт заведения ролей на работающей ячейке после выкладки
+-- не перезапускают, а таблица появилась позже него.
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.spring_session TO $APP_RUNTIME_ROLE;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.spring_session_attributes
+    TO $APP_RUNTIME_ROLE;
 SQL
 
 echo "==> Права на схемы арендаторов"

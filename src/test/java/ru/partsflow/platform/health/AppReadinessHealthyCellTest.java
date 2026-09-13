@@ -320,9 +320,15 @@ class AppReadinessHealthyCellTest extends PostgresTestBase {
         owner.execute("GRANT USAGE ON SCHEMA catalog TO " + ROLE);
         owner.execute("GRANT SELECT ON ALL TABLES IN SCHEMA catalog TO " + ROLE);
 
-        // А права на схему арендатора — настоящим SchemaGrants: копия его SQL
-        // разошлась бы с оригиналом, и тест стерёг бы несуществующее поведение.
-        new SchemaGrants(ownerDataSource(), ROLE).apply(TENANT);
+        // А права на схему арендатора и на служебные таблицы ячейки —
+        // настоящим SchemaGrants: копия его SQL разошлась бы с оригиналом,
+        // и тест стерёг бы несуществующее поведение. Хранилище сессий тут
+        // не украшение: без прав на него уборка истёкших сессий отвечает
+        // «permission denied for table spring_session» каждую минуту,
+        // а вход на такой ячейке невозможен вовсе.
+        SchemaGrants grants = new SchemaGrants(ownerDataSource(), ROLE);
+        grants.apply(TENANT);
+        grants.applyCellTables();
     }
 
     /** Владелец схем: тот, под кем поднят контейнер. */

@@ -39,9 +39,11 @@ public class CatalogMigrations implements ApplicationRunner {
     private static final Logger log = LoggerFactory.getLogger(CatalogMigrations.class);
 
     private final CatalogSchemaMigrator migrator;
+    private final SchemaGrants grants;
 
-    public CatalogMigrations(CatalogSchemaMigrator migrator) {
+    public CatalogMigrations(CatalogSchemaMigrator migrator, SchemaGrants grants) {
         this.migrator = migrator;
+        this.grants = grants;
     }
 
     @Override
@@ -54,6 +56,21 @@ public class CatalogMigrations implements ApplicationRunner {
             // и приложение, поднявшееся без него, будет отвечать ошибками
             // на каждый вход — только не сразу и не понятно почему.
             throw new IllegalStateException("Не удалось накатить общую схему каталога", e);
+        }
+
+        try {
+            // Права на служебные таблицы ячейки — здесь же, по той же причине,
+            // по которой их выдаёт накат схемы арендатора: новая таблица прав
+            // не наследует, а ops/create-roles.sh на работающей ячейке после
+            // выкладки никто не перезапускает. Цена пропуска — не «раздел
+            // не работает», а «войти не может никто»: хранилище сессий лежит
+            // в public, и без прав на него сессию некуда записать. Поэтому
+            // падаем так же, как на каталоге, — и по тому же доводу.
+            // В разработке разделения ролей нет, и метод не делает ничего.
+            grants.applyCellTables();
+        } catch (RuntimeException e) {
+            throw new IllegalStateException(
+                    "Не удалось выдать права на служебные таблицы ячейки", e);
         }
     }
 }

@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;
+import java.util.List;
 
 /**
  * Права рантайм-роли на схему арендатора.
@@ -35,6 +36,16 @@ import javax.sql.DataSource;
 public class SchemaGrants {
 
     private static final Logger log = LoggerFactory.getLogger(SchemaGrants.class);
+
+    /**
+     * Служебные таблицы ячейки в {@code public}, которые правит рабочая роль.
+     *
+     * <p>Хранилище сессий Spring Session: строка сессии и её атрибуты.
+     * {@code shedlock} и {@code tenant_registry} сюда не входят — их права
+     * выданы при заведении роли и с тех пор не менялись.
+     */
+    private static final List<String> CELL_TABLES =
+            List.of("spring_session", "spring_session_attributes");
 
     private final JdbcTemplate owner;
     private final String runtimeRole;
@@ -74,6 +85,39 @@ public class SchemaGrants {
             owner.execute("REVOKE UPDATE, DELETE ON %s.%s FROM %s".formatted(schema, journal, role));
         }
         log.debug("Схема {}: права выданы роли {}, журналы заперты", schema, runtimeRole);
+    }
+
+    /**
+     * Права рабочей роли на служебные таблицы ячейки в {@code public}.
+     *
+     * <p>Сегодня это хранилище сессий (задача 0080): состояние сессии живёт
+     * в общей схеме, и рабочая роль пишет туда на каждом входе. Без этих
+     * прав ячейка не «теряет возможность», а <b>перестаёт пускать вообще
+     * кого-либо</b> — сессию некуда записать, то есть вход отвечает
+     * пятисоткой при верном пароле.
+     *
+     * <p><b>Поэтому права выдаёт накат, а не только {@code ops/create-roles.sh}.</b>
+     * Тот заводит роль один раз, при включении разделения, — а таблица
+     * появилась позже него, и на работающей ячейке никто не перезапускает
+     * скрипт заведения ролей после выкладки. Это ровно та ловушка, что уже
+     * записана в корневом {@code CLAUDE.md}: «права выдаются и схемам,
+     * которым нечего накатывать», только цена здесь выше — не склад
+     * без доступа, а никто не может войти.
+     *
+     * <p>Идемпотентно, как и {@link #apply(String)}: {@code GRANT} повторно
+     * ничего не ломает.
+     */
+    public void applyCellTables() {
+        if (!enabled()) {
+            return;
+        }
+        String role = requireSafeName(runtimeRole);
+        owner.execute("GRANT USAGE ON SCHEMA public TO " + role);
+        for (String table : CELL_TABLES) {
+            owner.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON public.%s TO %s"
+                    .formatted(table, role));
+        }
+        log.debug("Служебные таблицы ячейки: права выданы роли {}", runtimeRole);
     }
 
     /**

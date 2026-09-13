@@ -48,6 +48,18 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- Хранилище сессий в общей схеме ячейки, а не в памяти процесса.
+             Своего писать не стали: это ровно то, для чего Spring Session
+             сделан, а в хранилище сессий ошибаются в вещах, которых не видно
+             (флаги cookie, срок жизни, подмена идентификатора). Redis тут
+             не годится — в ячейке его нет, а заводить ради сессий четвёртый
+             вид инфраструктуры дороже таблицы в Postgres, который и так
+             стоит рядом. -->
+        <dependency>
+            <groupId>org.springframework.session</groupId>
+            <artifactId>spring-session-jdbc</artifactId>
+        </dependency>
+
         <!-- Реестр Prometheus. Без него actuator не заводит /actuator/prometheus
              вовсе, и метрики очереди событий существуют только внутри процесса:
              в списке management.endpoints они при этом перечислены, то есть
