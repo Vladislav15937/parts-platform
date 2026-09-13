@@ -1,10 +1,10 @@
 ---
 id: 0071
 title: `WheelService.orderOf(null, …)` роняет NPE — мина, а не отказ
-status: новая
-assignee: —
+status: готово
+assignee: coder
 source: находка разбора волны 12 сентября 2026
-pr: —
+pr: 180
 ---
 
 ## Что найдено
