@@ -47,6 +47,19 @@ jobs:
       - name: db/check-changelog.py
         run: ./db/check-changelog.py
 
+      # Цена отката. Проверка не умеет определять потерю данных сама —
+      # это знает только автор changeset'а, — но умеет требовать, чтобы
+      # он её назвал: у отката с DROP TABLE, DROP COLUMN, DELETE или UPDATE
+      # обязана стоять строка `--rollback-теряет`. Без неё выкладка узнаёт
+      # цену отката от клиента, у которого «позиция 347» стала другой
+      # деталью. Здесь же, а не в задаче с Docker: это разбор текста,
+      # секунды, и ответ нужен до двадцати минут прогона.
+      - name: db/rollback-cost.py --selftest
+        run: ./db/rollback-cost.py --selftest
+
+      - name: db/rollback-cost.py
+        run: ./db/rollback-cost.py
+
   endpoints:
     name: Эндпоинты и экраны
     runs-on: ubuntu-latest
