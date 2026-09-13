@@ -279,23 +279,40 @@ jobs:
       # Конфигурация терминатора не проверяется ничем остальным: ошибка в ней
       # обнаруживается на выкладке, то есть в момент, когда клиенты уже ждут.
       # Секунды на проверку против часа разбора в бою.
+      #
+      # Файл активной сборки монтируется рядом: Caddyfile его импортирует,
+      # и без него разбор падает. Проверяется он тут не «заодно» — это
+      # единственное место, где записано, куда идёт трафик ячейки.
       - name: Конфигурация терминатора
         run: |
           docker run --rm -v "$PWD/ops/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            -v "$PWD/ops/active-build.caddy:/etc/caddy/active-build.caddy:ro" \
             -e APP_DOMAIN=parts.example.ru \
             -e S3_DOMAIN=s3.example.ru \
             -e ACME_EMAIL=ci@example.ru \
             -e PROVISIONING_ALLOW=10.0.0.0/8 \
             caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
 
+      # Переключатель трафика проверяет себя сам: без docker и без ячейки,
+      # на разборе файла активной сборки и записи в него. Он единственное,
+      # что стоит между «новая сборка не поднялась» и «люди уехали на неё»,
+      # а проверка, которая не краснеет на дефекте, хуже отсутствующей.
+      - name: ops/switch-build.sh --selftest
+        run: ./ops/switch-build.sh --selftest
+
       # Проверяется не только синтаксис compose, но и полнота .env.example:
       # переменные заполняются заглушками прямо из него, и забытая в примере
       # обязательная переменная валит эту команду. Иначе о ней узнаёт клиент,
       # разворачивающий ячейку по инструкции.
+      #
+      # Обе сборки называются явно: `config` показывает только сервисы
+      # включённых профилей, а сборки стоят под профилями blue и green —
+      # без этих флагов зелёная не проверялась бы вовсе.
       - name: Боевой compose и полнота .env.example
         run: |
           sed -E 's/^([A-Z0-9_]+)=$/\1=ci-placeholder/' .env.example > .env
-          docker compose -f docker-compose.prod.yml --env-file .env config >/dev/null
+          docker compose -f docker-compose.prod.yml --env-file .env \
+            --profile blue --profile green config >/dev/null
 
       # Образ собирается тем же многоступенчатым Dockerfile, что и в бою:
       # фронтенд внутрь jar, jar в JRE. Бэкенд и фронтенд проверены соседними

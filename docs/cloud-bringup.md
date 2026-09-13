@@ -103,7 +103,7 @@ ufw enable
 ```
 
 Управляющий контур провижининга **порта не занимает**: клиента заводят изнутри
-сети compose (`docker compose exec app wget … http://localhost:8080/…`, §клиент),
+сети compose (`docker compose exec "$(ops/switch-build.sh --current)" wget … http://localhost:8080/…`, §клиент),
 а снаружи `/api/provisioning` закрыт по адресам на самом Caddy. То есть
 firewall его не касается — но проверить, что снаружи он отвечает 404, всё равно
 надо (§клиент).
