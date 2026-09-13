@@ -30,6 +30,29 @@
 (`code_only`): закомментированный вызов и `{@code provisionTenants(TENANT)}`
 в javadoc — пример, а не занятие.
 
+**Свободен «здесь» и свободен «в main» — разные вопросы, и сторож отвечал
+на первый.** Пока PR задачи 0049 ждал вердикта разбора, в `main` уехала 0064
+и заняла `t_000153` — тот же номер, что взяла себе ждавшая ветка. В рабочей
+копии столкновения нет вовсе: чужой файл появился в `main` после ответвления.
+Локально зелено, краснеет CI — после двадцати минут прогона, не тем местом
+и не у того, кто занял номер первым. Причём наказывает это ровно за то
+поведение, которого мы добиваемся: чем дольше ветка ждёт настоящего разбора,
+тем вероятнее, что её номер заняли.
+
+Поэтому сторож сверяется не только с рабочей копией, но и с `origin/main`,
+и складывает не два дерева, а **то, что получится после слияния**: у файла,
+который ветка правит, побеждает версия ветки; у файла, который она не трогала,
+— версия `origin/main`; файл, удалённый веткой, не считается вовсе. Иначе
+сторож краснел бы на собственной правке ветки — а ложная тревога здесь дороже
+пропуска: на неё натыкается каждый прогон, и кончается это тем, что проверку
+отключают.
+
+Разбор идёт по дереву, которое уже есть локально; `git fetch` сторож
+не делает и без `origin/main` **не падает** — говорит, что сверка не выполнена,
+и проверяет рабочую копию, как раньше. Сеть у него не всегда есть (`./mvnw -o`
+здесь не случайность), а сторож, роняющий прогон из-за неподтянутой ссылки,
+живёт до первого такого утра.
+
 Ниже — список пар, делящих схему намеренно, с причиной у каждой. Пометка
 без причины не принимается: причина и есть то, что отличает разбор от отписки.
 
@@ -55,12 +78,19 @@
 
   ./tools/test-schema-guard.py [--list] [--selftest]
 """
+import hashlib
 import os
 import re
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TESTS = os.path.join(ROOT, "src", "test", "java")
+
+# Приставка к пути файла, чья версия взята из origin/main, а не из рабочей
+# копии. Она же отличает такого хозяина схемы в сообщении: «столкнулся сам
+# с собой» и «номер занят в main, пока ветка ждала» — разные новости.
+REMOTE = "origin/main:"
 
 # Схема -> (классы, которым позволено её делить, почему это не столкновение).
 # Классы перечислены поимённо: третий класс, пришедший к той же схеме, обязан
@@ -174,10 +204,23 @@ def provisioned(raw):
     return schemas, unresolved
 
 
-def survey(root=TESTS):
-    """Кто какую схему заводит, какие номера вообще встречаются, что не разобрано."""
+def survey(root=TESTS, remote=None):
+    """Кто какую схему заводит, какие номера вообще встречаются, что не разобрано.
+
+    `remote` — файлы, чья версия из origin/main окажется в main после слияния:
+    {абсолютный путь: (как называть, содержимое)}. Местная копия такого файла
+    пропускается, иначе один и тот же класс числился бы хозяином дважды —
+    с устаревшим номером из ветки и с новым из main, — и сторож краснел бы
+    на столкновении файла с самим собой.
+
+    Неразобранный аргумент `provisionTenants(...)` с той стороны не считается:
+    это забота прогона на main, а не ветки, которая файла даже не трогала.
+    """
+    remote = remote or {}
     owners, mentioned, unresolved = {}, set(), []
     for path in java_files(root):
+        if path in remote:
+            continue
         text = open(path, encoding="utf-8").read()
         mentioned |= set(SCHEMA.findall(text))
         taken, unknown = provisioned(text)
@@ -185,6 +228,11 @@ def survey(root=TESTS):
             owners.setdefault(schema, []).append(path)
         for arg in sorted(unknown):
             unresolved.append((path, arg))
+    for _, (name, text) in sorted(remote.items()):
+        mentioned |= set(SCHEMA.findall(text))
+        taken, _ = provisioned(text)
+        for schema in taken:
+            owners.setdefault(schema, []).append(name)
     return owners, mentioned, unresolved
 
 
@@ -207,16 +255,19 @@ def where(path):
     """Путь от корня репозитория — но только если он внутри него.
 
     Проверка самой проверки работает на временном каталоге, и `relpath` выдал бы
-    там дорожку из двух десятков `..`, в которой имя файла не найти.
+    там дорожку из двух десятков `..`, в которой имя файла не найти. Путь
+    с приставкой `origin/main:` — уже от корня и на диске не лежит вовсе.
     """
+    if path.startswith(REMOTE):
+        return path
     inside = os.path.relpath(path, ROOT)
     return path if inside.startswith("..") else inside
 
 
-def check(root=TESTS, allowed=ALLOWED):
-    owners, mentioned, unresolved = survey(root)
+def check(root=TESTS, allowed=ALLOWED, remote=None, extra_mentions=()):
+    owners, mentioned, unresolved = survey(root, remote)
     problems = []
-    free = ", ".join(free_numbers(mentioned))
+    free = ", ".join(free_numbers(mentioned | set(extra_mentions)))
 
     for path, arg in unresolved:
         problems.append(
@@ -246,8 +297,16 @@ def check(root=TESTS, allowed=ALLOWED):
                 f"      Разрешение выдано паре, а не номеру: разберите заново\n"
                 f"      или разведите. Свободные номера: {free}.")
             continue
+        elsewhere = (
+            "      Один из них — версия из origin/main: номер занят в main тем,\n"
+            "      кто слился раньше, пока эта ветка ждала разбора. В рабочей\n"
+            "      копии столкновения нет и не будет — оно появится в момент\n"
+            "      слияния и покраснеет на main, не у того, кто занял номер\n"
+            "      первым. Перенумеруйте свою схему, а не чужую.\n"
+        ) if any(p.startswith(REMOTE) for p in paths) else ""
         problems.append(
             f"{schema}\n      заводят несколько классов разом:\n{listed_at}\n"
+            f"{elsewhere}"
             f"      Схему на два теста не делить: фикстуры сталкиваются логинами,\n"
             f"      номерами и остатком, и красным это становится только в том\n"
             f"      порядке, где чужой класс идёт первым. Возьмите свободный номер:\n"
@@ -265,6 +324,132 @@ def check(root=TESTS, allowed=ALLOWED):
                 f"      некому. Список устарел — уберите строку.")
 
     return problems, owners, shared
+
+
+def git(repo, *args, stdin=None, binary=False):
+    """Вызов git, который никогда не роняет прогон: не вышло — вернулся None.
+
+    Сюда попадают и «не репозиторий», и «нет такой ссылки», и отсутствующий
+    сам git. Ни одно из этого не повод валить проверку схем: сеть у сторожа
+    есть не всегда, а отключают его после первого утра, когда он покраснел
+    не на дефекте.
+    """
+    try:
+        done = subprocess.run(["git", "-C", repo] + list(args), input=stdin,
+                              capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode:
+        return None
+    return done.stdout if binary else done.stdout.decode("utf-8", "replace")
+
+
+def tree(repo, ref, sub):
+    """Пути и хэши блобов поддерева: {путь от корня репозитория: sha}."""
+    out = git(repo, "ls-tree", "-r", "-z", ref, "--", sub)
+    if out is None:
+        return None
+    files = {}
+    for entry in out.split("\0"):
+        if not entry:
+            continue
+        meta, _, path = entry.partition("\t")
+        parts = meta.split()
+        if len(parts) == 3 and parts[1] == "blob":
+            files[path] = parts[2]
+    return files
+
+
+def blob_sha(path):
+    """Хэш рабочей копии по правилам git — чтобы сравнивать с ls-tree.
+
+    Считается здесь, а не вызовом `git hash-object` на каждый файл: их сотни.
+    Перевод строк не нормализуется, и это осознанно — расхождение означает
+    «файл считается тронутым», то есть версия ветки побеждает. Ошибка в эту
+    сторону даёт пропуск, а не ложную тревогу.
+    """
+    data = open(path, "rb").read()
+    digest = hashlib.sha1()
+    digest.update(b"blob %d\0" % len(data))
+    digest.update(data)
+    return digest.hexdigest()
+
+
+def blobs(repo, shas):
+    """Содержимое перечисленных объектов — одним вызовом git, а не по одному.
+
+    Ответ `cat-file --batch` идёт подряд: строка «sha blob размер», ровно
+    столько байт и перевод строки. Разбор ведётся по размеру, а не по
+    разделителю, — в исходниках есть и `\\n`, и что угодно ещё.
+    """
+    if not shas:
+        return {}
+    data = git(repo, "cat-file", "--batch",
+               stdin=("\n".join(shas) + "\n").encode(), binary=True)
+    if data is None:
+        return {}
+    at, bodies = 0, {}
+    try:
+        for sha in shas:
+            nl = data.index(b"\n", at)
+            header = data[at:nl].split()
+            size = int(header[2])
+            bodies[sha] = data[nl + 1:nl + 1 + size].decode("utf-8", "replace")
+            at = nl + 1 + size + 1
+    except (ValueError, IndexError):
+        return {}
+    return bodies
+
+
+def from_main(repo, root):
+    """Версии тестовых файлов, которые окажутся в main после слияния ветки.
+
+    Возвращает ({абсолютный путь: (как называть, содержимое)}, упомянутые
+    номера, причина отказа или None). Правило ровно то, по которому сливает
+    сам git, и от него зависит, тревога настоящая или ложная:
+
+      ветка правила файл            → побеждает версия ветки (её и так видно);
+      ветка файл не трогала         → побеждает версия origin/main;
+      ветка файл удалила            → после слияния его нет, считать нечего;
+      файла в ветке нет и не было   → он появился в main после ответвления,
+                                      и это ровно тот случай, ради которого
+                                      сверка заведена.
+
+    «Не трогала» определяется сравнением с точкой расхождения, а не с main:
+    иначе всякий файл, который main поправил, считался бы тронутым веткой.
+    """
+    sub = os.path.relpath(root, repo)
+    if git(repo, "rev-parse", "--git-dir") is None:
+        return {}, set(), "рядом нет репозитория git"
+    if git(repo, "rev-parse", "--verify", "--quiet", "origin/main^{commit}") is None:
+        return {}, set(), ("ссылки origin/main нет — подтяните её: "
+                           "git fetch --no-tags origin main:refs/remotes/origin/main")
+    base = git(repo, "merge-base", "HEAD", "origin/main")
+    if base is None:
+        return {}, set(), "не нашлась точка расхождения с origin/main (мелкая копия?)"
+
+    main_tree = tree(repo, "origin/main", sub)
+    base_tree = tree(repo, base.strip(), sub)
+    if main_tree is None or base_tree is None:
+        return {}, set(), "не прочиталось дерево тестов origin/main"
+
+    differing, winners = {}, {}
+    for path, main_sha in main_tree.items():
+        local = os.path.join(repo, path)
+        here = blob_sha(local) if os.path.isfile(local) else None
+        if here == main_sha:
+            continue                       # одно и то же, разбирать нечего
+        differing[path] = main_sha
+        if here == base_tree.get(path):    # ветка файла не трогала (и не удаляла)
+            winners[path] = main_sha
+
+    bodies = blobs(repo, sorted(set(differing.values())))
+    mentions = set()
+    for sha in differing.values():
+        mentions |= set(SCHEMA.findall(bodies.get(sha, "")))
+    files = {os.path.join(repo, path): (REMOTE + path, bodies.get(sha, ""))
+             for path, sha in winners.items()}
+    return files, mentions, None
 
 
 # Проверка самой проверки. Сторож, который не краснеет на своём же дефекте,
@@ -369,22 +554,161 @@ def selftest():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def a_class(name, schema, extra=""):
+    return (f'class {name} {{\n'
+            f'    private static final String TENANT = "{schema}";\n'
+            f'    static void setUp() {{ provisionTenants(TENANT); }}\n'
+            f'{extra}}}\n')
+
+
+def merge_selftest():
+    """Проверка второй половины сторожа — той, что смотрит в origin/main.
+
+    Заводится настоящий репозиторий с настоящей развилкой: на словах эту
+    логику проверить нельзя, потому что вся она про то, какую версию файла
+    выберет git при слиянии. Случаи подобраны так, чтобы поймать обе беды
+    сразу — и пропуск (номер занят в main, а сторож молчит), и ложную
+    тревогу (номер «занят» файлом, который правит сама ветка).
+    """
+    import shutil
+    import tempfile
+
+    repo = tempfile.mkdtemp(prefix="test-schema-guard-merge-")
+    tests = os.path.join(repo, "src", "test", "java")
+    os.makedirs(tests)
+
+    def run(*args):
+        subprocess.run(["git", "-C", repo] + list(args),
+                       check=True, capture_output=True)
+
+    def put(name, body):
+        open(os.path.join(tests, name), "w", encoding="utf-8").write(body)
+
+    def commit(message):
+        run("add", "-A")
+        run("-c", "user.email=guard@example", "-c", "user.name=guard",
+            "-c", "commit.gpgsign=false",
+            "commit", "-q", "--no-verify", "-m", message)
+        return git(repo, "rev-parse", "HEAD").strip()
+
+    try:
+        run("init", "-q")
+        run("symbolic-ref", "HEAD", "refs/heads/main")
+
+        # Точка расхождения: то, что видели обе стороны.
+        put("SharedTest.java", a_class("SharedTest", "t_000502"))
+        put("GoneTest.java", a_class("GoneTest", "t_000504"))
+        put("EpsilonTest.java", a_class("EpsilonTest", "t_000506"))
+        put("ThetaTest.java", a_class("ThetaTest", "t_000510"))
+        base = commit("основа")
+
+        # Что уехало в main, пока ветка ждала разбора: новый класс занял
+        # t_000503, а старый переехал с t_000506 на t_000507.
+        put("NewMainTest.java", a_class("NewMainTest", "t_000503"))
+        put("EpsilonTest.java", a_class("EpsilonTest", "t_000507"))
+        commit("волна в main")
+        run("update-ref", "refs/remotes/origin/main", "HEAD")
+
+        # Ветка: ответвилась от основы, дальше правит рабочую копию.
+        run("checkout", "-q", base)
+        put("SharedTest.java", a_class("SharedTest", "t_000509"))  # перенумеровала своё
+        put("ThetaTest.java", a_class("ThetaTest", "t_000510",
+                                      "    // правка, номера не касающаяся\n"))
+        os.remove(os.path.join(tests, "GoneTest.java"))
+        put("BetaTest.java", a_class("BetaTest", "t_000503"))    # занято в main
+        put("DeltaTest.java", a_class("DeltaTest", "t_000504"))  # освобождено веткой
+        put("ZetaTest.java", a_class("ZetaTest", "t_000507"))    # занято в main
+        put("EtaTest.java", a_class("EtaTest", "t_000506"))      # освобождено в main
+        put("IotaTest.java", a_class("IotaTest", "t_000502"))    # освобождено веткой
+
+        failures = []
+        remote, mentions, note = from_main(repo, tests)
+        if note:
+            failures.append(f"сверка с origin/main не выполнилась там, где "
+                            f"ссылка есть: {note}")
+        problems, _, _ = check(tests, allowed={}, remote=remote,
+                               extra_mentions=mentions)
+        text = "\n".join(problems)
+
+        for schema, mine, theirs in (("t_000503", "BetaTest", "NewMainTest"),
+                                     ("t_000507", "ZetaTest", "EpsilonTest")):
+            if schema not in text:
+                failures.append(
+                    f"{schema} занят в origin/main и взят веткой, а сторож молчит — "
+                    f"это ровно тот дефект, ради которого сверка заведена: "
+                    f"локально чисто, краснеет CI после слияния")
+            elif not (mine in text and REMOTE + f"src/test/java/{theirs}.java" in text):
+                failures.append(
+                    f"{schema} назван, а кто с кем столкнулся — нет: нужны оба, "
+                    f"и сторона main обязана быть подписана как origin/main")
+
+        if "t_000502" in text:
+            failures.append("номер, который ветка освободила, перенумеровав "
+                            "свой же файл, засчитан занятым его прежней версией "
+                            "из main — тогда красное не снимается ничем, и "
+                            "перенумероваться в ответ на тревогу нельзя вовсе")
+        if "t_000510" in text:
+            failures.append("файл, который ветка правит, засчитан дважды — своей "
+                            "версией и версией из main: столкновение с самим собой "
+                            "на каждом прогоне")
+        if "t_000504" in text:
+            failures.append("номер файла, удалённого веткой, засчитан занятым: "
+                            "после слияния этого файла не будет вовсе")
+        if "t_000506" in text:
+            failures.append("номер, освобождённый в main, засчитан занятым — "
+                            "сторож сравнил ветку с устаревшей версией файла")
+
+        # И главное: без ссылки на origin/main он не падает, а говорит словами.
+        run("update-ref", "-d", "refs/remotes/origin/main")
+        remote, mentions, note = from_main(repo, tests)
+        if remote or not note:
+            failures.append("без ссылки origin/main сверка не объявила себя "
+                            "невыполненной — молчаливый пропуск читается "
+                            "как проверенное")
+        problems, _, _ = check(tests, allowed={}, remote=remote,
+                               extra_mentions=mentions)
+        if any(s in "\n".join(problems) for s in ("t_000503", "t_000507")):
+            failures.append("без ссылки origin/main сторож всё равно ссылается "
+                            "на её содержимое")
+
+        return failures
+    except (OSError, subprocess.SubprocessError) as e:
+        # Самого git нет — тогда и сверять не с чем: сторож работает как
+        # раньше, по рабочей копии, и валить прогон из-за этого нельзя.
+        # Всё остальное (git есть, а фикстура не завелась) — настоящая
+        # поломка проверки, и молчать о ней значит предъявлять зелёный цвет,
+        # ничем не обеспеченный.
+        if isinstance(e, FileNotFoundError):
+            return []
+        return [f"репозиторий для сверки с origin/main не завёлся ({e}) — "
+                f"эта половина сторожа ничего не доказывает"]
+    finally:
+        shutil.rmtree(repo, ignore_errors=True)
+
+
 def main():
-    broken = selftest()
+    broken = selftest() + merge_selftest()
     if broken:
         print("Проверка сломана и потому ничего не доказывает:\n")
         for line in broken:
             print("  •", line)
         return 1
     if "--selftest" in sys.argv:
-        print("Сторож краснеет на общей схеме и молчит на разрешённой паре.")
+        print("Сторож краснеет на общей схеме и на номере, занятом в origin/main;\n"
+              "молчит на разрешённой паре, на своём же файле и без ссылки на main.")
         return 0
 
-    problems, owners, shared = check()
+    remote, mentions, note = from_main(ROOT, TESTS)
+    problems, owners, shared = check(remote=remote, extra_mentions=mentions)
 
     if "--list" in sys.argv:
         for schema, (classes, why) in sorted(ALLOWED.items()):
             print(f"{schema}: {', '.join(classes)}\n    {why}\n")
+
+    if note:
+        print(f"Сверка с origin/main не выполнена: {note}.\n"
+              f"Номер, занятый в main после ответвления, отсюда не виден — "
+              f"проверена только рабочая копия.\n")
 
     if problems:
         print("Схемы арендаторов в тестах: проверка не прошла\n")
@@ -392,8 +716,9 @@ def main():
             print("  •", p)
         return 1
 
+    seen = "" if note else f", сверено с origin/main (файлов оттуда: {len(remote)})"
     print(f"Схем в тестах {len(owners)}, у каждой один хозяин "
-          f"(делят намеренно {len(shared)}, все разобраны).")
+          f"(делят намеренно {len(shared)}, все разобраны){seen}.")
     return 0
 
 
