@@ -281,6 +281,14 @@ public class MemberService {
         if (login == null || login.isBlank()) {
             throw new IllegalArgumentException("Логин обязателен");
         }
+        // Пустую роль отбиваем до белого списка: ROLES — это Set.of, а он
+        // на null-ключе бросает NPE, то есть сообщение ниже при незаполненной
+        // роли не появлялось никогда. Снаружи это прикрывал @NotBlank
+        // в MemberController — защита в другом файле, и на путь
+        // провижининга она не распространяется.
+        if (role == null || role.isBlank()) {
+            throw new IllegalArgumentException("Роль сотрудника обязательна");
+        }
         if (!ROLES.contains(role)) {
             throw new IllegalArgumentException(
                     "Неизвестная роль «%s», допустимы: %s".formatted(role, ROLES));

@@ -19,6 +19,7 @@ import ru.partsflow.support.PostgresTestBase;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -49,6 +50,9 @@ class MemberManagementTest extends PostgresTestBase {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private MemberService members;
 
     private Long ownerId;
     private Long sellerId;
@@ -252,6 +256,40 @@ class MemberManagementTest extends PostgresTestBase {
                         .content("""
                                 {"login":"kto-to","password":"пароль-подлиннее","role":"OWNER"}"""))
                 .andExpect(status().isUnauthorized());
+    }
+
+    /**
+     * Незаполненная роль — отказ словами, а не {@code NullPointerException}.
+     *
+     * <p>Проверка белым списком в {@code MemberService.validate} стояла
+     * с самого начала и была мертва: {@code ROLES} — это {@code Set.of},
+     * а он на {@code null}-ключе бросает NPE, то есть до сообщения
+     * «Неизвестная роль …» управление не доходило вовсе. Снаружи это
+     * прикрывал {@code @NotBlank} в {@code MemberController} — защита
+     * в другом файле, и через HTTP оба варианта выглядят одинаково.
+     * Поэтому служба зовётся <b>напрямую</b>, минуя контроллер.
+     *
+     * <p><b>Откат:</b> убрать проверку на пусто в {@code validate} — тест
+     * падает с {@code NullPointerException}, а не с отказом проверки.
+     */
+    @Test
+    @DisplayName("Незаполненная роль — отказ словами, а не NPE (служба напрямую)")
+    void blankRoleIsRejectedWithWords() {
+        assertThatThrownBy(() -> inTenant(() -> members.create(
+                "novichok", "пароль-подлиннее", "Новичок", null, null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Роль сотрудника обязательна");
+
+        assertThatThrownBy(() -> inTenant(() -> members.create(
+                "novichok", "пароль-подлиннее", "Новичок", "   ", null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Роль сотрудника обязательна");
+
+        // Незнакомая роль по-прежнему называется словом, которое прислали.
+        assertThatThrownBy(() -> inTenant(() -> members.create(
+                "novichok", "пароль-подлиннее", "Новичок", "BOSS", null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("BOSS");
     }
 
     // ---------- вспомогательное ----------
