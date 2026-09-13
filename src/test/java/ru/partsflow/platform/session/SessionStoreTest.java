@@ -212,6 +212,55 @@ class SessionStoreTest extends PostgresTestBase {
         }
     }
 
+    /**
+     * Срок жизни сессии в базе — тот же, что был у сервлет-контейнера.
+     *
+     * <p>Задача требует проверить, что <b>пределы жизни не изменились</b>:
+     * переезд состояния в базу не должен был поменять поведение входа под
+     * своим видом. Раньше срок держал Tomcat и увидеть его было негде;
+     * теперь он лежит колонкой, и это первое место, где ошибка стала бы
+     * видимой — причём тихо: срок, записанный нулём или отрицательным,
+     * сделал бы сессию просроченной с рождения, а срок в сутки продлил бы
+     * брошенную вкладку на чужом компьютере.
+     *
+     * <p>Сверяется с {@code server.servlet.session.timeout} (умолчание
+     * сервлет-контейнера — 30 минут), а не с записанным здесь числом:
+     * назначать срок — дело владельца продукта, и он его ещё не назначал
+     * (docs/sessions.md, §10).
+     */
+    @Test
+    @DisplayName("Срок простоя в базе равен сроку сервлет-контейнера")
+    void idleLimitIsTheServletContainerOne() throws Exception {
+        Instance first = start();
+        try {
+            Browser seller = login(first, COMPANY, "prodavec");
+            Duration expected = first.context()
+                    .getEnvironment()
+                    .getProperty("server.servlet.session.timeout", Duration.class,
+                                 Duration.ofMinutes(30));
+
+            try (Connection connection = connect();
+                 PreparedStatement statement = connection.prepareStatement("""
+                         SELECT max_inactive_interval,
+                                expiry_time - last_access_time
+                           FROM public.spring_session
+                          WHERE session_id = ?""")) {
+                statement.setString(1, seller.sessionId());
+                try (ResultSet rows = statement.executeQuery()) {
+                    assertThat(rows.next()).as("строка сессии обязана быть в базе").isTrue();
+                    assertThat(rows.getInt(1))
+                            .as("срок простоя в базе — секунды сервлет-контейнера")
+                            .isEqualTo((int) expected.toSeconds());
+                    assertThat(rows.getLong(2))
+                            .as("момент истечения — последняя активность плюс срок простоя")
+                            .isEqualTo(expected.toMillis());
+                }
+            }
+        } finally {
+            first.close();
+        }
+    }
+
     // --- экземпляр приложения -------------------------------------------------
 
     private record Instance(ConfigurableApplicationContext context, int port) {
