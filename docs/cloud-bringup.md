@@ -153,17 +153,26 @@ rclone lsd <имя>:              # проверить, что доступ ес
 
 ```bash
 git clone <репозиторий> parts-platform && cd parts-platform
+git rev-parse HEAD             # полный SHA — он же APP_IMAGE_TAG, если CI на нём зелёный
 ```
 
-Дальше — целиком `docs/deployment.md`, по шагам: `cp .env.example .env`,
-заполнить секреты, `docker compose -f docker-compose.prod.yml up -d --build`,
-`ops/create-roles.sh`, перезапуск app под рабочей ролью, `ops/install-cron.sh`,
-`ops/basebackup.sh`.
+**Клон нужен не для сборки.** Ячейка ничего не собирает: образ приложения
+собран один раз в CI и приезжает из реестра готовым. Из репозитория берутся
+`docker-compose.prod.yml` и каталог `ops/` — настройки терминатора, Postgres,
+Prometheus и alertmanager. Ни JDK, ни node на этой машине не нужны.
 
-Что не забыть в `.env` (пустые в примере — обязательные): `DB_PASSWORD`,
-`APP_CRYPTO_KEY`, `ACME_EMAIL`, `ALERT_TELEGRAM_CHAT_ID`, `APP_RUNTIME_ROLE`
-и `APP_DDL_*`, `OFFSITE_REMOTE`, плюс домены `APP_DOMAIN`/`S3_DOMAIN`
-и `PROVISIONING_ALLOW`. Каждую — зачем и что при потере — §деплой, «Секреты».
+Дальше — целиком `docs/deployment.md`, по шагам: `cp .env.example .env`,
+заполнить секреты и `APP_IMAGE_TAG`, забрать образы (`pull`) и поднять ячейку
+(`up -d`), `ops/create-roles.sh`, перезапуск app под рабочей ролью,
+`ops/install-cron.sh`, `ops/basebackup.sh`.
+
+Что не забыть в `.env` (пустые в примере — обязательные): `APP_IMAGE_TAG`,
+`DB_PASSWORD`, `APP_CRYPTO_KEY`, `ACME_EMAIL`, `ALERT_TELEGRAM_CHAT_ID`,
+`APP_RUNTIME_ROLE` и `APP_DDL_*`, `OFFSITE_REMOTE`, плюс домены
+`APP_DOMAIN`/`S3_DOMAIN` и `PROVISIONING_ALLOW`. Каждую — зачем и что
+при потере — §деплой, «Секреты». Тег секретом не является, но без него
+`docker compose` не стартует вовсе: «укажите APP_IMAGE_TAG — SHA коммита,
+собранного CI».
 
 **Kafka на одном узле.** `min.insync.replicas=2` на одном брокере не соберётся.
 Для пилота — либо профиль `local` (события in-memory, Kafka не нужна), либо
