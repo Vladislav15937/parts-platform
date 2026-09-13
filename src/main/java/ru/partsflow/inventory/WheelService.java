@@ -383,11 +383,7 @@ public class WheelService {
             // «Nok», а не выбирает «Nokian» из списка, — и это другой вопрос,
             // чем выбор значения. Точным равенством оно не нашло бы ничего.
             for (var entry : words.entrySet()) {
-                String expression = FILTERS.get(entry.getKey());
-                if (expression == null) {
-                    throw new IllegalArgumentException(
-                            "По этой колонке отбор не делается: " + entry.getKey());
-                }
+                String expression = columnExpression(entry.getKey());
                 // Пустое «содержит» — не «подходит любое»: `ILIKE '%%'`
                 // отбрасывает незаполненные, тихо сужая выдачу.
                 if (entry.getValue() == null || entry.getValue().isBlank()) {
@@ -400,11 +396,7 @@ public class WheelService {
 
         if (columns != null) {
             for (var entry : columns.entrySet()) {
-                String expression = FILTERS.get(entry.getKey());
-                if (expression == null) {
-                    throw new IllegalArgumentException(
-                            "По этой колонке отбор не делается: " + entry.getKey());
-                }
+                String expression = columnExpression(entry.getKey());
                 String value = entry.getValue();
                 // Пустое значение — «условие не задано», а не «равно пустоте»:
                 // отбор по нему не находит ничего, и у выгрузки это пустой
@@ -487,12 +479,32 @@ public class WheelService {
         return FILTERS.keySet();
     }
 
-    @Transactional(readOnly = true)
-    public List<String> values(String column) {
-        String expression = FILTERS.get(column);
+    /**
+     * Выражение колонки из белого списка — одно место на все три отбора.
+     *
+     * <p>Копий было три (два прохода по картам отбора и список значений),
+     * и каждая читала {@code FILTERS} напрямую. Это не только повтор текста:
+     * {@code Map.ofEntries} неизменяема и на {@code null}-ключе бросает
+     * {@code NullPointerException} <b>до</b> проверки «выражение не найдено»,
+     * то есть неназванная колонка отвечала бы пятисоткой вместо «по этой
+     * колонке отбор не делается». Отказ обязан объяснять — офлайн-очередь
+     * читает 5xx как повод повторять, а человек идёт искать поломку сервера.
+     *
+     * <p>Видимость пакетная, а не приватная, ради теста: снаружи {@code null}
+     * сюда не приходит — параметр запроса обязателен, — и позвать метод так
+     * может только он.
+     */
+    static String columnExpression(String column) {
+        String expression = column == null ? null : FILTERS.get(column);
         if (expression == null) {
             throw new IllegalArgumentException("По этой колонке отбор не делается: " + column);
         }
+        return expression;
+    }
+
+    @Transactional(readOnly = true)
+    public List<String> values(String column) {
+        String expression = columnExpression(column);
         return jdbc.queryForList("""
                 SELECT DISTINCT %s AS value
                   FROM part p
@@ -777,9 +789,22 @@ public class WheelService {
      * <p>{@code ORDER BY} не принимает параметр, и подстановка пришедшего
      * из запроса текста — это внедрение SQL. Неизвестное имя молча становится
      * сортировкой по умолчанию.
+     *
+     * <p><b>Неназванная сортировка — тоже неизвестная, а не отказ.</b>
+     * {@code Map.ofEntries} неизменяема и на чтении по {@code null}-ключу
+     * бросает {@code NullPointerException}, а не отвечает «нет такого»:
+     * проверка {@code column == null} строкой ниже до этого не доживает.
+     * Сегодня {@code null} сюда не приходит — у параметра запроса стоит
+     * {@code defaultValue}, — то есть защита держится не на коде, а на том,
+     * что никто пока не позвал иначе. Снимут умолчание, добавят второго
+     * зовущего — и вкладка «Шины и диски» ответит пятисоткой на сортировку,
+     * то есть не откроется вовсе.
+     *
+     * <p>Видимость пакетная, а не приватная, ради теста: снаружи этот путь
+     * недостижим, и позвать метод с {@code null} может только он.
      */
-    private static String orderOf(String sort, boolean descending) {
-        String column = SORTS.get(sort);
+    static String orderOf(String sort, boolean descending) {
+        String column = sort == null ? null : SORTS.get(sort);
         if (column == null) {
             // Умолчание то же, что у витрины склада: номер позиции
             // по возрастанию, то есть порядок заведения. Прежним умолчанием
