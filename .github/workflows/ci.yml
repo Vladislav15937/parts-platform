@@ -5,6 +5,10 @@ name: CI
 # Одной задачей было бы проще, но
 # тогда упавший фронтенд прячет результат бэкенда, а чаще всего нужно знать
 # именно «что именно сломалось».
+#
+# Последней — и единственной зависимой — идёт публикация образа: она ждёт
+# всех остальных, потому что образ, попавший в реестр, уже нельзя «не
+# выложить», а неверным его делает любая красная задача.
 on:
   push:
     branches: ['**']
@@ -284,5 +288,100 @@ jobs:
       # фронтенд внутрь jar, jar в JRE. Бэкенд и фронтенд проверены соседними
       # задачами по отдельности, а здесь ловится их сборка вместе — то, что
       # ломается при выкладке и больше нигде.
+      #
+      # И собирается ровно один раз за прогон: дальше этот же файл уезжает
+      # в реестр задачей «Публикация образа». Пересборка там дала бы второй
+      # артефакт из того же Dockerfile — другая сеть, другой кэш npm, —
+      # то есть ровно ту разницу, ради устранения которой всё и делалось.
       - name: Сборка боевого образа
         run: docker build -t partsflow:ci .
+
+      # Образ уезжает следующей задаче файлом, а не пересборкой: только так
+      # «прошло проверки» и «уехало клиенту» означают один и тот же файл.
+      # Живёт он сутки — дольше незачем, опубликованное лежит в реестре.
+      - name: Образ файлом
+        run: docker save partsflow:ci -o /tmp/partsflow-image.tar
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-image
+          path: /tmp/partsflow-image.tar
+          retention-days: 1
+
+  publish:
+    name: Публикация образа
+    # Ждёт ВСЕХ проверок, а не только сборки. Образ в реестре — это уже
+    # не черновик: по тегу за ним придут на выкладке, а неверным его делает
+    # любая красная задача, не одна лишь «Развёртывание».
+    needs:
+      - changelog
+      - endpoints
+      - test-schemas
+      - worktrees
+      - recovery-point
+      - migrations
+      - backend
+      - frontend
+      - deployment
+    # Только push. У события pull_request github.sha — это эфемерный коммит
+    # слияния, которого нет в истории ни одной ветки: образ, названный таким
+    # SHA, ничей, и вернуться к нему по номеру коммита нельзя.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # Право писать в GHCR даётся здесь и только здесь: остальным задачам
+      # оно не нужно, а токен с лишними правами живёт во всех них сразу.
+      packages: write
+    steps:
+      - name: Имя образа
+        id: image
+        # GHCR принимает только строчные буквы, а владелец репозитория
+        # написан как написан. Тег — SHA коммита: не latest и не имя ветки,
+        # иначе «в бою работает такой-то коммит» перестаёт быть фактом.
+        run: |
+          REPO=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
+          echo "ref=ghcr.io/$REPO:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Вход в реестр
+        run: |
+          echo '${{ secrets.GITHUB_TOKEN }}' \
+            | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+      - name: Этот SHA уже опубликован?
+        id: published
+        # Повторный прогон того же коммита не обязан класть в реестр второй
+        # образ. Сборка не побайтово повторяема (время в jar), поэтому тот же
+        # тег получил бы новый digest, а прежний — тот, что уже стоит
+        # на стенде, — остался бы висеть без имени. Тег по SHA неизменен
+        # по смыслу: опубликованный не трогаем и говорим об этом вслух.
+        run: |
+          if docker manifest inspect '${{ steps.image.outputs.ref }}' >/dev/null 2>&1; then
+            echo "Уже в реестре: ${{ steps.image.outputs.ref }} — публикация пропущена."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/download-artifact@v4
+        if: steps.published.outputs.skip == 'false'
+        with:
+          name: app-image
+          path: /tmp
+
+      - name: Публикация
+        if: steps.published.outputs.skip == 'false'
+        run: |
+          docker load -i /tmp/partsflow-image.tar
+          docker tag partsflow:ci '${{ steps.image.outputs.ref }}'
+          docker push '${{ steps.image.outputs.ref }}'
+
+      - name: Чем выкладывать
+        # Последняя строка вывода — то, что оператор переносит в .env ячейки.
+        # Без неё SHA пришлось бы выковыривать из адресной строки браузера.
+        run: |
+          echo "Образ: ${{ steps.image.outputs.ref }}"
+          echo "Digest: $(docker manifest inspect -v '${{ steps.image.outputs.ref }}' \
+            | jq -r 'if type == "array" then .[0] else . end | .Descriptor.digest')"
+          echo "Выкладка ячейки: APP_IMAGE_TAG=${{ github.sha }}"
