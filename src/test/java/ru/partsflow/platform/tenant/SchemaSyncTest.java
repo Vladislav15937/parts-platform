@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Режим «привести схемы к версии артефакта и выйти».
@@ -261,6 +262,108 @@ class SchemaSyncTest extends PostgresTestBase {
         assertThat(result.problems()).singleElement()
                 .satisfies(problem -> assertThat(problem.reason()).contains("неизвестна"));
         assertThat(viewExists(TENANT)).isTrue();
+    }
+
+    @Test
+    @DisplayName("Ниже границы отката инструмент отказывается, назвав границу")
+    void targetBelowRollbackFloorIsRefused() {
+        register(158, TENANT);
+        int floor = TenantSchemaMigrator.changeSetsIn(migrator.rollbackFloor());
+
+        SchemaSync.Result result = sync.run(
+                new SchemaSync.Plan(SchemaSync.Mode.APPLY, floor - 1));
+
+        assertThat(result.exitCode())
+                .as("откат ниже границы прошёл бы молча и с кодом ноль, оставив "
+                        + "схему, на которой код той сборки работать не может")
+                .isEqualTo(1);
+        assertThat(result.problems()).singleElement().satisfies(problem -> {
+            assertThat(problem.reason()).contains("границы отката");
+            assertThat(problem.reason())
+                    .as("отказ не называет достижимую версию — человеку "
+                            + "непонятно, куда откатываться можно")
+                    .contains(String.valueOf(floor));
+        });
+        assertThat(migrator.inspect(TENANT).applied())
+                .as("схему тронули по цели, которую сами же объявили недостижимой")
+                .isEqualTo(migrator.totalChangeSets());
+
+        // И режим проверки отвечает так же: ответив числом «сколько не хватает
+        // до версии ниже границы», он пообещал бы, что --apply туда приведёт.
+        assertThat(sync.run(new SchemaSync.Plan(SchemaSync.Mode.CHECK, floor - 1))
+                .exitCode()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Второй край: до самой границы откат по-прежнему проходит")
+    void targetAtRollbackFloorStillWorks() {
+        register(158, TENANT);
+        int floor = TenantSchemaMigrator.changeSetsIn(migrator.rollbackFloor());
+
+        SchemaSync.Result down = sync.run(
+                new SchemaSync.Plan(SchemaSync.Mode.APPLY, floor));
+
+        assertThat(down.exitCode())
+                .as("граница запрещает ровно то, ради чего она поставлена: "
+                        + "до неё откат обязан работать")
+                .isZero();
+        assertThat(migrator.inspect(TENANT).applied()).isEqualTo(floor);
+        assertThat(versionOf(158)).isEqualTo(migrator.rollbackFloor());
+        assertThat(viewExists(TENANT))
+                .as("вьюхи стоят в наборе после границы — на ней их быть не должно")
+                .isFalse();
+
+        // Схему возвращаем на вершину: класс делит её между методами.
+        assertThat(sync.run(SchemaSync.Plan.apply()).exitCode()).isZero();
+        assertThat(viewExists(TENANT)).isTrue();
+    }
+
+    @Test
+    @DisplayName("Объявленная граница сходится с changelog'ом этого артефакта")
+    void rollbackFloorMatchesTheChangelog() {
+        String floor = migrator.rollbackFloor();
+        int number = TenantSchemaMigrator.changeSetsIn(floor);
+
+        assertThat(number).isPositive();
+        assertThat(migrator.versionAt(number))
+                .as("объявление «число/идентификатор» разъехалось с набором: "
+                        + "две половины указывают на разные места")
+                .isEqualTo(floor);
+        assertThat(number)
+                .as("граница выше вершины набора — откатиться нельзя никуда")
+                .isLessThanOrEqualTo(migrator.totalChangeSets());
+    }
+
+    @Test
+    @DisplayName("Разъехавшееся объявление границы роняет инструмент, а не меняет место")
+    void brokenFloorDeclarationIsRefused() {
+        // Набор из трёх: версия N читается как «N/идентификатор N-го».
+        java.util.function.IntFunction<String> versions =
+                n -> n + "/" + new String[]{"a", "b", "c"}[n - 1];
+
+        assertThat(TenantSchemaMigrator.checkedFloor("2/b", 3, versions))
+                .as("исправное объявление не принято — тогда инструмент "
+                        + "не запустится ни разу")
+                .isEqualTo("2/b");
+
+        assertThatThrownBy(() -> TenantSchemaMigrator.checkedFloor("2/c", 3, versions))
+                .as("пара «число/идентификатор» разъехалась, а её приняли: "
+                        + "объявление читалось бы двумя способами, и однажды "
+                        + "это были бы разные места")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("разъехалось");
+
+        assertThatThrownBy(() -> TenantSchemaMigrator.checkedFloor("99/x", 3, versions))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("в наборе 3");
+
+        assertThatThrownBy(() -> TenantSchemaMigrator.checkedFloor("не число", 3, versions))
+                .as("неразбираемая версия — это «не знаю», а не «подойдёт», "
+                        + "и отказ обязан назвать причину форматом, а не "
+                        + "числом changeset'ов в наборе: иначе читающий пойдёт "
+                        + "искать не там")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("формат");
     }
 
     private void register(long id, String schema) {
