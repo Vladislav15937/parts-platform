@@ -479,9 +479,13 @@ def edge_two_warehouses(ctx):
 
 
 def edge_partly_paid(ctx):
+    """Срок резерва — год, как у отложенной: доска ставит «Истек срок» раньше
+    «Частично оплачен», и с умолчанием в три дня край пропал бы со стенда сам
+    через трое суток — набор, который никто не трогал, перестал бы быть годным."""
     seller, main = ctx["seller"], ctx["wh"][MAIN_WAREHOUSE]
+    far = seller.server_now() + datetime.timedelta(days=365)
     deal = seller.post("/api/deals", {
-        "customerId": ctx["customers"]["ООО «Автосервис Восток»"],
+        "customerId": ctx["customers"]["ООО «Автосервис Восток»"], "reservedUntil": iso(far),
         "items": [{"partId": ctx["parts"]["дверь передняя левая"], "quantity": 1,
                    "warehouseId": main}],
     }, step="сделка с частичной оплатой")
