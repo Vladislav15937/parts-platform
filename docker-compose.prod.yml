@@ -463,6 +463,13 @@ services:
       - ${WAL_ARCHIVE_DIR:-${BACKUP_DIR:-./backups/${APP_CELL:-cell01}}/wal}:/wal-archive
       - ./ops/archive-wal.sh:/usr/local/bin/archive-wal.sh:ro
     healthcheck:
+      # «parts» здесь — не рабочая база и не требование, чтобы она была:
+      # pg_isready спрашивает, принимает ли сервер соединения, и имя базы
+      # не проверяет. С задачи 0112 рабочая база называется по выкладке,
+      # а «parts» после второй выкладки копией удалена — и это нормально.
+      # Менять строку нельзя без причины: правка конфигурации postgres
+      # пересоздаёт его контейнер при подъёме новой сборки (up -d app-…
+      # сводит и зависимости), то есть перезапускает базу посреди выкладки.
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d parts"]
       interval: 5s
       timeout: 3s

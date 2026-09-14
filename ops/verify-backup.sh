@@ -45,7 +45,11 @@ fail() { printf '\033[1;31m    ПРОВАЛ: %s\033[0m\n' "$1"; exit 1; }
 [ -d "$SET_DIR" ] || fail "набор не найден: $SET_DIR"
 [ -f "$SET_DIR/shared.dump" ] || fail "в наборе нет shared.dump"
 
-live()  { $COMPOSE exec -T postgres psql -U "$DB_USER" -d parts -tAc "$1"; }
+# Живая база — база сборки под трафиком (задача 0112), а не литерал «parts»:
+# сверка с замороженной прежней базой зеленела бы на бэкапе, снятом не с той.
+LIVE_DB=$(ENV_FILE="$ENV_FILE" ops/switch-build.sh --current-db) \
+    || fail "не узнать базу сборки под трафиком (ops/switch-build.sh --current-db)"
+live()  { $COMPOSE exec -T postgres psql -U "$DB_USER" -d "$LIVE_DB" -tAc "$1"; }
 check() { $COMPOSE exec -T postgres psql -U "$DB_USER" -d "$CHECK_DB" -tAc "$1"; }
 
 # Проверочную базу убираем в любом случае. Оставленная после провала, она

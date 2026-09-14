@@ -334,7 +334,9 @@ step "Архиватор базы"
 # Спрашиваем саму базу, а не каталог: неудачи архивации видны только ей,
 # и «в архиве всё подряд» ещё не значит «архиватор работает» — он мог
 # встать минуту назад, и сегменты копятся в pg_wal.
-if STAT=$($COMPOSE exec -T postgres psql -U "$DB_USER" -d parts -tAqc \
+# Служебная база: архиватор — свойство кластера, а рабочая база с задачи 0112
+# называется по выкладке, и «parts» после второй выкладки копией нет вовсе.
+if STAT=$($COMPOSE exec -T postgres psql -U "$DB_USER" -d postgres -tAqc \
         "SELECT failed_count
               ||' '|| COALESCE(EXTRACT(EPOCH FROM last_archived_time)::bigint, 0)
               ||' '|| (SELECT count(*) FROM pg_ls_dir('pg_wal/archive_status') f

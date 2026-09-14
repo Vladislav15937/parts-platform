@@ -293,7 +293,21 @@ kick_db() {  # база, момент по часам сервера
 # обязано ответить «только чтение». Верить команде без проверки нельзя —
 # настройка роли старше настройки базы и отменила бы заморозку молча.
 freeze_db() {  # база
-    local db="$1" since ro
+    local db="$1" since ro overrides
+    # Настройка роли старше настройки базы: заданное роли «read_only=off»
+    # молча отменило бы заморозку для рабочей роли, а проверка ниже идёт
+    # владельцем, у которого своей настройки нет, — и ответила бы «заморожено».
+    overrides=$(pg -c "SELECT string_agg(DISTINCT pg_get_userbyid(s.setrole), ', ')
+                         FROM pg_db_role_setting s, unnest(s.setconfig) c
+                        WHERE s.setrole <> 0
+                          AND c LIKE 'default\_transaction\_read\_only=%'
+                          AND (s.setdatabase = 0
+                               OR s.setdatabase = (SELECT oid FROM pg_database WHERE datname = '$db'))") || return 1
+    if [ -n "$overrides" ]; then
+        red "  $db: у ролей ($overrides) своя настройка default_transaction_read_only — она старше"
+        red "  настройки базы и отменила бы заморозку. Снимите: ALTER ROLE … RESET default_transaction_read_only"
+        return 1
+    fi
     pg -c "ALTER DATABASE \"$db\" SET default_transaction_read_only = on" >/dev/null || return 1
     since=$(pg -c "SELECT clock_timestamp()") || return 1
     kick_db "$db" "$since" || return 1
@@ -444,6 +458,9 @@ undo_copy() {
     run $COMPOSE stop "$TARGET" || bad=1
     run drop_db "$COPY_DB" || bad=1
     run set_env "APP_DB_$(upper "$COLOR")" "$PREV_TARGET_DB" || bad=1
+    # Профили — обратно на одну сборку. Оставленные «blue,green», они
+    # подняли бы неудавшуюся сборку первым же `up -d` без имени сервиса.
+    run set_env COMPOSE_PROFILES "$ACTIVE_COLOR" || bad=1
     run unfreeze_db "$SOURCE_DB" || bad=1
     if [ "$bad" != 0 ]; then
         red "Откат прошёл не целиком — метку незаконченной выкладки оставляю: ops/deploy.sh --abort"
@@ -724,9 +741,13 @@ wait_healthy() {  # имя сервиса
 # и у неудачной выкладки: разбираются как раз с ними.
 record() {  # что делали, чем кончилось
     local line
-    line=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+    # Базы — в строке истории: имя боевой базы меняется с каждой выкладкой,
+    # и возврат к моменту времени обязан знать, КАК база называлась тогда
+    # (ops/restore-pitr.sh --db). Спросить это потом больше не у кого.
+    line=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$STAND" "${TAG:-—}" "$WHO" \
-        "$1" "миграции: $MIGRATIONS$([ "$MIGRATE_WITH" = none ] && printf ', база новее образа')" "$2")
+        "$1" "миграции: $MIGRATIONS$([ "$MIGRATE_WITH" = none ] && printf ', база новее образа')" \
+        "база: ${SOURCE_DB:-—}$([ -n "${COPY_DB:-}" ] && [ "$MIGRATIONS" != only ] && printf ' → %s' "$COPY_DB")" "$2")
     if [ -n "$DRY" ]; then
         printf 'ЗАПИСЬ: %s\n' "$line"
     else
@@ -858,6 +879,8 @@ selftest() {
         before "отказ на «${broken}»: метка снимается последней" \
             "unfreeze_db $blue_db" "=set_env DEPLOY_COPY_DB "
         present "отказ на «${broken}»: зелёной возвращается прежняя база" "set_env APP_DB_GREEN $green_db"
+        before "отказ на «${broken}»: профили возвращаются на одну сборку" \
+            "drop_db $copy" "=set_env COMPOSE_PROFILES blue"
         absent "отказ на «${broken}»: ЗАПИСЬ В УДАЛЯЕМОЙ КОПИИ НЕ ОТКРЫВАЕТСЯ" "unfreeze_db $copy"
         absent "отказ на «${broken}»: старая сборка не гаснет" "stop app-blue"
         absent "отказ на «${broken}»: тег ячейки не переносится" "set_env APP_IMAGE_TAG $sha"

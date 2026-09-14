@@ -38,9 +38,27 @@ COMPOSE="docker compose -f docker-compose.prod.yml"
 step() { printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
 ok()   { printf '\033[1;32m    %s\033[0m\n' "$1"; }
 
+# Разворачивать — в базу сборки под трафиком (задача 0112): её имя записано
+# в .env и с первой выкладки копией уже не «parts». На новой машине такой базы
+# ещё нет — Postgres при первом запуске заводит только «parts», — поэтому она
+# создаётся здесь: развёрнутая в «parts», ячейка поднялась бы пустой, потому
+# что сборка смотрит в базу по имени из .env.
+DB_NAME=$(ENV_FILE="$ENV_FILE" ops/switch-build.sh --current-db) \
+    || { echo "Не узнать базу сборки под трафиком (ops/switch-build.sh --current-db)"; exit 1; }
+
 STARTED=$(date +%s)
 step "Набор $SET_DIR"
-[ -f "$SET_DIR/manifest.txt" ] && head -2 "$SET_DIR/manifest.txt" | sed 's/^/    /'
+[ -f "$SET_DIR/manifest.txt" ] && head -3 "$SET_DIR/manifest.txt" | sed 's/^/    /'
+
+step "База $DB_NAME"
+if [ "$($COMPOSE exec -T postgres psql -U "$DB_USER" -d postgres -tAc \
+        "SELECT count(*) FROM pg_database WHERE datname = '$DB_NAME'")" = 0 ]; then
+    $COMPOSE exec -T postgres psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 \
+        -c "CREATE DATABASE \"$DB_NAME\"" >/dev/null
+    ok "создана: её называет .env, а Postgres при первом запуске заводит только «parts»"
+else
+    ok "есть"
+fi
 
 step "Расширения Postgres"
 # pg_dump выгружает схемы, а расширения принадлежат базе — в дампе схем
@@ -49,7 +67,7 @@ step "Расширения Postgres"
 # public_code выдаётся умолчанием колонки через pgcrypto. Найдено репетицией
 # восстановления: до неё ячейка после потери диска просто не поднималась,
 # и узналось бы это в тот единственный день, когда это нужно.
-$COMPOSE exec -T postgres psql -U "$DB_USER" -d parts -v ON_ERROR_STOP=1 <<'SQL'
+$COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME"-v ON_ERROR_STOP=1 <<'SQL'
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE EXTENSION IF NOT EXISTS ltree;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -60,7 +78,7 @@ step "Общие схемы"
 # --clean не нужен: разворот идёт в пустую базу. Отказ «schema public
 # already exists» безобиден — эта схема есть в любой базе с рождения,
 # поэтому ошибки разбираем по итогу, а не по коду возврата.
-$COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d parts --no-owner \
+$COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d "$DB_NAME"--no-owner \
     < "$SET_DIR/shared.dump" 2>&1 | grep -v 'schema "public" already exists' \
     | grep -v 'CREATE SCHEMA public' || true
 ok "реестр и справочники подняты"
@@ -70,7 +88,7 @@ COUNT=0
 for dump in "$SET_DIR"/t_*.dump; do
     [ -e "$dump" ] || break
     schema=$(basename "$dump" .dump)
-    $COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d parts --no-owner < "$dump"
+    $COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d "$DB_NAME"--no-owner < "$dump"
     COUNT=$((COUNT + 1))
     ok "$schema"
 done
@@ -94,9 +112,9 @@ else
 fi
 
 step "Проверка"
-$COMPOSE exec -T postgres psql -U "$DB_USER" -d parts -tAc \
+$COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME"-tAc \
     "SELECT count(*)||' арендаторов в реестре' FROM public.tenant_registry" | sed 's/^/    /'
-$COMPOSE exec -T postgres psql -U "$DB_USER" -d parts -tAc \
+$COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME"-tAc \
     "SELECT count(*)||' схем в базе' FROM information_schema.schemata WHERE schema_name LIKE 't\_%'" \
     | sed 's/^/    /'
 

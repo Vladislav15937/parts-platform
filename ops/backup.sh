@@ -55,7 +55,16 @@ step() { printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
 ok()   { printf '\033[1;32m    %s\033[0m\n' "$1"; }
 fail() { printf '\033[1;31m    ОШИБКА: %s\033[0m\n' "$1"; exit 1; }
 
-psql_() { $COMPOSE exec -T postgres psql -U "$DB_USER" -d parts -v ON_ERROR_STOP=1 "$@"; }
+# База, в которой работают люди, — база сборки под трафиком. С первой выкладки
+# копией (задача 0112) это уже не «parts»: у каждой сборки своя база, а прежняя
+# остаётся рядом замороженной. Дамп литерала «parts» тихо снимал бы эту
+# замороженную — отметка «бэкап снят» ставилась бы каждую ночь, а клиента
+# вернуть было бы не из чего. Имя спрашивается у ops/switch-build.sh —
+# единственного места, которое читает его так же, как compose.
+DB_NAME=$(ENV_FILE="$ENV_FILE" ops/switch-build.sh --current-db) \
+    || fail "не узнать базу сборки под трафиком (ops/switch-build.sh --current-db)"
+
+psql_() { $COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 "$@"; }
 
 # Отметка об успехе для наблюдения.
 #
@@ -81,10 +90,10 @@ mark_success() {
 
 mkdir -p "$OUT"
 
-step "Общие схемы: реестр арендаторов и справочники"
+step "Общие схемы: реестр арендаторов и справочники (база $DB_NAME)"
 # --schema, а не весь кластер: роли и настройки сервера восстанавливает
 # провижининг ячейки, а не бэкап данных.
-$COMPOSE exec -T postgres pg_dump -U "$DB_USER" -d parts \
+$COMPOSE exec -T postgres pg_dump -U "$DB_USER" -d "$DB_NAME" \
     --format=custom --schema=public --schema=catalog \
     > "$OUT/shared.dump"
 ok "shared.dump — $(du -h "$OUT/shared.dump" | cut -f1)"
@@ -102,7 +111,7 @@ else
         # Каждый дамп согласован сам по себе: pg_dump держит снимок на время
         # одного вызова. Между арендаторами согласованности нет и не нужно —
         # их данные не пересекаются.
-        $COMPOSE exec -T postgres pg_dump -U "$DB_USER" -d parts \
+        $COMPOSE exec -T postgres pg_dump -U "$DB_USER" -d "$DB_NAME" \
             --format=custom --schema="$schema" > "$OUT/$schema.dump"
         ok "$schema — $(du -h "$OUT/$schema.dump" | cut -f1)"
     done
@@ -111,6 +120,7 @@ fi
 step "Опись"
 {
     echo "снято: $STAMP"
+    echo "база: $DB_NAME"
     echo "арендаторов: $(echo "$TENANTS" | grep -c . || true)"
     psql_ -tAc "SELECT tenant_id||' '||schema_name||' '||code||' '||status
                   FROM public.tenant_registry ORDER BY tenant_id"
