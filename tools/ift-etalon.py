@@ -766,11 +766,18 @@ VOLATILE = re.compile(r"(^id$|Id$|Ids$|^code$|Code$|At$|^reservedUntil$|^arrived
                       r"|[uU]rl$|^photoKey$|^path$|^token$|^key$|^expires$)")
 
 
+# Дата живёт и внутри текста: поставка на витрине — «Контейнер №ЭТ-001 |
+# 14.09.2026». Без маски отпечаток того же набора менялся бы каждые сутки.
+DATE_IN_TEXT = re.compile(r"\b\d{2}\.\d{2}\.\d{4}\b")
+
+
 def clean(value):
     if isinstance(value, dict):
         return {k: clean(v) for k, v in value.items() if not VOLATILE.search(k)}
     if isinstance(value, list):
         return [clean(v) for v in value]
+    if isinstance(value, str):
+        return DATE_IN_TEXT.sub("дд.мм.гггг", value)
     return value
 
 
@@ -798,8 +805,12 @@ def snapshot(owner, seller, warehouses, rows, wheels, deals):
         "доска": [(c["key"], c["count"]) for c in seller.get("/api/deals/board")["columns"]],
         "выгрузки": sorted((a["marketplace"], a["title"], a["status"], a["hasFeed"])
                            for a in owner.get("/api/marketplace-accounts")),
-        "нераспознанные": sorted(clean(n) for n in
-                                 owner.get("/api/part-names/unmatched?size=50")["items"]),
+        # По имени, а не целиком: словари между собой не сравниваются, и второе
+        # нераспознанное написание (его заводит первый же сценарий приёмки)
+        # роняло проверку уже после всех вердиктов.
+        "нераспознанные": sorted((clean(n) for n in
+                                  owner.get("/api/part-names/unmatched?size=50")["items"]),
+                                 key=lambda n: n.get("name") or ""),
     }
 
 
