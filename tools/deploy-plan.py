@@ -183,7 +183,18 @@ def selftest():
     check("равенство версий — выкладываемой", "target", plan(103, 103)["migrate_with"])
     check("первая выкладка — выкладываемой", "target", plan(None, 103)["migrate_with"])
 
-    rc = load_rollback_cost()
+    # Разбор changelog'а берётся у `db/rollback-cost.py` (см. шапку), и берётся
+    # importlib'ом из корня — то есть без `db/` в sys.path. Названный ✗ здесь
+    # дешевле трассировки: шов между двумя задачами видно по имени, а не по
+    # стеку чужого файла, и остальные случаи говорят, докуда дошла проверка.
+    try:
+        rc = load_rollback_cost()
+        print("  ✓ db/rollback-cost.py грузится модулем со своими зависимостями")
+    except Exception as e:
+        print(f"  \033[1;31m✗ db/rollback-cost.py не грузится модулем: "
+              f"{type(e).__name__}: {e}\033[0m", file=sys.stderr)
+        print("\033[1;31mСамопроверка не прошла\033[0m", file=sys.stderr)
+        return 1
 
     # 5. Версия считается ПО КОММИТУ, а не по рабочему дереву. Это и есть
     #    та ошибка, из-за которой откат был бы невидим: оба SHA дали бы

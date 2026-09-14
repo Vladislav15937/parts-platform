@@ -312,7 +312,52 @@ selftest() {
         bad_count=$((bad_count + 1))
     fi
 
-    # 6. И сам список упавших: выкладка обязана называть, ЧТО именно упало,
+    # 6. Обвязка проверок, а не только их разбор. Тело check_http,
+    #    check_journals и check_schemas можно было заменить на `return 0`,
+    #    и самопроверка оставалась зелёной: подсовывали ответ прямо в
+    #    verdict_*, минуя то, что этот ответ добывает. То есть нацеливание —
+    #    ровно то, чем проверка отличается от заглушки, — не проверялось
+    #    ничем, и выкладка зеленела бы, не спросив ячейку ни разу.
+    #    Ячейка для этого не нужна: подменяются `fetch` и скрипт опроса схем,
+    #    а обвязка проходится целиком, от нацеливания до вердикта.
+    local real_fetch real_migrate stub
+    real_fetch=$(declare -f fetch)
+    real_migrate="$MIGRATE_TENANTS"
+    # BUILD присваивается уже после самопроверки, а check_journals его читает
+    # при `set -u`: без этого обвязка упала бы не на том, что проверяют.
+    BUILD="app-green"
+    STUB_ANSWER=""
+    fetch() { printf '%s' "$STUB_ANSWER"; }
+
+    DEPLOY_HTTP_URL="https://стенд/"
+    STUB_ANSWER="200"
+    expect "1. обвязка: ответ 200 доезжает до вердикта" ok "" check_http
+    STUB_ANSWER="502"
+    expect "1. обвязка: 502 доезжает и краснеет" fail "приложение отвечает" check_http
+    unset DEPLOY_HTTP_URL
+    APP_DOMAIN=""
+    expect "1. обвязка: ненацеленная проверка — отказ" fail "приложение отвечает" check_http
+
+    STUB_ANSWER="$ready"
+    expect "2. обвязка: готовность доезжает до вердикта" ok "" check_journals
+    STUB_ANSWER="$broken"
+    expect "2. обвязка: незащищённые журналы доезжают и краснеют" \
+        fail "журналы защищены" check_journals
+
+    stub="${TMPDIR:-/tmp}/deploy-checks-migrate.$$"
+    printf '#!/usr/bin/env bash\necho "Все схемы на поставляемой версии"\nexit 0\n' > "$stub"
+    MIGRATE_TENANTS="$stub"
+    expect "3. обвязка: нулевой код доезжает до вердикта" ok "" check_schemas
+    printf '#!/usr/bin/env bash\necho "Отставших схем: 2"\nexit 1\n' > "$stub"
+    expect "3. обвязка: отставшие доезжают и краснеют" \
+        fail "отставших схем ноль" check_schemas
+    rm -f "$stub"
+
+    eval "$real_fetch"
+    MIGRATE_TENANTS="$real_migrate"
+    unset STUB_ANSWER APP_DOMAIN
+
+    # 7. И сам список упавших: выкладка обязана называть, ЧТО именно упало,
     #    а не «проверки не прошли». Разбирают её по этой строке.
     FAILED=""
     verdict_http 502 >/dev/null 2>&1
