@@ -12,12 +12,18 @@ import liquibase.resource.ClassLoaderResourceAccessor;
 import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Properties;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.IntFunction;
 
 /**
  * Накат миграций на схему арендатора.
@@ -38,10 +44,20 @@ public class TenantSchemaMigrator {
 
     private static final String TENANT_CHANGELOG = "db/changelog/db.changelog-tenant.xml";
 
+    /**
+     * Объявление нижней границы отката — рядом с самим changelog'ом и внутри
+     * артефакта: у сборки версии 120 и у сборки версии 138 она может быть
+     * разной, и спрашивать надо у той, которая откатывает.
+     */
+    private static final String ROLLBACK_FLOOR = "db/changelog/rollback-floor.properties";
+
     private final DataSource dataSource;
 
     /** Версия артефакта: считается один раз, см. {@link #expectedVersion()}. */
     private volatile String expectedVersion;
+
+    /** Нижняя граница отката: считается один раз, см. {@link #rollbackFloor()}. */
+    private volatile String rollbackFloor;
 
     public TenantSchemaMigrator(
             @SchemaOwnerDataSource.SchemaOwner DataSource dataSource) {
@@ -132,6 +148,97 @@ public class TenantSchemaMigrator {
     }
 
     /**
+     * Нижняя граница отката этого артефакта — «число косая идентификатор»,
+     * тем же форматом, что и {@link #expectedVersion()}.
+     *
+     * <p><b>Что это.</b> Самая младшая версия, до которой откат ВОЗВРАЩАЕТ
+     * схему к тому виду, какой она на этой версии имела. Ниже неё одиннадцать
+     * выпущенных changeset'ов не отменяют того, что сделали (волна «логика
+     * в Java» с пустым {@code --rollback}, переименование, два снятых
+     * {@code NOT NULL}), и откат туда проходит МОЛЧА, с кодом ноль, оставляя
+     * схему, на которой код той сборки работать не может. Задача 0102: довод,
+     * почему граница, а не второй мост отката, — в
+     * {@code db/changelog/rollback-floor.properties} и {@code db/CLAUDE.md}.
+     *
+     * <p><b>Пара сверяется с changelog'ом, а не принимается на слово.</b>
+     * Число обязано указывать на changeset с этим идентификатором — иначе
+     * объявление читалось бы двумя способами, и однажды это были бы разные
+     * места. Разъехалось — исключение: инструмент, который откатывает
+     * по неверной границе, хуже инструмента, который не запускается.
+     */
+    public String rollbackFloor() {
+        String known = rollbackFloor;
+        if (known != null) {
+            return known;
+        }
+        String declared = checkedFloor(declaredFloor(), totalChangeSets(), this::versionAt);
+        rollbackFloor = declared;
+        return declared;
+    }
+
+    /**
+     * Сверка объявления с набором, отделённая от базы намеренно.
+     *
+     * <p>Обе ветки отказа — «версии в наборе нет» и «пара разъехалась» —
+     * это правила про текст, и проверять их тестом, которому нужна база
+     * и Liquibase, значит не проверять вовсе: такой тест напишут один раз
+     * и на положительный случай. Питоновская половина того же объявления
+     * проверяется пятью подделками (`db/verify-rollback.py --selftest`),
+     * и эта обязана быть не слабее.
+     *
+     * @param versionAt как {@link #versionAt(int)} — вынесено параметром,
+     *                  чтобы сверку можно было спросить без соединения
+     */
+    static String checkedFloor(String declared, int total,
+                               IntFunction<String> versionAt) {
+        int number = changeSetsIn(declared);
+        if (number < 0) {
+            // Формат и диапазон — разные беды, и общий отказ отправил бы
+            // читающего искать не там: «а в наборе 138 changeset'ов»
+            // на «не число» читается как «номер великоват».
+            throw new IllegalStateException("Граница отката объявлена как «"
+                    + declared + "»: нужен формат «число/идентификатор», как "
+                    + "у отметки версии в реестре: " + ROLLBACK_FLOOR);
+        }
+        if (number < 1 || number > total) {
+            throw new IllegalStateException("Граница отката объявлена как «"
+                    + declared + "», а в наборе " + total + " changeset'ов: "
+                    + ROLLBACK_FLOOR);
+        }
+        String at = versionAt.apply(number);
+        if (!at.equals(declared)) {
+            throw new IllegalStateException("Граница отката объявлена как «"
+                    + declared + "», а версия " + number + " этого набора — «"
+                    + at + "». Объявление разъехалось с changelog'ом: "
+                    + ROLLBACK_FLOOR);
+        }
+        return declared;
+    }
+
+    private String declaredFloor() {
+        Properties props = new Properties();
+        try (InputStream in = getClass().getClassLoader()
+                .getResourceAsStream(ROLLBACK_FLOOR)) {
+            if (in == null) {
+                throw new IllegalStateException("В артефакте нет " + ROLLBACK_FLOOR
+                        + " — граница отката не объявлена, а откат вниз на неё опирается");
+            }
+            // Явно UTF-8: Properties.load(InputStream) читает ISO-8859-1,
+            // и русское объяснение внутри файла приехало бы крокозябрами.
+            props.load(new InputStreamReader(in, StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            throw new IllegalStateException("Не прочитался " + ROLLBACK_FLOOR, e);
+        }
+        String value = props.getProperty("tenant");
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException(ROLLBACK_FLOOR
+                    + ": нет строки «tenant=…» — граница для схемы арендатора"
+                    + " не объявлена");
+        }
+        return value.strip();
+    }
+
+    /**
      * Что схема знает о себе: сколько changeset'ов артефакта на ней уже есть,
      * сколько ещё нет и чего на ней лежит <b>сверх</b> артефакта.
      *
@@ -185,6 +292,10 @@ public class TenantSchemaMigrator {
      * <p>Цену отката печатает не этот метод, а {@code db/rollback-cost.py}:
      * структурно верный откат теряет данные молча, и что именно теряется,
      * знает только пометка у самого changeset'а.
+     *
+     * <p>И глубину тоже решает не этот метод: ниже {@link #rollbackFloor()}
+     * откат схему не возвращает, и отказывает в этом {@link SchemaSync} —
+     * там, где известна целевая версия, а не число шагов.
      */
     public void rollbackLast(String schema, int count) {
         inLiquibase(schema, liquibase -> {
