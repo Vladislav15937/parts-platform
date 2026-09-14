@@ -55,6 +55,7 @@ BASE_DIR=""
 KEEP=0
 VERIFY=0
 SELFTEST=0
+PITR_DB=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -62,9 +63,10 @@ while [ $# -gt 0 ]; do
         --tenant)   TENANT="${2:?укажите схему, например t_000042}"; shift 2 ;;
         --base)     BASE_DIR="${2:?укажите каталог базовой копии}"; shift 2 ;;
         --keep)     KEEP=1; shift ;;
+        --db)       PITR_DB="${2:?укажите имя базы, например parts_green_1a2b3c4d5e6f}"; shift 2 ;;
         --verify)   VERIFY=1; shift ;;
         --selftest) SELFTEST=1; shift ;;
-        *)          printf 'Использование: %s --to "МОМЕНТ ПОЯС"|latest [--tenant СХЕМА] [--base КАТАЛОГ] [--keep]\n' "$0" >&2
+        *)          printf 'Использование: %s --to "МОМЕНТ ПОЯС"|latest [--tenant СХЕМА] [--base КАТАЛОГ] [--db БАЗА] [--keep]\n' "$0" >&2
                     printf '               %s --verify | --selftest\n' "$0" >&2
                     exit 2 ;;
     esac
@@ -106,6 +108,17 @@ step() { printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
 ok()   { printf '\033[1;32m    %s\033[0m\n' "$1"; }
 warn() { printf '\033[1;33m    %s\033[0m\n' "$1"; }
 fail() { printf '\033[1;31m    ОШИБКА: %s\033[0m\n' "$1"; exit 1; }
+
+# В КАКОЙ БАЗЕ ИСКАТЬ (задача 0112). С первой выкладки копией у ячейки баз
+# несколько, и имя рабочей меняется с каждой выкладкой: к моменту до выкладки
+# люди работали в ДРУГОЙ базе, чем сейчас. По умолчанию берётся база сборки
+# под трафиком — это верно для момента после последней выкладки; для более
+# раннего имя называют явно (--db), и оно записано в deploy-history.log
+# («база: parts_blue_… → parts_green_…»). Не найдя базу в восстановленном
+# кластере, скрипт перечисляет, какие там есть, а не ждёт наката впустую.
+LIVE_DB=$(ENV_FILE="$ENV_FILE" ops/switch-build.sh --current-db) \
+    || fail "не узнать базу сборки под трафиком (ops/switch-build.sh --current-db)"
+[ -n "$PITR_DB" ] || PITR_DB="$LIVE_DB"
 
 # Времена, посчитанные скриптом (мтайм сегмента, «сейчас»), печатаются в поясе
 # машины — и пояс НАЗЫВАЕТСЯ. Молчащее время читается как время читающего,
@@ -256,7 +269,7 @@ cleanup() {
     local code=$?
     if [ "$KEEP" = 1 ] && [ "$code" = 0 ]; then
         printf '\nЧерновик оставлен: контейнер %s, том %s\n' "$CNAME" "$VOL"
-        printf 'Посмотреть:  docker exec -it %s psql -U %s -d parts\n' "$CNAME" "$DB_USER"
+        printf 'Посмотреть:  docker exec -it %s psql -U %s -d %s\n' "$CNAME" "$DB_USER" "$PITR_DB"
         printf 'Убрать:      docker rm -f %s && docker volume rm %s\n' "$CNAME" "$VOL"
     else
         docker rm -f "$CNAME" > /dev/null 2>&1 || true
@@ -266,7 +279,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-q() { docker exec "$CNAME" psql -U "$DB_USER" -d parts -tAqc "$1" 2>/dev/null; }
+# Два адресата, и путать их нельзя. Состояние наката — свойство кластера,
+# и спрашивается в служебной базе: спрошенное в рабочей, которой в кластере
+# на этот момент не оказалось, оно молча отвечало бы пустотой, и цикл ниже
+# ждал бы наката до таймаута. Данные — в той базе, где тогда работали люди.
+qc() { docker exec "$CNAME" psql -U "$DB_USER" -d postgres -tAqc "$1" 2>/dev/null; }
+q()  { docker exec "$CNAME" psql -U "$DB_USER" -d "$PITR_DB" -tAqc "$1" 2>/dev/null; }
 
 STARTED=$(date +%s)
 STATE=""
@@ -290,9 +308,9 @@ while :; do
         fail "накат не дошёл до конца — разбирайте по журналу выше"
     fi
 
-    STATE=$(q "SELECT CASE WHEN pg_is_in_recovery()
+    STATE=$(qc "SELECT CASE WHEN pg_is_in_recovery()
                            THEN pg_get_wal_replay_pause_state() ELSE 'поднят' END" || true)
-    REPLAYED=$(q "SELECT COALESCE(pg_last_xact_replay_timestamp()::text, '—')" || true)
+    REPLAYED=$(qc "SELECT COALESCE(pg_last_xact_replay_timestamp()::text, '—')" || true)
     [ -n "$REPLAYED" ] && [ "$REPLAYED" != "—" ] && LAST_REPLAYED="$REPLAYED"
     case "$STATE" in
         paused) ok "накат остановлен на запрошенном моменте"; break ;;
@@ -308,7 +326,7 @@ step "Куда именно вернулись"
 # Момент, до которого дошёл накат, спрашиваем у самой копии. «Запросили 13:59»
 # и «накатано до 13:58:57» — разные утверждения, и человеку нужно второе:
 # по нему он и решает, та ли это точка.
-REPLAYED=$(q "SELECT COALESCE(pg_last_xact_replay_timestamp()::text, '—')")
+REPLAYED=$(qc "SELECT COALESCE(pg_last_xact_replay_timestamp()::text, '—')")
 [ -n "$REPLAYED" ] && [ "$REPLAYED" != "—" ] && LAST_REPLAYED="$REPLAYED"
 if [ "$LATEST" = 1 ]; then
     printf '    запрошено: конец архива\n'
@@ -339,18 +357,22 @@ if [ "$LATEST" = 1 ]; then
     # как текст.
     LAST_IN_ARCHIVE=$(find "$WAL_DIR" -maxdepth 1 -type f -name '????????????????????????.gz' \
                       | sed 's|.*/||; s|\.gz$||' | sort | tail -1)
-    ENDED=$(q "SELECT pg_walfile_name(pg_current_wal_lsn())")
+    ENDED=$(qc "SELECT pg_walfile_name(pg_current_wal_lsn())")
     if [ -n "$LAST_IN_ARCHIVE" ] && [[ "${ENDED:8}" < "${LAST_IN_ARCHIVE:8}" ]]; then
         fail "накат встал на $ENDED, а в архиве есть $LAST_IN_ARCHIVE — восстановлено НЕ всё"
     fi
     ok "накат дошёл до конца архива: $ENDED (последний в архиве $LAST_IN_ARCHIVE)"
 fi
+if [ "$(qc "SELECT count(*) FROM pg_database WHERE datname = '$PITR_DB'")" != 1 ]; then
+    fail "базы $PITR_DB в восстановленном кластере нет; есть: $(qc "SELECT string_agg(datname, ', ' ORDER BY datname) FROM pg_database WHERE NOT datistemplate AND datname <> 'postgres'"). Какая база работала на тот момент — deploy-history.log, дальше --db"
+fi
+ok "база людей на тот момент: $PITR_DB$([ "$PITR_DB" = "$LIVE_DB" ] || printf ' (сейчас работает %s)' "$LIVE_DB")"
 TENANTS=$(q "SELECT count(*) FROM public.tenant_registry")
 ok "арендаторов в восстановленном реестре: $TENANTS"
 
 if [ "$VERIFY" = 1 ]; then
     step "Сверка с живой ячейкой"
-    LIVE=$($COMPOSE exec -T postgres psql -U "$DB_USER" -d parts -tAqc \
+    LIVE=$($COMPOSE exec -T postgres psql -U "$DB_USER" -d "$LIVE_DB" -tAqc \
         "SELECT count(*) FROM public.tenant_registry")
     # Равенства здесь НЕ требуем, и это не небрежность: возврат идёт к моменту
     # в прошлом, и клиент, заведённый после него, в восстановленном реестре
@@ -390,7 +412,7 @@ if [ -n "$TENANT" ]; then
         || fail "схемы $TENANT в восстановленном кластере нет"
     mkdir -p "$PITR/$(basename "$BASE_DIR")"
     DUMP_SET="$PITR/$(basename "$BASE_DIR")"
-    docker exec "$CNAME" pg_dump -U "$DB_USER" -d parts --format=custom --schema="$TENANT" \
+    docker exec "$CNAME" pg_dump -U "$DB_USER" -d "$PITR_DB" --format=custom --schema="$TENANT" \
         > "$DUMP_SET/$TENANT.dump"
     ok "$DUMP_SET/$TENANT.dump — $(du -h "$DUMP_SET/$TENANT.dump" | cut -f1)"
     printf '\nВернуть клиента в живую ячейку (схема будет пересоздана):\n'

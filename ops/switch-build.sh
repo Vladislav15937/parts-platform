@@ -4,6 +4,8 @@
 #
 #   ./switch-build.sh                 # какая сборка под трафиком сейчас
 #   ./switch-build.sh --current       # то же, одним словом: app-blue
+#   ./switch-build.sh --db app-green  # база, на которой работает эта сборка
+#   ./switch-build.sh --current-db    # база сборки под трафиком — боевая база ячейки
 #   ./switch-build.sh green           # перевести трафик на зелёную
 #   ./switch-build.sh blue            # и обратно
 #   ./switch-build.sh --selftest      # проверка самого скрипта, без docker
@@ -53,12 +55,51 @@ current() {
     printf '%s\n' "$name"
 }
 
+# База сборки (задача 0112). У каждой сборки своя: выкладка снимает копию
+# с базы работающей и поднимает новую уже на копии. Имя лежит в .env —
+# APP_DB_BLUE / APP_DB_GREEN, — и читается ровно так, как его читает compose:
+# переменная окружения оболочки старше файла, незаданное — «parts», база,
+# с которой ячейка родилась. Разойдись это место с compose, бэкап снимал бы
+# одну базу, а люди работали бы в другой, — и молча.
+#
+# Имя проверяется: оно уходит в SQL выкладки и бэкапа, и строка с кавычкой
+# или пробелом в .env не должна становиться частью команды.
+ENV_FILE="${ENV_FILE:-.env}"
+
+db_of() {  # app-blue | app-green
+    local key value
+    case "$1" in
+        app-blue)  key=APP_DB_BLUE ;;
+        app-green) key=APP_DB_GREEN ;;
+        *) fail "Неизвестная сборка: $1. Их две — app-blue и app-green." ;;
+    esac
+    if [ -n "${!key+задано}" ]; then
+        value="${!key}"
+    elif [ -f "$ENV_FILE" ]; then
+        value=$(sed -n "s/^${key}=//p" "$ENV_FILE" | tail -n1)
+    else
+        value=""
+    fi
+    value="${value:-parts}"
+    case "$value" in
+        [a-z]*) ;;
+        *) fail "Имя базы «${value}» в ${key} не годится: латиница в нижнем регистре, цифры и _" ;;
+    esac
+    case "$value" in
+        *[!a-z0-9_]*) fail "Имя базы «${value}» в ${key} не годится: латиница в нижнем регистре, цифры и _" ;;
+    esac
+    [ "${#value}" -le 63 ] || fail "Имя базы «${value}» длиннее 63 символов — Postgres его обрежет"
+    printf '%s\n' "$value"
+}
+
 usage() {
     cat >&2 <<'EOF'
 Использование: ops/switch-build.sh [blue|green|--current|--selftest] [--force]
 
   blue | green   перевести трафик на эту сборку (с проверкой готовности)
   --current      напечатать имя сборки под трафиком (app-blue / app-green)
+  --db СБОРКА    напечатать имя базы этой сборки (из .env, умолчание parts)
+  --current-db   напечатать имя базы сборки под трафиком
   --force        перевести БЕЗ проверки готовности — только для ВОЗВРАТА
   без аргумента  то же, словами
 EOF
@@ -153,6 +194,29 @@ selftest() {
         && printf '  ✓ записана строка проксирования\n' \
         || { red "  ✗ в файле нет строки «reverse_proxy app-green:8080»"; ok=1; }
 
+    # 7. База сборки читается так же, как её читает compose: из .env,
+    #    с умолчанием «parts», и переменная оболочки старше файла. Разойдись
+    #    это с compose — бэкап и выкладка работали бы не с той базой,
+    #    в которой люди.
+    printf 'APP_DB_GREEN=parts_green_0123456789ab\n#APP_DB_BLUE=zakommentirovano\n' > "$dir/env"
+    check "база сборки берётся из .env" "parts_green_0123456789ab" \
+        "$(env -u APP_DB_GREEN ENV_FILE=$dir/env bash "$0" --db app-green)"
+    check "незаданная база — parts, закомментированная не считается" "parts" \
+        "$(env -u APP_DB_BLUE ENV_FILE=$dir/env bash "$0" --db app-blue)"
+    check "переменная оболочки старше .env, как у compose" "iz_obolochki" \
+        "$(APP_DB_GREEN=iz_obolochki ENV_FILE=$dir/env bash "$0" --db app-green)"
+    printf 'reverse_proxy app-green:8080\n' > "$dir/d.caddy"
+    check "база под трафиком — база активной сборки" "parts_green_0123456789ab" \
+        "$(env -u APP_DB_GREEN ACTIVE_FILE=$dir/d.caddy ENV_FILE=$dir/env bash "$0" --current-db)"
+
+    # 8. Имя, негодное для SQL, — отказ, а не подстановка в команду.
+    printf 'APP_DB_BLUE=parts;DROP\n' > "$dir/bad.env"
+    if env -u APP_DB_BLUE ENV_FILE=$dir/bad.env bash "$0" --db app-blue >/dev/null 2>&1; then
+        red "  ✗ имя базы с «;» обязано быть отказом"; ok=1
+    else
+        printf '  ✓ имя базы с «;» — отказ\n'
+    fi
+
     [ $ok = 0 ] || fail "Самопроверка не прошла"
     green "Самопроверка пройдена"
 }
@@ -172,6 +236,8 @@ write_active() {
 # --- разбор аргументов ------------------------------------------------------
 case "${1:-}" in
     --current) current; exit 0 ;;
+    --current-db) db_of "$(current)"; exit 0 ;;
+    --db) db_of "${2:?назовите сборку: app-blue или app-green}"; exit 0 ;;
     --selftest) selftest; exit 0 ;;
     -h|--help) usage ;;
     "")
@@ -206,6 +272,37 @@ fi
 # список того, что не готово. Человеку, разбирающему неудачную выкладку,
 # нужен именно он, а не «curl: (22) error 503».
 probe() { $COMPOSE exec -T caddy curl -sS -m 10 "http://$TARGET:8080/actuator/readiness" 2>&1; }
+
+# --- не на замороженную базу (задача 0112) ------------------------------------
+#
+# После выкладки прежняя база остаётся рядом замороженной: это слепок
+# на момент переключения, а всё записанное людьми после него живёт только
+# в базе новой сборки. Готовность такой сборки зелёная — только-чтение её
+# не роняет, — поэтому «откат — обратное переключение» тихо перевёл бы людей
+# на вчерашний склад: чтение показывает прошлое, запись отвечает «идёт
+# обновление», а сегодняшняя работа пропадает из виду. Откат приложения
+# после выкладки — это ops/deploy.sh --tag <прежний SHA> --migrate-with none.
+#
+# Проходят сюда двое, и оба называют себя: выкладка на своём прямом
+# переключении (копия заморожена намеренно, до конца самопроверок —
+# SWITCH_FROZEN_OK=yes) и возврат при неудаче (--force, прежняя база ещё
+# заморожена и откроется следующим шагом).
+if [ -z "$FORCE" ] && [ "${SWITCH_FROZEN_OK:-}" != yes ]; then
+    TARGET_DB=$(db_of "$TARGET")
+    PG_USER="${DB_USER:-$(sed -n 's/^DB_USER=//p' "$ENV_FILE" 2>/dev/null | tail -n1)}"
+    FROZEN=$($COMPOSE exec -T postgres psql -U "${PG_USER:?не узнать DB_USER — владельца базы}" -d postgres -tAc \
+        "SELECT count(*) FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase,
+                unnest(s.setconfig) c
+          WHERE d.datname = '$TARGET_DB' AND s.setrole = 0
+            AND c = 'default_transaction_read_only=on'" 2>&1) \
+        || fail "Не спросить, заморожена ли база $TARGET_DB: $FROZEN — трафик ОСТАЁТСЯ на $CURRENT"
+    if [ "$FROZEN" != 0 ]; then
+        red "База сборки $TARGET ($TARGET_DB) заморожена: это прежняя база, слепок на момент"
+        red "выкладки. Записанное людьми после неё живёт в базе $CURRENT ($(db_of "$CURRENT"))."
+        red "Переключение туда показало бы людям вчерашний склад — трафик ОСТАЁТСЯ на $CURRENT."
+        fail "Откат приложения после выкладки: ops/deploy.sh --tag <прежний SHA> --migrate-with none"
+    fi
+fi
 
 if [ -n "$FORCE" ]; then
     # Говорится вслух и в лог выкладки: принуждение — это ровно тот путь,

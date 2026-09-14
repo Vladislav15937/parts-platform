@@ -35,7 +35,14 @@ DUMP="$SET_DIR/$SCHEMA.dump"
 
 [ -f "$DUMP" ] || { printf '\033[1;31mНет дампа: %s\033[0m\n' "$DUMP"; exit 1; }
 
+# Разворачивать — в базу сборки под трафиком (задача 0112): с первой выкладки
+# копией у ячейки баз несколько, и литерал «parts» вернул бы клиента в прежнюю
+# замороженную, где его не видит ни одна работающая сборка.
+DB_NAME=$(ENV_FILE="$ENV_FILE" ops/switch-build.sh --current-db) \
+    || { printf '\033[1;31mНе узнать базу сборки под трафиком\033[0m\n'; exit 1; }
+
 printf 'Схема:  %s\n' "$SCHEMA"
+printf 'База:   %s (сборки под трафиком)\n' "$DB_NAME"
 printf 'Набор:  %s (снят %s)\n' "$SET_DIR" "$(basename "$SET_DIR")"
 printf '\n\033[1;31mСхема %s будет удалена и восстановлена из набора.\033[0m\n' "$SCHEMA"
 printf 'Всё, что клиент завёл после снятия набора, пропадёт.\n'
@@ -43,9 +50,9 @@ printf 'Введите имя схемы для подтверждения: '
 read -r CONFIRM
 [ "$CONFIRM" = "$SCHEMA" ] || { echo "Отменено."; exit 1; }
 
-$COMPOSE exec -T postgres psql -U "$DB_USER" -d parts -v ON_ERROR_STOP=1 \
+$COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME"-v ON_ERROR_STOP=1 \
     -c "DROP SCHEMA IF EXISTS $SCHEMA CASCADE" >/dev/null
-$COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d parts --no-owner < "$DUMP"
+$COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d "$DB_NAME"--no-owner < "$DUMP"
 
 # Фотографии возвращаются вместе с базой. Схема-на-арендатора и префикс
 # арендатора в ключе S3 выбирались ради одного и того же — вернуть одного
@@ -65,7 +72,7 @@ else
     printf '\033[1;33mСнимков в копии нет: %s — карточки будут без фотографий\033[0m\n' "$PHOTOS"
 fi
 
-PARTS=$($COMPOSE exec -T postgres psql -U "$DB_USER" -d parts -tAc \
+PARTS=$($COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME"-tAc \
     "SELECT count(*) FROM $SCHEMA.part")
 printf '\n\033[1;32mВосстановлено: %s, позиций %s\033[0m\n' "$SCHEMA" "$PARTS"
 printf 'Остальные арендаторы не затронуты.\n'

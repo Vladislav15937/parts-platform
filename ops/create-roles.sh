@@ -24,7 +24,12 @@ set -a; . "./$ENV_FILE"; set +a
 : "${APP_RUNTIME_PASSWORD:?укажите APP_RUNTIME_PASSWORD}"
 
 COMPOSE="docker compose -f docker-compose.prod.yml"
-PSQL="$COMPOSE exec -T postgres psql -U $DB_USER -d parts -v ON_ERROR_STOP=1"
+# База сборки под трафиком (задача 0112): с первой выкладки копией это
+# не «parts». Право CONNECT выдаётся на базу, а не на кластер, и выданное
+# на прежнюю базу новую сборку не пустило бы. Копии выкладка переносит
+# права сама (ops/deploy.sh, copy_db).
+DB_NAME=$(ENV_FILE="$ENV_FILE" ops/switch-build.sh --current-db)
+PSQL="$COMPOSE exec -T postgres psql -U $DB_USER -d $DB_NAME -v ON_ERROR_STOP=1"
 
 echo "==> Заводим рабочую роль $APP_RUNTIME_ROLE"
 $PSQL <<SQL
@@ -37,7 +42,7 @@ BEGIN
     END IF;
 END \$\$;
 
-GRANT CONNECT ON DATABASE parts TO $APP_RUNTIME_ROLE;
+GRANT CONNECT ON DATABASE "$DB_NAME" TO $APP_RUNTIME_ROLE;
 
 -- Общая схема ячейки: справочники читают все, пишет их миграция.
 GRANT USAGE ON SCHEMA catalog TO $APP_RUNTIME_ROLE;
@@ -73,7 +78,7 @@ echo
 echo "==> Готово. В .env должны быть заполнены все четыре:"
 echo "    APP_RUNTIME_ROLE=$APP_RUNTIME_ROLE"
 echo "    APP_RUNTIME_PASSWORD=<пароль рабочей роли, тот же что здесь>"
-echo "    APP_DDL_URL=jdbc:postgresql://postgres:5432/parts"
+echo "    APP_DDL_URL=jdbc:postgresql://postgres:5432/parts   (признак: адрес compose строит на базу сборки)"
 echo "    APP_DDL_USERNAME=$DB_USER"
 echo "    APP_DDL_PASSWORD=<пароль владельца, он же DB_PASSWORD>"
 echo
