@@ -275,9 +275,37 @@ public class ApiExceptionHandler {
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> unexpected(Exception e) {
+        if (WriteFreeze.isFrozen(e)) {
+            return writeFrozen(e);
+        }
         log.error("Необработанная ошибка", e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(new ApiError("Внутренняя ошибка"));
+    }
+
+    /**
+     * Запись заморожена на время выкладки — 503 со словами, а не 500.
+     *
+     * <p>Шаг выкладки ставит базе режим «только чтение» и снимает с неё копию
+     * (задача 0112): всё записанное после этого в копию бы не попало, поэтому
+     * записывать нельзя вовсе, пока трафик не уйдёт на новую сборку. Отказ
+     * при этом временный по самой своей природе, и отвечать надо так, чтобы
+     * это было видно обоим адресатам: офлайн-очередь приёмки повторяет 5xx
+     * сама и дождётся, а продавцу нужны слова — «Внутренняя ошибка» на ровном
+     * месте отправила бы его звонить разработчику, а не ждать минуту.
+     *
+     * <p>Проверка стоит в общем обработчике, а не своим {@code @ExceptionHandler}:
+     * отказ базы приезжает обёрнутым в пять разных типов (Hibernate,
+     * {@code JdbcTemplate}, менеджер транзакций на коммите), и различает их
+     * только код в цепочке причин.
+     */
+    private static ResponseEntity<ApiError> writeFrozen(Exception e) {
+        log.info("Запись отклонена: база заморожена на время выкладки ({})",
+                e.getClass().getSimpleName());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(org.springframework.http.HttpHeaders.RETRY_AFTER,
+                        WriteFreeze.RETRY_AFTER_SECONDS)
+                .body(new ApiError(WriteFreeze.MESSAGE));
     }
 
     /** Тело ответа об ошибке. */

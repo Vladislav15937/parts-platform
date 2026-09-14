@@ -3,6 +3,7 @@ package ru.partsflow.platform.session;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.security.core.Authentication;
@@ -105,6 +106,23 @@ public class SharedSessionStore {
         repository.setCleanupCron(CLEANUP_CRON);
         repository.setIndexResolver(SharedSessionStore::indexesOf);
         return repository;
+    }
+
+    /**
+     * То, чем пользуются фильтр сессий и отзыв доступа: то же хранилище,
+     * переживающее заморозку записи на время выкладки
+     * ({@link FreezeTolerantSessions}, задача 0112).
+     *
+     * <p>Обёртка — отдельным бином поверх, а не вместо: у хранилища свой
+     * жизненный цикл (уборка истёкших по расписанию заводится в
+     * {@code afterPropertiesSet}), и спрятанное внутрь обёртки, оно осталось
+     * бы без уборки.
+     */
+    @Bean
+    @Primary
+    public FindByIndexNameSessionRepository<Session> freezeTolerantSessions(
+            JdbcIndexedSessionRepository sessionRepository) {
+        return new FreezeTolerantSessions(sessionRepository);
     }
 
     /**

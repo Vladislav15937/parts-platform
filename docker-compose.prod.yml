@@ -104,18 +104,21 @@ x-app: &app
       condition: service_healthy
     minio:
       condition: service_started
-  environment:
+  # Окружение обеих сборок, КРОМЕ адреса базы: он у каждой сборки свой
+  # и дописывается в самом сервисе (см. app-blue ниже). Якорь отдельный,
+  # потому что слияние YAML неглубокое — сервис, назвавший environment,
+  # заменил бы его целиком.
+  environment: &app-env
     # Рабочее подключение. Если заведена отдельная роль (ops/create-roles.sh),
     # приложение работает ею — и тогда журналы движений, изменений и лицевых
     # счетов ему не принадлежат: переписать их прямым SQL нельзя. Без роли
     # всё идёт владельцем, как раньше.
-    DB_URL: jdbc:postgresql://postgres:5432/parts
     DB_USER: ${APP_RUNTIME_ROLE:-${DB_USER:?укажите DB_USER}}
     DB_PASSWORD: ${APP_RUNTIME_PASSWORD:-${DB_PASSWORD:?укажите DB_PASSWORD}}
 
     # Подключение владельца схем: миграции, провижининг, выдача прав.
-    # Пустое означает «отдельной роли нет» — тогда DDL идёт рабочей ролью.
-    APP_DDL_URL: ${APP_DDL_URL:-}
+    # Пустой APP_DDL_URL означает «отдельной роли нет» — тогда DDL идёт
+    # рабочей ролью. Сам адрес дописывается в сервисе: база у сборки своя.
     APP_DDL_USERNAME: ${APP_DDL_USERNAME:-}
     APP_DDL_PASSWORD: ${APP_DDL_PASSWORD:-}
 
@@ -300,15 +303,37 @@ services:
   # тег, а общий APP_IMAGE_TAG остаётся версией ячейки. Одного общего тега
   # тут не хватает: `up -d` без имени сервиса пересоздал бы ОБЕ сборки новым
   # образом, то есть погасил бы ту самую старую, ради которой всё затеяно.
+  #
+  # И третьей — БАЗОЙ (задача 0112). Выкладка снимает с базы работающей
+  # сборки копию, накатывает на неё схему и поднимает новую сборку уже на
+  # копии: старая до последнего работает на своей нетронутой, а неудача
+  # означает удалённую копию, а не опущенную схему. Имя базы каждой сборки
+  # записано в .env (APP_DB_BLUE / APP_DB_GREEN) и ведёт его ops/deploy.sh;
+  # незаданное — «parts», база, с которой ячейка родилась. Спрашивать имя
+  # надо у ops/switch-build.sh --db, а не читать .env глазами: переменная
+  # окружения оболочки у compose старше файла, и скрипт учитывает это так же.
+  #
+  # APP_DDL_URL из .env здесь только признак «владелец схем отдельный»:
+  # адрес строится заново на базу сборки. Взятый как есть, он указывал бы
+  # владельцу на базу ПРЕЖНЕЙ сборки — миграции и провижининг новой ушли бы
+  # мимо её копии.
   app-blue:
     <<: *app
     image: ${APP_IMAGE:-ghcr.io/vladislav15937/parts-platform}:${APP_IMAGE_TAG_BLUE:-$APP_IMAGE_TAG}
     profiles: [blue]
+    environment:
+      <<: *app-env
+      DB_URL: jdbc:postgresql://postgres:5432/${APP_DB_BLUE:-parts}
+      APP_DDL_URL: ${APP_DDL_URL:+jdbc:postgresql://postgres:5432/${APP_DB_BLUE:-parts}}
 
   app-green:
     <<: *app
     image: ${APP_IMAGE:-ghcr.io/vladislav15937/parts-platform}:${APP_IMAGE_TAG_GREEN:-$APP_IMAGE_TAG}
     profiles: [green]
+    environment:
+      <<: *app-env
+      DB_URL: jdbc:postgresql://postgres:5432/${APP_DB_GREEN:-parts}
+      APP_DDL_URL: ${APP_DDL_URL:+jdbc:postgresql://postgres:5432/${APP_DB_GREEN:-parts}}
 
   # Брокер. Поднимается только с профилем kafka — без него приложение
   # работает на транспорте в памяти, и лишний контейнер означал бы лишний
