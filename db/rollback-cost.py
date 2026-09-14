@@ -76,7 +76,18 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
-import rollback_floor
+# Свой каталог — в путь поиска, до импорта соседа. Запущенный скриптом файл
+# кладёт туда свой каталог сам, а ЗАГРУЖЕННЫЙ модулем — нет: `tools/deploy-plan.py`
+# берёт этот файл через importlib из корня репозитория (ему нужен `read()`,
+# чтобы порядок наката считался одним выражением на весь проект), и тогда
+# sys.path[0] — это `tools/`, а `rollback_floor` не находится вовсе. Модуль,
+# который грузят другие, за свои зависимости отвечает сам: иначе тот же шов
+# вернётся у следующего, кто его загрузит.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import rollback_floor  # noqa: E402  — после правки sys.path, см. выше
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHANGELOG = os.path.join(ROOT, "db", "changelog")
@@ -599,6 +610,24 @@ def selftest():
         failures.append("откат до самой границы прошёл, а цену не назвал — "
                         "значит отказ съел и разрешённый случай")
 
+    # 10. Файл грузят не только скриптом: `tools/deploy-plan.py` берёт его
+    #     через importlib из КОРНЯ репозитория, и тогда `db/` в sys.path
+    #     не попадает — сосед `rollback_floor` обычным import не находится.
+    #     Проверяется подпроцессом из корня, а не здесь: у запущенного
+    #     самопроверкой модуля свой каталог в пути уже лежит, и в своей
+    #     памяти этот шов не воспроизводится вовсе.
+    loader = ("import importlib.util;"
+              "spec=importlib.util.spec_from_file_location('rc', %r);"
+              "m=importlib.util.module_from_spec(spec);"
+              "spec.loader.exec_module(m);"
+              "m.rollback_floor.declared()" % os.path.abspath(__file__))
+    done = subprocess.run([sys.executable, "-c", loader], cwd=ROOT,
+                          capture_output=True, text=True)
+    if done.returncode != 0:
+        tail = (done.stderr.strip().splitlines() or ["без сообщения"])[-1]
+        failures.append("файл не грузится модулем из корня репозитория, "
+                        "а план выкладки берёт его именно так: " + tail)
+
     return failures
 
 
@@ -625,7 +654,9 @@ def main():
               "с причиной принята,\nпустая — нет, у нового changeset'а цена "
               "обязана стоять рядом с откатом,\nснятая пометка пропадает "
               "из печати цены, а откат ниже границы отбит\nотказом — при том "
-              "что откат до самой границы по-прежнему считается.")
+              "что откат до самой границы по-прежнему считается.\nСам файл "
+              "при этом грузится модулем из корня репозитория: план выкладки "
+              "берёт его\nименно так, и свои зависимости он тянет сам.")
         return 0
 
     sets = read()
