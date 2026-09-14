@@ -292,22 +292,28 @@ kick_db() {  # база, момент по часам сервера
 # прежние обрываются, а результат проверяется попыткой: свежее соединение
 # обязано ответить «только чтение». Верить команде без проверки нельзя —
 # настройка роли старше настройки базы и отменила бы заморозку молча.
-freeze_db() {  # база
-    local db="$1" since ro overrides
-    # Настройка роли старше настройки базы: заданное роли «read_only=off»
-    # молча отменило бы заморозку для рабочей роли, а проверка ниже идёт
-    # владельцем, у которого своей настройки нет, — и ответила бы «заморожено».
+# Настройка роли старше настройки базы: заданное роли «read_only=off» молча
+# отменило бы заморозку для рабочей роли, а проверка заморозки идёт владельцем,
+# у которого своей настройки нет, — и ответила бы «заморожено». Спрашивается
+# дважды: до метки (отказ там никого не задевает) и в самой заморозке.
+freezable() {  # база
+    local overrides
     overrides=$(pg -c "SELECT string_agg(DISTINCT pg_get_userbyid(s.setrole), ', ')
                          FROM pg_db_role_setting s, unnest(s.setconfig) c
                         WHERE s.setrole <> 0
                           AND c LIKE 'default\_transaction\_read\_only=%'
                           AND (s.setdatabase = 0
-                               OR s.setdatabase = (SELECT oid FROM pg_database WHERE datname = '$db'))") || return 1
+                               OR s.setdatabase = (SELECT oid FROM pg_database WHERE datname = '$1'))") || return 1
     if [ -n "$overrides" ]; then
-        red "  $db: у ролей ($overrides) своя настройка default_transaction_read_only — она старше"
+        red "  $1: у ролей ($overrides) своя настройка default_transaction_read_only — она старше"
         red "  настройки базы и отменила бы заморозку. Снимите: ALTER ROLE … RESET default_transaction_read_only"
         return 1
     fi
+}
+
+freeze_db() {  # база
+    local db="$1" since ro
+    freezable "$db" || return 1
     pg -c "ALTER DATABASE \"$db\" SET default_transaction_read_only = on" >/dev/null || return 1
     since=$(pg -c "SELECT clock_timestamp()") || return 1
     kick_db "$db" "$since" || return 1
@@ -365,6 +371,7 @@ check_copy_room() {  # источник, копия
     dumps=$(pg -c "SELECT count(*) FROM pg_stat_activity
                     WHERE datname = '$src' AND application_name IN ('pg_dump', 'pg_restore')") || return 1
     [ "$dumps" = 0 ] || { red "  С базы $src сейчас снимают дамп ($dumps) — копия его оборвала бы. Повторите после бэкапа"; return 1; }
+    freezable "$src" || return 1
     size=$(pg -c "SELECT pg_database_size('$src')") || return 1
     free=$($COMPOSE exec -T postgres df -Pk /var/lib/postgresql/data | awk 'NR == 2 { printf "%.0f", $4 * 1024 }') || return 1
     # Пятая часть сверху — под WAL, который пишется рядом всё время выкладки,
@@ -646,7 +653,9 @@ deploy() {
 
     # ── 7. трафик ───────────────────────────────────────────────────────────
     step "Переводим трафик на $TARGET"
-    run "$SWITCH" "$COLOR" || abandon "Переключение не прошло"
+    # Копия заморожена намеренно (шаг 6), и переключатель на замороженную
+    # базу без разрешения не пускает: там обычно лежит вчерашний слепок.
+    run env SWITCH_FROZEN_OK=yes "$SWITCH" "$COLOR" || abandon "Переключение не прошло"
 
     # ── 8. самопроверки ─────────────────────────────────────────────────────
     step "Четыре самопроверки на переключённой сборке"
