@@ -566,12 +566,18 @@ selftest() {
     same "режим: ПРОМ только читает" "$(mode_of prom prom '')" "read-only"
     same "режим: свой подъём пишет" "$(mode_of '' local '')" "write"
     same "режим: ХОСТ ПРОМА СИЛЬНЕЕ ПЕРЕМЕННОЙ" "$(mode_of ift prom '')" "read-only"
-    same "режим: безымянный стенд — отказ" \
-        "$(mode_of '' '' '' | cut -c1-6)" "отказ:"
-    same "режим: --write на ПРОМ — отказ" \
-        "$(mode_of prom prom write | cut -c1-6)" "отказ:"
-    same "режим: --write на хосте прома — отказ" \
-        "$(mode_of ift prom write | cut -c1-6)" "отказ:"
+    # Приставку проверяем образцом, а не срезом: `cut -c` на macOS считает
+    # символы, а на Linux байты, и «отказ:» превращается там в «отк» —
+    # самопроверка краснела бы только на CI и только на кириллице.
+    refuses() {  # имя случая, ответ mode_of
+        case "$2" in
+            "отказ:"*) printf '  ✓ %s\n' "$1" ;;
+            *) red "  ✗ $1: ожидался отказ, получилось «${2}»"; broken=$((broken + 1)) ;;
+        esac
+    }
+    refuses "режим: безымянный стенд — отказ" "$(mode_of '' '' '')"
+    refuses "режим: --write на ПРОМ — отказ" "$(mode_of prom prom write)"
+    refuses "режим: --write на хосте прома — отказ" "$(mode_of ift prom write)"
     same "режим: --read-only на ИФТ разрешён" "$(mode_of ift ift read-only)" "read-only"
     same "метка хоста: prom.example.ru" "$(host_label https://prom.example.ru/)" "prom"
     same "метка хоста: parts-prod.example.ru" "$(host_label https://parts-prod.example.ru/)" "prom"
