@@ -75,10 +75,16 @@ psql_() { $COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR
 #
 # Отметка ставится ПОСЛЕ всех шагов: поставленная в начале, она означала бы
 # «запускался», а знать надо «получилось».
+#
+# Второй аргумент — метки отметки. Ими отметка отвечает не только на «бэкап
+# снялся», но и на «по КАКОЙ базе»: имя боевой базы меняется с каждой выкладкой
+# копией (задача 0112), а выкладка удаляет прежнюю базу только после бэкапа
+# сменившей её (задача 0117). Отметка без имени базы означала бы «бэкап был» —
+# в том числе бэкап позавчерашней базы, снятый до выкладки.
 mark_success() {
-    local metric="$1"
+    local metric="$1" labels="${2:-}"
     local url="${PUSHGATEWAY_URL:-http://localhost:9091}"
-    if ! printf '# TYPE %s gauge\n%s %s\n' "$metric" "$metric" "$(date -u +%s)" \
+    if ! printf '# TYPE %s gauge\n%s%s %s\n' "$metric" "$metric" "$labels" "$(date -u +%s)" \
         | curl -sf --max-time 10 --data-binary @- "$url/metrics/job/backup" > /dev/null
     then
         # Не «выход с ошибкой»: бэкап-то снялся, и валить его из-за
@@ -132,7 +138,7 @@ find "$BACKUPS" -maxdepth 1 -type d -name '20*' -mtime "+$KEEP_DAYS" \
     -exec rm -rf {} + 2>/dev/null || true
 ok "осталось наборов: $(find "$BACKUPS" -maxdepth 1 -type d -name '20*' | wc -l | tr -d ' ')"
 
-mark_success partsflow_backup_success_timestamp_seconds
+mark_success partsflow_backup_success_timestamp_seconds "{db=\"$DB_NAME\"}"
 
 # Фотографии — ПОСЛЕ отметки о дампах, и это не небрежность. Отметка означает
 # ровно то, что за ней стоит: дампы сняты и лежат. Сорвавшееся зеркало
