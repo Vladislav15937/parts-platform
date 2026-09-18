@@ -23,4 +23,7 @@ ops/secrets/
 # читает ops/deploy-checks.sh. Журнал выкладок стенда (deploy-history.log)
 # под «*.log» выше — он состояние машины, а не репозитория.
 .deploy-feeds
+# Вход дымового прогона стенда (компания, логин, пароль продавца) — секрет
+# по той же причине. Кладёт кнопка, читает ops/smoke-run.sh.
+.deploy-smoke
 .claude/worktrees/

@@ -167,7 +167,8 @@ Prometheus и alertmanager. Ни JDK, ни node на этой машине не 
 `ops/install-cron.sh`, `ops/basebackup.sh`.
 
 Что не забыть в `.env` (пустые в примере — обязательные): `APP_IMAGE_TAG`,
-`COMPOSE_PROFILES` (какие сборки поднимать — без неё не поднимется ни одной),
+`COMPOSE_PROFILES` (какие сборки поднимать; без строки поднимается синяя —
+прежняя версия, как было),
 `DB_PASSWORD`, `APP_CRYPTO_KEY`, `ACME_EMAIL`, `ALERT_TELEGRAM_CHAT_ID`,
 `APP_RUNTIME_ROLE` и `APP_DDL_*`, `OFFSITE_REMOTE`, плюс домены
 `APP_DOMAIN`/`S3_DOMAIN` и `PROVISIONING_ALLOW`. Каждую — зачем и что
