@@ -22,7 +22,8 @@
 
 ```bash
 cp .env.example .env                   # 1. заполнить секреты и APP_IMAGE_TAG
-docker compose -f docker-compose.prod.yml pull             # 2. забрать образы
+ops/config-guard.sh                    # 2. настройки ячейки на месте — файл, а не каталог
+docker compose -f docker-compose.prod.yml pull             # 3. забрать образы
 docker compose -f docker-compose.prod.yml up -d            #    и поднять ячейку
 ops/create-roles.sh                    # 3. завести рабочую роль
 docker compose -f docker-compose.prod.yml restart "$(ops/switch-build.sh --current)"   # 4. перечитать роли
@@ -1407,7 +1408,7 @@ before configured recovery target was reached». Репетиция стоит �
 | `partsflow_deadletter_unresolved` | неразобранные отказы обработчиков |
 | `partsflow_deadletter_attention` | из них те, что робот уже бросил |
 
-И восемь — на вопрос «есть ли точка возврата». Первые шесть кладёт
+И десять — на вопрос «есть ли точка возврата». Первые восемь кладёт
 `ops/wal-archive.sh` (каждые пять минут), остальные две — `ops/basebackup.sh`
 и `ops/restore-pitr.sh --verify`:
 
@@ -1415,6 +1416,8 @@ before configured recovery target was reached». Репетиция стоит �
 |---|---|
 | `partsflow_wal_archive_gaps` | разрывов в цепочке сегментов |
 | `partsflow_wal_archive_pending` | сегментов ждёт архивации (растёт — архиватор встал) |
+| `partsflow_wal_archive_broken` | 1, если архиватор не работает: сегмент ждёт дольше предела либо последняя попытка отказала |
+| `partsflow_wal_archive_oldest_ready_seconds` | сколько ждёт архивации самый старый сегмент (на исправной ячейке — единицы) |
 | `partsflow_wal_archive_failed_count` | отказов архивации за жизнь процесса базы |
 | `partsflow_wal_archive_success_timestamp_seconds` | когда сегмент последний раз уехал в архив |
 | `partsflow_wal_offsite_success_timestamp_seconds` | когда архив последний раз уехал наружу |
@@ -1434,6 +1437,7 @@ before configured recovery target was reached». Репетиция стоит �
 | `ОфсайтНеУезжал` | отметки нет или ей > 26 часов | или сорвался, или `OFFSITE_REMOTE` не задан — диск гибнет вместе с бэкапом |
 | `БэкапНеПроверялся` | отметки нет или ей > 9 дней | недельное расписание плюс запас |
 | `АрхивWALНеПишется` | в очереди > 5 сегментов 15 минут | точка возврата замерла, а `pg_wal` растёт и в конце остановит базу |
+| `АрхиваторWALОтбит` | сегмент ждёт архивации дольше 10 минут либо последняя попытка отказала, 5 минут | очередь отвечает «не справляется», а это «не работает»; и `pg_stat_archiver` не считает отказ, убивающий архиватор, — проверено живым прогоном |
 | `РазрывВАрхивеWAL` | разрывов > 0 | вернуться можно только до разрыва, и Postgres поднимется молча на том, что накатилось |
 | `СторожАрхиваНеХодит` | отметки нет или ей > часа | задача стоит каждые 5 минут: цепочку никто не проверяет |
 | `АрхивWALНеУезжалНаружу` | отметки нет или ей > 2 часов | сегменты появляются каждые 5 минут; суточный офсайт стоил бы смены |

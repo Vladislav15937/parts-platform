@@ -1,0 +1,108 @@
+# Тревоги про архив WAL на подложенных рядах (задача 0101).
+#
+# Зачем это отдельно от `promtool check rules`. Тот отвечает на вопрос
+# «файл разбирается» и молчит о том, СРАБОТАЕТ ли правило. А правило,
+# которое не поднимается на дефекте, — это отсутствующая тревога при полном
+# виде защищённости: ровно та беда, ради которой задача и заводилась.
+# Проверка идёт тем же promtool и тем же образом, что и разбор: секунды.
+#
+#   docker run --rm -v "$PWD/ops:/ops:ro" -w /ops \
+#     --entrypoint /bin/promtool prom/prometheus:v2.53.0 test rules alerts.test.yml
+
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+# ВНИМАНИЕ про «[]» в ожидаемых заголовках ниже. Имя ячейки приезжает
+# в тревогу ВНЕШНЕЙ меткой (в бою её подставляет sed при запуске Prometheus —
+# см. compose), а поля `external_labels` в файле модульной проверки promtool
+# 2.53 нет вовсе: проверено попыткой, «field external_labels not found».
+# Значит `{{ $externalLabels.cell }}` разворачивается здесь в пустую строку,
+# и заголовок выглядит как «[] archive_command …». У клиента там «[cell01]».
+# Сверяется в этой проверке не подпись ячейки, а то, поднимется ли тревога.
+
+tests:
+  # 1. Архиватор отбит и не оправился: тревога обязана прийти — и не раньше
+  #    выдержки. Десять минут стоят в правиле ради разового отказа, и если
+  #    убрать их, этот случай останется зелёным, а первый — нет.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_wal_archive_broken{job="wal", instance="pushgateway:9091"}'
+        values: '1+0x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: АрхиваторWALОтбит
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: АрхиваторWALОтбит
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: wal
+              instance: pushgateway:9091
+            exp_annotations:
+              summary: '[] archive_command не работает — WAL не уезжает в архив'
+              description: >-
+                Сегмент не уехал в архив: точка возврата стоит на последнем
+                уехавшем, а pg_wal растёт и в конце остановит базу. Частая
+                причина — пропавший ops/archive-wal.sh, на месте которого docker
+                оставил пустой каталог: проверяется ops/config-guard.sh. Сам
+                отказ — в docker logs postgres; статистика базы его может
+                не считать вовсе.
+
+  # 2. Исправный архиватор молчит. Обратный край: тревога, приходящая
+  #    на здоровой ячейке, будет отключена первой — вместе с защитой.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_wal_archive_broken{job="wal", instance="pushgateway:9091"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: АрхиваторWALОтбит
+        exp_alerts: []
+
+  # 3. Разовый отказ, который Postgres тут же починил повтором того же
+  #    сегмента. Пять минут отбитости — это не поломка, и будить владельца
+  #    здесь нечем.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_wal_archive_broken{job="wal", instance="pushgateway:9091"}'
+        values: '1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: АрхиваторWALОтбит
+        exp_alerts: []
+
+  # 4. И то, ради чего новая тревога вообще понадобилась. Спокойная ячейка:
+  #    архиватор отбит, но очередь НЕ растёт — сегменты закрываются, только
+  #    когда есть что писать. Прежнее правило (`АрхивWALНеПишется`, порог
+  #    по очереди) молчит и через сорок пять минут, а новое говорит.
+  #    Случай стоит здесь затем, чтобы «старой тревоги не хватало» было
+  #    проверяемым утверждением, а не фразой в комментарии.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_wal_archive_pending{job="wal", instance="pushgateway:9091"}'
+        values: '0+0x60'
+      - series: 'partsflow_wal_archive_broken{job="wal", instance="pushgateway:9091"}'
+        values: '1+0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: АрхивWALНеПишется
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: АрхиваторWALОтбит
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: wal
+              instance: pushgateway:9091
+            exp_annotations:
+              summary: '[] archive_command не работает — WAL не уезжает в архив'
+              description: >-
+                Сегмент не уехал в архив: точка возврата стоит на последнем
+                уехавшем, а pg_wal растёт и в конце остановит базу. Частая
+                причина — пропавший ops/archive-wal.sh, на месте которого docker
+                оставил пустой каталог: проверяется ops/config-guard.sh. Сам
+                отказ — в docker logs postgres; статистика базы его может
+                не считать вовсе.
