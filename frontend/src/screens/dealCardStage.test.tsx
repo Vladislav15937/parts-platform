@@ -81,16 +81,35 @@ describe('оплаченная сделка не подписана отложе
       render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
       await openCustomer();
 
-      await waitFor(() => expect(finderLines().length).toBe(3));
+      await waitFor(() => expect(finderLines().length).toBe(4));
       expect(finderLines()).toEqual([
         `№20 · готова к выдаче · 5 000 ₽ · ${CREATED}`,
         `№11 · отложена · до ${DAY} · 5 000 ₽ · ${CREATED}`,
+        `№12 · отложена · срок истёк · 5 000 ₽ · ${CREATED}`,
         `№9 · выдана · 5 000 ₽ · ${CREATED}`,
       ]);
     });
 });
 
-const RESERVED_UNTIL = '2026-09-15T12:00:00Z';
+const DAY_MS = 86_400_000;
+
+/**
+ * Срок резерва считается от «сейчас», а не стоит числом календаря.
+ *
+ * <p><b>Чем это было.</b> Здесь стояло `'2026-09-15T12:00:00Z'`, и проверка
+ * молча предполагала, что пятнадцатое сентября всегда впереди. Восемнадцатого
+ * оно стало позади, экран — совершенно правильно — сказал «срок истёк» вместо
+ * даты, и упали два метода из четырёх. Красной от этого стала `main`, то есть
+ * **любой** PR любой ветки: мина сработала не у того, кто её поставил, и не
+ * в тот день. Зашитая дата в тесте, который сравнивает её с сегодняшним
+ * числом, — это отложенное падение, а не фикстура.
+ *
+ * <p>Поэтому оба срока относительные, как в `reservationTerm.test.tsx`
+ * и `dealsBoard.test.tsx`: отложенная сделка держится ещё три дня, у
+ * просроченной срок вышел два дня назад — и то и другое верно в любой день.
+ */
+const RESERVED_UNTIL = new Date(Date.now() + 3 * DAY_MS).toISOString();
+const EXPIRED_UNTIL = new Date(Date.now() - 2 * DAY_MS).toISOString();
 const CREATED_AT = '2026-09-05T12:00:00Z';
 const DAY = new Date(RESERVED_UNTIL)
   .toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
@@ -164,6 +183,13 @@ function stubApi() {
   const deals = [
     deal(20, { paidAmount: '5000.00', debt: '0.00', stage: 'READY' }),
     deal(11, { paidAmount: '0.00', debt: '5000.00', stage: 'AWAITING_PAYMENT' }),
+    // Просроченная — та же «отложена», но срок вышел. Без неё проверка
+    // стерегла только половину правила и осталась бы зелёной на экране,
+    // который выдаёт вчерашнее число за срок.
+    deal(12, {
+      paidAmount: '0.00', debt: '5000.00', stage: 'EXPIRED',
+      reservedUntil: EXPIRED_UNTIL,
+    }),
     deal(9, {
       paidAmount: '5000.00', debt: '0.00', stage: null,
       status: 'ISSUED', reservedUntil: null, issuedAt: CREATED_AT,
