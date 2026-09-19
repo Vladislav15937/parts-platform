@@ -284,8 +284,16 @@ selftest() {
   env DEPLOY_ACCESS_HOME="$base" "$SELF" ключ ift >/dev/null 2>&1 || true
   if [ -f "$base/.parts-deploy-keys/ift" ]; then
     printf '  ✓ ключ заведён\n'
+    # Порядок не произволен: на Linux `stat -f` — это НЕ формат, а
+    # `--file-system`. Он печатает сведения о файловой системе и выходит
+    # НУЛ�ём, то есть `||` не срабатывает, и в mode попадает простыня про
+    # блоки и иноды — проверка сравнивает её с «600» и краснеет на исправных
+    # правах. Сначала GNU (`-c`), потом BSD (`-f`): на macOS `-c` неизвестен
+    # и отдаёт ненулевой код, значит откат сработает. Поймано красным CI —
+    # у себя на macOS проверка была зелёной.
     local mode
-    mode="$(stat -f '%Lp' "$base/.parts-deploy-keys/ift" 2>/dev/null || stat -c '%a' "$base/.parts-deploy-keys/ift")"
+    mode="$(stat -c '%a' "$base/.parts-deploy-keys/ift" 2>/dev/null \
+         || stat -f '%Lp' "$base/.parts-deploy-keys/ift" 2>/dev/null)"
     if [ "$mode" = 600 ]; then printf '  ✓ закрытая часть 600\n'
     else red "  ✗ закрытая часть $mode, а должна быть 600"; bad=$((bad+1)); fi
     # Не конвейером в `grep -q`: тот закрывает поток на первом совпадении,
