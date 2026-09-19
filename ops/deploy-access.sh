@@ -267,30 +267,64 @@ cmd_forget() {
 selftest() {
   local base; base="$(mktemp -d)"
   local bad=0
+
+  # Подменный gh заводится ПЕРВЫМ делом и подставляется во ВСЕ пробы.
+  # Разбор PR #253 показал, чем это было раньше: gh подменялся ровно в одной
+  # пробе из одиннадцати, и выпотрошенный сторож доходил до repo_name(),
+  # где падал настоящий gh — неаутентифицированный на раннере. Проба
+  # засчитывала ЧУЖОЙ ненулевой код за отказ сторожа, и пять проб
+  # не утверждали ничего: сверка отпечатка, запрет значения аргументом,
+  # перевыпуск, требование --отпечаток и незнакомое имя секрета оставались
+  # зелёными со снятыми проверками.
+  local fakegh="$base/gh"
+  {
+    printf '#!/bin/sh\n'
+    printf 'echo "ВЫЗВАН: $*" >> %s/gh.log\n' "$base"
+    printf 'case "$*" in\n'
+    printf '  *"--json nameWithOwner"*) echo "owner/repo" ;;\n'
+    printf '  *"--json owner"*) echo "hozyain" ;;\n'
+    printf '  *users/*) echo 42 ;;\n'
+    printf 'esac\n'
+    printf 'exit 0\n'
+  } > "$fakegh"; chmod +x "$fakegh"
+
+  run()  { env DEPLOY_ACCESS_HOME="$base" DEPLOY_ACCESS_GH="$fakegh" "$SELF" "$@"; }
+  runk() { env DEPLOY_ACCESS_HOME="$base" DEPLOY_ACCESS_GH="$fakegh" \
+               DEPLOY_ACCESS_KEYSCAN="$base/keyscan" "$SELF" "$@"; }
+
+  # Мало ненулевого кода — надо установить, что отказал НАШ сторож, а не
+  # упавшая рядом чужая программа. Поэтому проба требует ещё и кусок нашего
+  # сообщения: без этого «отказ» ssh-keygen, спрашивающего про перезапись,
+  # или падение gh засчитывались за работу защиты.
   probe() {
-    local title="$1"; shift
-    if "$@" >/dev/null 2>&1; then
-      red "  ✗ $title — прошло, а должно было отказать"; bad=$((bad+1))
-    else
-      printf '  ✓ %s\n' "$title"
+    local title="$1" want="$2"; shift 2
+    # `out=$(…)` под `set -e` — это команда, и её ненулевой код убивает
+    # самопроверку МОЛЧА: первая же проба, которая обязана отказать, обрывала
+    # прогон сразу после заголовка. Прежняя редакция пряталась за `if`,
+    # эта обязана ловить код явно.
+    local out rc=0
+    out="$("$@" 2>&1)" || rc=$?
+    if [ "$rc" = 0 ]; then
+      red "  ✗ $title — прошло, а должно было отказать"; bad=$((bad+1)); return
     fi
+    case "$out" in
+      *"$want"*) printf '  ✓ %s\n' "$title" ;;
+      *) red "  ✗ $title — отказ есть, но НЕ наш (ждали «${want}»)"; bad=$((bad+1)) ;;
+    esac
   }
 
   printf 'Самопроверка ops/deploy-access.sh\n'
 
-  probe "стенд не из трёх — отказ" env DEPLOY_ACCESS_HOME="$base" "$SELF" ключ бухгалтерия
-  probe "незнакомая команда — отказ" env DEPLOY_ACCESS_HOME="$base" "$SELF" разложить-всё
+  probe "стенд не из трёх — отказ" "не из трёх" run ключ бухгалтерия
+  probe "незнакомая команда — отказ" "Не знаю команды" run разложить-всё
 
-  env DEPLOY_ACCESS_HOME="$base" "$SELF" ключ ift >/dev/null 2>&1 || true
+  run ключ ift >/dev/null 2>&1 || true
   if [ -f "$base/.parts-deploy-keys/ift" ]; then
     printf '  ✓ ключ заведён\n'
-    # Порядок не произволен: на Linux `stat -f` — это НЕ формат, а
-    # `--file-system`. Он печатает сведения о файловой системе и выходит
-    # НУЛ�ём, то есть `||` не срабатывает, и в mode попадает простыня про
-    # блоки и иноды — проверка сравнивает её с «600» и краснеет на исправных
-    # правах. Сначала GNU (`-c`), потом BSD (`-f`): на macOS `-c` неизвестен
-    # и отдаёт ненулевой код, значит откат сработает. Поймано красным CI —
-    # у себя на macOS проверка была зелёной.
+    # Порядок не произволен: на Linux `stat -f` — это не формат, а
+    # `--file-system`; он печатает сведения о ФС в stdout и не даёт откату
+    # сработать, так что в mode попадает простыня про блоки и иноды.
+    # Сначала GNU (`-c`), потом BSD (`-f`). Поймано красным CI.
     local mode
     mode="$(stat -c '%a' "$base/.parts-deploy-keys/ift" 2>/dev/null \
          || stat -f '%Lp' "$base/.parts-deploy-keys/ift" 2>/dev/null)"
@@ -298,9 +332,9 @@ selftest() {
     else red "  ✗ закрытая часть $mode, а должна быть 600"; bad=$((bad+1)); fi
     # Не конвейером в `grep -q`: тот закрывает поток на первом совпадении,
     # печатающая сторона получает EPIPE, и `pipefail` объявляет отказом
-    # как раз успешный случай — первая же редакция этой пробы так и покраснела.
+    # как раз успешный случай — первая редакция этой пробы так и покраснела.
     local printed
-    printed="$(env DEPLOY_ACCESS_HOME="$base" "$SELF" ключ psi 2>/dev/null || true)"
+    printed="$(run ключ psi 2>/dev/null || true)"
     case "$printed" in
       *"restrict ssh-ed25519 "*) printf '  ✓ строка authorized_keys несёт restrict\n' ;;
       *) red "  ✗ в напечатанной строке authorized_keys нет restrict"; bad=$((bad+1)) ;;
@@ -309,42 +343,68 @@ selftest() {
     red "  ✗ ключ не завёлся"; bad=$((bad+1))
   fi
 
-  probe "повторный выпуск не перетирает ключ молча" \
-    env DEPLOY_ACCESS_HOME="$base" "$SELF" ключ ift
-
-  probe "стенд без --отпечаток — отказ" \
-    env DEPLOY_ACCESS_HOME="$base" "$SELF" стенд ift --host 192.0.2.1
+  probe "повторный выпуск не перетирает ключ молча" "уже есть" run ключ ift
+  probe "стенд без --отпечаток — отказ" "Не задан --отпечаток" run стенд ift --host 192.0.2.1
 
   # Подменяем keyscan: пусть отвечает ключом, отпечаток которого заведомо
-  # не тот, что назвал человек. Заливки быть не должно.
-  local fake="$base/keyscan"
+  # не тот, что назвал человек.
   {
     printf '#!/bin/sh\n'
-    printf 'sed "s|^|192.0.2.1 |" "%s/.parts-deploy-keys/ift.pub"\n' "$base"
-  } > "$fake"; chmod +x "$fake"
-  probe "чужой отпечаток — отказ, секреты не заливаются" \
-    env DEPLOY_ACCESS_HOME="$base" DEPLOY_ACCESS_KEYSCAN="$fake" \
-        "$SELF" стенд ift --host 192.0.2.1 --отпечаток 'SHA256:заведомо-не-тот'
+    printf 'sed "s|^|192.0.2.1 |" %s/.parts-deploy-keys/ift.pub\n' "$base"
+  } > "$base/keyscan"; chmod +x "$base/keyscan"
 
-  # А на СОВПАВШЕМ отпечатке дело обязано дойти до заливки — иначе сторож
-  # отказывает всегда и ничего не проверяет. Подменяем и gh.
-  local fakegh="$base/gh"
-  printf '#!/bin/sh\necho "ВЫЗВАН: $*" >> "%s/gh.log"\nexit 0\n' "$base" > "$fakegh"; chmod +x "$fakegh"
+  # Мало отказа: надо убедиться, что до заливки дело НЕ дошло. С этого края
+  # дыра опаснее — сторож со снятой сверкой доходил до `secret set` и отдавал
+  # ноль, то есть самопроверка на машине разработчика залила бы ключ
+  # в настоящее окружение.
+  : > "$base/gh.log"
+  probe "чужой отпечаток — отказ" "Отпечаток НЕ СОВПАЛ" \
+    runk стенд ift --host 192.0.2.1 --отпечаток 'SHA256:заведомо-не-тот'
+  if grep -q 'secret set' "$base/gh.log" 2>/dev/null; then
+    red "  ✗ при чужом отпечатке секреты ВСЁ РАВНО заливались"; bad=$((bad+1))
+  else
+    printf '  ✓ при чужом отпечатке заливки не было\n'
+  fi
+
+  # Обратный край: на совпавшем отпечатке дело обязано дойти до заливки —
+  # иначе сторож отказывает всегда и не проверяет ничего.
   local real_fp
   real_fp="$(ssh-keygen -lf "$base/.parts-deploy-keys/ift.pub" | awk '{print $2}')"
-  if env DEPLOY_ACCESS_HOME="$base" DEPLOY_ACCESS_KEYSCAN="$fake" DEPLOY_ACCESS_GH="$fakegh" \
-       "$SELF" стенд ift --host 192.0.2.1 --отпечаток "$real_fp" >/dev/null 2>&1 \
+  : > "$base/gh.log"
+  if runk стенд ift --host 192.0.2.1 --отпечаток "$real_fp" >/dev/null 2>&1 \
      && grep -q 'secret set DEPLOY_SSH_KEY' "$base/gh.log"; then
     printf '  ✓ совпавший отпечаток — секреты заливаются\n'
   else
     red "  ✗ на совпавшем отпечатке заливка не дошла: сторож отказывает всегда"; bad=$((bad+1))
   fi
 
-  probe "значение секрета аргументом не принимается" \
-    env DEPLOY_ACCESS_HOME="$base" "$SELF" секрет ift DEPLOY_SMOKE пароль123
+  # ПРОМ обязан получить подтверждающего: без него живые данные клиента
+  # выкладывает любой, у кого есть доступ к Actions.
+  run ключ prom >/dev/null 2>&1 || true
+  : > "$base/gh.log"
+  if runk стенд prom --host 192.0.2.1 --отпечаток "$real_fp" >/dev/null 2>&1 \
+     && grep -q 'environments/prom' "$base/gh.log" \
+     && grep -q 'reviewers\|--input' "$base/gh.log"; then
+    printf '  ✓ ПРОМ заводится с подтверждающим\n'
+  else
+    red "  ✗ ПРОМ заведён без подтверждающего"; bad=$((bad+1))
+  fi
 
-  probe "незнакомый секрет — отказ" \
-    env DEPLOY_ACCESS_HOME="$base" "$SELF" секрет ift ЧУЖОЙ_СЕКРЕТ
+  # «проверить» обязана краснеть на неполном окружении: подменный gh
+  # не отдаёт ни одного секрета, значит все шесть отметок — ✗.
+  probe "проверить краснеет на неполном окружении" "не доедет" run проверить ift
+
+  # «забыть» стирает закрытую часть и говорит, если стирать нечего.
+  if run забыть prom >/dev/null 2>&1 && [ ! -f "$base/.parts-deploy-keys/prom" ]; then
+    printf '  ✓ забыть стирает закрытую часть\n'
+  else
+    red "  ✗ забыть не стёрло закрытую часть"; bad=$((bad+1))
+  fi
+  probe "забыть на отсутствующем ключе — отказ" "здесь и нет" run забыть prom
+
+  probe "значение секрета аргументом не принимается" "аргументом не принимается" \
+    run секрет ift DEPLOY_SMOKE пароль123
+  probe "незнакомый секрет — отказ" "кнопка не читает" run секрет ift ЧУЖОЙ_СЕКРЕТ
 
   rm -rf "$base"
   if [ "$bad" = 0 ]; then green "Самопроверка пройдена."; else fail "Самопроверка провалена: $bad."; fi
