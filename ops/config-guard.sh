@@ -95,6 +95,12 @@ expect() {  # сервис:путь-в-контейнере → KIND (файл|�
         alertmanager:/etc/alertmanager/telegram-token)
             KIND=файл
             REASON="тревоги не уйдут в Telegram — молча, механизм при этом выглядит работающим" ;;
+        alert-watch:/usr/local/bin/alert-channel-check.sh)
+            KIND=файл
+            REASON="за каналом тревог никто не смотрит: отбитую доставку опять будет видно только в логе диспетчера (так ячейка молчала сутки 19 сентября 2026)" ;;
+        alert-watch:/etc/alert-channel/telegram-token)
+            KIND=файл
+            REASON="второму пути нечем слать: сторож увидит немой канал и не сможет о нём сказать" ;;
         # Архив WAL — законный каталог: его готовит разовый контейнер
         # wal-archive-init, и docker создаёт его сам, что здесь правильно.
         *:/wal-archive)
@@ -113,7 +119,9 @@ postgres:/usr/local/bin/archive-wal.sh
 prometheus:/etc/prometheus/prometheus.yml
 prometheus:/etc/prometheus/alerts.yml
 alertmanager:/etc/alertmanager/alertmanager.yml
-alertmanager:/etc/alertmanager/telegram-token"
+alertmanager:/etc/alertmanager/telegram-token
+alert-watch:/usr/local/bin/alert-channel-check.sh
+alert-watch:/etc/alert-channel/telegram-token"
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
