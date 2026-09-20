@@ -67,18 +67,19 @@ step "Расширения Postgres"
 # public_code выдаётся умолчанием колонки через pgcrypto. Найдено репетицией
 # восстановления: до неё ячейка после потери диска просто не поднималась,
 # и узналось бы это в тот единственный день, когда это нужно.
-$COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME"-v ON_ERROR_STOP=1 <<'SQL'
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-CREATE EXTENSION IF NOT EXISTS ltree;
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-SQL
+#
+# Список переехал в ops/restore-extensions.sql (задача 0157): тем же списком
+# теперь пользуются восстановление одного клиента и еженедельная проверка
+# бэкапа, а два списка расширений разошлись бы молча.
+$COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 \
+    -f /dev/stdin < ops/restore-extensions.sql >/dev/null
 ok "pg_trgm, ltree, pgcrypto"
 
 step "Общие схемы"
 # --clean не нужен: разворот идёт в пустую базу. Отказ «schema public
 # already exists» безобиден — эта схема есть в любой базе с рождения,
 # поэтому ошибки разбираем по итогу, а не по коду возврата.
-$COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d "$DB_NAME"--no-owner \
+$COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d "$DB_NAME" --no-owner \
     < "$SET_DIR/shared.dump" 2>&1 | grep -v 'schema "public" already exists' \
     | grep -v 'CREATE SCHEMA public' || true
 ok "реестр и справочники подняты"
@@ -88,7 +89,7 @@ COUNT=0
 for dump in "$SET_DIR"/t_*.dump; do
     [ -e "$dump" ] || break
     schema=$(basename "$dump" .dump)
-    $COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d "$DB_NAME"--no-owner < "$dump"
+    $COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d "$DB_NAME" --no-owner < "$dump"
     COUNT=$((COUNT + 1))
     ok "$schema"
 done
@@ -112,9 +113,9 @@ else
 fi
 
 step "Проверка"
-$COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME"-tAc \
+$COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -tAc \
     "SELECT count(*)||' арендаторов в реестре' FROM public.tenant_registry" | sed 's/^/    /'
-$COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME"-tAc \
+$COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -tAc \
     "SELECT count(*)||' схем в базе' FROM information_schema.schemata WHERE schema_name LIKE 't\_%'" \
     | sed 's/^/    /'
 
