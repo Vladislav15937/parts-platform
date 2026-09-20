@@ -357,9 +357,17 @@ EOF
     run() {  # $1 — команда добычи метрик, $2 — отправщик
         : > "$tmp/sent.txt"
         set +e
+        # ENV_FILE=/dev/null обязателен, и это не перестраховка. Скрипт
+        # сорсит файл ячейки через `set -a`, то есть `.env` СТАРШЕ того,
+        # что передал вызывающий, — и проба, запущенная там, где `.env`
+        # лежит, меряет не сторожа, а чужой файл. Поймано красным CI:
+        # задача «Развёртывание» шагом раньше пишет настоящий `.env`
+        # (заглушки из `.env.example`), и его `ALERT_CHANNEL_REPEAT=3600`
+        # отменял выдержку, заданную пробой, — у себя зелено, на раннере
+        # красное. Тот же класс, что в задаче 0144.
         out=$(ALERT_CHECK_FETCH="$1" ALERT_CHECK_SEND="$2" \
               ALERT_CHANNEL_STATE="$tmp/state" ALERT_CHANNEL_REPEAT="${REPEAT_OVERRIDE:-3600}" \
-              PUSHGATEWAY_URL="file:///dev/null" APP_CELL=cell01 \
+              PUSHGATEWAY_URL="file:///dev/null" APP_CELL=cell01 ENV_FILE=/dev/null \
               "$RUNNER" "$SELF" 2>&1)
         rc=$?
         set -e
@@ -460,6 +468,33 @@ EOF
     metrics_file 3 5
     run "cat $tmp/metrics" "$tmp/send-ok"
     check "перезапуск диспетчера — молчит" 0 молчим
+
+    # 10. И сама проба не зависит от `.env`, лежащего рядом. Случай не
+    #     умозрительный: ровно на нём покраснел CI — шаг «Боевой compose»
+    #     пишет `.env` из заглушек, а `set -a; . ./.env` старше окружения,
+    #     переданного пробой. Здесь это возвращается подделкой: рядом
+    #     с копией сторожа кладётся `.env` с выдержкой в час, а проба
+    #     требует, чтобы сторож всё равно разбудил — как ей и задано.
+    #     Порядок шагов тут не случаен, и первая редакция случая была
+    #     БЕСПОЛЕЗНА именно из-за него: пока сторож не будил ни разу,
+    #     `LAST_SHOUT` равен нулю, ветка выдержки не выполняется вовсе —
+    #     и подделка, вернувшая зависимость от `.env`, проходила зелёной.
+    #     Значит будить надо ДВАЖДЫ: первый раз ставит отметку, и только
+    #     второй проверяет, чья выдержка победила — файла или пробы.
+    local tree="$tmp/derevo"
+    mkdir -p "$tree/ops"
+    cp "$SELF" "$tree/ops/alert-channel-check.sh"
+    printf 'ALERT_CHANNEL_REPEAT=3600\nALERT_CHANNEL_INTERVAL=300\n' > "$tree/.env"
+    rm -f "$tmp/state"
+    metrics_file 1 1
+    SELF_SAVED="$SELF"; SELF="$tree/ops/alert-channel-check.sh"
+    run "cat $tmp/metrics" "$tmp/send-ok"      # первый проход — запомнили
+    metrics_file 5 1
+    run "cat $tmp/metrics" "$tmp/send-ok"      # разбудили, отметка поставлена
+    metrics_file 9 1
+    REPEAT_OVERRIDE=0 run "cat $tmp/metrics" "$tmp/send-ok"
+    SELF="$SELF_SAVED"
+    check "«.env» рядом не отменяет выдержки, заданной пробой" 1 шлём "НЕ УХОДЯТ"
 
     [ $bad = 0 ] || { red "Самопроверка не прошла"; exit 1; }
     green "Самопроверка пройдена"
