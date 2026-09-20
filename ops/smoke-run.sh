@@ -91,11 +91,16 @@ bad()   { printf '  \033[1;31m✗ %s\033[0m\n' "$1" >&2; FAILED="$FAILED$2, "; }
 FAILED=""
 MODE=""
 CSRF=""
-# Куда curl складывает ЗАГОЛОВКИ ответа (-D). Пусто — не складывает вовсе:
-# снимаются они только там, где по ним что-то измеряют (вход, задача 0147).
-# Объявлено здесь по той же причине, что и остальное: при set -u
-# самопроверка падала бы на «unbound variable» не на том, что проверяет.
-DUMP_HEADERS=""
+# Банка cookie ВЕДЁТСЯ НАМИ, а не curl (задача 0150), и лежит в двух местах.
+# Здесь — рабочая копия на этой машине: из неё собирается заголовок Cookie
+# и в неё складывается Set-Cookie ответа. Настоящая банка ($JAR) живёт там,
+# откуда ходит curl, — через неё выкладка передаёт сессию из шага входа
+# в самопроверки (0142), — и обновляется, только когда cookie изменились.
+LOCAL_JAR="${TMPDIR:-/tmp}/partsflow-smoke-jar.$$"
+# Заголовки последнего ответа. Снимаются ВСЕГДА, а не по просьбе: из них
+# берётся Set-Cookie, а вход по ним же отличает «cookie не доехала»
+# от «пароль не тот» (задача 0147).
+LOCAL_HEADERS="${LOCAL_JAR}-headers"
 # Куда curl складывает ТРАССУ ЗАПРОСА (-v --stderr). Пусто — не складывает.
 # По ней видно единственное, чего не видно больше нигде: положил ли curl
 # в запрос заголовок Cookie (задача 0149). Тела запроса в трассе нет —
@@ -225,45 +230,187 @@ run_there() {
     if [ "$ROUTE" = host ]; then "$@"; else $COMPOSE exec -T caddy "$@"; fi
 }
 
+# ────────────── cookie ведём МЫ, а не curl (задача 0150) ─────────────────────
+#
+# ПОЧЕМУ. Измерено на curl 8.22.0 — той версии, что стоит в контейнере
+# терминатора боевой ячейки:
+#
+#   хост                        банка пишется   заголовок Cookie уходит
+#   app-blue       (без точки)  да              НЕТ
+#   app-blue.local (с точкой)   да              да
+#
+# То есть на ОДНОСЛОЖНОЕ имя хоста curl не отправляет cookie из банки вовсе.
+# А прогон ходит в выкладываемую сборку ровно по такому имени с задачи 0145
+# (`http://app-green:8080`), и пять выкладок на ПРОМ падали здесь: сервер
+# не получал cookie CSRF, заводил новую и отбивал вход ДО проверки пароля.
+#
+# И ХУЖЕ ТОГО: `-c` переписывает банку тем, что curl смог ЗАГРУЗИТЬ, то есть
+# теряет cookie одну за другой. Замер на том же curl: после `csrf` + `login`
+# в банке остаётся только SESSION, а после первого же ответа без Set-Cookie
+# она ПУСТА. Значит отдавать банку curl на таком имени нельзя ни для
+# отправки, ни для хранения — ни одной половиной.
+#
+# ПОЧЕМУ НЕ «СДЕЛАТЬ ИМЯ С ТОЧКОЙ» (--resolve на имя-псевдоним). Так тоже
+# лечится, и дешевле по строкам, но цена выше: имя обязано разрешаться именно
+# в ВЫКЛАДЫВАЕМУЮ сборку, а не в ту, что под трафиком. Ошибка там не красит
+# выкладку, а ЗЕЛЕНИТ её на старой версии — ложная зелёная хуже красной.
+# У здешнего пути такого исхода нет вовсе: потеряв cookie, прогон получает
+# 401/403, то есть красное.
+#
+# ЧЕМ ПЛАТИМ, названо вслух: выбор cookie теперь наш. Прогон ходит на ОДИН
+# хост, поэтому домен не сверяется, путь не сверяется, срок не ведётся (все
+# cookie сессионные). Сверяется ровно одно — флаг Secure: по http такая
+# cookie не отправляется, как и у curl, и на этом различии стоит приписка
+# вердикта 0147. Понадобится второй хост или cookie с путём — это место
+# придётся растить, и молча оно этого не скажет.
+#
+# И ОТДЕЛЬНО — ПОЧЕМУ ЭТО ИСКАЛИ ТРИ КРУГА: `caddy:2-alpine` ПЛАВАЮЩИЙ тег.
+# В кэше у разработчика лежал curl 8.19.0, который отправляет cookie и на
+# односложное имя, — поэтому 0147 и 0149 воспроизводили боевой путь дословно
+# и получали зелёный прогон. Проверяя такое, образ надо тянуть заново.
+
+# Хост из адреса — он же домен cookie в банке.
+jar_domain() { printf '%s' "$BASE" | sed -e 's|^[A-Za-z][A-Za-z0-9+.-]*://||' -e 's|[:/].*$||'; }
+
+# Заголовок Cookie для запроса: всё, что лежит в банке.
+cookie_header() {
+    [ -s "$LOCAL_JAR" ] || return 0
+    local insecure=no
+    case "$BASE" in http://*) insecure=yes ;; esac
+    awk -F '\t' -v insecure="$insecure" '
+        /^#/ { next }
+        NF < 7 { next }
+        { if (insecure == "yes" && toupper($4) == "TRUE") next
+          out = (out == "" ? "" : out "; ") $6 "=" $7 }
+        END { printf "%s", out }' "$LOCAL_JAR"
+}
+
+# Set-Cookie ответа → банка. Ответ, в котором Set-Cookie нет, банку НЕ ТРОГАЕТ:
+# ровно этим `curl -c` её и опустошал. Пустое значение и Max-Age=0 означают
+# «снять» — так приложение закрывает сессию на выходе.
+store_cookies() {  # заголовки ответа
+    local merged old=""
+    merged=$(printf '%s\n' "$1" | awk -v jar="$LOCAL_JAR" -v dom="$(jar_domain)" '
+        BEGIN {
+            while ((getline line < jar) > 0) {
+                if (line ~ /^#/ || line == "") continue
+                if (split(line, f, "\t") < 7) continue
+                if (!(f[6] in have)) order[++cnt] = f[6]
+                have[f[6]] = line
+            }
+            close(jar)
+        }
+        tolower($0) ~ /^set-cookie:/ {
+            s = $0
+            sub(/^[^:]*:[ \t]*/, "", s)
+            sub(/\r$/, "", s)
+            pair = s
+            sub(/;.*$/, "", pair)
+            eq = index(pair, "=")
+            if (eq == 0) next
+            name = substr(pair, 1, eq - 1)
+            val = substr(pair, eq + 1)
+            gsub(/^[ \t]+/, "", name); gsub(/[ \t]+$/, "", name)
+            gsub(/^[ \t]+/, "", val);  gsub(/[ \t]+$/, "", val)
+            if (name == "") next
+            attrs = tolower(s)
+            secure = (attrs ~ /;[ \t]*secure[ \t]*(;|$)/) ? "TRUE" : "FALSE"
+            path = "/"
+            # Регистр в attrs сбит, а смещения те же — режем из ИСХОДНОЙ строки.
+            if (match(attrs, /;[ \t]*path=[^;]*/)) {
+                path = substr(s, RSTART, RLENGTH)
+                sub(/^;[ \t]*[Pp][Aa][Tt][Hh]=/, "", path)
+                if (path == "") path = "/"
+            }
+            if (val == "" || attrs ~ /;[ \t]*max-age=0[ \t]*(;|$)/) { delete have[name]; next }
+            if (!(name in have)) order[++cnt] = name
+            have[name] = dom "\tFALSE\t" path "\t" secure "\t0\t" name "\t" val
+        }
+        END {
+            print "# Netscape HTTP Cookie File"
+            print "# банку ведёт ops/smoke-run.sh (задача 0150)"
+            for (i = 1; i <= cnt; i++)
+                if (order[i] in have) { print have[order[i]]; delete have[order[i]] }
+        }')
+    [ -f "$LOCAL_JAR" ] && old=$(cat "$LOCAL_JAR")
+    [ "$merged" = "$old" ] && return 0
+    printf '%s\n' "$merged" > "$LOCAL_JAR"
+    # В настоящую банку пишем только на изменение (это два-три раза за прогон):
+    # лишний `compose exec` на каждом запросе удлинял бы окно заморозки,
+    # а долгая заморозка стоит продаж (0117).
+    printf '%s\n' "$merged" | run_there sh -c 'cat > "$1"' sh "$JAR" >/dev/null 2>&1
+}
+
+# Банка из того места, откуда ходит curl, — в рабочую копию. Так прогон
+# подхватывает сессию, добытую ДРУГИМ запуском до заморозки (0142).
+load_jar() { run_there cat "$JAR" > "$LOCAL_JAR" 2>/dev/null || : ; }
+
+# Заголовки ответа приезжают одним потоком с телом (-D -) — режем их здесь,
+# чтобы наружу уходило то же, что и раньше: тело, последней строкой код.
+# Блоков заголовков может быть несколько (100 Continue), берётся последний.
+resp_part() {  # head|body, ответ целиком
+    printf '%s\n' "$2" | awk -v want="$1" '
+        { lines[++n] = $0; sub(/\r$/, "", lines[n]) }
+        END {
+            i = 1; hs = 0; he = -1
+            while (i <= n && lines[i] ~ /^HTTP\//) {
+                hs = i
+                while (i <= n && lines[i] != "") i++
+                he = i - 1
+                i++
+            }
+            if (want == "head") { for (k = hs; k <= he; k++) print lines[k] }
+            else { for (k = i; k <= n; k++) print lines[k] }
+        }'
+}
+
 # МЕТОД ПУТЬ [ТЕЛО] → тело ответа, последней строкой код.
 #
 # Тело уезжает потоком, а не аргументом: в нём пароль, а аргументы команды
 # видит в `ps` любой, у кого есть учётка на машине (тем же доводом живёт
 # ops/migrate-tenants.sh).
 request() {
-    local method="$1" path="$2" body="${3-}"
-    set -- -sS -m "$TIMEOUT" -X "$method" -b "$JAR" -c "$JAR" \
-           -H 'Content-Type: application/json' -w '\n%{http_code}'
+    local method="$1" path="$2" body="${3-}" cookie raw heads
+    cookie=$(cookie_header)
+    # Заголовки ответа снимаются ВСЕГДА (-D -): из них берётся Set-Cookie,
+    # и по ним же вход отличает «cookie не доехала» от «пароль не тот» —
+    # единственное наблюдаемое, которое их различает (задача 0147).
+    set -- -sS -m "$TIMEOUT" -X "$method" \
+           -H 'Content-Type: application/json' -w '\n%{http_code}' -D -
+    # Cookie кладём своим заголовком: банку curl на односложном имени хоста
+    # не отправляет вовсе и при этом переписывает файл (задача 0150).
+    [ -n "$cookie" ] && set -- "$@" -H "Cookie: $cookie"
     [ -n "$CSRF" ] && set -- "$@" -H "X-XSRF-TOKEN: $CSRF"
     [ -n "$RESOLVE_HOST" ] && set -- "$@" --resolve "$RESOLVE_HOST:443:127.0.0.1"
-    # Заголовки ответа — в файл рядом с банкой, и только когда их спросили.
-    # По ним вход отличает «cookie не доехала» от «пароль не тот»: это
-    # единственное наблюдаемое, которое их различает (задача 0147).
-    [ -n "$DUMP_HEADERS" ] && set -- "$@" -D "$DUMP_HEADERS"
     # А трасса — про ЗАПРОС, и это другой вопрос: заголовки ответа говорят,
     # что сервер сделал, а «ушла ли cookie» по ним не узнать вовсе (0149).
     [ -n "$DUMP_TRACE" ] && set -- "$@" -v --stderr "$DUMP_TRACE"
     if [ -n "$body" ]; then
-        printf '%s' "$body" | run_there curl "$@" --data-binary @- "$BASE$path" 2>&1
+        raw=$(printf '%s' "$body" | run_there curl "$@" --data-binary @- "$BASE$path" 2>&1)
     else
-        run_there curl "$@" "$BASE$path" 2>&1
+        raw=$(run_there curl "$@" "$BASE$path" 2>&1)
     fi
+    heads=$(resp_part head "$raw")
+    printf '%s\n' "$heads" > "$LOCAL_HEADERS"
+    store_cookies "$heads"
+    resp_part body "$raw"
 }
 
 # Токен CSRF приложение кладёт в cookie, а в заголовок его перекладывает
-# клиент. Здесь клиент — мы, и банка лежит там же, откуда ходит curl.
-read_csrf() { run_there awk '/XSRF-TOKEN/ {print $7}' "$JAR" 2>/dev/null | tail -n 1; }
+# клиент. Здесь клиент — мы, и банку с 0150 ведём тоже мы: рабочая копия
+# лежит на этой машине, настоящая — там, откуда ходит curl.
+read_csrf() { awk -F '\t' '/XSRF-TOKEN/ {print $7}' "$LOCAL_JAR" 2>/dev/null | tail -n 1; }
 
 # Заголовки последнего ответа и строка банки с токеном — свидетельства,
 # по которым вход называет причину отказа (задача 0147). Отдельными
 # функциями, а не строками в шаге, по той же причине, что и read_csrf:
 # их подменяет самопроверка, иначе проверен был бы вердикт, а не путь.
-read_headers() { run_there cat "${JAR}-headers" 2>/dev/null; }
+read_headers() { cat "$LOCAL_HEADERS" 2>/dev/null; }
 # Вся строка банки, а не только значение: в ней видны и хозяин cookie
 # (домен), и флаг Secure — четвёртым полем. Cookie, помеченная Secure,
 # в банке ЛЕЖИТ и читается awk'ом, а по http не отправляется вовсе:
 # «токен получен» и «токен доехал» — разные утверждения.
-read_jar_line() { run_there awk '/XSRF-TOKEN/ {print}' "$JAR" 2>/dev/null | tail -n 1; }
+read_jar_line() { awk '/XSRF-TOKEN/ {print}' "$LOCAL_JAR" 2>/dev/null | tail -n 1; }
 # Трасса запроса — единственное место, где видно, что curl ПОЛОЖИЛ В ЗАПРОС.
 # «Токен в банке есть» и «cookie ушла» — разные утверждения, и до 0149
 # второе не измерял никто: отказ говорил о нём, не спросив.
@@ -701,11 +848,9 @@ step_login() {
     # перечитывается из переписанной банки, и отказ, называвший его
     # отправленным, называл токен из ответа (задача 0149).
     SENT_CSRF="$CSRF"
-    DUMP_HEADERS="${JAR}-headers"
     DUMP_TRACE="${JAR}-trace"
     answer=$(request POST /api/auth/login \
         "{\"company\":\"$SMOKE_COMPANY\",\"login\":\"$SMOKE_LOGIN\",\"password\":\"$SMOKE_PASSWORD\"}")
-    DUMP_HEADERS=""
     DUMP_TRACE=""
     # Заголовки снимаются всегда, а не только при отказе: задним числом
     # их не взять — второй запрос будет уже другим (задача 0147).
@@ -1621,6 +1766,119 @@ Content-Length: 0'
     rm -f "$argv_log"
     eval "$real_run_there"
 
+    # ─── COOKIE ВЕДЁМ МЫ, А НЕ curl (задача 0150) ───────────────────────────
+    #
+    # Причина шестой красной выкладки на ПРОМ: curl 8.22.0 не отправляет
+    # cookie из банки на ОДНОСЛОЖНОЕ имя хоста (`app-blue`), а `-c` при этом
+    # переписывает банку тем, что он смог загрузить, — то есть теряет её
+    # по частям. Ниже проверяются обе половины починки: что мы собираем
+    # заголовок сами и что ответ без Set-Cookie банку не опустошает.
+    local real_jar_path="$LOCAL_JAR" real_heads_path="$LOCAL_HEADERS" real_base2="$BASE"
+    LOCAL_JAR="${TMPDIR:-/tmp}/smoke-selftest-jar.$$"
+    LOCAL_HEADERS="${TMPDIR:-/tmp}/smoke-selftest-heads.$$"
+
+    # Домен в банке односложный — ровно тот, который curl отказывается
+    # отправлять. Наш заголовок собирается из неё независимо от домена.
+    printf '%s\n' '# Netscape HTTP Cookie File' \
+        'app-blue	FALSE	/	FALSE	0	XSRF-TOKEN	tok-1' \
+        'app-blue	FALSE	/	FALSE	0	SESSION	sess-1' > "$LOCAL_JAR"
+    BASE=http://app-blue:8080
+    same "cookie: заголовок собирается из банки (хост без точки)" \
+        "$(cookie_header)" "XSRF-TOKEN=tok-1; SESSION=sess-1"
+
+    # Secure по http не отправляется — так делает и curl, и на этом различии
+    # стоит приписка вердикта 0147. Обе стороны, иначе пробу прошло бы
+    # и «не отправляем никогда».
+    printf '%s\n' '# Netscape HTTP Cookie File' \
+        'app-blue	FALSE	/	TRUE	0	XSRF-TOKEN	tok-s' > "$LOCAL_JAR"
+    same "cookie: Secure по http НЕ уходит" "$(cookie_header)" ""
+    BASE=https://parts.example.ru
+    same "cookie: Secure по https уходит" "$(cookie_header)" "XSRF-TOKEN=tok-s"
+    BASE=http://app-blue:8080
+
+    : > "$LOCAL_JAR"
+    store_cookies 'HTTP/1.1 204
+Set-Cookie: XSRF-TOKEN=tok-1; Path=/'
+    same "cookie: Set-Cookie кладётся в банку" "$(cookie_header)" "XSRF-TOKEN=tok-1"
+    # Главная проба хранения: ровно так `curl -c` и опустошал банку.
+    store_cookies 'HTTP/1.1 200
+Content-Length: 0'
+    same "cookie: ОТВЕТ БЕЗ Set-Cookie БАНКУ НЕ ОПУСТОШАЕТ" \
+        "$(cookie_header)" "XSRF-TOKEN=tok-1"
+    store_cookies 'HTTP/1.1 200
+Set-Cookie: SESSION=sess-1; Path=/; HttpOnly'
+    same "cookie: вторая cookie добавляется к первой" \
+        "$(cookie_header)" "XSRF-TOKEN=tok-1; SESSION=sess-1"
+    store_cookies 'HTTP/1.1 200
+Set-Cookie: XSRF-TOKEN=tok-2; Path=/'
+    same "cookie: тот же ключ заменяется, а не удваивается" \
+        "$(cookie_header)" "XSRF-TOKEN=tok-2; SESSION=sess-1"
+    store_cookies 'HTTP/1.1 204
+Set-Cookie: SESSION=; Path=/; Max-Age=0'
+    same "cookie: снятая cookie уходит из банки (выход из сессии)" \
+        "$(cookie_header)" "XSRF-TOKEN=tok-2"
+    store_cookies 'HTTP/1.1 200
+Set-Cookie: S2=v; Path=/; Secure'
+    same "cookie: Secure из ответа доезжает до банки — и по http не уходит" \
+        "$(cookie_header)" "XSRF-TOKEN=tok-2"
+
+    # Заголовки приезжают одним потоком с телом (-D -). Не срежь их — и
+    # вердикты станут разбирать заголовки вместо тела.
+    local raw='HTTP/1.1 100 Continue
+
+HTTP/1.1 201 Created
+Set-Cookie: SESSION=s; Path=/
+
+{"id":5}
+201'
+    same "ответ: тело отделено от заголовков (и от блока 100 Continue)" \
+        "$(resp_part body "$raw")" '{"id":5}
+201'
+    same "ответ: заголовками считается ПОСЛЕДНИЙ блок" \
+        "$(resp_part head "$raw" | head -n 1)" 'HTTP/1.1 201 Created'
+    same "ответ: отказ curl остаётся телом целиком" \
+        "$(resp_part body 'curl: (7) Failed to connect
+000')" 'curl: (7) Failed to connect
+000'
+
+    # И ПЕРЕБОР ОТПРАВЛЕННОГО: заголовок Cookie обязан уходить в запросе.
+    # Это и есть возврат находки — понадеявшись на банку curl, прогон снова
+    # пойдёт без cookie, и сервер отобьёт вход до проверки пароля.
+    local real_rt2 argv2 second
+    real_rt2=$(declare -f run_there)
+    argv2="${TMPDIR:-/tmp}/smoke-selftest-argv2.$$"
+    : > "$argv2"; : > "$LOCAL_JAR"
+    run_there() {
+        printf '%s\n' "$*" >> "$argv2"
+        case "$*" in
+            *"/api/auth/csrf"*) printf 'HTTP/1.1 204\nSet-Cookie: XSRF-TOKEN=tok-9; Path=/\n\n\n204' ;;
+            *) printf 'HTTP/1.1 200\n\n{"ok":true}\n200' ;;
+        esac
+    }
+    CSRF=""
+    request GET /api/auth/csrf >/dev/null
+    request GET /api/auth/me >/dev/null
+    second=$(grep -F '/api/auth/me' "$argv2" | tail -n 1)
+    case "$second" in
+        *"Cookie: XSRF-TOKEN=tok-9"*)
+            printf '  ✓ cookie: следующий запрос НЕСЁТ заголовок Cookie из банки\n' ;;
+        *) red "  ✗ ЗАГОЛОВКА Cookie В ЗАПРОСЕ НЕТ — ровно так падали пять выкладок на ПРОМ: «$(printf '%s' "$second" | cut -c1-160)»"
+           broken=$((broken + 1)) ;;
+    esac
+    # Вторая половина: банку curl не отдаём вовсе. На имени без точки он её
+    # не отправит, а файл перепишет тем, что смог загрузить, — то есть
+    # потеряет и остальные cookie.
+    case "$second" in
+        *" -b "*|*" -c "*)
+            red "  ✗ банка отдана curl (-b/-c): на имени хоста без точки он её не отправит и перепишет файл"
+            broken=$((broken + 1)) ;;
+        *) printf '  ✓ cookie: банка curl не отдаётся — её ведём мы\n' ;;
+    esac
+    rm -f "$argv2" "$LOCAL_JAR" "$LOCAL_HEADERS"
+    eval "$real_rt2"
+    LOCAL_JAR="$real_jar_path"; LOCAL_HEADERS="$real_heads_path"; BASE="$real_base2"
+    CSRF=""
+
     rm -f "$STUB_LOG" "$STUB_LOG.out"
     eval "$real_request"
 
@@ -1795,6 +2053,14 @@ if [ -n "$PRINT_MODE" ]; then
 fi
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
+
+# Рабочая копия банки и заголовки последнего ответа живут на этой машине —
+# убираем их при любом выходе: в них лежит живая сессия.
+trap 'rm -f "$LOCAL_JAR" "$LOCAL_HEADERS"' EXIT
+
+# А саму банку забираем оттуда, откуда ходит curl: её мог оставить ДРУГОЙ
+# запуск — вход до заморозки записи (0142). Нет файла — начинаем с пустой.
+load_jar
 
 # Только вход и выход из скрипта: банка cookie остаётся, сценарий не идёт.
 # Зовётся выкладкой ДО заморозки записи — сессия ложится в исходную базу
