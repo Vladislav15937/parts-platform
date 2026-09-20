@@ -50,9 +50,23 @@ printf 'Введите имя схемы для подтверждения: '
 read -r CONFIRM
 [ "$CONFIRM" = "$SCHEMA" ] || { echo "Отменено."; exit 1; }
 
-$COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME"-v ON_ERROR_STOP=1 \
+# Пробел после "$DB_NAME" обязателен, и его тут не было с задачи 0112:
+# заменив литерал «parts» переменной, склеили аргументы — `-d parts-v`
+# и `-d parts--no-owner`. Оба инструмента читают это как ИМЯ БАЗЫ и отвечают
+# «database "parts-v" does not exist», то есть скрипт умирал на первой же
+# команде. Проверено живым прогоном, обе строки.
+$COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 \
     -c "DROP SCHEMA IF EXISTS $SCHEMA CASCADE" >/dev/null
-$COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d "$DB_NAME"--no-owner < "$DUMP"
+
+# Расширения — ДО разворота. В дампе схемы их нет по построению, а ставит их
+# тот, кто восстанавливает: почему не дамп и не приложение, расписано
+# в ops/restore-extensions.sql. На живой базе они уже стоят, и шаг ничего
+# не делает; на свежей (новая машина, база заведена руками) без них разворот
+# падает на первой же таблице — `gen_random_bytes does not exist`.
+$COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 \
+    -f /dev/stdin < ops/restore-extensions.sql >/dev/null
+
+$COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d "$DB_NAME" --no-owner < "$DUMP"
 
 # Фотографии возвращаются вместе с базой. Схема-на-арендатора и префикс
 # арендатора в ключе S3 выбирались ради одного и того же — вернуть одного
@@ -72,7 +86,7 @@ else
     printf '\033[1;33mСнимков в копии нет: %s — карточки будут без фотографий\033[0m\n' "$PHOTOS"
 fi
 
-PARTS=$($COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME"-tAc \
+PARTS=$($COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -tAc \
     "SELECT count(*) FROM $SCHEMA.part")
 printf '\n\033[1;32mВосстановлено: %s, позиций %s\033[0m\n' "$SCHEMA" "$PARTS"
 printf 'Остальные арендаторы не затронуты.\n'
