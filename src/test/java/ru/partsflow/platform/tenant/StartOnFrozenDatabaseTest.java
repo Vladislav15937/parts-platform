@@ -160,6 +160,56 @@ class StartOnFrozenDatabaseTest extends PostgresTestBase {
         }
     }
 
+    /**
+     * Заморозку готовность называет словами (задача 0196).
+     *
+     * <p><b>Что наблюдали.</b> Сборка {@code app-green} работала на замороженной
+     * базе и отвечала на {@code /actuator/readiness} пятью зелёными строками
+     * и {@code ready:true} — при том что записать в эту базу не мог никто
+     * и ничего: тот же контейнер каждые несколько секунд писал в лог
+     * {@code cannot execute UPDATE in a read-only transaction}. Ни одна
+     * проверка не врала: вопроса о записи у готовности не было ни одного.
+     * Человек, пришедший разбираться с брошенной сборкой, читал исправную
+     * систему.
+     *
+     * <p>Проверяется здесь, а не рядом с остальной готовностью, по той же
+     * причине, по которой заведён этот класс: заморозить надо <b>базу</b>,
+     * а не роль, и база у остальных контекстов прогона общая.
+     */
+    @Test
+    @DisplayName("Заморожена: готовность называет это словами и остаётся зелёной")
+    void frozenDatabaseIsNamedInReadiness() throws Exception {
+        setFrozen(true);
+
+        ConfigurableApplicationContext app = start(ROLE);
+        try {
+            int port = ((WebServerApplicationContext) app).getWebServer().getPort();
+            HttpResponse<String> readiness = get(port, "/actuator/readiness");
+            JsonNode body = json.readTree(readiness.body());
+
+            assertThat(detail(body, "writes"))
+                    .as("готовность не говорит, что записать в эту базу нельзя, "
+                            + "и не называет, в какую именно: ровно так брошенная "
+                            + "на слепке сборка и выглядит здоровой — пять зелёных "
+                            + "строк, ready:true, docker считает контейнер живым, "
+                            + "а люди работают на другой базе. Ответ: %s",
+                            readiness.body())
+                    .contains("заморожена")
+                    .contains(DB);
+
+            assertThat(ok(body, "writes"))
+                    .as("заморозка покрасила готовность в красное: копию морозят "
+                            + "как раз перед переключением трафика, и такой ответ "
+                            + "остановил бы ИСПРАВНУЮ выкладку — switch-build.sh ждёт "
+                            + "ready:true, а healthcheck боевого compose ищет ту же "
+                            + "строку в теле. Задача требует назвать состояние, "
+                            + "а не погасить зелёный свет")
+                    .isTrue();
+        } finally {
+            app.close();
+        }
+    }
+
     @Test
     @DisplayName("Незамороженная база: права рабочей роли выдаются, как и раньше")
     void grantsStillApplyWhenNotFrozen() throws Exception {
@@ -322,6 +372,15 @@ class StartOnFrozenDatabaseTest extends PostgresTestBase {
         for (JsonNode node : body.get("checks")) {
             if (check.equals(node.get("check").asText())) {
                 return node.get("ok").asBoolean();
+            }
+        }
+        throw new IllegalStateException("В ответе готовности нет проверки " + check);
+    }
+
+    private String detail(JsonNode body, String check) {
+        for (JsonNode node : body.get("checks")) {
+            if (check.equals(node.get("check").asText())) {
+                return node.get("detail").asText();
             }
         }
         throw new IllegalStateException("В ответе готовности нет проверки " + check);
