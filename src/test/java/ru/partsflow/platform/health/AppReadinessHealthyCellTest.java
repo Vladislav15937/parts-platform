@@ -128,7 +128,7 @@ class AppReadinessHealthyCellTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Исправная ячейка готова: 200 и все пять проверок зелёные")
+    @DisplayName("Исправная ячейка готова: 200 и все шесть проверок зелёные")
     void healthyCellIsReady() throws Exception {
         JsonNode body = readiness(200);
 
@@ -141,7 +141,14 @@ class AppReadinessHealthyCellTest extends PostgresTestBase {
         assertThat(names(body))
                 .as("состав проверок изменился молча: шаг выкладки и тревога "
                         + "узнают причину по имени проверки, а не по тексту")
-                .containsExactly("database", "catalog", "schemas", "journals", "metrics");
+                .containsExactly("database", "catalog", "schemas", "journals",
+                        "writes", "metrics");
+
+        assertThat(detail(body, "writes"))
+                .as("про запись не сказано, что она проходит: исправная ячейка — "
+                        + "единственное место в прогоне, где видно, что проба записи "
+                        + "вообще работает, а не молчит одинаково при любом ответе базы")
+                .contains("Запись проходит");
 
         assertThat(detail(body, "journals"))
                 .as("журналы сочтены защищёнными не потому, что защищены: "
