@@ -1,0 +1,494 @@
+#!/usr/bin/env bash
+# Своё зеркало образов хранилища в нашем GHCR.
+#
+#   tools/mirror-images.sh --проверить     что лежит в зеркале — мимо кэша
+#   tools/mirror-images.sh --собрать       собрать локально, без реестра
+#   tools/mirror-images.sh --опубликовать  собрать и положить в реестр
+#   tools/mirror-images.sh --selftest      проверить сам скрипт на подделках
+#
+# ЗАЧЕМ ОН ЕСТЬ. 26 сентября 2026 образ `quay.io/minio/minio` пропал целиком —
+# не тег, а репозиторий, — и `main` покраснела у всех: три теста поднимают
+# настоящий MinIO, и поднять его стало нечем. Годом раньше то же случилось
+# на Docker Hub. Решение владельца того дня: «своё зеркало в GHCR».
+#
+# ПОЧЕМУ СКРИПТ, А НЕ «ЗАЛИТЬ РУКАМИ ОДИН РАЗ». Залитое руками нельзя
+# повторить: следующий образ (а он будет — MinIO стал source-only, наш выпуск
+# последний) поехал бы вручную и по памяти. Здесь весь путь записан: откуда
+# берётся бинарник, чем сверяется, во что кладётся и куда пушится. Тот же
+# скрипт зовёт задача CI «Зеркало образов», поэтому пропавшее зеркало
+# восстанавливается прогоном, а не человеком с записками.
+#
+# ЧТО ИМЕННО ЗЕРКАЛИМ. Не чужой образ — его больше нет нигде, до чего мы
+# дотягиваемся (quay: репозитория нет; Docker Hub: denied; ghcr.io/minio:
+# нет; dl.min.io: 410 на все версии). Живым остался единственный официальный
+# источник — файлы выпуска на GitHub, и сумма sha256 к ним опубликована там
+# же. Значит зеркалим ВЫПУСК: бинарник той же версии, сверенный по сумме,
+# в тонком образе (tools/mirror/*.Dockerfile). Версия в бою не меняется.
+#
+# Локальный кэш источником быть не мог: у разработчика лежит только arm64,
+# а CI и ячейка — amd64. Именно поэтому образ собирается на две архитектуры.
+#
+# ДВА СПОСОБА ЗЕРКАЛИТЬ, И ВЫБИРАЕТ ИХ НЕ ЭТОТ СКРИПТ. У minio и mc официального
+# образа не осталось нигде — их мы СОБИРАЕМ из файлов выпуска. У postgres
+# и liquibase автор жив и раздаёт образ — их мы КОПИРУЕМ регистр в регистр,
+# не пересобирая: база данных, собранная нами из чужих кусков, была бы другим
+# продуктом, а не тем, что стоит в бою. Что чем зеркалится, записано там же,
+# где адреса, — списком `x-mirror-sources` в ops/images.yml: есть источник,
+# значит копируем.
+#
+# ЗАЧЕМ КОПИРОВАТЬ ТО, ЧТО И ТАК РАЗДАЮТ (задача 0095). 13 сентября 2026 задача
+# CI «Миграции на чистой базе» упала на выкачке `liquibase/liquibase:4.27`:
+# «read: connection reset by peer» от registry-1.docker.io. Образ никуда
+# не девался — чужой реестр не ответил в конкретную минуту. Красный CI без
+# дефекта стоит дороже, чем выглядит: исполнитель ищет причину у себя,
+# проверяющий рискует вынести вердикт по ложному красному.
+#
+# ТЕГ КОПИИ НЕСЁТ СУММУ ИСТОЧНИКА, И НА ЭТОМ ДЕРЖИТСЯ ОБНОВЛЕНИЕ ЗЕРКАЛА.
+# Задача CI не копирует ничего, пока тег в реестре есть, — значит источник,
+# сменённый без смены тега, остался бы только в файле: «зеркало на месте»
+# отвечало бы про прежние байты. Тег назван суммой, поэтому новый источник —
+# это всегда новый тег, и зеркало наполняется само.
+set -euo pipefail
+
+ROOT="${MIRROR_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+IMAGES_FILE="${IMAGES_FILE:-$ROOT/ops/images.yml}"
+# База выпусков. Переопределяется только самопроверкой — ей в сеть не надо.
+RELEASES="${MIRROR_RELEASES:-https://github.com/minio}"
+BUILDER="${MIRROR_BUILDER:-partsflow-mirror}"
+PLATFORMS="${MIRROR_PLATFORMS:-linux/amd64,linux/arm64}"
+# Все сервисы зеркала. Второго списка — «эти собираем, эти копируем» — здесь
+# намеренно нет: он выводится из самого фрагмента, где записаны источники.
+# Два списка одного и того же расходятся молча, и правка трогает один из них.
+SERVICES="minio mc postgres liquibase"
+
+red()   { printf '\033[1;31m%s\033[0m\n' "$1" >&2; }
+green() { printf '\033[1;32m%s\033[0m\n' "$1"; }
+step()  { printf '\n\033[1m%s\033[0m\n' "$1"; }
+fail()  { red "$1"; exit 1; }
+
+# Адрес образа из единственного места, где он записан. Разбор строчный:
+# формат фрагмента наш, и стережёт его tools/image-pin-guard.py.
+pin() {  # сервис → адрес
+    python3 - "$IMAGES_FILE" "$1" <<'PY'
+import re, sys
+path, want = sys.argv[1], sys.argv[2]
+service = None
+for line in open(path, encoding='utf-8'):
+    m = re.match(r'^ {2}([A-Za-z0-9_.-]+):\s*$', line)
+    if m:
+        service = m.group(1)
+        continue
+    m = re.match(r'^\s+image:\s*(\S+)\s*$', line)
+    if m and service == want:
+        print(m.group(1))
+        sys.exit(0)
+sys.exit(f'в {path} нет образа для сервиса «{want}»')
+PY
+}
+
+# Источник копии — из того же фрагмента. Пусто означает «этот образ мы
+# собираем сами»: развилка одна на весь скрипт и стоит в одном месте.
+source_of() {  # сервис → адрес источника с суммой, либо пусто
+    python3 - "$IMAGES_FILE" "$1" <<'PY'
+import re, sys
+path, want = sys.argv[1], sys.argv[2]
+inside = False
+for line in open(path, encoding='utf-8'):
+    if re.match(r'^x-mirror-sources:\s*$', line):
+        inside = True
+        continue
+    if inside:
+        # Блок кончается первой строкой без отступа (`services:`). Комментарии
+        # внутри блока идут с отступом и его не прерывают.
+        if line[:1] not in (' ', '\t', '\n'):
+            break
+        m = re.match(r'^ {2}([A-Za-z0-9_.-]+):\s*(\S+)\s*$', line)
+        if m and m.group(1) == want:
+            print(m.group(2))
+            break
+PY
+}
+
+tag_of()  { printf '%s' "${1##*:}"; }
+path_of() { local p="${1%:*}"; printf '%s' "${p#ghcr.io/}"; }
+
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+    else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+
+# Зеркало обязано быть нашим и закреплённым. Проверяется здесь, а не только
+# сторожем: скрипт кладёт образ в реестр, и положить его по чужому адресу
+# или с плавающим тегом — та же поломка, из-за которой всё началось.
+check_ref() {  # сервис адрес
+    local svc="$1" ref="$2" tag src digest want
+    case "$ref" in *:*) : ;; *) fail "адрес без тега: $ref" ;; esac
+    tag="$(tag_of "$ref")"
+    case "$tag" in
+        # Фигурные скобки не для красоты: bash 3.2 из macOS прихватывает
+        # многобайтовую кавычку в имя переменной и валится «tag»: unbound
+        # variable» — на этом уже спотыкались (docs/agent-workflow.md).
+        latest|main|edge) fail "плавающий тег «${tag}» в прогоне запрещён: ${ref}" ;;
+    esac
+    case "$ref" in
+        ghcr.io/*) : ;;
+        *) fail "зеркало обязано лежать в нашем GHCR, а это чужой реестр: $ref" ;;
+    esac
+
+    # У копии тег обязан быть назван суммой источника, а источник — закреплён
+    # суммой, а не тегом. Иначе обновление зеркала молча не случается: задача
+    # CI не копирует, пока тег в реестре есть.
+    src="$(source_of "$svc")"
+    if [ -n "$src" ]; then
+        case "$src" in
+            *@sha256:*) : ;;
+            *) fail "источник $svc закреплён тегом, а не суммой: $src — тег у автора плывёт, и копия перестала бы быть повторяемой" ;;
+        esac
+        digest="${src##*@sha256:}"
+        want="$(printf '%s' "$digest" | cut -c1-12)"
+        case "$tag" in
+            *-"$want") : ;;
+            # Фигурные скобки обязательны — та же ловушка, что отмечена выше
+            # у плавающего тега: bash 3.2 из macOS прихватывает многобайтовую
+            # кавычку в имя переменной, и вместо отказа по существу приходит
+            # «tag»: unbound variable». Поймано собственной самопроверкой:
+            # случай краснел, но не тем сообщением, которого ждал.
+            *) fail "тег зеркала ${svc} не назван суммой источника: тег «${tag}», а сумма начинается на «${want}». Сменив источник, смените и тег — иначе «зеркало на месте» ответит про прежние байты" ;;
+        esac
+    fi
+}
+
+# Бинарник выпуска + его опубликованная сумма. Сумма сверяется ВСЕГДА:
+# зеркало без сверки — это «мы положили что-то похожее».
+fetch_binaries() {  # сервис тег каталог
+    local svc="$1" tag="$2" dir="$3" arch asset want got
+    for arch in amd64 arm64; do
+        asset="$svc.linux-$arch.$tag"
+        curl -fsSL -o "$dir/$svc-$arch" \
+            "$RELEASES/$svc/releases/download/$tag/$asset" \
+            || fail "не скачался $asset — выпуск снят или сети нет"
+        curl -fsSL -o "$dir/$svc-$arch.sha256" \
+            "$RELEASES/$svc/releases/download/$tag/$asset.sha256sum" \
+            || fail "не скачалась сумма для $asset"
+        want="$(cut -d' ' -f1 "$dir/$svc-$arch.sha256")"
+        got="$(sha256_of "$dir/$svc-$arch")"
+        [ "$want" = "$got" ] || fail "sha256 не сошлась у $asset: ждали $want, получили $got"
+        printf '  ✓ %s — sha256 сошлась (%s)\n' "$asset" "$got"
+    done
+}
+
+build_one() {  # сервис режим(load|push)
+    local svc="$1" mode="$2" ref tag dir
+    ref="$(pin "$svc")"
+    check_ref "$svc" "$ref"
+    tag="$(tag_of "$ref")"
+    dir="$(mktemp -d)"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$dir'" RETURN
+
+    step "$svc: $ref"
+    fetch_binaries "$svc" "$tag" "$dir"
+
+    if [ "$mode" = push ]; then
+        # Многоархитектурная сборка требует сборщика с драйвером
+        # docker-container: у драйвера `docker` его умеет не всякая машина,
+        # и в прогоне это выясняется отказом посередине.
+        docker buildx inspect "$BUILDER" >/dev/null 2>&1 \
+            || docker buildx create --name "$BUILDER" --driver docker-container >/dev/null
+        docker buildx build --builder "$BUILDER" --platform "$PLATFORMS" \
+            -f "$ROOT/tools/mirror/$svc.Dockerfile" \
+            --build-arg "VERSION=$tag" \
+            -t "$ref" --push "$dir" \
+            || fail "не удалось положить $ref в реестр (вход есть? нужен write:packages)"
+        printf '  ✓ уехало: %s (%s)\n' "$ref" "$PLATFORMS"
+    else
+        # Локально — своя архитектура: многоархитектурный образ в кэш
+        # не загрузить, а проверить рецепт надо запуском, а не сборкой.
+        docker buildx build -f "$ROOT/tools/mirror/$svc.Dockerfile" \
+            --build-arg "VERSION=$tag" \
+            -t "$ref" --load "$dir" \
+            || fail "образ $svc не собрался"
+        printf '  ✓ собран локально: %s\n' "$ref"
+        docker run --rm "$ref" --version | sed 's/^/      /'
+        docker run --rm "$ref" --version | grep -q "$tag" \
+            || fail "$svc в образе не той версии: в адресе $tag, а бинарник говорит другое"
+        printf '  ✓ версия в образе совпадает с тегом: %s\n' "$tag"
+    fi
+}
+
+# Копия живого чужого образа: регистр в регистр, без пересборки.
+copy_one() {  # сервис режим(load|push)
+    local svc="$1" mode="$2" ref src
+    ref="$(pin "$svc")"
+    check_ref "$svc" "$ref"
+    src="$(source_of "$svc")"
+
+    step "$svc: $ref"
+    printf '  источник: %s\n' "$src"
+
+    if [ "$mode" != push ]; then
+        # Рецепта у копии нет вовсе, и проверять локальной сборкой нечего:
+        # «собрать» для неё означало бы скачать чужой образ себе в кэш, то есть
+        # ровно ту проверку, которая ничего не доказывает.
+        printf '  ✓ собирать нечего: это копия чужого образа, а не наш рецепт\n'
+        printf '    Положить в реестр: tools/mirror-images.sh --опубликовать\n'
+        return 0
+    fi
+
+    # imagetools собирает индекс ИЗ РЕЕСТРА ИСТОЧНИКА, а не из локального кэша:
+    # у разработчика лежит только arm64, а прогону и ячейке нужен amd64.
+    # Копируется индекс целиком, со всеми платформами, какие есть у автора, —
+    # выбирать из них незачем: слои адресуются суммой, и лишние архитектуры
+    # ничего не стоят ни прогону, ни ячейке.
+    #
+    # Источник закреплён суммой, поэтому «скопировали» и «скопировали то самое»
+    # — одно утверждение, а не два: плывущий тег автора тут ни при чём.
+    docker buildx imagetools create --tag "$ref" "$src" \
+        || fail "не удалось скопировать $src в $ref (вход в реестр есть? нужен write:packages; источник ещё раздают?)"
+    printf '  ✓ уехало: %s\n' "$ref"
+}
+
+# Лежит ли этот тег в реестре. Спрашиваем протоколом — по той же причине, что
+# и verify(): docker при containerd-хранилище отвечает из локального индекса.
+in_registry() {  # адрес → 0, если лежит
+    local ref="$1" path tag token code
+    path="$(path_of "$ref")"
+    tag="$(tag_of "$ref")"
+    token="$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:${path}:pull" \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))')"
+    code="$(curl -s -o /dev/null -w '%{http_code}' \
+        -H "Authorization: Bearer ${token}" \
+        -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+        "https://ghcr.io/v2/${path}/manifests/${tag}")"
+    [ "$code" = 200 ]
+}
+
+# Развилка одна на весь скрипт: есть источник — копируем, нет — собираем.
+#
+# И КЛАДЁМ ТОЛЬКО ТО, ЧЕГО НЕТ. Задача CI зовёт `--опубликовать`, когда зеркало
+# неполно, — то есть при добавлении ЧЕТВЁРТОГО образа она перекладывала бы
+# и три готовых. Для собираемых это не пустая трата, а подмена: тег остаётся
+# тем же, а образ пересобирается заново, и цифровой отпечаток у него уже другой,
+# — при том что про версию MinIO в ops/CLAUDE.md записано «бит в бит та,
+# на которой прогон был зелёным». Заодно `--опубликовать`, набранный руками,
+# перестаёт быть опасным действием.
+mirror_one() {  # сервис режим(load|push)
+    local svc="$1" mode="$2" ref
+    ref="$(pin "$svc")"
+    check_ref "$svc" "$ref"
+
+    if [ "$mode" = push ] && [ -z "${MIRROR_FORCE:-}" ] && in_registry "$ref"; then
+        step "$svc: $ref"
+        printf '  ✓ уже в реестре — не перекладываем\n'
+        printf '    Перезаписать тот же тег: MIRROR_FORCE=1 tools/mirror-images.sh --опубликовать\n'
+        return 0
+    fi
+
+    if [ -n "$(source_of "$svc")" ]; then
+        copy_one "$svc" "$mode"
+    else
+        build_one "$svc" "$mode"
+    fi
+}
+
+verify() {
+    local svc ref tag path token code bad=0
+    # НЕ local: уборка висит на RETURN, а к тому моменту область видимости
+    # функции уже закрыта — `set -u` свалился бы в самой уборке, поверх
+    # настоящего ответа. Ровно на этом спотыкалась самопроверка ниже.
+    TMPJSON="$(mktemp)"
+    trap 'rm -f "$TMPJSON"' RETURN
+    for svc in $SERVICES; do
+        ref="$(pin "$svc")"
+        check_ref "$svc" "$ref"
+        tag="$(tag_of "$ref")"
+        path="$(path_of "$ref")"
+        step "$svc: $ref"
+
+        # СПРАШИВАЕМ ПРОТОКОЛОМ, А НЕ DOCKER'ОМ, и это не педантичность.
+        # `docker manifest inspect` и `docker buildx imagetools inspect` при
+        # containerd-хранилище образов отвечают из ЛОКАЛЬНОГО индекса: образ,
+        # собранный тут же (`--собрать`), выглядит у них как лежащий в реестре.
+        # Проверено 26 сентября 2026 — оба показали полный индекс для тега,
+        # который в реестр никогда не уезжал. То есть проверка «мимо кэша»,
+        # сделанная docker'ом, повторила бы ровно ту ловушку, из-за которой
+        # поломку не замечали двенадцать месяцев. (На мёртвом чужом теге они
+        # в реестр всё же идут — локально его нет, — и этим можно обмануться.)
+        #
+        # Анонимный токен отвечает заодно на второй вопрос: тянется ли пакет
+        # БЕЗ входа в реестр. Приватный означает токен у прогона, у
+        # разработчика и в `.env` ячейки — три новых секрета вокруг образа,
+        # в котором нет ничего нашего.
+        token="$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:${path}:pull" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))')"
+        code="$(curl -s -o "$TMPJSON" -w '%{http_code}' \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://ghcr.io/v2/${path}/manifests/${tag}")"
+        case "$code" in
+            200)
+                printf '  ✓ лежит в реестре и тянется без входа\n'
+                python3 - "$TMPJSON" <<'PY' || exit 1
+import json, sys
+d = json.load(open(sys.argv[1]))
+# Слои подписей (attestation) идут платформой unknown/unknown — это не
+# архитектура, и считать их за неё значит принять однорукий образ за годный.
+real = [m for m in (d.get('manifests') or [])
+        if (m.get('platform') or {}).get('architecture') not in (None, 'unknown')]
+for m in real:
+    p = m['platform']
+    print(f"  ✓ {p.get('os')}/{p.get('architecture')} — {m.get('digest')}")
+need = {'amd64', 'arm64'}
+have = {(m['platform'] or {}).get('architecture') for m in real}
+if not need <= have:
+    print(f"  ✗ не хватает архитектур: {', '.join(sorted(need - have))} "
+          f"(amd64 — прогон и ячейка, arm64 — разработка)")
+    sys.exit(1)
+PY
+                ;;
+            404)
+                red "  ✗ в реестре нет: ${ref}"
+                red "      Положить: tools/mirror-images.sh --опубликовать"
+                bad=1 ;;
+            401|403)
+                # Анонимно эти два состояния неразличимы, и врать про них нельзя:
+                # GHCR отвечает 403 и на приватный пакет, и на НЕСУЩЕСТВУЮЩИЙ
+                # (404 приходит только там, где пакет есть и открыт). Проверено
+                # 26 сентября 2026 на свежих postgres и liquibase: пакета ещё
+                # не было вовсе, а прежняя редакция этой строки объявляла его
+                # приватным — то есть посылала человека менять видимость того,
+                # чего нет.
+                red "  ✗ анонимно не тянется (ответ ${code}): пакета либо нет вовсе, либо он приватный"
+                red "      Если ещё не кладён: tools/mirror-images.sh --опубликовать"
+                red "      (в прогоне это делает задача CI «Зеркало образов» сама)."
+                red "      Если приватный — токен понадобится прогону, разработчику"
+                red "      и ячейке, то есть новый секрет в .env и строка"
+                red "      в ops/config-guard.sh. Открыть: Packages →"
+                red "      parts-platform/${svc} → Change visibility."
+                bad=1 ;;
+            *)
+                red "  ✗ реестр ответил ${code} на ${ref}"
+                bad=1 ;;
+        esac
+    done
+    return $bad
+}
+
+# --- проверка самого скрипта -------------------------------------------------
+#
+# Проверяются ОТКАЗЫ: скрипт кладёт образ в реестр, и молчаливое согласие
+# положить его не туда или с плавающим тегом повторило бы ровно ту поломку,
+# ради которой он написан. Сети, docker и реестра для этого не нужно.
+selftest() {
+    local bad=0 out rc
+    echo "Самопроверка tools/mirror-images.sh"
+    # Каталог НЕ local: уборка висит на EXIT, а к тому моменту функция уже
+    # вернулась — из её области видимости переменную не достать, и `set -u`
+    # валит скрипт в самой уборке, поверх настоящего результата.
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+
+    probe() {  # файл-фрагмент → rc, out
+        set +e
+        out="$(IMAGES_FILE="$1" bash "$0" --selftest-pins 2>&1)"; rc=$?
+        set -e
+    }
+
+    probe "$IMAGES_FILE"
+    if [ "$rc" = 0 ]; then
+        printf '  ✓ настоящий ops/images.yml принимается\n'
+    else
+        red "  ✗ настоящий ops/images.yml не принимается:"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=1
+    fi
+
+    sed 's/:RELEASE\.[^ ]*$/:latest/' "$IMAGES_FILE" > "$tmp/floating.yml"
+    probe "$tmp/floating.yml"
+    if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'плавающий тег'; then
+        printf '  ✓ плавающий тег отбит словами\n'
+    else
+        red "  ✗ плавающий тег обязан отбиваться: rc=$rc"
+        bad=1
+    fi
+
+    sed 's#ghcr\.io/vladislav15937/parts-platform/#quay.io/minio/#' "$IMAGES_FILE" > "$tmp/foreign.yml"
+    probe "$tmp/foreign.yml"
+    if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'чужой реестр'; then
+        printf '  ✓ чужой реестр отбит словами\n'
+    else
+        red "  ✗ чужой реестр обязан отбиваться: rc=$rc"
+        bad=1
+    fi
+
+    grep -v 'image:' "$IMAGES_FILE" > "$tmp/empty.yml"
+    probe "$tmp/empty.yml"
+    if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'нет образа для сервиса'; then
+        printf '  ✓ фрагмент без адреса отбит словами\n'
+    else
+        red "  ✗ фрагмент без адреса обязан отбиваться: rc=$rc"
+        bad=1
+    fi
+
+    # Тег копии обязан быть назван суммой источника: иначе сменённый источник
+    # не доедет до реестра вовсе — задача CI не копирует, пока тег там есть.
+    sed 's/:16-alpine-721873c34ceb/:16-alpine/' "$IMAGES_FILE" > "$tmp/untagged.yml"
+    probe "$tmp/untagged.yml"
+    if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'не назван суммой источника'; then
+        printf '  ✓ тег копии, не названный суммой источника, отбит словами\n'
+    else
+        red "  ✗ тег копии обязан нести сумму источника: rc=$rc"
+        bad=1
+    fi
+
+    # Источник, закреплённый тегом вместо суммы: `16-alpine` у автора плывёт,
+    # и копия перестала бы быть повторяемой — молча.
+    sed 's/@sha256:[0-9a-f]*$//' "$IMAGES_FILE" > "$tmp/loose.yml"
+    probe "$tmp/loose.yml"
+    if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'закреплён тегом, а не суммой'; then
+        printf '  ✓ источник без суммы отбит словами\n'
+    else
+        red "  ✗ источник обязан быть закреплён суммой: rc=$rc"
+        bad=1
+    fi
+
+    # Рецепт нужен ровно тем, кого мы собираем: у копии его нет и быть не должно.
+    local svc
+    for svc in $SERVICES; do
+        if [ -n "$(source_of "$svc")" ]; then
+            printf '  ✓ %s копируется из источника — рецепт ему не нужен\n' "$svc"
+        elif [ -f "$ROOT/tools/mirror/$svc.Dockerfile" ]; then
+            printf '  ✓ рецепт на месте: tools/mirror/%s.Dockerfile\n' "$svc"
+        else
+            red "  ✗ нет tools/mirror/$svc.Dockerfile — собирать нечем"
+            bad=1
+        fi
+    done
+
+    return $bad
+}
+
+case "${1:---проверить}" in
+    --проверить)
+        echo "Что лежит в зеркале (мимо локального кэша)"
+        verify && green "Зеркало на месте." || fail "Зеркало неполно — смотрите строки выше."
+        ;;
+    --собрать)
+        for s in $SERVICES; do mirror_one "$s" load; done
+        green "Собрано локально. В реестр это не уехало — для этого --опубликовать."
+        ;;
+    --опубликовать)
+        for s in $SERVICES; do mirror_one "$s" push; done
+        green "Зеркало обновлено."
+        ;;
+    # Служебный режим самопроверки: только разбор адресов, без сети и docker.
+    --selftest-pins)
+        for s in $SERVICES; do ref="$(pin "$s")"; check_ref "$s" "$ref"; done
+        ;;
+    --selftest)
+        selftest && green "Скрипт проверен." || fail "Самопроверка не прошла."
+        ;;
+    *)
+        fail "не знаю режима «${1}». Есть: --проверить, --собрать, --опубликовать, --selftest"
+        ;;
+esac

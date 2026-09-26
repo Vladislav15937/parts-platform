@@ -10,9 +10,20 @@
 # compose (`postgres:5432`). С хоста база достаётся тем же exec'ом:
 #   docker compose -p <проект> exec postgres psql -U app -d parts
 # Имя проекта печатает сам verify.sh — оно своё у каждой рабочей копии.
+#
+# Адресов образов здесь нет намеренно: оба приходят из ops/images.yml — одного
+# места на весь проект. 13 сентября 2026 эта проверка упала на выкачке
+# `liquibase/liquibase:4.27` с Docker Hub («connection reset by peer»), при
+# совершенно исправном коде: красный CI без дефекта уводит исполнителя искать
+# причину у себя, а проверяющего — судить по ложному красному (задача 0095).
+# Теперь оба образа тянутся из нашего GHCR, и недоступность Docker Hub прогон
+# миграций не останавливает. Наполняет зеркало tools/mirror-images.sh, задача
+# CI «Зеркало образов» зовёт его сама.
 services:
   postgres:
-    image: postgres:16-alpine
+    extends:
+      file: ../ops/images.yml
+      service: postgres
     environment:
       POSTGRES_DB: parts
       POSTGRES_USER: app
@@ -24,7 +35,9 @@ services:
       retries: 30
 
   liquibase:
-    image: liquibase/liquibase:4.27
+    extends:
+      file: ../ops/images.yml
+      service: liquibase
     depends_on:
       postgres:
         condition: service_healthy
