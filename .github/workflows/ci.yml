@@ -222,6 +222,12 @@ jobs:
 
   migrations:
     name: Миграции на чистой базе
+    # Ждёт зеркало: и база, и Liquibase поднимаются из нашего GHCR. Пока образа
+    # там нет, накату не на чем идти — ровно так 13 сентября 2026 эта задача
+    # упала на выкачке `liquibase/liquibase:4.27` с Docker Hub, при исправном
+    # коде (задача 0095). Порядок тот же, что у «Бэкенда»: зеркало чинит себя
+    # само, и ждать его дешевле, чем разбирать красное без дефекта.
+    needs: mirror
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -235,6 +241,8 @@ jobs:
 
   rollback:
     name: Откат по шагам
+    # Тот же compose, что у «Миграций», — те же два образа из нашего GHCR.
+    needs: mirror
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

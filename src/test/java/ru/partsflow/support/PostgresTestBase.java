@@ -9,6 +9,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
 
 import java.io.File;
 import java.sql.Connection;
@@ -25,8 +26,21 @@ import java.sql.Statement;
 @Testcontainers
 public abstract class PostgresTestBase {
 
+    /**
+     * Образ — из {@code ops/images.yml}, единственного места, где записан адрес.
+     *
+     * <p>Это зеркало в нашем GHCR, побайтовая копия того же {@code postgres:16-alpine}
+     * с Docker Hub (сумма источника стоит в теге). Своё зеркало здесь потому, что
+     * чужой реестр не отвечает в конкретную минуту: 13 сентября 2026 на этом упала
+     * задача «Миграции на чистой базе», а образ никуда не девался.
+     *
+     * <p>{@code asCompatibleSubstituteFor} обязателен: Testcontainers сверяет имя
+     * образа со своим ожидаемым («postgres») и на незнакомом отказывается
+     * запускаться вовсе — молча он его не примет.
+     */
     protected static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            new PostgreSQLContainer<>(DockerImageName.parse(TestImages.image("postgres"))
+                    .asCompatibleSubstituteFor("postgres"))
                     .withDatabaseName("parts")
                     .withUsername("app")
                     .withPassword("app")
