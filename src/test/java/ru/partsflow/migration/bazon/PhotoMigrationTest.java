@@ -13,9 +13,9 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.wait.strategy.Wait;
 import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
+import ru.partsflow.support.TestImages;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -53,22 +53,17 @@ class PhotoMigrationTest extends PostgresTestBase {
      * смотрит в пустой localhost:9000 — локально там оказывается хранилище
      * из compose разработки, а на CI ничего. Ровно на этом прогон и покраснел.
      *
-     * <p>Версия закреплена, и образ взят с quay.io: minio/minio с Docker Hub
-     * убран — анонимный pull отвечает «repository does not exist», а на CI,
-     * где нет локального кэша, это ContainerFetchException. Отсюда красная
-     * main 12 сентября 2026. Почему именно так — в docker-compose.yml.
+     * <p>Адрес образа — в {@code ops/images.yml}, одном месте на весь проект,
+     * и это зеркало в нашем GHCR. Чужие реестры уносили этот образ дважды:
+     * Docker Hub (красная main 12 сентября 2026) и quay.io, где 26 сентября
+     * 2026 пропал весь репозиторий. Подъём идёт через {@code TestImages}:
+     * недоступный образ он называет сразу, вместо семи минут повторных
+     * попыток и «не выполнено за 2 минуты» наверху стека.
      */
-    @SuppressWarnings("resource")
-    private static final GenericContainer<?> MINIO =
-            new GenericContainer<>("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
-                    .withExposedPorts(9000)
-                    .withEnv("MINIO_ROOT_USER", "minioadmin")
-                    .withEnv("MINIO_ROOT_PASSWORD", "minioadmin")
-                    .withCommand("server", "/data")
-                    .waitingFor(Wait.forHttp("/minio/health/live").forPort(9000));
+    private static final GenericContainer<?> MINIO = TestImages.minio();
 
     static {
-        MINIO.start();
+        TestImages.startMinio(MINIO);
     }
 
     @DynamicPropertySource

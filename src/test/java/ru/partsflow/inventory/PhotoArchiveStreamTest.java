@@ -18,9 +18,9 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.wait.strategy.Wait;
 import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
+import ru.partsflow.support.TestImages;
 
 import java.io.ByteArrayInputStream;
 import java.net.URI;
@@ -65,21 +65,13 @@ class PhotoArchiveStreamTest extends PostgresTestBase {
     /** Файл-объяснение внутри архива: он есть только тогда, когда есть о чём. */
     private static final String NOTE = "NE-VSE-SNIMKI.txt";
 
-    // Версия закреплена, и образ взят с quay.io: minio/minio с Docker Hub убран —
-    // анонимный pull отвечает «repository does not exist», а на CI, где нет
-    // локального кэша, это ContainerFetchException. Отсюда красная main
-    // 12 сентября 2026. Почему именно так — в docker-compose.yml, там же версия.
-    @SuppressWarnings("resource")
-    private static final GenericContainer<?> MINIO =
-            new GenericContainer<>("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
-                    .withExposedPorts(9000)
-                    .withEnv("MINIO_ROOT_USER", "minioadmin")
-                    .withEnv("MINIO_ROOT_PASSWORD", "minioadmin")
-                    .withCommand("server", "/data")
-                    .waitingFor(Wait.forHttp("/minio/health/live").forPort(9000));
+    // Образ — из ops/images.yml, единственного места, где записан его адрес,
+    // и это зеркало в нашем GHCR: чужие реестры уносили его дважды. Подъём
+    // через TestImages — он отказывает внятно и сразу, если образа нет.
+    private static final GenericContainer<?> MINIO = TestImages.minio();
 
     static {
-        MINIO.start();
+        TestImages.startMinio(MINIO);
     }
 
     @DynamicPropertySource
