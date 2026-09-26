@@ -248,12 +248,46 @@ copy_one() {  # сервис режим(load|push)
     printf '  ✓ уехало: %s\n' "$ref"
 }
 
+# Лежит ли этот тег в реестре. Спрашиваем протоколом — по той же причине, что
+# и verify(): docker при containerd-хранилище отвечает из локального индекса.
+in_registry() {  # адрес → 0, если лежит
+    local ref="$1" path tag token code
+    path="$(path_of "$ref")"
+    tag="$(tag_of "$ref")"
+    token="$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:${path}:pull" \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))')"
+    code="$(curl -s -o /dev/null -w '%{http_code}' \
+        -H "Authorization: Bearer ${token}" \
+        -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+        "https://ghcr.io/v2/${path}/manifests/${tag}")"
+    [ "$code" = 200 ]
+}
+
 # Развилка одна на весь скрипт: есть источник — копируем, нет — собираем.
+#
+# И КЛАДЁМ ТОЛЬКО ТО, ЧЕГО НЕТ. Задача CI зовёт `--опубликовать`, когда зеркало
+# неполно, — то есть при добавлении ЧЕТВЁРТОГО образа она перекладывала бы
+# и три готовых. Для собираемых это не пустая трата, а подмена: тег остаётся
+# тем же, а образ пересобирается заново, и цифровой отпечаток у него уже другой,
+# — при том что про версию MinIO в ops/CLAUDE.md записано «бит в бит та,
+# на которой прогон был зелёным». Заодно `--опубликовать`, набранный руками,
+# перестаёт быть опасным действием.
 mirror_one() {  # сервис режим(load|push)
-    if [ -n "$(source_of "$1")" ]; then
-        copy_one "$1" "$2"
+    local svc="$1" mode="$2" ref
+    ref="$(pin "$svc")"
+    check_ref "$svc" "$ref"
+
+    if [ "$mode" = push ] && [ -z "${MIRROR_FORCE:-}" ] && in_registry "$ref"; then
+        step "$svc: $ref"
+        printf '  ✓ уже в реестре — не перекладываем\n'
+        printf '    Перезаписать тот же тег: MIRROR_FORCE=1 tools/mirror-images.sh --опубликовать\n'
+        return 0
+    fi
+
+    if [ -n "$(source_of "$svc")" ]; then
+        copy_one "$svc" "$mode"
     else
-        build_one "$1" "$2"
+        build_one "$svc" "$mode"
     fi
 }
 
