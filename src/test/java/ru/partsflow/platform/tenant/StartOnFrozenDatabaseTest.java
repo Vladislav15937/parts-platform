@@ -210,6 +210,74 @@ class StartOnFrozenDatabaseTest extends PostgresTestBase {
         }
     }
 
+    /**
+     * Третье состояние пробы записи: спросить не вышло (задача 0200).
+     *
+     * <p>Состояний у {@code DatabaseWriteProbe} три, и покрыты были два —
+     * «запись проходит» и «заморожена». На {@code UNKNOWN} не было ни одного
+     * утверждения: слово «не проверена» встречалось в тестах ровно один раз,
+     * и то в комментарии. Между тем состояние достижимое и названное
+     * основанием прямо в коде пробы («нет таблицы или нет прав — ответ
+     * „не проверена“ с причиной, а не тихое „проходит“»): права на
+     * {@code public.shedlock} рабочей роли выдаёт {@code ops/create-roles.sh},
+     * то есть их отсутствие — это ячейка между заведением роли и накатом,
+     * на котором проект уже спотыкался (ветка {@code !reachable} проверки
+     * {@code journals}).
+     *
+     * <p>Проверяется здесь по той же причине, по которой заведён класс:
+     * права снимаются у <b>рабочей роли этой сборки</b>, а роль и база
+     * у остальных контекстов прогона общие.
+     *
+     * <p><b>Зелёный свет обязан остаться зелёным</b> — это решение волны
+     * 0196, и потерять его молча нельзя: {@code ops/switch-build.sh} ждёт
+     * в теле {@code "ready":true}, а healthcheck боевого compose ищет ту же
+     * строку. Проверка, краснеющая от того, что она чего-то не смогла
+     * спросить, остановила бы исправную выкладку.
+     */
+    @Test
+    @DisplayName("Прав на пробу нет: готовность говорит «не проверена» и остаётся зелёной")
+    void writeProbeWithoutRightsIsNotChecked() throws Exception {
+        ConfigurableApplicationContext app = start(ROLE);
+        try {
+            int port = ((WebServerApplicationContext) app).getWebServer().getPort();
+
+            // Право снимается ПОСЛЕ старта намеренно: пробу зовут на каждый
+            // опрос готовности, а стартовые шаги ходят в ту же таблицу
+            // за замком — сняв его заранее, мы мерили бы падение старта,
+            // а не ответ пробы.
+            setProbeRight(false);
+
+            HttpResponse<String> readiness = get(port, "/actuator/readiness");
+            JsonNode body = json.readTree(readiness.body());
+
+            assertThat(detail(body, "writes"))
+                    .as("проба не смогла спросить базу, а готовность говорит про "
+                            + "запись что-то другое: «проходит» здесь — это незнание, "
+                            + "выданное за здоровье (и ровно так же соврёт метрика, "
+                            + "если вместо NaN отдать ноль), а «заморожена» отправит "
+                            + "человека искать брошенную сборку там, где её нет. "
+                            + "Ответ: %s", readiness.body())
+                    .contains("Запись не проверена");
+            assertThat(detail(body, "writes"))
+                    .as("причина не названа: «не проверена» без неё не говорит, "
+                            + "чинить права, накат или саму базу. Ответ: %s",
+                            readiness.body())
+                    .contains("shedlock");
+
+            assertThat(ok(body, "writes"))
+                    .as("невыясненная запись покрасила готовность в красное: "
+                            + "switch-build.sh ждёт ready:true, healthcheck боевого "
+                            + "compose ищет ту же строку — то есть ячейка, у которой "
+                            + "не выданы права на одну служебную таблицу, перестала бы "
+                            + "и переключаться, и считаться живой. Задача волны — "
+                            + "назвать состояние, а не погасить зелёный свет")
+                    .isTrue();
+        } finally {
+            setProbeRight(true);
+            app.close();
+        }
+    }
+
     @Test
     @DisplayName("Незамороженная база: права рабочей роли выдаются, как и раньше")
     void grantsStillApplyWhenNotFrozen() throws Exception {
@@ -307,6 +375,26 @@ class StartOnFrozenDatabaseTest extends PostgresTestBase {
             statement.execute("GRANT SELECT ON public.tenant_registry TO " + ROLE);
             statement.execute(
                     "GRANT SELECT, INSERT, UPDATE, DELETE ON public.shedlock TO " + ROLE);
+        }
+    }
+
+    /**
+     * Право рабочей роли на пробу записи — то самое, что выдаёт
+     * {@code ops/create-roles.sh} строкой про {@code public.shedlock}.
+     *
+     * <p>Снимается только {@code UPDATE}: проба — это
+     * {@code UPDATE … WHERE false}, и отказ приходит кодом 42501, то есть
+     * не заморозкой. Накат прав при старте эту таблицу не трогает
+     * ({@code SchemaGrants} про неё не знает), поэтому снятое право так
+     * и остаётся снятым до конца проверки.
+     */
+    private static void setProbeRight(boolean granted) throws Exception {
+        try (Connection connection = cellConnection(POSTGRES.getUsername(),
+                POSTGRES.getPassword());
+             Statement statement = connection.createStatement()) {
+            statement.execute(granted
+                    ? "GRANT UPDATE ON public.shedlock TO " + ROLE
+                    : "REVOKE UPDATE ON public.shedlock FROM " + ROLE);
         }
     }
 

@@ -44,12 +44,24 @@ class MetricsEndpointTest extends PostgresTestBase {
         // на /actuator 404, а порт приложения не опубликован.
         mvc.perform(get("/actuator/prometheus"))
                 .andExpect(status().isOk())
-                // Именно эти четыре: на них вешается тревога, и молча
+                // Именно эти пять: на них вешается тревога, и молча
                 // исчезнувшая метрика неотличима от исправной системы.
+                //
+                // Пятая — про запись в базе (задача 0196). Числом называют
+                // брошенную сборку по имени:
+                // partsflow_database_write_frozen{build="green"} == 1, метку
+                // ставит сбор метрик. Правила на этот ряд пока нет ни одного,
+                // и тем важнее, что ряд доезжает наружу: пропади он — правило,
+                // когда его заведут, будет молчать на исправной системе.
+                // Значение здесь 0 («запись проходит»), а проверяется имя:
+                // тесты значений берут SimpleMeterRegistry и до отдачи
+                // не доходят — ровно то, чем этот класс и заведён.
                 .andExpect(content().string(org.hamcrest.Matchers.allOf(
                         org.hamcrest.Matchers.containsString("partsflow_outbox_pending"),
                         org.hamcrest.Matchers.containsString("partsflow_outbox_oldest_seconds"),
                         org.hamcrest.Matchers.containsString("partsflow_deadletter_unresolved"),
-                        org.hamcrest.Matchers.containsString("partsflow_deadletter_attention"))));
+                        org.hamcrest.Matchers.containsString("partsflow_deadletter_attention"),
+                        org.hamcrest.Matchers.containsString(
+                                "partsflow_database_write_frozen"))));
     }
 }
