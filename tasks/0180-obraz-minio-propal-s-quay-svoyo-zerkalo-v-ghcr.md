@@ -192,9 +192,18 @@ $C exec minio minio --version   # обязано быть RELEASE.2025-09-07T16-
 пока смена не проверена, — иначе дороги назад не останется вовсе.
 
 ```bash
-git checkout <прежний SHA> -- docker-compose.prod.yml ops/images.yml
+git show <прежний SHA>:docker-compose.prod.yml > docker-compose.prod.yml
+git show <прежний SHA>:ops/images.yml > ops/images.yml
 $C up -d --no-deps minio
 ```
+
+**`git show`, а не `git checkout`, и это не вкусовщина.** Правило
+установлено живым инцидентом и записано в `ops/CLAUDE.md`: `checkout`
+на этой машине трогает не только названные файлы — он отказывается работать
+или сносит **местную** правку `ops/active-build.caddy` (имя сборки под
+трафиком правится на самой ячейке и в репозитории другое), а переписав файл
+заново, меняет inode и пересоздаёт терминатор. `git show` пишет ровно два
+названных файла и ничего больше.
 
 ## Публичность пакета — пункт 7
 

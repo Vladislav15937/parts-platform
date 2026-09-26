@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -60,6 +61,18 @@ TESTS = (
 # Мёртвые адреса: если такой снова появится в настройке или в коде, это
 # возврат к тому, из-за чего всё случилось.
 DEAD = ("quay.io/minio/", "minio/minio:", "minio/mc:")
+
+# Все файлы, которые сторож читает. Список один на два места намеренно: по нему
+# идёт и проверка мёртвых адресов, и сборка временного дерева в самопроверке.
+# Два списка одного и того же — ровно тот дефект, который эта задача и чинит.
+LOOKED = (
+    PIN,
+    *COMPOSES,
+    *TESTS,
+    "tools/mirror/minio.Dockerfile",
+    "tools/mirror/mc.Dockerfile",
+    "src/test/java/ru/partsflow/support/TestImages.java",
+)
 
 RED = "\033[1;31m%s\033[0m"
 GREEN = "\033[1;32m%s\033[0m"
@@ -164,13 +177,7 @@ def check(root: Path) -> int:
 
     # Мёртвые адреса в настройках и в коде. Документы и задачи — мимо:
     # там это история, и запрещать её значит запрещать объяснение.
-    looked = list(COMPOSES) + list(TESTS) + [
-        PIN,
-        "tools/mirror/minio.Dockerfile",
-        "tools/mirror/mc.Dockerfile",
-        "src/test/java/ru/partsflow/support/TestImages.java",
-    ]
-    for name in looked:
+    for name in LOOKED:
         path = root / name
         if not path.is_file():
             continue
@@ -199,6 +206,29 @@ def check(root: Path) -> int:
 # работать: вернули плавающий тег, вернули чужой реестр, вернули копию адреса
 # в compose, вернули копию в тест. Настоящее дерево при этом обязано проходить:
 # сторож, краснеющий на исправном дереве, отключат в первый же день.
+def _plant(dst: Path) -> None:
+    """Собрать временное дерево из тех файлов, которые сторож читает.
+
+    **Не `cp -R` корня репозитория, и это цена живого отказа.** Рядом с рабочим
+    каталогом лежат `.git`, `node_modules`, `target/` и — на машине
+    разработчика — сотня брошенных рабочих деревьев на десятки гигабайт
+    (`tasks/0171`). Копирование корня шло там минутами и валилось нечитаемым
+    traceback'ом (`CalledProcessError` либо `FileNotFoundError`, смотря
+    по состоянию дерева) вместо отчёта с ✓/✗: самопроверка не работала ровно
+    там, где её запускают руками. У себя это не воспроизводилось — свежее
+    изолированное дерево маленькое, — и на раннере тоже, потому что чекаут
+    чистый. Тот самый класс «работает у меня, а не в среде, для которой
+    писано», который эта задача и чинит.
+
+    Восемь файлов копируются по именам, поэтому время самопроверки больше
+    не зависит от того, что лежит рядом.
+    """
+    for rel in LOOKED:
+        target = dst / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / rel, target)
+
+
 def selftest() -> int:
     bad = 0
     print("Самопроверка tools/image-pin-guard.py")
@@ -231,8 +261,7 @@ def selftest() -> int:
         )
         for name, mangle, target, expect in cases:
             fake = Path(tmp) / name.replace(" ", "-")
-            subprocess.run(["cp", "-R", str(ROOT), str(fake)], check=True,
-                           capture_output=True)
+            _plant(fake)
             path = fake / target
             path.write_text(mangle(path.read_text(encoding="utf-8")), encoding="utf-8")
             rc, out = probe(fake)
@@ -253,8 +282,7 @@ def selftest() -> int:
              "литералом"),
         ):
             fake = Path(tmp) / ("copy-" + Path(target).name)
-            subprocess.run(["cp", "-R", str(ROOT), str(fake)], check=True,
-                           capture_output=True)
+            _plant(fake)
             path = fake / target
             text = path.read_text(encoding="utf-8")
             if needle not in text:
