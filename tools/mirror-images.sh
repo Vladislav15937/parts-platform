@@ -149,6 +149,11 @@ build_one() {  # сервис режим(load|push)
 
 verify() {
     local svc ref tag path token code bad=0
+    # НЕ local: уборка висит на RETURN, а к тому моменту область видимости
+    # функции уже закрыта — `set -u` свалился бы в самой уборке, поверх
+    # настоящего ответа. Ровно на этом спотыкалась самопроверка ниже.
+    TMPJSON="$(mktemp)"
+    trap 'rm -f "$TMPJSON"' RETURN
     for svc in $SERVICES; do
         ref="$(pin "$svc")"
         check_ref "$ref"
@@ -156,48 +161,61 @@ verify() {
         path="$(path_of "$ref")"
         step "$svc: $ref"
 
-        # `docker manifest inspect` всегда идёт в реестр и НЕ смотрит
-        # в локальный кэш — именно этим 26 сентября и установили, что образа
-        # больше нет, когда прогон у разработчика был зелёным.
-        if docker manifest inspect "$ref" >/tmp/mirror-manifest.$$ 2>/tmp/mirror-err.$$; then
-            python3 - /tmp/mirror-manifest.$$ <<'PY'
+        # СПРАШИВАЕМ ПРОТОКОЛОМ, А НЕ DOCKER'ОМ, и это не педантичность.
+        # `docker manifest inspect` и `docker buildx imagetools inspect` при
+        # containerd-хранилище образов отвечают из ЛОКАЛЬНОГО индекса: образ,
+        # собранный тут же (`--собрать`), выглядит у них как лежащий в реестре.
+        # Проверено 26 сентября 2026 — оба показали полный индекс для тега,
+        # который в реестр никогда не уезжал. То есть проверка «мимо кэша»,
+        # сделанная docker'ом, повторила бы ровно ту ловушку, из-за которой
+        # поломку не замечали двенадцать месяцев. (На мёртвом чужом теге они
+        # в реестр всё же идут — локально его нет, — и этим можно обмануться.)
+        #
+        # Анонимный токен отвечает заодно на второй вопрос: тянется ли пакет
+        # БЕЗ входа в реестр. Приватный означает токен у прогона, у
+        # разработчика и в `.env` ячейки — три новых секрета вокруг образа,
+        # в котором нет ничего нашего.
+        token="$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:${path}:pull" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))')"
+        code="$(curl -s -o "$TMPJSON" -w '%{http_code}' \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://ghcr.io/v2/${path}/manifests/${tag}")"
+        case "$code" in
+            200)
+                printf '  ✓ лежит в реестре и тянется без входа\n'
+                python3 - "$TMPJSON" <<'PY' || exit 1
 import json, sys
 d = json.load(open(sys.argv[1]))
-ms = d.get('manifests') or []
-if ms:
-    for m in ms:
-        p = m.get('platform') or {}
-        if p.get('architecture') == 'unknown':
-            continue
-        print(f"  ✓ {p.get('os')}/{p.get('architecture')} — {m.get('digest')}")
-else:
-    print("  ! манифест одиночный: архитектура одна, а нужны amd64 (CI, ячейка) и arm64 (разработка)")
+# Слои подписей (attestation) идут платформой unknown/unknown — это не
+# архитектура, и считать их за неё значит принять однорукий образ за годный.
+real = [m for m in (d.get('manifests') or [])
+        if (m.get('platform') or {}).get('architecture') not in (None, 'unknown')]
+for m in real:
+    p = m['platform']
+    print(f"  ✓ {p.get('os')}/{p.get('architecture')} — {m.get('digest')}")
+need = {'amd64', 'arm64'}
+have = {(m['platform'] or {}).get('architecture') for m in real}
+if not need <= have:
+    print(f"  ✗ не хватает архитектур: {', '.join(sorted(need - have))} "
+          f"(amd64 — прогон и ячейка, arm64 — разработка)")
+    sys.exit(1)
 PY
-        else
-            red "  ✗ образа в реестре нет: $ref"
-            sed 's/^/      /' /tmp/mirror-err.$$ >&2
-            red "      Положить обратно: tools/mirror-images.sh --опубликовать"
-            bad=1
-        fi
-        rm -f /tmp/mirror-manifest.$$ /tmp/mirror-err.$$
-
-        # Публичность спрашивается у реестра, а не предполагается: приватный
-        # пакет означает токен у CI, у разработчика и в .env ячейки — три
-        # новых секрета вокруг образа, в котором нет ничего секретного.
-        token="$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:$path:pull" \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))')"
-        code="$(curl -s -o /dev/null -w '%{http_code}' \
-            -H "Authorization: Bearer $token" \
-            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
-            "https://ghcr.io/v2/$path/manifests/$tag")"
-        if [ "$code" = 200 ]; then
-            printf '  ✓ пакет публичный: тянется без входа в реестр\n'
-        else
-            red "  ✗ без входа в реестр не тянется (ответ $code) — пакет приватный"
-            red "      Тогда токен нужен CI, разработчику и ячейке. Публичность"
-            red "      переключается в настройках пакета: Packages → parts-platform/$svc → Change visibility."
-            bad=1
-        fi
+                ;;
+            404)
+                red "  ✗ в реестре нет: ${ref}"
+                red "      Положить: tools/mirror-images.sh --опубликовать"
+                bad=1 ;;
+            401|403)
+                red "  ✗ анонимно не тянется (ответ ${code}) — пакет приватный"
+                red "      Тогда токен понадобится прогону, разработчику и ячейке,"
+                red "      то есть новый секрет в .env (и строка в ops/config-guard.sh)."
+                red "      Публичность: Packages → parts-platform/${svc} → Change visibility."
+                bad=1 ;;
+            *)
+                red "  ✗ реестр ответил ${code} на ${ref}"
+                bad=1 ;;
+        esac
     done
     return $bad
 }
