@@ -195,7 +195,11 @@ management:
         # Не перечислив адрес здесь, получишь 401, как от несуществующего:
         # ровно так и вышло однажды с метриками — конфигурация выглядела
         # рабочей, а отдавать было нечем.
-        include: health,info,prometheus,metrics,readiness
+        # provisioning — включён ли управляющий контур и с какого момента
+        # (ProvisioningStateEndpoint). Не перечислив адрес здесь, получишь 404
+        # там, где ждёшь признак, — и прочитаешь это как «сборка старше
+        # проверки», то есть молча останешься без ответа.
+        include: health,info,prometheus,metrics,readiness,provisioning
   endpoint:
     health:
       show-details: when-authorized

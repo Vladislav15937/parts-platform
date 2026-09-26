@@ -43,6 +43,17 @@ public class ProvisioningController {
     /** Тот же секрет, что в теле POST: заголовок нужен только там, где тела нет. */
     static final String TOKEN_HEADER = "X-Provisioning-Token";
 
+    /**
+     * Что отвечает выключенный контур — одной строкой на всё приложение.
+     *
+     * <p>Её же показывает признак состояния
+     * ({@code ru.partsflow.platform.health.ProvisioningStateEndpoint}): два
+     * написания одного смысла разъехались бы молча, и оператор читал бы
+     * «выключен» там, где отказ говорит другое.
+     */
+    public static final String DISABLED =
+            "Управляющий контур выключен: app.provisioning-token не задан";
+
     private final TenantProvisioning provisioning;
     private final TenantMigrations migrations;
     private final ru.partsflow.platform.config.TenantLoadMetrics tenantLoad;
@@ -130,15 +141,31 @@ public class ProvisioningController {
     }
 
     /**
+     * Включён ли управляющий контур — тот же вопрос, на который отвечает
+     * первая строка {@link #requireToken}.
+     *
+     * <p>Спрашивают его снаружи (признак состояния для оператора и шага
+     * выкладки), и посчитан он поэтому <b>один раз</b>: признак, считающий
+     * «включён» своим способом, однажды разошёлся бы с самой проверкой —
+     * и соврал бы ровно в ту сторону, в которую врать нельзя, объявив
+     * выключенным работающий контур.
+     *
+     * <p>Сам секрет наружу не отдаётся ни в каком виде: ни целиком,
+     * ни длиной, ни началом. Ответ здесь — одно «да» или «нет».
+     */
+    public boolean enabled() {
+        return token != null && !token.isBlank();
+    }
+
+    /**
      * Сверяет секрет за постоянное время.
      *
      * <p>Обычное {@code equals} прекращает сравнивать на первом несовпавшем
      * байте, и по времени ответа секрет подбирается посимвольно.
      */
     private void requireToken(String presented) {
-        if (token == null || token.isBlank()) {
-            throw new AccessDeniedException(
-                    "Управляющий контур выключен: app.provisioning-token не задан");
+        if (!enabled()) {
+            throw new AccessDeniedException(DISABLED);
         }
         if (presented == null || !MessageDigest.isEqual(
                 token.getBytes(StandardCharsets.UTF_8),
