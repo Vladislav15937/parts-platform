@@ -465,6 +465,7 @@ ops/deploy.sh --tag <SHA> --migrations «только миграции»    # с
 ops/deploy.sh --tag <прежний SHA> --migrate-with none      # откат приложения: база новее образа
 ops/deploy.sh --abort                                       # доделать откат оборвавшейся выкладки
 ops/deploy.sh --drop-previous                               # убрать прежнюю базу, когда её сменщицу забэкапили
+ops/deploy.sh --databases                                   # какие базы лежат в ячейке и кто они
 ops/deploy.sh --tag <SHA> --dry-run                         # напечатать шаги
 ```
 
