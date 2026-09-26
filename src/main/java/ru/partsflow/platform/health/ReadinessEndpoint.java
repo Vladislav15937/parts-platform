@@ -93,6 +93,7 @@ public class ReadinessEndpoint {
     private final TenantMigrations migrations;
     private final CatalogSchemaMigrator catalog;
     private final JournalProtection journals;
+    private final DatabaseWriteProbe writeProbe;
 
     /**
      * Лениво: список веб-эндпоинтов собирает тот же разборщик, который видит
@@ -103,11 +104,13 @@ public class ReadinessEndpoint {
     public ReadinessEndpoint(JdbcTemplate jdbc, TenantMigrations migrations,
                              CatalogSchemaMigrator catalog,
                              JournalProtection journals,
+                             DatabaseWriteProbe writeProbe,
                              ObjectProvider<WebEndpointsSupplier> webEndpoints) {
         this.jdbc = jdbc;
         this.migrations = migrations;
         this.catalog = catalog;
         this.journals = journals;
+        this.writeProbe = writeProbe;
         this.webEndpoints = webEndpoints;
     }
 
@@ -121,7 +124,8 @@ public class ReadinessEndpoint {
      */
     @ReadOperation
     public WebEndpointResponse<Readiness> readiness() {
-        List<Check> checks = List.of(database(), catalog(), schemas(), journals(), metrics());
+        List<Check> checks = List.of(database(), catalog(), schemas(), journals(),
+                writes(), metrics());
         boolean ready = checks.stream().allMatch(Check::ok);
         return new WebEndpointResponse<>(new Readiness(ready, checks),
                 ready ? WebEndpointResponse.STATUS_OK
@@ -250,6 +254,58 @@ public class ReadinessEndpoint {
                         .formatted(status.writable(), status.role(), status.schema())
                         + "Включается разделение ролей — ops/create-roles.sh и переменные "
                         + "DB_USER, APP_DDL_*, APP_RUNTIME_ROLE");
+    }
+
+    /**
+     * Пройдёт ли в этой базе запись — и почему зелёный свет здесь не гасится.
+     *
+     * <p><b>Зачем вопрос появился.</b> Сборка на замороженной базе отвечала
+     * пятью зелёными строками и {@code ready:true}, пока релей в это же время
+     * сыпал в лог {@code cannot execute UPDATE in a read-only transaction}.
+     * Ни одна проверка не врала — вопроса о записи просто не было ни у одной:
+     * {@code database} это {@code SELECT 1}, а {@code journals} спрашивает
+     * права, которых заморозка не меняет. Брошенная на слепке сборка поэтому
+     * выглядела здоровой сколько угодно долго (задача 0196).
+     *
+     * <p><b>Ответ этой проверки никогда не делает готовность красной, и это
+     * решение исполнителя с доводом.</b> Заморозка законна как минимум
+     * в трёх состояниях, и все три проверены живыми прогонами: копия во время
+     * выкладки (её морозят до конца самопроверок, а трафик переводят уже
+     * после), старая сборка, обязанная подниматься на чтение (задача 0122,
+     * решение владельца от 18 сентября 2026), и прежняя база, оставшаяся
+     * рядом слепком. Ни одно из трёх не означает «эта сборка не может
+     * обслуживать людей»: читают на ней как раньше.
+     *
+     * <p>Цена красного здесь не теоретическая, а немедленная и двойная.
+     * {@code ops/switch-build.sh} ждёт в теле {@code "ready":true} и без него
+     * трафик не переводит — то есть <b>исправная выкладка не прошла бы
+     * никогда</b>, потому что копию морозят как раз перед переключением.
+     * И healthcheck боевого compose ищет в теле ту же строку, значит docker
+     * объявил бы контейнер нездоровым, а выкладка не дождалась бы готовности.
+     * Проверка, которая краснеет на исправной системе, будет выключена
+     * первой — это правило здесь уже оплачено снятым флагом «старт закончен».
+     *
+     * <p><b>Признак, по которому шаг выкладки переводит трафик, поэтому
+     * не тронут.</b> Заморозку на переключении сторожит один
+     * {@code ops/switch-build.sh} (задача 0112), и второго места для этого
+     * решения не появилось: задача называет смену признака вопросом владельца
+     * продукта — признак не меняется.
+     *
+     * <p>Что проверка делает вместо этого — <b>называет состояние словами</b>,
+     * тремя разными. Числом то же самое отдаёт
+     * {@link DatabaseWriteProbe#FROZEN_GAUGE}, и по нему брошенную сборку можно
+     * назвать по имени: метку {@code build} ставит сбор метрик.
+     */
+    private Check writes() {
+        try {
+            return new Check("writes", true, writeProbe.probe().detail());
+        } catch (RuntimeException e) {
+            // Проба ответ собирает сама и наружу не бросает; это последний
+            // рубеж, чтобы неожиданность в ней не уронила весь ответ
+            // готовности — тогда выкладка встала бы на пустом месте.
+            return new Check("writes", true,
+                    "Запись не проверена: " + TenantMigrations.rootMessage(e));
+        }
     }
 
     /**
