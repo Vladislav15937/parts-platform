@@ -84,6 +84,25 @@ LOOKED = (
     "src/test/java/ru/partsflow/support/TestImages.java",
 )
 
+# Переехавший файл списка — одно сообщение на обе половины сторожа, и это
+# не косметика (задача 0181). До неё половины расходились: `_plant()` падал
+# `FileNotFoundError`, а `check()` такой файл ТИХО ПРОПУСКАЛ, — то есть сторож
+# молчал ровно на том изменении, которое делает его слепым. Переименовали тест
+# или рецепт зеркала — копия адреса в нём больше не проверяется никем, а прогон
+# при этом зелёный. Именно в этом единственном случае копия адреса и могла
+# уехать незамеченной, так что молчать здесь нельзя ни одной половине.
+GONE_MSG = "файл из списка не найден, сторож неполон"
+
+
+class GuardIncomplete(RuntimeError):
+    """Список сторожа разошёлся с деревом: собирать самопроверку не из чего."""
+
+
+def looked_missing(root: Path) -> list[str]:
+    """Файлы списка, которых в дереве нет. Пусто — список и дерево сходятся."""
+    return [rel for rel in LOOKED if not (root / rel).is_file()]
+
+
 # --- перебор образов ---------------------------------------------------------
 #
 # Чужой образ, не названный здесь, — красное. Не потому, что чужой плох,
@@ -307,6 +326,14 @@ def check(root: Path) -> int:
         red(f"  ✗ {PIN} — нет вовсе, а это единственное место, где записан адрес образа")
         return 1
 
+    # Сперва — сходится ли список сторожа с деревом. Молчаливый пропуск здесь
+    # означает сторожа, ослепшего от переименования файла (см. GONE_MSG).
+    for rel in looked_missing(root):
+        red(f"  ✗ {rel} — файла нет, а он в списке сторожа: {GONE_MSG}")
+        red("      Файл переехал или переименован — поправьте LOOKED в этом стороже,")
+        red("      иначе копию адреса в нём не проверяет больше никто.")
+        bad = 1
+
     images = pin_images(root)
     sources = pin_sources(root)
     for service in MIRRORED:
@@ -358,9 +385,7 @@ def check(root: Path) -> int:
     for name in COMPOSES:
         path = root / name
         if not path.is_file():
-            red(f"  ✗ {name} — нет вовсе")
-            bad = 1
-            continue
+            continue  # о пропавшем файле списка сказано выше, одним сообщением
         text = path.read_text(encoding="utf-8")
         if PIN not in text:
             red(f"  ✗ {name} не включает {PIN} — образ он берёт откуда-то ещё")
@@ -380,9 +405,7 @@ def check(root: Path) -> int:
     for name in TESTS:
         path = root / name
         if not path.is_file():
-            red(f"  ✗ {name} — нет вовсе")
-            bad = 1
-            continue
+            continue  # о пропавшем файле списка сказано выше, одним сообщением
         text = path.read_text(encoding="utf-8")
         literal = re.search(r'"(?:ghcr\.io|quay\.io|docker\.io)/\S+"', text)
         if literal:
@@ -400,7 +423,7 @@ def check(root: Path) -> int:
     for name in LOOKED:
         path = root / name
         if not path.is_file():
-            continue
+            continue  # о пропавшем файле списка сказано выше, одним сообщением
         # Комментарии — мимо: в них мёртвый адрес объясняет историю («образ
         # убрали оттуда-то»), и запрещать её значит запрещать объяснение.
         # Сторож смотрит настроечные строки — те, по которым образ ТЯНУТ.
@@ -443,9 +466,18 @@ def _plant(dst: Path) -> None:
     чистый. Тот самый класс «работает у меня, а не в среде, для которой
     писано», который эта задача и чинит.
 
-    Восемь файлов копируются по именам, поэтому время самопроверки больше
-    не зависит от того, что лежит рядом.
+    Файлы списка копируются по именам, поэтому время самопроверки больше
+    не зависит от того, что лежит рядом. Сколько их — не написано здесь
+    словом намеренно: написанное руками число разошлось со списком в первый
+    же день (`tasks/0181`), поэтому его печатает самопроверка из `len(LOOKED)`.
+
+    Переехавший файл — не `FileNotFoundError`, а `GuardIncomplete` теми же
+    словами, какими о нём говорит `check()`: половины сторожа обязаны вести
+    себя на этом одинаково.
     """
+    gone = looked_missing(ROOT)
+    if gone:
+        raise GuardIncomplete(f"{GONE_MSG}: {', '.join(gone)}")
     for rel in LOOKED:
         target = dst / rel
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -472,6 +504,16 @@ def selftest() -> int:
         red("  ✗ настоящее дерево не проходит — смотрите прогон без --selftest")
         print("\n".join("      " + line for line in out.splitlines()), file=sys.stderr)
         bad = 1
+
+    # Число файлов печатается из самого списка, а не пишется словом: написанное
+    # руками («восемь») разошлось со списком (их девять) в первый же день —
+    # `tasks/0181`. По такому числу потом считают, и сверять его должна машина.
+    gone = looked_missing(ROOT)
+    if gone:
+        red(f"  ✗ {GONE_MSG}: {', '.join(gone)}")
+        red("      Дерево самопроверки собирают из этого списка — собирать не из чего.")
+        return 1
+    print(f"  ✓ список сторожа полон: файлов в нём {len(LOOKED)}")
 
     with tempfile.TemporaryDirectory() as tmp:
         cases = (
@@ -536,12 +578,33 @@ def selftest() -> int:
                 red(f"  ✗ {label} в {target} обязано валить сторожа словами «{expect}»")
                 bad = 1
 
+        # Седьмой случай — не подделка текста, а ПЕРЕЕХАВШИЙ файл, и он про саму
+        # задачу 0181: до неё сторож проходил на этом зелёным (`check()` тихо
+        # пропускал), а самопроверка падала traceback'ом. Дефект возвращается
+        # переименованием, потому что установить это можно только попыткой.
+        fake = Path(tmp) / "file-moved"
+        _plant(fake)
+        moved = fake / "tools/mirror/mc.Dockerfile"
+        moved.rename(moved.parent / "mc.Dockerfile.moved")
+        rc, out = probe(fake)
+        if rc != 0 and GONE_MSG in out:
+            print("  ✓ переехавший файл списка — красное, и сказано, что сторож неполон")
+        else:
+            red(f"  ✗ переехавший файл списка обязан валить сторожа словами «{GONE_MSG}»")
+            bad = 1
+
     return bad
 
 
 def main() -> int:
     if "--selftest" in sys.argv:
-        rc = selftest()
+        try:
+            rc = selftest()
+        except GuardIncomplete as e:
+            # Внятным сообщением, а не traceback'ом: самопроверка, падающая
+            # стеком, не работает ровно там, где её запускают руками.
+            red(f"  ✗ {e}")
+            rc = 1
         print(GREEN % "Сторож проверен." if rc == 0 else RED % "Самопроверка не прошла.")
         return rc
 
