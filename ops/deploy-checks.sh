@@ -291,7 +291,7 @@ check_smoke() {
 # закрытым.
 #
 # Код возврата намеренно НЕ красит выкладку и НЕ попадает в FAILED.
-check_control_plane_line() {
+report_control_plane() {
     local out code
     out=$(CONTROL_PLANE_BUILD="$BUILD" bash "$CONTROL_PLANE" 2>&1); code=$?
     printf '%s\n' "$out"
@@ -515,7 +515,7 @@ EOF
     FAILED=""
     # Без подстановки команды: она подоболочка, и FAILED из неё не доехал бы —
     # то есть главное утверждение («выкладку не красит») не проверялось бы.
-    check_control_plane_line > "$stub.out" 2>&1; local cp_rc=$?
+    report_control_plane > "$stub.out" 2>&1; local cp_rc=$?
     out=$(cat "$stub.out")
     if [ "$cp_rc" != 0 ]; then
         red "  ✗ 6. включённый контур обязан НЕ красить выкладку, а код возврата ${cp_rc}"
@@ -541,7 +541,7 @@ EOF
     # «не красит» приучила бы её не читать.
     printf '#!/usr/bin/env bash\necho "  ✓ контур выключен"\nexit 0\n' > "$stub"
     FAILED=""
-    check_control_plane_line > "$stub.out" 2>&1
+    report_control_plane > "$stub.out" 2>&1
     out=$(cat "$stub.out")
     case "$out" in
         *"не красит"*)
@@ -617,11 +617,17 @@ check_journals
 check_schemas
 check_feeds
 check_smoke
-check_control_plane_line
+report_control_plane
 
 if [ -n "$FAILED" ]; then
     red "Самопроверки не прошли: ${FAILED%, }"
     red "Выкладка красная. Трафик возвращает ops/deploy.sh; вручную — ops/switch-build.sh <прежняя>"
     exit 1
 fi
-green "Все пять самопроверок пройдены"
+# Пять — это ровно те, что КРАСЯТ выкладку. Состояние управляющего контура
+# напечатано строкой выше и в счёт не идёт: оно ничего не гейтит, и назвать
+# его шестой самопроверкой значило бы обещать запрет, которого нет.
+# Но и молчать про него в итоге нельзя: человек прочитал шесть строк, а итог
+# говорил про пять — сообщение, которому нельзя верить, хуже отсутствующего
+# (находка разбора PR #290).
+green "Все пять самопроверок пройдены — и рядом сообщение о управляющем контуре: оно выкладку не красит"
