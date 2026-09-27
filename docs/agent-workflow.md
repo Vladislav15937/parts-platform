@@ -349,7 +349,7 @@ origin/main..HEAD` перед пушем» дирижёром соблюдала
 4. Правка.
 5. **Полный набор**: `./mvnw -o test`, `cd frontend && npx vitest run`,
    `./db/check-changelog.py`, `./tools/endpoint-coverage.py`,
-   `./tools/test-schema-guard.py`. Первый идёт
+   `./tools/test-schema-guard.py`, `./tools/date-mine-guard.py`. Первый идёт
    десять минут и нужен целиком: правка в одном модуле ломает соседний
    регулярно — так нашлась склейка `ENDAS supply`, которую глаза пропустили.
 6. **Живой прогон**, если правку видит человек: `./tools/dev-up.sh`, потом

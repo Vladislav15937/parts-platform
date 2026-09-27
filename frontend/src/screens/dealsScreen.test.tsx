@@ -73,8 +73,12 @@ describe('список сделок продавца', () => {
   });
 
   it('у выданной сделки срока нет вовсе', async () => {
+    // Срок от «сейчас», хотя выданной сделке он и не считается: зашитое число
+    // проверку не роняет, но читается следующим как разрешённая форма — а она
+    // и уронила `main` 18 сентября 2026.
+    const until = new Date(Date.now() + 5 * 24 * 3600 * 1000);
     stubApi({
-      items: [row({ status: 'ISSUED', reservedUntil: '2026-09-12T20:59:59Z' })],
+      items: [row({ status: 'ISSUED', reservedUntil: until.toISOString() })],
       total: 1,
     });
 

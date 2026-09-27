@@ -22,7 +22,11 @@ describe('панель справочников', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).includes('/api/intake/reference')) {
         return json({
-          loadedAt: '2026-08-09T02:00:00Z',
+          // От «сейчас»: панель подписывает справочник «свежие» или «устарели»
+          // по разнице с ним, и с зашитым числом она с 10 августа 2026
+          // показывала «устарели» — то есть фикстура перестала изображать
+          // то состояние, в котором панель проверяют.
+          loadedAt: new Date().toISOString(),
           warehouses: [{ id: 2, name: 'Ткацкая', cells: [] }],
           cells: [],
           supplies: [],
