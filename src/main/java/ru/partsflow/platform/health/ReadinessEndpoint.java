@@ -134,6 +134,7 @@ public class ReadinessEndpoint {
     private final CatalogSchemaMigrator catalog;
     private final JournalProtection journals;
     private final DatabaseWriteProbe writeProbe;
+    private final BuildVersion build;
 
     /**
      * Лениво: список веб-эндпоинтов собирает тот же разборщик, который видит
@@ -145,12 +146,14 @@ public class ReadinessEndpoint {
                              CatalogSchemaMigrator catalog,
                              JournalProtection journals,
                              DatabaseWriteProbe writeProbe,
+                             BuildVersion build,
                              ObjectProvider<WebEndpointsSupplier> webEndpoints) {
         this.jdbc = jdbc;
         this.migrations = migrations;
         this.catalog = catalog;
         this.journals = journals;
         this.writeProbe = writeProbe;
+        this.build = build;
         this.webEndpoints = webEndpoints;
     }
 
@@ -167,7 +170,16 @@ public class ReadinessEndpoint {
         List<Check> checks = List.of(database(), catalog(), schemas(), journals(),
                 writes(), metrics());
         boolean ready = checks.stream().allMatch(Check::ok);
-        return new WebEndpointResponse<>(new Readiness(ready, checks),
+        // Версия — рядом с проверками, но НЕ проверка, и это решение
+        // с доводом (задача 0130). Годность сборки от того, назвала ли она
+        // себя, не зависит: она обслуживает людей одинаково. А цена красного
+        // здесь немедленная и двойная — ровно как у writes: ops/switch-build.sh
+        // ждёт в теле «"ready":true» и без него трафик не переводит,
+        // а healthcheck боевого compose ищет ту же строку, то есть docker
+        // объявил бы контейнер нездоровым. Значит «выложили не то» обязан
+        // краснеть у шага выкладки, у которого есть с чем сравнивать,
+        // а не у сборки, которая про ожидаемый тег не знает ничего.
+        return new WebEndpointResponse<>(new Readiness(ready, build.version(), checks),
                 ready ? WebEndpointResponse.STATUS_OK
                       : WebEndpointResponse.STATUS_SERVICE_UNAVAILABLE);
     }
@@ -401,11 +413,18 @@ public class ReadinessEndpoint {
     }
 
     /**
-     * @param ready  одно поле, по которому отвечают машине: шаг выкладки
-     *               ждёт его, а не разбирает список
-     * @param checks все причины сразу, а не первая найденная
+     * @param ready   одно поле, по которому отвечают машине: шаг выкладки
+     *                ждёт его, а не разбирает список
+     * @param version какая это сборка — SHA и время сборки из самого
+     *                артефакта (задача 0130). Отдельным полем, а не
+     *                проверкой: на {@code ready} не влияет вовсе — сборка,
+     *                не назвавшая себя, обслуживает людей как любая другая.
+     *                Сверяет её с выкладываемым тегом шаг выкладки
+     *                ({@code ops/deploy-checks.sh}), у которого есть
+     *                с чем сравнивать
+     * @param checks  все причины сразу, а не первая найденная
      */
-    public record Readiness(boolean ready, List<Check> checks) {
+    public record Readiness(boolean ready, BuildVersion.Version version, List<Check> checks) {
     }
 
     /**
