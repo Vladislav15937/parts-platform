@@ -154,16 +154,67 @@ RELATIVE = re.compile(r"Date\.now\(\)|Instant\.now\(\)|LocalDate\.now\(\)|new Da
 # файле, будет отключён вместе с настоящей защитой. Поймано швом, а не
 # чтением: поодиночке обе ветки были зелёные.
 SHELL_NOW_OTHER = re.compile(r"\btime\(\)|\bdatetime\.now\b|\btime\.time\b")
-SHELL_DATE_CALL = re.compile(r"\bdate\b[^)`\n]*")
-SHELL_EXPLICIT_MOMENT = re.compile(r"(?:^|\s)(?:-d|-r|-j|--date=|--reference=)")
+SHELL_DATE_TOKEN = re.compile(r"\bdate\b")
+
+
+def date_calls(code):
+    """Вызовы `date` по одному.
+
+    Границей служит следующий `date`, а не только `)` и конец строки:
+    `date +%s || date -r "$f"` — это ДВА вызова, и жадный разбор до скобки
+    склеивал их в один. У склеенного находился `-r`, то есть он выглядел
+    «названным моментом», и стоящий рядом `date +%s` переставал считаться
+    часами — то есть настоящая мина становилась невидимой. Найдено попыткой
+    воспроизвести откат: подделка, которая обязана была покраснеть, молчала.
+    """
+    starts = [m.start() for m in SHELL_DATE_TOKEN.finditer(code)]
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(code)
+        chunk = code[start:end]
+        cuts = [chunk.find(ch) for ch in ")`\n" if chunk.find(ch) != -1]
+        yield chunk[:min(cuts)] if cuts else chunk
+
+# Флаг, подающий момент извне: `-r <эпоха|файл>`, `-j -f <формат> <строка>`,
+# `--reference=<файл>`. Такой вызов часов не спрашивает вовсе.
+SHELL_MOMENT_FLAG = re.compile(r"(?:^|\s)(?:-r|-j|--reference=)")
+
+# А `-d`/`--date=` двулик, и на этом различии держится вся честность правила:
+#
+#   date -d "@$epoch"              — названный момент (эпоха);
+#   date -d "2026-09-12 13:59:00"  — названный момент (строкой);
+#   date -d now                    — ТЕ ЖЕ ЧАСЫ;
+#   date -d yesterday              — те же часы со сдвигом;
+#   date -d '+1 day'               — то же.
+#
+# Считать «названным моментом» любой `-d` значило бы ослабить сторожа под свой
+# случай: проверка, зашившая дату рядом с `date -d "+1 day"`, — настоящая мина,
+# и пропускать её нельзя. Поэтому смотрим на АРГУМЕНТ.
+SHELL_DATE_ARG = re.compile(r"(?:^|\s)(?:-d|--date=)[= ]*['\"]?([^'\"]*)")
+SHELL_CLOCK_WORD = re.compile(
+    r"^\s*(?:now|today|yesterday|tomorrow|[-+]\d|next\b|last\b)|\bago\b", re.I)
 
 
 def asks_now(code):
-    """Спрашивает ли этот код настоящее время (а не про названный момент)."""
+    """Спрашивает ли этот код настоящее время — а не про названный момент.
+
+    Чего этот разбор не может: `date -d "$WHEN"`, где переменная в момент
+    прогона содержит `now`. Статически такое неразрешимо, и признано
+    пропуском сознательно — назвать часами всякую переменную значило бы
+    краснеть на `moment.sh` и `restore-pitr.sh`, где в переменной лежит
+    именно названный оператором момент.
+    """
     if SHELL_NOW_OTHER.search(code):
         return True
-    return any(not SHELL_EXPLICIT_MOMENT.search(call)
-               for call in SHELL_DATE_CALL.findall(code))
+    for call in date_calls(code):
+        argument = SHELL_DATE_ARG.search(call)
+        if argument:
+            if SHELL_CLOCK_WORD.search(argument.group(1)):
+                return True     # -d now, -d '+1 day' — это часы
+            continue            # -d "@$epoch", -d "2026-…" — названный момент
+        if SHELL_MOMENT_FLAG.search(call):
+            continue            # -r, -j -f, --reference= — момент извне
+        return True             # просто `date +%s` — часы
+    return False
 
 # Поля, которые вывод обязан находить. Это не рабочий список — рабочий
 # выводится из исходников, — а пол под ним: вывод, перестав находить эти
@@ -542,18 +593,40 @@ class DealFixtureTest {
 }
 """
 
+# Две функции, каждая из которых ОБЯЗАНА быть названа: литерал рядом
+# с настоящими часами. Вторая — та самая, которую ослабленное правило
+# пропустило бы: `-d` со сдвигом от «сейчас» это те же часы.
 CHECK_MINE = """
 selftest() {
     local now
     now=$(date +%s)
     out=$(report '2026-09-12 10:00:05')
 }
+relative_flag() {
+    tomorrow=$(date -d "+1 day" '+%F')
+    out=$(report '2026-09-12 10:00:05')
+}
+two_calls() {
+    stamp=$(date +%s || date -r "$f" '+%s')
+    out=$(report '2026-09-12 10:00:05')
+}
+"""
+
+# И три, которые обязаны молчать: часов не спрашивают вовсе либо спрашивают
+# про НАЗВАННЫЙ момент. Ровно так устроены `ops/moment.sh`
+# и `ops/restore-pitr.sh`, где момент зашит с обеих сторон сравнения, —
+# на них сторож краснел после слияния 0096, и это была ложная тревога.
+CHECK_QUIET = """
 inert() {
     out=$(report '2026-09-12 10:00:05')
 }
-explicit() {
-    here=$(date -d "@${MOMENT_EPOCH}" '+%H:%M:%S')
+epoch_moment() {
+    here=$(date -d "@${MOMENT_EPOCH}" '+%H:%M:%S' || date -r "${MOMENT_EPOCH}" '+%H:%M:%S')
     out=$(report '2026-09-12 13:59:00 MSK')
+}
+named_absolute() {
+    when=$(date -u -d "2026-09-12 13:59:00" +%s || date -u -j -f '%F %T' "2026-09-12 13:59:00" +%s)
+    out=$(report '2026-09-12 19:20:00 MSK')
 }
 """
 
@@ -580,6 +653,7 @@ def selftest():
         put("frontend/src/screens/cleanConst.test.tsx", CLEAN_CONST_TS)
         put("src/test/java/DealFixtureTest.java", MINE_JAVA)
         put("ops/check.sh", CHECK_MINE)
+        put("ops/quiet.sh", CHECK_QUIET)
 
         # 1. Вывод полей: три находятся, `createdAt` — нет. Второе не менее
         #    важно: попади оно в набор, сторож покраснел бы на сотне фикстур.
@@ -652,14 +726,23 @@ def selftest():
         if "check.sh" not in text:
             failures.append("в проверке ячейки литерал даты рядом с `date +%s` "
                             "не назван")
-        if text.count("check.sh") > 1:
+        if text.count("check.sh") != 3:
+            failures.append(
+                "не названы миной все три случая с настоящими часами: "
+                "`date +%%s`, сдвиг от «сейчас» (`date -d \"+1 day\"` — это "
+                "те же часы) и два вызова в одной строке (`date +%%s || "
+                "date -r \"$f\"` — жадный разбор склеивал их в один, и часы "
+                "прятались за `-r` соседа). Названо %d из 3"
+                % text.count("check.sh"))
+        if "quiet.sh" in text:
             failures.append(
                 "назван нарушением литерал, который сравнивать с «сейчас» "
                 "никто не собирается: либо функция вовсе не спрашивает время, "
-                "либо спрашивает про НАЗВАННЫЙ момент (`date -d \"@$epoch\"`, "
-                "`-r`, `-j -f`). У проверок ячейки это обычная фикстура "
-                "разбора, и на слиянии с 0096 сторож покраснел ровно так — "
-                "на трёх исправных фикстурах чужого файла")
+                "либо спрашивает про НАЗВАННЫЙ момент — `date -d \"@$epoch\"`, "
+                "`-d \"2026-09-12 13:59:00\"`, `-r`, `-j -f`. Так устроены "
+                "`ops/moment.sh` и самопроверка `ops/restore-pitr.sh`, где "
+                "момент зашит с ОБЕИХ сторон сравнения: на них сторож "
+                "покраснел после слияния 0096, и это была ложная тревога")
 
         # 6. Пометка: с причиной — молчит, без причины — красное. Иначе список
         #    станет способом отключить сторожа, а не разбором.
