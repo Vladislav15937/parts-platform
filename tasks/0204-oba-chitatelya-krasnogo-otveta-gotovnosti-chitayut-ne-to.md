@@ -1,10 +1,10 @@
 ---
 id: 0204
 title: Оба читателя красного ответа готовности читают не то: человеку он советует путь, который правило велит выключить, а шелл выкладки узнаёт исход по фразе без пиннящего теста
-status: новая
-assignee: —
+status: слита
+assignee: coder
 source: два неблокирующих замечания разбора PR #298 (задача 0202, слита 27 сентября 2026); премисы проверены разведкой 27.09.2026 чтением ReadinessEndpoint, SchemaVersionCheck, JournalProtectionCheck, CompanySettingsService, AppReadinessTest, AppReadinessHealthyCellTest, SchemaVersionCheckTest, ops/deploy-checks.sh, ops/migrate-tenants.sh, ops/schema-sync.sh и живым прогоном настоящего verdict_schemas на трёх ответах
-pr: —
+pr: 301
 ---
 
 ## Что человек сможет
