@@ -10,7 +10,8 @@
 #   5. Что осталось за базой: ограничения, каскады, сверки — и что в схеме
 #      арендатора не осталось ни триггеров, ни функций, ни генерируемых колонок
 #   6. Повторный update идемпотентен
-#   7. rollback отрабатывает
+#   7. rollback арендатора отрабатывает
+#   8. rollback общей схемы ячейки отрабатывает (catalog и public)
 #
 # Запускается, не спрашивая соседа: своя база у каждой рабочей копии, портов
 # хоста не занимает вовсе. Имя проекта compose печатается при подъёме — им же
@@ -201,6 +202,48 @@ LEFT=$($PSQL -tAc "SELECT count(*) FROM information_schema.tables
                      AND table_name <> 'databasechangeloglock';")
 [ "$LEFT" = "0" ] || fail "после отката в схеме остались таблицы: $LEFT"
 ok "схема вычищена до состояния «только служебные таблицы»"
+
+step "8. Rollback общей схемы ячейки"
+# До задачи 0103 разворачивался только арендатор: шаг 7 считает changeset'ы
+# в его схеме и откатывает их, а до public и catalog дело не доходило вовсе —
+# то есть откат changeset'ов ОБЩЕЙ схемы не выполнял никто. Схема арендатора
+# одна на клиента, общая — одна на всю ячейку, и неверный откат здесь кладёт
+# всех сразу.
+#
+# Проверяется тут ровно то же, что шагом 7 у арендатора: что Liquibase эти
+# откаты УМЕЕТ ВЫПОЛНИТЬ — тела откатов выполнимы, порядок зависимостей
+# сходится. Возвращают ли они схему к прежнему виду — другое утверждение,
+# и на него отвечает перебор по шагам (db/verify-rollback.py): откат до
+# пустоты проходит и при неверном откате отдельного changeset'а, потому что
+# следующий снесёт объект целиком и спрячет разницу.
+#
+# Схемы арендаторов приходится снести ДО этого, и шаг поэтому стоит последним:
+# donor ссылается внешними ключами на catalog.brand и catalog.model, а
+# public_code выдаётся умолчанием через pgcrypto — то есть DROP TABLE
+# catalog.brand и DROP EXTENSION упёрлись бы в зависимости живых схем,
+# и красным оказался бы исправный откат.
+$PSQL -c "DROP SCHEMA IF EXISTS t_000042 CASCADE;
+          DROP SCHEMA IF EXISTS t_000043 CASCADE;" >/dev/null
+CCNT=$($PSQL -tAc "SELECT count(*) FROM public.databasechangelog;")
+$LB --changelog-file=changelog/db.changelog-catalog.xml $CRED \
+    --liquibase-schema-name=public rollback-count --count="$CCNT"
+ok "rollback общей схемы отработал ($CCNT changeset'ов)"
+
+# Здесь проверяется ПОЛНАЯ пустота, в отличие от шага 7. У арендатора первый
+# changeset не откатывают — его rollback делает DROP SCHEMA CASCADE и сносит
+# вместе со схемой сам DATABASECHANGELOG. У каталога журнал лежит в public,
+# а первый changeset заводит расширения: цепочка проходит до конца, и после
+# неё не должно остаться ни схемы catalog, ни служебных таблиц каталога
+# в public (реестр арендаторов, shedlock, хранилище сессий).
+CLEFT=$($PSQL -tAc "SELECT count(*) FROM information_schema.schemata
+                     WHERE schema_name = 'catalog';")
+[ "$CLEFT" = "0" ] || fail "после отката общей схемы схема catalog осталась"
+PLEFT=$($PSQL -tAc "SELECT coalesce(string_agg(table_name, ',' ORDER BY table_name), '')
+                      FROM information_schema.tables
+                     WHERE table_schema = 'public'
+                       AND table_name NOT LIKE 'databasechangelog%';")
+[ -z "$PLEFT" ] || fail "после отката общей схемы в public остались таблицы: $PLEFT"
+ok "общая схема вычищена: ни catalog, ни служебных таблиц в public"
 
 printf '\n\033[1;32mВсе проверки пройдены.\033[0m\n'
 printf 'Погасить: docker compose -p %s down -v\n' "$PROJECT"
