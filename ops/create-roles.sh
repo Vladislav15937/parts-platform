@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Заводит две роли ячейки: владельца схем и рабочую.
 #
-#   ops/create-roles.sh
+#   ops/create-roles.sh            # завести рабочую роль и выдать ей права
+#   ops/create-roles.sh --selftest # проверить сам скрипт: без docker и без ячейки
 #
 # Пока приложение ходит в базу одной ролью, оно владелец всех таблиц,
 # а владелец возвращает себе любое право одной командой: журнал правится
@@ -12,48 +13,114 @@
 # Скрипт заводит рабочую роль и отдаёт ей права на общую схему; права
 # на схемы арендаторов выдаёт приложение при провижининге и при накате
 # миграций (SchemaGrants).
+#
+# ЧЕГО ОН НЕ ТРЕБУЕТ, И ПОЧЕМУ ЭТО ГЛАВНОЕ (задача 0107). До 27 сентября 2026
+# скрипт падал на `: "${APP_RUNTIME_ROLE:?…}"` — то есть требовал в .env ровно
+# то, что по документам выдаёт сам: и docs/onboarding.md, и ops/env.pilot.example,
+# и .env.example говорят «эту секцию заполнит create-roles.sh, вставь, что
+# напечатает», и имя роли в примере намеренно пустое. Буквальный проход
+# по инструкции подключения спотыкался на шаге, названном обязательным,
+# и спотыкался в день, когда клиент рядом.
+#
+# Выбор сделан в пользу скрипта: инструмент, который ЗАВОДИТ роль, сам
+# и называет её. Имя по умолчанию — `partsflow_app`, то же, что стоит
+# в docs/deployment.md, ops/CLAUDE.md и корневом CLAUDE.md («приложение
+# работает ролью partsflow_app»): это перенос уже принятого имени, а не
+# новое решение. Пароль, которого нет, скрипт генерирует и ПЕЧАТАЕТ —
+# прежняя редакция советовала вставить в .env «пароль рабочей роли, тот же
+# что здесь», не напечатав его нигде.
+#
+# ЗАДАННОЕ В .env СИЛЬНЕЕ УМОЛЧАНИЯ, и это не вкус. Скрипт прогоняют повторно
+# на работающей ячейке (появилась таблица сессий, переставили ячейку), а
+# CREATE/ALTER ROLE ниже пароль ПЕРЕЗАПИСЫВАЕТ. Генерируй он новый каждый раз —
+# повтор менял бы пароль роли, под которой в эту минуту работает приложение,
+# и следующий перезапуск сборки не пустил бы её в базу. Поэтому пароль из .env
+# переиспользуется, а генерируется только отсутствующий.
+#
+# ПАРОЛЬ ГЕНЕРИРУЕТСЯ В base64 НАМЕРЕННО: в нём нет ни `$`, ни `'`. Первое
+# важно для .env — compose подставляет в значения `${…}`, и пароль со знаком
+# доллара доехал бы до базы другим; второе для SQL ниже, где пароль стоит
+# в одинарных кавычках.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ENV_FILE="${ENV_FILE:-.env}"
-[ -f "$ENV_FILE" ] || { echo "Нет файла окружения $ENV_FILE"; exit 1; }
-set -a; . "./$ENV_FILE"; set +a
+red()   { printf '\033[1;31m%s\033[0m\n' "$1" >&2; }
+green() { printf '\033[1;32m%s\033[0m\n' "$1"; }
+fail()  { red "$1"; exit 1; }
 
-: "${DB_USER:?укажите DB_USER}"
-: "${APP_RUNTIME_ROLE:?укажите APP_RUNTIME_ROLE — имя рабочей роли}"
-: "${APP_RUNTIME_PASSWORD:?укажите APP_RUNTIME_PASSWORD}"
+# Имя рабочей роли по умолчанию. Одно место на скрипт: оно же печатается
+# в совете для .env, и разойдись эти два — оператор завёл бы одну роль,
+# а в .env вписал другую.
+DEFAULT_ROLE=partsflow_app
 
-COMPOSE="docker compose -f docker-compose.prod.yml"
-# База сборки под трафиком (задача 0112): с первой выкладки копией это
-# не «parts». Право CONNECT выдаётся на базу, а не на кластер, и выданное
-# на прежнюю базу новую сборку не пустило бы. Копии выкладка переносит
-# права сама (ops/deploy.sh, copy_db).
-DB_NAME=$(ENV_FILE="$ENV_FILE" ops/switch-build.sh --current-db)
-PSQL="$COMPOSE exec -T postgres psql -U $DB_USER -d $DB_NAME -v ON_ERROR_STOP=1"
+main() {
+    local ENV_FILE="${ENV_FILE:-.env}"
+    [ -f "$ENV_FILE" ] || fail "Нет файла окружения $ENV_FILE"
+    # Точка-источник без слэша ищет файл в PATH, поэтому у простого имени
+    # нужен «./». А у пути со слэшем его добавлять нельзя: «.//tmp/env»
+    # не откроется.
+    local env_path="$ENV_FILE"
+    case "$ENV_FILE" in */*) ;; *) env_path="./$ENV_FILE" ;; esac
+    set -a; . "$env_path"; set +a
 
-echo "==> Заводим рабочую роль $APP_RUNTIME_ROLE"
-$PSQL <<SQL
+    : "${DB_USER:?укажите DB_USER}"
+
+    local role password generated=нет
+    role="${APP_RUNTIME_ROLE:-$DEFAULT_ROLE}"
+    password="${APP_RUNTIME_PASSWORD:-}"
+    if [ -z "$password" ]; then
+        command -v openssl >/dev/null \
+            || fail "Нет openssl — задайте APP_RUNTIME_PASSWORD в $ENV_FILE вручную"
+        password=$(openssl rand -base64 24)
+        generated=да
+    fi
+
+    # Имя роли уходит в SQL БЕЗ кавычек (идентификатор), пароль — в одинарных.
+    # Строка из .env с кавычкой или точкой с запятой не должна становиться
+    # частью команды: тот же довод, что у имени базы в ops/switch-build.sh.
+    [[ $role =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+        || fail "Негодное имя роли «$role»: только латиница, цифры и _, не с цифры"
+    case "$password" in
+        *"'"*|*'\'*) fail "В пароле рабочей роли есть кавычка или обратный слэш — он уходит в SQL, замените" ;;
+    esac
+    case "$password" in
+        *[$'\n\r']*) fail "В пароле рабочей роли есть перевод строки — в .env такое значение не положить" ;;
+    esac
+
+    local COMPOSE="${COMPOSE:-docker compose -f docker-compose.prod.yml}"
+    # База сборки под трафиком (задача 0112): с первой выкладки копией это
+    # не «parts». Право CONNECT выдаётся на базу, а не на кластер, и выданное
+    # на прежнюю базу новую сборку не пустило бы. Копии выкладка переносит
+    # права сама (ops/deploy.sh, copy_db).
+    local DB_NAME
+    DB_NAME=$(ENV_FILE="$ENV_FILE" ops/switch-build.sh --current-db)
+    # Через переменную, чтобы самопроверка могла подменить psql заглушкой:
+    # весь смысл этого скрипта, кроме SQL, — что он печатает человеку.
+    local PSQL="${PSQL:-$COMPOSE exec -T postgres psql -U $DB_USER -d $DB_NAME -v ON_ERROR_STOP=1}"
+
+    echo "==> Заводим рабочую роль $role"
+    $PSQL <<SQL
 DO \$\$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$APP_RUNTIME_ROLE') THEN
-        CREATE ROLE $APP_RUNTIME_ROLE LOGIN PASSWORD '$APP_RUNTIME_PASSWORD';
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$role') THEN
+        CREATE ROLE $role LOGIN PASSWORD '$password';
     ELSE
-        ALTER ROLE $APP_RUNTIME_ROLE LOGIN PASSWORD '$APP_RUNTIME_PASSWORD';
+        ALTER ROLE $role LOGIN PASSWORD '$password';
     END IF;
 END \$\$;
 
-GRANT CONNECT ON DATABASE "$DB_NAME" TO $APP_RUNTIME_ROLE;
+GRANT CONNECT ON DATABASE "$DB_NAME" TO $role;
 
 -- Общая схема ячейки: справочники читают все, пишет их миграция.
-GRANT USAGE ON SCHEMA catalog TO $APP_RUNTIME_ROLE;
-GRANT SELECT ON ALL TABLES IN SCHEMA catalog TO $APP_RUNTIME_ROLE;
-ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT SELECT ON TABLES TO $APP_RUNTIME_ROLE;
+GRANT USAGE ON SCHEMA catalog TO $role;
+GRANT SELECT ON ALL TABLES IN SCHEMA catalog TO $role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT SELECT ON TABLES TO $role;
 
 -- Реестр арендаторов и служебные таблицы в public: рабочая роль читает
 -- реестр при входе и пишет отметки ShedLock.
-GRANT USAGE ON SCHEMA public TO $APP_RUNTIME_ROLE;
-GRANT SELECT ON public.tenant_registry TO $APP_RUNTIME_ROLE;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.shedlock TO $APP_RUNTIME_ROLE;
+GRANT USAGE ON SCHEMA public TO $role;
+GRANT SELECT ON public.tenant_registry TO $role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.shedlock TO $role;
 
 -- Хранилище сессий (catalog/021, задача 0080): состояние сессии живёт
 -- в общей схеме ячейки, и рабочая роль пишет туда на каждом входе.
@@ -61,27 +128,229 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.shedlock TO $APP_RUNTIME_ROLE;
 -- Те же права выдаёт и накат общей схемы (SchemaGrants.applyCellTables):
 -- скрипт заведения ролей на работающей ячейке после выкладки
 -- не перезапускают, а таблица появилась позже него.
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.spring_session TO $APP_RUNTIME_ROLE;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.spring_session TO $role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.spring_session_attributes
-    TO $APP_RUNTIME_ROLE;
+    TO $role;
 SQL
 
-echo "==> Права на схемы арендаторов"
-echo "    Их выдаёт приложение: при провижининге нового клиента и при накате"
-echo "    миграций (ops/migrate-tenants.sh). Для уже заведённых достаточно"
-echo "    один раз прогнать накат."
-echo
-# Перечисляем ровно те четыре переменные, которые читает compose. Пятая,
-# «DB_URL_RUNTIME», стояла здесь и не читалась никем: оператор прописывал её,
-# видел рабочую роль в .env и считал разделение включённым — а приложение
-# продолжало ходить владельцем, то есть журналы оставались изменяемыми.
-echo "==> Готово. В .env должны быть заполнены все четыре:"
-echo "    APP_RUNTIME_ROLE=$APP_RUNTIME_ROLE"
-echo "    APP_RUNTIME_PASSWORD=<пароль рабочей роли, тот же что здесь>"
-echo "    APP_DDL_URL=jdbc:postgresql://postgres:5432/parts   (признак: адрес compose строит на базу сборки)"
-echo "    APP_DDL_USERNAME=$DB_USER"
-echo "    APP_DDL_PASSWORD=<пароль владельца, он же DB_PASSWORD>"
-echo
-echo "    Имя роли без пароля означает подключение ролью, которой нет:"
-echo "    приложение не поднимется. Проверка — строка в логе при старте:"
-echo "    «Журналы защищены» против «Журналы правятся прямым SQL»."
+    echo "==> Права на схемы арендаторов"
+    echo "    Их выдаёт приложение: при провижининге нового клиента и при накате"
+    echo "    миграций (ops/migrate-tenants.sh). Для уже заведённых достаточно"
+    echo "    один раз прогнать накат."
+    echo
+    if [ "$generated" = да ]; then
+        echo "==> Пароль рабочей роли СГЕНЕРИРОВАН (в $ENV_FILE его не было)."
+        echo "    Он напечатан ниже и больше нигде не хранится: вставьте его в $ENV_FILE."
+    else
+        echo "==> Пароль рабочей роли взят из $ENV_FILE и переустановлен тот же."
+    fi
+    echo
+
+    # Перечисляем ровно те переменные, которые читает compose. «DB_URL_RUNTIME»
+    # стояла здесь и не читалась никем: оператор прописывал её, видел рабочую
+    # роль в .env и считал разделение включённым — а приложение продолжало
+    # ходить владельцем, то есть журналы оставались изменяемыми.
+    #
+    # Число в заголовке СЧИТАЕТСЯ по этому списку, а не написано словом:
+    # до задачи 0107 здесь стояло «все четыре» при пяти напечатанных строках,
+    # и оператор искал, какую из пяти не заполнять.
+    local vars=(
+        "APP_RUNTIME_ROLE=$role"
+        "APP_RUNTIME_PASSWORD=$password"
+        "APP_DDL_URL=jdbc:postgresql://postgres:5432/parts   (признак «владелец схем отдельный»; адрес compose строит на базу сборки)"
+        "APP_DDL_USERNAME=$DB_USER"
+        "APP_DDL_PASSWORD=<пароль владельца: значение DB_PASSWORD из этого же $ENV_FILE>"
+    )
+    printf '==> Готово. В %s должны быть заполнены все %d переменных:\n' "$ENV_FILE" "${#vars[@]}"
+    local v
+    for v in "${vars[@]}"; do printf '    %s\n' "$v"; done
+    echo
+    # Пароль владельца не печатается намеренно: он уже лежит в этом же файле
+    # (DB_PASSWORD), и второй его копией в выводе терминала мы бы только
+    # размножили самый дорогой секрет ячейки — владелец схем владеет журналами.
+    echo "    Заполнять надо все разом: имя роли без пароля означает подключение"
+    echo "    ролью, которой нет, — приложение не поднимется вовсе. Проверка —"
+    echo "    строка в логе при старте: «Журналы защищены» против «Журналы"
+    echo "    правятся прямым SQL»."
+}
+
+# ——— Самопроверка. Ни docker, ни ячейки, ни базы не нужно: psql подменяется
+# заглушкой, а проверяется ровно то, из-за чего задача и появилась, — что
+# скрипт не требует того, что сам выдаёт, и что число в сообщении считается.
+selftest() {
+    local bad=0 dir out rc
+    dir="${TMPDIR:-/tmp}/create-roles-selftest.$$"
+    mkdir -p "$dir"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$dir'" EXIT
+    echo "Самопроверка ops/create-roles.sh"
+
+    printf '#!/usr/bin/env bash\ncat >/dev/null\n' > "$dir/psql"
+    chmod +x "$dir/psql"
+
+    run() {  # содержимое .env… → вывод скрипта, код возврата в rc
+        local script="${SCRIPT:-$0}"
+        printf '%s\n' "$@" > "$dir/env"
+        set +e
+        out=$(env -u APP_RUNTIME_ROLE -u APP_RUNTIME_PASSWORD \
+                  -u APP_DB_BLUE -u APP_DB_GREEN \
+                  PSQL="$dir/psql" ENV_FILE="$dir/env" bash "$script" 2>&1)
+        rc=$?
+        set -e
+    }
+
+    has() {  # имя случая, слово
+        case "$out" in
+            *"$2"*) ;;
+            *) red "  ✗ $1: в выводе нет «$2»"
+               printf '%s\n' "$out" | sed 's/^/      /' >&2
+               bad=$((bad + 1)) ;;
+        esac
+    }
+
+    # 1. Строки про рабочую роль в .env нет вовсе — ровно то состояние,
+    #    в котором оператор оказывается, дойдя до этого шага по инструкции.
+    run 'DB_USER=partsflow' 'DB_PASSWORD=vlad'
+    if [ "$rc" != 0 ]; then
+        red "  ✗ .env без APP_RUNTIME_ROLE: скрипт обязан работать, а он вышел с $rc"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=$((bad + 1))
+    else
+        has ".env без APP_RUNTIME_ROLE" "APP_RUNTIME_ROLE=$DEFAULT_ROLE"
+        printf '  ✓ .env без строки роли: имя предложено само (%s)\n' "$DEFAULT_ROLE"
+    fi
+
+    # 2. Пустое значение — так и стоит в .env.example и ops/env.pilot.example.
+    #    Пустое перебивает окружение (файл читается через set -a), поэтому
+    #    случай отдельный, а не тот же самый.
+    run 'DB_USER=partsflow' 'APP_RUNTIME_ROLE=' 'APP_RUNTIME_PASSWORD='
+    if [ "$rc" != 0 ]; then
+        red "  ✗ пустые значения ролей: скрипт обязан работать, а он вышел с $rc"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=$((bad + 1))
+    else
+        has "пустые значения ролей" "APP_RUNTIME_ROLE=$DEFAULT_ROLE"
+        printf '  ✓ пустые значения в .env: скрипт не падает\n'
+    fi
+
+    # 3. Число в сообщении равно числу напечатанных строк. Именно равенство,
+    #    а не «есть ли слово»: константа расходится с содержимым молча.
+    local said printed
+    said=$(printf '%s\n' "$out" \
+        | sed -n 's/^==> Готово\..*заполнены все \([0-9]\{1,\}\) переменных.*$/\1/p' | tail -n1)
+    printed=$(printf '%s\n' "$out" | grep -c '^    [A-Z_][A-Z_]*=' || true)
+    if [ -z "$said" ]; then
+        red "  ✗ число переменных не напечатано числом — похоже, стоит константой"
+        bad=$((bad + 1))
+    elif [ "$said" != "$printed" ]; then
+        red "  ✗ сказано «все $said», а напечатано строк: $printed"
+        bad=$((bad + 1))
+    else
+        printf '  ✓ число в сообщении считается: сказано %s, напечатано %s\n' "$said" "$printed"
+    fi
+
+    # 4. Пароль из .env переиспользуется. Повтор скрипта на работающей ячейке
+    #    не имеет права сменить пароль роли, под которой работает приложение.
+    run 'DB_USER=partsflow' 'APP_RUNTIME_ROLE=my_app' 'APP_RUNTIME_PASSWORD=parol-iz-env'
+    has "пароль из .env" 'APP_RUNTIME_PASSWORD=parol-iz-env'
+    has "пароль из .env" 'APP_RUNTIME_ROLE=my_app'
+    has "пароль из .env" 'взят из'
+    printf '  ✓ заданные имя и пароль сильнее умолчания\n'
+
+    # 5. Отсутствующий пароль генерируется и ПЕЧАТАЕТСЯ — иначе вставлять
+    #    в .env было бы нечего (прежняя редакция советовала «тот же что здесь»,
+    #    не напечатав его нигде).
+    local first second
+    run 'DB_USER=partsflow'
+    first=$(printf '%s\n' "$out" | sed -n 's/^    APP_RUNTIME_PASSWORD=//p')
+    has "пароль сгенерирован" 'СГЕНЕРИРОВАН'
+    run 'DB_USER=partsflow'
+    second=$(printf '%s\n' "$out" | sed -n 's/^    APP_RUNTIME_PASSWORD=//p')
+    if [ ${#first} -lt 16 ] || [ "$first" = "$second" ]; then
+        red "  ✗ пароль не сгенерирован или повторяется между прогонами: «$first» и «$second»"
+        bad=$((bad + 1))
+    else
+        printf '  ✓ пароля нет в .env — сгенерирован и напечатан (%d символов)\n' "${#first}"
+    fi
+    case "$first" in
+        *'$'*|*"'"*) red "  ✗ в сгенерированном пароле есть \$ или кавычка"; bad=$((bad + 1)) ;;
+        *) printf '  ✓ в сгенерированном пароле нет ни $, ни кавычки\n' ;;
+    esac
+
+    # 6–7. Значение из .env не становится частью команды. Имя роли уходит
+    #      в SQL идентификатором, пароль — в кавычках.
+    run 'DB_USER=partsflow' 'APP_RUNTIME_ROLE=app;DROP ROLE partsflow'
+    if [ "$rc" = 0 ]; then
+        red "  ✗ негодное имя роли обязано быть отказом"; bad=$((bad + 1))
+    else
+        printf '  ✓ имя роли с «;» — отказ, а не подстановка в SQL\n'
+    fi
+    run 'DB_USER=partsflow' "APP_RUNTIME_PASSWORD=pa'rol"
+    if [ "$rc" = 0 ]; then
+        red "  ✗ пароль с кавычкой обязан быть отказом"; bad=$((bad + 1))
+    else
+        printf '  ✓ пароль с кавычкой — отказ\n'
+    fi
+
+    # Подделки лежат в /tmp, а скрипт первым делом уходит в корень репозитория
+    # от своего пути — копия ушла бы в родителя /tmp и «упала» бы на ненайденном
+    # ops/switch-build.sh, то есть по причине, к дефекту не относящейся.
+    # Поэтому `cd` в копии переписывается: проверка, зеленеющая от чужого
+    # отказа, не стоит ничего — этим она и была до правки.
+    fix_cd() { sed -e "s|^cd \"\$(dirname \"\$0\")/\.\.\"|cd '$PWD'|"; }
+
+    # 8. Возврат дефекта. Копия, в которой число написано константой, обязана
+    #    отработать до конца и разойтись с числом напечатанных строк — иначе
+    #    случай 3 ничего не стережёт.
+    sed 's/"${#vars\[@\]}"/4/' "$0" | fix_cd > "$dir/const.sh"
+    SCRIPT="$dir/const.sh" run 'DB_USER=partsflow'
+    said=$(printf '%s\n' "$out" \
+        | sed -n 's/^==> Готово\..*заполнены все \([0-9]\{1,\}\) переменных.*$/\1/p' | tail -n1)
+    printed=$(printf '%s\n' "$out" | grep -c '^    [A-Z_][A-Z_]*=' || true)
+    if [ "$rc" != 0 ] || [ -z "$said" ]; then
+        red "  ✗ возврат дефекта: копия с константой обязана дойти до сообщения, а вышла с $rc"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=$((bad + 1))
+    elif [ "$said" = "$printed" ]; then
+        red "  ✗ возврат дефекта: копия с константой $said обязана разойтись с $printed строками"
+        bad=$((bad + 1))
+    else
+        printf '  ✓ возврат дефекта: константа вместо счёта — расхождение видно (%s против %s)\n' \
+            "$said" "$printed"
+    fi
+
+    # 9. Возврат прежнего дефекта задачи целиком: копия, требующая
+    #    APP_RUNTIME_ROLE, обязана падать на случае 1 — и падать ИМЕННО
+    #    на этой переменной, а не на чём-нибудь по дороге.
+    #    Строка вставляется awk, а не `sed 's/…/&\n…/'`: перевод строки
+    #    в правой части BSD sed не понимает, и подделка вышла бы другой
+    #    на машине разработчика и на прогоне.
+    awk '{print}
+         /укажите DB_USER/ {print "    : \"${APP_RUNTIME_ROLE:?укажите APP_RUNTIME_ROLE}\""}' \
+        "$0" | fix_cd > "$dir/req.sh"
+    SCRIPT="$dir/req.sh" run 'DB_USER=partsflow'
+    if [ "$rc" = 0 ]; then
+        red "  ✗ возврат дефекта: копия, требующая APP_RUNTIME_ROLE, обязана падать на .env без неё"
+        bad=$((bad + 1))
+    else
+        case "$out" in
+            *APP_RUNTIME_ROLE*)
+                printf '  ✓ возврат дефекта: требование APP_RUNTIME_ROLE снова валит проход по инструкции\n' ;;
+            *) red "  ✗ возврат дефекта: копия упала, но не на APP_RUNTIME_ROLE:"
+               printf '%s\n' "$out" | sed 's/^/      /' >&2
+               bad=$((bad + 1)) ;;
+        esac
+    fi
+
+    [ "$bad" = 0 ] || fail "Самопроверка не прошла: $bad"
+    green "Самопроверка пройдена"
+}
+
+case "${1:-}" in
+    "") main ;;
+    --selftest) selftest ;;
+    -h|--help)
+        sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//'
+        exit 2 ;;
+    *) fail "Неизвестный аргумент «$1». Их два: без аргументов и --selftest." ;;
+esac
