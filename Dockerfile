@@ -32,10 +32,31 @@ COPY db db
 # домене — сессия в cookie и CSRF-токен из cookie иначе не работают.
 COPY --from=frontend /frontend/dist src/main/resources/static
 
+# SHA коммита, из которого собирают образ (задача 0130). Пустое умолчание —
+# это не «забыли»: местная сборка образом не является, и приложение обязано
+# отвечать «версия не названа», а не выдавать за версию номер из pom.
+#
+# Аргументом сборки, потому что больше взять его негде: в pom версия
+# не меняется от сборки к сборке, а .git в контекст сборки не копируется
+# (и в рабочей копии git его вовсе нет — там файл-указатель).
+#
+# ПОСЛЕ прогрева зависимостей намеренно: ARG перед `dependency:go-offline`
+# ломал бы его слой на каждом коммите — полсотни мегабайт заново.
+ARG APP_VERSION=""
+
 # Тесты здесь не гоняются: они поднимают Postgres через Testcontainers,
 # то есть требуют доступа к докеру изнутри сборки образа. Их место в CI,
 # и там они уже есть.
-RUN mvn -B -ntp -DskipTests package
+#
+# SHA уезжает в META-INF/build-info.properties внутрь jar (цель build-info
+# у spring-boot-maven-plugin, см. pom.xml): подменить его в работающем
+# контейнере нечем, а переменную окружения — можно.
+# Форма `${APP_VERSION:+…}` — не украшение: при пустом аргументе флаг
+# не подставляется вовсе, и действует умолчание-заглушка из pom. Передать
+# пустое значение нельзя — цель build-info отвергает пустое свойство
+# («Additional property 'sha' is illegal as its value is null»), то есть
+# `docker build` без --build-arg падал бы на сборке артефакта.
+RUN mvn -B -ntp -DskipTests ${APP_VERSION:+-Dapp.build.sha=$APP_VERSION} package
 
 
 FROM eclipse-temurin:21-jre-alpine AS runtime
