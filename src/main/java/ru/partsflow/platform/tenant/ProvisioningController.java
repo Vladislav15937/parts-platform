@@ -1,5 +1,6 @@
 package ru.partsflow.platform.tenant;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.beans.factory.annotation.Value;
@@ -57,28 +58,38 @@ public class ProvisioningController {
     private final TenantProvisioning provisioning;
     private final TenantMigrations migrations;
     private final ru.partsflow.platform.config.TenantLoadMetrics tenantLoad;
+    private final ProvisioningLimits limits;
     private final String token;
 
     public ProvisioningController(TenantProvisioning provisioning,
                                   TenantMigrations migrations,
                                   ru.partsflow.platform.config.TenantLoadMetrics tenantLoad,
+                                  ProvisioningLimits limits,
                                   @Value("${app.provisioning-token:}") String token) {
         this.provisioning = provisioning;
         this.migrations = migrations;
         this.tenantLoad = tenantLoad;
+        this.limits = limits;
         this.token = token;
     }
 
     @PostMapping("/tenants")
     public ResponseEntity<TenantProvisioning.Result> createTenant(
-            @Valid @RequestBody CreateTenantRequest request) {
+            @Valid @RequestBody CreateTenantRequest request, HttpServletRequest http) {
 
-        requireToken(request.token());
+        String address = ProvisioningLimits.addressOf(http);
+        requireToken(request.token(), address);
+        // Предел спрашивается до провижининга: отбитый запрос не должен ни
+        // создавать схему, ни накатывать на неё changeset'ы — иначе предел
+        // защищал бы только от записи в реестр, а диск занимался бы как
+        // раньше.
+        limits.beforeCreate(address);
 
         TenantProvisioning.Result created = provisioning.provision(
                 new TenantProvisioning.Request(request.companyCode(), request.companyName(),
                         request.ownerLogin(), request.ownerPassword(), request.ownerName()));
 
+        limits.created(address);
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
@@ -91,8 +102,9 @@ public class ProvisioningController {
      * такое делать нельзя, пятьсот схем это минуты недоступности ячейки.
      */
     @PostMapping("/migrations")
-    public TenantMigrations.Report migrate(@Valid @RequestBody TokenRequest request) {
-        requireToken(request.token());
+    public TenantMigrations.Report migrate(@Valid @RequestBody TokenRequest request,
+                                          HttpServletRequest http) {
+        requireToken(request.token(), ProvisioningLimits.addressOf(http));
         return migrations.migrateAll();
     }
 
@@ -116,8 +128,9 @@ public class ProvisioningController {
     @GetMapping("/migrations")
     public TenantMigrations.Status migrationStatus(
             @RequestHeader(name = TOKEN_HEADER, required = false) String token,
-            @RequestParam(defaultValue = "false") boolean deep) {
-        requireToken(token);
+            @RequestParam(defaultValue = "false") boolean deep,
+            HttpServletRequest http) {
+        requireToken(token, ProvisioningLimits.addressOf(http));
         return migrations.status(deep);
     }
 
@@ -135,8 +148,9 @@ public class ProvisioningController {
      */
     @GetMapping("/load")
     public java.util.List<ru.partsflow.platform.config.TenantLoadMetrics.TenantLoad> load(
-            @RequestHeader(name = TOKEN_HEADER, required = false) String token) {
-        requireToken(token);
+            @RequestHeader(name = TOKEN_HEADER, required = false) String token,
+            HttpServletRequest http) {
+        requireToken(token, ProvisioningLimits.addressOf(http));
         return tenantLoad.top();
     }
 
@@ -163,13 +177,19 @@ public class ProvisioningController {
      * <p>Обычное {@code equals} прекращает сравнивать на первом несовпавшем
      * байте, и по времени ответа секрет подбирается посимвольно.
      */
-    private void requireToken(String presented) {
+    private void requireToken(String presented, String address) {
         if (!enabled()) {
+            limits.rejected(ProvisioningLimits.REASON_DISABLED, address, "контур выключен");
             throw new AccessDeniedException(DISABLED);
         }
         if (presented == null || !MessageDigest.isEqual(
                 token.getBytes(StandardCharsets.UTF_8),
                 presented.getBytes(StandardCharsets.UTF_8))) {
+            // Считается каждая такая попытка, и это то самое «кто-то ломится
+            // в управляющий контур»: до задачи 0183 о ней не оставалось
+            // ни записи, ни метрики, то есть тревога была невозможна
+            // по построению.
+            limits.rejected(ProvisioningLimits.REASON_SECRET, address, "секрет не совпал");
             throw new AccessDeniedException("Неверный секрет");
         }
     }

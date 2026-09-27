@@ -86,6 +86,42 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiError(e.getMessage()));
     }
 
+    /**
+     * Провижининг упёрся в предел частоты — 429, а не 500 и не 403.
+     *
+     * <p>Код выбран так, чтобы по нему было видно: это <b>предел</b>, а не
+     * поломка и не «вам нельзя». 403 сказал бы, что секрет не тот, и оператор
+     * подключения пошёл бы искать опечатку в секрете; 500 отправил бы его
+     * искать сломанный сервер. Текст называет сам предел и настройку, которой
+     * он поднимается, — иначе следующий шаг непонятен.
+     *
+     * <p>{@code Retry-After} — это длина окна, то есть <b>верхняя</b> граница
+     * ожидания: место освободится не позже, чем через час, а обычно раньше.
+     */
+    @ExceptionHandler(ru.partsflow.platform.tenant.ProvisioningLimits.TooManyRequests.class)
+    public ResponseEntity<ApiError> tooManyRequests(
+            ru.partsflow.platform.tenant.ProvisioningLimits.TooManyRequests e) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(org.springframework.http.HttpHeaders.RETRY_AFTER,
+                        String.valueOf(
+                                ru.partsflow.platform.tenant.ProvisioningLimits.WINDOW
+                                        .toSeconds()))
+                .body(new ApiError(e.getMessage()));
+    }
+
+    /**
+     * Ячейка заполнена до потолка — 409 со словами.
+     *
+     * <p>Это состояние, а не частота: повтор через час не поможет, поможет
+     * следующая ячейка или поднятый потолок. Тот же код, что у остальных
+     * «состояние не позволяет», и по той же причине — повторять нечего.
+     */
+    @ExceptionHandler(ru.partsflow.platform.tenant.ProvisioningLimits.CellFull.class)
+    public ResponseEntity<ApiError> cellFull(
+            ru.partsflow.platform.tenant.ProvisioningLimits.CellFull e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiError(e.getMessage()));
+    }
+
     /** Ошибки разбора тела запроса: собираем все поля сразу, а не по одному. */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiError> invalidBody(MethodArgumentNotValidException e) {

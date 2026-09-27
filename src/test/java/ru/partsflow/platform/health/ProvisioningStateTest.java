@@ -109,7 +109,7 @@ class ProvisioningStateTest extends PostgresTestBase {
         // пул соединений (записано в корневом CLAUDE.md). Проверяется здесь
         // именно написание, а сериализацию по HTTP доказывает случай выше.
         ProvisioningStateEndpoint off = new ProvisioningStateEndpoint(
-                new ProvisioningController(null, null, null, ""));
+                new ProvisioningController(null, null, null, null, ""));
 
         ProvisioningStateEndpoint.State state = off.state();
 
@@ -128,7 +128,7 @@ class ProvisioningStateTest extends PostgresTestBase {
         // которую правили руками.
         for (String token : new String[]{null, "", "   "}) {
             ProvisioningStateEndpoint off = new ProvisioningStateEndpoint(
-                    new ProvisioningController(null, null, null, token));
+                    new ProvisioningController(null, null, null, null, token));
             assertThat(off.state().enabled())
                     .as("секрет %s обязан означать «выключено»", token == null ? "null" : "«" + token + "»")
                     .isFalse();
