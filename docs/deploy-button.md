@@ -522,7 +522,7 @@ ops/deploy.sh --tag <SHA> --dry-run                         # напечатат
 
 ```bash
 ./tools/deploy-plan.py --selftest   # «старшим образом» — правило отката
-./ops/deploy-checks.sh --selftest   # каждая из пяти краснеет на своём дефекте
+./ops/deploy-checks.sh --selftest   # каждая из шести краснеет на своём дефекте
 ./ops/smoke-run.sh --selftest       # сценарий: краснеет на шаге, который «сделал вид»
 ./ops/deploy.sh --selftest          # ПОРЯДОК: старая гаснет последней
 ./ops/switch-build.sh --selftest    # разбор и запись имени активной сборки
