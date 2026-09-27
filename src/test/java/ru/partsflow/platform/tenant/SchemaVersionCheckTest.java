@@ -93,7 +93,13 @@ class SchemaVersionCheckTest extends PostgresTestBase {
                         .containsPattern("Схемы арендаторов отстали от кода: 1 из \\d+")
                         .contains(schema(FIRST_ID))
                         .contains(migrator.expectedVersion())
-                        .contains("ops/migrate-tenants.sh"));
+                        // Договор тот же, что и был: сказано, кто отстал и что
+                        // делать. Изменилось то, что названный путь выполним
+                        // на ячейке с выключенным секретом провижининга, —
+                        // ops/migrate-tenants.sh требовал включённого, а правило
+                        // подключения велит его выключать (задача 0204).
+                        .contains("ops/schema-sync.sh")
+                        .doesNotContain("migrate-tenants"));
     }
 
     @Test

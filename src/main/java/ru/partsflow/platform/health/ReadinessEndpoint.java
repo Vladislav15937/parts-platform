@@ -82,12 +82,52 @@ import java.util.List;
  * буквально: спрашивать надо то, что стартовые шаги делают, а не то, что
  * они закончились (задача 0086).
  *
+ * <p><b>У каждой проверки два признака, а не один: {@code ok} и
+ * {@code known}.</b> Первый отвечает «годно ли», второй — «удалось ли вообще
+ * узнать». Разница не косметическая: третья самопроверка выкладки
+ * ({@code ops/deploy-checks.sh}) различает «схемы отстали» и «спросить
+ * не вышло», и до 27 сентября 2026 второе она узнавала по вхождению фразы
+ * «не проверены» в {@code detail} — то есть переименование слова в этом
+ * файле молча возвращало дефект, стоивший 37 секунд заморозки записи
+ * у живого клиента (задача 0202). Проверено живым прогоном настоящего
+ * разбора: та же ситуация с фразой в единственном числе — «Версия схем
+ * арендаторов не проверена», как у соседних проверок этого же ответа, —
+ * давала исход «СХЕМЫ ОТСТАЛИ», то есть <b>худшее из двух</b> состояний.
+ * Теперь исход несёт поле, а фраза осталась запасным путём и только для
+ * сборок старше признака: база может быть новее кода, то есть откат
+ * приложения законен (задача 0112), а у откаченной сборки фраза заморожена
+ * в её jar и разойтись не может.
+ *
+ * <p>Договор пиннится <b>с двух сторон</b>: {@code ReadinessContractTest}
+ * читает {@code ops/deploy-checks.sh}, достаёт оттуда имя поля и имя
+ * проверки и требует их у самого ответа — то есть краснеет и Java,
+ * перестав отдавать поле, и шелл, вернувшийся к узнаванию исхода по слову.
+ * Чего договор <b>не</b> покрывает, названо вслух: смысл поля (проверка,
+ * поставившая {@code known} наугад, текстовым сторожем не ловится — её
+ * стерегут утверждения о живом ответе в {@code AppReadinessTest}
+ * и {@code StartOnFrozenDatabaseTest}); остальные фразы этого ответа,
+ * которые машинно не читает никто; и сборку старше признака, которая
+ * переименовала бы свою фразу, — такой не бывает, фраза уезжает вместе
+ * с jar.
+ *
  * <p>Транзакция не нужна: все запросы идут в {@code public} — к реестру
  * и к правам, — а не в схему арендатора.
  */
 @Component
 @Endpoint(id = "readiness")
 public class ReadinessEndpoint {
+
+    /**
+     * Состояние выяснено: {@code ok} говорит, годно ли оно.
+     *
+     * <p>Именованной константой, а не литералом {@code true} четвёртым
+     * аргументом: два соседних булевых признака с разным смыслом читаются
+     * только по имени.
+     */
+    private static final boolean KNOWN = true;
+
+    /** Спросить не вышло — «не проверена» с причиной. */
+    private static final boolean UNKNOWN = false;
 
     private final JdbcTemplate jdbc;
     private final TenantMigrations migrations;
@@ -135,10 +175,12 @@ public class ReadinessEndpoint {
     private Check database() {
         try {
             jdbc.queryForObject("SELECT 1", Integer.class);
-            return new Check("database", true, "База отвечает");
+            return new Check("database", true, "База отвечает", KNOWN);
         } catch (RuntimeException e) {
+            // Состояние выяснено, и оно плохое: база не отвечает. Это не
+            // «спросить не вышло» — спросили и получили ответ.
             return new Check("database", false,
-                    "База не отвечает: " + TenantMigrations.rootMessage(e));
+                    "База не отвечает: " + TenantMigrations.rootMessage(e), KNOWN);
         }
     }
 
@@ -165,19 +207,20 @@ public class ReadinessEndpoint {
             // схема ещё не создана. Причина — из самого глубокого исключения:
             // обёртка несёт в себе весь текст запроса.
             return new Check("catalog", false,
-                    "Общая схема catalog не проверена: " + TenantMigrations.rootMessage(e));
+                    "Общая схема catalog не проверена: " + TenantMigrations.rootMessage(e),
+                    UNKNOWN);
         }
 
         if (pending.ok()) {
             return new Check("catalog", true,
                     "Общая схема catalog принята целиком: changeset'ов %d"
-                            .formatted(pending.total()));
+                            .formatted(pending.total()), KNOWN);
         }
         return new Check("catalog", false,
                 "Общая схема catalog принята не целиком: не хватает %d из %d (%s). "
                         .formatted(pending.missing().size(), pending.total(), pending.names())
                         + "Накат идёт при старте приложения — дождитесь его; если "
-                        + "не заканчивается, смотрите лог CatalogMigrations");
+                        + "не заканчивается, смотрите лог CatalogMigrations", KNOWN);
     }
 
     private Check schemas() {
@@ -189,8 +232,14 @@ public class ReadinessEndpoint {
             // несёт в сообщении весь текст запроса, и ответ готовности
             // превращался в простыню SQL вместо «реестра нет». Состояние
             // достижимое — ячейка до наката общей схемы, проверено живьём.
+            //
+            // Исход «спросить не вышло» несёт признак UNKNOWN, а не эта фраза
+            // (задача 0204): по фразе его узнавал шаг выкладки, и одно
+            // переписанное слово возвращало дефект 0202 целиком. Сама фраза
+            // оставлена дословно — по ней тот же исход узнаёт сборка,
+            // выложенная до признака.
             return new Check("schemas", false, "Версии схем арендаторов не проверены: "
-                    + TenantMigrations.rootMessage(e));
+                    + TenantMigrations.rootMessage(e), UNKNOWN);
         }
 
         if (lag.ok()) {
@@ -202,14 +251,20 @@ public class ReadinessEndpoint {
                     // та минута выкладки, ради которой правило несимметрично.
                     : "Схем позади версии %s нет; впереди %d из %d — это норма "
                             .formatted(lag.expectedVersion(), lag.ahead(), lag.tenants())
-                            + "между накатом и подъёмом новой сборки");
+                            + "между накатом и подъёмом новой сборки", KNOWN);
         }
 
+        // Совет ведёт на ops/schema-sync.sh, а не на ops/migrate-tenants.sh:
+        // тому нужен включённый секрет провижининга, а правило подключения
+        // велит его выключать — то есть на правильно настроенной ячейке
+        // прежний совет был невыполним (задача 0204). Одно место, знающее
+        // команду, — TenantMigrations.MIGRATE_COMMAND, там же и довод.
         return new Check("schemas", false,
-                "Схемы арендаторов позади версии %s: %d из %d (%s). Накатите: "
+                "Схемы арендаторов позади версии %s: %d из %d (%s). "
                         .formatted(lag.expectedVersion(), lag.behind().size(), lag.tenants(),
                                 TenantMigrations.namesOf(lag.behind()))
-                        + "ops/migrate-tenants.sh");
+                        + "Приведите их к версии образа: " + TenantMigrations.MIGRATE_COMMAND,
+                KNOWN);
     }
 
     private Check journals() {
@@ -218,25 +273,26 @@ public class ReadinessEndpoint {
             status = journals.status();
         } catch (RuntimeException e) {
             return new Check("journals", false,
-                    "Защита журналов не проверена: " + TenantMigrations.rootMessage(e));
+                    "Защита журналов не проверена: " + TenantMigrations.rootMessage(e),
+                    UNKNOWN);
         }
 
         if (status.problem() != null) {
             return new Check("journals", false,
-                    "Защита журналов не проверена: " + status.problem());
+                    "Защита журналов не проверена: " + status.problem(), UNKNOWN);
         }
         if (status.schema() == null) {
             // Ячейка без арендаторов законна: её как раз и поднимают перед
             // подключением первого клиента. Проверять при этом нечего,
             // и красить выкладку в красное не за что.
             return new Check("journals", true,
-                    "Арендаторов в ячейке ещё нет — проверять нечего");
+                    "Арендаторов в ячейке ещё нет — проверять нечего", KNOWN);
         }
         if (status.locked()) {
             return new Check("journals", true,
                     "Журналы защищены: роль %s не может править %s (проверено на %s)"
                             .formatted(status.role(), JournalProtection.JOURNALS,
-                                    status.schema()));
+                                    status.schema()), KNOWN);
         }
         if (!status.reachable()) {
             // Роль без прав на схему журналы тоже не перепишет — и это не
@@ -247,13 +303,13 @@ public class ReadinessEndpoint {
                     "Рабочая роль %s не дотягивается до схемы %s: прав нет ни на журналы, "
                             .formatted(status.role(), status.schema())
                             + "ни на обычные таблицы. Права на схемы выдаёт накат: "
-                            + "ops/migrate-tenants.sh");
+                            + TenantMigrations.MIGRATE_COMMAND, KNOWN);
         }
         return new Check("journals", false,
                 "Журналы правятся прямым SQL: %s доступны на UPDATE роли %s (проверено на %s). "
                         .formatted(status.writable(), status.role(), status.schema())
                         + "Включается разделение ролей — ops/create-roles.sh и переменные "
-                        + "DB_USER, APP_DDL_*, APP_RUNTIME_ROLE");
+                        + "DB_USER, APP_DDL_*, APP_RUNTIME_ROLE", KNOWN);
     }
 
     /**
@@ -298,13 +354,19 @@ public class ReadinessEndpoint {
      */
     private Check writes() {
         try {
-            return new Check("writes", true, writeProbe.probe().detail());
+            DatabaseWriteProbe.Answer answer = writeProbe.probe();
+            // Признак берётся у состояния пробы, а не у её текста: «запись
+            // не проверена» — это её третье состояние (задача 0200), и выдать
+            // его за знание значило бы соврать ровно тем полем, которое
+            // на этот вопрос и отвечает.
+            return new Check("writes", true, answer.detail(),
+                    answer.state() != DatabaseWriteProbe.State.UNKNOWN);
         } catch (RuntimeException e) {
             // Проба ответ собирает сама и наружу не бросает; это последний
             // рубеж, чтобы неожиданность в ней не уронила весь ответ
             // готовности — тогда выкладка встала бы на пустом месте.
             return new Check("writes", true,
-                    "Запись не проверена: " + TenantMigrations.rootMessage(e));
+                    "Запись не проверена: " + TenantMigrations.rootMessage(e), UNKNOWN);
         }
     }
 
@@ -322,17 +384,20 @@ public class ReadinessEndpoint {
         WebEndpointsSupplier supplier = webEndpoints.getIfAvailable();
         if (supplier == null) {
             return new Check("metrics", false,
-                    "Отдача метрик не проверена: список веб-эндпоинтов недоступен");
+                    "Отдача метрик не проверена: список веб-эндпоинтов недоступен",
+                    UNKNOWN);
         }
         boolean exposed = supplier.getEndpoints().stream()
                 .anyMatch(endpoint -> "prometheus".equals(endpoint.getEndpointId().toString()));
         return exposed
-                ? new Check("metrics", true, "Метрики отдаются: /actuator/prometheus на месте")
+                ? new Check("metrics", true, "Метрики отдаются: /actuator/prometheus на месте",
+                        KNOWN)
                 : new Check("metrics", false,
                         "Метрики не отдаются: /actuator/prometheus не отображён — нет реестра "
                                 + "Prometheus в зависимостях либо адрес убран из "
                                 + "management.endpoints.web.exposure.include. Тревоги ячейки "
-                                + "при этом молчат, а выглядит это как исправная система");
+                                + "при этом молчат, а выглядит это как исправная система",
+                        KNOWN);
     }
 
     /**
@@ -347,7 +412,12 @@ public class ReadinessEndpoint {
      * @param check  имя проверки латиницей: по нему шаг выкладки и тревога
      *               узнают, что именно не готово, а текст меняется свободно
      * @param detail что показать человеку, который пришёл разбираться
+     * @param known  удалось ли вообще узнать состояние. Машинный признак
+     *               исхода «спросить не вышло»: по нему шаг выкладки
+     *               отличает «схемы отстали» от «я не спросил», не читая
+     *               текста, — договор с {@code ops/deploy-checks.sh},
+     *               подробности и его границы в javadoc класса
      */
-    public record Check(String check, boolean ok, String detail) {
+    public record Check(String check, boolean ok, String detail, boolean known) {
     }
 }

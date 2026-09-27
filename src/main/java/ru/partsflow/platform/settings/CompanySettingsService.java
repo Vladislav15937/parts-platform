@@ -6,6 +6,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.platform.tenant.TenantMigrations;
 
 import java.util.List;
 import java.util.Set;
@@ -122,6 +123,18 @@ public class CompanySettingsService {
      * «сохранено» было бы враньём: владелец ушёл бы со страницы уверенным,
      * что у него теперь сутки, а сделки продолжали бы откладываться на трое.
      * Поэтому 409 со словами, называющими и причину, и кто её чинит.
+     *
+     * <p><b>Пути к скрипту ячейки в этом отказе нет, и это решение
+     * исполнителя (задача 0204).</b> До 27 сентября 2026 здесь стояло
+     * «Накатите миграции (ops/migrate-tenants.sh)» — команда, которую
+     * владелец компании не запустит ни при каком секрете: у него нет доступа
+     * к машине ячейки, он читает этот текст в браузере. То есть отказ
+     * показывал человеку внутреннее представление (класс 3
+     * {@code docs/defect-classes.md}) и вместо следующего действия давал
+     * тупик. Смысл отказа при этом не изменился — сохранить нельзя,
+     * действует прежний срок, — поменялось только то, к кому он адресует;
+     * вопроса владельцу продукта здесь поэтому нет. Дежурному по ячейке
+     * команда по-прежнему называется, но в логе: {@link #warnOnce()}.
      */
     @Transactional
     public CompanySettings update(int reservationDays) {
@@ -133,9 +146,9 @@ public class CompanySettingsService {
         if (!tableExists()) {
             warnOnce();
             throw new IllegalStateException(
-                    "Настройки компании ещё не накатаны на схему — сохранить срок "
-                            + "некуда. Накатите миграции (ops/migrate-tenants.sh) "
-                            + "и повторите; пока действует прежний срок "
+                    "Настройки компании ещё не накатаны на схему вашей компании — "
+                            + "сохранить срок некуда. Это чинит администратор сервиса: "
+                            + "нужен накат миграций. Пока действует прежний срок "
                             + FALLBACK_RESERVATION_DAYS + " дня.");
         }
         jdbc.update("""
@@ -173,7 +186,8 @@ public class CompanySettingsService {
         if (warned.add(String.valueOf(schema))) {
             log.warn("Схема {} не накатана до tenant/066: настройки компании нет, "
                             + "срок резерва берётся прежний — {} дня. "
-                            + "Накатить: ops/migrate-tenants.sh",
+                            + "Привести к версии образа: "
+                            + TenantMigrations.MIGRATE_COMMAND,
                     schema, FALLBACK_RESERVATION_DAYS);
         }
     }
