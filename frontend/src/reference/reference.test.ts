@@ -60,12 +60,26 @@ describe('подсказки', () => {
   });
 });
 
+/**
+ * Время загрузки — от «сейчас», а не числом календаря.
+ *
+ * <p>По разнице с «сейчас» считается свежесть справочника
+ * (`useReference.isStale`, 12 часов), поэтому зашитое число означает
+ * «устаревший справочник» в любом прогоне начиная со следующего дня —
+ * а здесь проверяется хранение, и состояние справочника должно быть
+ * обычным, а не краевым.
+ */
+const LOADED_AT = new Date().toISOString();
+
+/** Вторая загрузка — позже первой; важно только то, что они разные. */
+const LATER = new Date(Date.now() + 2 * 3600 * 1000).toISOString();
+
 describe('хранение справочников', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it('забранное с сервера читается из локального хранилища', async () => {
     const reference: Reference = {
-      loadedAt: '2026-07-30T10:00:00Z',
+      loadedAt: LOADED_AT,
       warehouses: [{ id: 1, name: 'Ткацкая', cells: [{ id: 10, code: 'А-01-1', zone: 'А' }] }],
       supplies: [],
       donors: [],
@@ -81,15 +95,15 @@ describe('хранение справочников', () => {
     // Ради этого всё и затевалось: после выхода из сети данные на месте.
     const cached = await cachedReference();
     expect(cached?.warehouses[0]?.cells[0]?.code).toBe('А-01-1');
-    expect(cached?.loadedAt).toBe('2026-07-30T10:00:00Z');
+    expect(cached?.loadedAt).toBe(LOADED_AT);
   });
 
   it('повторная загрузка заменяет справочники целиком, а не сливает', async () => {
-    const first: Reference = empty('2026-07-30T10:00:00Z');
+    const first: Reference = empty(LOADED_AT);
     first.warehouses = [{ id: 1, name: 'Закрытый склад', cells: [] }];
     await store(first);
 
-    const second: Reference = empty('2026-07-30T12:00:00Z');
+    const second: Reference = empty(LATER);
     second.warehouses = [{ id: 2, name: 'Рабочий склад', cells: [] }];
     await store(second);
 

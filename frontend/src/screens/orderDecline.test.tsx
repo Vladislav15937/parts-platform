@@ -69,12 +69,21 @@ describe('отказ по заказу с площадки', () => {
   });
 });
 
+/**
+ * Срок ответа площадке — от «сейчас».
+ *
+ * <p>Экран показывает не дату, а остаток времени (`hoursUntilDeadline`),
+ * то есть считает его от сегодняшнего числа. Зашитое «11 августа» означало
+ * заказ с давно вышедшим сроком — не то состояние, в котором заказ отклоняют.
+ */
+const REPLY_DEADLINE = new Date(Date.now() + 2 * 24 * 3600 * 1000).toISOString();
+
 function order(id: number, status: string, no: string) {
   return {
     id, number: id, customerId: null, managerId: null, status,
     reservedUntil: null, totalAmount: '850', paidAmount: '0', debt: '850',
     createdAt: '2026-08-08T10:00:00Z', issuedAt: null, marketplace: 'DROM',
-    externalOrderNo: no, replyDeadline: '2026-08-11T10:00:00Z',
+    externalOrderNo: no, replyDeadline: REPLY_DEADLINE,
     orderAcceptedAt: null, deliveryNote: null,
     items: [{ id, partId: 5, title: 'Тросик багажника', quantity: '1',
               price: '850', status: 'RESERVED', warehouseId: 2 }],

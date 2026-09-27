@@ -11,7 +11,10 @@ import { normalizeCode, resolveScan } from './codes';
  */
 
 const reference: Reference = {
-  loadedAt: '2026-07-30T00:00:00Z',
+  // От «сейчас»: свежесть справочника считается разницей с ним, и зашитое
+  // число означало бы «устаревший справочник» во всяком прогоне начиная
+  // со следующего дня.
+  loadedAt: new Date().toISOString(),
   warehouses: [
     {
       id: 1,
