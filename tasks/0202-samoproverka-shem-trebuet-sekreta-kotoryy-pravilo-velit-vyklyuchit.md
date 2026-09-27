@@ -1,10 +1,10 @@
 ---
 id: 0202
 title: Третья самопроверка выкладки требует секрета провижининга, который правило безопасности велит выключить — и не отличает «схемы отстали» от «спросить не вышло»
-status: новая
-assignee: —
+status: слита
+assignee: coder
 source: живой прогон выкладки на ПРОМ 27 сентября 2026 (прогон 36289918583, SHA bf92971ef33628acd0b85c0ba46f4118652522de); премисы проверены разведкой 27.09.2026 чтением ops/deploy-checks.sh, ops/migrate-tenants.sh, ProvisioningController, TenantMigrations и ReadinessEndpoint
-pr: —
+pr: 298
 ---
 
 ## Что человек сможет
