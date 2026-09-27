@@ -139,8 +139,31 @@ FROZEN = re.compile(
 # Относительная форма — то, к чему сторож и ведёт.
 RELATIVE = re.compile(r"Date\.now\(\)|Instant\.now\(\)|LocalDate\.now\(\)|new Date\(\s*\)")
 
-# «Сейчас» в шелле и в питоньих проверках.
-SHELL_NOW = re.compile(r"\$\(\s*date\s|`date\s|\bdate\s+[-+]|\btime\(\)|\bdatetime\.now\b|\btime\.time\b")
+# «Сейчас» в шелле и в питоньих проверках — и только оно.
+#
+# `date -d "@$epoch"`, `date -r`, `date -j -f`, `--date=` спрашивают про
+# НАЗВАННЫЙ момент, а не про сегодняшний день. Ровно это различие делает
+# и подменный `date` в tools/clock-shift-run.sh: сдвигать ответ на «сейчас»
+# и не трогать ответ про конкретный момент.
+#
+# Первая редакция их не различала — считала «сейчас» любой вызов `date`
+# с флагом, — и на слиянии с задачей 0096 покраснела на трёх фикстурах
+# `ops/restore-pitr.sh`, где момент зашит с ОБЕИХ сторон сравнения, то есть
+# на совершенно исправном коде, да ещё в чужом файле. Это и есть та ложная
+# тревога, которая дороже пропуска: сторож, краснеющий на зелёном чужом
+# файле, будет отключён вместе с настоящей защитой. Поймано швом, а не
+# чтением: поодиночке обе ветки были зелёные.
+SHELL_NOW_OTHER = re.compile(r"\btime\(\)|\bdatetime\.now\b|\btime\.time\b")
+SHELL_DATE_CALL = re.compile(r"\bdate\b[^)`\n]*")
+SHELL_EXPLICIT_MOMENT = re.compile(r"(?:^|\s)(?:-d|-r|-j|--date=|--reference=)")
+
+
+def asks_now(code):
+    """Спрашивает ли этот код настоящее время (а не про названный момент)."""
+    if SHELL_NOW_OTHER.search(code):
+        return True
+    return any(not SHELL_EXPLICIT_MOMENT.search(call)
+               for call in SHELL_DATE_CALL.findall(code))
 
 # Поля, которые вывод обязан находить. Это не рабочий список — рабочий
 # выводится из исходников, — а пол под ним: вывод, перестав находить эти
@@ -410,7 +433,7 @@ def mines_in_checks(dirs):
                 code = "\n".join(
                     line for line in block.splitlines()
                     if not re.match(r"\s*#", line))
-                if not SHELL_NOW.search(code):
+                if not asks_now(code):
                     continue
                 for offset, line in enumerate(code.splitlines()):
                     values = literals_of(line)
@@ -528,6 +551,10 @@ selftest() {
 inert() {
     out=$(report '2026-09-12 10:00:05')
 }
+explicit() {
+    here=$(date -d "@${MOMENT_EPOCH}" '+%H:%M:%S')
+    out=$(report '2026-09-12 13:59:00 MSK')
+}
 """
 
 
@@ -626,8 +653,13 @@ def selftest():
             failures.append("в проверке ячейки литерал даты рядом с `date +%s` "
                             "не назван")
         if text.count("check.sh") > 1:
-            failures.append("литерал в функции без «сейчас» назван нарушением: "
-                            "у проверок ячейки это обычная фикстура разбора")
+            failures.append(
+                "назван нарушением литерал, который сравнивать с «сейчас» "
+                "никто не собирается: либо функция вовсе не спрашивает время, "
+                "либо спрашивает про НАЗВАННЫЙ момент (`date -d \"@$epoch\"`, "
+                "`-r`, `-j -f`). У проверок ячейки это обычная фикстура "
+                "разбора, и на слиянии с 0096 сторож покраснел ровно так — "
+                "на трёх исправных фикстурах чужого файла")
 
         # 6. Пометка: с причиной — молчит, без причины — красное. Иначе список
         #    станет способом отключить сторожа, а не разбором.
