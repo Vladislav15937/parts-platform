@@ -116,6 +116,56 @@ class ReadinessContractTest {
                 .contains("\"" + name + "\"");
     }
 
+    @Test
+    @DisplayName("Версию шаг выкладки читает полями, которые ответ и отдаёт")
+    void versionFieldsMatch() throws IOException {
+        String verdict = verdictVersion();
+
+        assertThat(verdict)
+                .as("шестая самопроверка не читает блок version у ответа готовности: "
+                        + "сверять «подняли то, что выкладывали» ей нечем (задача 0130)")
+                .contains("body.get('version')");
+
+        Matcher reads = Pattern.compile("version\\.get\\('([A-Za-z]+)'\\)").matcher(verdict);
+        List<String> fields = new ArrayList<>();
+        while (reads.find()) {
+            if (!fields.contains(reads.group(1))) {
+                fields.add(reads.group(1));
+            }
+        }
+        assertThat(fields)
+                .as("ops/deploy-checks.sh не читает у версии ни одного поля — "
+                        + "значит исход он решает как-то иначе, и договор читать негде")
+                .contains("named", "sha");
+
+        // Ответ собирается настоящим record'ом: перестань он отдавать поле —
+        // шелл прочитает пустоту и объявит исправную сборку безымянной.
+        String serialized = json.writeValueAsString(new ReadinessEndpoint.Readiness(
+                true, BuildVersion.read(null), List.of()));
+        assertThat(serialized)
+                .as("в ответе готовности нет блока «version», который читает "
+                        + "ops/deploy-checks.sh")
+                .contains("\"version\"");
+        for (String field : fields) {
+            assertThat(serialized)
+                    .as("ответ готовности не несёт поля «%s», которое читает "
+                            + "шестая самопроверка: она получит пустоту и назовёт "
+                            + "причину, которой не проверяла", field)
+                    .contains("\"" + field + "\"");
+        }
+    }
+
+    /** Тело {@code verdict_version} — только оно, до соседней функции. */
+    private static String verdictVersion() throws IOException {
+        String text = read(CHECKS);
+        int from = text.indexOf("verdict_version()");
+        assertThat(from)
+                .as("в %s нет функции verdict_version — сверки версии нет вовсе", CHECKS)
+                .isNotNegative();
+        int to = text.indexOf("env_tag_of()", from);
+        return to < 0 ? text.substring(from) : text.substring(from, to);
+    }
+
     /** Тело {@code verdict_schemas} — только оно, чтобы не поймать соседний разбор. */
     private static String verdictSchemas() throws IOException {
         String text = read(CHECKS);

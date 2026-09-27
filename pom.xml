@@ -22,6 +22,25 @@
         <testcontainers.version>1.20.3</testcontainers.version>
         <awssdk.version>2.29.9</awssdk.version>
         <poi.version>5.3.0</poi.version>
+        <!--
+            SHA коммита, из которого собран артефакт (задача 0130). Здесь он
+            пустой намеренно: <version> от сборки к сборке не меняется
+            (0.1.0-SNAPSHOT), а настоящий SHA знает только сборка образа —
+            он приезжает аргументом сборки Dockerfile и доходит сюда
+            как -Dapp.build.sha=<SHA>.
+
+            Значение-заглушка, а не пустая строка: пустое цель build-info
+            отвергает («Additional property 'sha' is illegal as its value
+            is null» — проверено прогоном), то есть местная сборка перестала
+            бы собираться вовсе.
+
+            Само слово нигде не сверяется: приложение проверяет ФОРМУ —
+            SHA коммита это семь-сорок шестнадцатеричных знаков, а всё
+            остальное значит «версия не названа» (BuildVersion.read).
+            Так заглушку не приходится знать двоим, и заодно ловится
+            переданная невесть что — имя ветки, незаменённый ${APP_VERSION}.
+        -->
+        <app.build.sha>no-build-arg</app.build.sha>
     </properties>
 
     <dependencies>
@@ -187,6 +206,31 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <executions>
+                    <!--
+                        Сведения о сборке внутрь артефакта
+                        (META-INF/build-info.properties, задача 0130): по ним
+                        работающее приложение отвечает, какая это версия.
+
+                        ВНУТРЬ JAR, а не в переменную окружения образа,
+                        и это главное решение: окружение можно задать
+                        в compose, то есть ответ снова стал бы пересказом
+                        .env — ровно тем, что задача запрещает. Запечённое
+                        в артефакт подменить нельзя, не собрав другой
+                        артефакт.
+                    -->
+                    <execution>
+                        <id>build-info</id>
+                        <goals>
+                            <goal>build-info</goal>
+                        </goals>
+                        <configuration>
+                            <additionalProperties>
+                                <sha>${app.build.sha}</sha>
+                            </additionalProperties>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
