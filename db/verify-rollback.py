@@ -2,9 +2,43 @@
 # -*- coding: utf-8 -*-
 """Откат по шагам: каждый changeset обязан возвращать схему ровно к «как было».
 
-  ./db/verify-rollback.py              полный прогон по схеме арендатора
-  ./db/verify-rollback.py --selftest   проверка самого сторожа
-  ./db/verify-rollback.py --steps N    первые N changeset'ов (для разбора)
+  ./db/verify-rollback.py                оба набора: общий и арендаторский
+  ./db/verify-rollback.py --selftest     проверка самого сторожа
+  ./db/verify-rollback.py --steps N      первые N changeset'ов (для разбора)
+  ./db/verify-rollback.py --only catalog  один набор (для разбора)
+
+НАБОРОВ ДВА, И ДО 27 СЕНТЯБРЯ 2026 ПРОВЕРЯЛСЯ ОДИН (задача 0103). Общая схема
+ячейки — `catalog` плюс служебные таблицы в `public` — не откатывалась ни здесь,
+ни в `db/verify.sh`: её changeset'ы на разворот не проверяло ничто. А её откат
+опаснее арендаторского: схема арендатора одна на клиента, общая — одна НА ВСЮ
+ЯЧЕЙКУ. В ней справочники, реестр арендаторов и хранилище сессий, то есть
+неверный откат здесь кладёт всех клиентов разом.
+
+ЧЕМ ОБЩИЙ НАБОР ОТЛИЧАЕТСЯ ОТ АРЕНДАТОРСКОГО. Три отличия, и каждое меняет
+механику проверки, а не только имя схемы:
+
+  1. СХЕМ У НЕГО ДВЕ. Справочники лежат в `catalog`, а реестр арендаторов,
+     `shedlock` и хранилище сессий — в `public`, рядом с `DATABASECHANGELOG`.
+     Снимок снимается с обеих: смотреть одну значит не видеть половину набора
+     (шесть changeset'ов из тридцати шести правят только `public`).
+  2. ПЕРВЫЙ CHANGESET ЗДЕСЬ ОТКАТЫВАЕТСЯ. У арендатора его `--rollback` делает
+     `DROP SCHEMA CASCADE` и сносит вместе со схемой сам `DATABASECHANGELOG`
+     (он лежит внутри схемы) — поэтому там цепочка идёт до второго. У каталога
+     журнал живёт в `public`, а первый changeset заводит расширения: его откат
+     журнала не касается, и цепочка проверяется целиком, до пустоты.
+  3. РАСШИРЕНИЯ НЕ ПРИНАДЛЕЖАТ НИ ОДНОЙ СХЕМЕ, и `pg_dump -n` их не печатает
+     вовсе. Единственный changeset набора, чьи объекты не схемные, — как раз
+     первый; без отдельного вопроса к `pg_extension` сторож молчал бы ровно
+     про тот changeset, ради которого цепочку и продлили до конца.
+
+ГРАНИЦЫ ОТКАТА У ОБЩЕЙ СХЕМЫ НЕТ — это названо, а не умолчано. У набора
+арендатора расхождения лежат ниже объявленной границы
+(`db/changelog/rollback-floor.properties` знает только `tenant`), и ниже неё
+инструменты отказывают. Для общей схемы такого объявления нет, значит
+найденные расхождения НИЧЕМ НЕ ЗАПРЕЩЕНЫ: инструмент, опустивший общую схему
+ниже них, сработает молча. Что с этим делать и чья это работа — в `tasks/0103`
+и в `db/CLAUDE.md`; список известных расхождений печатается каждым прогоном
+(пометка ПРОБЕЛ) и разрешением не является.
 
 ЧЕМ ЭТО ОТЛИЧАЕТСЯ ОТ `db/verify.sh`, ШАГ 7. Тот откатывает схему целиком
 и проверяет, что таблиц не осталось, — то есть утверждение «всё откатывается
@@ -219,6 +253,102 @@ ALLOWED.update({
 })
 
 
+# ─────────── общая схема ячейки: чем её откат отличается ───────────
+#
+# Опоры, которая есть у набора арендатора, здесь нет: границы отката общей
+# схемы не объявлено вовсе. Поэтому и пометка одна, и она слабее двух
+# арендаторских — ПРОБЕЛ: «измерено; правкой выпущенного не чинится
+# (чек-сумма), и запретить такой откат сегодня нечем». Это очередь работы,
+# а не разрешение: что нужно от `migrator` и что решает владелец продукта,
+# названо в tasks/0103.
+ПРОБЕЛ = "пробел"
+
+# Волна «в базе нет генерируемых колонок» — catalog/017, два changeset'а.
+# Оба несут `--rollback SELECT 1;`, и вперёд это правильно: правило сильнее
+# возврата. Найдено перебором 27 сентября 2026 (задача 0103) — до него откат
+# общей схемы не проверяло ничто, ни здесь, ни в db/verify.sh.
+ALLOWED_CATALOG = {
+    "catalog-017-part-kind-search": (
+        ("join_text", "part_kind_search_gin", "search_vector"), ПРОБЕЛ,
+        "откат объявлен пустым (`--rollback SELECT 1`) намеренно: правило "
+        "«генерируемых колонок и логики в базе нет» сильнее возврата. "
+        "Но после отката ниже catalog/017 общая схема остаётся без "
+        "`part_kind.search_vector`, без индекса `part_kind_search_gin` "
+        "и без функции `catalog.join_text` — то есть не той, какой была "
+        "на прежней версии. Практическая цена мала, и это измерено самим 017: "
+        "вектор поиска по видам деталей не читал никто. Структурная цена "
+        "настоящая: changeset, сославшийся на `join_text` по имени, встанет "
+        "на свежей схеме и упадёт на откатанной. Правкой выпущенного "
+        "не чинится (чек-сумма), мостом отката в наборе каталога — чинится, "
+        "и здесь мост не опасен, в отличие от арендатора: объекты инертны, "
+        "а `part_kind` пишут только миграции. Это новый changeset, то есть "
+        "`migrator` и отдельная ветка — названо в tasks/0103."),
+    "catalog-017-normalize-oem-comment": (
+        ("normalize_oem",), ПРОБЕЛ,
+        "откат пустой (`--rollback SELECT 1`), и после него на "
+        "`catalog.normalize_oem` остаётся комментарий, которого на прежней "
+        "версии не было. Поведения это не меняет вовсе — комментарий, — "
+        "но схема после отката отличается от собранной накатом до той же "
+        "версии, и решать за читателя, какая разница «неважная», сторож "
+        "не вправе: сегодня это комментарий, а завтра тем же «SELECT 1» "
+        "закроют колонку. Чинится тем же мостом и тем же `migrator`."),
+}
+
+
+class Group:
+    """Набор changeset'ов: чем его накатывать и что у него считать схемой.
+
+    Заведён ради того, чтобы обход был один на оба набора. Второй обход,
+    написанный рядом, разошёлся бы с первым на первой же правке — и разошёлся
+    бы молча, потому что оба зелёные: ровно так до задачи 0103 и вышло, что
+    перебор existed только для арендатора.
+    """
+
+    def __init__(self, title, changelog, lb_schema, dump_schemas, search_path,
+                 reset, allowed, rollback_first, strip=()):
+        self.title = title                  # как набор зовут в выводе
+        self.changelog = changelog          # манифест, путь внутри db/
+        self.lb_schema = lb_schema          # схема Liquibase; None — public
+        self.dump_schemas = dump_schemas    # что попадает в снимок
+        self.search_path = search_path      # чем проигрывать SQL в psql
+        self.reset = reset                  # вернуть базу к «до первого»
+        self.allowed = allowed              # разобранные расхождения
+        self.rollback_first = rollback_first
+        self.strip = strip                  # какие имена схем прятать в снимке
+
+
+TENANT = Group(
+    title=f"схема арендатора {SCHEMA}",
+    changelog=TENANT_CHANGELOG,
+    lb_schema=SCHEMA,
+    dump_schemas=(SCHEMA,),
+    search_path=SCHEMA,
+    reset=f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE; CREATE SCHEMA {SCHEMA};",
+    allowed=ALLOWED,
+    rollback_first=False,
+    # Номер схемы прячется: прогон идёт по t_000042, самопроверка по своей,
+    # а сверять надо форму, а не адрес.
+    strip=(SCHEMA,))
+
+CATALOG = Group(
+    title="общая схема ячейки (catalog и public)",
+    changelog=CATALOG_CHANGELOG,
+    lb_schema=None,
+    dump_schemas=("catalog", "public"),
+    search_path="public",
+    # Сброс уносит и `public`: там лежат реестр арендаторов, shedlock,
+    # хранилище сессий и сам DATABASECHANGELOG, а `CREATE EXTENSION` кладёт
+    # объекты расширений туда же. Пересоздание схемы — единственный способ
+    # вернуть базу к состоянию «до первого changeset'а» целиком.
+    reset=("DROP SCHEMA IF EXISTS catalog CASCADE;"
+           " DROP SCHEMA IF EXISTS public CASCADE;"
+           " CREATE SCHEMA public;"),
+    allowed=ALLOWED_CATALOG,
+    rollback_first=True)
+
+GROUPS = {"catalog": CATALOG, "tenant": TENANT}
+
+
 def floor_problems(allowed=None, sets=None):
     """Сторожит само объявление границы (задача 0102).
 
@@ -362,10 +492,34 @@ class Cell:
             cmd += [f"-Dtenant.schema={schema}"]
         return run(cmd, capture=capture, quiet=True)
 
-    def dump(self, schema):
+    def dump(self, schemas):
+        """Схемный дамп: одна схема или несколько — у общей их две.
+
+        Общий набор ячейки живёт в `catalog` и `public` разом: справочники
+        там, реестр арендаторов и хранилище сессий здесь. Дамп одной схемы
+        отвечал бы про половину набора и молчал бы про вторую.
+        """
+        names = [schemas] if isinstance(schemas, str) else list(schemas)
+        where = []
+        for name in names:
+            where += ["-n", name]
         return run(["docker", "exec", "-i", self.pg, "pg_dump", "-U", "app",
-                    "-d", "parts", "-n", schema, "--schema-only",
+                    "-d", "parts"] + where + ["--schema-only",
                     "--no-owner", "--no-acl"], capture=True, quiet=True)
+
+    def extensions(self):
+        """Расширения базы: они не принадлежат ни одной схеме.
+
+        `pg_dump -n` их не печатает вовсе, а первый changeset общей схемы
+        только их и заводит. Без этого вопроса его откат был бы непроверяем —
+        сторож молчал бы про единственный changeset, ради которого цепочка
+        отката и продлена до конца.
+        """
+        out = run(["docker", "exec", "-i", self.pg, "psql", "-U", "app",
+                   "-d", "parts", "-tA", "-c",
+                   "SELECT extname FROM pg_extension ORDER BY extname"],
+                  capture=True, quiet=True) or ""
+        return [line.strip() for line in out.splitlines() if line.strip()]
 
 
 def run(cmd, cwd=None, check=True, capture=False, quiet=False, stdin=None):
@@ -420,7 +574,7 @@ def split_by_changeset(sql, marker):
 HEADER = re.compile(r"^-- Name: (.+); Type: (.+); Schema: (.+); Owner:")
 
 
-def snapshot(dump_text, schema):
+def snapshot(dump_text, strip=(), extensions=()):
     """Дамп → {объект: его определение}.
 
     Сверять построчно нельзя: pg_dump раскладывает объекты в порядке OID,
@@ -430,15 +584,19 @@ def snapshot(dump_text, schema):
     объект с объектом. Заодно это и есть ответ на вопрос «что именно
     осталось в схеме»: имя и тип, а не номер строки.
 
-    Имя схемы вычищается: снимки снимаются с одной схемы, но самопроверка
-    гоняет свою — сравнивать надо форму, а не адрес.
+    Имена схем из `strip` вычищаются: прогон арендатора идёт по t_000042,
+    а самопроверка по своей — сравнивать надо форму, а не адрес. У общей
+    схемы `strip` пуст намеренно: имена `catalog` и `public` настоящие
+    и не меняются, а спрятав оба, мы склеили бы `catalog.brand`
+    с `public.brand` — то есть научились бы не замечать разницу.
     """
     objects, key, body = {}, None, []
 
     def flush():
         if key:
             text = "\n".join(body).strip()
-            text = text.replace(schema + ".", "«схема».")
+            for name in strip:
+                text = text.replace(name + ".", "«схема».")
             # Запятая в конце строки говорит только о том, что колонка
             # не последняя. Вернувшаяся на своё место колонка сдвигает эту
             # запятую у соседней — и без нормализации сосед, к которому
@@ -472,11 +630,16 @@ def snapshot(dump_text, schema):
             continue
         body.append(line)
     flush()
-    # Служебные таблицы Liquibase к схеме арендатора не относятся: их форма
-    # одна и та же на любом шаге, а строки внутри сверять нечем — дамп
-    # схемный.
-    return {k: v for k, v in objects.items()
+    # Служебные таблицы Liquibase к набору не относятся: их форма одна и та же
+    # на любом шаге, а строки внутри сверять нечем — дамп схемный.
+    kept = {k: v for k, v in objects.items()
             if "databasechangelog" not in k.lower()}
+    # Расширения — часть того, что набор оставил в базе, но ни одной схеме
+    # они не принадлежат (см. Cell.extensions). Тела у записи нет: сверяется
+    # само наличие.
+    for name in extensions:
+        kept[f"EXTENSION: {name}"] = ""
+    return kept
 
 
 def compare(expected, actual):
@@ -488,7 +651,7 @@ def compare(expected, actual):
     return extra, missing, changed
 
 
-def allowed_for(changeset_id, detail):
+def allowed_for(allowed, changeset_id, detail):
     """Разобранное расхождение: названо всё, что разошлось, и причина непуста.
 
     `detail` — {объект: строки, которыми он разошёлся}. Сверяется каждая
@@ -496,7 +659,7 @@ def allowed_for(changeset_id, detail):
     отличаться» накрыло бы любую правку этой таблицы, а разрешение
     «строкой про search_vector» — только ту, которая разобрана.
     """
-    entry = ALLOWED.get(changeset_id)
+    entry = allowed.get(changeset_id)
     if not entry:
         return None
     markers, kind, reason = entry
@@ -511,37 +674,51 @@ def allowed_for(changeset_id, detail):
 
 # ──────────────────────────────── прогон ────────────────────────────────
 
-def walk(cell, changelog, schema, limit=None, report=print, known=None):
+def walk(cell, group, limit=None, report=print, known=None):
     """Накат по шагам, откат по шагам, накат обратно. Возвращает список бед."""
     problems = []
     known = known if known is not None else []
     tmp = tempfile.mkdtemp(prefix="rollback-sql-")
-    try:
-        cell.psql(sql=f"DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema};")
+    schema = group.search_path
 
-        forward_sql = cell.liquibase(changelog, schema, "update-sql", capture=True)
+    def look():
+        """Снимок набора: дамп всех его схем плюс расширения базы."""
+        return snapshot(cell.dump(group.dump_schemas), group.strip,
+                        cell.extensions())
+
+    try:
+        cell.psql(sql=group.reset)
+
+        forward_sql = cell.liquibase(group.changelog, group.lb_schema,
+                                     "update-sql", capture=True)
         preamble, forward = split_by_changeset(forward_sql, FORWARD)
         if not forward:
             raise Failed("Liquibase не отдал ни одного changeset'а — "
                          "проверять нечего")
         if limit:
             forward = forward[:limit]
+        else:
+            problems += unknown_allowed(group, forward)
 
         # ── вверх: снимок после каждого changeset'а
         write_and_play(cell, tmp, "preamble", preamble, schema)
-        snaps = [snapshot(cell.dump(schema), schema)]      # «до первого»
+        snaps = [look()]                                   # «до первого»
         for i, c in enumerate(forward):
             write_and_play(cell, tmp, f"up-{i}", c["sql"], schema)
-            snaps.append(snapshot(cell.dump(schema), schema))
+            snaps.append(look())
         report(f"    накат: {len(forward)} changeset'ов, "
                f"объектов в схеме {len(snaps[-1])}")
 
         # ── вниз: откат ровно на один и сверка с «как было»
         #
-        # Первый changeset не откатываем: его rollback делает DROP SCHEMA
-        # CASCADE и сносит сам DATABASECHANGELOG.
-        count = len(forward) - 1
-        back_sql = cell.liquibase(changelog, schema, "rollback-count-sql",
+        # У арендатора первый changeset не откатываем: его rollback делает
+        # DROP SCHEMA CASCADE и сносит сам DATABASECHANGELOG, лежащий внутри
+        # этой же схемы. У общей схемы журнал лежит в public, а первый
+        # changeset заводит расширения — там цепочка идёт до пустоты, и ровно
+        # он единственный, чьи объекты не схемные (см. Cell.extensions).
+        count = len(forward) if group.rollback_first else len(forward) - 1
+        back_sql = cell.liquibase(group.changelog, group.lb_schema,
+                                  "rollback-count-sql",
                                   f"--count={count}", capture=True)
         head, backward = split_by_changeset(back_sql, BACKWARD)
         if len(backward) != count:
@@ -569,14 +746,14 @@ def walk(cell, changelog, schema, limit=None, report=print, known=None):
                     f"{c['file']}::{c['id']}: откат не выполнился вовсе — "
                     f"{short(e)}")
                 return problems
-            got = snapshot(cell.dump(schema), schema)
+            got = look()
             problems += diff_report(c, got, snaps[i], "после отката",
                                     "как было до наката", drift=down_drift,
-                                    known=known)
+                                    known=known, allowed=group.allowed)
 
         # ── обратно вверх: та же схема, что была после N
         for i, c in enumerate(forward):
-            if i == 0:
+            if i == 0 and not group.rollback_first:
                 continue                   # первый и не откатывался
             try:
                 write_and_play(cell, tmp, f"re-{i}", c["sql"], schema)
@@ -585,17 +762,36 @@ def walk(cell, changelog, schema, limit=None, report=print, known=None):
                     f"{c['file']}::{c['id']}: повторный накат после отката "
                     f"не прошёл — {short(e)}")
                 return problems
-            got = snapshot(cell.dump(schema), schema)
+            got = look()
             problems += diff_report(c, got, snaps[i + 1], "после повторного наката",
                                     "как было после наката", drift=up_drift,
-                                    known=known, reapply=True)
+                                    known=known, allowed=group.allowed,
+                                    reapply=True)
         return problems
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def unknown_allowed(group, forward):
+    """Разрешение, выданное changeset'у, которого в наборе нет, — мёртвая строка.
+
+    Спрашивается не второй разбор манифеста, а сам Liquibase: он только что
+    перечислил набор. Второе место, знающее порядок наката, разъехалось бы
+    с первым — тот же довод, по которому `tools/deploy-plan.py` берёт разбор
+    у `db/rollback-cost.py`, а не пишет свой.
+    """
+    ids = {c["id"] for c in forward}
+    lost = sorted(key for key in group.allowed if key not in ids)
+    if not lost:
+        return []
+    return ["в списке разрешённых расхождений есть changeset'ы, которых нет "
+            f"в наборе «{group.title}»: " + ", ".join(lost)
+            + ".\n      Разрешение, выданное несуществующему changeset'у, "
+              "не молчит ни о чём — оно просто не работает"]
+
+
 def diff_report(chunk, got, want, got_name, want_name, drift, known,
-                reapply=False):
+                allowed=None, reapply=False):
     """Сообщает только то, что разошлось ИМЕННО НА ЭТОМ шаге.
 
     `drift` — расхождение, с которым шаг начался: оно уже названо выше
@@ -627,7 +823,7 @@ def diff_report(chunk, got, want, got_name, want_name, drift, known,
         detail.setdefault(name, (kind, []))[1].append(row or name)
 
     if not reapply:
-        entry = allowed_for(chunk["id"], detail)
+        entry = allowed_for(allowed or {}, chunk["id"], detail)
         if entry:
             known.append((chunk["file"], chunk["id"]) + entry)
             return []
@@ -804,6 +1000,148 @@ def floor_selftest():
     return failures
 
 
+def allowed_selftest():
+    """Список разрешённых расхождений не должен обрастать мёртвыми строками.
+
+    Без docker: это про текст. Разрешение, выданное changeset'у, которого
+    в наборе нет, ничего не разрешает — но выглядит как разбор, и следующий
+    примет его за объяснение. У набора арендатора это же стережёт
+    `floor_problems`, у общей схемы границы нет, значит нужен свой случай.
+    """
+    failures = []
+    forward = [{"id": "a"}, {"id": "b"}]
+
+    def group(allowed):
+        return Group(title="выдуманный набор", changelog="x", lb_schema=None,
+                     dump_schemas=(), search_path="public", reset="",
+                     allowed=allowed, rollback_first=True)
+
+    if unknown_allowed(group({"a": ()}), forward):
+        failures.append("разрешение, выданное существующему changeset'у, "
+                        "объявлено мёртвым — сторож краснел бы на исправном "
+                        "списке, и его сняли бы вместе со списком")
+    problems = unknown_allowed(group({"a": (), "catalog-net-takogo": ()}),
+                               forward)
+    if not problems:
+        failures.append("разрешение changeset'у, которого в наборе нет, "
+                        "принято: список копит строки, которые ничего "
+                        "не разрешают, и читаются они как разбор")
+    elif "catalog-net-takogo" not in " ".join(problems):
+        failures.append("мёртвое разрешение не названо по имени: искать "
+                        "придётся перебором")
+    return failures
+
+
+# Сколько changeset'ов общей схемы проходит самопроверка. Шестнадцать — это
+# первые семь файлов набора, и выбраны они не «побольше»: подделки стоят
+# в пятом и шестнадцатом changeset'е, то есть по одну сторону от обеих схем
+# (catalog.brand и public.shedlock). Дальше в наборе идут семнадцать тысяч
+# строк справочника машин — прогон целиком не добавил бы ни одного
+# утверждения, только минуты.
+CATALOG_SELFTEST_STEPS = 16
+
+# Подделка настоящего отката общей схемы. Строка ЗАМЕНЯЕТСЯ на пустой откат,
+# а не удаляется: удалённая оставила бы changeset без отката вовсе, Liquibase
+# отказался бы собирать цепочку, и подделка краснела бы ОТКАЗОМ КОМАНДЫ,
+# а не сверкой снимков — то есть проверялось бы не то, ради чего сторож
+# написан (урок задачи 0081). Пустой откат — ровно то, что бывает в жизни:
+# `--rollback SELECT 1;` стоит у двух changeset'ов catalog/017.
+#
+# Подделок три, и каждая — про свою половину набора, которую сторож мог бы
+# не увидеть вовсе:
+#   • `catalog.brand` — справочники, схема `catalog`;
+#   • `public.shedlock` — служебные таблицы в `public`: шесть changeset'ов
+#     набора правят только её, и сторож, дампящий одну схему, промолчал бы;
+#   • `pg_trgm` — расширения, которые не принадлежат ни одной схеме и в
+#     `pg_dump -n` не попадают вовсе. Это единственная проверка того, что
+#     первый changeset набора вообще проверяется: ради него цепочка отката
+#     и продлена до пустоты.
+CATALOG_BREAK = (
+    ("catalog/002-vehicles.sql", "--rollback DROP TABLE catalog.brand;",
+     "catalog-010-brand", "TABLE: brand"),
+    ("catalog/007-shedlock.sql", "--rollback DROP TABLE public.shedlock;",
+     "catalog-060-shedlock", "TABLE: shedlock"),
+    ("catalog/001-extensions-and-functions.sql",
+     "--rollback DROP EXTENSION IF EXISTS pg_trgm;",
+     "catalog-001-extensions", "EXTENSION: pg_trgm"),
+)
+
+
+def catalog_selftest(cell, failures):
+    """Подделка настоящего отката ОБЩЕЙ схемы (задача 0103).
+
+    Выдуманным набором это не проверяется: здесь важна ровно та механика,
+    которой у арендаторского набора нет — две схемы в снимке, откат первого
+    changeset'а и расширения. Поэтому берётся сам changelog каталога, копия
+    правится в двух строках, а `db/changelog` не трогается вовсе.
+    """
+    work = os.path.join(DB, f".selftest-catalog-{os.getpid()}")
+
+    def quiet(*a, **kw):
+        return None
+
+    try:
+        shutil.rmtree(work, ignore_errors=True)
+        os.makedirs(work)
+        shutil.copy(os.path.join(DB, "changelog", "db.changelog-catalog.xml"),
+                    os.path.join(work, "db.changelog-catalog.xml"))
+        shutil.copytree(os.path.join(DB, "changelog", "catalog"),
+                        os.path.join(work, "catalog"))
+        group = Group(
+            title="общая схема ячейки (самопроверка)",
+            changelog=f"{os.path.basename(work)}/db.changelog-catalog.xml",
+            lb_schema=None, dump_schemas=("catalog", "public"),
+            search_path="public", reset=CATALOG.reset, allowed={},
+            rollback_first=True)
+
+        # 1. Целая копия: сторож обязан молчать. Краснеющий на исправном
+        #    наборе отключают в первый же день — вместе с защитой.
+        problems = walk(cell, group, limit=CATALOG_SELFTEST_STEPS, report=quiet)
+        if problems:
+            failures.append("исправный откат общей схемы объявлен сломанным: "
+                            + " | ".join(problems)[:600])
+
+        # 2. Два пустых отката — по одному на каждую схему набора.
+        for name, line, _, _ in CATALOG_BREAK:
+            path = os.path.join(work, name)
+            body = open(path, encoding="utf-8").read()
+            if body.count(line) != 1:
+                failures.append(
+                    f"подделку негде поставить: в {name} нет строки «{line}». "
+                    "Changelog переехал или правился, а сторож проверяет "
+                    "не то, что думает")
+                return
+            open(path, "w", encoding="utf-8").write(
+                body.replace(line, "--rollback SELECT 1;"))
+
+        problems = walk(cell, group, limit=CATALOG_SELFTEST_STEPS, report=quiet)
+        text = "\n".join(problems)
+        if not problems:
+            failures.append(
+                "пустой откат в общей схеме прошёл молча — это ровно тот "
+                "дефект, ради которого перебор и заведён, и до задачи 0103 "
+                "общую схему не проверяло вообще ничто")
+            return
+        for _, _, cid, obj in CATALOG_BREAK:
+            if cid not in text:
+                failures.append(f"не назван changeset общей схемы, чей откат "
+                                f"неверен ({cid}):\n" + text[:600])
+            if obj not in text:
+                failures.append(
+                    f"расхождение названо, а что именно осталось в схеме "
+                    f"({obj}) — нет:\n" + text[:600])
+        # Краснеть обязана СВЕРКА СНИМКОВ. Пустой откат public-таблицы ломает
+        # заодно и повторный накат («relation already exists»), и вот на этот
+        # отказ опираться нельзя: он доказывает, что psql умеет ругаться
+        # на дубль, а не что сторож видит разницу схем.
+        if "схема не сходится" not in text:
+            failures.append(
+                "подделку поймала не сверка снимков, а отказ SQL — то есть "
+                "сама сверка на общей схеме не проверена вовсе.\n" + text[:600])
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def selftest():
     """Проверка самого сторожа — настоящей базой, а не рассуждением.
 
@@ -834,11 +1172,18 @@ def selftest():
 
         changelog = f"{os.path.basename(work)}/selftest.xml"
         quiet = lambda *a, **k: None
+        made_up = Group(
+            title="выдуманный набор самопроверки",
+            changelog=changelog, lb_schema="t_000901",
+            dump_schemas=("t_000901",), search_path="t_000901",
+            reset="DROP SCHEMA IF EXISTS t_000901 CASCADE;"
+                  " CREATE SCHEMA t_000901;",
+            allowed={}, rollback_first=False, strip=("t_000901",))
 
         # 1. Целый набор: сторож обязан молчать. Иначе он не сторож, а помеха —
         #    краснеющий на исправном коде отключают в первый же день.
         build(SELFTEST_FILES)
-        problems = walk(cell, changelog, "t_000901", report=quiet)
+        problems = walk(cell, made_up, report=quiet)
         if problems:
             failures.append("исправный набор объявлен сломанным: "
                             + " | ".join(problems)[:600])
@@ -846,7 +1191,7 @@ def selftest():
         # 2. Испорченный откат: покраснеть и назвать, что именно осталось.
         broken = dict(SELFTEST_FILES, **{"002-index.sql": BROKEN_002})
         build(broken)
-        problems = walk(cell, changelog, "t_000901", report=quiet)
+        problems = walk(cell, made_up, report=quiet)
         text = "\n".join(problems)
         if not problems:
             failures.append(
@@ -877,19 +1222,23 @@ def selftest():
             ALLOWED["002-index"] = (("thing_code_uk",), РАЗОБРАНО, "   ")
             one = {"INDEX: thing_code_uk": ("не вернулось", ["INDEX: thing_code_uk"])}
             two = dict(one, **{"TABLE: other": ("не вернулось", ["TABLE: other"])})
-            if allowed_for("002-index", one):
+            if allowed_for(ALLOWED, "002-index", one):
                 failures.append("пометка без причины принята")
             ALLOWED["002-index"] = (("thing_code_uk",), РАЗОБРАНО, "причина")
-            if not allowed_for("002-index", one):
+            if not allowed_for(ALLOWED, "002-index", one):
                 failures.append("пометка с причиной не принята — разобранное "
                                 "расхождение будет красить прогон вечно")
-            if allowed_for("002-index", two):
+            if allowed_for(ALLOWED, "002-index", two):
                 failures.append("разрешение, выданное названному объекту, "
                                 "накрыло соседний: тогда первая же настоящая "
                                 "дыра в том же changeset'е проедет молча")
         finally:
             ALLOWED.clear()
             ALLOWED.update(saved)
+
+        # 4. Общая схема ячейки: та же механика на настоящем changelog'е
+        #    каталога (задача 0103).
+        catalog_selftest(cell, failures)
 
         return failures
     finally:
@@ -905,6 +1254,8 @@ def main():
                     help="проверить самого сторожа")
     ap.add_argument("--steps", type=int, default=None,
                     help="ограничить число changeset'ов (для разбора)")
+    ap.add_argument("--only", choices=sorted(GROUPS),
+                    help="один набор вместо обоих (для разбора)")
     ap.add_argument("--keep", action="store_true",
                     help="не гасить базу после прогона")
     args = ap.parse_args()
@@ -921,6 +1272,12 @@ def main():
             for b in broken:
                 print("  •", b)
             return 1
+        broken = allowed_selftest()
+        if broken:
+            print("\nСамопроверка списка разрешений не прошла:\n")
+            for b in broken:
+                print("  •", b)
+            return 1
         broken = selftest()
         if broken:
             print("\nСамопроверка не прошла:\n")
@@ -930,9 +1287,12 @@ def main():
             return 1
         print(f"Самопроверка пройдена ({int(time.time() - started)} с): "
               f"исправный набор молчит, забытое снятие индекса названо "
-              f"по имени,\nпометка без причины не принимается, а граница "
-              f"отката не принимается ни завышенной,\nни заниженной, "
-              f"ни разъехавшейся с changelog'ом.")
+              f"по имени,\nпометка без причины и мёртвое разрешение "
+              f"не принимаются, граница отката не принимается\nни завышенной, "
+              f"ни заниженной, ни разъехавшейся с changelog'ом, а пустой "
+              f"откат\nв ОБЩЕЙ схеме назван по имени во всех трёх её "
+              f"половинах — в catalog, в public\nи в расширениях, которых "
+              f"pg_dump не печатает вовсе.")
         return 0
 
     # Объявление границы сверяется ДО подъёма базы: оно про текст, Docker ему
@@ -948,16 +1308,28 @@ def main():
     print(f"==> Граница отката: версия {floor} "
           f"(ниже неё инструменты отказывают — задача 0102)")
 
+    groups = [GROUPS[args.only]] if args.only else [CATALOG, TENANT]
+
     cell = Cell(project_name())
     known = []
+    problems = []
     print(f"==> Поднимаем чистую базу ({cell.project})")
     cell.up()
     try:
-        print("==> Общая схема catalog")
-        cell.liquibase(CATALOG_CHANGELOG, None, "update", capture=True)
-        print(f"==> Откат по шагам, схема {SCHEMA}")
-        problems = walk(cell, TENANT_CHANGELOG, SCHEMA, limit=args.steps,
-                        known=known)
+        if CATALOG not in groups:
+            # Схема арендатора ссылается на catalog.brand и берёт из общей
+            # схемы функцию приведения номера: без неё набор не накатывается
+            # вовсе. Когда общий набор идёт своим обходом, накатывать его
+            # отдельно не нужно — обход кончается повторным накатом, и он
+            # сверен со снимком.
+            print("==> Общая схема catalog (накатом, без перебора)")
+            cell.liquibase(CATALOG_CHANGELOG, None, "update", capture=True)
+        for group in groups:
+            print(f"==> Откат по шагам: {group.title}")
+            at = time.time()
+            found = walk(cell, group, limit=args.steps, known=known)
+            print(f"    {int(time.time() - at)} с, расхождений {len(found)}")
+            problems += found
     except Failed as e:
         print(f"\nПрогон оборвался: {e}")
         return 1
@@ -994,12 +1366,22 @@ def report_known(known, floor=None):
     if not known:
         return
     holes = [k for k in known if k[2] == ГРАНИЦА]
+    gaps = [k for k in known if k[2] == ПРОБЕЛ]
     print(f"\nИзвестных расхождений: {len(known)} — "
-          f"разобрано {len(known) - len(holes)}, держат границу {len(holes)}.")
+          f"разобрано {len(known) - len(holes) - len(gaps)}, "
+          f"держат границу {len(holes)}, ничем не запрещено {len(gaps)}.")
     for _, cid, kind, reason in known:
-        if kind == ГРАНИЦА:
+        if kind != РАЗОБРАНО:
             first = reason.split(". ")[0].rstrip(".")
-            print(f"  ГРАНИЦА {cid}: {first}.")
+            print(f"  {kind.upper()} {cid}: {first}.")
+    if gaps:
+        print(f"\nПометка ПРОБЕЛ — общая схема ячейки, и у неё границы отката "
+              f"НЕ ОБЪЯВЛЕНО вовсе.\nЗначит эти расхождения ничем "
+              f"не запрещены: инструмент, опустивший общую схему\nниже них, "
+              f"сработает молча — в отличие от схемы арендатора, где ниже "
+              f"границы\nотказывают и ./db/rollback-cost.py, "
+              f"и ops/schema-sync.sh --to.\nЧья это работа и что решает "
+              f"владелец — tasks/0103 и db/CLAUDE.md.")
     if holes:
         print(f"\nВсе они лежат ниже версии {floor} — объявленной границы "
               f"отката.\nВыше неё откат сходится объект в объект, ниже "
