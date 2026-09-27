@@ -171,9 +171,19 @@ public class ProvisioningLimits {
      * <p>Отдельно от занятого места в окне: место занимает и сорвавшаяся
      * попытка, а это число отвечает на вопрос «сколько компаний в ячейке
      * появилось».
+     *
+     * <p><b>Имя счётчика — {@code succeeded}, а не {@code created}, и это
+     * находка живого прогона, а не вкус.</b> {@code _created} — зарезервированный
+     * суффикс OpenMetrics, и Micrometer его срезает: счётчик
+     * {@code partsflow.provisioning.created} уехал на {@code /actuator/prometheus}
+     * под именем {@code partsflow_provisioning_total}, то есть читался как
+     * «всех попыток провижининга», а не «успешных». Тревога, построенная
+     * на таком ряде, считала бы не то, что обещает её имя. Тесты этого
+     * не видят вовсе — они берут {@code SimpleMeterRegistry} и до отдачи
+     * наружу не доходят; поймано опросом настоящего адреса.
      */
-    public void created(String address) {
-        metrics.counter("partsflow.provisioning.created").increment();
+    public void succeeded(String address) {
+        metrics.counter("partsflow.provisioning.succeeded").increment();
         log.info("Заведена компания с адреса {}", address);
     }
 

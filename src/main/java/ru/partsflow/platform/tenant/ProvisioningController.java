@@ -89,7 +89,7 @@ public class ProvisioningController {
                 new TenantProvisioning.Request(request.companyCode(), request.companyName(),
                         request.ownerLogin(), request.ownerPassword(), request.ownerName()));
 
-        limits.created(address);
+        limits.succeeded(address);
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 

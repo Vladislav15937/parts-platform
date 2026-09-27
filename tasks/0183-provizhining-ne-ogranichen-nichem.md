@@ -142,7 +142,7 @@ Postgres**, а с ним архив WAL, а с ним точку возврат�
 ### След от попытки (пункт 4)
 
 `partsflow.provisioning.rejected` с меткой `reason` (`secret` · `disabled` ·
-`rate` · `cell-full` · `addresses`) и `partsflow.provisioning.created`, плюс
+`rate` · `cell-full` · `addresses`) и `partsflow.provisioning.succeeded`, плюс
 `WARN` в логе с адресом. Схему это не трогает — метрика и лог, никакой новой
 таблицы. Причина обязательна: неверный секрет и упёршийся в предел оператор —
 разные события. **Адрес идёт в лог, а не в метку**: метка-адрес это
