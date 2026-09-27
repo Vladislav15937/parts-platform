@@ -27,7 +27,8 @@ import java.util.List;
  * у {@link JournalProtectionCheck}: разработчик работает как раз между
  * накатами, и падение на старте означало бы, что при отставшей схеме локально
  * ничего не поднять. В бою накат схем — шаг развёртывания
- * ({@code ops/migrate-tenants.sh}), и по замыслу отставания быть не должно;
+ * ({@link TenantMigrations#MIGRATE_COMMAND}), и по замыслу отставания быть
+ * не должно;
  * эта строка нужна ровно для тех случаев, когда шаг пропустили, он упал
  * на одном арендаторе из пятисот или код выложили раньше наката.
  *
@@ -77,7 +78,8 @@ public class SchemaVersionCheck implements ApplicationRunner {
         }
 
         log.warn("Схемы арендаторов отстали от кода: {} из {} ({}). "
-                        + "Ожидается {}. Накатите: ops/migrate-tenants.sh",
+                        + "Ожидается {}. Приведите их к версии образа: "
+                        + TenantMigrations.MIGRATE_COMMAND,
                 behind.size(), status.tenants(), TenantMigrations.namesOf(behind),
                 status.expectedVersion());
     }

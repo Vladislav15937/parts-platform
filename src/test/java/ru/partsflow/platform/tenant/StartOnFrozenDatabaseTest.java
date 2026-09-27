@@ -205,6 +205,14 @@ class StartOnFrozenDatabaseTest extends PostgresTestBase {
                             + "строку в теле. Задача требует назвать состояние, "
                             + "а не погасить зелёный свет")
                     .isTrue();
+
+            assertThat(known(body, "writes"))
+                    .as("заморозка — ВЫЯСНЕННОЕ состояние: спросили и получили "
+                            + "ответ. Признак «спросить не вышло» здесь означал бы, "
+                            + "что читающий ответ машинно (шаг выкладки) не отличит "
+                            + "брошенную на слепке сборку от той, у которой нет прав "
+                            + "на пробу. Ответ: %s", readiness.body())
+                    .isTrue();
         } finally {
             app.close();
         }
@@ -272,6 +280,15 @@ class StartOnFrozenDatabaseTest extends PostgresTestBase {
                             + "и переключаться, и считаться живой. Задача волны — "
                             + "назвать состояние, а не погасить зелёный свет")
                     .isTrue();
+
+            assertThat(known(body, "writes"))
+                    .as("проба не смогла спросить базу, а машинный признак говорит "
+                            + "«состояние выяснено»: это единственное место прогона, "
+                            + "где невыясненное состояние получается ПО-НАСТОЯЩЕМУ, "
+                            + "и по нему видно, что признак идёт за состоянием пробы, "
+                            + "а не приписан к ветке наугад (задача 0204). Ответ: %s",
+                            readiness.body())
+                    .isFalse();
         } finally {
             setProbeRight(true);
             app.close();
@@ -469,6 +486,31 @@ class StartOnFrozenDatabaseTest extends PostgresTestBase {
         for (JsonNode node : body.get("checks")) {
             if (check.equals(node.get("check").asText())) {
                 return node.get("detail").asText();
+            }
+        }
+        throw new IllegalStateException("В ответе готовности нет проверки " + check);
+    }
+
+    /**
+     * Машинный признак «удалось ли узнать состояние» (задача 0204).
+     *
+     * <p>Спрашивается здесь потому, что проба записи — единственное место
+     * прогона, где невыясненное состояние получается по-настоящему: права
+     * на {@code public.shedlock} снимаются настоящим {@code REVOKE}. Текстовый
+     * сторож договора ({@code ReadinessContractTest}) проверяет, что поле есть
+     * и что его читает {@code ops/deploy-checks.sh}, а <b>верно ли оно
+     * поставлено</b> — видно только на живом ответе.
+     */
+    private boolean known(JsonNode body, String check) {
+        for (JsonNode node : body.get("checks")) {
+            if (check.equals(node.get("check").asText())) {
+                JsonNode flag = node.get("known");
+                if (flag == null) {
+                    throw new IllegalStateException(
+                            "В ответе готовности нет признака known у проверки " + check
+                                    + ": шаг выкладки скатится к разбору исхода по фразе");
+                }
+                return flag.asBoolean();
             }
         }
         throw new IllegalStateException("В ответе готовности нет проверки " + check);

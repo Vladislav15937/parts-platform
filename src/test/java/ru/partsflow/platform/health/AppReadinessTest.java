@@ -124,7 +124,21 @@ class AppReadinessTest extends PostgresTestBase {
                 .as("не сказано, какая схема отстала и что делать: разбираться "
                         + "по такому ответу можно только запросами в базу")
                 .contains(TENANT)
-                .contains("ops/migrate-tenants.sh");
+                .contains("ops/schema-sync.sh");
+        assertThat(detail(body, "schemas"))
+                .as("совет ведёт на ops/migrate-tenants.sh — путь через управляющий "
+                        + "контур. Тому нужен включённый секрет провижининга, а правило "
+                        + "подключения (docs/onboarding.md, раздел 2) велит выключать "
+                        + "его сразу: на ячейке, выполнившей правило безопасности, "
+                        + "совет невыполним — скрипт падает на пустом секрете раньше, "
+                        + "чем успевает что-нибудь спросить (задача 0204)")
+                .doesNotContain("migrate-tenants");
+        assertThat(known(body, "schemas"))
+                .as("отставание схем — выясненное состояние, а признак говорит "
+                        + "«спросить не вышло»: шаг выкладки прочитает это как "
+                        + "«я не спросил» и напечатает не тот след — человек пойдёт "
+                        + "чинить доступ к ответу вместо наката. Ответ: %s", body)
+                .isTrue();
     }
 
     @Test
@@ -266,6 +280,22 @@ class AppReadinessTest extends PostgresTestBase {
 
     private String detail(JsonNode body, String check) {
         return check(body, check).get("detail").asText();
+    }
+
+    /**
+     * Машинный признак «удалось ли узнать состояние» — тот, по которому шаг
+     * выкладки отличает «схемы отстали» от «я не спросил» (задача 0204).
+     * Спрашивается у живого ответа: текстовый сторож договора
+     * ({@code ReadinessContractTest}) проверяет, что поле есть и что шелл его
+     * читает, а <b>верно ли оно поставлено</b> — видно только здесь.
+     */
+    private boolean known(JsonNode body, String check) {
+        JsonNode flag = check(body, check).get("known");
+        assertThat(flag)
+                .as("в ответе готовности нет признака known у проверки «%s»: "
+                        + "шаг выкладки скатится к разбору исхода по фразе", check)
+                .isNotNull();
+        return flag.asBoolean();
     }
 
     private JsonNode check(JsonNode body, String name) {
