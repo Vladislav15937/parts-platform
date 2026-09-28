@@ -1,8 +1,8 @@
 ---
 id: 0210
 title: Два ops-скрипта советуют `ops/migrate-tenants.sh` — путь, которому нужен включённый секрет, то есть невыполнимый на правильно настроенной ячейке
-status: новая
-assignee: —
+status: в работе
+assignee: coder
 source: остаток волны 27 сентября 2026, названный дирижёром; проверено разведкой 27.09.2026 чтением `ops/create-roles.sh`, `ops/restore-cell.sh`, `ops/migrate-tenants.sh:69–73`, `ReadinessEndpoint.schemas()` и `ops/CLAUDE.md:234–239`
 pr: —
 ---
