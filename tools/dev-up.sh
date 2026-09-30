@@ -35,11 +35,20 @@ docker info >/dev/null 2>&1 || { echo "Docker так и не поднялся"; 
 say "есть"
 
 echo "2. Postgres, MinIO, Kafka"
-docker compose up -d >/dev/null 2>&1
+# Отказ подъёма глушился целиком (`>/dev/null 2>&1`), а после цикла ожидания
+# не было ветки отказа вовсе: не поднявшийся Postgres ничем не отличался
+# от поднявшегося, и скрипт шёл дальше к «Готово». Шаги 1 и 3 устроены
+# правильно — отказ там назван и валит подъём; этот отставал от них.
+if ! docker compose up -d >/dev/null 2>&1; then
+  # Повторяем без глушения: `up -d` идемпотентен, зато человек увидит причину.
+  docker compose up -d || { echo "  docker compose up не прошёл — причина выше"; exit 1; }
+fi
 for _ in $(seq 1 60); do
   docker compose ps --format '{{.Service}} {{.Status}}' 2>/dev/null | grep -q '^postgres Up.*healthy' && break
   sleep 2
 done
+docker compose ps --format '{{.Service}} {{.Status}}' 2>/dev/null | grep -q '^postgres Up.*healthy' \
+  || { echo "  postgres не стал healthy за 120 с — docker compose ps, docker compose logs postgres"; exit 1; }
 say "$(docker compose ps --format '{{.Service}}' | tr '\n' ' ')"
 
 echo "3. Приложение"
@@ -81,6 +90,13 @@ else
   say "запускаю Vite, лог — /tmp/partsflow-vite.log"
   ( cd frontend && nohup npm run dev > /tmp/partsflow-vite.log 2>&1 & )
   for _ in $(seq 1 30); do curl -s -o /dev/null --max-time 1 http://localhost:5173/ && break; sleep 1; done
+  # После цикла проверки не было: не поднявшийся Vite не отличался
+  # от поднявшегося, а ниже безусловно печаталось «Готово» с адресом,
+  # по которому ничего не отвечает. Открывать надо именно :5173 —
+  # сессия и CSRF из cookie работают только на одном источнике.
+  curl -s -o /dev/null --max-time 2 http://localhost:5173/ \
+    || { echo "  Vite не поднялся за 30 с — смотрите /tmp/partsflow-vite.log"; exit 1; }
+  say "поднялось"
 fi
 
 cat <<TXT

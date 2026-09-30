@@ -358,10 +358,24 @@ if [ -z "${CAN_START_RUNS:-}" ]; then
   DIRTY=$(git status --porcelain | wc -l | tr -d ' ')
   [ "$DIRTY" = "0" ] && ok "рабочее дерево чистое" || say "незакоммиченных файлов: ${DIRTY}"
 
-  git fetch -q origin main 2>/dev/null || true
-  BEHIND=$(git rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
-  [ "${BEHIND:-0}" = "0" ] && ok "не отстаём от origin/main" \
-    || say "отстаём от origin/main на ${BEHIND} — ветвитесь от свежей"
+  # Молчание засчитывалось за ответ: не прошедший `fetch` (нет сети, нет
+  # ссылки) давал `BEHIND=0`, и печаталось зелёное «не отстаём от origin/main» —
+  # то есть сторож утверждал свежесть дерева, которой не мерил. Блок прогонов
+  # выше устроен строго наоборот: пустая выдача там отказ, а не зелень.
+  # Красным это не делается намеренно: отставание и раньше было `say`,
+  # а «начинать нельзя» решает только красная main.
+  if git fetch -q origin main 2>/dev/null; then
+    BEHIND=$(git rev-list --count HEAD..origin/main 2>/dev/null || echo "")
+    if [ -z "$BEHIND" ]; then
+      say "сверка с origin/main не выполнена: ссылки нет — свежесть дерева не проверена"
+    elif [ "$BEHIND" = "0" ]; then
+      ok "не отстаём от origin/main"
+    else
+      say "отстаём от origin/main на ${BEHIND} — ветвитесь от свежей"
+    fi
+  else
+    say "сверка с origin/main не выполнена: git fetch не прошёл — свежесть дерева не проверена"
+  fi
 fi
 
 echo

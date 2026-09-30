@@ -88,13 +88,18 @@ pc /api/marketplace-accounts/filter/count '{"productLine":"PART"}' >/dev/null
 same "счётчик выгрузки сходится с файлом" "$(num "['parts']")" "${OFFERS}"
 # Проданное остаётся в прайсе недоступным: убрать позицию значит потерять
 # объявление вместе с накопленными просмотрами.
-python3 - <<PY
+# Вердикт идёт через `same`, а не печатается своим `print`. Раньше этот раздел
+# печатал ✗ сам и выходил нулём: `FAILED` не трогался, и подвал говорил
+# «Сквозной прогон прошёл» при видимом ✗ на экране — то есть единственный
+# инвариант, ради которого раздел написан, на исход прогона не влиял вовсе.
+SOLD_HIDDEN=$(python3 - <<'PY'
 import re
 x = open('/tmp/smoke-feed.xml', encoding='utf-8').read()
 sold = re.search(r'<offer>(?:(?!</offer>).)*<quantity>0</quantity>.*?</offer>', x, re.S)
-print('  ✓ проданное уехало недоступным' if sold and '<available>false</available>' in sold.group(0)
-      else '  ✗ проданное не найдено в прайсе или доступно')
+print('да' if sold and '<available>false</available>' in sold.group(0) else 'нет')
 PY
+)
+same "проданное уехало в прайс недоступным" "${SOLD_HIDDEN}" "да"
 
 echo "4. Возврат"
 gc "/api/deals/${DEAL}" >/dev/null; ITEM=$(num "['items'][0]['id']")
