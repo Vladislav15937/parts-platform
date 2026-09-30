@@ -65,6 +65,11 @@ afterEach(() => {
 
 describe('файл, который не картинка', () => {
   it('отбивается словами и не оставляет ни одной записи о снимке', async () => {
+    // Сервер отвечает так, будто всё хорошо, — и это важно для отката:
+    // без проверки PDF дойдёт до хранилища и до подтверждения, а тест упадёт
+    // словами «загрузка прошла», а не спрячется за отсутствием заглушки.
+    requestMock.mockResolvedValue({ photoId: 1, key: 'k', uploadUrl: 'https://s3/put' });
+
     await expect(uploadPhoto(42, pdfNamedJpg())).rejects.toBeInstanceOf(ApiError);
 
     // Ни ссылки, ни подтверждения: записи о снимке не появилось вовсе.
@@ -73,6 +78,8 @@ describe('файл, который не картинка', () => {
   });
 
   it('называет, что именно не так, и не повторяется очередью', async () => {
+    requestMock.mockResolvedValue({ photoId: 1, key: 'k', uploadUrl: 'https://s3/put' });
+
     const failure = await uploadPhoto(42, pdfNamedJpg()).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(ApiError);
