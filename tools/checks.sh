@@ -99,7 +99,14 @@ while read -r id line title; do
   url=$(g "/api/marketplace-accounts/${id}/feed-url" \
         | python3 -c 'import json,sys
 d=json.load(sys.stdin); print(d.get("url") or "")')
-  if [ -z "$url" ]; then ok "${title}: ссылки нет, сравнивать нечего"; continue; fi
+  # Зелёная галочка означала «сходится», а сравнения не было вовсе: выключенные
+  # выгрузки отфильтрованы выше, значит сюда попадает АКТИВНАЯ выгрузка без
+  # постоянной ссылки — это не «сравнивать нечего», а «спросить нечем».
+  # Пишем как непроверенное: ✓ за несделанную сверку и есть искомый класс.
+  if [ -z "$url" ]; then
+    printf '  — %s: постоянной ссылки нет — счётчик с файлом НЕ сверялся\n' "${title}"
+    continue
+  fi
   actual=$(curl -s "$url" | grep -o '<offer>' | wc -l | tr -d ' ')
   [ "$promised" = "$actual" ] && ok "${title}: обещано ${promised}, в файле ${actual}" \
     || bad "${title}: обещано ${promised}, а в файле ${actual}"
