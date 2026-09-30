@@ -195,6 +195,66 @@ public class PhotoStorage {
     }
 
     /**
+     * Чем оказался приложенный файл — словами, которыми это назвал бы человек.
+     *
+     * <p>Порядок важен: сверка идёт началом строки, и более длинный префикс
+     * обязан стоять раньше общего.
+     */
+    private static final java.util.LinkedHashMap<String, String> NON_IMAGE_KINDS =
+            new java.util.LinkedHashMap<>();
+
+    static {
+        NON_IMAGE_KINDS.put("application/pdf", "PDF-документ");
+        NON_IMAGE_KINDS.put("application/msword", "документ Word");
+        NON_IMAGE_KINDS.put("application/vnd.openxmlformats-officedocument.wordprocessing",
+                "документ Word");
+        NON_IMAGE_KINDS.put("application/vnd.ms-excel", "таблица Excel");
+        NON_IMAGE_KINDS.put("application/vnd.openxmlformats-officedocument.spreadsheet",
+                "таблица Excel");
+        NON_IMAGE_KINDS.put("application/zip", "архив");
+        NON_IMAGE_KINDS.put("application/x-rar", "архив");
+        NON_IMAGE_KINDS.put("application/x-7z", "архив");
+        NON_IMAGE_KINDS.put("application/gzip", "архив");
+        NON_IMAGE_KINDS.put("text/", "текстовый файл");
+        NON_IMAGE_KINDS.put("video/", "видеозапись");
+        NON_IMAGE_KINDS.put("audio/", "звукозапись");
+    }
+
+    /**
+     * Отказ человеку: называет словами, что приложили и что годится.
+     *
+     * <p><b>MIME-типа в тексте нет ни в каком виде</b>, и это не придирка.
+     * «application/pdf» на экране — внутреннее представление: человек выбирал
+     * файл, а не тип, и по такому слову он не поймёт ни что случилось,
+     * ни что делать. Класс в этом проекте уже оплачен — отчёт про деньги писал
+     * «клиент 42» вместо имени человека (задача 0065), — и правило записано:
+     * внутреннего представления на экране нет.
+     *
+     * <p>Незнакомый тип не называется <b>вовсе</b>: выдуманное слово хуже
+     * молчания, как «Неизвестное устройство» в журнале входов и прочерк
+     * у рестайлинга донора.
+     */
+    public static String refusalFor(String contentType) {
+        String kind = humanKindOf(contentType);
+        String canAttach = "Приложить можно фотографию: " + supportedImageLabels();
+        return kind == null
+                ? "Это не картинка. " + canAttach
+                : "Это не картинка, а %s. %s".formatted(kind, canAttach);
+    }
+
+    private static String humanKindOf(String contentType) {
+        if (contentType == null || contentType.isBlank()) {
+            return null;
+        }
+        String normalized = contentType.trim().toLowerCase();
+        return NON_IMAGE_KINDS.entrySet().stream()
+                .filter(kind -> normalized.startsWith(kind.getKey()))
+                .map(java.util.Map.Entry::getValue)
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
      * Расширение объекта в хранилище.
      *
      * <p>Умолчание {@code .jpg} оставлено для незнакомого типа намеренно:

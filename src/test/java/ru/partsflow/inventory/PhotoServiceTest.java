@@ -385,7 +385,17 @@ class PhotoServiceTest extends PostgresTestBase {
                 // не говорит — он выбирал файл, а не MIME-тип.
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.message")
-                        .value(org.hamcrest.Matchers.containsString("JPEG")));
+                        .value(org.hamcrest.Matchers.containsString("JPEG")))
+                // И приложенный файл назван словом, а не своим типом: проверка
+                // идёт через HTTP, то есть по тому самому тексту, который
+                // попадёт в `photoError` карточки и на экран человеку.
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("PDF-документ")))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.not(
+                                org.hamcrest.Matchers.containsString("application/pdf"))));
 
         assertThat(inTenant(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM part_photo WHERE client_request_id = ?",

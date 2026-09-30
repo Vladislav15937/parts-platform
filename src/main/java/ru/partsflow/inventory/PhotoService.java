@@ -139,10 +139,11 @@ public class PhotoService {
         // в S3 мимо него, — поэтому здесь сверяется ЗАЯВЛЕННОЕ, а содержимое
         // смотрит клиент до отправки (frontend/src/photos/imageFile.ts).
         // Список принимаемых типов один на проект, в PhotoStorage.
+        // Текст собирает PhotoStorage — там же, где лежат слова о форматах.
+        // Подставлять тип в сообщение здесь нельзя: MIME на экране это
+        // внутреннее представление, а его человек не выбирал и не прочтёт.
         if (!PhotoStorage.isSupportedImage(contentType)) {
-            throw new IllegalArgumentException(
-                    "Это не картинка (тип файла «%s»). Приложить можно фотографию: %s"
-                            .formatted(contentType, PhotoStorage.supportedImageLabels()));
+            throw new IllegalArgumentException(PhotoStorage.refusalFor(contentType));
         }
 
         // Повтор из офлайн-очереди: отдаём ту же фотографию с новой ссылкой.

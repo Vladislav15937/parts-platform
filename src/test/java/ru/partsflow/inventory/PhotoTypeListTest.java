@@ -32,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class PhotoTypeListTest {
 
+    private static final Path SERVICE = Path.of("src/main/java/ru/partsflow/inventory/PhotoService.java");
     private static final Path SNIFFER = Path.of("frontend/src/photos/imageFile.ts");
     private static final Path CARD_UPLOAD = Path.of("frontend/src/inventory/photos.ts");
     private static final Path RESIZE = Path.of("frontend/src/photos/resize.ts");
@@ -67,6 +68,65 @@ class PhotoTypeListTest {
         assertThat(PhotoStorage.supportedImageLabels())
                 .contains("JPEG", "PNG", "WebP", "HEIC")
                 .doesNotContain("image/");
+    }
+
+    /**
+     * Отказ читает человек, и MIME-типа в нём нет ни в каком виде.
+     *
+     * <p>Проверка привязана к <b>самому тексту</b>, а не к списку форматов:
+     * привязанная к списку, она зеленела бы при вернувшемся в текст
+     * «application/pdf» — то есть стерегла бы не то, что сломается.
+     */
+    @Test
+    @DisplayName("Отказ называет файл словами, а не MIME-типом")
+    void refusalNamesTheFileInWords() {
+        String pdf = PhotoStorage.refusalFor("application/pdf");
+
+        assertThat(pdf)
+                .as("MIME-тип уехал на экран: человек выбирал файл, а не тип, "
+                        + "и по «application/pdf» не поймёт ни что случилось, ни что делать")
+                .doesNotContain("application/pdf")
+                // Косая черта есть в любом MIME и ни в одном человеческом слове:
+                // так проверка ловит и тот тип, о котором мы не подумали.
+                .doesNotContain("/")
+                .contains("не картинка")
+                .contains("PDF-документ")
+                .contains("JPEG");
+
+        for (String alien : List.of("text/plain", "video/mp4", "audio/mpeg",
+                "application/zip", "application/msword")) {
+            assertThat(PhotoStorage.refusalFor(alien))
+                    .as("отказ на «%s» показал человеку MIME-тип", alien)
+                    .doesNotContain("/")
+                    .contains("не картинка");
+        }
+
+        // Незнакомый тип не называется вовсе: выдуманное слово хуже молчания.
+        assertThat(PhotoStorage.refusalFor("application/x-nechto-strannoe"))
+                .doesNotContain("/")
+                .doesNotContain("nechto")
+                .contains("не картинка")
+                .contains("JPEG");
+    }
+
+    /**
+     * Текст собирает {@link PhotoStorage}, а не сервис на месте.
+     *
+     * <p>Без этой привязки MIME вернётся на экран одной строкой в
+     * {@code requestUpload}, и проверка выше останется зелёной: она спрашивает
+     * {@code refusalFor}, а человек увидит то, что бросили.
+     */
+    @Test
+    @DisplayName("Сервис не собирает текст отказа сам")
+    void serviceDoesNotBuildItsOwnText() throws IOException {
+        String service = read(SERVICE);
+
+        assertThat(service)
+                .as("отказ собирается не там, где лежат слова о форматах")
+                .contains("PhotoStorage.refusalFor(");
+        assertThat(service)
+                .as("тип снова подставляется в текст на месте — MIME вернулся на экран")
+                .doesNotContain(".formatted(contentType");
     }
 
     @Test
