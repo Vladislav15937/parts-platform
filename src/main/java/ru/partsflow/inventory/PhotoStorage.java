@@ -149,15 +149,131 @@ public class PhotoStorage {
                 .build());
     }
 
+    /**
+     * Типы снимков, которые система принимает: тип, расширение в хранилище
+     * и слово для человека.
+     *
+     * <p><b>Список один, и читают его трое.</b> {@link #extensionFor} называет
+     * по нему объект в хранилище, {@link #isSupportedImage} отвечает, принимать
+     * ли заявленный тип, {@link #supportedImageLabels} называет форматы
+     * в отказе. Второй список развёлся бы с первым на первом же новом
+     * формате — в этом проекте так уже расходились белые списки колонок
+     * и словари состояний сделки.
+     *
+     * <p><b>HEIC здесь намеренно.</b> Айфон снимает им, и снимок от поставщика
+     * приходит именно таким — при том что уменьшить его умеет не всякий
+     * браузер. «Не удалось раскодировать» и «это не картинка» — разные вещи,
+     * и путать их значит отвергать законную фотографию.
+     */
+    private record ImageType(String contentType, String extension, String label) {
+    }
+
+    private static final java.util.List<ImageType> IMAGE_TYPES = java.util.List.of(
+            new ImageType("image/jpeg", ".jpg", "JPEG"),
+            // Нестандартный, но встречается у старых камер и конвертеров.
+            new ImageType("image/jpg", ".jpg", "JPEG"),
+            new ImageType("image/png", ".png", "PNG"),
+            new ImageType("image/webp", ".webp", "WebP"),
+            new ImageType("image/heic", ".heic", "HEIC"),
+            new ImageType("image/heif", ".heic", "HEIC"));
+
+    /** Заявленный тип — из списка принимаемых? */
+    public static boolean isSupportedImage(String contentType) {
+        return contentType != null && IMAGE_TYPES.stream()
+                .anyMatch(type -> type.contentType().equals(contentType.trim().toLowerCase()));
+    }
+
+    /** Форматы словами, для отказа человеку: «JPEG, PNG, WebP, HEIC». */
+    public static String supportedImageLabels() {
+        return IMAGE_TYPES.stream().map(ImageType::label).distinct()
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
+    /** Принимаемые типы — для проверки, сверяющей этот список с клиентским. */
+    public static java.util.List<String> supportedImageTypes() {
+        return IMAGE_TYPES.stream().map(ImageType::contentType).toList();
+    }
+
+    /**
+     * Чем оказался приложенный файл — словами, которыми это назвал бы человек.
+     *
+     * <p>Порядок важен: сверка идёт началом строки, и более длинный префикс
+     * обязан стоять раньше общего.
+     */
+    private static final java.util.LinkedHashMap<String, String> NON_IMAGE_KINDS =
+            new java.util.LinkedHashMap<>();
+
+    static {
+        NON_IMAGE_KINDS.put("application/pdf", "PDF-документ");
+        NON_IMAGE_KINDS.put("application/msword", "документ Word");
+        NON_IMAGE_KINDS.put("application/vnd.openxmlformats-officedocument.wordprocessing",
+                "документ Word");
+        NON_IMAGE_KINDS.put("application/vnd.ms-excel", "таблица Excel");
+        NON_IMAGE_KINDS.put("application/vnd.openxmlformats-officedocument.spreadsheet",
+                "таблица Excel");
+        NON_IMAGE_KINDS.put("application/zip", "архив");
+        NON_IMAGE_KINDS.put("application/x-rar", "архив");
+        NON_IMAGE_KINDS.put("application/x-7z", "архив");
+        NON_IMAGE_KINDS.put("application/gzip", "архив");
+        NON_IMAGE_KINDS.put("text/", "текстовый файл");
+        NON_IMAGE_KINDS.put("video/", "видеозапись");
+        NON_IMAGE_KINDS.put("audio/", "звукозапись");
+    }
+
+    /**
+     * Отказ человеку: называет словами, что приложили и что годится.
+     *
+     * <p><b>MIME-типа в тексте нет ни в каком виде</b>, и это не придирка.
+     * «application/pdf» на экране — внутреннее представление: человек выбирал
+     * файл, а не тип, и по такому слову он не поймёт ни что случилось,
+     * ни что делать. Класс в этом проекте уже оплачен — отчёт про деньги писал
+     * «клиент 42» вместо имени человека (задача 0065), — и правило записано:
+     * внутреннего представления на экране нет.
+     *
+     * <p>Незнакомый тип не называется <b>вовсе</b>: выдуманное слово хуже
+     * молчания, как «Неизвестное устройство» в журнале входов и прочерк
+     * у рестайлинга донора.
+     */
+    public static String refusalFor(String contentType) {
+        String kind = humanKindOf(contentType);
+        String canAttach = "Приложить можно фотографию: " + supportedImageLabels();
+        return kind == null
+                ? "Это не картинка. " + canAttach
+                : "Это не картинка, а %s. %s".formatted(kind, canAttach);
+    }
+
+    private static String humanKindOf(String contentType) {
+        if (contentType == null || contentType.isBlank()) {
+            return null;
+        }
+        String normalized = contentType.trim().toLowerCase();
+        return NON_IMAGE_KINDS.entrySet().stream()
+                .filter(kind -> normalized.startsWith(kind.getKey()))
+                .map(java.util.Map.Entry::getValue)
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * Расширение объекта в хранилище.
+     *
+     * <p>Умолчание {@code .jpg} оставлено для незнакомого типа намеренно:
+     * этим путём идёт ещё перенос снимков с чужого CDN
+     * ({@code PhotoMigration}), где тип берётся из заголовка чужого сервера
+     * и бывает любым, а терять снимок клиента из-за нестандартного заголовка
+     * нельзя. Для загрузки из кабинета и с телефона незнакомый тип до сюда
+     * не доходит — его отбивает {@link #isSupportedImage} в
+     * {@code PhotoService.requestUpload}.
+     */
     private static String extensionFor(String contentType) {
         if (contentType == null) {
             return ".jpg";
         }
-        return switch (contentType.toLowerCase()) {
-            case "image/png" -> ".png";
-            case "image/webp" -> ".webp";
-            case "image/heic", "image/heif" -> ".heic";
-            default -> ".jpg";
-        };
+        String normalized = contentType.trim().toLowerCase();
+        return IMAGE_TYPES.stream()
+                .filter(type -> type.contentType().equals(normalized))
+                .map(ImageType::extension)
+                .findFirst()
+                .orElse(".jpg");
     }
 }

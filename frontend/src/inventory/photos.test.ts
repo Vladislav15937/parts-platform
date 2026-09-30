@@ -24,6 +24,20 @@ vi.mock('../photos/resize', () => ({
 const { uploadPhoto } = await import('./photos');
 const { ApiError } = await import('../api/client');
 
+/**
+ * Фикстура — настоящие первые байты JPEG, а не строка «x».
+ *
+ * <p>Загрузка с 30 сентября 2026 смотрит на подпись формата: файл, который
+ * не картинка, до сервера не доходит. Фикстура из одной буквы описывала бы
+ * то, чего приёмщик приложить не может, — и проверки про три шага проходили
+ * бы мимо настоящего пути.
+ */
+function jpegFile(name = 'снимок.jpg'): File {
+  return new File([new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10])], name, {
+    type: 'image/jpeg',
+  });
+}
+
 beforeEach(() => {
   requestMock.mockReset();
   resizeMock.mockReset();
@@ -44,7 +58,7 @@ describe('добавление снимка к карточке', () => {
       .mockResolvedValueOnce({ photoId: 7, key: 'k', uploadUrl: 'https://s3/put' })
       .mockResolvedValueOnce(undefined);
 
-    await uploadPhoto(42, new File(['x'], 'снимок.jpg'));
+    await uploadPhoto(42, jpegFile());
 
     const [urlCall, confirmCall] = requestMock.mock.calls as [unknown[], unknown[]];
     expect(urlCall[0]).toBe('/api/parts/42/photos/upload-url');
@@ -72,7 +86,7 @@ describe('добавление снимка к карточке', () => {
     requestMock
       .mockResolvedValueOnce({ photoId: 1, key: 'k', uploadUrl: 'https://s3/put' })
       .mockResolvedValueOnce(undefined);
-    const file = new File(['x'], 'снимок.jpg');
+    const file = jpegFile();
 
     await uploadPhoto(1, file);
 
@@ -85,7 +99,7 @@ describe('добавление снимка к карточке', () => {
     requestMock.mockResolvedValueOnce({ photoId: 3, key: 'k', uploadUrl: 'https://s3/put' });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
 
-    await expect(uploadPhoto(5, new File(['x'], 'снимок.jpg'))).rejects.toBeInstanceOf(ApiError);
+    await expect(uploadPhoto(5, jpegFile())).rejects.toBeInstanceOf(ApiError);
     expect(requestMock).toHaveBeenCalledTimes(1);
   });
 
@@ -93,7 +107,7 @@ describe('добавление снимка к карточке', () => {
     requestMock.mockResolvedValueOnce({ photoId: 3, key: 'k', uploadUrl: 'https://s3/put' });
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('сети нет')));
 
-    await expect(uploadPhoto(5, new File(['x'], 'снимок.jpg')))
+    await expect(uploadPhoto(5, jpegFile()))
       .rejects.toMatchObject({ kind: 'transient' });
   });
 });

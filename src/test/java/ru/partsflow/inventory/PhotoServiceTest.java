@@ -348,7 +348,99 @@ class PhotoServiceTest extends PostgresTestBase {
         assertThat(response.body()).isEqualTo(jpegBytes());
     }
 
+    /**
+     * Не-картинка отбивается сервером, а не только клиентом.
+     *
+     * <p>Клиент — не единственный вход: проверка содержимого стоит в браузере
+     * (байтов у сервера нет вовсе, снимок идёт в S3 мимо приложения), и потому
+     * сервер обязан сверять хотя бы заявленный тип. До 30 сентября 2026 он
+     * не проверял его никак — {@code @NotBlank} и всё, — а хранилище звало
+     * объект {@code .jpg} при любом MIME: в объявление уезжала битая картинка,
+     * за которую площадка объявление снимает.
+     *
+     * <p>Через HTTP, а не через сервис: код ответа здесь часть договора.
+     * 400, а не 409 и не 500 — повтор не поможет, файл не станет картинкой,
+     * и офлайн-очередь такое не повторяет.
+     */
+    @Test
+    @DisplayName("Файл, который не картинка, отбивается словами и записи не оставляет")
+    void notAnImageIsRefusedWithWords() throws Exception {
+        String requestId = "ne-kartinka-" + System.nanoTime();
+
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/parts/%d/photos/upload-url".formatted(partId))
+                        .with(org.springframework.security.test.web.servlet.request
+                                .SecurityMockMvcRequestPostProcessors.csrf())
+                        .session(ownerSession())
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"requestId":"%s","contentType":"application/pdf"}"""
+                                .formatted(requestId)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .status().isBadRequest())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("не картинка")))
+                // Форматы называются словами: «image/webp» человеку ничего
+                // не говорит — он выбирал файл, а не MIME-тип.
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("JPEG")))
+                // И приложенный файл назван словом, а не своим типом: проверка
+                // идёт через HTTP, то есть по тому самому тексту, который
+                // попадёт в `photoError` карточки и на экран человеку.
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("PDF-документ")))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.not(
+                                org.hamcrest.Matchers.containsString("application/pdf"))));
+
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_photo WHERE client_request_id = ?",
+                Integer.class, requestId)))
+                .as("запись о снимке всё-таки появилась — отказ пришёл слишком поздно")
+                .isZero();
+    }
+
+    /**
+     * HEIC — законный снимок, и это вторая половина того же требования.
+     *
+     * <p>Айфон снимает им, снимок от поставщика приходит таким, а уменьшить
+     * его умеет не всякий браузер: {@code createImageBitmap} на HEIC падает.
+     * Наивная проверка «не удалось раскодировать → не картинка» отвергла бы
+     * ровно тот случай, ради которого загрузка с компьютера и делается.
+     */
+    @Test
+    @DisplayName("HEIC с айфона принимается и называется .heic")
+    void heicIsAcceptedAndNamedByItsFormat() {
+        PhotoService.Upload upload = inTenant(
+                () -> photos.requestUpload(partId, "image/heic", uniqueRequestId()));
+
+        assertThat(upload.key())
+                .as("снимок айфона назван чужим расширением — подпись ссылки не сойдётся")
+                .endsWith(".heic");
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_photo WHERE id = ?", Integer.class, upload.photoId())))
+                .isEqualTo(1);
+    }
+
     // ---------- вспомогательное ----------
+
+    /** Вход владельцем: отказ по HTTP читает человек, а не очередь. */
+    private org.springframework.mock.web.MockHttpSession ownerSession() throws Exception {
+        return (org.springframework.mock.web.MockHttpSession) mvc.perform(
+                        org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                                .post("/api/auth/login")
+                                .with(org.springframework.security.test.web.servlet.request
+                                        .SecurityMockMvcRequestPostProcessors.csrf())
+                                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                                .content("""
+                                        {"company":"fotoco","login":"hozyain",
+                                         "password":"пароль-подлиннее"}"""))
+                .andReturn().getRequest().getSession(false);
+    }
 
     /** Полный цикл: ссылка, загрузка, подтверждение. */
     private PhotoService.Upload uploaded(String contentType) throws Exception {

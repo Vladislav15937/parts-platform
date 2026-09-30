@@ -133,6 +133,19 @@ public class PhotoService {
     public Upload requestUpload(Long partId, String contentType, String requestId) {
         requirePart(partId);
 
+        // Файл, который не картинка, до 30 сентября 2026 уезжал в объявление
+        // под видом .jpg: тип не проверял никто, а хранилище ставило это
+        // расширение любому MIME. Байтов у приложения нет вовсе — снимок идёт
+        // в S3 мимо него, — поэтому здесь сверяется ЗАЯВЛЕННОЕ, а содержимое
+        // смотрит клиент до отправки (frontend/src/photos/imageFile.ts).
+        // Список принимаемых типов один на проект, в PhotoStorage.
+        // Текст собирает PhotoStorage — там же, где лежат слова о форматах.
+        // Подставлять тип в сообщение здесь нельзя: MIME на экране это
+        // внутреннее представление, а его человек не выбирал и не прочтёт.
+        if (!PhotoStorage.isSupportedImage(contentType)) {
+            throw new IllegalArgumentException(PhotoStorage.refusalFor(contentType));
+        }
+
         // Повтор из офлайн-очереди: отдаём ту же фотографию с новой ссылкой.
         // Ссылка обновляется намеренно — прежняя за время ожидания истекла.
         PartPhoto existing = requestId == null || requestId.isBlank()

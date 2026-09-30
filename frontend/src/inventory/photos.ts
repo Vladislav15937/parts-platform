@@ -1,4 +1,5 @@
 import { ApiError, request } from '../api/client';
+import { imageFormatsWording, looksLikeImage } from '../photos/imageFile';
 import { resizePhoto } from '../photos/resize';
 
 /**
@@ -24,6 +25,21 @@ export interface Upload {
 }
 
 export async function uploadPhoto(partId: number, file: File): Promise<void> {
+  // Отказ не-картинке стоит ЗДЕСЬ, а не в уменьшении, и это то же решение,
+  // что назвал владелец: различать обязан слой, который знает, откуда файл.
+  // Сюда файл приходит с диска, выбранный в диалоге, — и это может быть
+  // что угодно, вплоть до PDF, переименованного в .jpg. Снимок с камеры идёт
+  // другим путём (PhotoPicker → офлайн-очередь), и там «не удалось уменьшить»
+  // по-прежнему означает «отправить как есть»: потерять фотографию приёмщика
+  // хуже, чем занять лишнее место.
+  if (!(await looksLikeImage(file))) {
+    throw new ApiError(
+      'permanent',
+      0,
+      `«${file.name}» — это не картинка. Приложить можно фотографию: ${imageFormatsWording()}`,
+    );
+  }
+
   // Уменьшение до отправки: снимок с телефона весит пять мегабайт, а в
   // карточке и в прайсе площадки от них не остаётся ничего, кроме времени
   // загрузки.
