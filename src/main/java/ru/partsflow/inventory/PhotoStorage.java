@@ -149,15 +149,71 @@ public class PhotoStorage {
                 .build());
     }
 
+    /**
+     * Типы снимков, которые система принимает: тип, расширение в хранилище
+     * и слово для человека.
+     *
+     * <p><b>Список один, и читают его трое.</b> {@link #extensionFor} называет
+     * по нему объект в хранилище, {@link #isSupportedImage} отвечает, принимать
+     * ли заявленный тип, {@link #supportedImageLabels} называет форматы
+     * в отказе. Второй список развёлся бы с первым на первом же новом
+     * формате — в этом проекте так уже расходились белые списки колонок
+     * и словари состояний сделки.
+     *
+     * <p><b>HEIC здесь намеренно.</b> Айфон снимает им, и снимок от поставщика
+     * приходит именно таким — при том что уменьшить его умеет не всякий
+     * браузер. «Не удалось раскодировать» и «это не картинка» — разные вещи,
+     * и путать их значит отвергать законную фотографию.
+     */
+    private record ImageType(String contentType, String extension, String label) {
+    }
+
+    private static final java.util.List<ImageType> IMAGE_TYPES = java.util.List.of(
+            new ImageType("image/jpeg", ".jpg", "JPEG"),
+            // Нестандартный, но встречается у старых камер и конвертеров.
+            new ImageType("image/jpg", ".jpg", "JPEG"),
+            new ImageType("image/png", ".png", "PNG"),
+            new ImageType("image/webp", ".webp", "WebP"),
+            new ImageType("image/heic", ".heic", "HEIC"),
+            new ImageType("image/heif", ".heic", "HEIC"));
+
+    /** Заявленный тип — из списка принимаемых? */
+    public static boolean isSupportedImage(String contentType) {
+        return contentType != null && IMAGE_TYPES.stream()
+                .anyMatch(type -> type.contentType().equals(contentType.trim().toLowerCase()));
+    }
+
+    /** Форматы словами, для отказа человеку: «JPEG, PNG, WebP, HEIC». */
+    public static String supportedImageLabels() {
+        return IMAGE_TYPES.stream().map(ImageType::label).distinct()
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
+    /** Принимаемые типы — для проверки, сверяющей этот список с клиентским. */
+    public static java.util.List<String> supportedImageTypes() {
+        return IMAGE_TYPES.stream().map(ImageType::contentType).toList();
+    }
+
+    /**
+     * Расширение объекта в хранилище.
+     *
+     * <p>Умолчание {@code .jpg} оставлено для незнакомого типа намеренно:
+     * этим путём идёт ещё перенос снимков с чужого CDN
+     * ({@code PhotoMigration}), где тип берётся из заголовка чужого сервера
+     * и бывает любым, а терять снимок клиента из-за нестандартного заголовка
+     * нельзя. Для загрузки из кабинета и с телефона незнакомый тип до сюда
+     * не доходит — его отбивает {@link #isSupportedImage} в
+     * {@code PhotoService.requestUpload}.
+     */
     private static String extensionFor(String contentType) {
         if (contentType == null) {
             return ".jpg";
         }
-        return switch (contentType.toLowerCase()) {
-            case "image/png" -> ".png";
-            case "image/webp" -> ".webp";
-            case "image/heic", "image/heif" -> ".heic";
-            default -> ".jpg";
-        };
+        String normalized = contentType.trim().toLowerCase();
+        return IMAGE_TYPES.stream()
+                .filter(type -> type.contentType().equals(normalized))
+                .map(ImageType::extension)
+                .findFirst()
+                .orElse(".jpg");
     }
 }
