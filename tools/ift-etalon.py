@@ -3,10 +3,11 @@
 """Эталонный набор стенда ИФТ: разложить, вернуть как было, проверить пригодность.
 
   ./tools/ift-etalon.py разложить  [--адрес URL]   компания с известным набором
-  ./tools/ift-etalon.py вернуть    [--адрес URL]   снести её и разложить заново
+  ./tools/ift-etalon.py вернуть    [--адрес URL] [--всё-равно]  снести и разложить заново
   ./tools/ift-etalon.py проверить  [--адрес URL] [--снимок ФАЙЛ]
   ./tools/ift-etalon.py сценарии   [--адрес URL]   три сценария walkthrough по набору
-  ./tools/ift-etalon.py --selftest                 правило «это ИФТ» без сети
+  ./tools/ift-etalon.py --selftest                 правило «это ИФТ» и четыре режима
+                                                   на подделках, без сети и стенда
 
 Задача 0076. Постоянный стенд тестировщика без двух вещей бесполезен: без
 входов под все шесть ролей и без способа вернуть его в известное состояние.
@@ -52,6 +53,20 @@ SQL, проверяет базу, а не приложение: приёмка, 
 ту же схему, что база, куда смотрит COMPOSE: иначе можно снести локальную
 компанию, а раскладывать на стенде.
 
+**Владелец не входит — снос отказывается, а не идёт молча** (задача 0241).
+Снимки убирает приложение, пока схема жива; без входа владельца убрать их
+нечем. Прежняя редакция сносила схему всё равно, печатала «снесена
+компания…» и выходила нулём — снимки оставались в хранилище без карточек,
+и следующий прогон становился несравнимым с предыдущим (отпечаток состояния
+на снимки не смотрит). Теперь это отказ словами и ненулевой код; снести,
+зная цену, можно `--всё-равно` — тогда оставленное считается и называется.
+
+**И сама самопроверка покрывает теперь не только правило «это ИФТ», а все
+четыре режима** — подделками на поддельном стенде (`http.server` на
+127.0.0.1) и заглушке базы. До 0241 на вопрос «ты себя проверяешь?»
+инструмент отвечал «да» видом успешной работы: краснел он только на двенадцати
+адресах, а раскладка, снос, проверка и сценарии не были покрыты ничем.
+
 Переменные:
   APP_PROVISIONING_TOKEN  секрет провижининга; локально по умолчанию local-dev-token
   COMPOSE                 как дотянуться до базы стенда (по умолчанию «docker compose»)
@@ -63,6 +78,7 @@ import datetime
 import email.utils
 import hashlib
 import http.cookiejar
+import http.server
 import json
 import os
 import re
@@ -70,6 +86,7 @@ import shlex
 import struct
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -553,10 +570,14 @@ def seed(base, token):
         return EXIT_ALREADY
     # Сотрудники заводятся в core(), а входить ими надо там же — поэтому
     # сессии кладовщика и продавца открываются лениво, при первом запросе.
-    ctx = {"owner": logged_in(base, OWNER),
-           "storekeeper": LazySession(base, MEMBERS[2]),
-           "seller": LazySession(base, MEMBERS[1])}
+    #
+    # Вход владельца стоит ВНУТРИ try: снаружи его отказ давал трассировку
+    # вместо «Набор разложен не до конца» — то есть раскладка падала, не назвав
+    # ни шага, ни того, что делать (найдено самопроверкой режимов, задача 0241).
     try:
+        ctx = {"owner": logged_in(base, OWNER),
+               "storekeeper": LazySession(base, MEMBERS[2]),
+               "seller": LazySession(base, MEMBERS[1])}
         core(base, ctx)
         edges(base, ctx)
         export(base, ctx)
@@ -592,7 +613,34 @@ def psql(sql):
     return [line.split("\t") for line in done.stdout.decode("utf-8").splitlines() if line]
 
 
-def demolish(base):
+def photos_left_gate(anyway, schema):
+    """Владелец не вошёл — снимки убрать нечем, и снос их осиротит.
+
+    До задачи 0241 здесь стояла строка `say(...)`: схема сносилась всё равно,
+    снимки оставались в хранилище без карточек, `вернуть` печатал «снесена
+    компания…» и выходил нулём. Мусор при этом не считал никто — отпечаток
+    состояния на снимки не смотрит, — то есть следующий прогон становился
+    несравнимым с предыдущим молча.
+
+    Поэтому по умолчанию это отказ, называющий все три выхода. Снести, зная
+    цену, можно `--всё-равно`: тогда оставленное считается и называется.
+    """
+    if not anyway:
+        raise Refused(
+            "владелец набора «%s» не входит (пароль меняли?) — снимки убрать "
+            "нечем, а снос оставит их в хранилище без карточек, и посчитать "
+            "мусор потом будет нечем. Выходы: вернуть владельцу пароль «%s»; "
+            "снести объекты префикса «%s/» в хранилище руками; либо снести "
+            "с ценой — ./tools/ift-etalon.py вернуть --всё-равно"
+            % (OWNER[1], OWNER[2], schema))
+    rows = psql("SELECT count(*) FROM %s.part_photo;" % schema)
+    left = rows[0][0] if rows and rows[0] else "?"
+    say("владелец не входит, сношу по требованию --всё-равно: в хранилище "
+        "остаётся снимков %s под префиксом «%s/», карточек к ним не будет"
+        % (left, schema))
+
+
+def demolish(base, anyway=False):
     """Сносит эталонную компанию. Ничего не нашёл — это не ошибка."""
     rows = psql("SELECT tenant_id, schema_name, company_name, status "
                 "FROM public.tenant_registry WHERE code = '%s';" % COMPANY_CODE)
@@ -625,7 +673,7 @@ def demolish(base):
 
     # Снимки удаляются через приложение, пока схема жива: иначе они остаются
     # в хранилище без карточек. Тестировщик мог сменить пароль владельца —
-    # тогда снимки останутся мусором, а снос всё равно пройдёт.
+    # тогда убрать их нечем, и снос отказывается (photos_left_gate).
     owner = Api(base)
     if owner.login(COMPANY_CODE, OWNER[1], OWNER[2]) == 200:
         removed = 0
@@ -638,8 +686,7 @@ def demolish(base):
                     removed += 1
         say("снимков убрано из хранилища: %d" % removed)
     else:
-        say("владелец набора не входит (пароль меняли?) — снимки прежнего набора "
-            "останутся в хранилище без карточек")
+        photos_left_gate(anyway, schema)
 
     # Сессии лежат в общей схеме и ищутся по «схема#сотрудник»: не снятые,
     # они пускали бы вчерашнюю cookie в компанию, которой больше нет.
@@ -828,8 +875,15 @@ def scenarios(base):
     def step(name, fn):
         try:
             print("  ✓ %s — %s" % (name, fn()))
-        except (Refused, LookupError, ValueError) as error:
-            print("  ✗ %s — %s" % (name, error))
+        except (Refused, LookupError, ValueError, StopIteration) as error:
+            # StopIteration — это `next(...)` по пустой выдаче: склад без
+            # свободного остатка, набор без клиентов, набор без выгрузки.
+            # Это и есть «данных набора не хватило», ради чего шаг и написан,
+            # но до задачи 0241 её не ловил никто: пустой склад давал
+            # трассировку — шаг не назван, код возврата чужой, а причина
+            # выглядит поломкой инструмента, а не непригодным набором.
+            why = str(error) or "нет данных (%s)" % type(error).__name__
+            print("  ✗ %s — %s" % (name, why))
             failed.append(name)
 
     storekeeper = logged_in(base, MEMBERS[2])
@@ -918,6 +972,488 @@ def selftest():
     return broken
 
 
+# --- поддельный стенд: четыре режима на подделках ----------------------------
+#
+# Режимы ходят в API и в базу, поэтому проверяются они ЗАПУСКОМ, а не вызовом
+# функций: `.env`, разбор аргументов, коды возврата и порядок шагов живут
+# в пути запуска, и проба, зовущая функцию, про них не говорит ничего
+# (урок задачи 0144). Поэтому здесь поднимается настоящий `http.server`
+# на 127.0.0.1 — законный ИФТ по правилу `stand_of`, — а сам скрипт
+# запускается подпроцессом против него. База подменяется заглушкой через
+# переменную COMPOSE, которую `psql()` читает и в бою: нового шва ради
+# самопроверки не заведено ни одного.
+#
+# Заглушка дописывает ВЕСЬ SQL в журнал, и по нему проба смотрит, звали ли
+# `DROP SCHEMA`. Это перебор отправленного, а не код возврата: «решили
+# не сносить» и «снесли, а потом покраснели» — разные утверждения.
+
+SELF = os.path.abspath(__file__)
+
+COMPOSE_STUB = """#!/bin/sh
+# Заглушка базы для самопроверки tools/ift-etalon.py. Печатает строки реестра
+# и счёт снимков; весь SQL дописывает в журнал — по нему проба и судит.
+sql=$(cat)
+printf '%s\\n-----\\n' "$sql" >> "$SQL_LOG"
+case "$sql" in
+    *part_photo*) printf '%s\\n' "$ETALON_PHOTOS_LEFT" ;;
+    *"DROP SCHEMA"*) : ;;
+    *tenant_registry*)
+        [ -n "$ETALON_NAME" ] && printf '%s\\t%s\\t%s\\tACTIVE\\n' \\
+            "$ETALON_TENANT_ID" "$ETALON_SCHEMA" "$ETALON_NAME" ;;
+esac
+exit 0
+"""
+
+BOARD_OK = {"NEW": 1, "EXPIRED": 1, "WAIT_PAYMENT": 1, "PARTLY_PAID": 1, "READY": 1}
+
+
+def stand_state(**knobs):
+    """Состояние поддельного стенда — годный набор. Подделка меняет один ключ."""
+    far = iso(datetime.datetime.now(datetime.timezone.utc)
+              + datetime.timedelta(days=365))
+    rows = []
+    for number, spec in enumerate(CORE_PARTS, start=1):
+        rows.append({"id": 100 + number, "number": number,
+                     "title": spec[0].capitalize(), "publicCode": "CODE%02d" % number,
+                     "photoCount": 1, "supply": "Контейнер №ЭТ-001",
+                     "stock": {"1": "1"}})
+    rows.append({"id": 200, "number": len(rows) + 1, "title": "Капот",
+                 "publicCode": "CODE20", "photoCount": 0,
+                 "supply": "Контейнер №ЭТ-001", "stock": {"1": "1"}})
+    rows.append({"id": 201, "number": len(rows) + 1, "title": "Радиатор охлаждения",
+                 "publicCode": "CODE21", "photoCount": 1,
+                 "supply": "Контейнер №ЭТ-001", "stock": {"1": "1", "2": "1"}})
+    state = {
+        "base": "", "schema": "t_000042", "provisioned": False,
+        "fresh_logins": True,
+        "bad_logins": set(), "fail": None, "offers": 3, "unmatched": 1,
+        "deleted": 0, "receipts": {}, "ids": {}, "who": None,
+        "board": dict(BOARD_OK),
+        "stock": [{"partId": 101, "warehouseId": 1, "qtyAvailable": "2"}],
+        "roles": {who[1]: who[0] for who in EVERYONE},
+        "rows": rows,
+        "customers": [{"id": 1, "name": "Иван Петров"},
+                      {"id": 2, "name": "ООО «Автосервис Восток»"},
+                      {"id": 3, "name": RETAIL}],
+        "deals": [
+            {"number": 1, "status": "RESERVED", "reservedUntil": far,
+             "customerName": "Иван Петров", "totalAmount": 12000, "paidAmount": 0},
+            {"number": 2, "status": "ISSUED", "reservedUntil": None,
+             "customerName": "ООО «Автосервис Восток»", "totalAmount": 6000,
+             "paidAmount": 6000},
+            {"number": 3, "status": "ISSUED", "reservedUntil": None,
+             "customerName": RETAIL, "totalAmount": 4500, "paidAmount": 4500},
+        ],
+    }
+    state.update(knobs)
+    state["photos"] = {row["id"]: row["photoCount"] for row in state["rows"]}
+    return state
+
+
+def fake_answer(state, method, path, body):
+    """Ответ поддельного стенда: всё, что зовут четыре режима, и ничего больше."""
+    base = state["base"]
+    if state["fail"] and (method, path) == tuple(state["fail"]):
+        return 500, {"message": "подделка самопроверки: этот шаг отказывает"}
+
+    def new_id(kind):
+        state["ids"][kind] = state["ids"].get(kind, 0) + 1
+        return state["ids"][kind]
+
+    if path == "/api/auth/csrf":
+        return 204, None
+    if path == "/api/auth/login":
+        login = (body or {}).get("login")
+        if login in state["bad_logins"]:
+            return 401, None
+        state["who"] = login
+        return 200, {"login": login, "role": state["roles"].get(login),
+                     "companySchema": state["schema"]}
+    if path == "/api/auth/me":
+        return 200, {"role": state["roles"].get(state["who"]),
+                     "companySchema": state["schema"]}
+    if path == "/api/provisioning/tenants":
+        if state["provisioned"]:
+            return 409, {"message": "код компании «%s» занят" % COMPANY_CODE}
+        state["provisioned"] = True
+        if state["fresh_logins"]:
+            # Заведённая компания получает пароли из репозитория по построению:
+            # иначе «вернуть» на стенде со сменённым паролем владельца падал бы
+            # в поддельном стенде после сноса, чего в бою случиться не может.
+            state["bad_logins"] = set()
+        return 201, {"schemaName": state["schema"]}
+
+    if path == "/api/organization/branches":
+        return 200, [{"id": 1, "name": "Главный"}]
+    if path == "/api/organization/warehouses":
+        if method == "POST":
+            return 201, {"id": new_id("wh")}
+        return 200, [{"id": 1, "name": MAIN_WAREHOUSE,
+                      "cells": len(CELLS[MAIN_WAREHOUSE])},
+                     {"id": 2, "name": SECOND_WAREHOUSE,
+                      "cells": len(CELLS[SECOND_WAREHOUSE])}]
+    m = re.fullmatch(r"/api/organization/warehouses/(\d+)/cells", path)
+    if m:
+        if method == "POST":
+            return 201, {}
+        main_codes = CELLS[MAIN_WAREHOUSE]
+        codes = main_codes if m.group(1) == "1" else CELLS[SECOND_WAREHOUSE]
+        start = 0 if m.group(1) == "1" else len(main_codes)
+        return 200, [{"id": start + i + 1, "code": code}
+                     for i, code in enumerate(codes)]
+    if path == "/api/members":
+        if method == "POST":
+            return 201, {"id": new_id("member")}
+        return 200, [{"login": w[1], "role": w[0], "displayName": w[3],
+                      "active": True} for w in EVERYONE]
+    if path == "/api/payment-sources":
+        if method == "POST":
+            return 201, {"id": new_id("pay")}
+        return 200, [{"id": i + 1, "name": name, "sourceType": kind}
+                     for i, (name, kind) in enumerate(PAYMENT_SOURCES)]
+    if path == "/api/deal-sources":
+        return 200, [{"id": 1, "name": "Звонок"}]
+    if path == "/api/catalog/brands":
+        return 200, [{"id": 1, "name": "Toyota"}]
+    if re.fullmatch(r"/api/catalog/brands/\d+/models", path):
+        return 200, [{"id": 1, "name": "Camry"}]
+    if path == "/api/intake/supplies":
+        return 201, {"id": 1, "number": "ЭТ-001"}
+    if re.fullmatch(r"/api/intake/supplies/\d+/arrived", path):
+        return 200, {"id": 1, "status": "ARRIVED"}
+    if path == "/api/intake/donors":
+        if method == "POST":
+            return 201, {"id": 1}
+        return 200, [{"id": 1, "status": "DISMANTLING", "vin": "JTNBE40K003123456"}]
+    if re.fullmatch(r"/api/intake/donors/\d+/(dismantling|costs)", path):
+        return 200, {"id": 1}
+    if path == "/api/intake/receipts":
+        key = (body or {}).get("requestId")
+        if key in state["receipts"]:
+            return 200, state["receipts"][key]
+        parts = []
+        for item in (body or {}).get("items", []):
+            raw = item.get("rawName", "")
+            parts.append({"id": new_id("part"), "title": raw,
+                          "nameMatched": raw != UNMATCHED_NAME})
+        state["receipts"][key] = {"parts": parts}
+        return 201, state["receipts"][key]
+    m = re.fullmatch(r"/api/parts/(\d+)/photos/upload-url", path)
+    if m:
+        return 200, {"photoId": new_id("photo"),
+                     "uploadUrl": "%s/storage/%s-%d" % (base, m.group(1),
+                                                        new_id("obj"))}
+    if re.fullmatch(r"/api/parts/\d+/photos/\d+/confirm", path):
+        return 200, {}
+    m = re.fullmatch(r"/api/parts/(\d+)/photos", path)
+    if m:
+        return 200, [{"photoId": i + 1}
+                     for i in range(state["photos"].get(int(m.group(1)), 0))]
+    if method == "DELETE" and re.fullmatch(r"/api/parts/\d+/photos/\d+", path):
+        state["deleted"] += 1
+        return 204, None
+    if path == "/api/parts/catalog":
+        return 200, {"rows": state["rows"], "total": len(state["rows"])}
+    if path == "/api/parts/stock":
+        return 200, {"rows": state["stock"]}
+    if path == "/api/wheels":
+        return 200, {"total": 6, "rows": [{"id": 1, "kind": "TYRE", "quantity": 4},
+                                          {"id": 2, "kind": "DISC", "quantity": 2}]}
+    if path == "/api/wheels/sets":
+        return 201, {"id": new_id("wheel")}
+    if path == "/api/customers":
+        if method == "POST":
+            return 201, {"id": new_id("customer")}
+        return 200, state["customers"]
+    if path == "/api/deals":
+        number = new_id("deal")
+        return 201, {"id": number, "number": number, "totalAmount": 12000,
+                     "status": "RESERVED"}
+    if re.fullmatch(r"/api/deals/\d+/payments", path):
+        return 201, {"id": new_id("payment")}
+    m = re.fullmatch(r"/api/deals/(\d+)/issue", path)
+    if m:
+        return 200, {"id": int(m.group(1)), "number": int(m.group(1)),
+                     "totalAmount": 12000, "status": "ISSUED"}
+    if path == "/api/deals/registry":
+        return 200, {"items": state["deals"], "total": len(state["deals"])}
+    if path == "/api/deals/board":
+        return 200, {"columns": [{"key": key, "count": count}
+                                 for key, count in state["board"].items()]}
+    if path == "/api/stock/moves":
+        return 201, {"id": new_id("move")}
+    if path == "/api/part-names/unmatched":
+        items = [{"name": UNMATCHED_NAME}] if state["unmatched"] else []
+        return 200, {"total": state["unmatched"], "items": items}
+    if path == "/api/marketplace-accounts":
+        if method == "POST":
+            return 201, {"id": 1}
+        return 200, [{"id": 1, "marketplace": "DROM", "title": "Дром — весь склад",
+                      "status": "ACTIVE", "hasFeed": True}]
+    if re.fullmatch(r"/api/marketplace-accounts/\d+/feed-url", path):
+        return 200, {"url": "%s/feed.xml" % base}
+    if path == "/feed.xml":
+        offers = "<offer>деталь</offer>" * state["offers"]
+        return 200, ("<offers>%s</offers>" % offers).encode("utf-8")
+    if path.startswith("/storage/"):
+        return 200, {}
+    return 404, {"message": "поддельный стенд не знает %s %s" % (method, path)}
+
+
+def start_fake_stand(state):
+    """Настоящий сервер на 127.0.0.1 — то есть законный ИФТ по правилу stand_of."""
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args):
+            pass                      # вывод пробы не засоряем
+
+        def _read(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b""
+            try:
+                return json.loads(raw.decode("utf-8")) if raw else None
+            except (ValueError, UnicodeDecodeError):
+                return None           # снимок в хранилище — не JSON
+
+        def _serve(self, method):
+            path = urllib.parse.urlsplit(self.path).path
+            body = self._read()
+            code, payload = fake_answer(state, method, path, body)
+            if isinstance(payload, bytes):
+                data, kind = payload, "application/xml; charset=utf-8"
+            elif payload is None:
+                data, kind = b"", "application/json"
+            else:
+                data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                kind = "application/json"
+            self.send_response(code)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(data)))
+            if path == "/api/auth/csrf":
+                self.send_header("Set-Cookie", "XSRF-TOKEN=proba; Path=/")
+            self.end_headers()
+            if data:
+                self.wfile.write(data)
+
+        def do_GET(self):
+            self._serve("GET")
+
+        def do_POST(self):
+            self._serve("POST")
+
+        def do_PUT(self):
+            self._serve("PUT")
+
+        def do_DELETE(self):
+            self._serve("DELETE")
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    state["base"] = "http://127.0.0.1:%d" % server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, state["base"]
+
+
+def modes_selftest():
+    """Четыре режима на подделках: каждая обязана краснеть своим сообщением.
+
+    Обратный край проверяется у каждого режима отдельно — проверка, которая
+    краснеет всегда, не даёт разложить стенд ни одним способом, и её отключат
+    первой, вместе с защитой.
+    """
+    import py_compile
+    import shutil
+    import tempfile
+
+    broken = []
+    work = tempfile.mkdtemp(prefix="etalon-selftest-")
+    fake = os.path.join(os.path.dirname(SELF), ".ift-etalon-fake.py")
+    try:
+        stub = os.path.join(work, "compose-stub.sh")
+        with open(stub, "w", encoding="utf-8") as out:
+            out.write(COMPOSE_STUB)
+        os.chmod(stub, 0o755)
+        counter = [0]
+        # Ребёнок возврата дефекта гоняет только режим «вернуть»: подделка
+        # снимает отказ сноса, и краснеть обязан именно он. Полный прогон
+        # у ребёнка удваивал бы время самопроверки, ничего не добавляя.
+        child_only = bool(os.environ.get("ETALON_SELFTEST_CHILD"))
+
+        def run_case(name, command, knobs=None, extra=(), registry=COMPANY_NAME,
+                     photos_left=0, want_code=0, says=(), not_says=(),
+                     sql_says=(), sql_not_says=(), script=None):
+            if child_only and not name.startswith("вернуть"):
+                return
+            counter[0] += 1
+            was = len(broken)
+            state = stand_state(**(knobs or {}))
+            server, url = start_fake_stand(state)
+            log = os.path.join(work, "sql-%d.log" % counter[0])
+            open(log, "w", encoding="utf-8").close()
+            env = dict(os.environ)
+            env.update({"COMPOSE": stub, "SQL_LOG": log,
+                        "ETALON_TENANT_ID": "42",
+                        "ETALON_SCHEMA": state["schema"],
+                        "ETALON_NAME": registry,
+                        "ETALON_PHOTOS_LEFT": str(photos_left)})
+            try:
+                done = subprocess.run(
+                    [sys.executable, script or SELF, command, "--адрес", url]
+                    + list(extra),
+                    capture_output=True, text=True, timeout=120, env=env)
+            except subprocess.TimeoutExpired:
+                broken.append("%s: режим не кончился за 120 с" % name)
+                return
+            finally:
+                server.shutdown()
+                server.server_close()
+            out = done.stdout + done.stderr
+            sql = open(log, encoding="utf-8").read()
+            tail = out[-600:]
+            if done.returncode != want_code:
+                broken.append("%s: код возврата %s, ожидался %s — %s"
+                              % (name, done.returncode, want_code, tail))
+            for text in says:
+                if text not in out:
+                    broken.append("%s: в выводе нет «%s» — %s" % (name, text, tail))
+            for text in not_says:
+                if text in out:
+                    broken.append("%s: в выводе есть «%s», а его быть не должно"
+                                  % (name, text))
+            for text in sql_says:
+                if text not in sql:
+                    broken.append("%s: в базу не ушло «%s»" % (name, text))
+            for text in sql_not_says:
+                if text in sql:
+                    broken.append("%s: в базу ушло «%s» — операция сделала то, "
+                                  "от чего отказалась словами" % (name, text))
+            # Пройденный случай называется вслух: иначе о составе проверки
+            # нельзя судить, не читая её исходник, — а судят по выводу.
+            if len(broken) == was:
+                print("  ✓ %s" % name, flush=True)
+
+        # --- проверить -------------------------------------------------------
+        run_case("проверить: годный набор пригоден", "проверить",
+                 says=("Набор пригоден", "Отпечаток состояния"))
+        run_case("проверить: снятая частичная оплата названа по имени", "проверить",
+                 knobs={"board": dict(BOARD_OK, PARTLY_PAID=0)},
+                 want_code=EXIT_FAILED,
+                 says=("частично оплаченная сделка", "Набор не пригоден"),
+                 not_says=("Набор пригоден",))
+        run_case("проверить: снятый просроченный резерв назван по имени", "проверить",
+                 knobs={"board": dict(BOARD_OK, EXPIRED=0)}, want_code=EXIT_FAILED,
+                 says=("просроченный резерв", "Набор не пригоден"))
+        run_case("проверить: снятое нераспознанное написание названо", "проверить",
+                 knobs={"unmatched": 0}, want_code=EXIT_FAILED,
+                 says=("нераспознанное написание", "Набор не пригоден"))
+        run_case("проверить: неверный пароль роли назван входом", "проверить",
+                 knobs={"bad_logins": {"revizor"}}, want_code=EXIT_FAILED,
+                 says=("вход revizor", "Набор не пригоден"))
+        run_case("проверить: без владельца дальше не идём", "проверить",
+                 knobs={"bad_logins": {"vladelec"}}, want_code=EXIT_FAILED,
+                 says=("Без владельца и продавца",))
+
+        # --- разложить -------------------------------------------------------
+        run_case("разложить: годный стенд раскладывается и проверяется",
+                 "разложить", says=("Набор пригоден", "входы:"))
+        run_case("разложить: поверх разложенного не кладём", "разложить",
+                 knobs={"provisioned": True}, want_code=EXIT_ALREADY,
+                 says=("уже разложена", "вернуть"),
+                 not_says=("Набор пригоден",))
+        run_case("разложить: отказ на шаге назван шагом", "разложить",
+                 knobs={"fail": ("POST", "/api/organization/warehouses")},
+                 want_code=EXIT_FAILED,
+                 says=("второй склад", "Набор разложен не до конца"))
+        run_case("разложить: отказ входа владельца назван, а не трассировкой",
+                 "разложить",
+                 knobs={"bad_logins": {"vladelec"}, "fresh_logins": False},
+                 want_code=EXIT_FAILED,
+                 says=("вход vladelec", "Набор разложен не до конца"),
+                 not_says=("Traceback",))
+
+        # --- вернуть ---------------------------------------------------------
+        run_case("вернуть: годный стенд сносится и раскладывается заново",
+                 "вернуть", says=("снимков убрано", "снесена компания",
+                                  "Набор пригоден"),
+                 not_says=("снимков убрано из хранилища: 0",),
+                 sql_says=("DROP SCHEMA",))
+        run_case("вернуть: владелец не входит — отказ, и схема цела", "вернуть",
+                 knobs={"bad_logins": {"vladelec"}}, want_code=EXIT_FAILED,
+                 says=("владелец набора", "не входит", "--всё-равно"),
+                 not_says=("снесена компания",),
+                 sql_not_says=("DROP SCHEMA",))
+        run_case("вернуть: с --всё-равно снос идёт, а оставленное названо",
+                 "вернуть", knobs={"bad_logins": {"vladelec"}}, photos_left=7,
+                 extra=("--всё-равно",),
+                 says=("остаётся снимков 7", "снесена компания", "Набор пригоден"),
+                 sql_says=("DROP SCHEMA",))
+        run_case("вернуть: чужое название компании не сносим", "вернуть",
+                 registry="Чужая компания", want_code=EXIT_FAILED,
+                 says=("не эталонный набор",), sql_not_says=("DROP SCHEMA",))
+        run_case("вернуть: ни один вход не работает — вслепую не сносим", "вернуть",
+                 knobs={"bad_logins": {w[1] for w in EVERYONE}},
+                 want_code=EXIT_FAILED, says=("сносить вслепую не буду",),
+                 sql_not_says=("DROP SCHEMA",))
+
+        # --- сценарии --------------------------------------------------------
+        run_case("сценарии: три шага проходят", "сценарии",
+                 says=("приёмка с телефона", "продажа с выдачей и оплатой",
+                       "сборка прайса", "Сценарии прошли"))
+        run_case("сценарии: пустой прайс назван шагом", "сценарии",
+                 knobs={"offers": 0}, want_code=EXIT_FAILED,
+                 says=("сборка прайса", "Данных набора не хватило"))
+        run_case("сценарии: нет свободного остатка — шаг назван, а не трассировка",
+                 "сценарии", knobs={"stock": []}, want_code=EXIT_FAILED,
+                 says=("продажа с выдачей и оплатой", "Данных набора не хватило"),
+                 not_says=("Traceback",))
+
+        # --- возврат дефекта -------------------------------------------------
+        # Без него остальные случаи ничего не утверждают: краснеть обязан именно
+        # сторож. Копия со снятым отказом сноса — это редакция до задачи 0241.
+        # Ребёнку этот случай выключен переменной, иначе подделка заводила бы
+        # подделку себя.
+        if not os.environ.get("ETALON_SELFTEST_CHILD"):
+            anchor = "def photos_left_gate(anyway, schema):\n"
+            text = open(SELF, encoding="utf-8").read()
+            if anchor not in text:
+                broken.append("возврат дефекта: подделку негде поставить — "
+                              "сторож сноса переехал, а проба осталась")
+            else:
+                with open(fake, "w", encoding="utf-8") as out:
+                    out.write(text.replace(
+                        anchor,
+                        anchor + "    return  # подделка: снос идёт, как до 0241\n",
+                        1))
+                # Целость копии — ДО запуска: красное от сломанного синтаксиса
+                # говорило бы о подделке, а не о стороже (урок задачи 0198).
+                try:
+                    py_compile.compile(fake, cfile=os.path.join(work, "fake.pyc"),
+                                       doraise=True)
+                except py_compile.PyCompileError as error:
+                    broken.append("возврат дефекта: копия не компилируется (%s)"
+                                  % error)
+                else:
+                    env = dict(os.environ)
+                    env["ETALON_SELFTEST_CHILD"] = "1"
+                    child = subprocess.run(
+                        [sys.executable, fake, "--самопроверка"],
+                        capture_output=True, text=True, timeout=600, env=env)
+                    out = child.stdout + child.stderr
+                    case = "вернуть: владелец не входит"
+                    if child.returncode == 0 or case not in out:
+                        broken.append(
+                            "возврат дефекта: копия со снятым отказом сноса "
+                            "обязана валить самопроверку случаем «%s» — код %s, "
+                            "вывод: %s" % (case, child.returncode, out[-600:]))
+        return broken
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        if os.path.exists(fake):
+            os.remove(fake)
+
+
 # ---------------------------------------------------------------- вход
 
 COMMANDS = {"разложить": "seed", "seed": "seed", "вернуть": "reset", "reset": "reset",
@@ -936,6 +1472,9 @@ def main():
     parser.add_argument("--снимок", "--snapshot", dest="snapshot",
                         help="сохранить состояние набора без идентификаторов и времени")
     parser.add_argument("--самопроверка", "--selftest", dest="selftest", action="store_true")
+    parser.add_argument("--всё-равно", "--anyway", dest="anyway", action="store_true",
+                        help="сносить набор, даже если владелец не входит "
+                             "и снимки останутся в хранилище без карточек")
     args = parser.parse_args()
 
     broken = selftest()
@@ -945,7 +1484,18 @@ def main():
             print("  ✗ " + line)
         return EXIT_FAILED
     if args.selftest:
-        print("Самопроверка прошла: правило «это ИФТ» пускает и отказывает, где должно.")
+        # Режимы гоняются только под флагом: каждый случай запускает этот же
+        # скрипт подпроцессом, и безусловный прогон уходил бы в рекурсию
+        # (и стоил бы секунд при каждой раскладке стенда). Правило «это ИФТ»
+        # остаётся безусловным, как было.
+        broken = modes_selftest()
+        if broken:
+            print("Самопроверка режимов не прошла — она ничего не доказывает:")
+            for line in broken:
+                print("  ✗ " + line)
+            return EXIT_FAILED
+        print("Самопроверка прошла: правило «это ИФТ» пускает и отказывает, где должно,")
+        print("а четыре режима краснеют на подделках и молчат на годном наборе.")
         return 0
     if not args.command:
         parser.print_help()
@@ -976,7 +1526,7 @@ def main():
     if command == "reset":
         print("Возвращаю как было: сношу эталонную компанию и раскладываю заново")
         try:
-            demolish(args.url)
+            demolish(args.url, args.anyway)
         except Refused as refused:
             print("  ✗ %s" % refused)
             return EXIT_FAILED
