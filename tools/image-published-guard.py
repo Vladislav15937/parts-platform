@@ -365,6 +365,69 @@ jobs:
 """
 
 
+# --- вход самой самопроверки: один исход на одну форму ------------------------
+#
+# Третий раз в задаче 0241 один класс укусил в новом месте: сперва сторожа,
+# потом шаг прогона, который их зовёт, потом ВХОД самопроверки. Первая редакция
+# проверки зовущего читала `ci.yml` и шла дальше под `if ci_text:` — то есть
+# пустой файл (ноль байт) читался как «нечего проверять», весь блок молча
+# пропускался, и самопроверка печатала «Сторож проверен» с кодом 0. Замерено
+# копией сторожа в дереве с пустым `ci.yml`: ни строки «шаги, читающие код
+# возврата», ни одного «возврат дефекта», зелёный итог.
+#
+# Поэтому форм здесь пять, и зелена из них ровно одна. «Файла нет», «файл
+# пуст», «не прочитать», «не разбирается», «задач нет» — это «СПРОСИТЬ
+# НЕ ВЫШЛО», и в прогоне это красное: `ci.yml` лежит в самом репозитории,
+# и его отсутствие означает поломку, а не особые условия. «Ни один шаг
+# не снимает $?» — законное «нечего проверять», но названное словами:
+# правило не нарушено и не проверено ничем, и молчать об этом нельзя.
+# Отдельно стоит «`.github` рядом нет вовсе»: так бывает у копии инструмента
+# вне дерева прогона, и случай пропускается СЛОВАМИ (приём `ops/deploy.sh`,
+# задача 0223), а не красным.
+
+WF_OK, WF_SKIP, WF_UNREADABLE, WF_NOTHING = "ok", "skip", "unreadable", "nothing"
+
+
+def repo_root(me):
+    return os.path.dirname(os.path.dirname(me))
+
+
+def workflow_state(root):
+    """(исход, текст, шаги, словами) по одному входу — файлу прогона."""
+    gh = os.path.join(root, ".github")
+    path = os.path.join(root, CI_YML)
+    if not os.path.isdir(gh):
+        return (WF_SKIP, "", [],
+                f"{gh} рядом нет — это не дерево с прогоном, проверять нечего")
+    if not os.path.isfile(path):
+        return (WF_UNREADABLE, "", [],
+                f"{CI_YML} нет, хотя .github рядом есть")
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError as e:
+        return WF_UNREADABLE, "", [], f"{CI_YML} не прочитать: {e}"
+    if not text.strip():
+        return (WF_UNREADABLE, "", [],
+                f"{CI_YML} пуст (байт: {len(text)}) — читать нечего")
+    try:
+        import yaml
+    except ImportError:
+        return (WF_UNREADABLE, "", [],
+                "PyYAML нет — разобрать файл прогона нечем")
+    try:
+        doc = yaml.safe_load(text)
+    except Exception as e:  # noqa: BLE001 — любая поломка разбора
+        return WF_UNREADABLE, "", [], f"{CI_YML} не разбирается как YAML: {e}"
+    if not isinstance(doc, dict) or not doc.get("jobs"):
+        return WF_UNREADABLE, "", [], f"в {CI_YML} нет ни одной задачи"
+    steps = rc_steps(text)
+    if not steps:
+        return (WF_NOTHING, text, [],
+                "ни один шаг не снимает $?: правило не нарушено, но и "
+                "не проверено ничем")
+    return WF_OK, text, steps, ""
+
+
 # --- проверка самого сторожа --------------------------------------------------
 
 FIXTURES = {
@@ -544,23 +607,22 @@ def selftest() -> int:
                             os.remove(os.path.join(cache, f))
 
         # --- зовущий доживает до разбора кодов -------------------------------
-        ci_path = os.path.join(os.path.dirname(os.path.dirname(me)), CI_YML)
-        try:
-            ci_text = open(ci_path, encoding="utf-8").read()
-        except OSError as e:
-            red(f"  ✗ {CI_YML} не прочитать ({e}): «кто читает мои коды» "
-                f"не проверено — это не «всё хорошо»")
-            bad = 1
-            ci_text = ""
+        import shutil
+        import tempfile
 
-        if ci_text:
-            steps = rc_steps(ci_text)
+        state, ci_text, steps, words = workflow_state(repo_root(me))
+        if state == WF_SKIP:
+            print(f"  · про зовущего не проверяли: {words}")
+        elif state == WF_UNREADABLE:
+            red(f"  ✗ СПРОСИТЬ НЕ ВЫШЛО: {words}")
+            red("      «Кто читает мои коды возврата» не проверено ничем, "
+                "и это не «нарушений нет».")
+            bad = 1
+        elif state == WF_NOTHING:
+            print(f"  · НЕЧЕГО ПРОВЕРЯТЬ: {words}")
+        else:
             broken = [(j, n, why) for j, _, n, ok, why in steps if not ok]
-            if not steps:
-                red("  ✗ в ci.yml не нашлось ни одного шага, снимающего $? — "
-                    "проверка выродилась: править её, а не ci.yml")
-                bad = 1
-            elif broken:
+            if broken:
                 for job_id, name, why in broken:
                     red(f"  ✗ {job_id} / {name}: {why}")
                 bad = 1
@@ -595,6 +657,123 @@ def selftest() -> int:
             else:
                 red(f"  ✗ обратный край не сошёлся: {names}")
                 bad = 1
+
+        # --- и то же самое у ВХОДА самопроверки: форма за формой -------------
+        #
+        # Перебор, а не одно условие: класс кусал в этой ветке трижды, и каждый
+        # раз в новом месте. Формы строятся настоящими деревьями, потому что
+        # вся разница в том, что лежит на диске.
+        подопытные = tempfile.mkdtemp(prefix="image-published-входы-")
+        try:
+            def дерево(имя, *, github=True, ci=None, mode=None):
+                root = os.path.join(подопытные, имя)
+                if github:
+                    os.makedirs(os.path.join(root, ".github", "workflows"))
+                    if ci is not None:
+                        p = os.path.join(root, CI_YML)
+                        open(p, "w", encoding="utf-8").write(ci)
+                        if mode is not None:
+                            os.chmod(p, mode)
+                else:
+                    os.makedirs(root)
+                return root
+
+            настоящий = ci_text or ""
+            формы = [
+                ("пустой файл прогона", дерево("пустой", ci=""), WF_UNREADABLE,
+                 "пуст"),
+                ("файла прогона нет", дерево("нет-файла"), WF_UNREADABLE,
+                 "нет, хотя .github"),
+                ("файл прогона не разбирается", дерево("битый", ci="a: [1,\n"),
+                 WF_UNREADABLE, "не разбирается"),
+                ("в файле прогона нет задач",
+                 дерево("без-задач", ci="on: push\n"), WF_UNREADABLE,
+                 "нет ни одной задачи"),
+                ("ни один шаг не снимает $?",
+                 дерево("нечего", ci="on: push\njobs:\n  a:\n    steps:\n"
+                                     "      - run: echo всё хорошо\n"),
+                 WF_NOTHING, "не проверено ничем"),
+                ("дерева с прогоном нет вовсе",
+                 дерево("без-github", github=False), WF_SKIP, "не дерево"),
+            ]
+            if настоящий:
+                формы.append(("настоящий файл прогона",
+                              дерево("настоящий", ci=настоящий), WF_OK, ""))
+            for имя, root, ждём, слово in формы:
+                got, _, _, сказано = workflow_state(root)
+                if got == ждём and (not слово or слово in сказано):
+                    print(f"  ✓ вход: {имя} → {got}")
+                else:
+                    red(f"  ✗ вход: {имя} → {got} (ждали {ждём}), "
+                        f"сказано «{сказано}»")
+                    bad = 1
+
+            # Нечитаемый по правам — настоящими правами, а не подменой. Под
+            # root их не спрашивают вовсе, и случай тогда называется
+            # непроверенным (приём ops/install-cron.sh), а не зелёным.
+            закрытый = дерево("без-прав", ci="on: push\njobs: {}\n", mode=0)
+            got, _, _, сказано = workflow_state(закрытый)
+            if got == WF_UNREADABLE:
+                print(f"  ✓ вход: файл прогона не прочитать → {got}")
+            elif os.geteuid() == 0:
+                print("  · вход: «не прочитать по правам» НЕ ПРОВЕРЕН — "
+                      "под root права не спрашивают")
+            else:
+                red(f"  ✗ вход: нечитаемый файл прогона → {got}, "
+                    f"сказано «{сказано}»")
+                bad = 1
+            os.chmod(os.path.join(закрытый, CI_YML), 0o644)
+
+            # ВОЗВРАТ ДЕФЕКТА. Копия сторожа, у которой пустой файл снова
+            # читается как «нечего проверять», обязана ВАЛИТЬ свою
+            # самопроверку — иначе формы выше ничего не утверждают. Копия
+            # кладётся в дерево с настоящим `ci.yml`: корень она считает
+            # от своего пути, и подделку обязан поймать случай «пустой файл»,
+            # а не отсутствие файла рядом.
+            if not os.environ.get("IMAGE_PUBLISHED_SELFTEST_CHILD") and настоящий:
+                гнездо = дерево("подделка", ci=настоящий)
+                os.makedirs(os.path.join(гнездо, "tools"))
+                копия = os.path.join(гнездо, "tools",
+                                     os.path.basename(me))
+                текст = open(me, encoding="utf-8").read()
+                якорь = ('        return (WF_UNREADABLE, "", [],\n'
+                         '                f"{CI_YML} пуст')
+                if якорь not in текст:
+                    red("  ✗ подделку входа негде поставить: ветка про пустой "
+                        "файл изменилась")
+                    bad = 1
+                else:
+                    open(копия, "w", encoding="utf-8").write(текст.replace(
+                        якорь,
+                        '        return (WF_NOTHING, "", [],\n'
+                        '                f"{CI_YML} пуст', 1))
+                    целость = subprocess.run(
+                        [sys.executable, "-m", "py_compile", копия],
+                        capture_output=True, text=True)
+                    if целость.returncode != 0:
+                        red("  ✗ подделка входа не компилируется — её красное "
+                            "говорило бы о копии, а не о проверке")
+                        bad = 1
+                    else:
+                        дитя = subprocess.run(
+                            [sys.executable, копия, "--selftest"],
+                            capture_output=True, text=True,
+                            env=dict(os.environ,
+                                     IMAGE_PUBLISHED_SELFTEST_CHILD="1",
+                                     PATH="/usr/bin:/bin"))
+                        вывод = дитя.stdout + дитя.stderr
+                        if дитя.returncode != 0 and "пустой файл прогона" in вывод:
+                            print("  ✓ возврат дефекта: копия, читающая пустой "
+                                  "файл как «нечего проверять», валит "
+                                  "самопроверку")
+                        else:
+                            red(f"  ✗ подделка «пустой = нечего проверять» "
+                                f"обязана валить самопроверку (код "
+                                f"{дитя.returncode}) — иначе зелёное на пустом "
+                                f"ci.yml вернётся молча")
+                            bad = 1
+        finally:
+            shutil.rmtree(подопытные, ignore_errors=True)
     finally:
         for p in servers:
             p.terminate()
