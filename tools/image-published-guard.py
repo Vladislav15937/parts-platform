@@ -275,6 +275,96 @@ def ask(ref: str) -> int:
     return verdict(ref, code, body, blob)
 
 
+# --- доживает ли зовущий до разбора моих кодов --------------------------------
+#
+# Три исхода не стоят ничего, если тот, кто их читает, до чтения не доживает.
+# Шаг прогона идёт под `bash -e {0}` (GitHub задаёт shell так, это видно
+# в логе каждого шага), и `set -uo pipefail` внутри скрипта шага наследуемый
+# `-e` НЕ СНИМАЕТ: он убивает шаг на первом же ненулевом коде, то есть
+# на законном исходе «годного образа нет — публикуем». Замерено прогоном
+# 36867959464: сторож напечатал «на теге образа нет (404)» и вернул 1, шаг
+# ответил «exit code 1», а `::notice::` в логе нет вовсе — `case` не выполнялся.
+#
+# Это класс 16 внутри правки против класса 16, поэтому проверка живёт здесь,
+# со стороны того, чьи коды читают: договор пиннит тот, кто его объявляет
+# (приём `ReadinessContractTest`). Смотрится при этом ВЕСЬ `ci.yml`, а не один
+# свой шаг: подвержен тому же любой шаг, снимающий `$?`.
+
+CI_YML = ".github/workflows/ci.yml"
+
+
+def rc_steps(text):
+    """[(задача, индекс шага, имя, защищён ли, чем)] по шагам, снимающим `$?`.
+
+    `${PIPESTATUS[0]}` намеренно не считается захватом: там статус конвейера
+    принадлежит последней команде (`| tee` отдаёт ноль), и `-e` не срабатывает.
+    """
+    import yaml
+
+    doc = yaml.safe_load(text)
+    top = ((doc.get("defaults") or {}).get("run") or {}).get("shell")
+    out = []
+    for job_id, job in (doc.get("jobs") or {}).items():
+        job_shell = ((job.get("defaults") or {}).get("run") or {}).get("shell")
+        for index, step in enumerate(job.get("steps") or []):
+            run = step.get("run")
+            if not run:
+                continue
+            lines = run.splitlines()
+            first = None
+            for i, line in enumerate(lines):
+                if line.strip().endswith("=$?"):
+                    first = i
+                    break
+            if first is None:
+                continue
+            name = step.get("name") or step.get("uses") or "(без имени)"
+            shell = step.get("shell") or job_shell or top
+            if shell and "-e" not in shell:
+                out.append((job_id, index, name, True, f"свой shell: {shell}"))
+                continue
+            before = [l.strip() for l in lines[:first]]
+            if any(l == "set +e" or l.startswith("set +e ") for l in before):
+                out.append((job_id, index, name, True, "set +e перед захватом"))
+            else:
+                out.append((job_id, index, name, False,
+                            "шаг снимает код возврата, но наследует -e "
+                            "от `bash -e {0}` — на ненулевом коде он умрёт "
+                            "до разбора, и законный исход станет красным"))
+    return out
+
+
+def without_set_plus_e(text, job_id, index):
+    """Подделка: у названного шага снято `set +e`. Возврат дефекта 0241."""
+    import yaml
+
+    doc = yaml.safe_load(text)
+    step = doc["jobs"][job_id]["steps"][index]
+    step["run"] = "\n".join(l for l in step["run"].splitlines()
+                            if l.strip() != "set +e")
+    return yaml.safe_dump(doc)
+
+
+SYNTHETIC = """
+on: push
+jobs:
+  proba:
+    steps:
+      - name: свой shell без -e
+        shell: bash {0}
+        run: |
+          ./cmd
+          rc=$?
+      - name: кода возврата не читает
+        run: |
+          echo всё хорошо
+      - name: конвейер и PIPESTATUS
+        run: |
+          ./cmd | tee /tmp/log
+          code=${PIPESTATUS[0]}
+"""
+
+
 # --- проверка самого сторожа --------------------------------------------------
 
 FIXTURES = {
@@ -452,6 +542,59 @@ def selftest() -> int:
                     for f in os.listdir(cache):
                         if f.startswith(".image-published-fake"):
                             os.remove(os.path.join(cache, f))
+
+        # --- зовущий доживает до разбора кодов -------------------------------
+        ci_path = os.path.join(os.path.dirname(os.path.dirname(me)), CI_YML)
+        try:
+            ci_text = open(ci_path, encoding="utf-8").read()
+        except OSError as e:
+            red(f"  ✗ {CI_YML} не прочитать ({e}): «кто читает мои коды» "
+                f"не проверено — это не «всё хорошо»")
+            bad = 1
+            ci_text = ""
+
+        if ci_text:
+            steps = rc_steps(ci_text)
+            broken = [(j, n, why) for j, _, n, ok, why in steps if not ok]
+            if not steps:
+                red("  ✗ в ci.yml не нашлось ни одного шага, снимающего $? — "
+                    "проверка выродилась: править её, а не ci.yml")
+                bad = 1
+            elif broken:
+                for job_id, name, why in broken:
+                    red(f"  ✗ {job_id} / {name}: {why}")
+                bad = 1
+            else:
+                print(f"  ✓ шаги, читающие код возврата ({len(steps)}), "
+                      f"защищены от наследуемого -e")
+
+            # ВОЗВРАТ ДЕФЕКТА, и по КАЖДОМУ такому шагу, а не только по своему:
+            # снятое `set +e` обязано краснеть. Так же будет пойман и шаг,
+            # который заведут завтра.
+            for job_id, index, name, ok, _ in steps:
+                if not ok:
+                    continue
+                fake = without_set_plus_e(ci_text, job_id, index)
+                after = [(j, n, w) for j, _, n, o, w in rc_steps(fake)
+                         if not o and j == job_id and n == name]
+                if after:
+                    print(f"  ✓ возврат дефекта: «{name}» без set +e краснеет")
+                else:
+                    red(f"  ✗ «{name}» без set +e обязан краснеть — иначе "
+                        f"проверка зовущего ничего не утверждает")
+                    bad = 1
+
+            # Обратные края: свой shell без `-e` защищён, а шаг, не читающий
+            # код возврата, и конвейер с PIPESTATUS в перечень не попадают
+            # вовсе — иначе сторож краснел бы на законных шагах.
+            synthetic = rc_steps(SYNTHETIC)
+            names = {n: ok for _, _, n, ok, _ in synthetic}
+            if names == {"свой shell без -e": True}:
+                print("  ✓ обратный край: свой shell без -e защищён, "
+                      "а шаг без $? и конвейер с PIPESTATUS не судятся")
+            else:
+                red(f"  ✗ обратный край не сошёлся: {names}")
+                bad = 1
     finally:
         for p in servers:
             p.terminate()
