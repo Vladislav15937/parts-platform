@@ -1,41 +1,71 @@
 #!/usr/bin/env python3
-"""На теге лежит ГОДНЫЙ образ — спрошено протоколом, а не «реестр ответил».
+"""На теге лежит ГОДНЫЙ образ — спрошено протоколом, и решение записано самим
+сторожем, а не вычитано шеллом из кода возврата.
 
     ./tools/image-published-guard.py ghcr.io/owner/repo:<sha>
     ./tools/image-published-guard.py --selftest
 
-Коды возврата, и сводить их к двум нельзя:
+КАК ЭТО РАБОТАЕТ В ПРОГОНЕ. Если задана переменная `GITHUB_OUTPUT` (а в задаче
+прогона она задана всегда), сторож сам дописывает туда `skip=true` либо
+`skip=false` и выходит **нулём**: решение принято и записано, шагу можно идти
+дальше. Не удалось узнать — он не пишет **ничего** и выходит ненулевым, то есть
+шаг краснеет. Это ровно та семантика, которой наследуемый `-e` и ждёт, поэтому
+шагу прогона нечего разбирать: ни `set +e`, ни `rc=$?`, ни `case`.
 
-    0 — на теге лежит годный образ: публикацию можно пропустить;
-    1 — годного образа на теге нет: публиковать (сказано, чего именно нет);
-    2 — спросить не удалось: реестр не ответил либо ответил непонятным.
+Вне прогона (`GITHUB_OUTPUT` не задан) коды возврата остаются человеческими
+и различимыми: 0 — на теге годный образ, 1 — годного нет, 2 — спросить
+не удалось.
 
-ЗАЧЕМ (задача 0241). Шаг прогона «Этот SHA уже опубликован?» спрашивал
-`docker manifest inspect … >/dev/null 2>&1` и считал нулевой код доказательством
-того, что образ опубликован: `skip=true`, публикация пропускается. А ноль там
-означает ровно одно — на тег ЧТО-ТО ответило. Годность — что это образ,
-что он для архитектуры ячейки, что у него есть слои и конфигурация — не
-спрашивалась вовсе, хотя у зеркала это делает `tools/mirror-images.sh
---проверить`. Цена: пропущенная публикация выглядит успехом прогона, а
-выкладка потом отвечает «no matching manifest» или тянет пустоту — то есть
-отказ приходит в минуту, когда за образом пришли.
+ПОЧЕМУ УСТРОЕНО ТАК, А НЕ ПРАВИЛОМ ПРО `set +e` (решение сессии-координатора
+от 1 октября 2026, записано комментарием в PR #334; это не решение владельца
+продукта — выбор не касается ни одной поверхности клиента, это способ вызвать
+сторож внутри задачи CI, и владелец отменяет его одним словом).
+
+Первая редакция этой проверки читала три кода возврата в самом шаге прогона,
+а шаг идёт под `bash -e {0}`: наследуемый `-e` убивал его на законном исходе
+«годного образа нет» ещё до разбора (прогон 36867959464). Починка добавила
+`set +e` — и тогда понадобился сторож, который следит, что `set +e` не потеряли.
+Этот сторож сопоставлял текст (`строка.endswith("=$?")`) и был обойдён
+**четырежды подряд**, последний раз просто кавычками: `rc="$?"` при той же
+семантике уводил шаг из перебора целиком, и самопроверка печатала
+«защищены (1)» и «Сторож проверен» с кодом 0. Расширять сопоставление
+бессмысленно: следом пройдут `rc=${?}`, промежуточная переменная, функция, —
+это ровно та болезнь, которую в этой же ветке лечили у `ops/verify-backup.sh`
+(он спрашивал грепом по тексту вместо следа).
+
+Поэтому опасность **убрана по построению**, а не поставлена под охрану:
+конструкции, которую надо стеречь, в шаге больше нет. Та же форма защиты, что
+у адреса образа в одном месте (`ops/images.yml`), у единственного хука
+`ui/useMounted.ts` вместо правила «пиши `mounted.current = true`» и у границы
+отката внутри образа: нечего стеречь — нечего обойти.
+
+ЧТО ПРИ ЭТОМ УДАЛЕНО, И ЭТО НАЗВАНО ВСЛУХ (критерий 7 задачи 0241). Вместе
+с текстовым правилом ушли: перебор шагов, снимающих `$?`, возврат дефекта
+по каждому такому шагу и разбор форм входа у `ci.yml` — включая состояние
+«ни один шаг не снимает `$?`», которое разбор справедливо отметил как
+смягчённое с красного. Убрано не потому, что мешало, а потому, что отвечало
+на вопрос «читает ли шаг код возврата» сопоставлением строк и было
+обойдено измеренным способом; стеречь им больше нечего.
+
+ЧЕГО ЭТА ПРАВКА НЕ ДЕЛАЕТ. Шаг «Зеркало на месте?» по-прежнему читает три кода
+`tools/mirror-images.sh --проверить` через `set +e` плюс `rc=$?`. Там это
+работает и проверено, но **стеречься оно теперь не стережётся ничем**: потеряй
+кто-нибудь `set +e` — и законный исход «зеркала нет» станет красным прогоном.
+Смешанная правка не проверяется, поэтому здесь это не чинится, а названо:
+подробности и формулировка для разведки — в `ops/CLAUDE.md`.
 
 ПОЧЕМУ ПРОТОКОЛОМ, А НЕ DOCKER'ОМ. `docker manifest inspect` и `docker buildx
 imagetools inspect` при containerd-хранилище отвечают из ЛОКАЛЬНОГО индекса:
-образ, лежащий в кэше, выглядит у них как лежащий в реестре (замерено
-26 сентября 2026, записано в tools/mirror-images.sh и ops/CLAUDE.md). Сегодня
-в задаче публикации локального кэша нет — копию образа скачивают ПОСЛЕ этого
-шага, — но держаться это должно не на порядке шагов: переставь их, и проверка
-начнёт отвечать про нашу машину, молча. Тот же довод у tools/alert-image-guard.py.
+образ из кэша выглядит у них лежащим в реестре (замерено 26 сентября 2026,
+`tools/mirror-images.sh`, `ops/CLAUDE.md`). Проверка «мимо кэша», сделанная
+docker'ом, повторила бы ту ловушку, из-за которой поломку MinIO не замечали
+двенадцать месяцев.
 
 ЧЕГО ОН НАМЕРЕННО НЕ ДЕЛАЕТ — не сверяет digest реестра с digest'ом собранного
-образа. Задача предлагала это вторым способом, и он ломает смысл самого шага:
-сборка не побайтово повторяема (время внутри jar), поэтому повторный прогон
-того же SHA даёт ДРУГОЙ digest, сверка объявила бы расхождение и переопубликовала
-бы тег — то есть прежний образ, тот, что уже стоит на стенде, остался бы висеть
-без имени. Ровно этого шаг и избегает («Тег по SHA неизменен по смыслу»).
-Поэтому здесь спрашивается не «тот ли это байт в байт образ», а «годен ли тот,
-что лежит»: манифест образа, слои на месте, архитектура — linux/amd64.
+образа. Сборка не побайтово повторяема (время внутри jar), поэтому повторный
+прогон того же SHA даёт ДРУГОЙ digest: сверка объявила бы расхождение
+и переопубликовала бы тег, а прежний образ — тот, что уже стоит на стенде, —
+остался бы висеть без имени. Спрашивается поэтому «годен ли тот, что лежит».
 """
 
 from __future__ import annotations
@@ -48,10 +78,13 @@ import sys
 import urllib.error
 import urllib.request
 
-# Архитектура ячейки и раннера. Образ, лежащий на теге под другой архитектурой,
-# это не «почти годный»: выкладка на нём не поднимется вовсе.
+# Архитектура ячейки и раннера. Образ на теге под другой архитектурой — это
+# не «почти годный»: выкладка на нём не поднимется вовсе.
 NEED_OS = "linux"
 NEED_ARCH = "amd64"
+
+# Имя, под которым решение читает прогон: `steps.<id>.outputs.skip`.
+OUTPUT_NAME = "skip"
 
 ACCEPT = ", ".join((
     "application/vnd.oci.image.index.v1+json",
@@ -69,9 +102,9 @@ GREEN = "\033[1;32m%s\033[0m"
 TOKEN_BASE = os.environ.get("IMAGE_PUBLISHED_TOKEN_BASE", "")
 REGISTRY_BASE = os.environ.get("IMAGE_PUBLISHED_REGISTRY_BASE", "")
 # «пользователь:токен» для реестра. GHCR отвечает 403 и на приватный пакет,
-# и на несуществующий (замер 26 сентября 2026, tools/mirror-images.sh), поэтому
-# в прогоне сторож спрашивает с учётной записью: тогда 404 означает «тега нет»,
-# а не «нам не показали».
+# и на несуществующий (замер 26 сентября 2026), поэтому в прогоне сторож
+# спрашивает с учётной записью: тогда 404 означает «тега нет», а не
+# «нам не показали».
 AUTH = os.environ.get("IMAGE_PUBLISHED_AUTH", "")
 
 TIMEOUT = 15
@@ -95,7 +128,7 @@ def red(msg: str) -> None:
 
 # --- как спрашиваем реестр ----------------------------------------------------
 
-def split_ref(ref: str) -> tuple[str, str, str]:
+def split_ref(ref):
     """адрес → (хост реестра, путь репозитория, тег)."""
     name, _, tag = ref.rpartition(":")
     if not name or not tag:
@@ -112,7 +145,7 @@ def split_ref(ref: str) -> tuple[str, str, str]:
     return host, path, tag
 
 
-def endpoints(host: str, path: str) -> tuple[str, str, str]:
+def endpoints(host, path):
     """Адреса токена, манифестов и блобов. Подменяются самопроверкой целиком."""
     if TOKEN_BASE and REGISTRY_BASE:
         return (f"{TOKEN_BASE}/token?scope=repository:{path}:pull",
@@ -128,10 +161,10 @@ def endpoints(host: str, path: str) -> tuple[str, str, str]:
             f"https://{host}/v2/{path}/blobs")
 
 
-def http(url: str, headers: dict[str, str] | None = None) -> tuple[int, bytes]:
+def http(url, headers=None):
     """Один запрос. Транспортный отказ — это Unreachable, а не код ответа."""
     req = urllib.request.Request(url, headers=headers or {})
-    last: Exception | None = None
+    last = None
     for _ in range(ATTEMPTS):
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
@@ -143,9 +176,9 @@ def http(url: str, headers: dict[str, str] | None = None) -> tuple[int, bytes]:
     raise Unreachable(str(last))
 
 
-def bearer(token_url: str) -> dict[str, str]:
+def bearer(token_url):
     headers = {"Accept": ACCEPT}
-    ask_headers: dict[str, str] = {}
+    ask_headers = {}
     if AUTH:
         ask_headers["Authorization"] = "Basic " + base64.b64encode(
             AUTH.encode("utf-8")).decode("ascii")
@@ -162,10 +195,9 @@ def bearer(token_url: str) -> dict[str, str]:
 
 # --- годность -----------------------------------------------------------------
 
-def index_arches(doc: dict) -> set:
+def index_arches(doc):
     """Архитектуры индекса. Слои подписей идут платформой unknown — это не
-    архитектура, и считать их за неё значит принять однорукий образ за годный
-    (tools/mirror-images.sh)."""
+    архитектура, и считать их за неё значит принять однорукий образ за годный."""
     found = set()
     for m in doc.get("manifests") or []:
         p = m.get("platform") or {}
@@ -175,20 +207,19 @@ def index_arches(doc: dict) -> set:
     return found
 
 
-def verdict(ref, code, body, blob) -> int:
+def verdict(ref, code, body, blob):
     """Годен ли образ на теге. Чистая функция — её и гоняет самопроверка."""
     if code == 404:
         print(f"  · на теге образа нет (404): {ref}")
         return ABSENT
     if code in (401, 403):
-        # Анонимно у GHCR эти два состояния неразличимы, и врать про них нельзя.
+        # Анонимно у GHCR эти состояния неразличимы, и врать про них нельзя.
         # В прогоне сторож спрашивает с учётной записью, поэтому здесь это
-        # «спросить не удалось», а не «публикуй»: опубликовав поверх закрытого
-        # пакета, мы получили бы отказ push'а без объяснения.
+        # «спросить не удалось», а не «публикуй».
         red(f"  ✗ реестр ответил {code} на {ref}: спросить не удалось")
         red("      Пакет закрыт либо учётной записи не хватает прав на чтение —")
         red("      нам не показали. «Опубликован» и «нам не показали» — разные")
-        red("      ответы, и выдавать второе за первое нельзя ни в какую сторону.")
+        red("      ответы, и выдавать второе за первое нельзя.")
         return UNKNOWN
     if code != 200:
         red(f"  ✗ реестр ответил {code} на {ref}: спросить не удалось")
@@ -205,7 +236,6 @@ def verdict(ref, code, body, blob) -> int:
         return ABSENT
 
     if doc.get("manifests") is not None:
-        # Индекс: архитектуру видно прямо в нём.
         arches = index_arches(doc)
         print(f"  · индекс, архитектуры: {', '.join(sorted(arches)) or 'ни одной'}")
         if f"{NEED_OS}/{NEED_ARCH}" not in arches:
@@ -216,10 +246,9 @@ def verdict(ref, code, body, blob) -> int:
         return GOOD
 
     # Одиночный манифест — ровно то, что кладёт `docker build` плюс `docker push`.
-    # Годность у него двусоставная: слои и конфигурация на месте, и конфигурация
+    # Годность двусоставная: слои и конфигурация на месте, и конфигурация
     # называет нашу архитектуру. Второе спрашивается у блоба конфигурации:
-    # в самом манифесте платформы нет вовсе, и «манифест есть» про архитектуру
-    # не говорит ничего.
+    # платформы в самом манифесте нет вовсе.
     config = (doc.get("config") or {}).get("digest")
     layers = doc.get("layers") or []
     if not config or not layers:
@@ -254,7 +283,7 @@ def verdict(ref, code, body, blob) -> int:
     return GOOD
 
 
-def ask(ref: str) -> int:
+def ask(ref):
     host, path, tag = split_ref(ref)
     token_url, manifests_url, blobs_url = endpoints(host, path)
     try:
@@ -275,188 +304,62 @@ def ask(ref: str) -> int:
     return verdict(ref, code, body, blob)
 
 
-# --- доживает ли зовущий до разбора моих кодов --------------------------------
-#
-# Три исхода не стоят ничего, если тот, кто их читает, до чтения не доживает.
-# Шаг прогона идёт под `bash -e {0}` (GitHub задаёт shell так, это видно
-# в логе каждого шага), и `set -uo pipefail` внутри скрипта шага наследуемый
-# `-e` НЕ СНИМАЕТ: он убивает шаг на первом же ненулевом коде, то есть
-# на законном исходе «годного образа нет — публикуем». Замерено прогоном
-# 36867959464: сторож напечатал «на теге образа нет (404)» и вернул 1, шаг
-# ответил «exit code 1», а `::notice::` в логе нет вовсе — `case` не выполнялся.
-#
-# Это класс 16 внутри правки против класса 16, поэтому проверка живёт здесь,
-# со стороны того, чьи коды читают: договор пиннит тот, кто его объявляет
-# (приём `ReadinessContractTest`). Смотрится при этом ВЕСЬ `ci.yml`, а не один
-# свой шаг: подвержен тому же любой шаг, снимающий `$?`.
+# --- решение записывает сторож ------------------------------------------------
 
-CI_YML = ".github/workflows/ci.yml"
+def write_decision(rc):
+    """Записать решение туда, где его читает прогон, и вернуть код ШАГА.
 
+    Пишем **только** при заданной `GITHUB_OUTPUT`: самопроверка и ручной запуск
+    идут вне прогона, где переменной нет, и безусловная запись уронила бы их
+    там, где раньше всё работало. Это был бы третий случай одного класса
+    за одну ветку — починка в одном месте ломает соседнее, которое никто
+    не спросил, — поэтому у него есть свой случай самопроверки.
 
-def rc_steps(text):
-    """[(задача, индекс шага, имя, защищён ли, чем)] по шагам, снимающим `$?`.
-
-    `${PIPESTATUS[0]}` намеренно не считается захватом: там статус конвейера
-    принадлежит последней команде (`| tee` отдаёт ноль), и `-e` не срабатывает.
+    «Спросить не удалось» не пишет НИЧЕГО: решения нет, и записать его значило
+    бы дать прогону прочитать выдуманное. Шаг в этом случае краснеет сам,
+    наследуемым `-e`, — ничего разбирать ему не надо.
     """
-    import yaml
-
-    doc = yaml.safe_load(text)
-    top = ((doc.get("defaults") or {}).get("run") or {}).get("shell")
-    out = []
-    for job_id, job in (doc.get("jobs") or {}).items():
-        job_shell = ((job.get("defaults") or {}).get("run") or {}).get("shell")
-        for index, step in enumerate(job.get("steps") or []):
-            run = step.get("run")
-            if not run:
-                continue
-            lines = run.splitlines()
-            first = None
-            for i, line in enumerate(lines):
-                if line.strip().endswith("=$?"):
-                    first = i
-                    break
-            if first is None:
-                continue
-            name = step.get("name") or step.get("uses") or "(без имени)"
-            shell = step.get("shell") or job_shell or top
-            if shell and "-e" not in shell:
-                out.append((job_id, index, name, True, f"свой shell: {shell}"))
-                continue
-            before = [l.strip() for l in lines[:first]]
-            if any(l == "set +e" or l.startswith("set +e ") for l in before):
-                out.append((job_id, index, name, True, "set +e перед захватом"))
-            else:
-                out.append((job_id, index, name, False,
-                            "шаг снимает код возврата, но наследует -e "
-                            "от `bash -e {0}` — на ненулевом коде он умрёт "
-                            "до разбора, и законный исход станет красным"))
-    return out
-
-
-def without_set_plus_e(text, job_id, index):
-    """Подделка: у названного шага снято `set +e`. Возврат дефекта 0241."""
-    import yaml
-
-    doc = yaml.safe_load(text)
-    step = doc["jobs"][job_id]["steps"][index]
-    step["run"] = "\n".join(l for l in step["run"].splitlines()
-                            if l.strip() != "set +e")
-    return yaml.safe_dump(doc)
-
-
-SYNTHETIC = """
-on: push
-jobs:
-  proba:
-    steps:
-      - name: свой shell без -e
-        shell: bash {0}
-        run: |
-          ./cmd
-          rc=$?
-      - name: кода возврата не читает
-        run: |
-          echo всё хорошо
-      - name: конвейер и PIPESTATUS
-        run: |
-          ./cmd | tee /tmp/log
-          code=${PIPESTATUS[0]}
-"""
-
-
-# --- вход самой самопроверки: один исход на одну форму ------------------------
-#
-# Третий раз в задаче 0241 один класс укусил в новом месте: сперва сторожа,
-# потом шаг прогона, который их зовёт, потом ВХОД самопроверки. Первая редакция
-# проверки зовущего читала `ci.yml` и шла дальше под `if ci_text:` — то есть
-# пустой файл (ноль байт) читался как «нечего проверять», весь блок молча
-# пропускался, и самопроверка печатала «Сторож проверен» с кодом 0. Замерено
-# копией сторожа в дереве с пустым `ci.yml`: ни строки «шаги, читающие код
-# возврата», ни одного «возврат дефекта», зелёный итог.
-#
-# Поэтому форм здесь пять, и зелена из них ровно одна. «Файла нет», «файл
-# пуст», «не прочитать», «не разбирается», «задач нет» — это «СПРОСИТЬ
-# НЕ ВЫШЛО», и в прогоне это красное: `ci.yml` лежит в самом репозитории,
-# и его отсутствие означает поломку, а не особые условия. «Ни один шаг
-# не снимает $?» — законное «нечего проверять», но названное словами:
-# правило не нарушено и не проверено ничем, и молчать об этом нельзя.
-# Отдельно стоит «`.github` рядом нет вовсе»: так бывает у копии инструмента
-# вне дерева прогона, и случай пропускается СЛОВАМИ (приём `ops/deploy.sh`,
-# задача 0223), а не красным.
-
-WF_OK, WF_SKIP, WF_UNREADABLE, WF_NOTHING = "ok", "skip", "unreadable", "nothing"
-
-
-def repo_root(me):
-    return os.path.dirname(os.path.dirname(me))
-
-
-def workflow_state(root):
-    """(исход, текст, шаги, словами) по одному входу — файлу прогона."""
-    gh = os.path.join(root, ".github")
-    path = os.path.join(root, CI_YML)
-    if not os.path.isdir(gh):
-        return (WF_SKIP, "", [],
-                f"{gh} рядом нет — это не дерево с прогоном, проверять нечего")
-    if not os.path.isfile(path):
-        return (WF_UNREADABLE, "", [],
-                f"{CI_YML} нет, хотя .github рядом есть")
+    out = os.environ.get("GITHUB_OUTPUT")
+    if not out:
+        return rc
+    if rc == UNKNOWN:
+        return UNKNOWN
+    value = "true" if rc == GOOD else "false"
     try:
-        text = open(path, encoding="utf-8").read()
+        with open(out, "a", encoding="utf-8") as f:
+            f.write(f"{OUTPUT_NAME}={value}\n")
     except OSError as e:
-        return WF_UNREADABLE, "", [], f"{CI_YML} не прочитать: {e}"
-    if not text.strip():
-        return (WF_UNREADABLE, "", [],
-                f"{CI_YML} пуст (байт: {len(text)}) — читать нечего")
-    try:
-        import yaml
-    except ImportError:
-        return (WF_UNREADABLE, "", [],
-                "PyYAML нет — разобрать файл прогона нечем")
-    try:
-        doc = yaml.safe_load(text)
-    except Exception as e:  # noqa: BLE001 — любая поломка разбора
-        return WF_UNREADABLE, "", [], f"{CI_YML} не разбирается как YAML: {e}"
-    if not isinstance(doc, dict) or not doc.get("jobs"):
-        return WF_UNREADABLE, "", [], f"в {CI_YML} нет ни одной задачи"
-    steps = rc_steps(text)
-    if not steps:
-        return (WF_NOTHING, text, [],
-                "ни один шаг не снимает $?: правило не нарушено, но и "
-                "не проверено ничем")
-    return WF_OK, text, steps, ""
+        red(f"  ✗ решение не записано в GITHUB_OUTPUT ({e})")
+        red("      Продолжать шаг нельзя: прогон прочитал бы пустоту либо")
+        red("      прежнее значение, то есть принял бы решение, которого нет.")
+        return UNKNOWN
+    print(f"  · для прогона записано: {OUTPUT_NAME}={value}")
+    return GOOD
 
 
 # --- проверка самого сторожа --------------------------------------------------
 
 FIXTURES = {
-    # Годный индекс: обе архитектуры плюс подписи платформой unknown.
     "index-good": (200, {"manifests": [
         {"platform": {"os": "linux", "architecture": "amd64"}, "digest": "sha256:a"},
         {"platform": {"os": "linux", "architecture": "arm64"}, "digest": "sha256:b"},
         {"platform": {"os": "unknown", "architecture": "unknown"}, "digest": "sha256:c"},
     ]}),
-    # Индекс без архитектуры ячейки — главная подделка критерия 3 задачи 0241.
     "index-no-amd64": (200, {"manifests": [
         {"platform": {"os": "linux", "architecture": "arm64"}, "digest": "sha256:b"},
     ]}),
-    # Только подписи: платформа unknown/unknown. Образа нет, 200 есть.
     "index-attest-only": (200, {"manifests": [
         {"platform": {"os": "unknown", "architecture": "unknown"}, "digest": "sha256:c"},
     ]}),
-    # Одиночный манифест — то, что кладёт docker build + docker push.
     "single-good": (200, {
         "mediaType": "application/vnd.oci.image.manifest.v1+json",
         "config": {"digest": "sha256:cfg-amd64"},
         "layers": [{"digest": "sha256:l1"}, {"digest": "sha256:l2"}],
     }),
-    # Тот же манифест, но конфигурация называет чужую архитектуру.
     "single-arm": (200, {
         "config": {"digest": "sha256:cfg-arm64"},
         "layers": [{"digest": "sha256:l1"}],
     }),
-    # След неудавшейся публикации: слоёв нет.
     "single-no-layers": (200, {"config": {"digest": "sha256:cfg-amd64"},
                                "layers": []}),
     "garbage": (200, "это не json"),
@@ -465,7 +368,6 @@ FIXTURES = {
     "forbidden": (403, {"errors": [{"code": "DENIED"}]}),
 }
 
-# Блобы конфигурации: по digest'у из фикстуры манифеста.
 BLOBS = {
     "sha256:cfg-amd64": (200, {"os": "linux", "architecture": "amd64"}),
     "sha256:cfg-arm64": (200, {"os": "linux", "architecture": "arm64"}),
@@ -501,11 +403,15 @@ srv.serve_forever()
 REF = "ghcr.io/proba/parts-platform:0241deadbeef"
 
 
-def selftest() -> int:
+def selftest():
+    import shutil
+    import tempfile
+
     bad = 0
     me = os.path.abspath(__file__)
     print("Самопроверка tools/image-published-guard.py")
     servers = []
+    tmp = tempfile.mkdtemp(prefix="image-published-")
 
     def registry(kind):
         code, doc = FIXTURES[kind]
@@ -516,14 +422,16 @@ def selftest() -> int:
         servers.append(p)
         return f"http://127.0.0.1:{p.stdout.readline().strip()}"
 
-    def probe(kind, script=None):
+    def probe(kind, script=None, out=None):
         base = registry(kind) if kind else "http://127.0.0.1:1"
         env = {"PATH": "/usr/bin:/bin",
                "IMAGE_PUBLISHED_TOKEN_BASE": base,
                "IMAGE_PUBLISHED_REGISTRY_BASE": base}
-        out = subprocess.run([sys.executable, script or me, REF],
-                             capture_output=True, text=True, env=env)
-        return out.returncode, out.stdout + out.stderr
+        if out is not None:
+            env["GITHUB_OUTPUT"] = out
+        done = subprocess.run([sys.executable, script or me, REF],
+                              capture_output=True, text=True, env=env)
+        return done.returncode, done.stdout + done.stderr
 
     def case(name, kind, want, says="", script=None):
         nonlocal bad
@@ -537,28 +445,25 @@ def selftest() -> int:
         bad = 1
 
     try:
-        # Обратные края. Сторож, краснеющий на годном образе, заставит прогон
-        # публиковать поверх уже опубликованного — то есть сам сломает то,
-        # ради чего шаг написан.
-        case("годный индекс — образ опубликован", "index-good", GOOD)
-        case("годный одиночный манифест — образ опубликован", "single-good", GOOD,
-             "платформа linux/amd64")
-        case("тега нет — публиковать", "gone", ABSENT, "на теге образа нет")
-
-        # Главные подделки: реестр отвечает 200, а годного образа на теге нет.
-        case("индекс без linux/amd64 — не считается опубликованным",
-             "index-no-amd64", ABSENT, "нет linux/amd64")
-        case("индекс из одних подписей — не считается опубликованным",
+        # --- годность образа: коды возврата вне прогона -----------------------
+        #
+        # Этот блок и есть требуемый случай «без GITHUB_OUTPUT сторож работает
+        # и не падает»: переменная здесь не задана ни разу, и коды остаются
+        # человеческими — 0, 1, 2.
+        case("вне прогона: годный индекс — код 0", "index-good", GOOD)
+        case("вне прогона: годный одиночный манифест — код 0", "single-good",
+             GOOD, "платформа linux/amd64")
+        case("вне прогона: тега нет — код 1", "gone", ABSENT, "на теге образа нет")
+        case("индекс без linux/amd64 — годным не считается", "index-no-amd64",
+             ABSENT, "нет linux/amd64")
+        case("индекс из одних подписей — годным не считается",
              "index-attest-only", ABSENT, "нет linux/amd64")
-        case("манифест без слоёв — не считается опубликованным",
-             "single-no-layers", ABSENT, "лежит не образ")
-        case("образ чужой архитектуры — не считается опубликованным",
-             "single-arm", ABSENT, "собран под linux/arm64")
-        case("на теге не JSON — не считается опубликованным",
-             "garbage", ABSENT, "лежит не манифест")
-
-        # «Спросить не удалось» — третий исход, и он не имеет права стать
-        # ни «опубликован», ни «публикуй».
+        case("манифест без слоёв — годным не считается", "single-no-layers",
+             ABSENT, "лежит не образ")
+        case("образ чужой архитектуры — годным не считается", "single-arm",
+             ABSENT, "собран под linux/arm64")
+        case("на теге не JSON — годным не считается", "garbage", ABSENT,
+             "лежит не манифест")
         case("реестр не ответил — спросить не удалось", None, UNKNOWN,
              "реестр не ответил")
         case("реестр ответил 500 — спросить не удалось", "server-error", UNKNOWN,
@@ -566,221 +471,117 @@ def selftest() -> int:
         case("реестр ответил 403 — спросить не удалось", "forbidden", UNKNOWN,
              "нам не показали")
 
-        # ВОЗВРАТ ДЕФЕКТА. Прежний шаг считал опубликованным всё, на что реестр
-        # ответил. Копия сторожа, вернувшая это правило, обязана объявить годным
-        # индекс без amd64 — иначе случаи выше ничего не утверждают: красное
-        # могло бы приходить от чего угодно.
-        fake = os.path.join(os.path.dirname(me), ".image-published-fake.py")
-        text = open(me, encoding="utf-8").read()
-        needle = '    if doc.get("manifests") is not None:'
-        if needle not in text:
-            red("  ✗ подделку негде поставить: место разбора манифеста изменилось")
-            bad = 1
-        else:
-            open(fake, "w", encoding="utf-8").write(text.replace(
-                needle, "    if code == 200:\n        return GOOD\n" + needle, 1))
-            try:
-                compiled = subprocess.run(
-                    [sys.executable, "-m", "py_compile", fake],
-                    capture_output=True, text=True)
-                if compiled.returncode != 0:
-                    red("  ✗ подделка не компилируется — её красное говорило бы "
-                        "о сломанной копии, а не о снятой проверке")
-                    bad = 1
-                else:
-                    rc, _ = probe("index-no-amd64", fake)
-                    if rc == GOOD:
-                        print("  ✓ возврат дефекта: копия, считающая опубликованным "
-                              "любой ответ 200, объявляет годным индекс без amd64")
-                    else:
-                        red(f"  ✗ подделка «любой 200 — это публикация» обязана "
-                            f"объявить годным индекс без amd64, а ответила {rc}: "
-                            f"значит красное выше приходит не от проверки годности")
-                        bad = 1
-            finally:
-                if os.path.exists(fake):
-                    os.remove(fake)
-                cache = os.path.join(os.path.dirname(me), "__pycache__")
-                if os.path.isdir(cache):
-                    for f in os.listdir(cache):
-                        if f.startswith(".image-published-fake"):
-                            os.remove(os.path.join(cache, f))
-
-        # --- зовущий доживает до разбора кодов -------------------------------
-        import shutil
-        import tempfile
-
-        state, ci_text, steps, words = workflow_state(repo_root(me))
-        if state == WF_SKIP:
-            print(f"  · про зовущего не проверяли: {words}")
-        elif state == WF_UNREADABLE:
-            red(f"  ✗ СПРОСИТЬ НЕ ВЫШЛО: {words}")
-            red("      «Кто читает мои коды возврата» не проверено ничем, "
-                "и это не «нарушений нет».")
-            bad = 1
-        elif state == WF_NOTHING:
-            print(f"  · НЕЧЕГО ПРОВЕРЯТЬ: {words}")
-        else:
-            broken = [(j, n, why) for j, _, n, ok, why in steps if not ok]
-            if broken:
-                for job_id, name, why in broken:
-                    red(f"  ✗ {job_id} / {name}: {why}")
-                bad = 1
-            else:
-                print(f"  ✓ шаги, читающие код возврата ({len(steps)}), "
-                      f"защищены от наследуемого -e")
-
-            # ВОЗВРАТ ДЕФЕКТА, и по КАЖДОМУ такому шагу, а не только по своему:
-            # снятое `set +e` обязано краснеть. Так же будет пойман и шаг,
-            # который заведут завтра.
-            for job_id, index, name, ok, _ in steps:
-                if not ok:
-                    continue
-                fake = without_set_plus_e(ci_text, job_id, index)
-                after = [(j, n, w) for j, _, n, o, w in rc_steps(fake)
-                         if not o and j == job_id and n == name]
-                if after:
-                    print(f"  ✓ возврат дефекта: «{name}» без set +e краснеет")
-                else:
-                    red(f"  ✗ «{name}» без set +e обязан краснеть — иначе "
-                        f"проверка зовущего ничего не утверждает")
-                    bad = 1
-
-            # Обратные края: свой shell без `-e` защищён, а шаг, не читающий
-            # код возврата, и конвейер с PIPESTATUS в перечень не попадают
-            # вовсе — иначе сторож краснел бы на законных шагах.
-            synthetic = rc_steps(SYNTHETIC)
-            names = {n: ok for _, _, n, ok, _ in synthetic}
-            if names == {"свой shell без -e": True}:
-                print("  ✓ обратный край: свой shell без -e защищён, "
-                      "а шаг без $? и конвейер с PIPESTATUS не судятся")
-            else:
-                red(f"  ✗ обратный край не сошёлся: {names}")
-                bad = 1
-
-        # --- и то же самое у ВХОДА самопроверки: форма за формой -------------
+        # --- решение записано: спрашиваем СЛЕД, а не код возврата ------------
         #
-        # Перебор, а не одно условие: класс кусал в этой ветке трижды, и каждый
-        # раз в новом месте. Формы строятся настоящими деревьями, потому что
-        # вся разница в том, что лежит на диске.
-        подопытные = tempfile.mkdtemp(prefix="image-published-входы-")
-        try:
-            def дерево(имя, *, github=True, ci=None, mode=None):
-                root = os.path.join(подопытные, имя)
-                if github:
-                    os.makedirs(os.path.join(root, ".github", "workflows"))
-                    if ci is not None:
-                        p = os.path.join(root, CI_YML)
-                        open(p, "w", encoding="utf-8").write(ci)
-                        if mode is not None:
-                            os.chmod(p, mode)
-                else:
-                    os.makedirs(root)
-                return root
+        # Шаг прогона ничего не разбирает, значит единственное, чем он отличает
+        # «пропустить публикацию» от «публиковать», — это строка, которую сторож
+        # записал. Её и проверяем; «код возврата верный» тут ничего не стоит.
+        def решение(name, kind, ждём_код, ждём_строку):
+            nonlocal bad
+            путь = os.path.join(tmp, f"out-{name}.txt")
+            open(путь, "w", encoding="utf-8").close()
+            rc, out = probe(kind, out=путь)
+            записано = open(путь, encoding="utf-8").read()
+            ок = rc == ждём_код and записано.strip() == (ждём_строку or "")
+            if ок:
+                print(f"  ✓ {name}")
+                return
+            red(f"  ✗ {name}: код {rc} (ждали {ждём_код}), "
+                f"записано «{записано.strip()}» (ждали «{ждём_строку or ''}»)")
+            print("\n".join("      " + l for l in out.splitlines()), file=sys.stderr)
+            bad = 1
 
-            настоящий = ci_text or ""
-            формы = [
-                ("пустой файл прогона", дерево("пустой", ci=""), WF_UNREADABLE,
-                 "пуст"),
-                ("файла прогона нет", дерево("нет-файла"), WF_UNREADABLE,
-                 "нет, хотя .github"),
-                ("файл прогона не разбирается", дерево("битый", ci="a: [1,\n"),
-                 WF_UNREADABLE, "не разбирается"),
-                ("в файле прогона нет задач",
-                 дерево("без-задач", ci="on: push\n"), WF_UNREADABLE,
-                 "нет ни одной задачи"),
-                ("ни один шаг не снимает $?",
-                 дерево("нечего", ci="on: push\njobs:\n  a:\n    steps:\n"
-                                     "      - run: echo всё хорошо\n"),
-                 WF_NOTHING, "не проверено ничем"),
-                ("дерева с прогоном нет вовсе",
-                 дерево("без-github", github=False), WF_SKIP, "не дерево"),
-            ]
-            if настоящий:
-                формы.append(("настоящий файл прогона",
-                              дерево("настоящий", ci=настоящий), WF_OK, ""))
-            for имя, root, ждём, слово in формы:
-                got, _, _, сказано = workflow_state(root)
-                if got == ждём and (not слово or слово in сказано):
-                    print(f"  ✓ вход: {имя} → {got}")
-                else:
-                    red(f"  ✗ вход: {имя} → {got} (ждали {ждём}), "
-                        f"сказано «{сказано}»")
-                    bad = 1
+        решение("в прогоне: годный образ — записан skip=true, код 0",
+                "index-good", GOOD, f"{OUTPUT_NAME}=true")
+        решение("в прогоне: тега нет — записан skip=false, код 0",
+                "gone", GOOD, f"{OUTPUT_NAME}=false")
+        решение("в прогоне: индекс без amd64 — записан skip=false, код 0",
+                "index-no-amd64", GOOD, f"{OUTPUT_NAME}=false")
+        # Главные три: решения нет — и не записано НИЧЕГО, а шаг краснеет.
+        решение("в прогоне: реестр не ответил — не записано ничего, код 2",
+                None, UNKNOWN, "")
+        решение("в прогоне: 500 — не записано ничего, код 2",
+                "server-error", UNKNOWN, "")
+        решение("в прогоне: 403 — не записано ничего, код 2",
+                "forbidden", UNKNOWN, "")
 
-            # Нечитаемый по правам — настоящими правами, а не подменой. Под
-            # root их не спрашивают вовсе, и случай тогда называется
-            # непроверенным (приём ops/install-cron.sh), а не зелёным.
-            закрытый = дерево("без-прав", ci="on: push\njobs: {}\n", mode=0)
-            got, _, _, сказано = workflow_state(закрытый)
-            if got == WF_UNREADABLE:
-                print(f"  ✓ вход: файл прогона не прочитать → {got}")
-            elif os.geteuid() == 0:
-                print("  · вход: «не прочитать по правам» НЕ ПРОВЕРЕН — "
-                      "под root права не спрашивают")
-            else:
-                red(f"  ✗ вход: нечитаемый файл прогона → {got}, "
-                    f"сказано «{сказано}»")
+        # Записать не удалось — это тоже «решения нет»: шаг не имеет права
+        # продолжать, прочитав пустоту. Каталог вместо файла даёт настоящий
+        # отказ записи, а не подменённый.
+        каталог = os.path.join(tmp, "вместо-файла")
+        os.makedirs(каталог, exist_ok=True)
+        rc, out = probe("index-good", out=каталог)
+        if rc == UNKNOWN and "не записано в GITHUB_OUTPUT" in out:
+            print("  ✓ в прогоне: запись не удалась — код 2 и сказано словами")
+        else:
+            red(f"  ✗ при неудачной записи шаг обязан краснеть: код {rc}")
+            bad = 1
+
+        # --- возврат дефекта --------------------------------------------------
+        #
+        # Две подделки, и обе про то, чем эта правка живёт: «любой ответ 200 —
+        # публикация» (прежний дефект годности) и «решение пишем всегда»
+        # (новый: прогон прочитал бы выдуманное).
+        def подделка(name, якорь, замена, kind, ждём_не):
+            nonlocal bad
+            копия = os.path.join(os.path.dirname(me), ".image-published-fake.py")
+            текст = open(me, encoding="utf-8").read()
+            if якорь not in текст:
+                red(f"  ✗ подделку «{name}» негде поставить: место изменилось")
                 bad = 1
-            os.chmod(os.path.join(закрытый, CI_YML), 0o644)
-
-            # ВОЗВРАТ ДЕФЕКТА. Копия сторожа, у которой пустой файл снова
-            # читается как «нечего проверять», обязана ВАЛИТЬ свою
-            # самопроверку — иначе формы выше ничего не утверждают. Копия
-            # кладётся в дерево с настоящим `ci.yml`: корень она считает
-            # от своего пути, и подделку обязан поймать случай «пустой файл»,
-            # а не отсутствие файла рядом.
-            if not os.environ.get("IMAGE_PUBLISHED_SELFTEST_CHILD") and настоящий:
-                гнездо = дерево("подделка", ci=настоящий)
-                os.makedirs(os.path.join(гнездо, "tools"))
-                копия = os.path.join(гнездо, "tools",
-                                     os.path.basename(me))
-                текст = open(me, encoding="utf-8").read()
-                якорь = ('        return (WF_UNREADABLE, "", [],\n'
-                         '                f"{CI_YML} пуст')
-                if якорь not in текст:
-                    red("  ✗ подделку входа негде поставить: ветка про пустой "
-                        "файл изменилась")
+                return
+            open(копия, "w", encoding="utf-8").write(
+                текст.replace(якорь, замена, 1))
+            try:
+                целость = subprocess.run(
+                    [sys.executable, "-m", "py_compile", копия],
+                    capture_output=True, text=True)
+                if целость.returncode != 0:
+                    red(f"  ✗ подделка «{name}» не компилируется — её красное "
+                        f"говорило бы о копии, а не о проверке")
                     bad = 1
+                    return
+                путь = os.path.join(tmp, "fake-out.txt")
+                open(путь, "w", encoding="utf-8").close()
+                rc, _ = probe(kind, script=копия, out=путь)
+                записано = open(путь, encoding="utf-8").read().strip()
+                if (rc, записано) != ждём_не:
+                    print(f"  ✓ возврат дефекта: {name}")
                 else:
-                    open(копия, "w", encoding="utf-8").write(текст.replace(
-                        якорь,
-                        '        return (WF_NOTHING, "", [],\n'
-                        '                f"{CI_YML} пуст', 1))
-                    целость = subprocess.run(
-                        [sys.executable, "-m", "py_compile", копия],
-                        capture_output=True, text=True)
-                    if целость.returncode != 0:
-                        red("  ✗ подделка входа не компилируется — её красное "
-                            "говорило бы о копии, а не о проверке")
-                        bad = 1
-                    else:
-                        дитя = subprocess.run(
-                            [sys.executable, копия, "--selftest"],
-                            capture_output=True, text=True,
-                            env=dict(os.environ,
-                                     IMAGE_PUBLISHED_SELFTEST_CHILD="1",
-                                     PATH="/usr/bin:/bin"))
-                        вывод = дитя.stdout + дитя.stderr
-                        if дитя.returncode != 0 and "пустой файл прогона" in вывод:
-                            print("  ✓ возврат дефекта: копия, читающая пустой "
-                                  "файл как «нечего проверять», валит "
-                                  "самопроверку")
-                        else:
-                            red(f"  ✗ подделка «пустой = нечего проверять» "
-                                f"обязана валить самопроверку (код "
-                                f"{дитя.returncode}) — иначе зелёное на пустом "
-                                f"ci.yml вернётся молча")
-                            bad = 1
-        finally:
-            shutil.rmtree(подопытные, ignore_errors=True)
+                    red(f"  ✗ подделка «{name}» обязана менять поведение, "
+                        f"а дала то же: код {rc}, записано «{записано}»")
+                    bad = 1
+            finally:
+                for junk in (копия, копия + "c"):
+                    if os.path.exists(junk):
+                        os.remove(junk)
+                кэш = os.path.join(os.path.dirname(me), "__pycache__")
+                if os.path.isdir(кэш):
+                    for f in os.listdir(кэш):
+                        if f.startswith(".image-published-fake"):
+                            os.remove(os.path.join(кэш, f))
+
+        # Копия, считающая опубликованным любой ответ 200, обязана записать
+        # skip=true там, где настоящий сторож пишет skip=false.
+        подделка("любой ответ 200 — публикация",
+                 '    if doc.get("manifests") is not None:',
+                 "    if code == 200:\n        return GOOD\n"
+                 '    if doc.get("manifests") is not None:',
+                 "index-no-amd64", (GOOD, f"{OUTPUT_NAME}=false"))
+        # Копия, пишущая решение и на «спросить не удалось», обязана записать
+        # что-нибудь там, где настоящий сторож не пишет ничего.
+        подделка("решение пишется и без ответа",
+                 "    if rc == UNKNOWN:\n        return UNKNOWN",
+                 "    if False:\n        return UNKNOWN",
+                 "server-error", (UNKNOWN, ""))
     finally:
         for p in servers:
             p.terminate()
+        shutil.rmtree(tmp, ignore_errors=True)
     return bad
 
 
-def main() -> int:
+def main():
     args = list(sys.argv[1:])
     if "--selftest" in args:
         rc = selftest()
@@ -809,7 +610,7 @@ def main() -> int:
         print("Годного образа на теге нет — публикуем.")
     else:
         red("Спросить реестр не удалось — это не «опубликовано» и не «публикуй».")
-    return rc
+    return write_decision(rc)
 
 
 if __name__ == "__main__":
