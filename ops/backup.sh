@@ -66,6 +66,30 @@ DB_NAME=$(ENV_FILE="$ENV_FILE" ops/switch-build.sh --current-db) \
 
 psql_() { $COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 "$@"; }
 
+# Числа для сверки: список агрегатов, слово-метка описи и SQL — один на два
+# файла (задача 0244). Их пишет этот скрипт, а читает ops/verify-backup.sh;
+# довод, почему оракул рождается здесь, а не берётся у живой базы на проверке,
+# и почему замеров два, — в самом ops/backup-aggregates.sh.
+. ops/backup-aggregates.sh
+
+# Снимок пяти агрегатов схемы: строки «метрика значение».
+# Отказ запроса — не отказ бэкапа: дампы дороже чисел, поэтому возвращаем
+# ненулевой код, а решает вызывающий (ниже он говорит об этом словами).
+agg_snap() {   # $1 — схема
+    local schema="$1" metric sql value out=""
+    for metric in $(agg_names); do
+        sql=$(agg_sql "$metric" "$schema") || return 1
+        value=$(psql_ -tAc "$sql") || return 1
+        out="$out$metric $value
+"
+    done
+    printf '%s' "$out"
+}
+
+# Строки описи с числами и схемы, для которых их снять не удалось.
+AGG_LINES=""
+AGG_MISSING=""
+
 # Отметка об успехе для наблюдения.
 #
 # Бэкап, который тихо перестал сниматься, обнаруживается в день, когда
@@ -114,24 +138,64 @@ if [ -z "$TENANTS" ]; then
     ok "арендаторов нет"
 else
     for schema in $TENANTS; do
+        # Числа для сверки снимаются ВОКРУГ дампа — до и после (задача 0244).
+        # Проверка бэкапа сверяет развёрнутую копию с ними, а не с живой базой:
+        # живая база к утру понедельника уже другая, и её движение красило
+        # проверку на годной копии. Два замера, а не один, потому что pg_dump
+        # держит свой снимок: запись между замером и снимком дала бы то же
+        # ложное красное, только окном в секунды. Годным считается любое число
+        # между замерами; на спокойной ячейке они равны.
+        AGG_BEFORE=""
+        AGG_AFTER=""
+        AGG_BEFORE=$(agg_snap "$schema") || AGG_BEFORE=""
+
         # Каждый дамп согласован сам по себе: pg_dump держит снимок на время
         # одного вызова. Между арендаторами согласованности нет и не нужно —
         # их данные не пересекаются.
         $COMPOSE exec -T postgres pg_dump -U "$DB_USER" -d "$DB_NAME" \
             --format=custom --schema="$schema" > "$OUT/$schema.dump"
+
+        [ -z "$AGG_BEFORE" ] || AGG_AFTER=$(agg_snap "$schema") || AGG_AFTER=""
+        if [ -n "$AGG_BEFORE" ] && [ -n "$AGG_AFTER" ]; then
+            for metric in $(agg_names); do
+                value_before=$(printf '%s\n' "$AGG_BEFORE" \
+                    | awk -v m="$metric" '$1 == m { print $2; exit }')
+                value_after=$(printf '%s\n' "$AGG_AFTER" \
+                    | awk -v m="$metric" '$1 == m { print $2; exit }')
+                [ -n "$value_before" ] && [ -n "$value_after" ] || continue
+                AGG_LINES="$AGG_LINES$(agg_line "$schema" "$metric" "$value_before" "$value_after")
+"
+            done
+        else
+            # Громко: без чисел проверка бэкапа сверить копию не сможет
+            # и честно скажет «не сверено». Бэкап при этом снят и лежит —
+            # валить его из-за ненайденной таблицы значило бы терять данные
+            # ради оракула.
+            AGG_MISSING="$AGG_MISSING $schema"
+            printf '\033[1;33m    числа для сверки по %s НЕ записаны — проверка бэкапа сверить копию не сможет\033[0m\n' \
+                "$schema"
+        fi
         ok "$schema — $(du -h "$OUT/$schema.dump" | cut -f1)"
     done
 fi
 
 step "Опись"
+# Числа на момент снятия стоят ПОСЛЕ строк реестра, и это не вкусовщина:
+# первые три строки описи ops/restore-cell.sh печатает человеку, а
+# «арендаторов: N» читает оттуда же sed'ом — формат начала файла трогать нельзя.
 {
     echo "снято: $STAMP"
     echo "база: $DB_NAME"
     echo "арендаторов: $(echo "$TENANTS" | grep -c . || true)"
     psql_ -tAc "SELECT tenant_id||' '||schema_name||' '||code||' '||status
                   FROM public.tenant_registry ORDER BY tenant_id"
+    printf '%s' "$AGG_LINES"
 } > "$OUT/manifest.txt"
-ok "manifest.txt"
+if [ -n "$AGG_MISSING" ]; then
+    printf '\033[1;33m    manifest.txt — БЕЗ чисел для сверки по схемам:%s\033[0m\n' "$AGG_MISSING"
+else
+    ok "manifest.txt — с числами на момент снятия ($(printf '%s' "$AGG_LINES" | grep -c . || true) строк)"
+fi
 
 step "Уборка старше $KEEP_DAYS дней"
 # Отказ уборки глушился ЦЕЛИКОМ — и сообщение (`2>/dev/null`), и код возврата
