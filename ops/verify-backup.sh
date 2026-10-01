@@ -269,6 +269,132 @@ mark_gate_verdict() {   # $1 — файл скрипта
     return 0
 }
 
+# Пишет ли бэкап числа в опись — спрашивается СЛЕДОМ, а не грепом по тексту
+# (задача 0241). Прогоняется настоящий ops/backup.sh под заглушкой `docker`:
+# ячейки, базы и хранилища у самопроверки нет, а всё, чем бэкап их касается
+# (psql, pg_dump, mc), идёт через один исполняемый файл — значит подменяется
+# он один.
+#
+# Ответы подставной базы лежат в ОДНОМ месте (answer.sh ниже) и читаются
+# и заглушкой, и этой сверкой: два списка одних и тех же чисел разошлись бы
+# молча — ровно тот довод, по которому список агрегатов один на два файла
+# (ops/backup-aggregates.sh).
+#
+# Схемы берутся из САМОГО НАБОРА (`t_*.dump`), а не из списка внутри пробы:
+# опись обязана нести числа по каждому задампленному арендатору. И пустой
+# перебор успехом не считается — отсюда требование «дампов не меньше двух»:
+# зелёный цикл, не сделавший ни одного витка, это ровно класс 16.
+aggregates_written_verdict() {   # $1 — скрипт бэкапа, $2 — рабочий каталог
+    local backup="$1" dir="$2" stub answer set_dir manifest want pair
+    local dump name metric dumps=0 checked=0 rc=0
+    stub="$dir/stub"
+    answer="$dir/answer.sh"
+    mkdir -p "$stub" "$dir/backups"
+
+    cat > "$answer" <<'ANSWER'
+#!/bin/sh
+# Ответ подставной базы на один запрос — одно место на заглушку docker и на
+# сверку описи. part_stock стоит ВЫШЕ part: иначе запрос про остаток попал бы
+# в ветку про позиции, и числа разъехались бы молча.
+case "$1" in
+    *"WHERE status IN"*)              printf 't_000042\nt_000099\n' ;;
+    *"||' '||code||"*)                printf '42 t_000042 yardt ACTIVE\n99 t_000099 proba ACTIVE\n' ;;
+    *"FROM t_000042.part_stock"*)     echo '7.000' ;;
+    *"FROM t_000042.part"*)           echo 3 ;;
+    *"FROM t_000042.stock_movement"*) echo 4 ;;
+    *"FROM t_000042.deal"*)           echo 2 ;;
+    *"FROM t_000042.tenant_member"*)  echo 2 ;;
+    *"FROM t_000099.part_stock"*)     echo '1.500' ;;
+    *"FROM t_000099.part"*)           echo 11 ;;
+    *"FROM t_000099.stock_movement"*) echo 5 ;;
+    *"FROM t_000099.deal"*)           echo 1 ;;
+    *"FROM t_000099.tenant_member"*)  echo 3 ;;
+    *) exit 0 ;;
+esac
+ANSWER
+    chmod +x "$answer"
+
+    cat > "$stub/docker" <<STUB
+#!/bin/sh
+# Заглушка docker: SQL у psql всегда последним аргументом (-tAc), дамп обязан
+# быть непустым файлом, зеркало снимков — успехом.
+sql=""
+for a in "\$@"; do sql="\$a"; done
+case " \$* " in
+    *" psql "*)    "$answer" "\$sql" ;;
+    *" pg_dump "*) printf 'PGDMP (заглушка самопроверки)\n' ;;
+esac
+exit 0
+STUB
+    chmod +x "$stub/docker"
+
+    # Отметка в наблюдение наружу не уходит: её адресом здесь стоит заглушка,
+    # а не pushgateway машины.
+    cat > "$stub/curl" <<CURL
+#!/bin/sh
+printf '%s\n' "\$*" >> "$dir/pushed"
+cat > /dev/null
+exit 0
+CURL
+    chmod +x "$stub/curl"
+
+    set +e
+    PATH="$stub:$PATH" BACKUP_DIR="$dir/backups" ENV_FILE=/dev/null DB_USER=app \
+        PUSHGATEWAY_URL="http://zaglushka-samoproverki/" OFFSITE_REMOTE="" \
+        bash "$backup" > "$dir/backup.log" 2>&1
+    rc=$?
+    set -e
+    if [ "$rc" != 0 ]; then
+        printf 'ПРОГОН БЭКАПА НЕ ПРОШЁЛ (код %s) — след спросить не удалось: %s\n' \
+            "$rc" "$(tail -3 "$dir/backup.log" | tr '\n' ' ')"
+        return 1
+    fi
+
+    set_dir="$(find "$dir/backups" -maxdepth 1 -type d -name '20*' | sort | tail -1)"
+    manifest="$set_dir/manifest.txt"
+    if [ -z "$set_dir" ] || [ ! -r "$manifest" ]; then
+        printf 'ОПИСИ НЕТ: прогон бэкапа не оставил manifest.txt в %s\n' "$dir/backups"
+        return 1
+    fi
+
+    # Начало описи — договор с ops/restore-cell.sh: первые три строки он печатает
+    # человеку, «арендаторов: N» читает sed'ом. Строки с числами обязаны стоять
+    # ПОСЛЕ строк реестра, и проверяется это на настоящем файле, а не на образце.
+    if ! sed -n 1p "$manifest" | grep -q '^снято: 20' \
+       || ! sed -n 2p "$manifest" | grep -q '^база: parts$' \
+       || ! sed -n 3p "$manifest" | grep -q '^арендаторов: 2$' \
+       || sed -n 4p "$manifest" | grep -q "^${AGG_MARK} "; then
+        printf 'ОПИСЬ: начало файла не то, что читает ops/restore-cell.sh: «%s»\n' \
+            "$(sed -n 1,4p "$manifest" | tr '\n' '|')"
+        return 1
+    fi
+
+    for dump in "$set_dir"/t_*.dump; do
+        [ -e "$dump" ] || break
+        dumps=$(( dumps + 1 ))
+        name="$(basename "$dump" .dump)"
+        for metric in $(agg_names); do
+            want="$("$answer" "$(agg_sql "$metric" "$name")")"
+            pair="$(agg_pair "$manifest" "$name" "$metric")"
+            if [ "$pair" != "$want $want" ]; then
+                printf 'ОПИСЬ БЕЗ ЧИСЕЛ: %s.%s — в описи «%s», а бэкап снимал «%s» (строк «%s» в описи: %s)\n' \
+                    "$name" "$metric" "$pair" "$want" "$AGG_MARK" \
+                    "$(grep -c "^${AGG_MARK} " "$manifest" || true)"
+                return 1
+            fi
+            checked=$(( checked + 1 ))
+        done
+    done
+    if [ "$dumps" -lt 2 ]; then
+        printf 'ПРОГОН БЭКАПА НЕ СНЯЛ ДАМПОВ (%s) — перебор пуст, и зелёный цвет его ничего не значит\n' \
+            "$dumps"
+        return 1
+    fi
+    printf 'дампов %s, сверено чисел %s, строк «%s» в описи %s\n' \
+        "$dumps" "$checked" "$AGG_MARK" "$(grep -c "^${AGG_MARK} " "$manifest" || true)"
+    return 0
+}
+
 # --- проверка самой проверки -------------------------------------------------
 selftest() {
     local bad=0 out rc pair urlneedle
@@ -279,9 +405,12 @@ selftest() {
     # по ней, а не из-за подделки.
     tmp="$(mktemp -d)"
     # FAKE не local по той же причине, и пустой — чтобы ловушка не упала
-    # под `set -u`, когда до подделок дело не дошло.
+    # под `set -u`, когда до подделок дело не дошло. FAKE_BACKUP — то же самое
+    # для подделки ops/backup.sh (случай 16в): она тоже кладётся в ops/, иначе
+    # `cd "$(dirname "$0")/.."` уводит копию в чужой каталог (урок 0151).
     FAKE=""
-    trap 'rm -rf "${tmp:-}"; rm -f "${FAKE:-}"' EXIT
+    FAKE_BACKUP=""
+    trap 'rm -rf "${tmp:-}"; rm -f "${FAKE:-}" "${FAKE_BACKUP:-}"' EXIT
     echo "Самопроверка ops/verify-backup.sh"
 
     says()     { printf '%s' "$1" | grep -qF -- "$2"; }
@@ -559,13 +688,58 @@ plpgsql" "$(ours_extensions)")"; rc=$?
         bad=1
     fi
 
-    # 16б. И бэкап обязан их писать: оракул, который перестали записывать, —
-    #      это та же проверка без сверки, только молча.
-    if grep -q 'backup-aggregates.sh' ops/backup.sh && grep -q 'agg_line' ops/backup.sh; then
-        printf '  ✓ ops/backup.sh пишет числа тем же списком, что читает проверка\n'
+    # 16б. И бэкап обязан их писать — спрашивается СЛЕДОМ, а не грепом по тексту
+    #      (задача 0241). Прежняя редакция смотрела, есть ли в ops/backup.sh
+    #      строки «backup-aggregates.sh» и «agg_line»: зелёной её делало НАЛИЧИЕ
+    #      ТЕКСТА — в том числе в комментарии или в закомментированном вызове.
+    #      А оракул, который перестали записывать, — это проверка бэкапа без
+    #      сверки, только молча (AGG_UNVERIFIED прогон не красит, задача 0244),
+    #      и этот случай — единственный сторож против такого вырождения.
+    #      Поэтому ops/backup.sh ПРОГОНЯЕТСЯ, и в его описи обязаны появиться
+    #      строки «агрегат …» по каждой метрике и каждому дампу набора.
+    set +e; out="$(aggregates_written_verdict ops/backup.sh "$tmp/agg-real")"; rc=$?; set -e
+    if [ "$rc" = 0 ]; then
+        printf '  ✓ прогон ops/backup.sh пишет числа в опись (%s)\n' "$out"
     else
-        printf '\033[1;31m  ✗ ops/backup.sh перестал писать числа в опись — сверять будет нечем\033[0m\n'
-        bad=1
+        printf '\033[1;31m  ✗ %s\033[0m\n' "$out"; bad=1
+    fi
+
+    # 16в. ВОЗВРАТ ДЕФЕКТА. Копия ops/backup.sh, где вызов agg_snap
+    #      закомментирован, а строки «backup-aggregates.sh» и «agg_line»
+    #      ОСТАЛИСЬ на месте: прежний греп по тексту такую копию принимал
+    #      зелёной. След обязан краснеть — и проверяется заодно, что подделка
+    #      именно того вида (иначе случай 16б краснел бы на чём попало).
+    #      Ребёнку случай выключен: имя подделки одно, и родитель с ребёнком
+    #      отняли бы файл друг у друга.
+    if [ -z "${VERIFY_BACKUP_SELFTEST_CHILD:-}" ]; then
+        FAKE_BACKUP="ops/.backup-no-aggregates-fake.sh"
+        python3 - ops/backup.sh "$FAKE_BACKUP" <<'PY'
+import sys
+src, dst = sys.argv[1:3]
+old = '        AGG_BEFORE=$(agg_snap "$schema") || AGG_BEFORE=""'
+new = '        : # подделка 0241: снятие чисел убрано, строки про них на месте'
+t = open(src, encoding="utf-8").read()
+assert old in t, "подделка не легла — изменилось место снятия чисел в ops/backup.sh"
+open(dst, "w", encoding="utf-8").write(t.replace(old, new, 1))
+PY
+        # Целость копии проверяется ДО запуска: красное от сломанного синтаксиса
+        # говорит о подделке, а не о стороже (урок задачи 0198).
+        bash -n "$FAKE_BACKUP"
+        set +e
+        out="$(aggregates_written_verdict "$FAKE_BACKUP" "$tmp/agg-fake")"; rc=$?
+        set -e
+        if [ "$rc" != 0 ] && says "$out" 'ОПИСЬ БЕЗ ЧИСЕЛ' \
+           && grep -q 'backup-aggregates.sh' "$FAKE_BACKUP" \
+           && grep -q 'agg_line' "$FAKE_BACKUP"; then
+            # Печатается и то, ЧЕМ она покраснела: «самопроверка обязана
+            # печатать причину, а не только факт» (урок задачи 0085).
+            printf '  ✓ возврат дефекта: бэкап, переставший снимать числа, краснеет — а греп по тексту его принимал\n'
+            printf '      ответ следа: %s\n' "$(printf '%s' "$out" | sed -n 1p)"
+        else
+            printf '\033[1;31m  ✗ подделка «числа не снимаются, строки на месте» обязана краснеть следом\033[0m\n'
+            printf '%s\n' "$out" | sed 's/^/      /'; bad=1
+        fi
+        rm -f "$FAKE_BACKUP"; FAKE_BACKUP=""
     fi
 
     # 17. ВОЗВРАТ ДЕФЕКТА №2: вердикт агрегата, всегда отвечающий «годно», —
