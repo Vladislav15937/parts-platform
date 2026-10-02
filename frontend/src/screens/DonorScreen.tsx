@@ -13,6 +13,7 @@ import {
 import type { Brand, Generation, Model, VehicleCatalog } from '../catalog/vehicles';
 import type { Reference } from '../reference/reference';
 import { DonorCosts } from './DonorCosts';
+import { DonorPhotos } from './DonorPhotos';
 import {
   donorTitle,
   moveDonor,
@@ -52,6 +53,10 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
   // не во что, а после — покупка, эвакуатор и разбор идут отдельными
   // платежами и в разные дни.
   const [costsOf, setCostsOf] = useState<number | null>(null);
+  // Снимки машины — там же, где затраты, и по той же причине: машину
+  // фотографируют один раз, а в объявления её снимки уходят у тех
+  // наименований, которые владелец отметил у выгрузки.
+  const [photosOf, setPhotosOf] = useState<number | null>(null);
   // Где стоит машина — правится прямо в строке: значение и поле ввода
   // в одной клетке, иначе владелец ищет, куда делась строка после нажатия.
   const [movingId, setMovingId] = useState<number | null>(null);
@@ -486,6 +491,13 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
                     >
                       {costsOf === donor.id ? 'Свернуть' : 'Затраты'}
                     </button>
+                    <button
+                      type="button"
+                      className="button--ghost"
+                      onClick={() => setPhotosOf(photosOf === donor.id ? null : donor.id)}
+                    >
+                      {photosOf === donor.id ? 'Свернуть' : 'Фото'}
+                    </button>
                   </td>
                 </tr>
                 {/* Затраты раскрываются под своей же строкой. Пока блок стоял
@@ -497,6 +509,16 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
                   <tr>
                     <td colSpan={4}>
                       <DonorCosts donorId={donor.id} title={donorTitle(donor)} />
+                    </td>
+                  </tr>
+                )}
+                {/* Снимки — под своей же строкой, по той же причине, что
+                    и затраты: блок после таблицы открывался бы у клиента
+                    с 441 машиной за одиннадцать экранов вниз. */}
+                {photosOf === donor.id && (
+                  <tr>
+                    <td colSpan={4}>
+                      <DonorPhotos donorId={donor.id} title={donorTitle(donor)} />
                     </td>
                   </tr>
                 )}

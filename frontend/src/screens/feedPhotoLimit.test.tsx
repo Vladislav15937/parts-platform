@@ -70,6 +70,7 @@ describe('число снимков в объявлении', () => {
         installationTemplate: 'Поставим за {цена} ₽',
         expectedGoods: false,
         expectedGoodsNote: null,
+        donorPhotoKinds: [],
       });
   });
 

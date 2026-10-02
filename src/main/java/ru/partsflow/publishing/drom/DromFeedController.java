@@ -166,9 +166,15 @@ public class DromFeedController {
             String base = photoBase(request, company, token);
             // Отбор говорит, что уедет; настройки — каким оно уедет: наценка
             // на прайс-лист и округление принадлежат выгрузке, а не товару.
+            // Снимки машины-донора идут своим адресом, а не общим со снимками
+            // позиции: номера у donor_photo и part_photo свои и пересекаются,
+            // и один путь на оба означал бы, что по номеру снимка детали
+            // площадка получает фотографию машины, и наоборот.
+            // Колёсной выгрузке он не передаётся вовсе — донора у колеса нет.
             int offers = account.isWheelFeed()
                     ? wheels.writeTo(out, account.filter(), base, account.settings())
-                    : generator.writeTo(out, account.filter(), base, account.settings());
+                    : generator.writeTo(out, account.filter(), base,
+                            donorPhotoBase(request, company, token), account.settings());
             log.info("Дром забрал прайс арендатора {} ({}): {} позиций",
                     schema, account.isWheelFeed() ? "колёса" : "запчасти", offers);
         } finally {
@@ -270,6 +276,60 @@ public class DromFeedController {
     }
 
     /**
+     * Снимок машины-донора по постоянному адресу.
+     *
+     * <p>Отдельный путь от снимков позиции по необходимости, а не для порядка:
+     * номера у {@code donor_photo} и {@code part_photo} свои и пересекаются —
+     * общий адрес отдавал бы по номеру снимка детали фотографию машины.
+     *
+     * <p>Всё остальное устроено так же: редирект вместо отдачи файла (байты
+     * площадка берёт из хранилища напрямую), токен тот же, что у прайса,
+     * и снимок машины, с которой ни одна позиция не выгружается, наружу
+     * не смотрит вовсе.
+     */
+    @GetMapping("/feeds/drom/{company}/{token}/donor-photo/{photoId}.jpg")
+    public void donorPhoto(@PathVariable String company,
+                           @PathVariable String token,
+                           @PathVariable long photoId,
+                           HttpServletResponse response) throws IOException {
+
+        String schema = schemaOf(company);
+        String key = schema == null || accountFor(schema, token) == null
+                ? null
+                : donorKeyOf(schema, photoId);
+        if (key == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        }
+        response.sendRedirect(photos.presignView(key));
+    }
+
+    /**
+     * Ключ снимка машины, с которой выгружается хоть одна позиция;
+     * {@code null} — нет такого снимка либо выгружать с этой машины нечего.
+     *
+     * <p>Условие по позициям здесь то же по смыслу, что {@code p.is_published}
+     * у снимков детали: фотографии машины, ни одна деталь с которой
+     * не выгружается, в объявлениях не участвуют — значит и наружу смотреть
+     * им незачем. Какие именно наименования получают снимки машины, решает
+     * выгрузка при сборке файла; адрес этого не повторяет намеренно —
+     * иначе смена настройки молча ломала бы ссылки в уже уехавшем прайсе,
+     * а площадка снимает объявление за мёртвую картинку.
+     */
+    private String donorKeyOf(String schema, long photoId) {
+        try {
+            return jdbc.queryForObject("""
+                    SELECT dp.s3_key
+                      FROM %s.donor_photo dp
+                     WHERE dp.id = ? AND dp.status = 'PROCESSED'
+                       AND EXISTS (SELECT 1 FROM %s.part p
+                                    WHERE p.donor_id = dp.donor_id AND p.is_published)"""
+                    .formatted(schema, schema), String.class, photoId);
+        } catch (EmptyResultDataAccessException e) {
+            return null;
+        }
+    }
+
+    /**
      * Постоянный адрес выдачи снимков этой выгрузки.
      *
      * <p>Берётся из настройки, а не из запроса: за терминатором адрес
@@ -283,6 +343,21 @@ public class DromFeedController {
                 ? request.getRequestURL().toString().replaceFirst("/feeds/drom/.*$", "")
                 : publicUrl.replaceFirst("/+$", "");
         return "%s/feeds/drom/%s/%s/photo/".formatted(origin, company, token);
+    }
+
+    /**
+     * Постоянный адрес выдачи снимков машин-доноров этой выгрузки.
+     *
+     * <p>Домен берётся тем же способом и по той же причине, что у снимков
+     * позиции: за терминатором адрес в запросе — внутреннее имя контейнера
+     * сборки, и прайс уехал бы со ссылками вида {@code http://app-blue:8080/…},
+     * по которым площадка не сходит никуда.
+     */
+    private String donorPhotoBase(HttpServletRequest request, String company, String token) {
+        String origin = publicUrl == null || publicUrl.isBlank()
+                ? request.getRequestURL().toString().replaceFirst("/feeds/drom/.*$", "")
+                : publicUrl.replaceFirst("/+$", "");
+        return "%s/feeds/drom/%s/%s/donor-photo/".formatted(origin, company, token);
     }
 
     /**

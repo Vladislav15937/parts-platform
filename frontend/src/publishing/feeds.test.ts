@@ -31,6 +31,9 @@ function feed(overrides: Partial<Feed> = {}): Feed {
       installationTemplate: null,
       expectedGoods: null,
       expectedGoodsNote: null,
+      // Снимков машины-донора никому: так выглядит выгрузка, у которой
+      // настройку не трогали, — и ровно так её отдаёт сервер.
+      donorPhotoKinds: null,
     },
     lastError: null,
     lastDownloadAt: null,
