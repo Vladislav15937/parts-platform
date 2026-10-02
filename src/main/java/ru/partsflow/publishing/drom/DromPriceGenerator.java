@@ -71,6 +71,15 @@ public class DromPriceGenerator {
                    -- в раздел. Пока его не было, ей оставалось угадывать
                    -- по заголовку, а угадывает она не всегда.
                    kind.name AS part_kind,
+                   -- Вид детали нужен ещё и числом: по нему решается, уходят
+                   -- ли в объявление снимки машины-донора. Решает это
+                   -- выгрузка (FeedSettings.donorPhotoKinds), а не позиция,
+                   -- и список наименований в SQL не подставляется вовсе:
+                   -- параметр в списке SELECT встал бы ПЕРВЫМ по порядку
+                   -- появления и сдвинул бы номера всех условий ниже вместе
+                   -- с фильтром дельты. Ошибка была бы тихой — запрос
+                   -- собирается, а сравнивается не то с не тем.
+                   p.part_kind_id,
                    p.price,
                    -- Товар в пути: позиция БЕЗ ОСТАТКА, привязанная
                    -- к поставке, которая ещё не приехала. Оба условия
@@ -110,6 +119,7 @@ public class DromPriceGenerator {
                    primary_oem.raw_number AS oem_number,
                    analogs.numbers        AS analog_numbers,
                    photos.ids             AS photo_ids,
+                   donor_photos.ids       AS donor_photo_ids,
                    -- Применимость: сначала машина, с которой деталь снята,
                    -- потом — перечисленные в применимости. У контрактной
                    -- машины нет вовсе, а подходит она к нескольким, и без
@@ -185,6 +195,21 @@ public class DromPriceGenerator {
                    WHERE status = 'PROCESSED'
                    GROUP BY part_id
               ) photos ON photos.part_id = p.id
+              -- Снимки машины, с которой снята деталь: для двигателя
+              -- и коробки состояние машины — половина объявления. Главный
+              -- первым, как и у снимков позиции: он уйдёт первым
+              -- из донорских.
+              --
+              -- Джойн безусловный, а решает про него Java: у контрактной
+              -- детали donor_id пуст, и тогда здесь просто NULL — ровно то,
+              -- что нужно, чтобы у неё ничего не пустовало и не ломалось.
+              LEFT JOIN (
+                  SELECT donor_id,
+                         string_agg(id::text, ',' ORDER BY is_main DESC, sort_order, id) AS ids
+                    FROM donor_photo
+                   WHERE status = 'PROCESSED'
+                   GROUP BY donor_id
+              ) donor_photos ON donor_photos.donor_id = p.donor_id
               LEFT JOIN catalog.part_kind kind ON kind.id = p.part_kind_id
               LEFT JOIN catalog.brand db ON db.id = d.brand_id
               LEFT JOIN catalog.model dm ON dm.id = d.model_id
@@ -407,6 +432,33 @@ public class DromPriceGenerator {
     }
 
     /**
+     * Прайс со ссылками и на снимки машин-доноров.
+     *
+     * <p>Для двигателя и коробки состояние машины — половина объявления:
+     * покупатель смотрит, откуда снято и в каком была машина. Каким именно
+     * наименованиям дописывать её снимки, решает выгрузка
+     * ({@code FeedSettings.donorPhotoKinds}): у фары фотографии донора
+     * в объявлении лишние.
+     *
+     * <p><b>Свой адрес, а не общий со снимками позиции.</b> Номера
+     * у {@code donor_photo} и {@code part_photo} свои и пересекаются,
+     * и один путь на оба означал бы, что по номеру снимка детали площадка
+     * получает снимок машины, и наоборот.
+     *
+     * <p>Аннотация повторена намеренно: {@code @Transactional} перегрузкой
+     * не наследуется, и метод без неё уходит {@code JdbcTemplate}'ом
+     * в {@code public} — шестая ловушка того же вида в этом проекте.
+     *
+     * @param donorPhotoBase постоянный адрес выдачи снимков машин;
+     *                       {@code null} — ссылки на них не пишутся вовсе
+     */
+    @Transactional(readOnly = true)
+    public int writeTo(OutputStream out, FeedFilter filter, String photoBase,
+                       String donorPhotoBase, FeedSettings settings) {
+        return write(out, null, filter, photoBase, donorPhotoBase, settings);
+    }
+
+    /**
      * Отбор товара в выгрузку.
      *
      * <p><b>Пусто в любом поле — «без ограничения», а не «ничего».</b>
@@ -504,8 +556,20 @@ public class DromPriceGenerator {
         return write(out, partIds, filter, null, settings);
     }
 
+    /**
+     * Прежняя подпись — без адреса снимков машины.
+     *
+     * <p>Снимки донора появились позже, а зовущих у сборки пять. Делегирующий
+     * метод оставляет их нетронутыми: тот, кто про машину ничего не передал,
+     * получает прайс ровно таким, каким получал раньше.
+     */
     private int write(OutputStream out, List<Long> partIds, FeedFilter filter, String photoBase,
                       FeedSettings settings) {
+        return write(out, partIds, filter, photoBase, null, settings);
+    }
+
+    private int write(OutputStream out, List<Long> partIds, FeedFilter filter, String photoBase,
+                      String donorPhotoBase, FeedSettings settings) {
         Session session = entityManager.unwrap(Session.class);
 
         // Условия по колонкам витрины: их собирает сам отбор витрины, чтобы
@@ -577,7 +641,8 @@ public class DromPriceGenerator {
                     statement.setArray(next, connection.createArrayOf("bigint", partIds.toArray()));
                 }
                 try (ResultSet rs = statement.executeQuery()) {
-                    return writer.write(out, new OfferCursor(rs, photoBase, settings));
+                    return writer.write(out,
+                            new OfferCursor(rs, photoBase, donorPhotoBase, settings));
                 }
             } catch (XMLStreamException e) {
                 // doReturningWork пропускает только SQLException; заворачиваем,
@@ -594,6 +659,15 @@ public class DromPriceGenerator {
         private final String photoBase;
 
         /**
+         * Адрес выдачи снимков машины-донора; {@code null} — их не пишем.
+         *
+         * <p>Отдельный от {@link #photoBase} по необходимости, а не для
+         * порядка: номера снимков детали и машины живут в разных таблицах
+         * и пересекаются.
+         */
+        private final String donorPhotoBase;
+
+        /**
          * Как собирается файл: наценка на прайс-лист и округление.
          *
          * <p>Применяются здесь, а не в SQL, и не в писателе. Не в SQL —
@@ -608,9 +682,11 @@ public class DromPriceGenerator {
 
         private Boolean hasNext;
 
-        private OfferCursor(ResultSet resultSet, String photoBase, FeedSettings settings) {
+        private OfferCursor(ResultSet resultSet, String photoBase, String donorPhotoBase,
+                            FeedSettings settings) {
             this.resultSet = resultSet;
             this.photoBase = photoBase;
+            this.donorPhotoBase = donorPhotoBase;
             this.settings = settings;
         }
 
@@ -633,7 +709,7 @@ public class DromPriceGenerator {
             }
             hasNext = null;
             try {
-                return map(resultSet, photoBase, settings);
+                return map(resultSet, photoBase, donorPhotoBase, settings);
             } catch (SQLException e) {
                 throw new IllegalStateException("Не удалось прочитать позицию прайса", e);
             }
@@ -661,7 +737,45 @@ public class DromPriceGenerator {
                     .toList();
         }
 
-        private static DromOffer map(ResultSet rs, String photoBase, FeedSettings settings)
+        /**
+         * Ссылки на снимки объявления: сначала свои, потом машины-донора.
+         *
+         * <p><b>Порядок здесь — это решение, а не случайность.</b> Предел
+         * числа снимков у выгрузки один на объявление, и обрезка берёт первые:
+         * значит донорские стоят после своих и вытесняются сами, а не
+         * вытесняют. Обратный порядок означал бы объявление о фаре,
+         * в котором вместо фары видно чужой капот, — и владелец узнал бы
+         * об этом с чужого сайта.
+         *
+         * <p>Снимки машины дописываются только тем наименованиям, которые
+         * владелец отметил у этой выгрузки. У контрактной детали донора нет
+         * вовсе — {@code donorIds} тогда {@code null}, и список остаётся
+         * ровно таким, каким был до появления настройки.
+         */
+        private static List<String> photoLinks(String ids, String donorIds, Long partKindId,
+                                               String base, String donorBase,
+                                               ru.partsflow.publishing.FeedSettings settings) {
+            if (base == null) {
+                return List.of();
+            }
+
+            java.util.List<String> links = new java.util.ArrayList<>();
+            if (ids != null && !ids.isBlank()) {
+                for (String id : ids.split(",")) {
+                    links.add(base + id + ".jpg");
+                }
+            }
+            if (donorBase != null && donorIds != null && !donorIds.isBlank()
+                    && settings.donorPhotosFor(partKindId)) {
+                for (String id : donorIds.split(",")) {
+                    links.add(donorBase + id + ".jpg");
+                }
+            }
+            return links.stream().limit(settings.photosPerOffer()).toList();
+        }
+
+        private static DromOffer map(ResultSet rs, String photoBase, String donorPhotoBase,
+                                     FeedSettings settings)
                 throws SQLException {
             return new DromOffer(
                     rs.getString("public_code"),
@@ -691,7 +805,8 @@ public class DromPriceGenerator {
                             // дни ноль, а ноль здесь значит «забрать сегодня».
                             rs.getObject("order_days_from", Integer.class),
                             rs.getObject("order_days_to", Integer.class)),
-                    photoLinks(rs.getString("photo_ids"), photoBase, settings),
+                    photoLinks(rs.getString("photo_ids"), rs.getString("donor_photo_ids"),
+                            kindId(rs), photoBase, donorPhotoBase, settings),
                     rs.getString("car_brand"),
                     rs.getString("car_model"),
                     rs.getString("body_code"),
@@ -707,6 +822,19 @@ public class DromPriceGenerator {
                     // «Ожидается поступление»: решение выгрузки, а не позиции,
                     // и без него товар в пути в файл не попадает вовсе.
                     settings.expectedNoteFor(rs.getBoolean("in_transit")));
+        }
+
+        /**
+         * Вид детали числом; {@code null} — наименование не сопоставлено.
+         *
+         * <p>Через {@code wasNull}, а не {@code getLong}: тот отдаёт на пустое
+         * значение ноль, а «ноль» в списке отмеченных наименований случайно
+         * совпал бы — и снимки машины уехали бы позициям, у которых вид
+         * детали просто не разобран. У переехавшего клиента таких тысячи.
+         */
+        private static Long kindId(ResultSet rs) throws SQLException {
+            long value = rs.getLong("part_kind_id");
+            return rs.wasNull() ? null : value;
         }
 
         /** Года у контрактной детали нет, а {@code getInt} отдаёт на это ноль. */

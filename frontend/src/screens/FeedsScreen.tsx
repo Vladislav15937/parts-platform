@@ -278,6 +278,12 @@ function FeedCard({
   const [expectedGoodsNote, setExpectedGoodsNote] = useState(
     feed.settings?.expectedGoodsNote ?? '');
 
+  // Наименования, которым в объявление дописываются снимки машины-донора.
+  // Пусто — никому, как было до появления настройки: у фары фотографии
+  // донора лишние, а у двигателя решают продажу.
+  const [donorPhotoKinds, setDonorPhotoKinds] = useState<number[]>(
+    feed.settings?.donorPhotoKinds ?? []);
+
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState<number | null>(null);
 
@@ -377,6 +383,7 @@ function FeedCard({
         expectedGoods,
         expectedGoodsNote: expectedGoodsNote.trim() === ''
           ? null : expectedGoodsNote,
+        donorPhotoKinds,
       });
       if (mounted.current) onChanged();
     } catch (cause) {
@@ -912,6 +919,46 @@ function FeedCard({
         </fieldset>
       )}
 
+      {/* Снимки машины-донора в объявлении. Для двигателя и коробки состояние
+          машины — половина объявления: покупатель смотрит, откуда снято,
+          какой пробег, цел ли кузов. У фары те же фотографии лишние, поэтому
+          владелец перечисляет наименования, а не включает «всем».
+
+          Колёсной выгрузке этого не показываем: донора у колеса нет вовсе
+          (прайс шин его и не отбирает), и показанная настройка была бы
+          обещанием, которого нет. */}
+      {!wheels && (
+        <fieldset className="choices">
+          <legend>Снимки машины-донора — каким наименованиям дописывать</legend>
+          <p className="note">
+            Уходят вслед за своими снимками позиции и в пределах того же числа
+            фотографий. Пусто — не дописывать никому. У контрактной детали,
+            приехавшей контейнером, донора нет — её объявление не меняется.
+          </p>
+
+          {/* Без выбора направления: «все, кроме этих» здесь не бывает.
+              Отбор решает, что уедет в прайс, и исключающая сторона ему
+              нужна («двигатели сюда не выгружать»); тут решается, кому
+              дописать снимки машины, и «дописать всем, кроме фары» — это
+              фотографии донора у девятисот наименований, то есть ровно
+              то, от чего настройка и избавляет. Показанный переключатель
+              без действия был бы мёртвым управлением на экране. */}
+          <Picker
+            title="Наименования со снимками машины"
+            options={kinds.map((k) => ({ id: k.id, name: k.name }))}
+            chosen={donorPhotoKinds}
+            onChosen={setDonorPhotoKinds}
+          />
+
+          <div className="filter-row">
+            <button type="button" disabled={busy}
+                    onClick={() => void saveSettings('Снимки донора не сохранены')}>
+              Сохранить снимки донора
+            </button>
+          </div>
+        </fieldset>
+      )}
+
       <div className="filter-row">
         <button type="button" className="button--ghost" disabled={busy}
                 onClick={() => void count()}>
@@ -1181,9 +1228,15 @@ function Picker({
   title: string;
   options: Array<{ id: number; name: string }>;
   chosen: number[];
-  excluded: boolean;
+  /**
+   * Направление отбора. Необязательное: у выбора, где исключающей стороны
+   * не бывает (наименования со снимками машины-донора), переключателя быть
+   * не должно вовсе — показанный, но ничего не меняющий, он читается как
+   * сломанный.
+   */
+  excluded?: boolean;
   onChosen: (ids: number[]) => void;
-  onExcluded: (value: boolean) => void;
+  onExcluded?: (value: boolean) => void;
 }) {
   const [query, setQuery] = useState('');
 
@@ -1205,11 +1258,11 @@ function Picker({
     <fieldset className="picker">
       <legend>{title}</legend>
 
-      {chosen.length > 0 && (
+      {chosen.length > 0 && onExcluded !== undefined && (
         <label className="field">
           Направление
           <select
-            value={excluded ? 'exclude' : 'include'}
+            value={excluded === true ? 'exclude' : 'include'}
             onChange={(e) => onExcluded(e.target.value === 'exclude')}
           >
             <option value="include">только эти</option>

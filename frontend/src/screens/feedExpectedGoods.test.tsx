@@ -82,6 +82,7 @@ describe('товар в пути в прайсе', () => {
         installationTemplate: 'Стоимость установки на нашем автосервисе: {цена} р.',
         expectedGoods: true,
         expectedGoodsNote: 'Ожидается поступление',
+        donorPhotoKinds: [],
       });
   });
 

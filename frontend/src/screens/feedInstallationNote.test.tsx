@@ -69,6 +69,7 @@ describe('приписка про стоимость установки', () => 
         installationTemplate: 'Стоимость установки на нашем автосервисе: {цена} р.',
         expectedGoods: false,
         expectedGoodsNote: null,
+        donorPhotoKinds: [],
       });
   });
 

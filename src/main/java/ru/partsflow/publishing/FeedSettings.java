@@ -95,12 +95,39 @@ import java.math.RoundingMode;
  *                      при сохранении, потому что товар, уехавший без
  *                      объяснения, — это объявление, по которому покупатель
  *                      приедет за деталью, которой на складе нет
+ * @param donorPhotoKinds наименования (виды деталей), которым в объявление
+ *                      дописываются снимки машины-донора. Пусто и
+ *                      {@code null} — никому, как было до появления
+ *                      настройки: у фары фотографии донора в объявлении
+ *                      лишние, а у двигателя решают продажу. Список, а не
+ *                      переключатель «всем», именно поэтому — выборочность
+ *                      и есть смысл настройки
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
                            Integer photoLimit, Boolean installationNote,
                            String installationTemplate,
-                           Boolean expectedGoods, String expectedGoodsNote) {
+                           Boolean expectedGoods, String expectedGoodsNote,
+                           java.util.List<Long> donorPhotoKinds) {
+
+    /**
+     * Прежняя подпись — без снимков донора.
+     *
+     * <p>Настройка появилась позже остальных, а составных вызовов у record'а
+     * двадцать с лишним, почти все в тестах. Переписать их все ради поля,
+     * которое в этих проверках всегда пусто, значило бы раздуть диff правки
+     * до неузнаваемости и спрятать в нём то, что действительно менялось.
+     * Тот же приём и по той же причине стоит у
+     * {@code DromPriceGenerator.FeedFilter}, где так же дописывали отбор
+     * по колонкам.
+     */
+    public FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
+                        Integer photoLimit, Boolean installationNote,
+                        String installationTemplate,
+                        Boolean expectedGoods, String expectedGoodsNote) {
+        this(pricePercent, priceRounding, photoLimit, installationNote,
+                installationTemplate, expectedGoods, expectedGoodsNote, null);
+    }
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -294,6 +321,33 @@ public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
             return null;
         }
         return expectedGoodsNote.strip();
+    }
+
+    /**
+     * Дописывать ли в объявление этой позиции снимки машины-донора.
+     *
+     * <p><b>Выборочность — это и есть настройка.</b> У двигателя и коробки
+     * состояние машины половина объявления: покупатель смотрит, откуда снято
+     * и в каком была машина. У фары те же фотографии — лишние: она
+     * с объявлением о фаре ничего общего не имеет, а место в объявлении
+     * конечно (см. {@link #photosPerOffer()}). Поэтому владелец перечисляет
+     * наименования, а не включает «всем».
+     *
+     * <p><b>Решает выгрузка, а не позиция.</b> Прайс-листов у клиента
+     * несколько, и на разных площадках снимков в объявлении помещается
+     * разное: тот же двигатель уедет в один прайс с фотографиями машины,
+     * а в другой — без. Поэтому настройка лежит здесь, рядом с пределом
+     * числа снимков, а не колонкой у товара.
+     *
+     * @param partKindId вид детали позиции; {@code null} — наименование
+     *        не сопоставлено со справочником, и тогда снимков донора нет:
+     *        мы не знаем, та ли это деталь. То же правило, что у отбора
+     *        «только эти» в прайсе
+     */
+    public boolean donorPhotosFor(Long partKindId) {
+        return partKindId != null
+                && donorPhotoKinds != null
+                && donorPhotoKinds.contains(partKindId);
     }
 
     /**
