@@ -48,6 +48,7 @@ class BazonImporterTest extends PostgresTestBase {
     private static final String JUNK_OEM = "t_000097";
     private static final String BROKEN_ROW = "t_000100";
     private static final String NO_PUBLISH = "t_000105";
+    private static final String CONDITION_COL = "t_000940";
 
     @Autowired
     private DataSource dataSource;
@@ -61,7 +62,7 @@ class BazonImporterTest extends PostgresTestBase {
     @BeforeAll
     static void migrate() {
         provisionTenants(IMPORT, REPEAT, HEADER, NAMES, BAD_ROW, UNKNOWN, BACKFILL,
-                PARTS_BACKFILL, JUNK_OEM, BROKEN_ROW, NO_PUBLISH);
+                PARTS_BACKFILL, JUNK_OEM, BROKEN_ROW, NO_PUBLISH, CONDITION_COL);
     }
 
     @Test
@@ -474,6 +475,53 @@ class BazonImporterTest extends PostgresTestBase {
                 "SELECT normalized FROM " + JUNK_OEM + ".part_oem ORDER BY normalized",
                 String.class))
                 .containsExactly("8115033670", "8115033671");
+    }
+
+    /**
+     * «Контракт» прежней системы переезжает состоянием, а не теряется.
+     *
+     * <p>До задачи 0039 колонку «Состояние» не читал никто: в INSERT стоял
+     * литерал {@code 'USED'}. У переехавшего клиента контрактных 9 417
+     * позиций из 35 841 — они приходят контейнером без донора, — и все они
+     * приезжали неотличимыми от б/у, хотя это другой товар, другая цена
+     * и другая плашка для покупателя.
+     *
+     * <p>Колонку фикстура дописывает сама: в выгрузку по умолчанию она
+     * не попадает (лежит в «Неактивных», как «Выгружать» и «Превью»),
+     * и клиент включает её по инструкции перед боевой выгрузкой.
+     */
+    @Test
+    @DisplayName("«Контракт» из выгрузки переезжает состоянием и пометкой заголовка")
+    void conditionColumnIsImported() throws Exception {
+        Path catalog = write("catalog-condition.csv", CATALOG_HEADER.strip()
+                + ";\"Состояние\"\n" + """
+                "A-700";"Фара левая";"";"";"";"";"";"";"";"";"";"";"";"";"";"9500";"";\
+                "1";"0";"0";"0";"0";"0";"да";"0";"Контракт"
+                "A-701";"Бампер передний";"";"";"";"";"";"";"";"";"";"";"";"";"";"7000";"";\
+                "1";"0";"0";"0";"0";"0";"да";"0";"БУ"
+                "A-702";"Стартер";"";"";"";"";"";"";"";"";"";"";"";"";"";"3500";"";\
+                "1";"0";"0";"0";"0";"0";"да";"0";""
+                """);
+
+        new BazonImporter(dataSource, CONDITION_COL).importAll(donorsFixture(), catalog);
+
+        assertThat(textOf(CONDITION_COL, "A-700", "condition"))
+                .as("«Контракт» потерялся: такого товара у переехавшего клиента"
+                        + " 9 417 позиций из 35 841")
+                .isEqualTo("CONTRACT");
+        assertThat(textOf(CONDITION_COL, "A-701", "condition")).isEqualTo("USED");
+
+        // Пустое значение — «в файле не сказано», а не выдуманное состояние:
+        // остаётся прежнее умолчание.
+        assertThat(textOf(CONDITION_COL, "A-702", "condition")).isEqualTo("USED");
+
+        // Пометка в заголовке идёт за состоянием тем же генератором, что
+        // и при приёмке: иначе карточка говорила бы «(б/у)» при состоянии
+        // «контрактная».
+        assertThat(textOf(CONDITION_COL, "A-700", "title"))
+                .as("заголовок разошёлся с состоянием")
+                .contains("(контракт)");
+        assertThat(textOf(CONDITION_COL, "A-701", "title")).contains("(б/у)");
     }
 
     private ImportReport importFixture(String schema) throws Exception {

@@ -97,9 +97,15 @@ public class DromPriceWriter {
         w.writeCharacters(Boolean.toString(offer.isAvailable()));
         w.writeEndElement();
 
+        // У площадки это поле двузначное: «Новое» или «Б/у». Контрактная
+        // и восстановленная для неё б/у — а то, что контрактная не то же,
+        // что восстановленная, покупатель читает в наименовании и описании.
+        // Уедет ли «Контракт» в прайс своим словом — вопрос владельцу
+        // продукта, названный в tasks/0039 и tasks/0166: сегодня поведение
+        // прежнее, и нового обещания покупателю мы не даём.
         element(w, "condition", switch (offer.condition()) {
             case NEW -> "Новое";
-            case USED, REFURBISHED -> "Б/у";
+            case USED, REFURBISHED, CONTRACT -> "Б/у";
         });
         element(w, "manufacturer", offer.manufacturer());
         element(w, "oem_number", offer.oemNumber());
@@ -164,8 +170,14 @@ public class DromPriceWriter {
         if (title == null || title.isBlank()) {
             return title;
         }
+        // Пометки состояния берутся у перечисления, а не перечислены здесь
+        // регуляркой: забытая в ней пометка уехала бы покупателю прямо
+        // в названии товара (задача 0039).
+        String marks = PartCondition.titleMarks().stream()
+                .map(java.util.regex.Pattern::quote)
+                .collect(java.util.stream.Collectors.joining("|"));
         String plain = title
-                .replaceAll("\\s*\\((?:б/у|новая|восст\\.)\\)", "")
+                .replaceAll("\\s*(?:" + marks + ")", "")
                 .replaceAll("\\s+(?:перед|задн|лев|прав|верх|ниж)\\.", "");
         return plain.replaceAll("\\s{2,}", " ").trim();
     }
@@ -268,7 +280,11 @@ public class DromPriceWriter {
         if (offer.oemNumber() != null && !offer.oemNumber().isBlank()) {
             lines.add("Номер производителя: " + offer.oemNumber() + ".");
         }
-        lines.add("Состояние: " + (offer.condition() == PartCondition.NEW ? "новая" : "б/у") + ".");
+        // Своим словом, а не «б/у» на всё, что не новое: контрактную деталь
+        // покупатель ищет именно этим словом, и собранное описание —
+        // единственное место, где оно до него доходит (поле condition
+        // у площадки двузначное, см. выше).
+        lines.add("Состояние: " + offer.condition().title() + ".");
         return String.join(" ", lines);
     }
 

@@ -570,8 +570,10 @@ public class WheelService {
             // выбранное из списка значение не находило бы ничего.
             Map.entry("supply", SupplyKinds.sqlLabelWithArrival("s")),
             Map.entry("partName", "pn.name"),
-            Map.entry("condition", "CASE p.condition WHEN 'NEW' THEN 'новая'"
-                    + " WHEN 'USED' THEN 'б/у' WHEN 'REFURBISHED' THEN 'восстановленная' END"),
+            // Тем же выражением, что у витрины склада: вторая копия
+            // расходилась бы с первой на первом же новом состоянии, и
+            // выбранное из списка значение не находило бы ничего.
+            Map.entry("condition", PartCondition.sqlLabel("p")),
             Map.entry("runFlat", "CASE WHEN w.run_flat THEN 'да' END"),
             Map.entry("lightTruck", "CASE WHEN w.light_truck THEN 'да' END"),
             Map.entry("speedIndex", "w.speed_index"),
@@ -760,8 +762,13 @@ public class WheelService {
         };
     }
 
-    private static final Map<String, String> CONDITIONS = Map.of(
-            "NEW", "новая", "USED", "б/у", "REFURBISHED", "восстановленная");
+    /**
+     * Белый список состояний на отбор и на заведение колеса — словарём
+     * самого перечисления, а не копией здесь (задача 0039). Копия отстала
+     * бы от перечисления, и состояние, которое витрина показывает,
+     * заведение колеса отбивало бы как неизвестное.
+     */
+    private static final Map<String, String> CONDITIONS = PartCondition.titles();
 
     private static String nullToEmpty(String value) {
         return value == null ? "" : value;

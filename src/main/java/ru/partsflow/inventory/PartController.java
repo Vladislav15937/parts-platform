@@ -226,10 +226,39 @@ public class PartController {
      * «очищено». Патч, в котором отсутствие ключа значит «не трогать»,
      * не даёт стереть заметку.
      */
+    /**
+     * Состояние среди полей формы — единственное, у которого своя роль:
+     * его правит **владелец**, и это записано как временное состояние,
+     * а не как решение (задача 0039, пункт 6 критерия). Владелец просил
+     * «все полномочия тому, кому он их дал», а раздавать полномочия
+     * поштучно система не умеет — ролей пять, и они перечислены строками;
+     * придёт задача 0044 — проверка станет полномочием, и роль из неё уйдёт.
+     *
+     * <p>Проверяется **изменение**, а не присутствие поля: форма уезжает
+     * PUT'ом целиком, и менеджер, сохраняющий цену, отправляет состояние
+     * тоже — отказ по самому факту отнял бы у него правку карточки вовсе.
+     *
+     * <p>Отказ — 409 со словами, а не 403: роль у метода проверена
+     * аннотацией и пройдена, а это нарушение правила внутри разрешённой
+     * операции. Офлайн-очередь читает 4xx как «требует внимания» —
+     * повторять такое незачем, менять надо запрос.
+     */
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public PartView update(@PathVariable Long id, @Valid @RequestBody UpdateRequest request) {
+        requireMayChangeCondition(id, request.condition());
         return PartView.of(partService.update(id, request.toUpdate(), CurrentUser.memberId()));
+    }
+
+    private void requireMayChangeCondition(Long id, PartCondition wanted) {
+        if (wanted == null || "OWNER".equals(CurrentUser.require().role())) {
+            return;
+        }
+        if (wanted != partService.require(id).getCondition()) {
+            throw new IllegalStateException(
+                    "Состояние детали меняет владелец: оно уходит в объявление"
+                            + " и в заголовок товара");
+        }
     }
 
     /**
@@ -279,14 +308,20 @@ public class PartController {
     /**
      * Тело правки карточки.
      *
-     * <p>Заголовка, стороны и состояния тут нет намеренно: заголовок
-     * собирается из них справочником, и правка руками разошлась бы с ним
-     * при первом же пересопоставлении.
+     * <p>Заголовка и стороны тут нет намеренно: заголовок собирается
+     * из них справочником, и правка руками разошлась бы с ним при первом
+     * же пересопоставлении. **Состояние с задачи 0039 правится** — оно
+     * в заголовок входит, и пометку в нём двигает сервер.
+     *
+     * <p>Пустое состояние означает «не трогать», а не «очистить», —
+     * и это единственное поле формы с такой семантикой. У детали нет
+     * состояния «не заполнено»: колонка {@code NOT NULL} с умолчанием.
      */
     public record UpdateRequest(@PositiveOrZero BigDecimal price,
                                 @PositiveOrZero BigDecimal minPrice,
                                 @PositiveOrZero BigDecimal costPrice,
                                 @PositiveOrZero BigDecimal installationPrice,
+                                PartCondition condition,
                                 QualityGrade qualityGrade,
                                 String description,
                                 String note,
@@ -315,7 +350,8 @@ public class PartController {
 
         static UpdateRequest of(Part part) {
             return new UpdateRequest(part.getPrice(), part.getMinPrice(), part.getCostPrice(),
-                    part.getInstallationPrice(), part.getQualityGrade(), part.getDescription(),
+                    part.getInstallationPrice(), part.getCondition(),
+                    part.getQualityGrade(), part.getDescription(),
                     part.getNote(), part.getTextBlock(), part.getVideoUrl(), part.getMarking(),
                     part.getManufacturer(), part.getColor(), part.getSection(), part.getBarcode(),
                     part.getWeightKg(), part.getLengthMm(), part.getWidthMm(), part.getHeightMm(),
@@ -328,7 +364,8 @@ public class PartController {
 
         PartService.PartUpdate toUpdate() {
             return new PartService.PartUpdate(price, minPrice, costPrice, installationPrice,
-                    qualityGrade, description, note, textBlock, videoUrl, marking, manufacturer,
+                    condition, qualityGrade, description, note, textBlock, videoUrl,
+                    marking, manufacturer,
                     color, section, barcode, weightKg, lengthMm, widthMm, heightMm,
                     packageLengthMm, packageWidthMm, packageHeightMm, packageWeightKg,
                     storageCellId, published, priceOp);

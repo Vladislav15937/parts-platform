@@ -528,6 +528,9 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
               <PartEditForm
                 partId={row.id}
                 row={row}
+                /* Состояние в форме правит владелец, остальные поля —
+                   и менеджер: роль нужна самой форме, а не только рельсу. */
+                role={role}
                 onSaved={onChanged}
                 onCancel={() => setEditing(false)}
               />

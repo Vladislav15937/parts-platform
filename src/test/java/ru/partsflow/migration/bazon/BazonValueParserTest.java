@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import ru.partsflow.inventory.LateralSide;
 import ru.partsflow.inventory.LongitudinalSide;
+import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.QualityGrade;
 import ru.partsflow.migration.bazon.BazonValueParser.SupplyKind;
 
@@ -333,6 +334,35 @@ class BazonValueParserTest {
             assertThat(BazonValueParser.parseLateralSide("Прав.")).isEqualTo(LateralSide.RIGHT);
             assertThat(BazonValueParser.parseLongitudinalSide("Перед.")).isEqualTo(LongitudinalSide.FRONT);
             assertThat(BazonValueParser.parseLongitudinalSide("Задн.")).isEqualTo(LongitudinalSide.REAR);
+        }
+
+        /**
+         * Состояние: список прежней системы из трёх значений.
+         *
+         * <p>Снят с её формы правки товара — «БУ · Контракт · Новый».
+         * «Контракт» до задачи 0039 не знал никто, и значение терялось
+         * молча: контрактная деталь приезжала как б/у, хотя это другой
+         * товар и другая цена.
+         *
+         * <p>Не путать с «Оценкой состояния» ниже: это соседняя колонка
+         * того же файла и другой вопрос.
+         */
+        @Test
+        @DisplayName("Состояние: «Контракт» прежней системы разбирается")
+        void conditions() {
+            assertThat(BazonValueParser.parseCondition("Контракт"))
+                    .isEqualTo(PartCondition.CONTRACT);
+            assertThat(BazonValueParser.parseCondition("БУ"))
+                    .isEqualTo(PartCondition.USED);
+            assertThat(BazonValueParser.parseCondition("Новый"))
+                    .isEqualTo(PartCondition.NEW);
+
+            // Колонки в выгрузке может не быть вовсе, и непонятое значение —
+            // null: вызывающий оставит прежнее умолчание, а не выдуманное
+            // состояние. То же правило, что у «Выгружать».
+            assertThat(BazonValueParser.parseCondition("")).isNull();
+            assertThat(BazonValueParser.parseCondition(null)).isNull();
+            assertThat(BazonValueParser.parseCondition("хорошее")).isNull();
         }
 
         @Test

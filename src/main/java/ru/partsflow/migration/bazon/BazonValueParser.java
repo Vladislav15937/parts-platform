@@ -2,6 +2,7 @@ package ru.partsflow.migration.bazon;
 
 import ru.partsflow.inventory.LateralSide;
 import ru.partsflow.inventory.LongitudinalSide;
+import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.QualityGrade;
 
 import java.math.BigDecimal;
@@ -305,6 +306,37 @@ public final class BazonValueParser {
         return switch (normalize(raw)) {
             case "перед.", "перед", "передний", "передняя" -> LongitudinalSide.FRONT;
             case "задн.", "задн", "задний", "задняя", "зад" -> LongitudinalSide.REAR;
+            default -> null;
+        };
+    }
+
+    /**
+     * Состояние из колонки «Состояние» выгрузки товаров.
+     *
+     * <p>Слова — прежней системы: её список из трёх значений «БУ ·
+     * Контракт · Новый» снят с формы правки товара. «Контракт» до задачи
+     * 0039 не знал никто, и значение терялось молча: у переехавшего
+     * клиента контрактных 9 417 позиций из 35 841, и все они приезжали
+     * как «б/у» — то есть товар, который клиент маркирует для покупателя
+     * отдельно и продаёт по своей цене, переставал отличаться от б/у.
+     *
+     * <p>Колонка в выгрузку по умолчанию не попадает (она в «Неактивных»,
+     * как «Выгружать» и «Превью»), поэтому её отсутствие — не ошибка:
+     * {@code null} означает «в файле не сказано», и импорт оставляет
+     * прежнее умолчание. Выдуманное состояние было бы хуже.
+     *
+     * <p>Не путать с «Оценкой состояния» ниже: это соседняя колонка того
+     * же файла и другой вопрос — «б/у» и «без дефектов» не заменяют друг
+     * друга (задача 0033).
+     */
+    public static PartCondition parseCondition(String raw) {
+        return switch (normalize(raw)) {
+            case "новый", "новая", "новое" -> PartCondition.NEW;
+            case "бу", "б/у", "б.у.", "б/у." -> PartCondition.USED;
+            case "контракт", "контрактный", "контрактная", "контрактное" ->
+                    PartCondition.CONTRACT;
+            case "восстановленный", "восстановленная", "восстановленное" ->
+                    PartCondition.REFURBISHED;
             default -> null;
         };
     }

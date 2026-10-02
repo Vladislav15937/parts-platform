@@ -39,7 +39,8 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('открывается значениями, а не двумя десятками полей ввода', async () => {
-    render(<PartEditForm partId={7} row={row()} onSaved={() => {}} onCancel={() => {}} />);
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByText('скол на креплении')).toBeTruthy());
 
     // До этой задачи здесь открывалось больше двадцати полей сразу — испортить
@@ -52,7 +53,8 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('раскрывает только ту строку, у которой нажали «Изменить»', async () => {
-    render(<PartEditForm partId={7} row={row()} onSaved={() => {}} onCancel={() => {}} />);
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText('Изменить: Цена'));
@@ -66,7 +68,8 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('считает изменённое и склоняет слово при числе', async () => {
-    render(<PartEditForm partId={7} row={row()} onSaved={() => {}} onCancel={() => {}} />);
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText('Изменить: Цена'));
@@ -78,7 +81,8 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('«Отменить» у строки возвращает её значение, а не всю форму', async () => {
-    render(<PartEditForm partId={7} row={row()} onSaved={() => {}} onCancel={() => {}} />);
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText('Изменить: Цена'));
@@ -103,7 +107,8 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('уезжает вся форма, а изменены ровно тронутые поля', async () => {
-    render(<PartEditForm partId={7} row={row()} onSaved={() => {}} onCancel={() => {}} />);
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Заметка')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText('Изменить: Заметка'));
@@ -126,7 +131,8 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('ничего не изменено — «Сохранить» погашена и говорит почему', async () => {
-    render(<PartEditForm partId={7} row={row()} onSaved={() => {}} onCancel={() => {}} />);
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
 
     expect(save().disabled).toBe(true);
@@ -137,7 +143,8 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('стёртое руками поле по-прежнему очищается', async () => {
-    render(<PartEditForm partId={7} row={row()} onSaved={() => {}} onCancel={() => {}} />);
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Заметка')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText('Изменить: Заметка'));
@@ -150,7 +157,8 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('неправимое поле показано с замком и нажатием не раскрывается', async () => {
-    render(<PartEditForm partId={7} row={row()} onSaved={() => {}} onCancel={() => {}} />);
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
 
     // Спрятанное поле читается как «этого у вас нет», поэтому оно на месте —
@@ -163,6 +171,37 @@ describe('правка карточки по одному полю', () => {
     // Донорские сведения — оттуда же: они приезжают с машины, а не с детали.
     expect(line('Номер донора').textContent).toContain('261');
     expect(line('Марка').querySelector('button')).toBeNull();
+  });
+
+  it('владелец меняет состояние выбором из списка, и уезжает код', async () => {
+    // До задачи 0039 эта строка стояла с замком: состояние писалось один
+    // раз, в приёмке, и «б/у» вместо «новой» исправлялось только заведением
+    // второй карточки.
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Состояние')).toBeTruthy());
+
+    expect(line('Состояние').textContent, 'состояние показано кодом').toContain('б/у');
+    fireEvent.click(screen.getByLabelText('Изменить: Состояние'));
+    fireEvent.change(screen.getByLabelText('Состояние'), { target: { value: 'CONTRACT' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['condition']).toBe('CONTRACT');
+  });
+
+  it('менеджеру состояние показано с замком, а не спрятано', async () => {
+    // Спрятанное поле читается как «этого у вас нет», а состояние у детали
+    // есть — его просто меняет владелец (пункт 6 критерия 0039).
+    render(<PartEditForm partId={7} row={row()} role="MANAGER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
+
+    const condition = line('Состояние');
+    expect(condition.textContent).toContain('б/у');
+    expect(condition.textContent).toContain('🔒');
+    expect(condition.querySelector('button'),
+      'менеджеру предложено менять состояние — сервер это отобьёт').toBeNull();
   });
 });
 
@@ -200,6 +239,7 @@ function save(): HTMLButtonElement {
 function card(): Record<string, unknown> {
   return {
     price: 27000, minPrice: null, costPrice: null, installationPrice: null,
+    condition: 'USED',
     qualityGrade: 'NO_DEFECTS', description: 'Фара в сборе', note: 'скол на креплении',
     textBlock: null, videoUrl: null, marking: null, manufacturer: 'Toyota',
     color: null, section: null, barcode: null, weightKg: null, lengthMm: null,

@@ -34,19 +34,69 @@ class WordingConsistencyTest {
     private static final Path SERVER = Path.of("src/main/java/ru/partsflow/inventory");
     private static final Path CLIENT = Path.of("frontend/src/inventory");
 
+    /**
+     * Состояние названо одними словами на экране и на сервере.
+     *
+     * <p><b>Зачем.</b> Словарей было пять: {@code CASE} витрины, такой же
+     * у вкладки колёс, словарь журнала изменений и два на фронтенде
+     * ({@code catalog.ts} и {@code wheels.ts}). Совпадали они только потому,
+     * что их писал один человек в один день, — а выбранное в меню слово
+     * уходит на сервер и сравнивается с собранным выражением: разойдись
+     * одна буква, и отбор перестаёт находить что-либо, причём причина видна
+     * только в SQL. Сведены они в {@link PartCondition} (задача 0039).
+     *
+     * <p>Перебором по перечислению, а не по списку слов: новое состояние
+     * попадает в проверку в тот же момент, когда его дописали в {@code enum}.
+     */
     @Test
-    @DisplayName("Состояние показано теми же словами, какими отбирается")
+    @DisplayName("Состояние названо одинаково на сервере и на экране")
     void conditionWordsMatch() throws IOException {
-        String server = read(SERVER.resolve("CatalogService.java"));
         String client = read(CLIENT.resolve("catalog.ts"));
 
-        for (String word : List.of("новая", "б/у", "восстановленная")) {
-            assertThat(server)
-                    .as("отбор витрины не знает состояния «%s»", word)
-                    .contains("'" + word + "'");
+        for (PartCondition condition : PartCondition.values()) {
             assertThat(client)
-                    .as("экран не показывает состояние «%s», а отбор его отдаёт", word)
-                    .contains("'" + word + "'");
+                    .as("экран не знает состояния «%s» (%s)", condition.title(), condition.name())
+                    .contains(condition.name() + ": '" + condition.title() + "'");
+        }
+    }
+
+    /**
+     * Вкладка колёс берёт словарь состояний, а не пишет свой.
+     *
+     * <p>Копия там и была, и жила ровно до первого нового значения: слово
+     * поправили бы на витрине, а вкладка колёс показывала бы прежнее.
+     * Проверяется отсутствие **объявления**, а не импорта: импорт мог бы
+     * стоять рядом с вернувшейся копией.
+     */
+    @Test
+    @DisplayName("У вкладки колёс нет своего словаря состояний")
+    void wheelsDoNotKeepTheirOwnConditionDictionary() throws IOException {
+        String wheels = read(CLIENT.resolve("wheels.ts"));
+
+        assertThat(wheels)
+                .as("во `wheels.ts` вернулась своя копия словаря состояний")
+                .doesNotContain("USED: 'б/у'");
+    }
+
+    /**
+     * Отбор выгрузки знает все состояния.
+     *
+     * <p>Состояние, которого нет в этом списке, владелец не смог бы
+     * отобрать в прайс-лист вовсе — а узнал бы об этом по тому, что товар
+     * уехал не в тот прайс или не уехал никуда. Слова здесь во множественном
+     * числе (так подписан отбор у ориентира), поэтому сверяются **коды**:
+     * именно они уходят на сервер и сравниваются с {@code part.condition}.
+     */
+    @Test
+    @DisplayName("В отборе выгрузки перечислены все состояния")
+    void feedFilterKnowsEveryCondition() throws IOException {
+        String feeds = read(Path.of("frontend/src/publishing/feeds.ts"));
+
+        for (PartCondition condition : PartCondition.values()) {
+            assertThat(feeds)
+                    .as("отбор выгрузки не знает состояния %s — по нему нельзя"
+                            + " собрать прайс-лист", condition.name())
+                    .contains("code: '" + condition.name() + "'");
         }
     }
 

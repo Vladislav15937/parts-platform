@@ -406,9 +406,14 @@ public class CatalogService {
      * в таблицу, которую открывают в Excel и читают глазами.
      *
      * <p>Позиция названа {@code p}, как и у {@link #QUALITY_GRADE}.
+     *
+     * <p><b>Слова берутся у {@link PartCondition}, а не пишутся здесь</b>
+     * (задача 0039). Пока они стояли здесь, тот же {@code CASE} был написан
+     * ещё и у вкладки колёс, а словарей на фронтенде было два: четвёртое
+     * значение пришлось бы дописать в пять мест, и забытое пятое молча
+     * показало бы пустую клетку в колонке «Состояние».
      */
-    public static final String CONDITION = "CASE p.condition WHEN 'NEW' THEN 'новая'"
-            + " WHEN 'USED' THEN 'б/у' WHEN 'REFURBISHED' THEN 'восстановленная' END";
+    public static final String CONDITION = PartCondition.sqlLabel("p");
 
     /** Незаполненное поле и «заполнено хоть чем-то» — тоже ответы на вопрос. */
     public static final String EMPTY = "\u2014пусто\u2014";
