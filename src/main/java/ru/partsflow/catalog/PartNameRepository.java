@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.Optional;
 
 public interface PartNameRepository extends JpaRepository<PartName, Long> {
@@ -45,6 +46,26 @@ public interface PartNameRepository extends JpaRepository<PartName, Long> {
             PartName.MatchStatus status, Pageable pageable);
 
     long countByMatchStatus(PartName.MatchStatus status);
+
+    /**
+     * Сопоставленные написания — тот список, с которого снимают ошибочный
+     * эталон (задача 0167).
+     *
+     * <p>Порядок тот же, что у нераспознанных, и по той же причине: после
+     * переезда все написания заведены одной секундой, и «свежие сверху»
+     * внутри неё — случайный порядок. Счётчик отвечает на вопрос владельца:
+     * какое неверное сопоставление держит двести карточек, а какое одну.
+     *
+     * <p>Заканчивается номером записи — иначе страницы перекрываются ровно
+     * так же, как перекрывались у нераспознанных (679 строк при 579
+     * уникальных).
+     *
+     * <p>Статусы списком, а не одним: сопоставить мог и алгоритм
+     * ({@code AUTO}), и человек ({@code MANUAL}), а ошибиться можно в обоих —
+     * снимают ровно то, что сейчас сведено с эталоном.
+     */
+    Page<PartName> findByMatchStatusInOrderByUsageCountDescCreatedAtDescIdDesc(
+            Collection<PartName.MatchStatus> statuses, Pageable pageable);
 
     /**
      * Пересчитывает счётчик по карточкам склада.

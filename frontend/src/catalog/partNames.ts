@@ -90,6 +90,39 @@ export function matchName(partNameId: number, partKindId: number): Promise<Match
   });
 }
 
+/** Написание, уже сведённое с эталоном, — то, с чего снимают сопоставление. */
+export interface MatchedName {
+  partName: UnmatchedName;
+  /** Эталон словом. `null` — такого эталона в справочнике больше нет. */
+  kindName: string | null;
+}
+
+export interface MatchedPage {
+  items: MatchedName[];
+  total: number;
+}
+
+/**
+ * Сопоставленные написания — список, с которого снимают ошибочный эталон.
+ *
+ * <p>Экран разбора показывал только нераспознанные, то есть сведённое
+ * с эталоном человеку не показывалось вовсе: сопоставить он мог, отменить
+ * нет. А после переезда клиента таких сопоставлений сотни, и ошибочное
+ * означает деталь, уехавшую в объявление под чужим наименованием.
+ */
+export function matchedNames(page = 0, size = 20): Promise<MatchedPage> {
+  return request<MatchedPage>(`/api/part-names/matched?page=${page}&size=${size}`);
+}
+
+/**
+ * Снимает сопоставление: эталон оказался не тем.
+ *
+ * <p>Карточки под написанием не меняются вовсе — заголовок и категория
+ * остаются теми, что поставило сопоставление, — а само написание
+ * возвращается в список нераспознанных. Экран говорит это словами:
+ * снятие, после которого непонятно, что изменилось, вернёт человека
+ * к разработчику.
+ */
 export function unmatchName(partNameId: number): Promise<UnmatchedName> {
   return request<UnmatchedName>(`/api/part-names/${partNameId}/unmatch`, { method: 'POST' });
 }

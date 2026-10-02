@@ -526,6 +526,36 @@ const SOLD_ITEMS = {
   managers: [{ id: 1, name: 'Екатерина Александрова' }],
 };
 
+/**
+ * Сопоставленные написания (задача 0167): ширину строке задают написание
+ * клиента, название эталона и образец заголовка — то есть самое длинное,
+ * что в ней бывает. Вторая строка без образца: у написания, под которым
+ * карточек нет, его неоткуда взять, и мериться должна и такая.
+ */
+const MATCHED_NAMES = {
+  total: 2,
+  items: [
+    {
+      partName: {
+        id: 49, name: 'трос замка зажигания', matchStatus: 'MANUAL',
+        partKindId: 118, categoryId: 4, usageCount: 379,
+        sampleTitle: 'Трос замка Mitsubishi Outlander (б/у) 2440A005',
+        createdAt: '2026-09-01T10:00:00Z',
+      },
+      kindName: 'Трос замка зажигания',
+    },
+    {
+      partName: {
+        id: 50, name: 'знак аварийной остановки', matchStatus: 'AUTO',
+        partKindId: 120, categoryId: 4, usageCount: 0,
+        sampleTitle: null,
+        createdAt: '2026-09-01T10:00:00Z',
+      },
+      kindName: 'Набор инструментов',
+    },
+  ],
+};
+
 const RESPONSES: Array<[string, unknown]> = [
   ['/api/parts/stock', STOCK],
   ['/api/intake/reference', REFERENCE],
@@ -557,6 +587,7 @@ const RESPONSES: Array<[string, unknown]> = [
   ['/api/payment-sources', []],
   ['/api/company/settings', { reservationDays: 3 }],
   ['/api/payments', PAYMENT_REGISTRY],
+  ['/api/part-names/matched', MATCHED_NAMES],
   ['/api/part-names/kinds', []],
   ['/api/stock/moves', []],
 ];

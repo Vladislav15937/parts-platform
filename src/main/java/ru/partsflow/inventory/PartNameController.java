@@ -16,6 +16,7 @@ import ru.partsflow.catalog.PartNameService;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Разбор нераспознанных наименований.
@@ -176,11 +177,71 @@ public class PartNameController {
     }
 
     /**
+     * Сопоставленные написания — то, с чего снимают ошибочный эталон.
+     *
+     * <p>Снять его было нечем: {@code unmatch} написан с самого начала,
+     * а экран показывал **только нераспознанные** — то есть сведённое
+     * с эталоном человеку не показывалось вовсе, и сопоставить он мог,
+     * а отменить нет (пометка {@code ПРОБЕЛ} в
+     * {@code tools/endpoint-coverage.py}, задача 0167). После переезда
+     * клиента таких сопоставлений сотни, и ошибочное означает деталь,
+     * уехавшую в объявление под чужим наименованием: покупатель ищет
+     * «фару», а позиция лежит под «фонарём».
+     *
+     * <p>Вместе со строкой едут эталон словом, число позиций под написанием
+     * и образец заголовка: снятие, после которого непонятно, что изменилось,
+     * вернёт человека к разработчику.
+     *
+     * <p>Роль та же, что у сопоставления и снятия: кто сводит, тот и снимает.
+     */
+    @GetMapping("/matched")
+    @PreAuthorize(MANAGES)
+    public MatchedPage matched(@RequestParam(defaultValue = "0") int page,
+                               @RequestParam(defaultValue = "20") int size) {
+
+        var found = partNames.matched(page, size);
+        // Образец заголовка и названия эталонов — по одному запросу
+        // на страницу, а не на строку: та же причина, что у /unmatched.
+        var samples = parts.sampleTitles(
+                found.getContent().stream().map(PartName::getId).toList());
+        var kinds = partNames.kindNames(found.getContent().stream()
+                .map(PartName::getPartKindId)
+                .filter(Objects::nonNull)
+                .toList());
+
+        return new MatchedPage(
+                found.getContent().stream()
+                        .map(name -> new MatchedView(
+                                NameView.of(name, samples.get(name.getId())),
+                                kinds.get(name.getPartKindId())))
+                        .toList(),
+                found.getTotalElements());
+    }
+
+    /**
+     * @param partName написание со счётчиком позиций и образцом заголовка
+     * @param kindName эталон словом; {@code null} означает, что эталона
+     *                 с таким номером в справочнике нет вовсе, — экран
+     *                 говорит это словами, а не показывает пустое место
+     */
+    public record MatchedView(NameView partName, String kindName) {
+    }
+
+    public record MatchedPage(List<MatchedView> items, long total) {
+    }
+
+    /**
      * Снимает сопоставление: эталон оказался не тем.
      *
-     * <p>Заголовки уже исправленных карточек назад не откатываются: обратная
-     * подмена вернула бы «фару лев.» и тем, кого правили руками после
-     * сопоставления. Наименование просто возвращается в список.
+     * <p>Зовёт это экран «Наименования», раздел «Сопоставленные написания»
+     * (задача 0167): до неё путь существовал и не вызывался ни одним
+     * экраном.
+     *
+     * <p><b>Карточки не меняются вовсе</b>, и это видимое человеку
+     * поведение — экран говорит его словами. Заголовки уже исправленных
+     * назад не откатываются: обратная подмена вернула бы «фару лев.» и тем,
+     * кого правили руками после сопоставления. Наименование просто
+     * возвращается в список нераспознанных.
      */
     @PostMapping("/{id}/unmatch")
     @PreAuthorize(MANAGES)

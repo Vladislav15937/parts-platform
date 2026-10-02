@@ -5,7 +5,10 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Справочник наименований арендатора.
@@ -107,6 +110,33 @@ public class PartNameService {
     public Page<PartName> unmatched(int page, int size) {
         return repository.findByMatchStatusOrderByUsageCountDescCreatedAtDescIdDesc(
                 PartName.MatchStatus.UNMATCHED, PageRequest.of(page, size));
+    }
+
+    /**
+     * Сопоставленные написания — список, с которого снимают ошибочный эталон.
+     *
+     * <p>Сопоставить с экрана было можно, отменить — нельзя: экран разбора
+     * показывал только нераспознанные, то есть сведённое с эталоном человеку
+     * не показывалось вовсе (задача 0167).
+     */
+    @Transactional(readOnly = true)
+    public Page<PartName> matched(int page, int size) {
+        return repository.findByMatchStatusInOrderByUsageCountDescCreatedAtDescIdDesc(
+                List.of(PartName.MatchStatus.AUTO, PartName.MatchStatus.MANUAL),
+                PageRequest.of(page, size));
+    }
+
+    /**
+     * Названия эталонов по номерам: на экране нужно слово, а не номер.
+     *
+     * <p>Одним запросом на страницу, а не по строке, — и без отбора
+     * по {@code is_active}: подробности у {@link PartKindMatcher#byIds}.
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, String> kindNames(Collection<Long> partKindIds) {
+        return matcher.byIds(partKindIds).stream()
+                .collect(Collectors.toMap(PartKindMatcher.PartKind::id,
+                        PartKindMatcher.PartKind::name));
     }
 
     @Transactional(readOnly = true)

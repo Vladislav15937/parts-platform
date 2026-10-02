@@ -3,6 +3,7 @@ package ru.partsflow.catalog;
 import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Component;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
@@ -117,6 +118,34 @@ public class PartKindMatcher {
                 .getResultList();
 
         return rows.isEmpty() ? Optional.empty() : Optional.of(toKind(rows.get(0)));
+    }
+
+    /**
+     * Эталоны по номерам — одним запросом на страницу.
+     *
+     * <p>Экран снятия сопоставления обязан назвать эталон словом: «снять
+     * сопоставление» без него означает «снять неизвестно что». Запрос
+     * на строку превратил бы страницу в двадцать обращений к базе — ровно
+     * то, от чего ушли образцы заголовков (`sampleTitles`).
+     *
+     * <p><b>Без условия {@code is_active}</b>, в отличие от поиска
+     * и подсказок: эталон, выведенный из справочника, у написания остаётся,
+     * и приходят снимать как раз его. Отфильтруй мы такой — строка, за
+     * которой человек и пришёл, оказалась бы единственной без названия.
+     */
+    public List<PartKind> byIds(Collection<Long> partKindIds) {
+        if (partKindIds == null || partKindIds.isEmpty()) {
+            return List.of();
+        }
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                        SELECT k.id, k.category_id, k.name
+                          FROM catalog.part_kind k
+                         WHERE k.id IN (:ids)""")
+                .setParameter("ids", partKindIds)
+                .getResultList();
+
+        return rows.stream().map(PartKindMatcher::toKind).toList();
     }
 
     /**

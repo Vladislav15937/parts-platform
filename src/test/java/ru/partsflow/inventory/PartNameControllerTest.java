@@ -235,9 +235,10 @@ class PartNameControllerTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Снятое сопоставление возвращает наименование в список")
+    @DisplayName("Снятое сопоставление возвращает наименование в список, а карточки не трогает")
     void unmatchReturnsToList() throws Exception {
         Long nameId = unmatchedName("фара лев.");
+        Long partId = partUnder(nameId, "фара лев. Toyota Camry 2006 (б/у)");
         MockHttpSession session = login("vladelec");
 
         mvc.perform(post("/api/part-names/" + nameId + "/match").with(csrf()).session(session)
@@ -251,6 +252,83 @@ class PartNameControllerTest extends PostgresTestBase {
 
         mvc.perform(get("/api/part-names/unmatched").session(session))
                 .andExpect(jsonPath("$.total").value(1));
+        // И уходит из списка сопоставленных — иначе снять его предлагали бы
+        // второй раз, а сервер уже ответил бы «нечего снимать».
+        mvc.perform(get("/api/part-names/matched").session(session))
+                .andExpect(jsonPath("$.total").value(0));
+
+        // Пункт 6 критерия приёмки задачи 0167: что делается с позициями,
+        // сопоставленными ошибочно. Они остаются как есть — обратная подмена
+        // заголовка вернула бы «фару лев.» и тем карточкам, которые правили
+        // руками уже после сопоставления. Экран говорит это словами.
+        assertThat(titleOf(partId))
+                .as("заголовок откатился: обратная подмена стёрла бы правки, "
+                        + "сделанные после сопоставления")
+                .isEqualTo("Фара Toyota Camry 2006 (б/у)");
+        assertThat(categoryOf(partId))
+                .as("категория снята с карточки — позиция выпала бы из разрезов склада")
+                .isEqualTo(headlightCategoryId);
+    }
+
+    /**
+     * Снимать с экрана нечего, пока сопоставленное на нём не видно.
+     *
+     * <p>Экран разбора показывал только нераспознанные, то есть сведённое
+     * с эталоном человеку не показывалось вовсе: `unmatch` был написан,
+     * покрыт тестом и недоступен — последний незакрытый `ПРОБЕЛ` сторожа
+     * эндпоинтов.
+     */
+    @Test
+    @DisplayName("Сопоставленное видно списком: написание, эталон словом и число позиций")
+    void matchedListNamesWhatWillBeUnmatched() throws Exception {
+        Long nameId = unmatchedName("фара лев.");
+        partUnder(nameId, "фара лев. Toyota Camry 2006 (б/у)");
+        // Счётчик ставим руками: карточки и написания здесь кладут прямым
+        // SQL, мимо PartNameService.resolve, который его и ведёт.
+        inTenant(() -> jdbc.update("UPDATE part_name SET usage_count = 40 WHERE id = ?", nameId));
+        MockHttpSession session = login("vladelec");
+
+        // Пока написание не сопоставлено, снимать нечего.
+        mvc.perform(get("/api/part-names/matched").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0));
+
+        mvc.perform(post("/api/part-names/" + nameId + "/match").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"partKindId\":%d}".formatted(headlightKindId)))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/api/part-names/matched").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].partName.name").value("фара лев."))
+                // Эталон словом, а не номером: «снять сопоставление» без
+                // названия означает «снять неизвестно что».
+                .andExpect(jsonPath("$.items[0].kindName").value("Фара"))
+                .andExpect(jsonPath("$.items[0].partName.usageCount").value(40))
+                // Образец заголовка — по нему и видно, что сопоставление
+                // оказалось не тем.
+                .andExpect(jsonPath("$.items[0].partName.sampleTitle")
+                        .value("Фара Toyota Camry 2006 (б/у)"));
+    }
+
+    @Test
+    @DisplayName("Приёмщик сопоставленных не видит и снять их не может")
+    void storekeeperNeitherSeesNorDropsMatches() throws Exception {
+        Long nameId = unmatchedName("фара лев.");
+        mvc.perform(post("/api/part-names/" + nameId + "/match").with(csrf())
+                        .session(login("vladelec"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"partKindId\":%d}".formatted(headlightKindId)))
+                .andExpect(status().isOk());
+
+        // Роли те же, что у сопоставления: кто сводит, тот и снимает.
+        MockHttpSession storekeeper = login("priyomshik");
+        mvc.perform(get("/api/part-names/matched").session(storekeeper))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/api/part-names/" + nameId + "/unmatch").with(csrf())
+                        .session(storekeeper))
+                .andExpect(status().isForbidden());
     }
 
     private Long unmatchedName(String name) {

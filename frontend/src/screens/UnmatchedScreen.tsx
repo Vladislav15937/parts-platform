@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
-import { positions } from '../ui/plural';
+import { count, plural, positions } from '../ui/plural';
 import {
   matchName,
+  matchedNames,
   rematchNames,
   searchKinds,
   suggestionsFor,
+  unmatchName,
   unmatchedNames,
 } from '../catalog/partNames';
-import type { PartKind, UnmatchedName } from '../catalog/partNames';
+import type { MatchedName, PartKind, UnmatchedName } from '../catalog/partNames';
 import { useMounted } from '../ui/useMounted';
 
 /**
@@ -64,6 +66,7 @@ export function UnmatchedScreen({ canManage, onTotalChanged }: Props) {
   }
 
   return (
+    <>
     <section className="card">
       <h2>Нераспознанные наименования</h2>
 
@@ -149,6 +152,11 @@ export function UnmatchedScreen({ canManage, onTotalChanged }: Props) {
         </button>
       )}
     </section>
+
+    {/* Снятие ошибочного сопоставления — там же, где его ставят: списком
+        ниже разбора, а не отдельной формой в другом месте. */}
+    <MatchedNames onUnmatched={() => void load(size)} />
+    </>
   );
 
   async function rematchAll(): Promise<void> {
@@ -417,6 +425,184 @@ function KindPicker({
       }
     } catch (cause) {
       if (mounted.current) onError(describe(cause, 'Поиск эталона не работает'));
+    }
+  }
+}
+
+/**
+ * Сопоставленные написания — и снятие ошибочного сопоставления (задача 0167).
+ *
+ * <p>`POST /api/part-names/{id}/unmatch` написан с самого начала и не
+ * вызывался ни одним экраном: разбор показывал **только** нераспознанные,
+ * то есть сведённое с эталоном человеку не показывалось вовсе. Сопоставить
+ * он мог, отменить — нет, а после переезда клиента таких сопоставлений
+ * сотни, и ошибочное означает деталь, уехавшую в объявление под чужим
+ * наименованием: покупатель ищет «фару», а позиция лежит под «фонарём».
+ *
+ * <p>В строке видно всё, что снимаешь: написание, эталон **словом**, число
+ * позиций под написанием и образец заголовка. Снятие, после которого
+ * непонятно, что изменилось, вернёт человека к разработчику — то же
+ * правило, по которому сопоставление рядом отвечает числом исправленных
+ * карточек.
+ */
+function MatchedNames({ onUnmatched }: { onUnmatched: () => void }) {
+  const [items, setItems] = useState<MatchedName[]>([]);
+  const [total, setTotal] = useState(0);
+  const [size, setSize] = useState(PAGE);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  /**
+   * Какое написание ждёт подтверждения.
+   *
+   * <p>Второе нажатие — то же решение, что у сопоставления рядом: строки
+   * стоят в ряд и разбирают их подряд, а промах мышью уводит написание
+   * из этого списка в стену нераспознанных, где его потом искать среди
+   * шестисот.
+   */
+  const [confirming, setConfirming] = useState<number | null>(null);
+  // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
+  const mounted = useMounted();
+
+  useEffect(() => {
+    void load(size);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size]);
+
+  return (
+    <section className="card">
+      <h2>Сопоставленные написания</h2>
+
+      {error !== null && <p className="note note--error">{error}</p>}
+      {done !== null && <p className="note">{done}</p>}
+
+      {/* «Загружаем…» — пока грузим, а не пока пусто: иначе надпись висит
+          рядом с красной причиной отказа. */}
+      {loading && items.length === 0 && error === null && (
+        <p className="note">Загружаем…</p>
+      )}
+
+      {!loading && error === null && total === 0 && (
+        <p className="note">
+          Сведённых с эталоном написаний пока нет — они появятся здесь, как
+          только вы сопоставите первое.
+        </p>
+      )}
+
+      {total > 0 && (
+        <>
+          <p className="note">
+            Сведено с эталоном {count(total)}{' '}
+            {plural(total, 'написание', 'написания', 'написаний')}
+            {items.length < total && ` — показаны первые ${count(items.length)}`}.
+          </p>
+          {/* Что делает снятие — сказано до нажатия, а не после. Это видимое
+              человеку поведение: карточки не меняются вовсе, потому что
+              обратная подмена заголовка вернула бы «фару лев.» и тем, кого
+              правили руками уже после сопоставления. */}
+          <p className="note">
+            Снятие возвращает написание в список нераспознанных. Позиции под
+            ним остаются как есть: заголовок и категория у них те, что
+            поставило сопоставление, — назад это не откатывается.
+          </p>
+        </>
+      )}
+
+      <ul className="suggestions">
+        {items.map((row) => (
+          <li key={row.partName.id}>
+            <div className="stock-row">
+              <div className="stock-info">
+                <strong>{row.partName.name}</strong>
+                <div className="muted">
+                  {/* Эталон словом, а не номером: «снять сопоставление»
+                      без названия означает «снять неизвестно что». */}
+                  эталон: {row.kindName ?? 'нет в справочнике'}
+                  {' · '}
+                  {row.partName.usageCount === 0
+                    ? 'позиций пока нет'
+                    : `позиций под этим написанием: ${row.partName.usageCount}`}
+                </div>
+                {row.partName.sampleTitle !== null && (
+                  <div className="muted">Сейчас: {row.partName.sampleTitle}</div>
+                )}
+              </div>
+              <div className="stock-action">
+                <button
+                  type="button"
+                  className="button--ghost"
+                  onClick={() => void drop(row)}
+                >
+                  {confirming === row.partName.id
+                    ? confirmLabel(row)
+                    : 'Снять сопоставление'}
+                </button>
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      {items.length < total && (
+        <button type="button" className="button--ghost" onClick={() => setSize(size + PAGE)}>
+          Показать ещё
+        </button>
+      )}
+    </section>
+  );
+
+  /** Цена действия числом — как «Точно? 40 позиций» у сопоставления рядом. */
+  function confirmLabel(row: MatchedName): string {
+    return row.partName.usageCount > 0
+      ? `Точно снять? ${positions(row.partName.usageCount)} не тронем`
+      : 'Точно снять?';
+  }
+
+  async function load(pageSize: number): Promise<void> {
+    setLoading(true);
+    try {
+      const page = await matchedNames(0, pageSize);
+      if (mounted.current) {
+        // Ответ — обещание, а не гарантия: на пустом теле экран упал бы
+        // целиком, а у арендатора первого дня оно ровно такое.
+        setItems(page.items ?? []);
+        setTotal(page.total ?? 0);
+        setError(null);
+      }
+    } catch (cause) {
+      if (mounted.current) setError(describe(cause, 'Список не загрузился'));
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
+  }
+
+  /** Первое нажатие спрашивает, второе снимает. */
+  async function drop(row: MatchedName): Promise<void> {
+    if (confirming !== row.partName.id) {
+      setConfirming(row.partName.id);
+      return;
+    }
+    setConfirming(null);
+    setError(null);
+    try {
+      await unmatchName(row.partName.id);
+      if (!mounted.current) return;
+      // Словами, а не «готово»: человеку надо знать и что написание вернулось
+      // в разбор, и что карточки при этом не тронуты.
+      setDone(
+        `«${row.partName.name}» больше не сведено с «${row.kindName ?? 'эталоном'}»`
+        + ' — написание вернулось в нераспознанные.'
+        + (row.partName.usageCount > 0
+          ? ` Карточки не тронуты: ${count(row.partName.usageCount)} `
+            + `${plural(row.partName.usageCount, 'позиция', 'позиции', 'позиций')}.`
+          : ''),
+      );
+      await load(size);
+      // Снятое вернулось в нераспознанные: их список и счётчик на вкладке
+      // обязаны это показать, иначе написание исчезает с экрана вовсе.
+      if (mounted.current) onUnmatched();
+    } catch (cause) {
+      if (mounted.current) setError(describe(cause, 'Снять сопоставление не удалось'));
     }
   }
 }
