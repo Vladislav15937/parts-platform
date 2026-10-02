@@ -817,7 +817,7 @@ function DealsTab({
             {deals.map((d) => (
               <tr key={d.id} className="row--clickable" onClick={() => onOpenDeal(d.id)}>
                 <td>
-                  <strong>№{d.number ?? d.id}</strong>
+                  <strong>{d.number === null ? '—' : `№${d.number}`}</strong>
                   <div className="muted">{new Date(d.createdAt).toLocaleDateString('ru-RU')}</div>
                 </td>
                 <td>{warehouseName(d.warehouseId)}</td>
@@ -928,7 +928,7 @@ function ReturnRow({
   return (
     <tr className={row.status === 'CANCELLED' ? 'muted' : undefined}>
       <td>
-        <strong>{row.number ?? row.id}</strong>
+        <strong>{row.number ?? '—'}</strong>
         <div className="muted">{new Date(row.createdAt).toLocaleDateString('ru-RU')}</div>
       </td>
       <td>

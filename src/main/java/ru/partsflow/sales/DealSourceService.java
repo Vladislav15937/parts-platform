@@ -1,5 +1,6 @@
 package ru.partsflow.sales;
 
+import ru.partsflow.shared.NotFound;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -78,8 +79,7 @@ public class DealSourceService {
                 "UPDATE deal_source SET is_archived = ? WHERE id = ?", archived, id);
         if (updated == 0) {
             // Без номера строки: см. ту же правку в PaymentSourceService.
-            throw new IllegalArgumentException(
-                    "Источник сделки не найден — обновите страницу, список устарел");
+            throw NotFound.DEAL_SOURCE.error(id);
         }
         return list().stream().filter(s -> s.id().equals(id)).findFirst().orElseThrow();
     }

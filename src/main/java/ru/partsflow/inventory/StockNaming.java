@@ -46,8 +46,9 @@ public class StockNaming {
                 rs -> rs.next()
                         ? "%s (%s)".formatted(rs.getString("title"), rs.getString("public_code"))
                         // Позиции нет — значит её удалили между проверкой
-                        // и отказом; номер тут единственное, что осталось.
-                        : "деталь " + partId,
+                        // и отказом. Номер строки человеку не говорит ничего,
+                        // а искать по нему нечего: карточки больше нет.
+                        : "удалённая позиция",
                 partId);
     }
 
@@ -58,7 +59,7 @@ public class StockNaming {
             return "склад не указан";
         }
         return jdbc.query("SELECT name FROM warehouse WHERE id = ?",
-                rs -> rs.next() ? "«" + rs.getString("name") + "»" : "склад " + warehouseId,
+                rs -> rs.next() ? "«" + rs.getString("name") + "»" : "неизвестный склад",
                 warehouseId);
     }
 }

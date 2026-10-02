@@ -582,7 +582,7 @@ export function ReportsScreen({ canRead }: Props) {
                 {settlements.totals.problems.map((p, i) => (
                   <li key={i}>
                     {p.problem}
-                    {p.dealId !== null && ` · сделка ${p.dealId}`}
+                    {p.dealNumber !== null && ` · сделка №${p.dealNumber}`}
                     {' · '}{p.amount.toLocaleString('ru-RU')} ₽
                   </li>
                 ))}

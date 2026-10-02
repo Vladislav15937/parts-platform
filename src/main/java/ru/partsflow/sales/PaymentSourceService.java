@@ -1,5 +1,6 @@
 package ru.partsflow.sales;
 
+import ru.partsflow.shared.NotFound;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -95,8 +96,7 @@ public class PaymentSourceService {
             // Номер строки в базе владельцу не говорит ничего: он нажал
             // на строку таблицы, а не набирал идентификатор. Единственный
             // способ сюда попасть — строку убрали, пока список был открыт.
-            throw new IllegalArgumentException(
-                    "Источник платежа не найден — обновите страницу, список устарел");
+            throw NotFound.PAYMENT_SOURCE.error(id);
         }
         return list().stream().filter(s -> s.id().equals(id)).findFirst().orElseThrow();
     }

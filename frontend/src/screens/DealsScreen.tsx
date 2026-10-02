@@ -243,7 +243,7 @@ function BoardCard({
   return (
     <button type="button" className="deal-card" onClick={() => onOpenDeal(card.id)}>
       <span className="deal-card__line">
-        <strong>№{card.number ?? card.id}</strong>
+        <strong>{card.number === null ? '—' : `№${card.number}`}</strong>
         <span>{money(card.totalAmount)}</span>
       </span>
       <span className="deal-card__line muted">
@@ -446,7 +446,7 @@ function Row({
   return (
     <tr className="row--clickable" onClick={() => onOpenDeal(row.id)}>
       <td>
-        <strong>№{row.number ?? row.id}</strong>
+        <strong>{row.number === null ? '—' : `№${row.number}`}</strong>
         <div className="muted">{shortDate(row.createdAt)}</div>
       </td>
       {/* Покупатель, которого продавец не проставил, зовётся «Частным лицом» —

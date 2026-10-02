@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import ru.partsflow.shared.NotFound;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -208,7 +209,7 @@ public class PartService {
     @Transactional
     public Part changePrice(Long partId, BigDecimal newPrice, Long changedBy) {
         Part part = partRepository.findById(partId)
-                .orElseThrow(() -> new IllegalArgumentException("Запчасть не найдена: " + partId));
+                .orElseThrow(() -> NotFound.PART.error(partId));
 
         if (newPrice.compareTo(part.getPrice() == null ? BigDecimal.ZERO : part.getPrice()) == 0) {
             return part;
@@ -227,7 +228,7 @@ public class PartService {
     @Transactional(readOnly = true)
     public Part require(Long partId) {
         return partRepository.findById(partId)
-                .orElseThrow(() -> new IllegalArgumentException("Запчасть не найдена: " + partId));
+                .orElseThrow(() -> NotFound.PART.error(partId));
     }
 
     /**
@@ -265,7 +266,7 @@ public class PartService {
     @Transactional
     public Part update(Long partId, PartUpdate update, Long authorId) {
         Part part = partRepository.findById(partId)
-                .orElseThrow(() -> new IllegalArgumentException("Запчасть не найдена: " + partId));
+                .orElseThrow(() -> NotFound.PART.error(partId));
 
         PriceOperation priceOp = update.priceOp() == null ? PriceOperation.SET : update.priceOp();
         if (!priceOp.arithmetic() && update.price() != null && update.price().signum() < 0) {
@@ -388,7 +389,7 @@ public class PartService {
     @Transactional
     public PartCell changeCell(Long partId, Long warehouseId, Long cellId, Long authorId) {
         Part part = partRepository.findById(partId)
-                .orElseThrow(() -> new IllegalArgumentException("Запчасть не найдена: " + partId));
+                .orElseThrow(() -> NotFound.PART.error(partId));
 
         String cellCode = null;
         if (cellId != null) {

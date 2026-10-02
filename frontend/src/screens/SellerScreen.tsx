@@ -1242,7 +1242,7 @@ function DealFinder({
             return (
               <li key={d.id}>
                 <button type="button" className="button--ghost" onClick={() => onPick(d)}>
-                  №{d.number ?? d.id} · {dealStatusNameLower(state)}
+                  {d.number === null ? '—' : `№${d.number}`} · {dealStatusNameLower(state)}
                   {line !== null && (
                     <span className={line.expired ? 'note--error' : 'muted'}>
                       {line.expired ? ' · срок истёк' : ` · до ${line.day}`}
@@ -1452,7 +1452,7 @@ function DealCard({
     <>
       <hr />
       <h3>
-        Сделка №{deal.number ?? deal.id} · {dealStatusNameLower(state)}
+        Сделка {deal.number === null ? '—' : `№${deal.number}`} · {dealStatusNameLower(state)}
       </h3>
 
       {/* Срок резерва — сразу под номером, как у ориентира. Без него карточка
@@ -1534,7 +1534,9 @@ function DealCard({
         <div className="row">
           <input
             type="date"
-            aria-label={`Продлить резерв по сделке №${deal.number ?? deal.id} до`}
+            aria-label={deal.number === null
+              ? 'Продлить резерв по сделке до'
+              : `Продлить резерв по сделке №${deal.number} до`}
             min={todayISO()}
             value={until}
             onChange={(e) => setUntil(e.target.value)}
@@ -1582,7 +1584,7 @@ function DealCard({
                   }
                 />
               )}{' '}
-              {item.title ?? `деталь ${item.partId}`}
+              {item.title ?? 'удалённая позиция'}
               <span className="muted">
                 {' '}
                 {/* Номер позиции (задача 0168): состав сделки и выбор позиций
@@ -1608,7 +1610,7 @@ function DealCard({
         {deal.services.map((line) => (
           <li key={`service-${line.id}`} className="stock-row">
             <span className="stock-info">
-              {line.name ?? `услуга ${line.serviceId}`}
+              {line.name ?? 'удалённая услуга'}
               <span className="muted"> · {Number(line.quantity)} шт</span>
             </span>
             <div className="stock-action">
@@ -1749,7 +1751,9 @@ function DealCard({
               );
               setPicked([]);
               setNotice(
-                `Перенесено в сделку №${created.number ?? created.id}. `
+                (created.number === null
+                  ? 'Перенесено в новую сделку. '
+                  : `Перенесено в сделку №${created.number}. `)
                   + 'Резерв сохранён — товар просто в другом документе.',
               );
             })
@@ -1779,7 +1783,7 @@ function DealCard({
               if (!mounted.current) return;
               setPicked([]);
               setNotice(
-                `Возврат №${doc.number ?? doc.id} на `
+                (doc.number === null ? 'Возврат на ' : `Возврат №${doc.number} на `)
                   + `${Number(doc.amount).toLocaleString('ru-RU')} ₽ оформлен.`,
               );
               setDocs(left);
@@ -1841,7 +1845,7 @@ function DealCard({
           <ul className="suggestions">
             {docs.map((doc) => (
               <li key={doc.id}>
-                №{doc.number ?? doc.id} · {Number(doc.amount).toLocaleString('ru-RU')} ₽
+                {doc.number === null ? '—' : `№${doc.number}`} · {Number(doc.amount).toLocaleString('ru-RU')} ₽
                 <span className="muted">
                   {' '}
                   · {new Date(doc.createdAt).toLocaleDateString('ru-RU')}

@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import ru.partsflow.shared.NotFound;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -100,24 +101,25 @@ public class InventoryService {
         Integer exists = jdbc.queryForObject(
                 "SELECT count(*) FROM warehouse WHERE id = ?", Integer.class, warehouseId);
         if (exists == null || exists == 0) {
-            throw new IllegalArgumentException("Склад не найден: " + warehouseId);
+            throw NotFound.WAREHOUSE.error(warehouseId);
         }
         if (cellId != null && cellId != NO_CELL) {
             Integer cellExists = jdbc.queryForObject(
                     "SELECT count(*) FROM storage_cell WHERE id = ? AND warehouse_id = ?",
                     Integer.class, cellId, warehouseId);
             if (cellExists == null || cellExists == 0) {
-                throw new IllegalArgumentException(
-                        "Ячейка %d не найдена на складе %d".formatted(cellId, warehouseId));
+                throw NotFound.CELL.error("cellId=%d warehouseId=%d".formatted(cellId, warehouseId));
             }
         }
 
         List<InventorySession> alreadyOpen = sessions.findByWarehouseIdAndStatus(
                 warehouseId, InventorySession.SessionStatus.OPEN);
         if (!alreadyOpen.isEmpty()) {
+            log.warn("Вторая инвентаризация на складе {}: уже идёт сессия {}",
+                    warehouseId, alreadyOpen.get(0).getId());
             throw new IllegalStateException(
-                    "На складе %d уже идёт инвентаризация %d: две сессии дадут двойную корректировку"
-                            .formatted(warehouseId, alreadyOpen.get(0).getId()));
+                    "На этом складе уже идёт пересчёт: две сессии дадут двойную"
+                            + " корректировку. Закройте или отмените начатый");
         }
 
         InventorySession session = new InventorySession(warehouseId, authorId);
@@ -438,7 +440,7 @@ public class InventoryService {
             // Словом экрана, а не базы: вкладка называется «Пересчёт»,
             // и «Инвентаризация не найдена» человек читает как сообщение
             // о чём-то другом.
-            throw new IllegalArgumentException("Пересчёт не найден: " + sessionId);
+            throw NotFound.INVENTORY_SESSION.error(sessionId);
         }
         return found.get(0);
     }
@@ -544,7 +546,7 @@ public class InventoryService {
             return "без адреса";
         }
         Long cellId = row.oneCell();
-        return codes.getOrDefault(cellId, "ячейка " + cellId);
+        return codes.getOrDefault(cellId, "неизвестная ячейка");
     }
 
     /** Коды ячеек только тех сессий страницы, у которых выборка — одна ячейка. */
@@ -743,7 +745,7 @@ public class InventoryService {
         // одновременных проведения читают пустой оба и списывают недостачу
         // дважды. Подробности — у findByIdForUpdate.
         InventorySession session = sessions.findByIdForUpdate(sessionId).orElseThrow(
-                () -> new IllegalArgumentException("Пересчёт не найден: " + sessionId));
+                () -> NotFound.INVENTORY_SESSION.error(sessionId));
         Instant now = Instant.now();
 
         int adjusted = 0;
@@ -804,7 +806,7 @@ public class InventoryService {
                  ORDER BY d.number""", Long.class, partId);
 
         return "«%s»: не хватает %s, свободно %s%s".formatted(
-                title == null ? "деталь " + partId : title,
+                title == null ? "удалённая позиция" : title,
                 needed.stripTrailingZeros().toPlainString(),
                 available.stripTrailingZeros().toPlainString(),
                 promisedBy(deals));
@@ -887,7 +889,7 @@ public class InventoryService {
 
     private InventorySession require(Long sessionId) {
         return sessions.findById(sessionId).orElseThrow(
-                () -> new IllegalArgumentException("Пересчёт не найден: " + sessionId));
+                () -> NotFound.INVENTORY_SESSION.error(sessionId));
     }
 
     /**

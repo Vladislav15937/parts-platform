@@ -1,8 +1,8 @@
 ---
 id: 0067
 title: Внутренний номер строки базы на экране: «деталь 8412», «услуга 3», «склад 7»
-status: новая
-assignee: —
+status: в работе
+assignee: coder (ветка feature/0067-vnutrenniy-nomer-stroki)
 source: находка разбора #156 (задача 0065), 12 сентября 2026
 pr: —
 ---

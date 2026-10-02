@@ -1,5 +1,6 @@
 package ru.partsflow.platform.security;
 
+import ru.partsflow.shared.NotFound;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -73,7 +74,7 @@ public class MemberService {
             Integer branch = jdbc.queryForObject(
                     "SELECT count(*) FROM branch WHERE id = ?", Integer.class, branchId);
             if (branch == null || branch == 0) {
-                throw new IllegalArgumentException("Филиал не найден: " + branchId);
+                throw NotFound.BRANCH.error(branchId);
             }
         }
 
@@ -132,7 +133,7 @@ public class MemberService {
                 passwordEncoder.encode(newPassword), memberId);
 
         if (updated == 0) {
-            throw new IllegalArgumentException("Сотрудник не найден: " + memberId);
+            throw NotFound.MEMBER.error(memberId);
         }
         revokeSessions(memberId, "смена пароля", actingSessionKey);
     }
@@ -152,7 +153,7 @@ public class MemberService {
         int updated = jdbc.update("UPDATE tenant_member SET is_active = ? WHERE id = ?",
                 active, memberId);
         if (updated == 0) {
-            throw new IllegalArgumentException("Сотрудник не найден: " + memberId);
+            throw NotFound.MEMBER.error(memberId);
         }
         if (!active) {
             // Выключенный сотрудник до этого дня доработывал смену: роль
@@ -275,7 +276,7 @@ public class MemberService {
                   FROM tenant_member WHERE id = ?""", MemberService::map, memberId);
 
         if (found.isEmpty()) {
-            throw new IllegalArgumentException("Сотрудник не найден: " + memberId);
+            throw NotFound.MEMBER.error(memberId);
         }
         return found.get(0);
     }

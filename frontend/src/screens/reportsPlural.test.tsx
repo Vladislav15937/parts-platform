@@ -24,8 +24,10 @@ describe('склонение на экране отчётов', () => {
         return json({
           totals: {
             advances: 1400, withAdvance: 1, debts: 6500, withDebt: 1,
+            // Номер сделки отличается от её id намеренно (задача 0067):
+            // совпади они, подстановка номера строки базы прошла бы зелёной.
             problems: [{ problem: 'сделка отменена, оплата не возвращена',
-                         dealId: 8, amount: 500, customerId: 1 }],
+                         dealId: 8, dealNumber: 1274, amount: 500, customerId: 1 }],
           },
           rows: [],
         });

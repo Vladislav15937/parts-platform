@@ -342,7 +342,7 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
                       ничего. Пусто бывает у позиции, карточку которой
                       удалили. */}
                   <td className="num">{r.number ?? '—'}</td>
-                  <td>{r.title ?? `деталь ${r.partId}`}</td>
+                  <td>{r.title ?? 'удалённая позиция'}</td>
                   <td className="num">{r.qtyExpectedAtCount}</td>
                   <td className="num">{r.qtyCounted}</td>
                   <td className="num">{r.shortage ? '' : '+'}{r.delta}</td>

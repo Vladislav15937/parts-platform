@@ -208,5 +208,9 @@ function addressOf(cells: PartCell[] | null, warehouseId: number): string {
 }
 
 function nameOf(warehouses: Warehouse[], id: number): string {
-  return warehouses.find((w) => w.id === id)?.name ?? `склад ${id}`;
+  // Склада нет в списке — значит его выключили или удалили. Номер строки
+  // базы кладовщику не говорит ничего, и искать по нему нечего; то же
+  // правило, по которому незнакомое устройство в журнале входов
+  // называется «Неизвестным», а не угаданным «Chrome».
+  return warehouses.find((w) => w.id === id)?.name ?? 'неизвестный склад';
 }

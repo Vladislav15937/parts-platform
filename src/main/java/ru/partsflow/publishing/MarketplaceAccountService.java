@@ -1,5 +1,6 @@
 package ru.partsflow.publishing;
 
+import ru.partsflow.shared.NotFound;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -239,7 +240,7 @@ public class MarketplaceAccountService {
                 json(columns), json(words),
                 id);
         if (updated == 0) {
-            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+            throw NotFound.FEED.error(id);
         }
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
     }
@@ -262,7 +263,7 @@ public class MarketplaceAccountService {
                 "SELECT product_line FROM marketplace_account WHERE id = ? AND deleted_at IS NULL",
                 String.class, id);
         if (found.isEmpty()) {
-            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+            throw NotFound.FEED.error(id);
         }
         return found.get(0);
     }
@@ -343,7 +344,7 @@ public class MarketplaceAccountService {
                 "UPDATE marketplace_account SET settings = settings || ?::jsonb\n                   WHERE id = ? AND deleted_at IS NULL",
                 checked.toJson(), id);
         if (updated == 0) {
-            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+            throw NotFound.FEED.error(id);
         }
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
     }
@@ -375,7 +376,7 @@ public class MarketplaceAccountService {
                 "UPDATE marketplace_account SET title = ? WHERE id = ? AND deleted_at IS NULL",
                 title, id);
         if (updated == 0) {
-            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+            throw NotFound.FEED.error(id);
         }
         return reload(id);
     }
@@ -409,7 +410,7 @@ public class MarketplaceAccountService {
                 "UPDATE marketplace_account SET status = ? WHERE id = ? AND deleted_at IS NULL",
                 status, id);
         if (updated == 0) {
-            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+            throw NotFound.FEED.error(id);
         }
         return reload(id);
     }
@@ -441,7 +442,7 @@ public class MarketplaceAccountService {
                 "UPDATE marketplace_account SET deleted_at = now() WHERE id = ? AND deleted_at IS NULL",
                 id);
         if (updated == 0) {
-            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+            throw NotFound.FEED.error(id);
         }
     }
 
@@ -487,7 +488,7 @@ public class MarketplaceAccountService {
                 cipher.encrypt(secret), accountId);
 
         if (updated == 0) {
-            throw new IllegalArgumentException("Кабинет не найден: " + accountId);
+            throw NotFound.MARKETPLACE_ACCOUNT.error(accountId);
         }
     }
 
@@ -511,7 +512,7 @@ public class MarketplaceAccountService {
                 "UPDATE marketplace_account SET feed_token = ? WHERE id = ? AND deleted_at IS NULL",
                 token, accountId);
         if (updated == 0) {
-            throw new IllegalArgumentException("Кабинет не найден: " + accountId);
+            throw NotFound.MARKETPLACE_ACCOUNT.error(accountId);
         }
         return token;
     }
@@ -552,7 +553,7 @@ public class MarketplaceAccountService {
                 "UPDATE marketplace_account SET feed_file_name = ? WHERE id = ? AND deleted_at IS NULL",
                 name, id);
         if (updated == 0) {
-            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+            throw NotFound.FEED.error(id);
         }
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
     }
@@ -598,7 +599,7 @@ public class MarketplaceAccountService {
                 "SELECT marketplace FROM marketplace_account WHERE id = ? AND deleted_at IS NULL",
                 String.class, id);
         if (found.isEmpty()) {
-            throw new IllegalArgumentException("Выгрузка не найдена: " + id);
+            throw NotFound.FEED.error(id);
         }
         return found.get(0);
     }

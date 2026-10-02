@@ -146,7 +146,7 @@ export function OrdersScreen({ canSell }: { canSell: boolean }) {
                     {/* Номер позиции (задача 0168, перебор): заказ площадки
                         собирает кладовщик, и названное вслух «позиция 347» —
                         единственный способ связать строку заказа с полкой. */}
-                    {item.title ?? `деталь ${item.partId}`}
+                    {item.title ?? 'удалённая позиция'}
                     {typeof item.number === 'number' && ` · № ${item.number}`} — {item.quantity} шт.
                   </li>
                 ))}
