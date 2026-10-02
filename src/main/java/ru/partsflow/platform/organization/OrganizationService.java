@@ -1,5 +1,6 @@
 package ru.partsflow.platform.organization;
 
+import ru.partsflow.shared.NotFound;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -68,7 +69,7 @@ public class OrganizationService {
     public Warehouse createWarehouse(Long branchId, String name) {
         requireName(name, "Название склада");
         Long branch = branchId != null ? branchId : soleBranch();
-        requireExists("branch", branch, "Филиал не найден: ");
+        requireExists("branch", branch, NotFound.BRANCH);
 
         Long id = jdbc.queryForObject(
                 "INSERT INTO warehouse (branch_id, name) VALUES (?, ?) RETURNING id",
@@ -117,7 +118,7 @@ public class OrganizationService {
         if (codes == null || codes.isEmpty()) {
             throw new IllegalArgumentException("Не указано ни одной ячейки");
         }
-        requireExists("warehouse", warehouseId, "Склад не найден: ");
+        requireExists("warehouse", warehouseId, NotFound.WAREHOUSE);
         List<Cell> created = new ArrayList<>();
 
         for (String raw : codes) {
@@ -158,14 +159,16 @@ public class OrganizationService {
      * <p>Имя таблицы подставляется текстом, и это безопасно: оно приходит
      * из этого же класса, а не из запроса. Параметром таблицу не задать.
      */
-    private void requireExists(String table, Long id, String complaint) {
+    private void requireExists(String table, Long id, NotFound subject) {
         if (id == null) {
             return;
         }
         Integer found = jdbc.queryForObject(
                 "SELECT count(*) FROM " + table + " WHERE id = ?", Integer.class, id);
         if (found == null || found == 0) {
-            throw new IllegalArgumentException(complaint + id);
+            // Номер строки базы человеку не говорит ничего: он выбирал
+            // из списка, а не набирал идентификатор (задача 0067).
+            throw subject.error(id);
         }
     }
 

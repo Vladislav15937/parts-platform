@@ -1,5 +1,6 @@
 package ru.partsflow.platform.settings;
 
+import ru.partsflow.shared.NotFound;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -181,8 +182,7 @@ public class PrintSettingsService {
                 // списка, а не набирал идентификатор. Единственный способ сюда
                 // попасть — склад убрали, пока форма была открыта; тем же
                 // отвечают PaymentSourceService и CustomerService.
-                throw new IllegalArgumentException(
-                        "Склад не найден — обновите страницу, список устарел");
+                throw NotFound.WAREHOUSE.error(block.id());
             }
         }
         return read();

@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import ru.partsflow.shared.NotFound;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -281,7 +282,7 @@ public class PhotoService {
     @Transactional(readOnly = true)
     public Archive archiveOf(Long partId) {
         Part part = parts.findById(partId).orElseThrow(
-                () -> new IllegalArgumentException("Запчасть не найдена: " + partId));
+                () -> NotFound.PART.error(partId));
 
         List<PartPhoto> confirmed = photos.findByPartIdOrderBySortOrderAscIdAsc(partId).stream()
                 .filter(PartPhoto::isConfirmed)
@@ -514,13 +515,13 @@ public class PhotoService {
 
     private void requirePart(Long partId) {
         if (!parts.existsById(partId)) {
-            throw new IllegalArgumentException("Запчасть не найдена: " + partId);
+            throw NotFound.PART.error(partId);
         }
     }
 
     private PartPhoto requirePhoto(Long photoId) {
         return photos.findById(photoId).orElseThrow(
-                () -> new IllegalArgumentException("Фотография не найдена: " + photoId));
+                () -> NotFound.PHOTO.error(photoId));
     }
 
     /** Ссылка на загрузку для телефона. */

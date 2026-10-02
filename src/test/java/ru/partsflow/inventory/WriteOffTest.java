@@ -235,7 +235,7 @@ class WriteOffTest extends PostgresTestBase {
                                 .formatted(warehouseId)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message")
-                        .value(org.hamcrest.Matchers.containsString("Деталь не найдена")));
+                        .value(org.hamcrest.Matchers.containsString("Запчасть не найдена")));
     }
 
     private String partStatus(Long part) {

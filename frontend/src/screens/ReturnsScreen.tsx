@@ -149,7 +149,7 @@ function Row({
   return (
     <tr className={row.status === 'CANCELLED' ? 'muted' : undefined}>
       <td>
-        <strong>{row.number ?? row.id}</strong>
+        <strong>{row.number ?? '—'}</strong>
         <div className="muted">{shortDate(row.createdAt)}</div>
       </td>
       {/* Слово то же самое, что было здесь с задачи 0021, — но взято общей

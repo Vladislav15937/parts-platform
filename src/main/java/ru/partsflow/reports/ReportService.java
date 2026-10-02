@@ -426,13 +426,19 @@ public class ReportService {
     @Transactional(readOnly = true)
     public List<Discrepancy> discrepancies() {
         return jdbc.query("""
-                SELECT customer_id, entry_id, deal_id, problem, amount
-                  FROM v_account_discrepancy
-                 ORDER BY customer_id, problem""",
+                SELECT a.customer_id, a.entry_id, a.deal_id,
+                       d.number AS deal_number, a.problem, a.amount
+                  FROM v_account_discrepancy a
+                  -- LEFT JOIN, а не внутренний: у нарушений «отрицательный
+                  -- остаток счёта» сделки нет вовсе, и внутренний потерял бы
+                  -- их молча — ровно то, ради чего сверка и заведена.
+                  LEFT JOIN deal d ON d.id = a.deal_id
+                 ORDER BY a.customer_id, a.problem""",
                 (rs, i) -> new Discrepancy(
                         rs.getObject("customer_id", Long.class),
                         rs.getObject("entry_id", Long.class),
                         rs.getObject("deal_id", Long.class),
+                        rs.getObject("deal_number", Long.class),
                         rs.getString("problem"),
                         rs.getBigDecimal("amount")));
     }
@@ -460,7 +466,14 @@ public class ReportService {
                                    List<Discrepancy> problems) {
     }
 
-    public record Discrepancy(Long customerId, Long entryId, Long dealId,
+    /**
+     * @param dealNumber номер сделки — тот, которым её зовут человеку.
+     *                   {@code dealId} остаётся рядом: по нему экран открывает
+     *                   документ, а показывать его нельзя — это номер строки
+     *                   базы, и «сделка 118» не отвечает на вопрос, ради
+     *                   которого отчёт про деньги открыли (задача 0067)
+     */
+    public record Discrepancy(Long customerId, Long entryId, Long dealId, Long dealNumber,
                               String problem, BigDecimal amount) {
     }
 

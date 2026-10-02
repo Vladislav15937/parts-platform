@@ -267,6 +267,8 @@ export interface SettlementProblem {
   customerId: number | null;
   entryId: number | null;
   dealId: number | null;
+  /** Номер сделки — тот, которым её зовут человеку (задача 0067). */
+  dealNumber: number | null;
   problem: string;
   amount: number;
 }

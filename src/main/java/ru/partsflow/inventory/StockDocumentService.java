@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import ru.partsflow.shared.NotFound;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -136,11 +137,11 @@ public class StockDocumentService {
      * ключи — между проверкой и вставкой строку может убрать кто-то другой.
      */
     private void requireReferences(StockDocument document) {
-        requireExists("warehouse", document.getWarehouseId(), "Склад не найден: ");
-        requireExists("warehouse", document.getToWarehouseId(), "Склад назначения не найден: ");
+        requireExists("warehouse", document.getWarehouseId(), NotFound.WAREHOUSE);
+        requireExists("warehouse", document.getToWarehouseId(), NotFound.DESTINATION_WAREHOUSE);
         for (StockDocumentLine line : document.getLines()) {
-            requireExists("part", line.getPartId(), "Деталь не найдена: ");
-            requireExists("storage_cell", line.getCellId(), "Ячейка не найдена: ");
+            requireExists("part", line.getPartId(), NotFound.PART);
+            requireExists("storage_cell", line.getCellId(), NotFound.CELL);
         }
     }
 
@@ -148,14 +149,16 @@ public class StockDocumentService {
      * Имя таблицы подставляется текстом, и это безопасно: оно приходит
      * из этого же класса, а не из запроса. Параметром таблицу не задать.
      */
-    private void requireExists(String table, Long id, String complaint) {
+    private void requireExists(String table, Long id, NotFound subject) {
         if (id == null) {
             return;
         }
         Integer found = jdbc.queryForObject(
                 "SELECT count(*) FROM " + table + " WHERE id = ?", Integer.class, id);
         if (found == null || found == 0) {
-            throw new IllegalArgumentException(complaint + id);
+            // Номер строки базы человеку не говорит ничего: он выбирал
+            // из списка, а не набирал идентификатор (задача 0067).
+            throw subject.error(id);
         }
     }
 
@@ -250,6 +253,6 @@ public class StockDocumentService {
 
     private StockDocument require(Long documentId) {
         return documents.findById(documentId).orElseThrow(
-                () -> new IllegalArgumentException("Складской документ не найден: " + documentId));
+                () -> NotFound.STOCK_DOCUMENT.error(documentId));
     }
 }

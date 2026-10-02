@@ -1,5 +1,6 @@
 package ru.partsflow.sales;
 
+import ru.partsflow.shared.NotFound;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.inventory.Part;
@@ -225,8 +226,7 @@ public class SalesService {
         }
         for (ServiceRequest service : services) {
             ServiceKind kind = serviceKinds.findById(service.serviceId())
-                    .orElseThrow(() -> new IllegalArgumentException(
-                            "Услуга не найдена: " + service.serviceId()));
+                    .orElseThrow(() -> NotFound.SERVICE.error(service.serviceId()));
             BigDecimal price = service.price() != null ? service.price() : kind.getPrice();
             // Ни в запросе, ни в справочнике цены нет — значит её никто
             // не называл. Ноль здесь превратился бы в строку «Доставка 0 ₽»
@@ -627,8 +627,9 @@ public class SalesService {
 
             if (quantity.compareTo(item.getQuantity()) > 0) {
                 throw new IllegalArgumentException(
-                        "Возвращают больше, чем выдали: позиция %d, выдано %s, возврат %s"
-                                .formatted(item.getId(), item.getQuantity(), quantity));
+                        "Возвращают больше, чем выдали: «%s», выдано %s, возврат %s"
+                                .formatted(requirePart(item.getPartId()).getTitle(),
+                                        item.getQuantity(), quantity));
             }
             dealReturn.addItem(item.getPartId(), quantity,
                     request.amount() != null ? request.amount() : refundFor(item, quantity),
@@ -666,7 +667,7 @@ public class SalesService {
     @Transactional
     public DealReturn cancelReturn(Long returnId, Long managerId) {
         DealReturn dealReturn = dealReturnRepository.findById(returnId)
-                .orElseThrow(() -> new IllegalArgumentException("Возврат не найден: " + returnId));
+                .orElseThrow(() -> NotFound.DEAL_RETURN.error(returnId));
 
         dealReturn.cancel();
         DealReturn saved = dealReturnRepository.saveAndFlush(dealReturn);
@@ -1469,15 +1470,16 @@ public class SalesService {
         DealItem item = deal.getItems().stream()
                 .filter(i -> itemId.equals(i.getId()))
                 .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Позиция %d не найдена в сделке %s".formatted(itemId, deal.getNumber())));
+                .orElseThrow(() -> NotFound.DEAL_ITEM.error(
+                        "%d (сделка %s)".formatted(itemId, deal.getNumber())));
 
         // Проверяем здесь, а не при пересчёте статусов: иначе сумма возврата
         // будет посчитана по позиции, которую вернуть нельзя.
         if (item.getStatus() != DealItemStatus.ISSUED) {
             throw new IllegalStateException(
-                    "Вернуть можно только выданное, а позиция %d в состоянии %s"
-                            .formatted(itemId, item.getStatus()));
+                    "Вернуть можно только выданное, а «%s» в состоянии %s"
+                            .formatted(requirePart(item.getPartId()).getTitle(),
+                                    item.getStatus()));
         }
         return item;
     }
@@ -1976,7 +1978,7 @@ public class SalesService {
 
     private Deal requireDeal(Long dealId) {
         return dealRepository.findById(dealId)
-                .orElseThrow(() -> new IllegalArgumentException("Сделка не найдена: " + dealId));
+                .orElseThrow(() -> NotFound.DEAL.error(dealId));
     }
 
     /**
@@ -2008,8 +2010,7 @@ public class SalesService {
             // Без номера строки в базе: продавец выбрал клиента из списка,
             // а не набирал идентификатор. Та же правка, что в
             // CustomerService и в источниках платежей.
-            throw new IllegalArgumentException(
-                    "Клиент не найден — обновите страницу, список устарел");
+            throw NotFound.CUSTOMER.error(customerId);
         }
     }
 
@@ -2051,13 +2052,13 @@ public class SalesService {
             return;
         }
         if (!dealSources.existsById(dealSourceId)) {
-            throw new IllegalArgumentException("Источник сделки не найден: " + dealSourceId);
+            throw NotFound.DEAL_SOURCE.error(dealSourceId);
         }
     }
 
     private Part requirePart(Long partId) {
         return partRepository.findById(partId)
-                .orElseThrow(() -> new IllegalArgumentException("Запчасть не найдена: " + partId));
+                .orElseThrow(() -> NotFound.PART.error(partId));
     }
 
     private byte[] payloadOf(Deal deal) {

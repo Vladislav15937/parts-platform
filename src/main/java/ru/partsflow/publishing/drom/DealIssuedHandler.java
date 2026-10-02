@@ -1,5 +1,7 @@
 package ru.partsflow.publishing.drom;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import ru.partsflow.platform.outbox.ConsumedEvent;
 import ru.partsflow.platform.outbox.EventHandler;
@@ -20,6 +22,8 @@ import java.util.Set;
  */
 @Component
 public class DealIssuedHandler implements EventHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(DealIssuedHandler.class);
 
     private final DromDeltaSender sender;
 
@@ -45,9 +49,14 @@ public class DealIssuedHandler implements EventHandler {
             // не повод откатывать выдачу товара. Но для очереди событий это
             // именно отказ — иначе непрошедшая дельта потеряется молча,
             // и площадка неделю будет показывать проданную деталь.
+            // Номер строки базы человеку не говорит ничего, а экран
+            // «Доставка» показывает сам документ отдельной колонкой —
+            // дописывать его сюда значит показать внутренний номер дважды
+            // (задача 0067). Подробности отказа площадки — в publication_log.
+            log.warn("Дром не принял дельту по сделке (aggregateId={})", event.aggregateId());
             throw new IllegalStateException(
-                    "Дром не принял дельту по сделке " + event.aggregateId()
-                            + ", подробности в publication_log");
+                    "Дром не принял дельту по этой сделке,"
+                            + " подробности в publication_log");
         }
     }
 }

@@ -22,6 +22,8 @@ import ru.partsflow.support.PostgresTestBase;
 import java.util.function.Supplier;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -340,10 +342,15 @@ class InventoryHttpTest extends PostgresTestBase {
                 .andExpect(status().isBadRequest());
 
         // Несуществующий пересчёт называется словом экрана, а не базы:
-        // вкладка везде говорит «Пересчёт».
+        // вкладка везде говорит «Пересчёт». И без номера строки (задача 0067):
+        // по нему человеку нечего ни искать, ни спрашивать — он уходит в лог.
+        // Утверждение отрицательное: «сказано „не найден“» проходило и до
+        // правки, а номера в ответе быть не должно.
         mvc.perform(get("/api/inventory/sessions/999999").session(owner))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Пересчёт не найден: 999999"));
+                .andExpect(jsonPath("$.message")
+                        .value("Пересчёт не найден — обновите страницу, список устарел"))
+                .andExpect(jsonPath("$.message", not(containsString("999999"))));
 
         // «Просмотр» читает список наравне с владельцем — журнал ссылается
         // на пересчёт, и посмотреть, что тогда считали, это не то же самое,

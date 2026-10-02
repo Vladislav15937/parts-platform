@@ -1,5 +1,6 @@
 package ru.partsflow.intake;
 
+import ru.partsflow.shared.NotFound;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -330,18 +331,18 @@ public class IntakeService {
         Integer found = jdbc.queryForObject(
                 "SELECT count(*) FROM warehouse WHERE id = ?", Integer.class, warehouseId);
         if (found == null || found == 0) {
-            throw new IllegalArgumentException("Склад не найден: " + warehouseId);
+            throw NotFound.WAREHOUSE.error(warehouseId);
         }
     }
 
     private Supply requireSupply(Long supplyId) {
         return supplies.findById(supplyId).orElseThrow(
-                () -> new IllegalArgumentException("Поставка не найдена: " + supplyId));
+                () -> NotFound.SUPPLY.error(supplyId));
     }
 
     private Donor requireDonor(Long donorId) {
         return donors.findById(donorId).orElseThrow(
-                () -> new IllegalArgumentException("Донор не найден: " + donorId));
+                () -> NotFound.DONOR.error(donorId));
     }
 
     /**

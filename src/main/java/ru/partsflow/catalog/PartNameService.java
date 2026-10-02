@@ -1,5 +1,6 @@
 package ru.partsflow.catalog;
 
+import ru.partsflow.shared.NotFound;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -65,7 +66,7 @@ public class PartNameService {
     public PartName matchManually(Long partNameId, Long partKindId) {
         PartName partName = require(partNameId);
         PartKindMatcher.PartKind kind = matcher.findById(partKindId).orElseThrow(
-                () -> new IllegalArgumentException("Эталон не найден: " + partKindId));
+                () -> NotFound.PART_KIND.error(partKindId));
 
         partName.matchTo(kind.id(), kind.categoryId(), false);
         return repository.saveAndFlush(partName);
@@ -171,7 +172,7 @@ public class PartNameService {
     @Transactional(readOnly = true)
     public PartName require(Long id) {
         return repository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Наименование не найдено: " + id));
+                .orElseThrow(() -> NotFound.PART_NAME.error(id));
     }
 
     /**

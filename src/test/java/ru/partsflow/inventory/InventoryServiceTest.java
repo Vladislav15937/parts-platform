@@ -596,8 +596,12 @@ class InventoryServiceTest extends PostgresTestBase {
         inTenant(() -> inventory.open(warehouse, null, null));
 
         // Две сессии дадут двойную корректировку на одно расхождение.
+        // Словом экрана и без двух внутренних номеров (задача 0067):
+        // «склад 2» и «инвентаризация 7» кладовщику не говорят ничего,
+        // оба уходят в лог.
         assertThatThrownBy(() -> inTenant(() -> inventory.open(warehouse, null, null)))
-                .hasMessageContaining("уже идёт инвентаризация");
+                .hasMessageContaining("уже идёт пересчёт")
+                .hasMessageNotContaining(String.valueOf(warehouse));
     }
 
     /**
@@ -640,8 +644,11 @@ class InventoryServiceTest extends PostgresTestBase {
                 "INSERT INTO storage_cell (warehouse_id, code) VALUES (?, 'B-01-1') RETURNING id",
                 Long.class, otherWarehouse));
 
+        // Утверждение отрицательное: «сказано „не найдена“» проходило
+        // и до правки, а номера ячейки в ответе быть не должно (задача 0067).
         assertThatThrownBy(() -> inTenant(() -> inventory.open(warehouse, foreign, null)))
-                .hasMessageContaining("не найдена на складе");
+                .hasMessageContaining("Ячейка не найдена")
+                .hasMessageNotContaining(String.valueOf(foreign));
     }
 
     /**
