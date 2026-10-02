@@ -1,4 +1,5 @@
 import { request } from '../api/client';
+import { CONDITION } from './catalog';
 import type { CatalogRow } from './catalog';
 
 /**
@@ -311,11 +312,10 @@ const TREAD: Record<string, string> = {
   DIRECTIONAL: 'Направленный',
 };
 
-const CONDITION: Record<string, string> = {
-  NEW: 'новая',
-  USED: 'б/у',
-  REFURBISHED: 'восстановленная',
-};
+// Состояние берётся общим словарём (`catalog.ts`), а не пишется здесь:
+// копия расходилась бы с витриной склада на первом же новом значении,
+// и расходилась бы молча — выбранное из списка перестало бы находиться
+// (задача 0039).
 
 function text(value: string | number | null): string {
   return value === null || value === undefined ? '' : String(value);

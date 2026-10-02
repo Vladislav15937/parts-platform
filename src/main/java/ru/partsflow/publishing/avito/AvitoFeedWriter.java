@@ -73,9 +73,10 @@ public class AvitoFeedWriter {
         element(w, "Price", part.getPrice() == null ? null : part.getPrice().toPlainString());
 
         // Б/у против нового — параметр Condition, обязателен для запчастей.
+        // Контрактная и восстановленная для площадки б/у: поле двузначное.
         element(w, "Condition", switch (part.getCondition()) {
             case NEW -> "Новое";
-            case USED, REFURBISHED -> "Б/у";
+            case USED, REFURBISHED, CONTRACT -> "Б/у";
         });
 
         // TODO: Images, ContactPhone, Address, OEM — добавляются, когда будут

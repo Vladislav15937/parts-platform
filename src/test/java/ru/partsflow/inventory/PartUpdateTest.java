@@ -82,6 +82,9 @@ class PartUpdateTest extends PostgresTestBase {
         inTenant(() -> {
             ownerId = member("vladelec", "Владелец", "OWNER");
             member("prodavec", "Продавец", "SELLER");
+            // Состояние правит владелец, а карточку целиком — и менеджер:
+            // разницу видно только когда в схеме есть оба (задача 0039).
+            member("menedzher", "Менеджер", "MANAGER");
 
             partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price, note, is_published)
@@ -322,6 +325,92 @@ class PartUpdateTest extends PostgresTestBase {
         assertThat(card.get("package_height_mm")).isEqualTo(50);
         assertThat(card.get("text_block")).isEqualTo("Проверена на стенде");
         assertThat(card.get("is_published")).isEqualTo(false);
+    }
+
+    /**
+     * Состояние принятой детали правится из карточки, и заголовок едет за ним.
+     *
+     * <p>До задачи 0039 {@code part.condition} писался ровно один раз,
+     * в приёмке: приёмщик, поставивший «б/у» вместо «новой», исправить это
+     * мог только заведением второй карточки. Решение владельца продукта
+     * от 8 сентября 2026 — «состояние должно быть и клиент должен иметь
+     * возможность его менять».
+     *
+     * <p>Через HTTP, а не вызовом сервиса: роль у состояния своя, и вызов
+     * сервиса напрямую её не касается.
+     */
+    @Test
+    @DisplayName("Владелец меняет состояние, и пометка в заголовке едет за ним")
+    void conditionIsEditableFromTheCard() throws Exception {
+        MockHttpSession session = login("vladelec");
+
+        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price":4500,"condition":"CONTRACT","published":true}"""))
+                .andExpect(status().isOk());
+
+        var card = inTenant(() -> jdbc.queryForMap(
+                "SELECT condition, title FROM part WHERE id = ?", partId));
+
+        assertThat(card.get("condition")).isEqualTo("CONTRACT");
+        // Заголовок уже уехал в объявление, и карточка не должна разойтись
+        // со своим же названием. Меняется ровно пометка состояния —
+        // остальное в заголовке не наше (см. PartTitleGenerator.remark).
+        assertThat((String) card.get("title"))
+                .as("пометка состояния в заголовке осталась прежней")
+                .isEqualTo("Фара Toyota Camry 2006 перед. лев. (контракт)");
+
+        // Площадка узнаёт об изменении дельтой, а не полным забором прайса
+        // (до трёх суток): «любой апдейт должен ехать до площадки дельтой».
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_change WHERE part_id = ?", Integer.class, partId)))
+                .as("смена состояния не отмечена для выгрузки")
+                .isEqualTo(1);
+    }
+
+    /**
+     * Состояние правит владелец, а карточку — и менеджер.
+     *
+     * <p>Проверяется **изменение**, а не присутствие поля: форма уезжает
+     * PUT'ом целиком, и менеджер, правящий заметку, отправляет состояние
+     * тоже. Отказ по самому факту отнял бы у него правку карточки вовсе —
+     * ровно так уже ломалась оценка состояния, уносившая с собой всю
+     * остальную правку (задача 0033).
+     *
+     * <p>Право записано как **временное**: владелец просил «все полномочия
+     * тому, кому он их дал», а раздавать их поштучно система не умеет
+     * (задача 0044).
+     */
+    @Test
+    @DisplayName("Менеджер правит карточку, но не состояние")
+    void onlyOwnerChangesCondition() throws Exception {
+        MockHttpSession manager = login("menedzher");
+
+        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(manager)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price":4500,"condition":"USED","note":"менеджер смотрел",
+                                 "published":true}"""))
+                .andExpect(status().isOk());
+        assertThat(note())
+                .as("прежнее состояние в теле формы отняло у менеджера правку карточки")
+                .isEqualTo("менеджер смотрел");
+
+        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(manager)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price":4500,"condition":"NEW","published":true}"""))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("владелец")));
+
+        assertThat(conditionOf()).as("менеджер сменил состояние").isEqualTo("USED");
+    }
+
+    private String conditionOf() {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT condition FROM part WHERE id = ?", String.class, partId));
     }
 
     /**

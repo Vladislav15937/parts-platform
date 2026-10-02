@@ -144,7 +144,12 @@ public class BazonWheelImporter {
                         text(row.get("Производитель диска")),
                         text(row.get("Модель диска")),
                         null, null, null, null, null, null,
-                        decimal(row.get("Цена"), null), null, "USED"),
+                        // Состояние из колонки «Новое/БУ» прайса: до задачи 0039
+                        // здесь стоял литерал, и «БУ» с «Контрактом» из файла
+                        // не доезжали никуда — колесо приезжало б/у независимо
+                        // от того, что написал клиент.
+                        decimal(row.get("Цена"), null), null,
+                        conditionOf(row.get("Новое/БУ"))),
                 quantity, warehouseId, authorId);
 
         stamp(created.partIds(), code, text(row.get("Комментарий")));
@@ -244,6 +249,23 @@ public class BazonWheelImporter {
      * записана, и наступить на неё удалось снова. Пустых полей в этом
      * файле много: у диска нет ни сезона, ни ширины профиля.
      */
+    /**
+     * Состояние колеса из колонки «Новое/БУ» прайса.
+     *
+     * <p>Разбирается тем же {@code BazonValueParser.parseCondition}, что
+     * и колонка «Состояние» в выгрузке товаров: два разборщика одних и тех
+     * же слов разошлись бы на первом же новом значении, и «Контракт» нашёлся
+     * бы у запчасти и не нашёлся у колеса.
+     *
+     * <p>Непонятое и пустое — прежнее умолчание «б/у», а не выдуманное
+     * состояние: {@code WheelService.createSet} белым списком отбивает всё,
+     * чего не знает, и отказ посреди переноса унёс бы строку целиком.
+     */
+    private static String conditionOf(String raw) {
+        var condition = BazonValueParser.parseCondition(raw);
+        return (condition == null ? ru.partsflow.inventory.PartCondition.USED : condition).name();
+    }
+
     private static String lookup(Map<String, String> dictionary, String raw) {
         String text = text(raw);
         return text == null

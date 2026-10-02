@@ -47,10 +47,13 @@ public class PartService {
     private final StockNaming naming;
     /** В {@code part_stock} не пишет никто мимо журнала — перестановка тоже. */
     private final StockLedger ledger;
+    /** Правка состояния двигает пометку в заголовке — её ставит он же. */
+    private final PartTitleGenerator titles;
 
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
                        PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc,
-                       VehicleWords vehicleWords, StockNaming naming, StockLedger ledger) {
+                       VehicleWords vehicleWords, StockNaming naming, StockLedger ledger,
+                       PartTitleGenerator titles) {
         this.partRepository = partRepository;
         this.eventPublisher = eventPublisher;
         this.partNames = partNames;
@@ -59,6 +62,7 @@ public class PartService {
         this.vehicleWords = vehicleWords;
         this.naming = naming;
         this.ledger = ledger;
+        this.titles = titles;
     }
 
     /**
@@ -247,9 +251,17 @@ public class PartService {
      * <p><b>Заголовок сюда не входит.</b> Он производный — собирается
      * из эталона наименования, машины, стороны и состояния, — и правка руками
      * разъехалась бы с ним при первом же пересопоставлении справочника.
-     * По той же причине не правятся сторона и состояние: они в заголовок
-     * входят, а пересборки его после правки у нас нет. Предел осознанный:
-     * ошибку в стороне лечит разбор наименований, а не поле в карточке.
+     * По той же причине не правится сторона: ошибку в ней лечит разбор
+     * наименований, а не поле в карточке.
+     *
+     * <p><b>А состояние правится — и двигает пометку в заголовке</b>
+     * (задача 0039, решение владельца продукта от 8 сентября 2026).
+     * До неё {@code part.condition} писался ровно один раз, в приёмке:
+     * приёмщик, поставивший «б/у» вместо «новой», исправить это мог только
+     * заведением второй карточки. Заголовок при этом обязан поехать
+     * за состоянием — иначе карточка разойдётся со своим же названием,
+     * уже уехавшим в объявление, — но **пересобирается он не целиком**:
+     * почему, записано у {@link PartTitleGenerator#remark}.
      *
      * <p>Событие о смене цены уходит только когда цена действительно другая:
      * площадке незачем дельта на правку заметки, а {@code price_changed_at}
@@ -285,6 +297,15 @@ public class PartService {
                 && (part.getPrice() == null || part.getPrice().compareTo(wanted) != 0);
         if (priceChanged) {
             part.changePrice(wanted, authorId);
+        }
+
+        // Состояние и пометка заголовка двигаются вместе, и только когда
+        // состояние действительно другое: пересчитывать заголовок на правке
+        // заметки незачем, а у перенесённой позиции он несёт ещё и список
+        // машин (см. PartTitleGenerator.remark).
+        if (update.condition() != null && update.condition() != part.getCondition()) {
+            part.setCondition(update.condition());
+            part.setTitle(titles.remark(part.getTitle(), update.condition()));
         }
 
         part.setMinPrice(update.minPrice());
@@ -843,6 +864,11 @@ public class PartService {
                              BigDecimal minPrice,
                              BigDecimal costPrice,
                              BigDecimal installationPrice,
+                             // Пустое — «не трогать», а не «очистить»: колонка
+                             // NOT NULL с умолчанием, пустого состояния у детали
+                             // не бывает вовсе. Это отличается от остальных полей
+                             // формы намеренно, и ровно поэтому стоит здесь.
+                             PartCondition condition,
                              QualityGrade qualityGrade,
                              String description,
                              String note,

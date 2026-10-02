@@ -70,11 +70,45 @@ public class PartTitleGenerator {
     }
 
     private static String conditionText(PartCondition condition) {
-        return switch (condition == null ? PartCondition.USED : condition) {
-            case NEW -> "(новая)";
-            case USED -> "(б/у)";
-            case REFURBISHED -> "(восст.)";
-        };
+        return (condition == null ? PartCondition.USED : condition).titleMark();
+    }
+
+    /**
+     * Меняет пометку состояния в уже собранном заголовке.
+     *
+     * <p><b>Почему не пересборка целиком.</b> Правка состояния из карточки
+     * (задача 0039) обязана подвинуть и заголовок — иначе карточка
+     * разойдётся со своим же названием, уже уехавшим в объявление. Но
+     * собрать заголовок заново значит собрать его из вида детали, машины
+     * и сторон — а у перенесённой позиции он этим не исчерпывается:
+     * {@code BazonImporter} дописывает в заголовок **список машин**
+     * (у переехавшего клиента так устроены 9 417 контрактных позиций
+     * из 35 841 — донора у них нет, и применимость перечислена прямо
+     * в названии), а {@code TitleApplicability} эти машины оттуда же
+     * и разбирает. Пересборка стёрла бы их молча, и вместе с ними —
+     * применимость, по которой деталь находят.
+     *
+     * <p>Поэтому меняется ровно то, что в заголовок вносит состояние:
+     * его пометка. Пометки известны перечислению, так что список здесь
+     * не пишется руками.
+     *
+     * <p>Пометки нет вовсе у заголовка, который собирал не этот класс
+     * («Без наименования» у битой строки переноса) — тогда она
+     * дописывается: состояние подставляется всегда, и у этого правила
+     * исключений нет.
+     */
+    public String remark(String title, PartCondition condition) {
+        String mark = (condition == null ? PartCondition.USED : condition).titleMark();
+        if (title == null || title.isBlank()) {
+            return title;
+        }
+        for (String known : PartCondition.titleMarks()) {
+            int at = title.indexOf(known);
+            if (at >= 0) {
+                return title.substring(0, at) + mark + title.substring(at + known.length());
+            }
+        }
+        return title + " " + mark;
     }
 
     /** Часть заголовка, описывающая машину. Любое поле может отсутствовать. */

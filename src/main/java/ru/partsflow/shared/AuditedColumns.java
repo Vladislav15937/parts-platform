@@ -3,6 +3,7 @@ package ru.partsflow.shared;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
 
+import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.QualityGrade;
 
 import java.util.Collection;
@@ -166,8 +167,25 @@ public final class AuditedColumns {
             "storage_cell_id", "donor_id", "part_kind_id", "supply_id",
             "customer_id", "manager_id", "payment_source_id");
 
-    private static final Map<String, String> CONDITIONS =
-            Map.of("NEW", "Новая", "USED", "Б/у", "REFURBISHED", "Восстановленная");
+    /**
+     * Состояние — словарём самого перечисления, а не копией здесь
+     * (задача 0039). Копий было пять, и эта совпадала с остальными
+     * по совпадению: её писали в другой день с тем же источником, —
+     * а совпадение и есть худший вид связи.
+     *
+     * <p>С заглавной буквы: тут это значение поля в таблице журнала,
+     * а не слово посреди фразы. Поднимается она здесь, а не хранится
+     * вторым написанием в перечислении: второе написание того же слова
+     * разошлось бы с первым ровно так же, как расходились словари.
+     */
+    private static final Map<String, String> CONDITIONS = capitalized(PartCondition.titles());
+
+    private static Map<String, String> capitalized(Map<String, String> titles) {
+        Map<String, String> capitalized = new java.util.LinkedHashMap<>();
+        titles.forEach((code, title) -> capitalized.put(code,
+                title.substring(0, 1).toUpperCase(java.util.Locale.ROOT) + title.substring(1)));
+        return capitalized;
+    }
 
     /**
      * Оценка состояния — словарём самого перечисления, а не копией здесь.

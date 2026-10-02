@@ -5,6 +5,7 @@ import type { PartEdit } from '../inventory/catalog';
 function card(overrides: Partial<PartEdit> = {}): PartEdit {
   return {
     price: 4500, minPrice: 4000, costPrice: 1200, installationPrice: null,
+    condition: 'USED',
     qualityGrade: 'NO_DEFECTS', description: null, note: 'скол на креплении',
     textBlock: null, videoUrl: null, marking: null, manufacturer: 'Toyota',
     color: null, section: null, barcode: null,
@@ -54,5 +55,20 @@ describe('форма правки карточки', () => {
 
   it('нечисловое значение не уезжает на сервер числом', () => {
     expect(toEdit({ ...draftOf(card()), price: 'дорого' }).price).toBeNull();
+  });
+
+  it('состояние уезжает кодом и переживает открытие без правки', () => {
+    // Состояние правится с задачи 0039, и «открыл и сохранил, ничего
+    // не трогая» обязано остаться тождеством и для него: уехавшее пустым,
+    // оно у менеджера отобрало бы правку карточки целиком (сервер
+    // сравнивает присланное с текущим).
+    expect(toEdit(draftOf(card({ condition: 'CONTRACT' }))).condition).toBe('CONTRACT');
+  });
+
+  it('пустое состояние — «не трогать», а не «очистить»', () => {
+    // У детали не бывает состояния «не заполнено»: колонка NOT NULL
+    // с умолчанием. Пустое поле формы поэтому означает «оставить как было»,
+    // и это единственное поле формы с такой семантикой.
+    expect(toEdit({ ...draftOf(card()), condition: '' }).condition).toBeNull();
   });
 });

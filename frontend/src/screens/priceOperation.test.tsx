@@ -39,7 +39,7 @@ describe('операция с ценой', () => {
         section: null, barcode: null, weightKg: null, lengthMm: null,
         widthMm: null, heightMm: null, packageLengthMm: null, packageWidthMm: null,
         packageHeightMm: null, packageWeightKg: null, storageCellId: null,
-        published: true,
+        condition: 'USED', published: true,
       });
     }));
   });
@@ -50,7 +50,8 @@ describe('операция с ценой', () => {
   });
 
   it('в карточке шесть операций, умолчание — «Изменить»', async () => {
-    render(<PartEditForm partId={7} row={row()} onSaved={() => {}} onCancel={() => {}} />);
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
     // Цена раскрывается по «Изменить» у своей строки: до этого в карточке
     // значения, а не поля ввода (задача 0038).
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
@@ -67,7 +68,8 @@ describe('операция с ценой', () => {
   });
 
   it('отправляет операцию и её значение, а не посчитанную цену', async () => {
-    render(<PartEditForm partId={7} row={row()} onSaved={() => {}} onCancel={() => {}} />);
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
     fireEvent.click(screen.getByLabelText('Изменить: Цена'));
     expect(screen.getByDisplayValue('27000')).toBeTruthy();

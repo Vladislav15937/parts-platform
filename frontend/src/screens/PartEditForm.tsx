@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
-  CONDITION, QUALITY, QUALITY_GRADES, loadEditable, savePart, priceOperationHint,
-  PRICE_OPERATIONS,
+  CONDITION, CONDITIONS, QUALITY, QUALITY_GRADES, loadEditable, savePart,
+  priceOperationHint, PRICE_OPERATIONS,
   type CatalogRow, type PartEdit, type PriceOperation,
 } from '../inventory/catalog';
 import { generationOf } from '../inventory/partCard';
@@ -43,7 +43,7 @@ import { useMounted } from '../ui/useMounted';
  * Считает сервер: тот же расчёт нужен правке списком, и две копии
  * разошлись бы на первом округлении.
  */
-export function PartEditForm({ partId, row, onSaved, onCancel }: {
+export function PartEditForm({ partId, row, role, onSaved, onCancel }: {
   partId: number;
   /**
    * Строка витрины — за неправимыми полями. Второго запроса за ними
@@ -51,6 +51,12 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
    * в таблице, и карточка её уже держит.
    */
   row: CatalogRow;
+  /**
+   * Роль вошедшего: состояние правит владелец, остальные поля — и менеджер
+   * (задача 0039, пункт 6 критерия). Временно и по нынешнему устройству —
+   * полномочия поштучно придут задачей 0044.
+   */
+  role: string;
   onSaved: () => void;
   onCancel: () => void;
 }) {
@@ -67,6 +73,23 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
   const [priceOp, setPriceOp] = useState<PriceOperation>('SET');
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
+
+  /**
+   * Правит ли эту строку вошедший. Неправимая показывается с замком,
+   * а не прячется: спрятанное поле читается как «этого у вас нет»,
+   * а состояние у детали есть — его просто меняет владелец. То же
+   * правило, по которому с замком стоят номер товара и донорские
+   * сведения.
+   *
+   * <p>Предикат типа, а не просто `boolean`: у неправимой строки ключ
+   * объявлен строкой (она не лежит в черновике), и без сужения союза
+   * `set(field.key, …)` перестаёт собираться. Проверка типов это и
+   * поймала — `vitest` типов не смотрит вовсе.
+   */
+  function editable(field: Field): field is Exclude<Field, { kind: 'locked' }> {
+    return field.kind !== 'locked'
+      && !(field.kind === 'condition' && role !== 'OWNER');
+  }
 
   useEffect(() => {
     let alive = true;
@@ -86,7 +109,7 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
   }
 
   function edit(field: Field): void {
-    if (field.kind === 'locked' || open.includes(field.key)) return;
+    if (!editable(field) || open.includes(field.key)) return;
     setOpen((keys) => [...keys, field.key]);
   }
 
@@ -95,7 +118,7 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
    * снова становится текстом, остальные раскрытые остаются как были.
    */
   function revert(field: Field): void {
-    if (field.kind === 'locked') return;
+    if (!editable(field)) return;
     setOpen((keys) => keys.filter((k) => k !== field.key));
     if (loaded !== null) set(field.key, loaded[field.key]);
     // Цена возвращается вместе с операцией: «Уменьшить на %» при закрытой
@@ -153,6 +176,17 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
           <h4>{section.title}</h4>
           {section.fields.map((field) => {
             const opened = open.includes(field.key);
+            /*
+             * Записано разбором разметки, а не через `editable`, и это
+             * не дубль. Предикат сужает союз — причём и через `const`
+             * (TypeScript помнит условие за именем), — и в ветке «неправимо»
+             * он решал бы, что строка непременно `locked`, тогда как
+             * состояние у менеджера тоже неправимо: сравнение с `condition`
+             * ниже становилось невозможным. Поймала это проверка типов,
+             * а `vitest` типов не смотрит вовсе.
+             */
+            const locked = field.kind === 'locked'
+              || (field.kind === 'condition' && role !== 'OWNER');
             return (
               <div
                 key={field.key}
@@ -161,15 +195,17 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
               >
                 <span className="card-edit__label">
                   {field.label}
-                  {field.kind === 'locked'
-                    && <span title="Это поле система ведёт сама"> 🔒</span>}
+                  {locked
+                    && <span title={field.kind === 'condition'
+                      ? 'Состояние детали меняет владелец'
+                      : 'Это поле система ведёт сама'}> 🔒</span>}
                 </span>
                 <span className="card-edit__value">
                   {opened
                     ? input(field, form, set, priceOp, changeOp)
                     : shownValue(field, form, row)}
                 </span>
-                {field.kind !== 'locked' && (
+                {!locked && (
                   opened
                     ? (
                       <button type="button" className="button--ghost"
@@ -242,6 +278,10 @@ function draftText(field: Field, form: Draft): string {
   switch (field.kind) {
     case 'check':
       return form.published ? 'Да' : 'Нет';
+    case 'condition':
+      // Словом, а не кодом: `USED` на экране — утечка внутреннего
+      // представления, и словарь для этого один на фронтенд.
+      return form.condition === '' ? '' : CONDITION[form.condition] ?? form.condition;
     case 'grade':
       return form.qualityGrade === '' ? '' : QUALITY[form.qualityGrade] ?? form.qualityGrade;
     case 'price':
@@ -294,6 +334,18 @@ function input(
         <textarea aria-label={field.label} rows={2} autoFocus value={form[field.key]}
                   onChange={(e) => set(field.key, e.target.value)} />
       );
+    case 'condition':
+      // Пустого пункта тут нет, в отличие от оценки: у детали всегда
+      // какое-то состояние, и «—» означало бы «очистить» — то, чего
+      // сервер не делает (колонка NOT NULL с умолчанием).
+      return (
+        <select aria-label={field.label} autoFocus value={form.condition}
+                onChange={(e) => set('condition', e.target.value)}>
+          {CONDITIONS.map((condition) => (
+            <option key={condition.key} value={condition.key}>{condition.title}</option>
+          ))}
+        </select>
+      );
     case 'grade':
       return (
         <select aria-label={field.label} autoFocus value={form.qualityGrade}
@@ -323,6 +375,7 @@ type StringKey = { [K in keyof Draft]: Draft[K] extends string ? K : never }[key
 type Field =
   | { kind: 'locked'; key: string; label: string; value: (row: CatalogRow) => string }
   | { kind: 'price'; key: 'price'; label: string; unit?: string }
+  | { kind: 'condition'; key: 'condition'; label: string }
   | { kind: 'grade'; key: 'qualityGrade'; label: string }
   | { kind: 'check'; key: 'published'; label: string }
   | { kind: 'text' | 'area'; key: StringKey; label: string }
@@ -345,8 +398,10 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
       { kind: 'locked', key: 'number', label: '№ позиции',
         value: (r) => plainText(String(r.number)) },
       { kind: 'locked', key: 'code', label: 'Номер товара', value: (r) => plainText(r.code) },
-      { kind: 'locked', key: 'condition', label: 'Состояние',
-        value: (r) => (r.condition === null ? '' : CONDITION[r.condition] ?? r.condition) },
+      // Состояние правится с задачи 0039 — у владельца; менеджер видит
+      // его с замком. Стоит второй строкой, как у ориентира: сразу
+      // под номером товара.
+      { kind: 'condition', key: 'condition', label: 'Состояние' },
       { kind: 'grade', key: 'qualityGrade', label: 'Оценка состояния' },
       { kind: 'price', key: 'price', label: 'Цена', unit: '₽' },
       { kind: 'num', key: 'minPrice', label: 'Минимальная цена', unit: '₽' },
@@ -439,6 +494,7 @@ export interface Draft {
   minPrice: string;
   costPrice: string;
   installationPrice: string;
+  condition: string;
   qualityGrade: string;
   description: string;
   note: string;
@@ -467,6 +523,7 @@ export function draftOf(card: PartEdit): Draft {
     minPrice: text(card.minPrice),
     costPrice: text(card.costPrice),
     installationPrice: text(card.installationPrice),
+    condition: card.condition ?? '',
     qualityGrade: card.qualityGrade ?? '',
     description: card.description ?? '',
     note: card.note ?? '',
@@ -498,6 +555,10 @@ export function toEdit(form: Draft): PartEdit {
     minPrice: number(form.minPrice),
     costPrice: number(form.costPrice),
     installationPrice: number(form.installationPrice),
+    // Пустое состояние — «не трогать», а не «очистить»: у детали нет
+    // состояния «не заполнено». Это единственное поле формы с такой
+    // семантикой, и сервер её повторяет.
+    condition: blank(form.condition),
     qualityGrade: blank(form.qualityGrade),
     description: blank(form.description),
     note: blank(form.note),

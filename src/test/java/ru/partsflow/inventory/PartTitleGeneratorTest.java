@@ -73,6 +73,64 @@ class PartTitleGeneratorTest {
                 .isEqualTo("Фара (восст.)");
     }
 
+    /**
+     * Контрактная деталь помечается своим словом, а не «б/у».
+     *
+     * <p>Контрактная снята с целой машины и не ремонтировалась, б/у —
+     * с разборки: на разборке это разные товары и разная цена. Пока
+     * значения не было, все девять с лишним тысяч контрактных позиций
+     * переехавшего клиента назывались в заголовке «(б/у)».
+     */
+    @Test
+    @DisplayName("Контрактная деталь помечается своим словом")
+    void marksContract() {
+        assertThat(generator.generate("Фара", null, null, PartCondition.CONTRACT, null))
+                .isEqualTo("Фара (контракт)");
+    }
+
+    @Test
+    @DisplayName("Правка состояния двигает пометку, не тронув остального заголовка")
+    void remarkReplacesOnlyTheMark() {
+        String title = generator.generate(
+                "Фара",
+                new VehicleTitlePart("Toyota", "Camry", null, null, 2007),
+                new Sides(LongitudinalSide.FRONT, LateralSide.LEFT, null),
+                PartCondition.USED,
+                "81150-33670");
+
+        assertThat(generator.remark(title, PartCondition.NEW))
+                .isEqualTo("Фара Toyota Camry 2007 перед. лев. (новая) 81150-33670");
+    }
+
+    /**
+     * Самое дорогое утверждение этого класса.
+     *
+     * <p>У перенесённой контрактной позиции в заголовке стоит **список
+     * машин** — донора у неё нет, и применимость перечислена прямо
+     * в названии ({@code BazonImporter}), а {@code TitleApplicability}
+     * эти машины оттуда же и разбирает. Пересборка заголовка из вида
+     * детали, машины и сторон стёрла бы их молча — и вместе с ними
+     * применимость, по которой деталь находят. У переехавшего клиента
+     * таких позиций 9 417 из 35 841.
+     */
+    @Test
+    @DisplayName("Список машин в заголовке переживает правку состояния")
+    void remarkKeepsWhatItDidNotWrite() {
+        String imported = "Фара Toyota, Camry, Allion, Premio (б/у) 81150-33670";
+
+        assertThat(generator.remark(imported, PartCondition.CONTRACT))
+                .isEqualTo("Фара Toyota, Camry, Allion, Premio (контракт) 81150-33670");
+    }
+
+    @Test
+    @DisplayName("Заголовок без пометки её получает, а не остаётся без состояния")
+    void remarkAppendsWhenThereIsNoMark() {
+        // «Без наименования» собирает не этот класс, а битая строка переноса:
+        // пометки в таком заголовке нет вовсе.
+        assertThat(generator.remark("Без наименования", PartCondition.CONTRACT))
+                .isEqualTo("Без наименования (контракт)");
+    }
+
     @Test
     @DisplayName("Пустые атрибуты не оставляют двойных пробелов")
     void doesNotLeaveDoubleSpaces() {

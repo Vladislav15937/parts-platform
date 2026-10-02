@@ -759,7 +759,7 @@ public final class BazonImporter {
             try (PreparedStatement insertPart = c.prepareStatement("""
                      INSERT INTO %s.part (%s, category_id, title, legacy_code, is_published,
                                           condition, status)
-                     VALUES (%s, ?, ?, ?, ?, 'USED', 'DRAFT')
+                     VALUES (%s, ?, ?, ?, ?, ?, 'DRAFT')
                      ON CONFLICT (legacy_code) WHERE legacy_code IS NOT NULL DO NOTHING
                      RETURNING id"""
                      .formatted(schema, partColumns(), partHolders()));
@@ -977,12 +977,19 @@ public final class BazonImporter {
                             long categoryId) throws SQLException {
 
         var years = BazonValueParser.parseYearRange(row.get("Год выпуска"));
+
+        // Состояние разбирается до заголовка, потому что входит в него
+        // пометкой: разойдись они — карточка говорила бы «(б/у)» при
+        // состоянии «контрактная», и это ровно то расхождение, из-за
+        // которого задача 0039 и заведена.
+        PartCondition condition = conditionOf(row);
+
         int at = 1;
         for (int i = 0; i < PART_FIELDS.size(); i++) {
             bind(ps, at++, PART_FIELDS.get(i), values[i]);
         }
         ps.setLong(at++, categoryId);
-        ps.setString(at++, buildTitle(row, row.get("Запчасть"), years));
+        ps.setString(at++, buildTitle(row, row.get("Запчасть"), years, condition));
         // Номер в прежней системе — естественный ключ импорта: по нему повторный
         // запуск узнаёт уже загруженное.
         ps.setString(at++, row.get("Номер товара"));
@@ -1001,7 +1008,8 @@ public final class BazonImporter {
             // через несколько дней.
             unknownPublish.add(publishRaw.trim());
         }
-        ps.setBoolean(at, Boolean.TRUE.equals(publish));
+        ps.setBoolean(at++, Boolean.TRUE.equals(publish));
+        ps.setString(at, condition.name());
 
         try (ResultSet rs = ps.executeQuery()) {
             return rs.next() ? rs.getLong(1) : null;
@@ -1025,8 +1033,33 @@ public final class BazonImporter {
         return fill.executeUpdate();
     }
 
+    /**
+     * Состояние из колонки «Состояние» выгрузки товаров.
+     *
+     * <p>До задачи 0039 его не читал никто: в INSERT стоял литерал
+     * {@code 'USED'}, и «Контракт» прежней системы терялся молча — у
+     * переехавшего клиента контрактных 9 417 позиций из 35 841, и все они
+     * приезжали неотличимыми от б/у, хотя это другой товар и другая цена.
+     *
+     * <p>Колонки в выгрузке может не быть вовсе — она в «Неактивных», как
+     * «Выгружать» и «Превью», — и тогда остаётся прежнее умолчание, а не
+     * выдуманное состояние. По той же причине умолчание стоит здесь, а
+     * не в базе: оно входит ещё и в заголовок.
+     *
+     * <p><b>Дозаполнение повтором его не трогает</b> — {@code condition}
+     * нет в {@code PART_FIELDS}: колонка {@code NOT NULL}, пустой её
+     * не бывает, и {@code COALESCE} всё равно ничего бы не заменил. То же
+     * решение, что у «Выгружать»: владелец мог поправить состояние руками,
+     * и повтор выгрузки не имеет права вернуть старое.
+     */
+    private static PartCondition conditionOf(BazonCsvReader.Row row) {
+        PartCondition parsed = BazonValueParser.parseCondition(row.get("Состояние"));
+        return parsed == null ? PartCondition.USED : parsed;
+    }
+
     private String buildTitle(BazonCsvReader.Row row, String partName,
-                              BazonValueParser.YearRange years) {
+                              BazonValueParser.YearRange years,
+                              PartCondition condition) {
         if (partName == null) {
             return "Без наименования";
         }
@@ -1038,7 +1071,7 @@ public final class BazonImporter {
                 BazonValueParser.parseLateralSide(row.get("Левый / Правый")),
                 null);
 
-        return titleGenerator.generate(partName, vehicle, sides, PartCondition.USED,
+        return titleGenerator.generate(partName, vehicle, sides, condition,
                 row.get("Номер производителя"));
     }
 

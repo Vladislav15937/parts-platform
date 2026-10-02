@@ -26,7 +26,8 @@
   • SET NOT NULL и новая колонка NOT NULL без умолчания, DROP DEFAULT
     у обязательной — старый код вставит строку без неё и получит отказ;
   • новое ограничение на существующую таблицу: CHECK (кроме расширения
-    перечня `IN (…)` под тем же именем), внешний ключ, исключение;
+    перечня под тем же именем — и `IN (…)` у скалярной колонки,
+    и `<@ ARRAY[…]` у колонки-массива), внешний ключ, исключение;
   • новая уникальность на данных, которые старый код может писать дублями,
     и снятая уникальность, на которую опирается `ON CONFLICT`.
 
@@ -556,7 +557,22 @@ def column_def(el, origin, fresh):
 
 
 def in_list(expr):
-    """`(col IN ('a', 'b'))` -> (col, {'a', 'b'}, NULL разрешён) либо None."""
+    """Перечень значений у колонки -> (ключ, {значения}, NULL разрешён) либо None.
+
+    Две записи одного и того же «значения берутся из этого набора»:
+    `col IN ('a', 'b')` у скалярной колонки и `col <@ ARRAY['a','b']::text[]`
+    у колонки-массива (так записан отбор выгрузки, tenant/027). Расширение
+    набора — послабление в обеих, и до задачи 0039 сторож узнавал только
+    первую: расширение перечня у `marketplace_account.conditions` он объявлял
+    НОВЫМ ограничением, то есть краснел на expand'е. Красное на законном
+    пути кончается тем, что проверку отключают, а пометка «--сужение» тут
+    была бы ложью — сужения нет, и назвать релиз, в котором код перестал
+    трогать объект, нечем.
+
+    Ключ несёт форму записи, а не только имя колонки: перечень у скаляра
+    и перечень у массива сравнивать между собой нельзя — это разные типы
+    колонки, и совпадение имён не делает их одним ограничением.
+    """
     e = expr.strip()
     while e.startswith("(") and e.endswith(")"):
         inner, end = paren(e, 0)
@@ -570,9 +586,17 @@ def in_list(expr):
         if e.startswith("(") and e.endswith(")") and paren(e, 0)[1] == len(e):
             e = e[1:-1].strip()
     m = re.match(r"^([\w.]+) in \((.*)\)$", e)
+    form = ""
+    if not m:
+        # Нежадное `.*?` намеренно: жадное съедало бы и закрывающую скобку
+        # набора, и приведение типа — `array['NEW']::text[]` разбиралось бы
+        # в набор «'NEW']::text[», то есть в тихо неверный ответ.
+        m = re.match(r"^([\w.]+) <@ array\[(.*?)\](?:::\w+(?:\[\])?)?$", e)
+        form = " <@"
     if not m or (nm and ident(nm.group(1)) != ident(m.group(1))):
         return None
-    return ident(m.group(1)), {v.strip() for v in split_top(m.group(2))}, nullable
+    return (ident(m.group(1)) + form,
+            {v.strip() for v in split_top(m.group(2))}, nullable)
 
 
 def select_columns(query):
@@ -1176,7 +1200,10 @@ def selftest():
             status text NOT NULL DEFAULT 'IN_STOCK'
                 CONSTRAINT part_status_check CHECK (status IN ('IN_STOCK', 'SOLD')),
             price numeric(12,2) NOT NULL DEFAULT 0,
-            code varchar(20)
+            code varchar(20),
+            conditions text[]
+                CONSTRAINT part_conditions_check
+                CHECK (conditions IS NULL OR conditions <@ ARRAY['NEW', 'USED']::text[])
         );
         CREATE VIEW ${tenant.schema}.v_stock AS
         SELECT p.id, p.name AS title, count(*) AS qty FROM ${tenant.schema}.part p GROUP BY p.id;
@@ -1242,6 +1269,22 @@ def selftest():
            "ALTER TABLE ${tenant.schema}.part DROP CONSTRAINT part_status_check;\n"
            "ALTER TABLE ${tenant.schema}.part ADD CONSTRAINT part_status_check "
            "CHECK (status IN ('IN_STOCK', 'SOLD', 'RESERVED'));")
+    # Тот же перечень у колонки-массива: так записан отбор выгрузки
+    # (tenant/027, `conditions <@ ARRAY[...]`). До задачи 0039 сторож знал
+    # только форму IN и краснел на расширении — то есть на expand'е, законном
+    # пути. Этот случай заодно сторожит нежадность разбора: при жадном `.*`
+    # набор разбирается в «'USED']::text[», подмножеством не окажется,
+    # и строка ниже покраснеет.
+    silent("расширение перечня CHECK в форме массива",
+           "ALTER TABLE ${tenant.schema}.part DROP CONSTRAINT part_conditions_check;\n"
+           "ALTER TABLE ${tenant.schema}.part ADD CONSTRAINT part_conditions_check "
+           "CHECK (conditions IS NULL OR conditions <@ "
+           "ARRAY['NEW', 'USED', 'CONTRACT']::text[]);")
+    red("сужение перечня CHECK в форме массива",
+        "ALTER TABLE ${tenant.schema}.part DROP CONSTRAINT part_conditions_check;\n"
+        "ALTER TABLE ${tenant.schema}.part ADD CONSTRAINT part_conditions_check "
+        "CHECK (conditions IS NULL OR conditions <@ ARRAY['NEW']::text[]);",
+        "новое ограничение CHECK part_conditions_check")
     red("уникальность на старых данных",
         "CREATE UNIQUE INDEX part_name_uk ON ${tenant.schema}.part (name);",
         "новая уникальность part_name_uk")
