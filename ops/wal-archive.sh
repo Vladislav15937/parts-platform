@@ -258,6 +258,12 @@ chain_report() {
 # быстрее прежнего порога по очереди.
 READY_WAIT_LIMIT="${READY_WAIT_LIMIT:-600}"
 
+# Подтверждение офсайта — одно место на этот сторож и на ops/backup.sh
+# (задача 0148): сам запрос живёт там, поэтому «спросить не вышло» нельзя
+# потерять по дороге. Путь от своего каталога, а не от корня: сорсится
+# до `cd`, и у самопроверки cwd бывает чужим.
+. "$(dirname "$0")/offsite-confirm.sh"
+
 BROKEN_WHY=""
 archiver_broken() {  # отказов, когда уехал последний, когда отказал последний, сколько ждёт самый старый .ready
     local failed="$1" last_archived="$2" last_failed="$3" ready_wait="${4:-0}"
@@ -447,6 +453,155 @@ selftest() {
     # Обратный край: короткое ожидание — это обычная работа, а не поломка.
     arch 1 0 1757894400 0          30   "сегмент ждёт полминуты — молчим" || return 1
 
+    # АРХИВАТОР СЕГМЕНТА: у повтора три исхода, а не два (задача 0148).
+    # Своей самопроверки у ops/archive-wal.sh нет и быть не может — его зовёт
+    # сам Postgres внутри контейнера базы (`archive_command`), а здесь он
+    # запускается как обычный скрипт: миллисекунды, ни docker, ни базы.
+    # Стоит это рядом со сторожем того же архива и в той же задаче CI.
+    local aw_script="${AW_SCRIPT:-ops/archive-wal.sh}"
+    local awdir="$tmp/aw" aw_out
+    mkdir -p "$awdir"
+    printf 'сегмент-источник' > "$awdir/src"
+    aw() {   # что лежит в архиве → вывод плюс строка «код=N»
+        local out rc=0 dst="$awdir/000000010000000000000099.gz"
+        rm -f "$dst"
+        case "$1" in
+            нет)    ;;
+            тот)    printf 'сегмент-источник' | gzip -c > "$dst" ;;
+            другой) printf 'чужой-сегмент'    | gzip -c > "$dst" ;;
+            битый)  printf 'обрывок, а не gzip' > "$dst" ;;
+        esac
+        set +e
+        out=$(WAL_ARCHIVE="$awdir" sh "$aw_script" \
+              "$awdir/src" 000000010000000000000099 2>&1)
+        rc=$?
+        set -e
+        printf '%s\nкод=%s\n' "$out" "$rc"
+    }
+    if [ ! -f "$aw_script" ]; then
+        printf 'САМОПРОВЕРКА: не найден %s — исходы архиватора НЕ ПРОВЕРЕНЫ\n' "$aw_script"
+        return 1
+    fi
+
+    aw_out=$(aw нет)
+    case "$aw_out" in
+        *"код=0"*) ok "свежий сегмент уезжает в архив" ;;
+        *) printf 'САМОПРОВЕРКА: свежий сегмент не уехал\n%s\n' "$aw_out"; return 1 ;;
+    esac
+    aw_out=$(aw тот)
+    case "$aw_out" in
+        *"код=0"*) ok "повтор с тем же сегментом — успех" ;;
+        *) printf 'САМОПРОВЕРКА: повтор того же сегмента объявлен бедой\n%s\n' "$aw_out"; return 1 ;;
+    esac
+    aw_out=$(aw другой)
+    case "$aw_out" in
+        *"два кластера"*) : ;;
+        *) printf 'САМОПРОВЕРКА: чужой сегмент не назван чужим\n%s\n' "$aw_out"; return 1 ;;
+    esac
+    case "$aw_out" in
+        *"код=0"*) printf 'САМОПРОВЕРКА: чужой сегмент принят успехом\n%s\n' "$aw_out"; return 1 ;;
+        *) ok "чужой сегмент под тем же именем — отказ словами" ;;
+    esac
+    # Главный случай: в архиве лежит НЕЧИТАЕМЫЙ файл. Прежняя редакция глушила
+    # отказ разжатия и объявляла его вторым кластером, пишущим в тот же архив, —
+    # то есть звала разбираться туда, где разбираться нечего.
+    aw_out=$(aw битый)
+    case "$aw_out" in
+        *"НЕЧИТАЕМЫЙ"*) : ;;
+        *) printf 'САМОПРОВЕРКА: битый файл в архиве не назван битым\n%s\n' "$aw_out"; return 1 ;;
+    esac
+    case "$aw_out" in
+        *"два кластера"*)
+            printf 'САМОПРОВЕРКА: НЕИЗМЕРЕННОЕ — битый файл назван вторым кластером\n%s\n' "$aw_out"
+            return 1 ;;
+    esac
+    case "$aw_out" in
+        *"код=0"*) printf 'САМОПРОВЕРКА: битый файл принят успехом\n%s\n' "$aw_out"; return 1 ;;
+        *) ok "нечитаемый файл в архиве назван своим отказом, а не чужим кластером" ;;
+    esac
+
+    # ПОДТВЕРЖДЕНИЕ ОФСАЙТА: три исхода (задача 0148). Запрос живёт
+    # в ops/offsite-confirm.sh — одном месте на этот сторож и на ops/backup.sh, —
+    # поэтому проверяется он один раз и здесь; `rclone` подменяется в PATH.
+    local offdir="$tmp/off"
+    mkdir -p "$offdir/bin"
+    cat > "$offdir/bin/rclone" <<'RCLONE'
+#!/bin/sh
+case "${STUB_RCLONE:-есть}" in
+    есть)  printf '000000010000000000000099.gz\nprochee.txt\n'; exit 0 ;;
+    нет)   printf 'prochee.txt\n'; exit 0 ;;
+    отказ) printf 'Failed to create file system: didnt find section in config\n' >&2; exit 1 ;;
+esac
+RCLONE
+    chmod +x "$offdir/bin/rclone"
+    off() {   # режим заглушки → «код|причина»
+        # `export` обязателен: заглушка — отдельный процесс, и обычное
+        # присваивание внутри подоболочки до неё не доезжает. Первая редакция
+        # этой пробы на нём и обожглась: все три режима отвечали «есть»,
+        # то есть проба была зелёной, ничего не проверив.
+        ( export PATH="$offdir/bin:$PATH"
+          export STUB_RCLONE="$1"
+          local rc=0
+          offsite_confirm "remote:wal" "000000010000000000000099.gz" || rc=$?
+          printf '%s|%s\n' "$rc" "$OFFSITE_WHY" )
+    }
+    local off_out
+    off_out=$(off есть)
+    case "$off_out" in
+        "0|") ok "файл на той стороне есть — офсайт подтверждён" ;;
+        *) printf 'САМОПРОВЕРКА: уехавший файл не подтверждён: %s\n' "$off_out"; return 1 ;;
+    esac
+    off_out=$(off нет)
+    case "$off_out" in
+        "1|") ok "файла на той стороне нет — так и сказано" ;;
+        *) printf 'САМОПРОВЕРКА: отсутствие файла названо не тем: %s\n' "$off_out"; return 1 ;;
+    esac
+    off_out=$(off отказ)
+    case "$off_out" in
+        2\|*"кодом 1"*"didnt find section"*)
+            ok "отказ rclone — свой исход и своя причина, а не «файла там нет»" ;;
+        *)
+            printf 'САМОПРОВЕРКА: НЕИЗМЕРЕННОЕ — отказ rclone не отделён от «файла нет»: %s\n' \
+                "$off_out"
+            return 1 ;;
+    esac
+
+    # ВОЗВРАТ ДЕФЕКТА к офсайту: вернув глушение отказа `lsf` (в прежней
+    # редакции `2>/dev/null`, здесь — одна строка признака), самопроверка
+    # обязана покраснеть. Копии лежат в `.scratch/` — он игнорируется git
+    # и стоит на той же глубине, что `ops/` (уроки 0151 и 0248); копия сторожа
+    # сорсит копию помощника, потому что путь к нему считается от своего
+    # каталога.
+    if [ -n "${WAL_SELFTEST_FAKE:-}" ]; then
+        ok "подделки своей копии не заводим — рекурсии нет"
+    else
+        mkdir -p .scratch
+        sed 's|^    local asked=yes   # 0148-офсайт$|    local asked=yes; rc=0|' \
+            "$(dirname "$0")/offsite-confirm.sh" > .scratch/offsite-confirm.sh
+        cp "$0" .scratch/wal-archive-offsite-fake-0148.sh
+        if ! grep -q 'local asked=yes; rc=0' .scratch/offsite-confirm.sh; then
+            printf 'САМОПРОВЕРКА: подделку негде поставить — случай про офсайт ничего не утверждает\n'
+            rm -f .scratch/offsite-confirm.sh .scratch/wal-archive-offsite-fake-0148.sh
+            return 1
+        fi
+        if ! bash -n .scratch/offsite-confirm.sh 2>/dev/null; then
+            printf 'САМОПРОВЕРКА: подделка сломала синтаксис — её красное скажет не о том\n'
+            rm -f .scratch/offsite-confirm.sh .scratch/wal-archive-offsite-fake-0148.sh
+            return 1
+        fi
+        set +e
+        WAL_SELFTEST_FAKE=yes AW_SCRIPT="$aw_script" \
+            bash .scratch/wal-archive-offsite-fake-0148.sh --selftest >/dev/null 2>&1
+        local fake_rc=$?
+        set -e
+        rm -f .scratch/offsite-confirm.sh .scratch/wal-archive-offsite-fake-0148.sh
+        if [ "$fake_rc" = 0 ]; then
+            printf 'САМОПРОВЕРКА: ВОЗВРАТ ДЕФЕКТА — проглоченный отказ rclone самопроверку НЕ валит\n'
+            return 1
+        fi
+        ok "возврат дефекта: проглоченный отказ rclone валит самопроверку"
+    fi
+
     rm -rf "$tmp"; trap - EXIT
     printf '\n\033[1;32mСторож архива WAL проверен на себе.\033[0m\n'
 }
@@ -577,13 +732,33 @@ else
     rclone copy "$WAL_DIR" "$OFFSITE_REMOTE/wal" --transfers 8 --quiet
     # «Уехало» проверяется присутствием последнего сегмента на той стороне:
     # rclone отдаёт ноль и когда копировать было нечего.
-    if [ -n "${CHAIN_LAST_NAME:-}" ] && \
-       rclone lsf "$OFFSITE_REMOTE/wal" 2>/dev/null | grep -q "^$CHAIN_LAST_NAME.gz$"; then
-        ok "архив уехал наружу: $OFFSITE_REMOTE/wal"
-        metric partsflow_wal_offsite_success_timestamp_seconds "$(date -u +%s)"
-    else
-        bad "офсайт архива не подтверждён: $CHAIN_LAST_NAME.gz на той стороне нет"
+    #
+    # ТРИ ИСХОДА, А НЕ ОДИН (задача 0148). Прежняя строка печатала
+    # «офсайт архива не подтверждён: $CHAIN_LAST_NAME.gz на той стороне нет»
+    # на три разных состояния: отказ самого `lsf` (нет удалёнки, нет сети, нет
+    # прав — глушился `2>/dev/null`), настоящее отсутствие файла и ПУСТОЕ
+    # имя сегмента, когда цепочка не прочиталась вовсе. В последнем случае
+    # строка выглядела особенно убедительно и особенно бессмысленно: «.gz
+    # на той стороне нет».
+    if [ -z "${CHAIN_LAST_NAME:-}" ]; then
+        bad "офсайт архива НЕ ПРОВЕРЕН: последний сегмент не назван (цепочка выше не прочиталась)"
+        bad "сверять нечего — это не «файла на той стороне нет»"
         RC=1
+    else
+        OFFSITE_RC=0
+        offsite_confirm "$OFFSITE_REMOTE/wal" "$CHAIN_LAST_NAME.gz" || OFFSITE_RC=$?
+        case "$OFFSITE_RC" in
+            0)
+                ok "архив уехал наружу: $OFFSITE_REMOTE/wal"
+                metric partsflow_wal_offsite_success_timestamp_seconds "$(date -u +%s)" ;;
+            2)
+                bad "офсайт архива НЕ ПРОВЕРЕН: спросить ту сторону не удалось ($OFFSITE_WHY)"
+                bad "это НЕ «файла там нет»: $CHAIN_LAST_NAME.gz мог уехать — проверьте удалёнку rclone и сеть"
+                RC=1 ;;
+            *)
+                bad "офсайт архива не подтверждён: $CHAIN_LAST_NAME.gz на той стороне нет"
+                RC=1 ;;
+        esac
     fi
 fi
 

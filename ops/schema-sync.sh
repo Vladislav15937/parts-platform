@@ -96,6 +96,43 @@ flip_build() {   # имя сборки под трафиком
     esac
 }
 
+# Какой образ у выкладываемой сборки — исходов четыре, а не один (задача 0148).
+#
+# Прежняя редакция глушила обе половины запроса (`2>/dev/null`) и на ЛЮБОЙ отказ
+# печатала одно: «Не удалось разобрать образ сборки app-green — проверьте
+# APP_IMAGE_TAG в .env». В эту строку сливались четыре разных беды: незаданный
+# тег (чинится там, куда посылает совет), docker не отвечает, нет python3
+# и «в разобранной конфигурации нет такого сервиса» — а про последнее python
+# ниже говорит своими словами, и эти слова выбрасывались. На трёх бедах из
+# четырёх человек шёл править файл, в котором всё верно, и шёл по совету шага,
+# который этого не проверял.
+#
+# Отдельной функцией — чтобы самопроверка смотрела на САМО сообщение, а не
+# на его половину (тот же приём, что у `no_base_text` в ops/restore-pitr.sh).
+verdict_image() {   # код, образ, первые строки отказа, сборка, файл .env
+    local rc="$1" image="$2" err="$3" build="$4" envfile="$5"
+    # Признак «ответ получен и он непуст» — одной строкой: возврат дефекта
+    # ставится ровно сюда (случай «прежняя редакция» в самопроверке).
+    local asked=yes
+    { [ "$rc" = 0 ] && [ -n "$image" ]; } || asked=no
+    [ "$asked" = no ] || return 0
+    case "$err" in
+        *"в конфигурации нет сервиса"*)
+            red "В разобранной конфигурации нет сервиса $build."
+            red "Это не про APP_IMAGE_TAG: сверьте имя сборки и профиль (COMPOSE_PROFILES)."
+            return 1 ;;
+    esac
+    if [ "$rc" = 0 ]; then
+        red "Образ сборки $build разобрать не удалось: ответ ПУСТОЙ при нулевом коде."
+        red "Сверять нечего, и тег в $envfile при этом может быть цел."
+        return 1
+    fi
+    red "Образ сборки $build СПРОСИТЬ НЕ ВЫШЛО: код ${rc}${err:+ — }${err}"
+    red "Сказано выше про APP_IMAGE_TAG — задайте его в $envfile; сказано"
+    red "про docker или python3 — чинить надо их, а файл цел."
+    return 1
+}
+
 # ─────────────────────────────── самопроверка ────────────────────────────────
 #
 # Без docker и без ячейки: разбор аргументов и выбор сборки — чистые функции.
@@ -172,6 +209,79 @@ selftest() {
         red "  ✗ из «app-chuzhaya» вышло «${out}» вместо отказа"; bad=$((bad + 1))
     fi
 
+    # ОБРАЗ ВЫКЛАДЫВАЕМОЙ СБОРКИ: исходов четыре, а не один (задача 0148),
+    # и проверяются они ПРОГОНОМ ВСЕГО ПУТИ, а не вызовом вердикта: отказ надо
+    # ещё донести до вердикта, а прежняя редакция глушила его на месте вызова
+    # (`2>/dev/null`) — проба, зовущая функцию, этого не видит (урок 0144).
+    # Ни docker, ни ячейки не нужно: `$COMPOSE` подменяется заглушкой.
+    local sdir stub
+    sdir="$(mktemp -d)"
+    stub="$sdir/compose"
+    cat > "$stub" <<'STUB'
+#!/bin/sh
+case " $* " in
+    *" config "*)
+        case "${STUB_IMAGE:-ok}" in
+            ok)    printf '{"services":{"app-green":{"image":"ghcr.io/x/partsflow:abc123"}}}\n'; exit 0 ;;
+            nosvc) printf '{"services":{"app-blue":{"image":"ghcr.io/x/partsflow:abc123"}}}\n'; exit 0 ;;
+            pusto) printf '{"services":{"app-green":{"image":""}}}\n'; exit 0 ;;
+            down)  printf 'cannot connect to the Docker daemon at unix:///var/run/docker.sock\n' >&2
+                   exit 14 ;;
+        esac ;;
+esac
+exit 0
+STUB
+    chmod +x "$stub"
+    sync_run() {  # STUB_IMAGE → вывод шага плюс строка «код=N»
+        local out rc=0
+        set +e
+        out=$(STUB_IMAGE="$1" COMPOSE="$stub" ENV_FILE=/dev/null bash "$SELF" green 2>&1)
+        rc=$?
+        set -e
+        printf '%s\nкод=%s\n' "$out" "$rc"
+    }
+
+    local sync_out
+    sync_out=$(sync_run ok)
+    case "$sync_out" in
+        *"ghcr.io/x/partsflow:abc123"*"код=0"*)
+            printf '  ✓ образ разобран — шаг идёт дальше и называет его\n' ;;
+        *) red "  ✗ исправный разбор образа не прошёл: ${sync_out}"; bad=$((bad + 1)) ;;
+    esac
+
+    #     Главный случай: сервиса нет в разобранной конфигурации (не тот
+    #     профиль). Прежняя редакция глотала слова самого python и посылала
+    #     править APP_IMAGE_TAG в файле, где всё верно.
+    sync_out=$(sync_run nosvc)
+    case "$sync_out" in
+        *"нет сервиса app-green"*) : ;;
+        *) red "  ✗ «нет такого сервиса» не названо своими словами: ${sync_out}"; bad=$((bad + 1)) ;;
+    esac
+    case "$sync_out" in
+        *"проверьте APP_IMAGE_TAG"*)
+            red "  ✗ НЕИЗМЕРЕННОЕ: отсутствие сервиса названо незаданным APP_IMAGE_TAG"
+            bad=$((bad + 1)) ;;
+    esac
+    case "$sync_out" in
+        *"код=0"*) red "  ✗ отсутствие сервиса дало нулевой код"; bad=$((bad + 1)) ;;
+        *) printf '  ✓ «нет такого сервиса» — своя причина, а не APP_IMAGE_TAG\n' ;;
+    esac
+
+    sync_out=$(sync_run down)
+    case "$sync_out" in
+        *"СПРОСИТЬ НЕ ВЫШЛО"*"Docker daemon"*)
+            printf '  ✓ отказ docker назван отказом docker, и показан дословно\n' ;;
+        *) red "  ✗ отказ docker не назван отказом: ${sync_out}"; bad=$((bad + 1)) ;;
+    esac
+
+    sync_out=$(sync_run pusto)
+    case "$sync_out" in
+        *"ответ ПУСТОЙ при нулевом коде"*)
+            printf '  ✓ пустой образ при нулевом коде назван пустым ответом\n' ;;
+        *) red "  ✗ пустой образ назван не тем: ${sync_out}"; bad=$((bad + 1)) ;;
+    esac
+    rm -rf "$sdir"
+
     # ── возврат дефекта ─────────────────────────────────────────────────────
     forgery() {  # имя, программа подделки для python
         local name="$1" program="$2"
@@ -213,6 +323,20 @@ text = text.replace(obrazec, """            *)
 """, 1)
 open(dst, "w", encoding="utf-8").write(text)
 '
+        forgery "любой отказ разбора образа снова зовут править APP_IMAGE_TAG" '
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+text = open(src, encoding="utf-8").read()
+obrazec = "verdict_image() {   # код, образ, первые строки отказа, сборка, файл .env"
+assert obrazec in text, "заголовок вердикта не найден"
+text = text.replace(obrazec, """verdict_image() {
+    { [ "$1" = 0 ] && [ -n "$2" ]; } && return 0
+    red "Не удалось разобрать образ сборки $4 — проверьте APP_IMAGE_TAG в $5"
+    return 1
+}
+old_verdict_image() {""", 1)
+open(dst, "w", encoding="utf-8").write(text)
+'
         forgery "выкладываемой объявлена сборка ПОД ТРАФИКОМ" '
 import sys
 src, dst = sys.argv[1], sys.argv[2]
@@ -248,7 +372,10 @@ case "$ACTION" in
 esac
 
 ENV_FILE="${ENV_FILE:-.env}"
-COMPOSE="docker compose -f docker-compose.prod.yml --env-file $ENV_FILE"
+# Переопределяется только самопроверкой (задача 0148): иначе путь запуска —
+# тот, где глушился отказ разбора образа, — проверить без docker нечем,
+# а проба, зовущая функцию, не проверяет того, что делает запуск (урок 0144).
+COMPOSE="${COMPOSE:-docker compose -f docker-compose.prod.yml --env-file $ENV_FILE}"
 
 # Имя активной сборки берём у switch-build.sh; не смог ответить (файла нет,
 # ячейка ещё не переключалась) — спрашиваем человека, а не угадываем:
@@ -272,13 +399,23 @@ PROFILE="${BUILD#app-}"
 # и в непредсказуемом порядке — проверено прогоном, строки приезжают
 # по-разному от запуска к запуску. Одна не та строка здесь означала бы
 # напечатанный тег, которым ничего не запускали.
-IMAGE=$($COMPOSE --profile "$PROFILE" config --format json \
+#
+# Отказ НЕ глушится (задача 0148): его код и его stderr — это и есть разница
+# между «не тот профиль», «docker не отвечает» и «забыт APP_IMAGE_TAG».
+IMAGE_ERR_FILE="$(mktemp)"
+IMAGE=""
+IMAGE_RC=0
+IMAGE=$($COMPOSE --profile "$PROFILE" config --format json 2>"$IMAGE_ERR_FILE" \
     | python3 -c "import json, sys
 services = json.load(sys.stdin)['services']
 if '$BUILD' not in services:
     sys.exit('в конфигурации нет сервиса $BUILD')
-print(services['$BUILD']['image'])" 2>/dev/null) \
-    || fail "Не удалось разобрать образ сборки $BUILD — проверьте APP_IMAGE_TAG в $ENV_FILE"
+print(services['$BUILD']['image'])" 2>>"$IMAGE_ERR_FILE") || IMAGE_RC=$?
+# Первые три строки отказа в одну: `cut -c` на не-ASCII режет байты на Linux
+# и символы на macOS (урок 0085), а compose и python говорят и по-русски.
+IMAGE_ERR=$(sed -n '1,3p' "$IMAGE_ERR_FILE" | tr '\n' ' ')
+rm -f "$IMAGE_ERR_FILE"
+verdict_image "$IMAGE_RC" "$IMAGE" "$IMAGE_ERR" "$BUILD" "$ENV_FILE" || exit 1
 
 printf 'Сборка: \033[1m%s\033[0m (под трафиком сейчас %s)\n' "$BUILD" "$CURRENT"
 printf 'Образ:  \033[1m%s\033[0m\n' "$IMAGE"

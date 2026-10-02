@@ -48,18 +48,54 @@ stub_env() {  # $1 — строка COMPOSE_PROFILES или слово НЕТ
 # Какие сборки включены при таком .env. `env -u` обязателен: переменная
 # оболочки у compose старше файла, и унаследованная от вызывающего она
 # подменила бы ответ на вопрос, который мы задаём.
+#
+# ОТКАЗ COMPOSE НЕ ГЛУШИТСЯ (задача 0148). Прежняя редакция стояла
+# с `config --services 2>/dev/null`, то есть превращала «docker не отвечает»,
+# «битый yml», «незаданную обязательную переменную» в ПУСТОЙ ответ — а пустой
+# ответ сторож объявлял «поднимутся „ничего“» и дописывал к нему вердикт
+# «Правка профилей меняет то, что поднимется у клиента». Правку профилей он
+# в этом случае не проверял ни разу: вопрос не был задан вовсе.
+#
+# Исходов поэтому три: 0 — ответ получен (в stdout то, что поднимется),
+# 2 — спросить не вышло, и тогда в stdout едет ПРИЧИНА, а не список сборок.
 builds() {  # $1 — строка COMPOSE_PROFILES или слово НЕТ
     stub_env "$1"
-    env -u COMPOSE_PROFILES $DC -f "$COMPOSE_FILE" \
-        --project-directory . --env-file "$TMP/env" config --services 2>/dev/null \
-        | grep '^app-' | sort | tr '\n' ' ' | sed 's/ $//'
+    local out rc=0 why
+    out=$(env -u COMPOSE_PROFILES $DC -f "$COMPOSE_FILE" \
+        --project-directory . --env-file "$TMP/env" config --services 2>"$TMP/dc-err") || rc=$?
+    # Первые две строки отказа в одну: `cut -c` на не-ASCII режет байты
+    # на Linux и символы на macOS (урок 0085), а compose говорит и по-русски.
+    why=$(sed -n '1,2p' "$TMP/dc-err" 2>/dev/null | tr '\n' ' ')
+    # Признак «ответ получен» — одной строкой: возврат дефекта (случай 4
+    # самопроверки) ставится ровно сюда, одной заменой.
+    local asked=yes
+    [ "$rc" = 0 ] || asked=no
+    if [ "$asked" = no ]; then
+        # Причина едет в STDOUT, а не в переменной: функцию зовут из `$( )`,
+        # то есть из подоболочки, откуда присваивание наружу не доезжает.
+        # Первая редакция этой правки на том и обожглась — сторож печатал
+        # «compose вышел кодом 0» при настоящем коде 14; тот же урок уже
+        # оплачен в 0151 (банка cookie) и 0241 (признак выданного токена).
+        printf 'кодом %s%s' "$rc" "${why:+ — $why}"
+        return 2
+    fi
+    printf '%s' "$out" | grep '^app-' | sort | tr '\n' ' ' | sed 's/ $//'
+    return 0
 }
 
 # Случаи. Первый — тот, ради которого сторож написан; четвёртый — обратный
 # край, и без него «починка» удалением профилей прошла бы проверку.
+#
+# Третий исход — «спросить не вышло» — печатается своими словами и своим
+# знаком: он не говорит ни что правка профилей цела, ни что она сломана.
 check() {  # $1 — что в .env, $2 — ожидание, $3 — чем это важно человеку
-    local got
-    got=$(builds "$1")
+    local got rc=0
+    got=$(builds "$1") || rc=$?
+    if [ "$rc" != 0 ]; then
+        red "  ? $3: СПРОСИТЬ НЕ ВЫШЛО — compose вышел ${got}"
+        red "    какие сборки поднимутся при таком .env, НЕ ПРОВЕРЕНО"
+        return 2
+    fi
     if [ "$got" = "$2" ]; then
         printf '  ✓ %s → %s\n' "$3" "${got:-ничего}"
         return 0
@@ -68,14 +104,31 @@ check() {  # $1 — что в .env, $2 — ожидание, $3 — чем эт�
     return 1
 }
 
+# Два исхода собираются по отдельности: расхождение — это «правка профилей
+# меняет то, что поднимется», а неотвеченный вопрос — «сторож не проверил».
+# Сложенные в один код возврата, они дали бы ровно ту подмену, которую
+# задача 0148 и чинит.
+CHECKS_UNKNOWN=0
 run_checks() {
-    local bad=0
-    check "НЕТ"        "app-blue"           "без строки COMPOSE_PROFILES поднимается прежняя сборка" || bad=1
-    check ""           "app-blue"           "пустая строка — то же самое, а не «ни одной»"           || bad=1
-    check "blue"       "app-blue"           "COMPOSE_PROFILES=blue"                                  || bad=1
-    check "green"      "app-green"          "COMPOSE_PROFILES=green — синяя НЕ воскресает"           || bad=1
-    check "blue,green" "app-blue app-green" "COMPOSE_PROFILES=blue,green — окно выкладки"            || bad=1
-    return $bad
+    local bad=0 rc
+    CHECKS_UNKNOWN=0
+    for_each_case() {  # $1 — что в .env, $2 — ожидание, $3 — чем важно
+        rc=0
+        check "$1" "$2" "$3" || rc=$?
+        case "$rc" in
+            0) ;;
+            2) CHECKS_UNKNOWN=1 ;;
+            *) bad=1 ;;
+        esac
+    }
+    for_each_case "НЕТ"        "app-blue"           "без строки COMPOSE_PROFILES поднимается прежняя сборка"
+    for_each_case ""           "app-blue"           "пустая строка — то же самое, а не «ни одной»"
+    for_each_case "blue"       "app-blue"           "COMPOSE_PROFILES=blue"
+    for_each_case "green"      "app-green"          "COMPOSE_PROFILES=green — синяя НЕ воскресает"
+    for_each_case "blue,green" "app-blue app-green" "COMPOSE_PROFILES=blue,green — окно выкладки"
+    [ "$bad" = 0 ] || return 1
+    [ "$CHECKS_UNKNOWN" = 0 ] || return 2
+    return 0
 }
 
 # --- проверка самого сторожа ------------------------------------------------
@@ -111,6 +164,58 @@ selftest() {
         red "  ✗ снятый профиль обязан валить сторожа: погашенная сборка воскресает"; ok=1
     else
         printf '  ✓ снятый профиль — красное: при COMPOSE_PROFILES=green поднималась бы и синяя\n'
+    fi
+
+    # 3. СПРОСИТЬ НЕ ВЫШЛО — это НЕ «поднимутся „ничего“» (задача 0148).
+    #    compose подменяется заглушкой, которая падает со своим stderr: сторож
+    #    обязан назвать отказ отказом, а не объявить правку профилей сломанной.
+    #    Подделкой это не проверить — предмет здесь сам отказ инструмента.
+    cat > "$TMP/dc-broken" <<'DC'
+#!/bin/sh
+echo 'no configuration file provided: not found' >&2
+exit 14
+DC
+    chmod +x "$TMP/dc-broken"
+    local out rc=0
+    set +e
+    out=$(DC="$TMP/dc-broken" run_checks 2>&1); rc=$?
+    set -e
+    case "$out" in
+        *"СПРОСИТЬ НЕ ВЫШЛО"*"14"*)
+            printf '  ✓ отказ compose назван отказом, и назван его код\n' ;;
+        *) red "  ✗ отказ compose не назван отказом: ${out}"; ok=1 ;;
+    esac
+    case "$out" in
+        *"поднимутся «ничего»"*)
+            red "  ✗ НЕИЗМЕРЕННОЕ: неотвеченный вопрос назван ответом «поднимутся ничего»"; ok=1 ;;
+    esac
+    case "$out" in
+        *"НЕ ПРОВЕРЕНО"*) ;;
+        *) red "  ✗ не сказано, что сборки при таком .env не проверены"; ok=1 ;;
+    esac
+    [ "$rc" != 0 ] || { red "  ✗ неотвеченный вопрос дал нулевой код возврата"; ok=1; }
+
+    # 4. ВОЗВРАТ ДЕФЕКТА к случаю 3: вернув глушение отказа (в прежней редакции
+    #    это `config --services 2>/dev/null`, здесь — одна строка признака),
+    #    самопроверка обязана покраснеть. Копия лежит в `.scratch/`: каталог
+    #    игнорируется git и стоит на той же глубине, что `ops/`, то есть корень
+    #    репозитория разрешается туда же (уроки 0151 и 0248).
+    if [ -n "${BUILDS_GUARD_SELFTEST_FAKE:-}" ]; then
+        printf '  ✓ подделки своей копии не заводим — рекурсии нет\n'
+    else
+        mkdir -p .scratch
+        local fake=".scratch/builds-guard-asked-fake-0148.sh"
+        sed 's|^    local asked=yes$|    local asked=yes; rc=0|' "$0" > "$fake"
+        if ! grep -q 'local asked=yes; rc=0' "$fake"; then
+            red "  ✗ подделку негде поставить — случай 3 ничего не утверждает"; ok=1
+        elif ! bash -n "$fake" 2>/dev/null; then
+            red "  ✗ подделка сломала синтаксис — её красное скажет не о том"; ok=1
+        elif BUILDS_GUARD_SELFTEST_FAKE=yes bash "$fake" --selftest >/dev/null 2>&1; then
+            red "  ✗ ВОЗВРАТ ДЕФЕКТА: проглоченный отказ compose самопроверку НЕ валит"; ok=1
+        else
+            printf '  ✓ возврат дефекта: проглоченный отказ compose валит самопроверку\n'
+        fi
+        rm -f "$fake"
     fi
 
     [ $ok = 0 ] || { red "Самопроверка не прошла"; exit 1; }
