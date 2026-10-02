@@ -155,6 +155,49 @@ class DromPriceWriterTest {
         }
 
         @Test
+        @DisplayName("Текст наличия и вилка дней уходят отдельными тегами")
+        void writesAvailabilityAndLeadTime() throws Exception {
+            // Отдельными тегами, а не фразой в описании: эталон площадки
+            // просит этого прямо, и разбирает она именно теги.
+            String xml = write(offerAt(
+                    new DromOffer.Placement("54 YARD", "под заказ", 2, 4)));
+
+            assertThat(xml)
+                    .contains("<sklad>54 YARD</sklad>")
+                    .contains("<nalichie>под заказ</nalichie>")
+                    .contains("<srok_zakaza_ot>2</srok_zakaza_ot>")
+                    .contains("<srok_zakaza_do>4</srok_zakaza_do>");
+        }
+
+        @Test
+        @DisplayName("Ноль дней не пишется, а в вилке «0–4» нижняя граница остаётся")
+        void zeroDaysAreNotNoise() throws Exception {
+            // Для покупателя «ноль дней» и «дней не назвали» — одно и то же:
+            // ждать не надо. А вот у вилки «0–4» значима и нижняя граница —
+            // она говорит «может быть, и сегодня».
+            assertThat(write(offerAt(new DromOffer.Placement("Ткацкая", "в наличии", 0, 0))))
+                    .contains("<nalichie>в наличии</nalichie>")
+                    .doesNotContain("<srok_zakaza_ot>")
+                    .doesNotContain("<srok_zakaza_do>");
+
+            assertThat(write(offerAt(new DromOffer.Placement("Ткацкая", "в наличии", 0, 4))))
+                    .contains("<srok_zakaza_ot>0</srok_zakaza_ot>")
+                    .contains("<srok_zakaza_do>4</srok_zakaza_do>");
+        }
+
+        @Test
+        @DisplayName("Склад без заданного наличия не получает пустого элемента")
+        void skipsAvailabilityWhenUnset() throws Exception {
+            // Пустой <nalichie> площадка читает как заполненный пустым
+            // значением, а выдуманное нами «в наличии» уехало бы покупателю
+            // от имени разборки, которая этого не обещала.
+            assertThat(write(offerAt(new DromOffer.Placement("Ткацкая", null, null, null))))
+                    .contains("<sklad>Ткацкая</sklad>")
+                    .doesNotContain("<nalichie>")
+                    .doesNotContain("<srok_zakaza_");
+        }
+
+        @Test
         @DisplayName("В наименовании выгрузки нет сокращений и повторов")
         void nameIsPlain() throws Exception {
             DromOffer abbreviated = new DromOffer("P-8",
@@ -409,7 +452,7 @@ class DromPriceWriterTest {
                 VerticalSide.LOWER,
                 "Чёрный",
                 "AM334388K",
-                "Ткацкая",
+                new DromOffer.Placement("Ткацкая", null, null, null),
                 List.of("https://parts.example.ru/feeds/drom/yardt/tok/photo/11.jpg",
                         "https://parts.example.ru/feeds/drom/yardt/tok/photo/12.jpg"),
                 "Honda",
@@ -422,6 +465,25 @@ class DromPriceWriterTest {
                 null,
                 null,
                 null);
+    }
+
+    /**
+     * Та же позиция, но с другим размещением.
+     *
+     * <p>Поля перечислены руками, а не скопированы «как-нибудь»: у записи
+     * нет копирующего конструктора, и компилятор здесь единственный, кто
+     * заметит перепутанные местами соседи одного типа.
+     */
+    private static DromOffer offerAt(DromOffer.Placement placement) {
+        DromOffer base = offer();
+        return new DromOffer(
+                base.orderCode(), base.name(), base.partKind(), base.description(),
+                base.price(), base.availableQty(), base.condition(), base.manufacturer(),
+                base.oemNumber(), base.analogNumbers(), base.lateralSide(),
+                base.longitudinalSide(), base.verticalSide(), base.color(), base.marking(),
+                placement, base.photos(), base.carBrand(), base.carModel(), base.bodyCode(),
+                base.engineCode(), base.year(), base.fromDonor(), base.textBlock(),
+                base.videoUrl(), base.installationNote(), base.expectedNote());
     }
 
     private String write(DromOffer... offers) throws XMLStreamException {

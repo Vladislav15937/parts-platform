@@ -14,6 +14,16 @@ export interface Warehouse {
   name: string;
   branchName: string | null;
   cells: number;
+  /**
+   * Текст наличия этого склада, который покупатель читает в объявлении:
+   * «в наличии», «под заказ». `null` — владелец его не задавал, и тогда
+   * в прайс не уходит ничего: молча ничего не выдумываем.
+   */
+  availabilityNote: string | null;
+  /** Нижняя граница вилки дней заказа. Ноль — «забрать можно сегодня». */
+  orderDaysFrom: number | null;
+  /** Верхняя граница вилки. */
+  orderDaysTo: number | null;
 }
 
 export function listWarehouses(): Promise<Warehouse[]> {
@@ -46,6 +56,85 @@ export function createWarehouse(name: string, branchId: number | null): Promise<
   return request<Warehouse>('/api/organization/warehouses', {
     method: 'POST',
     body: { name, branchId },
+  });
+}
+
+/**
+ * Срок словами: «2–4 дн.», «до 4 дн.», «от 2 дн.».
+ *
+ * <p>`null` — срок не назван: незаданная вилка и ноль дней значат для
+ * покупателя одно и то же — ждать не надо, — и «0 дн.» на экране было бы
+ * шумом. Это же правило держит прайс (`DromOffer.Placement.namesLeadTime`),
+ * и держат его два места: сервер пишет элементы объявления, экран —
+ * слова владельцу. Разойдясь, они покажут владельцу не то, что уедет
+ * покупателю.
+ *
+ * <p>Сокращение «дн.» не склоняется, поэтому помощник склонения здесь
+ * не нужен: «2–4 дня» от «4 дней» падежом не отличить.
+ */
+export function leadTimeWords(
+  from: number | null | undefined, to: number | null | undefined,
+): string | null {
+  const hasFrom = from !== null && from !== undefined && from > 0;
+  const hasTo = to !== null && to !== undefined && to > 0;
+  if (!hasFrom && !hasTo) {
+    return null;
+  }
+  if (hasFrom && hasTo) {
+    return from === to ? `${from} дн.` : `${from}–${to} дн.`;
+  }
+  return hasTo ? `до ${to} дн.` : `от ${from} дн.`;
+}
+
+/**
+ * Что стоит у склада, одной строкой для таблицы.
+ *
+ * <p>«не задано» словами, а не пустая клетка: пустая читается как «не знаем»,
+ * а мы знаем — владелец этому складу ничего не задавал, и в объявление
+ * не уходит ничего.
+ *
+ * <p><b>Отсутствие поля считается тем же «не задано», и это не перестраховка.</b>
+ * Тип описывает, что обещал сервер, а не что пришло: сборка старше этой
+ * задачи полей не отдаёт вовсе, и `undefined !== null` — то есть проверка
+ * на `null` их пропускает, а `.trim()` на `undefined` роняет **весь экран**.
+ * Поймано полным прогоном: падал не свой тест, а два чужих файла, где
+ * фикстура склада заведена до этих полей. Ровно тот класс, о котором
+ * `docs/frontend-rules.md` §3 и предупреждает.
+ */
+export function availabilitySummary(warehouse: Warehouse): string {
+  const said: string[] = [];
+  const note = warehouse.availabilityNote ?? null;
+  if (note !== null && note.trim() !== '') {
+    said.push(note);
+  }
+  const term = leadTimeWords(warehouse.orderDaysFrom, warehouse.orderDaysTo);
+  if (term !== null) {
+    said.push(term);
+  }
+  return said.length === 0 ? 'не задано' : said.join(' · ');
+}
+
+/**
+ * Текст наличия склада и вилка дней заказа.
+ *
+ * <p>Склады у клиента в разных местах, и деталь с дальнего едет несколько
+ * дней: в прайс уходило булево «есть», и покупатель узнавал про срок уже
+ * по телефону.
+ *
+ * <p>Пустой текст и пустые дни уезжают `null`, а не пустой строкой и не
+ * нулём: `null` означает «не задано» — склад ведёт себя как раньше, —
+ * а ноль дней значит «забрать можно сегодня». Превратив одно в другое
+ * здесь, экран отдал бы владельцу не то, что тот выбрал.
+ */
+export function setWarehouseAvailability(
+  warehouseId: number,
+  availabilityNote: string | null,
+  orderDaysFrom: number | null,
+  orderDaysTo: number | null,
+): Promise<Warehouse> {
+  return request<Warehouse>(`/api/organization/warehouses/${warehouseId}/availability`, {
+    method: 'PUT',
+    body: { availabilityNote, orderDaysFrom, orderDaysTo },
   });
 }
 

@@ -58,11 +58,66 @@ public class OrganizationService {
     public List<Warehouse> warehouses() {
         return jdbc.query("""
                 SELECT w.id, w.branch_id, w.name, b.name AS branch_name,
+                       w.availability_note, w.order_days_from, w.order_days_to,
                        (SELECT count(*) FROM storage_cell c
                          WHERE c.warehouse_id = w.id AND c.is_active) AS cells
                   FROM warehouse w
                   JOIN branch b ON b.id = w.branch_id
                  ORDER BY b.name, w.name, w.id""", OrganizationService::warehouse);
+    }
+
+    /**
+     * Текст наличия склада и вилка дней заказа — то, что покупатель читает
+     * в объявлении вместо булева «есть».
+     *
+     * <p><b>Зачем.</b> Склады у клиента в разных местах, и деталь с дальнего
+     * едет несколько дней. В прайс уходило одно `available`, и покупатель,
+     * приехавший за деталью сегодня, узнавал про срок уже по телефону.
+     *
+     * <p><b>Пусто — «не задано», а не значение.</b> Вычищенный руками текст
+     * приезжает пустой строкой, и записать её значило бы выгружать в объявление
+     * пустую строку наличия. NULL же означает «владелец про этот склад ничего
+     * не говорил», и прайс тогда ведёт себя ровно как раньше. Та же природа,
+     * что у снятого штрихкода и у пометки об НДС.
+     *
+     * <p><b>А ноль дней — значение, и это здесь главное отличие.</b> «В наличии,
+     * ноль дней» — это обычный ближний склад, с которого забирают сегодня;
+     * прочитать ноль как «не заполнено» значило бы потерять ровно тот случай,
+     * которым задача и начинается.
+     *
+     * <p><b>Границы проверяет служба, а не аннотация на запросе и не схема.</b>
+     * `CHECK` в схеме — последний рубеж, и приезжает он отказом базы без слов
+     * о том, что не так; одно правило не должно жить в двух местах. Тот же
+     * довод, что у срока резервирования в `CompanySettingsService`.
+     */
+    @Transactional
+    public Warehouse setAvailability(long warehouseId, String note,
+                                     Integer daysFrom, Integer daysTo) {
+        requireExists("warehouse", warehouseId, NotFound.WAREHOUSE);
+        requireDays(daysFrom, "Дней заказа «от»");
+        requireDays(daysTo, "Дней заказа «до»");
+        if (daysFrom != null && daysTo != null && daysTo < daysFrom) {
+            throw new IllegalArgumentException(
+                    "Верхняя граница вилки дней меньше нижней: " + daysFrom + "–" + daysTo);
+        }
+
+        jdbc.update("""
+                UPDATE warehouse
+                   SET availability_note = ?, order_days_from = ?, order_days_to = ?
+                 WHERE id = ?""",
+                note == null || note.isBlank() ? null : note.strip(),
+                daysFrom, daysTo, warehouseId);
+
+        return warehouses().stream()
+                .filter(w -> w.id() == warehouseId)
+                .findFirst()
+                .orElseThrow(() -> NotFound.WAREHOUSE.error(warehouseId));
+    }
+
+    private static void requireDays(Integer days, String what) {
+        if (days != null && days < 0) {
+            throw new IllegalArgumentException(what + " не может быть меньше нуля");
+        }
     }
 
     @Transactional
@@ -140,7 +195,12 @@ public class OrganizationService {
 
     private static Warehouse warehouse(ResultSet rs, int row) throws SQLException {
         return new Warehouse(rs.getLong("id"), rs.getLong("branch_id"),
-                rs.getString("name"), rs.getString("branch_name"), rs.getInt("cells"));
+                rs.getString("name"), rs.getString("branch_name"), rs.getInt("cells"),
+                rs.getString("availability_note"),
+                // getObject, а не getInt: тот отдаёт на незаполненные дни ноль,
+                // а ноль здесь законное значение — «забрать можно сегодня».
+                rs.getObject("order_days_from", Integer.class),
+                rs.getObject("order_days_to", Integer.class));
     }
 
     private static Cell cell(ResultSet rs, int row) throws SQLException {
@@ -181,7 +241,17 @@ public class OrganizationService {
     public record Branch(Long id, String name) {
     }
 
-    public record Warehouse(Long id, Long branchId, String name, String branchName, int cells) {
+    /**
+     * @param availabilityNote текст наличия, который покупатель читает
+     *                         в объявлении: «в наличии», «под заказ».
+     *                         {@code null} — владелец его не задавал,
+     *                         и прайс ведёт себя как раньше
+     * @param orderDaysFrom    нижняя граница вилки дней заказа; ноль — значение
+     *                         («сегодня»), {@code null} — «не задано»
+     * @param orderDaysTo      верхняя граница вилки
+     */
+    public record Warehouse(Long id, Long branchId, String name, String branchName, int cells,
+                            String availabilityNote, Integer orderDaysFrom, Integer orderDaysTo) {
     }
 
     public record Cell(Long id, String code, String zone, boolean active) {

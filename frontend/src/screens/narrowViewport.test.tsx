@@ -160,8 +160,15 @@ const WAREHOUSES = [
   {
     id: 1, branchId: 1, name: 'Основной склад на Ткацкой, бокс 3 (второй этаж)',
     branchName: 'Основной склад', cells: 128,
+    // Колонка «Наличие в объявлении» тоже тянет ширину, и мерить её надо
+    // тем, что бывает у клиента: текст наличия пишет владелец своими
+    // словами (задача 0008).
+    availabilityNote: 'в наличии', orderDaysFrom: 0, orderDaysTo: null,
   },
-  { id: 2, branchId: 1, name: '54 YARD', branchName: 'Основной склад', cells: 0 },
+  {
+    id: 2, branchId: 1, name: '54 YARD', branchName: 'Основной склад', cells: 0,
+    availabilityNote: 'под заказ, из Японии', orderDaysFrom: 2, orderDaysTo: 4,
+  },
 ];
 
 const SUPPLIES = [
