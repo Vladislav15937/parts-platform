@@ -1,8 +1,8 @@
 ---
 id: 0009
 title: Фото, видео и описание донора уходят в объявление выбранных наименований
-status: новая
-assignee: —
+status: в работе
+assignee: coder (ветка feature/0009)
 source: разведка 05.09.2026, §9 bazon-parity
 pr: —
 ---
