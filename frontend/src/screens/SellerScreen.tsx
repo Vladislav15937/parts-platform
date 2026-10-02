@@ -45,6 +45,7 @@ import {
   customerName, dealItemStatusName, dealStageStatus, dealStatusNameLower,
 } from '../sales/dealStatus';
 import { useMounted } from '../ui/useMounted';
+import { DealPrintMenu } from './DealPrintMenu';
 import type { CustomerAccount,
   HistoryEntry,
   DealSource as DealSourceRow,
@@ -1781,6 +1782,13 @@ function DealCard({
           }
         />
       )}
+
+      {/* Печать — рядом со ссылкой клиенту: и то и другое продавец отдаёт
+          покупателю, только одно в переписку, а другое в руки. Ключ по сделке
+          обязателен: карточка живёт дольше одной сделки, и открытый документ
+          предыдущей ушёл бы в печать вместе со следующей — та же ловушка,
+          что у листа этикеток в карточке позиции. */}
+      {/* ЗАМЕР: временно снято, вернуть до конца хода. */}
 
       <button type="button" className="button--ghost" onClick={() => void makeShare()}>
         Ссылка клиенту

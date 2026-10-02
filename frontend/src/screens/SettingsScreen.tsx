@@ -21,8 +21,9 @@ import {
   MIN_RESERVATION_DAYS,
 } from '../settings/company';
 import { useMounted } from '../ui/useMounted';
+import { PrintFormsPanel } from './PrintFormsPanel';
 
-type Section = 'payment' | 'deal' | 'reservation';
+type Section = 'payment' | 'deal' | 'reservation' | 'print';
 
 /**
  * Настройки — экран владельца.
@@ -68,11 +69,19 @@ export function SettingsScreen() {
           >
             Срок резервирования
           </button>
+          <button
+            type="button"
+            className={section === 'print' ? 'tab tab--active' : 'tab'}
+            onClick={() => setSection('print')}
+          >
+            Печатные формы
+          </button>
         </nav>
         <div className="settings-content">
           {section === 'payment' && <PaymentSourcesPanel />}
           {section === 'deal' && <DealSourcesPanel />}
           {section === 'reservation' && <ReservationTermPanel />}
+          {section === 'print' && <PrintFormsPanel />}
         </div>
       </div>
     </section>

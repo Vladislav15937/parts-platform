@@ -65,14 +65,39 @@ public class SalesController {
     private final PartService parts;
     private final ru.partsflow.platform.security.MemberService members;
     private final ru.partsflow.platform.settings.CompanySettingsService companySettings;
+    private final DealPrintService dealPrint;
 
     public SalesController(SalesService sales, PartService parts,
                            ru.partsflow.platform.security.MemberService members,
-                           ru.partsflow.platform.settings.CompanySettingsService companySettings) {
+                           ru.partsflow.platform.settings.CompanySettingsService companySettings,
+                           DealPrintService dealPrint) {
         this.sales = sales;
         this.parts = parts;
         this.members = members;
         this.companySettings = companySettings;
+        this.dealPrint = dealPrint;
+    }
+
+    /**
+     * Что напечатать по этой сделке: чек, накладную, счёт.
+     *
+     * <p><b>Роли те же, что у самой сделки ({@link #get}), а не у настроек
+     * печати.</b> Печать — это раздел того же документа, и правило задачи 0029
+     * записано в javadoc класса: разделы одного документа идут за самим
+     * документом. Кладовщик здесь нужен не формально — товар покупателю
+     * отдаёт он, и бумагу вместе с товаром отдаёт он же. А вот <b>настройку</b>
+     * печати правит только владелец ({@code PrintSettingsController}): это
+     * пункт 7 критерия приёмки задачи 0051 — «менеджер и продавец печатают,
+     * но настройку не меняют».
+     *
+     * <p>Форму выбирает человек в меню, а сервер отдаёт один ответ на все
+     * четыре: данные у них одни и те же, различаются вёрстка и то, чьи
+     * реквизиты стоят в шапке.
+     */
+    @GetMapping("/{id}/print")
+    @PreAuthorize(ISSUES)
+    public DealPrintService.DealPrintView print(@PathVariable Long id) {
+        return dealPrint.of(id);
     }
 
     /**

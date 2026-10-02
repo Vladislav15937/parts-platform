@@ -1377,19 +1377,130 @@ hr {
   letter-spacing: 0.3mm;
 }
 
+/* Меню «Печатать» в карточке сделки: четыре формы списком под кнопкой.
+   Список, а не выпадающий `select`: пункты здесь — действия, а не значение
+   поля, и нажатие сразу открывает документ. */
+.print-menu__list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 0 0 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+/* Документ сделки. Чёрным по белому и своими размерами: это бумага, которую
+   покупатель уносит с собой, а не экран кабинета. */
+.print-doc {
+  background: #fff;
+  color: #000;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.print-doc__seller {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.print-doc__role {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #555;
+}
+
+/* Реквизиты вводят многострочным полем и печатают так же: разбирать блок
+   на строки мы не вправе — владелец вписывает туда и телефон, и ОГРНИП. */
+.print-doc__details {
+  white-space: pre-line;
+  font-weight: 600;
+}
+
+.print-doc__missing {
+  color: #a12a2a;
+}
+
+.print-doc__title {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.print-doc__party,
+.print-doc__money,
+.print-doc__vat,
+.print-doc__note {
+  margin: 0 0 4px;
+}
+
+.print-doc__total {
+  margin: 8px 0 4px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.print-doc__extra {
+  margin: 10px 0 0;
+  white-space: pre-line;
+  /* Размер доп. текста у ориентира настраивается, у нас нет: лишняя настройка
+     без спроса владельца — решение за него. 11 пикселей — то, что стоит
+     у клиента умолчанием. */
+  font-size: 11px;
+}
+
+.print-doc__signs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.print-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+
+.print-table th,
+.print-table td {
+  border: 1px solid #999;
+  padding: 4px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+/* Числа выравниваются по разряду, как в отчётах: столбец «Сумма» складывают
+   глазами, и «9 500» под «120 000» без этого читаются как одинаковые. */
+.print-table .num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 @media print {
-  /* Печатается только лист этикеток: интерфейс вокруг на рулон не влезает
-     и стоит впустую потраченной ленты. */
+  /* Печатается только то, что печатают: лист этикеток или документ сделки.
+     Интерфейс вокруг на рулон не влезает и стоит впустую потраченной ленты,
+     а в товарном чеке рельс и кнопки покупателю не нужны вовсе. */
   body * {
     visibility: hidden;
   }
 
   .label-sheet,
-  .label-sheet * {
+  .label-sheet *,
+  .print-sheet,
+  .print-sheet * {
     visibility: visible;
   }
 
-  .label-sheet {
+  .label-sheet,
+  .print-sheet {
     position: absolute;
     top: 0;
     left: 0;
@@ -1398,20 +1509,49 @@ hr {
     gap: 0;
   }
 
+  .print-sheet {
+    width: 100%;
+  }
+
   .label {
     border: none;
     /* Каждая этикетка — своя страница: рулон подаётся по одной. */
     page-break-after: always;
     break-after: page;
+    /* Размер страницы — именованный, а не общий на документ (задача 0051).
+       Пока он стоял безымянным `@page`, он действовал на **всё**, что
+       печатает приложение, и товарный чек уехал бы на рулон 58×40 мм. */
+    page: label;
+  }
+
+  /* Товарный чек и накладная — лист A4: это бумага, которую покупатель
+     уносит с собой и приносит обратно по гарантии. */
+  .print-doc {
+    page: document;
+    /* «Товарный чек и накладная» — две страницы, а не один лист с двумя
+       блоками: их подписывают по отдельности и хранят по отдельности. */
+    page-break-after: always;
+    break-after: page;
+  }
+
+  /* У последнего документа пустой страницы за ним быть не должно. */
+  .print-doc:last-child {
+    page-break-after: auto;
+    break-after: auto;
   }
 
   .no-print {
     display: none;
   }
 
-  @page {
+  @page label {
     size: 58mm 40mm;
     margin: 0;
+  }
+
+  @page document {
+    size: A4 portrait;
+    margin: 12mm;
   }
 }
 
