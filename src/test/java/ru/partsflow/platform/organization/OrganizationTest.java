@@ -158,6 +158,121 @@ class OrganizationTest extends PostgresTestBase {
                         .value(org.hamcrest.Matchers.containsString("Филиал не найден")));
     }
 
+    /**
+     * Текст наличия склада и вилка дней заказа задаются через API (задача 0008).
+     *
+     * <p>Проверяется через HTTP, а не вызовом службы: ответ наружу — запись,
+     * и обычный класс Jackson не сериализует вовсе.
+     */
+    @Test
+    @DisplayName("Наличие склада задаётся, пустое становится «не задано»")
+    void warehouseAvailabilityIsStored() throws Exception {
+        String code = tenant("Разборка с двумя складами");
+        MockHttpSession session = login(code);
+        long warehouseId = warehouseOf(session);
+
+        mvc.perform(availability(warehouseId, session,
+                        "{\"availabilityNote\":\"под заказ\",\"orderDaysFrom\":2,\"orderDaysTo\":4}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.availabilityNote").value("под заказ"))
+                .andExpect(jsonPath("$.orderDaysFrom").value(2))
+                .andExpect(jsonPath("$.orderDaysTo").value(4));
+
+        // И видно это в списке, а не только в ответе на запись: иначе владелец
+        // с тремя складами не знает, у какого из них срок уже задан.
+        mvc.perform(get("/api/organization/warehouses").session(session))
+                .andExpect(jsonPath("$[0].availabilityNote").value("под заказ"))
+                .andExpect(jsonPath("$[0].orderDaysTo").value(4));
+
+        // Ноль дней — значение, а не пустота: «забрать можно сегодня».
+        mvc.perform(availability(warehouseId, session,
+                        "{\"availabilityNote\":\"в наличии\",\"orderDaysFrom\":0}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orderDaysFrom").value(0))
+                .andExpect(jsonPath("$.orderDaysTo").value(org.hamcrest.Matchers.nullValue()));
+
+        // А вычищенный руками текст приезжает пустой строкой, и записать её
+        // значило бы выгружать в объявление пустое наличие. Пусто — NULL.
+        mvc.perform(availability(warehouseId, session,
+                        "{\"availabilityNote\":\"   \"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.availabilityNote")
+                        .value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    /**
+     * Перевёрнутая вилка и отрицательные дни отказывают словами.
+     *
+     * <p>`CHECK` в схеме — последний рубеж, и приезжает он отказом базы
+     * без слов о том, что не так: владелец пошёл бы искать поломку сервера.
+     */
+    @Test
+    @DisplayName("Перевёрнутая вилка дней отказывает словами, а не отказом базы")
+    void brokenLeadTimeIsRefusedWithWords() throws Exception {
+        String code = tenant("Разборка с вилкой наоборот");
+        MockHttpSession session = login(code);
+        long warehouseId = warehouseOf(session);
+
+        mvc.perform(availability(warehouseId, session,
+                        "{\"orderDaysFrom\":4,\"orderDaysTo\":2}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("меньше нижней")));
+
+        mvc.perform(availability(warehouseId, session, "{\"orderDaysFrom\":-1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("меньше нуля")));
+
+        // И склада, которого нет, это тоже касается: номер строки базы
+        // человеку не говорит ничего.
+        mvc.perform(availability(999999, session, "{\"availabilityNote\":\"есть\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("Склад не найден")));
+    }
+
+    /**
+     * Наличие правит только владелец.
+     *
+     * <p>Решение исполнителя: экран «Склады» показан владельцу и больше никому
+     * (`screens/tabs.ts`, `OWNER_ONLY`), а право, которым не воспользоваться
+     * ни с одного экрана, читается следующим как готовый путь. Расширить потом
+     * безопасно, сузить обратно — нет. Поэтому менеджер, заводящий склады,
+     * текст наличия не правит.
+     */
+    @Test
+    @DisplayName("Менеджер склады заводит, а наличие в объявлении не правит")
+    void onlyOwnerSetsAvailability() throws Exception {
+        String code = tenant("Разборка с менеджером");
+        MockHttpSession owner = login(code);
+        long warehouseId = warehouseOf(owner);
+        String schema = jdbc.queryForObject(
+                "SELECT schema_name FROM public.tenant_registry WHERE code = ?", String.class, code);
+        jdbc.update("""
+                INSERT INTO %s.tenant_member (display_name, role, login, password_hash)
+                VALUES ('Менеджер', 'MANAGER', 'menedzher', ?)""".formatted(schema),
+                passwordEncoder.encode("пароль-8симв"));
+        MockHttpSession manager = login(code, "menedzher");
+
+        mvc.perform(post("/api/organization/warehouses").with(csrf()).session(manager)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Склад менеджера\"}"))
+                .andExpect(status().isCreated());
+
+        mvc.perform(availability(warehouseId, manager, "{\"availabilityNote\":\"есть\"}"))
+                .andExpect(status().isForbidden());
+    }
+
+    private org.springframework.test.web.servlet.RequestBuilder availability(
+            long warehouseId, MockHttpSession session, String body) {
+        return org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .put("/api/organization/warehouses/" + warehouseId + "/availability")
+                .with(csrf()).session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body);
+    }
+
     @Test
     @DisplayName("Продавец склады не заводит")
     void sellerCannotCreateWarehouse() throws Exception {

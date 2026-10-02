@@ -405,6 +405,135 @@ class DromPriceGeneratorTest extends PostgresTestBase {
     }
 
     /**
+     * Текст наличия склада уезжает в объявление (задача 0008, пункт 2).
+     *
+     * <p><b>Зачем.</b> В прайс уходило булево «есть», и покупатель, приехавший
+     * за деталью сегодня, узнавал про дорогу на дальний склад по телефону.
+     */
+    @Test
+    @DisplayName("Товар уезжает с текстом наличия своего склада")
+    void availabilityNoteOfTheWarehouseTravels() {
+        availability(warehouse, "в наличии", 0, null);
+        String name = "Прайс: наличие ближнего склада";
+        Long partId = part(name, new BigDecimal("7000"), true);
+        intake(partId, warehouse, 1);
+
+        assertThat(offerOf(name))
+                .as("прайс не назвал наличие склада, на котором деталь лежит")
+                .contains("<nalichie>в наличии</nalichie>")
+                // Ноль дней и незаданная вилка для покупателя одно: ждать
+                // не надо, — и «0 дн.» в объявлении было бы шумом.
+                .doesNotContain("<srok_zakaza_ot>")
+                .doesNotContain("<srok_zakaza_do>");
+    }
+
+    /**
+     * У дальнего склада свой текст и своя вилка (задача 0008, пункт 3).
+     */
+    @Test
+    @DisplayName("Товар с дальнего склада уезжает со своим текстом и вилкой дней")
+    void remoteWarehouseSendsItsOwnTerm() {
+        availability(otherWarehouse, "под заказ", 2, 4);
+        String name = "Прайс: наличие дальнего склада";
+        Long partId = part(name, new BigDecimal("7000"), true);
+        intake(partId, otherWarehouse, 1);
+
+        assertThat(offerOf(name))
+                .contains("<nalichie>под заказ</nalichie>")
+                .contains("<srok_zakaza_ot>2</srok_zakaza_ot>")
+                .contains("<srok_zakaza_do>4</srok_zakaza_do>");
+    }
+
+    /**
+     * Лежит на обоих — уезжает по ближнему (задача 0008, пункт 4).
+     *
+     * <p><b>Почему именно по лучшему сроку.</b> Покупатель поедет туда, где
+     * быстрее: назвав ему дальний склад, объявление обещает ждать то, что
+     * можно забрать сегодня.
+     *
+     * <p>И это же единственная проверка, которая ловит расхождение трёх
+     * выражений прайса между собой: текст наличия с ближнего склада рядом
+     * с вилкой дальнего — ложь о товаре при полностью исправном складе.
+     * Поэтому у складов здесь <b>и</b> разные тексты, <b>и</b> разные вилки.
+     */
+    @Test
+    @DisplayName("Лежит на обоих складах — уезжает по ближнему, а не по любому")
+    void nearestWarehouseWins() {
+        availability(warehouse, "в наличии", 0, null);
+        availability(otherWarehouse, "под заказ", 2, 4);
+        String name = "Прайс: наличие по ближнему складу";
+        Long partId = part(name, new BigDecimal("7000"), true);
+        intake(partId, warehouse, 1);
+        intake(partId, otherWarehouse, 1);
+
+        String offer = offerOf(name);
+        assertThat(offer)
+                .as("покупателю обещан худший срок из двух")
+                .contains("<nalichie>в наличии</nalichie>")
+                .doesNotContain("под заказ")
+                // Вилка обязана приехать от того же склада, что и текст.
+                .doesNotContain("<srok_zakaza_ot>")
+                .doesNotContain("<srok_zakaza_do>");
+        // Склад при этом назван целиком: раскладка ведётся по складам,
+        // и покупателю говорят, где деталь есть, а не только где быстрее.
+        assertThat(offer).contains("<sklad>54 YARD, Ткацкая</sklad>");
+    }
+
+    /**
+     * Склад без заданного текста ведёт себя как раньше (задача 0008, пункт 5).
+     *
+     * <p>Молча ничего не выдумываем: подставленное нами «в наличии» уехало бы
+     * покупателю от имени разборки, которая этого не обещала. И пустой
+     * элемент тут не годится — площадка читает его как заполненный пустым.
+     */
+    @Test
+    @DisplayName("Склад без заданного текста не добавляет в объявление ничего")
+    void warehouseWithoutNoteAddsNothing() {
+        String name = "Прайс: наличие не задано";
+        Long partId = part(name, new BigDecimal("7000"), true);
+        intake(partId, warehouse, 1);
+
+        assertThat(offerOf(name))
+                .as("прайс выдумал наличие складу, которому его не задавали")
+                .doesNotContain("<nalichie>")
+                .doesNotContain("<srok_zakaza_ot>")
+                .doesNotContain("<srok_zakaza_do>")
+                // Всё остальное — ровно как до задачи.
+                .contains("<sklad>Ткацкая</sklad>")
+                .contains("<available>true</available>");
+    }
+
+    /**
+     * Дельта несёт то же, что прайс.
+     *
+     * <p>Настройка, доехавшая до прайса и не доехавшая до дельты, даёт два
+     * файла с разными обещаниями об одном товаре: полный забор поставит
+     * на площадке срок, а первая же дельта его снимет — и увидеть это можно
+     * будет только на чужом сайте.
+     */
+    @Test
+    @DisplayName("Дельта несёт наличие и срок так же, как полный прайс")
+    void deltaCarriesAvailabilityToo() {
+        availability(otherWarehouse, "под заказ", 2, 4);
+        String name = "Прайс: наличие в дельте";
+        Long partId = part(name, new BigDecimal("7000"), true);
+        intake(partId, otherWarehouse, 1);
+
+        assertThat(offerIn(delta(partId), name))
+                .contains("<nalichie>под заказ</nalichie>")
+                .contains("<srok_zakaza_ot>2</srok_zakaza_ot>")
+                .contains("<srok_zakaza_do>4</srok_zakaza_do>");
+    }
+
+    /** Текст наличия и вилка дней заказа у склада. */
+    private void availability(Long warehouseId, String note, Integer from, Integer to) {
+        inTenant(() -> jdbc.update("""
+                UPDATE warehouse
+                   SET availability_note = ?, order_days_from = ?, order_days_to = ?
+                 WHERE id = ?""", note, from, to, warehouseId));
+    }
+
+    /**
      * Своё условие владельца сужает и прайс, и дельту, и счётчик.
      *
      * <p><b>Зачем.</b> Зашитых условий было шесть — цена, состояние, склады,

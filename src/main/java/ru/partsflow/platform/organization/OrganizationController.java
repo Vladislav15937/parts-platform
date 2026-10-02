@@ -9,6 +9,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -61,6 +62,27 @@ public class OrganizationController {
                 .body(organization.createWarehouse(request.branchId(), request.name()));
     }
 
+    /**
+     * Текст наличия склада и вилка дней заказа.
+     *
+     * <p>Владельцу, а не владельцу с менеджером, как у заведения склада рядом:
+     * экран «Склады» показан только владельцу (`screens/tabs.ts`, `OWNER_ONLY`),
+     * и право, которым не воспользоваться ни с одного экрана, читается
+     * следующим как готовый путь — так уже решили про комментарий к пересчёту
+     * у кладовщика. Расширить потом безопасно, сузить обратно — нет.
+     *
+     * <p>Текст уезжает покупателю в объявление, поэтому это не `POST`
+     * с «заведением»: настройка правится у уже существующего склада и
+     * перезаписывается целиком — пустой текст снимает приписку.
+     */
+    @PutMapping("/warehouses/{id}/availability")
+    @PreAuthorize("hasRole('OWNER')")
+    public OrganizationService.Warehouse setAvailability(
+            @PathVariable long id, @Valid @RequestBody AvailabilityRequest request) {
+        return organization.setAvailability(id, request.availabilityNote(),
+                request.orderDaysFrom(), request.orderDaysTo());
+    }
+
     @GetMapping("/warehouses/{id}/cells")
     public List<OrganizationService.Cell> cells(@PathVariable long id) {
         return organization.cells(id);
@@ -89,5 +111,14 @@ public class OrganizationController {
     }
 
     public record CellsRequest(@NotEmpty List<String> codes, String zone) {
+    }
+
+    /**
+     * Ни одно поле не обязательно: пустой текст — это снятая приписка,
+     * а пустые дни — «срок не называем». Обязательным здесь было бы
+     * требование заполнить то, чего у склада может не быть.
+     */
+    public record AvailabilityRequest(String availabilityNote,
+                                      Integer orderDaysFrom, Integer orderDaysTo) {
     }
 }

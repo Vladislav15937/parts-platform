@@ -94,6 +94,12 @@ public class DromPriceGenerator {
                    -- Берётся из того же отбора, что и остаток: у прайса филиала
                    -- в поле обязан стоять его склад, а не соседний.
                    s.warehouses,
+                   -- И через сколько дней он её получит. До задачи 0008 в прайс
+                   -- уходило булево «есть», и про дорогу с дальнего склада
+                   -- покупатель узнавал по телефону.
+                   s.availability_note,
+                   s.order_days_from,
+                   s.order_days_to,
                    p.condition,
                    p.manufacturer,
                    p.color,
@@ -133,7 +139,21 @@ public class DromPriceGenerator {
                          -- одном, и назвать один из двух значило бы отправить
                          -- половину покупателей не туда.
                          string_agg(DISTINCT w.name, ', ') FILTER (WHERE ps.qty > 0)
-                             AS warehouses
+                             AS warehouses,
+                         -- Текст наличия и вилка дней — БЛИЖНЕГО из складов,
+                         -- где деталь лежит: покупателю важен лучший срок,
+                         -- а не любой. Берутся первым элементом массива,
+                         -- упорядоченного по сроку, — и упорядочены все три
+                         -- выражения ОДНИМ И ТЕМ ЖЕ ${nearest}, подставленным
+                         -- из одного места. Разойдись порядок, объявление
+                         -- получило бы «в наличии» с ближнего склада и «2–4
+                         -- дня» с дальнего: ложь о товаре при исправном складе.
+                         (array_agg(w.availability_note ${nearest})
+                             FILTER (WHERE ps.qty > 0))[1] AS availability_note,
+                         (array_agg(w.order_days_from ${nearest})
+                             FILTER (WHERE ps.qty > 0))[1] AS order_days_from,
+                         (array_agg(w.order_days_to ${nearest})
+                             FILTER (WHERE ps.qty > 0))[1] AS order_days_to
                     FROM part_stock ps
                     JOIN warehouse w ON w.id = ps.warehouse_id
                    WHERE (?::bigint[] IS NULL OR ps.warehouse_id = ANY (?::bigint[]))
@@ -233,6 +253,26 @@ public class DromPriceGenerator {
                                            WHERE pa.part_id = p.id
                                              AND pa.brand_id = ANY (?::bigint[]))) END)
             """;
+
+    /**
+     * Какой склад считается ближним, когда деталь лежит на нескольких.
+     *
+     * <p>Лучший срок, а не любой: покупатель поедет туда, где быстрее.
+     * {@code COALESCE(…, 0)} здесь не формальность — склад, которому владелец
+     * вилку не задавал, обязан считаться ближним относительно того, который
+     * везут четыре дня: «не задано» у нас значит «ждать не надо», и ровно
+     * поэтому склад без настроек ведёт себя как до задачи 0008.
+     *
+     * <p>Имя склада последним ключом — чтобы при равном сроке прайс не менял
+     * ответ от запроса к запросу: два склада с одинаковой вилкой иначе
+     * выбирались бы планировщиком, и объявление меняло бы текст наличия само.
+     *
+     * <p><b>Подставляется в три выражения сразу и живёт одной строкой.</b>
+     * Три порядка, написанные порознь, однажды разойдутся — и тогда текст
+     * наличия приедет с одного склада, а дни с другого.
+     */
+    private static final String NEAREST_WAREHOUSE = """
+            ORDER BY COALESCE(w.order_days_from, 0), COALESCE(w.order_days_to, 0), w.name""";
 
     /** Дельта — тот же запрос по списку позиций: формат обязан совпасть с прайсом. */
     private static final String DELTA_FILTER = " AND p.id = ANY (?)";
@@ -480,6 +520,9 @@ public class DromPriceGenerator {
 
         String sql = SQL.replace("${statuses}",
                 statuses(partIds == null ? PRICE_STATUSES : DELTA_STATUSES, settings))
+                // Порядок «кто ближний» подставляется во все три выражения
+                // разом: написанный порознь, он однажды разойдётся.
+                .replace("${nearest}", NEAREST_WAREHOUSE)
                 + columnsSql + (partIds == null ? "" : DELTA_FILTER) + ORDER;
 
         return session.doReturningWork(connection -> {
@@ -638,7 +681,16 @@ public class DromPriceGenerator {
                     enumOf(VerticalSide.class, rs.getString("side_ud")),
                     rs.getString("color"),
                     rs.getString("marking"),
-                    rs.getString("warehouses"),
+                    // Где лежит и когда можно забрать — одним объектом: текст
+                    // наличия и вилка принадлежат тому же складу, по которому
+                    // посчитан срок, и расходиться им нельзя.
+                    new DromOffer.Placement(
+                            rs.getString("warehouses"),
+                            rs.getString("availability_note"),
+                            // getObject, а не getInt: тот отдаёт на незаданные
+                            // дни ноль, а ноль здесь значит «забрать сегодня».
+                            rs.getObject("order_days_from", Integer.class),
+                            rs.getObject("order_days_to", Integer.class)),
                     photoLinks(rs.getString("photo_ids"), photoBase, settings),
                     rs.getString("car_brand"),
                     rs.getString("car_model"),

@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { scannable } from '../labels/labels';
 import {
+  availabilitySummary,
   createBranch,
   createCells,
   createWarehouse,
   listBranches,
   listCells,
   listWarehouses,
+  setWarehouseAvailability,
   unprintableCells,
   type Branch,
   type Cell,
@@ -40,6 +42,12 @@ export function OrganizationScreen() {
   const [opened, setOpened] = useState<number | null>(null);
   const [cells, setCells] = useState<Cell[]>([]);
   const [codes, setCodes] = useState('');
+
+  // Наличие склада в объявлении: текст и вилка дней заказа (задача 0008).
+  const [availabilityFor, setAvailabilityFor] = useState<number | null>(null);
+  const [note, setNote] = useState('');
+  const [daysFrom, setDaysFrom] = useState('');
+  const [daysTo, setDaysTo] = useState('');
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
 
@@ -62,6 +70,19 @@ export function OrganizationScreen() {
   const wanted = codes.split(/[,\n]/).map((code) => code.trim()).filter((code) => code !== '');
   const unprintable = unprintableCells(wanted);
 
+  // Пусто — «не задано», а не ноль: склад без вилки ведёт себя как раньше.
+  const fromValue = daysFrom.trim() === '' ? null : Number(daysFrom);
+  const toValue = daysTo.trim() === '' ? null : Number(daysTo);
+  const badDays = (value: number | null) =>
+    value !== null && (!Number.isInteger(value) || value < 0);
+  // Серая кнопка обязана называть причину — те же слова, которыми отвечает
+  // сервер: иначе владелец читает два разных отказа на одну ошибку.
+  const availabilityObstacle = badDays(fromValue) || badDays(toValue)
+    ? 'Дни заказа — целое число, не меньше нуля'
+    : fromValue !== null && toValue !== null && toValue < fromValue
+      ? 'Верхняя граница вилки дней меньше нижней'
+      : null;
+
   return (
     <section className="screen">
       <h2>Филиалы и склады</h2>
@@ -79,6 +100,7 @@ export function OrganizationScreen() {
               <th>Склад</th>
               <th>Филиал</th>
               <th className="num">Ячеек</th>
+              <th>Наличие в объявлении</th>
               <th />
             </tr>
           </thead>
@@ -88,6 +110,9 @@ export function OrganizationScreen() {
                 <td>{warehouse.name}</td>
                 <td>{warehouse.branchName ?? '—'}</td>
                 <td className="num">{warehouse.cells}</td>
+                {/* «не задано» словами, а не пустой клеткой: пустая читается
+                    как «не знаем», а мы знаем — владелец ничего не задавал. */}
+                <td>{availabilitySummary(warehouse)}</td>
                 <td>
                   <button
                     type="button"
@@ -95,6 +120,14 @@ export function OrganizationScreen() {
                     onClick={() => void openCells(warehouse.id)}
                   >
                     {opened === warehouse.id ? 'Свернуть' : 'Ячейки'}
+                  </button>
+                  <button
+                    type="button"
+                    className="button--ghost"
+                    aria-label={`Наличие: ${warehouse.name}`}
+                    onClick={() => openAvailability(warehouse)}
+                  >
+                    {availabilityFor === warehouse.id ? 'Свернуть' : 'Наличие'}
                   </button>
                 </td>
               </tr>
@@ -170,6 +203,66 @@ export function OrganizationScreen() {
           <p className="note">
             Списком, а не по одной: стеллаж — это два-три десятка адресов подряд.
             Уже заведённые пропускаются, а не ломают запрос целиком.
+          </p>
+        </div>
+      )}
+
+      {availabilityFor !== null && (
+        <div className="card">
+          <h3>
+            Наличие склада «{warehouses.find((w) => w.id === availabilityFor)?.name}»
+            в объявлении
+          </h3>
+          <p className="note">
+            Это покупатель читает на площадке вместо одного «есть». Склады
+            в разных местах, и деталь с дальнего едет несколько дней — без
+            срока он узнаёт про дорогу только по телефону.
+          </p>
+
+          <div className="row">
+            <label className="field">
+              Текст наличия
+              <input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="в наличии"
+              />
+            </label>
+            <label className="field">
+              Дней заказа, от
+              <input
+                type="number"
+                min={0}
+                value={daysFrom}
+                onChange={(e) => setDaysFrom(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              Дней заказа, до
+              <input
+                type="number"
+                min={0}
+                value={daysTo}
+                onChange={(e) => setDaysTo(e.target.value)}
+              />
+            </label>
+          </div>
+
+          {availabilityObstacle !== null && (
+            <p className="note note--error">{availabilityObstacle}</p>
+          )}
+
+          <button
+            type="button"
+            disabled={busy || availabilityObstacle !== null}
+            onClick={() => void saveAvailability()}
+          >
+            Сохранить наличие
+          </button>
+          <p className="note">
+            Пустой текст и пустые дни — «не задано»: такой склад уезжает
+            в прайс как раньше, одним признаком наличия, и ничего лишнего
+            покупателю мы не обещаем. Ноль дней — это «забрать можно сегодня».
           </p>
         </div>
       )}
@@ -254,6 +347,45 @@ export function OrganizationScreen() {
       }
     } catch (cause) {
       if (mounted.current) setError(describe(cause, 'Ячейки не заведены'));
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }
+
+  /**
+   * Открывает форму наличия, подставив то, что у склада уже стоит.
+   *
+   * <p>Иначе владелец с тремя складами не знает, у какого из них срок уже
+   * задан, и решает это заново каждый раз.
+   */
+  function openAvailability(warehouse: Warehouse): void {
+    if (availabilityFor === warehouse.id) {
+      setAvailabilityFor(null);
+      return;
+    }
+    setAvailabilityFor(warehouse.id);
+    setNote(warehouse.availabilityNote ?? '');
+    setDaysFrom(warehouse.orderDaysFrom === null ? '' : String(warehouse.orderDaysFrom));
+    setDaysTo(warehouse.orderDaysTo === null ? '' : String(warehouse.orderDaysTo));
+  }
+
+  async function saveAvailability(): Promise<void> {
+    if (availabilityFor === null || availabilityObstacle !== null) {
+      return;
+    }
+    setBusy(true);
+    try {
+      // Пустое поле уезжает null, а не пустой строкой и не нулём: на сервере
+      // это разные вещи — «не задано» против «забрать сегодня».
+      await setWarehouseAvailability(
+        availabilityFor, note.trim() === '' ? null : note.trim(), fromValue, toValue,
+      );
+      if (mounted.current) {
+        setAvailabilityFor(null);
+        reload();
+      }
+    } catch (cause) {
+      if (mounted.current) setError(describe(cause, 'Наличие не сохранено'));
     } finally {
       if (mounted.current) setBusy(false);
     }
