@@ -455,6 +455,8 @@ export interface SoldItem {
   dealId: number;
   dealNumber: number;
   partId: number;
+  /** Порядковый номер позиции — тот, которым её называют вслух (задача 0168). */
+  number: number;
   publicCode: string | null;
   title: string;
   /** Словом («б/у»), а не кодом: словарь один — тот же, что у витрины. */

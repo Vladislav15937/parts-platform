@@ -91,6 +91,10 @@ class InventoryHttpTest extends PostgresTestBase {
             warehouseId = jdbc.queryForObject(
                     "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Ткацкая') RETURNING id",
                     Long.class, branch);
+            // Номер позиции и внутренний id разведены намеренно: в свежей
+            // схеме обе последовательности начинаются с единицы, и подмена
+            // `p.number` на `p.id` прошла бы зелёной.
+            jdbc.queryForObject("SELECT nextval('part_number_seq')", Long.class);
             partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price) VALUES (1, 'Фара для пересчёта', 4500)
                     RETURNING id""", Long.class);
@@ -135,7 +139,11 @@ class InventoryHttpTest extends PostgresTestBase {
                         .session(owner))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
-                .andExpect(jsonPath("$[0].delta").value(-1.0));
+                .andExpect(jsonPath("$[0].delta").value(-1.0))
+                // Номер позиции в расхождениях (задача 0168): публичного кода
+                // здесь нет вовсе, и до него спорную полку нечем было назвать
+                // вслух тому, кто сводит расхождения.
+                .andExpect(jsonPath("$[0].number").value(partNumber()));
 
         mvc.perform(post("/api/inventory/sessions/%d/apply".formatted(sessionId))
                         .with(csrf()).session(owner))
@@ -448,6 +456,64 @@ class InventoryHttpTest extends PostgresTestBase {
                         .session(session))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lines").value(1));
+    }
+
+    /**
+     * Лист обхода называет позицию номером, а не только наименованием.
+     *
+     * <p><b>Как это выглядело для человека</b> (задача 0168). Кладовщик идёт
+     * по полкам с этим листом, и найдя не то, называет деталь вслух тому, кто
+     * сводит расхождения. В строке стояло одно наименование: «Фара» на живом
+     * складе это сотни строк, а публичного кода в листе обхода нет вовсе.
+     *
+     * <p>Сверяется с самой колонкой {@code part.number}, а номер в фикстуре
+     * сдвинут относительно {@code id}: иначе подмена прошла бы зелёной.
+     */
+    @Test
+    @DisplayName("Лист обхода несёт номер позиции, которым её называют вслух")
+    void walkSheetCarriesThePartNumber() throws Exception {
+        MockHttpSession session = login();
+        long sessionId = openWholeWarehouse(session);
+        long number = partNumber();
+
+        assertThat(number)
+                .as("номер позиции совпал с её id — проверка перестала ловить подмену")
+                .isNotEqualTo(partId);
+
+        mvc.perform(get("/api/inventory/sessions/%d/lines".formatted(sessionId))
+                        .session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].partId").value(partId))
+                .andExpect(jsonPath("$[0].number").value(number))
+                .andExpect(jsonPath("$[0].title").value("Фара для пересчёта"));
+    }
+
+    /**
+     * И список кодов сканера — тоже, потому что из него заводится строка листа.
+     *
+     * <p>Деталь, отсканированная вне листа обхода, становится строкой «вне
+     * списка» из этой самой записи. Без номера она оказалась бы единственной
+     * строкой листа, которую нечем назвать вслух, — причём ровно той, из-за
+     * которой разбирательство и началось.
+     */
+    @Test
+    @DisplayName("Список кодов сканера несёт номер: из него заводится строка «вне списка»")
+    void scannerCodesCarryThePartNumber() throws Exception {
+        MockHttpSession session = login();
+        long sessionId = openWholeWarehouse(session);
+
+        mvc.perform(get("/api/inventory/sessions/%d/codes".formatted(sessionId))
+                        .session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].partId").value(partId))
+                .andExpect(jsonPath("$[0].number").value(partNumber()));
+    }
+
+    /** Номер позиции из самой колонки: записанное в тест число сдвинулось бы с фикстурой. */
+    private long partNumber() {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, partId));
     }
 
     /** Пересчёт всего склада, открытый заново: одновременно открытая на складе одна. */

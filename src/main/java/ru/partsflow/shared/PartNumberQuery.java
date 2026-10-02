@@ -1,4 +1,4 @@
-package ru.partsflow.inventory;
+package ru.partsflow.shared;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,6 +25,15 @@ import java.util.regex.Pattern;
  * «№ позиции», — а в выдаче продавца строка начинается с «№ 347», и это
  * ровно то, что копируют и диктуют.
  *
+ * <p><b>Лежит в {@code shared}, а не в {@code inventory}, и это про слои.</b>
+ * Разбор читает ещё и журнал действий организации (задача 0168), а тот живёт
+ * в {@code platform} — фундаменте, на который опираются остальные модули.
+ * Ссылка оттуда на класс склада развернула бы зависимость задом наперёд,
+ * а вторая копия регулярного выражения разошлась бы с первой на первой же
+ * правке: тогда «№ 347» находило бы деталь на витрине и не находило её
+ * в журнале. Та же причина, по которой здесь же лежат {@code AuditedColumns}
+ * и {@code RetailCustomer}.
+ *
  * <p><b>Длина ограничена</b> восемнадцатью цифрами: «12345678901234567890»
  * номером быть не может (номера идут подряд от единицы), а {@code Long}
  * на нём переполнится. Такой запрос остаётся обычным текстом.
@@ -43,7 +52,7 @@ public final class PartNumberQuery {
      * поиска по одному складу обязаны находить одно и то же**, а неправ
      * всегда тот, о ком не спрашивали.
      */
-    static final String UNION_BRANCH =
+    public static final String UNION_BRANCH =
             "\n                          UNION SELECT id FROM part WHERE number = ?";
 
     private PartNumberQuery() {

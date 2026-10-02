@@ -4,6 +4,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.shared.AuditedColumns;
+import ru.partsflow.shared.PartNumberQuery;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -203,8 +204,26 @@ public class OrganizationAuditService {
         }
 
         if (query != null && !query.isBlank()) {
-            where.append(" AND ").append(SEARCHABLE).append(" ILIKE ?");
+            // Номер позиции сравнивается точно, остальное — вхождением
+            // (задача 0168). Подстрочный `%347%` притащил бы 1347 и 3470,
+            // то есть ровно тот шум, от которого номер и спасает. Разбор
+            // запроса общий со складом, продавцом, колёсами и реестром
+            // сделок, поэтому «№ 347» понимается так же, как «347»: копия
+            // регулярного выражения здесь разошлась бы с ними на первой
+            // правке, и названное вслух находилось бы на одном экране
+            // и не находилось на соседнем.
+            Long number = PartNumberQuery.parse(query);
+            where.append(" AND (").append(SEARCHABLE).append(" ILIKE ?");
             args.add("%" + query.trim() + "%");
+            if (number != null) {
+                // Подмешивается, а не отбирает выдачу себе: цифрами задают
+                // и номер сделки, и номер записи журнала, и те ветки
+                // остаются — то же решение, что у поиска склада (0064).
+                where.append(" OR p.number = ? OR dip.number = ?");
+                args.add(number);
+                args.add(number);
+            }
+            where.append(')');
         }
         if (from != null) {
             where.append(" AND a.changed_at >= ?");
@@ -254,6 +273,7 @@ public class OrganizationAuditService {
                         + " SELECT a.id, a.changed_at, a.table_name, a.record_id, a.operation,"
                         + " a.changed_by_role AS author_role, m.display_name AS author,"
                         + " p.title AS part_title, p.public_code AS part_code,"
+                        + " p.number AS part_number, dip.number AS item_number,"
                         + " d.number AS deal_number, cust.name AS deal_customer,"
                         + " dip.title AS item_title, dip.public_code AS item_code,"
                         + " idl.number AS item_deal_number,"
@@ -272,6 +292,8 @@ public class OrganizationAuditService {
                         codeOf(rs.getString("table_name"), rs.getString("part_code"),
                                 rs.getObject("deal_number"), rs.getString("item_code"),
                                 rs.getLong("record_id")),
+                        numberOf(rs.getString("table_name"),
+                                rs.getObject("part_number"), rs.getObject("item_number")),
                         contextOf(rs.getString("table_name"), rs.getObject("item_deal_number"),
                                 rs.getObject("payment_deal_number"), rs.getString("cost_donor")),
                         actionOf(rs.getString("table_name"), rs.getString("operation")),
@@ -458,6 +480,23 @@ public class OrganizationAuditService {
         return found != null ? found : "запись №" + recordId;
     }
 
+    /**
+     * Порядковый номер позиции — тот, которым её называют вслух (задача 0168).
+     *
+     * <p>Есть он только у товара и у позиции сделки: у платежа, у самой сделки
+     * и у затраты по машине своей позиции нет вовсе, и выдуманный номер читался
+     * бы там как ответ на вопрос, которого никто не задавал. Публичный код
+     * рядом остаётся — он про этикетку, а номер про разговор.
+     */
+    private static Long numberOf(String table, Object partNumber, Object itemNumber) {
+        Object found = switch (table) {
+            case "part" -> partNumber;
+            case "deal_item" -> itemNumber;
+            default -> null;
+        };
+        return found instanceof Number number ? number.longValue() : null;
+    }
+
     /** Где это случилось: в какой сделке, по какой машине. */
     private static String contextOf(String table, Object itemDealNumber,
                                     Object paymentDealNumber, String costDonor) {
@@ -543,8 +582,8 @@ public class OrganizationAuditService {
      * @param action     заполнен у событий без полей («Товар заведён»)
      */
     public record Entry(long id, Instant at, String author, String authorRole,
-                        String kind, String subject, String subjectCode, String context,
-                        String action, List<Change> changes) {
+                        String kind, String subject, String subjectCode, Long subjectNumber,
+                        String context, String action, List<Change> changes) {
     }
 
     /**

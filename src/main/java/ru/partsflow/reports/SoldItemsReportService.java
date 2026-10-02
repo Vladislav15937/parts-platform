@@ -137,7 +137,8 @@ public class SoldItemsReportService {
 
         List<Item> rows = jdbc.query(
                 "SELECT di.id AS item_id, dl.closed_at, dl.id AS deal_id, dl.number AS deal_number,"
-                        + " p.id AS part_id, p.public_code, p.title,\n"
+                        + " p.id AS part_id, p.number AS part_number,"
+                        + " p.public_code, p.title,\n"
                         + "       " + CatalogService.CONDITION + " AS condition_word,\n"
                         + "       " + UNIT_PRICE + " AS unit_price,\n"
                         + "       di.price AS list_price, di.quantity,\n"
@@ -156,6 +157,7 @@ public class SoldItemsReportService {
                         rs.getLong("deal_id"),
                         rs.getLong("deal_number"),
                         rs.getLong("part_id"),
+                        rs.getLong("part_number"),
                         rs.getString("public_code"),
                         rs.getString("title"),
                         rs.getString("condition_word"),
@@ -234,7 +236,8 @@ public class SoldItemsReportService {
         List<Object> args = new ArrayList<>();
         String where = where(filter, args);
 
-        String sql = "SELECT dl.closed_at, dl.number AS deal_number, p.public_code, p.title,\n"
+        String sql = "SELECT dl.closed_at, dl.number AS deal_number,\n"
+                + "       p.number AS part_number, p.public_code, p.title,\n"
                 + "       " + CatalogService.CONDITION + " AS condition_word,\n"
                 + "       " + UNIT_PRICE + " AS unit_price, di.price AS list_price,\n"
                 + "       di.quantity, di.cost_price_snapshot AS cost_price,\n"
@@ -258,6 +261,7 @@ public class SoldItemsReportService {
             writer.accept(List.of(
                     day(rs.getTimestamp("closed_at")),
                     String.valueOf(rs.getLong("deal_number")),
+                    String.valueOf(rs.getLong("part_number")),
                     text(rs.getString("public_code")),
                     text(rs.getString("title")),
                     text(rs.getString("condition_word")),
@@ -275,7 +279,8 @@ public class SoldItemsReportService {
 
     /** Заголовок файла — теми же словами, что колонки на экране. */
     public static List<String> exportHeader() {
-        return List.of("Дата выдачи", "Номер сделки", "Номер товара", "Наименование",
+        return List.of("Дата выдачи", "Номер сделки", "№ позиции", "Номер товара",
+                "Наименование",
                 "Состояние", "Цена продажи", "Прежняя цена", "Себестоимость", "Выгода",
                 "Количество", "Склад выдачи", "Ответственный", "Поставка", "Номер донора");
     }
@@ -411,6 +416,8 @@ public class SoldItemsReportService {
      * Строка отчёта.
      *
      * @param soldAt    момент выдачи сделки: «дата выдачи» у ориентира
+     * @param number    порядковый номер позиции — тот, которым её называют
+     *                  вслух (задача 0060); публичный код рядом про этикетку
      * @param price     цена продажи за штуку — из сделки, а не из карточки
      * @param listPrice цена до скидки. Совпала с {@code price} — скидки
      *                  не было, и зачёркивать нечего
@@ -422,7 +429,8 @@ public class SoldItemsReportService {
      *                  если машина переехала, иначе наш
      */
     public record Item(long itemId, Instant soldAt, long dealId, long dealNumber,
-                       long partId, String publicCode, String title, String condition,
+                       long partId, long number, String publicCode, String title,
+                       String condition,
                        BigDecimal price, BigDecimal listPrice, BigDecimal quantity,
                        BigDecimal costPrice, BigDecimal profit,
                        String warehouse, String manager,

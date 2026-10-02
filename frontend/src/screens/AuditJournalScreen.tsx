@@ -135,7 +135,7 @@ function ChangesJournal() {
           Что искали
           <input
             value={draft}
-            placeholder="Название детали, её код или номер сделки"
+            placeholder="Название детали, её код, № позиции или номер сделки"
             onChange={(e) => setDraft(e.target.value)}
           />
         </label>
@@ -286,7 +286,13 @@ function Row({ entry }: { entry: AuditEntry }) {
       <td>
         <strong>{entry.subject ?? entry.kind}</strong>
         <div className="muted">
-          {[entry.subject === null ? null : entry.kind, entry.subjectCode, entry.context]
+          {/* Номер позиции (задача 0168) идёт перед публичным кодом: разобрав
+              правку, ревизор называет позицию вслух тому, кто её сделал,
+              а «A7K3M2» по телефону не диктуют. У платежа, сделки и затраты
+              по машине своей позиции нет — там его просто не будет. */}
+          {[entry.subject === null ? null : entry.kind,
+            entry.subjectNumber === null ? null : `№ ${entry.subjectNumber}`,
+            entry.subjectCode, entry.context]
             .filter((part) => part !== null && part !== '')
             .join(' · ')}
         </div>

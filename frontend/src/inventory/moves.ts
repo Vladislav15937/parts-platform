@@ -22,6 +22,8 @@ export interface MoveDocument {
 
 export interface MoveLine {
   partId: number;
+  /** Порядковый номер позиции — им называют увезённое вслух (задача 0168). */
+  number: number;
   publicCode: string;
   title: string;
   qty: number;

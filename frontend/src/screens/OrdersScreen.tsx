@@ -143,7 +143,11 @@ export function OrdersScreen({ canSell }: { canSell: boolean }) {
               <ul className="counts">
                 {deal.items.map((item) => (
                   <li key={item.id}>
-                    {item.title ?? `деталь ${item.partId}`} — {item.quantity} шт.
+                    {/* Номер позиции (задача 0168, перебор): заказ площадки
+                        собирает кладовщик, и названное вслух «позиция 347» —
+                        единственный способ связать строку заказа с полкой. */}
+                    {item.title ?? `деталь ${item.partId}`}
+                    {typeof item.number === 'number' && ` · № ${item.number}`} — {item.quantity} шт.
                   </li>
                 ))}
               </ul>

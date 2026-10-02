@@ -18,6 +18,7 @@ import ru.partsflow.support.PostgresTestBase;
 
 import java.util.function.Supplier;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -74,6 +75,10 @@ class OrganizationAuditTest extends PostgresTestBase {
             member("smotritel", "Смотрителев", "VIEWER");
 
             jdbc.update("DELETE FROM audit_log");
+            // Номер позиции и внутренний id разведены: в свежей схеме обе
+            // последовательности начинаются с единицы, и подмена
+            // `p.number` на `p.id` прошла бы зелёной.
+            jdbc.queryForObject("SELECT nextval('part_number_seq')", Long.class);
             partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price)
                     VALUES (1, 'Фара Toyota Camry 2006 перед. лев. (б/у)', 5000)
@@ -97,12 +102,22 @@ class OrganizationAuditTest extends PostgresTestBase {
     void ownerSeesWhoChangedThePrice() throws Exception {
         changePrice("ivanov", "4500");
 
+        // Номер позиции — тот, которым её называют вслух (задача 0168):
+        // разобрав правку, ревизор называет позицию тому, кто её сделал,
+        // а «A7K3M2» по телефону не диктуют.
+        long number = inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, partId));
+        assertThat(number)
+                .as("номер позиции совпал с её id — проверка перестала ловить подмену")
+                .isNotEqualTo(partId);
+
         mvc.perform(get("/api/organization/audit").session(login("vladelec")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].author").value("Иванов"))
                 .andExpect(jsonPath("$.items[0].kind").value("Товар"))
                 .andExpect(jsonPath("$.items[0].subject")
                         .value("Фара Toyota Camry 2006 перед. лев. (б/у)"))
+                .andExpect(jsonPath("$.items[0].subjectNumber").value(number))
                 .andExpect(jsonPath("$.items[0].changes[0].label").value("Цена"))
                 .andExpect(jsonPath("$.items[0].changes[0].before").value("5000"))
                 .andExpect(jsonPath("$.items[0].changes[0].after").value("4500"));
@@ -257,6 +272,43 @@ class OrganizationAuditTest extends PostgresTestBase {
     }
 
     /** Неразобранная дата — ошибка запроса, а не поломка сервера. */
+    /**
+     * Журнал ищется по номеру позиции, и сравнение точное (задача 0168).
+     *
+     * <p>Показать номер и не дать по нему найти — это половина работы:
+     * ревизор, услышав «посмотри позицию 347», обязан суметь его набрать.
+     * Разбор запроса общий со складом и реестром сделок
+     * ({@code PartNumberQuery}), поэтому «№ 347» понимается так же,
+     * как «347».
+     *
+     * <p><b>Точность доказывается отрицательным утверждением.</b> «Нашлось
+     * нужное» проходит и на подстрочном поиске; поэтому отдельно проверяется,
+     * что номер с лишней цифрой **не** находит эту запись — иначе «347»
+     * отдавало бы 1347 и 3470, то есть ровно тот шум, от которого номер
+     * и спасает.
+     */
+    @Test
+    @DisplayName("Поиск журнала по номеру позиции точен: 347 — это 347, а не 3479")
+    void journalIsSearchedByPartNumber() throws Exception {
+        changePrice("ivanov", "4500");
+
+        long number = inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, partId));
+
+        for (String term : new String[] {String.valueOf(number), "№ " + number}) {
+            mvc.perform(get("/api/organization/audit").param("q", term)
+                            .session(login("vladelec")))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items.length()").value(1))
+                    .andExpect(jsonPath("$.items[0].subjectNumber").value(number));
+        }
+
+        mvc.perform(get("/api/organization/audit").param("q", number + "9")
+                        .session(login("vladelec")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(0));
+    }
+
     @Test
     @DisplayName("Кривая дата периода отвечает четырёхсотым, а не пятисоткой")
     void badDateIsFourHundred() throws Exception {

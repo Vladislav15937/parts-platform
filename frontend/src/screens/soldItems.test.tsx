@@ -22,14 +22,14 @@ describe('проданные позиции на экране отчётов', (
     rows: [
       {
         itemId: 1, soldAt: '2026-09-05T10:00:00Z', dealId: 9, dealNumber: 1274,
-        partId: 11, publicCode: 'A1B2C3', title: 'Фара', condition: 'б/у',
+        partId: 11, number: 347, publicCode: 'A1B2C3', title: 'Фара', condition: 'б/у',
         price: 1200, listPrice: 1500, quantity: 1, costPrice: 1000, profit: 200,
         warehouse: 'Ткацкая', manager: 'Иван Продавцов',
         supplyNumber: 'К-9', donorCode: '500',
       },
       {
         itemId: 2, soldAt: '2026-09-05T11:00:00Z', dealId: 10, dealNumber: 1275,
-        partId: 12, publicCode: 'D4E5F6', title: 'Дверь', condition: 'б/у',
+        partId: 12, number: 348, publicCode: 'D4E5F6', title: 'Дверь', condition: 'б/у',
         price: 1200, listPrice: 1200, quantity: 1, costPrice: 700, profit: 500,
         warehouse: 'Ткацкая', manager: 'Иван Продавцов',
         supplyNumber: null, donorCode: '350',
@@ -37,7 +37,7 @@ describe('проданные позиции на экране отчётов', (
       // Без закупочной цены: так приезжает склад из чужой таблицы.
       {
         itemId: 3, soldAt: '2026-09-05T12:00:00Z', dealId: 11, dealNumber: 1276,
-        partId: 13, publicCode: 'G7H8I9', title: 'Стекло', condition: 'б/у',
+        partId: 13, number: 349, publicCode: 'G7H8I9', title: 'Стекло', condition: 'б/у',
         price: 800, listPrice: 800, quantity: 1, costPrice: null, profit: null,
         warehouse: 'Дальний', manager: 'Пётр Сменщиков',
         supplyNumber: null, donorCode: '500',
@@ -140,6 +140,43 @@ describe('проданные позиции на экране отчётов', (
       expect(cells).not.toContain('0 ₽');
 
       expect(screen.getByText(/Позиций без закупочной цены: 1/)).toBeTruthy();
+    });
+
+  /**
+   * Номер позиции в отчёте (задача 0168).
+   *
+   * <p>«На чём мы теряем» владелец выясняет здесь, а дальше называет позицию
+   * работнику вслух: публичный код для этого не годится — он шесть случайных
+   * байт и живёт на этикетке. Проверяется по колонке, а не по тексту
+   * на странице: убранная колонка обязана валить тест словами про неё.
+   */
+  it('колонка «№ позиции» стоит перед номером товара, и в ней номер строки',
+    async () => {
+      render(<ReportsScreen canRead />);
+      await waitFor(() => expect(screen.getByText('Фара')).toBeTruthy());
+
+      const table = screen.getByText('Фара').closest('table')!;
+      const headers = [...table.querySelectorAll('thead th')]
+        .map((cell) => (cell.textContent ?? '').trim());
+
+      const at = headers.indexOf('№ позиции');
+      expect(
+        at,
+        `колонки «№ позиции» в отчёте нет: ${headers.join(' · ')}`,
+      ).toBeGreaterThanOrEqual(0);
+      // Перед «Номером товара»: тот же порядок, что на витрине и во вкладках
+      // разреза по машине — номер для разговора, код для этикетки.
+      expect(
+        at,
+        'номер позиции встал после номера товара',
+      ).toBeLessThan(headers.indexOf('Номер товара'));
+
+      const cells = [...screen.getByText('Фара').closest('tr')!.querySelectorAll('td')]
+        .map((cell) => (cell.textContent ?? '').trim());
+      expect(
+        cells[at],
+        'в колонке «№ позиции» стоит не номер позиции',
+      ).toBe('347');
     });
 });
 

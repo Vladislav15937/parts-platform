@@ -167,7 +167,13 @@ export function StockMovesScreen({ role }: { role: string }) {
                             <table className="report">
                               <thead>
                                 <tr>
-                                  <th>Публичный код</th>
+                                  {/* Номер позиции (задача 0168): состав
+                                      документа открывают, чтобы назвать
+                                      увезённое вслух. «Номер товара» —
+                                      то же слово, каким публичный код зовут
+                                      на витрине и в карточке. */}
+                                  <th className="num">№ позиции</th>
+                                  <th>Номер товара</th>
                                   <th>Наименование</th>
                                   <th className="num">Количество</th>
                                 </tr>
@@ -179,6 +185,7 @@ export function StockMovesScreen({ role }: { role: string }) {
                                     className="row--clickable"
                                     onClick={() => void openPart(line.publicCode)}
                                   >
+                                    <td className="num">{line.number}</td>
                                     <td>{line.publicCode}</td>
                                     <td>{line.title}</td>
                                     <td className="num">{line.qty}</td>

@@ -324,6 +324,10 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
           <table>
             <thead>
               <tr>
+                {/* Номер позиции (задача 0168): спорную полку называют
+                    кладовщику вслух, а публичного кода в расхождениях
+                    нет вовсе. */}
+                <th className="num">№ позиции</th>
                 <th>Деталь</th>
                 <th className="num">Учёт на момент подсчёта</th>
                 <th className="num">Факт</th>
@@ -334,6 +338,10 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
             <tbody>
               {rows.map((r) => (
                 <tr key={r.partId} className={r.applied ? 'muted' : undefined}>
+                  {/* Прочерк, а не внутренний номер: тот человеку не говорит
+                      ничего. Пусто бывает у позиции, карточку которой
+                      удалили. */}
+                  <td className="num">{r.number ?? '—'}</td>
                   <td>{r.title ?? `деталь ${r.partId}`}</td>
                   <td className="num">{r.qtyExpectedAtCount}</td>
                   <td className="num">{r.qtyCounted}</td>

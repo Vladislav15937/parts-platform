@@ -34,10 +34,10 @@ describe('группы и вкладки пересчёта', () => {
       }
       if (url.includes('/sessions/1/lines')) {
         return json([
-          { partId: 1, title: 'Фара левая', cellId: 10, cellCode: 'А-01-1',
+          { partId: 1, number: 347, title: 'Фара левая', cellId: 10, cellCode: 'А-01-1',
             qtyExpected: '2', qtyCounted: null },
           // Учётный ноль — этот скан нашёл деталь, которой не было в листе.
-          { partId: 2, title: 'Дверь передняя', cellId: 11, cellCode: 'А-01-2',
+          { partId: 2, number: 348, title: 'Дверь передняя', cellId: 11, cellCode: 'А-01-2',
             qtyExpected: '0', qtyCounted: '1' },
         ]);
       }

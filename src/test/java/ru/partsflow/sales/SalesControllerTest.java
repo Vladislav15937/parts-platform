@@ -464,6 +464,46 @@ class SalesControllerTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.rows[0].publicCode").isNotEmpty());
     }
 
+    /**
+     * Состав сделки называет позицию номером — им её и спрашивают (задача 0168).
+     *
+     * <p><b>Как это выглядело для человека.</b> Продавец открывает сделку,
+     * чтобы отметить, что клиент привёз обратно, или назвать кладовщику, что
+     * снять с полки, — а в строке стояло одно наименование: «Фара Toyota Camry
+     * 2007» на живом складе это сотня одинаковых строк. Номер для разговора
+     * и заведён (задача 0060), и до этой правки его не было ни в одной строке
+     * сделки — ни в составе, ни в выборе позиций на возврат, который читает
+     * те же строки.
+     *
+     * <p>Через HTTP, а не вызовом сервиса: до экрана число доезжает ответом,
+     * и потерянное поле видно только здесь.
+     */
+    @Test
+    @DisplayName("Состав сделки несёт номер позиции, а не только наименование")
+    void dealItemsCarryThePartNumber() throws Exception {
+        // Сдвиг нумерации: без него id и номер у свежей позиции совпадают,
+        // и проверка зеленела бы на подмене `p.number` на `p.id`.
+        inTenant(() -> jdbc.queryForObject("SELECT nextval('part_number_seq')", Long.class));
+
+        Long partId = partWithStock("Стойка для состава сделки", 1);
+        long number = inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, partId));
+
+        assertThat(number)
+                .as("номер позиции совпал с её id — проверка перестала ловить подмену")
+                .isNotEqualTo(partId);
+
+        long dealId = createDeal(partId);
+
+        mvc.perform(get("/api/deals/" + dealId).session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].partId").value(partId))
+                .andExpect(jsonPath("$.items[0].number").value(number))
+                // Наименование рядом осталось: номером деталь называют,
+                // а глазами выбирают по названию.
+                .andExpect(jsonPath("$.items[0].title").value("Стойка для состава сделки"));
+    }
+
     @Test
     @DisplayName("Полностью отложенная деталь из поиска не исчезает")
     void fullyReservedIsStillVisible() throws Exception {

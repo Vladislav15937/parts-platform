@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import ru.partsflow.shared.PartNumberQuery;
 import ru.partsflow.shared.SupplyKinds;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;

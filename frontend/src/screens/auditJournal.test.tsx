@@ -150,6 +150,44 @@ describe('журнал действий организации', () => {
     await waitFor(() => expect(screen.getByText(/более чем 2 000/)).toBeTruthy());
     expect(screen.getByText(/уточните отбор/)).toBeTruthy();
   });
+
+  /**
+   * Номер позиции в журнале (задача 0168).
+   *
+   * <p>Разобрав правку, ревизор называет позицию вслух тому, кто её сделал, —
+   * а в строке стоял только публичный код, который по телефону не диктуют.
+   */
+  it('строка товара называет позицию номером, а не только публичным кодом', async () => {
+    stubApi(page());
+    render(<AuditJournalScreen />);
+
+    await waitFor(() => expect(
+      screen.getByText('Фара Toyota Camry 2006 перед. лев. (б/у)')).toBeTruthy());
+
+    const row = screen.getByText('Фара Toyota Camry 2006 перед. лев. (б/у)').closest('tr')!;
+    const text = row.textContent ?? '';
+    expect(text, `номера позиции в строке журнала нет: ${text}`).toContain('№ 347');
+    // Публичный код рядом остался: он про этикетку и сканер.
+    expect(text, 'публичный код пропал из строки').toContain('A7K3M2');
+  });
+
+  /**
+   * А у платежа своей позиции нет вовсе — и выдуманного номера там быть
+   * не должно: это тот же запрет, по которому не подставляется автор
+   * и не выдумывается роль.
+   */
+  it('у платежа номера позиции нет вовсе', async () => {
+    stubApi(page());
+    render(<AuditJournalScreen />);
+
+    await waitFor(() => expect(screen.getByText('Платёж записан')).toBeTruthy());
+
+    const row = screen.getByText('Платёж записан').closest('tr')!;
+    expect(
+      row.textContent ?? '',
+      'у платежа появился номер позиции, которого у него нет',
+    ).not.toContain('№ 347');
+  });
 });
 
 // ------------------------------------------------------------------ фикстуры
@@ -201,6 +239,7 @@ function page() {
         kind: 'Товар',
         subject: 'Фара Toyota Camry 2006 перед. лев. (б/у)',
         subjectCode: 'A7K3M2',
+        subjectNumber: 347,
         context: null,
         action: null,
         changes: [
@@ -215,6 +254,7 @@ function page() {
         kind: 'Сделка',
         subject: 'Мару Групп Владивосток',
         subjectCode: '№1274',
+        subjectNumber: null,
         context: null,
         action: null,
         changes: [
@@ -232,6 +272,7 @@ function page() {
         kind: 'Платёж',
         subject: null,
         subjectCode: 'запись №88',
+        subjectNumber: null,
         context: 'Сделка №1274',
         action: 'Платёж записан',
         changes: [],

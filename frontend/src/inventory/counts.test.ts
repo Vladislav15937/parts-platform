@@ -102,10 +102,10 @@ describe('отправка подсчёта', () => {
 });
 
 const lines: InventoryLine[] = [
-  { partId: 1, title: 'Фара левая', cellId: 10, cellCode: 'А-01-1', qtyExpected: '2', qtyCounted: null },
-  { partId: 2, title: 'Бампер', cellId: 10, cellCode: 'А-01-1', qtyExpected: '1', qtyCounted: null },
-  { partId: 3, title: 'Дверь', cellId: 11, cellCode: 'А-01-2', qtyExpected: '1', qtyCounted: null },
-  { partId: 4, title: 'Капот', cellId: null, cellCode: null, qtyExpected: '1', qtyCounted: null },
+  { partId: 1, number: 347, title: 'Фара левая', cellId: 10, cellCode: 'А-01-1', qtyExpected: '2', qtyCounted: null },
+  { partId: 2, number: 348, title: 'Бампер', cellId: 10, cellCode: 'А-01-1', qtyExpected: '1', qtyCounted: null },
+  { partId: 3, number: 349, title: 'Дверь', cellId: 11, cellCode: 'А-01-2', qtyExpected: '1', qtyCounted: null },
+  { partId: 4, number: 350, title: 'Капот', cellId: null, cellCode: null, qtyExpected: '1', qtyCounted: null },
 ];
 
 describe('лист обхода', () => {
@@ -133,11 +133,11 @@ describe('лист обхода', () => {
  */
 describe('статус строки', () => {
   const unscanned: InventoryLine = {
-    partId: 1, title: 'Фара левая', cellId: 10, cellCode: 'А-01-1',
+    partId: 1, number: 347, title: 'Фара левая', cellId: 10, cellCode: 'А-01-1',
     qtyExpected: '2', qtyCounted: null,
   };
   const outOfList: InventoryLine = {
-    partId: 2, title: 'Бампер', cellId: 11, cellCode: 'А-01-2',
+    partId: 2, number: 348, title: 'Бампер', cellId: 11, cellCode: 'А-01-2',
     qtyExpected: '0', qtyCounted: null,
   };
 
@@ -163,11 +163,11 @@ describe('статус строки', () => {
  */
 describe('скан штрихкода детали', () => {
   const codes: WarehouseCode[] = [
-    { partId: 1, title: 'Фара левая', publicCode: '000123', barcode: null, cellId: 10, cellCode: 'А-01-1' },
-    { partId: 2, title: 'Бампер', publicCode: '000456', barcode: '4600123456789', cellId: 11, cellCode: 'А-01-2' },
+    { partId: 1, number: 347, title: 'Фара левая', publicCode: '000123', barcode: null, cellId: 10, cellCode: 'А-01-1' },
+    { partId: 2, number: 348, title: 'Бампер', publicCode: '000456', barcode: '4600123456789', cellId: 11, cellCode: 'А-01-2' },
   ];
   const listed: InventoryLine[] = [
-    { partId: 1, title: 'Фара левая', cellId: 10, cellCode: 'А-01-1', qtyExpected: '2', qtyCounted: null },
+    { partId: 1, number: 347, title: 'Фара левая', cellId: 10, cellCode: 'А-01-1', qtyExpected: '2', qtyCounted: null },
   ];
 
   it('код позиции из листа — «listed»', () => {

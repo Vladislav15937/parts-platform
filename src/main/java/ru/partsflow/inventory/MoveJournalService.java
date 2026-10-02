@@ -67,16 +67,22 @@ public class MoveJournalService {
      * <p>Ссылка в карточку позиции строится на клиенте по {@code partId},
      * а публичный код и наименование — чтобы кладовщик узнал деталь, не
      * открывая карточку.
+     *
+     * <p><b>И номер позиции</b> (задача 0168): состав документа открывают,
+     * чтобы назвать увезённое другому человеку — «позиция 347 уехала
+     * на Ангар», — а публичный код для разговора не годится, он шесть
+     * случайных байт и живёт на этикетке.
      */
     @Transactional(readOnly = true)
     public List<MoveLine> lines(long documentId) {
         return jdbc.query("""
-                        SELECT p.id AS part_id, p.public_code, p.title, l.qty
+                        SELECT p.id AS part_id, p.number, p.public_code, p.title, l.qty
                           FROM stock_document_line l
                           JOIN part p ON p.id = l.part_id
                          WHERE l.document_id = ?
                          ORDER BY l.id""",
-                (rs, i) -> new MoveLine(rs.getLong("part_id"), rs.getString("public_code"),
+                (rs, i) -> new MoveLine(rs.getLong("part_id"), rs.getLong("number"),
+                        rs.getString("public_code"),
                         rs.getString("title"), rs.getBigDecimal("qty")),
                 documentId);
     }
@@ -86,6 +92,12 @@ public class MoveJournalService {
                                int lines, String note, String author) {
     }
 
-    public record MoveLine(Long partId, String publicCode, String title, BigDecimal qty) {
+    /**
+     * @param number порядковый номер позиции — тот, которым её называют вслух
+     *               (задача 0060). Публичный код рядом остаётся: его читают
+     *               с этикетки на самой детали
+     */
+    public record MoveLine(Long partId, Long number, String publicCode, String title,
+                           BigDecimal qty) {
     }
 }

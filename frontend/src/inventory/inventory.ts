@@ -19,6 +19,8 @@ import { normalizeCode } from '../scan/codes';
 
 export interface InventoryLine {
   partId: number;
+  /** Порядковый номер позиции — им кладовщик называет деталь вслух. */
+  number: number;
   title: string;
   cellId: number | null;
   cellCode: string | null;
@@ -184,6 +186,13 @@ export const NO_CELL_ID = 0;
  */
 export interface WarehouseCode {
   partId: number;
+  /**
+   * Порядковый номер позиции (задача 0168): отсканированная деталь, которой
+   * не было в листе обхода, заводится строкой листа из этой записи — и без
+   * номера она оказалась бы единственной строкой, которую нечем назвать
+   * вслух тому, кто сводит расхождения.
+   */
+  number: number;
   title: string;
   publicCode: string | null;
   barcode: string | null;
@@ -418,6 +427,8 @@ export function resolvePartScan(
  */
 export interface Discrepancy {
   partId: number;
+  /** Порядковый номер позиции: публичного кода в расхождениях нет вовсе. */
+  number: number | null;
   title: string | null;
   qtyExpectedAtOpen: number;
   qtyExpectedAtCount: number;

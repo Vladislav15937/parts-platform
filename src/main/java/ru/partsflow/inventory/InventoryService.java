@@ -327,7 +327,7 @@ public class InventoryService {
     public List<Line> lines(Long sessionId) {
         return jdbc.query("""
                 SELECT l.part_id, l.qty_expected, l.qty_counted, l.cell_id,
-                       p.title, c.code AS cell_code
+                       p.number, p.title, c.code AS cell_code
                   FROM inventory_line l
                   JOIN part p ON p.id = l.part_id
                   LEFT JOIN storage_cell c ON c.id = l.cell_id
@@ -335,6 +335,7 @@ public class InventoryService {
                  ORDER BY c.code NULLS LAST, p.title""",
                 (rs, i) -> new Line(
                         rs.getLong("part_id"),
+                        rs.getLong("number"),
                         rs.getString("title"),
                         rs.getObject("cell_id") == null ? null : rs.getLong("cell_id"),
                         rs.getString("cell_code"),
@@ -616,21 +617,30 @@ public class InventoryService {
     public List<WarehouseCode> warehouseCodes(Long sessionId) {
         InventorySession session = require(sessionId);
         return jdbc.query("""
-                SELECT p.id AS part_id, p.title, p.public_code, p.barcode,
+                SELECT p.id AS part_id, p.number, p.title, p.public_code, p.barcode,
                        ps.cell_id, c.code AS cell_code
                   FROM part_stock ps
                   JOIN part p ON p.id = ps.part_id
                   LEFT JOIN storage_cell c ON c.id = ps.cell_id
                  WHERE ps.warehouse_id = ? AND ps.qty > 0""",
-                (rs, i) -> new WarehouseCode(rs.getLong("part_id"), rs.getString("title"),
+                (rs, i) -> new WarehouseCode(rs.getLong("part_id"), rs.getLong("number"),
+                        rs.getString("title"),
                         rs.getString("public_code"), rs.getString("barcode"),
                         rs.getObject("cell_id") == null ? null : rs.getLong("cell_id"),
                         rs.getString("cell_code")),
                 session.getWarehouseId());
     }
 
-    /** Строка кода детали для сканера — код товара и владельческий штрихкод разом. */
-    public record WarehouseCode(Long partId, String title, String publicCode, String barcode,
+    /**
+     * Строка кода детали для сканера — код товара и владельческий штрихкод разом.
+     *
+     * @param number порядковый номер позиции (задача 0168). Отсканированная
+     *               деталь, которой не было в листе обхода, заводится строкой
+     *               обхода из этой записи — и без номера такая строка оказалась
+     *               бы единственной в листе, которую нечем назвать вслух
+     */
+    public record WarehouseCode(Long partId, Long number, String title,
+                                String publicCode, String barcode,
                                 Long cellId, String cellCode) {
     }
 
@@ -650,46 +660,60 @@ public class InventoryService {
         // Наименования одним запросом на всю выдачу, а не по строке:
         // «деталь 4» отправит кладовщика искать её самому, а расхождений
         // на большом складе бывают десятки.
-        Map<Long, String> titles = titlesOf(lines.stream().map(InventoryLine::getPartId).toList());
+        Map<Long, PartNaming> naming = namingOf(
+                lines.stream().map(InventoryLine::getPartId).toList());
 
         return lines.stream()
                 .map(line -> {
                     Discrepancy d = discrepancyOf(session, line);
-                    return new DiscrepancyLine(d.partId(), titles.get(d.partId()),
+                    PartNaming named = naming.get(d.partId());
+                    return new DiscrepancyLine(d.partId(),
+                            named == null ? null : named.number(),
+                            named == null ? null : named.title(),
                             d.qtyExpectedAtOpen(), d.qtyExpectedAtCount(), d.qtyCounted(),
                             d.delta(), d.isShortage(), line.isApplied());
                 })
                 .toList();
     }
 
-    private Map<Long, String> titlesOf(List<Long> partIds) {
+    private Map<Long, PartNaming> namingOf(List<Long> partIds) {
         if (partIds.isEmpty()) {
             return Map.of();
         }
-        Map<Long, String> titles = new HashMap<>();
+        Map<Long, PartNaming> naming = new HashMap<>();
         // Числа подставляются в текст запроса, а не параметрами: они пришли
         // из базы как long, а не из запроса пользователя, и списки бывают
         // в сотни позиций — на каждую по параметру Postgres не обязан
         // готовить свой план.
         String in = partIds.stream().map(String::valueOf)
                 .collect(java.util.stream.Collectors.joining(","));
-        jdbc.query("SELECT id, title FROM part WHERE id IN (" + in + ")",
+        // Номер и наименование одним запросом: второй проход по тем же
+        // строкам ради номера — это ещё один повод разойтись с первым.
+        jdbc.query("SELECT id, number, title FROM part WHERE id IN (" + in + ")",
                 rs -> {
-                    titles.put(rs.getLong("id"), rs.getString("title"));
+                    naming.put(rs.getLong("id"),
+                            new PartNaming(rs.getLong("number"), rs.getString("title")));
                 });
-        return titles;
+        return naming;
+    }
+
+    /** Как позицию зовут человеку: номер вслух, наименование глазами. */
+    private record PartNaming(Long number, String title) {
     }
 
     /**
      * Строка расхождения для человека.
      *
+     * @param number  порядковый номер позиции — им кладовщик называет деталь
+     *                тому, кто сводит расхождения; публичного кода здесь
+     *                нет вовсе (задача 0168)
      * @param applied проведена ли строка. После проведения расхождение
      *                не исчезает — оно считается на момент подсчёта,
      *                а корректировка записана позже, — и без этой отметки
      *                экран показывает «скорректировано» рядом с той же
      *                минусовой строкой
      */
-    public record DiscrepancyLine(Long partId, String title,
+    public record DiscrepancyLine(Long partId, Long number, String title,
                                   BigDecimal qtyExpectedAtOpen, BigDecimal qtyExpectedAtCount,
                                   BigDecimal qtyCounted, BigDecimal delta,
                                   boolean shortage, boolean applied) {
@@ -873,8 +897,14 @@ public class InventoryService {
      * @param qtyExpectedAtCount учёт на момент подсчёта — с ним и сравнивают
      * @param delta              что уйдёт корректировкой: минус недостача, плюс излишек
      */
-    /** Строка листа обхода. {@code qtyCounted} пусто — до полки не дошли. */
-    public record Line(Long partId, String title, Long cellId, String cellCode,
+    /**
+     * Строка листа обхода. {@code qtyCounted} пусто — до полки не дошли.
+     *
+     * @param number порядковый номер позиции (задача 0168): найдя на полке
+     *               не то, кладовщик называет деталь вслух тому, кто сводит
+     *               расхождения, — а публичного кода в листе обхода нет вовсе
+     */
+    public record Line(Long partId, Long number, String title, Long cellId, String cellCode,
                        BigDecimal qtyExpected, BigDecimal qtyCounted) {
     }
 

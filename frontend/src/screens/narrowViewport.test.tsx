@@ -352,7 +352,7 @@ const JOURNAL = {
       author: 'Владимир Петров', authorRole: 'MANAGER',
       kind: 'Товар',
       subject: 'Фара передняя левая Toyota Land Cruiser Prado 150 рестайлинг',
-      subjectCode: 'A7K3M2', context: null, action: null,
+      subjectCode: 'A7K3M2', subjectNumber: 347, context: null, action: null,
       changes: [
         { table: 'part', column: 'price', label: 'Цена', before: '5000', after: '4500' },
         {
@@ -366,7 +366,7 @@ const JOURNAL = {
       id: 2, at: '2026-09-08T16:10:00Z',
       author: null, authorRole: null,
       kind: 'Сделка', subject: 'Мару Групп Владивосток', subjectCode: '№1274',
-      context: null, action: null,
+      subjectNumber: null, context: null, action: null,
       changes: [
         { table: 'deal', column: 'status', label: 'Состояние', before: 'RESERVED', after: 'CANCELLED' },
       ],
@@ -375,7 +375,7 @@ const JOURNAL = {
       id: 1, at: '2026-09-08T09:05:00Z',
       author: 'Екатерина Александрова', authorRole: 'STOREKEEPER',
       kind: 'Платёж', subject: null, subjectCode: 'запись №88',
-      context: 'Сделка №1274', action: 'Платёж записан', changes: [],
+      subjectNumber: null, context: 'Сделка №1274', action: 'Платёж записан', changes: [],
     },
   ],
 };
@@ -502,7 +502,7 @@ const SOLD_ITEMS = {
   rows: [
     {
       itemId: 501, soldAt: '2026-09-05T18:40:00Z', dealId: 9, dealNumber: 1274,
-      partId: 1, publicCode: 'A7K3M2',
+      partId: 1, number: 347, publicCode: 'A7K3M2',
       title: 'Фара передняя левая Toyota Land Cruiser Prado 150 рестайлинг',
       condition: 'б/у', price: 12500, listPrice: 14000, quantity: 1,
       costPrice: 7000, profit: 5500,
@@ -512,7 +512,7 @@ const SOLD_ITEMS = {
     },
     {
       itemId: 502, soldAt: '2026-09-04T11:05:00Z', dealId: 8, dealNumber: 1270,
-      partId: 2, publicCode: 'B4C9Q1', title: 'Бампер передний',
+      partId: 2, number: 348, publicCode: 'B4C9Q1', title: 'Бампер передний',
       condition: 'б/у', price: 4500, listPrice: 4500, quantity: 2,
       costPrice: null, profit: null,
       warehouse: 'Дальний', manager: null, supplyNumber: null, donorCode: null,
