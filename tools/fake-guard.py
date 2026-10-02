@@ -1,0 +1,827 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Подделка доказательства не должна уезжать в `main` под видом работы.
+
+Ломать код здесь — **рабочий инструмент, а не нарушение**: `reviewer.md` велит
+вернуть прежнее поведение и прогнать, а половина записей в памятках кончается
+словами «проверено откатом». Значит стабы, `if false` и копии скриптов со снятой
+проверкой появляются в дереве каждую волну и по договору.
+
+Цена ошибки здесь особая. Обычная чужая правка, уехавшая в ветку, видна — она
+что-то меняет. Подделка **снимает** проверку: уехав в `main`, она даёт зелёный
+прогон и сторожа, который не краснеет на дефекте, то есть ровно то состояние,
+которое проект считает хуже отсутствия сторожа. Заметить его можно только
+попыткой сломать то, что он стережёт, — а до этой попытки всё выглядит зелёным.
+
+До задачи 0248 не держало этого ничто: у подделок не было ни названного места,
+ни строки в `.gitignore`, ни одного шага прогона. Слова `scratch` в дереве
+не было вовсе (перебор 01.10.2026), то есть место каждый выбирал своё, а
+`git add -A` увозил выбранное как работу — в этом проекте уже увозил чужое
+(`docs/agent-workflow.md`, «Что параллелится»).
+
+    ./tools/fake-guard.py [--list] [--selftest]
+
+Четыре вопроса, и каждый своей строкой:
+
+  1. МЕСТО ЦЕЛО — git действительно игнорирует `.scratch/`. Спрашивается
+     у самого git (`check-ignore`), а не грепом по `.gitignore`: правило,
+     закрытое соседней строкой или отменённое `!`-правилом, текстом выглядит
+     целым. Это же и возврат дефекта задачи: снимите строку — краснеет здесь.
+  2. В ОТСЛЕЖИВАЕМЫХ ФАЙЛАХ ПОДДЕЛОК НЕТ — ни по месту (`.scratch/`, `scratch-…`),
+     ни по имени (`-копия`, `-fake`, `.bak`, `~`, `-stub`…). Спрашивается
+     у `git ls-files`: предмет проверки — индекс, а не рабочая копия, потому
+     что уезжает в `main` именно индекс.
+  3. ВЕРДИКТ НЕ ЗАКОРОЧЕН — в самой проверочной машинерии (`tools/`, `ops/`,
+     `db/`, `.github/workflows/`) нет условия, навсегда выключающего проверку:
+     `if false`, `if False:`, `if (false)`, `if 0:`.
+  4. ОБВЯЗКА ЦЕЛА — прогон действительно зовёт этот сторож, и задача, которая
+     его зовёт, стоит в поимённом `needs` у публикации образа.
+
+ЧТО ИМЕННО ИСКАТЬ — РЕШЕНИЕ ИСПОЛНИТЕЛЯ, НАЗВАННОЕ ВСЛУХ (критерий 3 задачи
+0248; задача предлагала два пути и требовала назвать выбор, цену и пропуски).
+
+Выбрано **(а) целиком плюс узкий слой (б)**, и вот чем за это заплачено.
+
+Путь (а) — место и имя — ловит только неряшливость: подделку, закоммиченную
+вместе со всем остальным. Это ровно тот случай, который и наблюдали
+(`.scratch-0243/` с двумя стабами), он дёшев и ложных тревог не даёт вовсе:
+на дереве `main` 01.10.2026 ни одного совпадения ни по месту, ни по имени.
+
+Путь (б) — «признаки снятой проверки» — ловит настоящий случай, и задача честно
+предупреждала, что ложная тревога здесь дороже пропуска. Замер подтвердил
+предупреждение буквально: `if false`-подобных строк на `main` **семь**, и все
+семь законны — это селфтесты, которые САМИ сажают подделку через `sed` или
+строкой-фикстурой (`ops/verify-backup.sh`, `ops/deploy-checks.sh`,
+`ops/install-cron.sh`, `ops/deploy.sh`, `tools/board.py`,
+`tools/image-published-guard.py`). Сторож, краснеющий на них, был бы отключён
+в первый день — вместе с защитой.
+
+Поэтому слой (б) сужен до **кода**, а не текста: строки и комментарии гасятся
+до поиска (`blank`), и все семь законных случаев уходят сами, без единой
+пометки в списке исключений. Проверено с двух сторон: случай 6 самопроверки
+требует молчания на `if False` внутри кавычек, случай 5 — красного на том же
+`if false` в виде кода.
+
+ЧЕГО ЭТОТ ВЫБОР НЕ ЛОВИТ, и это надо знать заранее:
+
+  * подделку в отслеживаемом файле под невинным именем — правка `ops/deploy.sh`
+    на месте, без копии. Её возвращает разбор и `git status` в его дереве,
+    и это предмет `tasks/0247`, а не этой задачи;
+  * подделку смыслом, а не формой: порог `>= 1` вместо `>= 0`, вывернутое
+    утверждение, снятая строка `assert`, переименованный случай селфтеста.
+    Силуэта у такого нет, и перебором по исходникам он не ловится;
+  * `--rollback SELECT 1` — намеренно: восемь таких changeset'ов на `main`
+    законны (волна «логика в Java», 046–050), то есть проверка потребовала бы
+    восьми пометок, а ловила бы случай, который уже закрыт неизменяемостью
+    выпущенного changeset'а (`db/check-changelog.py`);
+  * подделку в продуктовом коде (Java, TS): там `if (false)` не компилируется
+    молча, и класс этот другой.
+
+ТРИ ИСХОДА, А НЕ ДВА (урок задачи 0241). Сторож спрашивает git, а у такого
+исходов три: 0 — чисто, 1 — нашлось, **2 — спросить не вышло** (git не
+запустился, каталог не репозиторий). Третье печатает свои слова и своим кодом:
+«не нашлось» и «спросить не вышло» — разные утверждения, и склеив их, сторож
+начинает зеленеть ровно там, где перестал работать.
+"""
+import os
+import re
+import subprocess
+import sys
+
+ROOT = os.environ.get(
+    "FAKE_GUARD_ROOT",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Одно место на все подделки. Почему именно корневой каталог, а не `ops/`
+# и не `/tmp`, — глубина: копия скрипта считает корень репозитория от своего
+# каталога (`cd "$(dirname "$0")/.."`, `Path(__file__).parent.parent`), поэтому
+# из `/tmp` она уходит в корень файловой системы (урок 0151), а из `.scratch/`
+# попадает туда же, куда из `ops/`, `tools/` и `db/`. То есть `.scratch/`
+# удовлетворяет правилу 0151 и при этом **игнорируется git**, чего про `ops/`
+# сказать нельзя.
+PLACE = ".scratch"
+
+# Спрашивать надо про файл ВНУТРИ каталога: правило `.scratch/` на сам каталог
+# не сработает, если каталога в дереве нет, — а его в чистом дереве и не бывает.
+PROBE = PLACE + "/проба"
+
+GOOD, FOUND, UNKNOWN = 0, 1, 2
+
+# Задача CI, которая зовёт этот сторож, и её имя в поимённом `needs`
+# у публикации образа.
+JOB = "fakes"
+SELF_PATH = "tools/fake-guard.py"
+WORKFLOW = os.path.join(".github", "workflows", "ci.yml")
+
+# Место подделки: названный каталог и те формы, которыми его уже обходили.
+# `.scratch-0243/` — не выдумка, а наблюдение волны 01.10.2026.
+PLACE_SHAPES = re.compile(r"(?:^|/)\.?scratch(?:[-_./]|$)", re.I)
+
+# Имя, которым подделку называют, когда места не знают. Список закрытый
+# и замеренный: на `main` 01.10.2026 ни одного совпадения среди 1043
+# отслеживаемых файлов, то есть ложной тревоги он не даёт сегодня ни одной.
+NAME_SHAPES = (
+    "-fake", "_fake", "-поддел", "-копия", "-copy", "-broken",
+    "-disabled", "-stub", "-стаб", "-sloman", "-сломан",
+)
+NAME_SUFFIXES = (".bak", ".orig", ".save", ".rej", ".disabled", "~")
+
+# Условие, навсегда выключающее проверку. Ищется в КОДЕ: строки и комментарии
+# гасятся до поиска, иначе сторож покраснел бы на семи законных селфтестах.
+DEAD = re.compile(
+    r"\bif\s+false\b"
+    r"|\b(?:el)?if\s+False\s*:"
+    r"|\bif\s+0\s*:"
+    r"|\bif\s*\(\s*false\s*\)"
+    r"|\bwhile\s+false\b")
+
+# Где живёт проверочная машинерия. Продуктовый код сюда не входит намеренно
+# (см. «чего этот выбор не ловит» в заголовке).
+MACHINERY = ("tools", "ops", "db", os.path.join(".github", "workflows"))
+MACHINERY_SUFFIXES = (".py", ".sh", ".yml", ".yaml")
+
+# Разобранные случаи: «путь:строка» → почему это законно. Пометка без причины
+# не принимается — иначе список станет способом отключить сторожа, а не
+# разбором. Сегодня список пуст, и это не случайность: все семь законных
+# `if false` на `main` лежат внутри кавычек и гасятся `blank()`, то есть
+# разбирать там нечего.
+ALLOWED = {}
+
+RED = "\033[1;31m%s\033[0m"
+GREEN = "\033[1;32m%s\033[0m"
+
+
+class Unknown(RuntimeError):
+    """Спросить не вышло: git не запустился либо каталог не репозиторий.
+
+    Это не «подделок нет»: первое означает, что сторож ничего не проверил,
+    второе — что проверил и не нашёл. Сведение их в один исход и есть дефект,
+    которым оплачена задача 0241.
+    """
+
+
+def red(msg):
+    print(RED % msg, file=sys.stderr)
+
+
+# --- что считается кодом ------------------------------------------------------
+
+def blank(text):
+    """Строки и комментарии — пробелами той же длины, смещения сохраняются.
+
+    Без этого сторож краснеет на семи законных местах `main`: селфтесты сажают
+    подделку через `sed 's/…/if false; then/'` и строкой-фикстурой `'if False:'`,
+    то есть `if false` стоит там ВНУТРИ кавычек и кодом не является.
+
+    Ошибается гашение в безопасную сторону: `#` в шелле внутри слова
+    (`${x#y}`) съест остаток строки, то есть сторож скорее промолчит,
+    чем соврёт. Ложная тревога здесь дороже пропуска — на неё натыкается
+    каждый прогон.
+    """
+    out = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in "'\"":
+            if text[i:i + 3] in ("'''", '"""'):
+                end = text.find(text[i:i + 3], i + 3)
+                end = n if end < 0 else end + 3
+                for k in range(i, end):
+                    if out[k] != "\n":
+                        out[k] = " "
+                i = end
+                continue
+            j = i + 1
+            while j < n and text[j] != c and text[j] != "\n":
+                j += 2 if text[j] == "\\" else 1
+            for k in range(i, min(j + 1, n)):
+                if out[k] != "\n":
+                    out[k] = " "
+            i = j + 1
+            continue
+        if c == "#":
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            for k in range(i, end):
+                out[k] = " "
+            i = end
+            continue
+        i += 1
+    return "".join(out)
+
+
+# --- 1. место цело ------------------------------------------------------------
+
+def git(args, repo):
+    try:
+        done = subprocess.run(["git", *args], cwd=repo,
+                              capture_output=True, text=True)
+    except OSError as e:
+        raise Unknown("git не запустился: %s" % e)
+    if done.returncode >= 128:
+        raise Unknown("git отказал: %s"
+                      % (done.stderr.strip().splitlines() or ["без причины"])[0])
+    return done
+
+
+def место(repo):
+    """(игнорируется ли, правило либо причина) — спрошено у самого git.
+
+    Именно у git, а не грепом по `.gitignore`: правило, отменённое ниже
+    `!`-строкой или закрытое опечаткой в пути, текстом выглядит целым, а
+    игнорировать перестаёт. Спрашиваем про следствие, а не про текст.
+    """
+    done = git(["check-ignore", "-v", "--no-index", PROBE], repo)
+    if done.returncode == 0:
+        # `check-ignore -v` печатает «правило<TAB>путь», а путь с кириллицей
+        # git отдаёт в своём экранированном виде (`"\320\277\321\200…"`).
+        # Человеку нужно правило — файл и строка; экранированный путь на экране
+        # это внутреннее представление, то есть класс 3 из docs/defect-classes.md,
+        # заведённый своими руками.
+        first = (done.stdout.strip().splitlines() or [""])[0]
+        return True, first.split("\t")[0].strip()
+    if done.returncode == 1:
+        return False, ""
+    raise Unknown("`git check-ignore` ответил кодом %d: %s"
+                  % (done.returncode, done.stderr.strip()))
+
+
+# --- 2. подделок нет в отслеживаемых файлах -----------------------------------
+
+def tracked(repo):
+    done = git(["ls-files", "-z"], repo)
+    if done.returncode != 0:
+        raise Unknown("`git ls-files` ответил кодом %d" % done.returncode)
+    return [p for p in done.stdout.split("\0") if p]
+
+
+def подделки_в_индексе(paths):
+    """Отслеживаемые файлы, похожие на подделку — по месту либо по имени."""
+    problems = []
+    for path in sorted(paths):
+        name = os.path.basename(path).lower()
+        if PLACE_SHAPES.search(path):
+            problems.append(
+                "%s\n"
+                "      лежит в месте подделок и при этом ОТСЛЕЖИВАЕТСЯ git.\n"
+                "      Место на то и место, чтобы его не коммитили: уехав\n"
+                "      в `main`, подделка даёт зелёный прогон и сторожа,\n"
+                "      который не краснеет на дефекте.\n"
+                "      `git rm --cached %s` — и пусть лежит как было."
+                % (path, path))
+            continue
+        if name.endswith(NAME_SUFFIXES) or any(s in name for s in NAME_SHAPES):
+            problems.append(
+                "%s\n"
+                "      имя говорит, что это копия или отключённый файл, а файл\n"
+                "      отслеживается git. Подделкам место в `%s/` — оно\n"
+                "      игнорируется; если это не подделка, переименуйте так,\n"
+                "      чтобы следующий не принял её за снятую проверку."
+                % (path, PLACE))
+    return problems
+
+
+# --- 3. вердикт не закорочен --------------------------------------------------
+
+def machinery_files(root):
+    me = os.path.abspath(__file__)
+    for where in MACHINERY:
+        base = os.path.join(root, where)
+        if not os.path.isdir(base):
+            continue
+        for dirpath, dirnames, names in os.walk(base):
+            dirnames[:] = [d for d in dirnames
+                           if d not in ("node_modules", "target", ".git")]
+            for name in sorted(names):
+                if not name.endswith(MACHINERY_SUFFIXES):
+                    continue
+                path = os.path.join(dirpath, name)
+                # Себя сторож не проверяет: его собственные фикстуры и есть
+                # подделки, и красное на них говорило бы о нём, а не о дереве.
+                if os.path.abspath(path) == me:
+                    continue
+                yield path
+
+
+def закороченный_вердикт(root):
+    """Условие, навсегда выключающее проверку, — в КОДЕ, а не в кавычках."""
+    problems = []
+    scanned = 0
+    for path in machinery_files(root):
+        rel = os.path.relpath(path, root)
+        scanned += 1
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        if not DEAD.search(text):
+            continue                      # дешёвый отказ до гашения строк
+        code = blank(text)
+        for number, line in enumerate(code.splitlines(), start=1):
+            hit = DEAD.search(line)
+            if not hit:
+                continue
+            key = "%s:%d" % (rel, number)
+            if key in ALLOWED and ALLOWED[key].strip():
+                continue
+            if key in ALLOWED:
+                problems.append(
+                    "%s — пометка без причины.\n"
+                    "      Причина и есть то, что отличает разбор от отписки."
+                    % key)
+                continue
+            problems.append(
+                "%s\n"
+                "      `%s` — условие, навсегда выключающее проверку, и стоит\n"
+                "      оно КОДОМ, а не внутри кавычек. Так выглядит подделка,\n"
+                "      уехавшая в `main`: прогон зелёный, а проверки нет.\n"
+                "      Верните условие либо внесите строку в ALLOWED\n"
+                "      с причиной внутри %s."
+                % (key, hit.group(0).strip(), SELF_PATH))
+    return problems, scanned
+
+
+# --- 4. обвязка цела ----------------------------------------------------------
+
+def needs_of(text, job):
+    """Поимённый список `needs` названной задачи прогона."""
+    lines = text.splitlines()
+    start = None
+    for number, line in enumerate(lines):
+        if re.match(r"^  %s:\s*$" % re.escape(job), line):
+            start = number
+            break
+    if start is None:
+        return None
+    out, inside = [], False
+    for line in lines[start + 1:]:
+        if re.match(r"^  \S", line):          # началась следующая задача
+            break
+        if re.match(r"^    needs:\s*$", line):
+            inside = True
+            continue
+        if inside:
+            m = re.match(r"^      - (\S+)\s*$", line)
+            if m:
+                out.append(m.group(1))
+            elif line.strip() and not line.strip().startswith("#"):
+                break
+    return out
+
+
+def обвязка(text):
+    """Зовёт ли прогон этот сторож — и остановит ли он публикацию образа.
+
+    Это второй уровень доказательства, и без него первый ничего не стоит:
+    сторож можно не ломать, а просто не позвать. Переименованный шаг,
+    выкинутый шаг и задача, пропавшая из поимённого `needs`, — три разных
+    способа сделать это молча, и каждый ловится здесь своей строкой.
+    """
+    problems = []
+    if text is None:
+        return ["%s не прочитан: обвязку проверить нечем.\n"
+                "      Это не «обвязка цела» — это «спросить не вышло»."
+                % WORKFLOW]
+    if ("./%s --selftest" % SELF_PATH) not in text:
+        problems.append(
+            "прогон не зовёт `./%s --selftest`.\n"
+            "      Сторож, который себя не проверяет, отвечает «да» на вопрос\n"
+            "      «ты краснеешь на подделке?» видом успешной работы."
+            % SELF_PATH)
+    runs = re.findall(r"run:\s*\./%s\s*$" % re.escape(SELF_PATH),
+                      text, re.M)
+    if not runs:
+        problems.append(
+            "прогон не зовёт `./%s` по дереву.\n"
+            "      Самопроверки мало: она проверяет сторожа, а не дерево."
+            % SELF_PATH)
+    needs = needs_of(text, "publish")
+    if needs is None:
+        problems.append(
+            "в %s нет задачи `publish` — список `needs` проверить нечем."
+            % WORKFLOW)
+    elif JOB not in needs:
+        problems.append(
+            "задача «%s» не стоит в поимённом `needs` у публикации образа.\n"
+            "      Список там поимённый, и забытое имя не ломает ни одного\n"
+            "      прогона — просто красная проверка перестаёт останавливать\n"
+            "      публикацию (так уже было с «Откатом по шагам», PR #197).\n"
+            "      Заодно это единственное, что замечает ПРОПАЖУ самой задачи:\n"
+            "      имя в `needs` без задачи — негодный workflow, и прогон\n"
+            "      краснеет целиком." % JOB)
+    return problems
+
+
+def workflow_text(root):
+    try:
+        with open(os.path.join(root, WORKFLOW), encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+# ─────────────────────────────── самопроверка ────────────────────────────────
+#
+# Проверка, не краснеющая на подделке, хуже отсутствующей, и установить это
+# можно только попыткой. Самопроверка идёт ПЕРЕД каждым прогоном и проверяет
+# обе стороны: что сторож краснеет на подделке и что он МОЛЧИТ на законном —
+# второе не менее важно, потому что на ложную тревогу натыкается каждый прогон.
+#
+# Ни одной переменной окружения прогона здесь не нужно: `--selftest` обязан
+# проходить вне CI, иначе доказательство существует только там, где его никто
+# не смотрит.
+
+CI_OK = """\
+name: CI
+jobs:
+  endpoints:
+    name: Эндпоинты и экраны
+    steps:
+      - name: tools/endpoint-coverage.py
+        run: ./tools/endpoint-coverage.py
+
+  fakes:
+    name: Подделки доказательства
+    steps:
+      - name: tools/fake-guard.py --selftest
+        run: ./tools/fake-guard.py --selftest
+      - name: tools/fake-guard.py
+        run: ./tools/fake-guard.py
+
+  publish:
+    name: Публикация образа
+    needs:
+      - endpoints
+      - fakes
+      - backend
+"""
+
+# Законный `if false` — внутри кавычек: так написаны все семь мест `main`,
+# где селфтест САМ сажает подделку. Краснеть на них нельзя.
+QUIET_SH = """\
+plant '    if [ "$unverified" != 0 ]; then' '    if false; then'
+sed 's/^\\( *\\)if ! log_writable; then$/\\1if false; then/' "$SELF" > "$tmp/fake.sh"
+# тут тоже написано if false, но это комментарий
+"""
+
+QUIET_PY = '''\
+ПОДДЕЛКИ = (
+    ("отказ снова глотается",
+     "    if проверяемые and not найдено:",
+     "    if False and проверяемые and not найдено:"),
+)
+'''
+
+# А это — подделка: то же условие КОДОМ.
+DEAD_SH = """\
+check_journals() {
+    if false; then
+        fail "журналы изменяемы"
+    fi
+}
+"""
+
+
+def selftest():
+    import shutil
+    import tempfile
+
+    failures = []
+    root = tempfile.mkdtemp(prefix="fake-guard-")
+
+    def put(relative, body):
+        path = os.path.join(root, relative)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        return path
+
+    def git_here(*args):
+        return subprocess.run(["git", *args], cwd=root,
+                              capture_output=True, text=True)
+
+    try:
+        git_here("init", "-q")
+        git_here("config", "user.email", "selftest@example.com")
+        git_here("config", "user.name", "selftest")
+        put(".gitignore", "target/\n%s/\n" % PLACE)
+        put("ops/deploy.sh", "echo живой скрипт\n")
+        put(WORKFLOW, CI_OK)
+        git_here("add", ".gitignore", "ops/deploy.sh", WORKFLOW)
+
+        # 1. Место цело: git подтверждает, что файл внутри `.scratch/`
+        #    игнорируется, и называет правило.
+        try:
+            ignored, rule = место(root)
+        except Unknown as e:
+            failures.append("на исправном дереве место не проверилось: %s" % e)
+            ignored, rule = False, ""
+        if not ignored:
+            failures.append(
+                "строка `%s/` в `.gitignore` есть, а git файл внутри каталога "
+                "не игнорирует — значит правило спрашивают не у того, у кого "
+                "надо" % PLACE)
+        elif ".gitignore" not in rule:
+            failures.append("правило названо без файла и строки (%r): искать "
+                            "придётся руками" % rule)
+
+        # 2. И подделка в самом месте: пока она не в индексе, сторож молчит.
+        put(PLACE + "/board.py", "print('стаб')\n")
+        try:
+            problems = подделки_в_индексе(tracked(root))
+        except Unknown as e:
+            failures.append("на исправном дереве индекс не прочитан: %s" % e)
+            problems = []
+        if problems:
+            failures.append(
+                "подделка, лежащая в своём месте и НЕ закоммиченная, названа "
+                "нарушением: %s. Это ровно разрешённый способ работы, и сторож, "
+                "краснеющий на нём, запрещает доказательство откатом"
+                % "; ".join(p.splitlines()[0] for p in problems))
+
+        # 3. ВОЗВРАТ ДЕФЕКТА ЗАДАЧИ: убираем строку из `.gitignore` — краснеет.
+        #    Сегодняшнее состояние проекта ровно такое, и оно обязано быть
+        #    отличимо от исправного.
+        put(".gitignore", "target/\n")
+        try:
+            ignored, _ = место(root)
+        except Unknown as e:
+            failures.append("без строки в `.gitignore` место ответило "
+                            "«спросить не вышло» вместо «не игнорируется»: %s" % e)
+            ignored = True
+        if ignored:
+            failures.append(
+                "строка `%s/` из `.gitignore` убрана, а сторож этого не заметил "
+                "— то есть возврат дефекта 0248 не проверяется ничем" % PLACE)
+        put(".gitignore", "target/\n%s/\n" % PLACE)
+
+        # 4. Подделка, уехавшая в индекс, названа — по месту и по имени.
+        git_here("add", "-f", PLACE + "/board.py")
+        put("ops/deploy-копия.sh", "echo копия\n")
+        git_here("add", "ops/deploy-копия.sh")
+        problems = подделки_в_индексе(tracked(root))
+        text = "\n".join(problems)
+        # Имя у этой подделки НЕЙТРАЛЬНОЕ намеренно: назови её `board_fake.py`,
+        # и её поймает проверка по имени, то есть случай перестанет отличать
+        # две проверки друг от друга — подделка «место больше не ищется»
+        # проходила самопроверку зелёной именно так (найдено прогоном).
+        if "board.py" not in text:
+            failures.append(
+                "подделка, ЗАКОММИЧЕННАЯ в место подделок, не названа — а это "
+                "тот самый случай, ради которого сторож заведён "
+                "(`.scratch-0243/` с двумя стабами, волна 01.10.2026)")
+        if "deploy-копия.sh" not in text:
+            failures.append(
+                "отслеживаемая копия скрипта («-копия» в имени) не названа: "
+                "место подделок обходят именно так — кладут рядом с настоящим")
+        git_here("rm", "-q", "--cached", PLACE + "/board.py")
+        git_here("rm", "-q", "--cached", "ops/deploy-копия.sh")
+        os.remove(os.path.join(root, "ops/deploy-копия.sh"))
+
+        # 5. Закороченный вердикт — в коде.
+        put("ops/journals.sh", DEAD_SH)
+        problems, _ = закороченный_вердикт(root)
+        text = "\n".join(problems)
+        if "journals.sh" not in text:
+            failures.append(
+                "`if false` в коде проверки не назван — а это и есть снятая "
+                "проверка: прогон зелёный, проверки нет")
+        if "journals.sh:2" not in text:
+            failures.append("файл назван, а строка — нет: искать придётся руками")
+
+        # 6. ОБРАТНЫЙ КРАЙ, и он здесь дороже прямого: тот же `if false`
+        #    внутри кавычек — законный способ посадить подделку, и так
+        #    написаны ВСЕ СЕМЬ мест `main`. Сторож, краснеющий на них,
+        #    был бы отключён в первый день вместе с защитой.
+        put("ops/quiet.sh", QUIET_SH)
+        put("tools/quiet_guard.py", QUIET_PY)
+        problems, _ = закороченный_вердикт(root)
+        text = "\n".join(problems)
+        if "quiet.sh" in text or "quiet_guard.py" in text:
+            failures.append(
+                "`if false` ВНУТРИ КАВЫЧЕК назван снятой проверкой: так "
+                "селфтесты сажают подделку (`sed 's/…/if false; then/'`, "
+                "строка-фикстура `'if False:'`) — семь законных мест `main`, "
+                "и ложная тревога на них дороже пропуска")
+        os.remove(os.path.join(root, "ops/journals.sh"))
+
+        # 7. Обвязка: три способа не позвать сторожа, каждый своей строкой.
+        if обвязка(CI_OK):
+            failures.append("исправная обвязка названа нарушением: %s"
+                            % "; ".join(обвязка(CI_OK)))
+        без_шага = CI_OK.replace("        run: ./%s\n" % SELF_PATH, "")
+        if not any("по дереву" in p for p in обвязка(без_шага)):
+            failures.append(
+                "шаг, зовущий сторожа по дереву, выкинут из прогона, и этого "
+                "никто не заметил — сторожа не надо ломать, достаточно "
+                "не позвать")
+        без_селфтеста = CI_OK.replace(
+            "        run: ./%s --selftest\n" % SELF_PATH, "")
+        if not any("--selftest" in p for p in обвязка(без_селфтеста)):
+            failures.append("шаг самопроверки выкинут, и этого никто не заметил")
+        переименован = CI_OK.replace("./%s" % SELF_PATH, "./tools/fake-guard2.py")
+        if len(обвязка(переименован)) < 2:
+            failures.append(
+                "сторож переименован в обвязке (шаги зовут другой файл), "
+                "а проверка этого не заметила")
+        без_needs = CI_OK.replace("      - fakes\n", "")
+        if not any(JOB in p and "needs" in p for p in обвязка(без_needs)):
+            failures.append(
+                "задача «%s» убрана из поимённого `needs` публикации образа, "
+                "и этого никто не заметил: красная проверка перестала "
+                "останавливать публикацию молча — ровно случай PR #197" % JOB)
+        if not обвязка(None):
+            failures.append("непрочитанный ci.yml сошёл за целую обвязку")
+
+        # 8. «Спросить не вышло» — третий исход, со своими словами и своим
+        #    кодом. Каталог без репозитория: сторож не имеет права ответить
+        #    «подделок нет», ничего не проверив (урок 0241).
+        не_репозиторий = tempfile.mkdtemp(prefix="fake-guard-no-git-")
+        try:
+            try:
+                место(не_репозиторий)
+                failures.append(
+                    "вне репозитория место ответило без ошибки: «спросить "
+                    "не вышло» подменено ответом по существу")
+            except Unknown:
+                pass
+            try:
+                tracked(не_репозиторий)
+                failures.append("вне репозитория индекс прочитался — значит "
+                                "проверка отвечает не про то дерево")
+            except Unknown:
+                pass
+        finally:
+            shutil.rmtree(не_репозиторий, ignore_errors=True)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    failures += возврат_дефекта()
+    return failures
+
+
+# Подделки самого сторожа: копия с ОТКЛЮЧЁННОЙ проверкой обязана валить
+# самопроверку. Без этого зелёные случаи выше не доказывают ничего — они
+# проверяют сторожа, который, возможно, не проверяет ничего. Четвёртый
+# элемент — слова, которыми копия обязана покраснеть: покрасневшая чем попало
+# не утверждает ничего (урок 0241).
+ПОДДЕЛКИ = (
+    ("место больше не спрашивают у git — ответ прибит",
+     "    done = git([\"check-ignore\", \"-v\", \"--no-index\", PROBE], repo)",
+     "    done = git([\"check-ignore\", \"-v\", \"--no-index\", PROBE], repo)\n"
+     "    return True, \".gitignore:1:%s/\" % PLACE",
+     "возврат дефекта 0248"),
+    ("подделка в индексе больше не находится по месту",
+     "        if PLACE_SHAPES.search(path):",
+     "        if False and PLACE_SHAPES.search(path):",
+     "ради которого сторож заведён"),
+    ("закороченный вердикт больше не ищется",
+     "        if not DEAD.search(text):\n"
+     "            continue",
+     "        if True:\n"
+     "            continue",
+     "снятая проверка"),
+    # Две последние — про ВТОРОЙ уровень: сторожа не надо ломать, достаточно
+    # его не позвать. Обе подделки снимают именно это, каждая своим способом.
+    ("задачу больше не спрашивают у поимённого `needs` публикации",
+     "    elif JOB not in needs:",
+     "    elif False:",
+     "needs"),
+    ("выкинутый шаг прогона больше не замечается",
+     "    if not runs:",
+     "    if False:",
+     "по дереву"),
+)
+
+
+def возврат_дефекта():
+    """Копия сторожа со снятой проверкой обязана валить самопроверку.
+
+    Копия кладётся в `tools/` рядом с собой, а не в `/tmp`: она считает корень
+    репозитория от своего каталога (урок 0151), и из `/tmp` ушла бы в корень
+    файловой системы. Рекурсию обрывает переменная `FAKE_GUARD_FAKE` — иначе
+    подделка заводила бы подделку себя. Целость копии проверяется ДО запуска:
+    красное от сломанного синтаксиса говорило бы о копии, а не о стороже
+    (урок 0198).
+    """
+    import py_compile
+
+    if os.environ.get("FAKE_GUARD_FAKE"):
+        return []
+    me = os.path.abspath(__file__)
+    текст = open(me, encoding="utf-8").read()
+    копия = os.path.join(os.path.dirname(me), ".fake-guard-fake.py")
+    сбои = []
+    окружение = dict(os.environ, FAKE_GUARD_FAKE="1")
+    try:
+        for имя, было, стало, ждём in ПОДДЕЛКИ:
+            if было not in текст:
+                сбои.append(
+                    "подделку «%s» некуда поставить — место в стороже "
+                    "изменилось, и возврат дефекта не проверяет ничего" % имя)
+                continue
+            with open(копия, "w", encoding="utf-8") as handle:
+                handle.write(текст.replace(было, стало, 1))
+            try:
+                py_compile.compile(копия, doraise=True)
+            except py_compile.PyCompileError:
+                сбои.append("подделка «%s» не компилируется — её красное "
+                            "говорило бы о копии, а не о стороже" % имя)
+                continue
+            done = subprocess.run([sys.executable, копия, "--selftest"],
+                                  capture_output=True, text=True,
+                                  env=окружение)
+            вывод = done.stdout + done.stderr
+            if done.returncode == 0:
+                сбои.append(
+                    "подделка «%s» прошла самопроверку зелёной: проверка, "
+                    "которую можно снять незаметно, не стережёт ничего" % имя)
+            elif ждём and ждём not in вывод:
+                сбои.append(
+                    "подделка «%s» покраснела не тем: в выводе нет «%s», "
+                    "то есть красное говорит о чём-то другом" % (имя, ждём))
+    finally:
+        for junk in (копия, копия + "c"):
+            if os.path.exists(junk):
+                os.remove(junk)
+        кэш = os.path.join(os.path.dirname(me), "__pycache__")
+        if os.path.isdir(кэш):
+            for name in os.listdir(кэш):
+                if name.startswith(".fake-guard-fake"):
+                    os.remove(os.path.join(кэш, name))
+    return сбои
+
+
+def main():
+    broken = selftest()
+    if broken:
+        print("Проверка сломана и потому ничего не доказывает:\n")
+        for line in broken:
+            print("  •", line)
+        return FOUND
+    if "--selftest" in sys.argv:
+        print(GREEN % (
+            "Сторож проверен: краснеет на снятой строке `.gitignore`, "
+            "на подделке\nв индексе (по месту и по имени), на закороченном "
+            "вердикте в коде\nи на выкинутом шаге прогона. Молчит на "
+            "подделке, лежащей в своём\nместе, и на `if false` внутри "
+            "кавычек. «Спросить не вышло» —\nтретий исход, не «подделок "
+            "нет»."))
+        return GOOD
+
+    problems = []
+    try:
+        ignored, rule = место(ROOT)
+        if ignored:
+            print("  · место подделок: `%s/` игнорируется (%s)" % (PLACE, rule))
+        else:
+            problems.append(
+                "`%s/` не игнорируется git.\n"
+                "      Это место подделок, и без строки в `.gitignore`\n"
+                "      `git add -A` увозит стаб в ветку как работу. Верните\n"
+                "      строку — сегодняшнее состояние проекта до задачи 0248\n"
+                "      было ровно таким." % PLACE)
+        paths = tracked(ROOT)
+        print("  · отслеживаемых файлов %d" % len(paths))
+        problems += подделки_в_индексе(paths)
+    except Unknown as e:
+        red("Подделки доказательства: спросить не вышло — %s" % e)
+        red("      Это НЕ «подделок нет»: сторож ничего не проверил.")
+        return UNKNOWN
+
+    dead, scanned = закороченный_вердикт(ROOT)
+    problems += dead
+    problems += обвязка(workflow_text(ROOT))
+
+    if "--list" in sys.argv:
+        print("\nМесто подделок: %s/ (одно на все, "
+              "`docs/agent-workflow.md`)" % PLACE)
+        print("Формы имени, которые считаются подделкой: %s"
+              % ", ".join(NAME_SHAPES + NAME_SUFFIXES))
+        if ALLOWED:
+            print("\nРазобранные случаи:\n")
+            for key, why in sorted(ALLOWED.items()):
+                print("  %s\n      %s\n" % (key, why))
+        else:
+            print("Разобранных случаев нет: семь законных `if false` на `main` "
+                  "лежат\nвнутри кавычек и гасятся до поиска — разбирать "
+                  "там нечего.")
+
+    if problems:
+        print("\nПодделки доказательства: проверка не прошла\n")
+        for problem in problems:
+            print("  •", problem)
+        return FOUND
+
+    print("  · проверочной машинерии просмотрено %d файлов — условий, "
+          "выключающих проверку, в коде нет" % scanned)
+    print("  · обвязка цела: прогон зовёт сторожа, задача «%s» "
+          "стоит в `needs` публикации" % JOB)
+    print(GREEN % ("Подделок в отслеживаемых файлах нет, место `%s/` "
+                   "на месте." % PLACE))
+    return GOOD
+
+
+if __name__ == "__main__":
+    sys.exit(main())
