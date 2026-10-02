@@ -257,12 +257,35 @@ class StockMoveControllerTest extends PostgresTestBase {
                 .andExpect(status().isForbidden());
     }
 
+    /**
+     * Состав документа называет позицию номером, а не только публичным кодом.
+     *
+     * <p><b>Как это выглядело для человека</b> (задача 0168). Состав перевозки
+     * открывают, чтобы назвать увезённое другому человеку — «позиция 347 уехала
+     * на Ангар», — а в строке стоял только публичный код: шесть случайных байт,
+     * которые по телефону не диктуют. Номер для разговора и заведён (0060).
+     *
+     * <p>Сверяется с самой колонкой {@code part.number}, а не с записанным
+     * числом, и номер в фикстуре сдвинут относительно {@code id}: в свежей
+     * схеме обе последовательности начинаются с единицы, и подмена
+     * {@code p.number} на {@code p.id} прошла бы зелёной.
+     */
     @Test
-    @DisplayName("Состав документа: публичный код, наименование и количество каждой строки")
+    @DisplayName("Состав документа: номер позиции, публичный код, наименование и количество")
     void journalLinesReturnComposition() throws Exception {
+        // Сдвиг нумерации: без него id и номер у свежей позиции совпадают,
+        // и проверка зеленела бы на `p.id AS number`.
+        inTenant(() -> jdbc.queryForObject("SELECT nextval('part_number_seq')", Long.class));
+
         Long partId = partWithStock("Радиатор для состава", 2);
         String publicCode = inTenant(() -> jdbc.queryForObject(
                 "SELECT public_code FROM part WHERE id = ?", String.class, partId));
+        long number = inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, partId));
+
+        assertThat(number)
+                .as("номер позиции совпал с её id — проверка перестала ловить подмену")
+                .isNotEqualTo(partId);
 
         String body = mvc.perform(post("/api/stock/moves").with(csrf()).session(login("vladelec"))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -277,6 +300,7 @@ class StockMoveControllerTest extends PostgresTestBase {
         mvc.perform(get("/api/stock/moves/" + documentId + "/lines").session(login("vladelec")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].partId").value(partId))
+                .andExpect(jsonPath("$[0].number").value(number))
                 .andExpect(jsonPath("$[0].publicCode").value(publicCode))
                 .andExpect(jsonPath("$[0].title").value("Радиатор для состава"))
                 .andExpect(jsonPath("$[0].qty").value(2));

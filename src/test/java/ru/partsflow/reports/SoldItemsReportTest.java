@@ -134,6 +134,18 @@ class SoldItemsReportTest extends PostgresTestBase {
         // И то, чем позицию зовут: номер с витрины, состояние словом,
         // склад выдачи, ответственный и происхождение.
         assertThat(door.path("publicCode").asText()).isNotEmpty();
+
+        // Номер позиции — тот, которым её называют вслух (задача 0168).
+        // «На чём мы теряем» владелец выясняет здесь, а дальше называет
+        // позицию работнику: публичный код для этого не годится.
+        long number = inTenant(TENANT, () -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, doorPart));
+        assertThat(number)
+                .as("номер позиции совпал с её id — проверка перестала ловить подмену")
+                .isNotEqualTo(doorPart);
+        assertThat(door.path("number").asLong())
+                .as("номера позиции в строке отчёта нет")
+                .isEqualTo(number);
         assertThat(door.path("condition").asText()).isEqualTo("б/у");
         assertThat(door.path("warehouse").asText()).isEqualTo("Ткацкая");
         assertThat(door.path("manager").asText()).isEqualTo("Иван Продавцов");
@@ -323,6 +335,16 @@ class SoldItemsReportTest extends PostgresTestBase {
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(all).contains("Цена продажи", "Себестоимость", "Выгода");
+        // Номер позиции и в файле: его качают ради сверки с экраном, и состав
+        // колонок обязан быть тем же (задача 0168).
+        assertThat(all)
+                .as("колонки «№ позиции» в файле нет — он разошёлся с экраном")
+                .contains("№ позиции");
+        long doorNumber = inTenant(TENANT, () -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, doorPart));
+        assertThat(all)
+                .as("номер позиции в файл не попал")
+                .contains(String.valueOf(doorNumber));
         assertThat(all).contains("Дверь", "Фара", "Стекло");
         // Состояние словом: файл открывают в Excel и читают глазами,
         // и «USED» там означал бы утечку внутреннего представления.
@@ -390,6 +412,12 @@ class SoldItemsReportTest extends PostgresTestBase {
             supply = jdbc.queryForObject("""
                     INSERT INTO supply (kind, number, supplier_name, status)
                     VALUES ('CONTAINER', 'К-9', 'Armtek', 'ARRIVED') RETURNING id""", Long.class);
+
+            // Номер позиции и внутренний id разведены намеренно: в свежей схеме
+            // обе последовательности начинаются с единицы, и подмена `p.number`
+            // на `p.id` прошла бы зелёной — строка отдавала бы верное число
+            // по неверной причине. Тот же приём, что в OriginReportTest.
+            jdbc.queryForObject("SELECT nextval('part_number_seq')", Long.class);
 
             lampDonor = donor("ПРОД-1", "500", "Toyota Camry");
             doorDonor = donor("ПРОД-2", "350", "Nissan Note");

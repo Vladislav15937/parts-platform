@@ -671,6 +671,14 @@ public class SalesController {
                 .map(DealItem::getPartId)
                 .distinct()
                 .toList());
+        // Номер позиции — тем же приёмом, одним запросом на всю выдачу
+        // (задача 0168): состав сделки и выбор позиций на возврат называют
+        // деталь вслух, а публичный код для этого не годится.
+        Map<Long, Long> partNumbers = parts.numbersOf(deals.stream()
+                .flatMap(deal -> deal.getItems().stream())
+                .map(DealItem::getPartId)
+                .distinct()
+                .toList());
         // Справочник услуг — это несколько строк на арендатора, и читается он
         // одним запросом на всю выдачу: по запросу на строку история клиента
         // превратилась бы в сотню обращений к базе.
@@ -698,8 +706,8 @@ public class SalesController {
                 .map(Deal::getCustomerId)
                 .toList());
         return deals.stream()
-                .map(deal -> DealView.of(deal, titles, serviceNames, managerNames, stages,
-                        customerNames))
+                .map(deal -> DealView.of(deal, titles, partNumbers, serviceNames, managerNames,
+                        stages, customerNames))
                 .toList();
     }
 
@@ -834,7 +842,7 @@ public class SalesController {
                            String deliveryNote, List<ItemView> items,
                            List<ServiceLineView> services) {
 
-        static DealView of(Deal deal, Map<Long, String> titles,
+        static DealView of(Deal deal, Map<Long, String> titles, Map<Long, Long> partNumbers,
                            Map<Long, String> serviceNames, Map<Long, String> managerNames,
                            Map<Long, String> stages, Map<Long, String> customerNames) {
             return new DealView(deal.getId(), deal.getNumber(), deal.getCustomerId(),
@@ -848,7 +856,8 @@ public class SalesController {
                     deal.getMarketplace(), deal.getExternalOrderNo(),
                     deal.getReplyDeadline(), deal.getOrderAcceptedAt(),
                     deal.getDeliveryNote(),
-                    deal.getItems().stream().map(item -> ItemView.of(item, titles)).toList(),
+                    deal.getItems().stream()
+                            .map(item -> ItemView.of(item, titles, partNumbers)).toList(),
                     deal.getServices().stream()
                             .map(s -> new ServiceLineView(s.getId(), s.getServiceId(),
                                     serviceNames.get(s.getServiceId()),
@@ -891,15 +900,21 @@ public class SalesController {
     }
 
     /**
-     * @param title наименование запчасти. Без него строка сделки — это номер,
-     *              а выбирать по номеру, что вернуть, продавец не станет
+     * @param title  наименование запчасти. Без него строка сделки — это номер,
+     *               а выбирать по номеру, что вернуть, продавец не станет
+     * @param number порядковый номер позиции — тот, которым её называют вслух
+     *               (задача 0168). «Фара Toyota Camry 2007» на живом складе —
+     *               сотня одинаковых строк, и в составе сделки их надо
+     *               различать: по этому номеру кладовщик идёт к полке. Пусто,
+     *               если карточку удалили, — строка сделки переживает запчасть
      */
-    public record ItemView(Long id, Long partId, String title, BigDecimal quantity,
+    public record ItemView(Long id, Long partId, Long number, String title, BigDecimal quantity,
                            BigDecimal price, BigDecimal discount, Long warehouseId,
                            DealItemStatus status) {
 
-        static ItemView of(DealItem item, Map<Long, String> titles) {
+        static ItemView of(DealItem item, Map<Long, String> titles, Map<Long, Long> numbers) {
             return new ItemView(item.getId(), item.getPartId(),
+                    numbers.get(item.getPartId()),
                     titles.get(item.getPartId()), item.getQuantity(),
                     item.getPrice(), item.getDiscount(), item.getWarehouseId(), item.getStatus());
         }

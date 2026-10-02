@@ -3,11 +3,11 @@ package ru.partsflow.sales;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.inventory.Part;
-import ru.partsflow.inventory.PartNumberQuery;
 import ru.partsflow.inventory.PartRepository;
 import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.inventory.StockReservationRepository;
 import ru.partsflow.inventory.StockMovementRepository;
+import ru.partsflow.shared.PartNumberQuery;
 import ru.partsflow.platform.outbox.DomainEvent;
 import ru.partsflow.platform.outbox.DomainEventPublisher;
 import ru.partsflow.platform.outbox.EventPayloads;
@@ -809,7 +809,7 @@ public class SalesService {
      * на этикетке, — а с номера, который называют вслух: «мне звонили,
      * позиция 347, вы её вчера откладывали». Номера документа приезжающий
      * не помнит, имя клиента записал другой продавец и другими словами.
-     * Разбор запроса — {@link ru.partsflow.inventory.PartNumberQuery}, один
+     * Разбор запроса — {@link ru.partsflow.shared.PartNumberQuery}, один
      * на все поверхности: витрина, продавец, колёса, этикетки и этот реестр
      * обязаны понимать «347» и «№ 347» одинаково, иначе названное вслух
      * находится на одном экране и не находится на соседнем.

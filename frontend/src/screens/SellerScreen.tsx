@@ -1585,6 +1585,11 @@ function DealCard({
               {item.title ?? `деталь ${item.partId}`}
               <span className="muted">
                 {' '}
+                {/* Номер позиции (задача 0168): состав сделки и выбор позиций
+                    на возврат называют деталь вслух — кладовщику, который
+                    пойдёт снимать её с полки. Порядок тот же, что в строке
+                    выдачи и в корзине: наименование, номер, публичный код. */}
+                {typeof item.number === 'number' && <>· №&nbsp;{item.number} </>}
                 · {Number(item.quantity)} шт · {dealItemStatusName(item.status)}
               </span>
             </label>

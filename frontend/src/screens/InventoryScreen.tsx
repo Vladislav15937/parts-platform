@@ -362,6 +362,7 @@ export function InventoryScreen({ reference, onCount }: Props) {
     // а не потерять.
     const newLine: InventoryLine = {
       partId: match.code.partId,
+      number: match.code.number,
       title: match.code.title,
       cellId: match.code.cellId,
       cellCode: match.code.cellCode,
@@ -450,6 +451,11 @@ function CountRow({
     <li className={status === 'scanned' ? 'count-row count-row--done' : 'count-row'}>
       <div className="count-title">
         {line.title}
+        {/* Номер позиции (задача 0168): найдя на полке не то, кладовщик
+            называет деталь вслух тому, кто сводит расхождения, — а публичного
+            кода в листе обхода нет вовсе, и «Фара Toyota Camry» на складе
+            не одна. */}
+        <span className="muted"> · №&nbsp;{line.number}</span>
         {status !== 'problem' && <span className="muted"> · учёт {line.qtyExpected}</span>}
         {count !== undefined && <span className="muted"> · посчитано {count.qty}</span>}
         {' '}

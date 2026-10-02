@@ -49,6 +49,11 @@ export interface Customer {
 export interface DealItem {
   id: number;
   partId: number;
+  /**
+   * Порядковый номер позиции — тот, которым её называют вслух (задача 0168).
+   * Пусто, если карточку удалили: строка сделки переживает запчасть.
+   */
+  number: number | null;
   /** Пусто, если карточку удалили: строка сделки переживает запчасть. */
   title: string | null;
   quantity: string;

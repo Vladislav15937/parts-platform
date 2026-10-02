@@ -12,6 +12,7 @@ import ru.partsflow.platform.outbox.DomainEvent;
 import ru.partsflow.platform.outbox.DomainEventPublisher;
 import ru.partsflow.platform.outbox.EventPayloads;
 import ru.partsflow.platform.outbox.contract.PartEvent;
+import ru.partsflow.shared.PartNumberQuery;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -1423,6 +1424,37 @@ public class PartService {
             titles.put(part.getId(), part.getTitle());
         }
         return titles;
+    }
+
+    /**
+     * Порядковые номера позиций по идентификаторам (задача 0168).
+     *
+     * <p>Нужно тем же продажам, что и {@link #titlesOf}: состав сделки и выбор
+     * позиций на возврат называют деталь человеку, а «Фара Toyota Camry 2007»
+     * на живом складе — сотня одинаковых строк. Публичный код для разговора
+     * не годится: он шесть случайных байт и живёт на этикетке.
+     *
+     * <p>Своим запросом, а не через сущность: {@code number} в {@link Part}
+     * не отображён вовсе — колонку ведёт база умолчанием ({@code nextval}), —
+     * и заводить поле ради чтения значило бы ставить {@code @Generated}
+     * на путь каждой приёмки.
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, Long> numbersOf(Collection<Long> partIds) {
+        if (partIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Long> numbers = new HashMap<>();
+        // Идентификаторы пришли из базы, а не из запроса пользователя, а список
+        // бывает в сотни строк: на каждую по параметру Postgres не обязан
+        // готовить свой план. Тот же приём, что в InventoryService.
+        String in = partIds.stream().map(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(","));
+        jdbc.query("SELECT id, number FROM part WHERE id IN (" + in + ")",
+                rs -> {
+                    numbers.put(rs.getLong("id"), rs.getLong("number"));
+                });
+        return numbers;
     }
 
     private byte[] payloadOf(Part part) {

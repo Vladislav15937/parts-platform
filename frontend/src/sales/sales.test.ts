@@ -152,6 +152,7 @@ function dealFrom(items: { status: string; warehouseId: number }[],
     items: items.map((item, at) => ({
       id: at + 1,
       partId: 100 + at,
+      number: 347 + at,
       title: `деталь ${at}`,
       quantity: '1',
       price: '5000',

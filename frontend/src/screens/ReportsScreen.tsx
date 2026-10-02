@@ -872,6 +872,10 @@ export function ReportsScreen({ canRead }: Props) {
               <tr>
                 <th>Дата выдачи</th>
                 <th>Сделка</th>
+                {/* Номер позиции (задача 0168): «на чём мы теряем» владелец
+                    выясняет здесь, а дальше называет позицию работнику
+                    вслух — публичный код для этого не годится. */}
+                <th className="num">№ позиции</th>
                 <th>Номер товара</th>
                 <th>Наименование</th>
                 <th>Состояние</th>
@@ -890,6 +894,7 @@ export function ReportsScreen({ canRead }: Props) {
                 <tr key={row.itemId}>
                   <td>{dayOf(row.soldAt)}</td>
                   <td>{row.dealNumber}</td>
+                  <td className="num">{row.number}</td>
                   <td>{row.publicCode ?? '—'}</td>
                   <td>{row.title}</td>
                   <td>{row.condition ?? '—'}</td>
