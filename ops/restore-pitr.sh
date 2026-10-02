@@ -708,7 +708,12 @@ fi
 PITR_DB_FOUND=$(qc_asked "SELECT count(*) FROM pg_database WHERE datname = '$PITR_DB'" \
     "есть ли база $PITR_DB в восстановленном кластере") || exit 1
 if [ "$PITR_DB_FOUND" != 1 ]; then
-    fail "базы $PITR_DB в восстановленном кластере нет; есть: $(qc "SELECT string_agg(datname, ', ' ORDER BY datname) FROM pg_database WHERE NOT datistemplate AND datname <> 'postgres'"). Какая база работала на тот момент — deploy-history.log, дальше --db"
+    # Список соседних баз — через тот же qc: сюда мы попадаем, уже получив
+    # ответ от psql (qc_asked выше), то есть пустой список здесь означает
+    # «других баз нет». Но если он всё-таки пуст по другой причине, пустоты
+    # в сообщении не остаётся: «не спросить» сказано словами.
+    PITR_OTHERS=$(qc "SELECT string_agg(datname, ', ' ORDER BY datname) FROM pg_database WHERE NOT datistemplate AND datname <> 'postgres'")
+    fail "базы $PITR_DB в восстановленном кластере нет; есть: ${PITR_OTHERS:-не спросить}. Какая база работала на тот момент — deploy-history.log, дальше --db"
 fi
 ok "база людей на тот момент: $PITR_DB$([ "$PITR_DB" = "$LIVE_DB" ] || printf ' (сейчас работает %s)' "$LIVE_DB")"
 TENANTS=$(q "SELECT count(*) FROM public.tenant_registry")
