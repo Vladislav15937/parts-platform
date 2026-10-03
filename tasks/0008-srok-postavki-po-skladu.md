@@ -1,7 +1,7 @@
 ---
 id: 0008
 title: Срок поставки по складу вместо «есть или нет»
-status: в работе
+status: слита
 assignee: coder (ветка feature/0008)
 source: разведка 05.09.2026, §9 bazon-parity
 pr: 346
