@@ -256,8 +256,15 @@ selftest() {
   # "Хранилище" волны — обычный `git init`, ни одного `remote` не заведено
   # ни разу: пункт задачи «работает в репозитории без remote вовсе»
   # выполняется не отдельным тестом, а всем устройством пробы.
+  #
+  # Ветка названа явно (`-b main`): умолчание `init.defaultBranch` берётся
+  # из глобального `~/.gitconfig`, а не из этого скрипта, и на раннере CI
+  # оно другое, чем на машине разработчика. Без этого флага самопроверка
+  # зелёная локально (там `main` и так по умолчанию) и красная в CI
+  # («couldn't find remote ref main») — живой прогон поймал это на первом
+  # же пуше ветки, локальный прогон этого не видел вовсе.
   store="$dir/store"
-  git init -q "$store"
+  git init -q -b main "$store"
   (cd "$store" && git config user.email t@t.t && git config user.name t \
     && echo init > a.txt && git add a.txt && git commit -q -m init)
 
@@ -265,7 +272,7 @@ selftest() {
   # хранилища передаётся КАЖДЫЙ раз аргументом через переменную окружения
   # (путь в файловой системе), а не записью в `.git/config`.
   reader="$dir/reader"
-  git init -q "$reader"
+  git init -q -b main "$reader"
 
   run_count() {
     (cd "$reader" && WAVE_DISCARDS_REMOTE="$1" WAVE_DISCARDS_BRANCH=main \
@@ -318,7 +325,7 @@ selftest() {
   #    самого с другой стороны: число лежит в хранилище, а не в кеше
   #    первого читателя.
   reader2="$dir/reader2"
-  git init -q "$reader2"
+  git init -q -b main "$reader2"
   out=$(cd "$reader2" && WAVE_DISCARDS_REMOTE="$store" WAVE_DISCARDS_BRANCH=main \
     bash "$SELF" count wave/test-1)
   rc=$?
