@@ -20,6 +20,35 @@
           }
         ]
       }
+    ],
+    "InstructionsLoaded": [
+      {
+        "matcher": "path_glob_match",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tools/instructions-loaded-log.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "session_start",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tools/instructions-loaded-log.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "nested_traversal",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tools/instructions-loaded-log.sh"
+          }
+        ]
+      }
     ]
   }
 }
