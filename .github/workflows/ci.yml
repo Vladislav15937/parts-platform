@@ -218,6 +218,21 @@ jobs:
       - name: tools/test-output-filter.sh --selftest
         run: ./tools/test-output-filter.sh --selftest
 
+      # `tools/instructions-loaded-log.sh` — второй хук того же
+      # `.claude/settings.json`, событие `InstructionsLoaded`. Он отвечает
+      # на вопрос, который до правил с `paths:` не стоял вовсе: подхватилось
+      # ли правило `.claude/rules/ops-*.md` или оно молчит. Молчащее правило —
+      # худший исход переноса: запись есть, а в нужный момент её нет, и узнать
+      # об этом нечем. У хука НЕТ управления решением (документация:
+      # observational only, коды возврата и JSON-вывод отбрасываются), поэтому
+      # сломать загрузку он не может — но может молча писать пустые строки,
+      # и первая редакция именно это и делала: программу подавали heredoc'ом
+      # в тот же stdin, которым приходит JSON. Самопроверка различает четыре
+      # исхода — подхват правила (с шаблоном и вызвавшим файлом), загрузку
+      # на старте, не-JSON и пустой вход, — и считает записи против вызовов.
+      - name: tools/instructions-loaded-log.sh --selftest
+        run: ./tools/instructions-loaded-log.sh --selftest
+
   test-schemas:
     name: Схемы арендаторов в тестах
     runs-on: ubuntu-latest
