@@ -304,7 +304,7 @@ def main():
             print("  •", p)
         print("\nПросроченная копия места не освобождает — 18 сентября 2026 "
               "176 таких\nостановили все PR разом. Подробности — "
-              "ops/CLAUDE.md, «Копии прогона».")
+              "docs/ops-history.md, «Копии прогона».")
         return 1
 
     uploads = sum(1 for _f, (wf, _r) in workflows.items()
