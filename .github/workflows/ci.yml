@@ -182,6 +182,16 @@ jobs:
       - name: tools/agent-contract-guard.py
         run: ./tools/agent-contract-guard.py
 
+      # Счёт выкинутых голов (`conductor.md`, «Предел — два выкидывания
+      # на волну») живёт в `main`, а не в памяти запуска дирижёра — ровно
+      # для того, чтобы обрыв сессии не стирал его. Самопроверка строит
+      # и ломает своё место сама, в поддельных репозиториях без единого
+      # `remote`, и не зовёт `git push` ни разу — только `--selftest`
+      # и идёт сюда, настоящая запись в `main` в CI не нужна и не должна
+      # запускаться автоматически.
+      - name: tools/wave-discards.sh --selftest
+        run: ./tools/wave-discards.sh --selftest
+
   test-output-filter:
     name: Хук обрезки шумного вывода
     runs-on: ubuntu-latest
