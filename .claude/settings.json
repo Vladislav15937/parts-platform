@@ -8,5 +8,18 @@
       "WebFetch(domain:farpost.ru)",
       "WebFetch(domain:infostart.ru)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tools/test-output-filter.sh"
+          }
+        ]
+      }
+    ]
   }
 }

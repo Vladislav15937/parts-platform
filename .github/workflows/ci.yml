@@ -182,6 +182,32 @@ jobs:
       - name: tools/agent-contract-guard.py
         run: ./tools/agent-contract-guard.py
 
+  test-output-filter:
+    name: Хук обрезки шумного вывода
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # `tools/test-output-filter.sh` — PreToolUse-хук из `.claude/settings.json`:
+      # он обрезает вывод `./mvnw test`/`mvn test`/`npm test`/`npm run test` до
+      # того, как этот вывод попадёт в контекст агента. Опасность у него одна —
+      # пайп в образцовом хуке из документации Anthropic отдаёт код возврата
+      # ПОСЛЕДНЕЙ команды конвейера, и молча приписанный пайп превратил бы
+      # красный прогон в зелёный (класс 16, docs/defect-classes.md). Здесь это
+      # не пайп, а однопроцессная обёртка, которая несёт код возврата оригинала
+      # явным `exit`, — и самопроверка именно это ловит первым делом (белый
+      # список, чёрный список, код возврата 0/1/42 через обёртку, читаемость
+      # отказа, cwd вызывающего). npm нужен для последней проверки: обёртка
+      # обязана исполнить «npm test» в том каталоге, где её позвал харнесс,
+      # а не в каталоге скрипта — живой прогон поймал это с первой попытки.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/.nvmrc
+
+      - name: tools/test-output-filter.sh --selftest
+        run: ./tools/test-output-filter.sh --selftest
+
   test-schemas:
     name: Схемы арендаторов в тестах
     runs-on: ubuntu-latest
@@ -1047,6 +1073,10 @@ jobs:
       # вместе с самой задачей: забытое имя не ломает ни одного прогона,
       # просто красная проверка перестаёт останавливать публикацию.
       - agent-contracts
+      # «Хук обрезки шумного вывода» — проверка, и её имя стоит здесь вместе
+      # с самой задачей: забытое имя не ломает ни одного прогона, просто
+      # красная проверка перестаёт останавливать публикацию.
+      - test-output-filter
       - test-schemas
       - worktrees
       - recovery-point
