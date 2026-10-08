@@ -366,13 +366,9 @@ class InventoryHttpTest extends PostgresTestBase {
      * <p>Ради него в журнал пересчётов и заходят: номер с датой говорят,
      * что документ был, а «83619 не найден» — зачем его открывали.
      *
-     * <p><b>Кладовщик его пока не пишет, и это не то, чего хотела задача.</b>
-     * Пункт 6 («комментарий, написанный кладовщиком на телефоне») требует
-     * поверхности на телефоне, которой задача не описывает, — вопрос
-     * владельцу продукта. Право без поверхности снято: висящее право
-     * `endpoint-coverage` не ловит (он сверяет пути, а не роли), и следующий
-     * читает его как рабочий путь с экраном. Проверяется поэтому отказ —
-     * чтобы возврат права заметили вместе с этим тестом.
+     * <p><b>Кладовщик пишет не сюда, а в своё поле</b> (задача 0169, тест
+     * ниже). Отказ ему на этом пути проверяется намеренно: одно поле
+     * на двоих означало бы, что второй пишущий молча затирает первого.
      *
      * <p>Отдельно проверяется, что пустой комментарий становится
      * {@code NULL}, а не пустой строкой. В этом проекте на разнице
@@ -408,9 +404,9 @@ class InventoryHttpTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.rows[0].id").value(sessionId))
                 .andExpect(jsonPath("$.rows[0].note").value("83619 не найден"));
 
-        // Кладовщику отказ, пока у него нет поверхности: право, которым
-        // неоткуда воспользоваться, читается следующим как рабочий путь.
-        // Появится экран — вернётся и право, одной веткой с ним.
+        // Кладовщику здесь отказ, и он остаётся (задача 0169, пункт 2):
+        // у ходившего своё поле и свой путь (`/counter-note`), а пиши они
+        // оба сюда — второй молча затирал бы первого.
         MockHttpSession keeper = login("kladovshchik");
         mvc.perform(post(noteUrl).with(csrf()).session(keeper)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -447,6 +443,172 @@ class InventoryHttpTest extends PostgresTestBase {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"note\":\"уже поздно\"}"))
                 .andExpect(status().isConflict());
+    }
+
+    /**
+     * Комментарий ходившего — задача 0169, решение владельца продукта
+     * от 29 сентября 2026 (записано в самом файле задачи).
+     *
+     * <p><b>Как это выглядело для человека.</b> Комментарий к пересчёту был
+     * один на документ, и писали его только владелец и менеджер — то есть
+     * «83619 не найден» знал кладовщик у полки, а до журнала доезжал пересказ.
+     * Отдать кладовщику то же поле нельзя: второй пишущий молча затёр бы
+     * первого. Поэтому у ходившего своё поле и свой путь, а нынешний
+     * {@code /note} кладовщику по-прежнему закрыт (проверено выше).
+     *
+     * <p>Путь идемпотентен по {@code requestId}: пишут с телефона через
+     * офлайн-очередь, и повтор обязан вернуть ответ, а не затереть то, что
+     * успели написать после него.
+     */
+    @Test
+    @DisplayName("Комментарий ходившего: своё поле, повтор по ключу не затирает, закрытый — 409")
+    void counterNoteIsTheWalkersOwnField() throws Exception {
+        MockHttpSession keeper = login("kladovshchik");
+        MockHttpSession owner = login("vladelec");
+        long sessionId = openWholeWarehouse(keeper);
+        String counterUrl = "/api/inventory/sessions/%d/counter-note".formatted(sessionId);
+        String noteUrl = "/api/inventory/sessions/%d/note".formatted(sessionId);
+
+        // Кладовщик пишет своё — пробелы по краям срезаются, как у note.
+        mvc.perform(post(counterUrl).with(csrf()).session(keeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"  Катушки не считали  \",\"requestId\":\"r-1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.counterNote").value("Катушки не считали"))
+                .andExpect(jsonPath("$.note").isEmpty());
+
+        // Сводящий пишет своё — комментарий ходившего на месте.
+        mvc.perform(post(noteUrl).with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"83619 не найден\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.note").value("83619 не найден"))
+                .andExpect(jsonPath("$.counterNote").value("Катушки не считали"));
+
+        // Ходивший пишет снова — последняя запись побеждает, а комментарий
+        // сводившего не трогается.
+        mvc.perform(post(counterUrl).with(csrf()).session(keeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"Катушки посчитали\",\"requestId\":\"r-2\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.counterNote").value("Катушки посчитали"))
+                .andExpect(jsonPath("$.note").value("83619 не найден"));
+
+        // Опоздавший повтор первой записи: очередь не получила ответа и шлёт
+        // её снова. Ответ — успех (иначе запись застрянет в очереди), но
+        // написанное после неё остаётся: повтор — не новая правка.
+        mvc.perform(post(counterUrl).with(csrf()).session(keeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"Катушки не считали\",\"requestId\":\"r-1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.counterNote").value("Катушки посчитали"));
+
+        // Оба видны и в журнале, и в карточке — отдельными полями.
+        mvc.perform(get("/api/inventory/sessions?status=OPEN").session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rows[0].id").value(sessionId))
+                .andExpect(jsonPath("$.rows[0].note").value("83619 не найден"))
+                .andExpect(jsonPath("$.rows[0].counterNote").value("Катушки посчитали"));
+        mvc.perform(get("/api/inventory/sessions/%d".formatted(sessionId)).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.counterNote").value("Катушки посчитали"));
+
+        // Пустое — NULL, а не пустая строка: спрашиваем базу.
+        mvc.perform(post(counterUrl).with(csrf()).session(keeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"   \",\"requestId\":\"r-3\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.counterNote").isEmpty());
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT counter_note FROM inventory_session WHERE id = ?", String.class, sessionId)))
+                .isNull();
+        mvc.perform(post(counterUrl).with(csrf()).session(keeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"Катушки посчитали\",\"requestId\":\"r-4\"}"))
+                .andExpect(status().isOk());
+
+        // Без ключа идемпотентности — 400 словами, а не запись без защиты
+        // от повтора и не пятисотка.
+        mvc.perform(post(counterUrl).with(csrf()).session(keeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"без ключа\"}"))
+                .andExpect(status().isBadRequest());
+
+        // Продавец считает, но комментарий ходившего — у трёх ролей,
+        // названных задачей.
+        mvc.perform(post(counterUrl).with(csrf()).session(login("prodavec"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"а я тут был\",\"requestId\":\"r-seller\"}"))
+                .andExpect(status().isForbidden());
+
+        // Закрытый пересчёт не комментируют: 409 со словами, а не 500 —
+        // очередь телефона повторяет 5xx вечно, а 409 уводит запись
+        // к человеку.
+        mvc.perform(post("/api/inventory/sessions/%d/cancel".formatted(sessionId))
+                        .with(csrf()).session(owner))
+                .andExpect(status().isOk());
+        mvc.perform(post(counterUrl).with(csrf()).session(keeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"уже поздно\",\"requestId\":\"r-5\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(
+                        "Комментарий пишут, пока пересчёт не проведён и не отменён"));
+        // А повтор записи, принятой до закрытия, — по-прежнему успех:
+        // она уже сделана, и очереди нужен ответ, чтобы её убрать.
+        mvc.perform(post(counterUrl).with(csrf()).session(keeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"Катушки посчитали\",\"requestId\":\"r-4\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.counterNote").value("Катушки посчитали"));
+
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM inventory_note_request WHERE session_id = ?",
+                Long.class, sessionId)))
+                .as("ключи принятых записей: r-1…r-4, повторы и отказы новых не добавляют")
+                .isEqualTo(4L);
+    }
+
+    /**
+     * Шесть одновременных повторов одной записи — тот случай, на котором
+     * у приёмки, ссылки на снимок и заказа с площадки проверка чтением
+     * пропускала второй запрос и наружу уезжало «нарушение целостности».
+     * Здесь ключ ставится одной инструкцией ({@code ON CONFLICT DO NOTHING}),
+     * и каждый повтор обязан получить успех.
+     */
+    @Test
+    @DisplayName("Одновременные повторы комментария ходившего отвечают успехом все")
+    void concurrentCounterNoteRepliesAllSucceed() throws Exception {
+        MockHttpSession keeper = login("kladovshchik");
+        long sessionId = openWholeWarehouse(keeper);
+        String counterUrl = "/api/inventory/sessions/%d/counter-note".formatted(sessionId);
+
+        int threads = 6;
+        var start = new java.util.concurrent.CountDownLatch(1);
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        try {
+            var replies = new java.util.ArrayList<java.util.concurrent.Future<Integer>>();
+            for (int i = 0; i < threads; i++) {
+                replies.add(pool.submit(() -> {
+                    start.await();
+                    return mvc.perform(post(counterUrl).with(csrf()).session(keeper)
+                                    .contentType(MediaType.APPLICATION_JSON)
+                                    .content("{\"note\":\"Не сканировали\",\"requestId\":\"same\"}"))
+                            .andReturn().getResponse().getStatus();
+                }));
+            }
+            start.countDown();
+            for (var reply : replies) {
+                assertThat(reply.get()).as("повтор получил отказ").isEqualTo(200);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM inventory_note_request WHERE request_id = 'same'",
+                Long.class))).isEqualTo(1L);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT counter_note FROM inventory_session WHERE id = ?", String.class, sessionId)))
+                .isEqualTo("Не сканировали");
     }
 
     @Test
