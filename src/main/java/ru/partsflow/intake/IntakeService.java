@@ -20,11 +20,14 @@ import ru.partsflow.platform.outbox.DomainEvent;
 import ru.partsflow.platform.outbox.DomainEventPublisher;
 import ru.partsflow.platform.outbox.EventPayloads;
 import ru.partsflow.platform.outbox.contract.PartEvent;
+import ru.partsflow.sales.PreorderService;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Приёмка: от контейнера до детали на полке.
@@ -50,6 +53,7 @@ public class IntakeService {
     private final DonorVehicleResolver vehicles;
     private final PartTitleGenerator titleGenerator;
     private final DomainEventPublisher eventPublisher;
+    private final PreorderService preorders;
     private final JdbcTemplate jdbc;
 
     public IntakeService(SupplyRepository supplies,
@@ -60,7 +64,9 @@ public class IntakeService {
                          DonorVehicleResolver vehicles,
                          PartTitleGenerator titleGenerator,
                          DomainEventPublisher eventPublisher,
+                         PreorderService preorders,
                          JdbcTemplate jdbc) {
+        this.preorders = preorders;
         this.supplies = supplies;
         this.donors = donors;
         this.parts = parts;
@@ -166,6 +172,13 @@ public class IntakeService {
         }
         Donor donor = donorId == null ? null : requireDonor(donorId);
 
+        // Заведённые заранее (ожидаемые по поставке) принимаются той же
+        // позицией, а не новой: вторая карточка той же детали ломает
+        // окупаемость машины и историю, а объявление уводит покупателя на
+        // списанную. Проверка раскладки по складам стоит ДО записи документа:
+        // отказ виден приёмщику в ту же минуту, а не сверке следующей ночью.
+        Map<Long, Part> accepted = acceptExpected(items, warehouseId, supplyId);
+
         StockDocument document = documents.save(StockDocument.intake(warehouseId, supplyId));
         document.setCreatedBy(authorId);
         document.setClientRequestId(requestId);
@@ -175,7 +188,14 @@ public class IntakeService {
         PartTitleGenerator.VehicleTitlePart vehicle = vehicles.resolve(donorId);
 
         List<Part> created = new ArrayList<>(items.size());
+        List<Part> fresh = new ArrayList<>(items.size());
         for (ItemRequest item : items) {
+            if (item.partId() != null) {
+                Part existing = accepted.get(item.partId());
+                document.addLine(existing.getId(), item.quantity(), item.cellId());
+                created.add(existing);
+                continue;
+            }
             PartName partName = partNames.resolve(item.rawName(), authorId);
             Part part = buildPart(item, partName, vehicle, donor, supplyId, authorId);
 
@@ -185,15 +205,194 @@ public class IntakeService {
             }
             document.addLine(savedPart.getId(), item.quantity(), item.cellId());
             created.add(savedPart);
+            fresh.add(savedPart);
         }
 
         StockDocument saved = documents.save(document);
         StockDocument completed = documents.complete(saved.getId());
 
+        // Деталь легла на склад — предзаказы под неё становятся обычным
+        // резервом, на тот склад, где она лежит целиком.
+        accepted.keySet().stream().sorted()
+                .forEach(partId -> preorders.convertOnArrival(partId, authorId));
+
         // Событие после проведения: до него остатка нет, и площадка получила бы
-        // деталь, которой на складе ещё не лежит.
-        created.forEach(this::publishCreated);
+        // деталь, которой на складе ещё не лежит. Только по новым карточкам:
+        // принятая заведённая уже была объявлена, когда её заводили.
+        fresh.forEach(this::publishCreated);
         return new Receipt(completed, created);
+    }
+
+    /**
+     * Принимаемые позиции, заведённые заранее: проверяет, что их можно
+     * принять, берёт под блокировку и проверяет раскладку предзаказов.
+     *
+     * <p>Блокировка строк {@code part} — та же, что берёт продавец,
+     * откладывая ту же деталь предзаказом: приём и новый предзаказ
+     * выстраиваются в очередь, и ни один не увидит список другого
+     * наполовину. Порядок по номеру — один у всех, чтобы две приёмки с
+     * общими позициями не ждали друг друга насмерть.
+     */
+    private Map<Long, Part> acceptExpected(List<ItemRequest> items, Long warehouseId,
+                                           Long supplyId) {
+        List<Long> ids = items.stream().map(ItemRequest::partId)
+                .filter(java.util.Objects::nonNull).distinct().sorted().toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        if (supplyId == null) {
+            throw new IllegalArgumentException(
+                    "Заведённую заранее позицию принимают в её поставку — выберите поставку");
+        }
+        jdbc.queryForList("SELECT id FROM part WHERE id = ANY (?) ORDER BY id FOR UPDATE",
+                Long.class, (Object) ids.toArray(Long[]::new));
+        Map<Long, Part> found = new HashMap<>();
+        for (Part part : parts.findAllById(ids)) {
+            found.put(part.getId(), part);
+        }
+        Map<Long, BigDecimal> incoming = new HashMap<>();
+        for (ItemRequest item : items) {
+            if (item.partId() == null) {
+                continue;
+            }
+            Part part = found.get(item.partId());
+            if (part == null) {
+                throw NotFound.PART.error(item.partId());
+            }
+            if (!part.isExpectedOrigin()) {
+                throw new IllegalArgumentException(
+                        "«%s» не заводили как ожидаемую по поставке — принимайте её обычной приёмкой"
+                                .formatted(part.getTitle()));
+            }
+            if (!supplyId.equals(part.getSupplyId())) {
+                throw new IllegalArgumentException(
+                        "«%s» ожидается по другой поставке — выберите её".formatted(part.getTitle()));
+            }
+            incoming.merge(part.getId(), item.quantity(), BigDecimal::add);
+        }
+        incoming.forEach((partId, quantity) ->
+                preorders.checkArrival(partId, warehouseId, quantity));
+        return found;
+    }
+
+    // ---------- ожидаемый товар ----------
+
+    /**
+     * Заводит позицию по ожидаемой поставке: товар, которого ещё нет на складе.
+     *
+     * <p>Заводит владелец с компьютера (путь закрыт ролью в контроллере):
+     * предзаказ по контейнеру в пути — кабинетная работа. Известно минимум —
+     * вид детали, машина, цена, количество (решение владельца продукта
+     * 30.09.2026, вариант «а»): за полминуты, и объявление выходит без снимков.
+     *
+     * <p>Позиция остаётся черновиком (склад ей ничего не откладывал) и
+     * помечается ожидаемой; продаётся она предзаказом, а при приходе
+     * принимается той же карточкой.
+     *
+     * @param donorId машина, с которой снято, — обязательна: заголовок
+     *                объявления собирается из вида детали и машины, и без неё
+     *                объявление выходит без нужного человеку
+     */
+    @Transactional
+    public Part registerExpectedPart(Long supplyId, String rawName, Long donorId,
+                                     BigDecimal quantity, BigDecimal price, Long authorId) {
+        Supply supply = requireSupply(supplyId);
+        if (supply.getStatus() != Supply.SupplyStatus.EXPECTED
+                && supply.getStatus() != Supply.SupplyStatus.IN_TRANSIT) {
+            throw new IllegalStateException(
+                    "Поставка уже приехала: ожидаемый товар по ней заводить поздно — "
+                            + "примите деталь обычной приёмкой");
+        }
+        if (rawName == null || rawName.isBlank()) {
+            throw new IllegalArgumentException("Не указан вид детали");
+        }
+        if (donorId == null) {
+            throw new IllegalArgumentException("Не указана машина, с которой деталь");
+        }
+        if (quantity == null || quantity.signum() <= 0) {
+            throw new IllegalArgumentException("Количество должно быть больше нуля");
+        }
+        // Ноль в прайс не уезжает: «0 ₽» в объявлении — публичное обещание
+        // отдать деталь даром. Лучше отказать здесь, чем завести позицию,
+        // которая молча не попадёт в выгрузку.
+        if (price == null || price.signum() <= 0) {
+            throw new IllegalArgumentException(
+                    "Цена должна быть больше нуля: с нулевой ценой объявление не уйдёт на площадку");
+        }
+        Donor donor = requireDonor(donorId);
+        PartName partName = partNames.resolve(rawName, authorId);
+        Part part = buildPart(ItemRequest.of(rawName, quantity, price, null), partName,
+                vehicles.resolve(donorId), donor, supplyId, authorId);
+        part.setQuantity(quantity);
+        part.setExpectedOrigin(true);
+        Part saved = parts.saveAndFlush(part);
+        publishCreated(saved);
+        return saved;
+    }
+
+    /**
+     * Назначает или сдвигает ожидаемую дату поставки.
+     *
+     * <p>Срок резерва открытых предзаказов едет за датой и пишется в историю
+     * каждой сделки; продавцу на сделке остаётся пометка. Подробности и
+     * причина — {@link PreorderService#shiftExpected}.
+     */
+    @Transactional
+    public Supply setExpectedOn(Long supplyId, LocalDate expectedOn, Long authorId) {
+        Supply supply = requireSupply(supplyId);
+        if (supply.getStatus() != Supply.SupplyStatus.EXPECTED
+                && supply.getStatus() != Supply.SupplyStatus.IN_TRANSIT) {
+            throw new IllegalStateException(
+                    "Поставка уже приехала: ожидаемую дату менять поздно");
+        }
+        if (expectedOn == null) {
+            throw new IllegalArgumentException("Не указана ожидаемая дата");
+        }
+        LocalDate was = supply.getExpectedOn();
+        if (expectedOn.equals(was)) {
+            return supply;
+        }
+        supply.setExpectedOn(expectedOn);
+        Supply saved = supplies.saveAndFlush(supply);
+        preorders.shiftExpected(supplyId, was, expectedOn, authorId);
+        return saved;
+    }
+
+    /**
+     * Ожидаемые позиции поставки: что владелец завёл и сколько ещё не принято.
+     *
+     * <p>Принятое считается по журналу движений, а не по остатку: остаток
+     * падает от продаж, и «осталось принять» росло бы с каждой проданной
+     * деталью.
+     */
+    @Transactional(readOnly = true)
+    public List<ExpectedPart> expectedPartsOf(Long supplyId) {
+        requireSupply(supplyId);
+        return jdbc.query("""
+                SELECT p.id, p.number, p.title, p.quantity, p.price,
+                       COALESCE((SELECT sum(m.qty_delta) FROM stock_movement m
+                                  WHERE m.part_id = p.id AND m.movement_type = 'INTAKE'), 0)
+                           AS received,
+                       COALESCE((SELECT sum(i.quantity) FROM deal_item i
+                                  WHERE i.part_id = p.id AND i.status = 'PREORDER'), 0)
+                           AS preordered
+                  FROM part p
+                 WHERE p.supply_id = ? AND p.expected_origin
+                 ORDER BY p.id""",
+                (rs, i) -> new ExpectedPart(rs.getLong("id"), rs.getLong("number"),
+                        rs.getString("title"), rs.getBigDecimal("quantity"),
+                        rs.getBigDecimal("price"), rs.getBigDecimal("received"),
+                        rs.getBigDecimal("preordered")),
+                supplyId);
+    }
+
+    /**
+     * @param quantity   обещано по поставке
+     * @param received   принято на склад по этой позиции
+     * @param preordered отложено под клиентов, но ещё не принято
+     */
+    public record ExpectedPart(long id, long number, String title, BigDecimal quantity,
+                               BigDecimal price, BigDecimal received, BigDecimal preordered) {
     }
 
     private Part buildPart(ItemRequest item, PartName partName,
@@ -368,13 +567,24 @@ public class IntakeService {
                               String manufacturer,
                               String oemNumber,
                               String marking,
-                              String note) {
+                              String note,
+                              Long partId) {
+
+        /** Прежняя форма без {@code partId}: новая карточка. */
+        public ItemRequest(String rawName, BigDecimal quantity, BigDecimal price,
+                           BigDecimal costPrice, Long cellId, LateralSide sideLr,
+                           LongitudinalSide sideFr, VerticalSide sideUd, PartCondition condition,
+                           QualityGrade qualityGrade, String manufacturer, String oemNumber,
+                           String marking, String note) {
+            this(rawName, quantity, price, costPrice, cellId, sideLr, sideFr, sideUd, condition,
+                    qualityGrade, manufacturer, oemNumber, marking, note, null);
+        }
 
         /** Минимальный случай: вид детали, количество и цена. */
         public static ItemRequest of(String rawName, BigDecimal quantity, BigDecimal price,
                                     Long cellId) {
             return new ItemRequest(rawName, quantity, price, null, cellId,
-                    null, null, null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null, null, null, null);
         }
     }
 

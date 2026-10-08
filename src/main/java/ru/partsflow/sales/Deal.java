@@ -98,6 +98,19 @@ public class Deal {
     @Column(name = "reserved_until")
     private Instant reservedUntil;
 
+    /**
+     * Дата прихода, названная клиенту до сдвига ожидаемой даты (задача 0170).
+     * Пара с {@link #preorderShiftTo}: заполняется и гасится вместе. Не
+     * журнал — журнал в истории документа; это пометка «продавец ещё не
+     * сказал клиенту», и после того как он её увидел или деталь пришла,
+     * её нет.
+     */
+    @Column(name = "preorder_shift_from")
+    private java.time.LocalDate preorderShiftFrom;
+
+    @Column(name = "preorder_shift_to")
+    private java.time.LocalDate preorderShiftTo;
+
     @Column(name = "total_amount", nullable = false)
     private BigDecimal totalAmount = BigDecimal.ZERO;
 
@@ -301,6 +314,11 @@ public class Deal {
      * половина отложенных сделок у живого клиента просрочена, и звонок
      * «подержите ещё до пятницы» приходит как раз по ним.
      */
+    /** Сдвигает срок резерва вместе с ожидаемой датой: без проверки на будущее. */
+    void moveReservationTo(Instant until) {
+        this.reservedUntil = until;
+    }
+
     public void extendReservation(Instant until) {
         if (status != DealStatus.RESERVED) {
             throw new IllegalStateException(
@@ -405,6 +423,9 @@ public class Deal {
         if (items.isEmpty()) {
             throw new IllegalStateException("Нечего выдавать: в сделке нет позиций");
         }
+        // Предзаказ выдать нельзя: деталь ещё не пришла, и «выдача» списала бы
+        // со склада то, чего на нём нет. Откладывается он до приёмки поставки.
+        requireNoPreorder();
         items.forEach(DealItem::issue);
         this.status = DealStatus.ISSUED;
         this.issuedAt = when;
@@ -462,9 +483,64 @@ public class Deal {
         this.closedAt = when;
     }
 
-    /** Срок резерва вышел, но резерв остаётся — это очередь на обзвон. */
+    /**
+     * Выдавать нельзя, пока в сделке есть предзаказ. Зовётся и из
+     * {@link #issue}, и раньше — из сервиса, до того как тот спишет первую
+     * позицию: отказ посреди выдачи откатил бы её, но писать движения ради
+     * отката незачем.
+     */
+    void requireNoPreorder() {
+        if (hasPreorder()) {
+            throw new IllegalStateException(
+                    "В сделке есть предзаказ: деталь по ожидаемой поставке ещё не пришла, "
+                            + "выдавать нечего. Дождитесь приёмки поставки или отмените сделку");
+        }
+    }
+
+    /** В сделке есть позиция, отложенная из ожидаемой поставки (ещё не принятая). */
+    public boolean hasPreorder() {
+        return items.stream().anyMatch(i -> i.getStatus() == DealItemStatus.PREORDER);
+    }
+
+    /**
+     * Запоминает, что ожидаемая дата сдвинулась. Если пометку ещё не видели,
+     * «было» остаётся первой названной клиентом датой: двух сдвигов подряд
+     * клиент не помнит, он помнит первое обещание. Вернулась на прежнюю —
+     * сдвига больше нет.
+     */
+    void markShifted(java.time.LocalDate from, java.time.LocalDate to) {
+        java.time.LocalDate named = preorderShiftFrom != null ? preorderShiftFrom : from;
+        if (named.equals(to)) {
+            clearShift();
+            return;
+        }
+        this.preorderShiftFrom = named;
+        this.preorderShiftTo = to;
+    }
+
+    void clearShift() {
+        this.preorderShiftFrom = null;
+        this.preorderShiftTo = null;
+    }
+
+    public java.time.LocalDate getPreorderShiftFrom() {
+        return preorderShiftFrom;
+    }
+
+    public java.time.LocalDate getPreorderShiftTo() {
+        return preorderShiftTo;
+    }
+
+    /**
+     * Срок резерва вышел, но резерв остаётся — это очередь на обзвон.
+     *
+     * <p>Предзаказ срока не истекает, пока деталь не пришла (решение владельца
+     * продукта, задача 0170): резерва склада у него нет, и «подержите ещё»
+     * не про что. Просрочка появится, когда приёмка превратит его в обычный.
+     */
     public boolean isReservationExpired(Instant now) {
         return status == DealStatus.RESERVED
+                && !hasPreorder()
                 && reservedUntil != null
                 && reservedUntil.isBefore(now);
     }

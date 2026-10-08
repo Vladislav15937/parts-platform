@@ -35,7 +35,19 @@ export interface StockRow {
   cellCode: string | null;
   qty: string;
   qtyReserved: string;
+  /**
+   * Свободно к продаже. У ожидаемой позиции (`expected`) это не складской
+   * остаток, а сколько ещё можно отложить предзаказом: обещано по поставке
+   * минус уже отложенное.
+   */
   qtyAvailable: string;
+  /**
+   * Позиция ожидается по поставке, на складе её нет (задача 0170). Продаётся
+   * предзаказом: резерва склада под неё не ставится, деталь придёт.
+   */
+  expected: boolean;
+  /** Ожидаемая дата поставки; пусто — её не называли. */
+  expectedOn: string | null;
 }
 
 export interface Customer {
@@ -117,6 +129,21 @@ export interface Deal {
   items: DealItem[];
   /** Доставка и упаковка: деньги сделки, а не примечание к ней. */
   services: DealServiceLine[];
+  /**
+   * В сделке есть предзаказ — деталь по ожидаемой поставке ещё не пришла
+   * (задача 0170). Срок резерва у такой сделки не «истёк», а выдать её
+   * нельзя, пока поставка не принята.
+   */
+  preorder: boolean;
+  /** Ожидаемая дата поставки по предзаказам сделки; пусто — её не называли. */
+  expectedOn: string | null;
+  /**
+   * Дата прихода, названная клиенту до сдвига. Вместе с {@link Deal.shiftTo}
+   * — пометка «клиенту ещё не сказали»: гаснет, когда продавец нажал
+   * «Клиенту сообщил» либо деталь пришла.
+   */
+  shiftFrom: string | null;
+  shiftTo: string | null;
 }
 
 /** Услуга в сделке. Склад не двигает — у неё нет детали. */
@@ -616,12 +643,16 @@ export function createDeal(
   lines: BasketLine[],
   services: ServiceLine[] = [],
   dealSourceId: number | null = null,
+  reservedUntil: string | null = null,
 ): Promise<Deal> {
   return request<Deal>('/api/deals', {
     method: 'POST',
     body: {
       customerId,
       dealSourceId,
+      // Пусто — срок по настройке компании; у предзаказа срок всегда
+      // называет продавец (сервер без него откажет словами).
+      reservedUntil,
       items: lines.map((line) => ({
         partId: line.row.partId,
         quantity: line.quantity,
@@ -914,6 +945,11 @@ export interface DealBoardCard {
   /** Состояние самого документа: по нему открывается сделка, но не подпись. */
   status: string;
   reservedUntil: string | null;
+  /** Есть предзаказ: деталь ещё в пути, «срок истёк» к такой сделке не применимо. */
+  preorder: boolean;
+  /** Ожидаемая дата сдвинулась, а продавец клиенту ещё не сказал. */
+  shiftFrom: string | null;
+  shiftTo: string | null;
 }
 
 /**
@@ -1028,6 +1064,11 @@ export interface DealListRow {
   managerId: number | null;
   /** Пусто — ответственного нет: сотрудника удалили либо заказ не принят. */
   managerName: string | null;
+  /** Есть предзаказ: деталь ещё в пути, «срок истёк» к такой сделке не применимо. */
+  preorder: boolean;
+  /** Ожидаемая дата сдвинулась, а продавец клиенту ещё не сказал. */
+  shiftFrom: string | null;
+  shiftTo: string | null;
 }
 
 /**
@@ -1144,7 +1185,8 @@ export function endOfDay(date: string): string {
  * не снимается сам — «до завтра» на разборке часто значит «до послезавтра».
  */
 export function reservationTerm(
-  deal: { status: string; reservedUntil: string | null }, now: number = Date.now(),
+  deal: { status: string; reservedUntil: string | null; preorder?: boolean },
+  now: number = Date.now(),
 ): { day: string; expired: boolean } | null {
   if (deal.status !== 'RESERVED' || deal.reservedUntil === null) {
     return null;
@@ -1152,8 +1194,110 @@ export function reservationTerm(
   const until = new Date(deal.reservedUntil);
   return {
     day: until.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }),
-    expired: until.getTime() < now,
+    // Предзаказ срока не теряет, пока деталь не пришла (решение владельца
+    // продукта, задача 0170): резерва склада у него нет, и «подержите ещё»
+    // не про что. Просрочка появится, когда приёмка сделает его обычным.
+    expired: deal.preorder !== true && until.getTime() < now,
   };
+}
+
+/**
+ * Запас на забор: на столько дней после ожидаемой даты предлагается держать
+ * предзаказ. Контейнер приходит не в минуту, а покупателю надо доехать.
+ *
+ * <p>Это умолчание поля, а не правило: срок называет продавец («тот, кто
+ * деталь кладёт, решает сам» — владелец продукта, 30.09.2026), и настройка
+ * компании «Срок резервирования сделок» к предзаказу не применяется.
+ * Семь дней выбраны исполнителем и ждут подтверждения владельца.
+ */
+export const PREORDER_MARGIN_DAYS = 7;
+
+/** День «2026-10-20» как дата без времени, в местном часовом поясе. */
+function localDate(iso: string): Date {
+  const [year, month, day] = iso.split('-');
+  return new Date(Number(year), Number(month) - 1, Number(day));
+}
+
+/** Самая поздняя из названных дат; ISO-дни сравниваются строками. */
+function latestOf(dates: (string | null)[]): string | undefined {
+  return dates.filter((date): date is string => date !== null).sort().at(-1);
+}
+
+/** Дата в поле выбора: «2026-10-20». Местная, а не по Гринвичу. */
+export function dateInput(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/** «20 октября» из «2026-10-20». Без времени: разбирается строкой, а не через UTC. */
+export function dayLabel(iso: string): string {
+  return localDate(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+}
+
+/**
+ * Что стоит в поле срока предзаказа, когда оформление открывается.
+ *
+ * <p>Пустое не годится: оформление одним нажатием — самый частый путь
+ * продавца, и пустой срок дал бы сделку без обещания. Ориентир — самая
+ * поздняя из ожидаемых дат корзины плюс запас на забор. Если ни у одной
+ * позиции дата не названа, подставлять нечего: поле остаётся пустым, а
+ * кнопка называет причину.
+ */
+export function defaultPreorderTerm(expectedDates: (string | null)[]): string {
+  const last = latestOf(expectedDates);
+  if (last === undefined) {
+    return '';
+  }
+  const latest = localDate(last);
+  latest.setDate(latest.getDate() + PREORDER_MARGIN_DAYS);
+  return dateInput(latest);
+}
+
+/**
+ * Предупреждение, когда названный срок раньше ожидаемой даты прихода.
+ *
+ * <p>Это обещание, которое нельзя выполнить по построению: деталь не успеет
+ * приехать. Узнать об этом надо при оформлении, а не при просрочке, когда
+ * она уже обещана. Предупреждение, а не запрет: продавец мог договориться
+ * с покупателем «если не приедет — снимем», и запретить это значило бы
+ * решить за него.
+ */
+export function preorderTermWarning(
+  termDay: string, expectedDates: (string | null)[],
+): string | null {
+  if (termDay === '') {
+    return null;
+  }
+  const latest = latestOf(expectedDates);
+  if (latest === undefined || termDay >= latest) {
+    return null;
+  }
+  return `Срок раньше ожидаемой даты прихода (${dayLabel(latest)}): деталь не успеет приехать, `
+    + 'а обещана покупателю';
+}
+
+/**
+ * Пометка «ожидаемая дата сдвинулась» — слова для всех мест, где продавец
+ * видит срок. Одна строка на четыре поверхности: два написания одного
+ * сообщения разошлись бы молча.
+ */
+export function shiftNote(
+  deal: { shiftFrom?: string | null; shiftTo?: string | null },
+): string | null {
+  // `== null`, а не `=== null`: пометку несёт сервер, но ответ, собранный
+  // прежней версией (или заглушкой), поля не содержит вовсе — и отсутствие
+  // пометки не должно ронять карточку.
+  if (deal.shiftFrom == null || deal.shiftTo == null) {
+    return null;
+  }
+  return `Дата прихода сдвинулась: было ${dayLabel(deal.shiftFrom)}, `
+    + `стало ${dayLabel(deal.shiftTo)}`;
+}
+
+/** Продавец сказал клиенту о сдвиге: пометка на сделке гаснет. */
+export function markShiftSeen(dealId: number): Promise<Deal> {
+  return request<Deal>(`/api/deals/${dealId}/shift-seen`, { method: 'POST' });
 }
 
 /**

@@ -12,6 +12,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -39,6 +40,16 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/intake")
 public class IntakeController {
+
+    /**
+     * Заводит ожидаемый товар и двигает ожидаемую дату только владелец
+     * (решение владельца продукта 30.09.2026): предзаказ по контейнеру в
+     * пути — кабинетная работа и обещание покупателю, а не приёмка стоя у
+     * стеллажа. Остальным путям {@code /api/intake/**} достаётся общее
+     * правило {@code SecurityConfig}; здесь оно сужено явно, одной
+     * константой, а не литералом в каждом месте.
+     */
+    private static final String OWNER_ONLY = "hasRole('OWNER')";
 
     private final IntakeService intake;
     private final IntakeReferenceService reference;
@@ -74,6 +85,43 @@ public class IntakeController {
         Supply supply = intake.registerSupply(
                 request.kind(), request.number(), request.supplierName(), CurrentUser.memberId());
         return ResponseEntity.status(HttpStatus.CREATED).body(SupplyView.of(supply));
+    }
+
+    /**
+     * Позиции, заведённые по ожидаемой поставке: что обещано, сколько уже
+     * принято и сколько отложено под клиентов.
+     */
+    @GetMapping("/supplies/{id}/expected-parts")
+    @PreAuthorize(OWNER_ONLY)
+    public List<IntakeService.ExpectedPart> expectedParts(@PathVariable Long id) {
+        return intake.expectedPartsOf(id);
+    }
+
+    /**
+     * Заводит товар, которого ещё нет на складе: вид детали, машина, цена,
+     * количество. Остальное — после прихода, приёмкой.
+     */
+    @PostMapping("/supplies/{id}/expected-parts")
+    @PreAuthorize(OWNER_ONLY)
+    public ResponseEntity<List<IntakeService.ExpectedPart>> addExpectedPart(
+            @PathVariable Long id, @Valid @RequestBody ExpectedPartRequest request) {
+        intake.registerExpectedPart(id, request.rawName(), request.donorId(),
+                request.quantity(), request.price(), CurrentUser.memberId());
+        // Отвечает весь список поставки, а не одну строку: экран после
+        // заведения показывает его целиком, и второй запрос был бы ожиданием
+        // ровно в тот момент, когда владелец набирает следующую позицию.
+        return ResponseEntity.status(HttpStatus.CREATED).body(intake.expectedPartsOf(id));
+    }
+
+    /**
+     * Ожидаемая дата поставки. Сдвигает срок резерва предзаказов и оставляет
+     * продавцам пометку на сделках.
+     */
+    @PutMapping("/supplies/{id}/expected-on")
+    @PreAuthorize(OWNER_ONLY)
+    public SupplyView setExpectedOn(@PathVariable Long id,
+                                    @Valid @RequestBody ExpectedOnRequest request) {
+        return SupplyView.of(intake.setExpectedOn(id, request.expectedOn(), CurrentUser.memberId()));
     }
 
     @PostMapping("/supplies/{id}/arrived")
@@ -210,6 +258,20 @@ public class IntakeController {
                                 String supplierName) {
     }
 
+    /**
+     * @param rawName вид детали — написание, как у приёмки
+     * @param donorId машина; обязательна, заголовок объявления собирается
+     *                из вида детали и машины
+     */
+    public record ExpectedPartRequest(@NotBlank String rawName,
+                                      @NotNull Long donorId,
+                                      @NotNull @Positive BigDecimal quantity,
+                                      @NotNull @Positive BigDecimal price) {
+    }
+
+    public record ExpectedOnRequest(@NotNull LocalDate expectedOn) {
+    }
+
     public record DonorRequest(@NotNull Long brandId,
                                Long modelId,
                                Long generationId,
@@ -263,7 +325,10 @@ public class IntakeController {
                               String manufacturer,
                               String oemNumber,
                               String marking,
-                              String note) {
+                              String note,
+                              /* Принять заведённую заранее (ожидаемую) позицию, а не
+                                 создавать новую. Пусто — обычная приёмка. */
+                              Long partId) {
 
         IntakeService.ItemRequest toService() {
             return new IntakeService.ItemRequest(
@@ -271,18 +336,19 @@ public class IntakeController {
                     quantity == null ? BigDecimal.ONE : quantity,
                     price, costPrice, cellId,
                     sideLr, sideFr, sideUd, condition, qualityGrade,
-                    manufacturer, oemNumber, marking, note);
+                    manufacturer, oemNumber, marking, note, partId);
         }
     }
 
     // ---------- ответы ----------
 
     public record SupplyView(Long id, Supply.SupplyKind kind, String number,
-                             Supply.SupplyStatus status, LocalDate arrivedOn) {
+                             Supply.SupplyStatus status, LocalDate arrivedOn,
+                             LocalDate expectedOn) {
 
         static SupplyView of(Supply supply) {
             return new SupplyView(supply.getId(), supply.getKind(), supply.getNumber(),
-                    supply.getStatus(), supply.getArrivedOn());
+                    supply.getStatus(), supply.getArrivedOn(), supply.getExpectedOn());
         }
     }
 

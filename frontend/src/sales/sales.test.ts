@@ -35,6 +35,8 @@ function row(overrides: Partial<StockRow> = {}): StockRow {
     qty: '3',
     qtyReserved: '0',
     qtyAvailable: '3',
+    expected: false,
+    expectedOn: null,
     ...overrides,
   };
 }
@@ -149,6 +151,10 @@ function dealFrom(items: { status: string; warehouseId: number }[],
     orderAcceptedAt: null,
     deliveryNote: null,
     services: [],
+    preorder: false,
+    expectedOn: null,
+    shiftFrom: null,
+    shiftTo: null,
     items: items.map((item, at) => ({
       id: at + 1,
       partId: 100 + at,

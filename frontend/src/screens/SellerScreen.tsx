@@ -9,11 +9,15 @@ import {
   createCustomer,
   createDeal,
   deal as fetchDealById,
+  dayLabel,
   defaultPaymentSource,
+  defaultPreorderTerm,
   endOfDay,
   extendReservation,
   historyOf,
+  markShiftSeen,
   paymentSources,
+  preorderTermWarning,
   rememberPaymentSource,
   reservationTerm,
   shareDeal,
@@ -37,6 +41,7 @@ import {
   changeDealCustomer,
   searchCustomers,
   searchStock,
+  shiftNote,
   NO_STOCK_FILTER,
   transferable,
   transferItems,
@@ -144,6 +149,10 @@ export function SellerScreen({
   const [sourceId, setSourceId] = useState('');
   const [marketplace, setMarketplace] = useState('');
   const [orderNo, setOrderNo] = useState('');
+  // Срок предзаказа: пока продавец не тронул поле, в нём стоит умолчание
+  // (ожидаемая дата плюс запас на забор), и оно пересчитывается с корзиной.
+  // Тронул — его слово сильнее: срок называет тот, кто откладывает.
+  const [preorderUntil, setPreorderUntil] = useState<string | null>(null);
   const [note, setNote] = useState('');
   // Источники платежей — для оплаты, возврата денег из кассы и операций
   // по лицевому счёту разом: справочник один на все три места, где спрашивают
@@ -224,7 +233,15 @@ export function SellerScreen({
 
   // Что мешает оформить. Считается один раз и используется дважды —
   // условием кнопки и текстом под ней.
-  const orderBlock = orderObstacle(canSell, marketplace, orderNo, customer);
+  // Предзаказ: в корзине лежит деталь, которой на складе ещё нет. Срок для
+  // неё называет продавец, и настройка компании к нему не применяется.
+  const preorderLines = lines.filter((line) => line.row.expected);
+  const expectedDates = preorderLines.map((line) => line.row.expectedOn);
+  const termDay = preorderUntil ?? defaultPreorderTerm(expectedDates);
+  const termWarning = preorderLines.length > 0
+    ? preorderTermWarning(termDay, expectedDates) : null;
+  const orderBlock = orderObstacle(
+    canSell, marketplace, orderNo, customer, preorderLines.length > 0, termDay);
 
   return (
     <section className="card">
@@ -380,7 +397,9 @@ export function SellerScreen({
                   <span className="muted">
                     {' '}
                     · №&nbsp;{line.row.number} · {line.quantity} шт
-                    {' '}· {line.row.warehouseName}
+                    {line.row.expected
+                      ? ' · ожидается, предзаказ'
+                      : <>{' '}· {line.row.warehouseName}</>}
                   </span>
                 </div>
                 <div className="stock-action">
@@ -481,6 +500,33 @@ export function SellerScreen({
                 Заказ уже оплачен покупателем. Ответить площадке нужно
                 в её срок — иначе деньги вернутся ему.
               </p>
+            </>
+          )}
+
+          {/* Предзаказ: деталь ещё в пути, и до какого числа её держать,
+              называет тот, кто откладывает («тот, кто деталь кладёт, решает
+              сам» — владелец продукта). В поле стоит умолчание, но не пустота:
+              оформление одним нажатием — самый частый путь, и пустой срок дал
+              бы сделку без обещания. Настройка «Срок резервирования сделок»
+              сюда не применяется: три дня на контейнер, идущий месяц, сделали
+              бы предзаказ просроченным в день заведения. */}
+          {preorderLines.length > 0 && marketplace === '' && (
+            <>
+              <label className="field">
+                Отложить предзаказ до
+                <input
+                  type="date"
+                  value={termDay}
+                  onChange={(e) => setPreorderUntil(e.target.value)}
+                />
+              </label>
+              <p className="note">
+                Деталь ещё в пути: склад под неё ничего не откладывает.
+                {preorderUntil === null && termDay !== ''
+                  && ' Срок подставлен — ожидаемая дата и неделя на забор; поправьте, если договорились иначе.'}
+                {termDay === '' && ' Ожидаемая дата поставки не названа — назовите срок сами.'}
+              </p>
+              {termWarning !== null && <p className="note note--error">{termWarning}</p>}
             </>
           )}
 
@@ -600,11 +646,15 @@ export function SellerScreen({
         setNote('');
       } else {
         const created = await createDeal(customer?.id ?? null, lines, services,
-          sourceId === '' ? null : Number(sourceId));
+          sourceId === '' ? null : Number(sourceId),
+          // Срок уезжает только у предзаказа: у обычной продажи его берёт
+          // настройка компании на сервере, как и раньше.
+          preorderLines.length > 0 && termDay !== '' ? endOfDay(termDay) : null);
         if (!mounted.current) return;
         setDeal(created);
       }
       setLines([]);
+      setPreorderUntil(null);
       // Следующий разговор начинается с чистого листа: оставшийся в поле
       // покупатель предыдущей сделки уехал бы в следующую молча — поле
       // заполнено и выглядит осмысленно, а смотрят на него как раз тогда,
@@ -906,18 +956,31 @@ function StockItem({
             его: «7584A8FEAE3D» по телефону не произносят. */}
         <span className="muted"> · №&nbsp;{row.number}</span>
         {row.publicCode !== null && <span className="muted"> · {row.publicCode}</span>}
-        <div className="muted">
-          {row.warehouseName}
-          {row.cellCode !== null && ` · ячейка ${row.cellCode}`} · свободно {row.qtyAvailable}
-          {reserved > 0 && ` · отложено ${row.qtyReserved}`}
-        </div>
+        {row.expected ? (
+          // Ожидаемая позиция: на складе её нет, и «свободно» тут значит
+          // другое — сколько ещё можно отложить предзаказом. Склад и ячейку
+          // не называем: деталь ляжет туда, куда её положит приёмщик.
+          <div className="muted">
+            Ожидается
+            {row.expectedOn != null ? ` · приход ${dayLabel(row.expectedOn)}` : ' · дата не названа'}
+            {' '}· можно отложить {row.qtyAvailable}
+          </div>
+        ) : (
+          <div className="muted">
+            {row.warehouseName}
+            {row.cellCode !== null && ` · ячейка ${row.cellCode}`} · свободно {row.qtyAvailable}
+            {reserved > 0 && ` · отложено ${row.qtyReserved}`}
+          </div>
+        )}
       </div>
       <div className="stock-action">
         <strong className="stock-price">
           {row.price === null ? '—' : `${Number(row.price).toLocaleString('ru-RU')} ₽`}
         </strong>
         <button type="button" disabled={room < 1 || !canSell} onClick={onAdd}>
-          {room >= 1 ? 'в сделку' : taken > 0 ? 'уже в сделке' : 'нет свободных'}
+          {room >= 1
+            ? (row.expected ? 'отложить под клиента' : 'в сделку')
+            : taken > 0 ? 'уже в сделке' : (row.expected ? 'всё отложено' : 'нет свободных')}
         </button>
       </div>
     </li>
@@ -1238,15 +1301,23 @@ function DealFinder({
             // больше половины, и красное здесь — это очередь на обзвон.
             // Считается он от того же слова: у готовой к выдаче дату брать
             // неоткуда, иначе поправка вернула бы половину прежнего обмана.
-            const line = reservationTerm({ status: state, reservedUntil: d.reservedUntil });
+            const line = reservationTerm({
+              status: state, reservedUntil: d.reservedUntil, preorder: d.preorder,
+            });
             return (
               <li key={d.id}>
                 <button type="button" className="button--ghost" onClick={() => onPick(d)}>
                   {d.number === null ? '—' : `№${d.number}`} · {dealStatusNameLower(state)}
+                  {d.preorder && <span className="muted"> · ожидается поставка</span>}
                   {line !== null && (
                     <span className={line.expired ? 'note--error' : 'muted'}>
                       {line.expired ? ' · срок истёк' : ` · до ${line.day}`}
                     </span>
+                  )}
+                  {/* Сдвиг даты прихода виден там же, где срок: звонить клиенту
+                      продавец начинает отсюда, а не из ленты истории. */}
+                  {shiftNote(d) !== null && (
+                    <span className="note--error"> · {shiftNote(d)}</span>
                   )}
                   <span className="muted">
                     {' '}
@@ -1380,7 +1451,9 @@ function DealCard({
   // у клиента, либо снова на полке, и дата рядом с ними обещала бы то,
   // чего никто не обещал. У готовой к выдаче — по той же причине: срок
   // резерва рядом со словом «готова» читается как ожидание оплаты.
-  const term = reservationTerm({ status: state, reservedUntil: deal.reservedUntil });
+  const term = reservationTerm({
+    status: state, reservedUntil: deal.reservedUntil, preorder: deal.preorder,
+  });
   // А продление остаётся доступным, пока резерв стоит на самом документе:
   // товар и у оплаченной сделки лежит отложенным до этого числа, и убрать
   // вместе со словом ещё и кнопку значило бы отнять возможность, о которой
@@ -1463,6 +1536,37 @@ function DealCard({
       {term !== null && (
         <p className={term.expired ? 'note note--error' : 'note'}>
           {term.expired ? 'Отложено · срок истёк' : `Отложено до ${term.day}`}
+        </p>
+      )}
+
+      {/* Предзаказ: деталь ещё в пути, склад под неё ничего не откладывал.
+          Говорится прямо и с датой — продавец отвечает покупателю «идёт
+          контейнером, будет тогда-то», а не «отложено» без объяснения. */}
+      {deal.preorder && (
+        <p className="note">
+          Ожидается поставка
+          {deal.expectedOn != null
+            ? ` · приход ${dayLabel(deal.expectedOn)}`
+            : ' · дата прихода не названа'}
+          . Выдать можно после приёмки.
+        </p>
+      )}
+
+      {/* Сдвиг даты прихода — на экране, а не только в ленте истории: в
+          историю заходят, когда уже что-то случилось, и если сдвиг виден
+          только там, звонка клиенту не будет вовсе. Гаснет по нажатию «Клиенту
+          сообщил» либо когда поставка придёт. */}
+      {shiftNote(deal) !== null && (
+        <p className="note note--error">
+          {shiftNote(deal)}. Клиенту названа прежняя дата — сообщите ему.
+          {canSell && (
+            <>
+              {' '}
+              <button type="button" className="button--ghost" onClick={() => void seenShift()}>
+                Клиенту сообщил
+              </button>
+            </>
+          )}
         </p>
       )}
 
@@ -1904,6 +2008,21 @@ function DealCard({
     }
   }
 
+  /**
+   * Продавец сказал клиенту о сдвиге даты прихода — пометка гаснет.
+   *
+   * <p>Мимо {@link act}, как и смена клиента: сервер отдаёт изменённую сделку
+   * в ответе, и брать её оттуда проще и надёжнее, чем перечитывать список.
+   */
+  async function seenShift(): Promise<void> {
+    try {
+      const fresh = await markShiftSeen(deal.id);
+      if (mounted.current) onChanged(fresh);
+    } catch (cause) {
+      if (mounted.current) onError(describe(cause, 'Пометку не удалось снять'));
+    }
+  }
+
   async function act(operation: () => Promise<unknown>): Promise<void> {
     try {
       await operation();
@@ -2227,14 +2346,26 @@ function todayISO(): string {
  */
 function orderObstacle(
   canSell: boolean, marketplace: string, orderNo: string, customer: Customer | null,
+  preorder: boolean, termDay: string,
 ): string | null {
   if (!canSell) {
     return 'Ваша роль не позволяет продавать.';
   }
   if (marketplace !== '') {
+    // Заказ площадки обеспечивается складом сразу, а ожидаемой детали на
+    // складе нет: заказ записался бы необеспеченным черновиком, о котором
+    // площадка уже знает, а склад отложить ничего не мог.
+    if (preorder) {
+      return 'Заказ с площадки нельзя оформить на ожидаемый товар — он ещё не на складе. '
+        + 'Уберите из корзины деталь, отмеченную «ожидается».';
+    }
     return orderNo.trim() === ''
       ? 'Впишите номер заказа у площадки — по нему заказ и опознаётся.'
       : null;
+  }
+  if (preorder && termDay === '') {
+    return 'Назовите срок, до которого держать предзаказ: ожидаемая дата поставки '
+      + 'не названа, и подставить нечего.';
   }
   // Обычная продажа: клиент подставлен «Частным лицом» и обязателен только
   // в том смысле, что поле нельзя оставить пустым, — нажав «Изменить»,

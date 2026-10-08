@@ -27,6 +27,9 @@ interface Props {
 
 interface Item {
   key: string;
+  /** Принимается заведённая заранее позиция, а не новая карточка. */
+  partId: number | null;
+  quantity: number;
   rawName: string;
   price: string;
   cellId: number | null;
@@ -46,6 +49,8 @@ interface Payload {
     sideLr: string | null;
     sideFr: string | null;
     quantity: number;
+    /** Заведённая заранее позиция; пусто — обычная приёмка новой карточки. */
+    partId: number | null;
   }[];
 }
 
@@ -96,7 +101,13 @@ export function IntakeScreen({ reference, onSend }: Props) {
    */
   const [pickedName, setPickedName] = useState(false);
 
+  // Сколько пришло по ожидаемой позиции — по умолчанию всё, что оставалось.
+  const [arrived, setArrived] = useState<Record<number, string>>({});
+
   const warehouse = reference.warehouses.find((w) => w.id === warehouseId);
+  // Ожидаемое по выбранной поставке: принимать его надо этой же позицией.
+  const expectedHere = supplyId === null ? [] : (reference.expectedParts ?? [])
+    .filter((part) => part.supplyId === supplyId);
   const suggestions = pickedName ? [] : suggestNames(reference.partNames, draft.rawName);
   // Склад проверяется здесь, а не при отправке: остановить приёмщика надо
   // до того, как он наберёт двадцать позиций, а не после.
@@ -157,6 +168,51 @@ export function IntakeScreen({ reference, onSend }: Props) {
           ))}
         </select>
       </label>
+
+      {/* Заведённое владельцем заранее принимается ЭТОЙ ЖЕ позицией. Завести
+          такую деталь заново руками — вторая карточка, и предзаказы покупателей
+          остались бы висеть на первой. */}
+      {expectedHere.length > 0 && (
+        <>
+          <hr />
+          <p className="note">
+            Ожидалось по этой поставке — принимайте эту же позицию, а не
+            заводите новую:
+          </p>
+          <ul className="suggestions">
+            {expectedHere.map((part) => {
+              const taken = items.some((item) => item.partId === part.id);
+              const quantity = Number(arrived[part.id] ?? part.remaining);
+              return (
+                <li key={part.id}>
+                  {part.title}
+                  <span className="muted"> · ждём {part.remaining} шт</span>
+                  <label>
+                    Пришло, шт
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      value={arrived[part.id] ?? String(part.remaining)}
+                      onChange={(e) => setArrived({ ...arrived, [part.id]: e.target.value })}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="button--ghost"
+                    disabled={warehouseId === null || taken || !(quantity > 0)}
+                    onClick={() => acceptExpected(part.id, part.title, part.price, quantity)}
+                  >
+                    {taken ? 'в партии' : 'Принять'}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {warehouseId === null && (
+            <p className="note">Выберите склад — принимать эту позицию будем на него.</p>
+          )}
+        </>
+      )}
 
       <hr />
 
@@ -280,6 +336,9 @@ export function IntakeScreen({ reference, onSend }: Props) {
             {items.map((item) => (
               <li key={item.key}>
                 {item.rawName} · {item.price} ₽
+                {item.partId !== null && (
+                  <span className="muted"> · заведена заранее, {item.quantity} шт</span>
+                )}
                 {item.photos.length > 0 && (
                   <span className="muted"> · {item.photos.length} фото</span>
                 )}
@@ -339,6 +398,24 @@ export function IntakeScreen({ reference, onSend }: Props) {
     setScanNote(`Код «${match.text}» не найден в справочниках`);
   }
 
+  /**
+   * Принять заведённую заранее позицию в партию.
+   *
+   * <p>Ячейка — та, что выбрана в форме ниже: на экране один выбор ячейки, и
+   * второй такой же для ожидаемой позиции был бы вторым способом сделать то же.
+   */
+  function acceptExpected(partId: number, title: string, price: number, quantity: number) {
+    setItems([...items, {
+      ...emptyItem(),
+      key: crypto.randomUUID(),
+      partId,
+      quantity,
+      rawName: title,
+      price: String(price),
+      cellId: draft.cellId,
+    }]);
+  }
+
   function addItem() {
     setItems([...items, { ...draft, key: crypto.randomUUID(), photos }]);
     // Склад, поставка и машина остаются: с одного донора снимают подряд.
@@ -363,7 +440,8 @@ export function IntakeScreen({ reference, onSend }: Props) {
         cellId: item.cellId,
         sideLr: item.sideLr,
         sideFr: item.sideFr,
-        quantity: 1,
+        quantity: item.quantity,
+        partId: item.partId,
       })),
     };
     // Снимки привязываются к позиции по номеру, а не по идентификатору:
@@ -394,6 +472,8 @@ export function IntakeScreen({ reference, onSend }: Props) {
 function emptyItem(): Item {
   return {
     key: '',
+    partId: null,
+    quantity: 1,
     rawName: '',
     price: '',
     cellId: null,

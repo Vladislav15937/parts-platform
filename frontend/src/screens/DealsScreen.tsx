@@ -4,6 +4,7 @@ import {
   DEAL_FUNNEL,
   dealBoard,
   listDeals,
+  shiftNote,
   reservationTerm,
 } from '../sales/sales';
 import { customerName, dealStageStatus, dealStatusName } from '../sales/dealStatus';
@@ -239,7 +240,9 @@ function BoardCard({
   // подписывают словом: доска, заголовок её карточки и список сделок клиента.
   // Копия этого соответствия разошлась бы с оригиналом молча.
   const state = dealStageStatus(card.stage, card.status);
-  const term = reservationTerm({ status: state, reservedUntil: card.reservedUntil });
+  const term = reservationTerm({
+    status: state, reservedUntil: card.reservedUntil, preorder: card.preorder,
+  });
   return (
     <button type="button" className="deal-card" onClick={() => onOpenDeal(card.id)}>
       <span className="deal-card__line">
@@ -261,6 +264,13 @@ function BoardCard({
         <span className={term.expired ? 'deal-card__state note--error' : 'deal-card__state muted'}>
           {term.expired ? 'срок истёк' : `до ${term.day}`}
         </span>
+      )}
+      {/* Предзаказ: деталь ещё в пути, и «срок истёк» к такой сделке не
+          применимо. Сдвиг даты прихода виден отсюда же — звонить клиенту
+          продавец начинает с доски, а не из ленты истории. */}
+      {card.preorder && <span className="deal-card__state muted">ожидается поставка</span>}
+      {shiftNote(card) !== null && (
+        <span className="deal-card__state note--error">{shiftNote(card)}</span>
       )}
       {/* У заказа с площадки покупателя нет вовсе, и строки о нём тоже. */}
       {card.customerName !== null && (
@@ -463,6 +473,8 @@ function Row({
             {term.expired ? 'срок истёк' : `до ${term.day}`}
           </div>
         )}
+        {row.preorder && <div className="muted">ожидается поставка</div>}
+        {shiftNote(row) !== null && <div className="note--error">{shiftNote(row)}</div>}
       </td>
       <td>{row.managerName ?? ''}</td>
     </tr>

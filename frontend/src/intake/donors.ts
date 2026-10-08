@@ -154,3 +154,54 @@ export function markSupplyArrived(id: number, on: string): Promise<unknown> {
 export function donorsOfSupply(id: number): Promise<DonorEntry[]> {
   return request<DonorEntry[]>(`/api/intake/supplies/${id}/donors`);
 }
+
+/**
+ * Позиция, заведённая владельцем заранее по ожидаемой поставке
+ * (задача 0170): товар, которого ещё нет на складе, но по которому уже
+ * можно отложить деталь под клиента.
+ *
+ * @param quantity   обещано по поставке
+ * @param received   уже принято на склад по этой позиции
+ * @param preordered отложено под клиентов, но не принято
+ */
+export interface ExpectedPartEntry {
+  id: number;
+  number: number;
+  title: string;
+  quantity: number;
+  price: number;
+  received: number;
+  preordered: number;
+}
+
+/** Ожидаемые позиции поставки. Владелец. */
+export function expectedPartsOf(supplyId: number): Promise<ExpectedPartEntry[]> {
+  return request<ExpectedPartEntry[]>(`/api/intake/supplies/${supplyId}/expected-parts`);
+}
+
+/**
+ * Заводит товар по ожидаемой поставке: вид детали, машина, цена, количество.
+ * Отвечает списком позиций поставки целиком — экран показывает его после
+ * заведения, и второй запрос был бы ожиданием, пока владелец набирает
+ * следующую позицию.
+ */
+export function addExpectedPart(
+  supplyId: number,
+  body: { rawName: string; donorId: number; quantity: number; price: number },
+): Promise<ExpectedPartEntry[]> {
+  return request<ExpectedPartEntry[]>(`/api/intake/supplies/${supplyId}/expected-parts`, {
+    method: 'POST',
+    body,
+  });
+}
+
+/**
+ * Назначает или сдвигает ожидаемую дату поставки. Срок резерва открытых
+ * предзаказов едет за ней, а продавцам на сделках остаётся пометка.
+ */
+export function setExpectedOn(supplyId: number, expectedOn: string): Promise<unknown> {
+  return request<unknown>(`/api/intake/supplies/${supplyId}/expected-on`, {
+    method: 'PUT',
+    body: { expectedOn },
+  });
+}

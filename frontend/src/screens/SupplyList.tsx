@@ -11,6 +11,7 @@ import {
 import type { SupplyRef } from '../reference/reference';
 import { plural } from '../ui/plural';
 import { useMounted } from '../ui/useMounted';
+import { ExpectedGoods } from './ExpectedGoods';
 
 /**
  * Поставки: что заведено, что уже приехало и какие машины пришли партией.
@@ -31,6 +32,11 @@ interface Props {
   online: boolean;
   /** Поставка изменилась: справочник приёмки надо перечитать. */
   onChanged: () => void;
+  /**
+   * Может ли вошедший заводить ожидаемый товар. Только владелец (решение
+   * владельца продукта 29.09.2026) — и тот же запрет стоит на сервере.
+   */
+  canExpect?: boolean;
 }
 
 /**
@@ -56,8 +62,10 @@ const STATUSES: Record<string, string> = {
   CLOSED: 'закрыта',
 };
 
-export function SupplyList({ supplies, online, onChanged }: Props) {
+export function SupplyList({ supplies, online, onChanged, canExpect = false }: Props) {
   const [openId, setOpenId] = useState<number | null>(null);
+  // Ожидаемый товар — своя панель под строкой, независимая от списка машин.
+  const [expectedId, setExpectedId] = useState<number | null>(null);
   const [cars, setCars] = useState<DonorEntry[] | null>(null);
   // Три состояния, а не два: «грузим», «не смогли» и «пусто» — разные вещи,
   // и экран, который их путает, обещает пустую партию при истёкшей сессии.
@@ -103,6 +111,9 @@ export function SupplyList({ supplies, online, onChanged }: Props) {
                   <td>{supply.supplierName ?? '—'}</td>
                   <td>{STATUSES[supply.status] ?? supply.status}</td>
                   <td>
+                    {supply.arrivedOn === null && supply.expectedOn != null && (
+                      <div className="muted">ожидается {day(supply.expectedOn)}</div>
+                    )}
                     {supply.arrivedOn !== null ? (
                       day(supply.arrivedOn)
                     ) : (
@@ -136,8 +147,24 @@ export function SupplyList({ supplies, online, onChanged }: Props) {
                     >
                       {openId === supply.id ? 'Свернуть' : 'Машины'}
                     </button>
+                    {canExpect && (supply.status === 'EXPECTED' || supply.status === 'IN_TRANSIT') && (
+                      <button
+                        type="button"
+                        className="button--ghost"
+                        onClick={() => setExpectedId(expectedId === supply.id ? null : supply.id)}
+                      >
+                        {expectedId === supply.id ? 'Скрыть ожидаемое' : 'Ожидаемый товар'}
+                      </button>
+                    )}
                   </td>
                 </tr>
+                {expectedId === supply.id && (
+                  <tr>
+                    <td colSpan={5}>
+                      <ExpectedGoods supply={supply} online={online} onChanged={onChanged} />
+                    </td>
+                  </tr>
+                )}
                 {/* Раскрывается под своей же строкой, как затраты по машине:
                     результат нажатия обязан быть виден там, где нажали. */}
                 {openId === supply.id && (

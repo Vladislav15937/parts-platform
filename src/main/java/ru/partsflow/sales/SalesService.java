@@ -47,6 +47,7 @@ public class SalesService {
     private final DealSourceRepository dealSources;
     private final ru.partsflow.inventory.PartChangeLog partChanges;
     private final CustomerService customers;
+    private final PreorderService preorders;
 
     public SalesService(DealRepository dealRepository,
                         DealReturnRepository dealReturnRepository,
@@ -61,8 +62,10 @@ public class SalesService {
                         DealSourceRepository dealSources,
                         ru.partsflow.inventory.PartChangeLog partChanges,
                         CustomerService customers,
+                        PreorderService preorders,
                         org.springframework.jdbc.core.JdbcTemplate jdbc) {
         this.customers = customers;
+        this.preorders = preorders;
         this.dealRepository = dealRepository;
         this.dealReturnRepository = dealReturnRepository;
         this.paymentRepository = paymentRepository;
@@ -194,10 +197,31 @@ public class SalesService {
         // без источника, не отвечает ни на один вопрос.
         deal.setDealSourceId(dealSourceId);
 
+        // Сколько ожидаемой детали отложено в этом же запросе: те строки ещё
+        // не записаны, и вторая такая же позиция иначе не увидела бы первой.
+        java.util.Map<Long, BigDecimal> preordered = new java.util.HashMap<>();
         for (ItemRequest item : items) {
             Part part = requirePart(item.partId());
-            deal.addItem(part.getId(), item.quantity(),
+            DealItem line = deal.addItem(part.getId(), item.quantity(),
                     item.price() != null ? item.price() : part.getPrice(), item.warehouseId());
+
+            // Ожидаемая по поставке деталь на складе не лежит: резерв по
+            // свободному остатку для неё не проходит по построению. Она
+            // откладывается предзаказом — отдельным состоянием позиции, со
+            // своим счётом (от количества в карточке, а не от склада). Складской
+            // резерв ниже не смягчён ни на букву: он остаётся для всего, что
+            // на складе есть.
+            PreorderService.Claim claim = preorders.claim(
+                    part.getId(), item.quantity(), preordered.get(part.getId()));
+            if (claim != null) {
+                if (item.warehouseId() == null) {
+                    throw new IllegalArgumentException(
+                            "Укажите склад, на который придёт деталь «%s»".formatted(claim.title()));
+                }
+                line.markPreorder();
+                preordered.merge(part.getId(), item.quantity(), BigDecimal::add);
+                continue;
+            }
 
             // Резерв на складе ставится здесь же, в той же транзакции.
             // Отложить его «на потом» значит открыть окно, в котором ту же
@@ -209,7 +233,13 @@ public class SalesService {
 
         Deal saved = detachable(dealRepository.saveAndFlush(deal));
         log(saved, "CREATED", "Сделка создана и зарезервирована. Позиций: "
-                + saved.getItems().size(), managerId);
+                + saved.getItems().size()
+                + (preordered.isEmpty() ? ""
+                        : ". Из них предзаказ (деталь по ожидаемой поставке ещё не пришла): "
+                                + saved.getItems().stream()
+                                        .filter(i -> i.getStatus() == DealItemStatus.PREORDER)
+                                        .count()),
+                managerId);
         return saved;
     }
 
@@ -480,6 +510,7 @@ public class SalesService {
     public Deal issue(Long dealId, Long managerId) {
         Deal deal = requireDeal(dealId);
         Instant now = Instant.now();
+        deal.requireNoPreorder();
 
         for (DealItem item : deal.getItems()) {
             if (item.getStatus() != DealItemStatus.RESERVED) {
@@ -903,7 +934,9 @@ public class SalesService {
         List<DealListRow> rows = jdbc.query(
                 "SELECT d.id, d.number, d.created_at, d.customer_id, c.name AS customer_name,"
                         + " d.total_amount, d.paid_amount, d.status, d.reserved_until,"
-                        + " d.manager_id, m.display_name AS manager_name"
+                        + " d.manager_id, m.display_name AS manager_name,"
+                        + PREORDER_EXISTS + " AS preorder,"
+                        + " d.preorder_shift_from, d.preorder_shift_to"
                         + joins + where
                         + " ORDER BY d.id DESC LIMIT ?",
                 (rs, i) -> new DealListRow(
@@ -914,7 +947,10 @@ public class SalesService {
                         DealStatus.valueOf(rs.getString("status")),
                         rs.getTimestamp("reserved_until") == null
                                 ? null : rs.getTimestamp("reserved_until").toInstant(),
-                        (Long) rs.getObject("manager_id"), rs.getString("manager_name")),
+                        (Long) rs.getObject("manager_id"), rs.getString("manager_name"),
+                        rs.getBoolean("preorder"),
+                        dateOf(rs.getDate("preorder_shift_from")),
+                        dateOf(rs.getDate("preorder_shift_to"))),
                 rowArgs.toArray());
 
         return new DealsPage(rows, total);
@@ -936,12 +972,23 @@ public class SalesService {
      *                      ни о чём, а дата рядом с ними читается как
      *                      обещание, которого никто не давал
      * @param managerName  пусто — ответственного нет
+     * @param preorder     в сделке есть предзаказ: деталь по ожидаемой поставке
+     *                     ещё не пришла, и срок резерва у такой сделки не
+     *                     «истёк» (задача 0170)
+     * @param shiftFrom    дата прихода, названная клиенту до сдвига; вместе
+     *                     с {@code shiftTo} — пометка «клиенту ещё не сказали»
      */
     public record DealListRow(Long id, Long number, Instant createdAt,
                               Long customerId, String customerName,
                               BigDecimal totalAmount, BigDecimal paidAmount,
                               DealStatus status, Instant reservedUntil,
-                              Long managerId, String managerName) {
+                              Long managerId, String managerName,
+                              boolean preorder, java.time.LocalDate shiftFrom,
+                              java.time.LocalDate shiftTo) {
+    }
+
+    private static java.time.LocalDate dateOf(java.sql.Date date) {
+        return date == null ? null : date.toLocalDate();
     }
 
     /**
@@ -973,6 +1020,18 @@ public class SalesService {
             new BoardStage("AWAITING_PAYMENT", "Ждет оплаты"),
             new BoardStage("PARTLY_PAID", "Частично оплачен"),
             new BoardStage("READY", "Готов к выдаче"));
+
+    /**
+     * В сделке есть предзаказ — позиция из ожидаемой поставки (задача 0170).
+     *
+     * <p>Условие стоит в двух местах, и разойтись они не должны: ветка
+     * «Истек срок» доски и {@code DealRepository.findExpiredReservations}
+     * (его отдаёт {@code GET /api/deals/expired-reservations}). Починенное в
+     * одном продавец увидел бы как «Истек срок 58» на доске над пустым
+     * списком просроченных. Стережёт {@code PreorderTest}.
+     */
+    static final String PREORDER_EXISTS = " EXISTS (SELECT 1 FROM deal_item pi"
+            + " WHERE pi.deal_id = d.id AND pi.status = 'PREORDER')";
 
     /** Незакрытая сделка: товар ещё числится обещанным, и по ней есть работа. */
     private static final String BOARD_OPEN = " d.status IN ('DRAFT', 'RESERVED', 'READY')";
@@ -1009,7 +1068,7 @@ public class SalesService {
     private static final String STAGE_CASE = " CASE"
             + " WHEN d.status = 'DRAFT' THEN 'NEW'"
             + " WHEN d.status = 'RESERVED' AND d.reserved_until IS NOT NULL"
-            + " AND d.reserved_until < ? THEN 'EXPIRED'"
+            + " AND d.reserved_until < ? AND NOT" + PREORDER_EXISTS + " THEN 'EXPIRED'"
             + " WHEN d.status = 'READY'"
             + " OR (d.total_amount > 0 AND d.paid_amount >= d.total_amount) THEN 'READY'"
             + " WHEN d.paid_amount <= 0 THEN 'AWAITING_PAYMENT'"
@@ -1060,6 +1119,35 @@ public class SalesService {
                         stages.put(rs.getLong("id"), rs.getString("stage")),
                 args.toArray());
         return stages;
+    }
+
+    /**
+     * Ожидаемая дата поставки по предзаказам сделок — для карточки сделки.
+     *
+     * <p>Ключ есть у сделки, в которой предзаказ есть; значение пусто, если
+     * дату поставки не называли. Это различие нужно экрану: «ожидается» без
+     * даты говорит «срок не назван», а не «предзаказа нет». Один запрос на
+     * всю выдачу и своя транзакция — по тем же причинам, что у
+     * {@link #stagesOf}.
+     */
+    @Transactional(readOnly = true)
+    public java.util.Map<Long, java.time.LocalDate> expectedDatesOf(List<Long> dealIds) {
+        List<Long> ids = dealIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        java.util.Map<Long, java.time.LocalDate> dates = new java.util.HashMap<>();
+        if (ids.isEmpty()) {
+            return dates;
+        }
+        jdbc.query("""
+                SELECT i.deal_id, min(s.expected_on) AS expected_on
+                  FROM deal_item i
+                  JOIN part p ON p.id = i.part_id
+                  LEFT JOIN supply s ON s.id = p.supply_id
+                 WHERE i.status = 'PREORDER' AND i.deal_id = ANY (?)
+                 GROUP BY i.deal_id""",
+                (org.springframework.jdbc.core.RowCallbackHandler) rs ->
+                        dates.put(rs.getLong("deal_id"), dateOf(rs.getDate("expected_on"))),
+                (Object) ids.toArray(Long[]::new));
+        return dates;
     }
 
     /**
@@ -1126,7 +1214,9 @@ public class SalesService {
 
         String inner = "SELECT" + STAGE_CASE
                 + ", d.id, d.number, d.created_at, c.name AS customer_name,"
-                + " d.total_amount, d.paid_amount, d.status, d.reserved_until"
+                + " d.total_amount, d.paid_amount, d.status, d.reserved_until,"
+                + PREORDER_EXISTS + " AS preorder,"
+                + " d.preorder_shift_from, d.preorder_shift_to"
                 + " FROM deal d"
                 + " LEFT JOIN customer c ON c.id = d.customer_id"
                 + where;
@@ -1155,7 +1245,10 @@ public class SalesService {
                             rs.getBigDecimal("total_amount"), rs.getBigDecimal("paid_amount"),
                             DealStatus.valueOf(rs.getString("status")),
                             rs.getTimestamp("reserved_until") == null
-                                    ? null : rs.getTimestamp("reserved_until").toInstant()));
+                                    ? null : rs.getTimestamp("reserved_until").toInstant(),
+                            rs.getBoolean("preorder"),
+                            dateOf(rs.getDate("preorder_shift_from")),
+                            dateOf(rs.getDate("preorder_shift_to"))));
                 },
                 rowArgs.toArray());
 
@@ -1242,7 +1335,9 @@ public class SalesService {
     public record BoardCard(String stage, Long id, Long number, Instant createdAt,
                             String customerName,
                             BigDecimal totalAmount, BigDecimal paidAmount,
-                            DealStatus status, Instant reservedUntil) {
+                            DealStatus status, Instant reservedUntil,
+                            boolean preorder, java.time.LocalDate shiftFrom,
+                            java.time.LocalDate shiftTo) {
     }
 
     public record BoardOption(Long id, String name) {
@@ -1965,6 +2060,22 @@ public class SalesService {
                 .ofPattern("d MMMM", java.util.Locale.of("ru"))
                 .withZone(java.time.ZoneOffset.UTC)
                 .format(moment);
+    }
+
+    /**
+     * Продавец увидел, что ожидаемая дата сдвинулась, и сказал клиенту:
+     * пометка гаснет (задача 0170, решение владельца — «продавец видел сдвиг»).
+     *
+     * <p>Гаснет она по нажатию, а не по открытию карточки: открытая и закрытая
+     * за секунду, карточка не значит, что звонок состоялся. «Никогда» не
+     * годится — не гаснущая пометка становится фоном; поэтому она гаснет ещё и
+     * сама, когда поставка приходит ({@link PreorderService#convertOnArrival}).
+     */
+    @Transactional
+    public Deal acknowledgeShift(Long dealId) {
+        Deal deal = requireDeal(dealId);
+        deal.clearShift();
+        return detachable(dealRepository.saveAndFlush(deal));
     }
 
     @Transactional(readOnly = true)
