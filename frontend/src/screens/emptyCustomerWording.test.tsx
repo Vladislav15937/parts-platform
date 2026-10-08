@@ -140,7 +140,7 @@ function dealRow() {
     customerId: null, customerName: null,
     totalAmount: '34500.00', paidAmount: '0.00',
     status: 'RESERVED', reservedUntil: null,
-    managerId: 7, managerName: 'Владимир Петров',
+    managerId: 7, managerName: 'Владимир Петров', foundBy: [],
   };
 }
 
