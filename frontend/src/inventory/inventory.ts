@@ -50,8 +50,19 @@ export interface InventorySession {
   startedAt: string;
   lines: number;
   counted: number;
-  /** Комментарий человека или `null`. Пустой строки не бывает — сервер её стирает. */
+  /**
+   * Комментарий сводящего расхождения или `null`. Пустой строки не бывает —
+   * сервер её стирает.
+   */
   note: string | null;
+  /**
+   * Комментарий того, кто ходил по полкам, или `null` (задача 0169).
+   * Отдельное поле: пиши оба в одно, второй затирал бы первого.
+   *
+   * <p>Необязательное в типе намеренно: лист обхода, скачанный до этой
+   * правки, лежит в IndexedDB без поля, и тип обязан это признать.
+   */
+  counterNote?: string | null;
 }
 
 /**
@@ -73,10 +84,12 @@ export interface SessionSummary {
   lines: number;
   counted: number;
   /**
-   * Комментарий человека — то, ради чего в журнал заходят: «83619 не найден»,
-   * «Не сканировали». `null` — не писали вовсе.
+   * Комментарий сводящего расхождения — то, ради чего в журнал заходят:
+   * «83619 не найден», «Не сканировали». `null` — не писали вовсе.
    */
   note: string | null;
+  /** Комментарий ходившего по полкам (задача 0169); `null` — не писал. */
+  counterNote: string | null;
 }
 
 /**
@@ -217,6 +230,21 @@ const KEY_SESSION = 'session';
 const KEY_LINES = 'lines';
 const KEY_COUNTS = 'counts';
 const KEY_CODES = 'codes';
+const KEY_NOTE = 'note';
+
+/**
+ * Комментарий ходившего, записанный на этом телефоне.
+ *
+ * <p>Хранится рядом с листом обхода, а не только в очереди: кладовщик обязан
+ * видеть то, что написал (задача 0169, пункт 10), и после перезапуска
+ * приложения, и после того, как очередь запись уже отправила и убрала.
+ * Привязан к сессии: комментарий к вчерашнему пересчёту под сегодняшним
+ * листом был бы неправдой.
+ */
+export interface LocalNote {
+  sessionId: number;
+  text: string;
+}
 
 /**
  * Открывает инвентаризацию склада — целиком или одной ячейкой. Только
@@ -284,6 +312,7 @@ async function adopt(session: InventorySession): Promise<void> {
   await put(STORE_INVENTORY, codes, KEY_CODES);
   if (stored?.id !== session.id) {
     await put(STORE_INVENTORY, {}, KEY_COUNTS);
+    await put(STORE_INVENTORY, undefined, KEY_NOTE);
   }
 }
 
@@ -292,19 +321,30 @@ export async function loadLocal(): Promise<{
   lines: InventoryLine[];
   counts: Record<string, LocalCount>;
   codes: WarehouseCode[];
+  note: LocalNote | null;
 }> {
-  const [session, lines, counts, codes] = await Promise.all([
+  const [session, lines, counts, codes, note] = await Promise.all([
     get<InventorySession>(STORE_INVENTORY, KEY_SESSION),
     get<InventoryLine[]>(STORE_INVENTORY, KEY_LINES),
     get<Record<string, LocalCount>>(STORE_INVENTORY, KEY_COUNTS),
     get<WarehouseCode[]>(STORE_INVENTORY, KEY_CODES),
+    get<LocalNote>(STORE_INVENTORY, KEY_NOTE),
   ]);
   return {
     session: session ?? null,
     lines: lines ?? [],
     counts: counts ?? {},
     codes: codes ?? [],
+    // Запись другой сессии не показывается: она о другом пересчёте.
+    note: note !== undefined && note !== null && note.sessionId === session?.id ? note : null,
   };
+}
+
+/** Запоминает комментарий ходившего на телефоне — до и после его отправки. */
+export async function rememberNote(sessionId: number, text: string): Promise<LocalNote> {
+  const note: LocalNote = { sessionId, text };
+  await put(STORE_INVENTORY, note, KEY_NOTE);
+  return note;
 }
 
 /** Запоминает подсчёт локально: экран обязан показывать пройденное сразу. */
@@ -337,6 +377,7 @@ export async function forgetSession(): Promise<void> {
   await put(STORE_INVENTORY, {}, KEY_COUNTS);
   await put(STORE_INVENTORY, [], KEY_LINES);
   await put(STORE_INVENTORY, [], KEY_CODES);
+  await put(STORE_INVENTORY, undefined, KEY_NOTE);
   await put(STORE_INVENTORY, undefined, KEY_SESSION);
 }
 

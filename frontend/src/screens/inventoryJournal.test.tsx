@@ -165,14 +165,14 @@ describe('журнал пересчётов', () => {
 
     render(<InventoryReconcile reference={reference()} />);
 
-    // В колонке списка — то, что написал человек.
-    expect(await screen.findByText('83619 не найден')).toBeTruthy();
+    // В колонке списка — то, что написал человек, с подписью, кто писал.
+    expect(await screen.findByText('Сводивший: 83619 не найден')).toBeTruthy();
 
     fireEvent.click(screen.getByText('Идёт подсчёт'));
     await waitFor(() => expect(screen.getByText(/Сессия 7/)).toBeTruthy());
 
     // У живого пересчёта это поле ввода, а не текст.
-    const field = screen.getByLabelText('Комментарий') as HTMLTextAreaElement;
+    const field = screen.getByLabelText('Комментарий сводившего') as HTMLTextAreaElement;
     expect(field.value).toBe('83619 не найден');
 
     fireEvent.change(field, { target: { value: 'Катушки не считали' } });
@@ -200,8 +200,8 @@ describe('журнал пересчётов', () => {
     fireEvent.click(await screen.findByText('Проведён'));
     await waitFor(() => expect(screen.getByText(/Сессия 8/)).toBeTruthy());
 
-    expect(screen.getByText('Комментарий: Все на месте')).toBeTruthy();
-    expect(screen.queryByLabelText('Комментарий')).toBeNull();
+    expect(screen.getByText('Комментарий сводившего: Все на месте')).toBeTruthy();
+    expect(screen.queryByLabelText('Комментарий сводившего')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Сохранить комментарий' })).toBeNull();
   });
 
@@ -221,8 +221,8 @@ describe('журнал пересчётов', () => {
     fireEvent.click(await screen.findByText('Идёт подсчёт'));
 
     await waitFor(() => expect(screen.getByText(/Сессия 3/)).toBeTruthy());
-    expect(screen.getByText('Комментарий: Катушки не считали')).toBeTruthy();
-    expect(screen.queryByLabelText('Комментарий')).toBeNull();
+    expect(screen.getByText('Комментарий сводившего: Катушки не считали')).toBeTruthy();
+    expect(screen.queryByLabelText('Комментарий сводившего')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Сохранить комментарий' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Завершить подсчёт' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Отменить пересчёт' })).toBeNull();
@@ -310,7 +310,68 @@ describe('журнал пересчётов', () => {
     // Сведения открылись — значит `openRow` дошёл до `setSession`,
     // то есть сторож после двойного прогона эффектов снова «смонтирован».
     await waitFor(() => expect(screen.getByText(/Сессия 5/)).toBeTruthy());
-    expect(screen.getByLabelText('Комментарий')).toBeTruthy();
+    expect(screen.getByLabelText('Комментарий сводившего')).toBeTruthy();
+  });
+
+  /**
+   * Задача 0169, пункт 8: два комментария видны отдельно и подписаны, кто
+   * написал, — «ходивший» и «сводивший». Подпись стоит на экране, а не
+   * угадывается по месту блока.
+   *
+   * <p>И сохранение комментария сводившего не стирает комментарий ходившего
+   * с экрана: сервер отдаёт оба, и экран обязан показать оба из ответа.
+   */
+  it('оба комментария видны отдельно и подписаны, кто написал', async () => {
+    stubApi({
+      sessions: [row({ id: 7, status: 'OPEN', note: '83619 не найден',
+                       counterNote: 'Катушки не считали' })],
+      onNote: () => row({ id: 7, status: 'OPEN', note: 'Проверить катушки',
+                          counterNote: 'Катушки не считали' }),
+    });
+
+    render(<InventoryReconcile reference={reference()} />);
+
+    // В журнале — оба, каждый со своей подписью.
+    expect(await screen.findByText('Ходивший: Катушки не считали')).toBeTruthy();
+    expect(screen.getByText('Сводивший: 83619 не найден')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Идёт подсчёт'));
+    await waitFor(() => expect(screen.getByText(/Сессия 7/)).toBeTruthy());
+
+    // Ходивший — текстом: сводящий его не правит, у него своё поле.
+    expect(screen.getByText('Комментарий ходившего: Катушки не считали')).toBeTruthy();
+    expect(screen.queryByLabelText('Комментарий ходившего')).toBeNull();
+    const field = screen.getByLabelText('Комментарий сводившего') as HTMLTextAreaElement;
+    expect(field.value).toBe('83619 не найден');
+
+    fireEvent.change(field, { target: { value: 'Проверить катушки' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить комментарий' }));
+    await waitFor(() => expect(screen.getByText('Комментарий сохранён')).toBeTruthy());
+    expect(screen.getByText('Комментарий ходившего: Катушки не считали')).toBeTruthy();
+  });
+
+  /**
+   * Задача 0169, пункт 9: пустой комментарий в журнале — прочерком, а не
+   * пустой клеткой: пустая клетка читается как потерянные данные.
+   */
+  it('пустой комментарий в журнале — прочерком, а не пустой клеткой', async () => {
+    stubApi({
+      sessions: [
+        row({ id: 5, status: 'OPEN', counterNote: 'Не сканировали' }),
+        row({ id: 4, status: 'OPEN' }),
+      ],
+    });
+
+    render(<InventoryReconcile reference={reference()} />);
+
+    const cells = await waitFor(() => {
+      const found = Array.from(document.querySelectorAll('tbody tr'))
+        .map((tr) => tr.querySelectorAll('td')[4]?.textContent ?? null);
+      expect(found).toHaveLength(2);
+      return found;
+    });
+    expect(cells[0]).toBe('Ходивший: Не сканировалиСводивший: —');
+    expect(cells[1]).toBe('—');
   });
 });
 
@@ -324,15 +385,17 @@ interface Row {
   appliedAt: string | null;
   lines: number;
   counted: number;
-  /** Комментарий человека или `null` — пустой строки сервер не отдаёт. */
+  /** Комментарий сводившего или `null` — пустой строки сервер не отдаёт. */
   note: string | null;
+  /** Комментарий ходившего (задача 0169) или `null`. */
+  counterNote: string | null;
 }
 
 function row(overrides: Partial<Row> = {}): Row {
   return {
     id: 1, warehouseId: 2, warehouseName: 'Ткацкая', selection: 'Ткацкая · весь склад',
     status: 'OPEN', startedAt: '2026-09-05T10:00:00Z', appliedAt: null,
-    lines: 1, counted: 0, note: null,
+    lines: 1, counted: 0, note: null, counterNote: null,
     ...overrides,
   };
 }

@@ -112,6 +112,13 @@ export const MOVE_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
 export const WRITING_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER', 'SELLER'];
 
 /**
+ * Кто пишет комментарий ходившего на экране обхода (задача 0169): те же роли,
+ * что на сервере (`InventoryController.COUNTER_NOTES`). Продавец считать
+ * может, а поле ему не показывается — сервер его отобьёт.
+ */
+export const COUNTER_NOTE_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
+
+/**
  * Кто видит вкладку «Пересчёт»: все, кто заводит данные, и «Просмотр».
  *
  * <p>Журнал пересчётов раньше был недоступен «Просмотру» вовсе — вкладки

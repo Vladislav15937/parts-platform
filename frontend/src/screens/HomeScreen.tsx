@@ -34,6 +34,7 @@ import { ordersAwaitingReply } from '../sales/sales';
 import { unmatchedNames } from '../catalog/partNames';
 import { deadLetters } from '../events/deadLetters';
 import {
+  COUNTER_NOTE_ROLES,
   JOURNAL_ROLES,
   LABEL_ROLES,
   MOVE_ROLES,
@@ -322,6 +323,14 @@ export function HomeScreen() {
                 `${line.title} · ${qty} шт`,
               )
             }
+            onNote={COUNTER_NOTE_ROLES.includes(state.me.role)
+              ? (sessionId, text) => void outbox.add(
+                'inventoryNote',
+                { sessionId, note: text },
+                `Комментарий к пересчёту: ${text}`,
+              )
+              : undefined}
+            noteQueue={outbox.records.filter((record) => record.kind === 'inventoryNote')}
           />
         ) : (
           <p className="note">
