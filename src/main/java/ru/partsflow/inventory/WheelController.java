@@ -33,9 +33,6 @@ public class WheelController {
 
     private static final String INTAKES = "hasAnyRole('OWNER','MANAGER','STOREKEEPER')";
 
-    /** Кто скачивает вкладку таблицей. Тот же список у витрины склада и у отчётов. */
-    private static final String EXPORTS = "hasAnyRole('OWNER','MANAGER')";
-
     private final WheelService wheels;
     private final CatalogService catalog;
     private final PhotoStorage storage;
@@ -86,10 +83,11 @@ public class WheelController {
      * <p>Владельцу и менеджеру — тем же, кому открыты отчёты, и по той же
      * причине, что у витрины склада ({@code CatalogController.export}):
      * вкладка открыта всем вошедшим, но один файл со всей номенклатурой —
-     * это опись имущества, а не просмотр цены. Заплатка до задачи 0044:
-     * там появится полномочие «скачивать таблицу», и роли отсюда уйдут.
+     * это опись имущества, а не просмотр цены. Право записано одним местом,
+     * {@link TableExport#ALLOWED}, — там же и оговорка, что это заплатка
+     * до полномочия «скачивать таблицу» (задача 0044).
      */
-    @PreAuthorize(EXPORTS)
+    @PreAuthorize(TableExport.ALLOWED)
     @GetMapping("/export")
     public void export(@RequestParam(required = false) String q,
                        @RequestParam(required = false) String kind,
