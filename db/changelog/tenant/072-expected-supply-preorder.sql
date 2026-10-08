@@ -59,7 +59,7 @@ COMMENT ON COLUMN ${tenant.schema}.deal.preorder_shift_from IS
 COMMENT ON COLUMN ${tenant.schema}.deal.preorder_shift_to IS
     'Новая ожидаемая дата прихода после сдвига. Задача 0170';
 
---rollback-стирает пометки о сдвиге даты, ожидаемые даты поставок, признак «заведена как ожидаемая» у позиций (после этого принять заведённую позицию нечем отличить от обычной) и переводит позиции PREORDER в DRAFT: склад под них ничего не откладывал, так что это точное описание «в документе есть, резерва нет». Обещания покупателям остаются в документах, но перестают быть отличимы от необеспеченных заказов
+--rollback-теряет пометки о сдвиге даты, ожидаемые даты поставок, признак «заведена как ожидаемая» у позиций (после этого принять заведённую позицию нечем отличить от обычной) и переводит позиции PREORDER в DRAFT: склад под них ничего не откладывал, так что это точное описание «в документе есть, резерва нет». Обещания покупателям остаются в документах, но перестают быть отличимы от необеспеченных заказов
 --rollback UPDATE ${tenant.schema}.deal_item SET status = 'DRAFT' WHERE status = 'PREORDER';
 --rollback ALTER TABLE ${tenant.schema}.deal DROP CONSTRAINT deal_preorder_shift_ck, DROP COLUMN preorder_shift_to, DROP COLUMN preorder_shift_from;
 --rollback DROP INDEX ${tenant.schema}.deal_item_preorder_ix;
