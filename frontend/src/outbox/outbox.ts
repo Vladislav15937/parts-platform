@@ -30,7 +30,7 @@ import { getAll, put, remove, STORE_OUTBOX } from '../storage/db';
  * от её результата: подписанную ссылку выдают на существующую деталь,
  * а идентификатор детали появляется только после отправки партии.
  */
-export type OutboxKind = 'receipt' | 'photo' | 'count';
+export type OutboxKind = 'receipt' | 'photo' | 'count' | 'inventoryNote';
 
 export type OutboxState =
   /** Ждёт отправки. */
@@ -321,6 +321,9 @@ async function sendRecord(record: OutboxRecord): Promise<OutboxRecord[] | void> 
   if (record.kind === 'count') {
     return await sendCount(record);
   }
+  if (record.kind === 'inventoryNote') {
+    return await sendInventoryNote(record);
+  }
   throw new Error(`Неизвестный вид операции: ${String(record.kind)}`);
 }
 
@@ -343,6 +346,24 @@ async function sendCount(record: OutboxRecord): Promise<void> {
       qty: payload.qty,
       countedAgoMs: Math.max(0, Date.now() - payload.countedAt),
     },
+  });
+}
+
+/**
+ * Отправляет комментарий того, кто ходил по полкам (задача 0169).
+ *
+ * <p>Через очередь, а не прямым запросом: обход работает без связи,
+ * и потерянный в ангаре комментарий — ровно то, ради чего задача заводилась.
+ * Ключ записи уходит в теле: сервер по нему узнаёт повтор и отвечает
+ * успехом, не затирая написанного после. Закрытый пересчёт отвечает 409 —
+ * запись уходит к человеку со словами сервера, а не в вечные повторы.
+ */
+async function sendInventoryNote(record: OutboxRecord): Promise<void> {
+  const payload = record.payload as { sessionId: number; note: string };
+
+  await request(`/api/inventory/sessions/${payload.sessionId}/counter-note`, {
+    method: 'POST',
+    body: { note: payload.note, requestId: record.requestId },
   });
 }
 

@@ -60,26 +60,25 @@ public class InventoryController {
     private static final String READS = "hasAnyRole('OWNER','MANAGER','VIEWER')";
 
     /**
-     * Комментарий к пересчёту. «Просмотра» тут нет — роль называется
-     * владельцу «только смотреть».
+     * Комментарий сводящего расхождения. «Просмотра» тут нет — роль
+     * называется владельцу «только смотреть».
      *
-     * <p><b>Кладовщика тут нет пока, и это не то, чего хотела задача.</b>
-     * Задача 0020 называет роли дословно — «те же, что у „Завершить
-     * подсчёт“, плюс кладовщик: пишет его тот, кто ходил», — и по существу
-     * это верно: «83619 не найден» знает человек у полки, а не тот, кто
-     * потом смотрит расхождения. Но поверхности у кладовщика нет ни одной:
-     * журнал пересчётов ему не показывают ({@code HomeScreen}), а обход
-     * полок с телефона поля комментария не имеет — где ему там стоять,
-     * задача не описывает, и это решение владельца продукта, а не наше.
-     *
-     * <p>Право без поверхности выбрано худшим из двух: {@code
-     * tools/endpoint-coverage.py} сверяет пути, а не роли, и висящее право
-     * читается следующим как рабочий путь, покрытый экраном, — при том что
-     * кладовщик не может даже прочитать написанное. Возвращать его сюда
-     * надо вместе с экраном, одной веткой, чтобы право и его поверхность
-     * доказывались вместе.
+     * <p><b>Кладовщика тут нет, и это решение, а не пробел</b> (задача 0169).
+     * Он пишет своё поле своим путём — {@link #COUNTER_NOTES}. Пиши оба сюда,
+     * второй молча затирал бы первого; поэтому список не расширяется,
+     * а отказ кладовщику на этом пути проверяется тестом
+     * ({@code InventoryHttpTest}).
      */
     private static final String COMMENTS = "hasAnyRole('OWNER','MANAGER')";
+
+    /**
+     * Комментарий того, кто ходил по полкам, — с экрана обхода на телефоне.
+     *
+     * <p>Роли названы задачей 0169 дословно: владелец, менеджер и кладовщик.
+     * Продавца нет, хотя считать он может ({@link #COUNTS}): экран обхода
+     * поле ему не показывает.
+     */
+    private static final String COUNTER_NOTES = "hasAnyRole('OWNER','MANAGER','STOREKEEPER')";
 
     private final InventoryService inventory;
 
@@ -178,6 +177,23 @@ public class InventoryController {
     @PostMapping("/sessions/{id}/note")
     public SessionView note(@PathVariable Long id, @RequestBody NoteRequest request) {
         return SessionView.of(inventory.changeNote(id, request.note()));
+    }
+
+    /**
+     * Комментарий ходившего — свободный текст, один на документ
+     * (задача 0169, решение владельца продукта от 29 сентября 2026).
+     *
+     * <p>Свой путь, а не {@code /note}: у ходившего и у сводящего разные
+     * поля, и один пишущий не затирает другого. Пишется с телефона через
+     * офлайн-очередь, поэтому идемпотентен по {@code requestId}: повтор
+     * отвечает успехом и поле не трогает. Закрытый пересчёт отвечает 409
+     * со словами, а не пятисоткой — 5xx очередь повторяет вечно.
+     */
+    @PreAuthorize(COUNTER_NOTES)
+    @PostMapping("/sessions/{id}/counter-note")
+    public SessionView counterNote(@PathVariable Long id,
+                                   @Valid @RequestBody CounterNoteRequest request) {
+        return SessionView.of(inventory.changeCounterNote(id, request.note(), request.requestId()));
     }
 
     private List<InventorySession.SessionStatus> parseStatuses(List<String> statuses) {
@@ -297,14 +313,25 @@ public class InventoryController {
     public record NoteRequest(String note) {
     }
 
+    /**
+     * @param note      комментарий ходившего; пустое стирается в {@code null}
+     * @param requestId ключ идемпотентности: ставит телефон при постановке
+     *                  в очередь и не меняет при повторах. Без него запись
+     *                  из очереди нельзя отличить от новой — поэтому 400
+     */
+    public record CounterNoteRequest(String note,
+                                     @jakarta.validation.constraints.NotBlank String requestId) {
+    }
+
     public record SessionView(Long id, Long warehouseId, InventorySession.SessionStatus status,
                               Instant startedAt, Instant appliedAt,
-                              int lines, long counted, String note) {
+                              int lines, long counted, String note, String counterNote) {
 
         static SessionView of(InventorySession session) {
             return new SessionView(session.getId(), session.getWarehouseId(), session.getStatus(),
                     session.getStartedAt(), session.getAppliedAt(),
-                    session.getLines().size(), session.countedLines().size(), session.getNote());
+                    session.getLines().size(), session.countedLines().size(), session.getNote(),
+                    session.getCounterNote());
         }
     }
 
