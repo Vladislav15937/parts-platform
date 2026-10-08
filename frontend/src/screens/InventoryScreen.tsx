@@ -7,6 +7,7 @@ import {
   loadLocal,
   NO_CELL_ID,
   openSession,
+  rememberNote,
   rememberUnlistedLine,
   resolvePartScan,
   statusOf,
@@ -16,8 +17,10 @@ import type {
   InventorySession,
   LineStatus,
   LocalCount,
+  LocalNote,
   WarehouseCode,
 } from '../inventory/inventory';
+import type { OutboxRecord } from '../outbox/outbox';
 import { rememberCount } from '../inventory/inventory';
 import { ApiError } from '../api/client';
 import type { Reference } from '../reference/reference';
@@ -46,6 +49,20 @@ import { ScanOverlay } from '../scan/ScanOverlay';
 interface Props {
   reference: Reference;
   onCount(sessionId: number, line: InventoryLine, qty: string, countedAt: number): void;
+  /**
+   * Ставит комментарий ходившего в очередь отправки (задача 0169).
+   *
+   * <p>Не передан — роль комментарий не пишет (продавец считает, но поле
+   * ему не положено), и поля на экране нет вовсе: поле, которое сервер
+   * отобьёт, хуже отсутствующего.
+   */
+  onNote?: ((sessionId: number, text: string) => void) | undefined;
+  /**
+   * Записи очереди с комментариями — экран говорит, ждёт ли написанное
+   * отправки и не отбил ли его сервер. Без них он молчал бы о том, что
+   * комментарий ещё на телефоне.
+   */
+  noteQueue?: OutboxRecord[] | undefined;
 }
 
 type Tab = 'all' | 'unscanned' | 'problem' | 'scanned';
@@ -57,7 +74,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'scanned', label: 'Отсканированы' },
 ];
 
-export function InventoryScreen({ reference, onCount }: Props) {
+export function InventoryScreen({ reference, onCount, onNote, noteQueue = [] }: Props) {
   const [warehouseId, setWarehouseId] = useState('');
   /**
    * Выборка формы открытия: '' — «Любая», 'none' — «Без адреса», иначе
@@ -78,6 +95,10 @@ export function InventoryScreen({ reference, onCount }: Props) {
   const [scanning, setScanning] = useState<'cell' | 'part' | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Комментарий ходившего: записанный на телефоне и набираемый. Черновик
+  // отдельно — кнопка гаснет ровно тогда, когда отправлять нечего.
+  const [localComment, setLocalComment] = useState<LocalNote | null>(null);
+  const [commentDraft, setCommentDraft] = useState('');
 
   // Экран уходит с вкладки не дожидаясь ответа IndexedDB или сервера —
   // офлайн-хранилище и счётчик формы отвечают не мгновенно, — и без сторожа
@@ -94,6 +115,11 @@ export function InventoryScreen({ reference, onCount }: Props) {
     setLines(local.lines);
     setCounts(local.counts);
     setCodes(local.codes);
+    setLocalComment(local.note);
+    // Записанное на этом телефоне свежее скачанного при открытии: лист
+    // обхода берёт комментарий сервера один раз, а очередь могла уже
+    // отправить новый.
+    setCommentDraft(local.note?.text ?? local.session?.counterNote ?? '');
   }, []);
 
   useEffect(() => {
@@ -200,6 +226,8 @@ export function InventoryScreen({ reference, onCount }: Props) {
 
   const groups = groupBy(lines, counts);
   const shown = groups[tab === 'all' ? 'unscanned' : tab];
+  const savedComment = localComment?.text ?? session.counterNote ?? '';
+  const commentState = commentDelivery(noteQueue, session.id);
 
   return (
     <section className="card">
@@ -245,6 +273,44 @@ export function InventoryScreen({ reference, onCount }: Props) {
         <CountGroup lines={shown} status={tab} counts={counts} onSubmit={submit} />
       )}
 
+      {/*
+        * Комментарий ходившего — в конце обхода, один на документ (задача
+        * 0169, решение владельца продукта от 29 сентября 2026), а не у каждой
+        * полки: пополочный означал бы операцию очереди на каждую строку.
+        *
+        * Уходит очередью, а не запросом: обход работает без связи. Экран
+        * не говорит «сохранено» — пока запись в очереди, это неправда, —
+        * а называет, что она ждёт отправки или чем её отбил сервер.
+        */}
+      {onNote !== undefined && (
+        <>
+          <hr />
+          <div className="field">
+            <label htmlFor="counter-note">Комментарий</label>
+            <textarea
+              id="counter-note"
+              rows={2}
+              value={commentDraft}
+              onChange={(e) => setCommentDraft(e.target.value)}
+            />
+            <div className="row">
+              <button
+                type="button"
+                disabled={commentDraft.trim() === '' || commentDraft.trim() === savedComment}
+                onClick={() => void saveComment()}
+              >
+                Сохранить комментарий
+              </button>
+            </div>
+            {commentState !== null && (
+              <p className={commentState.failed ? 'note note--error' : 'note'}>
+                {commentState.text}
+              </p>
+            )}
+          </div>
+        </>
+      )}
+
       <hr />
       <button
         type="button"
@@ -267,6 +333,28 @@ export function InventoryScreen({ reference, onCount }: Props) {
       )}
     </section>
   );
+
+  /**
+   * Записывает комментарий на телефоне и ставит его в очередь.
+   *
+   * <p>Очередь — раньше проверки «экран ещё на месте»: кладовщик, ушедший
+   * с вкладки сразу после нажатия, не должен терять написанное.
+   */
+  async function saveComment(): Promise<void> {
+    if (session === null || onNote === undefined) {
+      return;
+    }
+    const text = commentDraft.trim();
+    if (text === '') {
+      return;
+    }
+    const saved = await rememberNote(session.id, text);
+    onNote(session.id, text);
+    if (mounted.current) {
+      setLocalComment(saved);
+      setCommentDraft(text);
+    }
+  }
 
   async function start(fresh: boolean): Promise<void> {
     setBusy(true);
@@ -377,6 +465,30 @@ export function InventoryScreen({ reference, onCount }: Props) {
       void scanLine(newLine, 'Вне списка');
     });
   }
+}
+
+/**
+ * Что с комментарием этой сессии в очереди: ждёт отправки или отбит.
+ *
+ * <p>Нет записи — экран молчит, а не говорит «отправлен»: пустой список
+ * бывает и тогда, когда очередь ещё не прочитана, и подтверждать доставку
+ * по нему значило бы обещать то, чего не знаем.
+ */
+function commentDelivery(
+  queue: OutboxRecord[],
+  sessionId: number,
+): { text: string; failed: boolean } | null {
+  const mine = queue.filter((record) =>
+    record.kind === 'inventoryNote'
+      && (record.payload as { sessionId?: number } | null)?.sessionId === sessionId);
+  const latest = mine[mine.length - 1];
+  if (latest === undefined) {
+    return null;
+  }
+  if (latest.state === 'failed') {
+    return { text: `Не принят: ${latest.lastError ?? 'сервер отказал'}`, failed: true };
+  }
+  return { text: 'Ждёт отправки — уйдёт, когда будет связь', failed: false };
 }
 
 /** Разбирает выбор ячейки формы открытия в то, что ждёт сервер. */

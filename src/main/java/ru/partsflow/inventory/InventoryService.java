@@ -468,7 +468,7 @@ public class InventoryService {
                      LIMIT %d
                 )
                 SELECT s.id, s.warehouse_id, w.name AS warehouse_name, s.status,
-                       s.started_at, s.applied_at, s.note,
+                       s.started_at, s.applied_at, s.note, s.counter_note,
                        count(l.part_id) AS lines_count,
                        count(l.qty_counted) AS counted_count,
                        count(DISTINCT l.cell_id) AS placed_cells,
@@ -479,7 +479,7 @@ public class InventoryService {
                   LEFT JOIN inventory_line l ON l.session_id = s.id
                  WHERE s.id IN (SELECT id FROM page)
                  GROUP BY s.id, s.warehouse_id, w.name, s.status, s.started_at, s.applied_at,
-                          s.note
+                          s.note, s.counter_note
                  ORDER BY s.id DESC""".formatted(where, limit);
         List<SummaryRow> rows = jdbc.query(sql,
                 (rs, i) -> new SummaryRow(rs.getLong("id"), rs.getLong("warehouse_id"),
@@ -490,6 +490,7 @@ public class InventoryService {
                                 ? null : rs.getTimestamp("applied_at").toInstant(),
                         rs.getInt("lines_count"), rs.getLong("counted_count"),
                         rs.getString("note"),
+                        rs.getString("counter_note"),
                         rs.getInt("placed_cells"),
                         rs.getObject("one_cell") == null ? null : rs.getLong("one_cell"),
                         rs.getBoolean("has_unplaced")),
@@ -499,16 +500,18 @@ public class InventoryService {
         return rows.stream()
                 .map(r -> new SessionSummary(r.id(), r.warehouseId(), r.warehouseName(),
                         r.warehouseName() + " · " + selectionOf(r, codes),
-                        r.status(), r.startedAt(), r.appliedAt(), r.lines(), r.counted(), r.note()))
+                        r.status(), r.startedAt(), r.appliedAt(), r.lines(), r.counted(), r.note(),
+                        r.counterNote()))
                 .toList();
     }
 
     /**
      * Комментарий человека к пересчёту — то, ради чего в журнал заходят.
      *
-     * <p>Пишет его тот, кто ходил по складу (роли — в {@code
-     * InventoryController.COMMENTS}), и пишет по ходу подсчёта: номер и дата
-     * говорят, что документ был, а «83619 не найден» — зачем его открывали.
+     * <p>Это комментарий сводящего расхождения (роли — в {@code
+     * InventoryController.COMMENTS}): номер и дата говорят, что документ был,
+     * а «83619 не найден» — зачем его открывали. У того, кто ходил по полкам,
+     * своё поле — {@link #changeCounterNote}.
      *
      * <p>Правило «пока не закрыт» держит сама сессия ({@link
      * InventorySession#changeNote}), а не проверка здесь: инвариант должен
@@ -518,6 +521,47 @@ public class InventoryService {
     public InventorySession changeNote(Long sessionId, String note) {
         InventorySession session = require(sessionId);
         session.changeNote(note);
+        return detachable(sessions.saveAndFlush(session));
+    }
+
+    /**
+     * Комментарий ходившего — с телефона, через офлайн-очередь (задача 0169).
+     *
+     * <p><b>Идемпотентность по ключу клиента, и ключ ставится одной
+     * инструкцией.</b> Очередь не отличает «получилось только что»
+     * от «получилось в прошлый раз» и повторяет запись, пока не получит
+     * ответ. Повтор обязан ответить успехом и <b>не</b> править поле:
+     * иначе опоздавший повтор первой записи затёр бы то, что написали
+     * после неё. {@code INSERT ... ON CONFLICT DO NOTHING} отвечает числом
+     * строк — ноль значит повтор, — и одновременные повторы не проходят
+     * проверку оба, как проходили проверку чтением приёмка, ссылка на снимок
+     * и заказ с площадки: второй ждёт первого и получает ноль, а не отказ
+     * уникального индекса.
+     *
+     * <p>Существование сессии проверяется до ключа: иначе чужой номер
+     * доехал бы до внешней ссылки и вернулся «нарушением целостности».
+     * А сама сессия читается после него — одновременный повтор, дождавшийся
+     * первого, обязан увидеть уже записанный текст.
+     *
+     * <p>Отказ закрытому пересчёту откатывает транзакцию вместе с ключом:
+     * непринятая запись ключа не занимает. А повтор записи, принятой
+     * до закрытия, отвечает успехом — она сделана.
+     */
+    @Transactional
+    public InventorySession changeCounterNote(Long sessionId, String note, String requestId) {
+        if (!sessions.existsById(sessionId)) {
+            throw NotFound.INVENTORY_SESSION.error(sessionId);
+        }
+        int fresh = jdbc.update("""
+                INSERT INTO inventory_note_request (request_id, session_id) VALUES (?, ?)
+                ON CONFLICT (request_id) DO NOTHING""", requestId, sessionId);
+        InventorySession session = require(sessionId);
+        if (fresh == 0) {
+            log.info("Повтор комментария ходившего {} к пересчёту {} — поле не трогаем",
+                    requestId, sessionId);
+            return detachable(session);
+        }
+        session.changeCounterNote(note);
         return detachable(sessions.saveAndFlush(session));
     }
 
@@ -576,7 +620,7 @@ public class InventoryService {
     private record SummaryRow(Long id, Long warehouseId, String warehouseName,
                               InventorySession.SessionStatus status,
                               Instant startedAt, Instant appliedAt,
-                              int lines, long counted, String note,
+                              int lines, long counted, String note, String counterNote,
                               int placedCells, Long oneCell, boolean hasUnplaced) {
     }
 
@@ -600,11 +644,15 @@ public class InventoryService {
      * @param note      комментарий человека или {@code null}, если его нет.
      *                  Пустой строки тут не бывает — см. {@link
      *                  InventorySession#changeNote}
+     * @param counterNote комментарий того, кто ходил по полкам, или {@code
+     *                  null}. Отдельное поле, а не общее с {@code note}:
+     *                  экран подписывает их «ходивший» и «сводивший»
+     *                  (задача 0169)
      */
     public record SessionSummary(Long id, Long warehouseId, String warehouseName, String selection,
                                  InventorySession.SessionStatus status,
                                  Instant startedAt, Instant appliedAt,
-                                 int lines, long counted, String note) {
+                                 int lines, long counted, String note, String counterNote) {
     }
 
     /**

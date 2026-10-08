@@ -51,10 +51,10 @@ import type { Reference } from '../reference/reference';
  */
 export function InventoryReconcile({ reference, role }: { reference: Reference; role?: string }) {
   const canReconcile = role === undefined || role === 'OWNER' || role === 'MANAGER';
-  // Комментарий пишет тот же, кто сводит расхождения: то же разделение,
-  // что на сервере (`InventoryController.COMMENTS`). «Просмотр» его только
-  // читает. Кладовщика тут нет — у него нет поверхности, откуда писать,
-  // и права на сервере тоже нет; см. комментарий у `COMMENTS`.
+  // Комментарий сводившего пишет тот же, кто сводит расхождения: то же
+  // разделение, что на сервере (`InventoryController.COMMENTS`). «Просмотр»
+  // его только читает. Комментарий ходившего здесь только читается — его
+  // пишут с экрана обхода, своим полем (задача 0169).
   const canComment = canReconcile;
 
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
@@ -150,10 +150,11 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
                         <td>{row.counted} из {row.lines}</td>
                         {/* Ради него в журнал и заходят: номер с датой говорят,
                             что документ был, а «83619 не найден» — зачем его
-                            открывали. Пусто остаётся пустым, а не прочерком:
-                            «не писали» тут не вопрос, на который мы не знаем
-                            ответа, а обычное состояние половины строк. */}
-                        <td>{row.note ?? ''}</td>
+                            открывали. Комментариев два, и подписаны оба —
+                            «ходивший» и «сводивший» (задача 0169). Пустой —
+                            прочерком: пустая клетка читается как потерянные
+                            данные. */}
+                        <td><CommentsCell walker={row.counterNote} reconciler={row.note} /></td>
                       </tr>
                     ))}
                   </tbody>
@@ -220,7 +221,14 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
           </p>
 
           {/*
-            * Комментарий — под шапкой сведений, как и в задаче.
+            * Комментарий ходившего — текстом всегда: его пишут с экрана
+            * обхода, а сводящий своё пишет в своё поле ниже. Подпись стоит
+            * словами, а не угадывается по месту блока (задача 0169).
+            */}
+          <p className="note">Комментарий ходившего: {session.counterNote ?? '—'}</p>
+
+          {/*
+            * Комментарий сводившего — под шапкой сведений, как и в задаче.
             *
             * Правится, пока пересчёт не проведён и не отменён: закрытый
             * документ показывается текстом, потому что приписка задним
@@ -228,13 +236,13 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
             * Условие то же, что на сервере (`noteEditable`), — поле, которое
             * сервер отобьёт, хуже отсутствующего.
             *
-            * У закрытого без комментария блока нет вовсе: пустая подпись
-            * «Комментарий» с прочерком — это строка, которая ничего
-            * не сообщает, а таких на экране и так хватает.
+            * У закрытого пустой показан прочерком, как и комментарий
+            * ходившего рядом: из двух подписанных строк одна пропавшая
+            * читалась бы как потерянная.
             */}
           {canComment && noteEditable(session.status) ? (
             <div className="field">
-              <label htmlFor="session-note">Комментарий</label>
+              <label htmlFor="session-note">Комментарий сводившего</label>
               <textarea
                 id="session-note"
                 rows={2}
@@ -259,9 +267,7 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
               </div>
             </div>
           ) : (
-            session.note !== null && (
-              <p className="note">Комментарий: {session.note}</p>
-            )
+            <p className="note">Комментарий сводившего: {session.note ?? '—'}</p>
           )}
 
           {canReconcile && session.status === 'OPEN' && (
@@ -577,6 +583,30 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
       }
     }
   }
+}
+
+/**
+ * Клетка «Комментарий» журнала: оба комментария, каждый подписан.
+ *
+ * <p>Ни одного — прочерк, а не пустая клетка (задача 0169, пункт 9). Один
+ * из двух — пустой подписан прочерком: строка «Ходивший: …» без соседки
+ * не говорит, писал ли сводивший или его строку потеряли.
+ */
+function CommentsCell({ walker, reconciler }: {
+  walker: string | null | undefined;
+  reconciler: string | null | undefined;
+}) {
+  const walked = walker ?? null;
+  const reconciled = reconciler ?? null;
+  if (walked === null && reconciled === null) {
+    return <>—</>;
+  }
+  return (
+    <>
+      <div>{`Ходивший: ${walked ?? '—'}`}</div>
+      <div>{`Сводивший: ${reconciled ?? '—'}`}</div>
+    </>
+  );
 }
 
 function describe(cause: unknown, fallback: string): string {

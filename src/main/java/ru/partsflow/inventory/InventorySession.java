@@ -80,6 +80,18 @@ public class InventorySession {
     @Column(name = "note")
     private String note;
 
+    /**
+     * Комментарий того, кто ходил по полкам, — отдельно от {@link #note},
+     * который пишет сводящий расхождения (задача 0169, решение владельца
+     * продукта от 29 сентября 2026).
+     *
+     * <p>Поле второе, а не общее: пока оно было одно, второй пишущий молча
+     * затирал первого, а владельцу важно отличать «это написал ходивший»
+     * от «это написал сводивший». Пусто — {@code null}, как и у {@link #note}.
+     */
+    @Column(name = "counter_note")
+    private String counterNote;
+
     /** {@code nullable = false} — иначе Hibernate вставит строку без ссылки на сессию. */
     @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
     @JoinColumn(name = "session_id", nullable = false)
@@ -170,11 +182,30 @@ public class InventorySession {
      * строку: «не заполнено» обязано отличаться от «человек написал пусто».
      */
     public void changeNote(String text) {
+        requireCommentable();
+        this.note = commentOf(text);
+    }
+
+    /**
+     * Пишет комментарий ходившего — по тем же правилам, что {@link #changeNote}:
+     * закрытый пересчёт не комментируют, пустое стирается в {@code null},
+     * пробелы по краям срезаются. Последняя запись побеждает: комментарий
+     * один на документ, это правка поля, а не лента.
+     */
+    public void changeCounterNote(String text) {
+        requireCommentable();
+        this.counterNote = commentOf(text);
+    }
+
+    private void requireCommentable() {
         if (status == SessionStatus.APPLIED || status == SessionStatus.CANCELLED) {
             throw new IllegalStateException(
                     "Комментарий пишут, пока пересчёт не проведён и не отменён");
         }
-        this.note = text == null || text.isBlank() ? null : text.strip();
+    }
+
+    private static String commentOf(String text) {
+        return text == null || text.isBlank() ? null : text.strip();
     }
 
     public boolean isOpen() {
@@ -222,6 +253,11 @@ public class InventorySession {
     /** {@code null} — комментария нет; пустой строки тут не бывает. */
     public String getNote() {
         return note;
+    }
+
+    /** Комментарий ходившего; {@code null} — не писал. */
+    public String getCounterNote() {
+        return counterNote;
     }
 
     public List<InventoryLine> getLines() {
