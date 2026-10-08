@@ -893,7 +893,11 @@ class PreorderTest extends PostgresTestBase {
     }
 
     private static Instant daysAhead(int days) {
-        return Instant.now().plus(Duration.ofDays(days));
+        // До миллисекунд: Postgres хранит микросекунды, а на Linux Instant.now()
+        // несёт наносекунды — сравнение «что записали и что прочли» иначе
+        // краснеет только на раннере.
+        return Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+                .plus(Duration.ofDays(days));
     }
 
     private static String day(LocalDate date) {
