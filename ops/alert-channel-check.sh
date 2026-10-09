@@ -178,15 +178,17 @@ fetch_metrics() {
 # (clientError, serverError, contextDeadlineExceeded, other), и на боевой
 # ячейке отказ сети лёг в «other». Складывать надо все — сторож, смотрящий
 # на одну причину, промолчит на следующей.
+# LC_ALL=C у обоих sum_*: значение счётчика приезжает как «1.5e+06», и под
+# русской локалью awk читает его как 1 (задача 0126) — отказы недосчитались бы.
 sum_failed() {  # метрики на stdin
-    awk '/^alertmanager_notifications_failed_total\{integration="telegram"/ {
+    LC_ALL=C awk '/^alertmanager_notifications_failed_total\{integration="telegram"/ {
              n = split($0, p, " "); s += p[n]
          }
          END { printf "%d", s + 0 }'
 }
 
 sum_total() {
-    awk '/^alertmanager_notifications_total\{integration="telegram"/ {
+    LC_ALL=C awk '/^alertmanager_notifications_total\{integration="telegram"/ {
              n = split($0, p, " "); s += p[n]
          }
          END { printf "%d", s + 0 }'
@@ -635,6 +637,28 @@ EOF
             printf '%s\n' "$out" | sed 's/^/      /' >&2
             bad=1 ;;
     esac
+
+    # 8в. Локаль с запятой в дробях (задача 0126). Счётчик Prometheus
+    #     приезжает как «1.5e+06»; под ru_RU awk читает его как 1, и отказов
+    #     набегало бы меньше, чем было. Локаль берётся по разделителю, а не
+    #     по имени; export обязателен. Нет такой локали — случай непроверен.
+    zap=""
+    for loc in $(locale -a 2>/dev/null | grep -iE '^(ru_RU|de_DE|fr_FR|pt_BR)\.(utf-?8)$'); do
+        [ "$(LC_ALL="$loc" locale decimal_point 2>/dev/null)" = "," ] || continue
+        zap="$loc"; break
+    done
+    if [ -n "$zap" ]; then
+        got=$( export LC_ALL="$zap"
+               printf 'alertmanager_notifications_failed_total{integration="telegram",reason="other"} 1.5e+06\n' | sum_failed )
+        if [ "$got" = 1500000 ]; then
+            printf '  ✓ под локалью с запятой (%s) счётчик 1.5e+06 читается целиком\n' "$zap"
+        else
+            red "  ✗ под ${zap} счётчик 1.5e+06 прочитан как «${got}» вместо 1500000"
+            bad=1
+        fi
+    else
+        printf '  · локали с запятой в дробях на этой машине нет — случай 8в не проверен\n'
+    fi
 
     # 9. Счётчики уехали вниз — диспетчера перезапустили, а не «стало лучше».
     #    Будить не на чем, но и доставку проверить нечем: счёт начался заново.
