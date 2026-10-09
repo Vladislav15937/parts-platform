@@ -66,11 +66,13 @@ public class SalesController {
     private final ru.partsflow.platform.security.MemberService members;
     private final ru.partsflow.platform.settings.CompanySettingsService companySettings;
     private final DealPrintService dealPrint;
+    private final PreorderService preorders;
 
     public SalesController(SalesService sales, PartService parts,
                            ru.partsflow.platform.security.MemberService members,
                            ru.partsflow.platform.settings.CompanySettingsService companySettings,
-                           DealPrintService dealPrint) {
+                           DealPrintService dealPrint, PreorderService preorders) {
+        this.preorders = preorders;
         this.sales = sales;
         this.parts = parts;
         this.members = members;
@@ -117,10 +119,22 @@ public class SalesController {
     @PostMapping
     @PreAuthorize(SELLS)
     public ResponseEntity<DealView> create(@Valid @RequestBody CreateRequest request) {
-        Instant until = request.reservedUntil() != null
-                ? request.reservedUntil()
-                : Instant.now().plus(
-                        Duration.ofDays(companySettings.read().reservationDays()));
+        Instant until = request.reservedUntil();
+        if (until == null) {
+            // Предзаказу срок называет тот, кто откладывает («тот, кто деталь
+            // кладёт, решает сам», решение владельца продукта 30.09.2026), а
+            // настройка компании к нему не применяется: три дня на контейнер,
+            // идущий месяц, делали бы предзаказ просроченным в день заведения.
+            // Пустой срок у обычной продажи берёт настройку, как раньше.
+            if (!preorders.expectedAmong(request.items().stream()
+                    .map(ItemBody::partId).toList()).isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Для предзаказа назовите срок: до какого числа держать деталь, "
+                                + "пока контейнер в пути");
+            }
+            until = Instant.now().plus(
+                    Duration.ofDays(companySettings.read().reservationDays()));
+        }
 
         Deal deal = sales.createReserved(
                 request.customerId(), CurrentUser.memberId(), until, request.dealSourceId(),
@@ -356,6 +370,16 @@ public class SalesController {
     public DealView extendReservation(@PathVariable Long id,
                                       @Valid @RequestBody ExtendReservationRequest request) {
         return view(sales.extendReservation(id, request.reservedUntil(), CurrentUser.memberId()));
+    }
+
+    /**
+     * Продавец увидел, что ожидаемая дата сдвинулась, и сказал клиенту.
+     * Пометка на сделке гаснет (задача 0170).
+     */
+    @PostMapping("/{id}/shift-seen")
+    @PreAuthorize(SELLS)
+    public DealView shiftSeen(@PathVariable Long id) {
+        return view(sales.acknowledgeShift(id));
     }
 
     /** @param reservedUntil до какого момента держим товар. Пусто — продлевать нечем */
@@ -705,9 +729,13 @@ public class SalesController {
         Map<Long, String> customerNames = sales.customerNamesOf(deals.stream()
                 .map(Deal::getCustomerId)
                 .toList());
+        // Ожидаемая дата поставки по предзаказам сделки — тем же приёмом, одним
+        // запросом на всю выдачу (задача 0170).
+        Map<Long, java.time.LocalDate> expectedDates = sales.expectedDatesOf(
+                deals.stream().map(Deal::getId).toList());
         return deals.stream()
                 .map(deal -> DealView.of(deal, titles, partNumbers, serviceNames, managerNames,
-                        stages, customerNames))
+                        stages, customerNames, expectedDates))
                 .toList();
     }
 
@@ -840,11 +868,15 @@ public class SalesController {
                            String marketplace, String externalOrderNo,
                            Instant replyDeadline, Instant orderAcceptedAt,
                            String deliveryNote, List<ItemView> items,
-                           List<ServiceLineView> services) {
+                           List<ServiceLineView> services,
+                           boolean preorder, boolean preorderOnly,
+                           java.time.LocalDate expectedOn,
+                           java.time.LocalDate shiftFrom, java.time.LocalDate shiftTo) {
 
         static DealView of(Deal deal, Map<Long, String> titles, Map<Long, Long> partNumbers,
                            Map<Long, String> serviceNames, Map<Long, String> managerNames,
-                           Map<Long, String> stages, Map<Long, String> customerNames) {
+                           Map<Long, String> stages, Map<Long, String> customerNames,
+                           Map<Long, java.time.LocalDate> expectedDates) {
             return new DealView(deal.getId(), deal.getNumber(), deal.getCustomerId(),
                     nameOf(deal.getCustomerId(), customerNames),
                     deal.getManagerId(), nameOf(deal.getManagerId(), managerNames),
@@ -862,7 +894,10 @@ public class SalesController {
                             .map(s -> new ServiceLineView(s.getId(), s.getServiceId(),
                                     serviceNames.get(s.getServiceId()),
                                     s.getQuantity(), s.getPrice()))
-                            .toList());
+                            .toList(),
+                    deal.hasPreorder(), deal.hasOnlyPreorder(),
+                    deal.getId() == null ? null : expectedDates.get(deal.getId()),
+                    deal.getPreorderShiftFrom(), deal.getPreorderShiftTo());
         }
 
         /**

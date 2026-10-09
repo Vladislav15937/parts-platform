@@ -21,6 +21,25 @@ export interface SupplyRef {
   supplierName: string | null;
   status: string;
   arrivedOn: string | null;
+  /** Ожидаемая дата прихода; пусто — её не называли. В кэше прежней версии поля нет. */
+  expectedOn?: string | null;
+}
+
+/**
+ * Позиция, заведённая владельцем заранее по ожидаемой поставке (задача 0170).
+ *
+ * <p>Приёмщик принимает ЭТУ ЖЕ позицию, а не заводит новую: вторая карточка
+ * той же детали ломает окупаемость машины и историю, а объявление уводит
+ * покупателя на списанную. Знать её телефон должен офлайн — связи в ангаре нет.
+ *
+ * @param remaining сколько ещё не принято: обещано по поставке минус принятое
+ */
+export interface ExpectedPartRef {
+  id: number;
+  supplyId: number;
+  title: string;
+  price: number;
+  remaining: number;
 }
 
 export interface DonorRef {
@@ -51,6 +70,8 @@ export interface Reference {
   supplies: SupplyRef[];
   donors: DonorRef[];
   partNames: PartNameRef[];
+  /** В кэше, снятом прежней версией приложения, поля нет — читать через `?? []`. */
+  expectedParts?: ExpectedPartRef[];
 }
 
 /** Единственный ключ: справочники хранятся одной записью и заменяются целиком. */

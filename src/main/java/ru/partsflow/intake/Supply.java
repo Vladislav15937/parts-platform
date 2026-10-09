@@ -46,6 +46,15 @@ public class Supply {
     @Column(name = "arrived_on")
     private LocalDate arrivedOn;
 
+    /**
+     * Ожидаемая дата прихода — то, что продавец называет покупателю. Не то
+     * же, что {@link #arrivedOn}: та — факт, эта — обещание, и смешать их
+     * значило бы показывать несостоявшийся приход как состоявшийся.
+     * Пусто — дату не называли (задача 0170).
+     */
+    @Column(name = "expected_on")
+    private LocalDate expectedOn;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private SupplyStatus status = SupplyStatus.EXPECTED;
@@ -131,6 +140,14 @@ public class Supply {
 
     public LocalDate getArrivedOn() {
         return arrivedOn;
+    }
+
+    public LocalDate getExpectedOn() {
+        return expectedOn;
+    }
+
+    public void setExpectedOn(LocalDate expectedOn) {
+        this.expectedOn = expectedOn;
     }
 
     public SupplyStatus getStatus() {

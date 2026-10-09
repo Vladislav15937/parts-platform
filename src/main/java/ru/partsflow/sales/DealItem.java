@@ -78,7 +78,8 @@ public class DealItem {
         // Черновая отменяется наравне с зарезервированной: склад под неё
         // ничего не откладывал, но в документе она есть, и оставить её
         // висеть значит показать отменённый заказ живым.
-        if (status == DealItemStatus.RESERVED || status == DealItemStatus.DRAFT) {
+        if (status == DealItemStatus.RESERVED || status == DealItemStatus.DRAFT
+                || status == DealItemStatus.PREORDER) {
             status = DealItemStatus.CANCELLED;
         }
     }
@@ -90,6 +91,28 @@ public class DealItem {
      */
     void markUnreserved() {
         status = DealItemStatus.DRAFT;
+    }
+
+    /**
+     * Позиция отложена под клиента из ожидаемой поставки: склад ничего не
+     * откладывал, деталь придёт. См. {@link DealItemStatus#PREORDER}.
+     */
+    void markPreorder() {
+        status = DealItemStatus.PREORDER;
+    }
+
+    /**
+     * Поставка принята и резерв на складе поставлен: предзаказ становится
+     * обычным резервом. Склад пишется фактический — тот, где деталь легла,
+     * а не обещанный при оформлении.
+     */
+    void confirmPreorder(Long actualWarehouseId) {
+        if (status != DealItemStatus.PREORDER) {
+            throw new IllegalStateException(
+                    "Превратить в резерв можно только предзаказ, а позиция в состоянии " + status);
+        }
+        this.warehouseId = actualWarehouseId;
+        this.status = DealItemStatus.RESERVED;
     }
 
     void markReturned() {

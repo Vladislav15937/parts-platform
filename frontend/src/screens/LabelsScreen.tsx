@@ -284,9 +284,13 @@ export function LabelsScreen({ canPrint }: Props) {
     try {
       const found = await searchStock(query.trim());
       if (mounted.current) {
-        setPartsFound(found.total);
+        // Ожидаемая по поставке позиция (задача 0170) физически ещё не
+        // существует: клеить этикетку не на что, и в счёт найденного она
+        // не идёт — иначе подпись «пойдут первые N» врала бы об обрезке.
+        const physical = found.rows.filter((row) => !row.expected);
+        setPartsFound(found.total - (found.rows.length - physical.length));
         setPartLabels(
-          found.rows
+          physical
             .filter((row) => row.publicCode !== null)
             .map((row) => partLabel(row.publicCode!, row.title, row.price)),
         );

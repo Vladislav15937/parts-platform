@@ -46,6 +46,9 @@ export const DEAL_STATUS_NAMES: Record<string, string> = {
  */
 export const DEAL_ITEM_STATUS_NAMES: Record<string, string> = {
   DRAFT: 'без резерва',
+  // Предзаказ (задача 0170): деталь ещё не пришла, склад под неё ничего не
+  // откладывал. Слово — «ожидается»: так владелец назвал это на экране.
+  PREORDER: 'ожидается поставка',
   RESERVED: 'отложена',
   ISSUED: 'выдана',
   RETURNED: 'возвращена',

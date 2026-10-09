@@ -4,6 +4,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -41,7 +42,8 @@ public class IntakeReferenceService {
 
     @Transactional(readOnly = true)
     public Reference load() {
-        return new Reference(Instant.now(), warehouses(), supplies(), donors(), partNames());
+        return new Reference(Instant.now(), warehouses(), supplies(), donors(), partNames(),
+                expectedParts());
     }
 
     /**
@@ -81,7 +83,7 @@ public class IntakeReferenceService {
      */
     private List<SupplyRef> supplies() {
         return jdbc.query("""
-                SELECT id, kind, number, supplier_name, status, arrived_on
+                SELECT id, kind, number, supplier_name, status, arrived_on, expected_on
                   FROM supply
                  WHERE status IN ('EXPECTED', 'IN_TRANSIT', 'ARRIVED')
                  ORDER BY arrived_on DESC NULLS LAST, id DESC""",
@@ -92,7 +94,36 @@ public class IntakeReferenceService {
                         rs.getString("supplier_name"),
                         rs.getString("status"),
                         rs.getDate("arrived_on") == null
-                                ? null : rs.getDate("arrived_on").toLocalDate()));
+                                ? null : rs.getDate("arrived_on").toLocalDate(),
+                        rs.getDate("expected_on") == null
+                                ? null : rs.getDate("expected_on").toLocalDate()));
+    }
+
+    /**
+     * Заведённые заранее позиции, которые ещё не принято целиком.
+     *
+     * <p>Приёмщик принимает ЭТУ ЖЕ позицию, а не заводит новую (решение
+     * владельца продукта 29.09.2026), поэтому телефон должен знать их офлайн:
+     * в ангаре связи нет. Принятое считается по журналу движений, а не по
+     * остатку — остаток падает от продаж.
+     */
+    private List<ExpectedPartRef> expectedParts() {
+        return jdbc.query("""
+                SELECT p.id, p.supply_id, p.title, p.price,
+                       p.quantity - COALESCE((SELECT sum(m.qty_delta) FROM stock_movement m
+                                               WHERE m.part_id = p.id
+                                                 AND m.movement_type = 'INTAKE'), 0) AS remaining
+                  FROM part p
+                  JOIN supply s ON s.id = p.supply_id
+                 WHERE p.expected_origin
+                   AND s.status IN ('EXPECTED', 'IN_TRANSIT', 'ARRIVED')
+                   AND p.quantity - COALESCE((SELECT sum(m.qty_delta) FROM stock_movement m
+                                               WHERE m.part_id = p.id
+                                                 AND m.movement_type = 'INTAKE'), 0) > 0
+                 ORDER BY p.id""",
+                (rs, i) -> new ExpectedPartRef(rs.getLong("id"), rs.getLong("supply_id"),
+                        rs.getString("title"), rs.getBigDecimal("price"),
+                        rs.getBigDecimal("remaining")));
     }
 
     /**
@@ -160,7 +191,16 @@ public class IntakeReferenceService {
                             List<Warehouse> warehouses,
                             List<SupplyRef> supplies,
                             List<DonorRef> donors,
-                            List<PartNameRef> partNames) {
+                            List<PartNameRef> partNames,
+                            List<ExpectedPartRef> expectedParts) {
+    }
+
+    /**
+     * @param remaining сколько ещё не принято: обещано по поставке минус
+     *                  уже принятое
+     */
+    public record ExpectedPartRef(long id, long supplyId, String title, BigDecimal price,
+                                  BigDecimal remaining) {
     }
 
     public record Warehouse(long id, String name, List<Cell> cells) {
@@ -170,7 +210,7 @@ public class IntakeReferenceService {
     }
 
     public record SupplyRef(long id, String kind, String number, String supplierName,
-                            String status, LocalDate arrivedOn) {
+                            String status, LocalDate arrivedOn, LocalDate expectedOn) {
     }
 
     /**
