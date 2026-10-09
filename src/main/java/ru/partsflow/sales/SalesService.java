@@ -892,10 +892,14 @@ public class SalesService {
             String term = query.strip();
             String like = "%" + term + "%";
             List<String> branches = new ArrayList<>();
-            Long number = parseNumber(term);
-            if (number != null) {
+            // Номер сделки и номер позиции пишут одинаково — «347», «№347»,
+            // «№ 347», «#347» — и разбирает их один и тот же разбор (задача 0099).
+            // Прежний Long.parseLong понимал только голые цифры: «№ 347»
+            // ветка сделки не узнавала, и выдача молчала там, где сделка есть.
+            Long dealNumber = PartNumberQuery.parse(term);
+            if (dealNumber != null) {
                 branches.add("SELECT id FROM deal WHERE number = ?");
-                args.add(number);
+                args.add(dealNumber);
             }
             branches.add("SELECT d2.id FROM deal d2"
                     + " JOIN customer c2 ON c2.id = d2.customer_id"
@@ -909,7 +913,7 @@ public class SalesService {
             // Точным сравнением по part_number_uk, а не подстрокой — иначе
             // 347 притащит 1347 и 3470, то есть чужие сделки в ответ
             // на названный вслух номер.
-            Long partNumber = PartNumberQuery.parse(term);
+            Long partNumber = dealNumber;
             if (partNumber != null) {
                 branches.add("SELECT i2.deal_id FROM deal_item i2"
                         + " JOIN part p2 ON p2.id = i2.part_id"
@@ -950,11 +954,53 @@ public class SalesService {
                         (Long) rs.getObject("manager_id"), rs.getString("manager_name"),
                         rs.getBoolean("preorder"),
                         dateOf(rs.getDate("preorder_shift_from")),
-                        dateOf(rs.getDate("preorder_shift_to"))),
+                        dateOf(rs.getDate("preorder_shift_to")),
+                        List.of()),
                 rowArgs.toArray());
 
-        return new DealsPage(rows, total);
+        return new DealsPage(withFoundBy(rows, query), total);
     }
+
+    /**
+     * Подписи «чем найдено» (задача 0099): сделка найдена по своему номеру
+     * или потому, что в ней стоит позиция с таким номером.
+     *
+     * <p>Цифровой запрос идёт обеими ветками разом, и продавец, которому
+     * позвонили, часто сам не знает, какое число ему назвали, — поэтому выдача
+     * смешанная, а строки подписаны. Подпись считается отдельно от отбора, а не
+     * колонками основного запроса: тот делят подсчёт и выдача, и лишние
+     * параметры в нём разъехались бы с {@code count(*)}. Запрос один и точный
+     * ({@code part_number_uk}), сделки с этой позицией — единицы.
+     *
+     * <p>Клиент и код детали не подписываются: подписать нужно то, что
+     * отличить на глаз нельзя, а имя и код в строке видны сами.
+     */
+    private List<DealListRow> withFoundBy(List<DealListRow> rows, String query) {
+        Long asNumber = query == null ? null : PartNumberQuery.parse(query);
+        if (asNumber == null || rows.isEmpty()) {
+            return rows;
+        }
+        java.util.Set<Long> byPosition = new java.util.HashSet<>(jdbc.queryForList(
+                "SELECT i.deal_id FROM deal_item i"
+                        + " JOIN part p ON p.id = i.part_id"
+                        + " WHERE p.number = ?", Long.class, asNumber));
+        List<DealListRow> out = new ArrayList<>(rows.size());
+        for (DealListRow row : rows) {
+            List<String> found = new ArrayList<>(2);
+            if (row.number() != null && row.number().equals(asNumber)) {
+                found.add(FOUND_BY_DEAL_NUMBER);
+            }
+            if (byPosition.contains(row.id())) {
+                found.add(FOUND_BY_PART_NUMBER);
+            }
+            out.add(row.withFoundBy(found));
+        }
+        return out;
+    }
+
+    /** Коды подписей; слова для них — на экране, сервер отдаёт коды. */
+    public static final String FOUND_BY_DEAL_NUMBER = "DEAL_NUMBER";
+    public static final String FOUND_BY_PART_NUMBER = "PART_NUMBER";
 
     /**
      * Строка списка сделок.
@@ -977,6 +1023,9 @@ public class SalesService {
      *                     «истёк» (задача 0170)
      * @param shiftFrom    дата прихода, названная клиенту до сдвига; вместе
      *                     с {@code shiftTo} — пометка «клиенту ещё не сказали»
+     * @param foundBy      чем найдена при цифровом поиске: {@code DEAL_NUMBER},
+     *                     {@code PART_NUMBER} или оба; пусто — не цифровой запрос
+     *                     либо найдена клиентом или кодом детали (задача 0099)
      */
     public record DealListRow(Long id, Long number, Instant createdAt,
                               Long customerId, String customerName,
@@ -984,7 +1033,12 @@ public class SalesService {
                               DealStatus status, Instant reservedUntil,
                               Long managerId, String managerName,
                               boolean preorder, java.time.LocalDate shiftFrom,
-                              java.time.LocalDate shiftTo) {
+                              java.time.LocalDate shiftTo, List<String> foundBy) {
+        DealListRow withFoundBy(List<String> found) {
+            return new DealListRow(id, number, createdAt, customerId, customerName,
+                    totalAmount, paidAmount, status, reservedUntil, managerId, managerName,
+                    preorder, shiftFrom, shiftTo, found);
+        }
     }
 
     private static java.time.LocalDate dateOf(java.sql.Date date) {

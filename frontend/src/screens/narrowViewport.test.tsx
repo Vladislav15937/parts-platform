@@ -227,7 +227,7 @@ const DEALS = {
       customerId: 3, customerName: 'Автосервис на Русской',
       totalAmount: '34500.00', paidAmount: '12000.00',
       status: 'RESERVED', reservedUntil: RESERVED_UNTIL,
-      managerId: 7, managerName: 'Владимир Петров',
+      managerId: 7, managerName: 'Владимир Петров', foundBy: [],
     },
     // Заказ с площадки: клиента у него нет, ответственного — тоже, пока
     // его не приняли. Строка обязана меряться и в таком виде.
@@ -236,7 +236,7 @@ const DEALS = {
       customerId: null, customerName: null,
       totalAmount: '4500.00', paidAmount: '4500.00',
       status: 'ISSUED', reservedUntil: null,
-      managerId: null, managerName: null,
+      managerId: null, managerName: null, foundBy: [],
     },
   ],
 };

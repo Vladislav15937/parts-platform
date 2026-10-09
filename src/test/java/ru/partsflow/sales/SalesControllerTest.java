@@ -1213,6 +1213,97 @@ class SalesControllerTest extends PostgresTestBase {
     }
 
     /**
+     * Номер сделки понимается в том виде, в каком его пишут (задача 0099):
+     * со значком, с пробелом, с пробелами по краям. Прежняя ветка сравнивала
+     * строку целиком как число и «№ 347» не узнавала.
+     *
+     * <p>Номер сделки задан заведомо выше любых номеров позиций: иначе ветка
+     * позиции с тем же числом нашла бы сделку сама, и откат нормализации
+     * сделки остался бы незамеченным (проверено: на «№ N» её находила как раз
+     * ветка позиции, когда номера совпадали).
+     */
+    @Test
+    @DisplayName("Номер сделки находится в любом написании: 347, №347, № 347, #347, с пробелами")
+    void registryUnderstandsDealNumberSpellings() throws Exception {
+        long dealId = dealWithHighNumber("Фара для написаний номера сделки");
+        long number = dealNumberOf(dealId);
+
+        for (String spelling : new String[]{
+                "" + number, "№" + number, "№ " + number, "#" + number, " " + number + " ",
+                "  № " + number + "  "}) {
+            assertThat(foundBy(spelling, dealId))
+                    .as("запрос «%s» должен найти сделку по её номеру", spelling)
+                    .containsExactly("DEAL_NUMBER");
+        }
+    }
+
+    /**
+     * Значащее не съедается: «347-2» и «3 4 7» — не 347. Отрицательные
+     * утверждения: положительные проходят при любой жадной нормализации.
+     */
+    @Test
+    @DisplayName("Номер с хвостом или разбитый пробелами — не номер сделки")
+    void registryDoesNotEatSignificantCharacters() throws Exception {
+        long dealId = dealWithHighNumber("Фара для чужих написаний номера");
+        String digits = "" + dealNumberOf(dealId);
+        String spaced = String.join(" ", digits.split(""));
+
+        assertThat(foundBy(digits + "-2", dealId)).as("номер с хвостом -2").isNull();
+        assertThat(foundBy(spaced, dealId)).as("цифры через пробел").isNull();
+        assertThat(foundBy("№ " + digits + "а", dealId)).as("номер с буквой").isNull();
+    }
+
+    /**
+     * Подпись «чем найдено»: сделка, найденная по позиции, и сделка, найденная
+     * по своему номеру, различимы в одной выдаче (через HTTP: это то, что
+     * видит человек).
+     */
+    @Test
+    @DisplayName("Выдача по числу подписана: по номеру сделки и по позиции")
+    void registryLabelsWhyRowIsHere() throws Exception {
+        Long partId = partWithStock("Фара для подписи выдачи", 1);
+        long byPosition = createDeal(partId);
+        long byNumber = dealWithHighNumber("Фара для подписи по номеру");
+        long number = dealNumberOf(byNumber);
+        // Позиции первой сделки даётся то же число: одним запросом находятся
+        // обе сделки, каждая своей веткой. Номер позиции уникален, но число
+        // выше всех прежних номеров свободно.
+        inTenant(() -> jdbc.update("UPDATE part SET number = ? WHERE id = ?", number, partId));
+
+        assertThat(foundBy("№ " + number, byPosition)).containsExactly("PART_NUMBER");
+        assertThat(foundBy("№ " + number, byNumber)).containsExactly("DEAL_NUMBER");
+        // Не цифровой запрос — подписей нет: клиент и код видны в строке сами.
+        assertThat(foundBy("Автосервис", byPosition)).isNullOrEmpty();
+    }
+
+    /** Сделка с номером выше любых номеров позиций; номер сделки задаёт тест, не очередь. */
+    private long dealWithHighNumber(String title) throws Exception {
+        inTenant(() -> jdbc.queryForObject(
+                "SELECT setval('deal_number_seq',"
+                        + " greatest((SELECT last_value FROM deal_number_seq), 900000))",
+                Long.class));
+        return createDeal(partWithStock(title, 1));
+    }
+
+    private long dealNumberOf(long dealId) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM deal WHERE id = ?", Long.class, dealId));
+    }
+
+    /**
+     * Подписи сделки в выдаче реестра по запросу; {@code null} — сделки в выдаче нет.
+     * Идёт через HTTP: подпись существует для человека, а не для сервиса.
+     */
+    private java.util.List<String> foundBy(String q, long dealId) throws Exception {
+        String body = mvc.perform(get("/api/deals/registry").param("q", q).session(login("seller")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        java.util.List<java.util.List<String>> hit = com.jayway.jsonpath.JsonPath.read(
+                body, "$.items[?(@.id == %d)].foundBy".formatted(dealId));
+        return hit.isEmpty() ? null : hit.get(0);
+    }
+
+    /**
      * Воронка разводит состояния: выданная сделка не висит в «Отложенных»,
      * а в «Выданных» и «Всех» — есть.
      */
@@ -1387,7 +1478,11 @@ class SalesControllerTest extends PostgresTestBase {
                 .andReturn();
 
         String body = result.getResponse().getContentAsString();
-        return Long.parseLong(body.replaceAll("^\\{\"id\":(\\d+).*$", "$1"));
+        // Поиском, а не срезом всей строки: ответ читается не в UTF-8, и NEL
+        // из кириллицы обрывает `.` в регулярном выражении (корневой CLAUDE.md).
+        java.util.regex.Matcher id = java.util.regex.Pattern.compile("^\\{\"id\":(\\d+)").matcher(body);
+        assertThat(id.find()).as("ответ создания сделки: %s", body).isTrue();
+        return Long.parseLong(id.group(1));
     }
 
     private Long partWithStock(String title, int qty) {
