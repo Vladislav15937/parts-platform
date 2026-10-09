@@ -71,6 +71,10 @@ SQL, проверяет базу, а не приложение: приёмка, 
   APP_PROVISIONING_TOKEN  секрет провижининга; локально по умолчанию local-dev-token
   COMPOSE                 как дотянуться до базы стенда (по умолчанию «docker compose»)
   DB_USER                 владелец схем (по умолчанию app)
+  ETALON_DB               база, куда смотрит приложение (по умолчанию parts).
+                          После выкладки копией (0112) база называется иначе
+                          (parts_green_…), и без этой переменной снос ушёл бы
+                          в прежнюю, замороженную, а раскладка — в живую
 """
 
 import argparse
@@ -603,7 +607,8 @@ class LazySession:
 def psql(sql):
     compose = shlex.split(os.environ.get("COMPOSE", "docker compose"))
     command = compose + ["exec", "-T", "postgres", "psql", "-U",
-                         os.environ.get("DB_USER", "app"), "-d", "parts",
+                         os.environ.get("DB_USER", "app"),
+                         "-d", os.environ.get("ETALON_DB", "parts"),
                          "-v", "ON_ERROR_STOP=1", "-qtA", "-F", "\t", "-f", "-"]
     done = subprocess.run(command, input=sql.encode("utf-8"), capture_output=True)
     if done.returncode != 0:
@@ -992,6 +997,8 @@ SELF = os.path.abspath(__file__)
 COMPOSE_STUB = """#!/bin/sh
 # Заглушка базы для самопроверки tools/ift-etalon.py. Печатает строки реестра
 # и счёт снимков; весь SQL дописывает в журнал — по нему проба и судит.
+# Аргументы тоже: по ним видно, в какую базу пошёл запрос (ETALON_DB, 0118).
+printf 'ARGS: %s\\n' "$*" >> "$SQL_LOG"
 sql=$(cat)
 printf '%s\\n-----\\n' "$sql" >> "$SQL_LOG"
 case "$sql" in
@@ -1283,7 +1290,7 @@ def modes_selftest():
 
         def run_case(name, command, knobs=None, extra=(), registry=COMPANY_NAME,
                      photos_left=0, want_code=0, says=(), not_says=(),
-                     sql_says=(), sql_not_says=(), script=None):
+                     sql_says=(), sql_not_says=(), script=None, env_extra=None):
             if child_only and not name.startswith("вернуть"):
                 return
             counter[0] += 1
@@ -1298,6 +1305,7 @@ def modes_selftest():
                         "ETALON_SCHEMA": state["schema"],
                         "ETALON_NAME": registry,
                         "ETALON_PHOTOS_LEFT": str(photos_left)})
+            env.update(env_extra or {})
             try:
                 done = subprocess.run(
                     [sys.executable, script or SELF, command, "--адрес", url]
@@ -1379,6 +1387,14 @@ def modes_selftest():
                                   "Набор пригоден"),
                  not_says=("снимков убрано из хранилища: 0",),
                  sql_says=("DROP SCHEMA",))
+        # После выкладки копией приложение смотрит в базу с другим именем
+        # (0112), и кнопка называет её в ETALON_DB. Без этого снос шёл бы
+        # в «parts» — в прежнюю замороженную базу.
+        run_case("вернуть: запрос уходит в базу, названную ETALON_DB", "вернуть",
+                 env_extra={"ETALON_DB": "parts_green_zzz"},
+                 sql_says=("-d parts_green_zzz",), sql_not_says=("-d parts ",))
+        run_case("вернуть: без ETALON_DB — база parts", "вернуть",
+                 sql_says=("-d parts ",))
         run_case("вернуть: владелец не входит — отказ, и схема цела", "вернуть",
                  knobs={"bad_logins": {"vladelec"}}, want_code=EXIT_FAILED,
                  says=("владелец набора", "не входит", "--всё-равно"),
@@ -1471,6 +1487,10 @@ def main():
                         default=os.environ.get("ETALON_URL", "http://localhost:8080"))
     parser.add_argument("--снимок", "--snapshot", dest="snapshot",
                         help="сохранить состояние набора без идентификаторов и времени")
+    parser.add_argument("--проверить-адрес", "--check-address", dest="check_address",
+                        action="store_true",
+                        help="только ответить, ИФТ ли адрес: ни запросов, ни изменений "
+                             "(так спрашивает кнопка выкладки, задача 0118)")
     parser.add_argument("--самопроверка", "--selftest", dest="selftest", action="store_true")
     parser.add_argument("--всё-равно", "--anyway", dest="anyway", action="store_true",
                         help="сносить набор, даже если владелец не входит "
@@ -1496,6 +1516,15 @@ def main():
             return EXIT_FAILED
         print("Самопроверка прошла: правило «это ИФТ» пускает и отказывает, где должно,")
         print("а четыре режима краснеют на подделках и молчат на годном наборе.")
+        return 0
+    if args.check_address:
+        # Правило «это ИФТ» одно, и оно здесь: кнопка выкладки спрашивает его
+        # у скрипта, а не повторяет своей копией (вторая копия разошлась бы
+        # с первой на первом же новом написании адреса).
+        stand, reason = stand_of(args.url)
+        if stand is None:
+            return refuse_not_ift(reason)
+        print("Стенд: %s (%s)" % (stand, args.url))
         return 0
     if not args.command:
         parser.print_help()
