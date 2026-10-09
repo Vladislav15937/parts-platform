@@ -52,6 +52,27 @@ public class Part {
     @Column(name = "supply_id")
     private Long supplyId;
 
+    /**
+     * Позиция заведена как ожидаемая по поставке (задача 0170): владелец
+     * завёл её до прихода, и {@link #quantity} — обещанное по поставке, а не
+     * умолчание. Остаётся после прихода: вторая партия того же контейнера
+     * принимается в ту же карточку.
+     *
+     * <p>Значение задано здесь, а не только умолчанием колонки: Hibernate
+     * пишет колонку в каждом INSERT явно (та же ловушка, что у
+     * {@code is_published}).
+     */
+    @Column(name = "expected_origin", nullable = false)
+    private boolean expectedOrigin = false;
+
+    /**
+     * Ключ запроса клиента при заведении ожидаемой позиции (задача 0170):
+     * повтор с тем же ключом возвращает первую позицию. У остальных пуст —
+     * принятая с телефона деталь идемпотентна по ключу документа.
+     */
+    @Column(name = "client_request_id")
+    private String clientRequestId;
+
     @Column(name = "part_kind_id")
     private Long partKindId;
 
@@ -352,6 +373,22 @@ public class Part {
 
     public Long getSupplyId() {
         return supplyId;
+    }
+
+    public String getClientRequestId() {
+        return clientRequestId;
+    }
+
+    public void setClientRequestId(String clientRequestId) {
+        this.clientRequestId = clientRequestId;
+    }
+
+    public boolean isExpectedOrigin() {
+        return expectedOrigin;
+    }
+
+    public void setExpectedOrigin(boolean expectedOrigin) {
+        this.expectedOrigin = expectedOrigin;
     }
 
     public void setSupplyId(Long supplyId) {

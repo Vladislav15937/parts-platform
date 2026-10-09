@@ -216,6 +216,7 @@ export function HomeScreen() {
           <DonorScreen
             reference={status.reference}
             online={connected}
+            canExpect={state.me.role === 'OWNER'}
             onChanged={() => {
               // Справочники приёмки перечитаются сами: машина попадает
               // в список на экране деталей, когда её ставят в разбор.

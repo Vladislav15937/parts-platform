@@ -46,9 +46,11 @@ interface Props {
   online: boolean;
   /** Машины изменились: справочник приёмки надо перечитать. */
   onChanged: () => void;
+  /** Заводить ожидаемый товар по поставке может владелец (задача 0170). */
+  canExpect?: boolean;
 }
 
-export function DonorScreen({ reference, online, onChanged }: Props) {
+export function DonorScreen({ reference, online, onChanged, canExpect = false }: Props) {
   // Затраты вносятся по уже заведённой машине: до её появления вкладывать
   // не во что, а после — покупка, эвакуатор и разбор идут отдельными
   // платежами и в разные дни.
@@ -537,7 +539,8 @@ export function DonorScreen({ reference, online, onChanged }: Props) {
           на них нельзя вовсе, и заводил бы детали без машины. */}
       <hr />
 
-      <SupplyList supplies={reference.supplies} online={online} onChanged={onChanged} />
+      <SupplyList supplies={reference.supplies} online={online} onChanged={onChanged}
+                  canExpect={canExpect} />
 
       <hr />
 

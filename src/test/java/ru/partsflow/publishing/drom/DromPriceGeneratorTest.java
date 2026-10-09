@@ -952,6 +952,77 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 .contains("<quantity>2</quantity>");
     }
 
+    /**
+     * Отложенная под клиента предзаказом позиция в прайс не идёт вовсе
+     * (ответ владельца 9 октября 2026, задача 0170).
+     *
+     * <p>Товара на руках нет, площадка его честно не продаст, а обещанное
+     * покупателю не должно уйти ещё и второму. Строки просто нет — нулём она
+     * не пишется (ноль Дром читает как «удалить»). Контроль в том же прайсе:
+     * ожидаемая позиция без предзаказа по-прежнему уезжает, иначе тест
+     * прошёл бы и там, где ожидаемое не выгружается вообще. Счётчик выгрузки
+     * сверяется с числом {@code <offer>}, и дельта тем же запросом.
+     */
+    @Test
+    @DisplayName("Позиция под предзаказом в прайс не идёт, без предзаказа — уезжает; после прихода возвращается")
+    void preorderedPositionIsLeftOutOfThePrice() {
+        String promised = "Прайс: фара под предзаказом";
+        String open = "Прайс: фара без предзаказа";
+        Long promisedId = expectedPart(promised, new BigDecimal("9000"), "EXPECTED");
+        expectedPart(open, new BigDecimal("9100"), "EXPECTED");
+        Long dealId = inTenant(() -> {
+            Long deal = jdbc.queryForObject("""
+                    INSERT INTO deal (status, total_amount) VALUES ('RESERVED', 9000)
+                    RETURNING id""", Long.class);
+            jdbc.update("""
+                    INSERT INTO deal_item (deal_id, part_id, quantity, price, warehouse_id, status)
+                    VALUES (?, ?, 1, 9000, ?, 'PREORDER')""", deal, promisedId, warehouse);
+            return deal;
+        });
+
+        String xml = priceWith(expects("Ожидается поступление"));
+        assertThat(xml)
+                .as("позиция, обещанная клиенту предзаказом, уехала на площадку")
+                .doesNotContain(promised)
+                .as("контроль: ожидаемая позиция без предзаказа должна уезжать")
+                .contains("<name>" + open + "</name>");
+
+        long counted = inTenant(() -> accounts.countMatching(
+                null, null, null, null, null, false, null, false, "PART",
+                java.util.Map.of(), java.util.Map.of(), true));
+        assertThat(counted)
+                .as("счётчик выгрузки обещает не то, что уедет площадке")
+                .isEqualTo(xml.split("<offer>", -1).length - 1);
+
+        String delta = inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeDelta(out, java.util.List.of(promisedId),
+                    DromPriceGenerator.FeedFilter.everything(),
+                    expects("Ожидается поступление"));
+            return out.toString(StandardCharsets.UTF_8);
+        });
+        assertThat(delta)
+                .as("дельта завела бы объявление по детали, которую уже обещали клиенту")
+                .doesNotContain(promised);
+
+        // Деталь пришла, предзаказ стал обычным резервом: строка возвращается
+        // и вычитается из остатка, как любой резерв (недоступна, но объявление живо).
+        inTenant(() -> {
+            jdbc.update("UPDATE supply SET status = 'ARRIVED', arrived_on = current_date"
+                    + " WHERE id = (SELECT supply_id FROM part WHERE id = ?)", promisedId);
+            return null;
+        });
+        intake(promisedId, warehouse, 1);
+        inTenant(() -> {
+            reservations.reserve(promisedId, warehouse, java.math.BigDecimal.ONE);
+            jdbc.update("UPDATE deal_item SET status = 'RESERVED' WHERE deal_id = ?", dealId);
+            return null;
+        });
+        assertThat(offerIn(priceWith(expects("Ожидается поступление")), promised))
+                .as("после прихода позиция обязана вернуться в прайс")
+                .contains("<available>false</available>");
+    }
+
     /** Настройки выгрузки, которая выгружает ожидаемый товар с этой припиской. */
     private static ru.partsflow.publishing.FeedSettings expects(String note) {
         return new ru.partsflow.publishing.FeedSettings(

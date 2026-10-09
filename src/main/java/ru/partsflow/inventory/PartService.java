@@ -939,6 +939,71 @@ public class PartService {
      * что уже чинилась тут дважды.
      */
     /**
+     * Откуда продавец берёт «что можно предложить»: остаток на складах и
+     * ожидаемые по поставке позиции (задача 0170) — одним источником, чтобы
+     * выдача, счёт и списки значений не разошлись.
+     *
+     * <p><b>Ожидаемая позиция — строка того же вида, что и остаток.</b> Её
+     * «свободное» — не складское, а сколько ещё можно отложить предзаказом:
+     * обещано по поставке минус уже отложенное (то же вычитание делает
+     * {@code PreorderService.claim}, но под блокировкой — здесь только
+     * показ). Склад у неё один, первый действующий: деталь придёт на тот,
+     * куда приёмщик её положит, и сделка при приходе перепишется на
+     * фактический с записью в историю. Строка с нулём свободного не
+     * прячется — как и отложенная на складе: продавец отвечает «ожидается,
+     * но всё под заказ», а не «нет такого».
+     *
+     * <p>Складской резерв этим не затронут: условие {@code qty > 0} для
+     * остатка прежнее, а ожидаемая позиция под него не подпадает вовсе — у
+     * неё нет строки раскладки.
+     *
+     * <p><b>Частичный приход:</b> пришедшее, но обещанное предзаказам, в
+     * «свободно» не входит — иначе продавец увидел бы деталь, которую сервер
+     * ему не отдаст (см. {@code PreorderService.holdOf}). Обещанное
+     * вычитается из склада с меньшим номером первым, остальное — со
+     * следующего.
+     *
+     * <p><b>{@code LATERAL}, а не обычная производная таблица.</b> Замер
+     * 9 октября 2026 на складе в 50 000 позиций (EXPLAIN ANALYZE, в PR): прежний
+     * {@code JOIN part_stock} отвечал за 56 мс, переписанный на
+     * {@code UNION ALL} без привязки к строке — за 668 мс, а с вычетом
+     * предзаказов — за 790: планировщик хэширует весь склад (50 303 строки)
+     * вместо выборки по найденным. Привязка ветвей к {@code p.id} возвращает
+     * индексный доступ по найденному — 208 мс на запрос, находящий 5 301 позицию
+     * из 50 000, и 28–31 мс на запрос в полтысячи находок.
+     */
+    private static final String STOCK_SOURCE = """
+                  JOIN LATERAL (
+                      SELECT ps.part_id, ps.warehouse_id, ps.cell_id, ps.qty,
+                             ps.qty_reserved + CASE WHEN h.pending IS NULL THEN 0
+                                  ELSE LEAST(ps.qty - ps.qty_reserved,
+                                             GREATEST(h.pending - COALESCE(
+                                                 (SELECT sum(x.qty - x.qty_reserved)
+                                                    FROM part_stock x
+                                                   WHERE x.part_id = ps.part_id
+                                                     AND x.warehouse_id < ps.warehouse_id), 0), 0))
+                                  END AS qty_reserved,
+                             false AS expected
+                        FROM part_stock ps
+                        LEFT JOIN LATERAL (SELECT sum(quantity) AS pending FROM deal_item
+                                            WHERE part_id = ps.part_id
+                                              AND status = 'PREORDER') h ON true
+                       WHERE ps.part_id = p.id AND ps.qty > 0
+                      UNION ALL
+                      SELECT e.id, (SELECT min(w0.id) FROM warehouse w0 WHERE w0.is_active),
+                             NULL::bigint,
+                             e.quantity - COALESCE((SELECT sum(i.quantity) FROM deal_item i
+                                                     WHERE i.part_id = e.id
+                                                       AND i.status = 'PREORDER'), 0),
+                             0, true
+                        FROM part e
+                        JOIN supply es ON es.id = e.supply_id
+                       WHERE e.id = p.id AND e.expected_origin AND e.status = 'DRAFT'
+                         AND es.status IN ('EXPECTED', 'IN_TRANSIT')
+                  ) s ON true
+                """;
+
+    /**
      * Условие поиска продавца — одно на выдачу и на счёт.
      *
      * <p>Разойдись они, и «показаны 50 из 741» называло бы число, посчитанное
@@ -1098,11 +1163,13 @@ public class PartService {
                 SELECT p.id, p.number, p.public_code, p.title, p.price, p.status,
                        w.id AS warehouse_id, w.name AS warehouse_name,
                        c.code AS cell_code,
-                       s.qty, s.qty_reserved, s.qty - s.qty_reserved AS qty_available
+                       s.qty, s.qty_reserved, s.qty - s.qty_reserved AS qty_available,
+                       s.expected, sup.expected_on
                   FROM part p
-                  JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
+                """ + STOCK_SOURCE + """
                   JOIN warehouse w ON w.id = s.warehouse_id
                   LEFT JOIN storage_cell c ON c.id = s.cell_id
+                  LEFT JOIN supply sup ON sup.id = p.supply_id
                 """ + match.sql() + narrowing.sql()
                 // Разделитель явной строкой, а не отступом текстового блока:
                 // у блока, чьи кавычки стоят на строке содержимого, срезается
@@ -1124,7 +1191,10 @@ public class PartService {
                         rs.getString("cell_code"),
                         rs.getBigDecimal("qty"),
                         rs.getBigDecimal("qty_reserved"),
-                        rs.getBigDecimal("qty_available")),
+                        rs.getBigDecimal("qty_available"),
+                        rs.getBoolean("expected"),
+                        rs.getDate("expected_on") == null
+                                ? null : rs.getDate("expected_on").toLocalDate()),
                 // Ветки UNION, потом отбор, потом ранжирование, потом предел.
                 args.toArray());
 
@@ -1148,8 +1218,7 @@ public class PartService {
         Long found = jdbc.queryForObject("""
                 SELECT count(*)
                   FROM part p
-                  JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
-                """ + match.sql() + narrowing.sql(),
+                """ + STOCK_SOURCE + match.sql() + narrowing.sql(),
                 Long.class, args.toArray());
         return found == null ? 0 : found;
     }
@@ -1175,7 +1244,7 @@ public class PartService {
                 """ + CatalogService.QUALITY_GRADE + " AS grade" + """
 
                   FROM part p
-                  JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
+                """ + STOCK_SOURCE + """
                   LEFT JOIN donor d ON d.id = p.donor_id
                   LEFT JOIN catalog.brand b ON b.id = d.brand_id
                   LEFT JOIN catalog.model m ON m.id = d.model_id
@@ -1387,6 +1456,10 @@ public class PartService {
     /**
      * Строка выдачи продавцу: деталь на конкретном складе.
      *
+     * @param expected    позиция ожидается по поставке, на складе её нет;
+     *                    {@code qtyAvailable} у неё — сколько ещё можно отложить
+     *                    предзаказом (задача 0170)
+     * @param expectedOn  ожидаемая дата поставки; пусто — её не называли
      * @param number порядковый номер позиции — тот, которым её называют вслух.
      *               Продавец как раз и есть тот, кто произносит его в трубку:
      *               публичный код («7584A8FEAE3D») по телефону не диктуют
@@ -1394,7 +1467,8 @@ public class PartService {
     public record StockRow(Long partId, long number, String publicCode, String title, BigDecimal price,
                            String status, Long warehouseId, String warehouseName,
                            String cellCode, BigDecimal qty, BigDecimal qtyReserved,
-                           BigDecimal qtyAvailable) {
+                           BigDecimal qtyAvailable,
+                           boolean expected, java.time.LocalDate expectedOn) {
     }
 
     /**
