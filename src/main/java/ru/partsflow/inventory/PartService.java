@@ -963,44 +963,76 @@ public class PartService {
      * вычитается из склада с меньшим номером первым, остальное — со
      * следующего.
      *
-     * <p><b>{@code LATERAL}, а не обычная производная таблица.</b> Замер
-     * 9 октября 2026 на складе в 50 000 позиций (EXPLAIN ANALYZE, в PR): прежний
-     * {@code JOIN part_stock} отвечал за 56 мс, переписанный на
-     * {@code UNION ALL} без привязки к строке — за 668 мс, а с вычетом
-     * предзаказов — за 790: планировщик хэширует весь склад (50 303 строки)
-     * вместо выборки по найденным. Привязка ветвей к {@code p.id} возвращает
-     * индексный доступ по найденному — 208 мс на запрос, находящий 5 301 позицию
-     * из 50 000, и 28–31 мс на запрос в полтысячи находок.
+     * <p><b>Обычные соединения, а не {@code UNION ALL}, и без ветвей по строке
+     * (задачи 0170, 0261).</b> Три редакции, замер 9 октября 2026 на складе
+     * в 50 300 позиций (EXPLAIN ANALYZE, медиана; планы — в PR 0261):
+     * <ul>
+     *   <li>{@code UNION ALL} без привязки к строке — планировщик хэширует
+     *       весь склад: сотни миллисекунд;</li>
+     *   <li>{@code JOIN LATERAL} из двух ветвей с индексным доступом на каждую
+     *       найденную деталь (0170) — «фара» (5 301 находка) втрое дороже
+     *       прежнего {@code JOIN part_stock}: Append, подзапрос предзаказов
+     *       и проверка ожидаемой ветки на каждую строку, плюс стоимость плана
+     *       выше {@code jit_above_cost}, и Postgres включал JIT;</li>
+     *   <li>нынешняя: {@code LEFT JOIN part_stock} и {@code LEFT JOIN supply}
+     *       обычными соединениями, обещанное предзаказам — одним индексным
+     *       заходом по {@code deal_item_preorder_ix} на найденное, а ожидаемая
+     *       ветка работает только у деталей с {@code expected_origin}
+     *       (остальным {@code One-Time Filter}). Ничего из этого не несёт
+     *       плана за порог JIT, и «фара» стоит около 1,1 от прежнего
+     *       {@code JOIN part_stock}.</li>
+     * </ul>
+     *
+     * <p><b>Ожидаемая строка — та, у которой раскладки нет.</b> У черновика
+     * {@code expected_origin} нет строк {@code part_stock}: остаток
+     * появляется при приходе, и тогда статус уже {@code IN_STOCK}. Поэтому
+     * «нет раскладки» и есть признак ожидаемой строки; одновременно и ту
+     * и другую деталь запрос не отдаст (прежний {@code UNION ALL} отдал бы
+     * обе, но такого состояния система не создаёт).
+     *
+     * <p><b>Предзаказы — «хэш один раз, сумма у единиц» (0261).</b> Список
+     * частей с открытым предзаказом читается одним неприкреплённым подзапросом
+     * ({@code hashed SubPlan}: по {@code deal_item_preorder_ix} либо по
+     * малой таблице целиком — один раз, а не по разу на найденное), а
+     * коррелированная сумма считается только у тех, кто в нём есть, — то есть
+     * у единиц. Две соседние записи проверены и хуже: сумма на каждую строку
+     * ({@code WHERE part_id = p.id}) на малой {@code deal_item} (250 строк)
+     * планировщик читает {@code Seq Scan}'ом — 5 263 раза, «фара» 171 мс против
+     * 57; агрегат с хэш-соединением по {@code part_id} в условии
+     * {@code JOIN} с {@code CASE} оценивается в пять строк, и соединение
+     * превращается во вложенный цикл. {@code OFFSET 0} не даёт планировщику
+     * развернуть подзапрос обратно в соединение.
      */
     private static final String STOCK_SOURCE = """
-                  JOIN LATERAL (
-                      SELECT ps.part_id, ps.warehouse_id, ps.cell_id, ps.qty,
-                             ps.qty_reserved + CASE WHEN h.pending IS NULL THEN 0
-                                  ELSE LEAST(ps.qty - ps.qty_reserved,
-                                             GREATEST(h.pending - COALESCE(
-                                                 (SELECT sum(x.qty - x.qty_reserved)
-                                                    FROM part_stock x
-                                                   WHERE x.part_id = ps.part_id
-                                                     AND x.warehouse_id < ps.warehouse_id), 0), 0))
-                                  END AS qty_reserved,
-                             false AS expected
-                        FROM part_stock ps
-                        LEFT JOIN LATERAL (SELECT sum(quantity) AS pending FROM deal_item
-                                            WHERE part_id = ps.part_id
-                                              AND status = 'PREORDER') h ON true
-                       WHERE ps.part_id = p.id AND ps.qty > 0
-                      UNION ALL
-                      SELECT e.id, (SELECT min(w0.id) FROM warehouse w0 WHERE w0.is_active),
-                             NULL::bigint,
-                             e.quantity - COALESCE((SELECT sum(i.quantity) FROM deal_item i
-                                                     WHERE i.part_id = e.id
-                                                       AND i.status = 'PREORDER'), 0),
-                             0, true
-                        FROM part e
-                        JOIN supply es ON es.id = e.supply_id
-                       WHERE e.id = p.id AND e.expected_origin AND e.status = 'DRAFT'
-                         AND es.status IN ('EXPECTED', 'IN_TRANSIT')
-                  ) s ON true
+                 JOIN LATERAL (SELECT CASE WHEN p.id IN (SELECT part_id FROM deal_item
+                                                          WHERE status = 'PREORDER')
+                                           THEN (SELECT sum(quantity) FROM deal_item
+                                                  WHERE part_id = p.id AND status = 'PREORDER')
+                                      END AS pending OFFSET 0) h ON true
+                 LEFT JOIN part_stock ps ON ps.part_id = p.id AND ps.qty > 0
+                 LEFT JOIN supply es ON es.id = p.supply_id
+                      AND p.expected_origin AND p.status = 'DRAFT'
+                      AND es.status IN ('EXPECTED', 'IN_TRANSIT')
+                 JOIN LATERAL (
+                      SELECT CASE WHEN ps.part_id IS NULL
+                                  THEN (SELECT min(w0.id) FROM warehouse w0 WHERE w0.is_active)
+                                  ELSE ps.warehouse_id END AS warehouse_id,
+                             ps.cell_id AS cell_id,
+                             CASE WHEN ps.part_id IS NULL
+                                  THEN p.quantity - COALESCE(h.pending, 0)
+                                  ELSE ps.qty END AS qty,
+                             CASE WHEN ps.part_id IS NULL THEN 0
+                                  ELSE ps.qty_reserved + CASE WHEN h.pending IS NULL THEN 0
+                                       ELSE LEAST(ps.qty - ps.qty_reserved,
+                                                  GREATEST(h.pending - COALESCE(
+                                                      (SELECT sum(x.qty - x.qty_reserved)
+                                                         FROM part_stock x
+                                                        WHERE x.part_id = ps.part_id
+                                                          AND x.warehouse_id < ps.warehouse_id), 0), 0))
+                                       END END AS qty_reserved,
+                             ps.part_id IS NULL AS expected
+                       WHERE ps.part_id IS NOT NULL OR es.id IS NOT NULL
+                 ) s ON true
                 """;
 
     /**
