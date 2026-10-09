@@ -773,7 +773,7 @@ public class SalesService {
         if (query != null && !query.isBlank()) {
             String term = query.strip();
             String like = "%" + term + "%";
-            Long number = parseNumber(term);
+            Long number = PartNumberQuery.parse(term);
             if (number != null) {
                 where.append(" AND (d.number = ? OR c.name ILIKE ? OR r.reason ILIKE ?)");
                 args.add(number);
@@ -824,14 +824,6 @@ public class SalesService {
                 rowArgs.toArray());
 
         return new ReturnsPage(rows, total, totalAmount);
-    }
-
-    private static Long parseNumber(String term) {
-        try {
-            return Long.parseLong(term);
-        } catch (NumberFormatException e) {
-            return null;
-        }
     }
 
     /**
