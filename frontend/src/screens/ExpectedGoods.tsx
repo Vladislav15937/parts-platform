@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '../api/client';
 import {
@@ -54,6 +54,10 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
   const [quantity, setQuantity] = useState('1');
   const [price, setPrice] = useState('');
   const [date, setDate] = useState(supply.expectedOn ?? '');
+  // Ключ запроса живёт, пока позиция не заведена: двойное нажатие и повтор
+  // после обрыва шлют тот же ключ, и сервер отвечает первым результатом, а не
+  // заводит вторую позицию. Новая позиция получает новый ключ.
+  const requestId = useRef(crypto.randomUUID());
 
   useEffect(() => {
     setParts(null);
@@ -193,7 +197,9 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
         donorId: donorId === '' ? null : Number(donorId),
         quantity: Number(quantity),
         price: Number(price),
+        requestId: requestId.current,
       });
+      requestId.current = crypto.randomUUID();
       if (!mounted.current) return;
       setParts(updated);
       setRawName('');

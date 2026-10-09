@@ -187,7 +187,14 @@ export function expectedPartsOf(supplyId: number): Promise<ExpectedPartEntry[]> 
  */
 export function addExpectedPart(
   supplyId: number,
-  body: { rawName: string; donorId: number | null; quantity: number; price: number },
+  body: {
+    rawName: string;
+    donorId: number | null;
+    quantity: number;
+    price: number;
+    /** Ключ запроса: тот же при повторе, новый на следующую позицию. */
+    requestId: string;
+  },
 ): Promise<ExpectedPartEntry[]> {
   return request<ExpectedPartEntry[]>(`/api/intake/supplies/${supplyId}/expected-parts`, {
     method: 'POST',

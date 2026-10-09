@@ -293,11 +293,25 @@ public class IntakeService {
      *                агрегаты возят партиями без машин (ответ владельца
      *                9 октября 2026); без неё заголовок собирается из одного
      *                вида детали, а марка в объявлении берётся из применимости
+     * @param requestId ключ запроса клиента (задача 0170): повтор с тем же
+     *                  ключом возвращает первую позицию, а не заводит вторую;
+     *                  пустой — без защиты от повтора
      */
     @Transactional
     public Part registerExpectedPart(Long supplyId, String rawName, Long donorId,
-                                     BigDecimal quantity, BigDecimal price, Long authorId) {
+                                     BigDecimal quantity, BigDecimal price, Long authorId,
+                                     String requestId) {
         Supply supply = requireSupply(supplyId);
+        String key = requestId == null || requestId.isBlank() ? null : requestId.trim();
+        if (key != null) {
+            // Обычный повтор, пришедший после ответа. Одновременный проходит
+            // эту проверку оба раза — его отбивает part_client_request_uk,
+            // а ответ даёт replayExpectedAfterConflict.
+            Part already = parts.findByClientRequestId(key).orElse(null);
+            if (already != null) {
+                return sameSupplyOrRefuse(already, supplyId);
+            }
+        }
         if (supply.getStatus() != Supply.SupplyStatus.EXPECTED
                 && supply.getStatus() != Supply.SupplyStatus.IN_TRANSIT) {
             throw new IllegalStateException(
@@ -325,9 +339,43 @@ public class IntakeService {
                 vehicles.resolve(donorId), donor, supplyId, authorId);
         part.setQuantity(quantity);
         part.setExpectedOrigin(true);
+        part.setClientRequestId(key);
         Part saved = parts.saveAndFlush(part);
         publishCreated(saved);
         return saved;
+    }
+
+    /**
+     * Первая позиция по ключу запроса — ответ на одновременный повтор.
+     *
+     * <p>Второй из двух разом пришедших запросов упирается в уникальный ключ
+     * и без этого метода получал бы 409 «Операция нарушает целостность
+     * данных» на заведение, которое прошло: владелец нажимал второй раз
+     * как раз потому, что первое нажатие не показало результата.
+     *
+     * <p>Читается новой транзакцией: та, где случилось нарушение, помечена
+     * на откат, и запрос из неё не пройдёт. Пусто — ключа нет или позицию
+     * создал кто-то иной, тогда исходная ошибка остаётся ошибкой.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
+                   readOnly = true)
+    public Part replayExpectedAfterConflict(Long supplyId, String requestId) {
+        if (requestId == null || requestId.isBlank()) {
+            return null;
+        }
+        Part first = parts.findByClientRequestId(requestId.trim()).orElse(null);
+        if (first == null || !java.util.Objects.equals(first.getSupplyId(), supplyId)) {
+            return null;
+        }
+        return first;
+    }
+
+    private static Part sameSupplyOrRefuse(Part already, Long supplyId) {
+        if (!java.util.Objects.equals(already.getSupplyId(), supplyId)) {
+            throw new IllegalStateException(
+                    "Этот запрос уже заведён по другой поставке — обновите страницу и повторите");
+        }
+        return already;
     }
 
     /**

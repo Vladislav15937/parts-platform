@@ -87,7 +87,8 @@ describe('ожидаемый товар в карточке поставки', (
 
     fireEvent.click(create);
     await waitFor(() => expect(posted).not.toBeNull());
-    expect(posted).toEqual({ rawName: 'фара левая', donorId: 7, quantity: 3, price: 9000 });
+    expect(posted).toEqual({ rawName: 'фара левая', donorId: 7, quantity: 3, price: 9000,
+      requestId: expect.any(String) });
     // Список показывается после заведения, из ответа.
     await waitFor(() => expect(document.body.textContent).toContain('№ 410'));
   });
@@ -108,7 +109,53 @@ describe('ожидаемый товар в карточке поставки', (
 
     fireEvent.click(create);
     await waitFor(() => expect(posted).not.toBeNull());
-    expect(posted).toEqual({ rawName: 'двигатель', donorId: null, quantity: 1, price: 45000 });
+    expect(posted).toEqual({ rawName: 'двигатель', donorId: null, quantity: 1, price: 45000,
+      requestId: expect.any(String) });
+  });
+
+  it('ключ запроса: тот же при повторе после отказа, новый на следующую позицию', async () => {
+    const keys: string[] = [];
+    let attempt = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/supplies/19/expected-parts') && init?.method === 'POST') {
+        keys.push(JSON.parse(String(init.body)).requestId);
+        attempt += 1;
+        if (attempt === 1) {
+          return new Response(JSON.stringify({ message: 'Сервер занят' }),
+            { status: 503, headers: { 'Content-Type': 'application/json' } });
+        }
+        return json([]);
+      }
+      if (url.includes('/supplies/19/donors')) return json([]);
+      return json([]);
+    }));
+    render(<DonorScreen online canExpect reference={reference()} onChanged={() => {}} />);
+    fireEvent.click((await waitFor(() =>
+      screen.getAllByRole('button', { name: 'Ожидаемый товар' })))[0]!);
+    const create = await waitFor(() =>
+      screen.getByRole('button', { name: 'Завести' }) as HTMLButtonElement);
+
+    fireEvent.change(screen.getByLabelText('Вид детали'), { target: { value: 'двигатель' } });
+    fireEvent.change(screen.getByLabelText('Цена, ₽'), { target: { value: '45000' } });
+    await waitFor(() => expect(create.disabled).toBe(false));
+
+    fireEvent.click(create);
+    await waitFor(() => expect(keys).toHaveLength(1));
+    await waitFor(() => expect(create.disabled).toBe(false));
+    fireEvent.click(create);
+    await waitFor(() => expect(keys).toHaveLength(2));
+    // Повтор той же позиции несёт тот же ключ: сервер ответит первым результатом.
+    expect(keys[1]).toBe(keys[0]);
+
+    // Следующая позиция — новый ключ.
+    await waitFor(() => expect((screen.getByLabelText('Вид детали') as HTMLInputElement).value).toBe(''));
+    fireEvent.change(screen.getByLabelText('Вид детали'), { target: { value: 'фара' } });
+    fireEvent.change(screen.getByLabelText('Цена, ₽'), { target: { value: '9000' } });
+    await waitFor(() => expect(create.disabled).toBe(false));
+    fireEvent.click(create);
+    await waitFor(() => expect(keys).toHaveLength(3));
+    expect(keys[2]).not.toBe(keys[0]);
   });
 
   it('ожидаемая дата сохраняется и называет, что сдвинется', async () => {

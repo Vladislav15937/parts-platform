@@ -65,6 +65,14 @@ public class Part {
     @Column(name = "expected_origin", nullable = false)
     private boolean expectedOrigin = false;
 
+    /**
+     * Ключ запроса клиента при заведении ожидаемой позиции (задача 0170):
+     * повтор с тем же ключом возвращает первую позицию. У остальных пуст —
+     * принятая с телефона деталь идемпотентна по ключу документа.
+     */
+    @Column(name = "client_request_id")
+    private String clientRequestId;
+
     @Column(name = "part_kind_id")
     private Long partKindId;
 
@@ -365,6 +373,14 @@ public class Part {
 
     public Long getSupplyId() {
         return supplyId;
+    }
+
+    public String getClientRequestId() {
+        return clientRequestId;
+    }
+
+    public void setClientRequestId(String clientRequestId) {
+        this.clientRequestId = clientRequestId;
     }
 
     public boolean isExpectedOrigin() {

@@ -13,6 +13,8 @@ public interface PartRepository extends JpaRepository<Part, Long> {
 
     Optional<Part> findByPublicCode(String publicCode);
 
+    Optional<Part> findByClientRequestId(String clientRequestId);
+
     Page<Part> findByStatus(PartStatus status, Pageable pageable);
 
     /**

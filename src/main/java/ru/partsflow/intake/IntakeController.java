@@ -105,8 +105,18 @@ public class IntakeController {
     @PreAuthorize(OWNER_ONLY)
     public ResponseEntity<List<IntakeService.ExpectedPart>> addExpectedPart(
             @PathVariable Long id, @Valid @RequestBody ExpectedPartRequest request) {
-        intake.registerExpectedPart(id, request.rawName(), request.donorId(),
-                request.quantity(), request.price(), CurrentUser.memberId());
+        try {
+            intake.registerExpectedPart(id, request.rawName(), request.donorId(),
+                    request.quantity(), request.price(), CurrentUser.memberId(),
+                    request.requestId());
+        } catch (org.springframework.dao.DataIntegrityViolationException conflict) {
+            // Одновременный повтор: первый запрос успел вставить позицию,
+            // второй упёрся в part_client_request_uk. Заведение при этом
+            // прошло, и человеку нужен его результат, а не поломка сервера.
+            if (intake.replayExpectedAfterConflict(id, request.requestId()) == null) {
+                throw conflict;
+            }
+        }
         // Отвечает весь список поставки, а не одну строку: экран после
         // заведения показывает его целиком, и второй запрос был бы ожиданием
         // ровно в тот момент, когда владелец набирает следующую позицию.
@@ -263,11 +273,14 @@ public class IntakeController {
      * @param donorId машина; необязательна (ответ владельца 9 октября 2026:
      *                контрактные агрегаты возят партиями без машин) — заголовок
      *                тогда собирается из одного вида детали
+     * @param requestId ключ запроса: форма заводит его на каждую новую
+     *                  позицию и не меняет при повторе (задача 0170)
      */
     public record ExpectedPartRequest(@NotBlank String rawName,
                                       Long donorId,
                                       @NotNull @Positive BigDecimal quantity,
-                                      @NotNull @Positive BigDecimal price) {
+                                      @NotNull @Positive BigDecimal price,
+                                      String requestId) {
     }
 
     public record ExpectedOnRequest(@NotNull LocalDate expectedOn) {
