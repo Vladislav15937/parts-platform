@@ -241,7 +241,7 @@ function BoardCard({
   // Копия этого соответствия разошлась бы с оригиналом молча.
   const state = dealStageStatus(card.stage, card.status);
   const term = reservationTerm({
-    status: state, reservedUntil: card.reservedUntil, preorder: card.preorder,
+    status: state, reservedUntil: card.reservedUntil, preorder: card.preorder, preorderOnly: card.preorderOnly,
   });
   return (
     <button type="button" className="deal-card" onClick={() => onOpenDeal(card.id)}>

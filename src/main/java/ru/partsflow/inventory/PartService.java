@@ -956,12 +956,39 @@ public class PartService {
      * <p>Складской резерв этим не затронут: условие {@code qty > 0} для
      * остатка прежнее, а ожидаемая позиция под него не подпадает вовсе — у
      * неё нет строки раскладки.
+     *
+     * <p><b>Частичный приход:</b> пришедшее, но обещанное предзаказам, в
+     * «свободно» не входит — иначе продавец увидел бы деталь, которую сервер
+     * ему не отдаст (см. {@code PreorderService.holdOf}). Обещанное
+     * вычитается из склада с меньшим номером первым, остальное — со
+     * следующего.
+     *
+     * <p><b>{@code LATERAL}, а не обычная производная таблица.</b> Замер
+     * 9 октября 2026 на складе в 50 000 позиций (EXPLAIN ANALYZE, в PR): прежний
+     * {@code JOIN part_stock} отвечал за 56 мс, переписанный на
+     * {@code UNION ALL} без привязки к строке — за 668 мс, а с вычетом
+     * предзаказов — за 790: планировщик хэширует весь склад (50 303 строки)
+     * вместо выборки по найденным. Привязка ветвей к {@code p.id} возвращает
+     * индексный доступ по найденному — 208 мс на запрос, находящий 5 301 позицию
+     * из 50 000, и 28–31 мс на запрос в полтысячи находок.
      */
     private static final String STOCK_SOURCE = """
-                  JOIN (
-                      SELECT part_id, warehouse_id, cell_id, qty, qty_reserved,
+                  JOIN LATERAL (
+                      SELECT ps.part_id, ps.warehouse_id, ps.cell_id, ps.qty,
+                             ps.qty_reserved + CASE WHEN h.pending IS NULL THEN 0
+                                  ELSE LEAST(ps.qty - ps.qty_reserved,
+                                             GREATEST(h.pending - COALESCE(
+                                                 (SELECT sum(x.qty - x.qty_reserved)
+                                                    FROM part_stock x
+                                                   WHERE x.part_id = ps.part_id
+                                                     AND x.warehouse_id < ps.warehouse_id), 0), 0))
+                                  END AS qty_reserved,
                              false AS expected
-                        FROM part_stock WHERE qty > 0
+                        FROM part_stock ps
+                        LEFT JOIN LATERAL (SELECT sum(quantity) AS pending FROM deal_item
+                                            WHERE part_id = ps.part_id
+                                              AND status = 'PREORDER') h ON true
+                       WHERE ps.part_id = p.id AND ps.qty > 0
                       UNION ALL
                       SELECT e.id, (SELECT min(w0.id) FROM warehouse w0 WHERE w0.is_active),
                              NULL::bigint,
@@ -971,9 +998,9 @@ public class PartService {
                              0, true
                         FROM part e
                         JOIN supply es ON es.id = e.supply_id
-                       WHERE e.expected_origin AND e.status = 'DRAFT'
+                       WHERE e.id = p.id AND e.expected_origin AND e.status = 'DRAFT'
                          AND es.status IN ('EXPECTED', 'IN_TRANSIT')
-                  ) s ON s.part_id = p.id
+                  ) s ON true
                 """;
 
     /**

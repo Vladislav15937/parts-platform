@@ -80,7 +80,7 @@ describe('ожидаемый товар в карточке поставки', (
     expect(document.body.textContent).toContain('Впишите вид детали');
 
     fireEvent.change(screen.getByLabelText('Вид детали'), { target: { value: 'фара левая' } });
-    fireEvent.change(screen.getByLabelText('Машина'), { target: { value: '7' } });
+    fireEvent.change(screen.getByLabelText('Машина (необязательно)'), { target: { value: '7' } });
     fireEvent.change(screen.getByLabelText('Количество'), { target: { value: '3' } });
     fireEvent.change(screen.getByLabelText('Цена, ₽'), { target: { value: '9000' } });
     await waitFor(() => expect(create.disabled).toBe(false));
@@ -90,6 +90,25 @@ describe('ожидаемый товар в карточке поставки', (
     expect(posted).toEqual({ rawName: 'фара левая', donorId: 7, quantity: 3, price: 9000 });
     // Список показывается после заведения, из ответа.
     await waitFor(() => expect(document.body.textContent).toContain('№ 410'));
+  });
+
+  it('машину можно не указывать: контрактные агрегаты возят партиями без машин', async () => {
+    render(<DonorScreen online canExpect reference={reference()} onChanged={() => {}} />);
+    fireEvent.click((await waitFor(() =>
+      screen.getAllByRole('button', { name: 'Ожидаемый товар' })))[0]!);
+    const create = await waitFor(() =>
+      screen.getByRole('button', { name: 'Завести' }) as HTMLButtonElement);
+
+    // Машина не выбрана — и причины отказа про машину нет.
+    fireEvent.change(screen.getByLabelText('Вид детали'), { target: { value: 'двигатель' } });
+    fireEvent.change(screen.getByLabelText('Количество'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('Цена, ₽'), { target: { value: '45000' } });
+    await waitFor(() => expect(create.disabled).toBe(false));
+    expect(document.body.textContent).not.toContain('Выберите машину');
+
+    fireEvent.click(create);
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toEqual({ rawName: 'двигатель', donorId: null, quantity: 1, price: 45000 });
   });
 
   it('ожидаемая дата сохраняется и называет, что сдвинется', async () => {

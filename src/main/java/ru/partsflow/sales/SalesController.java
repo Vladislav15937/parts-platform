@@ -869,7 +869,8 @@ public class SalesController {
                            Instant replyDeadline, Instant orderAcceptedAt,
                            String deliveryNote, List<ItemView> items,
                            List<ServiceLineView> services,
-                           boolean preorder, java.time.LocalDate expectedOn,
+                           boolean preorder, boolean preorderOnly,
+                           java.time.LocalDate expectedOn,
                            java.time.LocalDate shiftFrom, java.time.LocalDate shiftTo) {
 
         static DealView of(Deal deal, Map<Long, String> titles, Map<Long, Long> partNumbers,
@@ -894,7 +895,7 @@ public class SalesController {
                                     serviceNames.get(s.getServiceId()),
                                     s.getQuantity(), s.getPrice()))
                             .toList(),
-                    deal.hasPreorder(),
+                    deal.hasPreorder(), deal.hasOnlyPreorder(),
                     deal.getId() == null ? null : expectedDates.get(deal.getId()),
                     deal.getPreorderShiftFrom(), deal.getPreorderShiftTo());
         }

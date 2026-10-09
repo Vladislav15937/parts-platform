@@ -141,6 +141,78 @@ public class PreorderService {
         return part;
     }
 
+    // ---------- пришедшее, но обещанное ----------
+
+    /**
+     * Сколько пришедшей детали ещё обещано предзаказам и не может уйти в
+     * обычную продажу.
+     *
+     * <p><b>Частичный приход.</b> Предзаказов на три штуки, приехала одна:
+     * {@link #convertOnArrival} её отдаёт первому в очереди, если она у него
+     * целиком, а если нет — остаток лежит на складе свободным, и обычный
+     * продавец отложил бы его первым же нажатием, мимо очереди. Обещанное
+     * предзаказом должно получить деталь раньше, чем она достанется тому, кто
+     * просто пришёл. Складской резерв при этом не тронут: гейт стоит в
+     * продаже, а не в {@code reserve}.
+     *
+     * <p>Строка {@code part} берётся под блокировку, когда предзаказы есть, и
+     * только тогда: это та же точка сериализации, что у прихода и у нового
+     * предзаказа, — приход, превращающий предзаказ в резерв, и продажа, считающая
+     * «сколько свободно за вычетом обещанного», не должны видеть друг друга
+     * наполовину. У детали без предзаказов блокировки нет, и обычная продажа
+     * не платит за них ничем.
+     *
+     * @return {@code null}, если ничего не обещано
+     */
+    @Transactional
+    public Hold holdOf(Long partId) {
+        BigDecimal pending = pendingOf(partId);
+        if (pending.signum() == 0) {
+            return null;
+        }
+        jdbc.queryForList("SELECT id FROM part WHERE id = ? FOR UPDATE", Long.class, partId);
+        pending = pendingOf(partId);
+        if (pending.signum() == 0) {
+            return null;
+        }
+        BigDecimal free = jdbc.queryForObject("""
+                SELECT COALESCE(sum(qty - qty_reserved), 0) FROM part_stock
+                 WHERE part_id = ?""", BigDecimal.class, partId);
+        String title = jdbc.queryForObject("SELECT title FROM part WHERE id = ?",
+                String.class, partId);
+        return new Hold(title, pending, free == null ? BigDecimal.ZERO : free);
+    }
+
+    private BigDecimal pendingOf(Long partId) {
+        BigDecimal pending = jdbc.queryForObject("""
+                SELECT COALESCE(sum(quantity), 0) FROM deal_item
+                 WHERE part_id = ? AND status = 'PREORDER'""", BigDecimal.class, partId);
+        return pending == null ? BigDecimal.ZERO : pending;
+    }
+
+    /**
+     * Обещанное предзаказам по пришедшей детали.
+     *
+     * @param pending сколько отложено предзаказами и ещё не получило деталь
+     * @param free    свободно на складах (без вычета предзаказов)
+     */
+    public record Hold(String title, BigDecimal pending, BigDecimal free) {
+
+        /** Сколько можно продать «просто так»: свободное за вычетом обещанного. */
+        public BigDecimal forOrdinarySale() {
+            return free.subtract(pending).max(BigDecimal.ZERO);
+        }
+
+        /** Слова отказа продавцу: что пришло, что обещано, сколько осталось. */
+        public String refusal(BigDecimal wanted) {
+            return ("Пришла только часть поставки: «%s» — свободно %s, из них отложено под "
+                    + "предзаказы клиентов %s, для обычной продажи %s, а нужно %s. "
+                    + "Обещанное предзаказам отдаётся первым")
+                    .formatted(title, plain(free), plain(pending),
+                            plain(forOrdinarySale()), plain(wanted));
+        }
+    }
+
     /** @param expectedOn ожидаемая дата поставки; пусто — её не называли */
     public record Claim(String title, BigDecimal promised, LocalDate expectedOn) {
     }

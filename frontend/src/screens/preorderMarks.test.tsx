@@ -117,13 +117,13 @@ function deal(id: number, over: Record<string, unknown>) {
     items: [{ id, partId: id, number: id, title: 'Фара', quantity: '1', price: '9000.00',
       discount: null, warehouseId: 2, status: 'PREORDER' }],
     services: [],
-    preorder: false, expectedOn: null, shiftFrom: null, shiftTo: null,
+    preorder: false, preorderOnly: false, expectedOn: null, shiftFrom: null, shiftTo: null,
     ...over,
   };
 }
 
 const PREORDER = () => deal(30, {
-  preorder: true, expectedOn: TO, shiftFrom: FROM, shiftTo: TO,
+  preorder: true, preorderOnly: true, expectedOn: TO, shiftFrom: FROM, shiftTo: TO,
 });
 const ORDINARY = () => deal(31, {
   items: [{ id: 31, partId: 31, number: 31, title: 'Бампер', quantity: '1', price: '9000.00',
@@ -159,7 +159,8 @@ function stubDeals() {
     id: d.id, number: d.number, createdAt: d.createdAt, customerId: 1,
     customerName: 'Иванов Пётр', totalAmount: d.totalAmount, paidAmount: d.paidAmount,
     status: d.status, reservedUntil: d.reservedUntil, managerId: null, managerName: null,
-    preorder: d.preorder, shiftFrom: d.shiftFrom, shiftTo: d.shiftTo,
+    preorder: d.preorder, preorderOnly: d.preorderOnly, foundBy: [],
+    shiftFrom: d.shiftFrom, shiftTo: d.shiftTo,
   });
   const card = (d: ReturnType<typeof deal>) => ({ ...row(d), stage: d.stage });
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

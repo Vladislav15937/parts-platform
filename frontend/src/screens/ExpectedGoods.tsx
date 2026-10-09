@@ -28,9 +28,10 @@ import { useMounted } from '../ui/useMounted';
  * Кнопка показывается только владельцу, и закрыт тот же адрес на сервере:
  * спрятанная кнопка при открытом адресе — не защита.
  *
- * <p>Минимум — вид детали, машина, цена, количество (вариант «а» владельца):
- * заводится за полминуты, объявление выходит без снимков. Машина берётся из
- * тех, что пришли этой же партией: деталь снимают именно с неё.
+ * <p>Минимум — вид детали, цена, количество (вариант «а» владельца):
+ * заводится за полминуты, объявление выходит без снимков. Машина необязательна
+ * (ответ владельца 9.10.2026: контрактные агрегаты возят партиями без машин);
+ * если указана, берётся из тех, что пришли этой же партией.
  */
 interface Props {
   supply: SupplyRef;
@@ -73,7 +74,7 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
 
   // Почему нельзя завести — одним выражением на кнопку и на подпись под ней:
   // разойдись они, серая кнопка снова начала бы молчать о причине.
-  const obstacle = addObstacle(rawName, donorId, quantity, price, cars.length);
+  const obstacle = addObstacle(rawName, quantity, price);
 
   return (
     <div>
@@ -112,13 +113,7 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
       {notice !== null && <p className="note">{notice}</p>}
 
       <h4>Завести позицию</h4>
-      {cars.length === 0 ? (
-        <p className="note">
-          Деталь заводят с машиной, а у этой партии машин нет. Заведите машину
-          партии выше — на экране «Машины», с этой же поставкой.
-        </p>
-      ) : (
-        <>
+      <>
           <div className="row">
             <label className="field">
               Вид детали
@@ -130,9 +125,9 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
               />
             </label>
             <label className="field">
-              Машина
+              Машина (необязательно)
               <select value={donorId} onChange={(e) => setDonorId(e.target.value)}>
-                <option value="">— выберите машину —</option>
+                <option value="">— без машины —</option>
                 {cars.map((car) => (
                   <option key={car.id} value={car.id}>{donorTitle(car)}</option>
                 ))}
@@ -165,7 +160,6 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
           </div>
           {obstacle !== null && <p className="note">{obstacle}</p>}
         </>
-      )}
 
       {loadFailure !== null && <p className="note note--error">{loadFailure}</p>}
       {loadFailure === null && parts === null && <p className="note">Загружаем…</p>}
@@ -196,7 +190,7 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
     try {
       const updated = await addExpectedPart(supply.id, {
         rawName: rawName.trim(),
-        donorId: Number(donorId),
+        donorId: donorId === '' ? null : Number(donorId),
         quantity: Number(quantity),
         price: Number(price),
       });
@@ -233,17 +227,9 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
   }
 }
 
-function addObstacle(
-  rawName: string, donorId: string, quantity: string, price: string, cars: number,
-): string | null {
-  if (cars === 0) {
-    return null;
-  }
+function addObstacle(rawName: string, quantity: string, price: string): string | null {
   if (rawName.trim() === '') {
     return 'Впишите вид детали.';
-  }
-  if (donorId === '') {
-    return 'Выберите машину, с которой деталь.';
   }
   if (!(Number(quantity) > 0)) {
     return 'Количество должно быть больше нуля.';

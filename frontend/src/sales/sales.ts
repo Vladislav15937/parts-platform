@@ -135,6 +135,8 @@ export interface Deal {
    * нельзя, пока поставка не принята.
    */
   preorder: boolean;
+  /** Все открытые позиции — предзаказ; у смешанной сделки срок обычной позиции истекает. */
+  preorderOnly: boolean;
   /** Ожидаемая дата поставки по предзаказам сделки; пусто — её не называли. */
   expectedOn: string | null;
   /**
@@ -945,8 +947,10 @@ export interface DealBoardCard {
   /** Состояние самого документа: по нему открывается сделка, но не подпись. */
   status: string;
   reservedUntil: string | null;
-  /** Есть предзаказ: деталь ещё в пути, «срок истёк» к такой сделке не применимо. */
+  /** Есть предзаказ: деталь по ожидаемой поставке ещё в пути. */
   preorder: boolean;
+  /** Все открытые позиции — предзаказ: только к такой сделке «срок истёк» не применимо. */
+  preorderOnly: boolean;
   /** Ожидаемая дата сдвинулась, а продавец клиенту ещё не сказал. */
   shiftFrom: string | null;
   shiftTo: string | null;
@@ -1064,8 +1068,10 @@ export interface DealListRow {
   managerId: number | null;
   /** Пусто — ответственного нет: сотрудника удалили либо заказ не принят. */
   managerName: string | null;
-  /** Есть предзаказ: деталь ещё в пути, «срок истёк» к такой сделке не применимо. */
+  /** Есть предзаказ: деталь по ожидаемой поставке ещё в пути. */
   preorder: boolean;
+  /** Все открытые позиции — предзаказ: только к такой сделке «срок истёк» не применимо. */
+  preorderOnly: boolean;
   /** Ожидаемая дата сдвинулась, а продавец клиенту ещё не сказал. */
   shiftFrom: string | null;
   shiftTo: string | null;
@@ -1191,7 +1197,13 @@ export function endOfDay(date: string): string {
  * не снимается сам — «до завтра» на разборке часто значит «до послезавтра».
  */
 export function reservationTerm(
-  deal: { status: string; reservedUntil: string | null; preorder?: boolean },
+  deal: {
+    status: string;
+    reservedUntil: string | null;
+    preorder?: boolean;
+    /** Все открытые позиции — предзаказ; у смешанной сделки срок обычной позиции истекает. */
+    preorderOnly?: boolean;
+  },
   now: number = Date.now(),
 ): { day: string; expired: boolean } | null {
   if (deal.status !== 'RESERVED' || deal.reservedUntil === null) {
@@ -1203,7 +1215,11 @@ export function reservationTerm(
     // Предзаказ срока не теряет, пока деталь не пришла (решение владельца
     // продукта, задача 0170): резерва склада у него нет, и «подержите ещё»
     // не про что. Просрочка появится, когда приёмка сделает его обычным.
-    expired: deal.preorder !== true && until.getTime() < now,
+    // Смешанная сделка (предзаказ плюс обычная позиция со склада) срок
+    // обычной позиции имеет: иначе просроченный резерв настоящей детали не
+    // видит никто (ответ владельца 9.10.2026). Ответ без признака читается
+    // как раньше: «есть предзаказ» значило «только он».
+    expired: (deal.preorderOnly ?? deal.preorder === true) !== true && until.getTime() < now,
   };
 }
 

@@ -7,6 +7,7 @@ import {
   rememberPaymentSource,
   returnable,
   returnWarehouseDefault,
+  reservationTerm,
   roomFor,
   transferable,
 } from './sales';
@@ -152,6 +153,7 @@ function dealFrom(items: { status: string; warehouseId: number }[],
     deliveryNote: null,
     services: [],
     preorder: false,
+    preorderOnly: false,
     expectedOn: null,
     shiftFrom: null,
     shiftTo: null,
@@ -320,5 +322,31 @@ describe('подпись типа источника платежа', () => {
     expect(paymentSourceTypeLabel('CREDIT')).toBe('В долг');
     expect(paymentSourceTypeLabel('MARKETPLACE')).toBe('Площадка');
     expect(paymentSourceTypeLabel(null)).toBe('Не указан');
+  });
+});
+
+describe('срок резерва у сделки с предзаказом', () => {
+  const past = new Date(Date.now() - 2 * 86_400_000).toISOString();
+
+  it('чисто предзаказная сделка срока не теряет: деталь ещё не пришла', () => {
+    const term = reservationTerm({
+      status: 'RESERVED', reservedUntil: past, preorder: true, preorderOnly: true,
+    });
+    expect(term?.expired).toBe(false);
+  });
+
+  it('смешанная (предзаказ плюс обычная позиция) просрочена по сроку обычной', () => {
+    const term = reservationTerm({
+      status: 'RESERVED', reservedUntil: past, preorder: true, preorderOnly: false,
+    });
+    expect(term?.expired).toBe(true);
+  });
+
+  it('ответ без признака читается как раньше: есть предзаказ — срока не теряет', () => {
+    expect(reservationTerm({
+      status: 'RESERVED', reservedUntil: past, preorder: true,
+    })?.expired).toBe(false);
+    // Контроль: обычная просроченная по-прежнему просрочена.
+    expect(reservationTerm({ status: 'RESERVED', reservedUntil: past })?.expired).toBe(true);
   });
 });

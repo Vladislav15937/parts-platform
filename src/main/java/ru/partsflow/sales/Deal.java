@@ -502,6 +502,12 @@ public class Deal {
         return items.stream().anyMatch(i -> i.getStatus() == DealItemStatus.PREORDER);
     }
 
+    /** Предзаказ есть, и обычной отложенной позиции рядом нет: срок резерва такой сделки не «истекает». */
+    public boolean hasOnlyPreorder() {
+        return hasPreorder()
+                && items.stream().noneMatch(i -> i.getStatus() == DealItemStatus.RESERVED);
+    }
+
     /**
      * Запоминает, что ожидаемая дата сдвинулась. Если пометку ещё не видели,
      * «было» остаётся первой названной клиентом датой: двух сдвигов подряд

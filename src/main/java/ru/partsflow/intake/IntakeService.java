@@ -289,9 +289,10 @@ public class IntakeService {
      * помечается ожидаемой; продаётся она предзаказом, а при приходе
      * принимается той же карточкой.
      *
-     * @param donorId машина, с которой снято, — обязательна: заголовок
-     *                объявления собирается из вида детали и машины, и без неё
-     *                объявление выходит без нужного человеку
+     * @param donorId машина, с которой снято, — необязательна: контрактные
+     *                агрегаты возят партиями без машин (ответ владельца
+     *                9 октября 2026); без неё заголовок собирается из одного
+     *                вида детали, а марка в объявлении берётся из применимости
      */
     @Transactional
     public Part registerExpectedPart(Long supplyId, String rawName, Long donorId,
@@ -306,9 +307,6 @@ public class IntakeService {
         if (rawName == null || rawName.isBlank()) {
             throw new IllegalArgumentException("Не указан вид детали");
         }
-        if (donorId == null) {
-            throw new IllegalArgumentException("Не указана машина, с которой деталь");
-        }
         if (quantity == null || quantity.signum() <= 0) {
             throw new IllegalArgumentException("Количество должно быть больше нуля");
         }
@@ -319,7 +317,9 @@ public class IntakeService {
             throw new IllegalArgumentException(
                     "Цена должна быть больше нуля: с нулевой ценой объявление не уйдёт на площадку");
         }
-        Donor donor = requireDonor(donorId);
+        // Машина необязательна: контрактные агрегаты приезжают партиями без
+        // машин (ответ владельца 9 октября 2026). Указанная — проверяется.
+        Donor donor = donorId == null ? null : requireDonor(donorId);
         PartName partName = partNames.resolve(rawName, authorId);
         Part part = buildPart(ItemRequest.of(rawName, quantity, price, null), partName,
                 vehicles.resolve(donorId), donor, supplyId, authorId);

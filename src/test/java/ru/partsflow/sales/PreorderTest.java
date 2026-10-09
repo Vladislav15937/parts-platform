@@ -161,19 +161,36 @@ class PreorderTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Без цены, машины и количества позицию не завести: ответ словами, а не 500")
+    @DisplayName("Без цены, вида детали и количества позицию не завести; машина необязательна")
     void minimumIsEnforcedInWords() throws Exception {
         long supply = supply();
         MockHttpSession owner = login("vladelec");
         for (String bad : List.of(
                 expectedBody("Фара левая", 3, "0"),
                 expectedBody("Фара левая", 0, "9000"),
-                "{\"rawName\":\"Фара\",\"quantity\":1,\"price\":100}")) {
+                "{\"quantity\":1,\"price\":100}")) {
             mvc.perform(post("/api/intake/supplies/" + supply + "/expected-parts")
                             .with(csrf()).session(owner)
                             .contentType(MediaType.APPLICATION_JSON).content(bad))
                     .andExpect(status().isBadRequest());
         }
+
+        // Ответ владельца 9 октября 2026: машина при заведении не обязательна —
+        // контрактные агрегаты возят партиями без машин. Контроль в том же
+        // тесте: названная несуществующая машина по-прежнему отбивается словами.
+        mvc.perform(post("/api/intake/supplies/" + supply + "/expected-parts")
+                        .with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rawName\":\"Двигатель\",\"quantity\":1,\"price\":100}"))
+                .andExpect(status().isCreated());
+        assertThat(count("SELECT count(*) FROM part WHERE supply_id = " + supply
+                + " AND donor_id IS NULL AND expected_origin")).isEqualTo(1);
+        mvc.perform(post("/api/intake/supplies/" + supply + "/expected-parts")
+                        .with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rawName\":\"Двигатель\",\"donorId\":99999999,"
+                                + "\"quantity\":1,\"price\":100}"))
+                .andExpect(status().is4xxClientError());
     }
 
     // ---------- предзаказ ----------
@@ -650,6 +667,113 @@ class PreorderTest extends PostgresTestBase {
     }
 
     // ---------------------------------------------------------------
+
+    // ---------- доделка по PR 370: ответ владельца 9 октября 2026 ----------
+
+    @Test
+    @DisplayName("Смешанная сделка (предзаказ + обычная позиция) просрочена по сроку обычной: «Истек срок» её видит")
+    void mixedDealExpiresByTheOrdinaryPosition() throws Exception {
+        long expected = expectedPart(supply(), "Крыло переднее", 2, "4000");
+        long ordinaryPart = ordinaryPart("Крыло обычное", 1);
+        long onlyPreorderPart = expectedPart(supply(), "Капот", 1, "6000");
+
+        long mixed = json(mvc.perform(post("/api/deals").with(csrf()).session(login("prodavets"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customerId":%d,"reservedUntil":"%s",
+                                 "items":[{"partId":%d,"quantity":1,"warehouseId":%d},
+                                          {"partId":%d,"quantity":1,"warehouseId":%d}]}"""
+                                .formatted(customer, daysAhead(30), expected, near,
+                                        ordinaryPart, near)))
+                .andExpect(status().isCreated()).andReturn()).path("id").asLong();
+        long pure = createDeal(onlyPreorderPart, 1, near, daysAhead(30))
+                .andReturn().path("id").asLong();
+
+        inTenant(() -> jdbc.update(
+                "UPDATE deal SET reserved_until = now() - interval '2 days' WHERE id IN (?, ?)",
+                mixed, pure));
+
+        // Контроль в той же проверке: чисто предзаказная просрочкой по-прежнему
+        // не считается — иначе тест прошёл бы и там, где условие снято вовсе.
+        assertThat(expiredByEndpoint())
+                .as("просроченный резерв обычной позиции в смешанной сделке не видит никто")
+                .contains(mixed).doesNotContain(pure);
+
+        JsonNode board = board();
+        List<Long> onBoard = new ArrayList<>();
+        for (JsonNode column : board.path("columns")) {
+            if ("EXPIRED".equals(column.path("key").asText())) {
+                column.path("cards").forEach(card -> onBoard.add(card.path("id").asLong()));
+            }
+        }
+        assertThat(onBoard)
+                .as("доска и список просроченных разошлись на смешанной сделке")
+                .contains(mixed).doesNotContain(pure);
+
+        // Экран отличает смешанную от чисто предзаказной признаком, а не
+        // «есть предзаказ»: иначе «срок истёк» к смешанной не показали бы.
+        assertThat(cardOf(board, mixed).path("preorder").asBoolean()).isTrue();
+        assertThat(cardOf(board, mixed).path("preorderOnly").asBoolean()).isFalse();
+        assertThat(registryRow(mixed).path("preorderOnly").asBoolean()).isFalse();
+        assertThat(dealById(mixed).path("preorderOnly").asBoolean()).isFalse();
+        assertThat(registryRow(pure).path("preorderOnly").asBoolean()).isTrue();
+        assertThat(dealById(pure).path("preorderOnly").asBoolean()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Частичный приход не открывает пришедший остаток обычной продаже мимо очереди предзаказов")
+    void partialArrivalKeepsTheRemainderForPreorders() throws Exception {
+        long supply = supply();
+        long part = expectedPart(supply, "Дверь правая", 3, "12000");
+        long waiting = createDeal(part, 2, near, daysAhead(30)).andReturn().path("id").asLong();
+
+        // Приехала одна штука из трёх: обещанному (две) её не хватает, предзаказ ждёт.
+        assertThat(receipt(near, supply, part, 1, UUID.randomUUID().toString())
+                .getResponse().getStatus()).isEqualTo(201);
+        assertThat(stock("qty", part, near)).isEqualByComparingTo("1");
+        assertThat(dealById(waiting).path("items").get(0).path("status").asText())
+                .isEqualTo("PREORDER");
+
+        // Продавец за прилавком видит не «свободно 1», а то, что ему отдадут.
+        assertThat(stockRow(part).path("qtyAvailable").decimalValue())
+                .as("продавец видит свободным то, что обещано предзаказу")
+                .isEqualByComparingTo("0");
+
+        // И сервер ему этот остаток не отдаёт — словами, без поломки.
+        MvcResult refused = tryDeal(part, 1, near, null);
+        assertThat(refused.getResponse().getStatus())
+                .as("пришедшее, но обещанное предзаказу, ушло в обычную продажу: %s",
+                        text(refused))
+                .isEqualTo(409);
+        assertThat(text(refused)).contains("Пришла только часть поставки");
+        assertThat(stock("qty_reserved", part, near)).isEqualByComparingTo("0");
+
+        // Заказ с площадки не отклоняется (деньги уже у площадки), но и
+        // обещанное не отбирает: записывается необеспеченным.
+        MvcResult order = mvc.perform(post("/api/deals/orders").with(csrf())
+                        .session(login("prodavets"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"marketplace":"DROM","orderNo":"PO-%d",
+                                 "items":[{"partId":%d,"quantity":1,"warehouseId":%d}]}"""
+                                .formatted(System.nanoTime(), part, near)))
+                .andReturn();
+        assertThat(order.getResponse().getStatus()).isEqualTo(201);
+        assertThat(json(order).path("deal").path("status").asText())
+                .as("заказ площадки отложил пришедшее, обещанное предзаказу")
+                .isEqualTo("DRAFT");
+        assertThat(stock("qty_reserved", part, near)).isEqualByComparingTo("0");
+
+        // Пришла остальная часть: очередь предзаказов получает своё, остаток
+        // свободен, и обычная продажа снова проходит.
+        assertThat(receipt(near, supply, part, 2, UUID.randomUUID().toString())
+                .getResponse().getStatus()).isEqualTo(201);
+        assertThat(dealById(waiting).path("items").get(0).path("status").asText())
+                .isEqualTo("RESERVED");
+        assertThat(stock("qty_reserved", part, near)).isEqualByComparingTo("2");
+        assertThat(tryDeal(part, 1, near, null).getResponse().getStatus()).isEqualTo(201);
+        assertReconciled();
+    }
 
     private long supply() throws Exception {
         MvcResult created = mvc.perform(post("/api/intake/supplies").with(csrf())

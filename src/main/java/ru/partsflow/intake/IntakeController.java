@@ -260,11 +260,12 @@ public class IntakeController {
 
     /**
      * @param rawName вид детали — написание, как у приёмки
-     * @param donorId машина; обязательна, заголовок объявления собирается
-     *                из вида детали и машины
+     * @param donorId машина; необязательна (ответ владельца 9 октября 2026:
+     *                контрактные агрегаты возят партиями без машин) — заголовок
+     *                тогда собирается из одного вида детали
      */
     public record ExpectedPartRequest(@NotBlank String rawName,
-                                      @NotNull Long donorId,
+                                      Long donorId,
                                       @NotNull @Positive BigDecimal quantity,
                                       @NotNull @Positive BigDecimal price) {
     }

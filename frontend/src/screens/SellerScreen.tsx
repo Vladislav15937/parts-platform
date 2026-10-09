@@ -1302,7 +1302,7 @@ function DealFinder({
             // Считается он от того же слова: у готовой к выдаче дату брать
             // неоткуда, иначе поправка вернула бы половину прежнего обмана.
             const line = reservationTerm({
-              status: state, reservedUntil: d.reservedUntil, preorder: d.preorder,
+              status: state, reservedUntil: d.reservedUntil, preorder: d.preorder, preorderOnly: d.preorderOnly,
             });
             return (
               <li key={d.id}>
@@ -1452,7 +1452,7 @@ function DealCard({
   // чего никто не обещал. У готовой к выдаче — по той же причине: срок
   // резерва рядом со словом «готова» читается как ожидание оплаты.
   const term = reservationTerm({
-    status: state, reservedUntil: deal.reservedUntil, preorder: deal.preorder,
+    status: state, reservedUntil: deal.reservedUntil, preorder: deal.preorder, preorderOnly: deal.preorderOnly,
   });
   // А продление остаётся доступным, пока резерв стоит на самом документе:
   // товар и у оплаченной сделки лежит отложенным до этого числа, и убрать

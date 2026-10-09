@@ -223,6 +223,13 @@ public class SalesService {
                 continue;
             }
 
+            // Частичный приход: пришедшее, но обещанное предзаказам, обычной
+            // продаже не достаётся — сначала очередь предзаказов.
+            PreorderService.Hold hold = preorders.holdOf(part.getId());
+            if (hold != null && item.quantity().compareTo(hold.forOrdinarySale()) > 0) {
+                throw new IllegalStateException(hold.refusal(item.quantity()));
+            }
+
             // Резерв на складе ставится здесь же, в той же транзакции.
             // Отложить его «на потом» значит открыть окно, в котором ту же
             // деталь положит в свою сделку другой продавец.
@@ -423,9 +430,21 @@ public class SalesService {
      */
     private List<String> shortagesOf(List<ItemRequest> items) {
         List<String> missing = new ArrayList<>();
+        // Строки этого же заказа ещё не отложены: вторая позиция той же детали
+        // иначе не увидела бы первой.
+        java.util.Map<Long, BigDecimal> asked = new java.util.HashMap<>();
         for (ItemRequest item : items) {
             BigDecimal available = reservationRepository.availableQuantity(
                     item.partId(), item.warehouseId());
+            // Пришедшее, но обещанное предзаказам, заказу площадки не
+            // достаётся (частичный приход). Заказ при этом не отклоняется: он
+            // записывается необеспеченным, как при любой нехватке.
+            PreorderService.Hold hold = preorders.holdOf(item.partId());
+            if (hold != null) {
+                BigDecimal before = asked.getOrDefault(item.partId(), BigDecimal.ZERO);
+                available = available.min(hold.forOrdinarySale().subtract(before).max(BigDecimal.ZERO));
+                asked.merge(item.partId(), item.quantity(), BigDecimal::add);
+            }
             if (available.compareTo(item.quantity()) < 0) {
                 Part part = requirePart(item.partId());
                 missing.add("%s — нужно %s, свободно %s".formatted(
@@ -940,6 +959,7 @@ public class SalesService {
                         + " d.total_amount, d.paid_amount, d.status, d.reserved_until,"
                         + " d.manager_id, m.display_name AS manager_name,"
                         + PREORDER_EXISTS + " AS preorder,"
+                + " (" + PREORDER_ONLY + ") AS preorder_only,"
                         + " d.preorder_shift_from, d.preorder_shift_to"
                         + joins + where
                         + " ORDER BY d.id DESC LIMIT ?",
@@ -952,7 +972,7 @@ public class SalesService {
                         rs.getTimestamp("reserved_until") == null
                                 ? null : rs.getTimestamp("reserved_until").toInstant(),
                         (Long) rs.getObject("manager_id"), rs.getString("manager_name"),
-                        rs.getBoolean("preorder"),
+                        rs.getBoolean("preorder"), rs.getBoolean("preorder_only"),
                         dateOf(rs.getDate("preorder_shift_from")),
                         dateOf(rs.getDate("preorder_shift_to")),
                         List.of()),
@@ -1019,8 +1039,10 @@ public class SalesService {
      *                      обещание, которого никто не давал
      * @param managerName  пусто — ответственного нет
      * @param preorder     в сделке есть предзаказ: деталь по ожидаемой поставке
-     *                     ещё не пришла, и срок резерва у такой сделки не
-     *                     «истёк» (задача 0170)
+     *                     ещё не пришла (задача 0170)
+     * @param preorderOnly все открытые позиции — предзаказ: только у такой
+     *                     сделки срок резерва не «истёк». Смешанная просроченный
+     *                     резерв имеет, и без этого признака экран не отличил бы её
      * @param shiftFrom    дата прихода, названная клиенту до сдвига; вместе
      *                     с {@code shiftTo} — пометка «клиенту ещё не сказали»
      * @param foundBy      чем найдена при цифровом поиске: {@code DEAL_NUMBER},
@@ -1032,12 +1054,13 @@ public class SalesService {
                               BigDecimal totalAmount, BigDecimal paidAmount,
                               DealStatus status, Instant reservedUntil,
                               Long managerId, String managerName,
-                              boolean preorder, java.time.LocalDate shiftFrom,
+                              boolean preorder, boolean preorderOnly,
+                              java.time.LocalDate shiftFrom,
                               java.time.LocalDate shiftTo, List<String> foundBy) {
         DealListRow withFoundBy(List<String> found) {
             return new DealListRow(id, number, createdAt, customerId, customerName,
                     totalAmount, paidAmount, status, reservedUntil, managerId, managerName,
-                    preorder, shiftFrom, shiftTo, found);
+                    preorder, preorderOnly, shiftFrom, shiftTo, found);
         }
     }
 
@@ -1087,6 +1110,21 @@ public class SalesService {
     static final String PREORDER_EXISTS = " EXISTS (SELECT 1 FROM deal_item pi"
             + " WHERE pi.deal_id = d.id AND pi.status = 'PREORDER')";
 
+    /**
+     * Все открытые позиции сделки — предзаказ: ни одной, которую склад
+     * действительно отложил.
+     *
+     * <p>Срок резерва у такой сделки не «истекает». Смешанная
+     * (предзаказ плюс обычная позиция со склада) просроченный резерв имеет:
+     * обычная позиция держит настоящую деталь, и если «Истек срок» её не
+     * показывает, о просрочке не знает никто — а деталь заблокирована. Срок
+     * у сделки один, и для обычной позиции он тот же, что назвали при
+     * оформлении (ответ владельца 9 октября 2026, задача 0170).
+     */
+    static final String PREORDER_ONLY = PREORDER_EXISTS
+            + " AND NOT EXISTS (SELECT 1 FROM deal_item oi"
+            + " WHERE oi.deal_id = d.id AND oi.status = 'RESERVED')";
+
     /** Незакрытая сделка: товар ещё числится обещанным, и по ней есть работа. */
     private static final String BOARD_OPEN = " d.status IN ('DRAFT', 'RESERVED', 'READY')";
 
@@ -1122,7 +1160,7 @@ public class SalesService {
     private static final String STAGE_CASE = " CASE"
             + " WHEN d.status = 'DRAFT' THEN 'NEW'"
             + " WHEN d.status = 'RESERVED' AND d.reserved_until IS NOT NULL"
-            + " AND d.reserved_until < ? AND NOT" + PREORDER_EXISTS + " THEN 'EXPIRED'"
+            + " AND d.reserved_until < ? AND NOT (" + PREORDER_ONLY + ") THEN 'EXPIRED'"
             + " WHEN d.status = 'READY'"
             + " OR (d.total_amount > 0 AND d.paid_amount >= d.total_amount) THEN 'READY'"
             + " WHEN d.paid_amount <= 0 THEN 'AWAITING_PAYMENT'"
@@ -1270,6 +1308,7 @@ public class SalesService {
                 + ", d.id, d.number, d.created_at, c.name AS customer_name,"
                 + " d.total_amount, d.paid_amount, d.status, d.reserved_until,"
                 + PREORDER_EXISTS + " AS preorder,"
+                + " (" + PREORDER_ONLY + ") AS preorder_only,"
                 + " d.preorder_shift_from, d.preorder_shift_to"
                 + " FROM deal d"
                 + " LEFT JOIN customer c ON c.id = d.customer_id"
@@ -1300,7 +1339,7 @@ public class SalesService {
                             DealStatus.valueOf(rs.getString("status")),
                             rs.getTimestamp("reserved_until") == null
                                     ? null : rs.getTimestamp("reserved_until").toInstant(),
-                            rs.getBoolean("preorder"),
+                            rs.getBoolean("preorder"), rs.getBoolean("preorder_only"),
                             dateOf(rs.getDate("preorder_shift_from")),
                             dateOf(rs.getDate("preorder_shift_to"))));
                 },
@@ -1390,7 +1429,8 @@ public class SalesService {
                             String customerName,
                             BigDecimal totalAmount, BigDecimal paidAmount,
                             DealStatus status, Instant reservedUntil,
-                            boolean preorder, java.time.LocalDate shiftFrom,
+                            boolean preorder, boolean preorderOnly,
+                            java.time.LocalDate shiftFrom,
                             java.time.LocalDate shiftTo) {
     }
 
