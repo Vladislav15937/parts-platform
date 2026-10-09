@@ -82,7 +82,20 @@ public final class TestImages {
      * а не рассуждением.
      */
     public static void startMinio(GenericContainer<?> container) {
-        ensureAvailable(image("minio"));
+        start(container, "minio");
+    }
+
+    /**
+     * Поднять контейнер сервиса из {@code ops/images.yml} с проверкой образа
+     * заранее — единственная точка подъёма контейнеров в тестах: и хранилище,
+     * и {@link PostgresTestBase} идут сюда. Вторая копия проверки разошлась бы
+     * с первой (задача 0187: Postgres, самый нагруженный подъём, ходил мимо
+     * неё и при пропавшем образе висел до таймаута).
+     *
+     * <p>Образ в локальном кэше в реестр не ходит вовсе: см. {@code present}.
+     */
+    public static void start(GenericContainer<?> container, String service) {
+        ensureAvailable(image(service));
         container.start();
     }
 

@@ -620,6 +620,107 @@ class PreorderTest extends PostgresTestBase {
         createDeal(part, 1, near, daysAhead(20)).andReturn();
     }
 
+    // ---------- площадка (задача 0259) ----------
+
+    @Autowired
+    private ru.partsflow.publishing.drom.DromPriceGenerator dromGenerator;
+
+    @Test
+    @DisplayName("Предзаказ снимает объявление с Дрома дельтой сразу; отмена возвращает; приход не снимает второй раз")
+    void preorderTakesTheListingOffDromWithTheDelta() throws Exception {
+        long supply = supply();
+        long part = expectedPart(supply, "Фара дельтовая", 2, "9000");
+        long control = expectedPart(supply, "Фара без предзаказа", 2, "9100");
+        inTenant(() -> {
+            jdbc.update("UPDATE part SET is_published = true WHERE id IN (?, ?)", part, control);
+            return null;
+        });
+
+        // До предзаказа ожидаемая позиция в дельте доступна: именно такое
+        // объявление площадка и держит.
+        assertThat(deltaOffer(part)).contains("<available>true</available>");
+
+        inTenant(() -> jdbc.update("DELETE FROM part_change"));
+        long deal = createDeal(part, 2, near, daysAhead(30)).andReturn().path("id").asLong();
+
+        assertThat(marked(part))
+                .as("предзаказ не отметил позицию изменившейся: дельты не будет, объявление "
+                        + "висит доступным до полного забора, то есть до трёх суток")
+                .isTrue();
+        assertThat(marked(control)).as("отметка легла на чужую позицию").isFalse();
+        String listed = deltaOffer(part);
+        assertThat(listed)
+                .as("дельта молчит о позиции под предзаказом: объявление осталось доступным")
+                .contains("<available>false</available>")
+                .contains("<quantity>0</quantity>");
+        assertThat(deltaOffer(control)).contains("<available>true</available>");
+        assertThat(fullPrice())
+                .as("полный прайс по-прежнему не содержит позицию под предзаказом")
+                .doesNotContain("<ordercode>" + codeOf(part) + "</ordercode>")
+                .contains("<ordercode>" + codeOf(control) + "</ordercode>");
+
+        // Отмена: место освободилось, позиция возвращается доступной.
+        inTenant(() -> jdbc.update("DELETE FROM part_change"));
+        mvc.perform(post("/api/deals/" + deal + "/cancel").with(csrf())
+                        .session(login("prodavets"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"передумал\"}"))
+                .andExpect(status().isOk());
+        assertThat(marked(part))
+                .as("отмена предзаказа не отметила позицию: объявление так и осталось снятым")
+                .isTrue();
+        assertThat(deltaOffer(part))
+                .contains("<available>true</available>")
+                .contains("<quantity>2</quantity>");
+
+        // Приход под полный предзаказ: обычный резерв, недоступна, без возврата
+        // «доступной» между шагами.
+        createDeal(part, 2, near, daysAhead(30));
+        inTenant(() -> jdbc.update("DELETE FROM part_change"));
+        assertThat(receipt(near, supply, part, 2, UUID.randomUUID().toString())
+                .getResponse().getStatus()).isEqualTo(201);
+        assertThat(stock("qty_reserved", part, near)).isEqualByComparingTo("2");
+        assertThat(deltaOffer(part))
+                .contains("<available>false</available>")
+                .contains("<quantity>0</quantity>");
+    }
+
+    private static final ru.partsflow.publishing.FeedSettings EXPECTING =
+            new ru.partsflow.publishing.FeedSettings(
+                    null, null, null, null, null, true, "Ожидается поступление");
+
+    private boolean marked(long partId) {
+        return count("SELECT count(*) FROM part_change WHERE part_id = " + partId) > 0;
+    }
+
+    private String codeOf(long partId) {
+        return text("SELECT public_code FROM part WHERE id = " + partId);
+    }
+
+    private String fullPrice() {
+        return inTenant(() -> {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            dromGenerator.writeTo(out,
+                    ru.partsflow.publishing.drom.DromPriceGenerator.FeedFilter.everything(),
+                    null, EXPECTING);
+            return out.toString(java.nio.charset.StandardCharsets.UTF_8);
+        });
+    }
+
+    /** Предложение позиции в дельте; пустая дельта — провал, а не пустая строка. */
+    private String deltaOffer(long partId) {
+        String xml = inTenant(() -> {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            dromGenerator.writeDelta(out, List.of(partId),
+                    ru.partsflow.publishing.drom.DromPriceGenerator.FeedFilter.everything(),
+                    EXPECTING);
+            return out.toString(java.nio.charset.StandardCharsets.UTF_8);
+        });
+        int at = xml.indexOf("<ordercode>" + codeOf(partId) + "</ordercode>");
+        assertThat(at).as("позиции нет в дельте вовсе: %s", xml).isNotNegative();
+        return xml.substring(at, xml.indexOf("</offer>", at));
+    }
+
     // ---------- что видит продавец ----------
 
     @Test
