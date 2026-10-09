@@ -57,6 +57,28 @@ describe('список сделок продавца', () => {
   });
 
   /**
+   * Смешанная выдача подписана (задача 0099): сделка №347 и сделка с позицией
+   * 347 лежат в одном списке, и по строке видно, почему она здесь. Строка,
+   * найденная не числом, подписи не несёт.
+   */
+  it('строка подписана, чем найдена: по номеру сделки или по номеру позиции', async () => {
+    stubApi({
+      items: [
+        row({ id: 1, number: 347, foundBy: ['DEAL_NUMBER'] }),
+        row({ id: 2, number: 12, foundBy: ['PART_NUMBER'] }),
+        row({ id: 3, number: 13, foundBy: [] }),
+      ],
+      total: 3,
+    });
+
+    render(<DealsScreen onOpenDeal={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('№347')).toBeTruthy());
+    expect(screen.getAllByText('по номеру сделки')).toHaveLength(1);
+    expect(screen.getAllByText('по номеру позиции')).toHaveLength(1);
+  });
+
+  /**
    * У живого клиента просрочена больше половины отложенных сделок, и это
    * не срок, а очередь на обзвон: вчерашнее число рядом со словом «отложена»
    * продавец прочтёт как обещание.
@@ -209,6 +231,7 @@ interface Row {
   reservedUntil: string | null;
   managerId: number | null;
   managerName: string | null;
+  foundBy: string[];
 }
 
 function row(overrides: Partial<Row> = {}): Row {
@@ -217,7 +240,7 @@ function row(overrides: Partial<Row> = {}): Row {
     customerId: 3, customerName: 'Автосервис на Русской',
     totalAmount: '34500.00', paidAmount: '12000.00',
     status: 'RESERVED', reservedUntil: null,
-    managerId: 7, managerName: 'Владимир Петров',
+    managerId: 7, managerName: 'Владимир Петров', foundBy: [],
     ...overrides,
   };
 }
