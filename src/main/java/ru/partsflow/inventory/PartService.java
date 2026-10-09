@@ -933,15 +933,16 @@ public class PartService {
      * уходит в полный перебор. Триграммные индексы на public_code
      * и raw_number уже стоят (tenant/055) — они заводились для витрины.
      *
-     * Место под %s — ветка номера позиции (задача 0064). Она приходит одной
+     * Последняя ветка — номер позиции (задача 0064; см. textMatch). Она приходит одной
      * строкой из PartNumberQuery, общей с витриной: разойдись они, «позиция
      * 347» нашлась бы у владельца и не нашлась у продавца — ровно та болезнь,
      * что уже чинилась тут дважды.
      */
     /**
      * Откуда продавец берёт «что можно предложить»: остаток на складах и
-     * ожидаемые по поставке позиции (задача 0170) — одним источником, чтобы
-     * выдача, счёт и списки значений не разошлись.
+     * ожидаемые по поставке позиции (задача 0170) — двумя ветвями
+     * {@code UNION ALL}, у каждой своё {@code FROM}, а выдача, счёт и списки
+     * значений собирают обе одинаково, чтобы не разойтись.
      *
      * <p><b>Ожидаемая позиция — строка того же вида, что и остаток.</b> Её
      * «свободное» — не складское, а сколько ещё можно отложить предзаказом:
@@ -953,9 +954,9 @@ public class PartService {
      * прячется — как и отложенная на складе: продавец отвечает «ожидается,
      * но всё под заказ», а не «нет такого».
      *
-     * <p>Складской резерв этим не затронут: условие {@code qty > 0} для
-     * остатка прежнее, а ожидаемая позиция под него не подпадает вовсе — у
-     * неё нет строки раскладки.
+     * <p>Складской резерв этим не затронут: ветвь остатка — прежний
+     * {@code JOIN part_stock ... qty > 0} до задачи 0170, а ожидаемая
+     * позиция под него не подпадает вовсе — у неё нет строки раскладки.
      *
      * <p><b>Частичный приход:</b> пришедшее, но обещанное предзаказам, в
      * «свободно» не входит — иначе продавец увидел бы деталь, которую сервер
@@ -963,45 +964,106 @@ public class PartService {
      * вычитается из склада с меньшим номером первым, остальное — со
      * следующего.
      *
-     * <p><b>{@code LATERAL}, а не обычная производная таблица.</b> Замер
-     * 9 октября 2026 на складе в 50 000 позиций (EXPLAIN ANALYZE, в PR): прежний
-     * {@code JOIN part_stock} отвечал за 56 мс, переписанный на
-     * {@code UNION ALL} без привязки к строке — за 668 мс, а с вычетом
-     * предзаказов — за 790: планировщик хэширует весь склад (50 303 строки)
-     * вместо выборки по найденным. Привязка ветвей к {@code p.id} возвращает
-     * индексный доступ по найденному — 208 мс на запрос, находящий 5 301 позицию
-     * из 50 000, и 28–31 мс на запрос в полтысячи находок.
+     * <p><b>Что мерили и чем кончилось (задачи 0170 и 0261, 9 октября 2026).</b>
+     * Склад в 50 300 позиций, «фара» (5 563 находки) и «модель96» (503),
+     * медиана Execution Time (генератор и замер — {@code tools/bench/},
+     * планы — в PR 0261). Ожидаемые позиции в одном соединении со складом
+     * дорожали на любом устройстве запроса:
+     * <ul>
+     *   <li>{@code UNION ALL} внутри {@code JOIN} — планировщик выполняет
+     *       целиком: хэш всего склада, а оценка в сотни тысяч включает JIT —
+     *       в десятки раз дороже;</li>
+     *   <li>{@code JOIN LATERAL} из двух ветвей по строке (0170) — втрое
+     *       дороже: на каждую найденную деталь {@code Append} и подзапросы;</li>
+     *   <li>{@code LEFT JOIN part_stock} и проверка ожидаемой в условии
+     *       соединения (0261, первая редакция) — 1,2 на «фаре» и 1,7–3 на
+     *       узком запросе: склад становится «необязательной» стороной, и
+     *       выдача читает {@code part} целиком там, где хватало индекса;</li>
+     *   <li>нынешняя: две полные ветви {@code UNION ALL} <i>сверху</i>. Ветвь
+     *       остатка — прежний запрос с внутренним соединением, ветвь ожидаемых
+     *       идёт по частичному индексу {@code part_expected_ix}
+     *       (единицы или сотни строк), и условие поиска у неё сужено до
+     *       ожидаемых прямо в каждой ветке {@code UNION}: триграммный индекс
+     *       не читается заново ради трёхсот строк. Цифры — в памятке модуля.</li>
+     * </ul>
+     *
+     * <p><b>Предзаказы — соединением с малой таблицей, а не подзапросом на
+     * строку.</b> Обещанное по детали ({@code deal_item PREORDER}) собирается
+     * агрегатом по {@code part_id} один раз, а «сколько свободного лежит
+     * на складах с меньшим номером» — оконной суммой только по деталям,
+     * у которых предзаказ есть (единицы). Коррелированная сумма внутри
+     * {@code CASE} на каждую строку оценивается планировщиком по всем найденным
+     * и уводит стоимость плана за {@code jit_above_cost}: первая же такая
+     * редакция отвечала за 75 мс при 31 мс работы — остальное компиляция.
+     *
+     * <p><b>Предикат ожидаемой ветви записан дословно как у индекса</b>
+     * ({@code expected_origin AND status = 'DRAFT'}, {@code tenant/074}):
+     * планировщик берёт частичный индекс, только если условие запроса его
+     * влечёт, а не взяв — молча читает {@code part} целиком; об этом
+     * узнают по времени ответа. Стережёт {@code StockSearchExpectedTest}.
      */
-    private static final String STOCK_SOURCE = """
-                  JOIN LATERAL (
-                      SELECT ps.part_id, ps.warehouse_id, ps.cell_id, ps.qty,
-                             ps.qty_reserved + CASE WHEN h.pending IS NULL THEN 0
-                                  ELSE LEAST(ps.qty - ps.qty_reserved,
-                                             GREATEST(h.pending - COALESCE(
-                                                 (SELECT sum(x.qty - x.qty_reserved)
-                                                    FROM part_stock x
-                                                   WHERE x.part_id = ps.part_id
-                                                     AND x.warehouse_id < ps.warehouse_id), 0), 0))
-                                  END AS qty_reserved,
-                             false AS expected
-                        FROM part_stock ps
-                        LEFT JOIN LATERAL (SELECT sum(quantity) AS pending FROM deal_item
-                                            WHERE part_id = ps.part_id
-                                              AND status = 'PREORDER') h ON true
-                       WHERE ps.part_id = p.id AND ps.qty > 0
-                      UNION ALL
-                      SELECT e.id, (SELECT min(w0.id) FROM warehouse w0 WHERE w0.is_active),
-                             NULL::bigint,
-                             e.quantity - COALESCE((SELECT sum(i.quantity) FROM deal_item i
-                                                     WHERE i.part_id = e.id
-                                                       AND i.status = 'PREORDER'), 0),
-                             0, true
-                        FROM part e
-                        JOIN supply es ON es.id = e.supply_id
-                       WHERE e.id = p.id AND e.expected_origin AND e.status = 'DRAFT'
-                         AND es.status IN ('EXPECTED', 'IN_TRANSIT')
-                  ) s ON true
-                """;
+    static final String EXPECTED_PREDICATE = "expected_origin AND status = 'DRAFT'";
+
+    /** Ветвь остатка — со всеми столбцами выдачи. */
+    private static final String STOCK_BRANCH = """
+            SELECT p.id, p.number, p.public_code, p.title, p.price, p.status,
+                   p.description, p.marking, p.created_at,
+                   w.id AS warehouse_id, w.name AS warehouse_name, c.code AS cell_code,
+                   s.qty,
+                   s.qty_reserved + CASE WHEN pn.pending IS NULL THEN 0
+                        ELSE LEAST(s.qty - s.qty_reserved,
+                                   GREATEST(pn.pending - COALESCE(pre.before, 0), 0)) END AS qty_reserved,
+                   false AS expected, sup.expected_on
+              FROM part p
+              JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
+              LEFT JOIN (SELECT part_id, sum(quantity) AS pending FROM deal_item
+                          WHERE status = 'PREORDER' GROUP BY part_id) pn ON pn.part_id = p.id
+              LEFT JOIN (SELECT x.part_id, x.warehouse_id,
+                                COALESCE(sum(x.qty - x.qty_reserved) OVER (
+                                    PARTITION BY x.part_id ORDER BY x.warehouse_id
+                                    ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS before
+                           FROM part_stock x
+                          WHERE x.part_id IN (SELECT part_id FROM deal_item
+                                               WHERE status = 'PREORDER')) pre
+                     ON pre.part_id = s.part_id AND pre.warehouse_id = s.warehouse_id
+              JOIN warehouse w ON w.id = s.warehouse_id
+              LEFT JOIN storage_cell c ON c.id = s.cell_id
+              LEFT JOIN supply sup ON sup.id = p.supply_id
+            """;
+
+    /** Ветвь ожидаемых — те же столбцы, что у ветви остатка, в том же порядке. */
+    private static final String EXPECTED_BRANCH = """
+            SELECT p.id, p.number, p.public_code, p.title, p.price, p.status,
+                   p.description, p.marking, p.created_at,
+                   w.id, w.name, NULL::text,
+                   p.quantity - COALESCE((SELECT sum(i.quantity) FROM deal_item i
+                                           WHERE i.part_id = p.id AND i.status = 'PREORDER'), 0),
+                   0, true, sup.expected_on
+              FROM part p
+              JOIN supply sup ON sup.id = p.supply_id AND sup.status IN ('EXPECTED', 'IN_TRANSIT')
+              JOIN (SELECT min(w0.id) AS warehouse_id FROM warehouse w0 WHERE w0.is_active) s ON true
+              JOIN warehouse w ON w.id = s.warehouse_id
+            """;
+
+    /** Для счёта и списков значений столбцы выдачи не нужны, склады и ячейки — тем более. */
+    private static final String STOCK_FROM =
+            "FROM part p JOIN part_stock s ON s.part_id = p.id AND s.qty > 0\n";
+
+    private static final String EXPECTED_FROM = """
+            FROM part p
+              JOIN supply sup ON sup.id = p.supply_id AND sup.status IN ('EXPECTED', 'IN_TRANSIT')
+              JOIN (SELECT min(w0.id) AS warehouse_id FROM warehouse w0 WHERE w0.is_active) s ON true
+            """;
+
+    /**
+     * Ожидаемая позиция: черновик из поставки, а если у неё всё же есть строка
+     * раскладки с остатком, это деталь со склада (при приходе статус уже
+     * {@code IN_STOCK}, и обеих строк система не создаёт — но отдавать
+     * дубль при ручной правке схемы нельзя).
+     */
+    static final String EXPECTED_WHERE =
+            " p.expected_origin AND p.status = 'DRAFT'"
+            + " AND NOT EXISTS (SELECT 1 FROM part_stock x WHERE x.part_id = p.id AND x.qty > 0)";
 
     /**
      * Условие поиска продавца — одно на выдачу и на счёт.
@@ -1010,17 +1072,34 @@ public class PartService {
      * не тем условием, которым собран список: продавец сузил бы запрос
      * по неверной подсказке. Та же причина, по которой отбор один у страницы
      * витрины, её выгрузки и правки списком.
+     *
+     * <p>Текстовое условие строится дважды — для ветви остатка и для ветви
+     * ожидаемых. Во втором случае каждая ветка {@code UNION} сужена до
+     * ожидаемых ({@link #EXPECTED_PREDICATE}): без этого планировщик строит
+     * весь набор совпадений — «фара» это 11 000 строк и 13 мс — ради трёхсот
+     * позиций; с этим ветка идёт по частичному индексу и читает строку
+     * ожидаемой один раз. Параметры у обоих построений одни и те же, в том же
+     * порядке.
      */
-    private static final String STOCK_SEARCH_MATCH = """
-                 WHERE p.id IN (
-                         SELECT id FROM part WHERE public_code ILIKE ?
-                          UNION SELECT id FROM part WHERE title ILIKE ?
-                          UNION SELECT id FROM part
-                                 WHERE to_tsvector('russian', coalesce(title, '') || ' '
-                                           || coalesce(description, '') || ' '
-                                           || coalesce(marking, ''))
-                                       @@ plainto_tsquery('russian', ?)
-                          UNION SELECT part_id FROM part_oem WHERE raw_number ILIKE ?%s)""";
+    static String textMatch(boolean expectedOnly, boolean byNumber) {
+        // Разделитель — явной строкой, а не отступом текстового блока: пробел
+        // в конце строки блок срезает, и «?» склеивался бы со следующим словом.
+        String only = expectedOnly ? " AND " + EXPECTED_PREDICATE : "";
+        String oem = expectedOnly
+                ? "SELECT o.part_id FROM part_oem o JOIN part e ON e.id = o.part_id"
+                        + " WHERE o.raw_number ILIKE ? AND e.expected_origin AND e.status = 'DRAFT'"
+                : "SELECT part_id FROM part_oem WHERE raw_number ILIKE ?";
+        return "p.id IN (\n"
+                + "         SELECT id FROM part WHERE public_code ILIKE ?" + only + "\n"
+                + "          UNION SELECT id FROM part WHERE title ILIKE ?" + only + "\n"
+                + "          UNION SELECT id FROM part\n"
+                + "                 WHERE to_tsvector('russian', coalesce(title, '') || ' '\n"
+                + "                           || coalesce(description, '') || ' '\n"
+                + "                           || coalesce(marking, ''))\n"
+                + "                       @@ plainto_tsquery('russian', ?)" + only + "\n"
+                + "          UNION " + oem
+                + (byNumber ? PartNumberQuery.UNION_BRANCH + only : "") + ")";
+    }
 
     /**
      * Условие поиска и его аргументы — вместе, чтобы выдача и счёт брали одно.
@@ -1070,8 +1149,11 @@ public class PartService {
                 wheels.append(" AND part_id IN (SELECT id FROM part WHERE title ILIKE ?)");
                 wheelArgs.add("%" + size.text().strip() + "%");
             }
-            return new Match(" WHERE p.id IN (SELECT part_id FROM part_wheel WHERE true"
-                    + wheels + ")", wheelArgs, size.text() == null ? "" : size.text(), null);
+            // Условие у обеих ветвей одно: часть колёс — единицы, и сужать
+            // его до ожидаемых незачем.
+            String sizeMatch = "p.id IN (SELECT part_id FROM part_wheel WHERE true" + wheels + ")";
+            return new Match(sizeMatch, sizeMatch, wheelArgs,
+                    size.text() == null ? "" : size.text(), null);
         }
 
         String like = "%" + text.strip() + "%";
@@ -1083,8 +1165,7 @@ public class PartService {
         if (number != null) {
             args.add(number);
         }
-        return new Match(
-                STOCK_SEARCH_MATCH.formatted(number == null ? "" : PartNumberQuery.UNION_BRANCH),
+        return new Match(textMatch(false, number != null), textMatch(true, number != null),
                 args, text, number);
     }
 
@@ -1097,8 +1178,10 @@ public class PartService {
     }
 
     /**
-     * @param sql  условие отбора со своими ветками
-     * @param args его параметры по порядку
+     * @param stockSql    условие отбора для ветви остатка, без {@code WHERE}
+     * @param expectedSql то же для ветви ожидаемых: те же параметры в том же
+     *                    порядке, но сужено до ожидаемых позиций
+     * @param args параметры любого из двух условий по порядку
      * @param rankText текст для ранжирования выдачи; отдельно от параметров,
      *                 потому что при отборе по размеру их порядок другой —
      *                 брать «третий по счёту» значило бы однажды подставить
@@ -1109,7 +1192,8 @@ public class PartService {
      *               вторым разом, и брать его «последним из списка» значило
      *               бы однажды поставить в порядок номер производителя
      */
-    private record Match(String sql, List<Object> args, String rankText, Long number) {
+    private record Match(String stockSql, String expectedSql, List<Object> args,
+                         String rankText, Long number) {
     }
 
     @Transactional(readOnly = true)
@@ -1139,7 +1223,11 @@ public class PartService {
         // по полям: покупатель звонит и говорит по-русски и словами.
         Match match = matchFor(query);
         Narrowing narrowing = narrowingOf(filter);
+        // Условие стоит в обеих ветвях, и параметры идут дважды: сначала
+        // ветвь остатка, потом ветвь ожидаемых.
         List<Object> args = new ArrayList<>(match.args());
+        args.addAll(narrowing.args());
+        args.addAll(match.args());
         args.addAll(narrowing.args());
         String order = orderBy(filter);
         // Найденное по номеру позиции встаёт первым — и при заданном порядке
@@ -1159,24 +1247,23 @@ public class PartService {
             args.add(match.rankText());
         }
         args.add(limit);
-        List<StockRow> rows = jdbc.query("""
-                SELECT p.id, p.number, p.public_code, p.title, p.price, p.status,
-                       w.id AS warehouse_id, w.name AS warehouse_name,
-                       c.code AS cell_code,
-                       s.qty, s.qty_reserved, s.qty - s.qty_reserved AS qty_available,
-                       s.expected, sup.expected_on
-                  FROM part p
-                """ + STOCK_SOURCE + """
-                  JOIN warehouse w ON w.id = s.warehouse_id
-                  LEFT JOIN storage_cell c ON c.id = s.cell_id
-                  LEFT JOIN supply sup ON sup.id = p.supply_id
-                """ + match.sql() + narrowing.sql()
-                // Разделитель явной строкой, а не отступом текстового блока:
-                // у блока, чьи кавычки стоят на строке содержимого, срезается
-                // весь отступ, и «= ?» склеивалось с «ORDER BY» в «?ORDER BY» —
-                // отказ Postgres на грамматике, то есть пятисотка на живом
-                // запросе. Та же ловушка, что «ENDAS supply» у выгрузки колёс.
-                + "\n ORDER BY " + (match.number() == null ? "" : "(p.number = ?) DESC, ")
+        // Куски склеиваются явными строками, а не отступом текстового блока:
+        // у блока, чьи кавычки стоят на строке содержимого, срезается весь
+        // отступ, и «= ?» склеивалось с «ORDER BY» в «?ORDER BY» — отказ
+        // Postgres на грамматике, то есть пятисотка на живом запросе. Та же
+        // ловушка, что «ENDAS supply» у выгрузки колёс.
+        List<StockRow> rows = jdbc.query(
+                "SELECT r.id, r.number, r.public_code, r.title, r.price, r.status,\n"
+                + "       r.warehouse_id, r.warehouse_name, r.cell_code,\n"
+                + "       r.qty, r.qty_reserved, r.qty - r.qty_reserved AS qty_available,\n"
+                + "       r.expected, r.expected_on\n"
+                + "  FROM (\n"
+                + STOCK_BRANCH + " WHERE " + match.stockSql() + narrowing.sql() + "\n"
+                + "UNION ALL\n"
+                + EXPECTED_BRANCH + " WHERE " + EXPECTED_WHERE
+                + " AND " + match.expectedSql() + narrowing.sql() + "\n"
+                + ") r\n"
+                + " ORDER BY " + (match.number() == null ? "" : "(r.number = ?) DESC, ")
                 + (order != null ? order : DEFAULT_STOCK_ORDER)
                 + "\n LIMIT ?",
                 (rs, i) -> new StockRow(
@@ -1215,10 +1302,17 @@ public class PartService {
     private long countAvailable(Match match, Narrowing narrowing) {
         List<Object> args = new ArrayList<>(match.args());
         args.addAll(narrowing.args());
-        Long found = jdbc.queryForObject("""
-                SELECT count(*)
-                  FROM part p
-                """ + STOCK_SOURCE + match.sql() + narrowing.sql(),
+        args.addAll(match.args());
+        args.addAll(narrowing.args());
+        // Две ветви тем же условием, что и выдача, — суммой двух счётов в одном
+        // запросе: на ветви остатка столбцы `part` не нужны, и планировщик
+        // читает один индекс (на узком запросе это 4 мс, а не 12).
+        Long found = jdbc.queryForObject(
+                "SELECT (SELECT count(*) " + STOCK_FROM
+                + " WHERE " + match.stockSql() + narrowing.sql() + ")\n"
+                + "     + (SELECT count(*) " + EXPECTED_FROM
+                + " WHERE " + EXPECTED_WHERE + " AND " + match.expectedSql()
+                + narrowing.sql() + ")",
                 Long.class, args.toArray());
         return found == null ? 0 : found;
     }
@@ -1239,20 +1333,24 @@ public class PartService {
     private Facets facetsOf(Match match) {
         // Одним запросом, а не тремя: у каждого свой проход по найденному,
         // а различных троек «марка · модель · оценка» в нём десятки.
-        List<String[]> found = jdbc.query("""
-                SELECT DISTINCT b.name AS brand, m.name AS model,
-                """ + CatalogService.QUALITY_GRADE + " AS grade" + """
-
-                  FROM part p
-                """ + STOCK_SOURCE + """
-                  LEFT JOIN donor d ON d.id = p.donor_id
-                  LEFT JOIN catalog.brand b ON b.id = d.brand_id
-                  LEFT JOIN catalog.model m ON m.id = d.model_id
-                """ + match.sql() + """
-                 ORDER BY 1, 2, 3""",
+        String values = "SELECT b.name AS brand, m.name AS model, "
+                + CatalogService.QUALITY_GRADE + " AS grade\n";
+        String donors = "\n  LEFT JOIN donor d ON d.id = p.donor_id"
+                + "\n  LEFT JOIN catalog.brand b ON b.id = d.brand_id"
+                + "\n  LEFT JOIN catalog.model m ON m.id = d.model_id\n";
+        List<Object> args = new ArrayList<>(match.args());
+        args.addAll(match.args());
+        // UNION, а не UNION ALL: повторы схлопывает он, и DISTINCT сверху не нужен.
+        List<String[]> found = jdbc.query(
+                values + "  " + STOCK_FROM + donors
+                + " WHERE " + match.stockSql() + "\n"
+                + "UNION\n"
+                + values + "  " + EXPECTED_FROM + donors
+                + " WHERE " + EXPECTED_WHERE + " AND " + match.expectedSql() + "\n"
+                + " ORDER BY 1, 2, 3",
                 (rs, i) -> new String[]{
                         rs.getString("brand"), rs.getString("model"), rs.getString("grade")},
-                match.args().toArray());
+                args.toArray());
 
         List<VehicleOption> vehicles = new ArrayList<>();
         List<String> grades = new ArrayList<>();
@@ -1285,8 +1383,8 @@ public class PartService {
      * становится порядком по умолчанию (по совпадению), как на витрине.
      */
     private static final Map<String, String> STOCK_SORTS = Map.of(
-            "price", "p.price",
-            "intake", "p.created_at");
+            "price", "r.price",
+            "intake", "r.created_at");
 
     /**
      * Порядок по умолчанию — по совпадению, свободное сначала.
@@ -1295,12 +1393,12 @@ public class PartService {
      * совпадения по номеру позиции, и собирается строка в одном месте.
      */
     private static final String DEFAULT_STOCK_ORDER = """
-            (s.qty - s.qty_reserved > 0) DESC,
-                      ts_rank(to_tsvector('russian', coalesce(p.title, '') || ' '
-                          || coalesce(p.description, '') || ' '
-                          || coalesce(p.marking, '')),
+            (r.qty - r.qty_reserved > 0) DESC,
+                      ts_rank(to_tsvector('russian', coalesce(r.title, '') || ' '
+                          || coalesce(r.description, '') || ' '
+                          || coalesce(r.marking, '')),
                           plainto_tsquery('russian', ?)) DESC,
-                      p.id""";
+                      r.id""";
 
     /**
      * @return {@code null}, если порядок продавцом не задан, — тогда выдача
@@ -1318,7 +1416,7 @@ public class PartService {
         // «что подороже», получил бы список без цен.
         // Вторым ключом номер позиции: без полного порядка одинаковые цены
         // база вправе вернуть в любой последовательности.
-        return column + (filter.descending() ? " DESC" : " ASC") + " NULLS LAST, p.id";
+        return column + (filter.descending() ? " DESC" : " ASC") + " NULLS LAST, r.id";
     }
 
     /**
