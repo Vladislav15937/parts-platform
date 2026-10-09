@@ -94,7 +94,8 @@ public class DromPriceGenerator {
                    -- со склада: ноль в колонке количества Дром читает как
                    -- «товар удалить», то есть объявление, ради которого всё
                    -- и затевалось, не появилось бы вовсе.
-                   CASE WHEN p.status = 'DRAFT' AND in_transit.id IS NOT NULL
+                   CASE WHEN ${preordered} THEN 0
+                        WHEN p.status = 'DRAFT' AND in_transit.id IS NOT NULL
                         THEN p.quantity
                         ELSE COALESCE(s.qty_available, 0) END AS qty_available,
                    (p.status = 'DRAFT' AND in_transit.id IS NOT NULL) AS in_transit,
@@ -248,8 +249,15 @@ public class DromPriceGenerator {
                -- резервом и вычитается из остатка, как любой другой
                -- (решение владельца 9 октября 2026, задача 0170). Счётчик
                -- выгрузки считает тем же условием.
-               AND NOT EXISTS (SELECT 1 FROM deal_item pre
-                                WHERE pre.part_id = p.id AND pre.status = 'PREORDER')
+               --
+               -- В ДЕЛЬТЕ этого условия нет, и это не расхождение с прайсом:
+               -- дельта об исчезновении строки сообщить не умеет, а позиция,
+               -- опубликованная до предзаказа, висела бы на Дроме доступной до
+               -- полного забора — до трёх суток (задача 0259, решение владельца
+               -- 9 октября 2026: «снимать объявление с Дрома сразу»). Поэтому
+               -- в дельте позиция под предзаказом остаётся, но уезжает
+               -- недоступной и с нулём в остатке — как списанная.
+               ${notPreordered}
                -- Цена обязательна, и ноль в неё не годится: в выгрузке
                -- прежней системы ноль стоит там, где поле не заполняли,
                -- а в объявлении «0 ₽» — это публичное обещание отдать
@@ -308,6 +316,17 @@ public class DromPriceGenerator {
      */
     private static final String NEAREST_WAREHOUSE = """
             ORDER BY COALESCE(w.order_days_from, 0), COALESCE(w.order_days_to, 0), w.name""";
+
+    /**
+     * Позиция отложена под клиента предзаказом (задача 0170).
+     *
+     * <p>Одна строка на оба места, где это условие нужно: отбор полного прайса
+     * (позиции там нет) и обнуление остатка в дельте (позиция там недоступна).
+     * Параметров нет — номера ниже не сдвигаются.
+     */
+    private static final String PREORDERED = """
+            EXISTS (SELECT 1 FROM deal_item pre
+                     WHERE pre.part_id = p.id AND pre.status = 'PREORDER')""";
 
     /** Дельта — тот же запрос по списку позиций: формат обязан совпасть с прайсом. */
     private static final String DELTA_FILTER = " AND p.id = ANY (?)";
@@ -592,7 +611,12 @@ public class DromPriceGenerator {
                 .map(ru.partsflow.inventory.CatalogService.ColumnFilter::args)
                 .orElseGet(List::of);
 
-        String sql = SQL.replace("${statuses}",
+        // Полный прайс предзаказную позицию отбрасывает, дельта — оставляет
+        // и обнуляет: об исчезновении она сообщить не может (задача 0259).
+        String sql = SQL.replace("${notPreordered}",
+                        partIds == null ? "AND NOT " + PREORDERED : "")
+                .replace("${preordered}", partIds == null ? "false" : PREORDERED)
+                .replace("${statuses}",
                 statuses(partIds == null ? PRICE_STATUSES : DELTA_STATUSES, settings))
                 // Порядок «кто ближний» подставляется во все три выражения
                 // разом: написанный порознь, он однажды разойдётся.
