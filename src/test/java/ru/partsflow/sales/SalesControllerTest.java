@@ -847,6 +847,52 @@ class SalesControllerTest extends PostgresTestBase {
                         org.hamcrest.Matchers.hasSize(0)));
     }
 
+    /**
+     * Задача 0258: реестр возвратов понимает номер сделки так же, как реестр
+     * сделок — со значком и пробелами. Прежний разбор (Long.parseLong) на
+     * «№ N» отдавал null, ветка номера отпадала, и возврат не находился:
+     * причина и имя клиента цифр номера не содержат, так что найти его
+     * в этом тесте может только ветка номера. Запросы уходят параметром:
+     * MockMvc не превращает плюс в пробел (см. registryFindsDealByPartNumber).
+     */
+    @Test
+    @DisplayName("Реестр возвратов: номер сделки в любом написании находит возврат, 347-2 и 3 4 7 — нет")
+    void returnsSearchUnderstandsDealNumberSpellings() throws Exception {
+        MockHttpSession session = login("seller");
+        inTenant(() -> jdbc.queryForObject(
+                "SELECT setval('deal_number_seq',"
+                        + " greatest((SELECT last_value FROM deal_number_seq), 5416))",
+                Long.class));
+        long dealId = createDeal(partWithStock("Зеркало для написаний номера", 1));
+        long itemId = firstItemId(dealId, session);
+        mvc.perform(post("/api/deals/" + dealId + "/issue").with(csrf()).session(session))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals/" + dealId + "/returns").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"написания-номера",
+                                 "items":[{"dealItemId":%d,"restocked":true}]}"""
+                                .formatted(warehouse, itemId)))
+                .andExpect(status().isCreated());
+        String n = String.valueOf(inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM deal WHERE id = ?", Long.class, dealId)));
+
+        for (String q : new String[] {n, "№" + n, "№ " + n, "#" + n, " " + n + " "}) {
+            mvc.perform(get("/api/deals/returns").param("q", q).session(session))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items[?(@.dealId == " + dealId + ")]",
+                            org.hamcrest.Matchers.hasSize(1)));
+        }
+
+        String spaced = String.join(" ", n.split(""));
+        for (String q : new String[] {n + "-2", spaced}) {
+            mvc.perform(get("/api/deals/returns").param("q", q).session(session))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items[?(@.dealId == " + dealId + ")]",
+                            org.hamcrest.Matchers.hasSize(0)));
+        }
+    }
+
     @Test
     @DisplayName("Поиск по причине — вхождение, найдёт по куску слова")
     void returnsSearchByReasonSubstring() throws Exception {
