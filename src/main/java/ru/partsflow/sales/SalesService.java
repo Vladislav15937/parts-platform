@@ -220,6 +220,11 @@ public class SalesService {
                 }
                 line.markPreorder();
                 preordered.merge(part.getId(), item.quantity(), BigDecimal::add);
+                // Позиция вышла из прайса Дрома, а дельта об исчезновении строки
+                // сообщить не умеет: без отметки опубликованное объявление
+                // висит доступным до полного забора, до трёх суток, — и по нему
+                // звонят за деталью, уже обещанной другому (задача 0259).
+                partChanges.changed(part.getId());
                 continue;
             }
 
@@ -577,6 +582,11 @@ public class SalesService {
             if (item.getStatus() == DealItemStatus.RESERVED) {
                 reservationRepository.release(
                         item.getPartId(), item.getWarehouseId(), item.getQuantity());
+            } else if (item.getStatus() == DealItemStatus.PREORDER) {
+                // Склад под предзаказ ничего не откладывал, но позиция
+                // возвращается в прайс Дрома — и объявление, снятое
+                // оформлением предзаказа, должно ожить дельтой (задача 0259).
+                partChanges.changed(item.getPartId());
             }
         }
         refundOnCancel(deal, managerId);
@@ -773,7 +783,7 @@ public class SalesService {
         if (query != null && !query.isBlank()) {
             String term = query.strip();
             String like = "%" + term + "%";
-            Long number = parseNumber(term);
+            Long number = PartNumberQuery.parse(term);
             if (number != null) {
                 where.append(" AND (d.number = ? OR c.name ILIKE ? OR r.reason ILIKE ?)");
                 args.add(number);
@@ -824,14 +834,6 @@ public class SalesService {
                 rowArgs.toArray());
 
         return new ReturnsPage(rows, total, totalAmount);
-    }
-
-    private static Long parseNumber(String term) {
-        try {
-            return Long.parseLong(term);
-        } catch (NumberFormatException e) {
-            return null;
-        }
     }
 
     /**

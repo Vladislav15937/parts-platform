@@ -74,7 +74,9 @@ public abstract class PostgresTestBase {
                     fromEnv == null || fromEnv.isBlank() ? "1.44" : fromEnv);
         }
 
-        POSTGRES.start();
+        // Через проверку образа, как хранилище: пропавший образ называется
+        // сразу, а не таймаутом ожидания (задача 0187).
+        TestImages.start(POSTGRES, "postgres");
         migrateCatalog();
         reserveNumberingRange();
     }
