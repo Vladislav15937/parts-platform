@@ -303,10 +303,73 @@ class OrganizationAuditTest extends PostgresTestBase {
                     .andExpect(jsonPath("$.items[0].subjectNumber").value(number));
         }
 
+        // Публичный код соседа с цифрами номера подставляется явно (задача
+        // 0263), а не выпадает жребием из случайных байт: без этого строка
+        // «номер + 9» совпадала с чужим кодом и тест падал «иногда».
+        // Запрос-номер сравнивает код точно, поэтому ни соседа, ни сделки
+        // с номером, содержащим эти цифры, он не находит.
+        inTenant(() -> {
+            Long neighbour = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, public_code)
+                    VALUES (1, 'Сосед по журналу', 100, ?) RETURNING id""",
+                    Long.class, "AAA" + number + "9BBBBBB");
+            jdbc.update("""
+                    INSERT INTO audit_log (table_name, record_id, operation, new_value)
+                    VALUES ('part', ?, 'INSERT', '{"price": 100}')""", neighbour);
+            return null;
+        });
         mvc.perform(get("/api/organization/audit").param("q", number + "9")
                         .session(login("vladelec")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items.length()").value(0));
+    }
+
+    /**
+     * Задача 0263 (решение владельца 10 октября 2026, уточнение к 0168):
+     * запись с публичным кодом, содержащим цифры номера, и сделка с номером
+     * вида «1347» запрос «347» не находят; фрагмент с буквой — находит.
+     */
+    @Test
+    @DisplayName("Запрос-номер не находит записи по цифрам публичного кода и номера сделки")
+    void numberQueryDoesNotMatchCodesBySubstring() throws Exception {
+        long number = inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, partId));
+        // Чужая позиция: цифры номера стоят только в её публичном коде.
+        // Сделка: номер «1<цифры>» содержит их подстрокой, но не равен номеру.
+        long dealNumber = Long.parseLong("1" + number);
+        inTenant(() -> {
+            jdbc.update("DELETE FROM audit_log");
+            Long decoy = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, public_code)
+                    VALUES (1, 'Чужая позиция журнала', 100, ?) RETURNING id""",
+                    Long.class, "AAA" + number + "9BBBBBB");
+            Long deal = jdbc.queryForObject("""
+                    INSERT INTO deal (status, total_amount, number)
+                    VALUES ('DRAFT', 0, ?) RETURNING id""", Long.class, dealNumber);
+            jdbc.update("""
+                    INSERT INTO audit_log (table_name, record_id, operation, new_value)
+                    VALUES ('part', ?, 'INSERT', '{"price": 100}')""", decoy);
+            jdbc.update("""
+                    INSERT INTO audit_log (table_name, record_id, operation, new_value)
+                    VALUES ('deal', ?, 'INSERT', '{"status": "DRAFT"}')""", deal);
+            return null;
+        });
+
+        for (String term : new String[] {String.valueOf(number), "№ " + number, "#" + number}) {
+            mvc.perform(get("/api/organization/audit").param("q", term)
+                            .session(login("vladelec")))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items.length()").value(0));
+        }
+        // Точный номер сделки находит ровно её.
+        mvc.perform(get("/api/organization/audit").param("q", String.valueOf(dealNumber))
+                        .session(login("vladelec")))
+                .andExpect(jsonPath("$.items.length()").value(1));
+        // Фрагмент с буквой остаётся текстом и ищет по коду.
+        mvc.perform(get("/api/organization/audit").param("q", number + "9B")
+                        .session(login("vladelec")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1));
     }
 
     @Test
