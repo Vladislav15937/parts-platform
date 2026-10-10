@@ -685,6 +685,85 @@ class PreorderTest extends PostgresTestBase {
                 .contains("<quantity>0</quantity>");
     }
 
+    /**
+     * Задача 0262: предзаказ на часть партии уменьшает количество на Дроме, отмена
+     * возвращает его дельтой, а после прихода предзаказанная штука не вычитается
+     * второй раз (она уже обычный резерв).
+     */
+    @Test
+    @DisplayName("Частичный предзаказ: Дром видит остаток; отмена возвращает; приход не вычитает второй раз")
+    void partialPreorderLeavesTheRestOnDrom() throws Exception {
+        long supply = supply();
+        long part = expectedPart(supply, "Фара партия три", 3, "9000");
+        inTenant(() -> {
+            jdbc.update("UPDATE part SET is_published = true WHERE id = ?", part);
+            return null;
+        });
+
+        inTenant(() -> jdbc.update("DELETE FROM part_change"));
+        long deal = createDeal(part, 1, near, daysAhead(30)).andReturn().path("id").asLong();
+        assertThat(marked(part)).as("предзаказ не отметил позицию: дельты не будет").isTrue();
+        assertThat(deltaOffer(part))
+                .as("из трёх одна под предзаказом, а Дром видит не две")
+                .contains("<quantity>2</quantity>")
+                .contains("<available>true</available>");
+        assertThat(fullPrice())
+                .as("позиция с частичным предзаказом обязана остаться в полном прайсе")
+                .contains("<ordercode>" + codeOf(part) + "</ordercode>");
+
+        // Отмена: количество возвращается дельтой.
+        inTenant(() -> jdbc.update("DELETE FROM part_change"));
+        mvc.perform(post("/api/deals/" + deal + "/cancel").with(csrf())
+                        .session(login("prodavets"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"передумал\"}"))
+                .andExpect(status().isOk());
+        assertThat(marked(part))
+                .as("отмена не отметила позицию: количество не вернётся до полного забора")
+                .isTrue();
+        assertThat(deltaOffer(part)).contains("<quantity>3</quantity>");
+
+        // Приход при предзаказе на одну: резерв 1, свободно 2, и Дром видит 2, а не 1.
+        createDeal(part, 1, near, daysAhead(30));
+        inTenant(() -> jdbc.update("DELETE FROM part_change"));
+        assertThat(receipt(near, supply, part, 3, UUID.randomUUID().toString())
+                .getResponse().getStatus()).isEqualTo(201);
+        assertThat(stock("qty_reserved", part, near)).isEqualByComparingTo("1");
+        assertThat(deltaOffer(part))
+                .as("предзаказ вычтен второй раз: он уже обычный резерв")
+                .contains("<quantity>2</quantity>");
+    }
+
+    /**
+     * Задача 0262, пункт 4, вторая сторона: вычитание из карточки действует
+     * только до прихода. Предзаказ на 2 из 3, пришла одна штука: предзаказ
+     * остаётся ждать (одной мало), а позиция уже на складе — Дром получает
+     * свободный остаток (1), а не «1 минус 2».
+     */
+    @Test
+    @DisplayName("После частичного прихода предзаказ из свободного остатка не вычитается")
+    void afterArrivalThePreorderIsNotSubtractedAgain() throws Exception {
+        long supply = supply();
+        long part = expectedPart(supply, "Фара частичный приход", 3, "9000");
+        inTenant(() -> {
+            jdbc.update("UPDATE part SET is_published = true WHERE id = ?", part);
+            return null;
+        });
+        createDeal(part, 2, near, daysAhead(30));
+        assertThat(deltaOffer(part)).contains("<quantity>1</quantity>");
+
+        assertThat(receipt(near, supply, part, 1, UUID.randomUUID().toString())
+                .getResponse().getStatus()).isEqualTo(201);
+        assertThat(count("SELECT count(*) FROM deal_item WHERE part_id = " + part
+                + " AND status = 'PREORDER'"))
+                .as("предзаказ на 2 при приходе 1 обязан остаться ждать")
+                .isEqualTo(1);
+        assertThat(deltaOffer(part))
+                .as("после прихода вычитание из карточки не действует")
+                .contains("<quantity>1</quantity>")
+                .contains("<available>true</available>");
+    }
+
     private static final ru.partsflow.publishing.FeedSettings EXPECTING =
             new ru.partsflow.publishing.FeedSettings(
                     null, null, null, null, null, true, "Ожидается поступление");
