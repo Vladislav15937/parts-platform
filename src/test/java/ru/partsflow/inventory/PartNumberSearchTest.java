@@ -272,6 +272,48 @@ class PartNumberSearchTest extends PostgresTestBase {
                 .contains(noisyWheel);
     }
 
+    /**
+     * Задача 0263: запрос-номер не находит позицию по случайным цифрам
+     * публичного кода. Код с цифрами номера подставляется явно, а не
+     * выпадает жребием; на четырёх поверхностях ответ один и тот же.
+     */
+    @Test
+    @DisplayName("Номер не находит чужую позицию по цифрам в публичном коде")
+    void numberDoesNotMatchPublicCodeBySubstring() {
+        // Номера двойников далеко от нумерации фикстуры: последовательность
+        // дрейфует между методами класса и иначе столкнулась бы с шумными.
+        Long decoyPart = inTenant(() -> {
+            jdbc.execute("SELECT setval('part_number_seq', 9000000)");
+            return part("Фара без цифр в названии", "AAA" + SPOKEN + "9BBBBBB");
+        });
+        Long decoyWheel = inTenant(() ->
+                wheel("Шина без цифр в названии", "AAA" + WHEEL_NUMBER + "9BBBBBB"));
+
+        for (String term : new String[] {String.valueOf(SPOKEN), "№ " + SPOKEN, "#" + SPOKEN,
+                SPOKEN + "9"}) {
+            assertThat(storefront(term)).as("витрина, «%s»", term).doesNotContain(decoyPart);
+            assertThat(seller(term)).as("продавец, «%s»", term).doesNotContain(decoyPart);
+            assertThat(storefront(term)).as("витрина и продавец расходятся, «%s»", term)
+                    .containsExactlyInAnyOrderElementsOf(
+                            seller(term).stream().filter(id -> !wheelIds().contains(id)).toList());
+        }
+        for (String term : new String[] {String.valueOf(WHEEL_NUMBER), "#" + WHEEL_NUMBER,
+                WHEEL_NUMBER + "9"}) {
+            assertThat(wheelsTab(term)).as("колёса, «%s»", term).doesNotContain(decoyWheel);
+            assertThat(seller(term)).as("продавец (колесо), «%s»", term).doesNotContain(decoyWheel);
+        }
+        // Названная позиция по-прежнему находится, а фрагмент с буквой — как текст.
+        assertThat(storefront(String.valueOf(SPOKEN))).contains(spokenPart);
+        assertThat(storefront(SPOKEN + "9B")).contains(decoyPart);
+        assertThat(seller(SPOKEN + "9B")).contains(decoyPart);
+        // Код целиком — законный запрос.
+        assertThat(storefront("AAA" + SPOKEN + "9BBBBBB")).contains(decoyPart);
+    }
+
+    private List<Long> wheelIds() {
+        return List.of(spokenWheel, noisyWheel);
+    }
+
     /** Витрина склада: `product_line = 'PART'`, колесо в неё не попадает. */
     private List<Long> storefront(String query) {
         return inTenant(() -> catalog.list(query, true, true, List.of(), null,

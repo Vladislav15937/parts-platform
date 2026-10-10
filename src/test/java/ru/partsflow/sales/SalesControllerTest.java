@@ -1228,6 +1228,37 @@ class SalesControllerTest extends PostgresTestBase {
     }
 
     /**
+     * Задача 0263: запрос-номер не находит сделку по случайным цифрам
+     * публичного кода позиции. Код чужой позиции подставляется явно
+     * (номер + «9» в середине), а не выпадает жребием.
+     */
+    @Test
+    @DisplayName("Номер не находит сделку с позицией, у которой эти цифры только в публичном коде")
+    void registryDoesNotMatchPublicCodeBySubstring() throws Exception {
+        Long spoken = partWithStock("Позиция, названная номером в сделках", 1);
+        long spokenDeal = createDeal(spoken);
+        long number = partNumberOf(spoken);
+
+        Long decoy = partWithStock("Позиция с цифрами номера в публичном коде", 1);
+        long decoyDeal = createDeal(decoy);
+        inTenant(() -> jdbc.update("UPDATE part SET public_code = ? WHERE id = ?",
+                "AAA" + number + "9BBBBBB", decoy));
+
+        for (String term : new String[] {String.valueOf(number), "№ " + number, "#" + number,
+                number + "9"}) {
+            mvc.perform(get("/api/deals/registry").param("q", term).session(login("seller")))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(decoyDeal)).isEmpty());
+        }
+        mvc.perform(get("/api/deals/registry").param("q", String.valueOf(number))
+                        .session(login("seller")))
+                .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(spokenDeal)).isNotEmpty());
+        // Фрагмент с буквой остаётся текстом и ищет по коду, как прежде.
+        mvc.perform(get("/api/deals/registry").param("q", number + "9B").session(login("seller")))
+                .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(decoyDeal)).isNotEmpty());
+    }
+
+    /**
      * Номер, которого нет ни у одной позиции, — пустая выдача, а не пятисотка
      * и не «покажем всё, раз ничего не совпало». Отрицательное утверждение,
      * и потому оно сторожит: число заведомо за пределом обеих нумераций,

@@ -356,9 +356,10 @@ public class WheelService {
                         args.add(like);
                         args.add(like);
                     } else {
-                        where.append(" AND (p.public_code ILIKE ? OR p.title ILIKE ?"
+                        // Публичный код — точно, номером назван весь запрос (0263).
+                        where.append(" AND (p.public_code = ? OR p.title ILIKE ?"
                                 + " OR p.number = ?)");
-                        args.add(like);
+                        args.add(PartNumberQuery.publicCodeArg(size.text(), true));
                         args.add(like);
                         args.add(number);
                     }
