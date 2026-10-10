@@ -926,10 +926,13 @@ public class SalesService {
                     + " JOIN customer c2 ON c2.id = d2.customer_id"
                     + " WHERE c2.name ILIKE ?");
             args.add(like);
+            // Запрос-номер сравнивает публичный код точно (задача 0263): иначе
+            // «347» находил сделки с позициями, у которых эти цифры нашлись
+            // в случайных байтах кода.
             branches.add("SELECT i.deal_id FROM deal_item i"
                     + " JOIN part p ON p.id = i.part_id"
-                    + " WHERE p.public_code ILIKE ?");
-            args.add(like);
+                    + " WHERE " + PartNumberQuery.publicCodeMatch("p.public_code", dealNumber != null));
+            args.add(PartNumberQuery.publicCodeArg(term, dealNumber != null));
             // Номер позиции (задача 0069): «мне звонили, позиция 347».
             // Точным сравнением по part_number_uk, а не подстрокой — иначе
             // 347 притащит 1347 и 3470, то есть чужие сделки в ответ

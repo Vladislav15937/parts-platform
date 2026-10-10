@@ -1090,7 +1090,8 @@ public class PartService {
                         + " WHERE o.raw_number ILIKE ? AND e.expected_origin AND e.status = 'DRAFT'"
                 : "SELECT part_id FROM part_oem WHERE raw_number ILIKE ?";
         return "p.id IN (\n"
-                + "         SELECT id FROM part WHERE public_code ILIKE ?" + only + "\n"
+                + "         SELECT id FROM part WHERE "
+                + PartNumberQuery.publicCodeMatch("public_code", byNumber) + only + "\n"
                 + "          UNION SELECT id FROM part WHERE title ILIKE ?" + only + "\n"
                 + "          UNION SELECT id FROM part\n"
                 + "                 WHERE to_tsvector('russian', coalesce(title, '') || ' '\n"
@@ -1161,7 +1162,9 @@ public class PartService {
         // не разбираются вовсе (у шины нужен «/», у диаметра — «R»), поэтому
         // ветка номера живёт только тут, в текстовом условии.
         Long number = PartNumberQuery.parse(text);
-        List<Object> args = new ArrayList<>(List.of(like, like, text, like));
+        // Публичный код при запросе-номере сравнивается точно (задача 0263).
+        List<Object> args = new ArrayList<>(List.of(
+                PartNumberQuery.publicCodeArg(text, number != null), like, text, like));
         if (number != null) {
             args.add(number);
         }

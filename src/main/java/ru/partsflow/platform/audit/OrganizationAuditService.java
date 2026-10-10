@@ -113,6 +113,17 @@ public class OrganizationAuditService {
             + " coalesce(dcd.legacy_code, dcd.public_code), cust.name)";
 
     /**
+     * То же без публичных кодов и без номеров сделки и платежа — для запроса,
+     * который сам является номером (задача 0263). Коды и номера в этом случае
+     * сравниваются точно отдельными ветками: подстрока «347» находила бы
+     * сделку 1347 и позицию с тремя такими цифрами в случайном коде. Текст
+     * (названия, код донора из прежней системы, имя клиента) остаётся
+     * подстрочным: «Авто 347» там честный текст.
+     */
+    private static final String SEARCHABLE_TEXT = "concat_ws(' ', p.title, dip.title,"
+            + " dcd.legacy_code, cust.name)";
+
+    /**
      * Присоединение вещи к записи журнала.
      *
      * <p>Строкой с явными пробелами, а не текстовым блоком: блок срезает
@@ -213,15 +224,28 @@ public class OrganizationAuditService {
             // правке, и названное вслух находилось бы на одном экране
             // и не находилось на соседнем.
             Long number = PartNumberQuery.parse(query);
-            where.append(" AND (").append(SEARCHABLE).append(" ILIKE ?");
+            where.append(" AND (").append(number == null ? SEARCHABLE : SEARCHABLE_TEXT)
+                    .append(" ILIKE ?");
             args.add("%" + query.trim() + "%");
             if (number != null) {
                 // Подмешивается, а не отбирает выдачу себе: цифрами задают
                 // и номер сделки, и номер записи журнала, и те ветки
-                // остаются — то же решение, что у поиска склада (0064).
-                where.append(" OR p.number = ? OR dip.number = ?");
+                // остаются, но точные (0064, уточнение к 0168 — задача 0263,
+                // решение владельца 10 октября 2026): иначе «347» находил бы
+                // сделку 1347, а публичный код чужой записи — по случайным
+                // цифрам.
+                where.append(" OR p.number = ? OR dip.number = ?"
+                        + " OR d.number = ? OR paid.number = ?");
                 args.add(number);
                 args.add(number);
+                args.add(number);
+                args.add(number);
+                String code = PartNumberQuery.publicCodeArg(query, true);
+                where.append(" OR p.public_code = ? OR dip.public_code = ?"
+                        + " OR dcd.public_code = ?");
+                args.add(code);
+                args.add(code);
+                args.add(code);
             }
             where.append(')');
         }

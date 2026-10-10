@@ -216,10 +216,14 @@ public class CatalogService {
             // иначе «347» притащило бы 1347, 3470 и 2347 — шум того же рода,
             // от которого номер и спасает.
             Long number = PartNumberQuery.parse(query);
+            // Публичный код при запросе-номере сравнивается точно (задача 0263):
+            // двенадцать случайных знаков содержат «347» у каждой четырёхсотой
+            // записи, и подстрока приносила бы чужие позиции рядом с названной.
+            where.append("\n\n                     AND p.id IN (\n"
+                    + "                         SELECT id FROM part WHERE "
+                    + PartNumberQuery.publicCodeMatch("public_code", number != null));
             where.append("""
 
-                     AND p.id IN (
-                         SELECT id FROM part WHERE public_code ILIKE ?
                           UNION SELECT id FROM part WHERE title ILIKE ?
                           UNION SELECT id FROM part
                                  WHERE to_tsvector('russian', coalesce(title, '') || ' '
@@ -229,7 +233,7 @@ public class CatalogService {
                           UNION SELECT part_id FROM part_oem WHERE raw_number ILIKE ?"""
                     + (number == null ? "" : PartNumberQuery.UNION_BRANCH) + ")");
             String like = "%" + query.strip() + "%";
-            args.add(like);
+            args.add(PartNumberQuery.publicCodeArg(query, number != null));
             args.add(like);
             args.add(query.strip());
             args.add(like);
