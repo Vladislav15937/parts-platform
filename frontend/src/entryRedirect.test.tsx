@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { App } from './App';
 
@@ -68,7 +68,9 @@ describe('общая страница входа и регистрации', () 
       render(<App />);
       await screen.findByText('Вход', { selector: 'h1' });
 
-      expect(window.location.pathname).toBe('/login');
+      // Адрес меняет эффект `Root`, а он идёт после отрисовки заголовка:
+      // ждём сам адрес, а длину истории читаем уже после него.
+      await waitFor(() => expect(window.location.pathname).toBe('/login'));
       expect(window.location.search).toBe('');
       expect(window.history.length).toBe(before);
       expect(screen.getByRole('tab', { name: 'Вход' }).getAttribute('aria-selected')).toBe('true');
@@ -80,6 +82,7 @@ describe('общая страница входа и регистрации', () 
     render(<App />);
 
     await screen.findByText('Регистрация компании', { selector: 'h1' });
+    await effectsSettled();
     expect(screen.getByRole('tab', { name: 'Регистрация' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('tab', { name: 'Вход' })).toBeTruthy();
     expect(window.location.pathname).toBe('/register');
@@ -90,6 +93,7 @@ describe('общая страница входа и регистрации', () 
     render(<App />);
 
     await screen.findByText('Сделка по ссылке razborka/tok-123');
+    await effectsSettled();
     expect(window.location.pathname).toBe('/s/razborka/tok-123');
     expect(screen.queryByRole('tab', { name: 'Вход' })).toBeNull();
   });
@@ -125,6 +129,7 @@ describe('общая страница входа и регистрации', () 
     const before = window.history.length;
     render(<App />);
     await screen.findByText('Вход', { selector: 'h1' });
+    await effectsSettled();
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Компания' }), { target: { value: 'razborka' } });
 
@@ -148,6 +153,7 @@ describe('общая страница входа и регистрации', () 
     window.history.pushState(null, '', '/');
     render(<App />);
     await screen.findByText('Вход', { selector: 'h1' });
+    await waitFor(() => expect(window.location.pathname).toBe('/login'));
     expect(challenges).toBe(0);
 
     fireEvent.click(screen.getByRole('link', { name: 'Зарегистрировать компанию' }));
@@ -160,6 +166,16 @@ describe('общая страница входа и регистрации', () 
     expect(window.location.pathname).toBe('/login');
   });
 });
+
+/**
+ * Дожидается эффектов после отрисовки. Заголовок появляется раньше, чем
+ * отработает эффект `Root`, правящий адрес, поэтому утверждение «адрес
+ * остался прежним», прочитанное сразу за заголовком, проходило бы и на коде,
+ * который уводит позже: проверка обязана смотреть после эффекта.
+ */
+async function effectsSettled(): Promise<void> {
+  await act(async () => { await Promise.resolve(); });
+}
 
 const ME = {
   memberId: 1,

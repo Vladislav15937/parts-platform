@@ -60,9 +60,12 @@ class SignInRedirectHttpTest extends PostgresTestBase {
         assertThat(response.statusCode())
                 .as("невошедший на %s обязан уйти на вход, а не получить белый экран", path)
                 .isEqualTo(302);
+        // Адрес целиком, а не хвост: «…/login» на чужом хосте или схеме
+        // за терминатором увёл бы человека не туда. Относительный адрес
+        // оставляет схему и хост браузеру, абсолютный — только свой.
         assertThat(response.headers().firstValue("Location").orElse(""))
-                .as("перенаправление ведёт на общую страницу входа")
-                .endsWith("/login");
+                .as("перенаправление ведёт на общую страницу входа этого же сервера")
+                .isIn("/login", "http://localhost:" + port + "/login");
     }
 
     @ParameterizedTest(name = "{0}")
