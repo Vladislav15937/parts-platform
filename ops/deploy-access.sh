@@ -73,6 +73,15 @@ repo_name() {
     || fail "Не понял, какой это репозиторий. Запускать из рабочей копии, войдя в gh."
 }
 
+# Кто сейчас подтверждает выкладку на стенд, по словам самого GitHub. Одна
+# функция на два места (после заведения окружения и «проверить»): два запроса
+# с одним jq разъехались бы. Пусто — «никого ИЛИ спросить не вышло»; различать
+# их здесь нечем, и обе беды для ПРОМ одинаково красные.
+env_reviewers() {
+  "$GH" api "repos/$1/environments/$2" \
+    --jq '[.protection_rules[]?|select(.type=="required_reviewers")|.reviewers[]?.reviewer.login]|join(", ")' 2>/dev/null || true
+}
+
 # ── ключ ──────────────────────────────────────────────────────────────────
 # Генерирует пару для одного стенда и печатает ровно ту строку, которую
 # человек добавит на машине. Повторный запуск НЕ перетирает ключ молча:
@@ -156,10 +165,30 @@ cmd_stand() {
     # выкладывает любой, у кого есть доступ к Actions. Логин по умолчанию —
     # владелец репозитория.
     local who id
-    who="${reviewer:-$("$GH" repo view --json owner --jq .owner.login)}"
-    id="$("$GH" api "users/$who" --jq .id)"
+    who="${reviewer:-$("$GH" repo view --json owner --jq .owner.login 2>/dev/null || true)}"
+    [ -n "$who" ] || fail "Не понял, кто подтверждает выкладку на ПРОМ: владельца репозитория узнать не вышло.
+Назовите логин явно: --подтверждающий ЛОГИН. Окружение не заводилось."
+    # Пустой или нечисловой ответ — не значение. Пустой id уходил в тело как
+    # {"id":} — невалидный JSON; хуже, если GitHub стерпит тело без reviewers:
+    # окружение prom заведётся без подтверждающего, а команда отчитается успехом.
+    id="$("$GH" api "users/$who" --jq .id 2>/dev/null || true)"
+    case "$id" in
+      ''|*[!0-9]*)
+        fail "GitHub не назвал номер пользователя «${who}» (ответ: «${id:-пусто}»).
+Либо такого логина нет, либо опечатка, либо GitHub не ответил. Окружение
+«${stand}» НЕ заводилось: без подтверждающего на ПРОМ выложит любой.
+Укажите логин явно: --подтверждающий ЛОГИН." ;;
+    esac
     printf '{"reviewers":[{"type":"User","id":%s}],"deployment_branch_policy":null}' "$id" \
       | "$GH" api -X PUT "repos/$R/environments/$stand" --input - >/dev/null
+    # Принять запрос и сделать то, о чём просили, — разные вещи: спрашиваем
+    # GitHub, что подтверждающий действительно стоит, а не верим молчанию PUT.
+    local got; got="$(env_reviewers "$R" "$stand")"
+    if ! printf '%s\n' "$got" | tr ',' '\n' | sed 's/^ *//' | grep -qixF "$who"; then
+      fail "Окружение «${stand}» заведено, но подтверждающего «${who}» GitHub за ним не видит (видит: «${got:-никого}»).
+На ПРОМ выложит любой — секреты НЕ заливаю. Проверьте Settings → Environments → ${stand}
+и повторите команду."
+    fi
     green "Подтверждающий: $who"
   else
     "$GH" api -X PUT "repos/$R/environments/$stand" >/dev/null
@@ -230,8 +259,7 @@ cmd_check() {
 
   if [ "$stand" = prom ]; then
     local revs
-    revs="$("$GH" api "repos/$R/environments/$stand" \
-      --jq '[.protection_rules[]?|select(.type=="required_reviewers")|.reviewers[]?.reviewer.login]|join(", ")' 2>/dev/null || true)"
+    revs="$(env_reviewers "$R" "$stand")"
     if [ -n "$revs" ]; then printf '  ✓ подтверждают: %s\n' "$revs"
     else printf '  ✗ подтверждающего нет — на ПРОМ выложит любой\n'; bad=1; fi
   fi
@@ -290,7 +318,11 @@ selftest() {
     printf 'case "$*" in\n'
     printf '  *"--json nameWithOwner"*) echo "owner/repo" ;;\n'
     printf '  *"--json owner"*) echo "hozyain" ;;\n'
-    printf '  *users/*) echo 42 ;;\n'
+    # Режимы подложенных ответов задаёт окружение пробы (0141): FAKE_GH_USER
+    # не задан — номер 42, задан пустым — пустой ответ, задан словом — слово.
+    printf '  *users/*) echo "${FAKE_GH_USER-42}" ;;\n'
+    printf '  *"-X PUT"*) ;;\n'
+    printf '  *environments/prom*protection_rules*) [ -n "${FAKE_GH_NO_REVIEWERS:-}" ] || echo hozyain ;;\n'
     printf 'esac\n'
     printf 'exit 0\n'
   } > "$fakegh"; chmod +x "$fakegh"
@@ -395,6 +427,36 @@ selftest() {
     printf '  ✓ ПРОМ заводится с подтверждающим\n'
   else
     red "  ✗ ПРОМ заведён без подтверждающего"; bad=$((bad+1))
+  fi
+
+  # Пустота от gh — не значение (задача 0141). Мало отказа словами: PUT
+  # окружения не должен быть послан вовсе, иначе невалидное тело уже ушло,
+  # а секреты — тем более. Журнал подменного gh видит и то, и другое.
+  : > "$base/gh.log"
+  FAKE_GH_USER= probe "ПРОМ: gh отдал пустой номер — отказ, логин назван" "«hozyain»" \
+    runk стенд prom --host 192.0.2.1 --отпечаток "$real_fp"
+  if grep -q 'X PUT' "$base/gh.log" || grep -q 'secret set' "$base/gh.log"; then
+    red "  ✗ при пустом номере PUT окружения или заливка секретов ВСЁ РАВНО ушли"; bad=$((bad+1))
+  else
+    printf '  ✓ при пустом номере PUT и заливки не было\n'
+  fi
+  : > "$base/gh.log"
+  FAKE_GH_USER=nobody probe "ПРОМ: gh отдал не число — отказ" "GitHub не назвал номер" \
+    runk стенд prom --host 192.0.2.1 --отпечаток "$real_fp" --подтверждающий опечатка
+  if grep -q 'X PUT' "$base/gh.log"; then
+    red "  ✗ при нечисловом номере PUT ушёл"; bad=$((bad+1))
+  else
+    printf '  ✓ при нечисловом номере PUT не было\n'
+  fi
+  # Обратный край: GitHub принял PUT, но подтверждающего за окружением не
+  # видит — молчание PUT не доказательство, секреты не заливаются.
+  : > "$base/gh.log"
+  FAKE_GH_NO_REVIEWERS=1 probe "ПРОМ: GitHub не видит подтверждающего после PUT — отказ" "не видит" \
+    runk стенд prom --host 192.0.2.1 --отпечаток "$real_fp"
+  if grep -q 'secret set' "$base/gh.log"; then
+    red "  ✗ без подтверждающего секреты ВСЁ РАВНО заливались"; bad=$((bad+1))
+  else
+    printf '  ✓ без подтверждающего заливки не было\n'
   fi
 
   # «проверить» обязана краснеть на неполном окружении: подменный gh
