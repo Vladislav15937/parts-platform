@@ -126,6 +126,10 @@ public class MailService {
                         rs.getString(4), rs.getString(5), rs.getInt(6)),
                 props.claimTtl().toSeconds(), props.batchSize());
 
+        // Отчёты, чьё письмо так и не нашлось, не копим: сутки с запасом хватает
+        // на любой разрыв между ответом оператора и записью результата.
+        jdbc.update("DELETE FROM public.mail_event_pending WHERE received_at < now() - interval '1 day'");
+
         for (Claimed c : batch) {
             MailTransport.Result result;
             try {
@@ -141,11 +145,15 @@ public class MailService {
 
     private void record(Claimed c, MailTransport.Result r) {
         switch (r.outcome()) {
-            case ACCEPTED -> jdbc.update("""
-                    UPDATE public.mail_message
-                       SET status = 'SENT', provider_id = ?, sent_at = now(),
-                           last_error = NULL, updated_at = now()
-                     WHERE id = ? AND status = 'QUEUED'""", r.providerId(), c.id());
+            case ACCEPTED -> {
+                jdbc.update("""
+                        UPDATE public.mail_message
+                           SET status = 'SENT', provider_id = ?, sent_at = now(),
+                               last_error = NULL, updated_at = now()
+                         WHERE id = ? AND status = 'QUEUED'""", r.providerId(), c.id());
+                // Отчёт мог прийти, пока шёл запрос: он ждёт в буфере.
+                replayPending(r.providerId());
+            }
             case REJECTED -> fail(c, "отказ оператора: " + r.detail());
             case TEMPORARY -> {
                 if (c.attempts() >= props.maxAttempts()) {
@@ -176,24 +184,65 @@ public class MailService {
     /**
      * Отчёт оператора о судьбе письма.
      *
-     * <p>Отправка идёт вне транзакции, результат пишется после, поэтому отчёт
-     * может обогнать запись {@code SENT}: {@code delivered} принимается и для
-     * {@code QUEUED}, а запись результата ({@code WHERE status = 'QUEUED'})
-     * более поздний статус не перетирает. Граница, которую это не снимает:
-     * номер задания попадает в строку только вместе с записью результата, и
-     * отчёт, пришедший до неё, номера не находит и пропускается.
+     * <p><b>Отчёт может обогнать запись результата.</b> Отправка идёт вне
+     * транзакции, а номер задания попадает в строку только вместе с записью
+     * {@code SENT}: пока оператор ответил, а мы ещё не записали, отчёт номера
+     * не находит — и, получив 200, оператор не повторит. Поэтому отчёт по
+     * неизвестному номеру не выбрасывается, а ждёт в {@code mail_event_pending};
+     * запись результата ({@link #record}) разбирает ожидающие по своему номеру.
+     * Обе половины перепроверяют друг друга после своей записи, так что при любом
+     * порядке один из двух путей увидит другой. Ожидающие отчёты, чьё письмо так
+     * и не нашлось (чужая рассылка с того же проекта), живут сутки.
      *
-     * @return изменилась ли хоть одна запись
+     * @return применён ли отчёт к письму сейчас
      */
     public boolean applyEvent(String providerId, String operatorStatus, String detail) {
         if (providerId == null || providerId.isBlank() || operatorStatus == null) {
             return false;
         }
+        if (applyKnown(providerId, operatorStatus, detail)) {
+            return true;
+        }
+        if (exists(providerId)) {
+            // Номер есть, но статус отчёта ничего не меняет (повтор, «sent»).
+            return false;
+        }
+        jdbc.update("""
+                INSERT INTO public.mail_event_pending (provider_id, operator_status, detail)
+                VALUES (?, ?, ?)""", providerId, operatorStatus, detail);
+        // Запись результата могла завершиться между нашей проверкой и вставкой.
+        return replayPending(providerId);
+    }
+
+    private boolean exists(String providerId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM public.mail_message WHERE provider_id = ?)",
+                Boolean.class, providerId));
+    }
+
+    /** Применяет ожидавшие отчёты по номеру, который уже записан в письме. */
+    private boolean replayPending(String providerId) {
+        if (!exists(providerId)) {
+            return false;
+        }
+        List<String[]> waiting = jdbc.query("""
+                SELECT operator_status, detail FROM public.mail_event_pending
+                 WHERE provider_id = ? ORDER BY id""",
+                (rs, i) -> new String[]{rs.getString(1), rs.getString(2)}, providerId);
+        boolean applied = false;
+        for (String[] w : waiting) {
+            applied |= applyKnown(providerId, w[0], w[1]);
+        }
+        jdbc.update("DELETE FROM public.mail_event_pending WHERE provider_id = ?", providerId);
+        return applied;
+    }
+
+    private boolean applyKnown(String providerId, String operatorStatus, String detail) {
         return switch (operatorStatus) {
             case "delivered", "opened", "clicked" -> jdbc.update("""
                     UPDATE public.mail_message
                        SET status = 'DELIVERED', delivered_at = now(), updated_at = now()
-                     WHERE provider_id = ? AND status IN ('QUEUED', 'SENT')""", providerId) > 0;
+                     WHERE provider_id = ? AND status = 'SENT'""", providerId) > 0;
             case "hard_bounced", "spam" -> jdbc.update("""
                     UPDATE public.mail_message
                        SET status = 'BOUNCED', last_error = ?, updated_at = now()

@@ -46,7 +46,8 @@ public class SchemaGrants {
      * выданы при заведении роли и с тех пор не менялись.
      */
     private static final List<String> CELL_TABLES =
-            List.of("spring_session", "spring_session_attributes", "mail_message");
+            List.of("spring_session", "spring_session_attributes", "mail_message",
+                    "mail_event_pending");
 
     private final JdbcTemplate owner;
     private final String runtimeRole;

@@ -83,6 +83,7 @@ class MailServiceTest extends PostgresTestBase {
     void clean() {
         // Таблица общая у всех контекстов и ни одной тестовой схеме не принадлежит.
         jdbc.update("DELETE FROM public.mail_message");
+        jdbc.update("DELETE FROM public.mail_event_pending");
         operator.script.clear();
         operator.sent.clear();
     }
@@ -232,25 +233,55 @@ class MailServiceTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Отчёт «delivered» раньше записи SENT: письмо остаётся DELIVERED, а не откатывается в SENT")
-    void deliveryReportBeforeSentIsNotLost() {
+    @DisplayName("Отчёт «delivered» пришёл по HTTP, пока запрос к оператору ещё шёл: письмо DELIVERED, а не SENT")
+    void deliveryReportBeforeResultIsRecordedIsNotLost() {
         String k = key();
         mail.enqueue(k, "owner@example.test", letter());
-        MailService[] holder = new MailService[1];
-        // Оператор присылает отчёт, пока наш запрос ещё не вернулся: номер
-        // задания уже у нас в строке, а результат отправки ещё не записан.
-        MailTransport racing = m -> {
-            jdbc.update("UPDATE public.mail_message SET provider_id = 'job-early' WHERE id = ?", m.id());
-            holder[0].applyEvent("job-early", "delivered", null);
+        // Боевой порядок: оператор уже ответил на отправку и сразу прислал отчёт,
+        // а мы ещё не успели записать номер задания в строку. Номера в строке
+        // нет — отчёт приходит тем же HTTP-путём, что и настоящий.
+        MailService racing = new MailService(jdbc, m -> {
+            try {
+                mvc.perform(post("/api/mail/events/hook-secret")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("""
+                                        {"events_by_user":[{"events":[{"event_name":"transactional_email_status",
+                                          "event_data":{"job_id":"job-early","status":"delivered"}}]}]}"""))
+                        .andExpect(status().isOk());
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
             return MailTransport.Result.accepted("job-early");
-        };
-        holder[0] = new MailService(jdbc, racing,
-                new MailProperties(null, null, null, null, null, null, 3,
-                        java.time.Duration.ZERO, null, null, null));
+        }, new MailProperties(null, null, null, null, null, null, 3,
+                java.time.Duration.ZERO, null, null, null));
 
-        holder[0].dispatchDue();
+        racing.dispatchDue();
 
         assertThat(mail.status(k).orElseThrow().status()).isEqualTo(MailService.DELIVERED);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM public.mail_event_pending", Integer.class))
+                .as("ожидавший отчёт разобран и убран").isZero();
+    }
+
+    @Test
+    @DisplayName("Отчёт по неизвестному номеру ждёт в буфере и письма не трогает; сутки спустя убирается")
+    void unknownJobWaitsAndIsCleanedUp() throws Exception {
+        String k = key();
+        mail.enqueue(k, "owner@example.test", letter());
+        mvc.perform(post("/api/mail/events/hook-secret")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"events_by_user":[{"events":[{"event_name":"transactional_email_status",
+                                  "event_data":{"job_id":"чужой-номер","status":"delivered"}}]}]}"""))
+                .andExpect(jsonPath("$.applied").value(0));
+
+        assertThat(mail.status(k).orElseThrow().status()).isEqualTo(MailService.QUEUED);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM public.mail_event_pending", Integer.class))
+                .isEqualTo(1);
+
+        jdbc.update("UPDATE public.mail_event_pending SET received_at = now() - interval '2 days'");
+        mail.dispatchDue();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM public.mail_event_pending", Integer.class))
+                .isZero();
     }
 
     @Test

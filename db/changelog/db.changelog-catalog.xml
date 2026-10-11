@@ -33,5 +33,6 @@
     <include file="catalog/020-uncategorized-category.sql" relativeToChangelogFile="true"/>
     <include file="catalog/021-session-store.sql"       relativeToChangelogFile="true"/>
     <include file="catalog/022-mail-message.sql"        relativeToChangelogFile="true"/>
+    <include file="catalog/023-mail-event-pending.sql"  relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
