@@ -4,7 +4,7 @@ import { ApiError } from '../api/client';
 import { fetchChallenge, registerCompany } from '../api/registration';
 import type { Registered } from '../api/registration';
 import { solveChallenge } from '../auth/proofOfWork';
-import { COMPANY_KEY } from './LoginScreen';
+import { COMPANY_KEY, follow } from './LoginScreen';
 import { useMounted } from '../ui/useMounted';
 
 /**
@@ -89,7 +89,11 @@ interface Proof {
   solution: Promise<{ challenge: string; solution: string }>;
 }
 
-export function RegistrationScreen() {
+/**
+ * @param onSignIn переключить общую страницу на вкладку входа (задача 0265),
+ *     не теряя набранного. Без него ссылки ведут на вход обычной загрузкой.
+ */
+export function RegistrationScreen({ onSignIn }: { onSignIn?: () => void } = {}) {
   useEffect(() => {
     document.title = 'Регистрация компании — PartsFlow';
   }, []);
@@ -238,7 +242,7 @@ export function RegistrationScreen() {
       <section className="screen screen--narrow">
         <h1>Регистрация компании</h1>
         <p className="error">{phase.message}</p>
-        <a href="/">Войти в свою компанию</a>
+        <a href="/login" onClick={(e) => follow(e, onSignIn)}>Войти в свою компанию</a>
       </section>
     );
   }
@@ -249,7 +253,7 @@ export function RegistrationScreen() {
         <h1>Регистрация компании</h1>
         <p className="error">{phase.message}</p>
         <button type="button" onClick={() => { void load(); }}>Повторить</button>
-        <a href="/">Войти в свою компанию</a>
+        <a href="/login" onClick={(e) => follow(e, onSignIn)}>Войти в свою компанию</a>
       </section>
     );
   }
@@ -271,7 +275,7 @@ export function RegistrationScreen() {
         <p className="note">Пароль — тот, что вы задали на этой странице.</p>
         <a
           className="button-link"
-          href="/"
+          href="/login"
           onClick={() => {
             try {
               localStorage.setItem(COMPANY_KEY, result.companyCode);
@@ -372,7 +376,7 @@ export function RegistrationScreen() {
         {busy ? 'Регистрируем…' : 'Зарегистрировать'}
       </button>
 
-      <a href="/">Уже есть компания? Войти</a>
+      <a href="/login" onClick={(e) => follow(e, onSignIn)}>Уже есть компания? Войти</a>
     </form>
   );
 }

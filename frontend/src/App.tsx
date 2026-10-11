@@ -1,6 +1,6 @@
+import { useEffect } from 'react';
 import { SessionProvider, useSession } from './auth/SessionProvider';
-import { LoginScreen } from './screens/LoginScreen';
-import { RegistrationScreen } from './screens/RegistrationScreen';
+import { EntryScreen, LOGIN_PATH, REGISTER_PATH } from './screens/EntryScreen';
 import { SharedDealScreen } from './screens/SharedDealScreen';
 import { HomeScreen } from './screens/HomeScreen';
 
@@ -14,8 +14,17 @@ import { HomeScreen } from './screens/HomeScreen';
  *
  * <p>Разбор пути ниже — для двух экранов без входа. Ссылка клиенту на его
  * сделку: у него учётной записи нет и не будет, и адрес тут единственный
- * способ сказать, какую сделку показать. И страница регистрации компании
- * ({@code /register}): её открывают по ссылке с сайта, и входить там некому.
+ * способ сказать, какую сделку показать. И общая страница входа
+ * и регистрации ({@code /login}, вкладка регистрации — {@code /register}):
+ * регистрацию открывают по ссылке с сайта, и входить там некому.
+ *
+ * <p><b>Невошедшего с любого адреса уводит на {@code /login}</b> (задача 0265),
+ * заменой записи истории, а не новой: «Назад» не должен возвращать на закрытый
+ * адрес, откуда страница тут же уведёт снова. Вошедшего с адреса входа — так же
+ * на {@code /}: иначе после входа в строке остался бы адрес формы, и обновление
+ * страницы вело бы себя иначе, чем до выхода сессии. На исходный адрес после
+ * входа не возвращаем: роутера нет, адрес раздела не выбирает, и вернуть туда
+ * значило бы пообещать то, чего приложение не сделает.
  */
 export function App() {
   return (
@@ -27,6 +36,22 @@ export function App() {
 
 function Root() {
   const { state } = useSession();
+  const path = window.location.pathname;
+  const shared = /^\/s\/([^/]+)\/([^/]+)$/.exec(path);
+  const isShared = shared !== null;
+  const entryPath = path === LOGIN_PATH || path === REGISTER_PATH;
+
+  // Адрес правится после отрисовки, а не во время неё: отрисовка обязана
+  // быть чистой, а StrictMode прогоняет её дважды.
+  useEffect(() => {
+    if (state.status === 'checking' || isShared) return;
+    const target = state.status === 'authenticated'
+      ? (entryPath ? '/' : null)
+      : (entryPath ? null : LOGIN_PATH);
+    if (target !== null) {
+      window.history.replaceState(window.history.state, '', target);
+    }
+  }, [state.status, isShared, entryPath]);
 
   if (state.status === 'checking') {
     // Отдельное состояние, чтобы экран входа не мигал у уже вошедшего.
@@ -35,18 +60,14 @@ function Root() {
   // Ссылка на сделку открывается без входа: у покупателя учётной записи нет.
   // Проверяется раньше сессии — иначе продавец, открывший ссылку со своего
   // телефона, увидел бы рабочий экран вместо того, что видит клиент.
-  const shared = /^\/s\/([^/]+)\/([^/]+)$/.exec(window.location.pathname);
   if (shared !== null && shared[1] !== undefined && shared[2] !== undefined) {
     return <SharedDealScreen company={shared[1]} token={shared[2]} />;
   }
 
+  // Вошедшему адрес входа или регистрации ничего не даёт — он видит свою
+  // работу, а не форму для чужой компании.
   if (state.status === 'authenticated') {
     return <HomeScreen />;
   }
-  // Регистрация открывается без входа; вошедшему адрес /register ничего
-  // не даёт — он видит свою работу, а не форму для чужой компании.
-  if (window.location.pathname === '/register') {
-    return <RegistrationScreen />;
-  }
-  return <LoginScreen />;
+  return <EntryScreen initial={path === REGISTER_PATH ? 'register' : 'login'} />;
 }

@@ -85,6 +85,9 @@ public class SecurityConfig {
                         // Секрет управляющего контура она не использует и
                         // не обходит: это другой путь, а не другая дверь в тот же.
                         .requestMatchers("/api/registration/**", "/register").permitAll()
+                        // Страница входа (задача 0265): за ней ещё нет никого,
+                        // как и за корнем ниже.
+                        .requestMatchers(HttpMethod.GET, "/login").permitAll()
                         // Отчёты о доставке писем присылает оператор: сессии у
                         // него нет и CSRF-токена тоже. Права даёт секрет в адресе,
                         // см. MailEventController.
