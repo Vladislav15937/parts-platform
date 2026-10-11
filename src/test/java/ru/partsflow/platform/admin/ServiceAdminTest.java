@@ -52,6 +52,11 @@ class ServiceAdminTest extends PostgresTestBase {
     private static final String COMPANY = "adminco";
     private static final String PASSWORD = "пароль-длинный";
 
+    /** Вторая разборка: разрешение первой её открывать не должно. */
+    private static final String OTHER_TENANT = "t_000348";
+    private static final long OTHER_TENANT_ID = 348;
+    private static final String OTHER_COMPANY = "adminco-sosed";
+
     private static final String ADMIN_LOGIN = "sluzhba347";
     private static final String ADMIN_PASSWORD = "пароль-администратора";
     private static final String ADMIN_NAME = "Владислав из поддержки";
@@ -68,22 +73,31 @@ class ServiceAdminTest extends PostgresTestBase {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    @Autowired
+    @org.springframework.beans.factory.annotation.Qualifier("requestMappingHandlerMapping")
+    private org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping handlerMapping;
+
     private Long partId;
 
     @BeforeAll
     static void migrate() {
-        provisionTenants(TENANT);
+        provisionTenants(TENANT, OTHER_TENANT);
     }
 
     @BeforeEach
     void fixtures() {
         // Разрешения и запросы ссылаются на реестр — уходят первыми.
-        jdbc.update("DELETE FROM public.admin_access_grant WHERE tenant_id = ?", TENANT_ID);
-        jdbc.update("DELETE FROM public.admin_access_request WHERE tenant_id = ?", TENANT_ID);
-        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = ?", TENANT_ID);
+        for (long id : new long[] {TENANT_ID, OTHER_TENANT_ID}) {
+            jdbc.update("DELETE FROM public.admin_access_grant WHERE tenant_id = ?", id);
+            jdbc.update("DELETE FROM public.admin_access_request WHERE tenant_id = ?", id);
+            jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = ?", id);
+        }
         jdbc.update("""
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
                 VALUES (?, ?, 'Разборка на Ткацкой', ?)""", TENANT_ID, TENANT, COMPANY);
+        jdbc.update("""
+                INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
+                VALUES (?, ?, 'Разборка на Прядильной', ?)""", OTHER_TENANT_ID, OTHER_TENANT, OTHER_COMPANY);
 
         // Фикстура пишет то, что называет, а не принимает найденное
         // (корневой CLAUDE.md, «Тесты»): соседний метод мог выключить
@@ -329,6 +343,170 @@ class ServiceAdminTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.items[?(@.role == 'ADMIN')].endReason").value(hasItem("LOGOUT")));
     }
 
+    // --- Пункт 4, вторая половина: вход, оставленный администратором, не переживает отзыва
+    //
+    // Права у администратора внутри — владельца, но кто входит в кабинет,
+    // решает только владелец: иначе после первого визита у администратора
+    // остался бы вход мимо разрешения (разбор PR 393). Каждый путь — отдельным
+    // методом, чтобы отчёт называл, какой из них открылся.
+
+    @Test
+    @DisplayName("Администратор не заводит сотрудника — ни владельца, ни продавца — и после отзыва входа нет")
+    void adminCannotCreateMembers() throws Exception {
+        grant(null);
+        MockHttpSession admin = enter();
+
+        for (String role : new String[] {"OWNER", "SELLER"}) {
+            mvc.perform(post("/api/members").with(csrf()).session(admin)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"login":"zapasnoy","password":"%s","role":"%s"}"""
+                                    .formatted(PASSWORD, role)))
+                    .andExpect(status().isForbidden());
+        }
+        Integer created = inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM tenant_member WHERE login = 'zapasnoy'", Integer.class));
+        assertThat(created).as("учётная запись администратора не заведена").isZero();
+
+        mvc.perform(post("/api/organization/admin-access/revoke").with(csrf()).session(ownerLogin()))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/auth/login").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"company":"%s","login":"zapasnoy","password":"%s"}"""
+                                .formatted(COMPANY, PASSWORD)))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("Администратор не меняет пароль владельцу — и владелец входит своим")
+    void adminCannotChangeOwnersPassword() throws Exception {
+        grant(null);
+        MockHttpSession admin = enter();
+        Long owner = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM tenant_member WHERE login = 'vladelec'", Long.class));
+
+        mvc.perform(post("/api/members/" + owner + "/password").with(csrf()).session(admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"password\":\"пароль-администратора-1\"}"))
+                .andExpect(status().isForbidden());
+
+        // Входит прежним паролем — значит пароль не тронут.
+        ownerLogin();
+    }
+
+    @Test
+    @DisplayName("Администратор не меняет пароль сотруднику и не включает и не выключает никого")
+    void adminCannotChangeOtherMembersAccess() throws Exception {
+        grant(null);
+        MockHttpSession admin = enter();
+        Long seller = inTenant(() -> member("prodavec347", "Продавец Сидоров", "SELLER"));
+        Long former = inTenant(() -> {
+            Long id = member("byvshiy347", "Бывший Кладовщиков", "STOREKEEPER");
+            jdbc.update("UPDATE tenant_member SET is_active = false WHERE id = ?", id);
+            return id;
+        });
+
+        mvc.perform(post("/api/members/" + seller + "/password").with(csrf()).session(admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"password\":\"пароль-администратора-1\"}"))
+                .andExpect(status().isForbidden());
+        // Включить выключенного — это вернуть вход человеку, пароль которого
+        // администратор мог знать; выключить — распорядиться входом чужого.
+        mvc.perform(post("/api/members/" + former + "/enable").with(csrf()).session(admin))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/api/members/" + seller + "/disable").with(csrf()).session(admin))
+                .andExpect(status().isForbidden());
+
+        Boolean formerActive = inTenant(() -> jdbc.queryForObject(
+                "SELECT is_active FROM tenant_member WHERE id = ?", Boolean.class, former));
+        assertThat(formerActive).as("выключенный остался выключенным").isFalse();
+        // Сотрудник при этом свой пароль меняет как раньше: правило про
+        // администратора, а не про путь.
+        mvc.perform(post("/api/members/" + seller + "/password").with(csrf())
+                        .session(memberLogin("prodavec347"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"password\":\"%s\"}".formatted(PASSWORD)))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    @DisplayName("Перебор: ни один изменяющий путь сотрудников и разрешения администратору ему не открыт")
+    void everyAccessChangingPathIsClosedToAdmin() throws Exception {
+        grant(null);
+        MockHttpSession admin = enter();
+        Long owner = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM tenant_member WHERE login = 'vladelec'", Long.class));
+
+        // Пути берутся у самого приложения, а не списком в тесте: путь,
+        // добавленный под эти адреса завтра, проверяется сам.
+        java.util.List<String> checked = new java.util.ArrayList<>();
+        for (var entry : handlerMapping.getHandlerMethods().entrySet()) {
+            var info = entry.getKey();
+            for (String pattern : info.getPatternValues()) {
+                if (!pattern.startsWith("/api/members") && !pattern.startsWith("/api/organization/admin-access")) {
+                    continue;
+                }
+                for (var method : info.getMethodsCondition().getMethods()) {
+                    if (method == org.springframework.web.bind.annotation.RequestMethod.GET) {
+                        continue;
+                    }
+                    String path = pattern.replaceAll("\\{[^}]+}", String.valueOf(owner));
+                    mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                                    .request(org.springframework.http.HttpMethod.valueOf(method.name()), path)
+                                    .with(csrf()).session(admin)
+                                    .contentType(MediaType.APPLICATION_JSON)
+                                    .content("""
+                                            {"login":"perebor","password":"%s","role":"OWNER","hours":null}"""
+                                            .formatted(PASSWORD)))
+                            .andExpect(result -> assertThat(result.getResponse().getStatus())
+                                    .as("%s %s из сессии администратора", method, path)
+                                    .isEqualTo(403));
+                    checked.add(method + " " + pattern);
+                }
+            }
+        }
+        // Семь известных сегодня: заведение, пароль, включение, выключение,
+        // выдача, отзыв, отклонение. Меньше — значит перебор ослеп.
+        assertThat(checked).as("перебор нашёл пути").hasSizeGreaterThanOrEqualTo(7);
+    }
+
+    // --- Пробы разбора: вход только в ту разборку и только пока разрешение действует
+
+    @Test
+    @DisplayName("Истёкшее разрешение в кабинет не пускает — 409 словами")
+    void expiredGrantDoesNotLetIn() throws Exception {
+        grant(1);
+        jdbc.update("""
+                UPDATE public.admin_access_grant
+                   SET granted_at = now() - interval '2 hours', expires_at = now() - interval '1 minute'
+                 WHERE tenant_id = ? AND closed_at IS NULL""", TENANT_ID);
+
+        mvc.perform(post("/api/admin/tenants/" + COMPANY + "/enter").with(csrf()).session(adminLogin()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(containsString("не открывал доступа")));
+    }
+
+    @Test
+    @DisplayName("Разрешение одной разборки не открывает другую — 409")
+    void grantOfOneCompanyDoesNotOpenAnother() throws Exception {
+        grant(null);
+
+        mvc.perform(post("/api/admin/tenants/" + OTHER_COMPANY + "/enter").with(csrf()).session(adminLogin()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(containsString("не открывал доступа")));
+    }
+
+    @Test
+    @DisplayName("Неизвестный код компании — 400 словами, без внутреннего номера")
+    void unknownCompanyCodeIsNamedWithoutInternalId() throws Exception {
+        var body = mvc.perform(post("/api/admin/tenants/net-takoy-kompanii/enter").with(csrf()).session(adminLogin()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(containsString("Компания не найдена")))
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(body).as("в отказе нет номера строки и схемы").doesNotContainPattern("\\d");
+    }
+
     // --- Пункт 7: система администрирования вне всех кабинетов
 
     @Test
@@ -403,11 +581,15 @@ class ServiceAdminTest extends PostgresTestBase {
     }
 
     private MockHttpSession ownerLogin() throws Exception {
+        return memberLogin("vladelec");
+    }
+
+    private MockHttpSession memberLogin(String login) throws Exception {
         var result = mvc.perform(post("/api/auth/login").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"company":"%s","login":"vladelec","password":"%s"}"""
-                                .formatted(COMPANY, PASSWORD)))
+                                {"company":"%s","login":"%s","password":"%s"}"""
+                                .formatted(COMPANY, login, PASSWORD)))
                 .andExpect(status().isOk())
                 .andReturn();
         return (MockHttpSession) result.getRequest().getSession(false);

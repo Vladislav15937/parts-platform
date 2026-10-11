@@ -74,8 +74,12 @@ describe('администратор сервиса в кабинете', () => 
     fireEvent.click(screen.getByRole('button', { name: 'Сотрудники' }));
 
     await waitFor(() => expect(screen.getByText('Администратор сервиса')).toBeTruthy());
-    // Кнопки «Выключить» одна — у владельца; у строки администратора её нет.
-    expect(screen.getAllByRole('button', { name: 'Выключить' })).toHaveLength(1);
+    // Кто входит в кабинет, решает владелец: ни у одной строки нет кнопок
+    // пароля и выключения, и завести сотрудника негде (разбор PR 393).
+    expect(screen.queryByRole('button', { name: 'Выключить' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Сменить пароль' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Завести' })).toBeNull();
+    expect(screen.getByText(/Сотрудников заводит и меняет владелец/)).toBeTruthy();
     await waitFor(() => expect(screen.getByText('Доступ открыт до отзыва.')).toBeTruthy());
     expect(screen.queryByRole('button', { name: 'Дать доступ администратору' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Отозвать доступ' })).toBeNull();

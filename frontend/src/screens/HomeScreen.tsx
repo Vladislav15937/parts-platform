@@ -418,9 +418,11 @@ export function HomeScreen() {
           только кнопкой на рельсе. */}
       {tab === 'journal' && JOURNAL_ROLES.includes(rights) && <AuditJournalScreen />}
 
-      {/* Давать доступ администратору сервиса может только сам владелец —
-          не администратор, у которого права владельца в кабинете. */}
-      {tab === 'members' && <MembersScreen canGrantAdminAccess={state.me.role === 'OWNER'} />}
+      {/* Кто входит в кабинет — сотрудники, их пароли и доступ администратора
+          сервиса — решает только сам владелец, а не администратор, у которого
+          права владельца в кабинете. Сервер держит то же правилом в
+          SecurityConfig (ACCESS_CONTROL). */}
+      {tab === 'members' && <MembersScreen managesAccess={state.me.role === 'OWNER'} />}
 
       {tab === 'organization' && <OrganizationScreen />}
 

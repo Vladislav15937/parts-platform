@@ -27,10 +27,13 @@ import { AdminAccessPanel } from './AdminAccessPanel';
  * можно было спросить, кто это сделал.
  */
 /**
- * @param canGrantAdminAccess вошёл ли сам владелец: администратор сервиса
- *        в кабинете видит раздел доступа, но давать и отзывать его не может
+ * @param managesAccess вошёл ли сам владелец. Администратор сервиса
+ *        в кабинете видит сотрудников и раздел доступа, но не заводит
+ *        сотрудников, не меняет им пароли, не включает и не выключает их
+ *        и не даёт доступ себе: всё это пережило бы отзыв его доступа
+ *        (разбор PR 393). Сервер отбивает то же самое 403.
  */
-export function MembersScreen({ canGrantAdminAccess = true }: { canGrantAdminAccess?: boolean }) {
+export function MembersScreen({ managesAccess = true }: { managesAccess?: boolean }) {
   const [members, setMembers] = useState<Member[] | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -103,6 +106,9 @@ export function MembersScreen({ canGrantAdminAccess = true }: { canGrantAdminAcc
                     // 2026): кнопки, которые сервер отобьёт, не рисуем, а
                     // говорим, где его рычаг.
                     <td className="note">доступ — в разделе ниже</td>
+                  ) : !managesAccess ? (
+                    // Кнопки, которые сервер отобьёт, администратору не рисуем.
+                    <td />
                   ) : (
                   <td className="filter-row">
                     <button
@@ -132,8 +138,14 @@ export function MembersScreen({ canGrantAdminAccess = true }: { canGrantAdminAcc
         </div>
       )}
 
-      <AdminAccessPanel canChange={canGrantAdminAccess} />
+      <AdminAccessPanel canChange={managesAccess} />
 
+      {!managesAccess ? (
+        <p className="note">
+          Сотрудников заводит и меняет владелец: вход, заданный администратором
+          сервиса, остался бы и после того, как владелец закроет ему доступ.
+        </p>
+      ) : (
       <div className="card">
         <h3>Новый сотрудник</h3>
         <div className="row">
@@ -188,6 +200,7 @@ export function MembersScreen({ canGrantAdminAccess = true }: { canGrantAdminAcc
           <p className="note">Пароль от восьми символов.</p>
         )}
       </div>
+      )}
     </section>
   );
 

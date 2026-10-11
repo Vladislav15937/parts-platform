@@ -25,6 +25,8 @@ import ru.partsflow.platform.admin.ServiceAdminAuthenticationProvider;
 import ru.partsflow.platform.admin.ServiceAdminPrincipal;
 import ru.partsflow.platform.session.LogoutRecorder;
 
+import java.util.List;
+
 /**
  * Аутентификация: сессия в cookie.
  *
@@ -185,6 +187,31 @@ public class SecurityConfig {
                         // этого не видно ни запросом, ни экраном: пункт 7
                         // критерия приёмки.
                         .requestMatchers("/api/admin/**").hasRole(ServiceAdminPrincipal.ROLE)
+                        // Кто входит в кабинет, решает владелец сам — и
+                        // администратор сервиса в его кабинете этого не меняет.
+                        // Права у администратора внутри — владельца («делать
+                        // абсолютно всё», решение от 8 сентября 2026), но тем же
+                        // днём записано и второе: вход только с разрешения
+                        // владельца. Заведённый им сотрудник, сменённый им
+                        // пароль, включённая им старая учётная запись или
+                        // продлённое им самому себе разрешение переживают отзыв:
+                        // разрешение закрыто, а вход остался. Разбор PR 393
+                        // поймал ровно это — владелец, созданный администратором
+                        // (201), и пароль настоящего владельца, сменённый им
+                        // (204): после отзыва компания уже не у владельца.
+                        //
+                        // Правило стоит на семействе путей, а не на методах:
+                        // новый способ завести или поменять вход, появившийся
+                        // под /api/members или под разрешением администратору,
+                        // закрыт от него сразу, а не после того, как кто-то
+                        // вспомнит дописать «и не ADMIN» в его @PreAuthorize.
+                        // Чтение остаётся: список сотрудников и состояние
+                        // разрешения он видит. Остальные роли проходят дальше
+                        // так же, как прошли бы правилом ниже.
+                        .requestMatchers(HttpMethod.POST, ACCESS_CONTROL).access(CHANGES_ACCESS)
+                        .requestMatchers(HttpMethod.PUT, ACCESS_CONTROL).access(CHANGES_ACCESS)
+                        .requestMatchers(HttpMethod.PATCH, ACCESS_CONTROL).access(CHANGES_ACCESS)
+                        .requestMatchers(HttpMethod.DELETE, ACCESS_CONTROL).access(CHANGES_ACCESS)
                         // «Просмотр» не меняет ничего — это свойство роли,
                         // а не отдельных операций, и потому стоит здесь,
                         // а не на методах, как остальные проверки.
@@ -233,6 +260,38 @@ public class SecurityConfig {
      * повторять здесь седьмой копией, и роль, забытая в нём, теряла бы чтение
      * всего кабинета.
      */
+    /**
+     * Пути, которыми заводят и меняют вход в кабинет: сотрудники (заведение,
+     * пароль, включение и выключение) и разрешение администратору сервиса.
+     *
+     * <p>Сеансы владельца ({@code /api/organization/sessions}) сюда не входят:
+     * они только читаются, а завершение чужого сеанса входа не даёт. Перебор
+     * от 12 октября 2026: других путей, после которых у кого-то появляется
+     * пароль или разрешение, в кабинете нет — приглашений и сброса пароля
+     * письмом нет вовсе, а первый владелец заводится провижинингом по секрету.
+     */
+    static final String[] ACCESS_CONTROL = {
+            "/api/members", "/api/members/**", "/api/organization/admin-access/**"};
+
+    /** Роли, которым правило по методам ниже разрешает менять данные. */
+    private static final List<String> WRITING_ROLES =
+            List.of("OWNER", "MANAGER", "STOREKEEPER", "SELLER");
+
+    /**
+     * Менять вход: сотрудник кабинета с пишущей ролью, но не администратор
+     * сервиса. Проверка по его собственной роли ({@link TenantPrincipal#isServiceAdmin()}),
+     * а не по отсутствию {@code ROLE_OWNER}: полномочия владельца у него есть,
+     * и именно они здесь не действуют.
+     */
+    private static final AuthorizationManager<RequestAuthorizationContext> CHANGES_ACCESS =
+            (authentication, context) -> {
+                Authentication current = authentication.get();
+                return new AuthorizationDecision(current != null && current.isAuthenticated()
+                        && current.getPrincipal() instanceof TenantPrincipal member
+                        && !member.isServiceAdmin()
+                        && WRITING_ROLES.contains(member.role()));
+            };
+
     private static final AuthorizationManager<RequestAuthorizationContext> TENANT_MEMBER =
             (authentication, context) -> {
                 Authentication current = authentication.get();
