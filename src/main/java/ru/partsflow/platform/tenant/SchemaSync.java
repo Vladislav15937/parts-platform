@@ -282,7 +282,7 @@ public class SchemaSync {
                 CatalogSchemaMigrator.Pending pending = catalog.pending();
                 if (!pending.ok()) {
                     problems.add(new Problem(CELL_SCHEMA,
-                            "не принято changeset'ов: " + pending.missing().size()
+                            "не принято changeset'ов: " + pending.count()
                                     + " — " + pending.names()));
                 }
             } catch (RuntimeException e) {
@@ -322,7 +322,7 @@ public class SchemaSync {
     /** @return сколько changeset'ов не хватает общей схеме; {@code -1} — «спросить не у кого» */
     private int missingInCatalog() {
         try {
-            return catalog.pending().missing().size();
+            return catalog.pending().count();
         } catch (RuntimeException e) {
             return -1;
         }
