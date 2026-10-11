@@ -16,7 +16,7 @@ import { useMounted } from '../ui/useMounted';
  * «нет такой компании» и «неверный пароль» значит сделать форму входа
  * справочником действующих компаний.
  */
-const COMPANY_KEY = 'partsflow.company';
+export const COMPANY_KEY = 'partsflow.company';
 
 export function LoginScreen() {
   // Заголовок вкладки возвращается к входу: он следует за разделом, и после
@@ -101,6 +101,8 @@ export function LoginScreen() {
       <button type="submit" disabled={busy}>
         {busy ? 'Проверяем…' : 'Войти'}
       </button>
+
+      <a href="/register">Зарегистрировать компанию</a>
     </form>
   );
 }

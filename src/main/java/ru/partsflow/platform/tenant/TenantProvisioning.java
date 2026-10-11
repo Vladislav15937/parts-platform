@@ -132,10 +132,34 @@ public class TenantProvisioning {
     }
 
     public Result provision(Request request) {
+        return provision(request, null);
+    }
+
+    /**
+     * То же, что {@link #provision(Request)}, но для самостоятельной регистрации
+     * (задача 0184): вместе с номером и кодом занимает почту владельца и ключ
+     * повтора запроса — одной вставкой в реестр.
+     *
+     * <p>Одной вставкой — потому что арбитром служат уникальные индексы, а не
+     * проверка чтением: два одновременных запроса с одной почтой или одним
+     * ключом проходят проверку оба, и разводит их только база. Проигравший
+     * получает {@link OwnerEmailTaken} либо {@link ReplayedRegistration} —
+     * словами, а не «нарушением целостности».
+     *
+     * <p><b>Сорвавшийся после занятия номера провижининг отпускает почту и
+     * ключ</b> (но не код и не номер — их держит запись в {@code PROVISIONING},
+     * как и раньше). Без этого человек, у которого не получилось с первого
+     * раза, больше никогда не смог бы зарегистрироваться на свою почту: запись
+     * брошенной компании не снимается (решение владельца, задача 0184), а
+     * почта в ней осталась бы занятой навсегда.
+     *
+     * @param registration null — заведение управляющим контуром, без почты
+     */
+    public Result provision(Request request, Registration registration) {
         String code = normalizeCode(request.companyCode());
         validate(request, code);
 
-        Reserved reserved = reserve(code, request.companyName());
+        Reserved reserved = reserve(code, request.companyName(), registration);
         try {
             createSchema(reserved.schema());
             migrator.migrate(reserved.schema());
@@ -150,6 +174,9 @@ public class TenantProvisioning {
         } catch (RuntimeException e) {
             log.error("Провижининг арендатора {} ({}) сорвался, запись осталась "
                     + "в состоянии PROVISIONING", reserved.schema(), code, e);
+            if (registration != null) {
+                releaseClaim(registration.registrationKey());
+            }
             throw e;
         }
 
@@ -186,6 +213,10 @@ public class TenantProvisioning {
      * правило, что у одновременного повтора приёмки.
      */
     Reserved reserve(String code, String companyName) {
+        return reserve(code, companyName, null);
+    }
+
+    Reserved reserve(String code, String companyName, Registration registration) {
         // Номер ячейки в старшем разряде: у второй ячейки арендаторы начинаются
         // с 2 000 001, а не с единицы. Иначе схемы t_000001 есть в обеих,
         // и дамп из одной нельзя развернуть в другую без переименования —
@@ -206,12 +237,27 @@ public class TenantProvisioning {
                     String schema = "t_%06d".formatted(tenantId);
                     jdbc.update("""
                             INSERT INTO public.tenant_registry
-                                (tenant_id, schema_name, company_name, code, status)
-                            VALUES (?, ?, ?, ?, 'PROVISIONING')""",
-                            tenantId, schema, companyName, code);
+                                (tenant_id, schema_name, company_name, code, status,
+                                 owner_email, owner_email_key, registration_key)
+                            VALUES (?, ?, ?, ?, 'PROVISIONING', ?, ?, ?)""",
+                            tenantId, schema, companyName, code,
+                            registration == null ? null : registration.ownerEmail(),
+                            registration == null ? null : registration.ownerEmailKey(),
+                            registration == null ? null : registration.registrationKey());
                     return new Reserved(tenantId, schema);
                 });
             } catch (org.springframework.dao.DuplicateKeyException e) {
+                if (registration != null) {
+                    // Порядок значим: свой же первый запрос держит и ключ, и
+                    // почту, и код сразу — повтор обязан узнать в нём себя, а
+                    // не отказать «почта занята» человеку, который нажал дважды.
+                    if (keyTaken(registration.registrationKey())) {
+                        throw new ReplayedRegistration(registration.registrationKey(), e);
+                    }
+                    if (emailTaken(registration.ownerEmailKey())) {
+                        throw new OwnerEmailTaken(registration.ownerEmail(), e);
+                    }
+                }
                 // Код занят — повторять бессмысленно, номер тут ни при чём.
                 // Это разные причины, и раньше они шли одним сообщением:
                 // оператор массового заведения не мог понять, повторять ему
@@ -230,6 +276,40 @@ public class TenantProvisioning {
         throw new IllegalStateException(
                 ("Не удалось занять номер за %d попыток: в public.tenant_registry пишет "
                         + "кто-то мимо провижининга").formatted(RESERVE_ATTEMPTS));
+    }
+
+    private boolean keyTaken(String key) {
+        Integer found = jdbc.queryForObject(
+                "SELECT count(*) FROM public.tenant_registry WHERE registration_key = ?",
+                Integer.class, key);
+        return found != null && found > 0;
+    }
+
+    private boolean emailTaken(String emailKey) {
+        Integer found = jdbc.queryForObject(
+                "SELECT count(*) FROM public.tenant_registry WHERE owner_email_key = ?",
+                Integer.class, emailKey);
+        return found != null && found > 0;
+    }
+
+    /**
+     * Отпускает почту и ключ сорвавшейся регистрации.
+     *
+     * <p>Только пока запись в {@code PROVISIONING}: у заведённой компании почта
+     * принадлежит ей навсегда. Сама отмена — {@code NULL}, а не удаление
+     * строки: схема могла создаться, и запись о ней нужна тому, кто будет
+     * разбираться.
+     */
+    private void releaseClaim(String key) {
+        try {
+            jdbc.update("""
+                    UPDATE public.tenant_registry
+                       SET owner_email_key = NULL, registration_key = NULL
+                     WHERE registration_key = ? AND status = 'PROVISIONING'""", key);
+        } catch (RuntimeException e) {
+            // Не затирать исходную причину отказа: она важнее.
+            log.error("Не удалось отпустить почту сорвавшейся регистрации", e);
+        }
     }
 
     /** Занят ли код: отличает «повторять бессмысленно» от «номер увели». */
@@ -362,6 +442,38 @@ public class TenantProvisioning {
     }
 
     public record Result(long tenantId, String schemaName, String companyCode) {
+    }
+
+    /**
+     * Что занимает самостоятельная регистрация сверх номера и кода.
+     *
+     * @param ownerEmail      почта как введена, после обрезки пробелов
+     * @param ownerEmailKey   она же в нижнем регистре: по ней идёт уникальность
+     * @param registrationKey ключ повтора запроса, от клиента
+     */
+    public record Registration(String ownerEmail, String ownerEmailKey, String registrationKey) {
+    }
+
+    /** Почта владельца уже занята другой компанией ячейки — 409 словами. */
+    public static class OwnerEmailTaken extends IllegalStateException {
+        public OwnerEmailTaken(String email, Throwable cause) {
+            super("Почта «%s» уже зарегистрирована. Войдите в свою компанию или укажите другую почту"
+                    .formatted(email), cause);
+        }
+    }
+
+    /** Ключ повтора уже занят: это второе нажатие той же регистрации. */
+    public static class ReplayedRegistration extends RuntimeException {
+        private final String registrationKey;
+
+        public ReplayedRegistration(String registrationKey, Throwable cause) {
+            super("Повтор регистрации", cause);
+            this.registrationKey = registrationKey;
+        }
+
+        public String registrationKey() {
+            return registrationKey;
+        }
     }
 
     record Reserved(long tenantId, String schema) {

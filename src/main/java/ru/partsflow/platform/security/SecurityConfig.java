@@ -59,7 +59,14 @@ public class SecurityConfig {
                         //
                         // Вход сюда не входит: там появляется сессия, и подделка
                         // входа (жертву логинят в чужой аккаунт) — реальная атака.
-                        .ignoringRequestMatchers("/api/provisioning/**", "/api/mail/events/**"))
+                        //
+                        // Регистрация компании клиентом (задача 0184) — второе:
+                        // запрос приходит от того, у кого сессии ещё нет и
+                        // которого мы ещё не знаем, cookie он не использует и
+                        // ничего не делает от имени вошедшего. Подделывать
+                        // браузером нечего: то же самое можно прислать напрямую.
+                        .ignoringRequestMatchers("/api/provisioning/**", "/api/mail/events/**",
+                                "/api/registration/**"))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 .authenticationManager(authenticationManager)
                 .exceptionHandling(e -> e.authenticationEntryPoint(
@@ -71,6 +78,13 @@ public class SecurityConfig {
                         // Механизм защищён секретом из конфигурации, пустой
                         // секрет его выключает — см. ProvisioningController.
                         .requestMatchers("/api/provisioning/**").permitAll()
+                        // Регистрация компании клиентом, задача 0184: входить
+                        // некому, компании ещё нет. Защищена не секретом, а
+                        // вычислительной преградой, пределом с адреса и
+                        // потолком числа компаний — см. RegistrationController.
+                        // Секрет управляющего контура она не использует и
+                        // не обходит: это другой путь, а не другая дверь в тот же.
+                        .requestMatchers("/api/registration/**", "/register").permitAll()
                         // Отчёты о доставке писем присылает оператор: сессии у
                         // него нет и CSRF-токена тоже. Права даёт секрет в адресе,
                         // см. MailEventController.
