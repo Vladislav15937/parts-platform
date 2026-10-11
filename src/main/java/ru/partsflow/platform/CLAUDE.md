@@ -1628,7 +1628,8 @@ null», и местная сборка перестала бы собирать�
 --build-arg APP_VERSION=<SHA>` → контейнер с настоящим Postgres рядом →
 `/actuator/readiness` отдаёт `named:true`, тот самый SHA, короткий SHA
 и время сборки; `ready:true`, проверок по-прежнему шесть
-(`database · catalog · schemas · journals · writes · metrics`).
+(`database · catalog · schemas · journals · writes · metrics` — на тот день;
+с задачи 0105 после `journals` стоит седьмая, `sessions`).
 Тот же ответ, поданный **настоящему тексту** `verdict_version`, даёт
 «версия та, что выкладывали» на верном ожидании и «ПОДНЯЛИ НЕ ТО»
 на чужом.
