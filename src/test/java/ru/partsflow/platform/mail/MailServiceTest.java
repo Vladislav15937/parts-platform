@@ -232,6 +232,28 @@ class MailServiceTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Отчёт «delivered» раньше записи SENT: письмо остаётся DELIVERED, а не откатывается в SENT")
+    void deliveryReportBeforeSentIsNotLost() {
+        String k = key();
+        mail.enqueue(k, "owner@example.test", letter());
+        MailService[] holder = new MailService[1];
+        // Оператор присылает отчёт, пока наш запрос ещё не вернулся: номер
+        // задания уже у нас в строке, а результат отправки ещё не записан.
+        MailTransport racing = m -> {
+            jdbc.update("UPDATE public.mail_message SET provider_id = 'job-early' WHERE id = ?", m.id());
+            holder[0].applyEvent("job-early", "delivered", null);
+            return MailTransport.Result.accepted("job-early");
+        };
+        holder[0] = new MailService(jdbc, racing,
+                new MailProperties(null, null, null, null, null, null, 3,
+                        java.time.Duration.ZERO, null, null, null));
+
+        holder[0].dispatchDue();
+
+        assertThat(mail.status(k).orElseThrow().status()).isEqualTo(MailService.DELIVERED);
+    }
+
+    @Test
     @DisplayName("Повтор с тем же ключом письма не добавляет и отдаёт состояние первого")
     void repeatDoesNotCreateSecondLetter() {
         String k = key();

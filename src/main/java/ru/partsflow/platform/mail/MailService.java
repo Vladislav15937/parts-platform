@@ -176,6 +176,13 @@ public class MailService {
     /**
      * Отчёт оператора о судьбе письма.
      *
+     * <p>Отправка идёт вне транзакции, результат пишется после, поэтому отчёт
+     * может обогнать запись {@code SENT}: {@code delivered} принимается и для
+     * {@code QUEUED}, а запись результата ({@code WHERE status = 'QUEUED'})
+     * более поздний статус не перетирает. Граница, которую это не снимает:
+     * номер задания попадает в строку только вместе с записью результата, и
+     * отчёт, пришедший до неё, номера не находит и пропускается.
+     *
      * @return изменилась ли хоть одна запись
      */
     public boolean applyEvent(String providerId, String operatorStatus, String detail) {
@@ -186,7 +193,7 @@ public class MailService {
             case "delivered", "opened", "clicked" -> jdbc.update("""
                     UPDATE public.mail_message
                        SET status = 'DELIVERED', delivered_at = now(), updated_at = now()
-                     WHERE provider_id = ? AND status = 'SENT'""", providerId) > 0;
+                     WHERE provider_id = ? AND status IN ('QUEUED', 'SENT')""", providerId) > 0;
             case "hard_bounced", "spam" -> jdbc.update("""
                     UPDATE public.mail_message
                        SET status = 'BOUNCED', last_error = ?, updated_at = now()
