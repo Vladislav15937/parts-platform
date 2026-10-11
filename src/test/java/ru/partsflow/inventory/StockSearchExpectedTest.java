@@ -98,8 +98,11 @@ class StockSearchExpectedTest extends PostgresTestBase {
             jdbc.update("""
                     INSERT INTO part_oem (part_id, raw_number, normalized)
                     VALUES (?, '8114048A90', '8114048A90')""", expectedId);
-            expectedCode = jdbc.queryForObject(
-                    "SELECT public_code FROM part WHERE id = ?", String.class, expectedId);
+            // Публичный код случаен (шесть байт), а кусок из одних цифр поиск читает
+            // как номер позиции и сверяет с кодом точно (0263): жребий решал бы, что
+            // тест утверждает. Код задан явно, с буквами внутри куска.
+            expectedCode = "12a3b45c6d78";
+            jdbc.update("UPDATE part SET public_code = ? WHERE id = ?", expectedCode, expectedId);
             expectedNumber = jdbc.queryForObject(
                     "SELECT number FROM part WHERE id = ?", Long.class, expectedId);
             return null;
