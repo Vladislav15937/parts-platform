@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
  * один раз в жизни, а не десятью разборками подряд.
  *
  * <p><b>Предел частоты — {@code app.registration-max-per-hour}, 10 в час с
- * одного адреса.</b> Законный пользователь тратит одну попытку; ещё две-три
+ * одного адреса (IPv6 — с одной подсети /64, {@link #rateKey}).</b> Законный пользователь тратит одну попытку; ещё две-три
  * уходят на опечатки в коде компании и на «код занят». Десять — это целая
  * контора с общим адресом (коворкинг, один провайдер на нескольких клиентов),
  * заводящая компании по очереди, и это запас на ошибки, а не на поток.
@@ -51,19 +51,26 @@ public class RegistrationLimits {
 
     private static final Logger log = LoggerFactory.getLogger(RegistrationLimits.class);
 
-    /** Сколько адресов держим под счётом — защита нашей памяти, не предел для человека. */
+    /**
+     * Сколько ключей держим под счётом — защита нашей памяти, не предел для
+     * человека. Заполнив карту, новый ключ вытесняет самый давний, а не
+     * получает отказ: отказ тут же стал бы отказом всем, кто пришёл позже
+     * (429 на час — оборотная сторона защиты, которая и должна была такое
+     * отбивать). Цена: тот, кто держит 4096 подсетей, обнуляет чужие
+     * счётчики — но он и без этого получает по десять попыток на каждую,
+     * а общий предел ячейке задаёт потолок числа компаний.
+     */
     private static final int MAX_TRACKED_ADDRESSES = 4096;
 
     public static final String REASON_RATE = "rate";
     public static final String REASON_CLOSED = "closed";
-    public static final String REASON_ADDRESSES = "addresses";
 
     private final JdbcTemplate jdbc;
     private final MeterRegistry metrics;
     private final int maxPerHour;
     private final int maxTenants;
     private final AddressWindow window =
-            new AddressWindow(ProvisioningLimits.WINDOW, MAX_TRACKED_ADDRESSES);
+            new AddressWindow(ProvisioningLimits.WINDOW, MAX_TRACKED_ADDRESSES, true);
 
     public RegistrationLimits(JdbcTemplate jdbc, MeterRegistry metrics,
                               @Value("${app.registration-max-per-hour:10}") int maxPerHour,
@@ -119,17 +126,10 @@ public class RegistrationLimits {
      * @throws ProvisioningLimits.CellFull        потолок достигнут — 409
      */
     public void beforeRegister(String address) {
-        int used = window.take(address);
-        if (used < 0) {
-            metrics.counter("partsflow.registration.rejected", "reason", REASON_ADDRESSES)
-                    .increment();
-            log.warn("Регистрации: адресов под счётом больше {} — отказ с {}",
-                    MAX_TRACKED_ADDRESSES, address);
-            throw new ProvisioningLimits.TooManyRequests(
-                    "Сейчас слишком много регистраций. Повторите через час");
-        }
+        String key = rateKey(address);
+        int used = window.take(key);
         if (used > maxPerHour) {
-            window.refund(address);
+            window.refund(key);
             metrics.counter("partsflow.registration.rejected", "reason", REASON_RATE).increment();
             log.warn("Регистрации: с адреса {} за час попыток {} при пределе {}",
                     address, used, maxPerHour);
@@ -143,7 +143,36 @@ public class RegistrationLimits {
 
     /** Попытка оказалась повтором уже принятой: место возвращается. */
     public void replayed(String address) {
-        window.refund(address);
+        window.refund(rateKey(address));
+    }
+
+    /**
+     * Ключ, по которому считается предел. IPv4 — адрес целиком; IPv6 — подсеть
+     * /64: хосту провайдер выдаёт её всю (2^64 адресов), и счёт по полному
+     * адресу давал бы ему по свежему счётчику на каждую попытку. Адрес вида
+     * {@code ::ffff:1.2.3.4} — это IPv4 в записи IPv6, считается как IPv4.
+     * Не адрес (имя, пустое) остаётся как есть и в DNS не ходит.
+     */
+    static String rateKey(String address) {
+        if (address == null || address.indexOf(':') < 0) {
+            return address;
+        }
+        byte[] raw;
+        try {
+            // Строка с двоеточием — литерал IPv6: разбор в DNS не ходит.
+            raw = java.net.InetAddress.getByName(address.replaceFirst("%.*$", "")).getAddress();
+        } catch (java.net.UnknownHostException e) {
+            return address;
+        }
+        if (raw.length == 4) {
+            // getByName сворачивает ::ffff:a.b.c.d в Inet4Address.
+            return (raw[0] & 0xff) + "." + (raw[1] & 0xff) + "." + (raw[2] & 0xff) + "." + (raw[3] & 0xff);
+        }
+        StringBuilder key = new StringBuilder("v6/64:");
+        for (int i = 0; i < 8; i++) {
+            key.append("%02x".formatted(raw[i] & 0xff));
+        }
+        return key.toString();
     }
 
     /**

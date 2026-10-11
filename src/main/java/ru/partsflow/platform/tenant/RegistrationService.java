@@ -46,8 +46,16 @@ import java.util.regex.Pattern;
 @Service
 public class RegistrationService {
 
-    /** Достаточно для адреса из людей и серверов, а не для проверки доставки. */
-    private static final Pattern EMAIL = Pattern.compile("[^@\\s]+@[^@\\s.]+(\\.[^@\\s.]+)+");
+    /**
+     * Достаточно для адреса из людей и серверов, а не для проверки доставки.
+     * Пробелом считается всё, что считает пробелом {@code \s} в JavaScript
+     * (экран проверяет тем же выражением): у Java {@code \s} неразрывного
+     * пробела не знает, и почта с ним внутри экраном отбивалась, а сервером
+     * принималась.
+     */
+    private static final String SPACES = "\\s\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF";
+    private static final Pattern EMAIL = Pattern.compile(
+            "[^@" + SPACES + "]+@[^@" + SPACES + ".]+(\\.[^@" + SPACES + ".]+)+");
 
     private static final Pattern CODE = Pattern.compile("[a-z0-9][a-z0-9-]{1,30}");
 
@@ -165,7 +173,7 @@ public class RegistrationService {
         }
 
         String code = form.companyCode() == null
-                ? "" : form.companyCode().strip().toLowerCase(Locale.ROOT);
+                ? "" : trimLikeScreen(form.companyCode()).toLowerCase(Locale.ROOT);
         if (!CODE.matcher(code).matches()) {
             throw new IllegalArgumentException(
                     "Код компании — от 2 до 31 символа: латиница, цифры и дефис, "
@@ -212,7 +220,38 @@ public class RegistrationService {
     }
 
     private static String strip(String value) {
-        return value == null ? "" : value.strip();
+        return value == null ? "" : trimLikeScreen(value);
+    }
+
+    /**
+     * Срезает по краям ровно то, что срезает {@code String.trim()} на экране
+     * регистрации. {@code String.strip()} Java неразрывный пробел (U+00A0,
+     * U+2007, U+202F) не считает пробелом, а {@code trim()} браузера считает, —
+     * почту, вставленную из мессенджера, экран принимал, а прямой запрос с
+     * тем же текстом сервер отбивал «Укажите почту так, как она пишется».
+     * Человек видит одно правило, сервер применяет другое.
+     */
+    static String trimLikeScreen(String value) {
+        int from = 0;
+        int to = value.length();
+        while (from < to && isScreenSpace(value.charAt(from))) {
+            from++;
+        }
+        while (to > from && isScreenSpace(value.charAt(to - 1))) {
+            to--;
+        }
+        return value.substring(from, to);
+    }
+
+    /** Пробельные символы JavaScript: табуляции, BOM, разделители Unicode и конец строки. */
+    private static boolean isScreenSpace(char c) {
+        if (c == '\t' || c == '\n' || c == '\u000B' || c == '\f' || c == '\r' || c == '\uFEFF') {
+            return true;
+        }
+        int type = Character.getType(c);
+        return type == Character.SPACE_SEPARATOR
+                || type == Character.LINE_SEPARATOR
+                || type == Character.PARAGRAPH_SEPARATOR;
     }
 
     /** Что пришло с формы. Пароль наружу не идёт и в лог не пишется. */

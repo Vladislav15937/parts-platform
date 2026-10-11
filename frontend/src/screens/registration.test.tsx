@@ -164,6 +164,11 @@ describe('регистрация компании', () => {
     await screen.findByText(/Регистрация временно закрыта/);
     expect(screen.queryByRole('button', { name: 'Зарегистрировать' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Войти в свою компанию' })).toBeTruthy();
+    // «Закрыто» — это ответ, а не сбой: повторять нечего. Кнопка «Повторить»
+    // есть только у «не слышно»; без этой строки тест не отличал бы одно
+    // состояние от другого (оба показывают слова сервера и ссылку на вход).
+    expect(screen.queryByRole('button', { name: 'Повторить' })).toBeNull();
+    expect(screen.queryByText('Нет связи с сервером')).toBeNull();
   });
 
   it('сервера не слышно: это не «закрыто», и можно повторить', async () => {
@@ -183,6 +188,40 @@ describe('регистрация компании', () => {
     reachable = true;
     fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
     await screen.findByRole('button', { name: 'Зарегистрировать' });
+  });
+
+  it('сервер ответил сбоем (503), а не «закрыто»: слова сбоя, повтор есть, слов про потолок нет', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/registration/challenge')) {
+        return json({ message: 'Сервер обновляется, повторите через минуту' }, 503);
+      }
+      return new Response(null, { status: 401 });
+    }));
+    render(<RegistrationScreen />);
+
+    await screen.findByText('Сервер обновляется, повторите через минуту');
+    expect(screen.queryByText(/временно закрыта/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Повторить' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Зарегистрировать' })).toBeNull();
+  });
+
+  it('неразрывный пробел по краям почты срезается, как на сервере; внутри — это не почта', async () => {
+    render(<RegistrationScreen />);
+    await fill();
+    fireEvent.change(screen.getByLabelText(/Почта/), { target: { value: '\u00a0owner@example.ru\u00a0' } });
+    expect(screen.queryByText(/Укажите почту так, как она пишется/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Зарегистрировать' }));
+    await screen.findByText('Компания зарегистрирована');
+    expect(posts[0]?.['email']).toBe('owner@example.ru');
+
+    cleanup();
+    posts = [];
+    render(<RegistrationScreen />);
+    await fill();
+    fireEvent.change(screen.getByLabelText(/Почта/), { target: { value: 'ivan\u00a0petrov@example.ru' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Зарегистрировать' }));
+    await screen.findAllByText(/Укажите почту так, как она пишется/);
+    expect(posts).toHaveLength(0);
   });
 
   it('по адресу /register без входа открывается регистрация, а на входе есть ссылка на неё', async () => {
