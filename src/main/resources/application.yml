@@ -146,6 +146,23 @@ app:
   # нельзя, отказ говорит словами.
   provisioning-max-tenants: ${APP_PROVISIONING_MAX_TENANTS:500}
 
+  mail:
+    # Отправка писем (задача 0192). log — письма только в лог и нигде больше;
+    # unisender — Unisender Go. Умолчание log: договора и ключа на день
+    # заведения нет, ячейка без них обязана подниматься, но не молча —
+    # см. MailConfigCheck и ops/config-guard.sh.
+    provider: ${APP_MAIL_PROVIDER:log}
+    # Секрет оператора: только переменной окружения, в репозиторий не класть.
+    api-key: "${APP_MAIL_API_KEY:}"
+    # Адрес API зависит от дата-центра аккаунта (go1 или go2): верный виден
+    # в кабинете; умолчания нет (см. MailProperties).
+    base-url: "${APP_MAIL_BASE_URL:}"
+    from-email: "${APP_MAIL_FROM:}"
+    from-name: "${APP_MAIL_FROM_NAME:}"
+    # Часть адреса, по которому оператор присылает отчёты о доставке.
+    # Пусто — приём выключен. Сгенерировать: openssl rand -hex 24
+    webhook-secret: "${APP_MAIL_WEBHOOK_SECRET:}"
+
   crypto:
     # Ключ шифрования секретов площадок: 32 байта в base64.
     # Пустой — механизм выключен: приложение поднимется, но завести ключ

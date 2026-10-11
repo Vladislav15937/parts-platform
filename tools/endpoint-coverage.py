@@ -49,6 +49,9 @@ KNOWN = {
         "существу: то же",
     "GET /api/provisioning/load":
         "существу: то же, замер ячейки",
+    "POST /api/mail/events/{secret}":
+        "существу: отчёты о доставке писем присылает оператор (Unisender Go) "
+        "по адресу с секретом, сессии у него нет (задача 0192)",
     "GET /feeds/drom/{company}/{token}.xml":
         "существу: забирает площадка по постоянной ссылке, у неё нет сессии",
     "GET /feeds/drom/{company}/{token}/{file}.xml":

@@ -141,6 +141,16 @@ x-app: &app
     APP_PROVISIONING_MAX_PER_HOUR: ${APP_PROVISIONING_MAX_PER_HOUR:-20}
     APP_PROVISIONING_MAX_TENANTS: ${APP_PROVISIONING_MAX_TENANTS:-500}
 
+    # Отправка писем (задача 0192). Без APP_MAIL_PROVIDER=unisender письма
+    # только пишутся в лог и НЕ уходят — ops/config-guard.sh говорит об этом
+    # словами перед подъёмом. Ключ оператора — секрет, в репозиторий не класть.
+    APP_MAIL_PROVIDER: ${APP_MAIL_PROVIDER:-log}
+    APP_MAIL_API_KEY: ${APP_MAIL_API_KEY:-}
+    APP_MAIL_BASE_URL: ${APP_MAIL_BASE_URL:-}
+    APP_MAIL_FROM: ${APP_MAIL_FROM:-}
+    APP_MAIL_FROM_NAME: ${APP_MAIL_FROM_NAME:-}
+    APP_MAIL_WEBHOOK_SECRET: ${APP_MAIL_WEBHOOK_SECRET:-}
+
     # Ключ шифрования секретов площадок, 32 байта в base64.
     # Потеряете — ключи кабинетов не расшифруются, и их придётся
     # запрашивать у площадок заново. Держите копию отдельно от бэкапа базы:

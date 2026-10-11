@@ -131,6 +131,11 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.shedlock TO $role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.spring_session TO $role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.spring_session_attributes
     TO $role;
+
+-- Журнал исходящих писем (catalog/022, задача 0192): письмо ставится в очередь
+-- и разбирается рабочей ролью. Те же права выдаёт накат общей схемы
+-- (SchemaGrants.applyCellTables) — по тому же доводу, что для сессий выше.
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.mail_message TO $role;
 SQL
 
     # ПОЧЕМУ ЗДЕСЬ НЕ ops/migrate-tenants.sh, который стоял тут до задачи 0210.
