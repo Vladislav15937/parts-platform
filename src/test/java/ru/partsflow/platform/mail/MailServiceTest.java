@@ -78,6 +78,8 @@ class MailServiceTest extends PostgresTestBase {
     private JdbcTemplate jdbc;
     @Autowired
     private MockMvc mvc;
+    @Autowired
+    private org.springframework.transaction.support.TransactionTemplate tx;
 
     @BeforeEach
     void clean() {
@@ -225,7 +227,7 @@ class MailServiceTest extends PostgresTestBase {
         MailTransport broken = m -> { throw new IllegalStateException("boom"); };
         MailService withBroken = new MailService(jdbc, broken,
                 new MailProperties(null, null, null, null, null, null, 3,
-                        java.time.Duration.ZERO, null, null, null));
+                        java.time.Duration.ZERO, null, null, null), tx);
 
         withBroken.dispatchDue();
 
@@ -253,7 +255,7 @@ class MailServiceTest extends PostgresTestBase {
             }
             return MailTransport.Result.accepted("job-early");
         }, new MailProperties(null, null, null, null, null, null, 3,
-                java.time.Duration.ZERO, null, null, null));
+                java.time.Duration.ZERO, null, null, null), tx);
 
         racing.dispatchDue();
 
@@ -282,6 +284,121 @@ class MailServiceTest extends PostgresTestBase {
         mail.dispatchDue();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM public.mail_event_pending", Integer.class))
                 .isZero();
+    }
+
+    /** JdbcTemplate с подкладкой: после выбранной инструкции выполняется чужое действие. */
+    static class HookJdbc extends JdbcTemplate {
+        java.util.function.BiConsumer<String, Object> after = (sql, result) -> { };
+
+        HookJdbc(JdbcTemplate base) {
+            super(base.getDataSource());
+        }
+
+        @Override
+        public int update(String sql, Object... args) {
+            int n = super.update(sql, args);
+            after.accept(sql, n);
+            return n;
+        }
+
+        @Override
+        public <T> T queryForObject(String sql, Class<T> type, Object... args) {
+            T r = super.queryForObject(sql, type, args);
+            after.accept(sql, r);
+            return r;
+        }
+
+        @Override
+        public <T> List<T> query(String sql, org.springframework.jdbc.core.RowMapper<T> m, Object... args) {
+            List<T> r = super.query(sql, m, args);
+            after.accept(sql, r);
+            return r;
+        }
+    }
+
+    private MailService service(JdbcTemplate j, String jobId) {
+        return new MailService(j, m -> MailTransport.Result.accepted(jobId),
+                new MailProperties(null, null, null, null, null, null, 3,
+                        java.time.Duration.ZERO, null, null, null), tx);
+    }
+
+    @Test
+    @DisplayName("Окно 1: запись результата встаёт между «номера нет» и «номер есть» приёма отчёта — отчёт не теряется")
+    void resultRecordedBetweenLookupAndExistsCheck() throws Exception {
+        String k = key();
+        mail.enqueue(k, "owner@example.test", letter());
+        HookJdbc eventJdbc = new HookJdbc(jdbc);
+        MailService events = service(eventJdbc, "unused");
+        MailService racer = service(jdbc, "job-w1");
+        Thread[] t = new Thread[1];
+        // Сразу после того, как приём отчёта не нашёл номер (0 строк), оператор-ответ
+        // записывается: письмо получает SENT и номер, буфер ещё пуст.
+        eventJdbc.after = (sql, r) -> {
+            if (t[0] == null && sql.contains("UPDATE public.mail_message") && Integer.valueOf(0).equals(r)) {
+                t[0] = new Thread(racer::dispatchDue);
+                t[0].start();
+                join(t[0], 1000);
+            }
+        };
+
+        events.applyEvent("job-w1", "delivered", null);
+        join(t[0], 5000);
+
+        assertThat(mail.status(k).orElseThrow().status()).isEqualTo(MailService.DELIVERED);
+    }
+
+    @Test
+    @DisplayName("Окно 2: запись результата удаляет из буфера чужую свежую строку — отчёт не теряется")
+    void resultRecordedDoesNotDeleteFreshPendingRow() throws Exception {
+        String k = key();
+        mail.enqueue(k, "owner@example.test", letter());
+        HookJdbc eventJdbc = new HookJdbc(jdbc);
+        HookJdbc racerJdbc = new HookJdbc(jdbc);
+        MailService events = service(eventJdbc, "unused");
+        MailService racer = service(racerJdbc, "job-w2");
+        CountDownLatch racerReadBuffer = new CountDownLatch(1);
+        CountDownLatch eventInserted = new CountDownLatch(1);
+        Thread[] t = new Thread[1];
+        // Запись результата прочла буфер (пусто) и ждёт, пока приём отчёта положит свою строку.
+        racerJdbc.after = (sql, r) -> {
+            if (sql.contains("FROM public.mail_event_pending")) {
+                racerReadBuffer.countDown();
+                await(eventInserted, 1500);
+            }
+        };
+        // Приём отчёта: не нашёл номер и номера в письмах нет — тут встаёт запись результата.
+        eventJdbc.after = (sql, r) -> {
+            if (t[0] == null && sql.startsWith("SELECT EXISTS") && Boolean.FALSE.equals(r)) {
+                t[0] = new Thread(racer::dispatchDue);
+                t[0].start();
+                await(racerReadBuffer, 1500);
+            }
+            if (sql.contains("INSERT INTO public.mail_event_pending")) {
+                eventInserted.countDown();
+                join(t[0], 1000);
+            }
+        };
+
+        events.applyEvent("job-w2", "delivered", null);
+        join(t[0], 5000);
+
+        assertThat(mail.status(k).orElseThrow().status()).isEqualTo(MailService.DELIVERED);
+    }
+
+    private static void join(Thread t, long ms) {
+        try {
+            t.join(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void await(CountDownLatch l, long ms) {
+        try {
+            l.await(ms, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Test

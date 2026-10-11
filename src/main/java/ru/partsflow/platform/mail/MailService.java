@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.util.List;
@@ -58,11 +59,14 @@ public class MailService {
     private final JdbcTemplate jdbc;
     private final MailTransport transport;
     private final MailProperties props;
+    private final TransactionTemplate tx;
 
-    public MailService(JdbcTemplate jdbc, MailTransport transport, MailProperties props) {
+    public MailService(JdbcTemplate jdbc, MailTransport transport, MailProperties props,
+                       TransactionTemplate tx) {
         this.jdbc = jdbc;
         this.transport = transport;
         this.props = props;
+        this.tx = tx;
     }
 
     /**
@@ -145,15 +149,17 @@ public class MailService {
 
     private void record(Claimed c, MailTransport.Result r) {
         switch (r.outcome()) {
-            case ACCEPTED -> {
+            // Запись номера и разбор буфера — под тем же замком, что и приём отчёта:
+            // между ними не должен встать отчёт (см. applyEvent).
+            case ACCEPTED -> tx.executeWithoutResult(s -> {
+                lock(r.providerId());
                 jdbc.update("""
                         UPDATE public.mail_message
                            SET status = 'SENT', provider_id = ?, sent_at = now(),
                                last_error = NULL, updated_at = now()
                          WHERE id = ? AND status = 'QUEUED'""", r.providerId(), c.id());
-                // Отчёт мог прийти, пока шёл запрос: он ждёт в буфере.
                 replayPending(r.providerId());
-            }
+            });
             case REJECTED -> fail(c, "отказ оператора: " + r.detail());
             case TEMPORARY -> {
                 if (c.attempts() >= props.maxAttempts()) {
@@ -190,9 +196,16 @@ public class MailService {
      * не находит — и, получив 200, оператор не повторит. Поэтому отчёт по
      * неизвестному номеру не выбрасывается, а ждёт в {@code mail_event_pending};
      * запись результата ({@link #record}) разбирает ожидающие по своему номеру.
-     * Обе половины перепроверяют друг друга после своей записи, так что при любом
-     * порядке один из двух путей увидит другой. Ожидающие отчёты, чьё письмо так
-     * и не нашлось (чужая рассылка с того же проекта), живут сутки.
+     *
+     * <p><b>Обе половины идут под одним рекомендательным замком по номеру
+     * задания</b> ({@code pg_advisory_xact_lock}) и каждая в своей транзакции:
+     * приём отчёта «применить или положить в буфер» и запись результата «записать
+     * номер и разобрать буфер» выполняются друг относительно друга строго по
+     * очереди — в том числе у двух экземпляров приложения, потому что замок в базе.
+     * Без замка (отдельные автокоммитные инструкции) между проверкой и записью
+     * вставал второй путь, и отчёт оказывался ни применён, ни в буфере. Ожидающие
+     * отчёты, чьё письмо так и не нашлось (чужая рассылка с того же проекта),
+     * живут сутки.
      *
      * @return применён ли отчёт к письму сейчас
      */
@@ -200,18 +213,25 @@ public class MailService {
         if (providerId == null || providerId.isBlank() || operatorStatus == null) {
             return false;
         }
-        if (applyKnown(providerId, operatorStatus, detail)) {
-            return true;
-        }
-        if (exists(providerId)) {
-            // Номер есть, но статус отчёта ничего не меняет (повтор, «sent»).
+        return Boolean.TRUE.equals(tx.execute(s -> {
+            lock(providerId);
+            if (applyKnown(providerId, operatorStatus, detail)) {
+                return true;
+            }
+            if (!exists(providerId)) {
+                jdbc.update("""
+                        INSERT INTO public.mail_event_pending (provider_id, operator_status, detail)
+                        VALUES (?, ?, ?)""", providerId, operatorStatus, detail);
+            }
+            // Номер есть, но статус отчёта ничего не меняет (повтор, «sent»), — не копим.
             return false;
-        }
-        jdbc.update("""
-                INSERT INTO public.mail_event_pending (provider_id, operator_status, detail)
-                VALUES (?, ?, ?)""", providerId, operatorStatus, detail);
-        // Запись результата могла завершиться между нашей проверкой и вставкой.
-        return replayPending(providerId);
+        }));
+    }
+
+    /** Замок живёт до конца транзакции; ключ — хеш номера задания. */
+    private void lock(String providerId) {
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtext(?))",
+                (org.springframework.jdbc.core.ResultSetExtractor<Void>) rs -> null, providerId);
     }
 
     private boolean exists(String providerId) {
@@ -221,20 +241,16 @@ public class MailService {
     }
 
     /** Применяет ожидавшие отчёты по номеру, который уже записан в письме. */
-    private boolean replayPending(String providerId) {
-        if (!exists(providerId)) {
-            return false;
-        }
-        List<String[]> waiting = jdbc.query("""
-                SELECT operator_status, detail FROM public.mail_event_pending
+    private void replayPending(String providerId) {
+        List<Object[]> waiting = jdbc.query("""
+                SELECT id, operator_status, detail FROM public.mail_event_pending
                  WHERE provider_id = ? ORDER BY id""",
-                (rs, i) -> new String[]{rs.getString(1), rs.getString(2)}, providerId);
-        boolean applied = false;
-        for (String[] w : waiting) {
-            applied |= applyKnown(providerId, w[0], w[1]);
+                (rs, i) -> new Object[]{rs.getLong(1), rs.getString(2), rs.getString(3)}, providerId);
+        for (Object[] w : waiting) {
+            applyKnown(providerId, (String) w[1], (String) w[2]);
+            // Удаляется ровно прочитанное: чужая свежая строка остаётся.
+            jdbc.update("DELETE FROM public.mail_event_pending WHERE id = ?", w[0]);
         }
-        jdbc.update("DELETE FROM public.mail_event_pending WHERE provider_id = ?", providerId);
-        return applied;
     }
 
     private boolean applyKnown(String providerId, String operatorStatus, String detail) {
