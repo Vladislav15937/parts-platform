@@ -349,6 +349,79 @@ class RegistrationTest extends PostgresTestBase {
                 .isInstanceOf(ProvisioningLimits.TooManyRequests.class);
     }
 
+    @Test
+    @DisplayName("IPv6 считается подсетью /64: десять адресов из одной исчерпывают один предел, соседняя подсеть не задета")
+    void rateLimitCountsIpv6BySubnet() {
+        RegistrationLimits limits = new RegistrationLimits(directJdbc(),
+                new SimpleMeterRegistry(), 10, 1_000_000);
+
+        // Десять разных адресов одной /64: хост с провайдерской подсетью
+        // сам выбирает младшие 64 бита, и по полному адресу у него был бы
+        // свежий счётчик на каждую попытку.
+        for (int i = 1; i <= 10; i++) {
+            limits.beforeRegister("2001:db8:1:2::" + Integer.toHexString(0x1000 + i));
+        }
+        assertThatThrownBy(() -> limits.beforeRegister("2001:db8:1:2:ffff:eeee:dddd:1"))
+                .as("одиннадцатый адрес той же подсети — в тот же предел")
+                .isInstanceOf(ProvisioningLimits.TooManyRequests.class);
+
+        // Соседняя /64 — другой хост, у него свой счёт.
+        limits.beforeRegister("2001:db8:1:3::1");
+
+        // IPv4 — адрес целиком, а не «подсеть»: соседний в той же /24 свободен.
+        for (int i = 0; i < 10; i++) {
+            limits.beforeRegister("10.77.0.1");
+        }
+        assertThatThrownBy(() -> limits.beforeRegister("10.77.0.1"))
+                .isInstanceOf(ProvisioningLimits.TooManyRequests.class);
+        limits.beforeRegister("10.77.0.2");
+
+        // IPv4 в записи IPv6 — тот же счёт, что у обычной записи.
+        assertThatThrownBy(() -> limits.beforeRegister("::ffff:10.77.0.1"))
+                .isInstanceOf(ProvisioningLimits.TooManyRequests.class);
+    }
+
+    @Test
+    @DisplayName("Карта адресов переполнена: новый ключ вытесняет самый давний, а не получает 429 — и чужой счёт не обнуляется заодно")
+    void fullAddressMapDoesNotCloseRegistrationForEveryone() {
+        RegistrationLimits limits = new RegistrationLimits(directJdbc(),
+                new SimpleMeterRegistry(), 2, 1_000_000);
+
+        // Недавний честный адрес с одной израсходованной попыткой из двух.
+        limits.beforeRegister("10.90.255.1");
+        // 4096 прочих ключей заполняют карту целиком (честный уже в ней).
+        for (int i = 0; i < 4095; i++) {
+            limits.beforeRegister("10.91." + (i / 250) + "." + (i % 250 + 1));
+        }
+        // Честный приходит снова — теперь он самый свежий.
+        limits.beforeRegister("10.90.255.1");
+
+        // 4097-й ключ: раньше отвечал 429 «слишком много регистраций» всем.
+        limits.beforeRegister("10.92.0.1");
+        limits.beforeRegister("10.92.0.2");
+
+        // Вытеснен самый давний, а честный с двумя попытками остался на счёте:
+        // третья ему отказывает, как и обязана.
+        assertThatThrownBy(() -> limits.beforeRegister("10.90.255.1"))
+                .isInstanceOf(ProvisioningLimits.TooManyRequests.class)
+                .hasMessageContaining("слишком много попыток");
+    }
+
+    @Test
+    @DisplayName("Неразрывный пробел по краям почты срезается, как на экране; внутри — отказ, как на экране")
+    void nonBreakingSpaceIsTrimmedLikeOnTheScreen() throws Exception {
+        String email = uniqueEmail();
+        String code = uniqueCode();
+        register(form(code, "\u00A0" + email + "\u00A0"), "10.84.0.40")
+                .andExpect(status().isCreated());
+        assertThat(jdbc.queryForObject(
+                "SELECT owner_email FROM public.tenant_registry WHERE code = ?", String.class, code))
+                .isEqualTo(email);
+
+        // Внутри адреса пробел любого вида — не почта, и экран говорит то же.
+        assertRefused(form(uniqueCode(), "ivan\u00A0petrov@example.ru"), "почту");
+    }
+
     private JdbcTemplate directJdbc() {
         return new JdbcTemplate(new DriverManagerDataSource(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()));

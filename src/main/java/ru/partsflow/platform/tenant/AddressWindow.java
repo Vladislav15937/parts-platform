@@ -3,7 +3,8 @@ package ru.partsflow.platform.tenant;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -26,11 +27,23 @@ final class AddressWindow {
 
     private final Duration window;
     private final int maxTracked;
-    private final Map<String, Deque<Long>> recent = new HashMap<>();
+    private final boolean evictWhenFull;
+    /** Порядок — от давно не приходивших к недавним: вытеснять есть с чего начать. */
+    private final Map<String, Deque<Long>> recent = new LinkedHashMap<>();
 
+    /** Заполненная карта отказывает новому ключу (управляющий контур). */
     AddressWindow(Duration window, int maxTracked) {
+        this(window, maxTracked, false);
+    }
+
+    /**
+     * @param evictWhenFull вместо отказа новому ключу вытесняется тот, что
+     *                      дольше всех не приходил (открытая регистрация)
+     */
+    AddressWindow(Duration window, int maxTracked, boolean evictWhenFull) {
         this.window = window;
         this.maxTracked = maxTracked;
+        this.evictWhenFull = evictWhenFull;
     }
 
     /**
@@ -38,7 +51,8 @@ final class AddressWindow {
      *
      * <p>Минус единица — адресов под счётом больше, чем держим: заполненная
      * карта (уже после уборки устаревшего) сама признак долбёжки, и запрос
-     * в этом состоянии отбивается вызывающим.
+     * в этом состоянии отбивается вызывающим. Так — у окна, созданного без
+     * {@code evictWhenFull}; с ним минус единицы не бывает вовсе.
      *
      * <p>Под замком: чтение окна и запись в него не должны разъезжаться —
      * то же правило, что у остатка склада, только цена ниже.
@@ -56,14 +70,19 @@ final class AddressWindow {
         });
         recent.entrySet().removeIf(entry -> entry.getValue().isEmpty());
 
-        Deque<Long> times = recent.get(address);
+        Deque<Long> times = recent.remove(address);
         if (times == null) {
             if (recent.size() >= maxTracked) {
-                return -1;
+                if (!evictWhenFull) {
+                    return -1;
+                }
+                Iterator<String> eldest = recent.keySet().iterator();
+                eldest.next();
+                eldest.remove();
             }
             times = new ArrayDeque<>();
-            recent.put(address, times);
         }
+        recent.put(address, times);
         times.addLast(now);
         return times.size();
     }
