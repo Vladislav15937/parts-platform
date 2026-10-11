@@ -1027,6 +1027,101 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 .contains("<available>false</available>");
     }
 
+    /**
+     * Предзаказ на часть ожидаемой партии уменьшает количество, а не снимает
+     * объявление (задача 0262, решение владельца 9 октября 2026).
+     *
+     * <p>Партия 3: предзаказ на 1 — Дром видит 2 и доступное; ещё на 2 (двумя
+     * строками 1+2 — считается сумма количеств, не число строк) — строки в
+     * прайсе нет, а дельта несёт недоступной с нулём. Счётчик сверяется с
+     * числом {@code <offer>} на каждом шаге.
+     */
+    @Test
+    @DisplayName("Частичный предзаказ уменьшает количество на Дроме; полный снимает; счётчик сверен")
+    void partialPreorderReducesTheQuantity() {
+        String name = "Прайс: партия фар, часть под предзаказом";
+        Long partId = expectedPart(name, new BigDecimal("9000"), "EXPECTED");
+        inTenant(() -> jdbc.update("UPDATE part SET quantity = 3 WHERE id = ?", partId));
+        Long dealId = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO deal (status, total_amount) VALUES ('RESERVED', 9000)
+                RETURNING id""", Long.class));
+
+        // Без предзаказа: 3 (контроль, что партия вообще в файле).
+        assertThat(offerIn(priceWith(expects("Ожидается поступление")), name))
+                .contains("<quantity>3</quantity>");
+
+        inTenant(() -> jdbc.update("""
+                INSERT INTO deal_item (deal_id, part_id, quantity, price, warehouse_id, status)
+                VALUES (?, ?, 1, 9000, ?, 'PREORDER')""", dealId, partId, warehouse));
+        String full = priceWith(expects("Ожидается поступление"));
+        assertThat(offerIn(full, name))
+                .as("из трёх штук одна под предзаказом: Дром обязан видеть две")
+                .contains("<quantity>2</quantity>")
+                .contains("<available>true</available>");
+        assertThat(offerIn(delta(partId, expects("Ожидается поступление")), name))
+                .as("дельта несёт то же количество, что и полный прайс")
+                .contains("<quantity>2</quantity>")
+                .contains("<available>true</available>");
+        assertThat(counted())
+                .as("счётчик расходится с числом <offer>: позиция с частичным предзаказом в файле")
+                .isEqualTo(full.split("<offer>", -1).length - 1);
+
+        // Ещё две штуки отдельной строкой: всего 1 + 2 = 3, под предзаказом всё.
+        inTenant(() -> jdbc.update("""
+                INSERT INTO deal_item (deal_id, part_id, quantity, price, warehouse_id, status)
+                VALUES (?, ?, 2, 9000, ?, 'PREORDER')""", dealId, partId, warehouse));
+        String none = priceWith(expects("Ожидается поступление"));
+        assertThat(none)
+                .as("все штуки под предзаказом, а строка в прайсе осталась")
+                .doesNotContain("<name>" + name + "</name>");
+        assertThat(counted())
+                .as("счётчик считает позицию, которой в файле нет")
+                .isEqualTo(none.split("<offer>", -1).length - 1);
+        assertThat(delta(partId, expects("Ожидается поступление")))
+                .as("дельта полностью предзаказанной позиции: недоступная с нулём")
+                .contains("<available>false</available>")
+                .contains("<quantity>0</quantity>");
+    }
+
+    /**
+     * Количество не уходит в минус, даже если предзаказов записано больше,
+     * чем штук в карточке (сервис такого не допускает, но файл не должен
+     * зависеть от того, что кто-то проверил выше).
+     */
+    @Test
+    @DisplayName("Предзаказов больше, чем штук: количество в файле не отрицательно")
+    void quantityNeverGoesNegative() {
+        String name = "Прайс: предзаказов больше партии";
+        Long partId = expectedPart(name, new BigDecimal("9000"), "EXPECTED");
+        inTenant(() -> {
+            Long deal = jdbc.queryForObject("""
+                    INSERT INTO deal (status, total_amount) VALUES ('RESERVED', 9000)
+                    RETURNING id""", Long.class);
+            jdbc.update("""
+                    INSERT INTO deal_item (deal_id, part_id, quantity, price, warehouse_id, status)
+                    VALUES (?, ?, 5, 9000, ?, 'PREORDER')""", deal, partId, warehouse);
+            return null;
+        });
+        assertThat(delta(partId, expects("Ожидается поступление")))
+                .doesNotContain("<quantity>-")
+                .contains("<quantity>0</quantity>");
+    }
+
+    private long counted() {
+        return inTenant(() -> accounts.countMatching(
+                null, null, null, null, null, false, null, false, "PART",
+                java.util.Map.of(), java.util.Map.of(), true));
+    }
+
+    private String delta(Long partId, ru.partsflow.publishing.FeedSettings settings) {
+        return inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeDelta(out, java.util.List.of(partId),
+                    DromPriceGenerator.FeedFilter.everything(), settings);
+            return out.toString(StandardCharsets.UTF_8);
+        });
+    }
+
     /** Настройки выгрузки, которая выгружает ожидаемый товар с этой припиской. */
     private static ru.partsflow.publishing.FeedSettings expects(String note) {
         return new ru.partsflow.publishing.FeedSettings(

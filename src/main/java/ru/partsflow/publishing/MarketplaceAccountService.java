@@ -764,10 +764,10 @@ public class MarketplaceAccountService {
                    -- Черновик считается только тогда, когда он из поставки
                    -- в пути: тем же условием, что и генератор.
                    AND (p.status <> 'DRAFT' OR in_transit.id IS NOT NULL)
-                   -- Тем же условием, что и генератор: отложенная предзаказом
-                   -- позиция в прайс не идёт (задача 0170).
-                   AND NOT EXISTS (SELECT 1 FROM deal_item pre
-                                    WHERE pre.part_id = p.id AND pre.status = 'PREORDER')
+                   -- Тем же условием, что и генератор: ожидаемая позиция, у которой
+                   -- под предзаказом все штуки, в прайс не идёт (задачи 0170, 0262).
+                   -- Текст берётся у генератора, а не пишется второй раз.
+                   AND NOT ${preordered}
                    -- Тем же условием, что и генератор: нулевая цена в прайс
                    -- не идёт, потому что «0 ₽» в объявлении — обещание отдать
                    -- деталь даром, а на деле это незаполненное поле.
@@ -800,6 +800,8 @@ public class MarketplaceAccountService {
                 .replace("${statuses}", inTransit
                         ? "('IN_STOCK', 'SOLD', 'DRAFT')"
                         : "('IN_STOCK', 'SOLD')")
+                .replace("${preordered}",
+                        ru.partsflow.publishing.drom.DromPriceGenerator.PREORDERED)
                 + columnsSql,
                 Long.class,
                 argsOf(args, columnArgs,
