@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Права рантайм-роли на схему арендатора.
@@ -41,14 +42,35 @@ public class SchemaGrants {
      * Служебные таблицы ячейки в {@code public}, которые правит рабочая роль.
      *
      * <p>Хранилище сессий Spring Session: строка сессии и её атрибуты, и журнал
-     * исходящих писем {@code mail_message} (задача 0192), разрешения владельцев
- * на вход администратора сервиса и его запросы доступа (задача 0042).
+     * исходящих писем {@code mail_message} (задача 0192).
      * {@code shedlock} и {@code tenant_registry} сюда не входят — их права
      * выданы при заведении роли и с тех пор не менялись.
      */
     private static final List<String> CELL_TABLES =
             List.of("spring_session", "spring_session_attributes", "mail_message",
-                    "mail_event_pending", "admin_access_grant", "admin_access_request");
+                    "mail_event_pending");
+
+    /**
+     * История допусков администратора сервиса (задача 0042): кто, когда и на
+     * сколько пускал администратора в кабинет разборки. Устроена как журнал —
+     * рабочая роль читает и добавляет, а правит <b>только колонки закрытия</b>
+     * (значение в мапе), и не стирает вовсе.
+     *
+     * <p>Закрытая строка остаётся навсегда, и это не вкус: по ней отвечают
+     * на вопрос «кто и когда пускал администратора в мой кабинет». Пока
+     * роль могла {@code DELETE}, отозванное разрешение стиралось бы вместе
+     * со следом, а колонки {@code granted_by}, {@code granted_at},
+     * {@code tenant_id} правились бы задним числом. Код удалением не пользуется
+     * нигде, так что запрет ничего не стоит.
+     *
+     * <p>Права выдаются <b>через {@code REVOKE}, а потом {@code GRANT}</b>, а не
+     * одним {@code GRANT}: на ячейке, где роль уже получила прежние широкие
+     * права, узкий {@code GRANT} их не отнимает. Идемпотентно, и обе стороны
+     * (прежний широкий и повторный узкий накат) проверены {@code RuntimeRoleTest}.
+     */
+    private static final Map<String, String> CELL_HISTORY = Map.of(
+            "admin_access_grant", "closed_at, closed_by",
+            "admin_access_request", "closed_at, outcome");
 
     /**
      * Учётные записи администраторов сервиса (задача 0042): рабочая роль
@@ -130,6 +152,15 @@ public class SchemaGrants {
         }
         for (String table : CELL_READ_ONLY) {
             owner.execute("GRANT SELECT ON public.%s TO %s".formatted(table, role));
+        }
+        for (var history : CELL_HISTORY.entrySet()) {
+            // Одной инструкцией, чтобы между снятием и выдачей роль не осталась
+            // без права закрывать разрешения: простой запрос идёт одной транзакцией.
+            owner.execute("""
+                    REVOKE UPDATE, DELETE ON public.%1$s FROM %3$s;
+                    GRANT SELECT, INSERT ON public.%1$s TO %3$s;
+                    GRANT UPDATE (%2$s) ON public.%1$s TO %3$s"""
+                    .formatted(history.getKey(), history.getValue(), role));
         }
         log.debug("Служебные таблицы ячейки: права выданы роли {}", runtimeRole);
     }

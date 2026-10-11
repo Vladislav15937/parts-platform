@@ -98,6 +98,92 @@ class RuntimeRoleTest extends PostgresTestBase {
                 java.math.BigDecimal.class, partId)).isEqualByComparingTo("6000");
     }
 
+    @Test
+    @DisplayName("История допусков администратора: добавлять и закрывать можно, стирать и переписывать нет")
+    void adminAccessHistoryIsAppendOnlyForRuntimeRole() {
+        createRole();
+        grants.apply(TENANT);
+        // Ячейка, на которой роль уже получила прежние широкие права:
+        // узкий GRANT их не отнимает, и без REVOKE в выдаче тест это покажет.
+        for (String table : new String[] {"admin_access_grant", "admin_access_request"}) {
+            jdbc.execute("GRANT USAGE ON SCHEMA public TO " + ROLE);
+            jdbc.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON public.%s TO %s"
+                    .formatted(table, ROLE));
+        }
+        grants.applyCellTables();
+        // Накат повторяют после каждой выкладки: второй раз ничего не ломает.
+        grants.applyCellTables();
+
+        long tenantId = 98;
+        jdbc.update("DELETE FROM public.admin_access_request WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM public.admin_access_grant WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = ?", tenantId);
+        jdbc.update("""
+                INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
+                VALUES (?, ?, 'Проба прав истории', 'runtime98')""", tenantId, TENANT);
+        jdbc.update("""
+                INSERT INTO public.service_admin (login, password_hash, display_name)
+                VALUES ('runtime-role-test', 'x', 'Проба')
+                ON CONFLICT DO NOTHING""");
+        Long adminId = jdbc.queryForObject(
+                "SELECT id FROM public.service_admin WHERE login = 'runtime-role-test'", Long.class);
+
+        try {
+            JdbcTemplate runtime = new JdbcTemplate(runtimeDataSource());
+
+            // Что код делает на самом деле: добавляет и закрывает.
+            runtime.update("""
+                    INSERT INTO public.admin_access_grant (tenant_id, granted_by) VALUES (?, 1)""",
+                    tenantId);
+            runtime.update("""
+                    INSERT INTO public.admin_access_request (tenant_id, admin_id) VALUES (?, ?)""",
+                    tenantId, adminId);
+            assertThat(runtime.update("""
+                    UPDATE public.admin_access_grant SET closed_at = now(), closed_by = 1
+                     WHERE tenant_id = ? AND closed_at IS NULL""", tenantId)).isEqualTo(1);
+            assertThat(runtime.update("""
+                    UPDATE public.admin_access_request SET closed_at = now(), outcome = 'DECLINED'
+                     WHERE tenant_id = ? AND closed_at IS NULL""", tenantId)).isEqualTo(1);
+
+            // А стереть и переписать след нельзя: ни строку, ни «кто и когда пустил».
+            for (String table : new String[] {"admin_access_grant", "admin_access_request"}) {
+                assertThatThrownBy(() -> runtime.update(
+                        "DELETE FROM public.%s WHERE tenant_id = ?".formatted(table), tenantId))
+                        .as("история %s стирается прямым SQL", table)
+                        .hasStackTraceContaining("permission denied");
+            }
+            assertThatThrownBy(() -> runtime.update(
+                    "UPDATE public.admin_access_grant SET granted_by = 2 WHERE tenant_id = ?", tenantId))
+                    .as("автор разрешения правится задним числом")
+                    .hasStackTraceContaining("permission denied");
+            assertThatThrownBy(() -> runtime.update(
+                    "UPDATE public.admin_access_grant SET granted_at = now() WHERE tenant_id = ?", tenantId))
+                    .as("время выдачи правится задним числом")
+                    .hasStackTraceContaining("permission denied");
+            assertThatThrownBy(() -> runtime.update(
+                    "UPDATE public.admin_access_request SET requested_at = now() WHERE tenant_id = ?", tenantId))
+                    .as("время запроса правится задним числом")
+                    .hasStackTraceContaining("permission denied");
+            assertThatThrownBy(() -> runtime.update(
+                    "UPDATE public.admin_access_request SET admin_id = admin_id WHERE tenant_id = ?", tenantId))
+                    .as("автор запроса правится задним числом")
+                    .hasStackTraceContaining("permission denied");
+
+            // Учётную запись администратора рабочая роль только читает.
+            assertThat(runtime.queryForObject(
+                    "SELECT count(*) FROM public.service_admin WHERE login = 'runtime-role-test'",
+                    Integer.class)).isEqualTo(1);
+            assertThatThrownBy(() -> runtime.update(
+                    "UPDATE public.service_admin SET is_active = false WHERE id = ?", adminId))
+                    .hasStackTraceContaining("permission denied");
+        } finally {
+            jdbc.update("DELETE FROM public.admin_access_request WHERE tenant_id = ?", tenantId);
+            jdbc.update("DELETE FROM public.admin_access_grant WHERE tenant_id = ?", tenantId);
+            jdbc.update("DELETE FROM public.service_admin WHERE login = 'runtime-role-test'");
+            jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = ?", tenantId);
+        }
+    }
+
     private void createRole() {
         Integer exists = jdbc.queryForObject(
                 "SELECT count(*) FROM pg_roles WHERE rolname = ?", Integer.class, ROLE);
