@@ -2,6 +2,7 @@
 # Живые сверки на поднятой системе: то, что обязано сходиться всегда.
 #
 #   ./tools/checks.sh
+#   ./tools/checks.sh --selftest   # краснеет ли на подделках (см. tools/tools-selftest.py)
 #
 # Это не замена тестам. Тесты отвечают на вопрос «работает ли код», а эти
 # проверки — на вопрос «сходятся ли данные и говорят ли поверхности одно и то
@@ -12,6 +13,7 @@
 # и другое надо разобрать, а не пропустить.
 set -u
 cd "$(dirname "$0")/.."
+[ "${1:-}" = "--selftest" ] && exec python3 -I tools/tools-selftest.py checks
 
 COMPANY="${COMPANY:-proba}"
 OWNER_LOGIN="${OWNER_LOGIN:-vladelec}"
@@ -19,8 +21,12 @@ OWNER_PASSWORD="${OWNER_PASSWORD:-проба-владелец}"
 
 . tools/api.sh
 FAILED=0
+# Отметка в файле: `bad` из подоболочки (`$(...)` внутри аргументов) поднимает
+# счётчик в копии, родитель его не видит.
+FAIL_MARK=$(mktemp)
+trap 'rm -f "$FAIL_MARK"' EXIT
 ok()   { printf '  ✓ %s\n' "$*"; }
-bad()  { printf '  ✗ %s\n' "$*"; FAILED=1; }
+bad()  { printf '  ✗ %s\n' "$*"; FAILED=1; echo x >> "$FAIL_MARK"; }
 
 # Упавшая проверка — не пройденная проверка.
 #
@@ -149,6 +155,7 @@ file=$(( $(wc -l < /tmp/checks-export.csv) - 1 ))
 [ "$screen" = "$file" ] && ok "на экране ${screen}, в файле ${file}" \
   || bad "на экране ${screen}, а в файле ${file}"
 
+[ -s "$FAIL_MARK" ] && FAILED=1
 echo
 [ $FAILED -eq 0 ] && echo "Всё сходится." || echo "Есть расхождения — разберите до правок."
 exit $FAILED

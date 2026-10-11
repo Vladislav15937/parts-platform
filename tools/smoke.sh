@@ -4,6 +4,7 @@
 # а то, что данные означают.
 #
 #   ./tools/smoke.sh
+#   ./tools/smoke.sh --selftest   # краснеет ли прогон на подделках (см. tools/tools-selftest.py)
 #
 # Компания заводится своя (код smoke) и переиспользуется: проверки относительные,
 # от того, что было до шага. Чистый лист — docker compose down -v.
@@ -15,6 +16,7 @@
 # нашлись именно так.
 set -u
 cd "$(dirname "$0")/.."
+[ "${1:-}" = "--selftest" ] && exec python3 -I tools/tools-selftest.py smoke
 
 COMPANY=smoke
 OWNER_LOGIN=vladelec
@@ -23,14 +25,26 @@ export APP_PROVISIONING_TOKEN="${APP_PROVISIONING_TOKEN:-local-dev-token}"
 
 . tools/api.sh
 FAILED=0
+# Отметка отказа лежит в файле, а не только в FAILED: `bad` из подоболочки
+# (`$(...)` внутри аргументов) поднимает счётчик в копии, и родитель его не
+# видит. Файл виден всем.
+FAIL_MARK=$(mktemp)
+trap 'rm -f "$FAIL_MARK"' EXIT
 ok()  { printf '  ✓ %s\n' "$*"; }
-bad() { printf '  ✗ %s\n' "$*"; FAILED=1; }
+bad() { printf '  ✗ %s\n' "$*"; FAILED=1; echo x >> "$FAIL_MARK"; }
 same() { [ "$2" = "$3" ] && ok "$1: $2" || bad "$1: ожидалось $3, получилось $2"; }
 # Деньги приезжают числом JSON, а не строкой: «1000.0» и «1000.00» — одно
 # и то же, и сравнивать их текстом значит ловить собственное написание.
 samenum() { python3 -c "import sys;sys.exit(0 if float(sys.argv[1])==float(sys.argv[2]) else 1)" "$2" "$3" \
               && ok "$1: $2" || bad "$1: ожидалось $3, получилось $2"; }
 num() { python3 -c "import json,sys;d=json.load(open('/tmp/last.json'));print(eval('d'+sys.argv[1]))" "$1"; }
+
+# Упавшая команда — не пройденный раздел. Раздел, оборвавшийся на curl, python3
+# или psql, раньше ничего не писал в FAILED, и подвал говорил «прошёл» над
+# непосчитанным. Приём тот же, что в tools/checks.sh — второго способа
+# объявлять обрыв не заводим (tasks/0177).
+trap 'bad "проверка оборвалась на строке ${LINENO} — раздел не посчитан"' ERR
+set -E
 
 echo "0. Компания ${COMPANY}"
 if [ "$(login ${COMPANY} ${OWNER_LOGIN} "${OWNER_PASSWORD}")" != "200" ]; then
@@ -133,6 +147,7 @@ for pair in "v_stock_discrepancy:остаток" "v_reservation_discrepancy:ре
   [ "$n" = "0" ] && ok "${name}: сходится" || bad "${name}: ${n} расхождений"
 done
 
+[ -s "$FAIL_MARK" ] && FAILED=1
 echo
-[ $FAILED -eq 0 ] && echo "Сквозной прогон прошёл." || echo "Прогон нашёл расхождения."
+[ $FAILED -eq 0 ] && echo "Сквозной прогон прошёл." || echo "Прогон нашёл расхождения или не досчитал разделы."
 exit $FAILED
