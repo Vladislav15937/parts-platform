@@ -2,7 +2,7 @@
 id: 0090
 title: Готовность не видит переката `runOnChange`-changeset'ов общей схемы
 status: в работе
-assignee: coder
+assignee: coder (ветка feature/0090)
 source: находка разбора #182, 13 сентября 2026
 pr: —
 ---

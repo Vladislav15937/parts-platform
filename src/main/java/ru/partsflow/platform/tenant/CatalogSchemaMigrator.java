@@ -2,6 +2,8 @@ package ru.partsflow.platform.tenant;
 
 import liquibase.Contexts;
 import liquibase.Liquibase;
+import liquibase.change.CheckSum;
+import liquibase.changelog.ChangeSet;
 import liquibase.database.Database;
 import liquibase.database.DatabaseFactory;
 import liquibase.database.jvm.JdbcConnection;
@@ -11,9 +13,10 @@ import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
-import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 
 /**
  * Общая схема ячейки: накат и ответ на вопрос «накатана ли она».
@@ -44,12 +47,18 @@ import java.util.Set;
  * выключена первой. Идентификатор же у changeset'а один, и в каталоге
  * он уникален (тридцать пять changeset'ов, ни одного повтора).
  *
- * <p><b>Чего этот способ не видит:</b> переписанного {@code runOnChange} —
- * changeset в истории есть, а накатить его Liquibase собирается заново.
- * Сверять контрольные суммы вместо идентификаторов нельзя: их формат
- * меняется от версии к версии Liquibase, и такая проверка однажды покраснеет
- * на ячейке, где всё в порядке. Окно от переписанного {@code runOnChange}
- * измеряется тем же временем старта и состава схемы не меняет.
+ * <p><b>Перекат {@code runOnChange} видна по контрольной сумме (задача 0090).</b>
+ * Идентификатор у переписанного changeset'а тот же, и сверка по одним
+ * идентификаторам отвечала «принято» там, где справочник и функции ещё старые.
+ * Теперь у принятого {@code runOnChange}-changeset'а сумма из
+ * {@code databasechangelog} сверяется с суммой текущего текста — но не
+ * строкой в строку, а средствами Liquibase ({@link ChangeSet#isCheckSumValid}):
+ * тот читает версию формата из самой записи, и смена версии Liquibase не
+ * краснит исправную ячейку (прежний довод против сверки сумм). Если же и это
+ * разойдётся, красный ответ самоисцеляется: накат при старте перекатывает
+ * changeset и пишет новую сумму. Остальные changeset'ы сумм не сверяют:
+ * их правка — отдельная беда, и отвечает за неё сам Liquibase.
+ * Накат здесь не запускается: вопрос не лечит.
  *
  * <p><b>Владельцем схем, а не рабочей ролью.</b> DDL делает владелец,
  * и историю его наката читает он же: рабочей роли {@code SELECT}
@@ -69,14 +78,14 @@ public class CatalogSchemaMigrator {
     private final JdbcTemplate jdbc;
 
     /**
-     * Идентификаторы changeset'ов артефакта: считаются один раз.
+     * Идентификаторы и runOnChange-changeset'ы артефакта: разбор один раз.
      *
      * <p>Changelog лежит внутри артефакта и за жизнь процесса не меняется,
      * а разбор его — это чтение всего набора, включая семнадцать тысяч строк
      * справочника машин. Готовность спрашивают раз в несколько секунд; тот же
      * размен, что у {@link TenantSchemaMigrator#expectedVersion()}.
      */
-    private volatile List<String> expected;
+    private volatile Parsed parsed;
 
     public CatalogSchemaMigrator(
             @SchemaOwnerDataSource.SchemaOwner DataSource dataSource) {
@@ -100,25 +109,53 @@ public class CatalogSchemaMigrator {
      */
     public Pending pending() {
         List<String> all = expected();
-        Set<String> applied = new HashSet<>(jdbc.query(
-                "SELECT author, id FROM public.databasechangelog",
-                (rs, i) -> key(rs.getString("author"), rs.getString("id"))));
+        Map<String, String> applied = new HashMap<>();
+        jdbc.query("SELECT author, id, md5sum FROM public.databasechangelog",
+                rs -> {
+                    applied.put(key(rs.getString("author"), rs.getString("id")),
+                            rs.getString("md5sum"));
+                });
 
-        List<String> missing = all.stream().filter(one -> !applied.contains(one)).toList();
-        return new Pending(all.size(), missing);
+        List<String> missing = all.stream().filter(one -> !applied.containsKey(one)).toList();
+        List<String> stale = stale(applied);
+        return new Pending(all.size(), missing, stale);
+    }
+
+    /** Принятые {@code runOnChange}-changeset'ы, чей текст с тех пор изменился. */
+    private List<String> stale(Map<String, String> applied) {
+        return parsed().runOnChange().stream()
+                .filter(changeSet -> {
+                    String stored = applied.get(key(changeSet.getAuthor(), changeSet.getId()));
+                    // Нет записи — это «не принят», он уже в missing; нет суммы
+                    // (старая запись) Liquibase сам дописывает при следующем накате.
+                    return stored != null
+                            && !changeSet.isCheckSumValid(CheckSum.parse(stored));
+                })
+                .map(changeSet -> key(changeSet.getAuthor(), changeSet.getId()))
+                .toList();
     }
 
     private List<String> expected() {
-        List<String> known = expected;
+        return parsed().ids();
+    }
+
+    /** Разбор changelog'а: один раз за процесс, по тому же доводу, что и {@link #parsed}. */
+    private Parsed parsed() {
+        Parsed known = parsed;
         if (known != null) {
             return known;
         }
-        List<String> computed = inLiquibase(liquibase ->
-                liquibase.getDatabaseChangeLog().getChangeSets().stream()
-                        .map(changeSet -> key(changeSet.getAuthor(), changeSet.getId()))
-                        .toList());
-        expected = computed;
+        Parsed computed = inLiquibase(liquibase -> {
+            List<ChangeSet> all = liquibase.getDatabaseChangeLog().getChangeSets();
+            return new Parsed(
+                    all.stream().map(changeSet -> key(changeSet.getAuthor(), changeSet.getId())).toList(),
+                    all.stream().filter(ChangeSet::isRunOnChange).toList());
+        });
+        parsed = computed;
         return computed;
+    }
+
+    private record Parsed(List<String> ids, List<ChangeSet> runOnChange) {
     }
 
     private static String key(String author, String id) {
@@ -147,25 +184,38 @@ public class CatalogSchemaMigrator {
 
     /**
      * @param total   сколько changeset'ов несёт сборка
-     * @param missing каких из них в истории базы ещё нет. Пусто — схема принята
+     * @param missing каких из них в истории базы ещё нет
+     * @param stale   каких {@code runOnChange}-changeset'ов текст изменился после
+     *                наката: идентификатор в истории есть, справочник или
+     *                функция в базе старые. Пусто у обоих списков — схема принята
      *                целиком, и это единственное состояние, в котором приложение
      *                можно объявлять готовым
      */
-    public record Pending(int total, List<String> missing) {
+    public record Pending(int total, List<String> missing, List<String> stale) {
 
         public boolean ok() {
-            return missing.isEmpty();
+            return missing.isEmpty() && stale.isEmpty();
+        }
+
+        /** Сколько changeset'ов накату предстоит принять или перекатить. */
+        public int count() {
+            return missing.size() + stale.size();
         }
 
         /**
-         * Имена непринятых для человека: первые три, остальные числом.
+         * Имена для человека: первые три, остальные числом. Перекат помечен —
+         * «не принят» и «ждёт переката» лечатся одним накатом, но читать их
+         * по-разному.
          *
          * <p>Тридцать пять идентификаторов в строку — это строка, которую
          * не читают; тот же приём, что у {@link TenantMigrations#namesOf}.
          */
         public String names() {
-            String first = String.join(", ", missing.subList(0, Math.min(NAMED, missing.size())));
-            int rest = missing.size() - Math.min(NAMED, missing.size());
+            List<String> all = new ArrayList<>(missing);
+            stale.forEach(one -> all.add(one + " (изменён после наката)"));
+            int shown = Math.min(NAMED, all.size());
+            String first = String.join(", ", all.subList(0, shown));
+            int rest = all.size() - shown;
             return rest == 0 ? first : first + " и ещё " + rest;
         }
     }

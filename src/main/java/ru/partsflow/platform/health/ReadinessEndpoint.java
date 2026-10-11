@@ -234,8 +234,8 @@ public class ReadinessEndpoint {
                             .formatted(pending.total()), KNOWN);
         }
         return new Check("catalog", false,
-                "Общая схема catalog принята не целиком: не хватает %d из %d (%s). "
-                        .formatted(pending.missing().size(), pending.total(), pending.names())
+                "Общая схема catalog принята не целиком: не принято или не перекачено %d из %d (%s). "
+                        .formatted(pending.count(), pending.total(), pending.names())
                         + "Накат идёт при старте приложения — дождитесь его; если "
                         + "не заканчивается, смотрите лог CatalogMigrations", KNOWN);
     }

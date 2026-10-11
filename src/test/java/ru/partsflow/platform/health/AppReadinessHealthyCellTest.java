@@ -208,6 +208,35 @@ class AppReadinessHealthyCellTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Переписанный runOnChange общей схемы — не готов, пока не перекатан (задача 0090)")
+    void rewrittenRunOnChangeIsNotReady() throws Exception {
+        // Текст changeset'а изменили, идентификатор прежний: в истории он есть,
+        // а справочник в базе старый. Правка текста изображается подменой суммы,
+        // принятой при накате, — Liquibase сравнивает именно её с суммой текста.
+        String changeSet = "catalog-041-seed-part-kinds";
+        String saved = owner.queryForObject(
+                "SELECT md5sum FROM public.databasechangelog WHERE id = ?", String.class, changeSet);
+        owner.update("UPDATE public.databasechangelog SET md5sum = ? WHERE id = ?",
+                "9:00000000000000000000000000000000", changeSet);
+        try {
+            JsonNode body = readiness(503);
+
+            assertThat(ok(body, "catalog"))
+                    .as("общая схема объявлена принятой при перекате, которого не было: "
+                            + "выкладка отдаст человеку старые написания — %s", body)
+                    .isFalse();
+            assertThat(detail(body, "catalog")).contains(changeSet);
+        } finally {
+            owner.update("UPDATE public.databasechangelog SET md5sum = ? WHERE id = ?",
+                    saved, changeSet);
+        }
+
+        assertThat(readiness(200).get("ready").asBoolean())
+                .as("после переката (сумма совпала) готовность обязана вернуться в «да»")
+                .isTrue();
+    }
+
+    @Test
     @DisplayName("Схема арендатора позади версии сборки — не готов")
     void schemaBehindIsNotReady() throws Exception {
         register("старьё");
