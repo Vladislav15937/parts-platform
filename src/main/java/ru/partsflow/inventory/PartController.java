@@ -52,8 +52,8 @@ public class PartController {
      */
     @GetMapping("/{id}/history")
     public PartHistoryService.History history(@PathVariable long id) {
-        String role = CurrentUser.require().role();
-        boolean money = "OWNER".equals(role) || "MANAGER".equals(role);
+        var principal = CurrentUser.require();
+        boolean money = principal.actsAsOwner() || "MANAGER".equals(principal.role());
         return history.of(id, money);
     }
 
@@ -251,7 +251,7 @@ public class PartController {
     }
 
     private void requireMayChangeCondition(Long id, PartCondition wanted) {
-        if (wanted == null || "OWNER".equals(CurrentUser.require().role())) {
+        if (wanted == null || CurrentUser.require().actsAsOwner()) {
             return;
         }
         if (wanted != partService.require(id).getCondition()) {

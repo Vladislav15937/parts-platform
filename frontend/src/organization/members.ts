@@ -9,9 +9,10 @@ import { request } from '../api/client';
  */
 export interface Member {
   id: number;
-  login: string;
+  /** Нет у администратора сервиса: его вход живёт вне кабинета. */
+  login: string | null;
   displayName: string | null;
-  role: Role;
+  role: Role | typeof SERVICE_ADMIN;
   active: boolean;
   lastLoginAt: string | null;
 }
@@ -32,7 +33,21 @@ export const ROLES: Array<{ role: Role; title: string; can: string }> = [
   { role: 'AUDITOR', title: 'Ревизор', can: 'журнал действий — кто что менял' },
 ];
 
+/**
+ * Администратор сервиса в кабинете разборки (задача 0042).
+ *
+ * <p>В `ROLES` его нет намеренно: это перечень того, что владелец выдаёт
+ * сотруднику, а эту роль владелец «не заводит и не может отобрать» (решение
+ * владельца продукта от 8 сентября 2026). Попав туда, она стала бы пунктом
+ * в выборе роли нового сотрудника. Название же нужно везде, где роль
+ * показывают: в списке сотрудников, в журнале действий и во «Входах».
+ */
+export const SERVICE_ADMIN = 'ADMIN';
+
 export function roleTitle(role: string): string {
+  if (role === SERVICE_ADMIN) {
+    return 'Администратор сервиса';
+  }
   return ROLES.find((r) => r.role === role)?.title ?? role;
 }
 

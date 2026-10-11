@@ -3,6 +3,7 @@ import { SessionProvider, useSession } from './auth/SessionProvider';
 import { EntryScreen, LOGIN_PATH, REGISTER_PATH } from './screens/EntryScreen';
 import { SharedDealScreen } from './screens/SharedDealScreen';
 import { HomeScreen } from './screens/HomeScreen';
+import { ADMIN_PATH, AdminScreen } from './admin/AdminScreen';
 
 /**
  * Роутера нет намеренно.
@@ -27,6 +28,14 @@ import { HomeScreen } from './screens/HomeScreen';
  * значило бы пообещать то, чего приложение не сделает.
  */
 export function App() {
+  // Система администрирования сервиса (задача 0042) — своя страница со своим
+  // входом и своей сессией, вне всех кабинетов: решение владельца продукта
+  // от 8 сентября 2026, «разборка выбирается только в административном окне,
+  // живущем отдельно от всех разборок». Разбирается до сессии кабинета:
+  // её проверка тут ни к чему, а у вошедшего администратора кабинета нет.
+  if (window.location.pathname === ADMIN_PATH) {
+    return <AdminScreen />;
+  }
   return (
     <SessionProvider>
       <Root />

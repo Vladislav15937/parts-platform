@@ -94,12 +94,21 @@ public class MemberService {
         }
     }
 
+    /**
+     * Сотрудники, у которых есть вход, — и администратор сервиса.
+     *
+     * <p>Администратор логина в схеме арендатора не имеет (вход у него свой,
+     * в общей схеме ячейки), и без второго условия он пропадал бы из списка.
+     * А решение владельца продукта от 8 сентября 2026 (tasks/0042, критерий 1)
+     * требует обратного: «в организации он виден отдельным участником» —
+     * владелец обязан видеть, что такой участник у него есть.
+     */
     @Transactional(readOnly = true)
     public List<Member> all() {
         return jdbc.query("""
                 SELECT id, login, display_name, role, is_active, last_login_at
                   FROM tenant_member
-                 WHERE login IS NOT NULL
+                 WHERE login IS NOT NULL OR role = 'ADMIN'
                  ORDER BY id""", MemberService::map);
     }
 
@@ -125,6 +134,7 @@ public class MemberService {
      */
     @Transactional
     public void changePassword(Long memberId, String newPassword, String actingSessionKey) {
+        requireNotServiceAdmin(memberId);
         requirePassword(newPassword);
 
         int updated = jdbc.update("""
@@ -147,6 +157,7 @@ public class MemberService {
      */
     @Transactional
     public void setActive(Long memberId, boolean active) {
+        requireNotServiceAdmin(memberId);
         if (!active) {
             requireNotLastOwner(memberId);
         }
@@ -210,6 +221,27 @@ public class MemberService {
             throw new IllegalStateException(
                     "Это единственный владелец: выключив его, в компанию нельзя будет войти "
                             + "как владелец. Сначала заведите второго");
+        }
+    }
+
+    /**
+     * Участника «администратор сервиса» владелец не меняет.
+     *
+     * <p>Решение владельца продукта от 8 сентября 2026 (tasks/0042): роль
+     * «существует вне зависимости ни от чего», владелец её «не заводит и не
+     * может отобрать». Рычаг у владельца другой и сильнее — разрешение
+     * на вход, которое он даёт и отзывает сам; выключенный же участник
+     * ничего бы не закрыл (вход у администратора не через эту строку),
+     * а только выглядел бы закрытым доступом. Пароля у этой строки нет вовсе.
+     */
+    private void requireNotServiceAdmin(Long memberId) {
+        String role = jdbc.query("SELECT role FROM tenant_member WHERE id = ?",
+                rs -> rs.next() ? rs.getString(1) : null, memberId);
+        if (TenantPrincipal.SERVICE_ADMIN_ROLE.equals(role)) {
+            throw new IllegalStateException(
+                    "Администратора сервиса владелец не выключает и пароль ему не меняет: "
+                            + "его вход закрывается кнопкой «Отозвать доступ» в разделе "
+                            + "«Доступ администратора сервиса»");
         }
     }
 

@@ -137,6 +137,22 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.spring_session_attributes
 -- (SchemaGrants.applyCellTables) — по тому же доводу, что для сессий выше.
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.mail_message TO $role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.mail_event_pending TO $role;
+
+-- Администратор сервиса (catalog/025, задача 0042): учётные записи рабочая
+-- роль только читает — при входе; заводит их владелец схем через управляющий
+-- контур. Разрешения владельцев разборок и запросы доступа — история
+-- «кто и когда пускал администратора», устроенная как журнал: рабочая роль
+-- читает, добавляет и правит только колонки закрытия, стереть не может.
+-- REVOKE перед GRANT: скрипт прогоняют повторно, и узкий GRANT сам широких
+-- прав прежнего прогона не отнимает.
+-- Те же права выдаёт накат общей схемы (SchemaGrants.applyCellTables).
+GRANT SELECT ON public.service_admin TO $role;
+REVOKE UPDATE, DELETE ON public.admin_access_grant FROM $role;
+GRANT SELECT, INSERT ON public.admin_access_grant TO $role;
+GRANT UPDATE (closed_at, closed_by) ON public.admin_access_grant TO $role;
+REVOKE UPDATE, DELETE ON public.admin_access_request FROM $role;
+GRANT SELECT, INSERT ON public.admin_access_request TO $role;
+GRANT UPDATE (closed_at, outcome) ON public.admin_access_request TO $role;
 SQL
 
     # ПОЧЕМУ ЗДЕСЬ НЕ ops/migrate-tenants.sh, который стоял тут до задачи 0210.

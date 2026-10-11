@@ -66,7 +66,9 @@ describe('экран при неудачной загрузке', () => {
     refuse();
     render(<MembersScreen />);
 
-    await waitFor(() => expect(screen.getByText(/Сессия кончилась/)).toBeTruthy());
+    // Причин две, и обе обязаны показаться: у списка сотрудников и у раздела
+    // «Доступ администратора сервиса» (задача 0042) загрузка своя.
+    await waitFor(() => expect(screen.getAllByText(/Сессия кончилась/)).toHaveLength(2));
     expect(screen.queryByText(/Загружаем/),
       'экран ждёт загрузку, которая уже провалилась').toBeNull();
   });

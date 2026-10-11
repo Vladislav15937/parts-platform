@@ -8,10 +8,12 @@ import {
   loadMembers,
   roleTitle,
   ROLES,
+  SERVICE_ADMIN,
   type Member,
   type Role,
 } from '../organization/members';
 import { useMounted } from '../ui/useMounted';
+import { AdminAccessPanel } from './AdminAccessPanel';
 
 /**
  * Сотрудники компании: кто входит и что видит.
@@ -24,7 +26,14 @@ import { useMounted } from '../ui/useMounted';
  * у совершённых операций, а история для того и ведётся, чтобы через месяц
  * можно было спросить, кто это сделал.
  */
-export function MembersScreen() {
+/**
+ * @param managesAccess вошёл ли сам владелец. Администратор сервиса
+ *        в кабинете видит сотрудников и раздел доступа, но не заводит
+ *        сотрудников, не меняет им пароли, не включает и не выключает их
+ *        и не даёт доступ себе: всё это пережило бы отзыв его доступа
+ *        (разбор PR 393). Сервер отбивает то же самое 403.
+ */
+export function MembersScreen({ managesAccess = true }: { managesAccess?: boolean }) {
   const [members, setMembers] = useState<Member[] | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -81,7 +90,9 @@ export function MembersScreen() {
             <tbody>
               {members.map((member) => (
                 <tr key={member.id} className={member.active ? undefined : 'muted'}>
-                  <td>{member.login}</td>
+                  {/* У администратора сервиса логина в кабинете нет: вход
+                      у него свой, вне всех разборок (задача 0042). */}
+                  <td>{member.login ?? '—'}</td>
                   <td>{member.displayName ?? '—'}</td>
                   <td>{roleTitle(member.role)}</td>
                   <td>
@@ -89,6 +100,16 @@ export function MembersScreen() {
                       ? 'не входил'
                       : new Date(member.lastLoginAt).toLocaleString('ru-RU')}
                   </td>
+                  {member.role === SERVICE_ADMIN ? (
+                    // Владелец этого участника «не заводит и не может
+                    // отобрать» (решение владельца продукта от 8 сентября
+                    // 2026): кнопки, которые сервер отобьёт, не рисуем, а
+                    // говорим, где его рычаг.
+                    <td className="note">доступ — в разделе ниже</td>
+                  ) : !managesAccess ? (
+                    // Кнопки, которые сервер отобьёт, администратору не рисуем.
+                    <td />
+                  ) : (
                   <td className="filter-row">
                     <button
                       type="button"
@@ -109,6 +130,7 @@ export function MembersScreen() {
                       {member.active ? 'Выключить' : 'Включить'}
                     </button>
                   </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -116,6 +138,14 @@ export function MembersScreen() {
         </div>
       )}
 
+      <AdminAccessPanel canChange={managesAccess} />
+
+      {!managesAccess ? (
+        <p className="note">
+          Сотрудников заводит и меняет владелец: вход, заданный администратором
+          сервиса, остался бы и после того, как владелец закроет ему доступ.
+        </p>
+      ) : (
       <div className="card">
         <h3>Новый сотрудник</h3>
         <div className="row">
@@ -170,6 +200,7 @@ export function MembersScreen() {
           <p className="note">Пароль от восьми символов.</p>
         )}
       </div>
+      )}
     </section>
   );
 

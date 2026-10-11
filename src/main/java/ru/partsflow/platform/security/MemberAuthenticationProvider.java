@@ -57,6 +57,15 @@ public class MemberAuthenticationProvider implements AuthenticationProvider {
 
         Tenant tenant = findTenant(request.getCompanyCode());
         Member member = tenant == null ? null : findMember(tenant.schemaName(), login);
+        // Строка администратора сервиса (задача 0042) входом кабинета
+        // не открывается никогда: логина у неё нет, а вход у администратора
+        // свой, через систему администрирования и только с разрешения
+        // владельца. Если логин ей кто-то всё же поставит прямым SQL, ответ
+        // тот же, что на несуществующий логин, — схема это ограничение пока
+        // не держит (tenant/076, почему — там же).
+        if (member != null && TenantPrincipal.SERVICE_ADMIN_ROLE.equals(member.role())) {
+            member = null;
+        }
 
         String hash = member == null ? DUMMY_HASH : member.passwordHash();
         boolean matches = passwordEncoder.matches(password == null ? "" : password, hash);

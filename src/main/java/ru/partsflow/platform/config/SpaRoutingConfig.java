@@ -29,5 +29,8 @@ public class SpaRoutingConfig implements WebMvcConfigurer {
         // уводит невошедшего с любого своего адреса, и обновивший её человек
         // обязан получить оболочку, а не белый экран.
         registry.addViewController("/login").setViewName("forward:/index.html");
+        // Система администрирования сервиса (задача 0042): своя страница
+        // со своим входом, вне всех кабинетов.
+        registry.addViewController("/admin").setViewName("forward:/index.html");
     }
 }
