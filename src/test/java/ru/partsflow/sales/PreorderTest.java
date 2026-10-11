@@ -1142,6 +1142,66 @@ class PreorderTest extends PostgresTestBase {
                 .isEqualTo("RESERVED");
     }
 
+    private void pay(long deal, String amount) throws Exception {
+        mvc.perform(post("/api/deals/" + deal + "/payments").with(csrf())
+                        .session(login("prodavets"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amount\":" + amount + "}"))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    @DisplayName("Смешанная сделка с оплатой больше новой суммы: деньги сами не двигаются, сделка называет переплату")
+    void mixedDealOverpaidAfterRemovalIsFlaggedNotRefunded() throws Exception {
+        long expected = expectedPart(supply(), "Крыло переплата", 2, "4000");
+        long ordinaryPart = ordinaryPart("Крыло обычное переплата", 1);
+        long mixed = json(mvc.perform(post("/api/deals").with(csrf()).session(login("prodavets"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customerId":%d,"reservedUntil":"%s",
+                                 "items":[{"partId":%d,"quantity":1,"warehouseId":%d,"price":4000},
+                                          {"partId":%d,"quantity":1,"warehouseId":%d,"price":5000}]}"""
+                                .formatted(customer, daysAhead(30), expected, near,
+                                        ordinaryPart, near)))
+                .andExpect(status().isCreated()).andReturn()).path("id").asLong();
+        pay(mixed, "8000");
+        assertThat(dealById(mixed).path("totalAmount").decimalValue()).isEqualByComparingTo("9000");
+        assertThat(dealById(mixed).path("overpaid").asBoolean())
+                .as("до снятия оплата 8000 при сумме 9000 — не переплата").isFalse();
+        int entriesBefore = count("SELECT count(*) FROM customer_account_entry WHERE deal_id = "
+                + mixed);
+        expire(mixed);
+
+        sweep();
+
+        JsonNode after = dealById(mixed);
+        assertThat(after.path("status").asText()).isEqualTo("RESERVED");
+        assertThat(after.path("totalAmount").decimalValue()).isEqualByComparingTo("5000");
+        assertThat(after.path("paidAmount").decimalValue()).isEqualByComparingTo("8000");
+        assertThat(after.path("overpaid").asBoolean())
+                .as("оплата больше суммы, а сделка об этом молчит").isTrue();
+        assertThat(count("SELECT count(*) FROM customer_account_entry WHERE deal_id = " + mixed))
+                .as("переплата ушла на счёт сама — владелец решил: не возвращать автоматом")
+                .isEqualTo(entriesBefore);
+    }
+
+    @Test
+    @DisplayName("Оплаченная чисто предзаказная сделка при автоснятии возвращает оплату на счёт клиента")
+    void paidPreorderOnlyDealRefundsOnAutoRemoval() throws Exception {
+        long part = expectedPart(supply(), "Фара оплаченная", 2, "3000");
+        long deal = createDeal(part, 1, near, daysAhead(20)).andReturn().path("id").asLong();
+        pay(deal, "1000");
+        expire(deal);
+
+        sweep();
+
+        assertThat(dealById(deal).path("status").asText()).isEqualTo("CANCELLED");
+        assertThat(count("SELECT count(*) FROM customer_account_entry WHERE deal_id = " + deal
+                + " AND entry_type = 'DEAL_REFUND' AND amount = 1000"))
+                .as("оплата отменённой автоснятием сделки пропала, а не вернулась на счёт")
+                .isEqualTo(1);
+    }
+
     private long supply() throws Exception {
         MvcResult created = mvc.perform(post("/api/intake/supplies").with(csrf())
                         .session(login("vladelec"))

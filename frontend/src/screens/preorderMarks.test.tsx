@@ -32,6 +32,7 @@ function label(day: string): string {
 
 describe('пометка о сдвиге ожидаемой даты и предзаказ без «срока истёк»', () => {
   afterEach(() => {
+    overpaid = false;
     cleanup();
     vi.unstubAllGlobals();
   });
@@ -54,6 +55,22 @@ describe('пометка о сдвиге ожидаемой даты и пред
       && (init as RequestInit | undefined)?.method === 'POST')).toBe(true);
     // Сам предзаказ остался: гаснет пометка, а не состояние.
     expect(plain(document.body.textContent)).toContain('Ожидается поставка');
+  });
+
+  it('оплата больше суммы после снятия предзаказа: карточка называет переплату, без неё слов нет', async () => {
+    stubSeller();
+    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    await openDeal('№31');
+    expect(plain(document.body.textContent)).not.toContain('Оплата больше суммы');
+    cleanup();
+
+    overpaid = true;
+    stubSeller();
+    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    await openDeal('№31');
+    const text = plain(document.body.textContent);
+    expect(text).toContain('Оплата больше суммы сделки');
+    expect(text).toContain('Деньги сами не возвращаются');
   });
 
   it('список сделок клиента: тот же предзаказ и тот же сдвиг, без «срока истёк»', async () => {
@@ -125,7 +142,9 @@ function deal(id: number, over: Record<string, unknown>) {
 const PREORDER = () => deal(30, {
   preorder: true, preorderOnly: true, expectedOn: TO, shiftFrom: FROM, shiftTo: TO,
 });
+let overpaid = false;
 const ORDINARY = () => deal(31, {
+  overpaid,
   items: [{ id: 31, partId: 31, number: 31, title: 'Бампер', quantity: '1', price: '9000.00',
     discount: null, warehouseId: 2, status: 'RESERVED' }],
 });

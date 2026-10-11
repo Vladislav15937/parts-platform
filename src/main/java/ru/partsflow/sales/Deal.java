@@ -569,6 +569,17 @@ public class Deal {
         return totalAmount.subtract(paidAmount).max(BigDecimal.ZERO);
     }
 
+    /**
+     * Оплата больше суммы открытой сделки (задача 0260). Появляется, когда
+     * просроченный предзаказ снят с сделки, где остались другие позиции, а
+     * внесённое уже превышает новую сумму. Деньги сами не двигаются (ответ
+     * владельца 11 октября 2026): продавец видит признак и решает — вернуть
+     * на счёт отменой или зачесть иначе.
+     */
+    public boolean isOverpaid() {
+        return !status.isClosed() && paidAmount.compareTo(totalAmount) > 0;
+    }
+
     public boolean isPartiallyPaid() {
         return paidAmount.signum() > 0 && paidAmount.compareTo(totalAmount) < 0;
     }

@@ -871,7 +871,8 @@ public class SalesController {
                            List<ServiceLineView> services,
                            boolean preorder, boolean preorderOnly,
                            java.time.LocalDate expectedOn,
-                           java.time.LocalDate shiftFrom, java.time.LocalDate shiftTo) {
+                           java.time.LocalDate shiftFrom, java.time.LocalDate shiftTo,
+                           boolean overpaid) {
 
         static DealView of(Deal deal, Map<Long, String> titles, Map<Long, Long> partNumbers,
                            Map<Long, String> serviceNames, Map<Long, String> managerNames,
@@ -897,7 +898,8 @@ public class SalesController {
                             .toList(),
                     deal.hasPreorder(), deal.hasOnlyPreorder(),
                     deal.getId() == null ? null : expectedDates.get(deal.getId()),
-                    deal.getPreorderShiftFrom(), deal.getPreorderShiftTo());
+                    deal.getPreorderShiftFrom(), deal.getPreorderShiftTo(),
+                    deal.isOverpaid());
         }
 
         /**

@@ -1688,6 +1688,13 @@ function DealCard({
         {Number(deal.paidAmount).toLocaleString('ru-RU')} ₽ · долг{' '}
         {Number(deal.debt).toLocaleString('ru-RU')} ₽
       </p>
+      {deal.overpaid === true && (
+        <p className="note note--error">
+          Оплата больше суммы сделки: после снятия просроченного предзаказа
+          внесено {(Number(deal.paidAmount) - Number(deal.totalAmount)).toLocaleString('ru-RU')} ₽
+          сверх. Деньги сами не возвращаются — решите, как поступить с переплатой.
+        </p>
+      )}
       {notice !== null && <p className="note">{notice}</p>}
 
       <ul className="stock-list">
