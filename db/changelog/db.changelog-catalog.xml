@@ -35,5 +35,6 @@
     <include file="catalog/022-mail-message.sql"        relativeToChangelogFile="true"/>
     <include file="catalog/023-mail-event-pending.sql"  relativeToChangelogFile="true"/>
     <include file="catalog/024-registration-owner-email.sql" relativeToChangelogFile="true"/>
+    <include file="catalog/025-service-admin.sql" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
