@@ -184,7 +184,12 @@ class ServiceAdminTest extends PostgresTestBase {
     @Test
     @DisplayName("Срок в часах: конец виден владельцу, в списке администратора и в его кабинете")
     void termIsVisibleToBothSides() throws Exception {
-        Instant before = Instant.now();
+        // «Сейчас» берётся у базы, а не у JVM: срок разрешения ставит, проверяет
+        // и показывает база (`now()` в AdminAccess) — у продукта часы одни.
+        // Часы теста от них отличаться вправе: задача CI «Часы вперёд» сдвигает
+        // JVM на 31 день, а Postgres в контейнере живёт по настоящим, и
+        // `Instant.now()` здесь давал «-740 ч» при верном сроке в три часа.
+        Instant before = jdbc.queryForObject("SELECT now()", Timestamp.class).toInstant();
         grant(3);
 
         Timestamp stored = jdbc.queryForObject("""
