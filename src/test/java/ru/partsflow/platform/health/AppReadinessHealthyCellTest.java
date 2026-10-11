@@ -17,6 +17,8 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.http.MediaType;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import ru.partsflow.platform.tenant.SchemaGrants;
@@ -31,7 +33,9 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 /**
  * Готовность на правильно настроенной ячейке: «да» по HTTP — и чем это «да»
@@ -58,8 +62,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  *
  * <p><b>Обе стороны в одном классе — это требование задачи, а не порядок.</b>
  * Зелёный ответ, полученный один раз, через полгода превращается в тест,
- * который не краснеет ни от чего: рядом стоят три отката, и каждый ломает
- * свою составляющую — общую схему, версию схем арендатора и защиту журналов.
+ * который не краснеет ни от чего: рядом стоят четыре отката, и каждый ломает
+ * свою составляющую — общую схему, версию схем арендатора, защиту журналов
+ * и права на хранилище сессий (задача 0105).
  */
 @SpringBootTest(properties = {
         "spring.jpa.hibernate.ddl-auto=none",
@@ -77,6 +82,10 @@ class AppReadinessHealthyCellTest extends PostgresTestBase {
     private static final String ROLE = "readiness_cell_runtime";
     private static final String PASSWORD = "readiness-cell-runtime";
 
+    /** Сотрудник, которым проверяется, что вход ломается вместе с правами. */
+    private static final String LOGIN = "vladelec_cell";
+    private static final String LOGIN_PASSWORD = "пароль-ячейки";
+
     static {
         prepareCell();
     }
@@ -86,6 +95,9 @@ class AppReadinessHealthyCellTest extends PostgresTestBase {
 
     @Autowired
     private TenantSchemaMigrator migrator;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
 
     private final JdbcTemplate owner = new JdbcTemplate(ownerDataSource());
 
@@ -128,7 +140,7 @@ class AppReadinessHealthyCellTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Исправная ячейка готова: 200 и все шесть проверок зелёные")
+    @DisplayName("Исправная ячейка готова: 200 и все семь проверок зелёные")
     void healthyCellIsReady() throws Exception {
         JsonNode body = readiness(200);
 
@@ -142,7 +154,13 @@ class AppReadinessHealthyCellTest extends PostgresTestBase {
                 .as("состав проверок изменился молча: шаг выкладки и тревога "
                         + "узнают причину по имени проверки, а не по тексту")
                 .containsExactly("database", "catalog", "schemas", "journals",
-                        "writes", "metrics");
+                        "sessions", "writes", "metrics");
+
+        assertThat(detail(body, "sessions"))
+                .as("хранилище сессий сочтено доступным не той роли: проверять надо "
+                        + "рабочую, под которой сессии и пишутся")
+                .contains(ROLE)
+                .contains("public.spring_session");
 
         assertThat(detail(body, "writes"))
                 .as("про запись не сказано, что она проходит: исправная ячейка — "
@@ -226,6 +244,88 @@ class AppReadinessHealthyCellTest extends PostgresTestBase {
     }
 
     /**
+     * Права на хранилище сессий отобрали у работающего приложения — готовность
+     * обязана сказать «нет» без перезапуска, а вернули — «да» (задача 0105).
+     *
+     * <p>Права снимаются <b>после</b> подъёма контекста намеренно: отсутствие
+     * их на старте ловилось и раньше (уборка истёкших и первый же вход
+     * падают громко), дыра была ровно в «отобрали позже».
+     *
+     * <p>И проверяется, что вход при этом действительно ломается, а при
+     * возвращённых правах работает: иначе проверка охраняла бы то, чего
+     * не происходит, — и красила бы выкладку на исправной ячейке.
+     */
+    @Test
+    @DisplayName("Права на запись сессий отобраны после старта — не готов и вход не работает; вернули — готов")
+    void sessionStoreRightsRevokedLaterIsNotReady() throws Exception {
+        member();
+        assertThat(login())
+                .as("вход на исправной ячейке не прошёл — фикстура не годится, "
+                        + "и «вход сломан» ниже ничего бы не доказывал")
+                .isEqualTo(200);
+
+        owner.execute("REVOKE INSERT, UPDATE, DELETE ON public.spring_session FROM " + ROLE);
+        try {
+            JsonNode body = readiness(503);
+
+            assertThat(ok(body, "sessions"))
+                    .as("рабочая роль не может записать сессию, а готовность этого "
+                            + "не заметила: выкладка переключит трафик на сборку, "
+                            + "в которую не войдёт никто — %s", body)
+                    .isFalse();
+            assertThat(body.get("ready").asBoolean()).isFalse();
+            assertThat(detail(body, "sessions"))
+                    .as("не сказано, какой роли и каких прав не хватает")
+                    .contains(ROLE)
+                    .contains("public.spring_session")
+                    .contains("INSERT");
+            assertThat(known(body, "sessions"))
+                    .as("отобранные права — выясненное состояние, а не «спросить не вышло»")
+                    .isTrue();
+
+            assertThat(login())
+                    .as("без права записи в spring_session вход прошёл — значит проверка "
+                            + "готовности стережёт то, чего не происходит")
+                    .isNotEqualTo(200);
+        } finally {
+            owner.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON public.spring_session TO "
+                    + ROLE);
+        }
+
+        JsonNode restored = readiness(200);
+        assertThat(ok(restored, "sessions"))
+                .as("права вернули, а готовность осталась красной: ответ закэширован "
+                        + "или считается не от базы — %s", restored)
+                .isTrue();
+        assertThat(login()).as("права вернули, а вход не заработал").isEqualTo(200);
+    }
+
+    /** Владелец компании ячейки: войти в неё должен кто-то настоящий. */
+    private void member() {
+        owner.update("DELETE FROM " + TENANT + ".tenant_member WHERE login = ?", LOGIN);
+        owner.update("INSERT INTO " + TENANT + ".tenant_member "
+                        + "(display_name, role, login, password_hash) VALUES (?, 'OWNER', ?, ?)",
+                "Владелец исправной ячейки", LOGIN, passwordEncoder.encode(LOGIN_PASSWORD));
+    }
+
+    /**
+     * Код ответа на вход; отказ, вылетевший из цепочки фильтров исключением
+     * (сессия сохраняется уже после контроллера), тоже «не 200».
+     */
+    private int login() {
+        try {
+            return mvc.perform(post("/api/auth/login").with(csrf())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"company":"healthy-cell","login":"%s","password":"%s"}"""
+                                    .formatted(LOGIN, LOGIN_PASSWORD)))
+                    .andReturn().getResponse().getStatus();
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    /**
      * Убирает из истории последний накатанный changeset общей схемы.
      *
      * <p>Это и есть «накат ещё не дошёл» с точки зрения того, кого спрашивает
@@ -284,6 +384,10 @@ class AppReadinessHealthyCellTest extends PostgresTestBase {
 
     private boolean ok(JsonNode body, String check) {
         return check(body, check).get("ok").asBoolean();
+    }
+
+    private boolean known(JsonNode body, String check) {
+        return check(body, check).get("known").asBoolean();
     }
 
     private String detail(JsonNode body, String check) {

@@ -41,7 +41,8 @@ class BuildVersionHttpTest extends PostgresTestBase {
 
     /** Проверки ответа готовности — ровно те, что красят выкладку. */
     private static final List<String> GATING =
-            List.of("database", "catalog", "schemas", "journals", "writes", "metrics");
+            List.of("database", "catalog", "schemas", "journals", "sessions", "writes",
+                    "metrics");
 
     @Autowired
     private MockMvc mvc;

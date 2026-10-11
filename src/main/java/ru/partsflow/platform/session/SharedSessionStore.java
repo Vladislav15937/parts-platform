@@ -18,6 +18,7 @@ import ru.partsflow.platform.security.TenantPrincipal;
 
 import javax.sql.DataSource;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -75,6 +76,14 @@ public class SharedSessionStore {
      * {@code public.spring_session_attributes}.
      */
     private static final String TABLE = "public.spring_session";
+
+    /**
+     * Обе таблицы хранилища — для готовности, которая спрашивает права на них
+     * (задача 0105). Выведены отсюда, а не написаны там второй раз: две
+     * копии одного имени расходятся молча, и проверка спрашивала бы права
+     * на таблицу, в которую хранилище уже не пишет.
+     */
+    public static final List<String> TABLES = List.of(TABLE, TABLE + "_attributes");
 
     /** Умолчание Spring Session: раз в минуту убирать истёкшие строки. */
     private static final String CLEANUP_CRON = "0 * * * * *";
