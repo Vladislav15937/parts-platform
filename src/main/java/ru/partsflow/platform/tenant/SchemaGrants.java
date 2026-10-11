@@ -40,12 +40,14 @@ public class SchemaGrants {
     /**
      * Служебные таблицы ячейки в {@code public}, которые правит рабочая роль.
      *
-     * <p>Хранилище сессий Spring Session: строка сессии и её атрибуты.
+     * <p>Хранилище сессий Spring Session: строка сессии и её атрибуты, и журнал
+     * исходящих писем {@code mail_message} (задача 0192).
      * {@code shedlock} и {@code tenant_registry} сюда не входят — их права
      * выданы при заведении роли и с тех пор не менялись.
      */
     private static final List<String> CELL_TABLES =
-            List.of("spring_session", "spring_session_attributes");
+            List.of("spring_session", "spring_session_attributes", "mail_message",
+                    "mail_event_pending");
 
     private final JdbcTemplate owner;
     private final String runtimeRole;

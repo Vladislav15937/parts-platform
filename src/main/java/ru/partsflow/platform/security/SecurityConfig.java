@@ -59,7 +59,7 @@ public class SecurityConfig {
                         //
                         // Вход сюда не входит: там появляется сессия, и подделка
                         // входа (жертву логинят в чужой аккаунт) — реальная атака.
-                        .ignoringRequestMatchers("/api/provisioning/**"))
+                        .ignoringRequestMatchers("/api/provisioning/**", "/api/mail/events/**"))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 .authenticationManager(authenticationManager)
                 .exceptionHandling(e -> e.authenticationEntryPoint(
@@ -71,6 +71,10 @@ public class SecurityConfig {
                         // Механизм защищён секретом из конфигурации, пустой
                         // секрет его выключает — см. ProvisioningController.
                         .requestMatchers("/api/provisioning/**").permitAll()
+                        // Отчёты о доставке писем присылает оператор: сессии у
+                        // него нет и CSRF-токена тоже. Права даёт секрет в адресе,
+                        // см. MailEventController.
+                        .requestMatchers("/api/mail/events/**").permitAll()
                         // Проверки живости нужны балансировщику до всякого входа.
                         .requestMatchers("/actuator/health/**").permitAll()
                         // Готовность спрашивает docker и шаг выкладки, а у них

@@ -218,6 +218,57 @@ run_checks() {
     return $bad
 }
 
+# --- Отправка писем: секрет оператора и его настройки (задача 0192) ---------
+#
+# Это не монтируемый файл, а значения в .env, и ломается оно так же молча:
+# ячейка без ключа оператора поднимается, регистрация работает — а письма
+# не уходят, и первым узнаёт об этом человек, ждущий письмо. Поэтому сторож
+# спрашивает значения ДО подъёма, словами, а не приложение молчанием в логе.
+#
+# Два состояния, и красным становится только одно. APP_MAIL_PROVIDER=unisender
+# при пустом ключе, адресе API или отправителе — красное: оператор выбран,
+# а послать нечем, и поднятая так ячейка обещает письма, которых не будет.
+# Провайдер log (умолчание) — жёлтая строка «письма НЕ уходят», а не отказ:
+# договор с оператором ещё не заключён, а ячейка с работающими клиентами
+# обязана выкладываться и до него (отказ здесь остановил бы выкладку
+# несвязанной версии). Станет ли это красным, когда появится возможность,
+# которой письма нужны (регистрация компании, задача 0184), — решение
+# владельца продукта; здесь это названо, а не принято.
+yellow() { printf '\033[1;33m%s\033[0m\n' "$1"; }
+
+# Значение переменной из .env: последняя строка, кавычки и пробелы по краям
+# снимаются. Файл не исполняется — он может быть чужим и неполным.
+env_value() {
+    local line
+    line=$(grep -E "^$1=" "$ENV_FILE" | tail -n 1) || true
+    line=${line#*=}
+    line=${line%\"}; line=${line#\"}
+    line=${line%\'}; line=${line#\'}
+    printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+mail_checks() {
+    local provider bad=0 name
+    provider=$(env_value APP_MAIL_PROVIDER)
+    [ -n "$provider" ] || provider=log
+    if [ "$provider" != unisender ]; then
+        yellow "  ! письма НЕ уходят: APP_MAIL_PROVIDER=$provider (оператор не подключён) — тексты пишутся только в лог"
+        return 0
+    fi
+    for name in APP_MAIL_API_KEY APP_MAIL_BASE_URL APP_MAIL_FROM; do
+        if [ -z "$(env_value "$name")" ]; then
+            red "  ✗ $name пуст при APP_MAIL_PROVIDER=unisender — письма не уйдут (регистрация будет копить их в очереди, человек письма не получит)"
+            bad=1
+        else
+            printf '  ✓ %s задан\n' "$name"
+        fi
+    done
+    if [ -z "$(env_value APP_MAIL_WEBHOOK_SECRET)" ]; then
+        yellow "  ! APP_MAIL_WEBHOOK_SECRET пуст — отчёты о доставке не принимаются: письма будут «отправлены», но не «доставлены»"
+    fi
+    return $bad
+}
+
 # --- проверка самого сторожа ------------------------------------------------
 #
 # Сторож, не краснеющий на дефекте, хуже отсутствующего, и установить это
@@ -340,6 +391,49 @@ PY
         bad=1
     fi
 
+    # Подделки 5-8: письма (задача 0192). Ключ оператора не файл, и сторож
+    # смотрит значения в .env: выбранный оператор без ключа — красное со словами,
+    # полный набор — зелёное, оператор не выбран — жёлтое без отказа.
+    mailprobe() {  # строки, добавляемые в .env
+        { cat "$TMP/env"; printf '%s\n' "$@"; } > "$TMP/env-mail"
+        set +e
+        out=$(CONFIG_GUARD_ROOT="$ROOT" ENV_FILE="$TMP/env-mail" \
+              IMAGE_STATE_SH="$TMP/image-state-quiet.sh" bash "$SELF" 2>&1); rc=$?
+        set -e
+    }
+    mailprobe APP_MAIL_PROVIDER=unisender APP_MAIL_API_KEY= APP_MAIL_BASE_URL=https://go1.example/api APP_MAIL_FROM=a@b.ru
+    if [ "$rc" != 0 ] && grep -q 'APP_MAIL_API_KEY пуст' <<< "$out"; then
+        printf '  ✓ оператор выбран, ключа нет — красное, названа переменная и цена\n'
+    else
+        red "  ✗ unisender без APP_MAIL_API_KEY обязан валить сторожа словами (код $rc)"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=1
+    fi
+    mailprobe APP_MAIL_PROVIDER=unisender APP_MAIL_API_KEY=k APP_MAIL_BASE_URL= APP_MAIL_FROM=a@b.ru
+    if [ "$rc" != 0 ] && grep -q 'APP_MAIL_BASE_URL пуст' <<< "$out"; then
+        printf '  ✓ убран адрес API оператора — красное до подъёма\n'
+    else
+        red "  ✗ пустой APP_MAIL_BASE_URL обязан валить сторожа (код $rc)"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=1
+    fi
+    mailprobe APP_MAIL_PROVIDER=unisender APP_MAIL_API_KEY=k APP_MAIL_BASE_URL=https://go1.example/api APP_MAIL_FROM=a@b.ru APP_MAIL_WEBHOOK_SECRET=s
+    if [ "$rc" = 0 ] && ! grep -q 'пуст' <<< "$out"; then
+        printf '  ✓ оператор настроен полностью — зелёное\n'
+    else
+        red "  ✗ полностью настроенный оператор не должен краснеть (код $rc)"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=1
+    fi
+    mailprobe APP_MAIL_PROVIDER=log
+    if [ "$rc" = 0 ] && grep -q 'письма НЕ уходят' <<< "$out"; then
+        printf '  ✓ оператор не подключён — жёлтая строка, выкладка не остановлена\n'
+    else
+        red "  ✗ провайдер log: ожидалась строка «письма НЕ уходят» и код 0 (код $rc)"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=1
+    fi
+
     [ $bad = 0 ] || { red "Самопроверка не прошла"; exit 1; }
     green "Самопроверка пройдена"
 }
@@ -360,6 +454,13 @@ if run_checks; then
     RC=0
 else
     red "Ячейку в таком виде поднимать нельзя: docker подставит пустые каталоги молча"
+    RC=1
+fi
+
+echo
+echo "Письма (APP_MAIL_*)"
+if ! mail_checks; then
+    red "Ячейку в таком виде поднимать нельзя: оператор писем выбран, а настроен не полностью"
     RC=1
 fi
 
