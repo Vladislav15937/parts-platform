@@ -9,10 +9,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Вторая преграда перед провижинингом: частота и потолок числа схем
@@ -121,7 +117,7 @@ public class ProvisioningLimits {
     private final int maxTenants;
 
     /** Когда с этого адреса заводили схемы — в пределах окна. */
-    private final Map<String, Deque<Long>> recentByAddress = new ConcurrentHashMap<>();
+    private final AddressWindow recentByAddress = new AddressWindow(WINDOW, MAX_TRACKED_ADDRESSES);
 
     public ProvisioningLimits(
             // Реестр рабочая роль читать вправе — писать в него не вправе,
@@ -246,36 +242,19 @@ public class ProvisioningLimits {
     /**
      * Занимает место в окне и возвращает, сколько их стало вместе с этим.
      *
-     * <p>Под замком на карте: чтение окна и запись в него не должны
-     * разъезжаться — то же правило, что у остатка склада, только цена ниже.
+     * <p>Окно и его замок — в {@link AddressWindow}: оно же считает попытки
+     * публичной регистрации, у которой свой экземпляр.
      */
-    private synchronized int takeSlot(String address) {
-        long now = System.currentTimeMillis();
-        long since = now - WINDOW.toMillis();
-
-        // Уборка устаревшего на каждом заходе: иначе карта растёт адресами,
-        // которые больше не придут.
-        recentByAddress.values().forEach(times -> {
-            while (!times.isEmpty() && times.peekFirst() < since) {
-                times.pollFirst();
-            }
-        });
-        recentByAddress.entrySet().removeIf(entry -> entry.getValue().isEmpty());
-
-        Deque<Long> times = recentByAddress.get(address);
-        if (times == null) {
-            if (recentByAddress.size() >= MAX_TRACKED_ADDRESSES) {
-                rejected(REASON_ADDRESSES, address,
-                        "адресов под счётом " + recentByAddress.size());
-                throw new TooManyRequests(("В управляющий контур ломятся с %d разных адресов "
-                        + "за час — больше, чем ячейка готова различать. Это предел, "
-                        + "а не поломка").formatted(recentByAddress.size()));
-            }
-            times = new ArrayDeque<>();
-            recentByAddress.put(address, times);
+    private int takeSlot(String address) {
+        int used = recentByAddress.take(address);
+        if (used < 0) {
+            rejected(REASON_ADDRESSES, address,
+                    "адресов под счётом " + recentByAddress.tracked());
+            throw new TooManyRequests(("В управляющий контур ломятся с %d разных адресов "
+                    + "за час — больше, чем ячейка готова различать. Это предел, "
+                    + "а не поломка").formatted(recentByAddress.tracked()));
         }
-        times.addLast(now);
-        return times.size();
+        return used;
     }
 
     /**

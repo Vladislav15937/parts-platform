@@ -22,5 +22,8 @@ public class SpaRoutingConfig implements WebMvcConfigurer {
     @Override
     public void addViewControllers(ViewControllerRegistry registry) {
         registry.addViewController("/s/{company}/{token}").setViewName("forward:/index.html");
+        // Страница регистрации компании (задача 0184): её открывают по ссылке
+        // с сайта, и адрес здесь единственный способ сказать, что показать.
+        registry.addViewController("/register").setViewName("forward:/index.html");
     }
 }
