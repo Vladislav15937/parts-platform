@@ -123,6 +123,42 @@ describe('предзаказ в выдаче и в оформлении прод
       .toBeGreaterThan(Date.now() + 26 * DAY_MS);
   });
 
+  it('срок задаётся днями или датой, второе поле считается из первого', async () => {
+    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    await search();
+    fireEvent.click(addButton('Фара Toyota Camry 2007 лев.'));
+
+    const date = await termField();
+    const days = screen.getByLabelText('Отложить предзаказ на (дней)') as HTMLInputElement;
+    // Подставленный срок виден в обоих видах: ожидаемая дата плюс неделя.
+    expect(date.value).toBe(iso(27));
+    expect(days.value).toBe('27');
+
+    // Назвали дни — дата посчитана и стоит рядом.
+    setNative(days, '10');
+    await waitFor(() => expect(date.value).toBe(iso(10)));
+    expect(days.value).toBe('10');
+
+    // Назвали дату — посчитаны дни.
+    setNative(date, iso(15));
+    await waitFor(() => expect(days.value).toBe('15'));
+
+    // Очищенные дни — срока нет, и кнопка называет причину, а не уходит с мусором.
+    setNative(days, '');
+    await waitFor(() => expect(date.value).toBe(''));
+    const submit = screen.getByRole('button', { name: 'Оформить и отложить' }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+
+    // Срок, названный днями, и уходит на сервер.
+    setNative(days, '12');
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    await waitFor(() => expect(created).not.toBeNull());
+    const until = new Date(String(created!.reservedUntil)).getTime();
+    expect(until).toBeGreaterThan(Date.now() + 11 * DAY_MS);
+    expect(until).toBeLessThan(Date.now() + 13 * DAY_MS);
+  });
+
   it('срок раньше ожидаемой даты — предупреждение до нажатия, кнопка не гаснет', async () => {
     render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
     await search();

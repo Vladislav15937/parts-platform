@@ -1258,6 +1258,38 @@ export function dayLabel(iso: string): string {
 }
 
 /**
+ * Сколько дней от сегодняшнего дня до названного срока: «2026-10-20» → 9.
+ *
+ * <p>Срок предзаказа задают либо числом дней, либо датой («установленное
+ * количество дней или срок до какого числа» — определение владельца, 9 октября
+ * 2026), и второе поле считается из первого. Считается по календарным дням
+ * местного часового пояса, а не по 24-часовым отрезкам: переход на летнее
+ * время сдвинул бы число на единицу. Пустой или непонятный срок — `null`.
+ */
+export function daysUntilTerm(termDay: string, now: Date = new Date()): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(termDay)) {
+    return null;
+  }
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = localDate(termDay);
+  return Math.round((target.getTime() - today.getTime()) / 86_400_000);
+}
+
+/** Срок «через N дней» как день для поля даты; `null`, если число не годится. */
+export function termFromDays(days: string, now: Date = new Date()): string | null {
+  if (!/^\d{1,4}$/.test(days.trim())) {
+    return null;
+  }
+  const count = Number(days);
+  if (count < 1) {
+    return null;
+  }
+  const day = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  day.setDate(day.getDate() + count);
+  return dateInput(day);
+}
+
+/**
  * Что стоит в поле срока предзаказа, когда оформление открывается.
  *
  * <p>Пустое не годится: оформление одним нажатием — самый частый путь

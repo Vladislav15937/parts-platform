@@ -955,6 +955,193 @@ class PreorderTest extends PostgresTestBase {
         assertReconciled();
     }
 
+    // ---------- срок предзаказа истёк: снимается сам (задача 0260) ----------
+
+    @Autowired
+    private PreorderExpiryService expiry;
+
+    /** Проход задания по тестовому арендатору, как его делает расписание. */
+    private void sweep() {
+        TenantContext.set(TENANT);
+        try {
+            expiry.sweepCurrentTenant(Instant.now());
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
+    private void expire(long... deals) {
+        for (long id : deals) {
+            inTenant(() -> jdbc.update(
+                    "UPDATE deal SET reserved_until = now() - interval '2 days' WHERE id = ?", id));
+        }
+    }
+
+    private int selfRemovals(long deal) {
+        return count("SELECT count(*) FROM document_event WHERE document_type = 'DEAL'"
+                + " AND document_id = " + deal + " AND message LIKE '%срок предзаказа истёк%'"
+                + " AND author_id IS NULL");
+    }
+
+    @Test
+    @DisplayName("Просроченный предзаказ без прихода снимается сам: обещанное возвращается, обычный резерв остаётся в «Истек срок»")
+    void expiredPreorderIsTakenOffByItself() throws Exception {
+        long part = expectedPart(supply(), "Фара снятая сама", 3, "9000");
+        long ordinaryPart = ordinaryPart("Фара обычная просроченная", 1);
+        long preorder = createDeal(part, 2, near, daysAhead(20)).andReturn().path("id").asLong();
+        long fresh = createDeal(part, 1, near, daysAhead(20)).andReturn().path("id").asLong();
+        long ordinary = createDeal(ordinaryPart, 1, near, null).andReturn().path("id").asLong();
+        expire(preorder, ordinary);
+        inTenant(() -> jdbc.update("DELETE FROM part_change"));
+
+        // Пока задание не шло, позиция занята целиком.
+        assertThat(stockRow(part).path("qtyAvailable").decimalValue()).isEqualByComparingTo("0");
+
+        sweep();
+
+        JsonNode taken = dealById(preorder);
+        assertThat(taken.path("status").asText()).isEqualTo("CANCELLED");
+        assertThat(taken.path("items").get(0).path("status").asText()).isEqualTo("CANCELLED");
+        assertThat(historyOf(preorder)).anyMatch(m -> m.contains("срок предзаказа истёк"));
+        assertThat(selfRemovals(preorder))
+                .as("снятие записано с автором-человеком или не записано вовсе").isEqualTo(1);
+
+        // Обещанное вернулось позиции: две штуки снова предлагаются продавцу.
+        assertThat(stockRow(part).path("qtyAvailable").decimalValue()).isEqualByComparingTo("2");
+        assertThat(marked(part))
+                .as("снятие не отметило позицию: количество не вернётся на Дром дельтой")
+                .isTrue();
+        assertThat(deltaOffer(part)).contains("<quantity>2</quantity>");
+
+        // Контроль: не просроченный предзаказ на месте, а обычный просроченный
+        // резерв никто не снял — он по-прежнему в «Истек срок».
+        assertThat(dealById(fresh).path("status").asText()).isEqualTo("RESERVED");
+        assertThat(dealById(fresh).path("items").get(0).path("status").asText())
+                .isEqualTo("PREORDER");
+        assertThat(dealById(ordinary).path("status").asText()).isEqualTo("RESERVED");
+        assertThat(expiredByEndpoint()).contains(ordinary);
+
+        // Повтор задания ничего не меняет.
+        sweep();
+        assertThat(selfRemovals(preorder)).isEqualTo(1);
+        assertReconciled();
+    }
+
+    @Test
+    @DisplayName("Пришедший предзаказ с истёкшим сроком снят сам, резерв склада возвращён; обычный резерв с тем же сроком остался")
+    void arrivedPreorderExpiresTheSameWay() throws Exception {
+        long supply = supply();
+        long part = expectedPart(supply, "Фара пришедшая", 3, "9000");
+        long ordinaryPart = ordinaryPart("Фара обычная рядом", 2);
+        long preorder = createDeal(part, 2, near, daysAhead(20)).andReturn().path("id").asLong();
+        long other = createDeal(part, 1, near, daysAhead(20)).andReturn().path("id").asLong();
+        long ordinary = createDeal(ordinaryPart, 1, near, null).andReturn().path("id").asLong();
+        assertThat(receipt(near, supply, part, 3, UUID.randomUUID().toString())
+                .getResponse().getStatus()).isEqualTo(201);
+        assertThat(stock("qty_reserved", part, near)).isEqualByComparingTo("3");
+        assertThat(count("SELECT count(*) FROM deal_item WHERE from_preorder AND deal_id = "
+                + preorder)).as("резерв не помнит, что родился предзаказом").isEqualTo(1);
+
+        expire(preorder, ordinary);
+        inTenant(() -> jdbc.update("DELETE FROM part_change"));
+        sweep();
+
+        assertThat(dealById(preorder).path("status").asText()).isEqualTo("CANCELLED");
+        assertThat(stock("qty_reserved", part, near))
+                .as("резерв пришедшего предзаказа не вернулся на склад")
+                .isEqualByComparingTo("1");
+        assertThat(selfRemovals(preorder)).isEqualTo(1);
+        assertThat(marked(part)).isTrue();
+        assertThat(dealById(other).path("status").asText()).isEqualTo("RESERVED");
+
+        // Контроль: обычный резерв с тем же просроченным сроком не тронут.
+        assertThat(dealById(ordinary).path("status").asText()).isEqualTo("RESERVED");
+        assertThat(stock("qty_reserved", ordinaryPart, near)).isEqualByComparingTo("1");
+        assertThat(expiredByEndpoint()).contains(ordinary);
+        assertReconciled();
+    }
+
+    @Test
+    @DisplayName("Смешанная сделка: снимаются позиции предзаказа, обычная остаётся, сумма пересчитана")
+    void mixedDealLosesOnlyThePreorderPosition() throws Exception {
+        long expected = expectedPart(supply(), "Крыло смешанное", 2, "4000");
+        long ordinaryPart = ordinaryPart("Крыло обычное смешанное", 1);
+        long mixed = json(mvc.perform(post("/api/deals").with(csrf()).session(login("prodavets"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customerId":%d,"reservedUntil":"%s",
+                                 "items":[{"partId":%d,"quantity":1,"warehouseId":%d},
+                                          {"partId":%d,"quantity":1,"warehouseId":%d}]}"""
+                                .formatted(customer, daysAhead(30), expected, near,
+                                        ordinaryPart, near)))
+                .andExpect(status().isCreated()).andReturn()).path("id").asLong();
+        BigDecimal before = dealById(mixed).path("totalAmount").decimalValue();
+        expire(mixed);
+
+        sweep();
+
+        JsonNode after = dealById(mixed);
+        assertThat(after.path("status").asText()).isEqualTo("RESERVED");
+        List<String> states = new ArrayList<>();
+        after.path("items").forEach(i -> states.add(i.path("status").asText()));
+        assertThat(states).containsExactlyInAnyOrder("CANCELLED", "RESERVED");
+        assertThat(after.path("totalAmount").decimalValue()).isLessThan(before);
+        assertThat(stock("qty_reserved", ordinaryPart, near)).isEqualByComparingTo("1");
+        assertThat(expiredByEndpoint())
+                .as("обычная позиция смешанной сделки осталась просроченной и должна быть видна")
+                .contains(mixed);
+        assertThat(historyOf(mixed)).anyMatch(m -> m.contains("Срок предзаказа истёк"));
+
+        // Повтор: предзаказной позиции больше нет, ничего не снимается и не пишется.
+        sweep();
+        assertThat(historyOf(mixed).stream()
+                .filter(m -> m.contains("Срок предзаказа истёк")).count()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Два одновременных прохода по одной сделке возвращают обещанное один раз")
+    void twoConcurrentPassesRemoveOnce() throws Exception {
+        long supply = supply();
+        long part = expectedPart(supply, "Фара гонка снятия", 3, "9000");
+        long preorder = createDeal(part, 2, near, daysAhead(20)).andReturn().path("id").asLong();
+        long other = createDeal(part, 1, near, daysAhead(20)).andReturn().path("id").asLong();
+        assertThat(receipt(near, supply, part, 3, UUID.randomUUID().toString())
+                .getResponse().getStatus()).isEqualTo(201);
+        expire(preorder);
+
+        java.util.concurrent.ExecutorService pool =
+                java.util.concurrent.Executors.newFixedThreadPool(2);
+        CountDownLatch go = new CountDownLatch(1);
+        List<java.util.concurrent.Future<Boolean>> results = new ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            results.add(pool.submit(() -> {
+                TenantContext.set(TENANT);
+                try {
+                    go.await();
+                    return sales.expirePreorder(preorder, Instant.now());
+                } finally {
+                    TenantContext.clear();
+                }
+            }));
+        }
+        go.countDown();
+        int removed = 0;
+        for (java.util.concurrent.Future<Boolean> r : results) {
+            if (r.get(30, TimeUnit.SECONDS)) {
+                removed++;
+            }
+        }
+        pool.shutdown();
+
+        assertThat(removed).as("обещанное снято дважды или ни разу").isEqualTo(1);
+        assertThat(stock("qty_reserved", part, near))
+                .as("резерв освобождён дважды: у соседнего предзаказа он тоже снят")
+                .isEqualByComparingTo("1");
+        assertThat(selfRemovals(preorder)).isEqualTo(1);
+        assertThat(dealById(other).path("items").get(0).path("status").asText())
+                .isEqualTo("RESERVED");
+    }
+
     private long supply() throws Exception {
         MvcResult created = mvc.perform(post("/api/intake/supplies").with(csrf())
                         .session(login("vladelec"))

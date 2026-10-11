@@ -11,6 +11,7 @@ import {
   deal as fetchDealById,
   dayLabel,
   defaultPaymentSource,
+  daysUntilTerm,
   defaultPreorderTerm,
   endOfDay,
   extendReservation,
@@ -20,6 +21,7 @@ import {
   preorderTermWarning,
   rememberPaymentSource,
   reservationTerm,
+  termFromDays,
   shareDeal,
   receiveOrder,
   serviceKinds,
@@ -238,6 +240,7 @@ export function SellerScreen({
   const preorderLines = lines.filter((line) => line.row.expected);
   const expectedDates = preorderLines.map((line) => line.row.expectedOn);
   const termDay = preorderUntil ?? defaultPreorderTerm(expectedDates);
+  const termDays = daysUntilTerm(termDay);
   const termWarning = preorderLines.length > 0
     ? preorderTermWarning(termDay, expectedDates) : null;
   const orderBlock = orderObstacle(
@@ -512,8 +515,24 @@ export function SellerScreen({
               бы предзаказ просроченным в день заведения. */}
           {preorderLines.length > 0 && marketplace === '' && (
             <>
+              {/* Срок задают либо днями, либо датой; второе поле считается из
+                  первого и стоит рядом («количество дней резерва или срок
+                  до какого числа» — определение предзаказа владельцем).
+                  Хранится одна дата: число дней — её запись от сегодняшнего
+                  дня, поэтому два поля разойтись не могут. */}
               <label className="field">
-                Отложить предзаказ до
+                Отложить предзаказ на (дней)
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  inputMode="numeric"
+                  value={termDays === null ? '' : String(termDays)}
+                  onChange={(e) => setPreorderUntil(termFromDays(e.target.value) ?? '')}
+                />
+              </label>
+              <label className="field">
+                или до какого числа
                 <input
                   type="date"
                   value={termDay}

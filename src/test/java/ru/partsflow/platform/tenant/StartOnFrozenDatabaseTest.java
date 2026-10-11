@@ -346,6 +346,7 @@ class StartOnFrozenDatabaseTest extends PostgresTestBase {
                 "--app.outbox.dead-letter-retry-enabled=false",
                 "--app.outbox.metrics-enabled=false",
                 "--app.feeds.delta-enabled=false",
+                "--app.preorder-expiry.enabled=false",
                 "--app.sessions.sweep-enabled=false");
     }
 
