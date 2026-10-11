@@ -42,6 +42,13 @@ export function AdminScreen() {
   const [who, setWho] = useState<Who>({ kind: 'checking' });
   const mounted = useMounted();
 
+  // Заголовок вкладки свой: в index.html прибита «Приёмка», и вкладка
+  // администрирования рядом с кабинетом клиента называлась бы его разделом
+  // (найдено живым прогоном).
+  useEffect(() => {
+    document.title = 'Администрирование сервиса — PartsFlow';
+  }, []);
+
   useEffect(() => {
     adminMe()
       .then((me) => { if (mounted.current) setWho({ kind: 'signed', me }); })

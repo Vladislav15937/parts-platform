@@ -74,6 +74,7 @@ describe('система администрирования', () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByText('Администрирование сервиса')).toBeTruthy());
+    expect(document.title).toBe('Администрирование сервиса — PartsFlow');
     expect(screen.queryByLabelText(/Код компании/),
       'у администратора нет кода компании — он вне всех разборок').toBeNull();
     expect(calls.some((c) => c.url.includes('/api/auth/me')),
