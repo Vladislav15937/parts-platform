@@ -96,7 +96,10 @@ public enum NotFound {
     /** Прайс-лист площадки. Владелец зовёт его выгрузкой. */
     FEED("Выгрузка не найдена"),
 
-    MARKETPLACE_ACCOUNT("Кабинет не найден");
+    MARKETPLACE_ACCOUNT("Кабинет не найден"),
+
+    /** Разборка в системе администрирования сервиса (задача 0042): её зовут по коду входа. */
+    COMPANY("Компания не найдена");
 
     private static final Logger log = LoggerFactory.getLogger(NotFound.class);
 

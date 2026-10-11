@@ -8,10 +8,12 @@ import {
   loadMembers,
   roleTitle,
   ROLES,
+  SERVICE_ADMIN,
   type Member,
   type Role,
 } from '../organization/members';
 import { useMounted } from '../ui/useMounted';
+import { AdminAccessPanel } from './AdminAccessPanel';
 
 /**
  * Сотрудники компании: кто входит и что видит.
@@ -24,7 +26,11 @@ import { useMounted } from '../ui/useMounted';
  * у совершённых операций, а история для того и ведётся, чтобы через месяц
  * можно было спросить, кто это сделал.
  */
-export function MembersScreen() {
+/**
+ * @param canGrantAdminAccess вошёл ли сам владелец: администратор сервиса
+ *        в кабинете видит раздел доступа, но давать и отзывать его не может
+ */
+export function MembersScreen({ canGrantAdminAccess = true }: { canGrantAdminAccess?: boolean }) {
   const [members, setMembers] = useState<Member[] | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -81,7 +87,9 @@ export function MembersScreen() {
             <tbody>
               {members.map((member) => (
                 <tr key={member.id} className={member.active ? undefined : 'muted'}>
-                  <td>{member.login}</td>
+                  {/* У администратора сервиса логина в кабинете нет: вход
+                      у него свой, вне всех разборок (задача 0042). */}
+                  <td>{member.login ?? '—'}</td>
                   <td>{member.displayName ?? '—'}</td>
                   <td>{roleTitle(member.role)}</td>
                   <td>
@@ -89,6 +97,13 @@ export function MembersScreen() {
                       ? 'не входил'
                       : new Date(member.lastLoginAt).toLocaleString('ru-RU')}
                   </td>
+                  {member.role === SERVICE_ADMIN ? (
+                    // Владелец этого участника «не заводит и не может
+                    // отобрать» (решение владельца продукта от 8 сентября
+                    // 2026): кнопки, которые сервер отобьёт, не рисуем, а
+                    // говорим, где его рычаг.
+                    <td className="note">доступ — в разделе ниже</td>
+                  ) : (
                   <td className="filter-row">
                     <button
                       type="button"
@@ -109,12 +124,15 @@ export function MembersScreen() {
                       {member.active ? 'Выключить' : 'Включить'}
                     </button>
                   </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
+
+      <AdminAccessPanel canChange={canGrantAdminAccess} />
 
       <div className="card">
         <h3>Новый сотрудник</h3>

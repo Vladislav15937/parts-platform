@@ -69,18 +69,37 @@ public class ProvisioningController {
     private final TenantMigrations migrations;
     private final ru.partsflow.platform.config.TenantLoadMetrics tenantLoad;
     private final ProvisioningLimits limits;
+    private final ru.partsflow.platform.admin.ServiceAdmins serviceAdmins;
     private final String token;
 
     public ProvisioningController(TenantProvisioning provisioning,
                                   TenantMigrations migrations,
                                   ru.partsflow.platform.config.TenantLoadMetrics tenantLoad,
                                   ProvisioningLimits limits,
+                                  ru.partsflow.platform.admin.ServiceAdmins serviceAdmins,
                                   @Value("${app.provisioning-token:}") String token) {
         this.provisioning = provisioning;
         this.migrations = migrations;
         this.tenantLoad = tenantLoad;
         this.limits = limits;
+        this.serviceAdmins = serviceAdmins;
         this.token = token;
+    }
+
+    /**
+     * Завести учётную запись администратора сервиса (задача 0042).
+     *
+     * <p>Здесь, а не экраном: администратора заводит тот же оператор с тем же
+     * секретом, что заводит клиентов, — довод в {@code ServiceAdmins}. Предел
+     * частоты заведения компаний сюда не относится: он защищает диск ячейки
+     * от схем, а строка учётной записи диска не занимает.
+     */
+    @PostMapping("/service-admins")
+    public ResponseEntity<ru.partsflow.platform.admin.ServiceAdmins.Created> createServiceAdmin(
+            @Valid @RequestBody CreateServiceAdminRequest request, HttpServletRequest http) {
+        requireToken(request.token(), ProvisioningLimits.addressOf(http));
+        return ResponseEntity.status(HttpStatus.CREATED).body(
+                serviceAdmins.create(request.login(), request.password(), request.displayName()));
     }
 
     @PostMapping("/tenants")
@@ -205,6 +224,12 @@ public class ProvisioningController {
     }
 
     public record TokenRequest(@NotBlank String token) {
+    }
+
+    public record CreateServiceAdminRequest(@NotBlank String token,
+                                            @NotBlank String login,
+                                            @NotBlank String password,
+                                            String displayName) {
     }
 
     public record CreateTenantRequest(@NotBlank String token,

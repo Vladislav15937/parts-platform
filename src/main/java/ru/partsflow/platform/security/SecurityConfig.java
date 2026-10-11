@@ -17,6 +17,12 @@ import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.util.matcher.AnyRequestMatcher;
+import org.springframework.security.authorization.AuthorizationDecision;
+import org.springframework.security.authorization.AuthorizationManager;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
+import ru.partsflow.platform.admin.ServiceAdminAuthenticationProvider;
+import ru.partsflow.platform.admin.ServiceAdminPrincipal;
 import ru.partsflow.platform.session.LogoutRecorder;
 
 /**
@@ -81,6 +87,10 @@ public class SecurityConfig {
                                 AnyRequestMatcher.INSTANCE))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/login", "/api/auth/csrf").permitAll()
+                        // Вход в систему администрирования сервиса (задача 0042) —
+                        // за ним тоже ещё нет никого. CSRF при этом действует,
+                        // как у входа в кабинет: подделка входа реальна и здесь.
+                        .requestMatchers("/api/admin/login").permitAll()
                         // Арендатора создавать некому: его самого ещё нет,
                         // а значит нет и учётных записей, под которыми входят.
                         // Механизм защищён секретом из конфигурации, пустой
@@ -96,6 +106,9 @@ public class SecurityConfig {
                         // Страница входа (задача 0265): за ней ещё нет никого,
                         // как и за корнем ниже.
                         .requestMatchers(HttpMethod.GET, "/login").permitAll()
+                        // Страница системы администрирования — тот же случай:
+                        // её вход живёт на ней самой.
+                        .requestMatchers(HttpMethod.GET, "/admin").permitAll()
                         // Отчёты о доставке писем присылает оператор: сессии у
                         // него нет и CSRF-токена тоже. Права даёт секрет в адресе,
                         // см. MailEventController.
@@ -152,7 +165,26 @@ public class SecurityConfig {
                         // нажатие. Адрес назван точно, а не шаблоном на /api/**:
                         // исключение из правила должно оставаться размером
                         // в одно место.
-                        .requestMatchers(HttpMethod.PUT, "/api/me/settings/**").authenticated()
+                        .requestMatchers(HttpMethod.PUT, "/api/me/settings/**").access(TENANT_MEMBER)
+                        // Граница между системой администрирования и кабинетами
+                        // (задача 0042, решение владельца продукта от 8 сентября
+                        // 2026: «отдельная система администрирования, живущая
+                        // отдельно от всех разборок»). Правила стоят выше
+                        // запретов по методам: первое совпадение решает.
+                        //
+                        // «Кто я» отвечает обоим: в кабинете по нему
+                        // администратор видит, до какого часа открыт доступ.
+                        .requestMatchers("/api/admin/me").hasAnyRole(
+                                ServiceAdminPrincipal.ROLE, TenantPrincipal.SERVICE_ADMIN_ROLE)
+                        // Выйти из кабинета обратно может только тот, кто вошёл
+                        // туда из системы администрирования.
+                        .requestMatchers("/api/admin/visit/**").hasRole(
+                                TenantPrincipal.SERVICE_ADMIN_ROLE)
+                        // Всё остальное здесь — список клиентов сервиса и вход
+                        // в их кабинеты. Сотруднику разборки, включая владельца,
+                        // этого не видно ни запросом, ни экраном: пункт 7
+                        // критерия приёмки.
+                        .requestMatchers("/api/admin/**").hasRole(ServiceAdminPrincipal.ROLE)
                         // «Просмотр» не меняет ничего — это свойство роли,
                         // а не отдельных операций, и потому стоит здесь,
                         // а не на методах, как остальные проверки.
@@ -172,6 +204,14 @@ public class SecurityConfig {
                                 "OWNER", "MANAGER", "STOREKEEPER", "SELLER")
                         .requestMatchers(HttpMethod.DELETE, "/api/**").hasAnyRole(
                                 "OWNER", "MANAGER", "STOREKEEPER", "SELLER")
+                        // Чтение кабинета — только вошедшему в кабинет. До задачи
+                        // 0042 вошедший был один вид, сотрудник разборки, и
+                        // «вошёл» означало «есть схема». Администратор в системе
+                        // администрирования вошёл, а схемы у него нет: без этого
+                        // правила он читал бы пути кабинета, и запрос уходил бы
+                        // в public. Изменяющие методы закрыты для него выше —
+                        // списком ролей, в котором его роли нет.
+                        .requestMatchers("/api/**").access(TENANT_MEMBER)
                         .anyRequest().authenticated())
                 .logout(l -> l.logoutUrl("/api/auth/logout")
                         // Отметка о выходе ставится до того, как сессию убьют:
@@ -186,9 +226,29 @@ public class SecurityConfig {
         return http.build();
     }
 
+    /**
+     * Вошёл ли сотрудник кабинета — то есть есть ли у запроса схема арендатора.
+     *
+     * <p>Проверка по типу вошедшего, а не по списку ролей: список пришлось бы
+     * повторять здесь седьмой копией, и роль, забытая в нём, теряла бы чтение
+     * всего кабинета.
+     */
+    private static final AuthorizationManager<RequestAuthorizationContext> TENANT_MEMBER =
+            (authentication, context) -> {
+                Authentication current = authentication.get();
+                return new AuthorizationDecision(current != null && current.isAuthenticated()
+                        && current.getPrincipal() instanceof TenantPrincipal);
+            };
+
+    /**
+     * Два входа, два провайдера: кабинет разборки (код компании, логин,
+     * пароль) и система администрирования сервиса (логин и пароль из общей
+     * схемы ячейки). Различаются они типом токена.
+     */
     @Bean
-    public AuthenticationManager authenticationManager(MemberAuthenticationProvider provider) {
-        return new ProviderManager(provider);
+    public AuthenticationManager authenticationManager(MemberAuthenticationProvider provider,
+                                                       ServiceAdminAuthenticationProvider admins) {
+        return new ProviderManager(provider, admins);
     }
 
     /**

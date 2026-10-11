@@ -5,7 +5,8 @@ export interface Me {
   memberId: number;
   login: string;
   displayName: string;
-  role: 'OWNER' | 'MANAGER' | 'STOREKEEPER' | 'SELLER' | 'VIEWER' | 'AUDITOR';
+  /** `ADMIN` — администратор сервиса в кабинете разборки (задача 0042). */
+  role: 'OWNER' | 'MANAGER' | 'STOREKEEPER' | 'SELLER' | 'VIEWER' | 'AUDITOR' | 'ADMIN';
   companySchema: string;
 }
 

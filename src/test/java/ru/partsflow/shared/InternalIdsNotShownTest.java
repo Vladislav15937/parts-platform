@@ -78,6 +78,9 @@ class InternalIdsNotShownTest {
                     "счёт отставших схем и changeset'ов: читает дежурный по ячейке"),
             new Allowed("platform/settings/CompanySettingsService.java",
                     "границы срока резервирования в днях — их владелец и вводит"),
+            new Allowed("platform/admin/AdminAccess.java",
+                    "границы срока доступа администратора в часах — их владелец и вводит"
+                            + " (задача 0042)"),
             new Allowed("platform/outbox/EventPayloads.java",
                     "номер события в логе разбора недоставленного, не ответ человеку"),
             new Allowed("publishing/drom/DromSyncClient.java",

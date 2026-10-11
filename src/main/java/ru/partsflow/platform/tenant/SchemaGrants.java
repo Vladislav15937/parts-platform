@@ -41,13 +41,22 @@ public class SchemaGrants {
      * Служебные таблицы ячейки в {@code public}, которые правит рабочая роль.
      *
      * <p>Хранилище сессий Spring Session: строка сессии и её атрибуты, и журнал
-     * исходящих писем {@code mail_message} (задача 0192).
+     * исходящих писем {@code mail_message} (задача 0192), разрешения владельцев
+ * на вход администратора сервиса и его запросы доступа (задача 0042).
      * {@code shedlock} и {@code tenant_registry} сюда не входят — их права
      * выданы при заведении роли и с тех пор не менялись.
      */
     private static final List<String> CELL_TABLES =
             List.of("spring_session", "spring_session_attributes", "mail_message",
-                    "mail_event_pending");
+                    "mail_event_pending", "admin_access_grant", "admin_access_request");
+
+    /**
+     * Учётные записи администраторов сервиса (задача 0042): рабочая роль
+     * их только читает — при входе в систему администрирования. Заводит
+     * их владелец схем через управляющий контур ({@code ServiceAdmins}),
+     * и приложение, найдя путь мимо контура, не заведёт себе администратора.
+     */
+    private static final List<String> CELL_READ_ONLY = List.of("service_admin");
 
     private final JdbcTemplate owner;
     private final String runtimeRole;
@@ -118,6 +127,9 @@ public class SchemaGrants {
         for (String table : CELL_TABLES) {
             owner.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON public.%s TO %s"
                     .formatted(table, role));
+        }
+        for (String table : CELL_READ_ONLY) {
+            owner.execute("GRANT SELECT ON public.%s TO %s".formatted(table, role));
         }
         log.debug("Служебные таблицы ячейки: права выданы роли {}", runtimeRole);
     }

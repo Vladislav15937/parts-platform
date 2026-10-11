@@ -25,11 +25,49 @@ public record TenantPrincipal(String tenantSchema,
                               String role,
                               boolean active) implements UserDetails {
 
+    /**
+     * Роль администратора сервиса, вошедшего в кабинет по разрешению
+     * владельца (задача 0042).
+     */
+    public static final String SERVICE_ADMIN_ROLE = "ADMIN";
+
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
         // Роли живут в tenant_member: у одного человека одна роль в одном
-        // арендаторе, поэтому список всегда из одного элемента.
+        // арендаторе, поэтому список из одного элемента.
+        //
+        // Кроме администратора сервиса. Решение владельца продукта
+        // от 8 сентября 2026 (tasks/0042): администратор «должен иметь
+        // возможность делать абсолютно всё в личном кабинете владельца
+        // разборки» — значит права у него ровно владельца, и выдаются они
+        // одним местом, а не дописыванием ADMIN в полторы сотни
+        // @PreAuthorize: забытое место молча отняло бы у него возможность,
+        // а новое — заводилось бы без него. Своя роль при этом остаётся
+        // первой: по ней журнал отличает его правку от правки владельца,
+        // а немногие действия, которые владелец оставляет себе (разрешение
+        // на вход самого администратора), закрыты от него явно —
+        // «hasRole('OWNER') and !hasRole('ADMIN')».
+        if (isServiceAdmin()) {
+            return List.of(new SimpleGrantedAuthority("ROLE_" + role),
+                    new SimpleGrantedAuthority("ROLE_OWNER"));
+        }
         return List.of(new SimpleGrantedAuthority("ROLE_" + role));
+    }
+
+    /** Администратор сервиса в кабинете разборки, а не её сотрудник. */
+    public boolean isServiceAdmin() {
+        return SERVICE_ADMIN_ROLE.equals(role);
+    }
+
+    /**
+     * Права владельца: сам владелец либо администратор сервиса.
+     *
+     * <p>Для тех немногих мест, где роль сравнивается в коде, а не в
+     * {@code @PreAuthorize}: там полномочие владельца проверяется строкой,
+     * и администратор, не названный в ней, получил бы меньше, чем ему дано.
+     */
+    public boolean actsAsOwner() {
+        return "OWNER".equals(role) || isServiceAdmin();
     }
 
     /**

@@ -30,6 +30,7 @@ import { WheelsScreen } from './WheelsScreen';
 import { CatalogScreen } from './CatalogScreen';
 import { StockMovesScreen } from './StockMovesScreen';
 import { AuditJournalScreen } from './AuditJournalScreen';
+import { AdminVisitBanner } from '../admin/AdminVisitBanner';
 import { ordersAwaitingReply } from '../sales/sales';
 import { unmatchedNames } from '../catalog/partNames';
 import { deadLetters } from '../events/deadLetters';
@@ -42,6 +43,7 @@ import {
   SELLING_ROLES,
   TABS,
   WRITING_ROLES,
+  rightsOf,
   sectionName,
   visibleTo,
   type Tab,
@@ -69,7 +71,7 @@ export function HomeScreen() {
   // «Просмотр» открывается на складе: приёмки у него в рельсе нет,
   // и начать с экрана, которого не видно, значит открыться пустым местом.
   const [tab, setTab] = useState<Tab>(
-    state.status === 'authenticated' && !WRITING_ROLES.includes(state.me.role)
+    state.status === 'authenticated' && !WRITING_ROLES.includes(rightsOf(state.me.role))
       ? 'catalog'
       : 'intake',
   );
@@ -102,7 +104,7 @@ export function HomeScreen() {
     document.title = `${sectionName(tab)} — PartsFlow`;
   }, [tab]);
 
-  const role = state.status === 'authenticated' ? state.me.role : null;
+  const role = state.status === 'authenticated' ? rightsOf(state.me.role) : null;
 
   useEffect(() => {
     // Один запрос за вход, и только тем, кто может разбирать: приёмщику
@@ -142,6 +144,9 @@ export function HomeScreen() {
   // нет. Значок «на связи» при лежащем сервере — это обещание, которого
   // никто не давал: приёмщик видит его и решает, что работа ушла.
   // Пока проход не состоялся, показываем то, что знает браузер.
+  // Права экранов — по `rightsOf`: администратор сервиса видит всё, что
+  // владелец. Своя роль остаётся в шапке.
+  const rights = rightsOf(state.me.role);
   const connected = (outbox.reachedServer ?? online) && !state.offline;
   const unsent = outbox.records.length;
 
@@ -162,7 +167,7 @@ export function HomeScreen() {
           же новом экране, и разошёлся бы молча. */}
       <nav className="rail">
         <div className="rail__brand">PartsFlow</div>
-        {TABS.filter((spec) => visibleTo(spec, state.me.role)).map((spec) => {
+        {TABS.filter((spec) => visibleTo(spec, rights)).map((spec) => {
           const count = badges[spec.id] ?? 0;
           return (
             <button
@@ -188,6 +193,10 @@ export function HomeScreen() {
             {connected ? 'на связи' : 'без связи'}
           </span>
         </header>
+
+        {/* Администратор сервиса в чужом кабинете видит это всегда: срок
+            доступа и путь обратно (задача 0042). */}
+        {state.me.role === 'ADMIN' && <AdminVisitBanner />}
 
         {state.offline && (
           <p className="note">
@@ -216,7 +225,7 @@ export function HomeScreen() {
           <DonorScreen
             reference={status.reference}
             online={connected}
-            canExpect={state.me.role === 'OWNER'}
+            canExpect={rights === 'OWNER'}
             onChanged={() => {
               // Справочники приёмки перечитаются сами: машина попадает
               // в список на экране деталей, когда её ставят в разбор.
@@ -230,8 +239,8 @@ export function HomeScreen() {
       {tab === 'sales' &&
         (connected ? (
           <SellerScreen
-            canSell={SELLING_ROLES.includes(state.me.role)}
-            role={state.me.role}
+            canSell={SELLING_ROLES.includes(rights)}
+            role={rights}
             company={state.me.companySchema}
             memberId={state.me.memberId}
             openDealId={openDealId}
@@ -244,7 +253,7 @@ export function HomeScreen() {
           </p>
         ))}
 
-      {tab === 'deals' && SELLING_ROLES.includes(state.me.role) && (
+      {tab === 'deals' && SELLING_ROLES.includes(rights) && (
         <DealsScreen
           onOpenDeal={(dealId) => {
             setOpenDealId(dealId);
@@ -264,7 +273,7 @@ export function HomeScreen() {
 
       {/* Касса компании — владельцу и менеджеру: в реестре видно всё,
           включая возвраты покупателям и выдачи с лицевых счетов. */}
-      {tab === 'payments' && NAMING_ROLES.includes(state.me.role) && (
+      {tab === 'payments' && NAMING_ROLES.includes(rights) && (
         <PaymentsScreen
           onOpenDeal={(dealId) => {
             setOpenDealId(dealId);
@@ -273,9 +282,9 @@ export function HomeScreen() {
         />
       )}
 
-      {tab === 'customers' && SELLING_ROLES.includes(state.me.role) && (
+      {tab === 'customers' && SELLING_ROLES.includes(rights) && (
         <CustomersScreen
-          role={state.me.role}
+          role={rights}
           company={state.me.companySchema}
           memberId={state.me.memberId}
           onOpenDeal={(dealId) => {
@@ -285,21 +294,21 @@ export function HomeScreen() {
         />
       )}
 
-      {tab === 'catalog' && <CatalogScreen role={state.me.role} />}
+      {tab === 'catalog' && <CatalogScreen role={rights} />}
 
       {tab === 'wheels' && (
-        <WheelsScreen canIntake={LABEL_ROLES.includes(state.me.role)}
-                      role={state.me.role} />
+        <WheelsScreen canIntake={LABEL_ROLES.includes(rights)}
+                      role={rights} />
       )}
 
-      {tab === 'feeds' && NAMING_ROLES.includes(state.me.role)
-        && <FeedsScreen role={state.me.role} />}
+      {tab === 'feeds' && NAMING_ROLES.includes(rights)
+        && <FeedsScreen role={rights} />}
 
-      {tab === 'moves' && MOVE_ROLES.includes(state.me.role)
-        && <StockMovesScreen role={state.me.role} />}
+      {tab === 'moves' && MOVE_ROLES.includes(rights)
+        && <StockMovesScreen role={rights} />}
 
       {tab === 'orders' && (
-        <OrdersScreen canSell={SELLING_ROLES.includes(state.me.role)} />
+        <OrdersScreen canSell={SELLING_ROLES.includes(rights)} />
       )}
 
       {/* Журнал пересчётов — над обходом полок и сведением расхождений:
@@ -307,13 +316,13 @@ export function HomeScreen() {
           поиск открытой сессии по складу. Владельцу, менеджеру и «Просмотру» —
           сведение расхождений компонент сам показывает только первым двум. */}
       {tab === 'inventory' && status.kind === 'ready'
-        && ['OWNER', 'MANAGER', 'VIEWER'].includes(state.me.role) && (
-          <InventoryReconcile reference={status.reference} role={state.me.role} />
+        && ['OWNER', 'MANAGER', 'VIEWER'].includes(rights) && (
+          <InventoryReconcile reference={status.reference} role={rights} />
         )}
 
       {/* Обход полок сканером — не «Просмотру»: экран называет действие,
           которое сервер эту роль отобьёт. */}
-      {tab === 'inventory' && WRITING_ROLES.includes(state.me.role) &&
+      {tab === 'inventory' && WRITING_ROLES.includes(rights) &&
         (status.kind === 'ready' ? (
           <InventoryScreen
             reference={status.reference}
@@ -324,7 +333,7 @@ export function HomeScreen() {
                 `${line.title} · ${qty} шт`,
               )
             }
-            onNote={COUNTER_NOTE_ROLES.includes(state.me.role)
+            onNote={COUNTER_NOTE_ROLES.includes(rights)
               ? (sessionId, text) => void outbox.add(
                 'inventoryNote',
                 { sessionId, note: text },
@@ -353,7 +362,7 @@ export function HomeScreen() {
         (status.kind === 'ready' ? (
           <ImportScreen
             reference={status.reference}
-            canImport={state.me.role === 'OWNER'}
+            canImport={rights === 'OWNER'}
           />
         ) : (
           <p className="note">Справочники не загружены — некуда класть склад.</p>
@@ -362,7 +371,7 @@ export function HomeScreen() {
       {tab === 'names' &&
         (connected ? (
           <UnmatchedScreen
-            canManage={NAMING_ROLES.includes(state.me.role)}
+            canManage={NAMING_ROLES.includes(rights)}
             onTotalChanged={setUnmatched}
           />
         ) : (
@@ -374,7 +383,7 @@ export function HomeScreen() {
 
       {tab === 'reports' &&
         (connected ? (
-          <ReportsScreen canRead={NAMING_ROLES.includes(state.me.role)} />
+          <ReportsScreen canRead={NAMING_ROLES.includes(rights)} />
         ) : (
           <p className="note note--error">
             Нет связи. Отчёты считает база — закэшированная зарплата хуже
@@ -385,7 +394,7 @@ export function HomeScreen() {
       {tab === 'delivery' &&
         (connected ? (
           <DeliveryScreen
-            canManage={NAMING_ROLES.includes(state.me.role)}
+            canManage={NAMING_ROLES.includes(rights)}
             onTotalChanged={setUndelivered}
           />
         ) : (
@@ -397,7 +406,7 @@ export function HomeScreen() {
 
       {tab === 'labels' &&
         (connected ? (
-          <LabelsScreen canPrint={LABEL_ROLES.includes(state.me.role)} />
+          <LabelsScreen canPrint={LABEL_ROLES.includes(rights)} />
         ) : (
           <p className="note note--error">
             Нет связи. Коды ячеек и деталей берутся из базы — печатать нечего.
@@ -407,13 +416,15 @@ export function HomeScreen() {
       {/* Журнал действий — владельцу и «Ревизору»: роль проверяется здесь
           так же явно, как у остальных разделов, а `visibleTo` управляет
           только кнопкой на рельсе. */}
-      {tab === 'journal' && JOURNAL_ROLES.includes(state.me.role) && <AuditJournalScreen />}
+      {tab === 'journal' && JOURNAL_ROLES.includes(rights) && <AuditJournalScreen />}
 
-      {tab === 'members' && <MembersScreen />}
+      {/* Давать доступ администратору сервиса может только сам владелец —
+          не администратор, у которого права владельца в кабинете. */}
+      {tab === 'members' && <MembersScreen canGrantAdminAccess={state.me.role === 'OWNER'} />}
 
       {tab === 'organization' && <OrganizationScreen />}
 
-      {tab === 'settings' && state.me.role === 'OWNER' && <SettingsScreen />}
+      {tab === 'settings' && rights === 'OWNER' && <SettingsScreen />}
 
       {tab === 'reference' && <ReferencePanel />}
 
@@ -438,6 +449,8 @@ function roleName(role: string): string {
       return 'продавец';
     case 'AUDITOR':
       return 'ревизор';
+    case 'ADMIN':
+      return 'администратор сервиса';
     default:
       return 'просмотр';
   }
