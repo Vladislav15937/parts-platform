@@ -48,6 +48,16 @@ public class DealItem {
     @Column(name = "cost_price_snapshot")
     private BigDecimal costPriceSnapshot;
 
+    /**
+     * Позиция родилась предзаказом (задача 0260). Ставится в {@link #markPreorder}
+     * и после прихода не снимается: приход превращает {@code PREORDER} в обычный
+     * {@code RESERVED}, а срок, названный клиенту, от этого не меняется — по нему
+     * {@link PreorderExpiryService} отличает такую позицию от обычного резерва,
+     * который снимается только руками.
+     */
+    @Column(name = "from_preorder", nullable = false)
+    private boolean fromPreorder;
+
     protected DealItem() {
     }
 
@@ -99,6 +109,7 @@ public class DealItem {
      */
     void markPreorder() {
         status = DealItemStatus.PREORDER;
+        fromPreorder = true;
     }
 
     /**
@@ -136,6 +147,16 @@ public class DealItem {
 
     public Long getId() {
         return id;
+    }
+
+    public boolean isFromPreorder() {
+        return fromPreorder;
+    }
+
+    /** Предзаказ до прихода либо резерв, в который его превратил приход, и он ещё открыт. */
+    boolean isOpenPreorderBorn() {
+        return status == DealItemStatus.PREORDER
+                || (status == DealItemStatus.RESERVED && fromPreorder);
     }
 
     public Long getPartId() {

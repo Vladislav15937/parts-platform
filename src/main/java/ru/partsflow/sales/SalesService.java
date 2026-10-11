@@ -601,6 +601,72 @@ public class SalesService {
     }
 
     /**
+     * Предзаказ, у которого вышел срок, снимается сам (задача 0260).
+     *
+     * <p>Определение владельца: «предзаказ — запчасть зарезервирована на
+     * установленное количество дней. По прошествии дней запчасть снимается
+     * с резерва автоматически и переходит в исходное состояние». Правило одно
+     * и до прихода, и после: срок — договор с клиентом, приход его не меняет
+     * (ответ владельца 9 октября 2026). Снимается <b>только</b> то, что родилось
+     * предзаказом ({@link DealItem#isOpenPreorderBorn}); обычный резерв остаётся
+     * в «Истек срок» и снимается руками, потому что продавец мог договориться
+     * «если не приедет — снимем».
+     *
+     * <p><b>Идемпотентность — блокировка строки сделки.</b> Две ноды или повтор
+     * задания встают в очередь на {@code FOR UPDATE}, и второй, дождавшись,
+     * перечитывает сделку: позиции уже {@code CANCELLED}, снимать нечего. Резерв
+     * при этом освобождает тот же атомарный {@code UPDATE ... WHERE}, что и при
+     * ручной отмене.
+     *
+     * <p><b>Сделка целиком или только позиции.</b> Если кроме родившихся
+     * предзаказом открытых позиций нет, сделка отменяется тем же путём, что
+     * ручная отмена (оплата уходит на счёт клиента, отметка для Дрома, событие):
+     * она больше ничего не держит. В смешанной снимаются одни позиции предзаказа,
+     * сумма пересчитывается, оплата остаётся на сделке — деньги автоматом не
+     * двигаем. Автора у снятия нет: пишет задание.
+     *
+     * @return {@code true}, если что-то снято
+     */
+    @Transactional
+    public boolean expirePreorder(Long dealId, Instant now) {
+        List<Long> locked = jdbc.queryForList("""
+                SELECT id FROM deal
+                 WHERE id = ? AND status = 'RESERVED' AND reserved_until < ?
+                   FOR UPDATE""", Long.class, dealId, java.sql.Timestamp.from(now));
+        if (locked.isEmpty()) {
+            return false;
+        }
+        Deal deal = requireDeal(dealId);
+        List<DealItem> born = deal.getItems().stream()
+                .filter(DealItem::isOpenPreorderBorn).toList();
+        if (born.isEmpty()) {
+            return false;
+        }
+        boolean othersOpen = deal.getItems().stream().anyMatch(i ->
+                !i.isOpenPreorderBorn()
+                        && i.getStatus() != DealItemStatus.CANCELLED);
+        if (!othersOpen) {
+            cancel(dealId, null, "срок предзаказа истёк");
+            return true;
+        }
+        for (DealItem item : born) {
+            if (item.getStatus() == DealItemStatus.RESERVED) {
+                reservationRepository.release(
+                        item.getPartId(), item.getWarehouseId(), item.getQuantity());
+            } else {
+                partChanges.changed(item.getPartId());
+            }
+            item.cancel();
+        }
+        deal.recalculate();
+        Deal saved = detachable(dealRepository.saveAndFlush(deal));
+        log(saved, "PREORDER_EXPIRED",
+                "Срок предзаказа истёк: снято позиций " + born.size()
+                        + ", остальные позиции сделки на месте", null);
+        return true;
+    }
+
+    /**
      * Отмена оплаченной сделки возвращает деньги на лицевой счёт клиента.
      *
      * <p><b>Пока этого не было, деньги пропадали.</b> Клиент оставил аванс,

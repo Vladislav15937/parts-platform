@@ -91,6 +91,7 @@
     <include file="tenant/072-expected-supply-preorder.sql" relativeToChangelogFile="true"/>
     <include file="tenant/073-part-client-request-id.sql" relativeToChangelogFile="true"/>
     <include file="tenant/074-part-expected-ix.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/075-deal-item-from-preorder.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>
