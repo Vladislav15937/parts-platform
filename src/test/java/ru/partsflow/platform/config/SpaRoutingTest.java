@@ -12,6 +12,7 @@ import ru.partsflow.support.PostgresTestBase;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -51,12 +52,17 @@ class SpaRoutingTest extends PostgresTestBase {
     /**
      * Правило узкое намеренно (см. {@code SpaRoutingConfig}): опечатка в пути
      * не получает двухсотого ответа. Проверено здесь, чтобы запись нового
-     * адреса не превратилась в «отдавать оболочку на всё».
+     * адреса не превратилась в «отдавать оболочку на всё». Невошедшего
+     * с такого адреса уводит на вход ({@code SignInRedirect}), вошедшему
+     * отвечает 404 ({@code NotFoundMappingTest}) — оболочки нет ни тому,
+     * ни другому.
      */
     @Test
     @DisplayName("Незнакомый адрес оболочку не получает")
     void unknownPathIsNotTheShell() throws Exception {
         mvc.perform(get("/login-opechatka"))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isFound())
+                .andExpect(redirectedUrl("/login"))
+                .andExpect(forwardedUrl(null));
     }
 }
