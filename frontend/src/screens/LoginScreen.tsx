@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { FormEvent, MouseEvent } from 'react';
 import { ApiError } from '../api/client';
 import { useSession } from '../auth/SessionProvider';
 import { useMounted } from '../ui/useMounted';
@@ -18,7 +18,12 @@ import { useMounted } from '../ui/useMounted';
  */
 export const COMPANY_KEY = 'partsflow.company';
 
-export function LoginScreen() {
+/**
+ * @param onRegister переключить общую страницу на вкладку регистрации
+ *     (задача 0265). Без него ссылка ведёт на {@code /register} обычной
+ *     загрузкой — так она работает и открытой в новой вкладке.
+ */
+export function LoginScreen({ onRegister }: { onRegister?: () => void } = {}) {
   // Заголовок вкладки возвращается к входу: он следует за разделом, и после
   // потери сессии на экране входа осталось бы «Очередь отправки — PartsFlow».
   useEffect(() => {
@@ -102,7 +107,19 @@ export function LoginScreen() {
         {busy ? 'Проверяем…' : 'Войти'}
       </button>
 
-      <a href="/register">Зарегистрировать компанию</a>
+      <a href="/register" onClick={(e) => follow(e, onRegister)}>Зарегистрировать компанию</a>
     </form>
   );
+}
+
+/**
+ * Ссылка между вкладками общей страницы: обычное нажатие переключает
+ * вкладку без загрузки, а открытие в новой вкладке (с Ctrl, Cmd, Shift
+ * или средней кнопкой) остаётся браузеру — адрес у ссылки настоящий.
+ */
+export function follow(event: MouseEvent<HTMLAnchorElement>, action: (() => void) | undefined): void {
+  if (action === undefined) return;
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  action();
 }

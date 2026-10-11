@@ -25,5 +25,9 @@ public class SpaRoutingConfig implements WebMvcConfigurer {
         // Страница регистрации компании (задача 0184): её открывают по ссылке
         // с сайта, и адрес здесь единственный способ сказать, что показать.
         registry.addViewController("/register").setViewName("forward:/index.html");
+        // Общая страница входа и регистрации (задача 0265): туда приложение
+        // уводит невошедшего с любого своего адреса, и обновивший её человек
+        // обязан получить оболочку, а не белый экран.
+        registry.addViewController("/login").setViewName("forward:/index.html");
     }
 }

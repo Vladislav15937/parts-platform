@@ -16,6 +16,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
+import org.springframework.security.web.util.matcher.AnyRequestMatcher;
 import ru.partsflow.platform.session.LogoutRecorder;
 
 /**
@@ -24,10 +25,11 @@ import ru.partsflow.platform.session.LogoutRecorder;
  * <p>Токены появятся с нативным клиентом; до тех пор сессия проще и не требует
  * ротации. PWA живёт на том же домене, поэтому cookie ей подходит.
  *
- * <p><b>Ответ на неаутентифицированный запрос — 401, а не редирект на форму.</b>
- * Клиент здесь один и тот же для человека и для очереди офлайн-отправки:
- * редирект она разберёт как успех и удалит запись из очереди, потеряв работу
- * приёмщика.
+ * <p><b>Ответ на неаутентифицированный запрос к API — 401, а не редирект
+ * на форму.</b> Клиент здесь один и тот же для человека и для очереди
+ * офлайн-отправки: редирект она разберёт как успех и удалит запись из очереди,
+ * потеряв работу приёмщика. Перенаправляется только навигация браузера
+ * на страницу вне {@code /api} и {@code /actuator} — {@link SignInRedirect}.
  */
 @Configuration
 @EnableWebSecurity
@@ -69,8 +71,14 @@ public class SecurityConfig {
                                 "/api/registration/**"))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 .authenticationManager(authenticationManager)
-                .exceptionHandling(e -> e.authenticationEntryPoint(
-                        new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+                // Программе — 401, человеку на странице — перенаправление на вход
+                // (задача 0265). Почему граница проходит по /api — SignInRedirect.
+                .exceptionHandling(e -> e
+                        .defaultAuthenticationEntryPointFor(SignInRedirect.TO_LOGIN,
+                                SignInRedirect.PAGE_NAVIGATION)
+                        .defaultAuthenticationEntryPointFor(
+                                new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED),
+                                AnyRequestMatcher.INSTANCE))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/login", "/api/auth/csrf").permitAll()
                         // Арендатора создавать некому: его самого ещё нет,
@@ -85,6 +93,9 @@ public class SecurityConfig {
                         // Секрет управляющего контура она не использует и
                         // не обходит: это другой путь, а не другая дверь в тот же.
                         .requestMatchers("/api/registration/**", "/register").permitAll()
+                        // Страница входа (задача 0265): за ней ещё нет никого,
+                        // как и за корнем ниже.
+                        .requestMatchers(HttpMethod.GET, "/login").permitAll()
                         // Отчёты о доставке писем присылает оператор: сессии у
                         // него нет и CSRF-токена тоже. Права даёт секрет в адресе,
                         // см. MailEventController.
