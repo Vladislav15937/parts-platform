@@ -7,11 +7,16 @@ import org.springframework.boot.actuate.endpoint.web.WebEndpointResponse;
 import org.springframework.boot.actuate.endpoint.web.WebEndpointsSupplier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import ru.partsflow.platform.session.SharedSessionStore;
 import ru.partsflow.platform.tenant.CatalogSchemaMigrator;
 import ru.partsflow.platform.tenant.JournalProtection;
 import ru.partsflow.platform.tenant.TenantMigrations;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Готово ли приложение обслуживать людей — машинно, а не по хвосту лога.
@@ -168,7 +173,7 @@ public class ReadinessEndpoint {
     @ReadOperation
     public WebEndpointResponse<Readiness> readiness() {
         List<Check> checks = List.of(database(), catalog(), schemas(), journals(),
-                writes(), metrics());
+                sessions(), writes(), metrics());
         boolean ready = checks.stream().allMatch(Check::ok);
         // Версия — рядом с проверками, но НЕ проверка, и это решение
         // с доводом (задача 0130). Годность сборки от того, назвала ли она
@@ -322,6 +327,98 @@ public class ReadinessEndpoint {
                         .formatted(status.writable(), status.role(), status.schema())
                         + "Включается разделение ролей — ops/create-roles.sh и переменные "
                         + "DB_USER, APP_DDL_*, APP_RUNTIME_ROLE", KNOWN);
+    }
+
+    /**
+     * Может ли рабочая роль вести хранилище сессий — спрошено у базы сейчас,
+     * а не выведено из того, что при старте всё было верно (задача 0105).
+     *
+     * <p><b>Зачем.</b> С задачи 0080 сессия живёт в {@code public.spring_session},
+     * и вход — это запись туда. Отсутствие прав на старте ловится само: уборка
+     * истёкших и первый же вход падают громко. А права, снятые <b>после</b>
+     * подъёма (пересоздали таблицу, сменили роль, кто-то «временно» отобрал),
+     * готовность не замечала: приложение объявляло себя готовым, а войти
+     * не мог никто — и выкладка спокойно переключила бы трафик на такую сборку.
+     * Тот же приём, что у {@code journals}: спрашивается база, а не память
+     * о старте.
+     *
+     * <p><b>Права, а не проба записи.</b> Готовность опрашивают раз в 15 секунд;
+     * настоящая запись сессии на каждый опрос — лишние строки и лишняя уборка.
+     * {@code has_table_privilege} — чтение системного каталога, одна инструкция
+     * на все восемь пар «таблица × право». Чего это не видит, названо: запись,
+     * отбитую не правами, а заморозкой базы, — про неё отвечает {@code writes},
+     * и сессии заморозку переживают намеренно ({@code FreezeTolerantSessions}).
+     *
+     * <p><b>Каждое право спрашивается отдельно.</b> {@code has_table_privilege}
+     * со списком прав через запятую отвечает «да», если есть <i>любое</i>
+     * из них, — то есть роль с одним {@code SELECT} выглядела бы годной.
+     * Нужны все четыре: Spring Session читает сессию, заводит её на входе,
+     * переписывает отметку обращения и удаляет на выходе и при уборке.
+     *
+     * <p><b>Краснеет в бою, а не в разработке.</b> Владелец схем, под которым
+     * приложение работает локально, имеет на свои таблицы все права — ответ
+     * там зелёный; мягкий {@code /actuator/health} этого вопроса не задаёт
+     * вовсе.
+     */
+    private Check sessions() {
+        List<SessionGrant> rows;
+        try {
+            // Имена таблиц — константы хранилища, а не ввод: подставляются
+            // текстом. to_regclass на отсутствующую таблицу даёт NULL,
+            // и строгая has_table_privilege отвечает на него NULL — так «нет
+            // таблицы» отличается от «нет права» без второго запроса.
+            rows = jdbc.query("""
+                    SELECT current_user AS role, t, p,
+                           has_table_privilege(current_user, to_regclass(t), p) AS granted
+                      FROM unnest(ARRAY[%s]) WITH ORDINALITY AS tables (t, tn),
+                           unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE'])
+                                WITH ORDINALITY AS privileges (p, pn)
+                     ORDER BY tn, pn"""
+                            .formatted(SharedSessionStore.TABLES.stream()
+                                    .map(table -> "'" + table + "'")
+                                    .collect(Collectors.joining(", "))),
+                    (rs, i) -> new SessionGrant(rs.getString("role"), rs.getString("t"),
+                            rs.getString("p"), rs.getObject("granted", Boolean.class)));
+        } catch (RuntimeException e) {
+            return new Check("sessions", false,
+                    "Права на хранилище сессий не проверены: " + TenantMigrations.rootMessage(e),
+                    UNKNOWN);
+        }
+
+        List<String> absent = rows.stream().filter(row -> row.granted() == null)
+                .map(SessionGrant::table).distinct().toList();
+        if (!absent.isEmpty()) {
+            return new Check("sessions", false,
+                    "Хранилища сессий нет: %s. Войти не сможет никто — сессию некуда "
+                            .formatted(String.join(", ", absent))
+                            + "записать. Таблицы заводит накат общей схемы при старте "
+                            + "приложения; если не заводит — смотрите лог CatalogMigrations",
+                    KNOWN);
+        }
+
+        Map<String, List<String>> missing = new LinkedHashMap<>();
+        rows.stream().filter(row -> Boolean.FALSE.equals(row.granted()))
+                .forEach(row -> missing.computeIfAbsent(row.table(), t -> new ArrayList<>())
+                        .add(row.privilege()));
+        String role = rows.isEmpty() ? "неизвестна" : rows.get(0).role();
+        if (missing.isEmpty()) {
+            return new Check("sessions", true,
+                    "Хранилище сессий доступно роли %s: %s"
+                            .formatted(role, String.join(", ", SharedSessionStore.TABLES)),
+                    KNOWN);
+        }
+        return new Check("sessions", false,
+                "Роли %s не хватает прав на хранилище сессий: %s. Вход не работает "
+                        .formatted(role, missing.entrySet().stream()
+                                .map(e -> e.getKey() + " — " + String.join(", ", e.getValue()))
+                                .collect(Collectors.joining("; ")))
+                        + "ни у кого: сессию некуда записать. Права на служебные таблицы "
+                        + "ячейки выдаёт накат: " + TenantMigrations.MIGRATE_COMMAND,
+                KNOWN);
+    }
+
+    /** Одна пара «таблица × право»; {@code granted == null} — таблицы нет. */
+    private record SessionGrant(String role, String table, String privilege, Boolean granted) {
     }
 
     /**
