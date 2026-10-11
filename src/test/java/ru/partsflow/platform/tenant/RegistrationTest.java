@@ -69,6 +69,9 @@ class RegistrationTest extends PostgresTestBase {
     @Autowired
     private MeterRegistry metrics;
 
+    @Autowired
+    private RegistrationLimits limits;
+
     @Test
     @DisplayName("Зарегистрированная компания рабочая: владелец входит, наружу не уезжает внутренний номер")
     void registeredCompanyIsUsable() throws Exception {
@@ -146,6 +149,11 @@ class RegistrationTest extends PostgresTestBase {
 
         assertRefused(with(form(uniqueCode(), uniqueEmail()), "ownerPassword", "семь567"),
                 "минимум 8");
+        // Поля — раньше вычислительной проверки: человек с опечаткой в пароле
+        // не должен услышать «проверка устарела» и не должен тратить на неё
+        // место в пределе.
+        assertRefused(with(with(form(uniqueCode(), uniqueEmail()), "ownerPassword", "семь567"),
+                "challenge", "мусор"), "минимум 8");
         assertRefused(with(form(uniqueCode(), uniqueEmail()), "companyCode", "Разборка №1"),
                 "Код компании");
         assertRefused(with(form(uniqueCode(), uniqueEmail()), "companyCode", "a"),
@@ -312,6 +320,8 @@ class RegistrationTest extends PostgresTestBase {
                 .isEqualTo((double) tenantCount());
         assertThat(metrics.get("partsflow.registration.limit").gauge().value())
                 .isEqualTo(200.0);
+        // Предупреждение владельцу — на четырёх пятых потолка: 160 из 200.
+        assertThat(limits.warnAt()).isEqualTo(160);
     }
 
     @Test

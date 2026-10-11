@@ -67,6 +67,9 @@ class InternalIdsNotShownTest {
     private static final List<Allowed> ALLOWED = List.of(
             new Allowed("platform/tenant/ProvisioningLimits.java",
                     "предел частоты и потолок схем — сами числа и есть ответ оператору"),
+            new Allowed("platform/tenant/RegistrationLimits.java",
+                    "предел попыток регистрации с адреса — число, которое человек и спрашивает:"
+                            + " «не больше N в час», а не номер строки базы"),
             new Allowed("platform/tenant/TenantShare.java",
                     "номер экземпляра и их число: это аргументы запуска, а не строки базы"),
             new Allowed("platform/tenant/TenantProvisioning.java",

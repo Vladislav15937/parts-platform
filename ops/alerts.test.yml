@@ -278,3 +278,60 @@ tests:
       - eval_time: 192h
         alertname: ДискКончается
         exp_alerts: []
+
+  # 12. Ячейка заполняется (задача 0184): 160 компаний из 200 — тревога
+  #     обязана прийти, и не раньше выдержки. Потолок здесь рядом рядом
+  #     с числом компаний, как в бою: правило сравнивает два ряда, а не
+  #     держит число у себя.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_registration_tenants{job="partsflow", build="blue"}'
+        values: '160+0x30'
+      - series: 'partsflow_registration_limit{job="partsflow", build="blue"}'
+        values: '200+0x30'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ЯчейкаЗаполняется
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: ЯчейкаЗаполняется
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: '[] в ячейке 160 компаний — регистрация скоро закроется'
+              description: >-
+                Регистрация клиентов закрывается на потолке (APP_REGISTRATION_MAX_TENANTS,
+                по умолчанию 200); считаются все записи реестра, брошенные тоже —
+                они не снимаются. Посмотрите, кто зарегистрировался
+                (public.tenant_registry, колонки code, owner_email, created_at):
+                если это клиенты — поднимайте потолок или заводите следующую
+                ячейку, если мусор — разбирайтесь с адресами в логе
+                «Регистрации: с адреса …».
+
+  # 13. Обратный край: 100 из 200 — спокойная ячейка, и правило молчать
+  #     обязано. Без этого случая порог прошёл бы и перевёрнутым.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_registration_tenants{job="partsflow", build="blue"}'
+        values: '100+0x30'
+      - series: 'partsflow_registration_limit{job="partsflow", build="blue"}'
+        values: '200+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ЯчейкаЗаполняется
+        exp_alerts: []
+
+  # 14. Потолок нуль — регистрацию закрыли нарочно: вечная тревога на
+  #     выключателе будила бы зря. Без условия `limit > 0` эта проверка
+  #     краснеет.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_registration_tenants{job="partsflow", build="blue"}'
+        values: '5+0x30'
+      - series: 'partsflow_registration_limit{job="partsflow", build="blue"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ЯчейкаЗаполняется
+        exp_alerts: []

@@ -62,6 +62,12 @@ class MetricsEndpointTest extends PostgresTestBase {
                         org.hamcrest.Matchers.containsString("partsflow_deadletter_unresolved"),
                         org.hamcrest.Matchers.containsString("partsflow_deadletter_attention"),
                         org.hamcrest.Matchers.containsString(
-                                "partsflow_database_write_frozen"))));
+                                "partsflow_database_write_frozen"),
+                        // Заполненность ячейки (задача 0184): на этих двух рядах
+                        // стоит тревога ЯчейкаЗаполняется. Имя проверяется
+                        // здесь, а не через SimpleMeterRegistry, — по той же
+                        // причине, что у остальных.
+                        org.hamcrest.Matchers.containsString("partsflow_registration_tenants"),
+                        org.hamcrest.Matchers.containsString("partsflow_registration_limit"))));
     }
 }

@@ -1,5 +1,6 @@
 import { SessionProvider, useSession } from './auth/SessionProvider';
 import { LoginScreen } from './screens/LoginScreen';
+import { RegistrationScreen } from './screens/RegistrationScreen';
 import { SharedDealScreen } from './screens/SharedDealScreen';
 import { HomeScreen } from './screens/HomeScreen';
 
@@ -11,9 +12,10 @@ import { HomeScreen } from './screens/HomeScreen';
  * открываться там, где его закрыли. Здесь решается только одно —
  * вошёл человек или нет.
  *
- * <p>Единственный разбор пути ниже — ссылка клиенту на его сделку: у него
- * учётной записи нет и не будет, и адрес тут единственный способ сказать,
- * какую сделку показать.
+ * <p>Разбор пути ниже — для двух экранов без входа. Ссылка клиенту на его
+ * сделку: у него учётной записи нет и не будет, и адрес тут единственный
+ * способ сказать, какую сделку показать. И страница регистрации компании
+ * ({@code /register}): её открывают по ссылке с сайта, и входить там некому.
  */
 export function App() {
   return (
@@ -38,5 +40,13 @@ function Root() {
     return <SharedDealScreen company={shared[1]} token={shared[2]} />;
   }
 
-  return state.status === 'authenticated' ? <HomeScreen /> : <LoginScreen />;
+  if (state.status === 'authenticated') {
+    return <HomeScreen />;
+  }
+  // Регистрация открывается без входа; вошедшему адрес /register ничего
+  // не даёт — он видит свою работу, а не форму для чужой компании.
+  if (window.location.pathname === '/register') {
+    return <RegistrationScreen />;
+  }
+  return <LoginScreen />;
 }

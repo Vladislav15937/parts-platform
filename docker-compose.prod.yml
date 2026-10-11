@@ -141,6 +141,16 @@ x-app: &app
     APP_PROVISIONING_MAX_PER_HOUR: ${APP_PROVISIONING_MAX_PER_HOUR:-20}
     APP_PROVISIONING_MAX_TENANTS: ${APP_PROVISIONING_MAX_TENANTS:-500}
 
+    # Самостоятельная регистрация компании клиентом (задача 0184): частота с
+    # одного адреса, потолок числа компаний в ячейке и сложность вычислительной
+    # проверки перед формой. Заданы ЧИСЛОМ по той же причине, что пределы выше:
+    # отказ регистрации советует поднять APP_REGISTRATION_MAX_TENANTS, и без
+    # этой строки заданное в .env до приложения не доехало бы. Нуль в потолке —
+    # выключатель: форма отвечает «регистрация временно закрыта».
+    APP_REGISTRATION_MAX_PER_HOUR: ${APP_REGISTRATION_MAX_PER_HOUR:-10}
+    APP_REGISTRATION_MAX_TENANTS: ${APP_REGISTRATION_MAX_TENANTS:-200}
+    APP_REGISTRATION_POW_BITS: ${APP_REGISTRATION_POW_BITS:-16}
+
     # Отправка писем (задача 0192). Без APP_MAIL_PROVIDER=unisender письма
     # только пишутся в лог и НЕ уходят — ops/config-guard.sh говорит об этом
     # словами перед подъёмом. Ключ оператора — секрет, в репозиторий не класть.

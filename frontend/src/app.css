@@ -236,6 +236,21 @@ button:disabled {
   background: var(--muted);
 }
 
+/* Ссылка, выглядящая как основная кнопка: «Войти» после регистрации — это
+   переход на другую страницу, а не действие на этой. */
+.button-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 0 1.25rem;
+  font-size: 1.05rem;
+  color: #fff;
+  text-decoration: none;
+  background: var(--accent);
+  border-radius: 8px;
+}
+
 .badge {
   padding: 0.2rem 0.6rem;
   border-radius: 999px;
