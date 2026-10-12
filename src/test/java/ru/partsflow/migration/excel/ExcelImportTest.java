@@ -117,6 +117,28 @@ class ExcelImportTest extends PostgresTestBase {
         assertThat(ExcelWarehouseImporter.number("—")).isNull();
     }
 
+    /**
+     * Узнанная колонка, которую импорт не пишет, сопоставленной не показывается.
+     *
+     * <p>«Состояние», «Марка», «VIN» заголовок узнавал, разбор отдавал их
+     * экрану среди сопоставленных — а импорт их отбрасывал молча. Владелец
+     * видел «сопоставлено» и ждал, что состояние переедет (задача 0272).
+     */
+    @Test
+    @DisplayName("Разбор отдаёт сопоставленным только то, что импорт читает")
+    void previewOffersOnlyImportedFields() throws Exception {
+        byte[] book = workbook(
+                List.of("Наименование", "Кол-во", "Состояние", "Марка", "VIN", "Склад"),
+                List.of(List.of("Фара", "1", "Б/у", "Toyota", "JT111", "Ткацкая")));
+
+        ExcelWarehouseImporter.Preview preview = importer.preview(new ByteArrayInputStream(book));
+
+        assertThat(preview.detected())
+                .as("узнанное, но не читаемое показано сопоставленным")
+                .containsOnlyKeys(Field.NAME, Field.QUANTITY);
+        assertThat(preview.format()).as("обычная таблица принята за перенос с Дрома").isNull();
+    }
+
     @Test
     @DisplayName("Пропущенная ячейка не сдвигает строку")
     void gapsDoNotShiftValues() throws Exception {
