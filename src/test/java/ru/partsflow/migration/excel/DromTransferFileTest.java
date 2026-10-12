@@ -90,7 +90,6 @@ class DromTransferFileTest extends PostgresTestBase {
             Map.entry("Ссылка", "0274"),
             Map.entry("Вид детали", "0278"),
             Map.entry("Раздел", "0278"),
-            Map.entry("Наличие", "0279"),
             Map.entry("Состояние", "0277"),
             Map.entry("Оригинальность", "0277"),
             Map.entry("Производитель", "0277"),
@@ -121,11 +120,19 @@ class DromTransferFileTest extends PostgresTestBase {
                     "SELECT price FROM part WHERE id = ?", BigDecimal.class))
                     .as("цена из файла не доехала")
                     .isEqualByComparingTo(value),
-            "Количество", (t, part, value) -> assertThat(t.column(part,
-                    "SELECT COALESCE(sum(qty), 0) FROM part_stock WHERE part_id = ?",
-                    BigDecimal.class))
-                    .as("остаток не равен количеству из файла")
-                    .isEqualByComparingTo(value),
+            // Пустое количество — одна штука (задача 0279): на карточке Дрома
+            // его нет, и парсер оставляет колонку пустой.
+            "Количество", (t, part, value) -> assertThat(t.stock(part))
+                    .as("остаток не равен количеству из файла (пусто — одна штука)")
+                    .isEqualByComparingTo(value.isBlank() ? "1" : value),
+            "Наличие", (t, part, value) -> {
+                assertThat(value)
+                        .as("в образце позиция не «В наличии» — а заведена")
+                        .isEqualTo(ExcelWarehouseImporter.IN_STOCK);
+                assertThat(t.stock(part))
+                        .as("позиция «В наличии» заведена без остатка")
+                        .isPositive();
+            },
             "Номер", (t, part, value) -> assertThat(t.inTenant(() -> t.jdbc.queryForList("""
                     SELECT raw_number FROM part_oem WHERE part_id = ? AND is_primary""",
                     String.class, part)))
@@ -286,47 +293,69 @@ class DromTransferFileTest extends PostgresTestBase {
                 .isZero();
     }
 
+    /**
+     * Образец грузится как есть — без количества, с «В наличии».
+     *
+     * <p>До задачи 0279 здесь стояла подстановка единицы в «Количество»
+     * и отдельный тест, требовавший, чтобы образец как есть пропускался
+     * целиком («нет количества» у всех пяти строк). Количества на странице
+     * Дрома нет, парсер оставляет колонку пустой — и теперь это одна штука
+     * с пометкой в отчёте, а не пропуск.
+     */
     @Test
-    @DisplayName("Каждая читаемая колонка образца доезжает до позиции")
+    @DisplayName("Каждая читаемая колонка образца доезжает до позиции — образец как есть")
     void everyReadColumnLands() throws Exception {
-        byte[] file = untilTask0279(sample());
+        byte[] file = sample();
         JsonNode preview = preview(file);
 
         JsonNode report = load(file, preview.path("detected"));
         assertThat(report.path("imported").asInt())
                 .as("загружено не всё: %s", report.path("skipped"))
                 .isEqualTo(SAMPLE_ADS.size());
+        assertThat(report.path("quantityDefaulted").asInt())
+                .as("количества в образце нет — отчёт обязан сказать, что заведено по одной штуке")
+                .isEqualTo(SAMPLE_ADS.size());
 
         for (Map<String, String> row : sampleRows(file)) {
-            long part = inTenant(() -> jdbc.queryForObject(
-                    "SELECT max(id) FROM part WHERE title = ?", Long.class,
-                    row.get("Наименование")));
+            long part = partOf(row);
             CHECKS.forEach((title, check) -> check.verify(this, part, row.get(title)));
         }
     }
 
     /**
-     * Образец как есть не загружается — и это записано, а не скрыто.
-     *
-     * <p>Количества на странице Дрома нет, парсер оставляет колонку пустой,
-     * а импорт строку без количества пропускает. Поэтому
-     * {@link #everyReadColumnLands} грузит образец с подставленной единицей.
-     * Задача 0279 научит импорт этому сама: тогда этот тест покраснеет —
-     * удалите его вместе с {@link #untilTask0279}.
+     * Не «В наличии» — пропуск со словами; число в «Количестве» — то число;
+     * ноль — пропуск. Критерий задачи 0279, пункты 2–4, на настоящих строках.
      */
     @Test
-    @DisplayName("До задачи 0279 образец без количества пропускается целиком")
-    void sampleAsIsWaitsForTask0279() throws Exception {
-        byte[] file = sample();
+    @DisplayName("Не «В наличии» пропускается словами, число количества читается, ноль — пропуск")
+    void availabilityAndQuantityRules() throws Exception {
+        byte[] file = edited(sample(), Map.of(
+                1, Map.of("Наличие", "Под заказ"),
+                2, Map.of("Количество", "3"),
+                3, Map.of("Количество", "0")));
+        List<Map<String, String>> rows = sampleRows(file);
+
         JsonNode report = load(file, preview(file).path("detected"));
 
         assertThat(report.path("imported").asInt())
-                .as("импорт научился заводить позицию без количества (задача 0279?) — "
-                        + "уберите этот тест и подстановку untilTask0279")
-                .isZero();
-        assertThat(report.path("skipped").findValuesAsText("reason"))
-                .hasSize(SAMPLE_ADS.size())
-                .containsOnly("нет количества");
+                .as("пропущено: %s", report.path("skipped"))
+                .isEqualTo(3);
+        assertThat(report.path("quantityDefaulted").asInt()).isEqualTo(2);
+        Map<Integer, String> skipped = new HashMap<>();
+        report.path("skipped").forEach(s -> skipped.put(s.path("row").asInt(), s.path("reason").asText()));
+        // Номер строки — как в Excel: заголовок первой строкой, данные со второй.
+        assertThat(skipped)
+                .as("пропуски названы не те или не теми словами")
+                .containsExactlyInAnyOrderEntriesOf(Map.of(
+                        3, "не в наличии: «Под заказ»",
+                        5, "нет количества"));
+
+        assertThat(stock(partOf(rows.get(2))))
+                .as("количество, вписанное клиентом, не прочитано")
+                .isEqualByComparingTo("3");
+        assertThat(stock(partOf(rows.get(0))))
+                .as("пустое количество при «В наличии» не дало одну штуку")
+                .isEqualByComparingTo("1");
     }
 
     // --- образец ---
@@ -338,19 +367,17 @@ class DromTransferFileTest extends PostgresTestBase {
         }
     }
 
-    /** Пустое «Количество» → 1. Единственная правка образца, и она временная. */
-    private static byte[] untilTask0279(byte[] file) throws Exception {
+    /** Образец с подменёнными ячейками: номер строки данных (с нуля) → колонка → значение. */
+    private static byte[] edited(byte[] file, Map<Integer, Map<String, String>> cells)
+            throws Exception {
+        List<String> header = sampleHeader(file);
         try (XSSFWorkbook book = new XSSFWorkbook(new ByteArrayInputStream(file));
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             Sheet sheet = book.getSheetAt(0);
-            int column = sampleHeader(file).indexOf("Количество");
-            for (int r = 1; r <= sheet.getLastRowNum(); r++) {
-                Row row = sheet.getRow(r);
-                Cell cell = row.getCell(column);
-                if (cell == null || new DataFormatter().formatCellValue(cell).isBlank()) {
-                    row.createCell(column).setCellValue("1");
-                }
-            }
+            cells.forEach((dataRow, values) -> values.forEach((title, value) -> {
+                Row row = sheet.getRow(dataRow + 1);
+                row.createCell(header.indexOf(title)).setCellValue(value);
+            }));
             book.write(out);
             return out.toByteArray();
         }
@@ -458,6 +485,19 @@ class DromTransferFileTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 .andReturn();
         return (MockHttpSession) result.getRequest().getSession(false);
+    }
+
+    /** Позиция, заведённая из этой строки, — последняя с таким заголовком. */
+    private long partOf(Map<String, String> row) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT max(id) FROM part WHERE title = ?", Long.class,
+                row.get("Наименование")));
+    }
+
+    private BigDecimal stock(long partId) {
+        return column(partId,
+                "SELECT COALESCE(sum(qty), 0) FROM part_stock WHERE part_id = ?",
+                BigDecimal.class);
     }
 
     private <T> T column(long partId, String sql, Class<T> type) {
