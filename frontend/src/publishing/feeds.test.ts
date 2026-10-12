@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deliveryLine, downloadMark, filterSummary, type DeliveryCode, type Feed } from './feeds';
+import { deliveryLine, downloadMark, filterSummary, type DeliveryCode, type DeliveryStatus, type Feed } from './feeds';
 
 /**
  * Как выгрузка описывает свой отбор в списке.
@@ -128,24 +128,72 @@ describe('когда площадка последний раз забирала
 
 describe('слова итога отправки', () => {
   const CODES: DeliveryCode[] = ['PACKET_NOT_FOUND', 'AUTH_FAILED', 'EMPTY_REQUEST',
-    'TOO_BIG', 'NO_ANSWER', 'OTHER'];
+    'UNKNOWN_REASON', 'HTTP_ERROR', 'UNRECOGNIZED', 'TIMEOUT', 'NO_CONNECTION',
+    'HOST_UNKNOWN', 'CONNECTION_BROKEN', 'TOO_BIG'];
 
-  it('у каждого кода отказа есть слова, и сырого кода Дрома в них нет', () => {
+  const refused = (code: DeliveryCode, extra: Partial<DeliveryStatus> = {}) =>
+    deliveryLine(feed({
+      packetId: '12345',
+      deliveryStatus: { state: 'REFUSED', at: '2026-10-12T07:05:00Z', code, ...extra },
+    }))!;
+
+  it('у каждого кода отказа есть слова, и знакомого кода Дрома в них нет', () => {
     for (const code of CODES) {
-      const line = deliveryLine(feed({
-        packetId: '12345',
-        deliveryStatus: { state: 'REFUSED', at: '2026-10-12T07:05:00Z', code },
-      }));
+      const line = refused(code);
       expect(line, code).not.toBeNull();
-      expect(line!.text, code).not.toMatch(/ERROR_REASON|PACKET_NOT_FOUND|undefined/);
+      expect(line.text, code).not.toMatch(/ERROR_REASON|PACKET_NOT_FOUND|undefined|null/);
     }
   });
 
-  it('красят только отказы с действием', () => {
+  it('у каждого исхода свои слова — общих «не ответил или ошибка» больше нет', () => {
+    // Решение владельца 12.10.2026: реальная причина, а не общие слова. Два
+    // исхода с одинаковым текстом — это снова одна общая фраза на разное.
+    const texts = CODES.map((code) => refused(code, { httpStatus: 502 }).text);
+    expect(new Set(texts).size).toBe(CODES.length);
+    expect(texts.join(' ')).not.toMatch(/не ответил или ответил ошибкой/);
+  });
+
+  it('сбой соединения называет, что случилось', () => {
+    expect(refused('TIMEOUT').text).toMatch(/ответа не дождались/);
+    expect(refused('NO_CONNECTION', { detail: 'Connection refused' }).text)
+      .toMatch(/Не удалось соединиться с Дромом .*: Connection refused/);
+    expect(refused('HOST_UNKNOWN').text).toMatch(/имя площадки не разрешилось/);
+    expect(refused('CONNECTION_BROKEN', { detail: 'Connection reset' }).text)
+      .toMatch(/Связь с Дромом оборвалась .*: Connection reset/);
+  });
+
+  it('ошибка HTTP называет статус, а страницу — её заголовком', () => {
+    const page = refused('HTTP_ERROR',
+      { httpStatus: 502, answerForm: 'PAGE', detail: '502 Bad Gateway' });
+    expect(page.text).toMatch(/HTTP 502/);
+    expect(page.text).toMatch(/веб-страница «502 Bad Gateway»/);
+    expect(page.text).toMatch(/сбой на стороне площадки/);
+    expect(refused('HTTP_ERROR', { httpStatus: 404, answerForm: 'EMPTY' }).text)
+      .toMatch(/Дром отверг запрос — HTTP 404/);
+  });
+
+  it('незнакомый ответ показан как незнакомый — с самим ответом', () => {
+    const odd = refused('UNRECOGNIZED',
+      { httpStatus: 200, answerForm: 'JSON', detail: '{"status":"maintenance"}' });
+    expect(odd.text).toMatch(/незнакомым образом/);
+    expect(odd.text).toContain('«{"status":"maintenance"}»');
+    expect(odd.text).toContain('HTTP 200');
+    expect(refused('UNRECOGNIZED', { httpStatus: 200, answerForm: 'EMPTY', detail: '' }).text)
+      .toContain('пустым ответом');
+  });
+
+  it('незнакомый код отличается от «кода нет» и показан сам', () => {
+    const unknown = refused('UNKNOWN_REASON', { detail: 'ERROR_REASON_PACKET_DISABLED' });
+    expect(unknown.text).toContain('ERROR_REASON_PACKET_DISABLED');
+    expect(unknown.text).toMatch(/кодом, которого мы не знаем/);
+    expect(unknown.text).not.toMatch(/незнакомым образом/);
+  });
+
+  it('красят знакомые отказы с действием и незнакомый код', () => {
     const red = CODES.filter((code) => deliveryLine(feed({
       deliveryStatus: { state: 'REFUSED', at: null, code },
     }))!.error);
-    expect(red).toEqual(['PACKET_NOT_FOUND', 'AUTH_FAILED', 'EMPTY_REQUEST']);
+    expect(red).toEqual(['PACKET_NOT_FOUND', 'AUTH_FAILED', 'EMPTY_REQUEST', 'UNKNOWN_REASON']);
   });
 
   it('у выключенной нет строки', () => {

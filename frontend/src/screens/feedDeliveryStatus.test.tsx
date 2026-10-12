@@ -81,10 +81,32 @@ describe('итог последней отправки на карточке в�
     expect(screen.getByText(/Последняя дельта принята Дромом — \d\d \S+, \d\d:\d\d\./)).toBeTruthy();
   });
 
-  it('сетевой сбой — спокойная строка, красной остаётся только плашка отказа с действием', async () => {
-    await show({ lastError: 'Нет ответа от Дрома: timeout', deliveryStatus: refused('NO_ANSWER') });
-    const line = screen.getByText(/Отправка повторится сама/);
+  it('истёк срок ответа — так и сказано, спокойной строкой', async () => {
+    await show({ lastError: '[TIMEOUT] request timed out', deliveryStatus: refused('TIMEOUT') });
+    const line = screen.getByText(/ответа не дождались/);
     expect(line.className).not.toContain('note--error');
+  });
+
+  it('незнакомый ответ виден на карточке сам, а не только в «Ответ Дрома»', async () => {
+    await show({
+      lastError: '[HTTP 200] {"status":"maintenance"}',
+      deliveryStatus: { ...refused('UNRECOGNIZED'), httpStatus: 200, answerForm: 'JSON',
+                        detail: '{"status":"maintenance"}' },
+    });
+    const line = screen.getByText(/незнакомым образом/);
+    expect(line.closest('details')).toBeNull();
+    expect(line.textContent).toContain('{"status":"maintenance"}');
+  });
+
+  it('незнакомый код — красной строкой с самим кодом', async () => {
+    await show({
+      lastError: '[HTTP 200] ERROR_REASON_PACKET_DISABLED',
+      deliveryStatus: { ...refused('UNKNOWN_REASON'), httpStatus: 200, answerForm: 'TEXT',
+                        detail: 'ERROR_REASON_PACKET_DISABLED' },
+    });
+    const line = screen.getByText(/кодом, которого мы не знаем/);
+    expect(line.className).toContain('note--error');
+    expect(line.textContent).toContain('ERROR_REASON_PACKET_DISABLED');
   });
 
   it('у выключенной выгрузки строки отправки нет', async () => {

@@ -23,6 +23,7 @@ import java.util.function.Supplier;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -88,31 +89,75 @@ class MarketplaceDeliveryStatusTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Принято и отказы: код приезжает перечислением, время — у любой попытки")
+    @DisplayName("Принято и отказы: причина приезжает перечислением, статус и незнакомый ответ — как есть")
     void afterSends() throws Exception {
         feed("Принято", true, "1", "ACTIVE", true, null);
-        feed("Нет прайса", true, "2", "ACTIVE", true, "ERROR_REASON_PACKET_NOT_FOUND");
-        feed("Ключ", true, "3", "ACTIVE", true, "ERROR_REASON_AUTH_FAILED");
-        feed("Пусто", true, "4", "ACTIVE", true, "ERROR_REASON_EMPTY_REQUEST");
-        feed("Большая", true, "5", "ACTIVE", true, "дельта превысила лимит 5242880");
-        feed("Сеть", true, "6", "ACTIVE", true, "Нет ответа от Дрома: timeout");
-        feed("Иное", true, "7", "ACTIVE", true, "ERROR_REASON_SOMETHING_NEW");
-        feed("Пятисотка", true, "8", "ACTIVE", true, "");
+        feed("Нет прайса", true, "2", "ACTIVE", true, "[HTTP 200] ERROR_REASON_PACKET_NOT_FOUND");
+        feed("Ключ", true, "3", "ACTIVE", true, "[HTTP 403] {\"error\":\"ERROR_REASON_AUTH_FAILED\"}");
+        feed("Пусто", true, "4", "ACTIVE", true, "[HTTP 200] ERROR_REASON_EMPTY_REQUEST");
+        feed("Большая", true, "5", "ACTIVE", true, "[TOO_BIG] дельта превысила лимит 5242880 байт");
+        feed("Срок", true, "6", "ACTIVE", true, "[TIMEOUT] request timed out");
+        feed("Имя", true, "7", "ACTIVE", true, "[DNS] UnresolvedAddressException");
+        feed("Незнакомый код", true, "8", "ACTIVE", true, "[HTTP 200] ERROR_REASON_SOMETHING_NEW");
+        feed("Пятисотка", true, "9", "ACTIVE", true,
+                "[HTTP 502] <!DOCTYPE html><html><title>502 Bad Gateway</title></html>");
+        feed("Странный", true, "10", "ACTIVE", true, "[HTTP 200] {\"status\":\"maintenance\"}");
 
         assertState("Принято", "ACCEPTED");
         assertCode("Нет прайса", "PACKET_NOT_FOUND");
         assertCode("Ключ", "AUTH_FAILED");
         assertCode("Пусто", "EMPTY_REQUEST");
         assertCode("Большая", "TOO_BIG");
-        assertCode("Сеть", "NO_ANSWER");
-        // Незнакомый код не теряется и не превращается в «принято».
-        assertCode("Иное", "OTHER");
-        assertCode("Пятисотка", "OTHER");
+        assertCode("Срок", "TIMEOUT");
+        assertCode("Имя", "HOST_UNKNOWN");
+        // Незнакомый код не теряется, не становится «принято» и едет сам.
+        assertCode("Незнакомый код", "UNKNOWN_REASON");
+        assertCode("Пятисотка", "HTTP_ERROR");
+        assertCode("Странный", "UNRECOGNIZED");
         mvc.perform(get("/api/marketplace-accounts").session(login()))
-                .andExpect(jsonPath("$[?(@.title=='Иное')].lastError").value(
+                .andExpect(jsonPath("$[?(@.title=='Незнакомый код')].deliveryStatus.detail").value(
                         org.hamcrest.Matchers.hasItem("ERROR_REASON_SOMETHING_NEW")))
+                .andExpect(jsonPath("$[?(@.title=='Незнакомый код')].lastError").value(
+                        org.hamcrest.Matchers.hasItem("[HTTP 200] ERROR_REASON_SOMETHING_NEW")))
+                .andExpect(jsonPath("$[?(@.title=='Пятисотка')].deliveryStatus.httpStatus").value(
+                        org.hamcrest.Matchers.hasItem(502)))
+                .andExpect(jsonPath("$[?(@.title=='Пятисотка')].deliveryStatus.answerForm").value(
+                        org.hamcrest.Matchers.hasItem("PAGE")))
+                .andExpect(jsonPath("$[?(@.title=='Пятисотка')].deliveryStatus.detail").value(
+                        org.hamcrest.Matchers.hasItem("502 Bad Gateway")))
+                .andExpect(jsonPath("$[?(@.title=='Странный')].deliveryStatus.detail").value(
+                        org.hamcrest.Matchers.hasItem("{\"status\":\"maintenance\"}")))
                 .andExpect(jsonPath("$[?(@.title=='Принято')].deliveryStatus.at").value(
                         org.hamcrest.Matchers.hasItem(org.hamcrest.Matchers.notNullValue())));
+    }
+
+    /**
+     * Заменили номер или ключ — вчерашний отказ про прежние не висит до следующей
+     * попытки: владелец поправил то, что ему велели, и не видит прежнего упрёка.
+     */
+    @Test
+    @DisplayName("Смена номера или ключа забывает прежний отказ; тот же номер — нет")
+    void changedPacketOrKeyForgetsOldRefusal() throws Exception {
+        long packet = feed("Номер", true, "1", "ACTIVE", true, "[HTTP 200] ERROR_REASON_PACKET_NOT_FOUND");
+        long key = feed("Ключ", true, "2", "ACTIVE", true, "[HTTP 200] ERROR_REASON_AUTH_FAILED");
+        long same = feed("Тот же", true, "3", "ACTIVE", true, "[HTTP 200] ERROR_REASON_PACKET_NOT_FOUND");
+        MockHttpSession session = login();
+
+        mvc.perform(put("/api/marketplace-accounts/" + packet + "/packet-id").session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"packetId\":\"777\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(put("/api/marketplace-accounts/" + key + "/credentials").session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"secret\":\"0b8e3c1a-1111-2222-3333-444455556666\"}"))
+                .andExpect(status().is2xxSuccessful());
+        mvc.perform(put("/api/marketplace-accounts/" + same + "/packet-id").session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"packetId\":\"3\"}"))
+                .andExpect(status().isOk());
+
+        assertState("Номер", "WAITING");
+        assertState("Ключ", "WAITING");
+        // Ничего не поменялось — и отказ по-прежнему правда.
+        assertCode("Тот же", "PACKET_NOT_FOUND");
     }
 
     @Test
@@ -127,7 +172,7 @@ class MarketplaceDeliveryStatusTest extends PostgresTestBase {
     @Test
     @DisplayName("Вынули номер после отказа — говорит «номера нет», а не вчерашний отказ")
     void missingPacketBeatsOldRefusal() throws Exception {
-        feed("Вынут", true, null, "ACTIVE", true, "ERROR_REASON_PACKET_NOT_FOUND");
+        feed("Вынут", true, null, "ACTIVE", true, "[HTTP 200] ERROR_REASON_PACKET_NOT_FOUND");
 
         assertState("Вынут", "NO_PACKET");
     }
@@ -145,12 +190,13 @@ class MarketplaceDeliveryStatusTest extends PostgresTestBase {
                         .value(org.hamcrest.Matchers.hasItem(code)));
     }
 
-    private void feed(String title, boolean key, String packetId, String status,
+    private long feed(String title, boolean key, String packetId, String status,
                       boolean sent, String lastError) {
-        inTenant(() -> jdbc.update("""
+        return inTenant(() -> jdbc.queryForObject("""
                 INSERT INTO marketplace_account
                     (marketplace, title, credentials, settings, status, last_sync_at, last_error)
-                VALUES ('DROM', ?, ?, ?::jsonb, ?, CASE WHEN ? THEN now() END, ?)""",
+                VALUES ('DROM', ?, ?, ?::jsonb, ?, CASE WHEN ? THEN now() END, ?)
+                RETURNING id""", Long.class,
                 title,
                 key ? "ключ".getBytes(StandardCharsets.UTF_8) : null,
                 packetId == null ? "{}" : "{\"packetId\": \"" + packetId + "\"}",

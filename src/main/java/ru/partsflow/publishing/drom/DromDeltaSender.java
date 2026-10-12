@@ -165,8 +165,7 @@ public class DromDeltaSender {
             log.warn("Дром: дельта {} для выгрузки {} не влезла в лимит ({} байт) — "
                             + "состояние приедет полным прайсом",
                     label, target.account().id(), body.length);
-            String tooBig = ru.partsflow.publishing.DeliveryStatus.TOO_BIG_PREFIX
-                    + " " + syncClient.maxPacketBytes();
+            String tooBig = DromSyncRecord.tooBig(syncClient.maxPacketBytes());
             logPublication(target.account().id(), 0, offers, false, tooBig);
             // Попытка была, и карточка должна её показать: без этого выгрузка
             // с дельтой-великаном выглядела бы «ещё не отправляли».
@@ -183,7 +182,7 @@ public class DromDeltaSender {
         logPublication(target.account().id(), result.httpStatus(), offers, result.success(),
                 result.success() ? null : result.body());
         markSynced(target.account().id(), partIds, result.success());
-        updateAccountState(target.account().id(), result.success(), failureText(result));
+        updateAccountState(target.account().id(), result.success(), DromSyncRecord.of(result));
 
         if (!result.success()) {
             log.warn("Дром: дельта {} в выгрузку {} не ушла, HTTP {}",
@@ -260,17 +259,10 @@ public class DromDeltaSender {
     }
 
     /**
-     * Текст отказа для {@code last_error}: сетевой сбой (HTTP 0) получает метку,
-     * иначе его не отличить от ответа площадки; пустое тело — пустая строка,
-     * а не {@code null}: {@code null} в этой колонке значит «принято».
+     * Исход пишется по выгрузке: у пяти прайс-листов он свой. Текст отказа
+     * собирает {@link DromSyncRecord} — с меткой статуса или сбоя соединения
+     * и потому никогда не пустой: {@code NULL} в этой колонке значит «принято».
      */
-    private static String failureText(DromSyncClient.Result result) {
-        String body = result.body() == null ? "" : result.body();
-        return result.httpStatus() == 0
-                ? ru.partsflow.publishing.DeliveryStatus.NO_ANSWER_PREFIX + body
-                : body;
-    }
-
     private void updateAccountState(long accountId, boolean success, String failure) {
         jdbc.update("""
                 UPDATE marketplace_account

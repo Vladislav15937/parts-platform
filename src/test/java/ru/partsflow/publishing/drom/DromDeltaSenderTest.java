@@ -155,14 +155,14 @@ class DromDeltaSenderTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Принятая после отказа дельта снимает отказ; сетевой сбой — NO_ANSWER, а не «принято»")
+    @DisplayName("Принятая после отказа дельта снимает отказ; сбой без текста — обрыв связи, а не «принято»")
     void laterOutcomeReplacesEarlier() {
         account("Дром", "111", "ключ-кабинета");
         syncClient.failWith(0, null);
         inTenant(() -> sender.onDealIssued(issuedDeal(part("Фара", true))));
         // Пустое сообщение сбоя не превращается в null, а null в этой колонке — «принято».
         assertThat(statusOf("Дром").state()).isEqualTo(DeliveryStatus.State.REFUSED);
-        assertThat(statusOf("Дром").code()).isEqualTo(DeliveryStatus.Code.NO_ANSWER);
+        assertThat(statusOf("Дром").code()).isEqualTo(DeliveryStatus.Code.CONNECTION_BROKEN);
 
         syncClient.reset();
         inTenant(() -> sender.onDealIssued(issuedDeal(part("Дверь", true))));
