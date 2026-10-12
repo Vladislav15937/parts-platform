@@ -72,7 +72,7 @@ describe('файл переноса с Дрома', () => {
 
   it('описание клиента не выдаётся за примечание', async () => {
     pick();
-    await waitFor(() => expect(screen.getByText(/файл переноса с Дрома/)).toBeTruthy());
+    await waitFor(() => expect(document.querySelector('table.preview')).toBeTruthy());
 
     expect(mapping('Примечание'), 'описание объявления легло во внутренний комментарий')
       .toBe('');
@@ -82,9 +82,9 @@ describe('файл переноса с Дрома', () => {
 
   it('называет каждую колонку, которую загрузка пропустит, и только их', async () => {
     pick();
-    await waitFor(() => expect(screen.getByText(/Не переносятся/)).toBeTruthy());
+    await waitFor(() => expect(document.querySelector('table.preview')).toBeTruthy());
 
-    const skipped = screen.getByText(/Не переносятся/).textContent ?? '';
+    const skipped = screen.queryByText(/Не переносятся/)?.textContent ?? '';
     for (const title of ['Номер объявления Дрома', 'Состояние', 'Описание', 'Фото',
       'Применимость', 'Доставка и оплата']) {
       expect(skipped, `о колонке «${title}» экран промолчал`).toContain(title);
