@@ -2,6 +2,7 @@ package ru.partsflow.publishing.drom;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -9,8 +10,11 @@ import ru.partsflow.platform.crypto.SecretCipher;
 
 import java.io.ByteArrayOutputStream;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Точечное обновление Дрома: изменилась позиция — уехала дельта.
@@ -41,6 +45,23 @@ import java.util.List;
  * и {@code DealIssuedHandler} — сразу по выдаче
  * сделки, не дожидаясь очередного захода релея. Напрямую из кода продаж
  * не вызывается намеренно: сделка не должна знать про площадки.
+ *
+ * <p><b>Отказ, который без человека не пройдёт, очередь не держит</b> (задача
+ * 0269, решение владельца продукта 12 октября 2026 — вариант «б», «не копить
+ * и не спамить Дром повторами»). Прайс-лист, ещё не подключённый поддержкой
+ * к API, или неверный ключ — это состояние дней, а не минуты. Пока такой отказ
+ * снимал заявку со всей пачки, позиции каждые пятнадцать секунд уходили
+ * заново во <b>все</b> выгрузки, включая принявшие, а отказавшая получала
+ * запрос четыре раза в минуту. Теперь она выпадает из отправки так же, как
+ * выгрузка без ключа: отметки снимаются, как только приняли остальные, а её
+ * пробуют снова не раньше {@code app.feeds.refused-retry} — первой же пачкой
+ * после интервала. Накопленное за это время она получит полным забором прайса.
+ *
+ * <p>Интервал не хранится отдельно: его отсчитывают от {@code last_sync_at}
+ * и {@code last_error} самой выгрузки, которые и так пишутся на каждую
+ * попытку. Поэтому он переживает перезапуск и одинаков у двух экземпляров,
+ * а замена ключа или номера сбрасывает его тем же {@code forgetLastOutcome},
+ * что забывает прежний исход на карточке.
  */
 @Service
 public class DromDeltaSender {
@@ -53,19 +74,37 @@ public class DromDeltaSender {
     private final DromWheelGenerator wheelGenerator;
     private final DromSyncClient syncClient;
     private final SecretCipher cipher;
+    private final Duration refusedRetry;
 
     public DromDeltaSender(JdbcTemplate jdbc,
                            DromAccountReader accounts,
                            DromPriceGenerator priceGenerator,
                            DromWheelGenerator wheelGenerator,
                            DromSyncClient syncClient,
-                           SecretCipher cipher) {
+                           SecretCipher cipher,
+                           @Value("${app.feeds.refused-retry:15m}") Duration refusedRetry) {
         this.jdbc = jdbc;
         this.accounts = accounts;
         this.priceGenerator = priceGenerator;
         this.wheelGenerator = wheelGenerator;
         this.syncClient = syncClient;
         this.cipher = cipher;
+        this.refusedRetry = refusedRetry;
+    }
+
+    /** Чем кончилась отправка в одну выгрузку. */
+    private enum Outcome {
+        /** Площадка приняла. */
+        ACCEPTED,
+        /** Ни одна позиция не проходит отбор выгрузки — слать нечего. */
+        NOTHING_TO_SEND,
+        /**
+         * Отказ, который без человека не пройдёт ({@link DromSyncRecord#NEEDS_PERSON}).
+         * Очередь не держит: изменения этой выгрузке не копятся (вариант «б»).
+         */
+        NEEDS_PERSON,
+        /** Временный сбой или дельта сверх лимита: позиции уедут следующим заходом. */
+        FAILED
     }
 
     /**
@@ -112,9 +151,11 @@ public class DromDeltaSender {
      *
      * @param label чем помечен файл дельты — попадает в имя вложения и
      *              оттуда в «Замечания к товарам» кабинета площадки
-     * @return {@code false}, если хотя бы одна выгрузка не приняла дельту;
-     *         тогда отметки об изменении снимать нельзя — позиция должна
-     *         уехать следующим заходом
+     * @return {@code false}, если хотя бы одна выгрузка не приняла дельту
+     *         из-за сбоя, который может пройти сам; тогда отметки об изменении
+     *         снимать нельзя — позиция должна уехать следующим заходом. Отказ,
+     *         которому нужен человек, и выгрузка, ждущая интервала после такого
+     *         отказа, результат не портят — как и выгрузка без ключа
      */
     @Transactional
     public boolean sendParts(List<Long> partIds, String label) {
@@ -129,14 +170,45 @@ public class DromDeltaSender {
             return true;
         }
 
+        Set<Long> resting = restingAfterRefusal();
         boolean allSent = true;
         for (Ready target : targets) {
-            allSent &= sendToAccount(target, partIds, label);
+            if (resting.contains(target.account().id())) {
+                // Отказ «нужен человек» был меньше интервала назад: не стучимся.
+                // Обработчик выдачи сделки идёт сюда же и мимо интервала не шлёт.
+                log.debug("Дром: выгрузка {} ждёт интервала после отказа — дельту не шлём",
+                        target.account().id());
+                continue;
+            }
+            allSent &= sendToAccount(target, partIds, label) != Outcome.FAILED;
         }
         return allSent;
     }
 
-    private boolean sendToAccount(Ready target, List<Long> partIds, String label) {
+    /**
+     * Выгрузки, отказавшие «нужен человек» меньше интервала назад.
+     *
+     * <p>Часы — базы ({@code now()}), как и у {@code last_sync_at}: сравнивать
+     * время записи с часами приложения значило бы сдвинуть интервал на их
+     * расхождение. Решает {@link DromSyncRecord#needsPerson} по тексту отказа,
+     * то есть тем же разбором, что и карточка.
+     */
+    private Set<Long> restingAfterRefusal() {
+        Set<Long> resting = new HashSet<>();
+        jdbc.query("""
+                SELECT id, last_error FROM marketplace_account
+                 WHERE last_error IS NOT NULL
+                   AND last_sync_at > now() - ?::interval""",
+                rs -> {
+                    if (DromSyncRecord.needsPerson(rs.getString("last_error"))) {
+                        resting.add(rs.getLong("id"));
+                    }
+                },
+                refusedRetry.toSeconds() + " seconds");
+        return resting;
+    }
+
+    private Outcome sendToAccount(Ready target, List<Long> partIds, String label) {
         ByteArrayOutputStream delta = new ByteArrayOutputStream();
         // Выгрузка колёс собирается своим генератором: у шины свои поля,
         // и дельта обязана быть в том же формате, что и полный прайс —
@@ -155,7 +227,7 @@ public class DromDeltaSender {
             // Обычный случай: пять прайс-листов по ценовым диапазонам, деталь
             // попадает в один. И сюда же попадает фара, отправленная
             // в колёсную выгрузку, и шина — в выгрузку запчастей.
-            return true;
+            return Outcome.NOTHING_TO_SEND;
         }
 
         byte[] body = delta.toByteArray();
@@ -170,7 +242,7 @@ public class DromDeltaSender {
             // Попытка была, и карточка должна её показать: без этого выгрузка
             // с дельтой-великаном выглядела бы «ещё не отправляли».
             updateAccountState(target.account().id(), false, tooBig);
-            return false;
+            return Outcome.FAILED;
         }
 
         DromSyncClient.Result result = syncClient.sync(
@@ -182,13 +254,21 @@ public class DromDeltaSender {
         logPublication(target.account().id(), result.httpStatus(), offers, result.success(),
                 result.success() ? null : result.body());
         markSynced(target.account().id(), partIds, result.success());
-        updateAccountState(target.account().id(), result.success(), DromSyncRecord.of(result));
+        String failure = DromSyncRecord.of(result);
+        updateAccountState(target.account().id(), result.success(), failure);
 
-        if (!result.success()) {
-            log.warn("Дром: дельта {} в выгрузку {} не ушла, HTTP {}",
-                    label, target.account().id(), result.httpStatus());
+        if (result.success()) {
+            return Outcome.ACCEPTED;
         }
-        return result.success();
+        if (DromSyncRecord.needsPerson(failure)) {
+            log.warn("Дром: выгрузка {} отказала так, что без человека не пройдёт (HTTP {}) — "
+                            + "следующая проба не раньше чем через {}",
+                    target.account().id(), result.httpStatus(), refusedRetry);
+            return Outcome.NEEDS_PERSON;
+        }
+        log.warn("Дром: дельта {} в выгрузку {} не ушла, HTTP {}",
+                label, target.account().id(), result.httpStatus());
+        return Outcome.FAILED;
     }
 
     /**

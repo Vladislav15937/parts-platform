@@ -1,5 +1,7 @@
 package ru.partsflow.publishing.drom;
 
+import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -56,6 +58,39 @@ public final class DromSyncRecord {
     /** Текст отказа, когда дельта не влезла в лимит и не отправлялась. */
     static String tooBig(int limitBytes) {
         return "[TOO_BIG] дельта превысила лимит " + limitBytes + " байт";
+    }
+
+    /**
+     * Коды отказа, которые без действия человека не пройдут (задача 0269):
+     * прайс-лист не подключён к API, ключ не принят, номера или ключа нет.
+     * Остальное — пятисотка, тишина, обрыв, незнакомый ответ — может пройти
+     * само и повторяется на следующем заходе релея, как раньше.
+     */
+    static final Set<String> NEEDS_PERSON = Set.of(
+            "ERROR_REASON_PACKET_NOT_FOUND",
+            "ERROR_REASON_AUTH_FAILED",
+            "ERROR_REASON_EMPTY_REQUEST");
+
+    /**
+     * Записан ли в {@code last_error} отказ, который без человека не пройдёт.
+     *
+     * <p>Тот же разбор, что у карточки ({@code DeliveryStatus.refused}): ответ
+     * площадки с <b>ровно одним</b> кодом из {@link #NEEDS_PERSON}. Знакомый
+     * код вперемешку с другим карточка называет незнакомым — значит и здесь
+     * это не «нужен человек», а повод повторить: разойдись они, карточка
+     * говорила бы «Дром ответил непонятно», а отправка молчала бы интервал.
+     * Сбой соединения и дельта сверх лимита — не ответ площадки вовсе.
+     */
+    static boolean needsPerson(String lastError) {
+        if (lastError == null) {
+            return false;
+        }
+        Reading reading = read(lastError);
+        if (reading.kind() != Kind.HTTP && reading.kind() != Kind.UNTAGGED) {
+            return false;
+        }
+        List<String> codes = DromAnswer.parse(reading.text()).codes();
+        return codes.size() == 1 && NEEDS_PERSON.contains(codes.get(0));
     }
 
     public static Reading read(String lastError) {

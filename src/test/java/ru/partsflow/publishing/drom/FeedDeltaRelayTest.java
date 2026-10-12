@@ -4,6 +4,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -31,7 +33,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>Свой арендатор: очередь изменений общая на схему, и соседний тест,
  * трогающий склад, ломал бы утверждения про размер пачки.
  */
-@SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
+@SpringBootTest(properties = {"spring.jpa.hibernate.ddl-auto=none",
+        "app.crypto.key=" + DromDeltaSenderTest.CRYPTO_KEY})
 @Import(DromDeltaSenderTest.StubSyncConfig.class)
 class FeedDeltaRelayTest extends PostgresTestBase {
 
@@ -63,6 +66,9 @@ class FeedDeltaRelayTest extends PostgresTestBase {
 
     @Autowired
     private DromDeltaSenderTest.StubSyncClient syncClient;
+
+    @Autowired
+    private ru.partsflow.publishing.MarketplaceAccountService accounts;
 
     private Long warehouse;
 
@@ -191,13 +197,21 @@ class FeedDeltaRelayTest extends PostgresTestBase {
                 .isZero();
     }
 
+    /**
+     * Временный сбой — повтор на следующем же заходе (задача 0269, п. 3 и 5).
+     *
+     * <p>До 0269 этот тест отказывал {@code ERROR_REASON_AUTH_FAILED} — отказом,
+     * который без человека не пройдёт. Теперь такой отказ очередь не держит
+     * (тесты ниже), и «уедет следующим заходом» верно только для сбоя, который
+     * может пройти сам: пятисотка прокси, обрыв, тишина.
+     */
     @Test
-    @DisplayName("Отказ площадки оставляет позицию в очереди")
+    @DisplayName("Временный сбой площадки оставляет позицию в очереди и повторяется следующим заходом")
     void failureKeepsThePartQueued() {
         account("12345", null, null);
         Long partId = part("Бампер", "5000");
         drainQueue();
-        syncClient.failWith(403, "ERROR_REASON_AUTH_FAILED");
+        syncClient.failWith(502, "<html><title>502 Bad Gateway</title></html>");
 
         inTenant(() -> {
             jdbc.update("UPDATE part SET price = 9000 WHERE id = ?", partId);
@@ -210,6 +224,108 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         // иначе позиция ждала бы истечения срока из-за мгновенного отказа.
         assertThat(queueSize()).isEqualTo(1);
         assertThat(claimedCount()).isZero();
+
+        relay.relayFor(TENANT);
+        assertThat(syncClient.calls())
+                .as("временный сбой обязан повторяться на следующем заходе, а не ждать интервала")
+                .hasSize(2);
+
+        syncClient.failWith(0, null);
+        relay.relayFor(TENANT);
+        assertThat(syncClient.calls()).as("обрыв связи — тоже временный сбой").hasSize(3);
+        assertThat(queueSize()).isEqualTo(1);
+    }
+
+    /**
+     * Отказ, который без человека не пройдёт, не тащит за собой исправные
+     * выгрузки и не стучится в Дром каждые пятнадцать секунд (задача 0269,
+     * ответ владельца — вариант «б», не копить).
+     *
+     * <p>Воспроизведение до правки: принимающая получала дельту на каждом
+     * проходе (три из трёх), отказывающая — тоже, и очередь не пустела.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"ERROR_REASON_PACKET_NOT_FOUND", "ERROR_REASON_AUTH_FAILED",
+            "ERROR_REASON_EMPTY_REQUEST"})
+    @DisplayName("Отказ «нужен человек» по одной выгрузке: исправная получает дельту один раз, отказавшая — одну пробу за интервал")
+    void refusalNeedingAPersonDoesNotDragHealthyFeeds(String code) {
+        account("11111", null, null);
+        Long refusing = account("22222", null, null);
+        Long first = part("Радиатор", "5000");
+        Long second = part("Капот", "5000");
+        Long third = part("Крыло", "5000");
+        drainQueue();
+        syncClient.failFor("22222", 200, code);
+
+        change(first);
+        relay.relayFor(TENANT);
+        relay.relayFor(TENANT);
+        relay.relayFor(TENANT);
+
+        assertThat(callsTo("11111"))
+                .as("исправная выгрузка получила одно изменение по разу на каждый проход")
+                .isEqualTo(1);
+        assertThat(callsTo("22222")).as("отказавшая пробуется не чаще раза за интервал").isEqualTo(1);
+        assertThat(queueSize()).as("отказ «нужен человек» не держит очередь").isZero();
+        assertThat(logRows(refusing)).isEqualTo(1);
+
+        // Новое изменение в пределах интервала: исправная получает его,
+        // отказавшая — нет, и журнал публикаций по ней не растёт.
+        change(second);
+        relay.relayFor(TENANT);
+        relay.relayFor(TENANT);
+        relay.relayFor(TENANT);
+        assertThat(callsTo("11111")).isEqualTo(2);
+        assertThat(callsTo("22222")).as("проба раньше интервала").isEqualTo(1);
+        assertThat(logRows(refusing)).isEqualTo(1);
+
+        // Интервал прошёл — первое же изменение уходит пробой.
+        inTenant(() -> jdbc.update("""
+                UPDATE marketplace_account SET last_sync_at = now() - interval '16 minutes'
+                 WHERE id = ?""", refusing));
+        change(third);
+        relay.relayFor(TENANT);
+        relay.relayFor(TENANT);
+        assertThat(callsTo("22222")).as("по прошествии интервала пробы не было").isEqualTo(2);
+        assertThat(callsTo("11111")).isEqualTo(3);
+        assertThat(logRows(refusing)).isEqualTo(2);
+    }
+
+    /**
+     * Исправленный ключ или номер владелец проверяет сразу, а не через
+     * интервал (задача 0269, п. 2): иначе он поправил то, что велела карточка,
+     * и четверть часа видит, что «не сработало».
+     */
+    @Test
+    @DisplayName("Новый ключ или номер прайс-листа пробуется на ближайшем проходе, не дожидаясь интервала")
+    void newKeyOrPacketIsTriedAtOnce() {
+        account("11111", null, null);
+        Long refusing = account("22222", null, null);
+        Long partId = part("Дверь", "5000");
+        drainQueue();
+        syncClient.failFor("22222", 200, "ERROR_REASON_AUTH_FAILED");
+
+        change(partId);
+        relay.relayFor(TENANT);
+        assertThat(callsTo("22222")).isEqualTo(1);
+
+        inTenant(() -> {
+            accounts.setCredentials(refusing, "новый-ключ-кабинета");
+            return null;
+        });
+        change(partId);
+        relay.relayFor(TENANT);
+        assertThat(callsTo("22222"))
+                .as("после замены ключа выгрузка ждёт интервала, а не пробуется сразу")
+                .isEqualTo(2);
+
+        // Ключ тот же отказ — снова интервал; теперь номер.
+        inTenant(() -> accounts.setPacketId(refusing, "33333"));
+        change(partId);
+        relay.relayFor(TENANT);
+        assertThat(callsTo("33333"))
+                .as("после замены номера выгрузка ждёт интервала, а не пробуется сразу")
+                .isEqualTo(1);
     }
 
     @Test
@@ -336,6 +452,23 @@ class FeedDeltaRelayTest extends PostgresTestBase {
     }
 
     // ---------- фикстуры ----------
+
+    private void change(Long partId) {
+        inTenant(() -> {
+            jdbc.update("UPDATE part SET price = price + 1 WHERE id = ?", partId);
+            partChanges.changed(partId);
+            return null;
+        });
+    }
+
+    private long callsTo(String packetId) {
+        return syncClient.calls().stream().filter(c -> packetId.equals(c.packetId())).count();
+    }
+
+    private int logRows(Long accountId) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM publication_log WHERE account_id = ?", Integer.class, accountId));
+    }
 
     /** Выгрузка шин и дисков: у неё свой формат и свой генератор. */
     private Long wheelAccount(String packetId) {
