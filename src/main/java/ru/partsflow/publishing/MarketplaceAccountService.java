@@ -127,7 +127,8 @@ public class MarketplaceAccountService {
                         // читает в адресе прайс-листа и должен видеть, что
                         // записано, иначе поле нечем проверить.
                         rs.getString("packet_id"),
-                        rs.getString("last_error"),
+                        DeliveryStatus.shownAnswer(rs.getString("marketplace"),
+                                rs.getString("last_error")),
                         DeliveryStatus.of(rs.getString("marketplace"), rs.getString("status"),
                                 rs.getBoolean("has_credentials"), rs.getString("packet_id"),
                                 instant(rs.getObject("last_sync_at",

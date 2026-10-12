@@ -124,6 +124,24 @@ public record DeliveryStatus(State state, Instant at, Code code,
         return refused(lastSyncAt, lastError);
     }
 
+    /**
+     * Что отдать наружу как «Ответ Дрома» — одна точка на все поверхности.
+     *
+     * <p>Метка {@code [HTTP 502]}, {@code [TIMEOUT]} — внутренняя запись
+     * {@code DromSyncRecord}, а не слова площадки: человеку отдаётся текст
+     * за меткой. У {@code [TOO_BIG]} ответа нет вовсе — запрос не уходил,
+     * и «Ответ Дрома» с нашей фразой был бы неправдой, поэтому {@code null}.
+     * Разбор PR 399: метка уезжала в {@code <details>} целиком. У Авито меток
+     * нет — текст как есть.
+     */
+    public static String shownAnswer(String marketplace, String lastError) {
+        if (lastError == null || !"DROM".equals(marketplace)) {
+            return lastError;
+        }
+        DromSyncRecord.Reading reading = DromSyncRecord.read(lastError);
+        return reading.kind() == DromSyncRecord.Kind.TOO_BIG ? null : reading.text();
+    }
+
     /** Отказ по тексту {@code last_error}: метка нашей записи, затем ответ по виду. */
     static DeliveryStatus refused(Instant at, String lastError) {
         DromSyncRecord.Reading reading = DromSyncRecord.read(lastError);

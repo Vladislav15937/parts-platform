@@ -82,25 +82,41 @@ describe('итог последней отправки на карточке в�
   });
 
   it('истёк срок ответа — так и сказано, спокойной строкой', async () => {
-    await show({ lastError: '[TIMEOUT] request timed out', deliveryStatus: refused('TIMEOUT') });
+    // lastError — как его отдаёт сервер: без внутренней метки ([TIMEOUT] и т. п.),
+    // её снимает DeliveryStatus.shownAnswer (MarketplaceDeliveryStatusTest.afterSends).
+    await show({ lastError: 'request timed out', deliveryStatus: refused('TIMEOUT') });
     const line = screen.getByText(/ответа не дождались/);
     expect(line.className).not.toContain('note--error');
+    expect(document.querySelector('details')?.textContent).toBe('Ответ Дромаrequest timed out');
   });
 
   it('незнакомый ответ виден на карточке сам, а не только в «Ответ Дрома»', async () => {
     await show({
-      lastError: '[HTTP 200] {"status":"maintenance"}',
+      lastError: '{"status":"maintenance"}',
       deliveryStatus: { ...refused('UNRECOGNIZED'), httpStatus: 200, answerForm: 'JSON',
                         detail: '{"status":"maintenance"}' },
     });
     const line = screen.getByText(/незнакомым образом/);
     expect(line.closest('details')).toBeNull();
     expect(line.textContent).toContain('{"status":"maintenance"}');
+    expect(document.querySelector('details')?.textContent)
+      .toBe('Ответ Дрома{"status":"maintenance"}');
+  });
+
+  it('старая запись без статуса не выдаёт себя за ответ Дрома', async () => {
+    await show({
+      lastError: 'Connection refused',
+      deliveryStatus: { ...refused('UNRECOGNIZED'), httpStatus: null, answerForm: 'TEXT',
+                        detail: 'Connection refused' },
+    });
+    const line = screen.getByText(/Последняя отправка на Дром не прошла/);
+    expect(line.textContent).toContain('Connection refused');
+    expect(screen.queryByText(/Дром ответил/)).toBeNull();
   });
 
   it('незнакомый код — красной строкой с самим кодом', async () => {
     await show({
-      lastError: '[HTTP 200] ERROR_REASON_PACKET_DISABLED',
+      lastError: 'ERROR_REASON_PACKET_DISABLED',
       deliveryStatus: { ...refused('UNKNOWN_REASON'), httpStatus: 200, answerForm: 'TEXT',
                         detail: 'ERROR_REASON_PACKET_DISABLED' },
     });

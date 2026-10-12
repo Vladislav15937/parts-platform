@@ -121,8 +121,20 @@ class MarketplaceDeliveryStatusTest extends PostgresTestBase {
         mvc.perform(get("/api/marketplace-accounts").session(login()))
                 .andExpect(jsonPath("$[?(@.title=='Незнакомый код')].deliveryStatus.detail").value(
                         org.hamcrest.Matchers.hasItem("ERROR_REASON_SOMETHING_NEW")))
+                // Метка — наша внутренняя запись: наружу уходит только текст площадки.
                 .andExpect(jsonPath("$[?(@.title=='Незнакомый код')].lastError").value(
-                        org.hamcrest.Matchers.hasItem("[HTTP 200] ERROR_REASON_SOMETHING_NEW")))
+                        org.hamcrest.Matchers.hasItem("ERROR_REASON_SOMETHING_NEW")))
+                .andExpect(jsonPath("$[?(@.title=='Пятисотка')].lastError").value(
+                        org.hamcrest.Matchers.hasItem(
+                                "<!DOCTYPE html><html><title>502 Bad Gateway</title></html>")))
+                .andExpect(jsonPath("$[?(@.title=='Срок')].lastError").value(
+                        org.hamcrest.Matchers.hasItem("request timed out")))
+                // Запрос сверх лимита не уходил — «Ответа Дрома» у него нет.
+                .andExpect(jsonPath("$[?(@.title=='Большая')].lastError").value(
+                        org.hamcrest.Matchers.hasItem(org.hamcrest.Matchers.nullValue())))
+                .andExpect(jsonPath("$[*].lastError").value(org.hamcrest.Matchers.everyItem(
+                        org.hamcrest.Matchers.anyOf(org.hamcrest.Matchers.nullValue(),
+                                org.hamcrest.Matchers.not(org.hamcrest.Matchers.startsWith("["))))))
                 .andExpect(jsonPath("$[?(@.title=='Пятисотка')].deliveryStatus.httpStatus").value(
                         org.hamcrest.Matchers.hasItem(502)))
                 .andExpect(jsonPath("$[?(@.title=='Пятисотка')].deliveryStatus.answerForm").value(
