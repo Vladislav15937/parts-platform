@@ -26,29 +26,45 @@ import java.util.Map;
  */
 public final class ColumnMapping {
 
-    /** Что мы умеем распознавать. Остальные колонки импорт не трогает. */
+    /**
+     * Что мы умеем распознавать. Остальные колонки импорт не трогает.
+     *
+     * <p><b>Распознать — не значит прочитать.</b> Шесть полей из двенадцати
+     * ({@code imported = false}) заголовок узнаёт, а {@code ExcelWarehouseImporter}
+     * их не пишет никуда. До задачи 0272 разбор отдавал их экрану среди
+     * сопоставленных — то есть обещал перенос того, что молча отбрасывалось.
+     * Теперь наружу ({@link #importedFields()}) уходят только читаемые;
+     * научили импорт новому полю — переставьте флаг, иначе экран его не увидит.
+     */
     public enum Field {
-        NAME("наименование", "название", "товар", "запчасть", "деталь", "номенклатура"),
-        PRICE("цена", "стоимость", "цена продажи", "розница", "цена, руб", "цена руб"),
-        QUANTITY("кол-во", "количество", "остаток", "шт", "штук", "кол"),
-        CELL("ячейка", "место", "полка", "место хранения", "адрес", "стеллаж"),
-        WAREHOUSE("склад", "склад хранения"),
-        BRAND("марка", "производитель авто", "бренд авто", "марка авто"),
-        MODEL("модель", "модель авто"),
-        YEAR("год", "год выпуска", "г.в.", "гв"),
-        VIN("vin", "вин", "vin-код", "вин-код"),
-        OEM("оем", "oem", "артикул", "номер детали", "каталожный номер", "номер"),
-        CONDITION("состояние", "качество"),
-        NOTE("примечание", "комментарий", "описание", "заметка");
+        NAME(true, "наименование", "название", "товар", "запчасть", "деталь", "номенклатура"),
+        PRICE(true, "цена", "стоимость", "цена продажи", "розница", "цена, руб", "цена руб"),
+        QUANTITY(true, "кол-во", "количество", "остаток", "шт", "штук", "кол"),
+        CELL(true, "ячейка", "место", "полка", "место хранения", "адрес", "стеллаж"),
+        WAREHOUSE(false, "склад", "склад хранения"),
+        BRAND(false, "марка", "производитель авто", "бренд авто", "марка авто"),
+        MODEL(false, "модель", "модель авто"),
+        YEAR(false, "год", "год выпуска", "г.в.", "гв"),
+        VIN(false, "vin", "вин", "vin-код", "вин-код"),
+        OEM(true, "оем", "oem", "артикул", "номер детали", "каталожный номер", "номер"),
+        CONDITION(false, "состояние", "качество"),
+        NOTE(true, "примечание", "комментарий", "описание", "заметка");
 
+        private final boolean imported;
         private final List<String> synonyms;
 
-        Field(String... synonyms) {
+        Field(boolean imported, String... synonyms) {
+            this.imported = imported;
             this.synonyms = List.of(synonyms);
         }
 
         public List<String> synonyms() {
             return synonyms;
+        }
+
+        /** Пишет ли импорт это поле куда-нибудь. */
+        public boolean imported() {
+            return imported;
         }
     }
 
@@ -68,6 +84,11 @@ public final class ColumnMapping {
      * ищется точное равенство по всем колонкам, и только потом — вхождение.
      */
     public static ColumnMapping detect(List<String> header) {
+        if (DromTransferFile.recognizes(header)) {
+            // Файл переноса с Дрома сопоставляется договором, а не догадкой:
+            // см. DromTransferFile, почему синонимы тут вредны.
+            return new ColumnMapping(DromTransferFile.fields(header), List.copyOf(header));
+        }
         Map<Field, Integer> found = new EnumMap<>(Field.class);
 
         for (Field field : Field.values()) {
@@ -139,6 +160,27 @@ public final class ColumnMapping {
 
     public Map<Field, Integer> fields() {
         return Map.copyOf(byField);
+    }
+
+    /**
+     * Сопоставленное из того, что импорт читает, — то, что видит человек.
+     *
+     * <p>Узнанная, но не читаемая колонка сюда не попадает: на экране она
+     * должна стоять «не переносится», а не «сопоставлено».
+     */
+    public Map<Field, Integer> importedFields() {
+        Map<Field, Integer> imported = new EnumMap<>(Field.class);
+        byField.forEach((field, index) -> {
+            if (field.imported()) {
+                imported.put(field, index);
+            }
+        });
+        return imported;
+    }
+
+    /** Узнан ли файл переноса с Дрома — тогда сопоставление взято из договора. */
+    public boolean isDromTransfer() {
+        return DromTransferFile.recognizes(header);
     }
 
     /**

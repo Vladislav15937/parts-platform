@@ -89,7 +89,8 @@ public class ExcelWarehouseImporter {
             throw new IllegalArgumentException("В файле нет ни одной строки");
         }
         ColumnMapping mapping = ColumnMapping.detect(header);
-        return new Preview(header, mapping.fields(), mapping.missingRequired(), rows);
+        return new Preview(header, mapping.importedFields(), mapping.missingRequired(), rows,
+                mapping.isDromTransfer() ? Preview.DROM_TRANSFER : null);
     }
 
     /**
@@ -349,9 +350,19 @@ public class ExcelWarehouseImporter {
                        String cell, String oem, String note) {
     }
 
-    /** Что распознали в файле. Показывается человеку до записи. */
+    /**
+     * Что распознали в файле. Показывается человеку до записи.
+     *
+     * @param detected только поля, которые импорт читает: узнанная, но
+     *                 не читаемая колонка показывается «не переносится»
+     * @param format   {@link #DROM_TRANSFER}, если это файл переноса с Дрома
+     *                 (сопоставлен договором, а не догадкой); иначе {@code null}
+     */
     public record Preview(List<String> header, Map<Field, Integer> detected,
-                          List<Field> missingRequired, List<List<String>> rows) {
+                          List<Field> missingRequired, List<List<String>> rows,
+                          String format) {
+
+        public static final String DROM_TRANSFER = "DROM_TRANSFER";
     }
 
     /**
