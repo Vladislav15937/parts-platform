@@ -35,7 +35,7 @@ const ROW = [
 
 const PREVIEW = {
   header: HEADER,
-  detected: { NAME: 2, PRICE: 5, QUANTITY: 6, OEM: 11 },
+  detected: { NAME: 2, PRICE: 5, QUANTITY: 6, AVAILABILITY: 7, OEM: 11 },
   missingRequired: [],
   rows: [ROW],
   format: 'DROM_TRANSFER',
@@ -67,7 +67,17 @@ describe('файл переноса с Дрома', () => {
     expect(mapping('Цена')).toBe('5');
     expect(mapping('Количество')).toBe('6');
     expect(mapping('Номер детали')).toBe('11');
+    expect(mapping('Наличие')).toBe('7');
     expect(screen.queryByText(/Не сопоставлено:/)).toBeNull();
+  });
+
+  it('говорит до загрузки, что пустое количество станет одной штукой (задача 0279)', async () => {
+    pick();
+    await waitFor(() => expect(document.querySelector('table.preview')).toBeTruthy());
+
+    expect(screen.getByText(/количество пустое — такие позиции заведутся по 1 шт\./))
+      .toBeTruthy();
+    expect(screen.getByText(/не «В наличии», загрузка пропустит/)).toBeTruthy();
   });
 
   it('описание клиента не выдаётся за примечание', async () => {
@@ -89,11 +99,11 @@ describe('файл переноса с Дрома', () => {
       'Применимость', 'Доставка и оплата']) {
       expect(skipped, `о колонке «${title}» экран промолчал`).toContain(title);
     }
-    for (const title of ['Наименование', 'Цена', 'Количество']) {
+    for (const title of ['Наименование', 'Цена', 'Количество', 'Наличие']) {
       expect(skipped, `читаемая «${title}» названа непереносимой`).not.toContain(`${title},`);
     }
-    // Ровно 18 из 22: четыре колонки договора импорт читает сегодня.
-    expect((skipped.split(':')[1] ?? '').split(',').length).toBe(18);
+    // Ровно 17 из 22: пять колонок договора импорт читает сегодня.
+    expect((skipped.split(':')[1] ?? '').split(',').length).toBe(17);
     expect(columnHead('Наименование')).toContain('→ Наименование');
   });
 

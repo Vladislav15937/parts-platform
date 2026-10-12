@@ -14,14 +14,23 @@ import { request, upload } from '../api/client';
  * и замечают это на первой продаже.
  */
 
-/** Поля, которые импорт умеет распознавать. Имена совпадают с серверными. */
+/**
+ * Поля, которые импорт умеет распознавать. Имена совпадают с серверными.
+ *
+ * <p>Количество необязательно с задачи 0279: на карточке Дрома его нет вовсе,
+ * и без колонки каждая позиция заводится по одной штуке — экран говорит
+ * об этом до загрузки (`quantityNote`). «Наличие» — поле только файла
+ * переноса с Дрома (`dromOnly`): правило «В наличии» дословно дромовское,
+ * и предлагать его к обычной таблице значит дать пропустить весь склад.
+ */
 export const FIELDS = [
-  { key: 'NAME', label: 'Наименование', required: true },
-  { key: 'QUANTITY', label: 'Количество', required: true },
-  { key: 'PRICE', label: 'Цена', required: false },
-  { key: 'CELL', label: 'Ячейка', required: false },
-  { key: 'OEM', label: 'Номер детали', required: false },
-  { key: 'NOTE', label: 'Примечание', required: false },
+  { key: 'NAME', label: 'Наименование', required: true, dromOnly: false },
+  { key: 'QUANTITY', label: 'Количество', required: false, dromOnly: false },
+  { key: 'PRICE', label: 'Цена', required: false, dromOnly: false },
+  { key: 'CELL', label: 'Ячейка', required: false, dromOnly: false },
+  { key: 'OEM', label: 'Номер детали', required: false, dromOnly: false },
+  { key: 'NOTE', label: 'Примечание', required: false, dromOnly: false },
+  { key: 'AVAILABILITY', label: 'Наличие', required: false, dromOnly: true },
 ] as const;
 
 export type FieldKey = (typeof FIELDS)[number]['key'];
@@ -66,6 +75,38 @@ export function notTransferred(
 export interface Report {
   imported: number;
   skipped: { row: number; reason: string }[];
+  /**
+   * Сколько позиций заведено по одной штуке, потому что количества в файле
+   * не было. Ответ прежней версии поля не несёт — читать через `?? 0`.
+   */
+  quantityDefaulted?: number;
+}
+
+/** Слова о количестве по умолчанию — дословно из критерия задачи 0279. */
+export const NO_QUANTITY_COLUMN =
+  'Количества в файле нет — каждая позиция заведётся по 1 шт.';
+
+/**
+ * Что экран обязан сказать о количестве до загрузки, или `null`.
+ *
+ * <p>Одна штука — догадка, а догадка показывается человеку, а не применяется
+ * молча. Колонки нет — говорим это словами критерия. Колонка есть, но в первых
+ * строках пуста у всех (так выглядит файл переноса с Дрома: на карточке
+ * количества нет) — говорим про эти строки: обещать про весь файл по первым
+ * пятнадцати нельзя.
+ */
+export function quantityNote(
+  columns: Partial<Record<FieldKey, number>>,
+  rows: string[][],
+): string | null {
+  const at = columns.QUANTITY;
+  if (at === undefined) {
+    return NO_QUANTITY_COLUMN;
+  }
+  if (rows.length > 0 && rows.every((row) => (row[at] ?? '').trim() === '')) {
+    return 'В первых строках файла количество пустое — такие позиции заведутся по 1 шт.';
+  }
+  return null;
 }
 
 export function previewFile(file: File): Promise<Preview> {
@@ -105,9 +146,9 @@ export function importFile(
 /**
  * Чего не хватает для запуска.
  *
- * <p>Наименование и количество обязательны: без первого нечего заводить,
- * без второго непонятно, сколько. Цена необязательна — её проставляют потом,
- * и склад без цен всё равно лучше склада в тетради.
+ * <p>Обязательно одно наименование: без него нечего заводить. Количества
+ * может не быть — тогда по одной штуке (`quantityNote`). Цена необязательна —
+ * её проставляют потом, и склад без цен всё равно лучше склада в тетради.
  */
 export function missingRequired(columns: Partial<Record<FieldKey, number>>): string[] {
   return FIELDS.filter((f) => f.required && columns[f.key] === undefined).map((f) => f.label);
