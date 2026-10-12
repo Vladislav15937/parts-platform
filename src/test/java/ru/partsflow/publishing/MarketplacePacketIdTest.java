@@ -53,6 +53,9 @@ class MarketplacePacketIdTest extends PostgresTestBase {
     @Autowired
     private DromAccountReader reader;
 
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
     private Long accountId;
 
     @BeforeAll
@@ -67,6 +70,9 @@ class MarketplacePacketIdTest extends PostgresTestBase {
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
                 VALUES (970, ?, 'Разборка', 'packetco')""", TENANT);
         inTenant(() -> {
+            // Журнал правок выгрузок — только отсюда же: строки прежних
+            // методов ссылались бы на выгрузку, которой уже нет.
+            jdbc.update("DELETE FROM audit_log WHERE table_name = 'marketplace_account'");
             jdbc.update("DELETE FROM marketplace_account");
             member("owner", "OWNER");
             member("manager", "MANAGER");
@@ -161,6 +167,109 @@ class MarketplacePacketIdTest extends PostgresTestBase {
         setPacketId("manager", "1").andExpect(status().isForbidden());
         setPacketId("seller", "1").andExpect(status().isForbidden());
         assertThat(storedPacketId()).isNull();
+    }
+
+    @Test
+    @DisplayName("Правка номера видна в журнале изменений: кто, в какой роли, было → стало")
+    void packetIdChangeIsJournaled() throws Exception {
+        setPacketId("owner", "111").andExpect(status().isOk());
+        setPacketId("owner", "222").andExpect(status().isOk());
+        setPacketId("owner", "").andExpect(status().isOk());
+
+        // Через экранный путь журнала, а не запросом в audit_log: решение
+        // владельца — «через запись, которую читает экран журнала».
+        // Свежие сверху: снятие, замена, вписывание.
+        journal().andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(3))
+                .andExpect(jsonPath("$.items[0].kind").value("Выгрузка"))
+                .andExpect(jsonPath("$.items[0].subject").value("Новые"))
+                .andExpect(jsonPath("$.items[0].subjectCode").doesNotExist())
+                .andExpect(jsonPath("$.items[0].author").value("owner"))
+                .andExpect(jsonPath("$.items[0].authorRole").value("OWNER"))
+                .andExpect(jsonPath("$.items[0].changes[0].label").value("Номер прайс-листа"))
+                .andExpect(jsonPath("$.items[0].changes[0].before").value("222"))
+                .andExpect(jsonPath("$.items[0].changes[0].after").doesNotExist())
+                .andExpect(jsonPath("$.items[1].changes[0].before").value("111"))
+                .andExpect(jsonPath("$.items[1].changes[0].after").value("222"))
+                .andExpect(jsonPath("$.items[2].changes[0].before").doesNotExist())
+                .andExpect(jsonPath("$.items[2].changes[0].after").value("111"));
+    }
+
+    @Test
+    @DisplayName("Сохранение того же номера журнал не засоряет")
+    void unchangedPacketIdIsNotJournaled() throws Exception {
+        setPacketId("owner", "111").andExpect(status().isOk());
+        setPacketId("owner", "  111 ").andExpect(status().isOk());
+
+        // Считается таблица, а не экран: экран правку без изменившегося поля
+        // и так прячет, и проверка по нему зеленела бы на коде, пишущем
+        // строку на каждое нажатие (проверено подделкой).
+        assertThat(inTenant(() -> jdbc.queryForObject("""
+                SELECT count(*) FROM audit_log
+                 WHERE table_name = 'marketplace_account' AND record_id = ?""",
+                Integer.class, accountId))).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Ключ синхронизации в журнал не попадает ни в каком виде")
+    void secretNeverReachesTheJournal() throws Exception {
+        String secret = "ключ-синхронизации-7f3a";
+        mvc.perform(put("/api/marketplace-accounts/" + accountId + "/credentials")
+                        .with(csrf()).session(login("owner"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"secret\":\"%s\"}".formatted(secret)))
+                .andExpect(status().isNoContent());
+        setPacketId("owner", "12345").andExpect(status().isOk());
+
+        String body = journal().andReturn().getResponse()
+                .getContentAsString(StandardCharsets.UTF_8);
+        assertThat(body).contains("12345").doesNotContain("7f3a");
+        // И в самой таблице: экран показывает только известные колонки,
+        // а снимок мог бы унести и лишнее.
+        String stored = inTenant(() -> String.join(" ", jdbc.queryForList("""
+                SELECT coalesce(old_value::text, '') || coalesce(new_value::text, '')
+                  FROM audit_log WHERE table_name = 'marketplace_account' AND record_id = ?""",
+                String.class, accountId)));
+        assertThat(stored).contains("12345").doesNotContain("7f3a");
+    }
+
+    @Test
+    @DisplayName("Форма заведения приводит номер тем же правилом, что и правка")
+    void creationNormalizesPacketId() throws Exception {
+        createFeed("Из адреса",
+                "{\"packetId\":\" https://baza.drom.ru/personal/goods/packet/555/recurrent-update \"}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.packetId").value("555"));
+        createFeed("Пустой номер", "{\"packetId\":\"   \"}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.packetId").doesNotExist());
+        createFeed("Мусор", "{\"packetId\":\"12 345\"}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(containsString("не распознан")));
+
+        assertThat(inTenant(() -> jdbc.queryForObject("""
+                SELECT jsonb_exists(settings, 'packetId') FROM marketplace_account
+                 WHERE title = 'Пустой номер'""", Boolean.class))).isFalse();
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM marketplace_account WHERE title = 'Мусор'",
+                Integer.class))).isZero();
+    }
+
+    private ResultActions createFeed(String title, String settings) throws Exception {
+        String body = JSON.writeValueAsString(java.util.Map.of(
+                "marketplace", "DROM", "title", title, "settings", settings,
+                "productLine", "PART"));
+        return mvc.perform(post("/api/marketplace-accounts")
+                .with(csrf()).session(login("owner"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body));
+    }
+
+    private ResultActions journal() throws Exception {
+        return mvc.perform(get("/api/organization/audit")
+                .session(login("owner"))
+                .param("kind", "Выгрузка")
+                .param("q", "Новые"));
     }
 
     private ResultActions setPacketId(String login, String value) throws Exception {

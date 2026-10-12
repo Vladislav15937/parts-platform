@@ -141,6 +141,26 @@ public final class AuditedColumns {
         DONOR_COST.put("note", "Примечание");
     }
 
+    /**
+     * Поля выгрузки, правку которых пишет журнал (задача 0267).
+     *
+     * <p>Выгрузка не сущность Hibernate: слушатель её не видит, и запись
+     * в журнал делает сам {@code MarketplaceAccountService} через
+     * {@code AuditJournal}, передавая только эти колонки. Имя колонки
+     * условное — номер лежит ключом {@code packetId} в {@code settings},
+     * а не своей колонкой; журналу нужно имя, по которому назвать поле.
+     *
+     * <p><b>Ключа синхронизации здесь нет и быть не должно.</b> Его значение
+     * в журнал не попадает ни в каком виде — ни целиком, ни началом:
+     * журнал открыт ревизору, а ключ даёт доступ к кабинету клиента
+     * на площадке.
+     */
+    public static final Map<String, String> MARKETPLACE_ACCOUNT = new LinkedHashMap<>();
+
+    static {
+        MARKETPLACE_ACCOUNT.put("packet_id", "Номер прайс-листа");
+    }
+
     /** Словарь колонок по имени таблицы; пустой — за таблицей не следим. */
     public static Map<String, String> of(String table) {
         return switch (table) {
@@ -149,6 +169,7 @@ public final class AuditedColumns {
             case "deal_item" -> DEAL_ITEM;
             case "payment" -> PAYMENT;
             case "donor_cost" -> DONOR_COST;
+            case "marketplace_account" -> MARKETPLACE_ACCOUNT;
             default -> Map.of();
         };
     }
