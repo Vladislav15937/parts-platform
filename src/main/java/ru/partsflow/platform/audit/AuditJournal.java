@@ -53,11 +53,42 @@ public class AuditJournal {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void changed(String table, long recordId, Map<String, ?> was, Map<String, ?> now) {
-        if (AuditedColumns.of(table).isEmpty()) {
-            throw new IllegalStateException("Журнал не знает таблицы " + table);
-        }
+        requireKnown(table);
         jdbc.update(AuditLogListener.INSERT, table, recordId, "UPDATE",
                 AuditLogListener.JsonRows.write(was), AuditLogListener.JsonRows.write(now),
                 CurrentAuthor.get(), CurrentAuthor.role());
+    }
+
+    /**
+     * Заведение записи: «было» нет, «стало» — то, что журнал умеет назвать.
+     *
+     * <p>Экран показывает такую строку событием («Выгрузка заведена»), а не
+     * перечнем полей, как и у записей слушателя. Что войдёт в «стало» —
+     * решает вызывающий; секрета там быть не должно (задача 0270).
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void created(String table, long recordId, Map<String, ?> now) {
+        requireKnown(table);
+        jdbc.update(AuditLogListener.INSERT, table, recordId, "INSERT",
+                null, AuditLogListener.JsonRows.write(now),
+                CurrentAuthor.get(), CurrentAuthor.role());
+    }
+
+    /**
+     * Удаление записи: «стало» нет, «было» — название и прочее, что нужно,
+     * чтобы строку журнала можно было узнать, когда вещи в списках уже нет.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void deleted(String table, long recordId, Map<String, ?> was) {
+        requireKnown(table);
+        jdbc.update(AuditLogListener.INSERT, table, recordId, "DELETE",
+                AuditLogListener.JsonRows.write(was), null,
+                CurrentAuthor.get(), CurrentAuthor.role());
+    }
+
+    private static void requireKnown(String table) {
+        if (AuditedColumns.of(table).isEmpty()) {
+            throw new IllegalStateException("Журнал не знает таблицы " + table);
+        }
     }
 }

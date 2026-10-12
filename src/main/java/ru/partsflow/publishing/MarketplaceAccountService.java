@@ -40,16 +40,19 @@ public class MarketplaceAccountService {
     private final ru.partsflow.inventory.CatalogService parts;
     private final ru.partsflow.inventory.WheelService wheels;
     private final AuditJournal journal;
+    private final MarketplaceAccountJournal feedJournal;
 
     public MarketplaceAccountService(JdbcTemplate jdbc, SecretCipher cipher,
                                      ru.partsflow.inventory.CatalogService parts,
                                      ru.partsflow.inventory.WheelService wheels,
-                                     AuditJournal journal) {
+                                     AuditJournal journal,
+                                     MarketplaceAccountJournal feedJournal) {
         this.jdbc = jdbc;
         this.cipher = cipher;
         this.parts = parts;
         this.wheels = wheels;
         this.journal = journal;
+        this.feedJournal = feedJournal;
     }
 
     /**
@@ -231,6 +234,7 @@ public class MarketplaceAccountService {
          * этом видел сохранённый отбор и ничего подозрительного.
          */
         checkColumns(productLineOf(id), columns, words);
+        var before = feedJournal.lock(id);
         int updated = jdbc.update("""
                 UPDATE marketplace_account
                    SET price_from = ?, price_to = ?,
@@ -251,6 +255,7 @@ public class MarketplaceAccountService {
         if (updated == 0) {
             throw NotFound.FEED.error(id);
         }
+        feedJournal.changed(id, before);
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
     }
 
@@ -327,6 +332,7 @@ public class MarketplaceAccountService {
                 Long.class, marketplace, title.strip(),
                 settingsWithPacketIdNormalized(settingsJson),
                 line);
+        feedJournal.created(id);
 
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
     }
@@ -349,12 +355,14 @@ public class MarketplaceAccountService {
     @Transactional
     public Account setSettings(Long id, FeedSettings settings) {
         FeedSettings checked = (settings == null ? FeedSettings.none() : settings).validated();
+        var before = feedJournal.lock(id);
         int updated = jdbc.update(
                 "UPDATE marketplace_account SET settings = settings || ?::jsonb\n                   WHERE id = ? AND deleted_at IS NULL",
                 checked.toJson(), id);
         if (updated == 0) {
             throw NotFound.FEED.error(id);
         }
+        feedJournal.changed(id, before);
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
     }
 
@@ -502,12 +510,14 @@ public class MarketplaceAccountService {
             throw new IllegalArgumentException(titleOccupied(title));
         });
 
+        var before = feedJournal.lock(id);
         int updated = jdbc.update(
                 "UPDATE marketplace_account SET title = ? WHERE id = ? AND deleted_at IS NULL",
                 title, id);
         if (updated == 0) {
             throw NotFound.FEED.error(id);
         }
+        feedJournal.changed(id, before);
         return reload(id);
     }
 
@@ -536,12 +546,14 @@ public class MarketplaceAccountService {
             throw new IllegalArgumentException(
                     "Выгрузку можно включить или выключить, третьего состояния нет: " + typed);
         }
+        var before = feedJournal.lock(id);
         int updated = jdbc.update(
                 "UPDATE marketplace_account SET status = ? WHERE id = ? AND deleted_at IS NULL",
                 status, id);
         if (updated == 0) {
             throw NotFound.FEED.error(id);
         }
+        feedJournal.changed(id, before);
         return reload(id);
     }
 
@@ -568,12 +580,14 @@ public class MarketplaceAccountService {
      */
     @Transactional
     public void delete(Long id) {
+        var before = feedJournal.lock(id);
         int updated = jdbc.update(
                 "UPDATE marketplace_account SET deleted_at = now() WHERE id = ? AND deleted_at IS NULL",
                 id);
         if (updated == 0) {
             throw NotFound.FEED.error(id);
         }
+        feedJournal.deleted(id, before);
     }
 
     /** Название выгрузки, у которой это имя уже стоит. Пусто — свободно. */
@@ -614,12 +628,14 @@ public class MarketplaceAccountService {
         if (secret == null || secret.isBlank()) {
             throw new IllegalArgumentException("Пустой ключ кабинета не имеет смысла");
         }
+        Boolean had = feedJournal.lockSecret(accountId, "credentials");
         int updated = jdbc.update("UPDATE marketplace_account SET credentials = ?\n                   WHERE id = ? AND deleted_at IS NULL",
                 cipher.encrypt(secret), accountId);
 
         if (updated == 0) {
             throw NotFound.MARKETPLACE_ACCOUNT.error(accountId);
         }
+        feedJournal.secretReplaced(accountId, "credentials", had);
     }
 
     /**
@@ -638,12 +654,14 @@ public class MarketplaceAccountService {
         // Без padding: токен едет в пути URL, а '=' там лишний.
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
 
+        Boolean had = feedJournal.lockSecret(accountId, "feed_token");
         int updated = jdbc.update(
                 "UPDATE marketplace_account SET feed_token = ? WHERE id = ? AND deleted_at IS NULL",
                 token, accountId);
         if (updated == 0) {
             throw NotFound.MARKETPLACE_ACCOUNT.error(accountId);
         }
+        feedJournal.secretReplaced(accountId, "feed_token", had);
         return token;
     }
 
@@ -679,12 +697,14 @@ public class MarketplaceAccountService {
          * читается как «Операция нарушает целостность данных», то есть
          * не говорит ни что случилось, ни что делать.
          */
+        var before = feedJournal.lock(id);
         int updated = jdbc.update(
                 "UPDATE marketplace_account SET feed_file_name = ? WHERE id = ? AND deleted_at IS NULL",
                 name, id);
         if (updated == 0) {
             throw NotFound.FEED.error(id);
         }
+        feedJournal.changed(id, before);
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
     }
 

@@ -159,7 +159,42 @@ public final class AuditedColumns {
 
     static {
         MARKETPLACE_ACCOUNT.put("packet_id", "Номер прайс-листа");
+        // Остальное — задача 0270. Ключи с приставкой feed_ там, где короткое
+        // имя уже занято другой таблицей и со своим смыслом (title, status):
+        // display() выбирает слова по имени колонки, не по таблице.
+        MARKETPLACE_ACCOUNT.put("feed_title", "Название выгрузки");
+        MARKETPLACE_ACCOUNT.put("feed_status", "Состояние выгрузки");
+        MARKETPLACE_ACCOUNT.put("feed_file_name", "Имя файла прайса");
+        MARKETPLACE_ACCOUNT.put("price_percent", "Наценка, %");
+        MARKETPLACE_ACCOUNT.put("price_rounding", "Округление цены, шаг ₽");
+        MARKETPLACE_ACCOUNT.put("photo_limit", "Число снимков в объявлении");
+        MARKETPLACE_ACCOUNT.put("installation_note", "Приписка о стоимости установки");
+        MARKETPLACE_ACCOUNT.put("installation_template", "Текст приписки об установке");
+        MARKETPLACE_ACCOUNT.put("expected_goods", "Выгружать ожидаемый товар");
+        MARKETPLACE_ACCOUNT.put("expected_goods_note", "Текст приписки об ожидаемом товаре");
+        MARKETPLACE_ACCOUNT.put("donor_photo_kinds", "Наименования со снимками машины");
+        MARKETPLACE_ACCOUNT.put("filter_price_from", "Отбор: цена от");
+        MARKETPLACE_ACCOUNT.put("filter_price_to", "Отбор: цена до");
+        MARKETPLACE_ACCOUNT.put("filter_conditions", "Отбор: состояния");
+        MARKETPLACE_ACCOUNT.put("filter_warehouses", "Отбор: склады");
+        MARKETPLACE_ACCOUNT.put("filter_kinds", "Отбор: виды деталей");
+        MARKETPLACE_ACCOUNT.put("filter_kinds_excluded", "Отбор: виды деталей — кроме выбранных");
+        MARKETPLACE_ACCOUNT.put("filter_brands", "Отбор: марки");
+        MARKETPLACE_ACCOUNT.put("filter_brands_excluded", "Отбор: марки — кроме выбранных");
+        MARKETPLACE_ACCOUNT.put("filter_columns", "Отбор: условия по колонкам");
+        MARKETPLACE_ACCOUNT.put("filter_words", "Отбор: слова в колонках");
+        // Секреты — только фактом: значения нет ни в снимке, ни в таблице.
+        MARKETPLACE_ACCOUNT.put("credentials", "Ключ синхронизации");
+        MARKETPLACE_ACCOUNT.put("feed_token", "Ссылка на прайс");
     }
+
+    /** Логические колонки журнала выгрузки: в снимке true/false, на экране да/нет. */
+    private static final Set<String> FLAGS = Set.of(
+            "is_published", "installation_note", "expected_goods",
+            "filter_kinds_excluded", "filter_brands_excluded");
+
+    private static final Map<String, String> FEED_STATUSES = Map.of(
+            "ACTIVE", "Включена", "PAUSED", "Выключена", "ERROR", "Ошибка отправки");
 
     /** Словарь колонок по имени таблицы; пустой — за таблицей не следим. */
     public static Map<String, String> of(String table) {
@@ -263,7 +298,8 @@ public final class AuditedColumns {
             case "product_line" -> LINES.getOrDefault(raw, raw);
             case "payment_type" -> PAYMENT_TYPES.getOrDefault(raw, raw);
             case "cost_type" -> COST_TYPES.getOrDefault(raw, raw);
-            case "is_published" -> "true".equals(raw) ? "да" : "нет";
+            case "feed_status" -> FEED_STATUSES.getOrDefault(raw, raw);
+            case String flag when FLAGS.contains(flag) -> "true".equals(raw) ? "да" : "нет";
             default -> raw;
         };
     }
