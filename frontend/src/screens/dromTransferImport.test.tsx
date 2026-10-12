@@ -120,7 +120,7 @@ describe('файл переноса с Дрома', () => {
     await waitFor(() => expect(document.querySelector('table.preview')).toBeTruthy());
 
     // Первый выбор склада — загрузки таблицы; второй ниже — у переноса колёс.
-    const warehouse = screen.getAllByText('— выберите склад —')[0]
+    const warehouse = screen.getAllByText('— выберите склад —')[0]!
       .closest('select') as HTMLSelectElement;
     fireEvent.change(warehouse, { target: { value: '7' } });
     fireEvent.click(screen.getByText('Загрузить склад'));
