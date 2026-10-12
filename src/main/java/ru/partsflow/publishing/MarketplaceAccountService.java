@@ -93,6 +93,7 @@ public class MarketplaceAccountService {
                        feed_file_name,
                        product_line,
                        settings::text AS settings,
+                       settings ->> 'packetId' AS packet_id,
                        price_from, price_to, conditions, warehouse_ids,
                        kind_ids, kinds_excluded, brand_ids, brands_excluded,
                        filter_columns::text AS filter_columns,
@@ -118,6 +119,10 @@ public class MarketplaceAccountService {
                         // не выходит; настройки сборки прайса — не секрет,
                         // их владелец сам и задаёт с экрана.
                         FeedSettings.parse(rs.getString("settings")),
+                        // Номер не секрет, в отличие от ключа: его владелец
+                        // читает в адресе прайс-листа и должен видеть, что
+                        // записано, иначе поле нечем проверить.
+                        rs.getString("packet_id"),
                         rs.getString("last_error"),
                         instant(rs.getObject("last_feed_download_at",
                                 java.time.OffsetDateTime.class)),
@@ -347,6 +352,73 @@ public class MarketplaceAccountService {
             throw NotFound.FEED.error(id);
         }
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
+    }
+
+    /** Номер прайс-листа: латиница, цифры, «-» и «_», до 32 знаков. */
+    private static final java.util.regex.Pattern PACKET_ID =
+            java.util.regex.Pattern.compile("[A-Za-z0-9_-]{1,32}");
+
+    /** Номер из адреса прайс-листа в кабинете: {@code …/packet/12345/recurrent-update}. */
+    private static final java.util.regex.Pattern PACKET_IN_URL =
+            java.util.regex.Pattern.compile("/packet/([^/?#\\s]+)");
+
+    /**
+     * Вписывает, заменяет или снимает номер прайс-листа в кабинете площадки.
+     *
+     * <p>Номер появляется у владельца <b>после</b> того, как специалист Дрома
+     * разместил прайс по нашей ссылке, то есть когда выгрузка давно заведена.
+     * Без него {@code DromAccountReader.canReceiveDelta} ложно и дельты молча
+     * не уходят, сколько бы раз ни сохранили ключ.
+     *
+     * <p>Пустое значение <b>снимает</b> номер: ключ удаляется из {@code settings},
+     * а не пишется пустой строкой. Пустая строка прошла бы проверку на
+     * пустоту и тоже не слала бы, но осталась бы в базе значением, которого
+     * никто не вводил.
+     *
+     * <p>Пишется точечно ({@code jsonb_set} и {@code - 'packetId'}), не затрагивая
+     * наценку и округление: обратное тому, что делает {@link #setSettings}.
+     * Вид номера у Дрома в живую не снимали, поэтому отвергается только то,
+     * что в адресе прайс-листа оказаться не может.
+     */
+    @Transactional
+    public Account setPacketId(Long id, String typed) {
+        String packetId = normalizePacketId(typed);
+        int updated = packetId == null
+                ? jdbc.update("""
+                        UPDATE marketplace_account SET settings = COALESCE(settings, '{}'::jsonb) - 'packetId'
+                         WHERE id = ? AND deleted_at IS NULL""", id)
+                : jdbc.update("""
+                        UPDATE marketplace_account
+                           SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{packetId}', to_jsonb(?::text))
+                         WHERE id = ? AND deleted_at IS NULL""", packetId, id);
+        if (updated == 0) {
+            throw NotFound.FEED.error(id);
+        }
+        // Правки выгрузок идут прямым SQL мимо Hibernate и в audit_log не попадают;
+        // след остаётся в логе приложения, ключа в нём нет по построению.
+        org.slf4j.LoggerFactory.getLogger(MarketplaceAccountService.class)
+                .info("Выгрузка {}: номер прайс-листа {}", id,
+                        packetId == null ? "снят" : "задан");
+        return reload(id);
+    }
+
+    /** Пусто — снять; иначе номер, вынутый из адреса или обрезанный по краям. */
+    static String normalizePacketId(String typed) {
+        String value = typed == null ? "" : typed.strip();
+        if (value.isEmpty()) {
+            return null;
+        }
+        java.util.regex.Matcher fromUrl = PACKET_IN_URL.matcher(value);
+        if (fromUrl.find()) {
+            value = fromUrl.group(1);
+        }
+        if (!PACKET_ID.matcher(value).matches()) {
+            throw new IllegalArgumentException(
+                    "Номер прайс-листа не распознан. Впишите номер из адреса прайс-листа в кабинете Дрома "
+                            + "(…/packet/номер/recurrent-update) или вставьте адрес целиком; "
+                            + "в номере не больше 32 знаков, без пробелов");
+        }
+        return value;
     }
 
     /**
@@ -663,6 +735,8 @@ public class MarketplaceAccountService {
      *                       второе
      * @param feedFileName читаемое имя файла в конце ссылки; пусто — имени
      *                     не задавали, и ссылка кончается токеном
+     * @param packetId    номер прайс-листа в кабинете площадки; пусто — не задан,
+     *                    и дельты для выгрузки не уходят
      * @param deletedAt   когда выгрузку удалили; пусто — живая. Удалённая
      *                    не отдаётся по ссылке и не видна в списке, но время
      *                    удаления и есть ответ на вопрос про историю:
@@ -675,6 +749,7 @@ public class MarketplaceAccountService {
                           boolean hasCredentials, boolean plaintextSecret, boolean hasFeed,
                           String feedFileName,
                           String productLine, FeedSettings settings,
+                          String packetId,
                           String lastError, java.time.Instant lastDownloadAt,
                           java.time.Instant deletedAt,
                           java.math.BigDecimal priceFrom,

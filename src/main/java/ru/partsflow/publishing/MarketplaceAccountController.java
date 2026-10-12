@@ -147,6 +147,21 @@ public class MarketplaceAccountController {
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
+    /**
+     * Вписывает, заменяет или снимает номер прайс-листа в кабинете площадки.
+     * Только владелец, как и ключ: вместе они решают, куда уходят цены.
+     */
+    @PutMapping("/{id}/packet-id")
+    @PreAuthorize("hasRole('OWNER')")
+    public MarketplaceAccountService.Account setPacketId(@PathVariable Long id,
+                                                         @RequestBody PacketIdRequest request) {
+        return accounts.setPacketId(id, request == null ? null : request.packetId());
+    }
+
+    /** @param packetId номер или адрес прайс-листа; пусто — снять номер */
+    public record PacketIdRequest(String packetId) {
+    }
+
     @PutMapping("/{id}/credentials")
     @PreAuthorize("hasRole('OWNER')")
     public ResponseEntity<Void> setCredentials(@PathVariable Long id,

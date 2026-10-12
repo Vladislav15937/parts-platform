@@ -16,6 +16,7 @@ function feed(overrides: Partial<Feed> = {}): Feed {
     marketplace: 'DROM',
     title: 'Дром',
     status: 'ACTIVE',
+    packetId: null,
     hasCredentials: false,
     plaintextSecret: false,
     hasFeed: true,
