@@ -17,9 +17,13 @@ import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
 
+import com.jayway.jsonpath.JsonPath;
+
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.function.Supplier;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -154,10 +158,19 @@ class MarketplaceDeliveryStatusTest extends PostgresTestBase {
                         .contentType(MediaType.APPLICATION_JSON).content("{\"packetId\":\"3\"}"))
                 .andExpect(status().isOk());
 
-        assertState("Номер", "WAITING");
-        assertState("Ключ", "WAITING");
+        // Все три разом, одной сверкой: откат одной половины правки называет
+        // именно её, а не прячет вторую за первым упавшим утверждением.
+        String body = mvc.perform(get("/api/marketplace-accounts").session(session))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        java.util.Map<String, String> states = new java.util.TreeMap<>();
+        for (String title : List.of("Номер", "Ключ", "Тот же")) {
+            List<String> found = JsonPath.read(body,
+                    "$[?(@.title=='%s')].deliveryStatus.state".formatted(title));
+            states.put(title, found.get(0));
+        }
         // Ничего не поменялось — и отказ по-прежнему правда.
-        assertCode("Тот же", "PACKET_NOT_FOUND");
+        assertThat(states).isEqualTo(java.util.Map.of(
+                "Номер", "WAITING", "Ключ", "WAITING", "Тот же", "REFUSED"));
     }
 
     @Test
