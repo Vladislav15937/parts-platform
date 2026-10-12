@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
 import { count, plural } from '../ui/plural';
 import {
+  DROM_TRANSFER,
   duplicateColumns,
   FIELDS,
+  notTransferred,
   applicabilityFromTitles,
   importBazon,
   importFile,
@@ -73,6 +75,7 @@ export function ImportScreen({ reference, canImport }: Props) {
 
   const missing = missingRequired(columns);
   const duplicates = duplicateColumns(columns);
+  const skipped = preview === null ? [] : notTransferred(preview.header, columns);
 
   return (
     <section className="card">
@@ -109,10 +112,17 @@ export function ImportScreen({ reference, canImport }: Props) {
         <>
           <hr />
           <h3>Что распознано</h3>
-          <p className="note">
-            Проверьте до запуска. Перепутанные цена и количество дадут склад,
-            где всё стоит по три рубля, и заметно это станет на первой продаже.
-          </p>
+          {(preview.format ?? null) === DROM_TRANSFER ? (
+            <p className="note">
+              Это файл переноса с Дрома: колонки сопоставлены сами, выбирать
+              ничего не нужно.
+            </p>
+          ) : (
+            <p className="note">
+              Проверьте до запуска. Перепутанные цена и количество дадут склад,
+              где всё стоит по три рубля, и заметно это станет на первой продаже.
+            </p>
+          )}
 
           <ul className="mapping">
             {FIELDS.map((field) => (
@@ -149,6 +159,14 @@ export function ImportScreen({ reference, canImport }: Props) {
           {missing.length > 0 && (
             <p className="note note--error">Не сопоставлено: {missing.join(', ')}</p>
           )}
+          {/* Колонка без поля не уедет никуда, и молчание о ней читается как
+              «перенесётся». У файла переноса с Дрома это снимки, описание
+              и номер объявления — то, ради чего перенос и затевают. */}
+          {skipped.length > 0 && (
+            <p className="note">
+              Не переносятся — загрузка их пропустит: {skipped.join(', ')}.
+            </p>
+          )}
 
           <h3>Первые строки файла</h3>
           <div className="table-scroll">
@@ -158,9 +176,9 @@ export function ImportScreen({ reference, canImport }: Props) {
                   {preview.header.map((title, index) => (
                     <th key={index} className={fieldAt(index) !== null ? 'mapped' : undefined}>
                       {title === '' ? `колонка ${index + 1}` : title}
-                      {fieldAt(index) !== null && (
-                        <div className="muted">→ {fieldAt(index)}</div>
-                      )}
+                      <div className="muted">
+                        {fieldAt(index) !== null ? `→ ${fieldAt(index)}` : 'не переносится'}
+                      </div>
                     </th>
                   ))}
                 </tr>

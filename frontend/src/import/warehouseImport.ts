@@ -28,10 +28,39 @@ export type FieldKey = (typeof FIELDS)[number]['key'];
 
 export interface Preview {
   header: string[];
-  /** Что сервер распознал сам: поле → номер колонки. */
+  /**
+   * Что сервер распознал сам: поле → номер колонки. Только то, что импорт
+   * читает: узнанная, но отбрасываемая колонка сюда не приходит (задача 0272).
+   */
   detected: Partial<Record<FieldKey, number>>;
   missingRequired: FieldKey[];
   rows: string[][];
+  /**
+   * `DROM_TRANSFER` — файл переноса с Дрома (docs/drom-transfer-file.md):
+   * колонки сопоставлены договором, а не догадкой. Ответ прежней версии
+   * поля не несёт — читать через `?? null`.
+   */
+  format?: 'DROM_TRANSFER' | null;
+}
+
+export const DROM_TRANSFER = 'DROM_TRANSFER';
+
+/**
+ * Колонки файла, которые загрузка пропустит, — заголовками, как в файле.
+ *
+ * <p>Нужны затем, чтобы экран сказал это вслух. Колонка без поля не уедет
+ * никуда, и молчание тут читается как «перенесётся»: у файла переноса с Дрома
+ * так выглядели бы снимки, описание и номер объявления.
+ */
+export function notTransferred(
+  header: string[],
+  columns: Partial<Record<FieldKey, number>>,
+): string[] {
+  const used = new Set(Object.values(columns).filter((i): i is number => i !== undefined));
+  return header
+    .map((title, index) => ({ title: title === '' ? `колонка ${index + 1}` : title, index }))
+    .filter(({ index }) => !used.has(index))
+    .map(({ title }) => title);
 }
 
 export interface Report {
