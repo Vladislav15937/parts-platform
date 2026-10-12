@@ -77,6 +77,9 @@ public class OrganizationAuditService {
         KINDS.put("deal_item", "Позиция сделки");
         KINDS.put("payment", "Платёж");
         KINDS.put("donor_cost", "Затрата по машине");
+        // Пишет не слушатель, а сам сервис выгрузок через AuditJournal
+        // (задача 0267): выгрузка правится прямым SQL мимо Hibernate.
+        KINDS.put("marketplace_account", "Выгрузка");
     }
 
     /**
@@ -110,7 +113,7 @@ public class OrganizationAuditService {
      */
     private static final String SEARCHABLE = "concat_ws(' ', p.title, p.public_code,"
             + " dip.title, dip.public_code, d.number::text, paid.number::text,"
-            + " coalesce(dcd.legacy_code, dcd.public_code), cust.name)";
+            + " coalesce(dcd.legacy_code, dcd.public_code), cust.name, ma.title)";
 
     /**
      * То же без публичных кодов и без номеров сделки и платежа — для запроса,
@@ -121,7 +124,7 @@ public class OrganizationAuditService {
      * подстрочным: «Авто 347» там честный текст.
      */
     private static final String SEARCHABLE_TEXT = "concat_ws(' ', p.title, dip.title,"
-            + " dcd.legacy_code, cust.name)";
+            + " dcd.legacy_code, cust.name, ma.title)";
 
     /**
      * Присоединение вещи к записи журнала.
@@ -142,7 +145,9 @@ public class OrganizationAuditService {
             + " LEFT JOIN payment pay ON a.table_name = 'payment' AND pay.id = a.record_id"
             + " LEFT JOIN deal paid ON paid.id = pay.deal_id"
             + " LEFT JOIN donor_cost dc ON a.table_name = 'donor_cost' AND dc.id = a.record_id"
-            + " LEFT JOIN donor dcd ON dcd.id = dc.donor_id";
+            + " LEFT JOIN donor dcd ON dcd.id = dc.donor_id"
+            + " LEFT JOIN marketplace_account ma ON a.table_name = 'marketplace_account'"
+            + " AND ma.id = a.record_id";
 
     private final JdbcTemplate jdbc;
 
@@ -302,7 +307,8 @@ public class OrganizationAuditService {
                         + " dip.title AS item_title, dip.public_code AS item_code,"
                         + " idl.number AS item_deal_number,"
                         + " paid.number AS payment_deal_number,"
-                        + " coalesce(dcd.legacy_code, dcd.public_code) AS cost_donor"
+                        + " coalesce(dcd.legacy_code, dcd.public_code) AS cost_donor,"
+                        + " ma.title AS feed_title"
                         + " FROM audit_log a JOIN watched w ON w.table_name = a.table_name"
                         + JOINS + page + " ORDER BY a.id DESC LIMIT ?",
                 (rs, i) -> new Entry(
@@ -312,7 +318,8 @@ public class OrganizationAuditService {
                         rs.getString("author_role"),
                         KINDS.get(rs.getString("table_name")),
                         subjectOf(rs.getString("table_name"), rs.getString("part_title"),
-                                rs.getString("deal_customer"), rs.getString("item_title")),
+                                rs.getString("deal_customer"), rs.getString("item_title"),
+                                rs.getString("feed_title")),
                         codeOf(rs.getString("table_name"), rs.getString("part_code"),
                                 rs.getObject("deal_number"), rs.getString("item_code"),
                                 rs.getLong("record_id")),
@@ -476,11 +483,12 @@ public class OrganizationAuditService {
     // ------------------------------------------------------------- слова строки
 
     private static String subjectOf(String table, String partTitle,
-                                    String dealCustomer, String itemTitle) {
+                                    String dealCustomer, String itemTitle, String feedTitle) {
         return switch (table) {
             case "part" -> partTitle;
             case "deal" -> dealCustomer;
             case "deal_item" -> itemTitle;
+            case "marketplace_account" -> feedTitle;
             default -> null;
         };
     }
@@ -495,6 +503,13 @@ public class OrganizationAuditService {
      */
     private static String codeOf(String table, String partCode, Object dealNumber,
                                  String itemCode, long recordId) {
+        if ("marketplace_account".equals(table)) {
+            // Выгрузку называет её название, а кода у неё нет. Строку
+            // удалённой выгрузки не стирают (пометка, а не удаление),
+            // поэтому название есть всегда, и «запись №» здесь была бы
+            // номером строки базы, который человеку ничего не говорит.
+            return null;
+        }
         String found = switch (table) {
             case "part" -> partCode;
             case "deal" -> dealNumber == null ? null : "№" + dealNumber;

@@ -4,6 +4,7 @@ import ru.partsflow.shared.NotFound;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.platform.audit.AuditJournal;
 import ru.partsflow.platform.crypto.SecretCipher;
 import ru.partsflow.platform.tenant.TenantContext;
 
@@ -38,14 +39,17 @@ public class MarketplaceAccountService {
      */
     private final ru.partsflow.inventory.CatalogService parts;
     private final ru.partsflow.inventory.WheelService wheels;
+    private final AuditJournal journal;
 
     public MarketplaceAccountService(JdbcTemplate jdbc, SecretCipher cipher,
                                      ru.partsflow.inventory.CatalogService parts,
-                                     ru.partsflow.inventory.WheelService wheels) {
+                                     ru.partsflow.inventory.WheelService wheels,
+                                     AuditJournal journal) {
         this.jdbc = jdbc;
         this.cipher = cipher;
         this.parts = parts;
         this.wheels = wheels;
+        this.journal = journal;
     }
 
     /**
@@ -93,6 +97,7 @@ public class MarketplaceAccountService {
                        feed_file_name,
                        product_line,
                        settings::text AS settings,
+                       settings ->> 'packetId' AS packet_id,
                        price_from, price_to, conditions, warehouse_ids,
                        kind_ids, kinds_excluded, brand_ids, brands_excluded,
                        filter_columns::text AS filter_columns,
@@ -118,6 +123,10 @@ public class MarketplaceAccountService {
                         // не выходит; настройки сборки прайса — не секрет,
                         // их владелец сам и задаёт с экрана.
                         FeedSettings.parse(rs.getString("settings")),
+                        // Номер не секрет, в отличие от ключа: его владелец
+                        // читает в адресе прайс-листа и должен видеть, что
+                        // записано, иначе поле нечем проверить.
+                        rs.getString("packet_id"),
                         rs.getString("last_error"),
                         instant(rs.getObject("last_feed_download_at",
                                 java.time.OffsetDateTime.class)),
@@ -316,7 +325,7 @@ public class MarketplaceAccountService {
                 VALUES (?, ?, COALESCE(?::jsonb, '{}'::jsonb), ?)
                 RETURNING id""",
                 Long.class, marketplace, title.strip(),
-                settingsJson == null || settingsJson.isBlank() ? null : settingsJson,
+                settingsWithPacketIdNormalized(settingsJson),
                 line);
 
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
@@ -347,6 +356,127 @@ public class MarketplaceAccountService {
             throw NotFound.FEED.error(id);
         }
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
+    }
+
+    /** Номер прайс-листа: латиница, цифры, «-» и «_», до 32 знаков. */
+    private static final java.util.regex.Pattern PACKET_ID =
+            java.util.regex.Pattern.compile("[A-Za-z0-9_-]{1,32}");
+
+    /** Номер из адреса прайс-листа в кабинете: {@code …/packet/12345/recurrent-update}. */
+    private static final java.util.regex.Pattern PACKET_IN_URL =
+            java.util.regex.Pattern.compile("/packet/([^/?#\\s]+)");
+
+    /**
+     * Вписывает, заменяет или снимает номер прайс-листа в кабинете площадки.
+     *
+     * <p>Номер появляется у владельца <b>после</b> того, как специалист Дрома
+     * разместил прайс по нашей ссылке, то есть когда выгрузка давно заведена.
+     * Без него {@code DromAccountReader.canReceiveDelta} ложно и дельты молча
+     * не уходят, сколько бы раз ни сохранили ключ.
+     *
+     * <p>Пустое значение <b>снимает</b> номер: ключ удаляется из {@code settings},
+     * а не пишется пустой строкой. Пустая строка прошла бы проверку на
+     * пустоту и тоже не слала бы, но осталась бы в базе значением, которого
+     * никто не вводил.
+     *
+     * <p>Пишется точечно ({@code jsonb_set} и {@code - 'packetId'}), не затрагивая
+     * наценку и округление: обратное тому, что делает {@link #setSettings}.
+     * Вид номера у Дрома в живую не снимали, поэтому отвергается только то,
+     * что в адресе прайс-листа оказаться не может.
+     */
+    @Transactional
+    public Account setPacketId(Long id, String typed) {
+        String packetId = normalizePacketId(typed);
+        // Прежний номер читается под блокировкой строки: два владельца,
+        // нажавшие «Сохранить номер» разом, иначе оба записали бы в журнал
+        // одно и то же «было», и одна из правок выглядела бы сделанной
+        // с номера, которого к её моменту уже не было.
+        List<String> before = jdbc.query("""
+                SELECT settings ->> 'packetId' FROM marketplace_account
+                 WHERE id = ? AND deleted_at IS NULL FOR UPDATE""",
+                (rs, i) -> rs.getString(1), id);
+        if (before.isEmpty()) {
+            throw NotFound.FEED.error(id);
+        }
+        if (packetId == null) {
+            jdbc.update("""
+                    UPDATE marketplace_account SET settings = COALESCE(settings, '{}'::jsonb) - 'packetId'
+                     WHERE id = ?""", id);
+        } else {
+            jdbc.update("""
+                    UPDATE marketplace_account
+                       SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{packetId}', to_jsonb(?::text))
+                     WHERE id = ?""", packetId, id);
+        }
+        String was = before.get(0);
+        if (!java.util.Objects.equals(was, packetId)) {
+            // Журнал изменений, а не строка в логе: решение владельца продукта
+            // от 12 октября 2026 (tasks/0267, «Вопрос владельцу продукта —
+            // журнал правки выгрузки»). Кто, когда, было → стало; в снимок
+            // идёт только номер — ключ синхронизации туда не попадает
+            // по построению, его здесь нет вовсе.
+            java.util.Map<String, String> old = new java.util.HashMap<>();
+            old.put("packet_id", was);
+            java.util.Map<String, String> now = new java.util.HashMap<>();
+            now.put("packet_id", packetId);
+            journal.changed("marketplace_account", id, old, now);
+        }
+        return reload(id);
+    }
+
+    /**
+     * Настройки при заведении — с номером, приведённым тем же правилом,
+     * что и у {@link #setPacketId}.
+     *
+     * <p>Иначе у одного номера было бы две поверхности с разными правилами:
+     * форма заведения пропускала «12 345» и адрес прайс-листа целиком как есть
+     * (дельты потом уходили бы с номером, которого у площадки нет, и молча),
+     * а правка в карточке тот же ввод отвергала. Пустой номер снимается,
+     * а не пишется пустой строкой — по той же причине, что и в правке.
+     *
+     * @return текст jsonb либо {@code null}, если настроек не прислали
+     */
+    static String settingsWithPacketIdNormalized(String settingsJson) {
+        if (settingsJson == null || settingsJson.isBlank()) {
+            return null;
+        }
+        com.fasterxml.jackson.databind.JsonNode parsed;
+        try {
+            parsed = JSON.readTree(settingsJson);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException notJson) {
+            throw new IllegalArgumentException("Настройки выгрузки не разобраны");
+        }
+        if (!(parsed instanceof com.fasterxml.jackson.databind.node.ObjectNode settings)
+                || !settings.has("packetId")) {
+            return settingsJson;
+        }
+        com.fasterxml.jackson.databind.JsonNode typed = settings.get("packetId");
+        String packetId = normalizePacketId(typed.isNull() ? null : typed.asText());
+        if (packetId == null) {
+            settings.remove("packetId");
+        } else {
+            settings.put("packetId", packetId);
+        }
+        return settings.toString();
+    }
+
+    /** Пусто — снять; иначе номер, вынутый из адреса или обрезанный по краям. */
+    static String normalizePacketId(String typed) {
+        String value = typed == null ? "" : typed.strip();
+        if (value.isEmpty()) {
+            return null;
+        }
+        java.util.regex.Matcher fromUrl = PACKET_IN_URL.matcher(value);
+        if (fromUrl.find()) {
+            value = fromUrl.group(1);
+        }
+        if (!PACKET_ID.matcher(value).matches()) {
+            throw new IllegalArgumentException(
+                    "Номер прайс-листа не распознан. Впишите номер из адреса прайс-листа в кабинете Дрома "
+                            + "(…/packet/номер/recurrent-update) или вставьте адрес целиком; "
+                            + "в номере не больше 32 знаков, без пробелов");
+        }
+        return value;
     }
 
     /**
@@ -663,6 +793,8 @@ public class MarketplaceAccountService {
      *                       второе
      * @param feedFileName читаемое имя файла в конце ссылки; пусто — имени
      *                     не задавали, и ссылка кончается токеном
+     * @param packetId    номер прайс-листа в кабинете площадки; пусто — не задан,
+     *                    и дельты для выгрузки не уходят
      * @param deletedAt   когда выгрузку удалили; пусто — живая. Удалённая
      *                    не отдаётся по ссылке и не видна в списке, но время
      *                    удаления и есть ответ на вопрос про историю:
@@ -675,6 +807,7 @@ public class MarketplaceAccountService {
                           boolean hasCredentials, boolean plaintextSecret, boolean hasFeed,
                           String feedFileName,
                           String productLine, FeedSettings settings,
+                          String packetId,
                           String lastError, java.time.Instant lastDownloadAt,
                           java.time.Instant deletedAt,
                           java.math.BigDecimal priceFrom,

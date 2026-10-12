@@ -22,6 +22,7 @@ import {
   CONDITIONS,
   DEFAULT_INSTALLATION_TEMPLATE,
   PRICE_PLACEHOLDER,
+  PACKET_ID_HINT,
   ROUNDING_STEPS,
   countMatching,
   createFeed,
@@ -31,10 +32,13 @@ import {
   downloadMark,
   filterSummary,
   listDeletedFeeds,
+  normalizePacketId,
+  packetIdObstacle,
   listFeeds,
   renameFeed,
   rotateFeedUrl,
   setCredentials,
+  setPacketId as savePacketId,
   setFeedFileName,
   setFeedStatus,
   setFilter,
@@ -247,6 +251,8 @@ function FeedCard({
   const [warehouseIds, setWarehouseIds] = useState<number[]>(feed.warehouseIds);
   const [link, setLink] = useState<FeedLink | null>(null);
   const [secret, setSecret] = useState('');
+  // Номер прайс-листа — не секрет, поле показывает текущий.
+  const [packet, setPacket] = useState(feed.packetId ?? '');
   // Имя файла прайса: пусто — имени не задавали, и ссылка кончается токеном.
   const [fileName, setFileName] = useState(feed.feedFileName ?? '');
 
@@ -529,6 +535,9 @@ function FeedCard({
       onClose={() => setMenuAt(null)}
     />
   ) : null;
+
+  // Одно выражение на кнопку «Сохранить номер» и на подпись под ней.
+  const packetObstacle = packetIdObstacle(packet, feed.packetId);
 
   return (
     <li className="card">
@@ -1088,6 +1097,41 @@ function FeedCard({
       </details>
 
       {/*
+        * Номер прайс-листа в кабинете площадки.
+        *
+        * Появляется у владельца после того, как специалист Дрома разместил
+        * прайс по нашей ссылке, то есть когда выгрузка давно заведена; а
+        * принимал его только `POST` при заведении. Без номера дельты молча
+        * не уходили, сколько бы раз ни сохранили ключ. Только владелец, как
+        * и сервер. Пустое поле снимает номер.
+        */}
+      {role === 'OWNER' && (
+        <details>
+          <summary>Номер прайс-листа {feed.packetId ? '· задан' : '· не задан'}</summary>
+          <label>
+            Номер прайс-листа в кабинете
+            <input
+              value={packet}
+              placeholder="12345"
+              onChange={(e) => setPacket(e.target.value)}
+            />
+          </label>
+          <p className="note">{PACKET_ID_HINT}</p>
+          {packet.trim() === '' && feed.packetId && (
+            <p className="note">Пустое поле снимет номер: дельты для этой выгрузки перестанут уходить.</p>
+          )}
+          {packetObstacle !== null && <p className="note">{packetObstacle}</p>}
+          <button
+            type="button"
+            disabled={busy || packetObstacle !== null}
+            onClick={() => void savePacket()}
+          >
+            Сохранить номер
+          </button>
+        </details>
+      )}
+
+      {/*
         * Переименовать, выключить и удалить.
         *
         * Выключить прайс-лист было нечем вовсе: его закрывают на сезон или
@@ -1183,6 +1227,21 @@ function FeedCard({
       )}
     </li>
   );
+
+  async function savePacket(): Promise<void> {
+    setBusy(true);
+    try {
+      const saved = await savePacketId(feed.id, packet);
+      if (mounted.current) {
+        setPacket(saved.packetId ?? '');
+        onChanged();
+      }
+    } catch (cause) {
+      if (mounted.current) onError(describe(cause, 'Номер не сохранён'));
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }
 
   async function saveSecret(): Promise<void> {
     setBusy(true);
@@ -1336,6 +1395,9 @@ function NewFeed({ onCreated }: { onCreated: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const mounted = useMounted();
+  // Номер в форме заведения проверяется тем же правилом, что в карточке:
+  // иначе «12 345» здесь проходил бы, а там отвергался (задача 0267).
+  const packetUnreadable = normalizePacketId(packetId) === undefined;
 
   return (
     <div className="card">
@@ -1377,10 +1439,21 @@ function NewFeed({ onCreated }: { onCreated: () => void }) {
           onChange={(e) => setPacketId(e.target.value)}
         />
       </label>
+      <p className="note">{PACKET_ID_HINT}</p>
+      {packetUnreadable && (
+        <p className="note note--error">
+          Номер не распознан: впишите номер из адреса прайс-листа или вставьте адрес целиком
+          (не больше 32 знаков, без пробелов), либо оставьте поле пустым
+        </p>
+      )}
 
       {error !== '' && <p className="note note--error">{error}</p>}
 
-      <button type="button" disabled={busy || title.trim() === ''} onClick={() => void save()}>
+      <button
+        type="button"
+        disabled={busy || title.trim() === '' || packetUnreadable}
+        onClick={() => void save()}
+      >
         {busy ? 'Заводим…' : 'Завести кабинет Дрома'}
       </button>
     </div>

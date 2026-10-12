@@ -43,6 +43,9 @@ class DromDeltaSenderTest extends PostgresTestBase {
     private DromDeltaSender sender;
 
     @Autowired
+    private ru.partsflow.publishing.MarketplaceAccountService accounts;
+
+    @Autowired
     private JdbcTemplate jdbc;
 
     @Autowired
@@ -98,6 +101,30 @@ class DromDeltaSenderTest extends PostgresTestBase {
         assertThat(inTenant(() -> sender.onDealIssued(dealId))).isTrue();
 
         assertThat(syncClient.calls()).isEmpty();
+    }
+
+    /**
+     * Номер прайс-листа появляется у владельца после того, как выгрузка заведена
+     * (задача 0267): впишет, заменит — и дельта идёт уже с ним.
+     */
+    @Test
+    @DisplayName("Номер, вписанный у заведённой выгрузки, уходит в запрос; замена уходит новым")
+    void packetIdSetLaterIsUsed() {
+        Long accountId = account(null, "ключ-кабинета");
+        long first = issuedDeal(part("Бампер", true));
+        inTenant(() -> sender.onDealIssued(first));
+        assertThat(syncClient.calls()).isEmpty();
+
+        inTenant(() -> accounts.setPacketId(accountId, "111"));
+        long second = issuedDeal(part("Фара", true));
+        inTenant(() -> sender.onDealIssued(second));
+
+        inTenant(() -> accounts.setPacketId(accountId, " 222 "));
+        long third = issuedDeal(part("Дверь", true));
+        inTenant(() -> sender.onDealIssued(third));
+
+        assertThat(syncClient.calls()).extracting(StubSyncClient.Call::packetId)
+                .containsExactly("111", "222");
     }
 
     @Test

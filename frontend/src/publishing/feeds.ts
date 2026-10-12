@@ -142,6 +142,12 @@ export interface Feed {
   productLine: 'PART' | 'WHEEL';
   /** Как собирается файл: наценка на прайс-лист и округление. */
   settings: FeedSettings;
+  /**
+   * Номер прайс-листа в кабинете площадки; `null` — не задан, и дельты
+   * для выгрузки не уходят. В отличие от ключа это не секрет: его владелец
+   * читает в адресе прайс-листа и должен видеть, что записано.
+   */
+  packetId: string | null;
   lastError: string | null;
   /**
    * Когда площадка последний раз забрала прайс по постоянной ссылке.
@@ -350,7 +356,12 @@ export function createFeed(
     body: {
       marketplace: 'DROM',
       title,
-      settings: packetId.trim() === '' ? null : JSON.stringify({ packetId: packetId.trim() }),
+      // Тем же правилом, что и правка в карточке: адрес прайс-листа даёт
+      // номер, пусто — номера нет. Нераспознанное уходит как набрано —
+      // сервер отвергнет его словами, а не запишет.
+      settings: packetId.trim() === ''
+        ? null
+        : JSON.stringify({ packetId: normalizePacketId(packetId) ?? packetId }),
       productLine,
     },
   });
@@ -485,6 +496,54 @@ export function setCredentials(id: number, secret: string): Promise<void> {
   return request<void>(`/api/marketplace-accounts/${id}/credentials`, {
     method: 'PUT',
     body: { secret },
+  });
+}
+
+/** Откуда брать номер прайс-листа: одна строка и под полем, и в форме заведения. */
+export const PACKET_ID_HINT =
+  'Номер виден в адресе прайс-листа в кабинете Дрома: …/packet/номер/recurrent-update. '
+  + 'Он появляется после того, как специалист Дрома разместит прайс по нашей ссылке.';
+
+/**
+ * Номер из того, что набрали: пусто — снять; адрес прайс-листа целиком даёт
+ * номер из него. `undefined` — не распознано (пробел внутри, длиннее 32 знаков).
+ *
+ * <p>Те же правила, что у сервера: сервер всё равно проверяет, а экран
+ * гасит кнопку заранее и называет причину.
+ */
+export function normalizePacketId(typed: string): string | undefined {
+  let value = typed.trim();
+  if (value === '') return '';
+  const fromUrl = /\/packet\/([^/?#\s]+)/.exec(value);
+  if (fromUrl?.[1]) value = fromUrl[1];
+  return /^[A-Za-z0-9_-]{1,32}$/.test(value) ? value : undefined;
+}
+
+/**
+ * Почему кнопка «Сохранить номер» погашена; `null` — можно нажимать.
+ * Одно выражение и на кнопку, и на подпись под ней.
+ */
+export function packetIdObstacle(typed: string, current: string | null): string | null {
+  const next = normalizePacketId(typed);
+  if (next === undefined) {
+    return 'Номер не распознан: впишите номер из адреса прайс-листа или вставьте адрес целиком '
+      + '(не больше 32 знаков, без пробелов)';
+  }
+  if (next === (current ?? '')) return 'Номер не изменился';
+  return null;
+}
+
+/**
+ * Вписывает, заменяет или снимает номер прайс-листа у заведённой выгрузки.
+ *
+ * <p>Пустая строка снимает номер, и дельты для этой выгрузки перестают
+ * уходить; полный прайс по ссылке работает как раньше. Отдельным запросом
+ * от настроек сборки: тело `PUT /settings` остаётся полным и номера не несёт.
+ */
+export function setPacketId(id: number, packetId: string): Promise<Feed> {
+  return request<Feed>(`/api/marketplace-accounts/${id}/packet-id`, {
+    method: 'PUT',
+    body: { packetId: normalizePacketId(packetId) ?? packetId },
   });
 }
 
