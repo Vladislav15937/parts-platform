@@ -150,6 +150,12 @@ export interface Feed {
   packetId: string | null;
   lastError: string | null;
   /**
+   * Итог последней отправки дельт на Дром (задача 0268). `null` — про выгрузку
+   * отправка не говорится: выключена или не Дром. Слова — `deliveryLine`;
+   * сырой ответ площадки остаётся в `lastError`.
+   */
+  deliveryStatus: DeliveryStatus | null;
+  /**
    * Когда площадка последний раз забрала прайс по постоянной ссылке.
    * `null` — не забирала ни разу.
    *
@@ -598,6 +604,100 @@ export function filterSummary(feed: Feed): string {
 
 function money(value: number): string {
   return value.toLocaleString('ru-RU');
+}
+
+export type DeliveryState =
+  | 'NOT_CONNECTED'
+  | 'NO_PACKET'
+  | 'NO_KEY'
+  | 'WAITING'
+  | 'ACCEPTED'
+  | 'REFUSED';
+
+export type DeliveryCode =
+  | 'PACKET_NOT_FOUND'
+  | 'AUTH_FAILED'
+  | 'EMPTY_REQUEST'
+  | 'TOO_BIG'
+  | 'NO_ANSWER'
+  | 'OTHER';
+
+/** `at` — время последней попытки при любом исходе; `code` — только при отказе. */
+export interface DeliveryStatus {
+  state: DeliveryState;
+  at: string | null;
+  code: DeliveryCode | null;
+}
+
+/**
+ * Отказы, у которых есть действие человека: только они красят строку.
+ * Остальные («повторится само», «уедет полным прайсом») тревожить нечем.
+ */
+const ACTIONABLE: DeliveryCode[] = ['PACKET_NOT_FOUND', 'AUTH_FAILED', 'EMPTY_REQUEST'];
+
+/**
+ * Итог последней отправки на Дром словами — единственное место слов.
+ *
+ * <p>Код ответа Дрома (`ERROR_REASON_…`) сюда не попадает: человеку он ничего
+ * не говорит, а остаётся только в раскрывающемся «Ответ Дрома». Слова — это
+ * предложение разведки 12.10.2026, а не перенос с Bazon (там слов для этого
+ * места не снято). Про «новые объявления» здесь нет ни слова намеренно: что
+ * Дром делает с ними по API, живой пробой не снято.
+ *
+ * @returns `null`, если про выгрузку отправка не говорится
+ */
+export function deliveryLine(feed: Feed): { text: string; error: boolean } | null {
+  const status = feed.deliveryStatus;
+  if (!status) {
+    return null;
+  }
+  const at = status.at === null ? '' : moment(status.at);
+  switch (status.state) {
+    case 'NOT_CONNECTED':
+      return {
+        text: 'Обновление по API не подключено. Цены и остатки у площадки обновятся '
+          + 'только с полным прайсом — он забирается раз в трое суток.',
+        error: false,
+      };
+    case 'NO_PACKET':
+      return {
+        text: 'Дельты не уходят: не указан номер прайс-листа. Он появится в кабинете '
+          + 'Дрома после того, как специалист разместит прайс по нашей ссылке.',
+        error: false,
+      };
+    case 'NO_KEY':
+      return { text: 'Дельты не уходят: не задан ключ синхронизации.', error: false };
+    case 'WAITING':
+      return {
+        text: 'Подключено у нас. Дельта уйдёт при первом изменении цены, остатка '
+          + 'или продаже позиции этого прайс-листа.',
+        error: false,
+      };
+    case 'ACCEPTED':
+      return { text: `Последняя дельта принята Дромом — ${at}.`, error: false };
+    case 'REFUSED':
+      break;
+  }
+  const code = status.code ?? 'OTHER';
+  const when = at === '' ? '' : ` (${at})`;
+  const text: Record<DeliveryCode, string> = {
+    PACKET_NOT_FOUND:
+      `Дром отказал${when}: прайс-лист не подключён к API. Напишите в поддержку Дрома `
+      + `и попросите включить обновление по API для этого прайс-листа `
+      + `(номер ${feed.packetId ?? '—'}). Пока не включат, изменения уедут только полным прайсом.`,
+    AUTH_FAILED:
+      `Дром не принял ключ${when}. Проверьте ключ синхронизации — его выдаёт поддержка `
+      + 'Дрома на кабинет, он выглядит как UUID. Заменить можно ниже.',
+    EMPTY_REQUEST:
+      `Дром получил запрос без данных или без ключа${when}. Задайте ключ заново; `
+      + 'если повторяется — сообщите нам.',
+    TOO_BIG:
+      `Изменений накопилось больше, чем принимает Дром за раз${when}. `
+      + 'Они уедут полным прайсом.',
+    NO_ANSWER: `Дром не ответил или ответил ошибкой${when}. Отправка повторится сама.`,
+    OTHER: `Дром не ответил или ответил ошибкой${when}. Отправка повторится сама.`,
+  };
+  return { text: text[code], error: ACTIONABLE.includes(code) };
 }
 
 /**

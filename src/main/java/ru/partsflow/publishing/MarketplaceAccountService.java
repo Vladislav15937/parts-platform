@@ -86,7 +86,7 @@ public class MarketplaceAccountService {
      */
     private List<Account> query(String where) {
         return jdbc.query("""
-                SELECT id, marketplace, title, status, last_sync_at IS NOT NULL AS synced,
+                SELECT id, marketplace, title, status, last_sync_at,
                        last_feed_download_at, deleted_at,
                        last_error, credentials IS NOT NULL AS has_credentials,
                        credentials, feed_token IS NOT NULL AS has_feed,
@@ -124,6 +124,11 @@ public class MarketplaceAccountService {
                         // записано, иначе поле нечем проверить.
                         rs.getString("packet_id"),
                         rs.getString("last_error"),
+                        DeliveryStatus.of(rs.getString("marketplace"), rs.getString("status"),
+                                rs.getBoolean("has_credentials"), rs.getString("packet_id"),
+                                instant(rs.getObject("last_sync_at",
+                                        java.time.OffsetDateTime.class)),
+                                rs.getString("last_error")),
                         instant(rs.getObject("last_feed_download_at",
                                 java.time.OffsetDateTime.class)),
                         instant(rs.getObject("deleted_at",
@@ -737,6 +742,9 @@ public class MarketplaceAccountService {
      *                     не задавали, и ссылка кончается токеном
      * @param packetId    номер прайс-листа в кабинете площадки; пусто — не задан,
      *                    и дельты для выгрузки не уходят
+     * @param deliveryStatus итог отправки дельт словом сервера (задача 0268);
+     *                    {@code null} у выключенной и у не-Дрома. Сырой ответ
+     *                    площадки остаётся в {@code lastError}
      * @param deletedAt   когда выгрузку удалили; пусто — живая. Удалённая
      *                    не отдаётся по ссылке и не видна в списке, но время
      *                    удаления и есть ответ на вопрос про историю:
@@ -750,7 +758,9 @@ public class MarketplaceAccountService {
                           String feedFileName,
                           String productLine, FeedSettings settings,
                           String packetId,
-                          String lastError, java.time.Instant lastDownloadAt,
+                          String lastError,
+                          DeliveryStatus deliveryStatus,
+                          java.time.Instant lastDownloadAt,
                           java.time.Instant deletedAt,
                           java.math.BigDecimal priceFrom,
                           java.math.BigDecimal priceTo, List<String> conditions,

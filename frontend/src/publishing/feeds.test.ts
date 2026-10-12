@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { downloadMark, filterSummary, type Feed } from './feeds';
+import { deliveryLine, downloadMark, filterSummary, type DeliveryCode, type Feed } from './feeds';
 
 /**
  * Как выгрузка описывает свой отбор в списке.
@@ -37,6 +37,7 @@ function feed(overrides: Partial<Feed> = {}): Feed {
       donorPhotoKinds: null,
     },
     lastError: null,
+    deliveryStatus: null,
     lastDownloadAt: null,
     // Живая: удалённая в обычный список не приходит вовсе.
     deletedAt: null,
@@ -122,5 +123,32 @@ describe('когда площадка последний раз забирала
     // Ни пусто, ни «01.01.1970»: первое читается как «экран не знает»,
     // второе — как поломка, и обе догадки уводят от настоящего ответа.
     expect(downloadMark(feed({ lastDownloadAt: null }))).toBe('Прайс не забирали');
+  });
+});
+
+describe('слова итога отправки', () => {
+  const CODES: DeliveryCode[] = ['PACKET_NOT_FOUND', 'AUTH_FAILED', 'EMPTY_REQUEST',
+    'TOO_BIG', 'NO_ANSWER', 'OTHER'];
+
+  it('у каждого кода отказа есть слова, и сырого кода Дрома в них нет', () => {
+    for (const code of CODES) {
+      const line = deliveryLine(feed({
+        packetId: '12345',
+        deliveryStatus: { state: 'REFUSED', at: '2026-10-12T07:05:00Z', code },
+      }));
+      expect(line, code).not.toBeNull();
+      expect(line!.text, code).not.toMatch(/ERROR_REASON|PACKET_NOT_FOUND|undefined/);
+    }
+  });
+
+  it('красят только отказы с действием', () => {
+    const red = CODES.filter((code) => deliveryLine(feed({
+      deliveryStatus: { state: 'REFUSED', at: null, code },
+    }))!.error);
+    expect(red).toEqual(['PACKET_NOT_FOUND', 'AUTH_FAILED', 'EMPTY_REQUEST']);
+  });
+
+  it('у выключенной нет строки', () => {
+    expect(deliveryLine(feed({ deliveryStatus: null }))).toBeNull();
   });
 });
