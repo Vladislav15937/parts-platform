@@ -31,9 +31,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * то, что вокруг запроса — какие позиции попадают в дельту, что пишется
  * в журнал публикаций и что происходит при отказе площадки.
  */
-@SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
+@SpringBootTest(properties = {"spring.jpa.hibernate.ddl-auto=none",
+        "app.crypto.key=" + DromDeltaSenderTest.CRYPTO_KEY})
 @Import(DromDeltaSenderTest.StubSyncConfig.class)
 class DromDeltaSenderTest extends PostgresTestBase {
+
+    /**
+     * Ключ шифрования секретов — тот же, что у {@code MarketplaceCredentialsTest}.
+     * Нужен {@code FeedDeltaRelayTest}: он меняет ключ кабинета сервисом
+     * (задача 0269). Стоит у обоих классов одинаково, иначе контекст Spring
+     * у них стал бы разным и поднимался дважды.
+     */
+    static final String CRYPTO_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
 
     private static final String TENANT = "t_000047";
 
@@ -169,6 +178,31 @@ class DromDeltaSenderTest extends PostgresTestBase {
         assertThat(statusOf("Дром").state()).isEqualTo(DeliveryStatus.State.ACCEPTED);
     }
 
+    /**
+     * Выдача сделки зовёт тот же отправитель, что и релей (задача 0269):
+     * мимо интервала после отказа «нужен человек» она не стучится, а сбой,
+     * который может пройти сам, по-прежнему отдаёт событие на повтор.
+     */
+    @Test
+    @DisplayName("Выдача сделки не стучится в отказавшую выгрузку раньше интервала; временный сбой — отказ, как раньше")
+    void dealIssueRespectsTheRefusalInterval() {
+        account("Принимает", "111", "ключ-кабинета");
+        account("Отказывает", "222", "ключ-кабинета");
+        syncClient.failFor("222", 200, "ERROR_REASON_PACKET_NOT_FOUND");
+
+        assertThat(inTenant(() -> sender.onDealIssued(issuedDeal(part("Фара", true))))).isTrue();
+        assertThat(inTenant(() -> sender.onDealIssued(issuedDeal(part("Дверь", true))))).isTrue();
+
+        assertThat(syncClient.calls()).extracting(StubSyncClient.Call::packetId)
+                .as("вторая выдача постучалась в отказавшую выгрузку раньше интервала")
+                .containsExactlyInAnyOrder("111", "222", "111");
+
+        syncClient.failFor("111", 503, "сервис недоступен");
+        assertThat(inTenant(() -> sender.onDealIssued(issuedDeal(part("Капот", true)))))
+                .as("временный сбой обязан вернуть событие на повтор")
+                .isFalse();
+    }
+
     @Test
     @DisplayName("Дельта сверх лимита — попытка, видимая на карточке как TOO_BIG")
     void tooBigIsAnAttempt() {
@@ -289,7 +323,11 @@ class DromDeltaSenderTest extends PostgresTestBase {
         long dealId = issuedDeal(part("Стойка", true));
 
         // Сорванная выгрузка не повод откатывать отданный клиенту товар.
-        assertThat(inTenant(() -> sender.onDealIssued(dealId))).isFalse();
+        // Отказ ключа без человека не пройдёт, и с задачи 0269 он не держит
+        // ни очередь, ни событие: повтор события раз в несколько минут стучался
+        // бы в Дром тем же неверным ключом. Отсюда «отправлено» — как у выгрузки
+        // без ключа; сам отказ остаётся в журнале и на карточке.
+        assertThat(inTenant(() -> sender.onDealIssued(dealId))).isTrue();
 
         inTenant(() -> {
             var row = jdbc.queryForMap("""
