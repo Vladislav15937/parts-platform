@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import { FeedsScreen } from './FeedsScreen';
 
@@ -21,6 +21,10 @@ describe('номер прайс-листа у заведённой выгруз�
       const url = String(input);
       if (url.includes('/packet-id')) {
         sent.push({ url, method: init?.method ?? 'GET', body: JSON.parse(String(init?.body ?? 'null')) });
+        return json(feed());
+      }
+      if (url.endsWith('/api/marketplace-accounts') && init?.method === 'POST') {
+        sent.push({ url, method: 'POST', body: JSON.parse(String(init.body ?? 'null')) });
         return json(feed());
       }
       if (url.includes('/api/marketplace-accounts')) {
@@ -87,6 +91,33 @@ describe('номер прайс-листа у заведённой выгруз�
 
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]!.body).toEqual({ packetId: '' });
+  });
+
+  it('форма заведения приводит номер тем же правилом, что и карточка', async () => {
+    render(<FeedsScreen role="OWNER" />);
+    await waitFor(() => expect(screen.getByText(/Номер прайс-листа · не задан/)).toBeTruthy());
+
+    const form = within(screen.getByRole('heading', { name: 'Завести выгрузку' })
+      .closest('.card') as HTMLElement);
+    fireEvent.change(form.getByPlaceholderText('например, Дром: основной'),
+      { target: { value: 'Новые' } });
+    const field = form.getByPlaceholderText('необязательно') as HTMLInputElement;
+    const create = form.getByRole('button', { name: 'Завести кабинет Дрома' }) as HTMLButtonElement;
+
+    // Пробел внутри: та же причина, что у карточки, и кнопка погашена.
+    fireEvent.change(field, { target: { value: '12 345' } });
+    expect(create.disabled).toBe(true);
+    expect(form.getByText(/Номер не распознан/)).toBeTruthy();
+
+    fireEvent.change(field, {
+      target: { value: ' https://baza.drom.ru/personal/goods/packet/555/recurrent-update ' } });
+    expect(create.disabled).toBe(false);
+    fireEvent.click(create);
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.method).toBe('POST');
+    const body = sent[0]!.body as { settings: string };
+    expect(JSON.parse(body.settings)).toEqual({ packetId: '555' });
   });
 
   it('управляющему блок номера не показывается', async () => {

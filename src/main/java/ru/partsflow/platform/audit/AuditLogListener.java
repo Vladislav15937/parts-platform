@@ -60,7 +60,8 @@ public class AuditLogListener
     private static final Set<String> AUDITED = Set.of(
             "part", "deal", "deal_item", "payment", "donor_cost");
 
-    private static final String INSERT = """
+    /** Одна запись на два пути: слушатель и {@link AuditJournal}. */
+    static final String INSERT = """
             INSERT INTO audit_log
                 (table_name, record_id, operation, old_value, new_value,
                  changed_by, changed_by_role)
@@ -189,7 +190,7 @@ public class AuditLogListener
         private JsonRows() {
         }
 
-        static String write(Map<String, Object> row) {
+        static String write(Map<String, ?> row) {
             StringBuilder json = new StringBuilder("{");
             boolean first = true;
             for (var entry : row.entrySet()) {

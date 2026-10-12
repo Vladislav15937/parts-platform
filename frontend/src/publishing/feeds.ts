@@ -362,7 +362,12 @@ export function createFeed(
     body: {
       marketplace: 'DROM',
       title,
-      settings: packetId.trim() === '' ? null : JSON.stringify({ packetId: packetId.trim() }),
+      // Тем же правилом, что и правка в карточке: адрес прайс-листа даёт
+      // номер, пусто — номера нет. Нераспознанное уходит как набрано —
+      // сервер отвергнет его словами, а не запишет.
+      settings: packetId.trim() === ''
+        ? null
+        : JSON.stringify({ packetId: normalizePacketId(packetId) ?? packetId }),
       productLine,
     },
   });

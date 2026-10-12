@@ -4,6 +4,7 @@ import ru.partsflow.shared.NotFound;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.platform.audit.AuditJournal;
 import ru.partsflow.platform.crypto.SecretCipher;
 import ru.partsflow.platform.tenant.TenantContext;
 
@@ -38,14 +39,17 @@ public class MarketplaceAccountService {
      */
     private final ru.partsflow.inventory.CatalogService parts;
     private final ru.partsflow.inventory.WheelService wheels;
+    private final AuditJournal journal;
 
     public MarketplaceAccountService(JdbcTemplate jdbc, SecretCipher cipher,
                                      ru.partsflow.inventory.CatalogService parts,
-                                     ru.partsflow.inventory.WheelService wheels) {
+                                     ru.partsflow.inventory.WheelService wheels,
+                                     AuditJournal journal) {
         this.jdbc = jdbc;
         this.cipher = cipher;
         this.parts = parts;
         this.wheels = wheels;
+        this.journal = journal;
     }
 
     /**
@@ -326,7 +330,7 @@ public class MarketplaceAccountService {
                 VALUES (?, ?, COALESCE(?::jsonb, '{}'::jsonb), ?)
                 RETURNING id""",
                 Long.class, marketplace, title.strip(),
-                settingsJson == null || settingsJson.isBlank() ? null : settingsJson,
+                settingsWithPacketIdNormalized(settingsJson),
                 line);
 
         return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow();
@@ -388,23 +392,77 @@ public class MarketplaceAccountService {
     @Transactional
     public Account setPacketId(Long id, String typed) {
         String packetId = normalizePacketId(typed);
-        int updated = packetId == null
-                ? jdbc.update("""
-                        UPDATE marketplace_account SET settings = COALESCE(settings, '{}'::jsonb) - 'packetId'
-                         WHERE id = ? AND deleted_at IS NULL""", id)
-                : jdbc.update("""
-                        UPDATE marketplace_account
-                           SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{packetId}', to_jsonb(?::text))
-                         WHERE id = ? AND deleted_at IS NULL""", packetId, id);
-        if (updated == 0) {
+        // Прежний номер читается под блокировкой строки: два владельца,
+        // нажавшие «Сохранить номер» разом, иначе оба записали бы в журнал
+        // одно и то же «было», и одна из правок выглядела бы сделанной
+        // с номера, которого к её моменту уже не было.
+        List<String> before = jdbc.query("""
+                SELECT settings ->> 'packetId' FROM marketplace_account
+                 WHERE id = ? AND deleted_at IS NULL FOR UPDATE""",
+                (rs, i) -> rs.getString(1), id);
+        if (before.isEmpty()) {
             throw NotFound.FEED.error(id);
         }
-        // Правки выгрузок идут прямым SQL мимо Hibernate и в audit_log не попадают;
-        // след остаётся в логе приложения, ключа в нём нет по построению.
-        org.slf4j.LoggerFactory.getLogger(MarketplaceAccountService.class)
-                .info("Выгрузка {}: номер прайс-листа {}", id,
-                        packetId == null ? "снят" : "задан");
+        if (packetId == null) {
+            jdbc.update("""
+                    UPDATE marketplace_account SET settings = COALESCE(settings, '{}'::jsonb) - 'packetId'
+                     WHERE id = ?""", id);
+        } else {
+            jdbc.update("""
+                    UPDATE marketplace_account
+                       SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{packetId}', to_jsonb(?::text))
+                     WHERE id = ?""", packetId, id);
+        }
+        String was = before.get(0);
+        if (!java.util.Objects.equals(was, packetId)) {
+            // Журнал изменений, а не строка в логе: решение владельца продукта
+            // от 12 октября 2026 (tasks/0267, «Вопрос владельцу продукта —
+            // журнал правки выгрузки»). Кто, когда, было → стало; в снимок
+            // идёт только номер — ключ синхронизации туда не попадает
+            // по построению, его здесь нет вовсе.
+            java.util.Map<String, String> old = new java.util.HashMap<>();
+            old.put("packet_id", was);
+            java.util.Map<String, String> now = new java.util.HashMap<>();
+            now.put("packet_id", packetId);
+            journal.changed("marketplace_account", id, old, now);
+        }
         return reload(id);
+    }
+
+    /**
+     * Настройки при заведении — с номером, приведённым тем же правилом,
+     * что и у {@link #setPacketId}.
+     *
+     * <p>Иначе у одного номера было бы две поверхности с разными правилами:
+     * форма заведения пропускала «12 345» и адрес прайс-листа целиком как есть
+     * (дельты потом уходили бы с номером, которого у площадки нет, и молча),
+     * а правка в карточке тот же ввод отвергала. Пустой номер снимается,
+     * а не пишется пустой строкой — по той же причине, что и в правке.
+     *
+     * @return текст jsonb либо {@code null}, если настроек не прислали
+     */
+    static String settingsWithPacketIdNormalized(String settingsJson) {
+        if (settingsJson == null || settingsJson.isBlank()) {
+            return null;
+        }
+        com.fasterxml.jackson.databind.JsonNode parsed;
+        try {
+            parsed = JSON.readTree(settingsJson);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException notJson) {
+            throw new IllegalArgumentException("Настройки выгрузки не разобраны");
+        }
+        if (!(parsed instanceof com.fasterxml.jackson.databind.node.ObjectNode settings)
+                || !settings.has("packetId")) {
+            return settingsJson;
+        }
+        com.fasterxml.jackson.databind.JsonNode typed = settings.get("packetId");
+        String packetId = normalizePacketId(typed.isNull() ? null : typed.asText());
+        if (packetId == null) {
+            settings.remove("packetId");
+        } else {
+            settings.put("packetId", packetId);
+        }
+        return settings.toString();
     }
 
     /** Пусто — снять; иначе номер, вынутый из адреса или обрезанный по краям. */

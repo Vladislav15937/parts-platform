@@ -33,6 +33,7 @@ import {
   downloadMark,
   filterSummary,
   listDeletedFeeds,
+  normalizePacketId,
   packetIdObstacle,
   listFeeds,
   renameFeed,
@@ -1411,6 +1412,9 @@ function NewFeed({ onCreated }: { onCreated: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const mounted = useMounted();
+  // Номер в форме заведения проверяется тем же правилом, что в карточке:
+  // иначе «12 345» здесь проходил бы, а там отвергался (задача 0267).
+  const packetUnreadable = normalizePacketId(packetId) === undefined;
 
   return (
     <div className="card">
@@ -1453,10 +1457,20 @@ function NewFeed({ onCreated }: { onCreated: () => void }) {
         />
       </label>
       <p className="note">{PACKET_ID_HINT}</p>
+      {packetUnreadable && (
+        <p className="note note--error">
+          Номер не распознан: впишите номер из адреса прайс-листа или вставьте адрес целиком
+          (не больше 32 знаков, без пробелов), либо оставьте поле пустым
+        </p>
+      )}
 
       {error !== '' && <p className="note note--error">{error}</p>}
 
-      <button type="button" disabled={busy || title.trim() === ''} onClick={() => void save()}>
+      <button
+        type="button"
+        disabled={busy || title.trim() === '' || packetUnreadable}
+        onClick={() => void save()}
+      >
         {busy ? 'Заводим…' : 'Завести кабинет Дрома'}
       </button>
     </div>
