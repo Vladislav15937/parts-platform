@@ -41,7 +41,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class MarketplaceFeedJournalTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000971";
+    private static final String TENANT = "t_000972";
     private static final String OLD_SECRET = "старый-ключ-5b1d";
     private static final String NEW_SECRET = "новый-ключ-9c4e";
     private static final String OLD_TOKEN = "oldtoken-aaaa1111bbbb2222cccc3333dddd4444";
@@ -67,10 +67,10 @@ class MarketplaceFeedJournalTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() {
-        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 971");
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 972");
         jdbc.update("""
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
-                VALUES (971, ?, 'Разборка', 'feedjournal')""", TENANT);
+                VALUES (972, ?, 'Разборка', 'feedjournal')""", TENANT);
         inTenant(() -> {
             jdbc.update("DELETE FROM audit_log WHERE table_name = 'marketplace_account'");
             jdbc.update("DELETE FROM marketplace_account");
@@ -222,6 +222,32 @@ class MarketplaceFeedJournalTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.items[1].changes[0].after").value("заменён"));
 
         assertThat(newToken).isNotEqualTo(OLD_TOKEN);
+    }
+
+    @Test
+    @DisplayName("Замена ключа: прежний отказ забыт и в журнале ровно одна запись «заменён»")
+    void replacedKeyForgetsRefusalAndIsJournaledOnce() throws Exception {
+        // Шов задач 0268 и 0270 в setCredentials: одно сохранение ключа
+        // обязано дать оба следствия — ни одно не вытесняет другое.
+        inTenant(() -> jdbc.update("""
+                UPDATE marketplace_account
+                   SET settings = '{"packetId":"777"}'::jsonb,
+                       last_sync_at = now(), last_error = 'ERROR_REASON_AUTH_FAILED'
+                 WHERE id = ?""", accountId));
+        mvc.perform(get("/api/marketplace-accounts").session(login("owner")))
+                .andExpect(jsonPath("$[?(@.title=='Новые')].deliveryStatus.state").value("REFUSED"));
+
+        putSecret("/credentials", NEW_SECRET);
+
+        mvc.perform(get("/api/marketplace-accounts").session(login("owner")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.title=='Новые')].deliveryStatus.state").value("WAITING"));
+        assertThat(rows()).isEqualTo(1);
+        journal().andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].changes.length()").value(1))
+                .andExpect(jsonPath("$.items[0].changes[0].label").value("Ключ синхронизации"))
+                .andExpect(jsonPath("$.items[0].changes[0].before").value("задан"))
+                .andExpect(jsonPath("$.items[0].changes[0].after").value("заменён"));
     }
 
     @Test
