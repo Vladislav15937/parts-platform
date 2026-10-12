@@ -90,7 +90,7 @@ public class MarketplaceAccountService {
      */
     private List<Account> query(String where) {
         return jdbc.query("""
-                SELECT id, marketplace, title, status, last_sync_at IS NOT NULL AS synced,
+                SELECT id, marketplace, title, status, last_sync_at,
                        last_feed_download_at, deleted_at,
                        last_error, credentials IS NOT NULL AS has_credentials,
                        credentials, feed_token IS NOT NULL AS has_feed,
@@ -127,7 +127,13 @@ public class MarketplaceAccountService {
                         // читает в адресе прайс-листа и должен видеть, что
                         // записано, иначе поле нечем проверить.
                         rs.getString("packet_id"),
-                        rs.getString("last_error"),
+                        DeliveryStatus.shownAnswer(rs.getString("marketplace"),
+                                rs.getString("last_error")),
+                        DeliveryStatus.of(rs.getString("marketplace"), rs.getString("status"),
+                                rs.getBoolean("has_credentials"), rs.getString("packet_id"),
+                                instant(rs.getObject("last_sync_at",
+                                        java.time.OffsetDateTime.class)),
+                                rs.getString("last_error")),
                         instant(rs.getObject("last_feed_download_at",
                                 java.time.OffsetDateTime.class)),
                         instant(rs.getObject("deleted_at",
@@ -410,6 +416,7 @@ public class MarketplaceAccountService {
         }
         String was = before.get(0);
         if (!java.util.Objects.equals(was, packetId)) {
+            forgetLastOutcome(id);
             // Журнал изменений, а не строка в логе: решение владельца продукта
             // от 12 октября 2026 (tasks/0267, «Вопрос владельцу продукта —
             // журнал правки выгрузки»). Кто, когда, было → стало; в снимок
@@ -620,6 +627,28 @@ public class MarketplaceAccountService {
         if (updated == 0) {
             throw NotFound.MARKETPLACE_ACCOUNT.error(accountId);
         }
+        // Сравнить с прежним ключом нечем — он зашифрован со случайным
+        // вектором, — поэтому забывается исход при любой записи ключа:
+        // «ждём первой отправки» про тот же ключ — правда, а вчерашний
+        // «Дром не принял ключ» про новый — нет.
+        forgetLastOutcome(accountId);
+    }
+
+    /**
+     * Забывает исход последней отправки (задача 0268).
+     *
+     * <p>Исход говорит про отправку с прежними номером и ключом. Заменили
+     * одно из двух — вчерашний «Дром не принял ключ» или «прайс-лист
+     * не подключён» про новый был бы неправдой, а висел бы до следующей
+     * попытки, то есть до ближайшего изменения позиции этого прайс-листа:
+     * владелец поправил то, что ему велели, и видит тот же упрёк. После
+     * замены карточка говорит «подключено у нас, дельта уйдёт при первом
+     * изменении» — ровно то, что известно.
+     */
+    private void forgetLastOutcome(long accountId) {
+        jdbc.update("""
+                UPDATE marketplace_account SET last_sync_at = NULL, last_error = NULL
+                 WHERE id = ?""", accountId);
     }
 
     /**
@@ -795,6 +824,9 @@ public class MarketplaceAccountService {
      *                     не задавали, и ссылка кончается токеном
      * @param packetId    номер прайс-листа в кабинете площадки; пусто — не задан,
      *                    и дельты для выгрузки не уходят
+     * @param deliveryStatus итог отправки дельт словом сервера (задача 0268);
+     *                    {@code null} у выключенной и у не-Дрома. Сырой ответ
+     *                    площадки остаётся в {@code lastError}
      * @param deletedAt   когда выгрузку удалили; пусто — живая. Удалённая
      *                    не отдаётся по ссылке и не видна в списке, но время
      *                    удаления и есть ответ на вопрос про историю:
@@ -808,7 +840,9 @@ public class MarketplaceAccountService {
                           String feedFileName,
                           String productLine, FeedSettings settings,
                           String packetId,
-                          String lastError, java.time.Instant lastDownloadAt,
+                          String lastError,
+                          DeliveryStatus deliveryStatus,
+                          java.time.Instant lastDownloadAt,
                           java.time.Instant deletedAt,
                           java.math.BigDecimal priceFrom,
                           java.math.BigDecimal priceTo, List<String> conditions,
