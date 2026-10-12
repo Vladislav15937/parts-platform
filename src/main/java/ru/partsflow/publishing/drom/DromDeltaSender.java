@@ -165,11 +165,8 @@ public class DromDeltaSender {
             log.warn("Дром: дельта {} для выгрузки {} не влезла в лимит ({} байт) — "
                             + "состояние приедет полным прайсом",
                     label, target.account().id(), body.length);
-            String tooBig = DromSyncRecord.tooBig(syncClient.maxPacketBytes());
-            logPublication(target.account().id(), 0, offers, false, tooBig);
-            // Попытка была, и карточка должна её показать: без этого выгрузка
-            // с дельтой-великаном выглядела бы «ещё не отправляли».
-            updateAccountState(target.account().id(), false, tooBig);
+            logPublication(target.account().id(), 0, offers, false,
+                    "дельта превысила лимит " + syncClient.maxPacketBytes());
             return false;
         }
 
@@ -182,7 +179,7 @@ public class DromDeltaSender {
         logPublication(target.account().id(), result.httpStatus(), offers, result.success(),
                 result.success() ? null : result.body());
         markSynced(target.account().id(), partIds, result.success());
-        updateAccountState(target.account().id(), result.success(), DromSyncRecord.of(result));
+        updateAccountState(target.account().id(), result);
 
         if (!result.success()) {
             log.warn("Дром: дельта {} в выгрузку {} не ушла, HTTP {}",
@@ -258,17 +255,12 @@ public class DromDeltaSender {
         }
     }
 
-    /**
-     * Исход пишется по выгрузке: у пяти прайс-листов он свой. Текст отказа
-     * собирает {@link DromSyncRecord} — с меткой статуса или сбоя соединения
-     * и потому никогда не пустой: {@code NULL} в этой колонке значит «принято».
-     */
-    private void updateAccountState(long accountId, boolean success, String failure) {
+    private void updateAccountState(long accountId, DromSyncClient.Result result) {
         jdbc.update("""
                 UPDATE marketplace_account
                    SET last_sync_at = now(), last_error = ?
                  WHERE id = ?""",
-                success ? null : failure, accountId);
+                result.success() ? null : result.body(), accountId);
     }
 
     /** Выгрузка с уже расшифрованным ключом: расшифровка делается один раз. */

@@ -14,7 +14,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.inventory.StockMovement;
-import ru.partsflow.publishing.DeliveryStatus;
 import ru.partsflow.support.PostgresTestBase;
 
 import java.nio.charset.StandardCharsets;
@@ -126,59 +125,6 @@ class DromDeltaSenderTest extends PostgresTestBase {
 
         assertThat(syncClient.calls()).extracting(StubSyncClient.Call::packetId)
                 .containsExactly("111", "222");
-    }
-
-    /**
-     * Итог отправки свой у каждого прайс-листа (задача 0268): чужой успех не
-     * затирает отказ, а отказ соседа не красит принявшую выгрузку.
-     */
-    @Test
-    @DisplayName("Две выгрузки: одна приняла, другая отказала — каждая говорит про себя")
-    void outcomeIsPerFeed() {
-        account("Принимает", "111", "ключ-кабинета");
-        account("Отказывает", "222", "ключ-кабинета");
-        syncClient.failFor("222", 200, "ERROR_REASON_PACKET_NOT_FOUND");
-
-        assertThat(statusOf("Принимает").state()).isEqualTo(DeliveryStatus.State.WAITING);
-        assertThat(statusOf("Отказывает").state()).isEqualTo(DeliveryStatus.State.WAITING);
-
-        long dealId = issuedDeal(part("Бампер", true));
-        inTenant(() -> sender.onDealIssued(dealId));
-
-        DeliveryStatus ok = statusOf("Принимает");
-        assertThat(ok.state()).isEqualTo(DeliveryStatus.State.ACCEPTED);
-        assertThat(ok.at()).isNotNull();
-        assertThat(ok.code()).isNull();
-        DeliveryStatus refused = statusOf("Отказывает");
-        assertThat(refused.state()).isEqualTo(DeliveryStatus.State.REFUSED);
-        assertThat(refused.code()).isEqualTo(DeliveryStatus.Code.PACKET_NOT_FOUND);
-    }
-
-    @Test
-    @DisplayName("Принятая после отказа дельта снимает отказ; сбой без текста — обрыв связи, а не «принято»")
-    void laterOutcomeReplacesEarlier() {
-        account("Дром", "111", "ключ-кабинета");
-        syncClient.failWith(0, null);
-        inTenant(() -> sender.onDealIssued(issuedDeal(part("Фара", true))));
-        // Пустое сообщение сбоя не превращается в null, а null в этой колонке — «принято».
-        assertThat(statusOf("Дром").state()).isEqualTo(DeliveryStatus.State.REFUSED);
-        assertThat(statusOf("Дром").code()).isEqualTo(DeliveryStatus.Code.CONNECTION_BROKEN);
-
-        syncClient.reset();
-        inTenant(() -> sender.onDealIssued(issuedDeal(part("Дверь", true))));
-        assertThat(statusOf("Дром").state()).isEqualTo(DeliveryStatus.State.ACCEPTED);
-    }
-
-    @Test
-    @DisplayName("Дельта сверх лимита — попытка, видимая на карточке как TOO_BIG")
-    void tooBigIsAnAttempt() {
-        account("Дром", "111", "ключ-кабинета");
-        syncClient.limit(10);
-        inTenant(() -> sender.onDealIssued(issuedDeal(part("Капот", true))));
-
-        assertThat(syncClient.calls()).isEmpty();
-        assertThat(statusOf("Дром").state()).isEqualTo(DeliveryStatus.State.REFUSED);
-        assertThat(statusOf("Дром").code()).isEqualTo(DeliveryStatus.Code.TOO_BIG);
     }
 
     @Test
@@ -341,20 +287,10 @@ class DromDeltaSenderTest extends PostgresTestBase {
     // ---------- фикстуры ----------
 
     private Long account(String packetId, String cabinetKey) {
-        return account("Дром", packetId, cabinetKey);
-    }
-
-    private DeliveryStatus statusOf(String title) {
-        return inTenant(() -> accounts.list().stream()
-                .filter(a -> title.equals(a.title())).findFirst().orElseThrow()
-                .deliveryStatus());
-    }
-
-    private Long account(String title, String packetId, String cabinetKey) {
         return inTenant(() -> jdbc.queryForObject("""
                 INSERT INTO marketplace_account (marketplace, title, credentials, settings)
-                VALUES ('DROM', ?, ?, ?::jsonb) RETURNING id""",
-                Long.class, title,
+                VALUES ('DROM', 'Дром', ?, ?::jsonb) RETURNING id""",
+                Long.class,
                 cabinetKey == null ? null : cabinetKey.getBytes(StandardCharsets.UTF_8),
                 packetId == null ? "{}" : "{\"packetId\": \"" + packetId + "\"}"));
     }
@@ -413,27 +349,11 @@ class DromDeltaSenderTest extends PostgresTestBase {
 
         private final List<Call> calls = new ArrayList<>();
         private Result answer = new Result(true, 200, "");
-        private final java.util.Map<String, Result> perPacket = new java.util.HashMap<>();
-        private int limit = super.maxPacketBytes();
-
-        @Override
-        public int maxPacketBytes() {
-            return limit;
-        }
-
-        void limit(int bytes) {
-            limit = bytes;
-        }
 
         @Override
         public Result sync(String packetId, String auth, byte[] deltaXml, String fileName) {
             calls.add(new Call(packetId, auth, new String(deltaXml, StandardCharsets.UTF_8), fileName));
-            return perPacket.getOrDefault(packetId, answer);
-        }
-
-        /** Отказ только для одного прайс-листа: остальные принимают. */
-        void failFor(String packetId, int httpStatus, String body) {
-            perPacket.put(packetId, new Result(false, httpStatus, body));
+            return answer;
         }
 
         void failWith(int httpStatus, String body) {
@@ -442,8 +362,6 @@ class DromDeltaSenderTest extends PostgresTestBase {
 
         void reset() {
             calls.clear();
-            perPacket.clear();
-            limit = super.maxPacketBytes();
             answer = new Result(true, 200, "");
         }
 

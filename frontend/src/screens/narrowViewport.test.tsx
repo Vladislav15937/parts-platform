@@ -191,11 +191,7 @@ const FEEDS = [
     status: 'ACTIVE', hasCredentials: true, plaintextSecret: false, hasFeed: true,
     feedFileName: 'drom-parts.xml', productLine: 'PART',
     settings: { pricePercent: -20, priceRounding: 100, photoLimit: 10 },
-    // Самая длинная из строк итога отправки: красная, с номером и действием.
-    packetId: '12345678901234567890123456789012',
-    lastError: 'ERROR_REASON_PACKET_NOT_FOUND',
-    deliveryStatus: { state: 'REFUSED', at: '2026-10-12T07:05:00Z', code: 'PACKET_NOT_FOUND' },
-    lastDownloadAt: '2026-09-05T20:01:00Z', deletedAt: null,
+    lastError: null, lastDownloadAt: '2026-09-05T20:01:00Z', deletedAt: null,
     priceFrom: null, priceTo: null, conditions: [], warehouseIds: [],
     kindIds: [], kindsExcluded: false, brandIds: [], brandsExcluded: false,
     filterColumns: {}, filterWords: {},

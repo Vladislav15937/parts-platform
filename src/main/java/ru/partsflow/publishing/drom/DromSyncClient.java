@@ -6,15 +6,10 @@ import org.springframework.stereotype.Component;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.net.ConnectException;
 import java.net.URI;
-import java.net.UnknownHostException;
 import java.net.http.HttpClient;
-import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.net.http.HttpTimeoutException;
-import java.nio.channels.UnresolvedAddressException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -50,20 +45,9 @@ public class DromSyncClient {
     private static final URI SYNC_ENDPOINT = URI.create("https://baza.drom.ru/good/packet/api/sync");
     private static final int MAX_PACKET_BYTES = 5 * 1024 * 1024;
 
-    private final URI endpoint;
-    private final Duration requestTimeout;
-    private final HttpClient httpClient;
-
-    public DromSyncClient() {
-        this(SYNC_ENDPOINT, Duration.ofSeconds(15), Duration.ofMinutes(2));
-    }
-
-    /** Для проверки на настоящем соединении: свой адрес и свои сроки. */
-    DromSyncClient(URI endpoint, Duration connectTimeout, Duration requestTimeout) {
-        this.endpoint = endpoint;
-        this.requestTimeout = requestTimeout;
-        this.httpClient = HttpClient.newBuilder().connectTimeout(connectTimeout).build();
-    }
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(15))
+            .build();
 
     public int maxPacketBytes() {
         return MAX_PACKET_BYTES;
@@ -86,8 +70,8 @@ public class DromSyncClient {
         try {
             byte[] body = multipartBody(boundary, packetId, auth, deltaXml, fileName);
 
-            HttpRequest request = HttpRequest.newBuilder(endpoint)
-                    .timeout(requestTimeout)
+            HttpRequest request = HttpRequest.newBuilder(SYNC_ENDPOINT)
+                    .timeout(Duration.ofMinutes(2))
                     .header("Content-Type", "multipart/form-data; boundary=" + boundary)
                     .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                     .build();
@@ -95,10 +79,7 @@ public class DromSyncClient {
             HttpResponse<String> response =
                     httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 
-            // Успех и отказ — одним разбором по виду, тем же, которым карточка
-            // потом называет причину: разойдись они, карточка сказала бы
-            // «отказ» про то, что отправитель счёл принятым, или наоборот.
-            boolean ok = DromAnswer.accepted(response.statusCode(), response.body());
+            boolean ok = response.statusCode() == 200 && !response.body().contains("ERROR_REASON");
             if (!ok) {
                 log.warn("Дром: синхронизация не удалась, HTTP {}, тело: {}",
                         response.statusCode(), response.body());
@@ -106,52 +87,11 @@ public class DromSyncClient {
             return new Result(ok, response.statusCode(), response.body());
 
         } catch (IOException e) {
-            Transport kind = transportOf(e);
-            log.warn("Дром: синхронизация не удалась, {}: {}", kind, e.toString());
-            return new Result(false, 0, describe(e), kind);
+            return new Result(false, 0, e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return new Result(false, 0, "Прервано", Transport.BROKEN);
+            return new Result(false, 0, "Прервано");
         }
-    }
-
-    /**
-     * Что случилось с соединением, когда ответа нет вовсе.
-     *
-     * <p>«Не ответил» человеку не помогает: истёкший срок ожидания, отказ
-     * в соединении и неразрешённое имя лечатся разным — первое ждут, второе
-     * чаще всего сбой площадки, третье почти всегда наша сеть. Различаются
-     * они видом исключения {@link HttpClient}: срок — {@link HttpTimeoutException}
-     * (срок соединения — его подвид, и это «не соединились»), имя —
-     * {@link UnresolvedAddressException} или {@link UnknownHostException}
-     * в цепочке причин, отказ — {@link ConnectException}.
-     */
-    static Transport transportOf(Throwable e) {
-        if (e instanceof HttpConnectTimeoutException) {
-            return Transport.CONNECT;
-        }
-        if (e instanceof HttpTimeoutException) {
-            return Transport.TIMEOUT;
-        }
-        for (Throwable c = e; c != null; c = c.getCause()) {
-            if (c instanceof UnresolvedAddressException || c instanceof UnknownHostException) {
-                return Transport.DNS;
-            }
-        }
-        if (e instanceof ConnectException) {
-            return Transport.CONNECT;
-        }
-        return Transport.BROKEN;
-    }
-
-    /** Текст сбоя: сообщение исключения бывает пустым, а пустота тут не годится. */
-    private static String describe(Throwable e) {
-        String message = e.getMessage();
-        for (Throwable c = e.getCause(); (message == null || message.isBlank()) && c != null;
-             c = c.getCause()) {
-            message = c.getMessage();
-        }
-        return message == null || message.isBlank() ? e.getClass().getSimpleName() : message;
     }
 
     /**
@@ -195,28 +135,6 @@ public class DromSyncClient {
         out.write("\r\n".getBytes(StandardCharsets.UTF_8));
     }
 
-    /** Что случилось с соединением, когда HTTP-ответа нет (задача 0268). */
-    public enum Transport {
-        /** Соединились, а ответа не дождались. */
-        TIMEOUT,
-        /** Соединение не установилось: отказ или срок соединения. */
-        CONNECT,
-        /** Имя площадки не разрешилось. */
-        DNS,
-        /** Связь оборвалась иначе (сброс, TLS, прерывание). */
-        BROKEN
-    }
-
-    /**
-     * @param httpStatus 0, если HTTP-ответа не было
-     * @param body       тело ответа; без ответа — текст сбоя
-     * @param failure    при {@code httpStatus == 0} — что случилось с соединением;
-     *                   иначе {@code null}
-     */
-    public record Result(boolean success, int httpStatus, String body, Transport failure) {
-
-        public Result(boolean success, int httpStatus, String body) {
-            this(success, httpStatus, body, null);
-        }
+    public record Result(boolean success, int httpStatus, String body) {
     }
 }
