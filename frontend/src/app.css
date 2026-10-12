@@ -278,6 +278,13 @@ button:disabled {
   margin: 0;
   color: var(--muted);
   font-size: 0.9rem;
+  /* Итог отправки несёт номера и коды без пробелов (ERROR_REASON_…): без
+     переноса такое слово выталкивает страницу вбок (задача 0268, 6 px при 390). */
+  overflow-wrap: anywhere;
+}
+
+details > .muted {
+  overflow-wrap: anywhere;
 }
 
 .error {

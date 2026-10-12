@@ -29,6 +29,7 @@ import {
   decimalOrNull,
   deleteFeed,
   deletedMark,
+  deliveryLine,
   downloadMark,
   filterSummary,
   listDeletedFeeds,
@@ -538,6 +539,7 @@ function FeedCard({
 
   // Одно выражение на кнопку «Сохранить номер» и на подпись под ней.
   const packetObstacle = packetIdObstacle(packet, feed.packetId);
+  const delivery = deliveryLine(feed);
 
   return (
     <li className="card">
@@ -566,7 +568,22 @@ function FeedCard({
         </p>
       )}
 
-      {feed.lastError && <p className="note note--error">{feed.lastError}</p>}
+      {/* Итог последней отправки дельт — рядом с «Скачан …», потому что оба
+          отвечают на «уехало ли», а факты разные: забрали прайс и приняли
+          дельту. Слова вместо кода Дрома; красным — только отказ, у которого
+          есть действие (задача 0268). */}
+      {delivery && (
+        <p className={delivery.error ? 'note note--error' : 'note'}>{delivery.text}</p>
+      )}
+      {feed.lastError && feed.marketplace === 'AVITO' && (
+        <p className="note note--error">{feed.lastError}</p>
+      )}
+      {feed.lastError && feed.marketplace !== 'AVITO' && (
+        <details>
+          <summary>Ответ Дрома</summary>
+          <p className="muted">{feed.lastError}</p>
+        </details>
+      )}
 
       <div className="filter-row">
         <label className="field">
