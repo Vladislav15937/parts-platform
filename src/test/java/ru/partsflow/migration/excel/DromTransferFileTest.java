@@ -126,11 +126,11 @@ class DromTransferFileTest extends PostgresTestBase {
                     BigDecimal.class))
                     .as("остаток не равен количеству из файла")
                     .isEqualByComparingTo(value),
-            "Номер", (t, part, value) -> assertThat(t.column(part, """
+            "Номер", (t, part, value) -> assertThat(t.inTenant(() -> t.jdbc.queryForList("""
                     SELECT raw_number FROM part_oem WHERE part_id = ? AND is_primary""",
-                    String.class))
+                    String.class, part)))
                     .as("номер производителя не доехал главным номером позиции")
-                    .isEqualTo(value));
+                    .containsExactly(value));
 
     @Autowired
     private MockMvc mvc;
