@@ -93,7 +93,7 @@ describe('файл переноса с Дрома', () => {
       expect(skipped, `читаемая «${title}» названа непереносимой`).not.toContain(`${title},`);
     }
     // Ровно 18 из 22: четыре колонки договора импорт читает сегодня.
-    expect(skipped.split(':')[1].split(',').length).toBe(18);
+    expect((skipped.split(':')[1] ?? '').split(',').length).toBe(18);
     expect(columnHead('Наименование')).toContain('→ Наименование');
   });
 
