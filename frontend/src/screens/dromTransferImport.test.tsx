@@ -35,7 +35,7 @@ const ROW = [
 
 const PREVIEW = {
   header: HEADER,
-  detected: { NAME: 2, PRICE: 5, QUANTITY: 6, OEM: 11 },
+  detected: { NAME: 2, PRICE: 5, QUANTITY: 6, OEM: 11, PHOTOS: 21 },
   missingRequired: [],
   rows: [ROW],
   format: 'DROM_TRANSFER',
@@ -43,14 +43,23 @@ const PREVIEW = {
 
 describe('файл переноса с Дрома', () => {
   let answer: unknown;
+  // Сколько снимков в очереди: ноль до загрузки, четырнадцать после, —
+  // как на сервере, где их ставит в очередь сама загрузка.
+  let queued: number;
 
   beforeEach(() => {
     answer = PREVIEW;
+    queued = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      if (String(input).includes('/api/import/excel/preview')) {
+      const url = String(input);
+      if (url.includes('/api/import/excel/preview')) {
         return json(answer);
       }
-      return json({ done: 0, failed: 0, pending: 0, total: 0, broken: 0 });
+      if (url.endsWith('/api/import/excel')) {
+        queued = 14;
+        return json({ imported: 1, skipped: [] });
+      }
+      return json({ done: 0, failed: 0, pending: queued, total: 0, broken: 0 });
     }));
   });
 
@@ -67,6 +76,8 @@ describe('файл переноса с Дрома', () => {
     expect(mapping('Цена')).toBe('5');
     expect(mapping('Количество')).toBe('6');
     expect(mapping('Номер детали')).toBe('11');
+    expect(mapping('Фото'), 'снимки клиента не сопоставлены — экран назвал бы их непереносимыми')
+      .toBe('21');
     expect(screen.queryByText(/Не сопоставлено:/)).toBeNull();
   });
 
@@ -85,16 +96,40 @@ describe('файл переноса с Дрома', () => {
     await waitFor(() => expect(document.querySelector('table.preview')).toBeTruthy());
 
     const skipped = screen.queryByText(/Не переносятся/)?.textContent ?? '';
-    for (const title of ['Номер объявления Дрома', 'Состояние', 'Описание', 'Фото',
+    for (const title of ['Номер объявления Дрома', 'Состояние', 'Описание',
       'Применимость', 'Доставка и оплата']) {
       expect(skipped, `о колонке «${title}» экран промолчал`).toContain(title);
     }
+    // «Фото» стоит в файле последней, и в перечне её выдала бы точка, а не
+    // запятая, — поэтому отдельно и целиком.
+    expect(skipped, 'снимки названы непереносимыми').not.toContain('Фото');
     for (const title of ['Наименование', 'Цена', 'Количество']) {
       expect(skipped, `читаемая «${title}» названа непереносимой`).not.toContain(`${title},`);
     }
-    // Ровно 18 из 22: четыре колонки договора импорт читает сегодня.
-    expect((skipped.split(':')[1] ?? '').split(',').length).toBe(18);
+    // Ровно 17 из 22: пять колонок договора импорт читает сегодня.
+    expect((skipped.split(':')[1] ?? '').split(',').length).toBe(17);
     expect(columnHead('Наименование')).toContain('→ Наименование');
+    expect(columnHead('Фото')).toContain('→ Фото');
+  });
+
+  it('после загрузки счётчик снимков сразу показывает поставленное в очередь', async () => {
+    render(<ImportScreen reference={reference([{ id: 7, name: 'Исакова' }])} canImport />);
+    await waitFor(() => expect(screen.getByText(/ждёт 0/)).toBeTruthy());
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(['xlsx'], 'perenos-s-droma.xlsx')] } });
+    await waitFor(() => expect(document.querySelector('table.preview')).toBeTruthy());
+
+    // Первый выбор склада — загрузки таблицы; второй ниже — у переноса колёс.
+    const warehouse = screen.getAllByText('— выберите склад —')[0]
+      .closest('select') as HTMLSelectElement;
+    fireEvent.change(warehouse, { target: { value: '7' } });
+    fireEvent.click(screen.getByText('Загрузить склад'));
+
+    await waitFor(() => expect(screen.getByText(/Загружено позиций: 1/)).toBeTruthy());
+    expect(screen.getByText(/Ссылки на снимки поставлены в очередь/)).toBeTruthy();
+    // Счётчик, оставшийся на «ждёт 0», говорит владельцу «переносить нечего» —
+    // так у клиента прежней системы и осталось восемь снимков из ста девяноста тысяч.
+    await waitFor(() => expect(screen.getByText(/ждёт 14/)).toBeTruthy());
   });
 
   it('ответ прежней версии без признака формата не роняет экран', async () => {
@@ -130,8 +165,8 @@ function columnHead(title: string): string {
   return th!.textContent ?? '';
 }
 
-function reference(): never {
-  return { warehouses: [], supplies: [], donors: [], cells: [], partNames: [] } as never;
+function reference(warehouses: { id: number; name: string }[] = []): never {
+  return { warehouses, supplies: [], donors: [], cells: [], partNames: [] } as never;
 }
 
 function json(body: unknown): Response {

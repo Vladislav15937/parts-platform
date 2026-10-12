@@ -22,6 +22,9 @@ export const FIELDS = [
   { key: 'CELL', label: 'Ячейка', required: false },
   { key: 'OEM', label: 'Номер детали', required: false },
   { key: 'NOTE', label: 'Примечание', required: false },
+  // Ссылки на снимки, по одной на строку ячейки, главный первым. Сами файлы
+  // качает отдельный проход «Фотографии» ниже на экране (задача 0273).
+  { key: 'PHOTOS', label: 'Фото', required: false },
 ] as const;
 
 export type FieldKey = (typeof FIELDS)[number]['key'];

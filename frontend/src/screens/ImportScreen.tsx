@@ -246,6 +246,12 @@ export function ImportScreen({ reference, canImport }: Props) {
               </ul>
             </>
           )}
+          {columns.PHOTOS !== undefined && report.imported > 0 && (
+            <p className="note">
+              Ссылки на снимки поставлены в очередь. Сами файлы переносятся
+              ниже, в «Фотографиях», кнопкой «Перенести все».
+            </p>
+          )}
           <p className="note">
             Наименования попали в общий справочник. Те, что не сопоставились
             с эталоном, ждут на экране нераспознанных — до этого они не уедут
@@ -300,7 +306,14 @@ export function ImportScreen({ reference, canImport }: Props) {
     setError(null);
     try {
       const done = await importFile(file, warehouseId, columns, requestId);
-      if (mounted.current) setReport(done);
+      if (mounted.current) {
+        setReport(done);
+        // Снимки из колонки «Фото» встали в очередь — счётчик ниже обязан
+        // это показать сразу, иначе он стоит на «ждёт 0» при полной очереди
+        // и владелец решает, что переносить нечего (та же беда, что была
+        // у переноса из предыдущей системы).
+        setImported((n) => n + 1);
+      }
     } catch (cause) {
       if (mounted.current) setError(describe(cause, 'Загрузка не прошла'));
     } finally {
