@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { duplicateColumns, FIELDS, missingRequired } from './warehouseImport';
+import {
+  duplicateColumns, FIELDS, missingRequired, NO_QUANTITY_COLUMN, quantityNote,
+} from './warehouseImport';
 import type { FieldKey } from './warehouseImport';
 
 /**
@@ -14,8 +16,8 @@ import type { FieldKey } from './warehouseImport';
 const columns = (given: Partial<Record<FieldKey, number>>) => given;
 
 describe('обязательные колонки', () => {
-  it('без наименования и количества запускать нечего', () => {
-    expect(missingRequired(columns({}))).toEqual(['Наименование', 'Количество']);
+  it('без наименования запускать нечего', () => {
+    expect(missingRequired(columns({}))).toEqual(['Наименование']);
   });
 
   it('цена необязательна', () => {
@@ -29,8 +31,30 @@ describe('обязательные колонки', () => {
     expect(missingRequired(columns({ NAME: 0, QUANTITY: 3 }))).toEqual([]);
   });
 
-  it('не хватает только количества — говорим именно про него', () => {
-    expect(missingRequired(columns({ NAME: 2 }))).toEqual(['Количество']);
+  it('без количества запускать можно — по одной штуке (задача 0279)', () => {
+    // На карточке Дрома количества нет вовсе: требуй его экран, файл переноса
+    // с Дрома не загружался бы никогда.
+    expect(missingRequired(columns({ NAME: 2 }))).toEqual([]);
+  });
+});
+
+describe('количество по умолчанию говорится до загрузки', () => {
+  const rows = [['Фара', ''], ['Бампер', '']];
+
+  it('колонки нет — словами критерия', () => {
+    expect(quantityNote(columns({ NAME: 0 }), rows)).toBe(
+      'Количества в файле нет — каждая позиция заведётся по 1 шт.');
+    expect(NO_QUANTITY_COLUMN).toContain('по 1 шт.');
+  });
+
+  it('колонка есть, но пуста в первых строках — так выглядит файл с Дрома', () => {
+    expect(quantityNote(columns({ NAME: 0, QUANTITY: 1 }), rows))
+      .toContain('заведутся по 1 шт.');
+  });
+
+  it('количество в файле есть — молчим', () => {
+    expect(quantityNote(columns({ NAME: 0, QUANTITY: 1 }), [['Фара', '3'], ['Бампер', '']]))
+      .toBeNull();
   });
 });
 
@@ -53,8 +77,8 @@ describe('колонка, назначенная дважды', () => {
 });
 
 describe('список полей', () => {
-  it('обязательны ровно наименование и количество', () => {
+  it('обязательно ровно наименование', () => {
     expect(FIELDS.filter((f) => f.required).map((f) => f.label))
-      .toEqual(['Наименование', 'Количество']);
+      .toEqual(['Наименование']);
   });
 });
