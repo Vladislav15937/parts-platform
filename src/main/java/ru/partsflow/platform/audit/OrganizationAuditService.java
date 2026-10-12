@@ -94,14 +94,16 @@ public class OrganizationAuditService {
             "deal", "Сделка заведена",
             "deal_item", "Позиция добавлена в сделку",
             "payment", "Платёж записан",
-            "donor_cost", "Затрата записана");
+            "donor_cost", "Затрата записана",
+            "marketplace_account", "Выгрузка заведена");
 
     private static final Map<String, String> REMOVED = Map.of(
             "part", "Товар удалён",
             "deal", "Сделка удалена",
             "deal_item", "Позиция убрана из сделки",
             "payment", "Платёж удалён",
-            "donor_cost", "Затрата удалена");
+            "donor_cost", "Затрата удалена",
+            "marketplace_account", "Выгрузка удалена");
 
     /**
      * Одно выражение, по которому ищут вещь.
@@ -308,7 +310,8 @@ public class OrganizationAuditService {
                         + " idl.number AS item_deal_number,"
                         + " paid.number AS payment_deal_number,"
                         + " coalesce(dcd.legacy_code, dcd.public_code) AS cost_donor,"
-                        + " ma.title AS feed_title"
+                        + " ma.title AS feed_title,"
+                        + " a.new_value ->> 'packet_id' AS created_packet"
                         + " FROM audit_log a JOIN watched w ON w.table_name = a.table_name"
                         + JOINS + page + " ORDER BY a.id DESC LIMIT ?",
                 (rs, i) -> new Entry(
@@ -327,7 +330,8 @@ public class OrganizationAuditService {
                                 rs.getObject("part_number"), rs.getObject("item_number")),
                         contextOf(rs.getString("table_name"), rs.getObject("item_deal_number"),
                                 rs.getObject("payment_deal_number"), rs.getString("cost_donor")),
-                        actionOf(rs.getString("table_name"), rs.getString("operation")),
+                        actionOf(rs.getString("table_name"), rs.getString("operation"),
+                                rs.getString("created_packet")),
                         new ArrayList<>()),
                 withWatched(pageArgs));
 
@@ -547,9 +551,18 @@ public class OrganizationAuditService {
         };
     }
 
-    private static String actionOf(String table, String operation) {
+    /**
+     * @param createdPacket номер прайс-листа, заданный при заведении выгрузки
+     *                      (задача 0270); у остального {@code null}. Номер
+     *                      едет в самой строке события: экран показывает
+     *                      либо событие, либо перечень полей, а заведение —
+     *                      событие.
+     */
+    private static String actionOf(String table, String operation, String createdPacket) {
         return switch (operation) {
-            case "INSERT" -> CREATED.get(table);
+            case "INSERT" -> createdPacket == null || createdPacket.isBlank()
+                    ? CREATED.get(table)
+                    : CREATED.get(table) + ", номер прайс-листа " + createdPacket;
             case "DELETE" -> REMOVED.get(table);
             default -> null;
         };
