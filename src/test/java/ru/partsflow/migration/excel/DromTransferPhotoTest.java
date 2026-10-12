@@ -283,6 +283,72 @@ class DromTransferPhotoTest extends PostgresTestBase {
                 .isEqualTo(broken.expected().size() - 1L);
     }
 
+    /**
+     * Пункт 5 критерия и решение владельца 13.10.2026: новая выгрузка на Дром
+     * без ручной настройки отдаёт все шестнадцать снимков карточки, обложку
+     * первой. Прежнее умолчание (не задано → 10) отрезало бы шесть.
+     */
+    @Test
+    @DisplayName("Новая выгрузка на Дром отдаёт все снимки переехавшей карточки, главный первым")
+    void newDromFeedCarriesEveryPhoto() throws Exception {
+        List<Card> cards = cards();
+        byte[] file = file(cards);
+        load(file, preview(file).path("detected"), UUID.randomUUID().toString());
+        JsonNode progress = photoPass();
+        long left = Long.MAX_VALUE;
+        while (progress.path("pending").asLong() > 0 && progress.path("pending").asLong() < left) {
+            left = progress.path("pending").asLong();
+            progress = photoPass();
+        }
+
+        Card richest = cards.get(0);
+        long part = partOf(richest);
+        // Публикация и категория — не предмет проверки: у переехавшей позиции
+        // их ставят свои задачи (0278, «Выгружать»), а прайс без них позицию
+        // не возьмёт вовсе.
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET category_id = 1, is_published = true WHERE id = ?", part));
+        List<Long> shown = inTenant(() -> jdbc.queryForList(
+                "SELECT id FROM part_photo WHERE part_id = ? ORDER BY is_main DESC, sort_order, id",
+                Long.class, part));
+        assertThat(shown).hasSize(MOST_PHOTOS);
+
+        // Как экран: выгрузка заводится без числа снимков — владелец его не трогал.
+        JsonNode feed = json.readTree(mvc.perform(post("/api/marketplace-accounts")
+                        .with(csrf()).session(login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"marketplace":"DROM","title":"Дром %s","settings":"{}",
+                                 "productLine":"PART"}""".formatted(richest.name())))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8));
+        String path = json.readTree(mvc.perform(post("/api/marketplace-accounts/"
+                                + feed.path("id").asLong() + "/feed-url")
+                        .with(csrf()).session(login()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8))
+                .path("path").asText();
+
+        String price = mvc.perform(org.springframework.test.web.servlet.request
+                        .MockMvcRequestBuilders.get(path))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        int at = price.indexOf(richest.name());
+        assertThat(at).as("позиции нет в прайсе вовсе").isPositive();
+        String offer = price.substring(at, price.indexOf("</offer>", at));
+
+        assertThat(offer.split("<photo>", -1).length - 1)
+                .as("новая выгрузка урезала снимки переехавшей карточки")
+                .isEqualTo(MOST_PHOTOS);
+        assertThat(offer.substring(offer.indexOf("<photo>")))
+                .as("первой ссылкой прайса ушёл не главный снимок — обложка на Дроме будет другой")
+                .startsWith("<photo>")
+                .contains("/photo/%d.".formatted(shown.get(0)));
+        assertThat(offer.indexOf("/photo/%d.".formatted(shown.get(0))))
+                .as("главный снимок не первый в прайсе")
+                .isLessThan(offer.indexOf("/photo/%d.".formatted(shown.get(1))));
+    }
+
     // --- карточки ---
 
     /**
