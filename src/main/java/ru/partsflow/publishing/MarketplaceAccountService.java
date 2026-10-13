@@ -336,7 +336,7 @@ public class MarketplaceAccountService {
                 VALUES (?, ?, COALESCE(?::jsonb, '{}'::jsonb), ?)
                 RETURNING id""",
                 Long.class, marketplace, title.strip(),
-                settingsWithPacketIdNormalized(settingsJson),
+                withNewFeedPhotoLimit(marketplace, settingsWithPacketIdNormalized(settingsJson)),
                 line);
         feedJournal.created(id);
 
@@ -472,6 +472,36 @@ public class MarketplaceAccountService {
         } else {
             settings.put("packetId", packetId);
         }
+        return settings.toString();
+    }
+
+    /**
+     * Предел снимков новой выгрузки на Дром, если экран его не прислал, —
+     * {@link FeedSettings#NEW_DROM_FEED_PHOTO_LIMIT}, почему — там.
+     *
+     * <p>Пишется в настройки явно, а не подставляется при чтении: тогда
+     * экран выгрузки показывает настоящее число, владелец может его
+     * поменять, а «не задано» у старых выгрузок сохраняет прежний смысл.
+     */
+    static String withNewFeedPhotoLimit(String marketplace, String settingsJson) {
+        if (!"DROM".equals(marketplace)) {
+            return settingsJson;
+        }
+        com.fasterxml.jackson.databind.node.ObjectNode settings;
+        try {
+            com.fasterxml.jackson.databind.JsonNode parsed = settingsJson == null
+                    ? JSON.createObjectNode() : JSON.readTree(settingsJson);
+            if (!(parsed instanceof com.fasterxml.jackson.databind.node.ObjectNode object)) {
+                return settingsJson;
+            }
+            settings = object;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException notJson) {
+            throw new IllegalArgumentException("Настройки выгрузки не разобраны");
+        }
+        if (settings.hasNonNull("photoLimit")) {
+            return settingsJson;
+        }
+        settings.put("photoLimit", FeedSettings.NEW_DROM_FEED_PHOTO_LIMIT);
         return settings.toString();
     }
 

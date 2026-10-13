@@ -325,8 +325,34 @@ public class ExcelWarehouseImporter {
                 blankToNull(mapping.value(row, Field.CELL)),
                 blankToNull(mapping.value(row, Field.OEM)),
                 blankToNull(mapping.value(row, Field.NOTE)),
+                photoLinks(mapping.value(row, Field.PHOTOS)),
                 adNumber);
     }
+
+    /**
+     * Ссылки на снимки из ячейки — в том порядке, в каком они там стоят.
+     *
+     * <p><b>Порядок и есть смысл колонки.</b> Первая ссылка — обложка
+     * объявления у клиента, и она обязана остаться главной у нас: перенос
+     * отмечает главным снимок с нулевым порядком. Повтор одной ссылки
+     * в ячейке оставляет её на первом месте, где она встретилась, а не
+     * дырой в нумерации.
+     *
+     * <p>Делится по любому пробельному знаку, а не только по переводу
+     * строки: в адресе пробела не бывает, а таблица, прошедшая через Excel,
+     * приносит {@code \r\n} и пробелы по краям. Что не похоже на адрес,
+     * не отбрасывается молча — уходит в очередь и отказывает там с причиной
+     * словами, как любая битая ссылка: молча потерянный снимок не найдёт
+     * никто.
+     */
+    static List<String> photoLinks(String cell) {
+        if (cell == null || cell.isBlank()) {
+            return List.of();
+        }
+        return List.copyOf(new java.util.LinkedHashSet<>(
+                List.of(cell.strip().split("\\s+"))));
+    }
+
 
     /**
      * Номер объявления из ячейки: края обрезаны, знак «№» перед числом
@@ -395,6 +421,22 @@ public class ExcelWarehouseImporter {
                         VALUES (?, ?, ?, true)
                         ON CONFLICT DO NOTHING""",
                         partId, row.oem(), normalizedOem);
+            }
+
+            // Снимки только ставятся в очередь: качает их отдельный проход
+            // (PhotoMigration), который можно прервать и продолжить. Внутри
+            // запроса импорта это часы — у клиента с Дрома 2 897 карточек
+            // по 14–16 снимков. Повтор той же ссылки той же позиции отбивает
+            // part_photo_import_uk, а не проверка «нет ли уже такого».
+            List<Object[]> photos = new ArrayList<>(row.photos().size());
+            for (int order = 0; order < row.photos().size(); order++) {
+                photos.add(new Object[] {partId, row.photos().get(order), order});
+            }
+            if (!photos.isEmpty()) {
+                jdbc.batchUpdate("""
+                        INSERT INTO part_photo_import (part_id, url, sort_order)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT (part_id, url) DO NOTHING""", photos);
             }
 
             // Остаток появляется движением: писать qty_on_hand напрямую значит
@@ -476,7 +518,8 @@ public class ExcelWarehouseImporter {
     }
 
     private record Row(int number, String name, BigDecimal price, BigDecimal quantity,
-                       String cell, String oem, String note, String dromAd) {
+                       String cell, String oem, String note, List<String> photos,
+                       String dromAd) {
     }
 
     /**
