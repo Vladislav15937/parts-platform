@@ -379,11 +379,19 @@ public class DromPriceWriter {
     }
 
     private static String longitudinalWord(LongitudinalSide side) {
-        return side == null ? null : side == LongitudinalSide.FRONT ? "передняя" : "задняя";
+        return side == null ? null : switch (side) {
+            case FRONT -> "передняя";
+            case REAR -> "задняя";
+            case BOTH -> "передняя и задняя";
+        };
     }
 
     private static String verticalWord(VerticalSide side) {
-        return side == null ? null : side == VerticalSide.UPPER ? "верхняя" : "нижняя";
+        return side == null ? null : switch (side) {
+            case UPPER -> "верхняя";
+            case LOWER -> "нижняя";
+            case BOTH -> "верхняя и нижняя";
+        };
     }
 
     /** Дром ждёт номера одной строкой через запятую. */
@@ -412,6 +420,10 @@ public class DromPriceWriter {
         return side == null ? null : switch (side) {
             case FRONT -> "перед";
             case REAR -> "зад";
+            // Слово Дрома для «обе» неизвестно (вопрос Д2 в tasks/0280) —
+            // временно, той же формой, что у поперечной оси: оба своих слова
+            // через запятую (задача 0283).
+            case BOTH -> "перед,зад";
         };
     }
 
@@ -419,6 +431,7 @@ public class DromPriceWriter {
         return side == null ? null : switch (side) {
             case UPPER -> "верх";
             case LOWER -> "низ";
+            case BOTH -> "верх,низ";
         };
     }
 

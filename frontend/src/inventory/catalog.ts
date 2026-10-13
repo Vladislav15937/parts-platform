@@ -392,7 +392,7 @@ export interface Column {
 }
 
 const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.', BOTH: 'лев., прав.' };
-const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.' };
+const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.', BOTH: 'перед., задн.' };
 /**
  * Состояние детали — словарь один на весь фронтенд.
  *
@@ -965,6 +965,26 @@ export interface PartEdit {
   packageWeightKg: number | null;
   storageCellId: number | null;
   published: boolean;
+  /**
+   * Блоки карточки Дрома — тексты клиента дословно (задача 0285). С сервера
+   * приходят `null`, когда блока нет; уезжают строкой, пустой при очистке:
+   * `null` или отсутствующий ключ сервер читает как «не трогать» (так вкладка,
+   * открытая до выкладки, не стирает то, о чём её форма не знает).
+   */
+  warranty: string | null;
+  pickup: string | null;
+  deliveryPayment: string | null;
+  /**
+   * Вид детали и раздел как у клиента на Дроме (задача 0286): строки дословно,
+   * те же два способа «пусто», что у блоков выше. Не `part_kind` и не «Секция».
+   */
+  dromKind: string | null;
+  dromSection: string | null;
+  /**
+   * «Подходит» как у клиента на Дроме (задача 0287): блоки текстом, строка на пункт,
+   * части через « | ». Те же два способа «пусто». Не справочная применимость.
+   */
+  applicability: string | null;
 }
 
 /**

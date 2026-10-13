@@ -82,6 +82,15 @@ class DromRepeatLoadTest extends PostgresTestBase {
             Map.entry(Field.PRICE, new Facet("Цена", "price")),
             Map.entry(Field.DESCRIPTION, new Facet("Описание", "description")),
             Map.entry(Field.NOTE, new Facet(NOTE, "note")),
+            // Блоки карточки Дрома (задача 0285) лежат в part_drom_card, не в part.
+            Map.entry(Field.WARRANTY, new Facet("Гарантия", "warranty")),
+            Map.entry(Field.PICKUP, new Facet("Самовывоз", "pickup")),
+            Map.entry(Field.DELIVERY, new Facet("Доставка и оплата", "delivery_payment")),
+            // Вид детали и раздел как у клиента (задача 0286) — туда же.
+            Map.entry(Field.DROM_KIND, new Facet("Вид детали", "drom_kind")),
+            Map.entry(Field.DROM_SECTION, new Facet("Раздел", "drom_section")),
+            // Применимость текстом (задача 0287) — туда же.
+            Map.entry(Field.APPLICABILITY, new Facet("Применимость", "applicability")),
             Map.entry(Field.MANUFACTURER, new Facet("Производитель", "manufacturer")),
             Map.entry(Field.AUTHENTICITY, new Facet("Оригинальность", "authenticity")),
             Map.entry(Field.SIDE_LR, new Facet("Сторона", "side_lr")),
@@ -245,6 +254,36 @@ class DromRepeatLoadTest extends PostgresTestBase {
 
         // Повтор того же нажатия отдаёт тот же отчёт, а не «ничего не было».
         assertThat(load(file, key).path("repeat")).isEqualTo(repeat);
+    }
+
+    @Test
+    @DisplayName("«Переднее, Заднее» и «Верхнее, Нижнее» заводятся строкой с фото, а в отчёте называются своей парой (задача 0283)")
+    void bothSidesLoadAndAreNamedByTheirOwnAxis() throws Exception {
+        Map<String, String> both = rowA();
+        both.put("Положение", "Переднее, Заднее");
+        both.put("Верх/низ", "Нижнее, Верхнее");
+        byte[] file = file(List.of(both, rowB()), Set.of(), null);
+
+        JsonNode first = load(file);
+        assertThat(first.path("imported").asInt()).isEqualTo(2);
+        assertThat(first.path("skipped")).isEmpty();
+        long a = partOf(AD_A);
+        assertThat(column(a, "side_fr", String.class)).isEqualTo("BOTH");
+        assertThat(column(a, "side_ud", String.class)).isEqualTo("BOTH");
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_photo_import WHERE part_id = ?", Integer.class, a)))
+                .as("фото строки с парой сторон не встали в очередь")
+                .isEqualTo(2);
+
+        // Расхождение: у позиции одна сторона, в файле пара. Слово пары у каждой оси своё.
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET side_fr = 'FRONT', side_ud = 'UPPER' WHERE id = ?", a));
+        JsonNode repeat = load(file).path("repeat");
+        assertThat(repeat.path("discrepancies").findValuesAsText("text")).containsExactly(
+                "№ 300000001, поле «Положение»: в файле «Переднее, Заднее», "
+                        + "у позиции «Переднее» (оставлено как есть)",
+                "№ 300000001, поле «Верх/низ»: в файле «Верхнее, Нижнее», "
+                        + "у позиции «Верхнее» (оставлено как есть)");
     }
 
     @Test
@@ -524,6 +563,53 @@ class DromRepeatLoadTest extends PostgresTestBase {
                 .isEqualTo(reference);
     }
 
+    /**
+     * Блоки карточки Дрома (задача 0285) пишутся в свою таблицу вставкой-или-обновлением,
+     * и условие «блок ещё пуст» стоит в {@code WHERE} этой инструкции. Без него шесть
+     * потоков, прочитавшие блок пустым, перезаписывали бы друг друга и насчитали бы
+     * поле дозаполненным не двадцать раз, а больше: прежний тест это не ловит —
+     * там блоков нет, а владельцем поправленное отсекает проверка до записи.
+     */
+    @RepeatedTest(3)
+    @DisplayName("Шесть одновременных повторов дозаполняют каждый блок карточки Дрома один раз")
+    void concurrentRefillCountsTermsOnce() throws Exception {
+        List<Map<String, String>> rows = generatedRows(20);
+        byte[] full = file(rows, Set.of(), null);
+        load(full);
+        Map<String, Map<String, Object>> reference = contentByAd();
+        inTenant(() -> {
+            clean();
+            return null;
+        });
+        load(file(rows, Set.of("Гарантия", "Самовывоз", "Доставка и оплата",
+                "Вид детали", "Раздел", "Применимость"), null));
+
+        List<JsonNode> reports = concurrently(6, full);
+
+        Map<String, Integer> filled = new TreeMap<>();
+        int refilled = 0;
+        List<String> discrepancies = new ArrayList<>();
+        for (JsonNode report : reports) {
+            JsonNode repeat = report.path("repeat");
+            refilled += repeat.path("refilled").asInt();
+            repeat.path("fields").forEach(f ->
+                    filled.merge(f.path("field").asText(), f.path("positions").asInt(), Integer::sum));
+            repeat.path("discrepancies").forEach(d -> discrepancies.add(d.path("text").asText()));
+        }
+        assertThat(discrepancies)
+                .as("проигравший повтор назвал расхождением блок, записанный победителем")
+                .isEmpty();
+        assertThat(filled)
+                .as("блок насчитан дозаполненным не один раз на позицию")
+                .isEqualTo(Map.of("Гарантия и условия возврата", 20, "Самовывоз", 20,
+                        "Доставка и оплата", 20, "Вид детали", 20, "Раздел", 20,
+                        "Применимость", 20));
+        // Позицию могут разделить победители разных блоков (их шесть), поэтому не ровно 20.
+        assertThat(refilled).isBetween(20, 120);
+        assertThat(contentByAd()).as("итог шести повторов не тот, что у одной загрузки")
+                .isEqualTo(reference);
+    }
+
     private List<Map<String, String>> generatedRows(int count) {
         List<Map<String, String>> rows = new ArrayList<>();
         for (int i = 0; i < count; i++) {
@@ -618,6 +704,12 @@ class DromRepeatLoadTest extends PostgresTestBase {
         row.put("Положение", "Переднее");
         row.put("Верх/низ", "Верхнее");
         row.put("Описание", "Фара целая.\nБез сколов.");
+        row.put("Вид детали", "Фара левая Toyota Camry");
+        row.put("Раздел", "Автозапчасти → Электрооборудование → Фары");
+        row.put("Применимость", "Toyota Camry | 7 поколение (2017–2024) | XV70\nДля двигателей | 2AR-FE");
+        row.put("Гарантия", "Обговаривается индивидуально");
+        row.put("Самовывоз", "Самовывоз — улица Георгия Исакова 9");
+        row.put("Доставка и оплата", "Доставка по городу — 300 р.\n\nОплата при получении");
         row.put("Фото", "https://example.test/a/1.jpg\nhttps://example.test/a/2.jpg");
         row.put(NOTE, "с полки 3");
         return row;
@@ -638,6 +730,12 @@ class DromRepeatLoadTest extends PostgresTestBase {
         row.put("Положение", "Заднее");
         row.put("Верх/низ", "Нижнее");
         row.put("Описание", "Бампер без трещин.");
+        row.put("Вид детали", "Бампер задний Toyota Camry");
+        row.put("Раздел", "Автозапчасти → Кузов → Бампера");
+        row.put("Применимость", "Toyota Camry | Другие кузова | ACV40");
+        row.put("Гарантия", "Гарантия 14 дней");
+        row.put("Самовывоз", "Самовывоз — склад на Ленина 5");
+        row.put("Доставка и оплата", "Доставка ТК — по тарифу\nОплата картой");
         row.put("Фото", "https://example.test/b/1.jpg\nhttps://example.test/b/2.jpg");
         row.put(NOTE, "под потолком");
         return row;
@@ -744,6 +842,14 @@ class DromRepeatLoadTest extends PostgresTestBase {
                 state.put("oem_substitutes", jdbc.queryForList("""
                         SELECT raw_number FROM part_oem WHERE part_id = ? AND NOT is_primary
                          ORDER BY id""", String.class, id));
+                // Блоки карточки Дрома: нет строки — все NULL (задача 0285).
+                for (String block : List.of("warranty", "pickup", "delivery_payment",
+                        "drom_kind", "drom_section", "applicability")) {
+                    List<String> value = jdbc.queryForList(
+                            "SELECT " + block + " FROM part_drom_card WHERE part_id = ?",
+                            String.class, id);
+                    state.put(block, value.isEmpty() ? null : value.get(0));
+                }
                 state.put("photos", jdbc.queryForList("""
                         SELECT url || ' ' || sort_order FROM part_photo_import WHERE part_id = ?
                          ORDER BY sort_order""", String.class, id));

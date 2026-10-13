@@ -48,8 +48,8 @@ public final class DromTransferFile {
             new Column(ANCHOR, true, Field.DROM_AD_NUMBER),
             new Column("Ссылка", true, null),
             new Column("Наименование", true, Field.NAME),
-            new Column("Вид детали", true, null),
-            new Column("Раздел", true, null),
+            new Column("Вид детали", true, Field.DROM_KIND),
+            new Column("Раздел", true, Field.DROM_SECTION),
             new Column("Цена", true, Field.PRICE),
             new Column("Количество", false, Field.QUANTITY),
             new Column("Наличие", true, Field.AVAILABILITY),
@@ -61,11 +61,11 @@ public final class DromTransferFile {
             new Column("Сторона", false, Field.SIDE_LR),
             new Column("Положение", false, Field.SIDE_FR),
             new Column("Верх/низ", false, Field.SIDE_UD),
-            new Column("Применимость", false, null),
+            new Column("Применимость", false, Field.APPLICABILITY),
             new Column("Описание", false, Field.DESCRIPTION),
-            new Column("Гарантия", false, null),
-            new Column("Самовывоз", false, null),
-            new Column("Доставка и оплата", false, null),
+            new Column("Гарантия", false, Field.WARRANTY),
+            new Column("Самовывоз", false, Field.PICKUP),
+            new Column("Доставка и оплата", false, Field.DELIVERY),
             new Column("Фото", false, Field.PHOTOS));
 
     private DromTransferFile() {

@@ -49,6 +49,18 @@ export const FIELDS = [
   // таблице «Описание» по-прежнему угадывается примечанием, и выдать чужую
   // заметку покупателю хуже, чем спрятать её.
   { key: 'DESCRIPTION', label: 'Описание', required: false, dromOnly: true },
+  // Блоки карточки Дрома (задача 0285). Слова Дрома, как на объявлении, а не
+  // названия колонок файла; только у файла переноса: что лежит в чужой
+  // колонке «Гарантия», мы не знаем.
+  { key: 'WARRANTY', label: 'Гарантия и условия возврата', required: false, dromOnly: true },
+  { key: 'PICKUP', label: 'Самовывоз', required: false, dromOnly: true },
+  { key: 'DELIVERY', label: 'Доставка и оплата', required: false, dromOnly: true },
+  // Вид детали и раздел как у клиента (задача 0286): строки Дрома дословно, не
+  // наш справочный вид и не «Секция» склада.
+  { key: 'DROM_KIND', label: 'Вид детали', required: false, dromOnly: true },
+  { key: 'DROM_SECTION', label: 'Раздел', required: false, dromOnly: true },
+  // «Применимость» («Подходит») текстом блоками, как у клиента (задача 0287): не справочная.
+  { key: 'APPLICABILITY', label: 'Применимость', required: false, dromOnly: true },
 ] as const;
 
 export type FieldKey = (typeof FIELDS)[number]['key'];

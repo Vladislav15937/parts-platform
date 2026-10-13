@@ -41,6 +41,12 @@ const PREVIEW = {
     // Поля карточки Дрома (задача 0277).
     CONDITION: 8, AUTHENTICITY: 9, MANUFACTURER: 10, OEM_SUBSTITUTES: 12,
     SIDE_LR: 13, SIDE_FR: 14, SIDE_UD: 15,
+    // Блоки карточки Дрома (задача 0285).
+    WARRANTY: 18, PICKUP: 19, DELIVERY: 20,
+    // Вид детали и раздел как у клиента (задача 0286).
+    DROM_KIND: 3, DROM_SECTION: 4,
+    // «Применимость» текстом (задача 0287).
+    APPLICABILITY: 16,
   },
   missingRequired: [],
   rows: [ROW],
@@ -119,12 +125,27 @@ describe('файл переноса с Дрома', () => {
     expect(columnHead('Описание')).not.toContain('Примечание');
   });
 
+  it('гарантия, самовывоз и доставка переносятся блоками карточки, а не «не переносятся» (задача 0285)', async () => {
+    pick();
+    await waitFor(() => expect(document.querySelector('table.preview')).toBeTruthy());
+
+    expect(mapping('Гарантия и условия возврата')).toBe('18');
+    expect(mapping('Самовывоз')).toBe('19');
+    expect(mapping('Доставка и оплата')).toBe('20');
+    expect(columnHead('Гарантия')).toContain('→ Гарантия и условия возврата');
+    expect(columnHead('Самовывоз')).toContain('→ Самовывоз');
+    expect(columnHead('Доставка и оплата')).toContain('→ Доставка и оплата');
+    for (const title of ['Гарантия', 'Самовывоз', 'Доставка и оплата']) {
+      expect(columnHead(title)).not.toContain('не переносится');
+    }
+  });
+
   it('называет каждую колонку, которую загрузка пропустит, и только их', async () => {
     pick();
     await waitFor(() => expect(document.querySelector('table.preview')).toBeTruthy());
 
     const skipped = screen.queryByText(/Не переносятся/)?.textContent ?? '';
-    for (const title of ['Применимость', 'Гарантия', 'Доставка и оплата']) {
+    for (const title of ['Ссылка']) {
       expect(skipped, `о колонке «${title}» экран промолчал`).toContain(title);
     }
     // «Фото» стоит в файле последней, и в перечне её выдала бы точка, а не
@@ -132,12 +153,16 @@ describe('файл переноса с Дрома', () => {
     expect(skipped, 'снимки названы непереносимыми').not.toContain('Фото');
     for (const title of ['Номер объявления Дрома', 'Наименование', 'Цена', 'Количество', 'Наличие',
       'Состояние', 'Оригинальность', 'Производитель', 'Номера замен', 'Сторона', 'Положение',
-      'Верх/низ', 'Описание']) {
+      'Верх/низ', 'Описание', 'Гарантия', 'Самовывоз', 'Доставка и оплата', 'Вид детали', 'Раздел', 'Применимость']) {
       expect(skipped, `читаемая «${title}» названа непереносимой`).not.toContain(`${title},`);
     }
-    // Ровно 7 из 22: пятнадцать колонок договора импорт читает сегодня
-    // (семь — с задачи 0277, описание — с 0275).
-    expect((skipped.split(':')[1] ?? '').split(',').length).toBe(7);
+    // Ровно 1 из 22: двадцать одну колонку договора импорт читает сегодня (семь — с
+    // задачи 0277, описание — с 0275, три блока карточки — с 0285, вид детали
+    // и раздел — с 0286, применимость — с 0287).
+    expect((skipped.split(':')[1] ?? '').split(',').length).toBe(1);
+    expect(columnHead('Применимость')).toContain('→ Применимость');
+    expect(columnHead('Вид детали')).toContain('→ Вид детали');
+    expect(columnHead('Раздел')).toContain('→ Раздел');
     expect(columnHead('Наименование')).toContain('→ Наименование');
     expect(columnHead('Фото')).toContain('→ Фото');
   });

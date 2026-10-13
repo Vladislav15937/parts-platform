@@ -46,6 +46,10 @@ describe('колонки витрины', () => {
     expect(value('sideFr', row({ sideFr: 'REAR' }))).toBe('задн.');
   });
 
+  it('«Переднее, Заднее» в колонке — парой слов, а не пустотой (задача 0283)', () => {
+    expect(value('sideFr', row({ sideFr: 'BOTH' }))).toBe('перед., задн.');
+  });
+
   it('пустая сторона даёт пустоту, а не «undefined»', () => {
     expect(value('sideLr', row())).toBe('');
   });

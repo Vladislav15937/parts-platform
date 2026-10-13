@@ -127,7 +127,11 @@ public class PartTitleGenerator {
         String asText() {
             List<String> words = new ArrayList<>();
             if (fr != null) {
-                words.add(fr == LongitudinalSide.FRONT ? "перед." : "задн.");
+                words.add(switch (fr) {
+                    case FRONT -> "перед.";
+                    case REAR -> "задн.";
+                    case BOTH -> "перед. задн.";
+                });
             }
             if (lr != null) {
                 // «Обе» — двумя словами, а не своим сокращением: каждое
@@ -139,7 +143,11 @@ public class PartTitleGenerator {
                 });
             }
             if (ud != null) {
-                words.add(ud == VerticalSide.UPPER ? "верх." : "ниж.");
+                words.add(switch (ud) {
+                    case UPPER -> "верх.";
+                    case LOWER -> "ниж.";
+                    case BOTH -> "верх. ниж.";
+                });
             }
             return String.join(" ", words);
         }

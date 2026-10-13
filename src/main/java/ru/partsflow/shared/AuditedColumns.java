@@ -90,6 +90,33 @@ public final class AuditedColumns {
     }
 
     /**
+     * Блоки карточки Дрома у позиции (таблица {@code part_drom_card}, задача 0285).
+     *
+     * <p>Отдельным словарём, а не строками {@link #PART}: слушатель пишет их в
+     * журнал отдельной таблицей, и в журнале действий организации ({@link #of})
+     * её нет — пункт меню по полю, которого журнал организации не покажет
+     * никогда, был бы отбором, не находящим ничего. Ленту правок одной позиции
+     * ({@code inventory.PartHistoryService}) читает оба словаря: имена колонок
+     * не пересекаются с {@link #PART}, и место ленты, откуда пришла правка,
+     * человеку ни к чему.
+     */
+    public static final Map<String, String> PART_DROM_CARD = new LinkedHashMap<>();
+
+    static {
+        PART_DROM_CARD.put("warranty", "Гарантия и условия возврата");
+        PART_DROM_CARD.put("pickup", "Самовывоз");
+        PART_DROM_CARD.put("delivery_payment", "Доставка и оплата");
+        // Задача 0286. В ленте правок подписи с «на Дроме»: «Вид детали» там уже
+        // занят справочным видом (PART.part_kind_id), а «Раздел» читался бы как
+        // «Секция» склада (PART.section). На карточке подписи короткие, слова Дрома.
+        PART_DROM_CARD.put("drom_kind", "Вид детали на Дроме");
+        PART_DROM_CARD.put("drom_section", "Раздел на Дроме");
+        // Задача 0287: слово Дрома для блока применимости («Подходит»); справочная
+        // применимость (part_applicability) журналом называется иначе.
+        PART_DROM_CARD.put("applicability", "Подходит");
+    }
+
+    /**
      * Поля сделки.
      *
      * <p>Состояние первым: «кто отменил сделку» спрашивают тогда, когда клиент
@@ -255,8 +282,13 @@ public final class AuditedColumns {
     private static final Map<String, String> GRADES = QualityGrade.titles();
 
     private static final Map<String, String> SIDES = Map.of(
-            "LEFT", "Левый", "RIGHT", "Правый", "BOTH", "Левый и правый", "FRONT", "Передний",
+            "LEFT", "Левый", "RIGHT", "Правый", "FRONT", "Передний",
             "REAR", "Задний", "UPPER", "Верхний", "LOWER", "Нижний");
+
+    /** «Обе» зависит от оси: одно слово на три колонки назвало бы заднюю деталь «левой и правой». */
+    private static final Map<String, String> BOTH_SIDES = Map.of(
+            "side_lr", "Левый и правый", "side_fr", "Передний и задний",
+            "side_ud", "Верхний и нижний");
 
     private static final Map<String, String> LINES = Map.of(
             "PART", "Запчасть", "TYRE", "Шина", "DISC", "Диск", "WHEEL", "Колесо");
@@ -294,7 +326,8 @@ public final class AuditedColumns {
         return switch (column) {
             case "condition" -> CONDITIONS.getOrDefault(raw, raw);
             case "quality_grade" -> GRADES.getOrDefault(raw, raw);
-            case "side_lr", "side_fr", "side_ud" -> SIDES.getOrDefault(raw, raw);
+            case "side_lr", "side_fr", "side_ud" -> "BOTH".equals(raw)
+                    ? BOTH_SIDES.get(column) : SIDES.getOrDefault(raw, raw);
             case "product_line" -> LINES.getOrDefault(raw, raw);
             case "payment_type" -> PAYMENT_TYPES.getOrDefault(raw, raw);
             case "cost_type" -> COST_TYPES.getOrDefault(raw, raw);

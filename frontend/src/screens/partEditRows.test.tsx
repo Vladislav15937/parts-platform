@@ -206,6 +206,143 @@ describe('правка карточки по одному полю', () => {
 });
 
 /**
+ * Блоки карточки Дрома в форме правки (задача 0285): три поля словами Дрома
+ * рядом с «Комментарием», многострочные, перевод строки виден.
+ */
+describe('блоки карточки Дрома', () => {
+  let sent: Array<Record<string, unknown>>;
+
+  beforeEach(() => {
+    sent = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') !== 'GET') {
+        sent.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+        return json({ price: 27000 });
+      }
+      return json(card());
+    }));
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('показаны подписями Дрома, с замком не стоят и сохраняют переводы строк', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Самовывоз')).toBeTruthy());
+
+    for (const label of ['Гарантия и условия возврата', 'Самовывоз', 'Доставка и оплата']) {
+      expect(line(label).textContent, `у «${label}» стоит замок`).not.toContain('🔒');
+      expect(screen.getByLabelText(`Изменить: ${label}`), `«${label}» не правится`).toBeTruthy();
+    }
+    expect(line('Самовывоз').textContent).toContain('Самовывоз — улица Георгия Исакова 9');
+    // Перевод строки лежит в тексте строки, а CSS оставляет его видимым.
+    const delivery = line('Доставка и оплата').querySelector('.card-edit__value')!;
+    expect(delivery.textContent).toBe('Доставка по городу — 300 р.\n\nОплата при получении');
+  });
+
+  it('изменённый блок уезжает тем же PUT, остальные блоки — как были', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Самовывоз')).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
+    expect((screen.getByLabelText('Самовывоз') as HTMLTextAreaElement).tagName)
+      .toBe('TEXTAREA');
+    fireEvent.change(screen.getByLabelText('Самовывоз'),
+      { target: { value: 'Самовывоз — склад на Ленина 5' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['pickup']).toBe('Самовывоз — склад на Ленина 5');
+    expect(sent[0]!['warranty']).toBe('Обговаривается индивидуально');
+    expect(sent[0]!['deliveryPayment'])
+      .toBe('Доставка по городу — 300 р.\n\nОплата при получении');
+  });
+
+  it('«Вид детали» и «Раздел» показаны подписями Дрома, правятся и стираются тем же PUT (задача 0286)', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Раздел')).toBeTruthy());
+
+    expect(line('Вид детали').textContent).toContain('Карданный вал Lexus GX400');
+    expect(line('Раздел').textContent).toContain('Автозапчасти → Трансмиссия');
+    // «Секция» склада — другая строка, не «Раздел».
+    expect(line('Секция').textContent).not.toContain('Автозапчасти');
+
+    fireEvent.click(screen.getByLabelText('Изменить: Раздел'));
+    fireEvent.change(screen.getByLabelText('Раздел'),
+      { target: { value: 'Автозапчасти → Кузов' } });
+    fireEvent.click(screen.getByLabelText('Изменить: Вид детали'));
+    fireEvent.change(screen.getByLabelText('Вид детали'), { target: { value: '' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['dromSection']).toBe('Автозапчасти → Кузов');
+    expect(sent[0]!['dromKind'], 'очистка — пустая строка, null сервер прочёл бы как «не трогать»')
+      .toBe('');
+    expect(sent[0]!['section'], '«Секция» склада поехала вместо «Раздела»').toBe(null);
+  });
+
+  it('«Подходит» показано блоками и свёрнуто; правка открывает текст как есть; очистка уезжает пустой строкой (задача 0287)', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Подходит')).toBeTruthy());
+
+    const view = line('Подходит').querySelector('.fits')!;
+    // Читаемо, а не сырой « | »: части через тире, пустая часть не оставляет « — » на конце.
+    expect(view.textContent).toContain('Toyota 4Runner — 5 поколение (2009–2013) — TRN285, GRN285');
+    expect(view.textContent).toContain('Lexus GX400 — GRJ158');
+    expect(view.textContent).not.toContain('|');
+    expect(view.textContent).not.toContain('GRJ158 —');
+    // Свёрнуто: пять строк из восьми и кнопка с числом.
+    expect(view.querySelectorAll('div').length).toBe(5);
+    expect(view.textContent).not.toContain('Для двигателей');
+    fireEvent.click(screen.getByText('Показать все (8 строк)'));
+    expect(view.querySelectorAll('div').length).toBe(8);
+    expect(view.textContent).toContain('Для двигателей — 1GR-FE, 2UZ-FE');
+    fireEvent.click(screen.getByText('Свернуть'));
+    expect(view.querySelectorAll('div').length).toBe(5);
+
+    // Правка открывает хранимый текст как есть — с « | » и переводами строк.
+    fireEvent.click(screen.getByLabelText('Изменить: Подходит'));
+    expect((screen.getByLabelText('Подходит') as HTMLTextAreaElement).value).toBe(APPLICABILITY);
+    fireEvent.change(screen.getByLabelText('Подходит'), { target: { value: '' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['applicability'], 'очистка — пустая строка, null сервер прочёл бы как «не трогать»')
+      .toBe('');
+  });
+
+  it('нетронутое «Подходит» уезжает как прочитано, байт в байт', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
+    fireEvent.click(save());
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['applicability']).toBe(APPLICABILITY);
+  });
+
+  it('стёртый руками блок уезжает пустой строкой, а не null', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Гарантия и условия возврата'))
+      .toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText('Изменить: Гарантия и условия возврата'));
+    fireEvent.change(screen.getByLabelText('Гарантия и условия возврата'), { target: { value: '' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['warranty'], 'null сервер прочитал бы как «не трогать»').toBe('');
+  });
+});
+
+/**
  * Склонение — по пяти числам, а не по одному: вторая десятка ломает
  * правило «по последней цифре», и «Изменено 11 параметр» владелец увидел бы
  * ровно тогда, когда правит много.
@@ -236,6 +373,18 @@ function save(): HTMLButtonElement {
   return screen.getByText('Сохранить') as HTMLButtonElement;
 }
 
+/** Восемь пунктов: больше пяти — значит, свёрнуто. Пустая часть и «Для двигателей» — как у клиента. */
+const APPLICABILITY = [
+  'Lexus GX400 | GRJ158 | ',
+  'Toyota 4Runner | 5 поколение (2009–2013) | TRN285, GRN285',
+  'Toyota 4Runner | 4 поколение (2002–2005) | GRN215',
+  'Toyota Hilux Surf | 4 поколение (2002–2005) | VZN215W',
+  'Toyota Hilux Surf | Другие кузова | GRN215, VZN215',
+  'Toyota Land Cruiser Prado | 4 поколение (2013–2017) | TRJ150W',
+  'Toyota Land Cruiser Prado | Другие кузова | GRJ150L',
+  'Для двигателей | 1GR-FE, 2UZ-FE',
+].join('\n');
+
 function card(): Record<string, unknown> {
   return {
     price: 27000, minPrice: null, costPrice: null, installationPrice: null,
@@ -246,6 +395,12 @@ function card(): Record<string, unknown> {
     widthMm: null, heightMm: null, packageLengthMm: null, packageWidthMm: null,
     packageHeightMm: null, packageWeightKg: null, storageCellId: null,
     published: true,
+    warranty: 'Обговаривается индивидуально',
+    pickup: 'Самовывоз — улица Георгия Исакова 9',
+    deliveryPayment: 'Доставка по городу — 300 р.\n\nОплата при получении',
+    dromKind: 'Карданный вал Lexus GX400',
+    dromSection: 'Автозапчасти → Трансмиссия',
+    applicability: APPLICABILITY,
   };
 }
 

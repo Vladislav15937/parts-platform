@@ -12,6 +12,12 @@ function card(overrides: Partial<PartEdit> = {}): PartEdit {
     weightKg: 3.5, lengthMm: 120, widthMm: 80, heightMm: 45,
     packageLengthMm: null, packageWidthMm: null, packageHeightMm: null,
     packageWeightKg: null, storageCellId: 17, published: true,
+    warranty: 'Обговаривается индивидуально',
+    pickup: 'Самовывоз — улица Георгия Исакова 9',
+    deliveryPayment: 'Доставка по городу — 300 р.\n\nОплата при получении',
+    dromKind: 'Карданный вал Lexus GX400',
+    dromSection: 'Автозапчасти → Трансмиссия',
+    applicability: 'Toyota 4Runner | 5 поколение (2009–2013) | TRN285, GRN285\nДля двигателей | 1GR-FE',
     ...overrides,
   };
 }
@@ -45,6 +51,45 @@ describe('форма правки карточки', () => {
     expect(saved.note).toBeNull();
     // «Цена установки 0 ₽» в карточке — обещание, которого никто не давал.
     expect(saved.installationPrice).toBeNull();
+  });
+
+  it('блоки карточки Дрома уезжают дословно: пустые строки внутри и края не трогаются', () => {
+    // Клиент не должен терять слова (задача 0285): ни «пустую строку» между
+    // пунктами доставки, ни двойной пробел, ни перевод строки в конце.
+    const text = '  Пункт 1\n\n\nПункт  2\n';
+    const saved = toEdit({ ...draftOf(card()), deliveryPayment: text });
+    expect(saved.deliveryPayment).toBe(text);
+    expect(toEdit(draftOf(card())).deliveryPayment).toBe(card().deliveryPayment);
+  });
+
+  it('вид детали и раздел как у клиента уезжают дословно и не путаются с «Секцией»', () => {
+    // Задача 0286: строка Дрома со стрелкой « → » и краями не трогается; «Секция»
+    // склада — другое поле и едет своим ключом.
+    const text = ' Автозапчасти → Кузов  ';
+    const saved = toEdit({ ...draftOf(card({ section: 'А-01' })), dromSection: text });
+    expect(saved.dromSection).toBe(text);
+    expect(saved.section).toBe('А-01');
+    expect(toEdit(draftOf(card())).dromKind).toBe('Карданный вал Lexus GX400');
+    // Очистка — пустая строка, а не null (null сервер читает как «не трогать»).
+    expect(toEdit({ ...draftOf(card()), dromKind: '' }).dromKind).toBe('');
+    expect(draftOf(card({ dromKind: null })).dromKind).toBe('');
+  });
+
+  it('«Подходит» уезжает дословно — с « | », переводами строк и краями, очистка — пустая строка (задача 0287)', () => {
+    const text = ' Lexus GX400 | GRJ158 | \nДля двигателей | 1GR-FE  ';
+    expect(toEdit({ ...draftOf(card()), applicability: text }).applicability).toBe(text);
+    expect(toEdit(draftOf(card())).applicability).toBe(card().applicability);
+    expect(toEdit({ ...draftOf(card()), applicability: '' }).applicability).toBe('');
+    expect(draftOf(card({ applicability: null })).applicability).toBe('');
+  });
+
+  it('очищенный блок уезжает пустой строкой, а не null', () => {
+    // null сервер читает как «ключа не было» и блок не трогает: вкладка,
+    // открытая до выкладки, иначе стирала бы тексты клиента. Очистка — ''.
+    const saved = toEdit({ ...draftOf(card()), warranty: '' });
+    expect(saved.warranty).toBe('');
+    // Блока нет на сервере (null) — форма видит пустую строку, а не «null».
+    expect(draftOf(card({ pickup: null })).pickup).toBe('');
   });
 
   it('принимает запятую как десятичный знак', () => {

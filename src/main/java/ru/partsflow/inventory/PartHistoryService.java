@@ -107,8 +107,11 @@ public class PartHistoryService {
                           FROM audit_log a
                           CROSS JOIN unnest(string_to_array(?, ',')) AS f(key)
                           LEFT JOIN tenant_member m ON m.id = a.changed_by
-                         WHERE a.table_name = 'part' AND a.record_id = ?
-                           AND a.operation = 'UPDATE'
+                         WHERE a.table_name IN ('part', 'part_drom_card') AND a.record_id = ?
+                           -- Блоки карточки Дрома заводятся строкой при первой правке
+                           -- (INSERT): без этого первое заполнение в ленте не видно.
+                           AND (a.operation = 'UPDATE'
+                                OR (a.operation = 'INSERT' AND a.table_name = 'part_drom_card'))
                            AND\s""" + was + " IS DISTINCT FROM " + now + """
 
                          ORDER BY a.changed_at DESC, a.id DESC,
@@ -128,7 +131,7 @@ public class PartHistoryService {
             Change change = byAudit.computeIfAbsent(diff.auditId(),
                     id -> new Change(diff.at(), diff.author(), null, new ArrayList<>()));
             Map<Long, String> lookup = titles.getOrDefault(diff.column(), Map.of());
-            change.fields().add(new Field(AuditedColumns.PART.get(diff.column()),
+            change.fields().add(new Field(labelOf(diff.column()),
                     AuditedColumns.display(diff.column(), diff.was(), lookup),
                     AuditedColumns.display(diff.column(), diff.now(), lookup),
                     delta(diff.column(), diff.was(), diff.now())));
@@ -193,9 +196,17 @@ public class PartHistoryService {
             Set.of("price", "min_price", "cost_price", "installation_price");
 
     private List<String> visibleFields(boolean money) {
-        return AuditedColumns.PART.keySet().stream()
+        return java.util.stream.Stream.concat(
+                        AuditedColumns.PART.keySet().stream(),
+                        AuditedColumns.PART_DROM_CARD.keySet().stream())
                 .filter(column -> money || !AuditedColumns.MONEY.contains(column))
                 .toList();
+    }
+
+    /** Слово колонки: поле позиции либо блок карточки Дрома (задача 0285). */
+    private static String labelOf(String column) {
+        String label = AuditedColumns.PART.get(column);
+        return label != null ? label : AuditedColumns.PART_DROM_CARD.get(column);
     }
 
     /**

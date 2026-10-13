@@ -106,7 +106,30 @@ public final class ColumnMapping {
          * чужую заметку покупателю хуже, чем спрятать её. Сопоставляется
          * поле договором {@link DromTransferFile}.
          */
-        DESCRIPTION(true);
+        DESCRIPTION(true),
+        /**
+         * «Гарантия и условия возврата» объявления дословно (задача 0285) —
+         * {@code part_drom_card.warranty}. Без синонимов, как описание: что
+         * лежит в чужой колонке «Гарантия», мы не знаем.
+         */
+        WARRANTY(true),
+        /** «Самовывоз» объявления дословно — {@code part_drom_card.pickup}. */
+        PICKUP(true),
+        /** «Доставка и оплата» дословно, с переводами строк — {@code part_drom_card.delivery_payment}. */
+        DELIVERY(true),
+        /**
+         * «Вид детали» объявления дословно (задача 0286) — {@code part_drom_card.drom_kind}.
+         * Строка клиента с маркой и моделью («Карданный вал Lexus GX400»), а не наш
+         * справочный вид {@code part_kind} («Фара»). Без синонимов, как описание.
+         */
+        DROM_KIND(true),
+        /** «Раздел» объявления дословно («Автозапчасти → Трансмиссия») — {@code part_drom_card.drom_section}; не «Секция» склада. */
+        DROM_SECTION(true),
+        /**
+         * «Применимость» («Подходит») объявления дословно (задача 0287) — {@code part_drom_card.applicability}.
+         * Текст блоками со « | », а не справочная {@code part_applicability}; без синонимов.
+         */
+        APPLICABILITY(true);
 
         private final boolean imported;
         private final List<String> synonyms;

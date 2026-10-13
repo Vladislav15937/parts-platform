@@ -86,19 +86,37 @@ class DromTransferFileTest extends PostgresTestBase {
 
     /** Колонки договора, которые импорт ещё не читает, — и кто их прочтёт. */
     private static final Map<String, String> PENDING = Map.ofEntries(
-            Map.entry("Ссылка", "0274"),
-            Map.entry("Вид детали", "0278"),
-            Map.entry("Раздел", "0278"),
-            Map.entry("Применимость", "0278"),
-            Map.entry("Гарантия", "0276"),
-            Map.entry("Самовывоз", "0276"),
-            Map.entry("Доставка и оплата", "0276"));
+            Map.entry("Ссылка", "0274"));
 
     /** Проверка одной колонки: значение из файла против того, что в базе у позиции. */
     @FunctionalInterface
     private interface Check {
         void verify(DromTransferFileTest test, long partId, String fileValue);
     }
+
+    /**
+     * Блоки карточки Дрома (задача 0285): гарантия, самовывоз, доставка и оплата
+     * лежат в {@code part_drom_card} дословно, и пусто у клиента — NULL у позиции.
+     * Подробно (пустые строки внутри, склейка с листа «Продолжение», правка на
+     * карточке) — {@link DromShopTermsTest}; здесь только то, что колонка читается.
+     */
+    private static Check term(String column, String what) {
+        return (t, part, value) -> assertThat(t.column(part,
+                "SELECT (SELECT " + column + " FROM part_drom_card WHERE part_id = p.id) FROM part p WHERE p.id = ?",
+                String.class))
+                .as(what + " доехала не дословно")
+                .isEqualTo(value.isEmpty() ? null : value);
+    }
+
+    private static final Map<String, Check> TERM_CHECKS = Map.of(
+            "Гарантия", term("warranty", "«Гарантия»"),
+            "Самовывоз", term("pickup", "«Самовывоз»"),
+            "Доставка и оплата", term("delivery_payment", "«Доставка и оплата»"),
+            // Задача 0286: строка вида и раздел дословно, не part_kind_id и не part.section.
+            "Вид детали", term("drom_kind", "«Вид детали»"),
+            "Раздел", term("drom_section", "«Раздел»"),
+            // Задача 0287: «Применимость» («Подходит») текстом, не part_applicability.
+            "Применимость", term("applicability", "«Применимость»"));
 
     /**
      * Колонки, которые импорт читает, — и чем это доказано.
@@ -157,6 +175,7 @@ class DromTransferFileTest extends PostgresTestBase {
 
     private static Map<String, Check> withCardChecks(Map<String, Check> own) {
         Map<String, Check> all = new HashMap<>(own);
+        all.putAll(TERM_CHECKS);
         DromCardFieldsTest.CHECKS.forEach((title, card) -> all.put(title,
                 (t, part, value) -> card.verify((sql, id) -> t.inTenant(
                         () -> t.jdbc.queryForList(sql, String.class, id)), part, value)));

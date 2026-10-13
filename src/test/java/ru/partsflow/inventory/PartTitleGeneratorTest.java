@@ -45,6 +45,20 @@ class PartTitleGeneratorTest {
     }
 
     @Test
+    @DisplayName("Сторона «обе» — двумя словами на месте одного (задача 0283)")
+    void bothSidesAreTwoWords() {
+        String title = generator.generate(
+                "Стойка",
+                new VehicleTitlePart("Honda", "Airwave", "GJ1", null, 2002),
+                new Sides(LongitudinalSide.BOTH, LateralSide.BOTH, VerticalSide.BOTH),
+                PartCondition.USED,
+                null);
+
+        assertThat(title).isEqualTo(
+                "Стойка Honda Airwave GJ1 2002 перед. задн. лев. прав. верх. ниж. (б/у)");
+    }
+
+    @Test
     @DisplayName("Заданные стороны попадают в заголовок, незаданные — пропускаются")
     void skipsUnsetAxes() {
         String title = generator.generate(
