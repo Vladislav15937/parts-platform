@@ -69,6 +69,8 @@ export function cardFields(row: CatalogRow): Array<[string, string]> {
   add('Ст. баркод', row.barcode);
   // Номер, по которому деталь помнит переехавший клиент.
   add('Старые данные', row.legacyCode);
+  // Номер объявления клиента на Дроме: по нему он сверяет перенос с кабинетом.
+  add('Номер объявления Дрома', row.dromAdNumber);
   add('Выгружать', row.published === null ? null : row.published ? 'Везде' : 'Нет');
   add('Количество фото', row.photoCount === 0 ? null : row.photoCount);
   // Кто и когда трогал карточку — внизу, а не среди свойств детали:

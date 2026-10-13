@@ -260,7 +260,7 @@ function row(): CatalogRow {
     manufacturer: 'Toyota', marking: null, section: null, cellCode: 'А-01-1',
     sideLr: 'LEFT', sideFr: 'FRONT',
     qty: 1, oem: null, crosses: null, photoUrl: null, supply: null, equipment: null,
-    partName: 'фара', published: true, barcode: null, legacyCode: null,
+    partName: 'фара', published: true, barcode: null, legacyCode: null, dromAdNumber: null,
     videoUrl: null, textBlock: null, weightKg: null, dimensions: null,
     packageDimensions: null, packageWeightKg: null, createdAt: null, updatedAt: null,
     updatedByName: null, priceChangedAt: null, priceChangedByName: null,

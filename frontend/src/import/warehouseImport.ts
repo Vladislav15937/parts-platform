@@ -22,6 +22,7 @@ export const FIELDS = [
   { key: 'CELL', label: 'Ячейка', required: false },
   { key: 'OEM', label: 'Номер детали', required: false },
   { key: 'NOTE', label: 'Примечание', required: false },
+  { key: 'DROM_AD_NUMBER', label: 'Номер объявления Дрома', required: false },
 ] as const;
 
 export type FieldKey = (typeof FIELDS)[number]['key'];

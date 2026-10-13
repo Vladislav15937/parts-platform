@@ -247,18 +247,58 @@ public class ExcelWarehouseImporter {
             return null;
         }
 
+        String adNumber = dromAdNumber(mapping.value(row, Field.DROM_AD_NUMBER));
+        if (adNumber != null && !adNumber.matches("[0-9]+")) {
+            // Число в Excel («1,26E+08») или слово вместо номера: заводить позицию
+            // с номером объявления, который нельзя сверить с кабинетом, значит
+            // пообещать связь, которой нет. Строку пропускаем и называем, что в ней.
+            report.skip(row.number(), "номер объявления Дрома не из цифр: «"
+                    + shortened(adNumber) + "»");
+            return null;
+        }
+
         return new Row(
+                row.number(),
                 name,
                 number(mapping.value(row, Field.PRICE)),
                 quantity,
                 blankToNull(mapping.value(row, Field.CELL)),
                 blankToNull(mapping.value(row, Field.OEM)),
-                blankToNull(mapping.value(row, Field.NOTE)));
+                blankToNull(mapping.value(row, Field.NOTE)),
+                adNumber);
+    }
+
+    /**
+     * Номер объявления из ячейки: края обрезаны, знак «№» перед числом
+     * снят (на карточке Дрома он стоит именно так), пусто — {@code null}.
+     * Пустая строка в базу не уйдёт никогда: колонка {@code NULL} либо цифры.
+     */
+    private static String dromAdNumber(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String value = raw.strip();
+        if (value.startsWith("№")) {
+            value = value.substring(1).strip();
+        }
+        return value.isEmpty() ? null : value;
+    }
+
+    private static String shortened(String value) {
+        return value.length() <= 30 ? value : value.substring(0, 30) + "…";
     }
 
     private void flush(List<Row> batch, long warehouseId, Map<String, Long> cells,
                        Map<String, PartName> names, Tally report) {
         for (Row row : batch) {
+            // Объявление, которое у нас уже есть, второй позицией не заводится:
+            // повтор файла переноса не должен удваивать склад клиента. Ответ
+            // называет позицию публичным кодом — номер базы человеку ничего не даёт.
+            // Проверка стоит до работы со справочником и ячейками, чтобы
+            // пропущенная строка не оставляла за собой побочных заведений.
+            if (row.dromAd() != null && skipIfAdTaken(row, report)) {
+                continue;
+            }
             Long cellId = row.cell() == null ? null
                     : cells.computeIfAbsent(row.cell().toUpperCase(),
                             code -> createCell(warehouseId, row.cell()));
@@ -266,12 +306,24 @@ public class ExcelWarehouseImporter {
             PartName partName = names.computeIfAbsent(
                     row.name().toLowerCase(), key -> partNames.resolve(row.name(), null));
 
-            Long partId = jdbc.queryForObject("""
+            // ON CONFLICT — на одновременный повтор: проверка выше читает, а между
+            // чтением и вставкой встанет вторая загрузка. Индекс дубль не пустит
+            // в любом случае, но без этого человек получил бы «Операция нарушает
+            // целостность данных» на весь файл вместо названной позиции.
+            List<Long> inserted = jdbc.queryForList("""
                     INSERT INTO part (category_id, part_name_id, title, price, note,
-                                      storage_cell_id)
-                    VALUES (?, ?, ?, ?, ?, ?) RETURNING id""",
+                                      storage_cell_id, drom_ad_number)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (drom_ad_number) WHERE drom_ad_number IS NOT NULL
+                    DO NOTHING
+                    RETURNING id""",
                     Long.class, partName.getCategoryId(), partName.getId(),
-                    row.name(), row.price(), row.note(), cellId);
+                    row.name(), row.price(), row.note(), cellId, row.dromAd());
+            if (inserted.isEmpty()) {
+                skipIfAdTaken(row, report);
+                continue;
+            }
+            Long partId = inserted.get(0);
 
             // Номер, от которого после приведения ничего не осталось, — не номер:
             // колонка normalized объявлена NOT NULL, и такая строка отвечает
@@ -298,6 +350,23 @@ public class ExcelWarehouseImporter {
             report.imported++;
         }
         batch.clear();
+    }
+
+    /**
+     * Занят ли номер объявления; если да — строка пропущена и названа.
+     *
+     * @return {@code true}, если позиция с этим номером уже есть
+     */
+    private boolean skipIfAdTaken(Row row, Tally report) {
+        List<String> holder = jdbc.queryForList(
+                "SELECT public_code FROM part WHERE drom_ad_number = ?",
+                String.class, row.dromAd());
+        if (holder.isEmpty()) {
+            return false;
+        }
+        report.skip(row.number(), "объявление № " + row.dromAd()
+                + " уже у позиции " + holder.get(0));
+        return true;
     }
 
     private Long createCell(long warehouseId, String code) {
@@ -346,8 +415,8 @@ public class ExcelWarehouseImporter {
         return value == null || value.isBlank() ? null : value.strip();
     }
 
-    private record Row(String name, BigDecimal price, BigDecimal quantity,
-                       String cell, String oem, String note) {
+    private record Row(int number, String name, BigDecimal price, BigDecimal quantity,
+                       String cell, String oem, String note, String dromAd) {
     }
 
     /**

@@ -86,7 +86,6 @@ class DromTransferFileTest extends PostgresTestBase {
 
     /** Колонки договора, которые импорт ещё не читает, — и кто их прочтёт. */
     private static final Map<String, String> PENDING = Map.ofEntries(
-            Map.entry("Номер объявления Дрома", "0274"),
             Map.entry("Ссылка", "0274"),
             Map.entry("Вид детали", "0278"),
             Map.entry("Раздел", "0278"),
@@ -113,6 +112,10 @@ class DromTransferFileTest extends PostgresTestBase {
 
     /** Колонки, которые импорт читает, — и чем это доказано. */
     private static final Map<String, Check> CHECKS = Map.of(
+            "Номер объявления Дрома", (t, part, value) -> assertThat(t.column(part,
+                    "SELECT drom_ad_number FROM part WHERE id = ?", String.class))
+                    .as("номер объявления из файла не доехал до позиции")
+                    .isEqualTo(value),
             "Наименование", (t, part, value) -> assertThat(t.column(part,
                     "SELECT title FROM part WHERE id = ?", String.class))
                     .as("заголовок клиента доехал не дословно")

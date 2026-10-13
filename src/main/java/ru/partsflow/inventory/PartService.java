@@ -1099,7 +1099,8 @@ public class PartService {
                 + "                           || coalesce(marking, ''))\n"
                 + "                       @@ plainto_tsquery('russian', ?)" + only + "\n"
                 + "          UNION " + oem
-                + (byNumber ? PartNumberQuery.UNION_BRANCH + only : "") + ")";
+                + (byNumber ? PartNumberQuery.UNION_BRANCH + only
+                        + PartNumberQuery.DROM_AD_BRANCH + only : "") + ")";
     }
 
     /**
@@ -1167,6 +1168,8 @@ public class PartService {
                 PartNumberQuery.publicCodeArg(text, number != null), like, text, like));
         if (number != null) {
             args.add(number);
+            // Номер объявления Дрома (задача 0274): те же цифры, но текстом.
+            args.add(args.get(0));
         }
         return new Match(textMatch(false, number != null), textMatch(true, number != null),
                 args, text, number);

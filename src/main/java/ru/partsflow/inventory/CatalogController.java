@@ -98,7 +98,7 @@ public class CatalogController {
                 row.photoKey() == null ? null : storage.presignView(row.photoKey()),
                 row.supply(), row.equipment(),
                 row.partName(), row.published(), row.barcode(),
-                row.legacyCode(), row.videoUrl(), row.textBlock(),
+                row.legacyCode(), row.dromAdNumber(), row.videoUrl(), row.textBlock(),
                 row.weightKg(), row.dimensions(), row.packageDimensions(),
                 row.packageWeightKg(),
                 row.createdAt(), row.updatedAt(), row.updatedByName(),
@@ -386,7 +386,7 @@ public class CatalogController {
                       // Паритет с таблицей товаров прежней системы: сорок две
                       // колонки против наших двадцати четырёх.
                       String partName, Boolean published, String barcode,
-                      String legacyCode, String videoUrl, String textBlock,
+                      String legacyCode, String dromAdNumber, String videoUrl, String textBlock,
                       java.math.BigDecimal weightKg, String dimensions,
                       String packageDimensions, java.math.BigDecimal packageWeightKg,
                       java.time.Instant createdAt, java.time.Instant updatedAt,

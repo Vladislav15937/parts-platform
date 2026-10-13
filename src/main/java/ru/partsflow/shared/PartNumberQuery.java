@@ -55,6 +55,18 @@ public final class PartNumberQuery {
     public static final String UNION_BRANCH =
             "\n                          UNION SELECT id FROM part WHERE number = ?";
 
+    /**
+     * Ветка `UNION` по номеру объявления Дрома (задача 0274): запрос из одних
+     * цифр может быть и номером позиции, и номером объявления, которое клиент
+     * назвал по телефону («мне звонили по №125696381»). Сравнение точное —
+     * подстрока притащила бы чужие объявления, — и ветка живёт там же, где
+     * {@link #UNION_BRANCH}, у обоих поисков по складу сразу. Аргумент —
+     * цифры запроса как есть ({@link #publicCodeArg}), а не {@code Long}:
+     * в базе номер объявления лежит текстом.
+     */
+    public static final String DROM_AD_BRANCH =
+            "\n                          UNION SELECT id FROM part WHERE drom_ad_number = ?";
+
     private PartNumberQuery() {
     }
 

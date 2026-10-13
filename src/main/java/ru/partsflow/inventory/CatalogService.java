@@ -231,14 +231,19 @@ public class CatalogService {
                                            || coalesce(marking, ''))
                                        @@ plainto_tsquery('russian', ?)
                           UNION SELECT part_id FROM part_oem WHERE raw_number ILIKE ?"""
-                    + (number == null ? "" : PartNumberQuery.UNION_BRANCH) + ")");
+                    + (number == null ? ""
+                            : PartNumberQuery.UNION_BRANCH + PartNumberQuery.DROM_AD_BRANCH)
+                    + ")");
             String like = "%" + query.strip() + "%";
-            args.add(PartNumberQuery.publicCodeArg(query, number != null));
+            String codeArg = PartNumberQuery.publicCodeArg(query, number != null);
+            args.add(codeArg);
             args.add(like);
             args.add(query.strip());
             args.add(like);
             if (number != null) {
                 args.add(number);
+                // Номер объявления Дрома (задача 0274): те же цифры, но текстом.
+                args.add(codeArg);
             }
         }
         if (!withMissing) {
@@ -806,6 +811,7 @@ public class CatalogService {
                        p.price, p.installation_price, p.color, p.description, p.note,
                        p.manufacturer, p.marking, p.section, p.side_lr, p.side_fr,
                        p.qty_on_hand, p.is_published, p.barcode, p.legacy_code,
+                       p.drom_ad_number,
                        p.video_url, p.text_block,
                        p.weight_kg, p.length_mm, p.width_mm, p.height_mm,
                        p.package_weight_kg, p.package_length_mm,
@@ -883,6 +889,7 @@ public class CatalogService {
                         (Boolean) rs.getObject("is_published"),
                         rs.getString("barcode"),
                         rs.getString("legacy_code"),
+                        rs.getString("drom_ad_number"),
                         rs.getString("video_url"), rs.getString("text_block"),
                         rs.getBigDecimal("weight_kg"),
                         dimensions(rs.getObject("length_mm", Integer.class),
@@ -1233,6 +1240,11 @@ public class CatalogService {
                        * чужой выгрузки, то есть внутреннее представление.
                        */
                       String legacyCode,
+                      /**
+                       * Номер объявления Дрома, только цифры (задача 0274): по нему
+                       * клиент сверяет перенесённую позицию со своим кабинетом.
+                       */
+                      String dromAdNumber,
                       String videoUrl, String textBlock,
                       BigDecimal weightKg, String dimensions, String packageDimensions,
                       BigDecimal packageWeightKg,
@@ -1248,7 +1260,7 @@ public class CatalogService {
                     color, description, note, manufacturer, marking, section, cellCode,
                     sideLr, sideFr,
                     qty, oem, crosses, photoKey, supply, equipment,
-                    partName, published, barcode, legacyCode,
+                    partName, published, barcode, legacyCode, dromAdNumber,
                     videoUrl, textBlock, weightKg, dimensions, packageDimensions,
                     packageWeightKg, createdAt, updatedAt, updatedByName,
                     priceChangedAt, priceChangedByName, photoCount, found);

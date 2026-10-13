@@ -473,7 +473,7 @@ export function rowOfWheel(row: WheelRow): CatalogRow {
     sideLr: null, sideFr: null, qty: Number(w.qty), oem: w.oem, crosses: null,
     photoUrl: row.photoUrl, supply: w.supply, equipment: null,
     partName: w.partName, published: w.published, barcode: w.barcode,
-    legacyCode: w.legacyCode, videoUrl: null, textBlock: null,
+    legacyCode: w.legacyCode, dromAdNumber: null, videoUrl: null, textBlock: null,
     weightKg: null, dimensions: null, packageDimensions: null, packageWeightKg: null,
     createdAt: w.createdAt, updatedAt: w.updatedAt, updatedByName: w.updatedByName,
     priceChangedAt: w.priceChangedAt, priceChangedByName: w.priceChangedByName,

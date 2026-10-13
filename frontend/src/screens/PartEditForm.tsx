@@ -471,6 +471,8 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
     fields: [
       { kind: 'locked', key: 'legacyCode', label: 'Старые данные',
         value: (r) => plainText(r.legacyCode) },
+      { kind: 'locked', key: 'dromAdNumber', label: 'Номер объявления Дрома',
+        value: (r) => plainText(r.dromAdNumber) },
     ],
   },
 ];

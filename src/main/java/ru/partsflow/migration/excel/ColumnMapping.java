@@ -48,7 +48,10 @@ public final class ColumnMapping {
         VIN(false, "vin", "вин", "vin-код", "вин-код"),
         OEM(true, "оем", "oem", "артикул", "номер детали", "каталожный номер", "номер"),
         CONDITION(false, "состояние", "качество"),
-        NOTE(true, "примечание", "комментарий", "описание", "заметка");
+        NOTE(true, "примечание", "комментарий", "описание", "заметка"),
+        // Без синонимов: колонку узнаёт только договор файла переноса с Дрома.
+        // Догадкой «номер» её не найти — «Номер» это OEM, а не объявление.
+        DROM_AD_NUMBER(true);
 
         private final boolean imported;
         private final List<String> synonyms;
