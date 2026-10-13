@@ -139,12 +139,10 @@ class DromAdNumberTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Повтор файла не заводит вторую позицию и называет, какая позиция занимает номер")
-    void repeatedFileNamesTheHolder() throws Exception {
+    @DisplayName("Повтор файла не заводит вторую позицию — узнаёт её по номеру (дозаполнение — задача 0282)")
+    void repeatedFileRecognizesThePosition() throws Exception {
         byte[] file = file(ad(FIRST_AD, "Карданный вал передний"), ad(SECOND_AD, "Фара левая"));
         assertThat(load(file).path("imported").asInt()).isEqualTo(2);
-        String firstCode = codeOf(FIRST_AD);
-        String secondCode = codeOf(SECOND_AD);
 
         // Другой ключ запроса: это не повтор того же нажатия, а второй заход с тем же файлом.
         JsonNode again = load(file);
@@ -153,15 +151,10 @@ class DromAdNumberTest extends PostgresTestBase {
                 .as("повтор файла завёл позиции заново — склад клиента удвоился")
                 .isZero();
         assertThat(count("SELECT count(*) FROM part")).isEqualTo(2);
-        List<String> reasons = again.path("skipped").findValuesAsText("reason");
-        assertThat(reasons)
-                .as("отказ обязан назвать позицию публичным кодом, а не номером базы")
-                .containsExactly(
-                        "объявление № " + FIRST_AD + " уже у позиции " + firstCode,
-                        "объявление № " + SECOND_AD + " уже у позиции " + secondCode);
-        assertThat(again.path("skipped").findValues("row").stream().map(JsonNode::asInt))
-                .as("номера строк — как в Excel: заголовок первая, данные со второй")
-                .containsExactly(2, 3);
+        assertThat(again.path("skipped"))
+                .as("с задачи 0282 повтор не пропускает узнанную позицию, а дозаполняет")
+                .isEmpty();
+        assertThat(again.path("repeat").path("unchanged").asInt()).isEqualTo(2);
     }
 
     @Test

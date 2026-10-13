@@ -114,6 +114,24 @@ final class DromCardWords {
         };
     }
 
+    /**
+     * Код стороны словом карточки Дрома — для отчёта повторной загрузки
+     * (задача 0282): «у позиции LEFT» — это внутреннее представление, а не
+     * то, что владелец видел у себя в объявлении. Не код стороны — {@code null}.
+     */
+    static String word(String code) {
+        return switch (code) {
+            case "LEFT" -> "Левая";
+            case "RIGHT" -> "Правая";
+            case "BOTH" -> "Левая, Правая";
+            case "FRONT" -> "Переднее";
+            case "REAR" -> "Заднее";
+            case "UPPER" -> "Верхнее";
+            case "LOWER" -> "Нижнее";
+            default -> null;
+        };
+    }
+
     private static String normalize(String value) {
         return value.strip().toLowerCase(Locale.ROOT).replace('ё', 'е');
     }

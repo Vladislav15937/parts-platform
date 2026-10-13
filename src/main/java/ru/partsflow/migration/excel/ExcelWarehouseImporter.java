@@ -58,12 +58,18 @@ public class ExcelWarehouseImporter {
     private final PartNameService partNames;
 
     private final ru.partsflow.inventory.StockLedger ledger;
+    private final ru.partsflow.inventory.PartChangeLog changeLog;
+    private final com.fasterxml.jackson.databind.ObjectMapper json;
 
     public ExcelWarehouseImporter(JdbcTemplate jdbc, PartNameService partNames,
-                                  ru.partsflow.inventory.StockLedger ledger) {
+                                  ru.partsflow.inventory.StockLedger ledger,
+                                  ru.partsflow.inventory.PartChangeLog changeLog,
+                                  com.fasterxml.jackson.databind.ObjectMapper json) {
         this.jdbc = jdbc;
         this.partNames = partNames;
         this.ledger = ledger;
+        this.changeLog = changeLog;
+        this.json = json;
     }
 
     /**
@@ -183,11 +189,18 @@ public class ExcelWarehouseImporter {
 
         // Движения записаны, применить их надо пачкой: тысяча строк — тысяча
         // обращений к базе, если делать это по одному. Остаток и статус
-        // считаются по журналу, поэтому результат тот же.
-        ledger.recomputeAll();
+        // считаются по журналу, поэтому результат тот же. Повтор, не заведший
+        // ни одной позиции, движений не писал — и пересчитывать ему нечего:
+        // пересчёт трогает каждую строку part_stock, и шесть одновременных
+        // повторов дрались бы за них вместо того, чтобы разойтись.
+        if (report.imported > 0) {
+            ledger.recomputeAll();
+        }
 
-        log.info("Импорт из таблицы: заведено {} позиций, пропущено {}",
-                report.imported, report.skipped.size());
+        log.info("Импорт из таблицы: заведено {} позиций, дозаполнено {}, без изменений {}, "
+                        + "расхождений {}, пропущено {}",
+                report.imported, report.refilled, report.unchanged, report.discrepancyCount,
+                report.skipped.size());
 
         Report result = report.toReport();
         jdbc.update("UPDATE import_run SET imported = ?, skipped = ?::jsonb "
@@ -210,7 +223,34 @@ public class ExcelWarehouseImporter {
         if (imported.isEmpty()) {
             return null;
         }
-        return new Report(imported.get(0), skippedOf(requestId), quantityDefaultedOf(requestId));
+        return new Report(imported.get(0), skippedOf(requestId), quantityDefaultedOf(requestId),
+                repeatOf(requestId));
+    }
+
+    /**
+     * Дозаполнение и расхождения прошлого прогона — тем же обходом, что число
+     * «по одной штуке»: элемент {@code {"repeat": …}} в {@code skipped}
+     * (своей колонки у {@code import_run} нет, а заводить её — changeset).
+     * Повтор по ключу смотрят, когда первого ответа не видели, и «заведено 0»
+     * без «дозаполнено 2 410» читалось бы как «ничего не произошло».
+     */
+    private Report.Repeat repeatOf(String requestId) {
+        List<String> stored = jdbc.queryForList("""
+                        SELECT (e->'repeat')::text
+                          FROM import_run r
+                         CROSS JOIN LATERAL jsonb_array_elements(r.skipped) e
+                         WHERE r.client_request_id = ?
+                           AND e->'repeat' IS NOT NULL""",
+                String.class, requestId);
+        if (stored.isEmpty()) {
+            return Report.Repeat.NONE;
+        }
+        try {
+            return json.readValue(stored.get(0), Report.Repeat.class);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            log.warn("Итог повтора по ключу {} не разобран: {}", requestId, e.getMessage());
+            return Report.Repeat.NONE;
+        }
     }
 
     /**
@@ -273,7 +313,7 @@ public class ExcelWarehouseImporter {
      * отдельным элементом без {@code row} — почему здесь, а не своей
      * колонкой, сказано у {@link #quantityDefaultedOf}.
      */
-    private static String skippedJson(Report report) {
+    private String skippedJson(Report report) {
         java.util.stream.Stream<String> skipped = report.skipped().stream()
                 .map(s -> "{\"row\":%d,\"reason\":\"%s\"%s}"
                         .formatted(s.row(), jsonText(s.reason()), s.sheet() == null ? ""
@@ -282,7 +322,18 @@ public class ExcelWarehouseImporter {
                 ? java.util.stream.Stream.empty()
                 : java.util.stream.Stream.of(
                         "{\"quantityDefaulted\":%d}".formatted(report.quantityDefaulted()));
-        return java.util.stream.Stream.concat(skipped, defaulted)
+        // Итог повтора — вложенный и с текстом из файла, поэтому сериализатором,
+        // а не руками: экранировать значения ячеек самим значит повторить
+        // ту дыру, что уже ронялась на обратной косой (задача 0281).
+        java.util.stream.Stream<String> repeat;
+        try {
+            repeat = java.util.stream.Stream.of(
+                    "{\"repeat\":" + json.writeValueAsString(report.repeat()) + "}");
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("итог повтора не записан", e);
+        }
+        return java.util.stream.Stream.of(skipped, defaulted, repeat)
+                .flatMap(s -> s)
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
     }
 
@@ -333,6 +384,7 @@ public class ExcelWarehouseImporter {
         }
 
         BigDecimal quantity;
+        boolean quantityFromFile = true;
         String rawQuantity = mapping.value(row, Field.QUANTITY);
         if (rawQuantity.isBlank()) {
             // Количества нет — ни колонки, ни значения в строке. У Дрома его
@@ -342,6 +394,7 @@ public class ExcelWarehouseImporter {
             // о ней до загрузки.
             quantity = BigDecimal.ONE;
             report.quantityDefaulted++;
+            quantityFromFile = false;
         } else {
             quantity = number(rawQuantity);
             if (quantity == null || quantity.signum() <= 0) {
@@ -388,6 +441,7 @@ public class ExcelWarehouseImporter {
                 name,
                 number(mapping.value(row, Field.PRICE)),
                 quantity,
+                quantityFromFile,
                 blankToNull(mapping.value(row, Field.CELL)),
                 blankToNull(mapping.value(row, Field.OEM)),
                 blankToNull(mapping.value(row, Field.NOTE)),
@@ -465,12 +519,23 @@ public class ExcelWarehouseImporter {
                        Map<String, PartName> names, Tally report) {
         for (Row row : batch) {
             // Объявление, которое у нас уже есть, второй позицией не заводится:
-            // повтор файла переноса не должен удваивать склад клиента. Ответ
-            // называет позицию публичным кодом — номер базы человеку ничего не даёт.
-            // Проверка стоит до работы со справочником и ячейками, чтобы
-            // пропущенная строка не оставляла за собой побочных заведений.
-            if (row.dromAd() != null && skipIfAdTaken(row, report)) {
-                continue;
+            // повтор файла переноса не должен удваивать склад клиента. Но и не
+            // пропускается — пустые поля позиции дозаполняются из файла
+            // (задача 0282, см. refill). Проверка стоит до работы со справочником
+            // и ячейками, чтобы узнанная строка не оставляла побочных заведений.
+            if (row.dromAd() != null) {
+                if (!report.seenAds.add(row.dromAd())) {
+                    // Тот же номер второй раз в одном файле — это изъян файла,
+                    // а не второй заход: дозаполнять позицию её же соседней
+                    // строкой значило бы выбрать одну из двух молча.
+                    skipAsTaken(row, report);
+                    continue;
+                }
+                Map<String, Object> existing = existing(row.dromAd());
+                if (existing != null) {
+                    refill(row, existing, report);
+                    continue;
+                }
             }
             Long cellId = row.cell() == null ? null
                     : cells.computeIfAbsent(row.cell().toUpperCase(),
@@ -501,7 +566,15 @@ public class ExcelWarehouseImporter {
                     card.manufacturer(), card.authenticity(),
                     nameOf(card.sideLr()), nameOf(card.sideFr()), nameOf(card.sideUd()));
             if (inserted.isEmpty()) {
-                skipIfAdTaken(row, report);
+                // Одновременная загрузка того же файла завела позицию между
+                // нашим чтением и вставкой: к этому моменту она закоммичена
+                // (вставка ждала её), и строка — такой же повтор, как и любой.
+                Map<String, Object> existing = existing(row.dromAd());
+                if (existing == null) {
+                    skipAsTaken(row, report);
+                } else {
+                    refill(row, existing, report);
+                }
                 continue;
             }
             Long partId = inserted.get(0);
@@ -559,25 +632,386 @@ public class ExcelWarehouseImporter {
             // в конце importInto.
 
             report.imported++;
+            if (row.dromAd() == null) {
+                report.withoutAdNumber++;
+            }
         }
         batch.clear();
     }
 
-    /**
-     * Занят ли номер объявления; если да — строка пропущена и названа.
-     *
-     * @return {@code true}, если позиция с этим номером уже есть
-     */
-    private boolean skipIfAdTaken(Row row, Tally report) {
+    /** Второе появление номера в одном файле: строка пропущена и названа. */
+    private void skipAsTaken(Row row, Tally report) {
         List<String> holder = jdbc.queryForList(
                 "SELECT public_code FROM part WHERE drom_ad_number = ?",
                 String.class, row.dromAd());
-        if (holder.isEmpty()) {
+        report.skip(row.number(), "объявление № " + row.dromAd()
+                + (holder.isEmpty() ? " встречается в файле повторно"
+                        : " уже у позиции " + holder.get(0)));
+    }
+
+    /** Позиция с этим номером объявления, со всем, что сверяет повтор; нет — {@code null}. */
+    private Map<String, Object> existing(String adNumber) {
+        List<Map<String, Object>> found = jdbc.queryForList("""
+                SELECT p.id, p.public_code, p.title, p.price, p.qty_on_hand, c.code AS cell,
+                       p.note, p.description, p.condition, p.manufacturer, p.authenticity,
+                       p.side_lr, p.side_fr, p.side_ud
+                  FROM part p
+                  LEFT JOIN storage_cell c ON c.id = p.storage_cell_id
+                 WHERE p.drom_ad_number = ?""", adNumber);
+        return found.isEmpty() ? null : found.get(0);
+    }
+
+    // --- Повторная загрузка: дозаполнение (задача 0282) ---
+
+    /**
+     * Скалярное поле, которое повтор дозаполняет.
+     *
+     * @param column  колонка {@code part}; берётся из этого списка, а не из запроса
+     * @param cutTail дописывать ли хвост: значение у позиции — начало значения
+     *                из файла (первая загрузка была без листа «Продолжение»,
+     *                и длинное значение доехало обрезанным, задача 0281)
+     */
+    private record Scalar(Field field, String column, String label,
+                          java.util.function.Function<Row, Object> value, boolean cutTail) {
+    }
+
+    private static final List<Scalar> SCALARS = List.of(
+            new Scalar(Field.PRICE, "price", "Цена", Row::price, false),
+            new Scalar(Field.DESCRIPTION, "description", "Описание", Row::description, true),
+            new Scalar(Field.NOTE, "note", "Примечание", Row::note, true),
+            new Scalar(Field.MANUFACTURER, "manufacturer", "Производитель",
+                    r -> r.card().manufacturer(), true),
+            new Scalar(Field.AUTHENTICITY, "authenticity", "Оригинальность",
+                    r -> r.card().authenticity(), true),
+            new Scalar(Field.SIDE_LR, "side_lr", "Сторона", r -> nameOf(r.card().sideLr()), false),
+            new Scalar(Field.SIDE_FR, "side_fr", "Положение", r -> nameOf(r.card().sideFr()), false),
+            new Scalar(Field.SIDE_UD, "side_ud", "Верх/низ", r -> nameOf(r.card().sideUd()), false));
+
+    /**
+     * Что повтор дозаполняет — поле и его имя в отчёте, в порядке отчёта.
+     *
+     * <p>Правило одно на все: <b>пусто у позиции — берётся из файла, заполнено —
+     * не трогается</b>, а разница называется расхождением. Владелец мог
+     * поправить у нас цену или описание после переноса, и повтор файла не имеет
+     * права это стереть. Обход идёт именно по этому списку ({@link #refill}),
+     * поэтому поле, вынутое отсюда, перестаёт дозаполняться, а сторож
+     * ({@code RepeatLoadRulesTest}) требует, чтобы каждое читаемое поле стояло
+     * либо здесь, либо в {@link #NOT_REFILLED} с причиной: иначе следующая
+     * задача научит импорт новой колонке, а повтор будет её молча пропускать.
+     */
+    static final Map<Field, String> REFILLED;
+
+    static {
+        Map<Field, String> refilled = new java.util.LinkedHashMap<>();
+        refilled.put(Field.CONDITION, "Состояние");
+        SCALARS.forEach(s -> refilled.put(s.field(), s.label()));
+        refilled.put(Field.OEM, "Номер детали");
+        refilled.put(Field.OEM_SUBSTITUTES, "Номера замен");
+        refilled.put(Field.PHOTOS, "Снимки");
+        REFILLED = java.util.Collections.unmodifiableMap(refilled);
+    }
+
+    /** Читаемые поля, которые повтор не дозаполняет, — и почему. */
+    static final Map<Field, String> NOT_REFILLED = Map.of(
+            Field.DROM_AD_NUMBER,
+            "ключ, по которому повтор и узнаёт позицию",
+            Field.NAME,
+            "заголовок собран справочником наименований (на нём стоит part_name_id) — "
+                    + "разница только называется",
+            Field.QUANTITY,
+            "остаток правят документом, а не загрузкой: второе движение склада удвоило бы его — "
+                    + "разница только называется",
+            Field.CELL,
+            "адрес полки меняет перестановка, а это движение склада, которого повтор не пишет — "
+                    + "разница только называется",
+            Field.AVAILABILITY,
+            "не поле позиции, а условие, заводить ли строку вовсе");
+
+    /** Сколько расхождений приходит в ответе; число — полное. */
+    static final int DISCREPANCY_LIMIT = 200;
+
+    /**
+     * Повтор строки, номер объявления которой уже у позиции.
+     *
+     * <p><b>Каждое дозаполнение — одна инструкция с условием в {@code WHERE}</b>
+     * ({@code … WHERE id = ? AND col IS NULL}), а число изменённых строк и есть
+     * счёт «дозаполнено»: шесть одновременных загрузок одного файла не запишут
+     * поле дважды и не насчитают его шесть раз. Прочитанное до записи решает
+     * только, звать ли запись и что назвать расхождением.
+     *
+     * <p>Остаток и движения склада не трогаются вовсе: строка файла — не приход.
+     */
+    private void refill(Row row, Map<String, Object> part, Tally report) {
+        long partId = ((Number) part.get("id")).longValue();
+        String ad = row.dromAd();
+        boolean changed = false;
+
+        for (Field field : REFILLED.keySet()) {
+            String label = REFILLED.get(field);
+            changed |= switch (field) {
+                case CONDITION -> refillCondition(row, part, partId, label, report);
+                case OEM -> refillPrimaryOem(row, partId, label, report);
+                case OEM_SUBSTITUTES -> refillSubstitutes(row, partId, label, report);
+                case PHOTOS -> refillPhotos(row, partId, label, report);
+                default -> refillScalar(scalarOf(field), row, part, partId, report);
+            };
+        }
+
+        // Сверяется, но не дозаполняется (почему — NOT_REFILLED).
+        if (!row.name().equals(part.get("title"))) {
+            report.discrepancy(ad, "Наименование", row.name(), (String) part.get("title"));
+        }
+        BigDecimal qty = (BigDecimal) part.get("qty_on_hand");
+        if (row.quantityFromFile() && (qty == null || qty.compareTo(row.quantity()) != 0)) {
+            report.discrepancy(ad, "Количество", plain(row.quantity()), plain(qty));
+        }
+        String cell = (String) part.get("cell");
+        if (row.cell() != null && (cell == null || !cell.equalsIgnoreCase(row.cell()))) {
+            report.discrepancy(ad, "Ячейка", row.cell(), cell);
+        }
+
+        if (changed) {
+            // Площадка узнаёт о дозаполненной позиции дельтой — но только
+            // о реально изменённой: повтор без изменений отметку не двигает.
+            changeLog.changed(partId);
+            report.refilled++;
+        } else {
+            report.unchanged++;
+        }
+    }
+
+    private static Scalar scalarOf(Field field) {
+        return SCALARS.stream().filter(s -> s.field() == field).findFirst()
+                .orElseThrow(() -> new IllegalStateException("нет правила дозаполнения: " + field));
+    }
+
+    private boolean refillScalar(Scalar rule, Row row, Map<String, Object> part, long partId,
+                                 Tally report) {
+        Object fromFile = rule.value().apply(row);
+        if (fromFile == null) {
             return false;
         }
-        report.skip(row.number(), "объявление № " + row.dromAd()
-                + " уже у позиции " + holder.get(0));
-        return true;
+        Object current = part.get(rule.column());
+        if (same(current, fromFile)) {
+            return false;
+        }
+        boolean fillable = current == null
+                || (rule.cutTail() && current instanceof String have && fromFile instanceof String want
+                        && want.length() > have.length() && want.startsWith(have));
+        if (fillable) {
+            // Условие повторено в WHERE: между чтением и записью поле могла
+            // заполнить одновременная загрузка или человек.
+            String sql = rule.cutTail()
+                    ? "UPDATE part SET " + rule.column() + " = ? WHERE id = ? AND (" + rule.column()
+                            + " IS NULL OR (length(?) > length(" + rule.column()
+                            + ") AND starts_with(?, " + rule.column() + ")))"
+                    : "UPDATE part SET " + rule.column() + " = ? WHERE id = ? AND "
+                            + rule.column() + " IS NULL";
+            int updated = rule.cutTail()
+                    ? jdbc.update(sql, fromFile, partId, fromFile, fromFile)
+                    : jdbc.update(sql, fromFile, partId);
+            if (updated > 0) {
+                report.filled(rule.label(), 0);
+                return true;
+            }
+            return false;
+        }
+        report.discrepancy(row.dromAd(), rule.label(), words(fromFile), words(current));
+        return false;
+    }
+
+    /**
+     * Состояние: у колонки умолчание «б/у», и по самой позиции не отличить
+     * «в файле не было» от «в файле было „Б/у“». Поэтому «б/у» считается
+     * пустым, <b>пока человек состояние не правил</b> — а правку видно
+     * в журнале изменений: загрузка пишет мимо Hibernate и следов там
+     * не оставляет, правка из карточки — оставляет снимок до и после.
+     * Правленое (или любое иное, кроме «б/у») не перезаписывается.
+     */
+    private boolean refillCondition(Row row, Map<String, Object> part, long partId,
+                                    String label, Tally report) {
+        ru.partsflow.inventory.PartCondition fromFile = row.card().condition();
+        if (fromFile == null) {
+            return false;
+        }
+        String current = (String) part.get("condition");
+        if (fromFile.name().equals(current)) {
+            return false;
+        }
+        int updated = jdbc.update("""
+                UPDATE part p SET condition = ?
+                 WHERE p.id = ? AND p.condition = 'USED'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM audit_log a
+                        WHERE a.table_name = 'part' AND a.record_id = p.id
+                          AND a.operation = 'UPDATE'
+                          AND (a.old_value IS NULL
+                               OR a.old_value->>'condition' IS DISTINCT FROM
+                                  a.new_value->>'condition'))""",
+                fromFile.name(), partId);
+        if (updated > 0) {
+            report.filled(label, 0);
+            return true;
+        }
+        report.discrepancy(row.dromAd(), label, fromFile.title(), words(current));
+        return false;
+    }
+
+    /** Главный номер производителя: нет у позиции — заводится, есть другой — расхождение. */
+    private boolean refillPrimaryOem(Row row, long partId, String label, Tally report) {
+        String normalized = ru.partsflow.catalog.OemNumbers.normalize(row.oem());
+        if (normalized == null) {
+            return false;
+        }
+        List<Map<String, Object>> primary = jdbc.queryForList(
+                "SELECT raw_number, normalized FROM part_oem WHERE part_id = ? AND is_primary",
+                partId);
+        if (!primary.isEmpty()) {
+            if (!normalized.equals(primary.get(0).get("normalized"))) {
+                report.discrepancy(row.dromAd(), label, row.oem(),
+                        (String) primary.get(0).get("raw_number"));
+            }
+            return false;
+        }
+        int inserted = jdbc.update("""
+                INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
+                SELECT ?, ?, ?, true
+                 WHERE NOT EXISTS (SELECT 1 FROM part_oem WHERE part_id = ? AND is_primary)
+                ON CONFLICT DO NOTHING""", partId, row.oem(), normalized, partId);
+        if (inserted > 0) {
+            report.filled(label, 0);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Номера замен: у позиции нет ни одного — заводятся все по порядку ячейки;
+     * есть начало списка из файла (первая загрузка обрезала ячейку) — дописывается
+     * остаток; иной список — расхождение. Совпадение с главным номером
+     * в сравнение не идёт: его при первой загрузке отбил {@code part_oem_uk}.
+     */
+    private boolean refillSubstitutes(Row row, long partId, String label, Tally report) {
+        List<String> raw = row.card().substitutes();
+        if (raw.isEmpty()) {
+            return false;
+        }
+        List<Map<String, Object>> have = jdbc.queryForList("""
+                SELECT raw_number, normalized, is_primary FROM part_oem
+                 WHERE part_id = ? ORDER BY id""", partId);
+        java.util.Set<String> primary = new java.util.HashSet<>();
+        List<String> existing = new ArrayList<>();
+        List<String> existingRaw = new ArrayList<>();
+        for (Map<String, Object> oem : have) {
+            if (Boolean.TRUE.equals(oem.get("is_primary"))) {
+                primary.add((String) oem.get("normalized"));
+            } else {
+                existing.add((String) oem.get("normalized"));
+                existingRaw.add((String) oem.get("raw_number"));
+            }
+        }
+        java.util.LinkedHashMap<String, String> wanted = new java.util.LinkedHashMap<>();
+        for (String number : raw) {
+            String normalized = ru.partsflow.catalog.OemNumbers.normalize(number);
+            if (normalized != null && !primary.contains(normalized)) {
+                wanted.putIfAbsent(normalized, number);
+            }
+        }
+        List<String> wantedKeys = new ArrayList<>(wanted.keySet());
+        if (existing.equals(wantedKeys)) {
+            return false;
+        }
+        if (existing.size() >= wantedKeys.size()
+                || !wantedKeys.subList(0, existing.size()).equals(existing)) {
+            report.discrepancy(row.dromAd(), label, String.join(", ", raw),
+                    String.join(", ", existingRaw));
+            return false;
+        }
+        int inserted = 0;
+        for (String normalized : wantedKeys.subList(existing.size(), wantedKeys.size())) {
+            inserted += jdbc.update("""
+                    INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
+                    VALUES (?, ?, ?, false)
+                    ON CONFLICT DO NOTHING""", partId, wanted.get(normalized), normalized);
+        }
+        if (inserted > 0) {
+            report.filled(label, 0);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Снимки: в очередь встают только ссылки, которых у позиции ещё нет,
+     * и встают <b>после</b> существующих — и перенесённых, и добавленных
+     * владельцем руками. Главным {@code PhotoMigration} делает снимок с нулевым
+     * порядком, только если главного ещё нет, поэтому прежний главный остаётся.
+     * Строка очереди после переноса остаётся ({@code DONE} с {@code photo_id}),
+     * так что уже скачанный снимок по тому же адресу второй раз не заводится —
+     * это держит {@code part_photo_import_uk}, а не проверка чтением.
+     */
+    private boolean refillPhotos(Row row, long partId, String label, Tally report) {
+        if (row.photos().isEmpty()) {
+            return false;
+        }
+        java.util.Set<String> queued = new java.util.HashSet<>(jdbc.queryForList(
+                "SELECT url FROM part_photo_import WHERE part_id = ?", String.class, partId));
+        List<String> fresh = row.photos().stream().filter(url -> !queued.contains(url)).toList();
+        if (fresh.isEmpty()) {
+            return false;
+        }
+        Integer next = jdbc.queryForObject("""
+                SELECT COALESCE(max(sort_order), -1) + 1 FROM (
+                    SELECT sort_order FROM part_photo_import WHERE part_id = ?
+                    UNION ALL
+                    SELECT sort_order FROM part_photo WHERE part_id = ?) orders""",
+                Integer.class, partId, partId);
+        int order = next == null ? 0 : next;
+        int added = 0;
+        for (String url : fresh) {
+            added += jdbc.update("""
+                    INSERT INTO part_photo_import (part_id, url, sort_order)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT (part_id, url) DO NOTHING""", partId, url, order++);
+        }
+        if (added > 0) {
+            report.filled(label, added);
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean same(Object current, Object fromFile) {
+        if (current instanceof BigDecimal have && fromFile instanceof BigDecimal want) {
+            return have.compareTo(want) == 0;
+        }
+        return java.util.Objects.equals(current, fromFile);
+    }
+
+    /** Значение для отчёта словами человека: код стороны — словом Дрома, число — без хвоста нулей. */
+    private static String words(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof BigDecimal number) {
+            return plain(number);
+        }
+        String text = value.toString();
+        String side = DromCardWords.word(text);
+        if (side != null) {
+            return side;
+        }
+        for (ru.partsflow.inventory.PartCondition condition
+                : ru.partsflow.inventory.PartCondition.values()) {
+            if (condition.name().equals(text)) {
+                return condition.title();
+            }
+        }
+        return text;
+    }
+
+    private static String plain(BigDecimal number) {
+        return number == null ? null : number.stripTrailingZeros().toPlainString();
     }
 
     private Long createCell(long warehouseId, String code) {
@@ -640,8 +1074,13 @@ public class ExcelWarehouseImporter {
         return value == null || value.isBlank() ? null : value;
     }
 
+    /**
+     * @param quantityFromFile {@code false} — количества в файле не было,
+     *                         и одна штука подставлена: сверять её с остатком
+     *                         позиции при повторе нечего
+     */
     private record Row(int number, String name, BigDecimal price, BigDecimal quantity,
-                       String cell, String oem, String note, List<String> photos,
+                       boolean quantityFromFile, String cell, String oem, String note, List<String> photos,
                        String dromAd, String description, CardFields card) {
     }
 
@@ -684,7 +1123,45 @@ public class ExcelWarehouseImporter {
      * «No acceptable representation». Тесты этого не ловят — они зовут
      * импортёр напрямую, минуя HTTP.
      */
-    public record Report(int imported, List<Skipped> skipped, int quantityDefaulted) {
+    public record Report(int imported, List<Skipped> skipped, int quantityDefaulted,
+                         Repeat repeat) {
+
+        /**
+         * Что сделала загрузка с позициями, номер объявления которых уже был
+         * (задача 0282). Отдельной записью: её же целиком кладём в
+         * {@code import_run}, чтобы повтор по тому же ключу отдал те же числа.
+         *
+         * @param refilled         позиций, у которых хоть что-то дозаполнено
+         * @param fields           по полям, в порядке {@link #REFILLED}
+         * @param unchanged        номер совпал, нового в файле нет
+         * @param discrepancyCount расхождений всего; в списке — не больше
+         *                         {@link #DISCREPANCY_LIMIT}
+         * @param withoutAdNumber  заведено строк без номера объявления — их
+         *                         повтор файла не узнает и заведёт снова
+         */
+        public record Repeat(int refilled, List<FieldCount> fields, int unchanged,
+                             int discrepancyCount, List<Discrepancy> discrepancies,
+                             int withoutAdNumber) {
+
+            static final Repeat NONE = new Repeat(0, List.of(), 0, 0, List.of(), 0);
+        }
+
+        /**
+         * @param positions у скольких позиций поле дозаполнено
+         * @param links     для снимков — сколько ссылок встало в очередь; иначе 0
+         */
+        public record FieldCount(String field, int positions, int links) {
+        }
+
+        /**
+         * Поле, у которого в файле одно, а у позиции другое, — оставлено как есть.
+         *
+         * @param text строка отчёта целиком; слова собирает сервер, чтобы их
+         *             можно было закрепить проверкой ответа HTTP
+         */
+        public record Discrepancy(String adNumber, String field, String inFile, String atPart,
+                                  String text) {
+        }
 
         /**
          * @param sheet лист, к которому относится строка; {@code null} — первый.
@@ -709,6 +1186,59 @@ public class ExcelWarehouseImporter {
         private int quantityDefaulted;
         private final List<Skipped> skipped = new ArrayList<>();
 
+        /** Номера объявлений, уже встреченные в этом файле. */
+        private final java.util.Set<String> seenAds = new java.util.HashSet<>();
+        private int refilled;
+        private int unchanged;
+        private int withoutAdNumber;
+        private int discrepancyCount;
+        private final List<Report.Discrepancy> discrepancies = new ArrayList<>();
+        /** Поле → {позиций, ссылок}. */
+        private final Map<String, int[]> filled = new java.util.LinkedHashMap<>();
+
+        Tally() {
+            REFILLED.values().forEach(label -> filled.put(label, new int[2]));
+        }
+
+        void filled(String label, int links) {
+            int[] counts = filled.get(label);
+            counts[0]++;
+            counts[1] += links;
+        }
+
+        /**
+         * Строка «№ N, поле «…»: в файле «…», у позиции «…» (оставлено как есть)».
+         * Длинное значение сокращается — описание в пять тысяч знаков в строке
+         * отчёта не прочесть, а разницу видно по началу.
+         */
+        void discrepancy(String ad, String field, String inFile, String atPart) {
+            discrepancyCount++;
+            if (discrepancies.size() < DISCREPANCY_LIMIT) {
+                discrepancies.add(new Report.Discrepancy(ad, field, inFile, atPart,
+                        "№ %s, поле «%s»: в файле %s, у позиции %s (оставлено как есть)"
+                                .formatted(ad, field, quoted(inFile), quoted(atPart))));
+            }
+        }
+
+        private static String quoted(String value) {
+            if (value == null || value.isEmpty()) {
+                return "пусто";
+            }
+            String line = value.replaceAll("\\s+", " ").strip();
+            return "«" + (line.length() <= 80 ? line : line.substring(0, 80) + "…") + "»";
+        }
+
+        Report.Repeat repeat() {
+            List<Report.FieldCount> fields = new ArrayList<>();
+            filled.forEach((label, counts) -> {
+                if (counts[0] > 0) {
+                    fields.add(new Report.FieldCount(label, counts[0], counts[1]));
+                }
+            });
+            return new Report.Repeat(refilled, List.copyOf(fields), unchanged,
+                    discrepancyCount, List.copyOf(discrepancies), withoutAdNumber);
+        }
+
         void skip(int rowNumber, String reason) {
             // Список пропущенных не бесконечен: файл с неверным сопоставлением
             // даст пятьдесят тысяч одинаковых строк, и ответ раздуется.
@@ -728,7 +1258,7 @@ public class ExcelWarehouseImporter {
         }
 
         Report toReport() {
-            return new Report(imported, List.copyOf(skipped), quantityDefaulted);
+            return new Report(imported, List.copyOf(skipped), quantityDefaulted, repeat());
         }
     }
 }
