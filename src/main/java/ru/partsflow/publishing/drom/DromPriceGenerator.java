@@ -143,7 +143,10 @@ public class DromPriceGenerator {
                    -- Снята с машины или пришла контейнером: у контрактной
                    -- марка берётся из применимости, и «снято с» про неё
                    -- было бы неправдой.
-                   d.id IS NOT NULL AS from_donor
+                   d.id IS NOT NULL AS from_donor,
+                   -- Перенесена с объявления клиента на Дроме: заголовок
+                   -- и описание тогда его, и уходят дословно (задача 0275).
+                   p.drom_ad_number IS NOT NULL AS client_text
               FROM part p
               LEFT JOIN (
                   SELECT ps.part_id,
@@ -873,7 +876,8 @@ public class DromPriceGenerator {
                     settings.installationNoteFor(rs.getBigDecimal("installation_price")),
                     // «Ожидается поступление»: решение выгрузки, а не позиции,
                     // и без него товар в пути в файл не попадает вовсе.
-                    settings.expectedNoteFor(rs.getBoolean("in_transit")));
+                    settings.expectedNoteFor(rs.getBoolean("in_transit")),
+                    rs.getBoolean("client_text"));
         }
 
         /**

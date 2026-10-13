@@ -97,7 +97,6 @@ class DromTransferFileTest extends PostgresTestBase {
             Map.entry("Положение", "0277"),
             Map.entry("Верх/низ", "0277"),
             Map.entry("Применимость", "0278"),
-            Map.entry("Описание", "0275"),
             Map.entry("Гарантия", "0276"),
             Map.entry("Самовывоз", "0276"),
             Map.entry("Доставка и оплата", "0276"));
@@ -144,7 +143,18 @@ class DromTransferFileTest extends PostgresTestBase {
                     SELECT url FROM part_photo_import WHERE part_id = ? ORDER BY sort_order""",
                     String.class, part)))
                     .as("снимки не встали в очередь переноса все и в порядке галереи")
-                    .containsExactlyElementsOf(List.of(value.split("\n"))));
+                    .containsExactlyElementsOf(List.of(value.split("\n"))),
+            // Описание объявления, а не внутреннее примечание; дословно,
+            // с переводами строк. Пусто у клиента — пусто и у позиции:
+            // ни пустой строки, ни собранного за него текста (задача 0275).
+            "Описание", (t, part, value) -> {
+                assertThat(t.column(part, "SELECT description FROM part WHERE id = ?", String.class))
+                        .as("описание клиента доехало не дословно")
+                        .isEqualTo(value.isEmpty() ? null : value);
+                assertThat(t.column(part, "SELECT note FROM part WHERE id = ?", String.class))
+                        .as("описание объявления легло во внутреннее примечание")
+                        .isNull();
+            });
 
     @Autowired
     private MockMvc mvc;

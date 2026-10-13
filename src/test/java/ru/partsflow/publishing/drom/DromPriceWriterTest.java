@@ -385,6 +385,105 @@ class DromPriceWriterTest {
         }
     }
 
+    /**
+     * Позиция, перенесённая с объявления клиента на Дроме (задача 0275):
+     * заголовок и описание — его, и уходят они дословно.
+     *
+     * <p>Значения сверяются разбором XML, а не поиском подстроки: «дословно»
+     * значит и перевод строки, и пробел после скобки, а подстрока молчит
+     * о том, что стоит вокруг неё.
+     */
+    @Nested
+    @DisplayName("Текст клиента, перенесённый с Дрома")
+    class ClientText {
+
+        @Test
+        @DisplayName("Заголовок клиента уходит побайтно — без чистки «(б/у)» и сокращений")
+        void nameIsVerbatim() throws Exception {
+            // Первые два — заголовки из образца задачи 0272: слитная скобка
+            // и пробел после открывающей. Третий — то, что чистка вырезала бы:
+            // пометка состояния и «лев.»/«перед.» в заголовке клиента.
+            for (String title : List.of(
+                    "Карданный вал передний (Пробег 130т. км)Toyota Land Cruiser Prado 120",
+                    "Рулевая рейка ( правый руль 110т. км) Toyota Land Cruiser Prado 120",
+                    "Фара (б/у) перед. лев. Toyota Camry  (контракт)")) {
+                assertThat(only(write(transferred(title, null)), "name"))
+                        .as("заголовок клиента ушёл не дословно")
+                        .isEqualTo(title);
+            }
+        }
+
+        @Test
+        @DisplayName("Описание клиента уходит как есть, с переводами строк и без приписок")
+        void descriptionIsVerbatim() throws Exception {
+            String text = "Подходит на автомобиль с левым и правым рулем.\nХорошее состоянии.";
+
+            assertThat(only(write(transferred("Дверь", text)), "description"))
+                    .as("описание клиента дописано или поправлено")
+                    .isEqualTo(text);
+        }
+
+        @Test
+        @DisplayName("Нет описания у клиента — нет его и в прайсе, ничего не собирается")
+        void noDescriptionStaysEmpty() throws Exception {
+            // У клиента 2 из 7 просмотренных карточек без описания: собранное
+            // «Снято с … Состояние: б/у.» было бы текстом, которого у него нет.
+            assertThat(write(transferred("Расширитель крыла", null)))
+                    .doesNotContain("<description>")
+                    .doesNotContain("Состояние:");
+        }
+
+        @Test
+        @DisplayName("Длинное описание не режется")
+        void longDescriptionIsNotCut() throws Exception {
+            String text = "Ж".repeat(4_999) + "\n" + "к".repeat(1_000);
+
+            assertThat(only(write(transferred("Двигатель", text)), "description"))
+                    .isEqualTo(text);
+        }
+
+        @Test
+        @DisplayName("Прочим позициям чистка заголовка и сборка описания остаются")
+        void ownPositionsAreUnchanged() throws Exception {
+            // Контроль: тот же заголовок без признака «текст клиента» чистится,
+            // а пустое описание собирается — иначе проверки выше зеленели бы
+            // на писателе, который перестал чистить всем.
+            DromOffer ours = new DromOffer("P-1", "Фара (б/у) перед. лев. Toyota Camry",
+                    "Фара", null, new BigDecimal("100"), BigDecimal.ONE, PartCondition.USED,
+                    null, null, List.of(), null, null, null, null, null, null, List.of(),
+                    null, null, null, null, null, true, "Текстовый блок", null, null, null);
+
+            String xml = write(ours);
+            assertThat(only(xml, "name")).isEqualTo("Фара Toyota Camry");
+            assertThat(only(xml, "description")).isEqualTo("Состояние: б/у.\nТекстовый блок");
+        }
+
+        /**
+         * Перенесённая позиция со всем, что прайс умеет дописывать: текстовым
+         * блоком, видео, установкой, «ожидается», машиной и стороной. Ни одно
+         * из них в её текст попасть не должно.
+         */
+        private DromOffer transferred(String title, String description) {
+            return new DromOffer("P-777", title, "Фара", description,
+                    new BigDecimal("1500"), BigDecimal.ONE, PartCondition.USED,
+                    null, "3714060380", List.of(), LateralSide.LEFT, LongitudinalSide.FRONT,
+                    null, null, null, null, List.of(),
+                    "Toyota", "Land Cruiser Prado", null, null, 2008, true,
+                    "Текстовый блок", "https://video.example/1",
+                    "Стоимость установки: 500 р.", "Ожидается поступление", true);
+        }
+
+        /** Текст единственного элемента с этим именем — как его прочтёт площадка. */
+        private String only(String xml, String element) throws Exception {
+            org.w3c.dom.NodeList found = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+                    .newDocumentBuilder()
+                    .parse(new java.io.ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)))
+                    .getElementsByTagName(element);
+            assertThat(found.getLength()).as("элемент <%s> в прайсе", element).isEqualTo(1);
+            return found.item(0).getTextContent();
+        }
+    }
+
     @Nested
     @DisplayName("Потоковость")
     class Streaming {

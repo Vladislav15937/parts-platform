@@ -326,7 +326,8 @@ public class ExcelWarehouseImporter {
                 blankToNull(mapping.value(row, Field.OEM)),
                 blankToNull(mapping.value(row, Field.NOTE)),
                 photoLinks(mapping.value(row, Field.PHOTOS)),
-                adNumber);
+                adNumber,
+                verbatim(mapping.value(row, Field.DESCRIPTION)));
     }
 
     /**
@@ -398,13 +399,14 @@ public class ExcelWarehouseImporter {
             // целостность данных» на весь файл вместо названной позиции.
             List<Long> inserted = jdbc.queryForList("""
                     INSERT INTO part (category_id, part_name_id, title, price, note,
-                                      storage_cell_id, drom_ad_number)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                                      storage_cell_id, drom_ad_number, description)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (drom_ad_number) WHERE drom_ad_number IS NOT NULL
                     DO NOTHING
                     RETURNING id""",
                     Long.class, partName.getCategoryId(), partName.getId(),
-                    row.name(), row.price(), row.note(), cellId, row.dromAd());
+                    row.name(), row.price(), row.note(), cellId, row.dromAd(),
+                    row.description());
             if (inserted.isEmpty()) {
                 skipIfAdTaken(row, report);
                 continue;
@@ -517,9 +519,19 @@ public class ExcelWarehouseImporter {
         return value == null || value.isBlank() ? null : value.strip();
     }
 
+    /**
+     * Текст клиента как есть: пусто — {@code null}, иначе ни одного знака
+     * не трогаем — ни переводов строк, ни пробелов внутри, ни длины
+     * (задача 0275). Описание объявления — его слова, и «повторить
+     * на сто процентов» значит не нормализовать их за него.
+     */
+    private static String verbatim(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
     private record Row(int number, String name, BigDecimal price, BigDecimal quantity,
                        String cell, String oem, String note, List<String> photos,
-                       String dromAd) {
+                       String dromAd, String description) {
     }
 
     /**
