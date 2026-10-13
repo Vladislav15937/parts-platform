@@ -336,3 +336,38 @@ export function applicabilityFromTitles(): Promise<ParsedApplicability> {
     method: 'POST',
   });
 }
+
+/**
+ * Пункты блока «Подходит», не легшие в справочник целиком, — по одной причине.
+ *
+ * @param reason слова сервера: «марки нет в справочнике», «модель не найдена у марки»,
+ *               «поколение не найдено», «годы не разобраны»
+ * @param names  уникальные названия из блока клиента, не больше пятидесяти
+ * @param unique сколько уникальных названий всего
+ */
+export interface DromApplicabilityMiss {
+  reason: string;
+  items: number;
+  names: string[];
+  unique: number;
+}
+
+/** Итог раскладки «Подходит» с Дрома в справочную применимость (задача 0289). */
+export interface DromApplicabilityReport {
+  parts: number;
+  added: number;
+  refined: number;
+  removed: number;
+  misses: DromApplicabilityMiss[];
+}
+
+/**
+ * Раскладывает блок «Подходит» карточек Дрома в справочную применимость —
+ * по уже загруженному складу. Текст клиента не меняется, подтверждённое
+ * человеком не трогается, повтор ничего не задваивает.
+ */
+export function applicabilityFromDrom(): Promise<DromApplicabilityReport> {
+  return request<DromApplicabilityReport>('/api/parts/catalog/applicability/from-drom', {
+    method: 'POST',
+  });
+}

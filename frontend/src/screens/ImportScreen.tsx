@@ -6,6 +6,7 @@ import {
   duplicateColumns,
   FIELDS,
   notTransferred,
+  applicabilityFromDrom,
   applicabilityFromTitles,
   importBazon,
   importFile,
@@ -20,6 +21,7 @@ import {
 } from '../import/warehouseImport';
 import type {
   BazonResult,
+  DromApplicabilityReport,
   FieldKey,
   ParsedApplicability,
   WheelImportResult,
@@ -359,7 +361,8 @@ export function ImportScreen({ reference, canImport }: Props) {
 function AfterImport({ reload }: { reload: number }) {
   const [photos, setPhotos] = useState<PhotoProgress | null>(null);
   const [fits, setFits] = useState<ParsedApplicability | null>(null);
-  const [busy, setBusy] = useState<'photos' | 'fits' | null>(null);
+  const [dromFits, setDromFits] = useState<DromApplicabilityReport | null>(null);
+  const [busy, setBusy] = useState<'photos' | 'fits' | 'drom' | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
@@ -444,6 +447,22 @@ function AfterImport({ reload }: { reload: number }) {
           из справочника; повтор ничего не дублирует.
         </p>
       </div>
+
+      <div className="card">
+        <h3>Применимость из карточек Дрома</h3>
+        {dromFits !== null && <DromFitsReport report={dromFits} />}
+        <button type="button" disabled={busy !== null} onClick={() => void parseDrom()}>
+          {busy === 'drom' ? 'Раскладываем…' : 'Разложить «Подходит»'}
+        </button>
+        <p className="note">
+          У позиций, перенесённых с Дрома, блок «Подходит» лежит текстом:
+          «Toyota 4Runner — 5 поколение (2009–2013)». Кнопка раскладывает его
+          по справочнику машин — марка, модель, поколение с годами, — и по ним
+          работает подбор по машине. Текст объявления не меняется, машины,
+          добавленные в карточке руками, не трогаются, повтор ничего
+          не дублирует. При загрузке файла это делается само.
+        </p>
+      </div>
     </>
   );
 
@@ -501,6 +520,19 @@ function AfterImport({ reload }: { reload: number }) {
     }
   }
 
+  async function parseDrom(): Promise<void> {
+    setBusy('drom');
+    setError(null);
+    try {
+      const report = await applicabilityFromDrom();
+      if (mounted.current) setDromFits(report);
+    } catch (cause) {
+      if (mounted.current) setError(describe(cause, 'Разбор «Подходит» не прошёл'));
+    } finally {
+      if (mounted.current) setBusy(null);
+    }
+  }
+
   async function parseTitles(): Promise<void> {
     setBusy('fits');
     setError(null);
@@ -513,6 +545,51 @@ function AfterImport({ reload }: { reload: number }) {
       if (mounted.current) setBusy(null);
     }
   }
+}
+
+/**
+ * Итог раскладки «Подходит» словами (задача 0289).
+ *
+ * <p>Повтор, не сделавший ничего, говорит это прямо: «заведено 0» среди
+ * трёх нулей читается как сбой, а это обычный второй проход. Не легшее
+ * называется по причинам и уникальными названиями из блока клиента —
+ * по ним видно, чего нет в справочнике машин.
+ */
+function DromFitsReport({ report }: { report: DromApplicabilityReport }) {
+  const changed = report.added + report.refined + report.removed;
+  const notLaid = report.misses.reduce((sum, miss) => sum + miss.items, 0);
+  return (
+    <>
+      {changed === 0 ? (
+        <p className="note">
+          Ничего нового: проверено {count(report.parts)}{' '}
+          {plural(report.parts, 'позиция', 'позиции', 'позиций')}, применимость уже разложена.
+        </p>
+      ) : (
+        <p className="note">
+          Позиций обработано: {count(report.parts)}. Строк применимости заведено:{' '}
+          {count(report.added)}, дополнено годами: {count(report.refined)}, снято менее
+          точных: {count(report.removed)}.
+        </p>
+      )}
+      {notLaid > 0 && (
+        <>
+          <p className="note">Пунктов, не легших в справочник целиком: {count(notLaid)}.</p>
+          <ul className="note">
+            {report.misses.map((miss) => (
+              <li key={miss.reason}>
+                {miss.reason}
+                {miss.reason === 'поколение не найдено' && ' (марка, модель и годы легли)'}:{' '}
+                {miss.names.join(', ')}
+                {miss.unique > miss.names.length &&
+                  ` и ещё ${count(miss.unique - miss.names.length)}`}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </>
+  );
 }
 
 /**
