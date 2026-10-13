@@ -171,11 +171,15 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
     @Test
     @DisplayName("Донор побеждает: колонки — его машина, как до задачи")
     void donorWins() throws Exception {
-        long corolla = model("Corolla");
+        // Марка донора — другая, чем у своей машины из применимости (Toyota
+        // в наименовании): иначе «донор побеждает» не отличить от «применимость
+        // побеждает» — марка совпала бы при любом порядке.
+        long honda = brand("Honda");
+        long civic = model(honda, "Civic");
         long donor = inTenant(() -> jdbc.queryForObject("""
                 INSERT INTO donor (brand_id, model_id, generation_id, body_code, engine_code, year, status)
                 VALUES (?, ?, ?, 'ZZE120', '3ZZ-FE', 2003, 'DISMANTLING') RETURNING id""",
-                Long.class, toyota, corolla, generation(corolla, 2000)));
+                Long.class, honda, civic, firstGeneration(civic)));
         long part = part("Фара Toyota Land Cruiser Prado");
         inTenant(() -> jdbc.update("UPDATE part SET donor_id = ? WHERE id = ?", donor, part));
         row(part, prado, generation(prado, 2002), true);
@@ -189,8 +193,8 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
                   JOIN catalog.model m ON m.id = d.model_id
                   JOIN catalog.generation g ON g.id = d.generation_id
                  WHERE d.id = ?""", donor));
-        assertThat(row.path("brand").asText()).isEqualTo(expected.get("brand"));
-        assertThat(row.path("model").asText()).isEqualTo("Corolla");
+        assertThat(row.path("brand").asText()).isEqualTo("Honda").isEqualTo(expected.get("brand"));
+        assertThat(row.path("model").asText()).isEqualTo("Civic");
         assertThat(row.path("generation").asText()).isEqualTo(expected.get("generation"));
         assertThat(row.path("yearFrom").asInt()).isEqualTo(expected.get("year_from"));
         assertThat(row.path("body").asText()).isEqualTo("ZZE120");
@@ -245,6 +249,36 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
         String csv = export();
         assertThat(csv).contains("\"Дверь передняя правая Toyota Land Cruiser Prado 120\";\"\";"
                 + "\"Toyota\";\"Land Cruiser Prado\";\"2002\"");
+    }
+
+    /**
+     * Сортировка по марке — по показанному значению, а не по порядку заведения.
+     *
+     * <p>Позиция, заведённая раньше, — Toyota, позже — Honda; донора нет
+     * ни у одной. По марке Honda обязана встать первой. Отсортируй экран
+     * по марке донора (её нет у обеих) — порядок решит последний ключ,
+     * номер позиции, и первой встанет Toyota.
+     */
+    @Test
+    @DisplayName("Сортировка по марке и модели идёт по своей машине позиции без донора")
+    void sortUsesTheShownValue() throws Exception {
+        long first = part("Карданный вал Toyota Land Cruiser Prado 120");
+        row(first, prado, generation(prado, 2002), false);
+        long honda = brand("Honda");
+        long civic = model(honda, "Civic");
+        long second = part("Фара Honda Civic");
+        inTenant(() -> jdbc.update("""
+                INSERT INTO part_applicability (part_id, brand_id, model_id, is_verified)
+                VALUES (?, ?, ?, false)""", second, honda, civic));
+
+        assertThat(titles(page("&sort=brand")))
+                .containsExactly("Фара Honda Civic", "Карданный вал Toyota Land Cruiser Prado 120");
+        assertThat(titles(page("&sort=brand&desc=true")))
+                .containsExactly("Карданный вал Toyota Land Cruiser Prado 120", "Фара Honda Civic");
+        assertThat(titles(page("&sort=model")))
+                .containsExactly("Фара Honda Civic", "Карданный вал Toyota Land Cruiser Prado 120");
+        assertThat(titles(page("&sort=model&desc=true")))
+                .containsExactly("Карданный вал Toyota Land Cruiser Prado 120", "Фара Honda Civic");
     }
 
     // --- 6: подбор по машине ---
@@ -361,6 +395,20 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
         return mvc.perform(request.session(session))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+    }
+
+    private long brand(String name) {
+        return jdbc.queryForObject("SELECT id FROM catalog.brand WHERE name = ?", Long.class, name);
+    }
+
+    private long model(long brand, String name) {
+        return jdbc.queryForObject(
+                "SELECT id FROM catalog.model WHERE brand_id = ? AND name = ?", Long.class, brand, name);
+    }
+
+    private long firstGeneration(long model) {
+        return jdbc.queryForObject(
+                "SELECT min(id) FROM catalog.generation WHERE model_id = ?", Long.class, model);
     }
 
     private long model(String name) {
