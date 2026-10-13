@@ -216,7 +216,10 @@ export function itemsOf(level: Level | null, left: VehicleOption[], search: stri
     }
     const key = String(id);
     const seen = sums.get(key);
-    sums.set(key, { id, label, parts: (seen?.parts ?? 0) + row.parts });
+    // У марки число своё, с сервера: деталь, подходящая к трём моделям
+    // марки, — одна позиция, а сложение строк насчитало бы три (задача 0290).
+    const parts = level === 'brand' ? row.brandParts : (seen?.parts ?? 0) + row.parts;
+    sums.set(key, { id, label, parts });
   }
   const needle = search.trim().toLowerCase();
   return [...sums.values()]

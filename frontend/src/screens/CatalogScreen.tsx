@@ -698,7 +698,11 @@ export function CatalogScreen({ role }: { role: string }) {
                     </td>
                   )}
                   {columns.map((column) => (
-                    <td key={column.key} className={column.numeric ? 'num' : undefined}>
+                    <td
+                      key={column.key}
+                      className={column.numeric ? 'num' : undefined}
+                      title={column.hint?.(row)}
+                    >
                       {column.image
                         ? column.image(row) !== null && (
                             <span

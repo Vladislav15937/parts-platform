@@ -107,6 +107,7 @@ public class CatalogController {
                 row.packageWeightKg(),
                 row.createdAt(), row.updatedAt(), row.updatedByName(),
                 row.priceChangedAt(), row.priceChangedByName(), row.photoCount(),
+                row.vehicleSource(), row.vehicleSpans(),
                 row.stock());
     }
 
@@ -413,6 +414,10 @@ public class CatalogController {
                       String updatedByName,
                       java.time.Instant priceChangedAt, String priceChangedByName,
                       int photoCount,
+                      /** Откуда машина в колонках — для подсказки клетки (задача 0290). */
+                      String vehicleSource,
+                      /** Поколений у своей машины в применимости. */
+                      Integer vehicleSpans,
                       Map<Long, java.math.BigDecimal> stock) {
     }
 }

@@ -1,0 +1,409 @@
+package ru.partsflow.inventory;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpSession;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.transaction.support.TransactionTemplate;
+import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.support.PostgresTestBase;
+
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Supplier;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * Колонки машины на витрине у позиции без донора — своя машина позиции
+ * из её применимости, и подбор по машине видит такие позиции (задача 0290).
+ *
+ * <p>Склад устроен как у клиента, перенесённого с Дрома: донора нет ни у одной
+ * позиции, машина названа в наименовании, а применимость — наименование
+ * плюс блок «Подходит». «Карданный вал … Prado 120» подходит к 4Runner
+ * и Hilux Surf, и в колонке «Марка / Модель» обязан стоять Prado, а не первая
+ * машина блока: решение владельца продукта 14.10.2026 («Только ту марку
+ * модель которой и является запчасть. Для всего остального есть
+ * применимость»).
+ *
+ * <p>Всё через HTTP, как экран: колонки — {@code GET /api/parts/catalog},
+ * список отбора — {@code /values}, подбор — {@code /vehicles}, файл —
+ * {@code /export}. Справочник машин настоящий ({@code catalog/009}).
+ */
+@SpringBootTest
+@AutoConfigureMockMvc
+class CatalogOwnVehicleTest extends PostgresTestBase {
+
+    private static final String TENANT = "t_000992";
+    private static final int REGISTRY_ID = 992;
+    private static final String COMPANY = "ownvehicle";
+
+    @Autowired
+    private MockMvc mvc;
+    @Autowired
+    private JdbcTemplate jdbc;
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    private final ObjectMapper json = new ObjectMapper();
+    private MockHttpSession session;
+
+    private long toyota;
+    private long prado;
+    private long cruiser;
+    private long runner;
+    private long surf;
+
+    @BeforeAll
+    static void migrate() {
+        provisionTenants(TENANT);
+    }
+
+    @BeforeEach
+    void fixtures() throws Exception {
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = ?", REGISTRY_ID);
+        jdbc.update("""
+                INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
+                VALUES (?, ?, 'Разборка с Дрома: своя машина', ?)""", REGISTRY_ID, TENANT, COMPANY);
+        toyota = jdbc.queryForObject("SELECT id FROM catalog.brand WHERE name = 'Toyota'", Long.class);
+        prado = model("Land Cruiser Prado");
+        cruiser = model("Land Cruiser");
+        runner = model("4Runner");
+        surf = model("Hilux Surf");
+        inTenant(() -> {
+            jdbc.update("DELETE FROM part_applicability");
+            jdbc.update("DELETE FROM part_change");
+            jdbc.update("DELETE FROM part");
+            jdbc.update("DELETE FROM donor");
+            if (jdbc.queryForList("SELECT id FROM tenant_member WHERE login = 'owner'").isEmpty()) {
+                jdbc.update("""
+                        INSERT INTO tenant_member (display_name, role, login, password_hash)
+                        VALUES ('Владелец', 'OWNER', 'owner', ?)""", passwordEncoder.encode("пароль"));
+            }
+            return null;
+        });
+        session = login();
+    }
+
+    // --- 1, 2: колонки показывают свою машину, источник назван ---
+
+    @Test
+    @DisplayName("Без донора: марка и модель — машина из наименования, а не первая машина блока")
+    void ownCarIsTheOneNamedInTheTitle() throws Exception {
+        long part = part("Карданный вал передний (Пробег 130т. км) Toyota Land Cruiser Prado 120");
+        // Порядок строк — как кладёт разбор: сначала машины блока «Подходит»,
+        // потом строка из наименования. Первая по номеру — 4Runner.
+        row(part, runner, generation(runner, 2009), false);
+        row(part, surf, generation(surf, 2002), false);
+        // «Land Cruiser» тоже стоит в наименовании — внутри «Land Cruiser Prado».
+        row(part, cruiser, null, false);
+        row(part, prado, generation(prado, 2002), false);
+
+        JsonNode row = only(page(""));
+        assertThat(row.path("brand").asText()).isEqualTo("Toyota");
+        assertThat(row.path("model").asText())
+                .as("своя машина — названная в наименовании, длиннейшая на одном месте")
+                .isEqualTo("Land Cruiser Prado");
+        assertThat(row.path("yearFrom").asInt()).isEqualTo(2002);
+        assertThat(row.path("generation").isNull()).isFalse();
+        assertThat(row.path("vehicleSource").asText()).isEqualTo("PARSED");
+        // Кузова и двигателя у применимости нет — пусто, как и было.
+        assertThat(row.path("body").isNull()).isTrue();
+        assertThat(row.path("engine").isNull()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Несколько поколений своей машины — поколение и годы пусты, марка и модель есть")
+    void severalGenerationsAreNotGuessed() throws Exception {
+        long part = part("Суппорт задний правый Toyota Land Cruiser Prado 120");
+        row(part, prado, generation(prado, 2009), false);
+        row(part, prado, generation(prado, 2002), false);
+
+        JsonNode row = only(page(""));
+        assertThat(row.path("model").asText()).isEqualTo("Land Cruiser Prado");
+        assertThat(row.path("generation").isNull())
+                .as("первое поколение блока у «Prado 120» было бы догадкой").isTrue();
+        assertThat(row.path("yearFrom").isNull()).isTrue();
+        assertThat(row.path("vehicleSpans").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("Марка в наименовании есть, модели нет — показана одна марка, без чужой модели")
+    void brandWithoutModelInTitle() throws Exception {
+        long part = part("Блок управления зеркалами Toyota");
+        row(part, prado, generation(prado, 2002), false);
+
+        JsonNode row = only(page(""));
+        assertThat(row.path("brand").asText()).isEqualTo("Toyota");
+        assertThat(row.path("model").isNull())
+                .as("Prado в наименовании не назван — своей моделью он не считается").isTrue();
+        assertThat(row.path("generation").isNull()).isTrue();
+        assertThat(row.path("yearFrom").isNull()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Подтверждённая человеком машина названа подтверждённой")
+    void verifiedIsTold() throws Exception {
+        long part = part("Магнитола Toyota Land Cruiser Prado");
+        row(part, prado, null, true);
+
+        assertThat(only(page("")).path("vehicleSource").asText()).isEqualTo("VERIFIED");
+    }
+
+    @Test
+    @DisplayName("Донор побеждает: колонки — его машина, как до задачи")
+    void donorWins() throws Exception {
+        long corolla = model("Corolla");
+        long donor = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO donor (brand_id, model_id, generation_id, body_code, engine_code, year, status)
+                VALUES (?, ?, ?, 'ZZE120', '3ZZ-FE', 2003, 'DISMANTLING') RETURNING id""",
+                Long.class, toyota, corolla, generation(corolla, 2000)));
+        long part = part("Фара Toyota Land Cruiser Prado");
+        inTenant(() -> jdbc.update("UPDATE part SET donor_id = ? WHERE id = ?", donor, part));
+        row(part, prado, generation(prado, 2002), true);
+
+        JsonNode row = only(page(""));
+        // То, что колонки показывали до задачи: машина донора, поля донора.
+        var expected = inTenant(() -> jdbc.queryForMap("""
+                SELECT b.name AS brand, m.name AS model, g.name AS generation,
+                       g.year_from, g.year_to
+                  FROM donor d JOIN catalog.brand b ON b.id = d.brand_id
+                  JOIN catalog.model m ON m.id = d.model_id
+                  JOIN catalog.generation g ON g.id = d.generation_id
+                 WHERE d.id = ?""", donor));
+        assertThat(row.path("brand").asText()).isEqualTo(expected.get("brand"));
+        assertThat(row.path("model").asText()).isEqualTo("Corolla");
+        assertThat(row.path("generation").asText()).isEqualTo(expected.get("generation"));
+        assertThat(row.path("yearFrom").asInt()).isEqualTo(expected.get("year_from"));
+        assertThat(row.path("body").asText()).isEqualTo("ZZE120");
+        assertThat(row.path("engine").asText()).isEqualTo("3ZZ-FE");
+        assertThat(row.path("year").asInt()).isEqualTo(2003);
+        assertThat(row.path("vehicleSource").asText()).isEqualTo("DONOR");
+    }
+
+    // --- 7: пусто, когда нечего показать ---
+
+    @Test
+    @DisplayName("Нет применимости или её машины нет в наименовании — клетки пусты")
+    void nothingToShowIsEmpty() throws Exception {
+        part("Теплообменник (б/у) CCLNS004");
+        long other = part("Магнитола");
+        // Машина есть, но в наименовании не названа: своей она не считается.
+        row(other, prado, null, false);
+
+        for (JsonNode row : page("").path("rows")) {
+            assertThat(row.path("brand").isNull()).as(row.toString()).isTrue();
+            assertThat(row.path("model").isNull()).isTrue();
+            assertThat(row.path("generation").isNull()).isTrue();
+            assertThat(row.path("vehicleSource").isNull()).isTrue();
+        }
+    }
+
+    // --- 3: отбор, сортировка, список значений, файл — по показанному ---
+
+    @Test
+    @DisplayName("Отбор и сортировка по марке и модели находят позицию без донора")
+    void filterAndSortUseTheShownValue() throws Exception {
+        long withCar = part("Дверь передняя правая Toyota Land Cruiser Prado 120");
+        row(withCar, prado, generation(prado, 2002), false);
+        part("Теплообменник CCLNS004");
+
+        assertThat(titles(page("&filter=brand:Toyota")))
+                .containsExactly("Дверь передняя правая Toyota Land Cruiser Prado 120");
+        assertThat(titles(page("&filter=model:Land Cruiser Prado")))
+                .containsExactly("Дверь передняя правая Toyota Land Cruiser Prado 120");
+        assertThat(titles(page("&find=model:prado")))
+                .containsExactly("Дверь передняя правая Toyota Land Cruiser Prado 120");
+        // Отбор по машине из блока, а не своей, не находит: колонка её не показывает.
+        row(withCar, runner, null, false);
+        assertThat(titles(page("&filter=model:4Runner"))).isEmpty();
+        // Пустые сортируются последними, марка — первой.
+        assertThat(titles(page("&sort=brand")).get(0))
+                .isEqualTo("Дверь передняя правая Toyota Land Cruiser Prado 120");
+
+        assertThat(values("brand")).containsExactly("Toyota");
+        assertThat(values("model")).containsExactly("Land Cruiser Prado");
+
+        String csv = export();
+        assertThat(csv).contains("\"Дверь передняя правая Toyota Land Cruiser Prado 120\";\"\";"
+                + "\"Toyota\";\"Land Cruiser Prado\";\"2002\"");
+    }
+
+    // --- 6: подбор по машине ---
+
+    @Test
+    @DisplayName("Подбор: машины применимости в списке, число у модели — сколько найдёт отбор")
+    void vehiclesComeFromApplicability() throws Exception {
+        long first = part("Карданный вал Toyota Land Cruiser Prado 120");
+        row(first, prado, generation(prado, 2002), false);
+        row(first, prado, generation(prado, 2009), false);
+        row(first, runner, null, false);
+        long second = part("Дверь Toyota Land Cruiser Prado 120");
+        row(second, prado, generation(prado, 2002), false);
+        // С донором на ту же машину и применимостью на неё же — одна позиция.
+        long donor = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO donor (brand_id, model_id, body_code, status)
+                VALUES (?, ?, 'GRJ120', 'DISMANTLING') RETURNING id""", Long.class, toyota, prado));
+        long third = part("Фара Toyota Land Cruiser Prado");
+        inTenant(() -> jdbc.update("UPDATE part SET donor_id = ? WHERE id = ?", donor, third));
+        row(third, prado, null, true);
+
+        JsonNode options = json.readTree(body(get("/api/parts/catalog/vehicles")));
+        assertThat(options).isNotEmpty();
+        long pradoParts = 0;
+        long runnerParts = 0;
+        long brandParts = -1;
+        for (JsonNode option : options) {
+            if (option.path("modelId").asLong() == prado) {
+                pradoParts += option.path("parts").asLong();
+            }
+            if (option.path("modelId").asLong() == runner) {
+                runnerParts += option.path("parts").asLong();
+            }
+            brandParts = option.path("brandParts").asLong();
+        }
+        assertThat(pradoParts)
+                .as("число у модели = отбор по ней; позиция с донором и применимостью на Prado — один раз")
+                .isEqualTo(total("&brandId=" + toyota + "&modelId=" + prado))
+                .isEqualTo(3);
+        assertThat(runnerParts).isEqualTo(total("&brandId=" + toyota + "&modelId=" + runner))
+                .isEqualTo(1);
+        assertThat(brandParts)
+                .as("число у марки — не сумма моделей: позиция Prado и 4Runner одна")
+                .isEqualTo(total("&brandId=" + toyota))
+                .isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("Подбор: у склада без донора вовсе список не пуст")
+    void vehiclesWithoutDonors() throws Exception {
+        long part = part("Глушитель Toyota Land Cruiser Prado 120");
+        row(part, surf, generation(surf, 2002), false);
+
+        JsonNode options = json.readTree(body(get("/api/parts/catalog/vehicles")));
+        assertThat(options).hasSize(1);
+        assertThat(options.get(0).path("model").asText()).isEqualTo("Hilux Surf");
+        assertThat(options.get(0).path("parts").asLong())
+                .isEqualTo(total("&brandId=" + toyota + "&modelId=" + surf)).isEqualTo(1);
+    }
+
+    // --- 9: это чтение ---
+
+    @Test
+    @DisplayName("Витрина, списки и подбор ничего не пишут: отметок для площадки нет")
+    void readingMarksNothing() throws Exception {
+        long part = part("Дверь Toyota Land Cruiser Prado 120");
+        row(part, prado, generation(prado, 2002), false);
+        String before = inTenant(() -> jdbc.queryForObject(
+                "SELECT updated_at::text FROM part WHERE id = ?", String.class, part));
+
+        page("&sort=brand&filter=brand:Toyota");
+        values("brand");
+        body(get("/api/parts/catalog/vehicles"));
+        export();
+
+        assertThat(inTenant(() -> jdbc.queryForObject("SELECT count(*) FROM part_change", Long.class)))
+                .isZero();
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT updated_at::text FROM part WHERE id = ?", String.class, part)))
+                .isEqualTo(before);
+    }
+
+    private JsonNode page(String query) throws Exception {
+        return json.readTree(body(get("/api/parts/catalog?missing=true" + query)));
+    }
+
+    private long total(String query) throws Exception {
+        return page(query).path("total").asLong();
+    }
+
+    private static JsonNode only(JsonNode page) {
+        assertThat(page.path("rows")).hasSize(1);
+        return page.path("rows").get(0);
+    }
+
+    private static List<String> titles(JsonNode page) {
+        List<String> titles = new ArrayList<>();
+        page.path("rows").forEach(row -> titles.add(row.path("title").asText()));
+        return titles;
+    }
+
+    private List<String> values(String column) throws Exception {
+        List<String> values = new ArrayList<>();
+        json.readTree(body(get("/api/parts/catalog/values?column=" + column)))
+                .forEach(value -> values.add(value.asText()));
+        return values;
+    }
+
+    private String export() throws Exception {
+        return body(get("/api/parts/catalog/export?missing=true"));
+    }
+
+    private String body(MockHttpServletRequestBuilder request) throws Exception {
+        return mvc.perform(request.session(session))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+    }
+
+    private long model(String name) {
+        return jdbc.queryForObject(
+                "SELECT id FROM catalog.model WHERE brand_id = ? AND name = ?", Long.class, toyota, name);
+    }
+
+    /** Поколение модели по году начала — тем же признаком, каким его ищет разбор блока. */
+    private long generation(long model, int yearFrom) {
+        return jdbc.queryForObject(
+                "SELECT min(id) FROM catalog.generation WHERE model_id = ? AND year_from = ?",
+                Long.class, model, yearFrom);
+    }
+
+    private long part(String title) {
+        return inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (title, price, status) VALUES (?, 1000, 'IN_STOCK') RETURNING id""",
+                Long.class, title));
+    }
+
+    private void row(long part, long model, Long generation, boolean verified) {
+        inTenant(() -> jdbc.update("""
+                INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id, is_verified)
+                VALUES (?, ?, ?, ?, ?)""", part, toyota, model, generation, verified));
+    }
+
+    private MockHttpSession login() throws Exception {
+        var result = mvc.perform(post("/api/auth/login").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"company":"%s","login":"owner","password":"пароль"}"""
+                                .formatted(COMPANY)))
+                .andExpect(status().isOk())
+                .andReturn();
+        return (MockHttpSession) result.getRequest().getSession(false);
+    }
+
+    private <T> T inTenant(Supplier<T> body) {
+        TenantContext.set(TENANT);
+        try {
+            return transactionTemplate.execute(status -> body.get());
+        } finally {
+            TenantContext.clear();
+        }
+    }
+}

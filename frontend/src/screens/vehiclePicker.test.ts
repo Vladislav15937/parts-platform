@@ -4,12 +4,12 @@ import { itemsOf, levelOf } from './VehiclePicker';
 
 const CAMRY_2AZ: VehicleOption = {
   brandId: 43, brand: 'Toyota', modelId: 518, model: 'Camry',
-  body: 'ACV40', engine: '2AZ-FE', parts: 700,
+  body: 'ACV40', engine: '2AZ-FE', parts: 700, brandParts: 1200,
 };
 const CAMRY_1AZ: VehicleOption = { ...CAMRY_2AZ, engine: '1AZ-FE', parts: 300 };
 const COROLLA: VehicleOption = {
   brandId: 43, brand: 'Toyota', modelId: 519, model: 'Corolla',
-  body: 'ZZE120', engine: '3ZZ-FE', parts: 200,
+  body: 'ZZE120', engine: '3ZZ-FE', parts: 200, brandParts: 1200,
 };
 
 describe('подбор по машине', () => {
@@ -39,6 +39,22 @@ describe('подбор по машине', () => {
   it('складывает детали по всем машинам уровня', () => {
     const items = itemsOf('brand', [CAMRY_2AZ, CAMRY_1AZ, COROLLA], '');
     expect(items).toEqual([{ id: 43, label: 'Toyota', parts: 1200 }]);
+  });
+
+  // Деталь без донора подходит к нескольким моделям марки и стоит строкой
+  // в каждой из них: сложение строк дало бы Toyota 3 там, где отбор по марке
+  // находит одну позицию (задача 0290). Число марки — с сервера.
+  it('у марки берёт число сервера, а не сумму моделей', () => {
+    const fits = (modelId: number, model: string): VehicleOption => ({
+      brandId: 43, brand: 'Toyota', modelId, model, body: null, engine: null,
+      parts: 1, brandParts: 1,
+    });
+    const rows = [fits(1, 'Land Cruiser Prado'), fits(2, '4Runner'), fits(3, 'Hilux Surf')];
+    expect(itemsOf('brand', rows, '')).toEqual([{ id: 43, label: 'Toyota', parts: 1 }]);
+    // У модели — по-прежнему сумма строк: позиция стоит в одной строке модели.
+    expect(itemsOf('model', rows, 'prado')).toEqual([
+      { id: 1, label: 'Land Cruiser Prado', parts: 1 },
+    ]);
   });
 
   it('фильтрует список набранным', () => {

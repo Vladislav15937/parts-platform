@@ -40,6 +40,125 @@ public class CatalogService {
     private static final Logger log = LoggerFactory.getLogger(CatalogService.class);
 
     /**
+     * Своя машина позиции без донора — та, деталью которой запчасть
+     * и является, из её применимости (задача 0290).
+     *
+     * <p><b>Своя — значит названная в наименовании клиента, а не любая
+     * из применимости.</b> Решение владельца продукта, 14.10.2026, дословно:
+     * «Только ту марку модель которой и является запчасть. Для всего
+     * остального есть применимость» ({@code tasks/0290}, раздел «Вопрос
+     * владельцу — что показывать, когда у позиции несколько машин»).
+     * На Дроме у «Карданного вала … Toyota Land Cruiser Prado 120» блок
+     * «Подходит» называет Lexus GX400, 4Runner и Hilux Surf, а самого Prado
+     * может не назвать вовсе: колонка «Марка» с Lexus была бы неправдой
+     * о детали, а «Lexus, Toyota +2» — перечнем, за которым есть карточка.
+     *
+     * <p>Поэтому из строк применимости берутся только те, чья марка стоит
+     * в наименовании, и из них — названная раньше; модель — та, что тоже
+     * стоит в наименовании (при одном месте — длиннейшая: «Land Cruiser»
+     * и «Land Cruiser Prado» начинаются с одной буквы). Марка названа,
+     * а модель нет («Блок управления зеркалами Toyota», «Land Сruiser»
+     * с кириллической «С») — показывается одна марка: что деталь от Toyota,
+     * клиент сказал сам, а какой модели — нет.
+     *
+     * <p><b>Одним проходом по применимости, а не подзапросом на позицию.</b>
+     * Первая редакция была {@code LEFT JOIN LATERAL} на каждую строку склада:
+     * сортировка по марке на складе в 35 841 позицию стоила 3,4 с через HTTP —
+     * девять тысяч маленьких группировок. Один {@code DISTINCT ON} по всей
+     * применимости — около 140 мс в базе (замер в PR задачи 0290). Строку
+     * страницы та же запись украшает сужённой до позиции
+     * ({@link #OWN_VEHICLE_OF_ROW}): текст один, сужение — подставкой.
+     *
+     * <p>Сравнение — вхождением без учёта регистра, а не целым словом:
+     * строки применимости и так ставит разбор наименования или карточки,
+     * то есть «Kia» внутри «Kiabi» сюда не доедет, а регулярное выражение
+     * на каждую строку склада стоило бы заметно дороже.
+     *
+     * <p><b>Поколение и годы — только если у своей машины поколение одно.</b>
+     * У 1 107 из 2 897 позиций перенесённого клиента блок называет у той же
+     * модели два-три поколения, и «Prado 120» с блоком «4 поколение
+     * 2017–2024; рестайлинг 2013–2017» — обычное дело: деталь подходит
+     * к нескольким, а снята с одной. Первое по порядку блока было бы
+     * догадкой, выданной за факт; пусто с подсказкой «поколений несколько»
+     * — правда. При одном поколении блок совпадает с наименованием в 975
+     * случаях из 981 (замер по файлу клиента: «Prado 120» → «3 поколение»).
+     *
+     * <p><b>Донор побеждает:</b> позиции с донором в подзапрос не входят
+     * ({@code op.donor_id IS NULL}), и колонки берут его машину, как до задачи.
+     *
+     * <p>Позиция названа {@code p}, машина донора — {@code b}, {@code m},
+     * {@code g}, как в {@link #JOINS}.
+     */
+    private static final String OWN_VEHICLE_OF = """
+
+              LEFT JOIN %s(
+                  SELECT DISTINCT ON (x.part_id) x.part_id, x.brand, x.model,
+                         count(DISTINCT (x.generation_id, x.year_from, x.year_to))
+                             FILTER (WHERE x.model IS NOT NULL
+                                       AND (x.generation_id IS NOT NULL
+                                            OR x.year_from IS NOT NULL)) AS spans,
+                         max(x.generation) FILTER (WHERE x.model IS NOT NULL) AS generation,
+                         max(x.year_from) FILTER (WHERE x.model IS NOT NULL) AS year_from,
+                         max(x.year_to) FILTER (WHERE x.model IS NOT NULL) AS year_to,
+                         bool_or(x.is_verified) AS verified
+                    FROM (SELECT a.part_id, ab.name AS brand,
+                                 CASE WHEN strpos(lower(op.title), lower(am.name)) > 0
+                                      THEN am.name END AS model,
+                                 strpos(lower(op.title), lower(ab.name)) AS brand_at,
+                                 strpos(lower(op.title), lower(am.name)) AS model_at,
+                                 a.generation_id, ag.name AS generation,
+                                 coalesce(a.year_from, ag.year_from) AS year_from,
+                                 coalesce(a.year_to, ag.year_to) AS year_to,
+                                 a.is_verified
+                            FROM part_applicability a
+                            JOIN part op ON op.id = a.part_id AND op.donor_id IS NULL%s
+                            JOIN catalog.brand ab ON ab.id = a.brand_id
+                            LEFT JOIN catalog.model am ON am.id = a.model_id
+                            LEFT JOIN catalog.generation ag ON ag.id = a.generation_id
+                           WHERE strpos(lower(op.title), lower(ab.name)) > 0) x
+                   GROUP BY x.part_id, x.brand, x.model
+                   ORDER BY x.part_id, min(x.brand_at), x.model IS NULL,
+                            min(x.model_at) FILTER (WHERE x.model IS NOT NULL),
+                            length(x.model) DESC) own ON own.part_id = p.id""";
+
+    /** Своя машина каждой позиции склада — для отбора, сортировки, счёта и файла. */
+    static final String OWN_VEHICLE = OWN_VEHICLE_OF.formatted("", "");
+
+    /**
+     * Своя машина одной позиции — та же запись, сужённая до строки: ею
+     * украшают пятьдесят позиций страницы после того, как отбор и порядок
+     * их выбрали. Проход по всей применимости ради пятидесяти строк стоил
+     * бы страницы по умолчанию втрое (замер в PR задачи 0290).
+     */
+    private static final String OWN_VEHICLE_OF_ROW =
+            OWN_VEHICLE_OF.formatted("LATERAL ", " AND op.id = p.id");
+
+    /*
+     * Колонки машины: у позиции с донором — его машина, без донора — своя
+     * машина из применимости. Одно выражение на колонку, её отбор, сортировку,
+     * список значений, скачанный файл и отбор выгрузки — образец
+     * {@link #QUALITY_GRADE}: копия разошлась бы на букву, и выбранное
+     * из списка перестало бы находить. Подзапрос {@code own} у позиции
+     * с донором пуст, поэтому {@code coalesce} и есть «донор побеждает».
+     */
+    static final String VEHICLE_BRAND = "coalesce(b.name, own.brand)";
+    static final String VEHICLE_MODEL = "coalesce(m.name, own.model)";
+    static final String VEHICLE_GENERATION =
+            "coalesce(g.name, CASE WHEN own.spans = 1 THEN own.generation END)";
+    static final String VEHICLE_YEAR_FROM =
+            "coalesce(g.year_from, CASE WHEN own.spans = 1 THEN own.year_from END)";
+    static final String VEHICLE_YEAR_TO =
+            "coalesce(g.year_to, CASE WHEN own.spans = 1 THEN own.year_to END)";
+
+    /**
+     * Откуда машина в колонках — для подсказки клетки: машинный разбор
+     * не должен читаться как подтверждённый факт.
+     */
+    static final String VEHICLE_SOURCE = "CASE WHEN p.donor_id IS NOT NULL THEN 'DONOR'"
+            + " WHEN own.brand IS NULL THEN NULL"
+            + " WHEN own.verified THEN 'VERIFIED' ELSE 'PARSED' END";
+
+    /**
      * Разрешённые сортировки: имя из запроса → выражение SQL.
      *
      * <p>Белый список, а не экранирование: {@code ORDER BY} не принимает
@@ -55,8 +174,8 @@ public class CatalogService {
             Map.entry("code", "p.public_code"),
             Map.entry("title", "p.title"),
             Map.entry("price", "p.price"),
-            Map.entry("brand", "b.name"),
-            Map.entry("model", "m.name"),
+            Map.entry("brand", VEHICLE_BRAND),
+            Map.entry("model", VEHICLE_MODEL),
             Map.entry("year", "d.year"),
             Map.entry("qty", "p.qty_on_hand"),
             Map.entry("created", "p.created_at"),
@@ -370,7 +489,8 @@ public class CatalogService {
         }
         Filter filter = filterOf(null, true, true, List.of(), null, columns, words);
         return java.util.Optional.of(new ColumnFilter(
-                "p.id IN (SELECT p.id" + JOINS + filter.where() + ")", filter.args()));
+                "p.id IN (SELECT p.id" + joins(filter.where()) + filter.where() + ")",
+                filter.args()));
     }
 
     /**
@@ -482,18 +602,14 @@ public class CatalogService {
     @Transactional(readOnly = true)
     public List<String> values(String column) {
         String expression = columnExpression(column);
-        return jdbc.queryForList("""
-                SELECT DISTINCT %s AS value
-                  FROM part p
-                  LEFT JOIN donor d ON d.id = p.donor_id
-                  LEFT JOIN catalog.brand b ON b.id = d.brand_id
-                  LEFT JOIN catalog.model m ON m.id = d.model_id
-                  LEFT JOIN catalog.generation g ON g.id = d.generation_id
-                  LEFT JOIN supply s ON s.id = d.supply_id
-                  LEFT JOIN part_name pn ON pn.id = p.part_name_id
-                 WHERE p.product_line = 'PART' AND %s IS NOT NULL AND %s <> ''
-                 ORDER BY value
-                 LIMIT 1000""".formatted(expression, expression, expression),
+        // Соединения те же, что у страницы (`JOINS`), а не своя копия: у копии
+        // не было своей машины из применимости, и список марок молчал бы
+        // о марках, которые колонка уже показывает (задача 0290).
+        return jdbc.queryForList("SELECT DISTINCT " + expression + " AS value"
+                        + joins(expression)
+                        + " WHERE p.product_line = 'PART' AND " + expression + " IS NOT NULL"
+                        + " AND " + expression + " <> ''"
+                        + " ORDER BY value LIMIT 1000",
                 String.class);
     }
 
@@ -515,9 +631,11 @@ public class CatalogService {
             // не было вовсе — то есть «покажи всё новое» владелец задать
             // не мог, хотя колонка перед глазами.
             Map.entry("condition", CONDITION),
-            Map.entry("brand", "b.name"),
-            Map.entry("model", "m.name"),
-            Map.entry("generation", "g.name"),
+            // Машина позиции: донора, а без него — своя из применимости
+            // (задача 0290). Те же выражения, что у колонки и сортировки.
+            Map.entry("brand", VEHICLE_BRAND),
+            Map.entry("model", VEHICLE_MODEL),
+            Map.entry("generation", VEHICLE_GENERATION),
             Map.entry("body", "d.body_code"),
             Map.entry("engine", "d.engine_code"),
             Map.entry("year", "trim_scale(d.year)::text"),
@@ -559,27 +677,68 @@ public class CatalogService {
      *
      * <p>Строк тут по числу разобранных машин, то есть сотни, — уровни кузова
      * и двигателя экран складывает сам, вторым запросом их брать незачем.
+     *
+     * <p><b>Машины донора и машины применимости — вместе (задача 0290).</b>
+     * Отбор подбора с самого начала объединяющий (донор <i>или</i> строка
+     * {@code part_applicability}), а список, из которого его выбирают, шёл
+     * только от донора: у клиента, перенесённого с Дрома, где донора нет
+     * ни у одной позиции, он был пуст целиком — на ПРОМ {@code []}.
+     *
+     * <p><b>Число рядом с моделью обязано совпасть с тем, что найдёт отбор.</b>
+     * Поэтому позиция считается в модели один раз: если её донор — эта же
+     * марка и модель, строка применимости на ту же машину не добавляет её
+     * второй раз (она уже в строке донора с его кузовом и двигателем), а
+     * несколько поколений одной модели в применимости — одна позиция,
+     * а не три. Кузова и двигателя у применимости нет, её строка — без них.
+     *
+     * <p><b>Число рядом с маркой экран сложением не получит:</b> деталь,
+     * подходящая к Prado, 4Runner и Hilux Surf, — одна позиция Toyota, а не
+     * три. Его считает сервер — {@code brandParts}, столько, сколько найдёт
+     * отбор по одной марке.
      */
     @Transactional(readOnly = true)
     public List<VehicleOption> vehicles() {
         return jdbc.query("""
+                WITH fits AS (
+                    SELECT p.id AS part_id, d.brand_id, d.model_id, d.body_code, d.engine_code
+                      FROM part p
+                      JOIN donor d ON d.id = p.donor_id
+                     WHERE p.product_line = 'PART'
+                    UNION
+                    SELECT a.part_id, a.brand_id, a.model_id, NULL, NULL
+                      FROM part_applicability a
+                      JOIN part p ON p.id = a.part_id
+                     WHERE p.product_line = 'PART'
+                       AND NOT EXISTS (SELECT 1 FROM donor d
+                                        WHERE d.id = p.donor_id AND d.brand_id = a.brand_id
+                                          AND d.model_id IS NOT DISTINCT FROM a.model_id)
+                ), brands AS (
+                    SELECT brand_id, count(DISTINCT part_id) AS parts FROM fits GROUP BY brand_id
+                )
                 SELECT b.id AS brand_id, b.name AS brand, m.id AS model_id, m.name AS model,
-                       d.body_code, d.engine_code, count(*) AS parts
-                  FROM part p
-                  JOIN donor d ON d.id = p.donor_id
-                  JOIN catalog.brand b ON b.id = d.brand_id
-                  LEFT JOIN catalog.model m ON m.id = d.model_id
-                 GROUP BY b.id, b.name, m.id, m.name, d.body_code, d.engine_code
+                       f.body_code, f.engine_code, count(*) AS parts, br.parts AS brand_parts
+                  FROM fits f
+                  JOIN brands br ON br.brand_id = f.brand_id
+                  JOIN catalog.brand b ON b.id = f.brand_id
+                  LEFT JOIN catalog.model m ON m.id = f.model_id
+                 GROUP BY b.id, b.name, m.id, m.name, f.body_code, f.engine_code, br.parts
                  ORDER BY b.name, m.name""",
                 (rs, i) -> new VehicleOption(rs.getLong("brand_id"), rs.getString("brand"),
                         (Long) rs.getObject("model_id"), rs.getString("model"),
                         rs.getString("body_code"), rs.getString("engine_code"),
-                        rs.getLong("parts")));
+                        rs.getLong("parts"), rs.getLong("brand_parts")));
     }
 
-    /** Марка, модель, кузов и двигатель одной разобранной машины. */
+    /**
+     * Марка, модель, кузов и двигатель одной разобранной машины.
+     *
+     * @param parts      позиций в этой строке; по модели строки складываются
+     *                   без повтора (позиция стоит в одной строке модели)
+     * @param brandParts позиций у марки целиком — не сумма строк: деталь,
+     *                   подходящая к трём моделям марки, в ней одна
+     */
     public record VehicleOption(Long brandId, String brand, Long modelId, String model,
-                                String body, String engine, long parts) {
+                                String body, String engine, long parts, long brandParts) {
     }
 
     /**
@@ -714,6 +873,25 @@ public class CatalogService {
               LEFT JOIN part_name pn ON pn.id = p.part_name_id""";
 
     /**
+     * Соединения под запрос: своя машина позиции из применимости — только
+     * тогда, когда запрос её читает.
+     *
+     * <p>Подзапрос {@link #OWN_VEHICLE} проходит всю применимость склада
+     * (у переехавшего клиента — сорок тысяч строк), и счёт склада без отбора
+     * по машине платил бы за него ни за что. Признак — алиас {@code own.}
+     * в тексте запроса: выражения колонок машины ({@link #VEHICLE_BRAND}
+     * и соседи) его содержат, и забыть соединение для них нельзя.
+     */
+    private static String joins(CharSequence... uses) {
+        for (CharSequence use : uses) {
+            if (use != null && use.toString().contains("own.")) {
+                return JOINS + OWN_VEHICLE;
+            }
+        }
+        return JOINS;
+    }
+
+    /**
      * Номера всех позиций отбора, а не одной страницы.
      *
      * <p><b>Зачем.</b> Правка списком берёт то, что владелец отметил на
@@ -740,7 +918,8 @@ public class CatalogService {
                                   Map<String, String> columns, Map<String, String> words) {
         Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
                 columns, words);
-        return jdbc.queryForList("SELECT p.id" + JOINS + filter.where() + " ORDER BY p.id",
+        return jdbc.queryForList("SELECT p.id" + joins(filter.where()) + filter.where()
+                        + " ORDER BY p.id",
                 Long.class, filter.args().toArray());
     }
 
@@ -762,9 +941,9 @@ public class CatalogService {
 
     private Page finish(StringBuilder where, List<Object> args, String sort,
                         boolean descending, int page, int size, String after) {
-        String joins = JOINS;
-
-        Long total = jdbc.queryForObject("SELECT count(*)" + joins + where, Long.class,
+        // Счёт берёт свою машину из применимости, только если по ней отбирают:
+        // на число строк она не влияет (соединение левое и не больше строки).
+        Long total = jdbc.queryForObject("SELECT count(*)" + joins(where) + where, Long.class,
                 args.toArray());
 
         String order = orderBy(sort, descending);
@@ -802,10 +981,22 @@ public class CatalogService {
         pageArgs.add(size);
         pageArgs.add(pageWhere.isEmpty() ? (long) page * size : 0L);
 
-        List<Row> rows = jdbc.query("""
+        // Сначала пятьдесят номеров — отбором и порядком, и своя машина
+        // из применимости здесь участвует, только если по ней отбирают или
+        // сортируют. Потом строки для них: колонки, подзапросы снимков, номеров
+        // и своя машина считаются на пятьдесят позиций, а не на склад (задача
+        // 0290). Порядок снаружи повторён тем же выражением: он полный
+        // (последним ключом идёт p.id), значит строки встают так же.
+        String pageIds = "WITH page AS (SELECT p.id" + joins(where, order) + where + pageWhere
+                + " ORDER BY " + order + " LIMIT ? OFFSET ?)\n";
+
+        List<Row> rows = jdbc.query(pageIds + """
                 SELECT p.id, p.number, p.public_code, p.title, p.quality_grade, p.condition,
-                       b.name AS brand, m.name AS model,
-                       g.name AS generation, g.year_from, g.year_to,
+                       """ + VEHICLE_BRAND + " AS brand, " + VEHICLE_MODEL + " AS model, "
+                       + VEHICLE_GENERATION + " AS generation, "
+                       + VEHICLE_YEAR_FROM + " AS year_from, "
+                       + VEHICLE_YEAR_TO + " AS year_to, "
+                       + VEHICLE_SOURCE + " AS vehicle_source, own.spans::int AS vehicle_spans," + """
                        d.body_code, d.engine_code,
                        d.year, d.public_code AS donor_code, d.legacy_code AS donor_legacy,
                        p.price, p.installation_price, p.color, p.description, p.note,
@@ -865,7 +1056,8 @@ public class CatalogService {
                          WHERE ph.part_id = p.id AND ph.status = 'PROCESSED'
                          ORDER BY ph.is_main DESC, ph.sort_order,
                                ph.id LIMIT 1) AS photo_key
-                """ + joins + where + pageWhere + " ORDER BY " + order + " LIMIT ? OFFSET ?",
+                """ + JOINS + OWN_VEHICLE_OF_ROW
+                + " WHERE p.id IN (SELECT id FROM page) ORDER BY " + order,
                 (rs, i) -> new Row(
                         rs.getLong("id"), rs.getLong("number"),
                         rs.getString("public_code"), rs.getString("title"),
@@ -906,6 +1098,8 @@ public class CatalogService {
                         instant(rs, "price_changed_at"),
                         rs.getString("price_changed_by_name"),
                         rs.getInt("photo_count"),
+                        rs.getString("vehicle_source"),
+                        (Integer) rs.getObject("vehicle_spans"),
                         Map.of()),
                 pageArgs.toArray());
 
@@ -1013,7 +1207,9 @@ public class CatalogService {
 
         String sql = """
                 SELECT p.number, p.public_code, p.title, p.condition,
-                       b.name AS brand, m.name AS model, g.year_from, g.year_to,
+                       """ + VEHICLE_BRAND + " AS brand, " + VEHICLE_MODEL + " AS model, "
+                       + VEHICLE_YEAR_FROM + " AS year_from, "
+                       + VEHICLE_YEAR_TO + " AS year_to," + """
                        d.body_code, d.engine_code, d.year,
                        COALESCE(d.legacy_code, d.public_code) AS donor_code,
                        p.side_fr, p.side_lr, p.price, p.installation_price, p.color,
@@ -1062,6 +1258,9 @@ public class CatalogService {
                   LEFT JOIN catalog.generation g ON g.id = d.generation_id
                   LEFT JOIN part_name pn ON pn.id = p.part_name_id
                   LEFT JOIN supply sp ON sp.id = d.supply_id"""
+                // Своя машина позиции без донора — та же, что у колонок
+                // на экране (задача 0290): файл сверяют с экраном.
+                + OWN_VEHICLE
                 + filter.where() + " ORDER BY " + order;
 
         jdbc.query(connection -> {
@@ -1257,6 +1456,19 @@ public class CatalogService {
                       Instant createdAt, Instant updatedAt, String updatedByName,
                       Instant priceChangedAt, String priceChangedByName,
                       int photoCount,
+                      /**
+                       * Откуда машина в колонках «Марка», «Модель», «Поколение»:
+                       * {@code DONOR} — донор, {@code VERIFIED} — применимость,
+                       * подтверждённая человеком, {@code PARSED} — разобранная
+                       * автоматически; пусто — машины нет (задача 0290).
+                       */
+                      String vehicleSource,
+                      /**
+                       * Сколько поколений у своей машины в применимости; больше
+                       * одного — поколение и годы не показываются: какое из них
+                       * у детали, неизвестно.
+                       */
+                      Integer vehicleSpans,
                       Map<Long, BigDecimal> stock) {
 
         Row withStock(Map<Long, BigDecimal> found) {
@@ -1269,7 +1481,8 @@ public class CatalogService {
                     partName, published, barcode, legacyCode, dromAdNumber, authenticity,
                     videoUrl, textBlock, weightKg, dimensions, packageDimensions,
                     packageWeightKg, createdAt, updatedAt, updatedByName,
-                    priceChangedAt, priceChangedByName, photoCount, found);
+                    priceChangedAt, priceChangedByName, photoCount, vehicleSource,
+                    vehicleSpans, found);
         }
     }
 }
