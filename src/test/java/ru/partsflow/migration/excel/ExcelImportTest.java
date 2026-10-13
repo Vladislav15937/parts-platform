@@ -424,6 +424,90 @@ class ExcelImportTest extends PostgresTestBase {
                 .containsExactlyElementsOf(first.skipped());
     }
 
+    /**
+     * «По 1 шт.» считает заведённые позиции, а не строки, где количества нет.
+     *
+     * <p>Задача 0284: на переносе с Дрома отчёт писал «Заведено новых: 2 860»,
+     * «Пропущено строк: 37» и «По 1 шт. заведено позиций: 2 897» — счётчик
+     * стоял в разборе до проверок положения и номера объявления, и строка,
+     * пропущенная позже, в нём оставалась. Число — это сколько остатков
+     * проверять, и больше заведённого оно быть не может.
+     */
+    @Test
+    @DisplayName("Строка с неизвестным положением не считается заведённой по одной штуке")
+    void skippedBySideIsNotDefaulted() throws Exception {
+        byte[] book = workbook(
+                List.of("Наименование", "Перед/зад"),
+                List.of(List.of("Фонарь задний", "Заднее"),
+                        List.of("Решётка радиатора", ""),
+                        List.of("Брызговик", "Сбоку")));
+
+        ExcelWarehouseImporter.Report report =
+                inTenant(() -> load(book, Map.of(Field.NAME, 0, Field.SIDE_FR, 1)));
+
+        assertThat(report.imported()).as("пропущено: %s", report.skipped()).isEqualTo(2);
+        assertThat(report.skipped()).extracting(ExcelWarehouseImporter.Report.Skipped::row)
+                .containsExactly(4);
+        assertThat(report.quantityDefaulted())
+                .as("пропущенная строка осталась в «по 1 шт.»")
+                .isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("Строка с номером объявления не из цифр не считается заведённой по одной штуке")
+    void skippedByAdNumberIsNotDefaulted() throws Exception {
+        byte[] book = workbook(
+                List.of("Наименование", "Номер объявления Дрома"),
+                List.of(List.of("Зеркало левое", "28400101"),
+                        List.of("Зеркало правое", "28400102"),
+                        List.of("Стекло двери", "1,26E+08")));
+
+        ExcelWarehouseImporter.Report report =
+                inTenant(() -> load(book, Map.of(Field.NAME, 0, Field.DROM_AD_NUMBER, 1)));
+
+        assertThat(report.imported()).as("пропущено: %s", report.skipped()).isEqualTo(2);
+        assertThat(report.skipped()).extracting(ExcelWarehouseImporter.Report.Skipped::row)
+                .containsExactly(4);
+        assertThat(report.quantityDefaulted())
+                .as("пропущенная строка осталась в «по 1 шт.»")
+                .isEqualTo(2);
+    }
+
+    /**
+     * Второй заход тем же файлом (0282) позиций не заводит — он их дозаполняет,
+     * а количество не дозаполняется вовсе. «По 1 шт.» на нём — ноль; повтор
+     * по тому же ключу отдаёт то же число, что первый ответ.
+     */
+    @Test
+    @DisplayName("Повторная загрузка того же файла не считает дозаполненные позиции по одной штуке")
+    void repeatLoadCountsOnlyNewPositions() throws Exception {
+        byte[] book = workbook(
+                List.of("Наименование", "Номер объявления Дрома"),
+                List.of(List.of("Суппорт передний", "28400201"),
+                        List.of("Суппорт задний", "28400202"),
+                        List.of("Шланг тормозной", "№ 2840020x")));
+        Map<Field, Integer> columns = Map.of(Field.NAME, 0, Field.DROM_AD_NUMBER, 1);
+        String secondKey = java.util.UUID.randomUUID().toString();
+
+        ExcelWarehouseImporter.Report first = inTenant(() -> load(book, columns));
+        ExcelWarehouseImporter.Report second = inTenant(() -> load(book, secondKey, columns));
+        ExcelWarehouseImporter.Report replay = inTenant(() -> load(book, secondKey, columns));
+
+        assertThat(first.imported()).isEqualTo(2);
+        assertThat(first.quantityDefaulted()).isEqualTo(2);
+        assertThat(second.imported()).as("второй заход завёл позиции заново").isZero();
+        assertThat(second.quantityDefaulted())
+                .as("дозаполненные позиции посчитаны как заведённые по одной штуке")
+                .isZero();
+        assertThat(replay.quantityDefaulted())
+                .as("повтор по ключу отдал другое число, чем первый ответ")
+                .isEqualTo(second.quantityDefaulted());
+        for (ExcelWarehouseImporter.Report r : List.of(first, second, replay)) {
+            assertThat(r.quantityDefaulted()).as("«по 1 шт.» больше заведённых")
+                    .isLessThanOrEqualTo(r.imported());
+        }
+    }
+
     @Test
     @DisplayName("Наименования попадают в тот же справочник, что и у приёмки")
     void namesGoThroughTheSameDictionary() throws Exception {
