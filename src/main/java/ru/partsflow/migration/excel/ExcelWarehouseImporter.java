@@ -178,7 +178,7 @@ public class ExcelWarehouseImporter {
         });
         flush(batch, warehouseId, cells, names, report);
         if (stitching[0]) {
-            continuation.finish(firstSheet).forEach(p -> report.named(p.row(), p.reason()));
+            continuation.finish(firstSheet).forEach(p -> report.continuation(p.row(), p.reason()));
         }
 
         // Движения записаны, применить их надо пачкой: тысяча строк — тысяча
@@ -250,12 +250,14 @@ public class ExcelWarehouseImporter {
      */
     private List<Report.Skipped> skippedOf(String requestId) {
         return jdbc.query("""
-                        SELECT (e->>'row')::int AS row_number, e->>'reason' AS reason
+                        SELECT (e->>'row')::int AS row_number, e->>'reason' AS reason,
+                               e->>'sheet' AS sheet
                           FROM import_run r
                          CROSS JOIN LATERAL jsonb_array_elements(r.skipped) e
                          WHERE r.client_request_id = ?
                            AND e->>'reason' IS NOT NULL""",
-                (rs, i) -> new Report.Skipped(rs.getInt("row_number"), rs.getString("reason")),
+                (rs, i) -> new Report.Skipped(rs.getInt("row_number"), rs.getString("reason"),
+                        rs.getString("sheet")),
                 requestId);
     }
 
@@ -273,8 +275,9 @@ public class ExcelWarehouseImporter {
      */
     private static String skippedJson(Report report) {
         java.util.stream.Stream<String> skipped = report.skipped().stream()
-                .map(s -> "{\"row\":%d,\"reason\":\"%s\"}"
-                        .formatted(s.row(), jsonText(s.reason())));
+                .map(s -> "{\"row\":%d,\"reason\":\"%s\"%s}"
+                        .formatted(s.row(), jsonText(s.reason()), s.sheet() == null ? ""
+                                : ",\"sheet\":\"" + jsonText(s.sheet()) + "\""));
         java.util.stream.Stream<String> defaulted = report.quantityDefaulted() == 0
                 ? java.util.stream.Stream.empty()
                 : java.util.stream.Stream.of(
@@ -591,7 +594,18 @@ public class ExcelWarehouseImporter {
      */
     public record Report(int imported, List<Skipped> skipped, int quantityDefaulted) {
 
-        public record Skipped(int row, String reason) {
+        /**
+         * @param sheet лист, к которому относится строка; {@code null} — первый.
+         *              Повреждения листа «Продолжение» несут его имя: номер
+         *              строки у них — строка того листа, и экран показывает их
+         *              отдельно и целиком, а не в общем списке под пределом
+         *              (задача 0281)
+         */
+        public record Skipped(int row, String reason, String sheet) {
+
+            public Skipped(int row, String reason) {
+                this(row, reason, null);
+            }
         }
     }
 
@@ -617,8 +631,8 @@ public class ExcelWarehouseImporter {
          * пропадали бы ровно у того файла, где пропусков и так много, — то есть
          * значение было бы обрезано молча. Их не больше, чем строк того листа.
          */
-        void named(int rowNumber, String reason) {
-            skipped.add(new Skipped(rowNumber, reason));
+        void continuation(int rowNumber, String reason) {
+            skipped.add(new Skipped(rowNumber, reason, DromContinuation.SHEET));
         }
 
         Report toReport() {

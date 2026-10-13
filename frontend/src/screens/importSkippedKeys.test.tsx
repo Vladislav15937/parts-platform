@@ -4,7 +4,13 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { ImportScreen } from './ImportScreen';
 
 /**
- * Пропуски с одним номером строки показываются оба (задача 0281).
+ * Повреждения листа «Продолжение» видны словами, где бы они ни стояли
+ * в ответе (задача 0281).
+ *
+ * <p>Сервер дописывает их после строк первого листа, а список строк экран
+ * режет двадцатью: у файла с Дрома «не в наличии» десятки, и повреждение
+ * уходило за предел. Они же несут номер строки **своего** листа, и раньше
+ * ключ по номеру давал двух соседей с одним ключом.
  *
  * <p>Повреждения листа «Продолжение» файла переноса с Дрома идут в тот же
  * список, что пропуски первого листа, с номером строки **своего** листа —
@@ -21,17 +27,19 @@ const PREVIEW = {
   format: 'DROM_TRANSFER',
 };
 
+/** Двадцать пять «не в наличии» — у файла с Дрома их десятки — и потом повреждение листа. */
+const CONTINUATION_REASON = 'Лист «Продолжение»: у объявления № 125696381 колонка «Применимость» — '
+  + 'нет части 2 из 3; значение взято до разрыва';
 const REPORT = {
   imported: 1,
   skipped: [
-    { row: 2, reason: 'не в наличии: «Под заказ»' },
-    { row: 2, reason: 'Лист «Продолжение»: часть для объявления № 555 (колонка «Применимость») '
-      + 'не имеет строки на листе «Объявления»; пропущена' },
+    ...Array.from({ length: 25 }, (_, i) => ({ row: i + 2, reason: 'не в наличии: «Под заказ»' })),
+    { row: 2, reason: CONTINUATION_REASON, sheet: 'Продолжение' },
   ],
   quantityDefaulted: 1,
 };
 
-describe('пропуски с одинаковым номером строки', () => {
+describe('повреждения листа «Продолжение» в отчёте загрузки', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -51,7 +59,7 @@ describe('пропуски с одинаковым номером строки',
     vi.restoreAllMocks();
   });
 
-  it('показывает оба и не даёт React двух соседей с одним ключом', async () => {
+  it('показывает повреждение отдельно и целиком, даже если оно за двадцатым пунктом', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     render(<ImportScreen reference={reference()} canImport />);
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -62,9 +70,13 @@ describe('пропуски с одинаковым номером строки',
     fireEvent.change(select!, { target: { value: '7' } });
     fireEvent.click(screen.getByText('Загрузить склад'));
 
-    await waitFor(() => expect(screen.getByText(/Пропущено строк: 2/)).toBeTruthy());
-    expect(screen.getByText(/не в наличии: «Под заказ»/)).toBeTruthy();
-    expect(screen.getByText(/Лист «Продолжение»: часть для объявления № 555/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/Пропущено строк: 25/)).toBeTruthy());
+    // Повреждение стоит в ответе двадцать шестым — за пределом списка строк.
+    expect(screen.getByText(`строка 2 листа «Продолжение» — ${CONTINUATION_REASON}`),
+      'повреждение листа ушло за предел списка — значение обрезано молча').toBeTruthy();
+    expect(screen.getByText(/Лист «Продолжение» склеен не целиком: 1/)).toBeTruthy();
+    expect(screen.getAllByText(/^строка \d+ — не в наличии/), 'предел списка строк сдвинулся')
+      .toHaveLength(20);
     const sameKey = errors.mock.calls.filter((call) => call.map(String).join(' ')
       .includes('Encountered two children with the same key'));
     expect(sameKey, 'у двух пропусков один ключ — React вправе выбросить одного').toEqual([]);

@@ -156,10 +156,18 @@ class DromContinuationImportTest extends PostgresTestBase {
                 new String[] {"100000001", "Фото", "1", "https://static.baza.drom.ru/drom/5_default"},
                 new String[] {firstAd(), "Цена\\\tскидка", "1", "хвост"}));
 
-        JsonNode report = load(file);
+        String requestId = UUID.randomUUID().toString();
+        JsonNode report = load(file, requestId);
 
         assertThat(report.path("imported").asInt()).as("повреждённый лист не должен ронять загрузку")
                 .isEqualTo(5);
+        // Лист назван в каждой записи — экран показывает их отдельно и целиком,
+        // и повтор загрузки (тот же ключ) отдаёт ту же отметку.
+        for (JsonNode answer : List.of(report, load(file, requestId))) {
+            assertThat(answer.path("skipped").size()).isEqualTo(3);
+            answer.path("skipped").forEach(s -> assertThat(s.path("sheet").asText())
+                    .as("повреждение без отметки листа: %s", s).isEqualTo(DromContinuation.SHEET));
+        }
         List<String> reasons = new ArrayList<>();
         report.path("skipped").forEach(s -> reasons.add(s.path("reason").asText()));
         assertThat(reasons).containsExactlyInAnyOrder(
@@ -203,6 +211,8 @@ class DromContinuationImportTest extends PostgresTestBase {
 
         List<String> reasons = new ArrayList<>();
         report.path("skipped").forEach(s -> reasons.add(s.path("reason").asText()));
+        assertThat(report.path("skipped").size()).as("первый лист: 200 под пределом, плюс лист")
+                .isEqualTo(201);
         assertThat(reasons).as("повреждение листа пропало за пределом пропусков")
                 .contains("Лист «Продолжение»: у объявления № " + firstAd() + " колонка «Фото» — "
                         + "нет части 1 из 2; значение взято до разрыва");
@@ -261,6 +271,10 @@ class DromContinuationImportTest extends PostgresTestBase {
 
     /** Сопоставление уходит тем, что пришло в разборе: человек ничего не выбирал. */
     private JsonNode load(byte[] file) throws Exception {
+        return load(file, UUID.randomUUID().toString());
+    }
+
+    private JsonNode load(byte[] file, String requestId) throws Exception {
         MockHttpSession session = login();
         String previewBody = mvc.perform(multipart("/api/import/excel/preview").file(xlsx(file))
                         .with(csrf()).session(session))
@@ -273,7 +287,7 @@ class DromContinuationImportTest extends PostgresTestBase {
         detected.fields().forEachRemaining(e -> request.param(e.getKey(), e.getValue().asText()));
         String body = mvc.perform(request.with(csrf()).session(session)
                         .param("warehouseId", String.valueOf(warehouseId))
-                        .param("requestId", UUID.randomUUID().toString()))
+                        .param("requestId", requestId))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         return json.readTree(body);
