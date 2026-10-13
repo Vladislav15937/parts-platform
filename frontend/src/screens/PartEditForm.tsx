@@ -417,6 +417,11 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
       { kind: 'area', key: 'warranty', label: 'Гарантия и условия возврата' },
       { kind: 'area', key: 'pickup', label: 'Самовывоз' },
       { kind: 'area', key: 'deliveryPayment', label: 'Доставка и оплата' },
+      // Строки Дрома дословно (задача 0286). «Раздел» — не «Секция» (место на
+      // складе, блок «Основные параметры» ниже): поля стоят в разных блоках формы, рядом
+      // с остальными словами объявления, а не с адресом полки.
+      { kind: 'text', key: 'dromKind', label: 'Вид детали' },
+      { kind: 'text', key: 'dromSection', label: 'Раздел' },
       { kind: 'text', key: 'note', label: 'Заметка' },
       { kind: 'text', key: 'barcode', label: 'Ст. баркод' },
     ],
@@ -534,6 +539,8 @@ export interface Draft {
   warranty: string;
   pickup: string;
   deliveryPayment: string;
+  dromKind: string;
+  dromSection: string;
 }
 
 export function draftOf(card: PartEdit): Draft {
@@ -569,6 +576,8 @@ export function draftOf(card: PartEdit): Draft {
     warranty: card.warranty ?? '',
     pickup: card.pickup ?? '',
     deliveryPayment: card.deliveryPayment ?? '',
+    dromKind: card.dromKind ?? '',
+    dromSection: card.dromSection ?? '',
   };
 }
 
@@ -608,6 +617,8 @@ export function toEdit(form: Draft): PartEdit {
     warranty: form.warranty,
     pickup: form.pickup,
     deliveryPayment: form.deliveryPayment,
+    dromKind: form.dromKind,
+    dromSection: form.dromSection,
   };
 }
 

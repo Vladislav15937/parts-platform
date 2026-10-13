@@ -106,6 +106,11 @@ public final class AuditedColumns {
         PART_DROM_CARD.put("warranty", "Гарантия и условия возврата");
         PART_DROM_CARD.put("pickup", "Самовывоз");
         PART_DROM_CARD.put("delivery_payment", "Доставка и оплата");
+        // Задача 0286. В ленте правок подписи с «на Дроме»: «Вид детали» там уже
+        // занят справочным видом (PART.part_kind_id), а «Раздел» читался бы как
+        // «Секция» склада (PART.section). На карточке подписи короткие, слова Дрома.
+        PART_DROM_CARD.put("drom_kind", "Вид детали на Дроме");
+        PART_DROM_CARD.put("drom_section", "Раздел на Дроме");
     }
 
     /**

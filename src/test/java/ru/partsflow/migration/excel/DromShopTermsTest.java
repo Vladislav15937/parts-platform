@@ -363,6 +363,135 @@ class DromShopTermsTest extends PostgresTestBase {
                 .containsExactly("Владелец: — -> Гарантия 14 дней");
     }
 
+    // --- Задача 0286: «Вид детали» и «Раздел» как у клиента ---
+
+    private static final String KIND = "Вид детали";
+    private static final String SECTION = "Раздел";
+
+    @Test
+    @DisplayName("Образец из пяти карточек: «Вид детали» и «Раздел» в базе побайтно равны ячейкам, стрелка « → » на месте")
+    void sampleKindAndSectionLandVerbatim() throws Exception {
+        byte[] file = sample();
+        List<Map<String, String>> rows = sampleRows(file);
+
+        JsonNode report = load(file);
+        assertThat(report.path("imported").asInt())
+                .as("загружено не всё: %s", report.path("skipped")).isEqualTo(5);
+
+        for (Map<String, String> row : rows) {
+            String ad = row.get(DromTransferFile.ANCHOR);
+            String[] stored = kindAndSection(ad);
+            assertThat(stored[0]).as("«Вид детали» № %s доехал не дословно", ad)
+                    .isEqualTo(row.get(KIND));
+            assertThat(stored[1]).as("«Раздел» № %s доехал не дословно", ad)
+                    .isEqualTo(row.get(SECTION));
+        }
+        // Без этого сверка выше зеленела бы на пустых ячейках.
+        String first = rows.get(0).get(DromTransferFile.ANCHOR);
+        assertThat(kindAndSection(first)[0]).isEqualTo("Карданный вал Lexus GX400");
+        assertThat(rows).extracting(r -> r.get(SECTION))
+                .allSatisfy(v -> assertThat(v).startsWith("Автозапчасти").contains(" → "));
+        // Вид клиента — не наше имя вида и не заголовок: это отдельное поле.
+        assertThat(rows.get(0).get("Наименование")).isNotEqualTo(rows.get(0).get(KIND));
+    }
+
+    @Test
+    @DisplayName("Позиция, чьё наименование не совпало с эталоном, всё равно несёт строку вида и раздел")
+    void unmatchedNameStillKeepsClientsKind() throws Exception {
+        Map<String, String> a = row(AD_A, "Неведомая штуковина 9000");
+        a.put(KIND, "Штуковина Lexus GX400");
+        a.put(SECTION, "Автозапчасти → Неведомое");
+
+        JsonNode report = load(file(List.of(a), Set.of(), null));
+
+        assertThat(report.path("imported").asInt()).isEqualTo(1);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT part_kind_id FROM part WHERE drom_ad_number = ?", Long.class, AD_A)))
+                .as("наименование должно было не сопоставиться с эталоном").isNull();
+        assertThat(kindAndSection(AD_A)).containsExactly(
+                "Штуковина Lexus GX400", "Автозапчасти → Неведомое");
+    }
+
+    @Test
+    @DisplayName("Файл без «Вида детали» и «Раздела», затем с ними: заполнены, остальное прежнее, отметка для площадки не двинулась; поправленное не затирается")
+    void secondLoadFillsKindAndSectionAndKeepsEdits() throws Exception {
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Camry");
+        a.put(KIND, "Фара левая Toyota Camry XV70");
+        a.put(SECTION, "Автозапчасти → Электрооборудование");
+        Map<String, String> b = row(AD_B, "Бампер задний Toyota Camry");
+        b.put(KIND, "Бампер Toyota Camry");
+        b.put(SECTION, "Автозапчасти → Кузов");
+        List<Map<String, String>> rows = List.of(a, b);
+
+        load(file(rows, Set.of(KIND, SECTION), null));
+        assertThat(kindAndSection(AD_A)).containsOnlyNulls();
+        Map<String, Object> before = partRows();
+
+        JsonNode repeat = load(file(rows, Set.of(), null)).path("repeat");
+
+        assertThat(repeat.path("refilled").asInt()).as("%s", repeat).isEqualTo(2);
+        assertThat(repeat.path("fields").findValuesAsText("field"))
+                .containsExactly("Вид детали", "Раздел");
+        assertThat(kindAndSection(AD_A)).containsExactly(a.get(KIND), a.get(SECTION));
+        assertThat(kindAndSection(AD_B)).containsExactly(b.get(KIND), b.get(SECTION));
+        assertThat(partRows()).as("повтор тронул саму позицию").isEqualTo(before);
+        assertThat(feedMarks())
+                .as("дозаполнение вида и раздела двинуло отметку «позиция изменилась»").isZero();
+
+        // Поправили у нас — повтор не перезаписывает и называет обе строки.
+        long part = partOf(AD_A);
+        ObjectNode form = editable(part);
+        form.put("dromKind", "Фара Toyota Camry (правка)");
+        update(part, form);
+        JsonNode again = load(file(rows, Set.of(), null)).path("repeat");
+        assertThat(kindAndSection(AD_A)[0]).isEqualTo("Фара Toyota Camry (правка)");
+        assertThat(again.path("discrepancies").findValuesAsText("text")).containsExactly(
+                "№ " + AD_A + ", поле «Вид детали»: в файле «Фара левая Toyota Camry XV70», "
+                        + "у позиции «Фара Toyota Camry (правка)» (оставлено как есть)");
+    }
+
+    @Test
+    @DisplayName("Карточка: «Вид детали» и «Раздел» видны, правятся тем же PUT, пустой ввод — NULL, форма без ключей их не стирает")
+    void cardShowsEditsAndClearsKindAndSection() throws Exception {
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Camry");
+        a.put(KIND, "Фара левая Toyota Camry XV70");
+        a.put(SECTION, "Автозапчасти → Электрооборудование");
+        load(file(List.of(a), Set.of(), null));
+        long part = partOf(AD_A);
+
+        ObjectNode form = editable(part);
+        assertThat(form.path("dromKind").asText()).isEqualTo(a.get(KIND));
+        assertThat(form.path("dromSection").asText()).isEqualTo(a.get(SECTION));
+        assertThat(form.path("section").isNull() || form.path("section").asText().isEmpty())
+                .as("«Секция» склада и «Раздел» Дрома — разные поля").isTrue();
+
+        form.put("dromSection", "Автозапчасти → Кузов");
+        update(part, form);
+        assertThat(kindAndSection(AD_A)).containsExactly(a.get(KIND), "Автозапчасти → Кузов");
+        assertThat(feedMarks()).as("правка одних текстов Дрома двинула отметку").isZero();
+
+        // Форма старой вкладки ключей не шлёт: тексты не стираются.
+        ObjectNode stale = form.deepCopy();
+        stale.remove(List.of("dromKind", "dromSection"));
+        stale.put("note", "с полки 3");
+        update(part, stale);
+        assertThat(kindAndSection(AD_A)).as("форма без ключей стёрла тексты клиента")
+                .containsExactly(a.get(KIND), "Автозапчасти → Кузов");
+
+        form.put("dromKind", "   ");
+        form.put("dromSection", "");
+        update(part, form);
+        assertThat(kindAndSection(AD_A)).containsOnlyNulls();
+
+        JsonNode history = json.readTree(mvc.perform(get("/api/parts/" + part + "/history")
+                        .session(login()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8));
+        List<String> labels = new ArrayList<>();
+        history.path("changes").forEach(c -> c.path("fields").forEach(f -> labels.add(f.path("label").asText())));
+        assertThat(labels).contains("Вид детали на Дроме", "Раздел на Дроме");
+    }
+
     // --- файлы ---
 
     private static byte[] sample() throws Exception {
@@ -464,6 +593,16 @@ class DromShopTermsTest extends PostgresTestBase {
                   FROM part p LEFT JOIN part_drom_card c ON c.part_id = p.id
                  WHERE p.drom_ad_number = ?""",
                 (rs, i) -> new String[] {rs.getString(1), rs.getString(2), rs.getString(3)}, ad)
+                .stream().findFirst().orElseThrow(() -> new AssertionError("позиции № " + ad + " нет")));
+    }
+
+    /** {Вид детали, Раздел} как у клиента; нет строки — оба NULL. */
+    private String[] kindAndSection(String ad) {
+        return inTenant(() -> jdbc.query("""
+                SELECT c.drom_kind, c.drom_section
+                  FROM part p LEFT JOIN part_drom_card c ON c.part_id = p.id
+                 WHERE p.drom_ad_number = ?""",
+                (rs, i) -> new String[] {rs.getString(1), rs.getString(2)}, ad)
                 .stream().findFirst().orElseThrow(() -> new AssertionError("позиции № " + ad + " нет")));
     }
 

@@ -394,21 +394,26 @@ public class PartService {
         String pickup = termOf(update.pickup(), card == null ? null : card.getPickup());
         String delivery = termOf(update.deliveryPayment(),
                 card == null ? null : card.getDeliveryPayment());
+        String kind = termOf(update.dromKind(), card == null ? null : card.getDromKind());
+        String section = termOf(update.dromSection(), card == null ? null : card.getDromSection());
         if (card == null) {
-            if (warranty == null && pickup == null && delivery == null) {
+            if (warranty == null && pickup == null && delivery == null
+                    && kind == null && section == null) {
                 return false;
             }
             card = new PartDromCard(partId);
-            card.set(warranty, pickup, delivery);
+            card.set(warranty, pickup, delivery, kind, section);
             entityManager.persist(card);
             return true;
         }
         if (java.util.Objects.equals(card.getWarranty(), warranty)
                 && java.util.Objects.equals(card.getPickup(), pickup)
-                && java.util.Objects.equals(card.getDeliveryPayment(), delivery)) {
+                && java.util.Objects.equals(card.getDeliveryPayment(), delivery)
+                && java.util.Objects.equals(card.getDromKind(), kind)
+                && java.util.Objects.equals(card.getDromSection(), section)) {
             return false;
         }
-        card.set(warranty, pickup, delivery);
+        card.set(warranty, pickup, delivery, kind, section);
         return true;
     }
 
@@ -956,6 +961,9 @@ public class PartService {
                              String warranty,
                              String pickup,
                              String deliveryPayment,
+                             // Вид детали и раздел как у клиента (задача 0286): так же.
+                             String dromKind,
+                             String dromSection,
                              // Что сделать с ценой: заменить (умолчание), подвинуть
                              // процентом или суммой, округлить. При арифметике
                              // price — значение операции, а не новая цена.

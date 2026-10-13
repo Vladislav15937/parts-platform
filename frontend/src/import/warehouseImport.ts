@@ -55,6 +55,10 @@ export const FIELDS = [
   { key: 'WARRANTY', label: 'Гарантия и условия возврата', required: false, dromOnly: true },
   { key: 'PICKUP', label: 'Самовывоз', required: false, dromOnly: true },
   { key: 'DELIVERY', label: 'Доставка и оплата', required: false, dromOnly: true },
+  // Вид детали и раздел как у клиента (задача 0286): строки Дрома дословно, не
+  // наш справочный вид и не «Секция» склада.
+  { key: 'DROM_KIND', label: 'Вид детали', required: false, dromOnly: true },
+  { key: 'DROM_SECTION', label: 'Раздел', required: false, dromOnly: true },
 ] as const;
 
 export type FieldKey = (typeof FIELDS)[number]['key'];

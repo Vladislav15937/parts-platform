@@ -15,6 +15,8 @@ function card(overrides: Partial<PartEdit> = {}): PartEdit {
     warranty: 'Обговаривается индивидуально',
     pickup: 'Самовывоз — улица Георгия Исакова 9',
     deliveryPayment: 'Доставка по городу — 300 р.\n\nОплата при получении',
+    dromKind: 'Карданный вал Lexus GX400',
+    dromSection: 'Автозапчасти → Трансмиссия',
     ...overrides,
   };
 }
@@ -57,6 +59,19 @@ describe('форма правки карточки', () => {
     const saved = toEdit({ ...draftOf(card()), deliveryPayment: text });
     expect(saved.deliveryPayment).toBe(text);
     expect(toEdit(draftOf(card())).deliveryPayment).toBe(card().deliveryPayment);
+  });
+
+  it('вид детали и раздел как у клиента уезжают дословно и не путаются с «Секцией»', () => {
+    // Задача 0286: строка Дрома со стрелкой « → » и краями не трогается; «Секция»
+    // склада — другое поле и едет своим ключом.
+    const text = ' Автозапчасти → Кузов  ';
+    const saved = toEdit({ ...draftOf(card({ section: 'А-01' })), dromSection: text });
+    expect(saved.dromSection).toBe(text);
+    expect(saved.section).toBe('А-01');
+    expect(toEdit(draftOf(card())).dromKind).toBe('Карданный вал Lexus GX400');
+    // Очистка — пустая строка, а не null (null сервер читает как «не трогать»).
+    expect(toEdit({ ...draftOf(card()), dromKind: '' }).dromKind).toBe('');
+    expect(draftOf(card({ dromKind: null })).dromKind).toBe('');
   });
 
   it('очищенный блок уезжает пустой строкой, а не null', () => {

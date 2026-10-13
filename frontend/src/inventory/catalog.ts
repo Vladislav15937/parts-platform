@@ -974,6 +974,12 @@ export interface PartEdit {
   warranty: string | null;
   pickup: string | null;
   deliveryPayment: string | null;
+  /**
+   * Вид детали и раздел как у клиента на Дроме (задача 0286): строки дословно,
+   * те же два способа «пусто», что у блоков выше. Не `part_kind` и не «Секция».
+   */
+  dromKind: string | null;
+  dromSection: string | null;
 }
 
 /**

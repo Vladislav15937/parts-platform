@@ -116,7 +116,15 @@ public final class ColumnMapping {
         /** «Самовывоз» объявления дословно — {@code part_drom_card.pickup}. */
         PICKUP(true),
         /** «Доставка и оплата» дословно, с переводами строк — {@code part_drom_card.delivery_payment}. */
-        DELIVERY(true);
+        DELIVERY(true),
+        /**
+         * «Вид детали» объявления дословно (задача 0286) — {@code part_drom_card.drom_kind}.
+         * Строка клиента с маркой и моделью («Карданный вал Lexus GX400»), а не наш
+         * справочный вид {@code part_kind} («Фара»). Без синонимов, как описание.
+         */
+        DROM_KIND(true),
+        /** «Раздел» объявления дословно («Автозапчасти → Трансмиссия») — {@code part_drom_card.drom_section}; не «Секция» склада. */
+        DROM_SECTION(true);
 
         private final boolean imported;
         private final List<String> synonyms;

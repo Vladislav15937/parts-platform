@@ -7,7 +7,7 @@ import jakarta.persistence.Table;
 
 /**
  * Блоки карточки объявления Дрома: гарантия, самовывоз, доставка и оплата
- * (задача 0285).
+ * (задача 0285), вид детали и раздел как у клиента (задача 0286).
  *
  * <p><b>Отдельной сущностью, а не полями {@link Part}.</b> Тексты длинные
  * (доставка — около тысячи знаков на каждой позиции), а {@code Part} читают
@@ -37,6 +37,17 @@ public class PartDromCard {
     /** «Доставка и оплата», весь текст с переводами строк. */
     @Column(name = "delivery_payment")
     private String deliveryPayment;
+
+    /**
+     * «Вид детали» как у клиента на Дроме («Карданный вал Lexus GX400», задача 0286).
+     * Не {@code part_kind_id}: тот — справочный вид без марки.
+     */
+    @Column(name = "drom_kind")
+    private String dromKind;
+
+    /** «Раздел» как у клиента («Автозапчасти → Трансмиссия»). Не {@code part.section} («Секция» склада). */
+    @Column(name = "drom_section")
+    private String dromSection;
 
     protected PartDromCard() {
     }
@@ -70,9 +81,20 @@ public class PartDromCard {
         return deliveryPayment;
     }
 
-    public void set(String warranty, String pickup, String deliveryPayment) {
+    public String getDromKind() {
+        return dromKind;
+    }
+
+    public String getDromSection() {
+        return dromSection;
+    }
+
+    public void set(String warranty, String pickup, String deliveryPayment,
+                    String dromKind, String dromSection) {
         this.warranty = clean(warranty);
         this.pickup = clean(pickup);
         this.deliveryPayment = clean(deliveryPayment);
+        this.dromKind = clean(dromKind);
+        this.dromSection = clean(dromSection);
     }
 }

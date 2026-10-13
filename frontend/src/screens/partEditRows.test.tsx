@@ -262,6 +262,30 @@ describe('блоки карточки Дрома', () => {
       .toBe('Доставка по городу — 300 р.\n\nОплата при получении');
   });
 
+  it('«Вид детали» и «Раздел» показаны подписями Дрома, правятся и стираются тем же PUT (задача 0286)', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Раздел')).toBeTruthy());
+
+    expect(line('Вид детали').textContent).toContain('Карданный вал Lexus GX400');
+    expect(line('Раздел').textContent).toContain('Автозапчасти → Трансмиссия');
+    // «Секция» склада — другая строка, не «Раздел».
+    expect(line('Секция').textContent).not.toContain('Автозапчасти');
+
+    fireEvent.click(screen.getByLabelText('Изменить: Раздел'));
+    fireEvent.change(screen.getByLabelText('Раздел'),
+      { target: { value: 'Автозапчасти → Кузов' } });
+    fireEvent.click(screen.getByLabelText('Изменить: Вид детали'));
+    fireEvent.change(screen.getByLabelText('Вид детали'), { target: { value: '' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['dromSection']).toBe('Автозапчасти → Кузов');
+    expect(sent[0]!['dromKind'], 'очистка — пустая строка, null сервер прочёл бы как «не трогать»')
+      .toBe('');
+    expect(sent[0]!['section'], '«Секция» склада поехала вместо «Раздела»').toBe(null);
+  });
+
   it('стёртый руками блок уезжает пустой строкой, а не null', async () => {
     render(<PartEditForm partId={7} row={row()} role="OWNER"
                          onSaved={() => {}} onCancel={() => {}} />);
@@ -321,6 +345,8 @@ function card(): Record<string, unknown> {
     warranty: 'Обговаривается индивидуально',
     pickup: 'Самовывоз — улица Георгия Исакова 9',
     deliveryPayment: 'Доставка по городу — 300 р.\n\nОплата при получении',
+    dromKind: 'Карданный вал Lexus GX400',
+    dromSection: 'Автозапчасти → Трансмиссия',
   };
 }
 

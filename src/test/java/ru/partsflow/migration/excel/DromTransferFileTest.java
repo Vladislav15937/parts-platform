@@ -87,8 +87,6 @@ class DromTransferFileTest extends PostgresTestBase {
     /** Колонки договора, которые импорт ещё не читает, — и кто их прочтёт. */
     private static final Map<String, String> PENDING = Map.ofEntries(
             Map.entry("Ссылка", "0274"),
-            Map.entry("Вид детали", "0278"),
-            Map.entry("Раздел", "0278"),
             Map.entry("Применимость", "0278"));
 
     /** Проверка одной колонки: значение из файла против того, что в базе у позиции. */
@@ -114,7 +112,10 @@ class DromTransferFileTest extends PostgresTestBase {
     private static final Map<String, Check> TERM_CHECKS = Map.of(
             "Гарантия", term("warranty", "«Гарантия»"),
             "Самовывоз", term("pickup", "«Самовывоз»"),
-            "Доставка и оплата", term("delivery_payment", "«Доставка и оплата»"));
+            "Доставка и оплата", term("delivery_payment", "«Доставка и оплата»"),
+            // Задача 0286: строка вида и раздел дословно, не part_kind_id и не part.section.
+            "Вид детали", term("drom_kind", "«Вид детали»"),
+            "Раздел", term("drom_section", "«Раздел»"));
 
     /**
      * Колонки, которые импорт читает, — и чем это доказано.

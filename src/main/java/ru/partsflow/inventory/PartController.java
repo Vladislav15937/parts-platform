@@ -354,6 +354,10 @@ public class PartController {
                                 String warranty,
                                 String pickup,
                                 String deliveryPayment,
+                                // Вид детали и раздел как у клиента (задача 0286): те же два
+                                // способа «пусто», что у блоков выше.
+                                String dromKind,
+                                String dromSection,
                                 // Что сделать с ценой: «Изменить» (умолчание и прежнее
                                 // поведение), процент, сумма, округление. При арифметике
                                 // поле price несёт значение операции, а не новую цену, —
@@ -372,6 +376,8 @@ public class PartController {
                     card == null ? null : card.getWarranty(),
                     card == null ? null : card.getPickup(),
                     card == null ? null : card.getDeliveryPayment(),
+                    card == null ? null : card.getDromKind(),
+                    card == null ? null : card.getDromSection(),
                     // Форма открывается на «Изменить»: самый частый случай —
                     // вписать новое число — остаётся одним движением.
                     PriceOperation.SET);
@@ -383,7 +389,8 @@ public class PartController {
                     marking, manufacturer,
                     color, section, barcode, weightKg, lengthMm, widthMm, heightMm,
                     packageLengthMm, packageWidthMm, packageHeightMm, packageWeightKg,
-                    storageCellId, published, warranty, pickup, deliveryPayment, priceOp);
+                    storageCellId, published, warranty, pickup, deliveryPayment,
+                    dromKind, dromSection, priceOp);
         }
     }
 
