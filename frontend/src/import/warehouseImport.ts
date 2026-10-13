@@ -35,6 +35,11 @@ export const FIELDS = [
   // качает отдельный проход «Фотографии» ниже на экране (задача 0273).
   { key: 'PHOTOS', label: 'Фото', required: false, dromOnly: false },
   { key: 'DROM_AD_NUMBER', label: 'Номер объявления Дрома', required: false, dromOnly: false },
+  // Текст объявления, который видит покупатель, — не «Примечание»: то
+  // внутренний комментарий. Только у файла с Дрома (задача 0275): в чужой
+  // таблице «Описание» по-прежнему угадывается примечанием, и выдать чужую
+  // заметку покупателю хуже, чем спрятать её.
+  { key: 'DESCRIPTION', label: 'Описание', required: false, dromOnly: true },
 ] as const;
 
 export type FieldKey = (typeof FIELDS)[number]['key'];
