@@ -52,7 +52,7 @@ public final class DromTransferFile {
             new Column("Раздел", true, null),
             new Column("Цена", true, Field.PRICE),
             new Column("Количество", false, Field.QUANTITY),
-            new Column("Наличие", true, null),
+            new Column("Наличие", true, Field.AVAILABILITY),
             new Column("Состояние", true, null),
             new Column("Оригинальность", false, null),
             new Column("Производитель", false, null),
