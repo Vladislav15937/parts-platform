@@ -449,7 +449,10 @@ public class ExcelWarehouseImporter {
                 photoLinks(mapping.value(row, Field.PHOTOS)),
                 adNumber,
                 verbatim(mapping.value(row, Field.DESCRIPTION)),
-                card);
+                card,
+                new Terms(verbatim(mapping.value(row, Field.WARRANTY)),
+                        verbatim(mapping.value(row, Field.PICKUP)),
+                        verbatim(mapping.value(row, Field.DELIVERY))));
     }
 
     /**
@@ -580,6 +583,19 @@ public class ExcelWarehouseImporter {
             }
             Long partId = inserted.get(0);
 
+            // Блоки карточки Дрома — своя таблица, строка только если хоть один блок
+            // есть в файле (задача 0285). ON CONFLICT нужен не для одновременного
+            // повтора (вставку позиции выше выиграл один), а чтобы строка не роняла
+            // загрузку, если она по какой-то причине уже есть.
+            if (!row.terms().isEmpty()) {
+                jdbc.update("""
+                        INSERT INTO part_drom_card (part_id, warranty, pickup, delivery_payment)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT (part_id) DO NOTHING""",
+                        partId, row.terms().warranty(), row.terms().pickup(),
+                        row.terms().delivery());
+            }
+
             // Номер, от которого после приведения ничего не осталось, — не номер:
             // колонка normalized объявлена NOT NULL, и такая строка отвечает
             // отказом базы вместо загруженной позиции.
@@ -658,9 +674,11 @@ public class ExcelWarehouseImporter {
         List<Map<String, Object>> found = jdbc.queryForList("""
                 SELECT p.id, p.public_code, p.title, p.price, p.qty_on_hand, c.code AS cell,
                        p.note, p.description, p.condition, p.manufacturer, p.authenticity,
-                       p.side_lr, p.side_fr, p.side_ud
+                       p.side_lr, p.side_fr, p.side_ud,
+                       d.warranty, d.pickup, d.delivery_payment
                   FROM part p
                   LEFT JOIN storage_cell c ON c.id = p.storage_cell_id
+                  LEFT JOIN part_drom_card d ON d.part_id = p.id
                  WHERE p.drom_ad_number = ?""", adNumber);
         return found.isEmpty() ? null : found.get(0);
     }
@@ -692,6 +710,26 @@ public class ExcelWarehouseImporter {
             new Scalar(Field.SIDE_UD, "side_ud", "Верх/низ", r -> nameOf(r.card().sideUd()), false));
 
     /**
+     * Блок карточки Дрома, который повтор дозаполняет (задача 0285).
+     *
+     * <p>Живёт в {@code part_drom_card}, а не в {@code part}, поэтому его правило
+     * отдельное от {@link Scalar}: запись — вставка-или-обновление строки блоков,
+     * и <b>отметку «позиция изменилась» дозаполнение не двигает</b> — прайс этих
+     * текстов пока не несёт, и 2 897 позиций без изменений для площадки ушли бы
+     * в дельту Дрому.
+     *
+     * @param column колонка {@code part_drom_card}; берётся из этого списка, а не из запроса
+     */
+    private record Term(Field field, String column, String label,
+                        java.util.function.Function<Terms, String> value) {
+    }
+
+    private static final List<Term> TERMS = List.of(
+            new Term(Field.WARRANTY, "warranty", "Гарантия и условия возврата", Terms::warranty),
+            new Term(Field.PICKUP, "pickup", "Самовывоз", Terms::pickup),
+            new Term(Field.DELIVERY, "delivery_payment", "Доставка и оплата", Terms::delivery));
+
+    /**
      * Что повтор дозаполняет — поле и его имя в отчёте, в порядке отчёта.
      *
      * <p>Правило одно на все: <b>пусто у позиции — берётся из файла, заполнено —
@@ -709,6 +747,7 @@ public class ExcelWarehouseImporter {
         Map<Field, String> refilled = new java.util.LinkedHashMap<>();
         refilled.put(Field.CONDITION, "Состояние");
         SCALARS.forEach(s -> refilled.put(s.field(), s.label()));
+        TERMS.forEach(t -> refilled.put(t.field(), t.label()));
         refilled.put(Field.OEM, "Номер детали");
         refilled.put(Field.OEM_SUBSTITUTES, "Номера замен");
         refilled.put(Field.PHOTOS, "Снимки");
@@ -749,16 +788,21 @@ public class ExcelWarehouseImporter {
         long partId = ((Number) part.get("id")).longValue();
         String ad = row.dromAd();
         boolean changed = false;
+        // Блоки карточки Дрома считаются дозаполненными, но отметки не двигают
+        // (задача 0285, пункт 7): прайс их пока не несёт.
+        boolean termsFilled = false;
 
         for (Field field : REFILLED.keySet()) {
             String label = REFILLED.get(field);
-            changed |= switch (field) {
-                case CONDITION -> refillCondition(row, part, partId, label, report);
-                case OEM -> refillPrimaryOem(row, partId, label, report);
-                case OEM_SUBSTITUTES -> refillSubstitutes(row, partId, label, report);
-                case PHOTOS -> refillPhotos(row, partId, label, report);
-                default -> refillScalar(scalarOf(field), row, part, partId, report);
-            };
+            switch (field) {
+                case CONDITION -> changed |= refillCondition(row, part, partId, label, report);
+                case OEM -> changed |= refillPrimaryOem(row, partId, label, report);
+                case OEM_SUBSTITUTES -> changed |= refillSubstitutes(row, partId, label, report);
+                case PHOTOS -> changed |= refillPhotos(row, partId, label, report);
+                case WARRANTY, PICKUP, DELIVERY ->
+                        termsFilled |= refillTerm(termOf(field), row, part, partId, report);
+                default -> changed |= refillScalar(scalarOf(field), row, part, partId, report);
+            }
         }
 
         // Сверяется, но не дозаполняется (почему — NOT_REFILLED).
@@ -779,9 +823,61 @@ public class ExcelWarehouseImporter {
             // о реально изменённой: повтор без изменений отметку не двигает.
             changeLog.changed(partId);
             report.refilled++;
+        } else if (termsFilled) {
+            report.refilled++;
         } else {
             report.unchanged++;
         }
+    }
+
+    private static Term termOf(Field field) {
+        return TERMS.stream().filter(t -> t.field() == field).findFirst()
+                .orElseThrow(() -> new IllegalStateException("нет правила дозаполнения: " + field));
+    }
+
+    /**
+     * Блок карточки Дрома: нет у позиции (нет строки или блок пуст) — берётся из файла;
+     * есть начало значения из файла (первая загрузка шла без листа «Продолжение»,
+     * задача 0281) — дописывается хвост; иное значение — расхождение, прежнее
+     * остаётся. Запись — одна инструкция с условием в {@code WHERE}, как у полей
+     * позиции: число затронутых строк и есть счёт «дозаполнено», а шесть
+     * одновременных загрузок не запишут и не насчитают блок дважды.
+     */
+    private boolean refillTerm(Term rule, Row row, Map<String, Object> part, long partId,
+                               Tally report) {
+        String fromFile = rule.value().apply(row.terms());
+        if (fromFile == null) {
+            return false;
+        }
+        String current = (String) part.get(rule.column());
+        if (fromFile.equals(current)) {
+            return false;
+        }
+        boolean fillable = current == null
+                || (fromFile.length() > current.length() && fromFile.startsWith(current));
+        if (fillable) {
+            String column = rule.column();
+            int updated = jdbc.update("INSERT INTO part_drom_card (part_id, " + column + ") VALUES (?, ?)"
+                    + " ON CONFLICT (part_id) DO UPDATE SET " + column + " = EXCLUDED." + column
+                    + " WHERE part_drom_card." + column + " IS NULL"
+                    + " OR (length(EXCLUDED." + column + ") > length(part_drom_card." + column + ")"
+                    + " AND starts_with(EXCLUDED." + column + ", part_drom_card." + column + "))",
+                    partId, fromFile);
+            if (updated > 0) {
+                report.filled(rule.label(), 0);
+                return true;
+            }
+            // Ноль строк: блок заполнили между нашим чтением и записью.
+            // Расхождение называется по тому, что лежит сейчас.
+            List<String> now = jdbc.queryForList(
+                    "SELECT " + column + " FROM part_drom_card WHERE part_id = ?", String.class, partId);
+            current = now.isEmpty() ? null : now.get(0);
+            if (fromFile.equals(current)) {
+                return false;
+            }
+        }
+        report.discrepancy(row.dromAd(), rule.label(), fromFile, current);
+        return false;
     }
 
     private static Scalar scalarOf(Field field) {
@@ -1107,7 +1203,18 @@ public class ExcelWarehouseImporter {
      */
     private record Row(int number, String name, BigDecimal price, BigDecimal quantity,
                        boolean quantityFromFile, String cell, String oem, String note, List<String> photos,
-                       String dromAd, String description, CardFields card) {
+                       String dromAd, String description, CardFields card, Terms terms) {
+    }
+
+    /**
+     * Блоки карточки Дрома, как их пишет клиент (задача 0285): гарантия, самовывоз,
+     * доставка и оплата. Дословно — без чистки и без сопоставления со справочником.
+     */
+    private record Terms(String warranty, String pickup, String delivery) {
+
+        boolean isEmpty() {
+            return warranty == null && pickup == null && delivery == null;
+        }
     }
 
     /**

@@ -82,6 +82,10 @@ class DromRepeatLoadTest extends PostgresTestBase {
             Map.entry(Field.PRICE, new Facet("Цена", "price")),
             Map.entry(Field.DESCRIPTION, new Facet("Описание", "description")),
             Map.entry(Field.NOTE, new Facet(NOTE, "note")),
+            // Блоки карточки Дрома (задача 0285) лежат в part_drom_card, не в part.
+            Map.entry(Field.WARRANTY, new Facet("Гарантия", "warranty")),
+            Map.entry(Field.PICKUP, new Facet("Самовывоз", "pickup")),
+            Map.entry(Field.DELIVERY, new Facet("Доставка и оплата", "delivery_payment")),
             Map.entry(Field.MANUFACTURER, new Facet("Производитель", "manufacturer")),
             Map.entry(Field.AUTHENTICITY, new Facet("Оригинальность", "authenticity")),
             Map.entry(Field.SIDE_LR, new Facet("Сторона", "side_lr")),
@@ -648,6 +652,9 @@ class DromRepeatLoadTest extends PostgresTestBase {
         row.put("Положение", "Переднее");
         row.put("Верх/низ", "Верхнее");
         row.put("Описание", "Фара целая.\nБез сколов.");
+        row.put("Гарантия", "Обговаривается индивидуально");
+        row.put("Самовывоз", "Самовывоз — улица Георгия Исакова 9");
+        row.put("Доставка и оплата", "Доставка по городу — 300 р.\n\nОплата при получении");
         row.put("Фото", "https://example.test/a/1.jpg\nhttps://example.test/a/2.jpg");
         row.put(NOTE, "с полки 3");
         return row;
@@ -668,6 +675,9 @@ class DromRepeatLoadTest extends PostgresTestBase {
         row.put("Положение", "Заднее");
         row.put("Верх/низ", "Нижнее");
         row.put("Описание", "Бампер без трещин.");
+        row.put("Гарантия", "Гарантия 14 дней");
+        row.put("Самовывоз", "Самовывоз — склад на Ленина 5");
+        row.put("Доставка и оплата", "Доставка ТК — по тарифу\nОплата картой");
         row.put("Фото", "https://example.test/b/1.jpg\nhttps://example.test/b/2.jpg");
         row.put(NOTE, "под потолком");
         return row;
@@ -774,6 +784,13 @@ class DromRepeatLoadTest extends PostgresTestBase {
                 state.put("oem_substitutes", jdbc.queryForList("""
                         SELECT raw_number FROM part_oem WHERE part_id = ? AND NOT is_primary
                          ORDER BY id""", String.class, id));
+                // Блоки карточки Дрома: нет строки — все NULL (задача 0285).
+                for (String block : List.of("warranty", "pickup", "delivery_payment")) {
+                    List<String> value = jdbc.queryForList(
+                            "SELECT " + block + " FROM part_drom_card WHERE part_id = ?",
+                            String.class, id);
+                    state.put(block, value.isEmpty() ? null : value.get(0));
+                }
                 state.put("photos", jdbc.queryForList("""
                         SELECT url || ' ' || sort_order FROM part_photo_import WHERE part_id = ?
                          ORDER BY sort_order""", String.class, id));

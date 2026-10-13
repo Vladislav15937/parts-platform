@@ -49,11 +49,13 @@ public class PartService {
     private final StockLedger ledger;
     /** Правка состояния двигает пометку в заголовке — её ставит он же. */
     private final PartTitleGenerator titles;
+    /** Блоки карточки Дрома лежат в своей таблице и правятся вместе с формой (задача 0285). */
+    private final jakarta.persistence.EntityManager entityManager;
 
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
                        PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc,
                        VehicleWords vehicleWords, StockNaming naming, StockLedger ledger,
-                       PartTitleGenerator titles) {
+                       PartTitleGenerator titles, jakarta.persistence.EntityManager entityManager) {
         this.partRepository = partRepository;
         this.eventPublisher = eventPublisher;
         this.partNames = partNames;
@@ -63,6 +65,7 @@ public class PartService {
         this.naming = naming;
         this.ledger = ledger;
         this.titles = titles;
+        this.entityManager = entityManager;
     }
 
     /**
@@ -334,12 +337,22 @@ public class PartService {
         part.setPackageWeightKg(update.packageWeightKg());
         part.setStorageCellId(update.storageCellId());
         part.setPublished(update.published());
+        // Меняло ли форму что-нибудь в самой позиции — спрашивается до того,
+        // как руку приложили автор и блоки карточки Дрома: в прайс они пока
+        // не уходят, и правка одних блоков не должна слать площадке дельту.
+        boolean partChanged = entityManager.unwrap(org.hibernate.Session.class).isDirty();
         part.touchedBy(authorId);
+        boolean termsChanged = applyDromCard(partId, update);
 
         // Отметка на любой правке, а не только на смене цены: в прайс уезжают
         // и наименование, и цвет, и «Выгружать». Событие о цене — другой
-        // вопрос и другое условие.
-        partChanges.changed(partId);
+        // вопрос и другое условие. Пропуск — только когда изменились ОДНИ блоки
+        // карточки Дрома: прайс их пока не несёт (задача 0285, пункт 7), и
+        // отметка стоила бы площадке дельты без единого изменения для неё.
+        // Включит её тот, кто начнёт отдавать блоки в прайс.
+        if (partChanged || !termsChanged) {
+            partChanges.changed(partId);
+        }
 
         if (priceChanged) {
             // Ключ партиции включает id запчасти, поэтому события по одной
@@ -349,6 +362,54 @@ public class PartService {
                     "part", part.getId(), "part.price_changed.v1", payloadOf(part)));
         }
         return part;
+    }
+
+    /**
+     * Блоки карточки Дрома позиции; строки нет — {@code null}.
+     *
+     * <p>Читает форма правки ({@code GET /api/parts/{id}/editable}) и больше
+     * никто: ни витрина, ни продажа этих текстов не несут.
+     */
+    @Transactional(readOnly = true)
+    public PartDromCard dromCardOf(Long partId) {
+        return entityManager.find(PartDromCard.class, partId);
+    }
+
+    /**
+     * Блоки карточки Дрома из формы: пусто — {@code null}, строка заводится при
+     * первом непустом блоке и дальше остаётся (с пустыми блоками), чтобы очистка
+     * последнего блока тоже была правкой в журнале, а не удалением строки.
+     * Идёт через Hibernate, а не {@code JdbcTemplate}: автора правки пишет
+     * слушатель журнала ({@code AuditLogListener}), и прямой SQL его бы обошёл.
+     *
+     * @return изменилось ли хоть что-то
+     */
+    private static String termOf(String sent, String current) {
+        return sent == null ? current : PartDromCard.clean(sent);
+    }
+
+    private boolean applyDromCard(Long partId, PartUpdate update) {
+        PartDromCard card = entityManager.find(PartDromCard.class, partId);
+        String warranty = termOf(update.warranty(), card == null ? null : card.getWarranty());
+        String pickup = termOf(update.pickup(), card == null ? null : card.getPickup());
+        String delivery = termOf(update.deliveryPayment(),
+                card == null ? null : card.getDeliveryPayment());
+        if (card == null) {
+            if (warranty == null && pickup == null && delivery == null) {
+                return false;
+            }
+            card = new PartDromCard(partId);
+            card.set(warranty, pickup, delivery);
+            entityManager.persist(card);
+            return true;
+        }
+        if (java.util.Objects.equals(card.getWarranty(), warranty)
+                && java.util.Objects.equals(card.getPickup(), pickup)
+                && java.util.Objects.equals(card.getDeliveryPayment(), delivery)) {
+            return false;
+        }
+        card.set(warranty, pickup, delivery);
+        return true;
     }
 
     /**
@@ -889,6 +950,12 @@ public class PartService {
                              BigDecimal packageWeightKg,
                              Long storageCellId,
                              boolean published,
+                             // Блоки карточки Дрома (задача 0285). {@code null} — в запросе
+                             // ключа не было, блок не трогать; пустой текст — очистить,
+                             // в базу уходит NULL.
+                             String warranty,
+                             String pickup,
+                             String deliveryPayment,
                              // Что сделать с ценой: заменить (умолчание), подвинуть
                              // процентом или суммой, округлить. При арифметике
                              // price — значение операции, а не новая цена.

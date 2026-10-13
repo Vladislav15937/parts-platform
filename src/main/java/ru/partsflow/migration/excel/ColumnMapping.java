@@ -106,7 +106,17 @@ public final class ColumnMapping {
          * чужую заметку покупателю хуже, чем спрятать её. Сопоставляется
          * поле договором {@link DromTransferFile}.
          */
-        DESCRIPTION(true);
+        DESCRIPTION(true),
+        /**
+         * «Гарантия и условия возврата» объявления дословно (задача 0285) —
+         * {@code part_drom_card.warranty}. Без синонимов, как описание: что
+         * лежит в чужой колонке «Гарантия», мы не знаем.
+         */
+        WARRANTY(true),
+        /** «Самовывоз» объявления дословно — {@code part_drom_card.pickup}. */
+        PICKUP(true),
+        /** «Доставка и оплата» дословно, с переводами строк — {@code part_drom_card.delivery_payment}. */
+        DELIVERY(true);
 
         private final boolean imported;
         private final List<String> synonyms;

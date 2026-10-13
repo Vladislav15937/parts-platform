@@ -211,7 +211,7 @@ public class PartController {
     @GetMapping("/{id}/editable")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public UpdateRequest editable(@PathVariable Long id) {
-        return UpdateRequest.of(partService.require(id));
+        return UpdateRequest.of(partService.require(id), partService.dromCardOf(id));
     }
 
     /**
@@ -342,13 +342,25 @@ public class PartController {
                                 @PositiveOrZero BigDecimal packageWeightKg,
                                 Long storageCellId,
                                 boolean published,
+                                // Блоки карточки Дрома (задача 0285): гарантия, самовывоз,
+                                // доставка и оплата — тексты клиента, хранятся дословно.
+                                // В отличие от остальных текстов формы, у них два способа
+                                // «пусто», и они разные: {@code null} (ключа нет вовсе) —
+                                // не трогать, пустая строка — очистить. Иначе вкладка,
+                                // открытая до выкладки этой задачи, при сохранении стёрла бы
+                                // тексты клиента, о которых её форма не знает: Jackson
+                                // отсутствующий ключ и явный null не различает. Экран шлёт
+                                // всегда строку, пустую при очистке.
+                                String warranty,
+                                String pickup,
+                                String deliveryPayment,
                                 // Что сделать с ценой: «Изменить» (умолчание и прежнее
                                 // поведение), процент, сумма, округление. При арифметике
                                 // поле price несёт значение операции, а не новую цену, —
                                 // поэтому @PositiveOrZero на нём верен и там.
                                 PriceOperation priceOp) {
 
-        static UpdateRequest of(Part part) {
+        static UpdateRequest of(Part part, PartDromCard card) {
             return new UpdateRequest(part.getPrice(), part.getMinPrice(), part.getCostPrice(),
                     part.getInstallationPrice(), part.getCondition(),
                     part.getQualityGrade(), part.getDescription(),
@@ -357,6 +369,9 @@ public class PartController {
                     part.getWeightKg(), part.getLengthMm(), part.getWidthMm(), part.getHeightMm(),
                     part.getPackageLengthMm(), part.getPackageWidthMm(), part.getPackageHeightMm(),
                     part.getPackageWeightKg(), part.getStorageCellId(), part.isPublished(),
+                    card == null ? null : card.getWarranty(),
+                    card == null ? null : card.getPickup(),
+                    card == null ? null : card.getDeliveryPayment(),
                     // Форма открывается на «Изменить»: самый частый случай —
                     // вписать новое число — остаётся одним движением.
                     PriceOperation.SET);
@@ -368,7 +383,7 @@ public class PartController {
                     marking, manufacturer,
                     color, section, barcode, weightKg, lengthMm, widthMm, heightMm,
                     packageLengthMm, packageWidthMm, packageHeightMm, packageWeightKg,
-                    storageCellId, published, priceOp);
+                    storageCellId, published, warranty, pickup, deliveryPayment, priceOp);
         }
     }
 
