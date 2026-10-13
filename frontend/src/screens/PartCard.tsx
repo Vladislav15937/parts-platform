@@ -17,7 +17,7 @@ import {
   type PartPhoto,
   type Warehouse,
 } from '../inventory/catalog';
-import { cardFields } from '../inventory/partCard';
+import { cardFields, fitLabel } from '../inventory/partCard';
 import { deletePhoto, makeMainPhoto, photoArchiveUrl, uploadPhoto } from '../inventory/photos';
 import { PartCellBlock } from './PartCellBlock';
 import { PartQualityBlock } from './PartQualityBlock';
@@ -400,9 +400,11 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
                   <ul>
                     {fits.map((fit) => (
                       <li key={fit.id}>
-                        {[fit.brand, fit.model, fit.generation].filter((v) => v).join(' ')}
-                        {fit.yearFrom !== null && ` · ${fit.yearFrom}—${fit.yearTo ?? ''}`}
-                        {!fit.verified && <span className="muted"> · из наименования</span>}
+                        {fitLabel(fit)}
+                        {/* Неподтверждённую строку ставит машина — разбор наименования
+                            или блока «Подходит» с Дрома (0289), — и «из наименования»
+                            про вторую было бы неправдой. */}
+                        {!fit.verified && <span className="muted"> · разобрано автоматически</span>}
                         <button
                           type="button"
                           className="mark__link"

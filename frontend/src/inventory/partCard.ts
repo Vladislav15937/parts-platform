@@ -1,4 +1,4 @@
-import { CONDITION, qualityTitle, type CatalogRow } from './catalog';
+import { CONDITION, qualityTitle, type Applicability, type CatalogRow } from './catalog';
 
 const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.', BOTH: 'лев., прав.' };
 const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.', BOTH: 'перед., задн.' };
@@ -106,6 +106,27 @@ export function generationOf(row: CatalogRow): string | null {
     return row.generation;
   }
   return `${row.generation} ${years}`;
+}
+
+/** Имя поколения справочника, которое само есть диапазон лет: «2013—2023», «1966—н.в.». */
+const YEARS_NAME = /^\d{4}—(\d{4}|н\.в\.)?$/;
+
+/**
+ * Строка применимости словами: «Toyota 4Runner · 2013—2024».
+ *
+ * <p>Годы строки — годы клиента из блока «Подходит» (задача 0289), и рядом
+ * с поколением, названным диапазоном лет справочника, они печатали одно и то же
+ * дважды и вдобавок по-разному: «2013—2023 · 2013—2024». Поэтому при годах
+ * строки имя-диапазон не печатается — годы клиента точнее; поколение
+ * с настоящим именем («XV40») остаётся. Тот же довод, что у {@link generationOf}.
+ */
+export function fitLabel(fit: Applicability): string {
+  const years = fit.yearFrom === null ? null : `${fit.yearFrom}—${fit.yearTo ?? 'н.в.'}`;
+  const generation = fit.generation !== null && years !== null && YEARS_NAME.test(fit.generation)
+    ? null
+    : fit.generation;
+  const name = [fit.brand, fit.model, generation].filter((v) => v).join(' ');
+  return years === null ? name : `${name} · ${years}`;
 }
 
 function day(value: string | null): string | null {

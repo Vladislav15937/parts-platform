@@ -191,6 +191,28 @@ class DromApplicabilityPassTest extends PostgresTestBase {
         assertThat(marks()).as("проход поставил отметку «позиция изменилась»").isEqualTo(marksBefore);
     }
 
+    @Test
+    @DisplayName("Подтверждённая строка с тем же ключом, что у пункта блока, не дополняется "
+            + "годами и кузовами и не снимается рядом с точной")
+    void verifiedRowOfTheSameKeyStaysAsIs() throws Exception {
+        loadAsBeforeTheFeature();
+        long prado = model("Toyota", "Land Cruiser Prado");
+        // C: блок даёт Prado без поколения с годами и кузовом — ровно этот ключ.
+        long verifiedC = row(partOf(AD_C), toyota(), prado, null, true);
+        // A: блок даёт поколения Prado — подтверждённая грубая строка рядом с ними.
+        long verifiedA = row(partOf(AD_A), toyota(), prado, null, true);
+        List<Map<String, Object>> before = verified();
+
+        JsonNode report = pressButton();
+
+        assertThat(verified()).as("проход дополнил или снял подтверждённое человеком")
+                .isEqualTo(before);
+        assertThat(exists(verifiedC) && exists(verifiedA)).isTrue();
+        assertThat(report.path("refined").asInt()).as("подтверждённую строку посчитали дополненной")
+                .isZero();
+        assertThat(rowsOf(partOf(AD_C))).containsExactly("Toyota/Land Cruiser Prado/-/-/-/да");
+    }
+
     // --- 4: повтор ---
 
     @Test
@@ -219,17 +241,26 @@ class DromApplicabilityPassTest extends PostgresTestBase {
     @Test
     @DisplayName("Загрузка файла раскладывает «Подходит» сама; повтор файла не задваивает; дозаполненный текст тоже раскладывается")
     void loadLaysItItself() throws Exception {
-        load(file(List.of(card(AD_A, "Фара левая", FITS_A), card(AD_B, "Фара правая", FITS_B)),
-                Set.of()));
+        JsonNode first = load(file(List.of(card(AD_A, "Фара левая", FITS_A),
+                card(AD_B, "Фара правая", FITS_B)), Set.of()));
+        // Итог разложения — в отчёте загрузки, а не только в базе (разбор PR 416).
+        JsonNode laid = first.path("applicability");
+        assertThat(laid.path("parts").asInt()).as("итога разложения нет в отчёте: %s", first)
+                .isEqualTo(2);
+        assertThat(laid.path("added").asInt()).isEqualTo(3);
+        assertThat(miss(laid, "модель не найдена у марки").path("names").get(0).asText())
+                .isEqualTo("Lexus GX400");
         assertThat(rowsOf(partOf(AD_A))).containsExactlyInAnyOrder(
                 "Toyota/Land Cruiser Prado/2009/2009-2013/Кузова: GRJ150L/нет",
                 "Toyota/Land Cruiser Prado/2013/2013-2017/Кузова: GRJ150W/нет");
         assertThat(marks()).as("загрузка поставила отметку из-за разложения").isEmpty();
         List<String> once = allRows();
 
-        load(file(List.of(card(AD_A, "Фара левая", FITS_A), card(AD_B, "Фара правая", FITS_B)),
-                Set.of()));
+        JsonNode again = load(file(List.of(card(AD_A, "Фара левая", FITS_A),
+                card(AD_B, "Фара правая", FITS_B)), Set.of()));
         assertThat(allRows()).as("повтор файла задвоил применимость").isEqualTo(once);
+        assertThat(again.path("applicability").isNull() || again.path("applicability").isMissingNode())
+                .as("повтор без нового текста отчитался разложением: %s", again).isTrue();
 
         // Первая загрузка без колонки, вторая с ней — ветка дозаполнения (0282).
         load(file(List.of(card(AD_C, "Бампер", FITS_C)), Set.of(APPLICABILITY)));

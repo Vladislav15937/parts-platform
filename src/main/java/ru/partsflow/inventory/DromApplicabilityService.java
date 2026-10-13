@@ -122,8 +122,16 @@ public class DromApplicabilityService {
         }
     }
 
-    /** Справочник машин на проход — общая схема {@code catalog}, читается один раз. */
-    @Transactional(readOnly = true)
+    /**
+     * Справочник машин на проход — общая схема {@code catalog}, читается один раз.
+     *
+     * <p>Без {@code @Transactional} намеренно: из {@link #applyAll} он зовётся
+     * самовызовом, мимо прокси, и аннотация там не действовала бы — а читать
+     * её как «здесь транзакция» значило бы ошибиться. Транзакция и не нужна:
+     * все три запроса идут в {@code catalog.*} с явной схемой, а не в схему
+     * арендатора, и {@code search_path} им безразличен. У загрузки файла он
+     * зовётся внутри её транзакции.
+     */
     public DromApplicability.Dictionary dictionary() {
         return new DromApplicability.Dictionary(
                 jdbc.query("SELECT id, name FROM catalog.brand",

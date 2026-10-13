@@ -245,7 +245,7 @@ public class ExcelWarehouseImporter {
             return null;
         }
         return new Report(imported.get(0), skippedOf(requestId), quantityDefaultedOf(requestId),
-                repeatOf(requestId));
+                repeatOf(requestId), applicabilityOf(requestId));
     }
 
     /**
@@ -255,6 +255,31 @@ public class ExcelWarehouseImporter {
      * Повтор по ключу смотрят, когда первого ответа не видели, и «заведено 0»
      * без «дозаполнено 2 410» читалось бы как «ничего не произошло».
      */
+    /**
+     * Итог разложения «Подходит» прошлого прогона (задача 0289) — тем же обходом,
+     * что итог повтора: элемент {@code {"applicability": …}} в {@code skipped}.
+     * Нет элемента — разбирать было нечего (или прогон старше задачи): {@code null}.
+     */
+    private ru.partsflow.inventory.DromApplicabilityService.Report applicabilityOf(String requestId) {
+        List<String> stored = jdbc.queryForList("""
+                        SELECT (e->'applicability')::text
+                          FROM import_run r
+                         CROSS JOIN LATERAL jsonb_array_elements(r.skipped) e
+                         WHERE r.client_request_id = ?
+                           AND e->'applicability' IS NOT NULL""",
+                String.class, requestId);
+        if (stored.isEmpty()) {
+            return null;
+        }
+        try {
+            return json.readValue(stored.get(0),
+                    ru.partsflow.inventory.DromApplicabilityService.Report.class);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            log.warn("Итог разложения «Подходит» по ключу {} не разобран: {}", requestId, e.getMessage());
+            return null;
+        }
+    }
+
     private Report.Repeat repeatOf(String requestId) {
         List<String> stored = jdbc.queryForList("""
                         SELECT (e->'repeat')::text
@@ -347,13 +372,19 @@ public class ExcelWarehouseImporter {
         // а не руками: экранировать значения ячеек самим значит повторить
         // ту дыру, что уже ронялась на обратной косой (задача 0281).
         java.util.stream.Stream<String> repeat;
+        java.util.stream.Stream<String> applicability;
         try {
             repeat = java.util.stream.Stream.of(
                     "{\"repeat\":" + json.writeValueAsString(report.repeat()) + "}");
+            // Итог разложения «Подходит» (0289): названия из блока клиента — тоже текст
+            // из файла, поэтому сериализатором.
+            applicability = report.applicability() == null ? java.util.stream.Stream.empty()
+                    : java.util.stream.Stream.of("{\"applicability\":"
+                            + json.writeValueAsString(report.applicability()) + "}");
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new IllegalStateException("итог повтора не записан", e);
         }
-        return java.util.stream.Stream.of(skipped, defaulted, repeat)
+        return java.util.stream.Stream.of(skipped, defaulted, repeat, applicability)
                 .flatMap(s -> s)
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
     }
@@ -1293,9 +1324,14 @@ public class ExcelWarehouseImporter {
      * без getX() Jackson не сериализует, и ответ уходит пятисоткой
      * «No acceptable representation». Тесты этого не ловят — они зовут
      * импортёр напрямую, минуя HTTP.
+     *
+     * @param applicability итог разложения «Подходит» в справочную применимость
+     *                      у позиций, которым загрузка записала текст (задача 0289);
+     *                      {@code null} — таких позиций не было
      */
     public record Report(int imported, List<Skipped> skipped, int quantityDefaulted,
-                         Repeat repeat) {
+                         Repeat repeat,
+                         ru.partsflow.inventory.DromApplicabilityService.Report applicability) {
 
         /**
          * Что сделала загрузка с позициями, номер объявления которых уже был
@@ -1446,7 +1482,8 @@ public class ExcelWarehouseImporter {
         }
 
         Report toReport() {
-            return new Report(imported, List.copyOf(skipped), quantityDefaulted, repeat());
+            return new Report(imported, List.copyOf(skipped), quantityDefaulted, repeat(),
+                    vehicles == null ? null : applicability.toReport());
         }
     }
 }
