@@ -101,8 +101,7 @@ class DromTransferFileTest extends PostgresTestBase {
             Map.entry("Описание", "0275"),
             Map.entry("Гарантия", "0276"),
             Map.entry("Самовывоз", "0276"),
-            Map.entry("Доставка и оплата", "0276"),
-            Map.entry("Фото", "0273"));
+            Map.entry("Доставка и оплата", "0276"));
 
     /** Проверка одной колонки: значение из файла против того, что в базе у позиции. */
     @FunctionalInterface
@@ -137,7 +136,12 @@ class DromTransferFileTest extends PostgresTestBase {
                     SELECT raw_number FROM part_oem WHERE part_id = ? AND is_primary""",
                     String.class, part)))
                     .as("номер производителя не доехал главным номером позиции")
-                    .containsExactly(value));
+                    .containsExactly(value),
+            "Фото", (t, part, value) -> assertThat(t.inTenant(() -> t.jdbc.queryForList("""
+                    SELECT url FROM part_photo_import WHERE part_id = ? ORDER BY sort_order""",
+                    String.class, part)))
+                    .as("снимки не встали в очередь переноса все и в порядке галереи")
+                    .containsExactlyElementsOf(List.of(value.split("\n"))));
 
     @Autowired
     private MockMvc mvc;
