@@ -293,12 +293,12 @@ class StockSearchExpectedTest extends PostgresTestBase {
                         .replace("status", "p.status"));
 
         // Каждая ветка условия поиска по part сужена предикатом индекса (их
-        // четыре: код, заголовок, морфология, номер позиции); ветка кросс-номеров
+        // пять: код, заголовок, морфология, номер позиции, номер объявления Дрома); ветка кросс-номеров
         // сужает через part и пишет то же условие со своим псевдонимом.
         String narrowed = PartService.textMatch(true, true);
         assertThat(narrowed.split(Pattern.quote(" AND " + PartService.EXPECTED_PREDICATE), -1).length - 1)
                 .as("не каждая ветка поиска по part сужена предикатом индекса")
-                .isEqualTo(4);
+                .isEqualTo(5);
         assertThat(narrowed).contains("e.expected_origin AND e.status = 'DRAFT'");
     }
 

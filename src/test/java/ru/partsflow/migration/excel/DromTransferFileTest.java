@@ -166,6 +166,14 @@ class DromTransferFileTest extends PostgresTestBase {
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
                 VALUES (?, ?, 'Разборка с Дрома', ?)""", REGISTRY_ID, TENANT, COMPANY);
         warehouseId = inTenant(() -> {
+            // Образец грузится в каждом тесте этого класса, а объявление, номер
+            // которого уже есть, второй позицией не заводится (задача 0274):
+            // без очистки второй тест видел бы «уже у позиции» вместо загрузки.
+            jdbc.update("DELETE FROM import_run");
+            jdbc.update("DELETE FROM part_oem");
+            jdbc.update("DELETE FROM part_stock");
+            jdbc.update("DELETE FROM stock_movement");
+            jdbc.update("DELETE FROM part");
             if (jdbc.queryForList("SELECT id FROM tenant_member WHERE login = 'owner'").isEmpty()) {
                 jdbc.update("""
                         INSERT INTO tenant_member (display_name, role, login, password_hash)

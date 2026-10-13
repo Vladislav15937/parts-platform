@@ -366,6 +366,7 @@ class DromAdNumberTest extends PostgresTestBase {
                 put(row, header, "Наименование", ads[r].title());
                 put(row, header, "Цена", "16000");
                 put(row, header, "Количество", "1");
+                put(row, header, "Наличие", "В наличии");
             }
             book.write(out);
             return out.toByteArray();
