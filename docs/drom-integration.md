@@ -165,7 +165,8 @@ Content-Type: multipart/form-data
 | `ordercode` | `part.public_code` |
 | `condition` | `part.condition` |
 | `brandcars` / `modelcars` / `bodycars` / `engine` / `year` | `part_applicability` → `catalog.*` |
-| `lr` / `fr` / `ud` | `part.side_lr` / `side_fr` / `side_ud` — разбито миграцией `tenant/010` |
+| `lr` / `fr` / `ud` | `part.side_lr` / `side_fr` / `side_ud` — разбито миграцией `tenant/010`; «на обе стороны» (`BOTH`, `tenant/078`) уходит `лево,право` — слово площадки для «обе» не известно (`tasks/0280`, вопрос Д) |
+| `authenticity` | `part.authenticity` — оригинальность словом клиента дословно (`tenant/078`, задача 0277); имя тега наше |
 | `color` | `part.color` — добавлено миграцией `tenant/010` |
 | `sklad` | адрес склада — **нет реквизитов складов**, см. `bazon-parity.md` §7 |
 | `supplier`, `supplier_inn`, `supplier_art` | **нет** |

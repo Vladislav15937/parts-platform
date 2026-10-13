@@ -11,7 +11,7 @@ function row(overrides: Partial<CatalogRow> = {}): CatalogRow {
     manufacturer: null, marking: null, section: null, cellCode: null,
     sideLr: null, sideFr: null,
     qty: 1, oem: null, crosses: null, photoUrl: null, supply: null, equipment: null,
-    partName: null, published: null, barcode: null, legacyCode: null,
+    partName: null, published: null, barcode: null, legacyCode: null, dromAdNumber: null,
     videoUrl: null, textBlock: null, weightKg: null, dimensions: null,
     packageDimensions: null, packageWeightKg: null,
     createdAt: null, updatedAt: null, updatedByName: null,
@@ -42,6 +42,19 @@ describe('карточка товара', () => {
     expect(valueOf(r, 'Состояние')).toBe('б/у');
     expect(valueOf(r, 'Левый / Правый')).toBe('лев.');
     expect(valueOf(r, 'Передний / Задний')).toBe('задн.');
+  });
+
+  it('называет пару сторон и оригинальность с карточки Дрома (задача 0277)', () => {
+    // «Левая, Правая» у клиента — одна сторона BOTH у нас; показать её кодом
+    // или пустотой значит потерять то, ради чего её переносили.
+    const r = row({ sideLr: 'BOTH', authenticity: 'Оригинал', manufacturer: 'Toyota' });
+    expect(valueOf(r, 'Левый / Правый')).toBe('лев., прав.');
+    expect(valueOf(r, 'Оригинальность')).toBe('Оригинал');
+    // Рядом с производителем: оба приезжают с той же карточки.
+    const order = titles(r);
+    expect(order.indexOf('Оригинальность')).toBe(order.indexOf('Производитель') + 1);
+    // Ответ прежней версии поля не несёт — карточка не падает и не врёт.
+    expect(titles(row())).not.toContain('Оригинальность');
   });
 
   it('печатает поколение вместе с годами', () => {

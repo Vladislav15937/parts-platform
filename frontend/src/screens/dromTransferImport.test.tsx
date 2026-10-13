@@ -35,7 +35,12 @@ const ROW = [
 
 const PREVIEW = {
   header: HEADER,
-  detected: { NAME: 2, PRICE: 5, QUANTITY: 6, AVAILABILITY: 7, OEM: 11, PHOTOS: 21 },
+  detected: {
+    NAME: 2, PRICE: 5, QUANTITY: 6, AVAILABILITY: 7, OEM: 11, PHOTOS: 21, DROM_AD_NUMBER: 0,
+    // Поля карточки Дрома (задача 0277).
+    CONDITION: 8, AUTHENTICITY: 9, MANUFACTURER: 10, OEM_SUBSTITUTES: 12,
+    SIDE_LR: 13, SIDE_FR: 14, SIDE_UD: 15,
+  },
   missingRequired: [],
   rows: [ROW],
   format: 'DROM_TRANSFER',
@@ -79,6 +84,15 @@ describe('файл переноса с Дрома', () => {
     expect(mapping('Наличие')).toBe('7');
     expect(mapping('Фото'), 'снимки клиента не сопоставлены — экран назвал бы их непереносимыми')
       .toBe('21');
+    expect(mapping('Номер объявления Дрома')).toBe('0');
+    // Поля карточки Дрома (задача 0277): каждое своим словом и своей колонкой.
+    expect(mapping('Состояние')).toBe('8');
+    expect(mapping('Оригинальность')).toBe('9');
+    expect(mapping('Производитель')).toBe('10');
+    expect(mapping('Номера замен')).toBe('12');
+    expect(mapping('Сторона')).toBe('13');
+    expect(mapping('Положение')).toBe('14');
+    expect(mapping('Верх/низ')).toBe('15');
     expect(screen.queryByText(/Не сопоставлено:/)).toBeNull();
   });
 
@@ -106,18 +120,20 @@ describe('файл переноса с Дрома', () => {
     await waitFor(() => expect(document.querySelector('table.preview')).toBeTruthy());
 
     const skipped = screen.queryByText(/Не переносятся/)?.textContent ?? '';
-    for (const title of ['Номер объявления Дрома', 'Состояние', 'Описание',
-      'Применимость', 'Доставка и оплата']) {
+    for (const title of ['Описание', 'Применимость', 'Доставка и оплата']) {
       expect(skipped, `о колонке «${title}» экран промолчал`).toContain(title);
     }
     // «Фото» стоит в файле последней, и в перечне её выдала бы точка, а не
     // запятая, — поэтому отдельно и целиком.
     expect(skipped, 'снимки названы непереносимыми').not.toContain('Фото');
-    for (const title of ['Наименование', 'Цена', 'Количество', 'Наличие']) {
+    for (const title of ['Номер объявления Дрома', 'Наименование', 'Цена', 'Количество', 'Наличие',
+      'Состояние', 'Оригинальность', 'Производитель', 'Номера замен', 'Сторона', 'Положение',
+      'Верх/низ']) {
       expect(skipped, `читаемая «${title}» названа непереносимой`).not.toContain(`${title},`);
     }
-    // Ровно 16 из 22: шесть колонок договора импорт читает сегодня.
-    expect((skipped.split(':')[1] ?? '').split(',').length).toBe(16);
+    // Ровно 8 из 22: четырнадцать колонок договора импорт читает сегодня
+    // (семь — с задачи 0277).
+    expect((skipped.split(':')[1] ?? '').split(',').length).toBe(8);
     expect(columnHead('Наименование')).toContain('→ Наименование');
     expect(columnHead('Фото')).toContain('→ Фото');
   });

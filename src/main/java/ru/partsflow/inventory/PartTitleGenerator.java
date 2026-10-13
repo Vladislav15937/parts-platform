@@ -130,7 +130,13 @@ public class PartTitleGenerator {
                 words.add(fr == LongitudinalSide.FRONT ? "перед." : "задн.");
             }
             if (lr != null) {
-                words.add(lr == LateralSide.LEFT ? "лев." : "прав.");
+                // «Обе» — двумя словами, а не своим сокращением: каждое
+                // из них прайс уже умеет снимать с заголовка (plainName).
+                words.add(switch (lr) {
+                    case LEFT -> "лев.";
+                    case RIGHT -> "прав.";
+                    case BOTH -> "лев. прав.";
+                });
             }
             if (ud != null) {
                 words.add(ud == VerticalSide.UPPER ? "верх." : "ниж.");

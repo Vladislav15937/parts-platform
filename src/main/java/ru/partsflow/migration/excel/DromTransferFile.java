@@ -45,7 +45,7 @@ public final class DromTransferFile {
 
     /** Порядок — тот, в котором парсер кладёт колонки. Импорт ищет по заголовку. */
     public static final List<Column> COLUMNS = List.of(
-            new Column(ANCHOR, true, null),
+            new Column(ANCHOR, true, Field.DROM_AD_NUMBER),
             new Column("Ссылка", true, null),
             new Column("Наименование", true, Field.NAME),
             new Column("Вид детали", true, null),
@@ -53,14 +53,14 @@ public final class DromTransferFile {
             new Column("Цена", true, Field.PRICE),
             new Column("Количество", false, Field.QUANTITY),
             new Column("Наличие", true, Field.AVAILABILITY),
-            new Column("Состояние", true, null),
-            new Column("Оригинальность", false, null),
-            new Column("Производитель", false, null),
+            new Column("Состояние", true, Field.CONDITION),
+            new Column("Оригинальность", false, Field.AUTHENTICITY),
+            new Column("Производитель", false, Field.MANUFACTURER),
             new Column("Номер", false, Field.OEM),
-            new Column("Номера замен", false, null),
-            new Column("Сторона", false, null),
-            new Column("Положение", false, null),
-            new Column("Верх/низ", false, null),
+            new Column("Номера замен", false, Field.OEM_SUBSTITUTES),
+            new Column("Сторона", false, Field.SIDE_LR),
+            new Column("Положение", false, Field.SIDE_FR),
+            new Column("Верх/низ", false, Field.SIDE_UD),
             new Column("Применимость", false, null),
             new Column("Описание", false, null),
             new Column("Гарантия", false, null),
@@ -101,7 +101,8 @@ public final class DromTransferFile {
         return -1;
     }
 
-    private static String normalize(String title) {
+    /** Сравнение названий колонок: края, регистр и «ё» не различаются. */
+    static String normalize(String title) {
         return title == null ? "" : title.strip().toLowerCase(Locale.ROOT).replace('ё', 'е');
     }
 }

@@ -98,7 +98,7 @@ public class CatalogService {
             Map.of("FRONT", "Перед.", "REAR", "Задн.");
 
     private static final Map<String, String> SIDE_LR =
-            Map.of("LEFT", "Лев.", "RIGHT", "Прав.");
+            Map.of("LEFT", "Лев.", "RIGHT", "Прав.", "BOTH", "Лев., прав.");
 
     private final JdbcTemplate jdbc;
 
@@ -231,14 +231,19 @@ public class CatalogService {
                                            || coalesce(marking, ''))
                                        @@ plainto_tsquery('russian', ?)
                           UNION SELECT part_id FROM part_oem WHERE raw_number ILIKE ?"""
-                    + (number == null ? "" : PartNumberQuery.UNION_BRANCH) + ")");
+                    + (number == null ? ""
+                            : PartNumberQuery.UNION_BRANCH + PartNumberQuery.DROM_AD_BRANCH)
+                    + ")");
             String like = "%" + query.strip() + "%";
-            args.add(PartNumberQuery.publicCodeArg(query, number != null));
+            String codeArg = PartNumberQuery.publicCodeArg(query, number != null);
+            args.add(codeArg);
             args.add(like);
             args.add(query.strip());
             args.add(like);
             if (number != null) {
                 args.add(number);
+                // Номер объявления Дрома (задача 0274): те же цифры, но текстом.
+                args.add(codeArg);
             }
         }
         if (!withMissing) {
@@ -519,7 +524,7 @@ public class CatalogService {
             Map.entry("sideFr", "CASE p.side_fr WHEN 'FRONT' THEN 'Перед.'"
                     + " WHEN 'REAR' THEN 'Задн.' END"),
             Map.entry("sideLr", "CASE p.side_lr WHEN 'LEFT' THEN 'Лев.'"
-                    + " WHEN 'RIGHT' THEN 'Прав.' END"),
+                    + " WHEN 'RIGHT' THEN 'Прав.' WHEN 'BOTH' THEN 'Лев., прав.' END"),
             Map.entry("donor", "coalesce(d.legacy_code, d.public_code)"),
             Map.entry("price", "trim_scale(p.price)::text"),
             Map.entry("installation", "trim_scale(p.installation_price)::text"),
@@ -806,6 +811,7 @@ public class CatalogService {
                        p.price, p.installation_price, p.color, p.description, p.note,
                        p.manufacturer, p.marking, p.section, p.side_lr, p.side_fr,
                        p.qty_on_hand, p.is_published, p.barcode, p.legacy_code,
+                       p.drom_ad_number, p.authenticity,
                        p.video_url, p.text_block,
                        p.weight_kg, p.length_mm, p.width_mm, p.height_mm,
                        p.package_weight_kg, p.package_length_mm,
@@ -820,7 +826,7 @@ public class CatalogService {
                          WHERE ph2.part_id = p.id AND ph2.status = 'PROCESSED')         AS photo_count,
                        (SELECT o.raw_number FROM part_oem o
                          WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
-                       (SELECT string_agg(o.raw_number, ', ') FROM part_oem o
+                       (SELECT string_agg(o.raw_number, ', ' ORDER BY o.id) FROM part_oem o
                          WHERE o.part_id = p.id AND NOT o.is_primary) AS crosses,
                        -- Адрес полки. Код ячейки не доезжал до витрины вовсе:
                        -- на экране был виден только `section` — текстовое поле,
@@ -883,6 +889,8 @@ public class CatalogService {
                         (Boolean) rs.getObject("is_published"),
                         rs.getString("barcode"),
                         rs.getString("legacy_code"),
+                        rs.getString("drom_ad_number"),
+                        rs.getString("authenticity"),
                         rs.getString("video_url"), rs.getString("text_block"),
                         rs.getBigDecimal("weight_kg"),
                         dimensions(rs.getObject("length_mm", Integer.class),
@@ -1012,7 +1020,7 @@ public class CatalogService {
                        p.description, p.manufacturer, p.marking, p.section, p.note,
                        (SELECT o.raw_number FROM part_oem o
                          WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
-                       (SELECT string_agg(o.raw_number, ', ') FROM part_oem o
+                       (SELECT string_agg(o.raw_number, ', ' ORDER BY o.id) FROM part_oem o
                          WHERE o.part_id = p.id AND NOT o.is_primary) AS crosses,
                        pn.name AS part_name, p.is_published, p.barcode,
                        p.legacy_code, p.video_url, p.text_block,
@@ -1233,6 +1241,16 @@ public class CatalogService {
                        * чужой выгрузки, то есть внутреннее представление.
                        */
                       String legacyCode,
+                      /**
+                       * Номер объявления Дрома, только цифры (задача 0274): по нему
+                       * клиент сверяет перенесённую позицию со своим кабинетом.
+                       */
+                      String dromAdNumber,
+                      /**
+                       * Оригинальность словом площадки, дословно («Оригинал»):
+                       * приезжает файлом переноса с Дрома (задача 0277).
+                       */
+                      String authenticity,
                       String videoUrl, String textBlock,
                       BigDecimal weightKg, String dimensions, String packageDimensions,
                       BigDecimal packageWeightKg,
@@ -1248,7 +1266,7 @@ public class CatalogService {
                     color, description, note, manufacturer, marking, section, cellCode,
                     sideLr, sideFr,
                     qty, oem, crosses, photoKey, supply, equipment,
-                    partName, published, barcode, legacyCode,
+                    partName, published, barcode, legacyCode, dromAdNumber, authenticity,
                     videoUrl, textBlock, weightKg, dimensions, packageDimensions,
                     packageWeightKg, createdAt, updatedAt, updatedByName,
                     priceChangedAt, priceChangedByName, photoCount, found);

@@ -422,6 +422,11 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
       { kind: 'locked', key: 'sideLr', label: 'Левый / Правый',
         value: (r) => (r.sideLr === null ? '' : SIDE_LR[r.sideLr] ?? r.sideLr) },
       { kind: 'text', key: 'manufacturer', label: 'Производитель' },
+      // Слово клиента с карточки Дрома (задача 0277). С замком: правки
+      // оригинальности у сервера нет, а спрятанное поле читается как «этого
+      // у вас нет».
+      { kind: 'locked', key: 'authenticity', label: 'Оригинальность',
+        value: (r) => plainText(r.authenticity ?? null) },
       { kind: 'locked', key: 'oem', label: 'Номер производителя',
         value: (r) => plainText(r.oem) },
       { kind: 'locked', key: 'crosses', label: 'Кросс-номера',
@@ -471,11 +476,13 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
     fields: [
       { kind: 'locked', key: 'legacyCode', label: 'Старые данные',
         value: (r) => plainText(r.legacyCode) },
+      { kind: 'locked', key: 'dromAdNumber', label: 'Номер объявления Дрома',
+        value: (r) => plainText(r.dromAdNumber) },
     ],
   },
 ];
 
-const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.' };
+const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.', BOTH: 'лев., прав.' };
 const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.' };
 
 function plainText(value: string | number | null): string {

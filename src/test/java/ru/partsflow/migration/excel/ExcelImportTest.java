@@ -137,6 +137,8 @@ class ExcelImportTest extends PostgresTestBase {
      * <p>«Состояние», «Марка», «VIN» заголовок узнавал, разбор отдавал их
      * экрану среди сопоставленных — а импорт их отбрасывал молча. Владелец
      * видел «сопоставлено» и ждал, что состояние переедет (задача 0272).
+     * С задачи 0277 «Состояние» читается — и потому сопоставлено; «Марка»
+     * и «VIN» по-прежнему нет.
      */
     @Test
     @DisplayName("Разбор отдаёт сопоставленным только то, что импорт читает")
@@ -149,7 +151,7 @@ class ExcelImportTest extends PostgresTestBase {
 
         assertThat(preview.detected())
                 .as("узнанное, но не читаемое показано сопоставленным")
-                .containsOnlyKeys(Field.NAME, Field.QUANTITY);
+                .containsOnlyKeys(Field.NAME, Field.QUANTITY, Field.CONDITION);
         assertThat(preview.format()).as("обычная таблица принята за перенос с Дрома").isNull();
     }
 

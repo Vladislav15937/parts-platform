@@ -168,6 +168,14 @@ class DromTransferPhotoTest extends PostgresTestBase {
                 VALUES (?, ?, 'Разборка с Дрома: снимки', ?)""", REGISTRY_ID, TENANT, COMPANY);
         warehouseId = inTenant(() -> {
             jdbc.update("DELETE FROM part_photo_import");
+            // Те же пять объявлений грузятся в каждом тесте, а объявление, номер
+            // которого уже есть, второй позицией не заводится (задача 0274):
+            // без очистки следующий тест видел бы «уже у позиции» вместо загрузки.
+            jdbc.update("DELETE FROM import_run");
+            jdbc.update("DELETE FROM part_oem");
+            jdbc.update("DELETE FROM part_stock");
+            jdbc.update("DELETE FROM stock_movement");
+            jdbc.update("DELETE FROM part");
             if (jdbc.queryForList("SELECT id FROM tenant_member WHERE login = 'owner'").isEmpty()) {
                 jdbc.update("""
                         INSERT INTO tenant_member (display_name, role, login, password_hash)

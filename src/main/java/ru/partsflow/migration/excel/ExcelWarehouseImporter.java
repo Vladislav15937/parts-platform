@@ -142,14 +142,30 @@ public class ExcelWarehouseImporter {
         Tally report = new Tally();
         List<Row> batch = new ArrayList<>(BATCH_SIZE);
         boolean[] headerSeen = {false};
+        // Хвосты длинных значений файла переноса с Дрома (лист «Продолжение»):
+        // склеиваются с ячейкой до разбора строки, см. DromContinuation.
+        DromContinuation continuation = new DromContinuation();
+        boolean[] stitching = {false};
 
-        ExcelSheetReader.read(in, row -> {
+        String firstSheet = ExcelSheetReader.read(in, DromContinuation.SHEET, side -> {
+            continuation.accept(side);
+            return true;
+        }, row -> {
             if (!headerSeen[0]) {
                 headerSeen[0] = true;
+                // Сопоставление сюда приходит без заголовка — файл переноса
+                // узнаётся по самой первой строке.
+                stitching[0] = DromTransferFile.recognizes(row.cells()) && !continuation.isEmpty();
+                if (stitching[0]) {
+                    continuation.header(row.cells());
+                }
                 return true;
             }
             if (row.isEmpty()) {
                 return true;
+            }
+            if (stitching[0]) {
+                row = continuation.stitch(row);
             }
             Row parsed = parse(row, mapping, report);
             if (parsed != null) {
@@ -161,6 +177,9 @@ public class ExcelWarehouseImporter {
             return true;
         });
         flush(batch, warehouseId, cells, names, report);
+        if (stitching[0]) {
+            continuation.finish(firstSheet).forEach(p -> report.continuation(p.row(), p.reason()));
+        }
 
         // Движения записаны, применить их надо пачкой: тысяча строк — тысяча
         // обращений к базе, если делать это по одному. Остаток и статус
@@ -231,12 +250,14 @@ public class ExcelWarehouseImporter {
      */
     private List<Report.Skipped> skippedOf(String requestId) {
         return jdbc.query("""
-                        SELECT (e->>'row')::int AS row_number, e->>'reason' AS reason
+                        SELECT (e->>'row')::int AS row_number, e->>'reason' AS reason,
+                               e->>'sheet' AS sheet
                           FROM import_run r
                          CROSS JOIN LATERAL jsonb_array_elements(r.skipped) e
                          WHERE r.client_request_id = ?
                            AND e->>'reason' IS NOT NULL""",
-                (rs, i) -> new Report.Skipped(rs.getInt("row_number"), rs.getString("reason")),
+                (rs, i) -> new Report.Skipped(rs.getInt("row_number"), rs.getString("reason"),
+                        rs.getString("sheet")),
                 requestId);
     }
 
@@ -254,14 +275,40 @@ public class ExcelWarehouseImporter {
      */
     private static String skippedJson(Report report) {
         java.util.stream.Stream<String> skipped = report.skipped().stream()
-                .map(s -> "{\"row\":%d,\"reason\":\"%s\"}"
-                        .formatted(s.row(), s.reason().replace('"', '\'')));
+                .map(s -> "{\"row\":%d,\"reason\":\"%s\"%s}"
+                        .formatted(s.row(), jsonText(s.reason()), s.sheet() == null ? ""
+                                : ",\"sheet\":\"" + jsonText(s.sheet()) + "\""));
         java.util.stream.Stream<String> defaulted = report.quantityDefaulted() == 0
                 ? java.util.stream.Stream.empty()
                 : java.util.stream.Stream.of(
                         "{\"quantityDefaulted\":%d}".formatted(report.quantityDefaulted()));
         return java.util.stream.Stream.concat(skipped, defaulted)
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+    }
+
+    /**
+     * Причина как строка JSON без кавычек по краям.
+     *
+     * <p>Причина несёт текст из файла — «Наличие» дословно, название колонки
+     * с листа «Продолжение» (задача 0281), — и обратная косая или перевод
+     * строки в нём делали JSON битым: запись итога падала, и весь импорт
+     * откатывался отказом базы вместо названной строки. Кавычка по-прежнему
+     * меняется на апостроф — так было, и повтор отдаёт то же написание.
+     */
+    private static String jsonText(String reason) {
+        StringBuilder out = new StringBuilder(reason.length());
+        for (char c : reason.toCharArray()) {
+            if (c == '"') {
+                out.append('\'');
+            } else if (c == '\\') {
+                out.append("\\\\");
+            } else if (c < 0x20) {
+                out.append(String.format("\\u%04x", (int) c));
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
     }
 
 
@@ -307,14 +354,65 @@ public class ExcelWarehouseImporter {
             }
         }
 
+        String adNumber = dromAdNumber(mapping.value(row, Field.DROM_AD_NUMBER));
+        if (adNumber != null && !adNumber.matches("[0-9]+")) {
+            // Число в Excel («1,26E+08») или слово вместо номера: заводить позицию
+            // с номером объявления, который нельзя сверить с кабинетом, значит
+            // пообещать связь, которой нет. Строку пропускаем и называем, что в ней.
+            report.skip(row.number(), "номер объявления Дрома не из цифр: «"
+                    + shortened(adNumber) + "»");
+            return null;
+        }
+
+        // Поля карточки Дрома (задача 0277). Слово, которого разборщик
+        // не знает, останавливает строку и называется дословно: молча
+        // подставленная сторона или «б/у» — объявление клиента, переехавшее
+        // неправдой (почему не умолчание — в DromCardWords).
+        CardFields card;
+        try {
+            card = new CardFields(
+                    DromCardWords.condition(mapping.value(row, Field.CONDITION)),
+                    blankToNull(mapping.value(row, Field.MANUFACTURER)),
+                    blankToNull(mapping.value(row, Field.AUTHENTICITY)),
+                    substitutes(mapping.value(row, Field.OEM_SUBSTITUTES)),
+                    DromCardWords.lateral(mapping.value(row, Field.SIDE_LR)),
+                    DromCardWords.longitudinal(mapping.value(row, Field.SIDE_FR)),
+                    DromCardWords.vertical(mapping.value(row, Field.SIDE_UD)));
+        } catch (DromCardWords.Unknown unknown) {
+            report.skip(row.number(), unknown.getMessage());
+            return null;
+        }
+
         return new Row(
+                row.number(),
                 name,
                 number(mapping.value(row, Field.PRICE)),
                 quantity,
                 blankToNull(mapping.value(row, Field.CELL)),
                 blankToNull(mapping.value(row, Field.OEM)),
                 blankToNull(mapping.value(row, Field.NOTE)),
-                photoLinks(mapping.value(row, Field.PHOTOS)));
+                photoLinks(mapping.value(row, Field.PHOTOS)),
+                adNumber,
+                card);
+    }
+
+    /**
+     * Номера замен из ячейки — все и в том порядке, в каком стоят.
+     *
+     * <p>Договор пишет их через «, » (у амортизатора клиента их 55, и все
+     * обязаны доехать: по ним площадка находит деталь, когда спрашивают
+     * номером аналога). Точка с запятой и перевод строки тоже делят —
+     * таблица, поправленная руками, приносит и их. Повтор номера отбивает
+     * {@code part_oem_uk}, совпадение с главным — он же.
+     */
+    static List<String> substitutes(String cell) {
+        if (cell == null || cell.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(cell.split("[,;\\n\\r]"))
+                .map(String::strip)
+                .filter(number -> !number.isEmpty())
+                .toList();
     }
 
     /**
@@ -341,9 +439,38 @@ public class ExcelWarehouseImporter {
                 List.of(cell.strip().split("\\s+"))));
     }
 
+
+    /**
+     * Номер объявления из ячейки: края обрезаны, знак «№» перед числом
+     * снят (на карточке Дрома он стоит именно так), пусто — {@code null}.
+     * Пустая строка в базу не уйдёт никогда: колонка {@code NULL} либо цифры.
+     */
+    private static String dromAdNumber(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String value = raw.strip();
+        if (value.startsWith("№")) {
+            value = value.substring(1).strip();
+        }
+        return value.isEmpty() ? null : value;
+    }
+
+    private static String shortened(String value) {
+        return value.length() <= 30 ? value : value.substring(0, 30) + "…";
+    }
+
     private void flush(List<Row> batch, long warehouseId, Map<String, Long> cells,
                        Map<String, PartName> names, Tally report) {
         for (Row row : batch) {
+            // Объявление, которое у нас уже есть, второй позицией не заводится:
+            // повтор файла переноса не должен удваивать склад клиента. Ответ
+            // называет позицию публичным кодом — номер базы человеку ничего не даёт.
+            // Проверка стоит до работы со справочником и ячейками, чтобы
+            // пропущенная строка не оставляла за собой побочных заведений.
+            if (row.dromAd() != null && skipIfAdTaken(row, report)) {
+                continue;
+            }
             Long cellId = row.cell() == null ? null
                     : cells.computeIfAbsent(row.cell().toUpperCase(),
                             code -> createCell(warehouseId, row.cell()));
@@ -351,12 +478,31 @@ public class ExcelWarehouseImporter {
             PartName partName = names.computeIfAbsent(
                     row.name().toLowerCase(), key -> partNames.resolve(row.name(), null));
 
-            Long partId = jdbc.queryForObject("""
+            // ON CONFLICT — на одновременный повтор: проверка выше читает, а между
+            // чтением и вставкой встанет вторая загрузка. Индекс дубль не пустит
+            // в любом случае, но без этого человек получил бы «Операция нарушает
+            // целостность данных» на весь файл вместо названной позиции.
+            CardFields card = row.card();
+            List<Long> inserted = jdbc.queryForList("""
                     INSERT INTO part (category_id, part_name_id, title, price, note,
-                                      storage_cell_id)
-                    VALUES (?, ?, ?, ?, ?, ?) RETURNING id""",
+                                      storage_cell_id, drom_ad_number,
+                                      condition, manufacturer, authenticity,
+                                      side_lr, side_fr, side_ud)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (drom_ad_number) WHERE drom_ad_number IS NOT NULL
+                    DO NOTHING
+                    RETURNING id""",
                     Long.class, partName.getCategoryId(), partName.getId(),
-                    row.name(), row.price(), row.note(), cellId);
+                    row.name(), row.price(), row.note(), cellId, row.dromAd(),
+                    (card.condition() == null
+                            ? ru.partsflow.inventory.PartCondition.USED : card.condition()).name(),
+                    card.manufacturer(), card.authenticity(),
+                    nameOf(card.sideLr()), nameOf(card.sideFr()), nameOf(card.sideUd()));
+            if (inserted.isEmpty()) {
+                skipIfAdTaken(row, report);
+                continue;
+            }
+            Long partId = inserted.get(0);
 
             // Номер, от которого после приведения ничего не осталось, — не номер:
             // колонка normalized объявлена NOT NULL, и такая строка отвечает
@@ -368,6 +514,20 @@ public class ExcelWarehouseImporter {
                         VALUES (?, ?, ?, true)
                         ON CONFLICT DO NOTHING""",
                         partId, row.oem(), normalizedOem);
+            }
+            // Номера замен — не главные, по одному на строку и в порядке
+            // ячейки: прайс и карточка собирают их по порядку заведения.
+            // Номер, от которого после приведения ничего не осталось,
+            // отбрасывается — та же причина, что у главного выше.
+            for (String substitute : card.substitutes()) {
+                String normalized = ru.partsflow.catalog.OemNumbers.normalize(substitute);
+                if (normalized != null) {
+                    jdbc.update("""
+                            INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
+                            VALUES (?, ?, ?, false)
+                            ON CONFLICT DO NOTHING""",
+                            partId, substitute, normalized);
+                }
             }
 
             // Снимки только ставятся в очередь: качает их отдельный проход
@@ -399,6 +559,23 @@ public class ExcelWarehouseImporter {
             report.imported++;
         }
         batch.clear();
+    }
+
+    /**
+     * Занят ли номер объявления; если да — строка пропущена и названа.
+     *
+     * @return {@code true}, если позиция с этим номером уже есть
+     */
+    private boolean skipIfAdTaken(Row row, Tally report) {
+        List<String> holder = jdbc.queryForList(
+                "SELECT public_code FROM part WHERE drom_ad_number = ?",
+                String.class, row.dromAd());
+        if (holder.isEmpty()) {
+            return false;
+        }
+        report.skip(row.number(), "объявление № " + row.dromAd()
+                + " уже у позиции " + holder.get(0));
+        return true;
     }
 
     private Long createCell(long warehouseId, String code) {
@@ -443,12 +620,33 @@ public class ExcelWarehouseImporter {
         }
     }
 
+    private static String nameOf(Enum<?> value) {
+        return value == null ? null : value.name();
+    }
+
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.strip();
     }
 
-    private record Row(String name, BigDecimal price, BigDecimal quantity,
-                       String cell, String oem, String note, List<String> photos) {
+    private record Row(int number, String name, BigDecimal price, BigDecimal quantity,
+                       String cell, String oem, String note, List<String> photos,
+                       String dromAd, CardFields card) {
+    }
+
+    /**
+     * Поля карточки Дрома (задача 0277): состояние, производитель,
+     * оригинальность, номера замен, три стороны. Отдельной записью, а не
+     * семью полями {@link Row}: читаются и пишутся они одним куском.
+     *
+     * @param condition {@code null} — в файле не сказано, и позиция получает
+     *                  умолчание колонки «б/у», как любая без слова
+     */
+    private record CardFields(ru.partsflow.inventory.PartCondition condition,
+                              String manufacturer, String authenticity,
+                              List<String> substitutes,
+                              ru.partsflow.inventory.LateralSide sideLr,
+                              ru.partsflow.inventory.LongitudinalSide sideFr,
+                              ru.partsflow.inventory.VerticalSide sideUd) {
     }
 
     /**
@@ -476,7 +674,18 @@ public class ExcelWarehouseImporter {
      */
     public record Report(int imported, List<Skipped> skipped, int quantityDefaulted) {
 
-        public record Skipped(int row, String reason) {
+        /**
+         * @param sheet лист, к которому относится строка; {@code null} — первый.
+         *              Повреждения листа «Продолжение» несут его имя: номер
+         *              строки у них — строка того листа, и экран показывает их
+         *              отдельно и целиком, а не в общем списке под пределом
+         *              (задача 0281)
+         */
+        public record Skipped(int row, String reason, String sheet) {
+
+            public Skipped(int row, String reason) {
+                this(row, reason, null);
+            }
         }
     }
 
@@ -494,6 +703,16 @@ public class ExcelWarehouseImporter {
             if (skipped.size() < 200) {
                 skipped.add(new Skipped(rowNumber, reason));
             }
+        }
+
+        /**
+         * Сказать без предела в двести. Повреждения листа «Продолжение»
+         * дописываются после всех строк первого листа, и под пределом они
+         * пропадали бы ровно у того файла, где пропусков и так много, — то есть
+         * значение было бы обрезано молча. Их не больше, чем строк того листа.
+         */
+        void continuation(int rowNumber, String reason) {
+            skipped.add(new Skipped(rowNumber, reason, DromContinuation.SHEET));
         }
 
         Report toReport() {

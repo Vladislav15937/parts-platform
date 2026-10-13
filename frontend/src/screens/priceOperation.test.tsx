@@ -248,7 +248,7 @@ function row(): CatalogRow {
     manufacturer: null, marking: null, section: null, cellCode: null,
     sideLr: null, sideFr: null,
     qty: 1, oem: null, crosses: null, photoUrl: null, supply: null, equipment: null,
-    partName: null, published: true, barcode: null, legacyCode: null,
+    partName: null, published: true, barcode: null, legacyCode: null, dromAdNumber: null,
     videoUrl: null, textBlock: null, weightKg: null, dimensions: null,
     packageDimensions: null, packageWeightKg: null, createdAt: null, updatedAt: null,
     updatedByName: null, priceChangedAt: null, priceChangedByName: null,

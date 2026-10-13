@@ -86,17 +86,9 @@ class DromTransferFileTest extends PostgresTestBase {
 
     /** Колонки договора, которые импорт ещё не читает, — и кто их прочтёт. */
     private static final Map<String, String> PENDING = Map.ofEntries(
-            Map.entry("Номер объявления Дрома", "0274"),
             Map.entry("Ссылка", "0274"),
             Map.entry("Вид детали", "0278"),
             Map.entry("Раздел", "0278"),
-            Map.entry("Состояние", "0277"),
-            Map.entry("Оригинальность", "0277"),
-            Map.entry("Производитель", "0277"),
-            Map.entry("Номера замен", "0277"),
-            Map.entry("Сторона", "0277"),
-            Map.entry("Положение", "0277"),
-            Map.entry("Верх/низ", "0277"),
             Map.entry("Применимость", "0278"),
             Map.entry("Описание", "0275"),
             Map.entry("Гарантия", "0276"),
@@ -109,8 +101,18 @@ class DromTransferFileTest extends PostgresTestBase {
         void verify(DromTransferFileTest test, long partId, String fileValue);
     }
 
-    /** Колонки, которые импорт читает, — и чем это доказано. */
-    private static final Map<String, Check> CHECKS = Map.of(
+    /**
+     * Колонки, которые импорт читает, — и чем это доказано.
+     *
+     * <p>Поля карточки Дрома (задача 0277) проверяет {@link DromCardFieldsTest#CHECKS}
+     * и подмешивается сюда ({@link #withCardChecks}): одна проверка на колонку,
+     * а не две, разъехавшиеся бы на первой правке.
+     */
+    private static final Map<String, Check> CHECKS = withCardChecks(Map.of(
+            "Номер объявления Дрома", (t, part, value) -> assertThat(t.column(part,
+                    "SELECT drom_ad_number FROM part WHERE id = ?", String.class))
+                    .as("номер объявления из файла не доехал до позиции")
+                    .isEqualTo(value),
             "Наименование", (t, part, value) -> assertThat(t.column(part,
                     "SELECT title FROM part WHERE id = ?", String.class))
                     .as("заголовок клиента доехал не дословно")
@@ -141,7 +143,15 @@ class DromTransferFileTest extends PostgresTestBase {
                     SELECT url FROM part_photo_import WHERE part_id = ? ORDER BY sort_order""",
                     String.class, part)))
                     .as("снимки не встали в очередь переноса все и в порядке галереи")
-                    .containsExactlyElementsOf(List.of(value.split("\n"))));
+                    .containsExactlyElementsOf(List.of(value.split("\n")))));
+
+    private static Map<String, Check> withCardChecks(Map<String, Check> own) {
+        Map<String, Check> all = new HashMap<>(own);
+        DromCardFieldsTest.CHECKS.forEach((title, card) -> all.put(title,
+                (t, part, value) -> card.verify((sql, id) -> t.inTenant(
+                        () -> t.jdbc.queryForList(sql, String.class, id)), part, value)));
+        return Map.copyOf(all);
+    }
 
     @Autowired
     private MockMvc mvc;
@@ -167,6 +177,14 @@ class DromTransferFileTest extends PostgresTestBase {
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
                 VALUES (?, ?, 'Разборка с Дрома', ?)""", REGISTRY_ID, TENANT, COMPANY);
         warehouseId = inTenant(() -> {
+            // Образец грузится в каждом тесте этого класса, а объявление, номер
+            // которого уже есть, второй позицией не заводится (задача 0274):
+            // без очистки второй тест видел бы «уже у позиции» вместо загрузки.
+            jdbc.update("DELETE FROM import_run");
+            jdbc.update("DELETE FROM part_oem");
+            jdbc.update("DELETE FROM part_stock");
+            jdbc.update("DELETE FROM stock_movement");
+            jdbc.update("DELETE FROM part");
             if (jdbc.queryForList("SELECT id FROM tenant_member WHERE login = 'owner'").isEmpty()) {
                 jdbc.update("""
                         INSERT INTO tenant_member (display_name, role, login, password_hash)

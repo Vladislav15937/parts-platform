@@ -1099,7 +1099,8 @@ public class PartService {
                 + "                           || coalesce(marking, ''))\n"
                 + "                       @@ plainto_tsquery('russian', ?)" + only + "\n"
                 + "          UNION " + oem
-                + (byNumber ? PartNumberQuery.UNION_BRANCH + only : "") + ")";
+                + (byNumber ? PartNumberQuery.UNION_BRANCH + only
+                        + PartNumberQuery.DROM_AD_BRANCH + only : "") + ")";
     }
 
     /**
@@ -1167,6 +1168,8 @@ public class PartService {
                 PartNumberQuery.publicCodeArg(text, number != null), like, text, like));
         if (number != null) {
             args.add(number);
+            // Номер объявления Дрома (задача 0274): те же цифры, но текстом.
+            args.add(args.get(0));
         }
         return new Match(textMatch(false, number != null), textMatch(true, number != null),
                 args, text, number);
@@ -1462,7 +1465,9 @@ public class PartService {
         }
 
         if (notBlank(filter.side())) {
-            where.append("\n AND p.side_lr = ?");
+            // Деталь «на обе стороны» — ответ и на «левую», и на «правую»:
+            // спросивший левый амортизатор о паре обязан узнать (задача 0277).
+            where.append("\n AND p.side_lr IN (?, 'BOTH')");
             args.add(sideOf(filter.side()));
         }
         if (notBlank(filter.position())) {
