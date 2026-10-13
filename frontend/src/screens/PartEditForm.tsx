@@ -331,7 +331,8 @@ function input(
       );
     case 'area':
       return (
-        <textarea aria-label={field.label} rows={2} autoFocus value={form[field.key]}
+        <textarea aria-label={field.label} rows={BLOCK_KEYS.includes(field.key) ? 6 : 2}
+                  autoFocus value={form[field.key]}
                   onChange={(e) => set(field.key, e.target.value)} />
       );
     case 'condition':
@@ -368,6 +369,9 @@ function input(
       );
   }
 }
+
+/** Блоки карточки Дрома: длинные тексты в несколько строк, и поле под них выше обычного. */
+const BLOCK_KEYS: string[] = ['warranty', 'pickup', 'deliveryPayment'];
 
 /** Ключи черновика, в которых лежит строка: всё, кроме флажка и ячейки. */
 type StringKey = { [K in keyof Draft]: Draft[K] extends string ? K : never }[keyof Draft];
@@ -408,6 +412,11 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
       { kind: 'num', key: 'costPrice', label: 'Себестоимость', unit: '₽' },
       { kind: 'num', key: 'installationPrice', label: 'Цена установки', unit: '₽' },
       { kind: 'area', key: 'description', label: 'Комментарий' },
+      // Блоки карточки Дрома (задача 0285): слова Дрома, по ним клиент узнаёт
+      // своё объявление, — а не имена колонок файла переноса.
+      { kind: 'area', key: 'warranty', label: 'Гарантия и условия возврата' },
+      { kind: 'area', key: 'pickup', label: 'Самовывоз' },
+      { kind: 'area', key: 'deliveryPayment', label: 'Доставка и оплата' },
       { kind: 'text', key: 'note', label: 'Заметка' },
       { kind: 'text', key: 'barcode', label: 'Ст. баркод' },
     ],
@@ -522,6 +531,9 @@ export interface Draft {
   packageWeightKg: string;
   storageCellId: number | null;
   published: boolean;
+  warranty: string;
+  pickup: string;
+  deliveryPayment: string;
 }
 
 export function draftOf(card: PartEdit): Draft {
@@ -553,6 +565,10 @@ export function draftOf(card: PartEdit): Draft {
     // её сохранение не должно.
     storageCellId: card.storageCellId,
     published: card.published,
+    // Старый ответ сервера блоков не несёт: `undefined` читается пустым.
+    warranty: card.warranty ?? '',
+    pickup: card.pickup ?? '',
+    deliveryPayment: card.deliveryPayment ?? '',
   };
 }
 
@@ -586,6 +602,12 @@ export function toEdit(form: Draft): PartEdit {
     packageWeightKg: number(form.packageWeightKg),
     storageCellId: form.storageCellId,
     published: form.published,
+    // Дословно, без обрезки краёв и без «пусто — null»: клиент не должен терять
+    // слова, а очистка блока — пустая строка (сервер приводит её к NULL).
+    // `null` сервер читает как «ключа не было» и блок не трогает.
+    warranty: form.warranty,
+    pickup: form.pickup,
+    deliveryPayment: form.deliveryPayment,
   };
 }
 

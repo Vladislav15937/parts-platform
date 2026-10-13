@@ -965,6 +965,15 @@ export interface PartEdit {
   packageWeightKg: number | null;
   storageCellId: number | null;
   published: boolean;
+  /**
+   * Блоки карточки Дрома — тексты клиента дословно (задача 0285). С сервера
+   * приходят `null`, когда блока нет; уезжают строкой, пустой при очистке:
+   * `null` или отсутствующий ключ сервер читает как «не трогать» (так вкладка,
+   * открытая до выкладки, не стирает то, о чём её форма не знает).
+   */
+  warranty: string | null;
+  pickup: string | null;
+  deliveryPayment: string | null;
 }
 
 /**

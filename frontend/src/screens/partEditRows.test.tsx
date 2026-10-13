@@ -206,6 +206,78 @@ describe('правка карточки по одному полю', () => {
 });
 
 /**
+ * Блоки карточки Дрома в форме правки (задача 0285): три поля словами Дрома
+ * рядом с «Комментарием», многострочные, перевод строки виден.
+ */
+describe('блоки карточки Дрома', () => {
+  let sent: Array<Record<string, unknown>>;
+
+  beforeEach(() => {
+    sent = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') !== 'GET') {
+        sent.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+        return json({ price: 27000 });
+      }
+      return json(card());
+    }));
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('показаны подписями Дрома, с замком не стоят и сохраняют переводы строк', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Самовывоз')).toBeTruthy());
+
+    for (const label of ['Гарантия и условия возврата', 'Самовывоз', 'Доставка и оплата']) {
+      expect(line(label).textContent, `у «${label}» стоит замок`).not.toContain('🔒');
+      expect(screen.getByLabelText(`Изменить: ${label}`), `«${label}» не правится`).toBeTruthy();
+    }
+    expect(line('Самовывоз').textContent).toContain('Самовывоз — улица Георгия Исакова 9');
+    // Перевод строки лежит в тексте строки, а CSS оставляет его видимым.
+    const delivery = line('Доставка и оплата').querySelector('.card-edit__value')!;
+    expect(delivery.textContent).toBe('Доставка по городу — 300 р.\n\nОплата при получении');
+  });
+
+  it('изменённый блок уезжает тем же PUT, остальные блоки — как были', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Самовывоз')).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
+    expect((screen.getByLabelText('Самовывоз') as HTMLTextAreaElement).tagName)
+      .toBe('TEXTAREA');
+    fireEvent.change(screen.getByLabelText('Самовывоз'),
+      { target: { value: 'Самовывоз — склад на Ленина 5' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['pickup']).toBe('Самовывоз — склад на Ленина 5');
+    expect(sent[0]!['warranty']).toBe('Обговаривается индивидуально');
+    expect(sent[0]!['deliveryPayment'])
+      .toBe('Доставка по городу — 300 р.\n\nОплата при получении');
+  });
+
+  it('стёртый руками блок уезжает пустой строкой, а не null', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Гарантия и условия возврата'))
+      .toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText('Изменить: Гарантия и условия возврата'));
+    fireEvent.change(screen.getByLabelText('Гарантия и условия возврата'), { target: { value: '' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['warranty'], 'null сервер прочитал бы как «не трогать»').toBe('');
+  });
+});
+
+/**
  * Склонение — по пяти числам, а не по одному: вторая десятка ломает
  * правило «по последней цифре», и «Изменено 11 параметр» владелец увидел бы
  * ровно тогда, когда правит много.
@@ -246,6 +318,9 @@ function card(): Record<string, unknown> {
     widthMm: null, heightMm: null, packageLengthMm: null, packageWidthMm: null,
     packageHeightMm: null, packageWeightKg: null, storageCellId: null,
     published: true,
+    warranty: 'Обговаривается индивидуально',
+    pickup: 'Самовывоз — улица Георгия Исакова 9',
+    deliveryPayment: 'Доставка по городу — 300 р.\n\nОплата при получении',
   };
 }
 
