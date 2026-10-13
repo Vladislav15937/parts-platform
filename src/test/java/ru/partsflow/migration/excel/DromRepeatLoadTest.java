@@ -451,6 +451,96 @@ class DromRepeatLoadTest extends PostgresTestBase {
         assertThat(contentByAd()).as("итог шести загрузок не тот, что у одной").isEqualTo(reference);
     }
 
+    /**
+     * Пункт 7, вторая половина: шесть одновременных повторов, которым есть что
+     * дозаполнять. Тест выше грузит с нуля, и дозаполнять там нечего, поэтому
+     * «дозаполнено 0» он подтвердил бы и у записи без условия в {@code WHERE}.
+     * Здесь первая загрузка идёт без цены, производителя и состояния, а потом
+     * шесть потоков грузят полный файл: каждое поле обязано насчитаться
+     * дозаполненным ровно один раз на позицию, и проигравшие не называют
+     * расхождением значение, которое записал победитель.
+     */
+    @RepeatedTest(3)
+    @DisplayName("Шесть одновременных повторов дозаполняют каждое поле один раз и не выдумывают расхождений")
+    void concurrentRefillCountsOnce() throws Exception {
+        List<Map<String, String>> rows = generatedRows(20);
+        byte[] full = file(rows, Set.of(), null);
+        load(full);
+        Map<String, Map<String, Object>> reference = contentByAd();
+        inTenant(() -> {
+            clean();
+            return null;
+        });
+        load(file(rows, Set.of("Цена", "Производитель", "Состояние"), null));
+
+        List<JsonNode> reports = concurrently(6, full);
+
+        Map<String, Integer> filled = new TreeMap<>();
+        int refilled = 0;
+        int unchanged = 0;
+        List<String> discrepancies = new ArrayList<>();
+        for (JsonNode report : reports) {
+            assertThat(report.path("imported").asInt()).isZero();
+            JsonNode repeat = report.path("repeat");
+            refilled += repeat.path("refilled").asInt();
+            unchanged += repeat.path("unchanged").asInt();
+            repeat.path("fields").forEach(f ->
+                    filled.merge(f.path("field").asText(), f.path("positions").asInt(), Integer::sum));
+            repeat.path("discrepancies").forEach(d -> discrepancies.add(d.path("text").asText()));
+        }
+        assertThat(discrepancies)
+                .as("проигравший повтор назвал расхождением значение, записанное победителем")
+                .isEmpty();
+        assertThat(filled)
+                .as("поле насчитано дозаполненным не один раз на позицию")
+                .isEqualTo(Map.of("Состояние", 20, "Цена", 20, "Производитель", 20));
+        assertThat(refilled).isEqualTo(20);
+        assertThat(unchanged).isEqualTo(5 * 20);
+        assertThat(contentByAd()).as("итог шести повторов не тот, что у одной загрузки")
+                .isEqualTo(reference);
+    }
+
+    private List<Map<String, String>> generatedRows(int count) {
+        List<Map<String, String>> rows = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            Map<String, String> row = new LinkedHashMap<>(i % 2 == 0 ? rowA() : rowB());
+            row.put("Номер объявления Дрома", String.valueOf(330000000 + i));
+            row.put("Наименование", "Деталь повтора " + i);
+            row.put("Фото", "https://example.test/r" + i + "/1.jpg");
+            row.put("Номер", "ROEM-" + i);
+            row.put("Номера замен", "RSUB-" + i);
+            rows.add(row);
+        }
+        // Наименования заранее — см. concurrentLoadsEndLikeOne.
+        inTenant(() -> {
+            rows.forEach(row -> partNames.resolve(row.get("Наименование"), null));
+            return null;
+        });
+        return rows;
+    }
+
+    private List<JsonNode> concurrently(int threads, byte[] file) throws Exception {
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        try {
+            var go = new java.util.concurrent.CountDownLatch(1);
+            List<java.util.concurrent.Future<JsonNode>> runs = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                runs.add(pool.submit(() -> {
+                    go.await();
+                    return load(file);
+                }));
+            }
+            go.countDown();
+            List<JsonNode> reports = new ArrayList<>();
+            for (var run : runs) {
+                reports.add(run.get());
+            }
+            return reports;
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     // --- Пункт 8: отчёт — предел показа назван, полный счёт в числе ---
 
     @Test

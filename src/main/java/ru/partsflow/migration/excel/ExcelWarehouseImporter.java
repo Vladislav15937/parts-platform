@@ -814,7 +814,12 @@ public class ExcelWarehouseImporter {
                 report.filled(rule.label(), 0);
                 return true;
             }
-            return false;
+            // Ноль строк: поле заполнили между нашим чтением и записью.
+            // Прочитанное раньше уже неправда — сравниваем с тем, что есть.
+            current = reread(partId, rule.column());
+            if (same(current, fromFile)) {
+                return false;
+            }
         }
         report.discrepancy(row.dromAd(), rule.label(), words(fromFile), words(current));
         return false;
@@ -853,8 +858,22 @@ public class ExcelWarehouseImporter {
             report.filled(label, 0);
             return true;
         }
+        // Ноль строк — либо правка человека, либо одновременная загрузка уже
+        // записала то же значение. Расхождение называется по тому, что лежит
+        // сейчас, а не по прочитанному до записи: иначе проигравший повтор
+        // сказал бы «у позиции б/у» про позицию, где уже стоит значение файла.
+        current = (String) reread(partId, "condition");
+        if (fromFile.name().equals(current)) {
+            return false;
+        }
         report.discrepancy(row.dromAd(), label, fromFile.title(), words(current));
         return false;
+    }
+
+    /** Колонка позиции сейчас; имя колонки — из списков этого класса, не из запроса. */
+    private Object reread(long partId, String column) {
+        return jdbc.queryForObject("SELECT " + column + " FROM part WHERE id = ?",
+                (rs, i) -> rs.getObject(1), partId);
     }
 
     /** Главный номер производителя: нет у позиции — заводится, есть другой — расхождение. */
@@ -1214,18 +1233,27 @@ public class ExcelWarehouseImporter {
         void discrepancy(String ad, String field, String inFile, String atPart) {
             discrepancyCount++;
             if (discrepancies.size() < DISCREPANCY_LIMIT) {
-                discrepancies.add(new Report.Discrepancy(ad, field, inFile, atPart,
+                // Значения — те же восемьдесят знаков, что в строке: двести пар
+                // полных описаний раздули бы и ответ, и import_run, а экран
+                // показывает только строку.
+                String fileBrief = brief(inFile);
+                String partBrief = brief(atPart);
+                discrepancies.add(new Report.Discrepancy(ad, field, fileBrief, partBrief,
                         "№ %s, поле «%s»: в файле %s, у позиции %s (оставлено как есть)"
-                                .formatted(ad, field, quoted(inFile), quoted(atPart))));
+                                .formatted(ad, field, quoted(fileBrief), quoted(partBrief))));
             }
         }
 
-        private static String quoted(String value) {
+        private static String brief(String value) {
             if (value == null || value.isEmpty()) {
-                return "пусто";
+                return null;
             }
             String line = value.replaceAll("\\s+", " ").strip();
-            return "«" + (line.length() <= 80 ? line : line.substring(0, 80) + "…") + "»";
+            return line.length() <= 80 ? line : line.substring(0, 80) + "…";
+        }
+
+        private static String quoted(String value) {
+            return value == null ? "пусто" : "«" + value + "»";
         }
 
         Report.Repeat repeat() {
