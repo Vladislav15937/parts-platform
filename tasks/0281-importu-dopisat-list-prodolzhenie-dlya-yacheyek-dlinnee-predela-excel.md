@@ -4,7 +4,7 @@ title: Файл переноса с Дрома: значение длиннее 
 status: в работе
 assignee: coder (ветка feature/0281)
 source: разведка 13.10.2026 (полный файл клиента собран парсером app-drom-price-parser, ветка drom-migration-export, коммит 9402e36; 2 897 строк)
-pr: —
+pr: 408
 ---
 
 ## Что человек сможет
