@@ -177,6 +177,37 @@ class DromContinuationImportTest extends PostgresTestBase {
                         "https://static.baza.drom.ru/drom/2_default");
     }
 
+    /**
+     * Пропусков первого листа больше предела в двести — повреждение листа
+     * «Продолжение» всё равно названо: иначе значение обрезано молча ровно
+     * у того файла, где пропусков и так много.
+     */
+    @Test
+    @DisplayName("Повреждение листа названо и тогда, когда пропусков первого листа больше двухсот")
+    void damageIsNamedPastTheSkipLimit() throws Exception {
+        byte[] file = withContinuation(sample(), "https://static.baza.drom.ru/drom/1_default\n",
+                List.<String[]>of(new String[] {firstAd(), "Фото", "2", "https://static.baza.drom.ru/drom/3_default"}));
+        try (XSSFWorkbook book = new XSSFWorkbook(new ByteArrayInputStream(file));
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            Sheet sheet = book.getSheetAt(0);
+            int next = sheet.getLastRowNum() + 1;
+            for (int i = 0; i < 210; i++) {
+                // Без наименования — пропуск «пустое наименование».
+                sheet.createRow(next + i).createCell(0).setCellValue(String.valueOf(200_000_000 + i));
+            }
+            book.write(out);
+            file = out.toByteArray();
+        }
+
+        JsonNode report = load(file);
+
+        List<String> reasons = new ArrayList<>();
+        report.path("skipped").forEach(s -> reasons.add(s.path("reason").asText()));
+        assertThat(reasons).as("повреждение листа пропало за пределом пропусков")
+                .contains("Лист «Продолжение»: у объявления № " + firstAd() + " колонка «Фото» — "
+                        + "нет части 1 из 2; значение взято до разрыва");
+    }
+
     // --- файл ---
 
     private static byte[] sample() throws Exception {

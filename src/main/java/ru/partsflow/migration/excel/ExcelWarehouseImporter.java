@@ -178,7 +178,7 @@ public class ExcelWarehouseImporter {
         });
         flush(batch, warehouseId, cells, names, report);
         if (stitching[0]) {
-            continuation.finish(firstSheet).forEach(p -> report.skip(p.row(), p.reason()));
+            continuation.finish(firstSheet).forEach(p -> report.named(p.row(), p.reason()));
         }
 
         // Движения записаны, применить их надо пачкой: тысяча строк — тысяча
@@ -609,6 +609,16 @@ public class ExcelWarehouseImporter {
             if (skipped.size() < 200) {
                 skipped.add(new Skipped(rowNumber, reason));
             }
+        }
+
+        /**
+         * Сказать без предела в двести. Повреждения листа «Продолжение»
+         * дописываются после всех строк первого листа, и под пределом они
+         * пропадали бы ровно у того файла, где пропусков и так много, — то есть
+         * значение было бы обрезано молча. Их не больше, чем строк того листа.
+         */
+        void named(int rowNumber, String reason) {
+            skipped.add(new Skipped(rowNumber, reason));
         }
 
         Report toReport() {
