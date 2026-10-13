@@ -821,7 +821,7 @@ public class ExcelWarehouseImporter {
                 return false;
             }
         }
-        report.discrepancy(row.dromAd(), rule.label(), words(fromFile), words(current));
+        report.discrepancy(row.dromAd(), rule.label(), words(fromFile, rule.column()), words(current, rule.column()));
         return false;
     }
 
@@ -866,7 +866,7 @@ public class ExcelWarehouseImporter {
         if (fromFile.name().equals(current)) {
             return false;
         }
-        report.discrepancy(row.dromAd(), label, fromFile.title(), words(current));
+        report.discrepancy(row.dromAd(), label, fromFile.title(), words(current, "condition"));
         return false;
     }
 
@@ -1007,8 +1007,11 @@ public class ExcelWarehouseImporter {
         return java.util.Objects.equals(current, fromFile);
     }
 
-    /** Значение для отчёта словами человека: код стороны — словом Дрома, число — без хвоста нулей. */
-    private static String words(Object value) {
+    /**
+     * Значение для отчёта словами человека: код стороны — словом Дрома, число — без хвоста нулей.
+     * Колонка нужна, потому что {@code BOTH} у трёх осей называется по-разному (задача 0283).
+     */
+    private static String words(Object value, String column) {
         if (value == null) {
             return null;
         }
@@ -1016,7 +1019,7 @@ public class ExcelWarehouseImporter {
             return plain(number);
         }
         String text = value.toString();
-        String side = DromCardWords.word(text);
+        String side = DromCardWords.word(column, text);
         if (side != null) {
             return side;
         }

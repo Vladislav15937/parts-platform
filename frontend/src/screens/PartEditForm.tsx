@@ -483,7 +483,7 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
 ];
 
 const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.', BOTH: 'лев., прав.' };
-const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.' };
+const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.', BOTH: 'перед., задн.' };
 
 function plainText(value: string | number | null): string {
   return value === null || value === undefined ? '' : String(value);

@@ -1471,7 +1471,9 @@ public class PartService {
             args.add(sideOf(filter.side()));
         }
         if (notBlank(filter.position())) {
-            where.append("\n AND p.side_fr = ?");
+            // Как со стороной выше: деталь «Переднее, Заднее» — ответ и
+            // на «переднюю», и на «заднюю» (задача 0283).
+            where.append("\n AND p.side_fr IN (?, 'BOTH')");
             args.add(positionOf(filter.position()));
         }
         if (filter.warehouseId() != null) {

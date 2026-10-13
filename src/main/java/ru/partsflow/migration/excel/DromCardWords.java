@@ -58,42 +58,22 @@ final class DromCardWords {
      * («Левая, Правая» у амортизатора № 135618913, «цена за пару»).
      */
     static LateralSide lateral(String raw) {
-        String word = blankToNull(raw);
-        if (word == null) {
-            return null;
-        }
-        Set<LateralSide> sides = EnumSet.noneOf(LateralSide.class);
-        for (String part : word.split("[,;/]")) {
-            if (part.isBlank()) {
-                continue;
-            }
-            LateralSide side = switch (normalize(part)) {
-                case "левая", "левый", "левое", "лево", "лев.", "лев" -> LateralSide.LEFT;
-                case "правая", "правый", "правое", "право", "прав.", "прав" -> LateralSide.RIGHT;
-                default -> null;
-            };
-            if (side == null) {
-                throw new Unknown("сторона не распознана", word);
-            }
-            sides.add(side);
-        }
-        if (sides.isEmpty()) {
-            throw new Unknown("сторона не распознана", word);
-        }
-        return sides.size() == 2 ? LateralSide.BOTH : sides.iterator().next();
+        return sides(raw, "сторона не распознана", LateralSide.class, LateralSide.BOTH, part ->
+                switch (part) {
+                    case "левая", "левый", "левое", "лево", "лев.", "лев" -> LateralSide.LEFT;
+                    case "правая", "правый", "правое", "право", "прав.", "прав" -> LateralSide.RIGHT;
+                    default -> null;
+                });
     }
 
-    /** «Переднее», «Заднее» — средний род на карточке Дрома. */
+    /** «Переднее», «Заднее» — средний род на карточке Дрома; обе через запятую — {@code BOTH} (задача 0283). */
     static LongitudinalSide longitudinal(String raw) {
-        String word = blankToNull(raw);
-        if (word == null) {
-            return null;
-        }
-        return switch (normalize(word)) {
-            case "переднее", "передний", "передняя", "перед", "перед." -> LongitudinalSide.FRONT;
-            case "заднее", "задний", "задняя", "зад", "задн." -> LongitudinalSide.REAR;
-            default -> throw new Unknown("положение не распознано", word);
-        };
+        return sides(raw, "положение не распознано", LongitudinalSide.class, LongitudinalSide.BOTH, part ->
+                switch (part) {
+                    case "переднее", "передний", "передняя", "перед", "перед." -> LongitudinalSide.FRONT;
+                    case "заднее", "задний", "задняя", "зад", "задн." -> LongitudinalSide.REAR;
+                    default -> null;
+                });
     }
 
     /**
@@ -103,31 +83,73 @@ final class DromCardWords {
      * а остановит строку со словами.
      */
     static VerticalSide vertical(String raw) {
+        return sides(raw, "верх/низ не распознан", VerticalSide.class, VerticalSide.BOTH, part ->
+                switch (part) {
+                    case "верхнее", "верхний", "верхняя", "верх", "верх." -> VerticalSide.UPPER;
+                    case "нижнее", "нижний", "нижняя", "низ", "ниж." -> VerticalSide.LOWER;
+                    default -> null;
+                });
+    }
+
+    /**
+     * Разбор списка сторон одной оси — один на все три, а не три копии цикла.
+     *
+     * <p>Слова через {@code , ; /} в любом порядке; две разные стороны дают
+     * {@code both}, повтор одного слова — эту одну сторону. Слово другой оси
+     * или неизвестное останавливает строку со всем значением дословно: сторона,
+     * подставленная вместо непонятной, — это объявление, переехавшее неправдой.
+     * Пустое значение — {@code null}; значение из одних разделителей — не слово.
+     */
+    private static <S extends Enum<S>> S sides(String raw, String what, Class<S> axis, S both,
+                                               java.util.function.Function<String, S> parse) {
         String word = blankToNull(raw);
         if (word == null) {
             return null;
         }
-        return switch (normalize(word)) {
-            case "верхнее", "верхний", "верхняя", "верх", "верх." -> VerticalSide.UPPER;
-            case "нижнее", "нижний", "нижняя", "низ", "ниж." -> VerticalSide.LOWER;
-            default -> throw new Unknown("верх/низ не распознан", word);
-        };
+        Set<S> found = EnumSet.noneOf(axis);
+        for (String part : word.split("[,;/]")) {
+            if (part.isBlank()) {
+                continue;
+            }
+            S side = parse.apply(normalize(part));
+            if (side == null) {
+                throw new Unknown(what, word);
+            }
+            found.add(side);
+        }
+        if (found.isEmpty()) {
+            throw new Unknown(what, word);
+        }
+        return found.size() == 2 ? both : found.iterator().next();
     }
 
     /**
      * Код стороны словом карточки Дрома — для отчёта повторной загрузки
      * (задача 0282): «у позиции LEFT» — это внутреннее представление, а не
-     * то, что владелец видел у себя в объявлении. Не код стороны — {@code null}.
+     * то, что владелец видел у себя в объявлении. {@code BOTH} у каждой из
+     * трёх осей называется своей парой, поэтому нужна колонка ({@code side_lr},
+     * {@code side_fr}, {@code side_ud}). Не сторона — {@code null}.
      */
-    static String word(String code) {
-        return switch (code) {
-            case "LEFT" -> "Левая";
-            case "RIGHT" -> "Правая";
-            case "BOTH" -> "Левая, Правая";
-            case "FRONT" -> "Переднее";
-            case "REAR" -> "Заднее";
-            case "UPPER" -> "Верхнее";
-            case "LOWER" -> "Нижнее";
+    static String word(String column, String code) {
+        return switch (column) {
+            case "side_lr" -> switch (code) {
+                case "LEFT" -> "Левая";
+                case "RIGHT" -> "Правая";
+                case "BOTH" -> "Левая, Правая";
+                default -> null;
+            };
+            case "side_fr" -> switch (code) {
+                case "FRONT" -> "Переднее";
+                case "REAR" -> "Заднее";
+                case "BOTH" -> "Переднее, Заднее";
+                default -> null;
+            };
+            case "side_ud" -> switch (code) {
+                case "UPPER" -> "Верхнее";
+                case "LOWER" -> "Нижнее";
+                case "BOTH" -> "Верхнее, Нижнее";
+                default -> null;
+            };
             default -> null;
         };
     }

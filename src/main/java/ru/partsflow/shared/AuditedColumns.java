@@ -255,8 +255,13 @@ public final class AuditedColumns {
     private static final Map<String, String> GRADES = QualityGrade.titles();
 
     private static final Map<String, String> SIDES = Map.of(
-            "LEFT", "Левый", "RIGHT", "Правый", "BOTH", "Левый и правый", "FRONT", "Передний",
+            "LEFT", "Левый", "RIGHT", "Правый", "FRONT", "Передний",
             "REAR", "Задний", "UPPER", "Верхний", "LOWER", "Нижний");
+
+    /** «Обе» зависит от оси: одно слово на три колонки назвало бы заднюю деталь «левой и правой». */
+    private static final Map<String, String> BOTH_SIDES = Map.of(
+            "side_lr", "Левый и правый", "side_fr", "Передний и задний",
+            "side_ud", "Верхний и нижний");
 
     private static final Map<String, String> LINES = Map.of(
             "PART", "Запчасть", "TYRE", "Шина", "DISC", "Диск", "WHEEL", "Колесо");
@@ -294,7 +299,8 @@ public final class AuditedColumns {
         return switch (column) {
             case "condition" -> CONDITIONS.getOrDefault(raw, raw);
             case "quality_grade" -> GRADES.getOrDefault(raw, raw);
-            case "side_lr", "side_fr", "side_ud" -> SIDES.getOrDefault(raw, raw);
+            case "side_lr", "side_fr", "side_ud" -> "BOTH".equals(raw)
+                    ? BOTH_SIDES.get(column) : SIDES.getOrDefault(raw, raw);
             case "product_line" -> LINES.getOrDefault(raw, raw);
             case "payment_type" -> PAYMENT_TYPES.getOrDefault(raw, raw);
             case "cost_type" -> COST_TYPES.getOrDefault(raw, raw);

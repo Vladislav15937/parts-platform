@@ -1070,3 +1070,10 @@ NULL, а не в LEFT или RIGHT — одна сторона была бы н�
 разворот) и откат самого changeset'а на непустой схеме с позицией `BOTH`
 и с оригинальностью — без `UPDATE` разворот встаёт на «check constraint
 "part_side_lr_ck" … is violated by some row», с ним проходит.
+
+## `tenant/079` — «обе» у продольной и вертикальной осей (задача 0283, 14 октября 2026)
+
+Тот же expand, что `tenant/078` для поперечной оси: `BOTH` в `part_side_fr_ck`
+и `part_side_ud_ck`. Откат уводит `BOTH` в NULL перед возвратом ограничений;
+проверен на непустой таблице обеими сторонами (без `UPDATE` — «is violated by
+some row», с ним проходит), `db/verify.sh` и `db/verify-rollback.py` зелёные.

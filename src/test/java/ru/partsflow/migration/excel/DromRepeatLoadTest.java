@@ -248,6 +248,36 @@ class DromRepeatLoadTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("«Переднее, Заднее» и «Верхнее, Нижнее» заводятся строкой с фото, а в отчёте называются своей парой (задача 0283)")
+    void bothSidesLoadAndAreNamedByTheirOwnAxis() throws Exception {
+        Map<String, String> both = rowA();
+        both.put("Положение", "Переднее, Заднее");
+        both.put("Верх/низ", "Нижнее, Верхнее");
+        byte[] file = file(List.of(both, rowB()), Set.of(), null);
+
+        JsonNode first = load(file);
+        assertThat(first.path("imported").asInt()).isEqualTo(2);
+        assertThat(first.path("skipped")).isEmpty();
+        long a = partOf(AD_A);
+        assertThat(column(a, "side_fr", String.class)).isEqualTo("BOTH");
+        assertThat(column(a, "side_ud", String.class)).isEqualTo("BOTH");
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_photo_import WHERE part_id = ?", Integer.class, a)))
+                .as("фото строки с парой сторон не встали в очередь")
+                .isEqualTo(2);
+
+        // Расхождение: у позиции одна сторона, в файле пара. Слово пары у каждой оси своё.
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET side_fr = 'FRONT', side_ud = 'UPPER' WHERE id = ?", a));
+        JsonNode repeat = load(file).path("repeat");
+        assertThat(repeat.path("discrepancies").findValuesAsText("text")).containsExactly(
+                "№ 300000001, поле «Положение»: в файле «Переднее, Заднее», "
+                        + "у позиции «Переднее» (оставлено как есть)",
+                "№ 300000001, поле «Верх/низ»: в файле «Верхнее, Нижнее», "
+                        + "у позиции «Верхнее» (оставлено как есть)");
+    }
+
+    @Test
     @DisplayName("Состояние, которое человек правил, повтор не трогает, даже если оно снова «б/у»")
     void editedConditionIsNotRefilled() throws Exception {
         List<Map<String, String>> rows = List.of(rowA(), rowB());

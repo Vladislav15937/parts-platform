@@ -56,6 +56,20 @@ class DromPriceWriterTest {
         }
 
         @Test
+        @DisplayName("Сторона «обе» по каждой оси пишется парой слов и в описании «и»-словами (задача 0283)")
+        void writesBothSidesOnEveryAxis() throws Exception {
+            String xml = write(offerSides(LateralSide.BOTH, LongitudinalSide.BOTH, VerticalSide.BOTH));
+
+            assertThat(xml)
+                    .contains("<lr>лево,право</lr>")
+                    .contains("<fr>перед,зад</fr>")
+                    .contains("<ud>верх,низ</ud>")
+                    .contains("левая и правая")
+                    .contains("передняя и задняя")
+                    .contains("верхняя и нижняя");
+        }
+
+        @Test
         @DisplayName("Применимость едет отдельными тегами, а не в наименовании")
         void writesApplicability() throws Exception {
             // Эталон Дрома для «Автозапчастей» просит это первым: по марке
@@ -583,6 +597,18 @@ class DromPriceWriterTest {
                 placement, base.photos(), base.carBrand(), base.carModel(), base.bodyCode(),
                 base.engineCode(), base.year(), base.fromDonor(), base.textBlock(),
                 base.videoUrl(), base.installationNote(), base.expectedNote());
+    }
+
+    private static DromOffer offerSides(LateralSide lr, LongitudinalSide fr, VerticalSide ud) {
+        DromOffer base = offer();
+        return new DromOffer(
+                base.orderCode(), base.name(), base.partKind(), null,
+                base.price(), base.availableQty(), base.condition(), base.manufacturer(),
+                base.oemNumber(), base.analogNumbers(), lr, fr, ud, base.color(),
+                base.marking(), base.placement(), base.photos(), base.carBrand(),
+                base.carModel(), base.bodyCode(), base.engineCode(), base.year(),
+                base.fromDonor(), base.textBlock(), base.videoUrl(), base.installationNote(),
+                base.expectedNote());
     }
 
     private String write(DromOffer... offers) throws XMLStreamException {

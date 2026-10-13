@@ -95,7 +95,7 @@ public class CatalogService {
     }
 
     private static final Map<String, String> SIDE_FR =
-            Map.of("FRONT", "Перед.", "REAR", "Задн.");
+            Map.of("FRONT", "Перед.", "REAR", "Задн.", "BOTH", "Перед., задн.");
 
     private static final Map<String, String> SIDE_LR =
             Map.of("LEFT", "Лев.", "RIGHT", "Прав.", "BOTH", "Лев., прав.");
@@ -522,7 +522,7 @@ public class CatalogService {
             Map.entry("engine", "d.engine_code"),
             Map.entry("year", "trim_scale(d.year)::text"),
             Map.entry("sideFr", "CASE p.side_fr WHEN 'FRONT' THEN 'Перед.'"
-                    + " WHEN 'REAR' THEN 'Задн.' END"),
+                    + " WHEN 'REAR' THEN 'Задн.' WHEN 'BOTH' THEN 'Перед., задн.' END"),
             Map.entry("sideLr", "CASE p.side_lr WHEN 'LEFT' THEN 'Лев.'"
                     + " WHEN 'RIGHT' THEN 'Прав.' WHEN 'BOTH' THEN 'Лев., прав.' END"),
             Map.entry("donor", "coalesce(d.legacy_code, d.public_code)"),

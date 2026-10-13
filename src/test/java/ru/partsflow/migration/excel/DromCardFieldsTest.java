@@ -102,9 +102,9 @@ class DromCardFieldsTest extends PostgresTestBase {
     private static final Map<String, String> LATERAL = Map.of(
             "Левая", "LEFT", "Правая", "RIGHT", "Левая, Правая", "BOTH");
     private static final Map<String, String> LONGITUDINAL = Map.of(
-            "Переднее", "FRONT", "Заднее", "REAR");
+            "Переднее", "FRONT", "Заднее", "REAR", "Переднее, Заднее", "BOTH");
     private static final Map<String, String> VERTICAL = Map.of(
-            "Верхнее", "UPPER", "Нижнее", "LOWER");
+            "Верхнее", "UPPER", "Нижнее", "LOWER", "Верхнее, Нижнее", "BOTH");
 
     /** Колонки задачи 0277 — и чем доказано, что значение доехало. */
     static final Map<String, CardCheck> CHECKS = Map.of(
@@ -191,8 +191,9 @@ class DromCardFieldsTest extends PostgresTestBase {
      */
     private static byte[] covering() throws Exception {
         return edited(sample(), Map.of(
-                3, Map.of("Состояние", "Новый", "Сторона", "Левая, Правая"),
-                4, Map.of("Верх/низ", "Нижнее")));
+                3, Map.of("Состояние", "Новый", "Сторона", "Левая, Правая",
+                        "Положение", "Переднее, Заднее"),
+                4, Map.of("Верх/низ", "Верхнее, Нижнее")));
     }
 
     /**
@@ -245,6 +246,17 @@ class DromCardFieldsTest extends PostgresTestBase {
         assertThat(offerOf(price, door))
                 .as("одиночная сторона уезжает прежним словом")
                 .contains("<lr>право</lr>");
+
+        // Задача 0283: «Переднее, Заднее» и «Верхнее, Нижнее» — тем же путём.
+        long panel = partOf("Панель приборов Toyota Land Cruiser Prado 120");
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT side_fr FROM part WHERE id = ?", String.class, connector))).isEqualTo("BOTH");
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT side_ud FROM part WHERE id = ?", String.class, panel))).isEqualTo("BOTH");
+        assertThat(offerOf(price, connector)).contains("<fr>перед,зад</fr>");
+        assertThat(offerOf(price, panel)).contains("<ud>верх,низ</ud>");
+        assertThat(positionTitles("Разъем", "FRONT")).contains("Разъем 6 контактов Toyota");
+        assertThat(positionTitles("Разъем", "REAR")).contains("Разъем 6 контактов Toyota");
 
         // Продавцу, спросившему левый, пара — ответ; правая дверь — нет.
         assertThat(stockTitles("Разъем", "LEFT")).contains("Разъем 6 контактов Toyota");
@@ -432,6 +444,16 @@ class DromCardFieldsTest extends PostgresTestBase {
     private List<String> stockTitles(String query, String side) throws Exception {
         String body = mvc.perform(get("/api/parts/stock").session(login())
                         .param("q", query).param("side", side))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        List<String> titles = new ArrayList<>();
+        json.readTree(body).path("rows").forEach(r -> titles.add(r.path("title").asText()));
+        return titles;
+    }
+
+    private List<String> positionTitles(String query, String position) throws Exception {
+        String body = mvc.perform(get("/api/parts/stock").session(login())
+                        .param("q", query).param("position", position))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         List<String> titles = new ArrayList<>();
