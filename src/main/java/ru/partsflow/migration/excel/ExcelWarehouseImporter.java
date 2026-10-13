@@ -1132,10 +1132,10 @@ public class ExcelWarehouseImporter {
          * {@code import_run}, чтобы повтор по тому же ключу отдал те же числа.
          *
          * @param refilled         позиций, у которых хоть что-то дозаполнено
-         * @param fields           по полям, в порядке {@link #REFILLED}
+         * @param fields           по полям, в порядке {@link ExcelWarehouseImporter#REFILLED}
          * @param unchanged        номер совпал, нового в файле нет
          * @param discrepancyCount расхождений всего; в списке — не больше
-         *                         {@link #DISCREPANCY_LIMIT}
+         *                         {@link ExcelWarehouseImporter#DISCREPANCY_LIMIT}
          * @param withoutAdNumber  заведено строк без номера объявления — их
          *                         повтор файла не узнает и заведёт снова
          */
