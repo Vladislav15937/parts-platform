@@ -289,6 +289,22 @@ class DromTransferPhotoTest extends PostgresTestBase {
                 "SELECT count(*) FROM part_photo WHERE part_id = ?", Long.class, brokenPart)))
                 .as("битая ссылка остановила перенос остальных снимков карточки")
                 .isEqualTo(broken.expected().size() - 1L);
+
+        // Задача 0282: повтор файла после настоящего переноса. Строки очереди
+        // остаются DONE с photo_id, поэтому уже скачанный снимок по тому же
+        // адресу второй раз в очередь не встаёт и в карточке не задваивается.
+        long queuedBefore = queueSize();
+        long storedBefore = inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_photo", Long.class));
+        JsonNode again = load(file, preview(file).path("detected"), UUID.randomUUID().toString());
+        assertThat(again.path("imported").asInt()).isZero();
+        assertThat(queueSize())
+                .as("повтор файла после переноса поставил скачанные снимки в очередь заново")
+                .isEqualTo(queuedBefore);
+        assertThat(photoPass().path("pending").asLong()).isZero();
+        assertThat(inTenant(() -> jdbc.queryForObject("SELECT count(*) FROM part_photo", Long.class)))
+                .as("повтор файла после переноса задвоил снимки в карточках")
+                .isEqualTo(storedBefore);
     }
 
     /**

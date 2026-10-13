@@ -155,7 +155,7 @@ describe('файл переноса с Дрома', () => {
     fireEvent.change(warehouse, { target: { value: '7' } });
     fireEvent.click(screen.getByText('Загрузить склад'));
 
-    await waitFor(() => expect(screen.getByText(/Загружено позиций: 1/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Заведено новых: 1/)).toBeTruthy());
     expect(screen.getByText(/Ссылки на снимки поставлены в очередь/)).toBeTruthy();
     // Счётчик, оставшийся на «ждёт 0», говорит владельцу «переносить нечего» —
     // так у клиента прежней системы и осталось восемь снимков из ста девяноста тысяч.

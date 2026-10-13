@@ -25,6 +25,7 @@ import type {
   WheelImportResult,
   PhotoProgress,
   Preview,
+  RepeatReport,
   Report,
 } from '../import/warehouseImport';
 import type { Reference } from '../reference/reference';
@@ -243,7 +244,7 @@ export function ImportScreen({ reference, canImport }: Props) {
       {report !== null && (
         <>
           <hr />
-          <h3>Загружено позиций: {report.imported}</h3>
+          <h3>Заведено новых: {count(report.imported)}</h3>
           {(report.quantityDefaulted ?? 0) > 0 && (
             <p className="note">
               По 1 шт. заведено позиций: {count(report.quantityDefaulted ?? 0)} —
@@ -251,8 +252,10 @@ export function ImportScreen({ reference, canImport }: Props) {
               остаток.
             </p>
           )}
+          <RepeatSummary repeat={report.repeat} />
           <SkippedReport skipped={report.skipped} />
-          {columns.PHOTOS !== undefined && report.imported > 0 && (
+          {columns.PHOTOS !== undefined
+            && (report.imported > 0 || refilledLinks(report.repeat) > 0) && (
             <p className="note">
               Ссылки на снимки поставлены в очередь. Сами файлы переносятся
               ниже, в «Фотографиях», кнопкой «Перенести все».
@@ -741,6 +744,68 @@ function describe(cause: unknown, fallback: string): string {
  * перенесено не на сто процентов. Номер строки у них — строка их листа,
  * поэтому лист назван рядом с номером.
  */
+/** Сколько ссылок на снимки поставил в очередь повтор файла. */
+function refilledLinks(repeat: RepeatReport | undefined): number {
+  return (repeat?.fields ?? []).reduce((sum, f) => sum + f.links, 0);
+}
+
+/**
+ * Что повторная загрузка сделала с уже перенесёнными позициями (задача 0282).
+ *
+ * <p>Говорит о каждом исходе отдельной строкой, а не одним «готово»: владелец
+ * грузит файл второй раз ради новых колонок, и «заведено новых: 0» без
+ * «дозаполнено» читалось бы как «ничего не произошло». Расхождения — то, что
+ * повтор намеренно оставил как есть, — перечислены, и обрезка списка названа.
+ */
+function RepeatSummary({ repeat }: { repeat: RepeatReport | undefined }) {
+  if (repeat === undefined) {
+    return null;
+  }
+  const shown = repeat.discrepancies.length;
+  return (
+    <>
+      {repeat.refilled > 0 && (
+        <p className="note">
+          Дозаполнено: {count(repeat.refilled)}{' '}
+          {plural(repeat.refilled, 'позиция', 'позиции', 'позиций')}. По полям:{' '}
+          {repeat.fields
+            .map((f) => `${f.field} — ${count(f.positions)}`
+              + (f.links > 0
+                ? ` (${count(f.links)} ${plural(f.links, 'ссылка', 'ссылки', 'ссылок')})`
+                : ''))
+            .join(', ')}
+          .
+        </p>
+      )}
+      {repeat.unchanged > 0 && (
+        <p className="note">Без изменений: {count(repeat.unchanged)}</p>
+      )}
+      {repeat.withoutAdNumber > 0 && (
+        <p className="note">
+          Без номера объявления: {count(repeat.withoutAdNumber)} — заведены как новые.
+          Повторная загрузка их не узнает и заведёт ещё раз.
+        </p>
+      )}
+      {repeat.discrepancyCount > 0 && (
+        <>
+          <p className="note">
+            Расхождений: {count(repeat.discrepancyCount)}
+            {shown < repeat.discrepancyCount
+              && ` — показано ${count(shown)} из ${count(repeat.discrepancyCount)}`}
+            . Заполненное у позиции повтор не меняет: правьте в карточке, если файл прав.
+          </p>
+          <ul className="suggestions">
+            {/* Ключ — место в списке: у позиции бывает несколько расхождений. */}
+            {repeat.discrepancies.map((d, index) => (
+              <li key={index}>{d.text}</li>
+            ))}
+          </ul>
+        </>
+      )}
+    </>
+  );
+}
+
 function SkippedReport({ skipped }: { skipped: Report['skipped'] }) {
   const { rows, sheets } = splitSkipped(skipped);
   return (

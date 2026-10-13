@@ -63,7 +63,7 @@ describe('таблица без количества', () => {
     chooseWarehouse();
     fireEvent.click(loadButton());
 
-    await waitFor(() => expect(screen.getByText(/Загружено позиций: 2/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Заведено новых: 2/)).toBeTruthy());
     expect(screen.getByText(/По 1 шт\. заведено позиций: 2/)).toBeTruthy();
   });
 
@@ -74,7 +74,7 @@ describe('таблица без количества', () => {
     chooseWarehouse();
     fireEvent.click(loadButton());
 
-    await waitFor(() => expect(screen.getByText(/Загружено позиций: 2/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Заведено новых: 2/)).toBeTruthy());
     expect(screen.queryByText(/По 1 шт\. заведено/)).toBeNull();
   });
 });
