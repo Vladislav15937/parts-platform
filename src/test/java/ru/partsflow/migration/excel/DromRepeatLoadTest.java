@@ -272,6 +272,30 @@ class DromRepeatLoadTest extends PostgresTestBase {
                         + "(оставлено как есть)");
     }
 
+    @Test
+    @DisplayName("Длинные значения в расхождении — первые 80 знаков и «…», и в полях, и в строке")
+    void longDiscrepancyValuesAreCut() throws Exception {
+        String fileText = "Ф".repeat(100);
+        String partText = "П".repeat(120);
+        Map<String, String> longA = new LinkedHashMap<>(rowA());
+        longA.put("Описание", fileText);
+        byte[] file = file(List.of(longA), Set.of(), null);
+        load(file);
+        long a = partOf(AD_A);
+        inTenant(() -> jdbc.update("UPDATE part SET description = ? WHERE id = ?", partText, a));
+
+        JsonNode found = load(file).path("repeat").path("discrepancies");
+
+        assertThat(found.size()).isEqualTo(1);
+        JsonNode only = found.get(0);
+        String fileCut = "Ф".repeat(80) + "…";
+        String partCut = "П".repeat(80) + "…";
+        assertThat(only.path("inFile").asText()).as("значение файла не обрезано").isEqualTo(fileCut);
+        assertThat(only.path("atPart").asText()).as("значение позиции не обрезано").isEqualTo(partCut);
+        assertThat(only.path("text").asText()).isEqualTo("№ " + AD_A + ", поле «Описание»: в файле «"
+                + fileCut + "», у позиции «" + partCut + "» (оставлено как есть)");
+    }
+
     // --- Пункт 3: остаток и движение ---
 
     @Test
