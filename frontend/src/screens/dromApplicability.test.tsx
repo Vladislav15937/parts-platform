@@ -72,6 +72,51 @@ describe('применимость из карточек Дрома', () => {
   });
 });
 
+describe('итог разложения в отчёте загрузки файла', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/import/excel/preview')) {
+        return json({
+          header: ['Номер объявления Дрома', 'Наименование', 'Применимость'],
+          detected: { DROM_AD_NUMBER: 0, NAME: 1, APPLICABILITY: 2 },
+          missingRequired: [], rows: [['300000001', 'Фара', 'Toyota 4Runner — …']],
+          format: 'DROM_TRANSFER',
+        });
+      }
+      if (url.endsWith('/api/import/excel')) {
+        return json({
+          imported: 2897, skipped: [], quantityDefaulted: 0,
+          applicability: { parts: 2875, added: 39872, refined: 0, removed: 0, misses: [
+            { reason: 'модель не найдена у марки', items: 1603, names: ['Toyota Dyna'], unique: 1 },
+          ] },
+        });
+      }
+      return json({ done: 0, failed: 0, pending: 0, total: 0, broken: 0 });
+    }));
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('загрузка называет, что разложено и что не легло', async () => {
+    render(<ImportScreen reference={reference()} canImport />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(['xlsx'], 'perenos.xlsx')] } });
+    await waitFor(() => expect(document.querySelector('table.preview')).toBeTruthy());
+    const select = [...document.querySelectorAll('select')]
+      .find((s) => s.querySelector('option')?.textContent === '— выберите склад —');
+    fireEvent.change(select!, { target: { value: '7' } });
+    fireEvent.click(screen.getByText('Загрузить склад'));
+
+    await waitFor(() => expect(text()).toContain('Применимость из блока «Подходит»'));
+    expect(text()).toContain('Строк применимости заведено: 39 872');
+    expect(text()).toContain('модель не найдена у марки: Toyota Dyna');
+  });
+});
+
 /** Текст экрана одной строкой: числа приходят с неразрывными пробелами разрядов. */
 function text(): string {
   return (document.body.textContent ?? '').replace(/\s+/g, ' ');

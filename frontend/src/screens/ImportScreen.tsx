@@ -255,6 +255,12 @@ export function ImportScreen({ reference, canImport }: Props) {
             </p>
           )}
           <RepeatSummary repeat={report.repeat} />
+          {report.applicability != null && (
+            <>
+              <h4>Применимость из блока «Подходит»</h4>
+              <DromFitsReport report={report.applicability} />
+            </>
+          )}
           <SkippedReport skipped={report.skipped} />
           {columns.PHOTOS !== undefined
             && (report.imported > 0 || refilledLinks(report.repeat) > 0) && (

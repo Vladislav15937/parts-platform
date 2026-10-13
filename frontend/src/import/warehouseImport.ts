@@ -121,6 +121,12 @@ export interface Report {
    * Ответ прежней версии поля не несёт — читать через `?.` и `?? 0`.
    */
   repeat?: RepeatReport;
+  /**
+   * Итог разложения «Подходит» в справочную применимость у позиций, которым
+   * загрузка записала текст (задача 0289). Нет таких позиций или ответ прежней
+   * версии — поля нет либо `null`.
+   */
+  applicability?: DromApplicabilityReport | null;
 }
 
 export interface RepeatReport {
