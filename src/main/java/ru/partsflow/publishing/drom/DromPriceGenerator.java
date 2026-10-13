@@ -118,6 +118,7 @@ public class DromPriceGenerator {
                    s.order_days_to,
                    p.condition,
                    p.manufacturer,
+                   p.authenticity,
                    p.color,
                    p.marking,
                    p.side_lr,
@@ -187,7 +188,10 @@ public class DromPriceGenerator {
               LEFT JOIN part_oem primary_oem
                      ON primary_oem.part_id = p.id AND primary_oem.is_primary
               LEFT JOIN (
-                  SELECT part_id, string_agg(raw_number, ',') AS numbers
+                  -- В порядке заведения: файл переноса с Дрома кладёт номера
+                  -- замен в порядке страницы клиента (задача 0277), и без
+                  -- ORDER BY порядок в прайсе выбирал бы планировщик.
+                  SELECT part_id, string_agg(raw_number, ',' ORDER BY id) AS numbers
                     FROM part_oem
                    WHERE NOT is_primary
                    GROUP BY part_id
@@ -873,7 +877,8 @@ public class DromPriceGenerator {
                     settings.installationNoteFor(rs.getBigDecimal("installation_price")),
                     // «Ожидается поступление»: решение выгрузки, а не позиции,
                     // и без него товар в пути в файл не попадает вовсе.
-                    settings.expectedNoteFor(rs.getBoolean("in_transit")));
+                    settings.expectedNoteFor(rs.getBoolean("in_transit")),
+                    rs.getString("authenticity"));
         }
 
         /**

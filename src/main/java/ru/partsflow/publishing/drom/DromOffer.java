@@ -54,6 +54,9 @@ import java.util.List;
  *                     про деталь, а это — про то, когда её забрать.
  *                     {@code null} — товар уже на складе либо выгрузка
  *                     ожидаемый товар не выгружает
+ * @param authenticity оригинальность словом площадки, дословно («Оригинал»),
+ *                     как её написал клиент на карточке Дрома (задача 0277).
+ *                     {@code null} — не указана, и тег не пишется
  */
 public record DromOffer(
         String orderCode,
@@ -82,7 +85,31 @@ public record DromOffer(
         String textBlock,
         String videoUrl,
         String installationNote,
-        String expectedNote) {
+        String expectedNote,
+        String authenticity) {
+
+    /**
+     * Позиция без оригинальности — прежний состав, до задачи 0277.
+     *
+     * <p>Оригинальность приезжает только с переносом с Дрома; у позиции,
+     * заведённой приёмкой или переносом из прежней системы, её нет,
+     * и всякое место, собирающее предложение руками, писало бы {@code null}.
+     */
+    public DromOffer(String orderCode, String name, String partKind, String description,
+                     BigDecimal price, BigDecimal availableQty, PartCondition condition,
+                     String manufacturer, String oemNumber, List<String> analogNumbers,
+                     LateralSide lateralSide, LongitudinalSide longitudinalSide,
+                     VerticalSide verticalSide, String color, String marking,
+                     Placement placement, List<String> photos, String carBrand,
+                     String carModel, String bodyCode, String engineCode, Integer year,
+                     boolean fromDonor, String textBlock, String videoUrl,
+                     String installationNote, String expectedNote) {
+        this(orderCode, name, partKind, description, price, availableQty, condition,
+                manufacturer, oemNumber, analogNumbers, lateralSide, longitudinalSide,
+                verticalSide, color, marking, placement, photos, carBrand, carModel,
+                bodyCode, engineCode, year, fromDonor, textBlock, videoUrl,
+                installationNote, expectedNote, null);
+    }
 
     public boolean isAvailable() {
         return availableQty != null && availableQty.signum() > 0;

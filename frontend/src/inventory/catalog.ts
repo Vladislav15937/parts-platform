@@ -70,6 +70,13 @@ export interface CatalogRow {
   legacyCode: string | null;
   /** Номер объявления Дрома, только цифры: клиент сверяет по нему кабинет. */
   dromAdNumber: string | null;
+  /**
+   * Оригинальность словом площадки, дословно («Оригинал»): приезжает файлом
+   * переноса с Дрома (задача 0277). Необязательное в типе, потому что строку
+   * собирают и экраны, у которых её нет (колесо), и фикстуры тестов; сервер
+   * присылает поле всегда — читать через `?? null`.
+   */
+  authenticity?: string | null;
   videoUrl: string | null;
   textBlock: string | null;
   weightKg: number | null;
@@ -384,7 +391,7 @@ export interface Column {
   image?: (row: CatalogRow) => string | null;
 }
 
-const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.' };
+const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.', BOTH: 'лев., прав.' };
 const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.' };
 /**
  * Состояние детали — словарь один на весь фронтенд.

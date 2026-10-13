@@ -255,7 +255,7 @@ public final class AuditedColumns {
     private static final Map<String, String> GRADES = QualityGrade.titles();
 
     private static final Map<String, String> SIDES = Map.of(
-            "LEFT", "Левый", "RIGHT", "Правый", "FRONT", "Передний",
+            "LEFT", "Левый", "RIGHT", "Правый", "BOTH", "Левый и правый", "FRONT", "Передний",
             "REAR", "Задний", "UPPER", "Верхний", "LOWER", "Нижний");
 
     private static final Map<String, String> LINES = Map.of(
