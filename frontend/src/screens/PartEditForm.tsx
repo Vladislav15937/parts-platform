@@ -8,6 +8,7 @@ import {
 import { generationOf } from '../inventory/partCard';
 import { count, plural } from '../ui/plural';
 import { useMounted } from '../ui/useMounted';
+import { ApplicabilityView } from './ApplicabilityView';
 
 /**
  * Правка карточки товара — списком «подпись — значение», а не формой
@@ -269,6 +270,9 @@ export function changedNote(changed: number): string {
 /** Значение строки текстом — то, что видно, пока строку не раскрыли. */
 function shownValue(field: Field, form: Draft, row: CatalogRow): JSX.Element | string {
   const value = field.kind === 'locked' ? field.value(row) : draftText(field, form);
+  if (field.kind === 'fits' && value.trim() !== '') {
+    return <ApplicabilityView text={value} />;
+  }
   // «Не заполнено», а не прочерк: прочерк читается как «не знаем»,
   // а тут мы знаем — поле просто пустое, и заполнить его можно отсюда же.
   return value === '' ? <span className="muted">не заполнено</span> : value;
@@ -329,6 +333,11 @@ function input(
                value={form[field.key]}
                onChange={(e) => set(field.key, e.target.value.replace(',', '.'))} />
       );
+    case 'fits':
+      return (
+        <textarea aria-label={field.label} rows={10} autoFocus value={form[field.key]}
+                  onChange={(e) => set(field.key, e.target.value)} />
+      );
     case 'area':
       return (
         <textarea aria-label={field.label} rows={BLOCK_KEYS.includes(field.key) ? 6 : 2}
@@ -382,7 +391,7 @@ type Field =
   | { kind: 'condition'; key: 'condition'; label: string }
   | { kind: 'grade'; key: 'qualityGrade'; label: string }
   | { kind: 'check'; key: 'published'; label: string }
-  | { kind: 'text' | 'area'; key: StringKey; label: string }
+  | { kind: 'text' | 'area' | 'fits'; key: StringKey; label: string }
   | { kind: 'num'; key: StringKey; label: string; unit?: string };
 
 /**
@@ -422,6 +431,8 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
       // с остальными словами объявления, а не с адресом полки.
       { kind: 'text', key: 'dromKind', label: 'Вид детали' },
       { kind: 'text', key: 'dromSection', label: 'Раздел' },
+      // Слово Дрома; текст как у клиента, показ — блоками, правка — как есть (задача 0287).
+      { kind: 'fits', key: 'applicability', label: 'Подходит' },
       { kind: 'text', key: 'note', label: 'Заметка' },
       { kind: 'text', key: 'barcode', label: 'Ст. баркод' },
     ],
@@ -541,6 +552,7 @@ export interface Draft {
   deliveryPayment: string;
   dromKind: string;
   dromSection: string;
+  applicability: string;
 }
 
 export function draftOf(card: PartEdit): Draft {
@@ -578,6 +590,7 @@ export function draftOf(card: PartEdit): Draft {
     deliveryPayment: card.deliveryPayment ?? '',
     dromKind: card.dromKind ?? '',
     dromSection: card.dromSection ?? '',
+    applicability: card.applicability ?? '',
   };
 }
 
@@ -619,6 +632,7 @@ export function toEdit(form: Draft): PartEdit {
     deliveryPayment: form.deliveryPayment,
     dromKind: form.dromKind,
     dromSection: form.dromSection,
+    applicability: form.applicability,
   };
 }
 

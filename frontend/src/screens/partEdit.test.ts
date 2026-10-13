@@ -17,6 +17,7 @@ function card(overrides: Partial<PartEdit> = {}): PartEdit {
     deliveryPayment: 'Доставка по городу — 300 р.\n\nОплата при получении',
     dromKind: 'Карданный вал Lexus GX400',
     dromSection: 'Автозапчасти → Трансмиссия',
+    applicability: 'Toyota 4Runner | 5 поколение (2009–2013) | TRN285, GRN285\nДля двигателей | 1GR-FE',
     ...overrides,
   };
 }
@@ -72,6 +73,14 @@ describe('форма правки карточки', () => {
     // Очистка — пустая строка, а не null (null сервер читает как «не трогать»).
     expect(toEdit({ ...draftOf(card()), dromKind: '' }).dromKind).toBe('');
     expect(draftOf(card({ dromKind: null })).dromKind).toBe('');
+  });
+
+  it('«Подходит» уезжает дословно — с « | », переводами строк и краями, очистка — пустая строка (задача 0287)', () => {
+    const text = ' Lexus GX400 | GRJ158 | \nДля двигателей | 1GR-FE  ';
+    expect(toEdit({ ...draftOf(card()), applicability: text }).applicability).toBe(text);
+    expect(toEdit(draftOf(card())).applicability).toBe(card().applicability);
+    expect(toEdit({ ...draftOf(card()), applicability: '' }).applicability).toBe('');
+    expect(draftOf(card({ applicability: null })).applicability).toBe('');
   });
 
   it('очищенный блок уезжает пустой строкой, а не null', () => {

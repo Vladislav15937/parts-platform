@@ -61,7 +61,7 @@ public final class DromTransferFile {
             new Column("Сторона", false, Field.SIDE_LR),
             new Column("Положение", false, Field.SIDE_FR),
             new Column("Верх/низ", false, Field.SIDE_UD),
-            new Column("Применимость", false, null),
+            new Column("Применимость", false, Field.APPLICABILITY),
             new Column("Описание", false, Field.DESCRIPTION),
             new Column("Гарантия", false, Field.WARRANTY),
             new Column("Самовывоз", false, Field.PICKUP),

@@ -980,6 +980,11 @@ export interface PartEdit {
    */
   dromKind: string | null;
   dromSection: string | null;
+  /**
+   * «Подходит» как у клиента на Дроме (задача 0287): блоки текстом, строка на пункт,
+   * части через « | ». Те же два способа «пусто». Не справочная применимость.
+   */
+  applicability: string | null;
 }
 
 /**

@@ -496,6 +496,160 @@ class DromShopTermsTest extends PostgresTestBase {
         assertThat(labels).contains("Вид детали на Дроме", "Раздел на Дроме");
     }
 
+    // --- Задача 0287: «Применимость» («Подходит») дословно блоками ---
+
+    private static final String APPLICABILITY = "Применимость";
+
+    /** Список блоков, как его пишет парсер: строка на пункт, части через « | », пустые края внутри. */
+    private static final String FITS = "Lexus GX400 | GRJ158 | \n"
+            + "Toyota 4Runner | 5 поколение (2009–2013) | TRN285, GRN285\n"
+            + "Toyota Hilux Surf | Другие кузова | GRN215, VZN215\n"
+            + "Для двигателей | 1GR-FE, 2UZ-FE";
+
+    @Test
+    @DisplayName("Образец из пяти карточек: «Применимость» в базе побайтно равна ячейке — с « | », переводами строк и без разбора")
+    void sampleApplicabilityLandsVerbatim() throws Exception {
+        byte[] file = sample();
+        List<Map<String, String>> rows = sampleRows(file);
+
+        JsonNode report = load(file);
+        assertThat(report.path("imported").asInt())
+                .as("загружено не всё: %s", report.path("skipped")).isEqualTo(5);
+
+        for (Map<String, String> row : rows) {
+            String ad = row.get(DromTransferFile.ANCHOR);
+            assertThat(applicability(ad)).as("«Применимость» № %s доехала не дословно", ad)
+                    .isEqualTo(row.get(APPLICABILITY).isEmpty() ? null : row.get(APPLICABILITY));
+        }
+        // Без этого сверка выше зеленела бы на пустых ячейках.
+        String first = applicability(rows.get(0).get(DromTransferFile.ANCHOR));
+        assertThat(first).isNotNull().contains(" | ").contains("\n")
+                .contains("Toyota 4Runner | 5 поколение (2009–2013) | TRN285, GRN285");
+    }
+
+    @Test
+    @DisplayName("«Применимость» длиннее ячейки Excel (≥ 33 000 знаков) приходит склейкой с листа «Продолжение» побайтно")
+    void longApplicabilityIsGluedFromTheContinuationSheet() throws Exception {
+        StringBuilder value = new StringBuilder();
+        for (int i = 0; value.length() < 41_000; i++) {
+            value.append("Toyota Land Cruiser Prado ").append(i).append(" | 4 поколение (2002–2005) | GRJ")
+                    .append(i).append("\n");
+        }
+        String text = value.toString().strip();
+        assertThat(text.length()).isGreaterThan(33_000);
+        List<String> chunks = DromContinuationTest.split(text,
+                DromContinuationTest.CELL_MAX, DromContinuationTest.PART_MAX);
+        assertThat(chunks).as("значение обязано резаться на ячейку и часть").hasSizeGreaterThan(1);
+
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Camry");
+        a.put(APPLICABILITY, chunks.get(0));
+        byte[] file = file(List.of(a), Set.of(), DromContinuationTest.partsOf(AD_A, APPLICABILITY, chunks));
+
+        JsonNode report = load(file);
+
+        assertThat(report.path("skipped")).as("пропущено: %s", report.path("skipped")).isEmpty();
+        assertThat(applicability(AD_A)).as("склейка не побайтная").isEqualTo(text);
+    }
+
+    @Test
+    @DisplayName("Применимость текстом не создаёт строк справочной применимости и не входит в поиск")
+    void applicabilityTextIsNotTheReferenceApplicability() throws Exception {
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Camry");
+        a.put(APPLICABILITY, "Мифомобиль ZQXWORD | 1 поколение | ABC1");
+        int before = inTenant(() -> jdbc.queryForObject("SELECT count(*) FROM part_applicability", Integer.class));
+
+        load(file(List.of(a), Set.of(), null));
+
+        assertThat(applicability(AD_A)).contains("ZQXWORD");
+        assertThat(inTenant(() -> jdbc.queryForObject("SELECT count(*) FROM part_applicability", Integer.class)))
+                .as("текст применимости создал строки справочной применимости").isEqualTo(before);
+        JsonNode found = json.readTree(mvc.perform(get("/api/parts/search").param("q", "ZQXWORD")
+                        .session(login()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8));
+        assertThat(found).as("поиск нашёл позицию по тексту применимости").isEmpty();
+    }
+
+    @Test
+    @DisplayName("Файл без «Применимости», затем с ней: заполнена, остальное прежнее, отметка не двинулась; поправленная не затирается, расхождение усечено")
+    void secondLoadFillsApplicabilityAndKeepsEdits() throws Exception {
+        String huge = ("Toyota 4Runner | 5 поколение (2009–2013) | TRN285, GRN285\n").repeat(700).strip();
+        assertThat(huge.length()).isGreaterThan(40_000);
+        // Длиннее ячейки Excel: в ячейке начало, остальное — лист «Продолжение».
+        List<String> chunks = DromContinuationTest.split(huge,
+                DromContinuationTest.CELL_MAX, DromContinuationTest.PART_MAX);
+        List<String[]> continuation = DromContinuationTest.partsOf(AD_A, APPLICABILITY, chunks);
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Camry");
+        a.put(APPLICABILITY, chunks.get(0));
+        Map<String, String> b = row(AD_B, "Бампер задний Toyota Camry");
+        b.put(APPLICABILITY, FITS);
+        List<Map<String, String>> rows = List.of(a, b);
+
+        load(file(rows, Set.of(APPLICABILITY), null));
+        assertThat(applicability(AD_A)).isNull();
+        Map<String, Object> before = partRows();
+
+        JsonNode repeat = load(file(rows, Set.of(), continuation)).path("repeat");
+
+        assertThat(repeat.path("refilled").asInt()).as("%s", repeat).isEqualTo(2);
+        assertThat(repeat.path("fields").findValuesAsText("field")).containsExactly("Применимость");
+        assertThat(applicability(AD_A)).isEqualTo(huge);
+        assertThat(applicability(AD_B)).isEqualTo(FITS);
+        assertThat(partRows()).as("повтор тронул саму позицию").isEqualTo(before);
+        assertThat(feedMarks())
+                .as("дозаполнение применимости двинуло отметку «позиция изменилась»").isZero();
+
+        // Поправили у нас — повтор не перезаписывает, называет расхождение, значения усечены.
+        long part = partOf(AD_A);
+        ObjectNode form = editable(part);
+        form.put("applicability", huge.replace("TRN285", "TRN999"));
+        update(part, form);
+        JsonNode again = load(file(rows, Set.of(), continuation));
+        assertThat(applicability(AD_A)).isEqualTo(huge.replace("TRN285", "TRN999"));
+        JsonNode discrepancy = again.path("repeat").path("discrepancies").get(0);
+        assertThat(discrepancy.path("field").asText()).isEqualTo("Применимость");
+        assertThat(discrepancy.path("text").asText().length())
+                .as("значения применимости в отчёте не усечены — 42 000 знаков уехали бы в ответ")
+                .isLessThan(400);
+        assertThat(again.toString().length()).isLessThan(5_000);
+    }
+
+    @Test
+    @DisplayName("Карточка: «Применимость» видна, правится тем же PUT, пустой ввод — NULL, форма без ключа её не стирает, лента называет «Подходит»")
+    void cardShowsEditsAndClearsApplicability() throws Exception {
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Camry");
+        a.put(APPLICABILITY, FITS);
+        load(file(List.of(a), Set.of(), null));
+        long part = partOf(AD_A);
+
+        ObjectNode form = editable(part);
+        assertThat(form.path("applicability").asText()).isEqualTo(FITS);
+
+        String edited = FITS + "\nToyota Camry | 7 поколение | XV70";
+        form.put("applicability", edited);
+        update(part, form);
+        assertThat(applicability(AD_A)).isEqualTo(edited);
+        assertThat(feedMarks()).as("правка одной применимости двинула отметку").isZero();
+
+        ObjectNode stale = form.deepCopy();
+        stale.remove("applicability");
+        stale.put("note", "с полки 3");
+        update(part, stale);
+        assertThat(applicability(AD_A)).as("форма без ключа стёрла применимость клиента").isEqualTo(edited);
+
+        form.put("applicability", "  \n ");
+        update(part, form);
+        assertThat(applicability(AD_A)).isNull();
+
+        JsonNode history = json.readTree(mvc.perform(get("/api/parts/" + part + "/history")
+                        .session(login()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8));
+        List<String> labels = new ArrayList<>();
+        history.path("changes").forEach(c -> c.path("fields").forEach(f -> labels.add(f.path("label").asText())));
+        assertThat(labels).contains("Подходит");
+    }
+
     // --- файлы ---
 
     private static byte[] sample() throws Exception {
@@ -608,6 +762,16 @@ class DromShopTermsTest extends PostgresTestBase {
                  WHERE p.drom_ad_number = ?""",
                 (rs, i) -> new String[] {rs.getString(1), rs.getString(2)}, ad)
                 .stream().findFirst().orElseThrow(() -> new AssertionError("позиции № " + ad + " нет")));
+    }
+
+    private String applicability(String ad) {
+        List<String> found = inTenant(() -> jdbc.query("""
+                SELECT c.applicability
+                  FROM part p LEFT JOIN part_drom_card c ON c.part_id = p.id
+                 WHERE p.drom_ad_number = ?""",
+                (rs, i) -> rs.getString(1), ad));
+        assertThat(found).as("позиции № %s нет", ad).hasSize(1);
+        return found.get(0);
     }
 
     private long partOf(String ad) {

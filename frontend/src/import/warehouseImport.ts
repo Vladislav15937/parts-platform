@@ -59,6 +59,8 @@ export const FIELDS = [
   // наш справочный вид и не «Секция» склада.
   { key: 'DROM_KIND', label: 'Вид детали', required: false, dromOnly: true },
   { key: 'DROM_SECTION', label: 'Раздел', required: false, dromOnly: true },
+  // «Применимость» («Подходит») текстом блоками, как у клиента (задача 0287): не справочная.
+  { key: 'APPLICABILITY', label: 'Применимость', required: false, dromOnly: true },
 ] as const;
 
 export type FieldKey = (typeof FIELDS)[number]['key'];

@@ -286,6 +286,47 @@ describe('блоки карточки Дрома', () => {
     expect(sent[0]!['section'], '«Секция» склада поехала вместо «Раздела»').toBe(null);
   });
 
+  it('«Подходит» показано блоками и свёрнуто; правка открывает текст как есть; очистка уезжает пустой строкой (задача 0287)', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Подходит')).toBeTruthy());
+
+    const view = line('Подходит').querySelector('.fits')!;
+    // Читаемо, а не сырой « | »: части через тире, пустая часть не оставляет « — » на конце.
+    expect(view.textContent).toContain('Toyota 4Runner — 5 поколение (2009–2013) — TRN285, GRN285');
+    expect(view.textContent).toContain('Lexus GX400 — GRJ158');
+    expect(view.textContent).not.toContain('|');
+    expect(view.textContent).not.toContain('GRJ158 —');
+    // Свёрнуто: пять строк из восьми и кнопка с числом.
+    expect(view.querySelectorAll('div').length).toBe(5);
+    expect(view.textContent).not.toContain('Для двигателей');
+    fireEvent.click(screen.getByText('Показать все (8 строк)'));
+    expect(view.querySelectorAll('div').length).toBe(8);
+    expect(view.textContent).toContain('Для двигателей — 1GR-FE, 2UZ-FE');
+    fireEvent.click(screen.getByText('Свернуть'));
+    expect(view.querySelectorAll('div').length).toBe(5);
+
+    // Правка открывает хранимый текст как есть — с « | » и переводами строк.
+    fireEvent.click(screen.getByLabelText('Изменить: Подходит'));
+    expect((screen.getByLabelText('Подходит') as HTMLTextAreaElement).value).toBe(APPLICABILITY);
+    fireEvent.change(screen.getByLabelText('Подходит'), { target: { value: '' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['applicability'], 'очистка — пустая строка, null сервер прочёл бы как «не трогать»')
+      .toBe('');
+  });
+
+  it('нетронутое «Подходит» уезжает как прочитано, байт в байт', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
+    fireEvent.click(save());
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['applicability']).toBe(APPLICABILITY);
+  });
+
   it('стёртый руками блок уезжает пустой строкой, а не null', async () => {
     render(<PartEditForm partId={7} row={row()} role="OWNER"
                          onSaved={() => {}} onCancel={() => {}} />);
@@ -332,6 +373,18 @@ function save(): HTMLButtonElement {
   return screen.getByText('Сохранить') as HTMLButtonElement;
 }
 
+/** Восемь пунктов: больше пяти — значит, свёрнуто. Пустая часть и «Для двигателей» — как у клиента. */
+const APPLICABILITY = [
+  'Lexus GX400 | GRJ158 | ',
+  'Toyota 4Runner | 5 поколение (2009–2013) | TRN285, GRN285',
+  'Toyota 4Runner | 4 поколение (2002–2005) | GRN215',
+  'Toyota Hilux Surf | 4 поколение (2002–2005) | VZN215W',
+  'Toyota Hilux Surf | Другие кузова | GRN215, VZN215',
+  'Toyota Land Cruiser Prado | 4 поколение (2013–2017) | TRJ150W',
+  'Toyota Land Cruiser Prado | Другие кузова | GRJ150L',
+  'Для двигателей | 1GR-FE, 2UZ-FE',
+].join('\n');
+
 function card(): Record<string, unknown> {
   return {
     price: 27000, minPrice: null, costPrice: null, installationPrice: null,
@@ -347,6 +400,7 @@ function card(): Record<string, unknown> {
     deliveryPayment: 'Доставка по городу — 300 р.\n\nОплата при получении',
     dromKind: 'Карданный вал Lexus GX400',
     dromSection: 'Автозапчасти → Трансмиссия',
+    applicability: APPLICABILITY,
   };
 }
 

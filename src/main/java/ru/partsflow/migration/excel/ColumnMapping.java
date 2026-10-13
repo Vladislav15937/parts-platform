@@ -124,7 +124,12 @@ public final class ColumnMapping {
          */
         DROM_KIND(true),
         /** «Раздел» объявления дословно («Автозапчасти → Трансмиссия») — {@code part_drom_card.drom_section}; не «Секция» склада. */
-        DROM_SECTION(true);
+        DROM_SECTION(true),
+        /**
+         * «Применимость» («Подходит») объявления дословно (задача 0287) — {@code part_drom_card.applicability}.
+         * Текст блоками со « | », а не справочная {@code part_applicability}; без синонимов.
+         */
+        APPLICABILITY(true);
 
         private final boolean imported;
         private final List<String> synonyms;

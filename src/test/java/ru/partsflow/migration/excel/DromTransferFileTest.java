@@ -86,8 +86,7 @@ class DromTransferFileTest extends PostgresTestBase {
 
     /** Колонки договора, которые импорт ещё не читает, — и кто их прочтёт. */
     private static final Map<String, String> PENDING = Map.ofEntries(
-            Map.entry("Ссылка", "0274"),
-            Map.entry("Применимость", "0278"));
+            Map.entry("Ссылка", "0274"));
 
     /** Проверка одной колонки: значение из файла против того, что в базе у позиции. */
     @FunctionalInterface
@@ -115,7 +114,9 @@ class DromTransferFileTest extends PostgresTestBase {
             "Доставка и оплата", term("delivery_payment", "«Доставка и оплата»"),
             // Задача 0286: строка вида и раздел дословно, не part_kind_id и не part.section.
             "Вид детали", term("drom_kind", "«Вид детали»"),
-            "Раздел", term("drom_section", "«Раздел»"));
+            "Раздел", term("drom_section", "«Раздел»"),
+            // Задача 0287: «Применимость» («Подходит») текстом, не part_applicability.
+            "Применимость", term("applicability", "«Применимость»"));
 
     /**
      * Колонки, которые импорт читает, — и чем это доказано.

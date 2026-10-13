@@ -111,6 +111,9 @@ public final class AuditedColumns {
         // «Секция» склада (PART.section). На карточке подписи короткие, слова Дрома.
         PART_DROM_CARD.put("drom_kind", "Вид детали на Дроме");
         PART_DROM_CARD.put("drom_section", "Раздел на Дроме");
+        // Задача 0287: слово Дрома для блока применимости («Подходит»); справочная
+        // применимость (part_applicability) журналом называется иначе.
+        PART_DROM_CARD.put("applicability", "Подходит");
     }
 
     /**

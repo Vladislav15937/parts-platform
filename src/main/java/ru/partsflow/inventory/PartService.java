@@ -396,13 +396,15 @@ public class PartService {
                 card == null ? null : card.getDeliveryPayment());
         String kind = termOf(update.dromKind(), card == null ? null : card.getDromKind());
         String section = termOf(update.dromSection(), card == null ? null : card.getDromSection());
+        String applicability = termOf(update.applicability(),
+                card == null ? null : card.getApplicability());
         if (card == null) {
             if (warranty == null && pickup == null && delivery == null
-                    && kind == null && section == null) {
+                    && kind == null && section == null && applicability == null) {
                 return false;
             }
             card = new PartDromCard(partId);
-            card.set(warranty, pickup, delivery, kind, section);
+            card.set(warranty, pickup, delivery, kind, section, applicability);
             entityManager.persist(card);
             return true;
         }
@@ -410,10 +412,11 @@ public class PartService {
                 && java.util.Objects.equals(card.getPickup(), pickup)
                 && java.util.Objects.equals(card.getDeliveryPayment(), delivery)
                 && java.util.Objects.equals(card.getDromKind(), kind)
-                && java.util.Objects.equals(card.getDromSection(), section)) {
+                && java.util.Objects.equals(card.getDromSection(), section)
+                && java.util.Objects.equals(card.getApplicability(), applicability)) {
             return false;
         }
-        card.set(warranty, pickup, delivery, kind, section);
+        card.set(warranty, pickup, delivery, kind, section, applicability);
         return true;
     }
 
@@ -964,6 +967,8 @@ public class PartService {
                              // Вид детали и раздел как у клиента (задача 0286): так же.
                              String dromKind,
                              String dromSection,
+                             // «Применимость» («Подходит») дословно (задача 0287): так же.
+                             String applicability,
                              // Что сделать с ценой: заменить (умолчание), подвинуть
                              // процентом или суммой, округлить. При арифметике
                              // price — значение операции, а не новая цена.

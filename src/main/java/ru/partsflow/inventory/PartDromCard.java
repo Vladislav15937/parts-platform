@@ -49,6 +49,13 @@ public class PartDromCard {
     @Column(name = "drom_section")
     private String dromSection;
 
+    /**
+     * «Применимость» («Подходит») как у клиента на Дроме (задача 0287): блоки текстом,
+     * строка на пункт, части через « | ». Не {@code part_applicability} — тот справочный.
+     */
+    @Column(name = "applicability")
+    private String applicability;
+
     protected PartDromCard() {
     }
 
@@ -89,12 +96,17 @@ public class PartDromCard {
         return dromSection;
     }
 
+    public String getApplicability() {
+        return applicability;
+    }
+
     public void set(String warranty, String pickup, String deliveryPayment,
-                    String dromKind, String dromSection) {
+                    String dromKind, String dromSection, String applicability) {
         this.warranty = clean(warranty);
         this.pickup = clean(pickup);
         this.deliveryPayment = clean(deliveryPayment);
         this.dromKind = clean(dromKind);
         this.dromSection = clean(dromSection);
+        this.applicability = clean(applicability);
     }
 }

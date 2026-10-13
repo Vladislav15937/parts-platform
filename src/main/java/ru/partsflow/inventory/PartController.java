@@ -358,6 +358,8 @@ public class PartController {
                                 // способа «пусто», что у блоков выше.
                                 String dromKind,
                                 String dromSection,
+                                // «Применимость» («Подходит») дословно (задача 0287): так же.
+                                String applicability,
                                 // Что сделать с ценой: «Изменить» (умолчание и прежнее
                                 // поведение), процент, сумма, округление. При арифметике
                                 // поле price несёт значение операции, а не новую цену, —
@@ -378,6 +380,7 @@ public class PartController {
                     card == null ? null : card.getDeliveryPayment(),
                     card == null ? null : card.getDromKind(),
                     card == null ? null : card.getDromSection(),
+                    card == null ? null : card.getApplicability(),
                     // Форма открывается на «Изменить»: самый частый случай —
                     // вписать новое число — остаётся одним движением.
                     PriceOperation.SET);
@@ -390,7 +393,7 @@ public class PartController {
                     color, section, barcode, weightKg, lengthMm, widthMm, heightMm,
                     packageLengthMm, packageWidthMm, packageHeightMm, packageWeightKg,
                     storageCellId, published, warranty, pickup, deliveryPayment,
-                    dromKind, dromSection, priceOp);
+                    dromKind, dromSection, applicability, priceOp);
         }
     }
 

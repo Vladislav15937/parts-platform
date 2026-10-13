@@ -454,7 +454,8 @@ public class ExcelWarehouseImporter {
                         verbatim(mapping.value(row, Field.PICKUP)),
                         verbatim(mapping.value(row, Field.DELIVERY)),
                         verbatim(mapping.value(row, Field.DROM_KIND)),
-                        verbatim(mapping.value(row, Field.DROM_SECTION))));
+                        verbatim(mapping.value(row, Field.DROM_SECTION)),
+                        verbatim(mapping.value(row, Field.APPLICABILITY))));
     }
 
     /**
@@ -592,11 +593,12 @@ public class ExcelWarehouseImporter {
             if (!row.terms().isEmpty()) {
                 jdbc.update("""
                         INSERT INTO part_drom_card (part_id, warranty, pickup, delivery_payment,
-                                                    drom_kind, drom_section)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                                                    drom_kind, drom_section, applicability)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT (part_id) DO NOTHING""",
                         partId, row.terms().warranty(), row.terms().pickup(),
-                        row.terms().delivery(), row.terms().kind(), row.terms().section());
+                        row.terms().delivery(), row.terms().kind(), row.terms().section(),
+                        row.terms().applicability());
             }
 
             // Номер, от которого после приведения ничего не осталось, — не номер:
@@ -678,7 +680,8 @@ public class ExcelWarehouseImporter {
                 SELECT p.id, p.public_code, p.title, p.price, p.qty_on_hand, c.code AS cell,
                        p.note, p.description, p.condition, p.manufacturer, p.authenticity,
                        p.side_lr, p.side_fr, p.side_ud,
-                       d.warranty, d.pickup, d.delivery_payment, d.drom_kind, d.drom_section
+                       d.warranty, d.pickup, d.delivery_payment, d.drom_kind, d.drom_section,
+                       d.applicability
                   FROM part p
                   LEFT JOIN storage_cell c ON c.id = p.storage_cell_id
                   LEFT JOIN part_drom_card d ON d.part_id = p.id
@@ -733,7 +736,9 @@ public class ExcelWarehouseImporter {
             new Term(Field.DELIVERY, "delivery_payment", "Доставка и оплата", Terms::delivery),
             // Вид и раздел как у клиента (задача 0286): строка Дрома дословно, не наш part_kind.
             new Term(Field.DROM_KIND, "drom_kind", "Вид детали", Terms::kind),
-            new Term(Field.DROM_SECTION, "drom_section", "Раздел", Terms::section));
+            new Term(Field.DROM_SECTION, "drom_section", "Раздел", Terms::section),
+            // Применимость текстом (задача 0287): блоками как у клиента, не part_applicability.
+            new Term(Field.APPLICABILITY, "applicability", "Применимость", Terms::applicability));
 
     /**
      * Что повтор дозаполняет — поле и его имя в отчёте, в порядке отчёта.
@@ -805,7 +810,7 @@ public class ExcelWarehouseImporter {
                 case OEM -> changed |= refillPrimaryOem(row, partId, label, report);
                 case OEM_SUBSTITUTES -> changed |= refillSubstitutes(row, partId, label, report);
                 case PHOTOS -> changed |= refillPhotos(row, partId, label, report);
-                case WARRANTY, PICKUP, DELIVERY, DROM_KIND, DROM_SECTION ->
+                case WARRANTY, PICKUP, DELIVERY, DROM_KIND, DROM_SECTION, APPLICABILITY ->
                         termsFilled |= refillTerm(termOf(field), row, part, partId, report);
                 default -> changed |= refillScalar(scalarOf(field), row, part, partId, report);
             }
@@ -1217,11 +1222,11 @@ public class ExcelWarehouseImporter {
      * доставка и оплата. Дословно — без чистки и без сопоставления со справочником.
      */
     private record Terms(String warranty, String pickup, String delivery,
-                         String kind, String section) {
+                         String kind, String section, String applicability) {
 
         boolean isEmpty() {
             return warranty == null && pickup == null && delivery == null
-                    && kind == null && section == null;
+                    && kind == null && section == null && applicability == null;
         }
     }
 
