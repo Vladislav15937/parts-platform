@@ -15,6 +15,7 @@ import {
   retryPhotos,
   missingRequired,
   previewFile,
+  quantityNote,
 } from '../import/warehouseImport';
 import type {
   BazonResult,
@@ -76,6 +77,11 @@ export function ImportScreen({ reference, canImport }: Props) {
   const missing = missingRequired(columns);
   const duplicates = duplicateColumns(columns);
   const skipped = preview === null ? [] : notTransferred(preview.header, columns);
+  const isDrom = (preview?.format ?? null) === DROM_TRANSFER;
+  // «Наличие» — поле только файла с Дрома: у обычной таблицы его не предлагаем.
+  const shownFields = FIELDS.filter(
+    (f) => !f.dromOnly || isDrom || columns[f.key] !== undefined);
+  const quantity = preview === null ? null : quantityNote(columns, preview.rows);
 
   return (
     <section className="card">
@@ -112,7 +118,7 @@ export function ImportScreen({ reference, canImport }: Props) {
         <>
           <hr />
           <h3>Что распознано</h3>
-          {(preview.format ?? null) === DROM_TRANSFER ? (
+          {isDrom ? (
             <p className="note">
               Это файл переноса с Дрома: колонки сопоставлены сами, выбирать
               ничего не нужно.
@@ -125,7 +131,7 @@ export function ImportScreen({ reference, canImport }: Props) {
           )}
 
           <ul className="mapping">
-            {FIELDS.map((field) => (
+            {shownFields.map((field) => (
               <li key={field.key} className="mapping-row">
                 <span>
                   {field.label}
@@ -158,6 +164,14 @@ export function ImportScreen({ reference, canImport }: Props) {
           )}
           {missing.length > 0 && (
             <p className="note note--error">Не сопоставлено: {missing.join(', ')}</p>
+          )}
+          {/* Одна штука — догадка, и она говорится до загрузки, а не
+              обнаруживается на складе (задача 0279). */}
+          {quantity !== null && <p className="note">{quantity}</p>}
+          {columns.AVAILABILITY !== undefined && (
+            <p className="note">
+              Строки, где «Наличие» не «В наличии», загрузка пропустит и назовёт.
+            </p>
           )}
           {/* Колонка без поля не уедет никуда, и молчание о ней читается как
               «перенесётся». У файла переноса с Дрома это снимки, описание
@@ -229,6 +243,13 @@ export function ImportScreen({ reference, canImport }: Props) {
         <>
           <hr />
           <h3>Загружено позиций: {report.imported}</h3>
+          {(report.quantityDefaulted ?? 0) > 0 && (
+            <p className="note">
+              По 1 шт. заведено позиций: {count(report.quantityDefaulted ?? 0)} —
+              количества в файле для них не было. Где штук больше, поправьте
+              остаток.
+            </p>
+          )}
           {report.skipped.length === 0 ? (
             <p className="note">Все строки файла приняты.</p>
           ) : (

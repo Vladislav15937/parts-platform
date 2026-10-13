@@ -51,6 +51,9 @@ public class ExcelWarehouseImporter {
 
     private static final int BATCH_SIZE = 500;
 
+    /** Значение «Наличия» с карточки Дрома, при котором позиция заводится. */
+    static final String IN_STOCK = "В наличии";
+
     private final JdbcTemplate jdbc;
     private final PartNameService partNames;
 
@@ -170,7 +173,7 @@ public class ExcelWarehouseImporter {
         Report result = report.toReport();
         jdbc.update("UPDATE import_run SET imported = ?, skipped = ?::jsonb "
                         + "WHERE client_request_id = ?",
-                result.imported(), skippedJson(result.skipped()), requestId);
+                result.imported(), skippedJson(result), requestId);
         return result;
     }
 
@@ -188,7 +191,27 @@ public class ExcelWarehouseImporter {
         if (imported.isEmpty()) {
             return null;
         }
-        return new Report(imported.get(0), skippedOf(requestId));
+        return new Report(imported.get(0), skippedOf(requestId), quantityDefaultedOf(requestId));
+    }
+
+    /**
+     * Сколько позиций прошлый прогон завёл по одной штуке.
+     *
+     * <p>Число лежит отдельным элементом в том же {@code skipped}: своей
+     * колонки у {@code import_run} нет, а заводить её ради одного числа
+     * значит changeset и отдельную ветку. Потерять его на повторе нельзя —
+     * повтор смотрят тогда, когда первого ответа не видели, и «заведено
+     * 2 897» без «по одной штуке» читается как точный склад.
+     */
+    private int quantityDefaultedOf(String requestId) {
+        Integer count = jdbc.queryForObject("""
+                        SELECT COALESCE(sum((e->>'quantityDefaulted')::int), 0)::int
+                          FROM import_run r
+                         CROSS JOIN LATERAL jsonb_array_elements(r.skipped) e
+                         WHERE r.client_request_id = ?
+                           AND e->>'quantityDefaulted' IS NOT NULL""",
+                Integer.class, requestId);
+        return count == null ? 0 : count;
     }
 
     /**
@@ -211,7 +234,8 @@ public class ExcelWarehouseImporter {
                         SELECT (e->>'row')::int AS row_number, e->>'reason' AS reason
                           FROM import_run r
                          CROSS JOIN LATERAL jsonb_array_elements(r.skipped) e
-                         WHERE r.client_request_id = ?""",
+                         WHERE r.client_request_id = ?
+                           AND e->>'reason' IS NOT NULL""",
                 (rs, i) -> new Report.Skipped(rs.getInt("row_number"), rs.getString("reason")),
                 requestId);
     }
@@ -223,11 +247,20 @@ public class ExcelWarehouseImporter {
      * сериализатор ради двух полей значит связать импортёр с представлением.
      * Кавычки в причине заменяются — причины пишем мы сами, и кавычек
      * в них нет, но полагаться на это нельзя.
+     *
+     * <p>Число позиций, заведённых по одной штуке, дописывается в конец
+     * отдельным элементом без {@code row} — почему здесь, а не своей
+     * колонкой, сказано у {@link #quantityDefaultedOf}.
      */
-    private static String skippedJson(List<Report.Skipped> skipped) {
-        return skipped.stream()
+    private static String skippedJson(Report report) {
+        java.util.stream.Stream<String> skipped = report.skipped().stream()
                 .map(s -> "{\"row\":%d,\"reason\":\"%s\"}"
-                        .formatted(s.row(), s.reason().replace('"', '\'')))
+                        .formatted(s.row(), s.reason().replace('"', '\'')));
+        java.util.stream.Stream<String> defaulted = report.quantityDefaulted() == 0
+                ? java.util.stream.Stream.empty()
+                : java.util.stream.Stream.of(
+                        "{\"quantityDefaulted\":%d}".formatted(report.quantityDefaulted()));
+        return java.util.stream.Stream.concat(skipped, defaulted)
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
     }
 
@@ -239,12 +272,39 @@ public class ExcelWarehouseImporter {
             return null;
         }
 
-        BigDecimal quantity = number(mapping.value(row, Field.QUANTITY));
-        if (quantity == null || quantity.signum() <= 0) {
-            // Ноль — это не остаток, а строка о том, что позиции нет.
-            // Заводить карточку под неё значит наполнить склад несуществующим.
-            report.skip(row.number(), "нет количества");
-            return null;
+        if (mapping.has(Field.AVAILABILITY)) {
+            // Дром пишет на карточке только «В наличии» — это и есть правда
+            // о том, что позиция лежит. Иное значение называется дословно:
+            // по нему видно, что писал Дром, и правило можно расширить.
+            String availability = mapping.value(row, Field.AVAILABILITY).strip();
+            if (!IN_STOCK.equals(availability)) {
+                report.skip(row.number(), availability.isEmpty()
+                        ? "не в наличии: значение пустое"
+                        : "не в наличии: «" + availability + "»");
+                return null;
+            }
+        }
+
+        BigDecimal quantity;
+        String rawQuantity = mapping.value(row, Field.QUANTITY);
+        if (rawQuantity.isBlank()) {
+            // Количества нет — ни колонки, ни значения в строке. У Дрома его
+            // нет на странице вовсе (задача 0279), и пропуск здесь значил бы
+            // «пропущено 2 897: нет количества» на весь перенос. Одна штука —
+            // догадка, поэтому её число уходит в отчёт, а экран говорит
+            // о ней до загрузки.
+            quantity = BigDecimal.ONE;
+            report.quantityDefaulted++;
+        } else {
+            quantity = number(rawQuantity);
+            if (quantity == null || quantity.signum() <= 0) {
+                // Ноль — это не остаток, а строка о том, что позиции нет.
+                // Заводить карточку под неё значит наполнить склад несуществующим.
+                // То же со словом вместо числа: «нет» в колонке количества
+                // одной штукой не читается.
+                report.skip(row.number(), "нет количества");
+                return null;
+            }
         }
 
         return new Row(
@@ -414,7 +474,7 @@ public class ExcelWarehouseImporter {
      * «No acceptable representation». Тесты этого не ловят — они зовут
      * импортёр напрямую, минуя HTTP.
      */
-    public record Report(int imported, List<Skipped> skipped) {
+    public record Report(int imported, List<Skipped> skipped, int quantityDefaulted) {
 
         public record Skipped(int row, String reason) {
         }
@@ -424,6 +484,8 @@ public class ExcelWarehouseImporter {
     private static final class Tally {
 
         private int imported;
+        /** Строк, заведённых по одной штуке, потому что количества в файле нет. */
+        private int quantityDefaulted;
         private final List<Skipped> skipped = new ArrayList<>();
 
         void skip(int rowNumber, String reason) {
@@ -435,7 +497,7 @@ public class ExcelWarehouseImporter {
         }
 
         Report toReport() {
-            return new Report(imported, List.copyOf(skipped));
+            return new Report(imported, List.copyOf(skipped), quantityDefaulted);
         }
     }
 }

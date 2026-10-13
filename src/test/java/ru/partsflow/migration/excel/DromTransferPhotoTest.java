@@ -418,8 +418,11 @@ class DromTransferPhotoTest extends PostgresTestBase {
                 values.put(DromTransferFile.ANCHOR, String.valueOf(125696381 + r));
                 values.put("Наименование", card.name());
                 values.put("Цена", "16000");
-                // Количества на странице Дрома нет; единица — до задачи 0279.
+                // Количества на странице Дрома нет; явная единица — чтобы
+                // тест не зависел от умолчания 0279.
                 values.put("Количество", "1");
+                // «Наличие» читается с задачи 0279: пустое пропускает строку.
+                values.put("Наличие", "В наличии");
                 values.put("Фото", card.cell());
                 Row row = sheet.createRow(r + 1);
                 for (int c = 0; c < titles.size(); c++) {

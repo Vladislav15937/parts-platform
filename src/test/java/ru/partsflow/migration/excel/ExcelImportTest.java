@@ -100,7 +100,21 @@ class ExcelImportTest extends PostgresTestBase {
 
         assertThat(mapping.has(Field.QUANTITY)).isFalse();
         assertThat(mapping.has(Field.YEAR)).isFalse();
-        assertThat(mapping.missingRequired()).containsExactly(Field.QUANTITY);
+        // Количество с задачи 0279 необязательно: без колонки — по одной штуке.
+        assertThat(mapping.missingRequired()).isEmpty();
+    }
+
+    /**
+     * «Наличие» чужой таблицы не угадывается: правило «В наличии» дословно —
+     * дромовское, а в своей таблице клиент пишет туда «да» или число, и угаданная
+     * колонка пропустила бы весь склад как «не в наличии» (задача 0279).
+     */
+    @Test
+    @DisplayName("«Наличие» обычной таблицы полем не считается")
+    void availabilityIsNotGuessed() {
+        ColumnMapping mapping = ColumnMapping.detect(List.of("Наименование", "Наличие", "Кол-во"));
+
+        assertThat(mapping.has(Field.AVAILABILITY)).isFalse();
     }
 
     @Test
@@ -317,24 +331,95 @@ class ExcelImportTest extends PostgresTestBase {
                 Integer.class, warehouse))).isEqualTo(2);
     }
 
+    /**
+     * Пустое количество — одна штука с пометкой, ноль и слово — пропуск.
+     *
+     * <p>До задачи 0279 здесь стояло «строки без количества пропускаются»,
+     * и пустая ячейка шла в пропуск вместе с нулём. Для файла с Дрома это
+     * значило «пропущено 2 897: нет количества» на весь перенос: количества
+     * на карточке Дрома нет вовсе. Ноль же остаётся пропуском — это правда
+     * про строку «позиции нет».
+     */
     @Test
-    @DisplayName("Строки без количества пропускаются с указанием номера")
-    void rowsWithoutQuantityAreSkipped() throws Exception {
+    @DisplayName("Пустое количество — одна штука с пометкой, ноль и слово — пропуск с номером строки")
+    void emptyQuantityIsOneZeroIsSkipped() throws Exception {
         byte[] book = workbook(
                 List.of("Наименование", "Кол-во"),
-                List.of(List.of("Фара", "1"),
+                List.of(List.of("Фара", "3"),
                         List.of("Бампер", "0"),
                         List.of("", "5"),
-                        List.of("Дверь", "нет")));
+                        List.of("Дверь", "нет"),
+                        List.of("Капот", "")));
 
         ExcelWarehouseImporter.Report report =
                 inTenant(() -> load(book, Map.of(Field.NAME, 0, Field.QUANTITY, 1)));
 
-        assertThat(report.imported()).isEqualTo(1);
+        assertThat(report.imported()).isEqualTo(2);
         // Номера строк — как их видит человек в Excel: искать он будет там.
         assertThat(report.skipped()).extracting(
                         ExcelWarehouseImporter.Report.Skipped::row)
                 .containsExactly(3, 4, 5);
+        assertThat(report.skipped()).extracting(ExcelWarehouseImporter.Report.Skipped::reason)
+                .as("ноль — правда про строку «позиции нет»")
+                .contains("нет количества");
+        assertThat(report.quantityDefaulted())
+                .as("одна штука у «Капота» — догадка, и отчёт обязан её назвать")
+                .isEqualTo(1);
+        assertThat(stockOf("Фара")).as("количество из файла по-прежнему читается")
+                .isEqualByComparingTo("3");
+        assertThat(stockOf("Капот")).as("пустое количество не завело одну штуку")
+                .isEqualByComparingTo("1");
+    }
+
+    @Test
+    @DisplayName("Без колонки количества каждая позиция заводится по одной штуке")
+    void noQuantityColumnGivesOneEach() throws Exception {
+        byte[] book = workbook(
+                List.of("Наименование", "Цена"),
+                List.of(List.of("Стойка передняя Прадо", "4000"),
+                        List.of("Рычаг задний Прадо", "1500"),
+                        List.of("Дверь задняя Прадо", "9000")));
+
+        ExcelWarehouseImporter.Report report =
+                inTenant(() -> load(book, Map.of(Field.NAME, 0, Field.PRICE, 1)));
+
+        assertThat(report.imported()).as("пропущено: %s", report.skipped()).isEqualTo(3);
+        assertThat(report.skipped()).isEmpty();
+        assertThat(report.quantityDefaulted()).isEqualTo(3);
+        for (String title : List.of("Стойка передняя Прадо", "Рычаг задний Прадо",
+                "Дверь задняя Прадо")) {
+            assertThat(stockOf(title)).as("остаток «%s»", title).isEqualByComparingTo("1");
+        }
+    }
+
+    /**
+     * Повтор отдаёт и число позиций, заведённых по одной штуке.
+     *
+     * <p>Повтор смотрят тогда, когда первого ответа не видели, и «заведено
+     * 2 897» без «по одной штуке» читается как точный склад — та же потеря,
+     * что «пропущено 0» у пропущенных строк.
+     */
+    @Test
+    @DisplayName("Повтор возвращает и число позиций, заведённых по одной штуке")
+    void repeatKeepsDefaultedCount() throws Exception {
+        byte[] book = workbook(
+                List.of("Наименование", "Кол-во"),
+                List.of(List.of("Крыло левое", ""),
+                        List.of("Крыло правое", "2"),
+                        List.of("", "1")));
+        String key = java.util.UUID.randomUUID().toString();
+        Map<Field, Integer> columns = Map.of(Field.NAME, 0, Field.QUANTITY, 1);
+
+        ExcelWarehouseImporter.Report first = inTenant(() -> load(book, key, columns));
+        ExcelWarehouseImporter.Report again = inTenant(() -> load(book, key, columns));
+
+        assertThat(first.quantityDefaulted()).isEqualTo(1);
+        assertThat(again.quantityDefaulted())
+                .as("повтор потерял число позиций, заведённых по одной штуке")
+                .isEqualTo(1);
+        assertThat(again.skipped())
+                .as("число по одной штуке не должно стать пропущенной строкой")
+                .containsExactlyElementsOf(first.skipped());
     }
 
     @Test
@@ -360,13 +445,22 @@ class ExcelImportTest extends PostgresTestBase {
     void refusesWithoutRequiredColumns() {
         byte[] book;
         try {
-            book = workbook(List.of("Наименование"), List.of(List.of("Фара")));
+            book = workbook(List.of("Наименование", "Кол-во"), List.of(List.of("Фара", "1")));
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
 
-        assertThatThrownBy(() -> inTenant(() -> load(book, Map.of(Field.NAME, 0))))
-                .hasMessageContaining("QUANTITY");
+        // Обязательно одно наименование: количества может не быть (задача 0279).
+        assertThatThrownBy(() -> inTenant(() -> load(book, Map.of(Field.QUANTITY, 1))))
+                .hasMessageContaining("NAME");
+    }
+
+    private BigDecimal stockOf(String title) {
+        return inTenant(() -> jdbc.queryForObject("""
+                SELECT COALESCE(sum(s.qty), 0) FROM part_stock s
+                  JOIN part p ON p.id = s.part_id
+                 WHERE p.title = ? AND s.warehouse_id = ?""",
+                BigDecimal.class, title, warehouse));
     }
 
     private ExcelWarehouseImporter.Report load(byte[] book, Map<Field, Integer> columns) {
