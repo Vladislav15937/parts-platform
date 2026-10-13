@@ -35,6 +35,15 @@ export const FIELDS = [
   // качает отдельный проход «Фотографии» ниже на экране (задача 0273).
   { key: 'PHOTOS', label: 'Фото', required: false, dromOnly: false },
   { key: 'DROM_AD_NUMBER', label: 'Номер объявления Дрома', required: false, dromOnly: false },
+  // Поля карточки Дрома (задача 0277). Сервер их по заголовку чужой таблицы
+  // не угадывает — сопоставляются договором файла переноса или руками здесь.
+  { key: 'CONDITION', label: 'Состояние', required: false, dromOnly: false },
+  { key: 'MANUFACTURER', label: 'Производитель', required: false, dromOnly: false },
+  { key: 'AUTHENTICITY', label: 'Оригинальность', required: false, dromOnly: false },
+  { key: 'OEM_SUBSTITUTES', label: 'Номера замен', required: false, dromOnly: false },
+  { key: 'SIDE_LR', label: 'Сторона', required: false, dromOnly: false },
+  { key: 'SIDE_FR', label: 'Положение', required: false, dromOnly: false },
+  { key: 'SIDE_UD', label: 'Верх/низ', required: false, dromOnly: false },
 ] as const;
 
 export type FieldKey = (typeof FIELDS)[number]['key'];

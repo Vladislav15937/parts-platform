@@ -1,6 +1,6 @@
 import { CONDITION, qualityTitle, type CatalogRow } from './catalog';
 
-const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.' };
+const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.', BOTH: 'лев., прав.' };
 const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.' };
 
 /**
@@ -50,6 +50,8 @@ export function cardFields(row: CatalogRow): Array<[string, string]> {
   add('Цвет', row.color);
   add('Секция', row.section);
   add('Производитель', row.manufacturer);
+  // «Оригинал» с карточки клиента на Дроме — его слово, дословно (задача 0277).
+  add('Оригинальность', row.authenticity ?? null);
   add('Номер производителя', row.oem);
   add('Кросс-номера', row.crosses);
   // Установка на месте — отдельная услуга и отдельные деньги: она есть
