@@ -259,8 +259,11 @@ export function ImportScreen({ reference, canImport }: Props) {
                 искать по ним.
               </p>
               <ul className="suggestions">
-                {report.skipped.slice(0, 20).map((skip) => (
-                  <li key={skip.row}>
+                {/* Ключ — место в списке, а не номер строки: пропуски листа
+                    «Продолжение» несут номер своего листа, и он совпадает
+                    с номером строки первого (задача 0281). */}
+                {report.skipped.slice(0, 20).map((skip, index) => (
+                  <li key={index}>
                     строка {skip.row} — {skip.reason}
                   </li>
                 ))}
