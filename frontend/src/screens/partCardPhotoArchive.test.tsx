@@ -120,7 +120,7 @@ function row(): CatalogRow {
     partName: null,
     published: null,
     barcode: null,
-    legacyCode: null,
+    legacyCode: null, dromAdNumber: null,
     videoUrl: null,
     textBlock: null,
     weightKg: null,

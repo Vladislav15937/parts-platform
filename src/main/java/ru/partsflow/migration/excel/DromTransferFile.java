@@ -45,7 +45,7 @@ public final class DromTransferFile {
 
     /** Порядок — тот, в котором парсер кладёт колонки. Импорт ищет по заголовку. */
     public static final List<Column> COLUMNS = List.of(
-            new Column(ANCHOR, true, null),
+            new Column(ANCHOR, true, Field.DROM_AD_NUMBER),
             new Column("Ссылка", true, null),
             new Column("Наименование", true, Field.NAME),
             new Column("Вид детали", true, null),

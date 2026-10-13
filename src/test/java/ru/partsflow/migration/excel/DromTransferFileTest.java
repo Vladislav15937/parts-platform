@@ -86,7 +86,6 @@ class DromTransferFileTest extends PostgresTestBase {
 
     /** Колонки договора, которые импорт ещё не читает, — и кто их прочтёт. */
     private static final Map<String, String> PENDING = Map.ofEntries(
-            Map.entry("Номер объявления Дрома", "0274"),
             Map.entry("Ссылка", "0274"),
             Map.entry("Вид детали", "0278"),
             Map.entry("Раздел", "0278"),
@@ -111,6 +110,10 @@ class DromTransferFileTest extends PostgresTestBase {
 
     /** Колонки, которые импорт читает, — и чем это доказано. */
     private static final Map<String, Check> CHECKS = Map.of(
+            "Номер объявления Дрома", (t, part, value) -> assertThat(t.column(part,
+                    "SELECT drom_ad_number FROM part WHERE id = ?", String.class))
+                    .as("номер объявления из файла не доехал до позиции")
+                    .isEqualTo(value),
             "Наименование", (t, part, value) -> assertThat(t.column(part,
                     "SELECT title FROM part WHERE id = ?", String.class))
                     .as("заголовок клиента доехал не дословно")
@@ -167,6 +170,14 @@ class DromTransferFileTest extends PostgresTestBase {
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
                 VALUES (?, ?, 'Разборка с Дрома', ?)""", REGISTRY_ID, TENANT, COMPANY);
         warehouseId = inTenant(() -> {
+            // Образец грузится в каждом тесте этого класса, а объявление, номер
+            // которого уже есть, второй позицией не заводится (задача 0274):
+            // без очистки второй тест видел бы «уже у позиции» вместо загрузки.
+            jdbc.update("DELETE FROM import_run");
+            jdbc.update("DELETE FROM part_oem");
+            jdbc.update("DELETE FROM part_stock");
+            jdbc.update("DELETE FROM stock_movement");
+            jdbc.update("DELETE FROM part");
             if (jdbc.queryForList("SELECT id FROM tenant_member WHERE login = 'owner'").isEmpty()) {
                 jdbc.update("""
                         INSERT INTO tenant_member (display_name, role, login, password_hash)

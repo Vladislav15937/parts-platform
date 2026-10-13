@@ -68,6 +68,8 @@ export interface CatalogRow {
   published: boolean | null;
   barcode: string | null;
   legacyCode: string | null;
+  /** Номер объявления Дрома, только цифры: клиент сверяет по нему кабинет. */
+  dromAdNumber: string | null;
   videoUrl: string | null;
   textBlock: string | null;
   weightKg: number | null;

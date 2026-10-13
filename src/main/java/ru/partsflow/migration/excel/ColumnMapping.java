@@ -67,7 +67,10 @@ public final class ColumnMapping {
          * никто не подтверждал («Фото: есть/нет» в самодельной таблице).
          * Сопоставляется договором файла переноса с Дрома или руками на экране.
          */
-        PHOTOS(true);
+        PHOTOS(true),
+        // Без синонимов: колонку узнаёт только договор файла переноса с Дрома.
+        // Догадкой «номер» её не найти — «Номер» это OEM, а не объявление.
+        DROM_AD_NUMBER(true);
 
         private final boolean imported;
         private final List<String> synonyms;

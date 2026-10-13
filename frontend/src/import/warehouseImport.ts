@@ -34,6 +34,7 @@ export const FIELDS = [
   // Ссылки на снимки, по одной на строку ячейки, главный первым. Сами файлы
   // качает отдельный проход «Фотографии» ниже на экране (задача 0273).
   { key: 'PHOTOS', label: 'Фото', required: false, dromOnly: false },
+  { key: 'DROM_AD_NUMBER', label: 'Номер объявления Дрома', required: false, dromOnly: false },
 ] as const;
 
 export type FieldKey = (typeof FIELDS)[number]['key'];
