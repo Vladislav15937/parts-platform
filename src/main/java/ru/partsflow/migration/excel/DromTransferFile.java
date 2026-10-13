@@ -101,7 +101,8 @@ public final class DromTransferFile {
         return -1;
     }
 
-    private static String normalize(String title) {
+    /** Сравнение названий колонок: края, регистр и «ё» не различаются. */
+    static String normalize(String title) {
         return title == null ? "" : title.strip().toLowerCase(Locale.ROOT).replace('ё', 'е');
     }
 }

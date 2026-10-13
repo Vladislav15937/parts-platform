@@ -142,14 +142,30 @@ public class ExcelWarehouseImporter {
         Tally report = new Tally();
         List<Row> batch = new ArrayList<>(BATCH_SIZE);
         boolean[] headerSeen = {false};
+        // Хвосты длинных значений файла переноса с Дрома (лист «Продолжение»):
+        // склеиваются с ячейкой до разбора строки, см. DromContinuation.
+        DromContinuation continuation = new DromContinuation();
+        boolean[] stitching = {false};
 
-        ExcelSheetReader.read(in, row -> {
+        String firstSheet = ExcelSheetReader.read(in, DromContinuation.SHEET, side -> {
+            continuation.accept(side);
+            return true;
+        }, row -> {
             if (!headerSeen[0]) {
                 headerSeen[0] = true;
+                // Сопоставление сюда приходит без заголовка — файл переноса
+                // узнаётся по самой первой строке.
+                stitching[0] = DromTransferFile.recognizes(row.cells()) && !continuation.isEmpty();
+                if (stitching[0]) {
+                    continuation.header(row.cells());
+                }
                 return true;
             }
             if (row.isEmpty()) {
                 return true;
+            }
+            if (stitching[0]) {
+                row = continuation.stitch(row);
             }
             Row parsed = parse(row, mapping, report);
             if (parsed != null) {
@@ -161,6 +177,9 @@ public class ExcelWarehouseImporter {
             return true;
         });
         flush(batch, warehouseId, cells, names, report);
+        if (stitching[0]) {
+            continuation.finish(firstSheet).forEach(p -> report.continuation(p.row(), p.reason()));
+        }
 
         // Движения записаны, применить их надо пачкой: тысяча строк — тысяча
         // обращений к базе, если делать это по одному. Остаток и статус
@@ -231,12 +250,14 @@ public class ExcelWarehouseImporter {
      */
     private List<Report.Skipped> skippedOf(String requestId) {
         return jdbc.query("""
-                        SELECT (e->>'row')::int AS row_number, e->>'reason' AS reason
+                        SELECT (e->>'row')::int AS row_number, e->>'reason' AS reason,
+                               e->>'sheet' AS sheet
                           FROM import_run r
                          CROSS JOIN LATERAL jsonb_array_elements(r.skipped) e
                          WHERE r.client_request_id = ?
                            AND e->>'reason' IS NOT NULL""",
-                (rs, i) -> new Report.Skipped(rs.getInt("row_number"), rs.getString("reason")),
+                (rs, i) -> new Report.Skipped(rs.getInt("row_number"), rs.getString("reason"),
+                        rs.getString("sheet")),
                 requestId);
     }
 
@@ -254,14 +275,40 @@ public class ExcelWarehouseImporter {
      */
     private static String skippedJson(Report report) {
         java.util.stream.Stream<String> skipped = report.skipped().stream()
-                .map(s -> "{\"row\":%d,\"reason\":\"%s\"}"
-                        .formatted(s.row(), s.reason().replace('"', '\'')));
+                .map(s -> "{\"row\":%d,\"reason\":\"%s\"%s}"
+                        .formatted(s.row(), jsonText(s.reason()), s.sheet() == null ? ""
+                                : ",\"sheet\":\"" + jsonText(s.sheet()) + "\""));
         java.util.stream.Stream<String> defaulted = report.quantityDefaulted() == 0
                 ? java.util.stream.Stream.empty()
                 : java.util.stream.Stream.of(
                         "{\"quantityDefaulted\":%d}".formatted(report.quantityDefaulted()));
         return java.util.stream.Stream.concat(skipped, defaulted)
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+    }
+
+    /**
+     * Причина как строка JSON без кавычек по краям.
+     *
+     * <p>Причина несёт текст из файла — «Наличие» дословно, название колонки
+     * с листа «Продолжение» (задача 0281), — и обратная косая или перевод
+     * строки в нём делали JSON битым: запись итога падала, и весь импорт
+     * откатывался отказом базы вместо названной строки. Кавычка по-прежнему
+     * меняется на апостроф — так было, и повтор отдаёт то же написание.
+     */
+    private static String jsonText(String reason) {
+        StringBuilder out = new StringBuilder(reason.length());
+        for (char c : reason.toCharArray()) {
+            if (c == '"') {
+                out.append('\'');
+            } else if (c == '\\') {
+                out.append("\\\\");
+            } else if (c < 0x20) {
+                out.append(String.format("\\u%04x", (int) c));
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
     }
 
 
@@ -627,7 +674,18 @@ public class ExcelWarehouseImporter {
      */
     public record Report(int imported, List<Skipped> skipped, int quantityDefaulted) {
 
-        public record Skipped(int row, String reason) {
+        /**
+         * @param sheet лист, к которому относится строка; {@code null} — первый.
+         *              Повреждения листа «Продолжение» несут его имя: номер
+         *              строки у них — строка того листа, и экран показывает их
+         *              отдельно и целиком, а не в общем списке под пределом
+         *              (задача 0281)
+         */
+        public record Skipped(int row, String reason, String sheet) {
+
+            public Skipped(int row, String reason) {
+                this(row, reason, null);
+            }
         }
     }
 
@@ -645,6 +703,16 @@ public class ExcelWarehouseImporter {
             if (skipped.size() < 200) {
                 skipped.add(new Skipped(rowNumber, reason));
             }
+        }
+
+        /**
+         * Сказать без предела в двести. Повреждения листа «Продолжение»
+         * дописываются после всех строк первого листа, и под пределом они
+         * пропадали бы ровно у того файла, где пропусков и так много, — то есть
+         * значение было бы обрезано молча. Их не больше, чем строк того листа.
+         */
+        void continuation(int rowNumber, String reason) {
+            skipped.add(new Skipped(rowNumber, reason, DromContinuation.SHEET));
         }
 
         Report toReport() {
