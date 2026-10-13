@@ -391,9 +391,10 @@ public class ExcelWarehouseImporter {
             // нет на странице вовсе (задача 0279), и пропуск здесь значил бы
             // «пропущено 2 897: нет количества» на весь перенос. Одна штука —
             // догадка, поэтому её число уходит в отчёт, а экран говорит
-            // о ней до загрузки.
+            // о ней до загрузки. Считается оно при вставке, а не здесь
+            // (задача 0284): строка ещё может быть пропущена ниже или
+            // дозаполнить уже перенесённую позицию.
             quantity = BigDecimal.ONE;
-            report.quantityDefaulted++;
             quantityFromFile = false;
         } else {
             quantity = number(rawQuantity);
@@ -632,6 +633,9 @@ public class ExcelWarehouseImporter {
             // в конце importInto.
 
             report.imported++;
+            if (!row.quantityFromFile()) {
+                report.quantityDefaulted++;
+            }
             if (row.dromAd() == null) {
                 report.withoutAdNumber++;
             }
@@ -1204,7 +1208,11 @@ public class ExcelWarehouseImporter {
     private static final class Tally {
 
         private int imported;
-        /** Строк, заведённых по одной штуке, потому что количества в файле нет. */
+        /**
+         * Позиций, заведённых по одной штуке, потому что количества в файле нет.
+         * Часть {@link #imported}: пропущенная или дозаполненная строка сюда
+         * не входит (задача 0284).
+         */
         private int quantityDefaulted;
         private final List<Skipped> skipped = new ArrayList<>();
 
