@@ -142,14 +142,30 @@ public class ExcelWarehouseImporter {
         Tally report = new Tally();
         List<Row> batch = new ArrayList<>(BATCH_SIZE);
         boolean[] headerSeen = {false};
+        // Хвосты длинных значений файла переноса с Дрома (лист «Продолжение»):
+        // склеиваются с ячейкой до разбора строки, см. DromContinuation.
+        DromContinuation continuation = new DromContinuation();
+        boolean[] stitching = {false};
 
-        ExcelSheetReader.read(in, row -> {
+        String firstSheet = ExcelSheetReader.read(in, DromContinuation.SHEET, side -> {
+            continuation.accept(side);
+            return true;
+        }, row -> {
             if (!headerSeen[0]) {
                 headerSeen[0] = true;
+                // Сопоставление сюда приходит без заголовка — файл переноса
+                // узнаётся по самой первой строке.
+                stitching[0] = DromTransferFile.recognizes(row.cells()) && !continuation.isEmpty();
+                if (stitching[0]) {
+                    continuation.header(row.cells());
+                }
                 return true;
             }
             if (row.isEmpty()) {
                 return true;
+            }
+            if (stitching[0]) {
+                row = continuation.stitch(row);
             }
             Row parsed = parse(row, mapping, report);
             if (parsed != null) {
@@ -161,6 +177,9 @@ public class ExcelWarehouseImporter {
             return true;
         });
         flush(batch, warehouseId, cells, names, report);
+        if (stitching[0]) {
+            continuation.finish(firstSheet).forEach(p -> report.skip(p.row(), p.reason()));
+        }
 
         // Движения записаны, применить их надо пачкой: тысяча строк — тысяча
         // обращений к базе, если делать это по одному. Остаток и статус
@@ -255,13 +274,38 @@ public class ExcelWarehouseImporter {
     private static String skippedJson(Report report) {
         java.util.stream.Stream<String> skipped = report.skipped().stream()
                 .map(s -> "{\"row\":%d,\"reason\":\"%s\"}"
-                        .formatted(s.row(), s.reason().replace('"', '\'')));
+                        .formatted(s.row(), jsonText(s.reason())));
         java.util.stream.Stream<String> defaulted = report.quantityDefaulted() == 0
                 ? java.util.stream.Stream.empty()
                 : java.util.stream.Stream.of(
                         "{\"quantityDefaulted\":%d}".formatted(report.quantityDefaulted()));
         return java.util.stream.Stream.concat(skipped, defaulted)
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+    }
+
+    /**
+     * Причина как строка JSON без кавычек по краям.
+     *
+     * <p>Причина несёт текст из файла — «Наличие» дословно, название колонки
+     * с листа «Продолжение» (задача 0281), — и обратная косая или перевод
+     * строки в нём делали JSON битым: запись итога падала, и весь импорт
+     * откатывался отказом базы вместо названной строки. Кавычка по-прежнему
+     * меняется на апостроф — так было, и повтор отдаёт то же написание.
+     */
+    private static String jsonText(String reason) {
+        StringBuilder out = new StringBuilder(reason.length());
+        for (char c : reason.toCharArray()) {
+            if (c == '"') {
+                out.append('\'');
+            } else if (c == '\\') {
+                out.append("\\\\");
+            } else if (c < 0x20) {
+                out.append(String.format("\\u%04x", (int) c));
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
     }
 
 
