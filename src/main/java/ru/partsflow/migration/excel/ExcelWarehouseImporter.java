@@ -60,16 +60,37 @@ public class ExcelWarehouseImporter {
     private final ru.partsflow.inventory.StockLedger ledger;
     private final ru.partsflow.inventory.PartChangeLog changeLog;
     private final com.fasterxml.jackson.databind.ObjectMapper json;
+    private final ru.partsflow.inventory.DromApplicabilityService dromApplicability;
 
     public ExcelWarehouseImporter(JdbcTemplate jdbc, PartNameService partNames,
                                   ru.partsflow.inventory.StockLedger ledger,
                                   ru.partsflow.inventory.PartChangeLog changeLog,
-                                  com.fasterxml.jackson.databind.ObjectMapper json) {
+                                  com.fasterxml.jackson.databind.ObjectMapper json,
+                                  ru.partsflow.inventory.DromApplicabilityService dromApplicability) {
         this.jdbc = jdbc;
         this.partNames = partNames;
         this.ledger = ledger;
         this.changeLog = changeLog;
         this.json = json;
+        this.dromApplicability = dromApplicability;
+    }
+
+    /**
+     * «Подходит», только что записанный позиции, раскладывается в справочную
+     * применимость сразу (задача 0289) — в транзакции загрузки: позиция и её
+     * разложение появляются вместе или не появляются вовсе. Только у позиций,
+     * которым эта загрузка текст и записала, — у прочих разбор уже делался
+     * (или его сделает кнопка), и строка, снятая владельцем руками, повтором
+     * файла не вернётся.
+     */
+    private void layApplicability(long partId, String text, Tally report) {
+        if (text == null) {
+            return;
+        }
+        if (report.vehicles == null) {
+            report.vehicles = dromApplicability.dictionary();
+        }
+        dromApplicability.applyTo(partId, text, report.vehicles, report.applicability);
     }
 
     /**
@@ -599,6 +620,7 @@ public class ExcelWarehouseImporter {
                         partId, row.terms().warranty(), row.terms().pickup(),
                         row.terms().delivery(), row.terms().kind(), row.terms().section(),
                         row.terms().applicability());
+                layApplicability(partId, row.terms().applicability(), report);
             }
 
             // Номер, от которого после приведения ничего не осталось, — не номер:
@@ -876,6 +898,9 @@ public class ExcelWarehouseImporter {
                     partId, fromFile);
             if (updated > 0) {
                 report.filled(rule.label(), 0);
+                if (rule.field() == Field.APPLICABILITY) {
+                    layApplicability(partId, fromFile, report);
+                }
                 return true;
             }
             // Ноль строк: блок заполнили между нашим чтением и записью.
@@ -1345,6 +1370,10 @@ public class ExcelWarehouseImporter {
         private final List<Report.Discrepancy> discrepancies = new ArrayList<>();
         /** Поле → {позиций, ссылок}. */
         private final Map<String, int[]> filled = new java.util.LinkedHashMap<>();
+        /** Справочник машин для разбора «Подходит» — читается при первой позиции с блоком. */
+        private ru.partsflow.inventory.DromApplicability.Dictionary vehicles;
+        private final ru.partsflow.inventory.DromApplicabilityService.Tally applicability =
+                new ru.partsflow.inventory.DromApplicabilityService.Tally();
 
         Tally() {
             REFILLED.values().forEach(label -> filled.put(label, new int[2]));

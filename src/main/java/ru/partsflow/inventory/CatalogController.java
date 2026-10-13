@@ -36,13 +36,16 @@ public class CatalogController {
     private final CatalogService catalog;
     private final PhotoStorage storage;
     private final PartService parts;
+    private final DromApplicabilityService dromApplicability;
 
     public CatalogController(CatalogService catalog,
                              PhotoStorage storage,
-                             PartService parts) {
+                             PartService parts,
+                             DromApplicabilityService dromApplicability) {
         this.catalog = catalog;
         this.storage = storage;
         this.parts = parts;
+        this.dromApplicability = dromApplicability;
     }
 
     @GetMapping
@@ -136,6 +139,21 @@ public class CatalogController {
     @PreAuthorize("hasRole('OWNER')")
     public CatalogService.Parsed applicabilityFromTitles() {
         return catalog.applyFromTitles();
+    }
+
+    /**
+     * Раскладывает блок «Подходит» карточек Дрома в справочную применимость —
+     * по уже загруженному складу (задача 0289).
+     *
+     * <p>Тем же, кому разбор наименований: проход по всему складу, и отменить
+     * его можно только правкой каждой карточки. Повтор безопасен: та же машина
+     * второй строкой не заводится, подтверждённое человеком не трогается,
+     * текст клиента не меняется.
+     */
+    @PostMapping("/applicability/from-drom")
+    @PreAuthorize("hasRole('OWNER')")
+    public DromApplicabilityService.Report applicabilityFromDrom() {
+        return dromApplicability.applyAll();
     }
 
     /** Добавляет машину в применимость позиции — из карточки. */
