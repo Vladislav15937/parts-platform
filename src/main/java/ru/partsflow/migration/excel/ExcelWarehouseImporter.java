@@ -317,6 +317,25 @@ public class ExcelWarehouseImporter {
             return null;
         }
 
+        // Поля карточки Дрома (задача 0277). Слово, которого разборщик
+        // не знает, останавливает строку и называется дословно: молча
+        // подставленная сторона или «б/у» — объявление клиента, переехавшее
+        // неправдой (почему не умолчание — в DromCardWords).
+        CardFields card;
+        try {
+            card = new CardFields(
+                    DromCardWords.condition(mapping.value(row, Field.CONDITION)),
+                    blankToNull(mapping.value(row, Field.MANUFACTURER)),
+                    blankToNull(mapping.value(row, Field.AUTHENTICITY)),
+                    substitutes(mapping.value(row, Field.OEM_SUBSTITUTES)),
+                    DromCardWords.lateral(mapping.value(row, Field.SIDE_LR)),
+                    DromCardWords.longitudinal(mapping.value(row, Field.SIDE_FR)),
+                    DromCardWords.vertical(mapping.value(row, Field.SIDE_UD)));
+        } catch (DromCardWords.Unknown unknown) {
+            report.skip(row.number(), unknown.getMessage());
+            return null;
+        }
+
         return new Row(
                 row.number(),
                 name,
@@ -326,7 +345,27 @@ public class ExcelWarehouseImporter {
                 blankToNull(mapping.value(row, Field.OEM)),
                 blankToNull(mapping.value(row, Field.NOTE)),
                 photoLinks(mapping.value(row, Field.PHOTOS)),
-                adNumber);
+                adNumber,
+                card);
+    }
+
+    /**
+     * Номера замен из ячейки — все и в том порядке, в каком стоят.
+     *
+     * <p>Договор пишет их через «, » (у амортизатора клиента их 55, и все
+     * обязаны доехать: по ним площадка находит деталь, когда спрашивают
+     * номером аналога). Точка с запятой и перевод строки тоже делят —
+     * таблица, поправленная руками, приносит и их. Повтор номера отбивает
+     * {@code part_oem_uk}, совпадение с главным — он же.
+     */
+    static List<String> substitutes(String cell) {
+        if (cell == null || cell.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(cell.split("[,;\\n\\r]"))
+                .map(String::strip)
+                .filter(number -> !number.isEmpty())
+                .toList();
     }
 
     /**
@@ -396,15 +435,22 @@ public class ExcelWarehouseImporter {
             // чтением и вставкой встанет вторая загрузка. Индекс дубль не пустит
             // в любом случае, но без этого человек получил бы «Операция нарушает
             // целостность данных» на весь файл вместо названной позиции.
+            CardFields card = row.card();
             List<Long> inserted = jdbc.queryForList("""
                     INSERT INTO part (category_id, part_name_id, title, price, note,
-                                      storage_cell_id, drom_ad_number)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                                      storage_cell_id, drom_ad_number,
+                                      condition, manufacturer, authenticity,
+                                      side_lr, side_fr, side_ud)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (drom_ad_number) WHERE drom_ad_number IS NOT NULL
                     DO NOTHING
                     RETURNING id""",
                     Long.class, partName.getCategoryId(), partName.getId(),
-                    row.name(), row.price(), row.note(), cellId, row.dromAd());
+                    row.name(), row.price(), row.note(), cellId, row.dromAd(),
+                    (card.condition() == null
+                            ? ru.partsflow.inventory.PartCondition.USED : card.condition()).name(),
+                    card.manufacturer(), card.authenticity(),
+                    nameOf(card.sideLr()), nameOf(card.sideFr()), nameOf(card.sideUd()));
             if (inserted.isEmpty()) {
                 skipIfAdTaken(row, report);
                 continue;
@@ -421,6 +467,20 @@ public class ExcelWarehouseImporter {
                         VALUES (?, ?, ?, true)
                         ON CONFLICT DO NOTHING""",
                         partId, row.oem(), normalizedOem);
+            }
+            // Номера замен — не главные, по одному на строку и в порядке
+            // ячейки: прайс и карточка собирают их по порядку заведения.
+            // Номер, от которого после приведения ничего не осталось,
+            // отбрасывается — та же причина, что у главного выше.
+            for (String substitute : card.substitutes()) {
+                String normalized = ru.partsflow.catalog.OemNumbers.normalize(substitute);
+                if (normalized != null) {
+                    jdbc.update("""
+                            INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
+                            VALUES (?, ?, ?, false)
+                            ON CONFLICT DO NOTHING""",
+                            partId, substitute, normalized);
+                }
             }
 
             // Снимки только ставятся в очередь: качает их отдельный проход
@@ -513,13 +573,33 @@ public class ExcelWarehouseImporter {
         }
     }
 
+    private static String nameOf(Enum<?> value) {
+        return value == null ? null : value.name();
+    }
+
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.strip();
     }
 
     private record Row(int number, String name, BigDecimal price, BigDecimal quantity,
                        String cell, String oem, String note, List<String> photos,
-                       String dromAd) {
+                       String dromAd, CardFields card) {
+    }
+
+    /**
+     * Поля карточки Дрома (задача 0277): состояние, производитель,
+     * оригинальность, номера замен, три стороны. Отдельной записью, а не
+     * семью полями {@link Row}: читаются и пишутся они одним куском.
+     *
+     * @param condition {@code null} — в файле не сказано, и позиция получает
+     *                  умолчание колонки «б/у», как любая без слова
+     */
+    private record CardFields(ru.partsflow.inventory.PartCondition condition,
+                              String manufacturer, String authenticity,
+                              List<String> substitutes,
+                              ru.partsflow.inventory.LateralSide sideLr,
+                              ru.partsflow.inventory.LongitudinalSide sideFr,
+                              ru.partsflow.inventory.VerticalSide sideUd) {
     }
 
     /**

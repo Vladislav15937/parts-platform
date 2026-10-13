@@ -1465,7 +1465,9 @@ public class PartService {
         }
 
         if (notBlank(filter.side())) {
-            where.append("\n AND p.side_lr = ?");
+            // Деталь «на обе стороны» — ответ и на «левую», и на «правую»:
+            // спросивший левый амортизатор о паре обязан узнать (задача 0277).
+            where.append("\n AND p.side_lr IN (?, 'BOTH')");
             args.add(sideOf(filter.side()));
         }
         if (notBlank(filter.position())) {

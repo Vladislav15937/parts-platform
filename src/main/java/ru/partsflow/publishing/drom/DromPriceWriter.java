@@ -107,6 +107,13 @@ public class DromPriceWriter {
             case NEW -> "Новое";
             case USED, REFURBISHED, CONTRACT -> "Б/у";
         });
+        // Оригинальность своим тегом, словом клиента дословно (задача 0277).
+        // Имя тега наше, как у sklad и nalichie: формат прайса запчастей
+        // выбираем мы, а техспециалист Дрома настраивает разбор под него.
+        // Взято по имени поля самой карточки Дрома (autoPartsAuthenticity),
+        // чтобы при настройке его было с чем сопоставить; ответа площадки
+        // о своём имени тега нет (tasks/0280).
+        element(w, "authenticity", offer.authenticity());
         element(w, "manufacturer", offer.manufacturer());
         element(w, "oem_number", offer.oemNumber());
         element(w, "analog_numbers", joinAnalogs(offer.analogNumbers()));
@@ -338,7 +345,11 @@ public class DromPriceWriter {
     }
 
     private static String lateralWord(LateralSide side) {
-        return side == null ? null : side == LateralSide.LEFT ? "левая" : "правая";
+        return side == null ? null : switch (side) {
+            case LEFT -> "левая";
+            case RIGHT -> "правая";
+            case BOTH -> "левая и правая";
+        };
     }
 
     private static String longitudinalWord(LongitudinalSide side) {
@@ -361,6 +372,13 @@ public class DromPriceWriter {
         return side == null ? null : switch (side) {
             case LEFT -> "лево";
             case RIGHT -> "право";
+            // «Левая, Правая» на карточке клиента. Какое слово Дром ждёт
+            // для «обе», не известно (вопрос Д в tasks/0280, ответа нет):
+            // пишем оба своих слова через запятую — так же, как номера
+            // в analog_numbers, — чтобы техспециалисту площадки было что
+            // сопоставить при настройке разбора. Промолчать было бы хуже:
+            // сторона у клиента на карточке есть, а у нас пропала бы.
+            case BOTH -> "лево,право";
         };
     }
 
