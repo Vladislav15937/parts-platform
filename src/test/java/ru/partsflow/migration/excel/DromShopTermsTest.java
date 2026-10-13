@@ -333,6 +333,36 @@ class DromShopTermsTest extends PostgresTestBase {
         assertThat(feedMarks()).isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("Первое заполнение блока на карточке (строки ещё нет) видно в ленте правок с автором")
+    void firstFillOfTheBlockIsInHistory() throws Exception {
+        load(file(List.of(row(AD_A, "Фара левая Toyota Camry")), Set.of(), null));
+        long part = partOf(AD_A);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_drom_card WHERE part_id = ?", Integer.class, part)))
+                .as("у позиции без блоков в файле строка завелась").isZero();
+
+        ObjectNode form = editable(part);
+        assertThat(form.path("warranty").isNull()).as("нет блока — null, не пустая строка").isTrue();
+        form.put("warranty", "Гарантия 14 дней");
+        update(part, form);
+
+        assertThat(terms(AD_A)).containsExactly("Гарантия 14 дней", null, null);
+        JsonNode history = json.readTree(mvc.perform(get("/api/parts/" + part + "/history")
+                        .session(login()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8));
+        List<String> seen = new ArrayList<>();
+        history.path("changes").forEach(c -> c.path("fields").forEach(f -> {
+            if ("Гарантия и условия возврата".equals(f.path("label").asText())) {
+                seen.add(c.path("author").asText() + ": " + f.path("before").asText("—")
+                        + " -> " + f.path("after").asText());
+            }
+        }));
+        assertThat(seen).as("первое заполнение блока не попало в ленту правок")
+                .containsExactly("Владелец: — -> Гарантия 14 дней");
+    }
+
     // --- файлы ---
 
     private static byte[] sample() throws Exception {

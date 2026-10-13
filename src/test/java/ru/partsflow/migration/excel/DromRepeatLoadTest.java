@@ -558,6 +558,51 @@ class DromRepeatLoadTest extends PostgresTestBase {
                 .isEqualTo(reference);
     }
 
+    /**
+     * Блоки карточки Дрома (задача 0285) пишутся в свою таблицу вставкой-или-обновлением,
+     * и условие «блок ещё пуст» стоит в {@code WHERE} этой инструкции. Без него шесть
+     * потоков, прочитавшие блок пустым, перезаписывали бы друг друга и насчитали бы
+     * поле дозаполненным не двадцать раз, а больше: прежний тест это не ловит —
+     * там блоков нет, а владельцем поправленное отсекает проверка до записи.
+     */
+    @RepeatedTest(3)
+    @DisplayName("Шесть одновременных повторов дозаполняют каждый блок карточки Дрома один раз")
+    void concurrentRefillCountsTermsOnce() throws Exception {
+        List<Map<String, String>> rows = generatedRows(20);
+        byte[] full = file(rows, Set.of(), null);
+        load(full);
+        Map<String, Map<String, Object>> reference = contentByAd();
+        inTenant(() -> {
+            clean();
+            return null;
+        });
+        load(file(rows, Set.of("Гарантия", "Самовывоз", "Доставка и оплата"), null));
+
+        List<JsonNode> reports = concurrently(6, full);
+
+        Map<String, Integer> filled = new TreeMap<>();
+        int refilled = 0;
+        List<String> discrepancies = new ArrayList<>();
+        for (JsonNode report : reports) {
+            JsonNode repeat = report.path("repeat");
+            refilled += repeat.path("refilled").asInt();
+            repeat.path("fields").forEach(f ->
+                    filled.merge(f.path("field").asText(), f.path("positions").asInt(), Integer::sum));
+            repeat.path("discrepancies").forEach(d -> discrepancies.add(d.path("text").asText()));
+        }
+        assertThat(discrepancies)
+                .as("проигравший повтор назвал расхождением блок, записанный победителем")
+                .isEmpty();
+        assertThat(filled)
+                .as("блок насчитан дозаполненным не один раз на позицию")
+                .isEqualTo(Map.of("Гарантия и условия возврата", 20, "Самовывоз", 20,
+                        "Доставка и оплата", 20));
+        // Позицию могут разделить победители разных блоков, поэтому не ровно 20.
+        assertThat(refilled).isBetween(20, 60);
+        assertThat(contentByAd()).as("итог шести повторов не тот, что у одной загрузки")
+                .isEqualTo(reference);
+    }
+
     private List<Map<String, String>> generatedRows(int count) {
         List<Map<String, String>> rows = new ArrayList<>();
         for (int i = 0; i < count; i++) {
