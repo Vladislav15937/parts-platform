@@ -160,6 +160,9 @@ class DromApplicabilityPassTest extends PostgresTestBase {
         JsonNode report = pressButton();
 
         assertThat(report.path("parts").asInt()).isEqualTo(3);
+        // 2. Подтверждённые — те же строки, и та, что грубее (4Runner у B), не снята и не дополнена.
+        assertThat(verified()).as("проход тронул подтверждённое человеком").isEqualTo(verifiedBefore);
+        assertThat(exists(verifiedA) && exists(verifiedB)).isTrue();
         assertThat(report.path("added").asInt()).as("A — два поколения, B — одно").isEqualTo(3);
         assertThat(report.path("refined").asInt()).as("у C строка из наименования дополнена годами")
                 .isEqualTo(1);
@@ -179,9 +182,6 @@ class DromApplicabilityPassTest extends PostgresTestBase {
                 .isFalse();
         assertThat(rowsOf(c)).containsExactly("Toyota/Land Cruiser Prado/-/1950-1955/Кузова: XJ9/нет");
         assertThat(exists(titleC)).as("уточнение завело новую строку вместо прежней").isTrue();
-        // 2. Подтверждённые — те же строки, и та, что грубее, не снята и не дополнена.
-        assertThat(verified()).as("проход тронул подтверждённое человеком").isEqualTo(verifiedBefore);
-        assertThat(exists(verifiedA) && exists(verifiedB)).isTrue();
         assertThat(rowsOf(b)).containsExactlyInAnyOrder(
                 "Toyota/4Runner/-/-/-/да",
                 "Toyota/4Runner/2009/2009-2013/Кузова: TRN285, GRN285/нет");
@@ -264,6 +264,7 @@ class DromApplicabilityPassTest extends PostgresTestBase {
         load(file(List.of(card(AD_A, "Фара левая", FITS_A), card(AD_B, "Фара правая", FITS_B),
                 card(AD_C, "Бампер", FITS_C)), Set.of()));
         inTenant(() -> jdbc.update("DELETE FROM part_applicability"));
+        inTenant(() -> jdbc.update("DELETE FROM part_change"));
     }
 
     private JsonNode pressButton() throws Exception {
