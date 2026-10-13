@@ -16,6 +16,7 @@ import {
   missingRequired,
   previewFile,
   quantityNote,
+  splitSkipped,
 } from '../import/warehouseImport';
 import type {
   BazonResult,
@@ -250,23 +251,7 @@ export function ImportScreen({ reference, canImport }: Props) {
               остаток.
             </p>
           )}
-          {report.skipped.length === 0 ? (
-            <p className="note">Все строки файла приняты.</p>
-          ) : (
-            <>
-              <p className="note">
-                Пропущено строк: {report.skipped.length}. Номера — как в Excel,
-                искать по ним.
-              </p>
-              <ul className="suggestions">
-                {report.skipped.slice(0, 20).map((skip) => (
-                  <li key={skip.row}>
-                    строка {skip.row} — {skip.reason}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
+          <SkippedReport skipped={report.skipped} />
           {columns.PHOTOS !== undefined && report.imported > 0 && (
             <p className="note">
               Ссылки на снимки поставлены в очередь. Сами файлы переносятся
@@ -743,4 +728,56 @@ function describe(cause: unknown, fallback: string): string {
     return cause.message;
   }
   return fallback;
+}
+
+/**
+ * Что из файла не легло: строки первого листа — списком под пределом
+ * в двадцать, повреждения остальных листов — отдельно и все (задача 0281).
+ *
+ * <p>Повреждения листа «Продолжение» — это значение, склеенное не целиком
+ * или не склеенное вовсе, и сервер дописывает их после строк первого листа.
+ * В общем списке под пределом у файла с Дрома, где «не в наличии» десятки,
+ * они уходили бы за двадцатый пункт, и человек не узнал бы, что объявление
+ * перенесено не на сто процентов. Номер строки у них — строка их листа,
+ * поэтому лист назван рядом с номером.
+ */
+function SkippedReport({ skipped }: { skipped: Report['skipped'] }) {
+  const { rows, sheets } = splitSkipped(skipped);
+  return (
+    <>
+      {rows.length === 0 ? (
+        <p className="note">Все строки файла приняты.</p>
+      ) : (
+        <>
+          <p className="note">
+            Пропущено строк: {rows.length}. Номера — как в Excel,
+            искать по ним.
+          </p>
+          <ul className="suggestions">
+            {/* Ключ — место в списке: номер строки не обязан быть единственным. */}
+            {rows.slice(0, 20).map((skip, index) => (
+              <li key={index}>
+                строка {skip.row} — {skip.reason}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {sheets.length > 0 && (
+        <>
+          <p className="note">
+            Лист «Продолжение» склеен не целиком: {sheets.length}. Значения
+            объявлений ниже перенесены обрезанными или без части.
+          </p>
+          <ul className="suggestions">
+            {sheets.map((skip, index) => (
+              <li key={index}>
+                строка {skip.row} листа «{skip.sheet}» — {skip.reason}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </>
+  );
 }

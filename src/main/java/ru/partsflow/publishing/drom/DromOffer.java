@@ -54,6 +54,9 @@ import java.util.List;
  *                     про деталь, а это — про то, когда её забрать.
  *                     {@code null} — товар уже на складе либо выгрузка
  *                     ожидаемый товар не выгружает
+ * @param authenticity оригинальность словом площадки, дословно («Оригинал»),
+ *                     как её написал клиент на карточке Дрома (задача 0277).
+ *                     {@code null} — не указана, и тег не пишется
  * @param clientText   заголовок и описание — текст клиента, перенесённый
  *                     с его объявления на Дроме, и уходят они дословно:
  *                     без чистки заголовка, без собранного описания и без
@@ -89,14 +92,19 @@ public record DromOffer(
         String videoUrl,
         String installationNote,
         String expectedNote,
+        String authenticity,
         boolean clientText) {
 
     /**
-     * Позиция, чей текст собираем мы, — всё, кроме перенесённых с Дрома.
+     * Позиция без оригинальности и с текстом, который собираем мы, —
+     * прежний состав, до задач 0277 и 0275.
      *
-     * <p>Отдельный конструктор, а не правка всех мест сборки: признак
-     * нужен ровно одному источнику (прайсу, читающему номер объявления),
-     * а остальным «текст наш» и есть прежнее поведение.
+     * <p>Оригинальность приезжает только с переносом с Дрома; у позиции,
+     * заведённой приёмкой или переносом из прежней системы, её нет,
+     * и всякое место, собирающее предложение руками, писало бы {@code null}.
+     * Признак «текст клиента» нужен ровно одному источнику (прайсу,
+     * читающему номер объявления), а остальным «текст наш» и есть прежнее
+     * поведение.
      */
     public DromOffer(String orderCode, String name, String partKind, String description,
                      BigDecimal price, BigDecimal availableQty, PartCondition condition,
@@ -111,7 +119,7 @@ public record DromOffer(
                 manufacturer, oemNumber, analogNumbers, lateralSide, longitudinalSide,
                 verticalSide, color, marking, placement, photos, carBrand, carModel,
                 bodyCode, engineCode, year, fromDonor, textBlock, videoUrl,
-                installationNote, expectedNote, false);
+                installationNote, expectedNote, null, false);
     }
 
     public boolean isAvailable() {

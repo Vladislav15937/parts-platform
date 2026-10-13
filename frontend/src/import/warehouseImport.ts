@@ -35,6 +35,15 @@ export const FIELDS = [
   // качает отдельный проход «Фотографии» ниже на экране (задача 0273).
   { key: 'PHOTOS', label: 'Фото', required: false, dromOnly: false },
   { key: 'DROM_AD_NUMBER', label: 'Номер объявления Дрома', required: false, dromOnly: false },
+  // Поля карточки Дрома (задача 0277). Сервер их по заголовку чужой таблицы
+  // не угадывает — сопоставляются договором файла переноса или руками здесь.
+  { key: 'CONDITION', label: 'Состояние', required: false, dromOnly: false },
+  { key: 'MANUFACTURER', label: 'Производитель', required: false, dromOnly: false },
+  { key: 'AUTHENTICITY', label: 'Оригинальность', required: false, dromOnly: false },
+  { key: 'OEM_SUBSTITUTES', label: 'Номера замен', required: false, dromOnly: false },
+  { key: 'SIDE_LR', label: 'Сторона', required: false, dromOnly: false },
+  { key: 'SIDE_FR', label: 'Положение', required: false, dromOnly: false },
+  { key: 'SIDE_UD', label: 'Верх/низ', required: false, dromOnly: false },
   // Текст объявления, который видит покупатель, — не «Примечание»: то
   // внутренний комментарий. Только у файла с Дрома (задача 0275): в чужой
   // таблице «Описание» по-прежнему угадывается примечанием, и выдать чужую
@@ -83,12 +92,36 @@ export function notTransferred(
 
 export interface Report {
   imported: number;
-  skipped: { row: number; reason: string }[];
+  /**
+   * `sheet` — лист, к которому относится строка; нет или `null` — первый.
+   * Повреждения листа «Продолжение» (задача 0281) несут его имя: номер строки
+   * у них — строка того листа.
+   */
+  skipped: { row: number; reason: string; sheet?: string | null }[];
   /**
    * Сколько позиций заведено по одной штуке, потому что количества в файле
    * не было. Ответ прежней версии поля не несёт — читать через `?? 0`.
    */
   quantityDefaulted?: number;
+}
+
+/**
+ * Пропуски первого листа и повреждения остальных — порознь.
+ *
+ * <p>Первые экран показывает списком под пределом в двадцать строк, вторые —
+ * отдельно и все: их дописывают после строк первого листа, и под общим
+ * пределом у файла с Дрома, где «не в наличии» десятки, повреждение листа
+ * «Продолжение» уходило бы за двадцатый пункт — значение обрезано, а экран
+ * молчит.
+ */
+export function splitSkipped(skipped: Report['skipped']): {
+  rows: Report['skipped'];
+  sheets: Report['skipped'];
+} {
+  return {
+    rows: skipped.filter((s) => s.sheet == null),
+    sheets: skipped.filter((s) => s.sheet != null),
+  };
 }
 
 /** Слова о количестве по умолчанию — дословно из критерия задачи 0279. */

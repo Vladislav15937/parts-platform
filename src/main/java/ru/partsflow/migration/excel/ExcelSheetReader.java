@@ -45,11 +45,40 @@ public final class ExcelSheetReader {
     /**
      * @param number номер строки в файле, с единицы — как его видит человек
      *               в Excel; в сообщениях об ошибках он и нужен
+     * @param cells  значения с обрезанными краями — то, что разбирает импорт
+     * @param raw    те же значения как есть, с краями. Нужны склейке листа
+     *               «Продолжение» ({@link DromContinuation}): парсер режет
+     *               длинное значение по переводу строки и оставляет его
+     *               в конце куска, и обрезанный край склеил бы две строки
+     *               в одну
      */
-    public record Row(int number, List<String> cells) {
+    public record Row(int number, List<String> cells, List<String> raw) {
+
+        public Row(int number, List<String> cells) {
+            this(number, cells, cells);
+        }
 
         public String at(int index) {
             return index >= 0 && index < cells.size() ? cells.get(index) : "";
+        }
+
+        public String rawAt(int index) {
+            return index >= 0 && index < raw.size() ? raw.get(index) : "";
+        }
+
+        /** Та же строка с другим значением в колонке {@code index} (как есть, с краями). */
+        public Row with(int index, String rawValue) {
+            List<String> newCells = new ArrayList<>(cells);
+            List<String> newRaw = new ArrayList<>(raw);
+            while (newCells.size() <= index) {
+                newCells.add("");
+            }
+            while (newRaw.size() <= index) {
+                newRaw.add("");
+            }
+            newCells.set(index, rawValue.trim());
+            newRaw.set(index, rawValue);
+            return new Row(number, List.copyOf(newCells), List.copyOf(newRaw));
         }
 
         public boolean isEmpty() {
@@ -59,24 +88,69 @@ public final class ExcelSheetReader {
 
     /** Читает первый лист книги. */
     public static void read(InputStream in, RowHandler handler) throws Exception {
+        read(in, null, null, handler);
+    }
+
+    /**
+     * Читает сначала лист с именем {@code sideSheet} целиком — если он в книге
+     * есть и он не первый, — затем первый лист.
+     *
+     * <p><b>Боковой лист раньше первого, а не после.</b> Лист «Продолжение»
+     * несёт хвосты значений первого листа, и склеить их надо до того, как
+     * строка уйдёт в разбор: строку первого листа импорт пишет в базу пачкой
+     * по ходу чтения, и хвост, прочитанный после, было бы некуда дописать.
+     * Книга при этом открывается один раз — {@code OPCPackage} держит её
+     * целиком, и листы читаются из него в любом порядке.
+     *
+     * @param sideSheet имя бокового листа (без учёта регистра и краёв);
+     *                  {@code null} — читать только первый
+     * @return имя первого листа — его называют сообщения о боковом
+     */
+    public static String read(InputStream in, String sideSheet, RowHandler side,
+                              RowHandler handler) throws Exception {
         try (OPCPackage pkg = OPCPackage.open(in)) {
             ReadOnlySharedStringsTable strings = new ReadOnlySharedStringsTable(pkg);
             XSSFReader reader = new XSSFReader(pkg);
             StylesTable styles = reader.getStylesTable();
+
+            if (sideSheet != null) {
+                XSSFReader.SheetIterator all = (XSSFReader.SheetIterator) reader.getSheetsData();
+                boolean first = true;
+                while (all.hasNext()) {
+                    try (InputStream sheet = all.next()) {
+                        String name = all.getSheetName();
+                        if (!first && name != null && name.strip().equalsIgnoreCase(sideSheet.strip())) {
+                            parse(sheet, styles, strings, side);
+                            break;
+                        }
+                    }
+                    first = false;
+                }
+            }
 
             XSSFReader.SheetIterator sheets = (XSSFReader.SheetIterator) reader.getSheetsData();
             if (!sheets.hasNext()) {
                 throw new IllegalArgumentException("В книге нет ни одного листа");
             }
             try (InputStream sheet = sheets.next()) {
-                XMLReader parser = org.apache.poi.util.XMLHelper.newXMLReader();
-                parser.setContentHandler(new XSSFSheetXMLHandler(
-                        styles, strings, new Collector(handler), new DataFormatter(), false));
-                parser.parse(new InputSource(sheet));
-            } catch (StopReading stop) {
-                // Обработчик сказал «хватит»: предпросмотр читает первые строки
-                // и не должен тянуть весь файл.
+                String name = sheets.getSheetName();
+                parse(sheet, styles, strings, handler);
+                return name;
             }
+        }
+    }
+
+    private static void parse(InputStream sheet, StylesTable styles,
+                              ReadOnlySharedStringsTable strings, RowHandler handler)
+            throws Exception {
+        try {
+            XMLReader parser = org.apache.poi.util.XMLHelper.newXMLReader();
+            parser.setContentHandler(new XSSFSheetXMLHandler(
+                    styles, strings, new Collector(handler), new DataFormatter(), false));
+            parser.parse(new InputSource(sheet));
+        } catch (StopReading stop) {
+            // Обработчик сказал «хватит»: предпросмотр читает первые строки
+            // и не должен тянуть весь файл.
         }
     }
 
@@ -85,6 +159,7 @@ public final class ExcelSheetReader {
 
         private final RowHandler handler;
         private final List<String> cells = new ArrayList<>();
+        private final List<String> raw = new ArrayList<>();
         private int rowNumber;
 
         Collector(RowHandler handler) {
@@ -94,6 +169,7 @@ public final class ExcelSheetReader {
         @Override
         public void startRow(int rowIndex) {
             cells.clear();
+            raw.clear();
             rowNumber = rowIndex + 1;
         }
 
@@ -104,13 +180,16 @@ public final class ExcelSheetReader {
             // приезжает в колонку количества.
             while (cells.size() < column) {
                 cells.add("");
+                raw.add("");
             }
-            cells.add(formattedValue == null ? "" : formattedValue.trim());
+            String value = formattedValue == null ? "" : formattedValue;
+            cells.add(value.trim());
+            raw.add(value);
         }
 
         @Override
         public void endRow(int rowIndex) {
-            if (!handler.test(new Row(rowNumber, List.copyOf(cells)))) {
+            if (!handler.test(new Row(rowNumber, List.copyOf(cells), List.copyOf(raw)))) {
                 throw new StopReading();
             }
         }

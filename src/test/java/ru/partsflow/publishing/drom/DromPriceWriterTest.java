@@ -470,7 +470,7 @@ class DromPriceWriterTest {
                     null, null, null, null, List.of(),
                     "Toyota", "Land Cruiser Prado", null, null, 2008, true,
                     "Текстовый блок", "https://video.example/1",
-                    "Стоимость установки: 500 р.", "Ожидается поступление", true);
+                    "Стоимость установки: 500 р.", "Ожидается поступление", null, true);
         }
 
         /** Текст единственного элемента с этим именем — как его прочтёт площадка. */

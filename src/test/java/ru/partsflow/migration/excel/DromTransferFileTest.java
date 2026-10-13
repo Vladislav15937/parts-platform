@@ -89,13 +89,6 @@ class DromTransferFileTest extends PostgresTestBase {
             Map.entry("Ссылка", "0274"),
             Map.entry("Вид детали", "0278"),
             Map.entry("Раздел", "0278"),
-            Map.entry("Состояние", "0277"),
-            Map.entry("Оригинальность", "0277"),
-            Map.entry("Производитель", "0277"),
-            Map.entry("Номера замен", "0277"),
-            Map.entry("Сторона", "0277"),
-            Map.entry("Положение", "0277"),
-            Map.entry("Верх/низ", "0277"),
             Map.entry("Применимость", "0278"),
             Map.entry("Гарантия", "0276"),
             Map.entry("Самовывоз", "0276"),
@@ -107,8 +100,14 @@ class DromTransferFileTest extends PostgresTestBase {
         void verify(DromTransferFileTest test, long partId, String fileValue);
     }
 
-    /** Колонки, которые импорт читает, — и чем это доказано. */
-    private static final Map<String, Check> CHECKS = Map.of(
+    /**
+     * Колонки, которые импорт читает, — и чем это доказано.
+     *
+     * <p>Поля карточки Дрома (задача 0277) проверяет {@link DromCardFieldsTest#CHECKS}
+     * и подмешивается сюда ({@link #withCardChecks}): одна проверка на колонку,
+     * а не две, разъехавшиеся бы на первой правке.
+     */
+    private static final Map<String, Check> CHECKS = withCardChecks(Map.of(
             "Номер объявления Дрома", (t, part, value) -> assertThat(t.column(part,
                     "SELECT drom_ad_number FROM part WHERE id = ?", String.class))
                     .as("номер объявления из файла не доехал до позиции")
@@ -154,7 +153,15 @@ class DromTransferFileTest extends PostgresTestBase {
                 assertThat(t.column(part, "SELECT note FROM part WHERE id = ?", String.class))
                         .as("описание объявления легло во внутреннее примечание")
                         .isNull();
-            });
+            }));
+
+    private static Map<String, Check> withCardChecks(Map<String, Check> own) {
+        Map<String, Check> all = new HashMap<>(own);
+        DromCardFieldsTest.CHECKS.forEach((title, card) -> all.put(title,
+                (t, part, value) -> card.verify((sql, id) -> t.inTenant(
+                        () -> t.jdbc.queryForList(sql, String.class, id)), part, value)));
+        return Map.copyOf(all);
+    }
 
     @Autowired
     private MockMvc mvc;
