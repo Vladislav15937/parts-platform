@@ -410,6 +410,10 @@ class DromShopTermsTest extends PostgresTestBase {
                 .as("наименование должно было не сопоставиться с эталоном").isNull();
         assertThat(kindAndSection(AD_A)).containsExactly(
                 "Штуковина Lexus GX400", "Автозапчасти → Неведомое");
+        assertThatThrownBy(() -> inTenant(() -> jdbc.update(
+                "UPDATE part_drom_card SET drom_kind = '  ', drom_section = ' ' WHERE part_id > 0")))
+                .as("схема приняла строку из одних пробелов")
+                .hasMessageContaining("part_drom_card_drom_");
     }
 
     @Test
