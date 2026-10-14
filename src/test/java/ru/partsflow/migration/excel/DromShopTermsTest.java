@@ -676,9 +676,10 @@ class DromShopTermsTest extends PostgresTestBase {
             + "Тип шины [predestination]: Обычная\n"
             + "Модель диска [discFirmAndModel]: noname";
 
-    /** Магнитола (строка 211 файла клиента): первые две строки дублируют друг друга. */
+    /** Усилитель — не колесо: «Прочие поля» без колёсных ключей (задача 0291). */
     private static final String AMPLIFIER = "Бренд [brand]: Pioneer\nКоличество каналов [channels]: 4";
 
+    /** Магнитола (строка 211 файла клиента): первые две строки дублируют друг друга. */
     private static final String RADIO = "model [model]: Toyota NHZT-W58\n"
             + "Модель магнитолы [model]: Toyota NHZT-W58\n"
             + "Размер [size]: 2 DIN — 178x100 мм";
