@@ -102,7 +102,8 @@ export interface CatalogRow {
   /**
    * Номер кузова из наименования («120») и номера кузовов единственного
    * поколения блока («150, 151»), когда поколение не показано потому, что
-   * они другого ряда (задача 0294); иначе пусто.
+   * номер ими не подтверждён (задачи 0294, 0299); иначе пусто. Номер есть,
+   * а кузовов нет — блок кузова не назвал, сверить было нечем.
    */
   vehicleTitleBody?: string | null;
   vehicleBlockBodies?: string | null;
@@ -139,9 +140,14 @@ export function vehicleHint(row: CatalogRow): string | undefined {
   const base = source === 'VERIFIED'
     ? 'По применимости, подтверждена человеком'
     : 'По применимости, разобрана автоматически';
-  if (row.vehicleTitleBody && row.vehicleBlockBodies) {
+  // Поколение не подтверждено номером кузова из наименования (0294, 0299):
+  // кузова другого ряда либо их нет вовсе. Подсказка не утверждает, что
+  // поколения нет, — только что сверить его не удалось.
+  if (row.vehicleTitleBody) {
     return `${base}. Поколение не определено: в наименовании ${row.vehicleTitleBody}, `
-      + `а «Подходит» называет кузова ${row.vehicleBlockBodies}`;
+      + (row.vehicleBlockBodies
+        ? `а «Подходит» называет кузова ${row.vehicleBlockBodies}`
+        : 'а «Подходит» не называет кузова');
   }
   const spans = row.vehicleSpans ?? 0;
   return spans > 1

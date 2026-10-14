@@ -421,7 +421,8 @@ public class CatalogController {
                       Integer vehicleSpans,
                       /**
                        * Номер кузова в наименовании и номера кузовов блока, когда
-                       * поколение не показано из-за их расхождения (задача 0294).
+                       * поколение не показано, потому что номер ими не подтверждён
+                       * (задачи 0294, 0299); кузовов нет — второе поле пусто.
                        */
                       String vehicleTitleBody, String vehicleBlockBodies,
                       Map<Long, java.math.BigDecimal> stock) {

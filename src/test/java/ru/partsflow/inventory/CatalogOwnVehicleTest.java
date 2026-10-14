@@ -115,7 +115,9 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
         row(part, surf, generation(surf, 2002), false);
         // «Land Cruiser» тоже стоит в наименовании — внутри «Land Cruiser Prado».
         row(part, cruiser, null, false);
-        row(part, prado, generation(prado, 2002), false);
+        // Кузова того же ряда, что «120» в наименовании: без них поколение
+        // не подтверждено (0299), а тест не про это.
+        row(part, prado, generation(prado, 2002), false, "Кузова: GRJ120W, KDJ121W");
 
         JsonNode row = only(page(""));
         assertThat(row.path("brand").asText()).isEqualTo("Toyota");
@@ -215,22 +217,29 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
     }
 
     /**
-     * «Накладка кнопки стеклоподъемника … Prado 12» (строка 1675 файла):
-     * клиент сократил 120 до «12». Ряд по правилу «число без последней
-     * цифры» был бы «1» и не совпал бы с кузовами 120 — правило потеряло бы
-     * верное поколение. Сокращение — тот же ряд.
+     * «Накладка кнопки стеклоподъемника … Prado 12» (строка 1675 файла).
+     * PR 419 читал «12» как сокращение 120-го ряда и показывал 2002. Решение
+     * владельца 14.10.2026 (задача 0299): поколение — только при уверенности,
+     * а «12» сокращением не считается. Ряд двузначного номера — «1»
+     * (правило 0294 «число без последней цифры»), с кузовами 120 он
+     * не совпадает: пусто, и подсказка называет, что с чем не сошлось.
      */
     @Test
-    @DisplayName("«Prado 12» — сокращение 120-го ряда: кузова 120 его, кузова 150 нет")
-    void twoDigitShorthandIsTheSeries() throws Exception {
+    @DisplayName("«Prado 12» — не сокращение 120-го: поколение пусто и при кузовах 120, и при 150")
+    void twoDigitNumberIsNotAShorthand() throws Exception {
         long own = part("Накладка кнопки стеклоподъемника заднее R Toyota Land Cruiser Prado 12");
         row(own, prado, generation(prado, 2002), false, "Кузова: GRJ120W, KDJ121W");
         long alien = part("Молдинг двери Toyota Land Cruiser Prado 12");
         row(alien, prado, generation(prado, 2009), false, "Кузова: GRJ150W");
 
-        JsonNode page = page("&sort=number");
-        assertThat(page.path("rows").get(0).path("yearFrom").asInt()).isEqualTo(2002);
-        assertThat(page.path("rows").get(1).path("yearFrom").isNull()).isTrue();
+        JsonNode rows = page("&sort=number").path("rows");
+        JsonNode first = rows.get(0);
+        assertThat(first.path("yearFrom").isNull())
+                .as("«Prado 12» при кузовах 120 — не подтверждено, значит пусто").isTrue();
+        assertThat(first.path("generation").isNull()).isTrue();
+        assertThat(first.path("vehicleTitleBody").asText()).isEqualTo("12");
+        assertThat(first.path("vehicleBlockBodies").asText()).isEqualTo("120, 121");
+        assertThat(rows.get(1).path("yearFrom").isNull()).isTrue();
     }
 
     @Test
@@ -267,13 +276,46 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
         }
     }
 
+    /**
+     * 14 позиций «Prado 150» файла клиента: номер в наименовании есть, а строка
+     * поколения кузовов не называет. PR 419 ставил поколение по правилу 0290;
+     * решение владельца 14.10.2026 (задача 0299) — сверить нечем, значит
+     * не подтверждено, значит пусто. Машина при этом остаётся: марка и модель
+     * на месте, пусты только поколение и годы — на всех поверхностях.
+     *
+     * <p>Без номера в наименовании правило 0290 не меняется: та же строка
+     * поколения без кузовов у «Рейлинга … Prado» показывается, как была.
+     */
     @Test
-    @DisplayName("Номер кузова в наименовании, но блок кузовов не назвал — прежнее правило 0290")
-    void noBodiesInTheBlockKeepsTheOldRule() throws Exception {
+    @DisplayName("Номер кузова в наименовании, а блок кузовов не назвал — поколение пусто, причина названа")
+    void noBodiesInTheBlockConfirmsNothing() throws Exception {
         long part = part("Рейлинг на крышу Toyota Land Cruiser Prado 150");
         row(part, prado, generation(prado, 2009), false, null);
+        long plain = part("Рейлинг на крышу правый Toyota Land Cruiser Prado");
+        row(plain, prado, generation(prado, 2009), false, null);
 
-        assertThat(only(page("")).path("yearFrom").asInt()).isEqualTo(2009);
+        JsonNode rows = page("&sort=number").path("rows");
+        JsonNode numbered = rows.get(0);
+        assertThat(numbered.path("model").asText()).isEqualTo("Land Cruiser Prado");
+        assertThat(numbered.path("generation").isNull())
+                .as("«150» в наименовании, а сверить не с чем — не подтверждено").isTrue();
+        assertThat(numbered.path("yearFrom").isNull()).isTrue();
+        assertThat(numbered.path("yearTo").isNull()).isTrue();
+        assertThat(numbered.path("vehicleTitleBody").asText()).isEqualTo("150");
+        assertThat(numbered.path("vehicleBlockBodies").isNull())
+                .as("кузовов у строки поколения нет — подсказке назвать нечего").isTrue();
+
+        JsonNode unnumbered = rows.get(1);
+        assertThat(unnumbered.path("yearFrom").asInt())
+                .as("номера в наименовании нет — правило 0290 как было").isEqualTo(2009);
+        assertThat(unnumbered.path("vehicleTitleBody").isNull()).isTrue();
+
+        // Все поверхности — одно выражение: отбор, список значений, файл.
+        String shown = unnumbered.path("generation").asText();
+        assertThat(titles(page("&filter=generation:" + shown)))
+                .containsExactly("Рейлинг на крышу правый Toyota Land Cruiser Prado");
+        assertThat(export()).contains("\"Рейлинг на крышу Toyota Land Cruiser Prado 150\";\"\";"
+                + "\"Toyota\";\"Land Cruiser Prado\";\"\";\"\"");
     }
 
     @Test
@@ -367,7 +409,7 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
     @DisplayName("Отбор и сортировка по марке и модели находят позицию без донора")
     void filterAndSortUseTheShownValue() throws Exception {
         long withCar = part("Дверь передняя правая Toyota Land Cruiser Prado 120");
-        row(withCar, prado, generation(prado, 2002), false);
+        row(withCar, prado, generation(prado, 2002), false, "Кузова: GRJ120W, KDJ121W");
         part("Теплообменник CCLNS004");
 
         assertThat(titles(page("&filter=brand:Toyota")))

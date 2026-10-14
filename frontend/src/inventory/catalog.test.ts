@@ -209,6 +209,20 @@ describe('подсказка клетки машины', () => {
       vehicleTitleBody: '120', vehicleBlockBodies: '150, 151' }))).toBe(text);
   });
 
+  it('называет причину, когда «Подходит» кузовов не называет вовсе (0299)', () => {
+    const unconfirmed = row({
+      vehicleSource: 'PARSED', vehicleSpans: 1,
+      vehicleTitleBody: '150', vehicleBlockBodies: null,
+    });
+    const text = 'По применимости, разобрана автоматически. Поколение не определено: '
+      + 'в наименовании 150, а «Подходит» не называет кузова';
+    expect(vehicleHint(unconfirmed)).toBe(text);
+    expect(hint('generation', unconfirmed)).toBe(text);
+    // Без номера в наименовании — прежнее правило 0290, подсказка про источник.
+    expect(vehicleHint(row({ vehicleSource: 'PARSED', vehicleSpans: 1 })))
+      .toBe('По применимости, разобрана автоматически');
+  });
+
   it('молчит, когда машины нет', () => {
     expect(vehicleHint(row())).toBeUndefined();
     expect(vehicleHint(row({ vehicleSource: null }))).toBeUndefined();
