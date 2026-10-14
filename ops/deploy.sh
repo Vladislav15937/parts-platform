@@ -1092,11 +1092,30 @@ undo_copy() {
     clear_marker
 }
 
+# Метка нужна `--abort` ровно в ту минуту, когда что-то уже пошло не так, и
+# зовущий останавливается до заморозки по её коду возврата. Значит «метку
+# поставили» — тоже след, а не цепочка кодов `set_env` (задача 0256): он
+# пишет файл через python3 и может ответить нулём, ничего не записав. Приём
+# тот же, что у clear_marker, — `read_env` по тем же четырём ключам.
 set_marker() {
     run set_env DEPLOY_COPY_DB "$COPY_DB" &&
     run set_env DEPLOY_COPY_FROM "$SOURCE_DB" &&
     run set_env DEPLOY_COPY_BUILD "$TARGET" &&
-    run set_env DEPLOY_COPY_PREV "$PREV_TARGET_DB"
+    run set_env DEPLOY_COPY_PREV "$PREV_TARGET_DB" || return 1
+    # При `--dry-run` `run` только печатает — перечитка краснела бы на показе.
+    if [ -n "${DRY:-}" ]; then
+        return 0
+    fi
+    local key missing=""
+    for key in DEPLOY_COPY_DB DEPLOY_COPY_FROM DEPLOY_COPY_BUILD DEPLOY_COPY_PREV; do
+        if [ -z "$(read_env "$key")" ]; then
+            missing="$missing$key "
+        fi
+    done
+    if [ -n "$missing" ]; then
+        red "  Метка выкладки в $ENV_FILE не записана: ${missing% }"
+        return 1
+    fi
 }
 
 # Метка снимается ДО открытия записи в копии, и зовущий полагается на её код
@@ -3070,6 +3089,33 @@ selftest() {
         esac
     fi
 
+    # Парный случай для постановки метки (задача 0256): та же болезнь, что
+    # у снятия, — `set_env` отвечает нулём и не пишет, а выкладка идёт дальше,
+    # снимает копию и морозит запись, считая метку записанной.
+    fresh_env
+    set_env() { return 0; }
+    COPY_DB=parts_copy SOURCE_DB=parts TARGET=app-green PREV_TARGET_DB=parts_prev
+    if DRY="" set_marker >"$dir/mark.out" 2>&1; then
+        nope "ПОСТАНОВКА МЕТКИ: set_env отчитался успехом, метки нет — шаг этого не заметил"
+    else
+        case "$(cat "$dir/mark.out")" in
+            *"не записана"*DEPLOY_COPY_DB*DEPLOY_COPY_PREV*) say "ПОСТАНОВКА МЕТКИ: незаписанные ключи названы" ;;
+            *) nope "постановка метки: незаписанные ключи не названы: $(tr '\n' ' ' < "$dir/mark.out")" ;;
+        esac
+    fi
+    eval "$real_setenv"
+    if DRY="" set_marker >"$dir/mark.out" 2>&1; then
+        say "постановка метки: записанное перечитано, все четыре ключа на месте"
+    else
+        nope "постановка метки: отказ на исправном файле: $(tr '\n' ' ' < "$dir/mark.out")"
+    fi
+    if DRY=yes set_marker >"$dir/mark.out" 2>&1; then
+        say "постановка метки: при --dry-run перечитка пропущена"
+    else
+        nope "постановка метки: --dry-run покраснел: $(tr '\n' ' ' < "$dir/mark.out")"
+    fi
+    fresh_env
+
     eval "$real_pg"
     eval "$real_kick"
     eval "$real_setenv"
@@ -3096,6 +3142,9 @@ selftest() {
         returns_defect "снятие метки снова не перечитывается" \
             's|^        red "  Метка выкладки.*|        return 0 # podelka|' \
             'return 0 # podelka' "метка осталась"
+        returns_defect "постановка метки снова не перечитывается" \
+            's|^        red "  Метка выкладки.*не записана.*|        return 0 # podelka-0256|' \
+            'return 0 # podelka-0256' "метки нет"
         # 26б. И третий исход перепроверки гашения (задача 0148): снятая
         #      оговорка возвращает прежнее состояние, где неотвеченный вопрос
         #      уезжал под успехом.
