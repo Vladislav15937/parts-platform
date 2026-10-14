@@ -508,7 +508,8 @@ public class ExcelWarehouseImporter {
                         verbatim(mapping.value(row, Field.DROM_KIND)),
                         verbatim(mapping.value(row, Field.DROM_SECTION)),
                         verbatim(mapping.value(row, Field.APPLICABILITY)),
-                        characteristics(mapping.value(row, Field.CHARACTERISTICS))));
+                        characteristics(mapping.value(row, Field.CHARACTERISTICS)),
+                        verbatim(mapping.value(row, Field.MAY_FIT))));
     }
 
     /**
@@ -647,12 +648,13 @@ public class ExcelWarehouseImporter {
                 jdbc.update("""
                         INSERT INTO part_drom_card (part_id, warranty, pickup, delivery_payment,
                                                     drom_kind, drom_section, applicability,
-                                                    characteristics)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                                    characteristics, may_fit)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT (part_id) DO NOTHING""",
                         partId, row.terms().warranty(), row.terms().pickup(),
                         row.terms().delivery(), row.terms().kind(), row.terms().section(),
-                        row.terms().applicability(), row.terms().characteristics());
+                        row.terms().applicability(), row.terms().characteristics(),
+                        row.terms().mayFit());
                 layApplicability(partId, row.terms().applicability(), report);
             }
 
@@ -736,7 +738,7 @@ public class ExcelWarehouseImporter {
                        p.note, p.description, p.condition, p.manufacturer, p.authenticity,
                        p.side_lr, p.side_fr, p.side_ud,
                        d.warranty, d.pickup, d.delivery_payment, d.drom_kind, d.drom_section,
-                       d.applicability, d.characteristics
+                       d.applicability, d.characteristics, d.may_fit
                   FROM part p
                   LEFT JOIN storage_cell c ON c.id = p.storage_cell_id
                   LEFT JOIN part_drom_card d ON d.part_id = p.id
@@ -796,7 +798,10 @@ public class ExcelWarehouseImporter {
             new Term(Field.APPLICABILITY, "applicability", "Применимость", Terms::applicability),
             // «Прочие поля» Дрома дословно (задача 0292): характеристики не-запчастей.
             new Term(Field.CHARACTERISTICS, "characteristics", "Характеристики",
-                    Terms::characteristics));
+                    Terms::characteristics),
+            // «Может подойти» дословно (задача 0293): догадка Дрома текстом. В справочную
+            // применимость не раскладывается — решение владельца 14.10.2026, tasks/0293.
+            new Term(Field.MAY_FIT, "may_fit", "Может подойти", Terms::mayFit));
 
     /**
      * Что повтор дозаполняет — поле и его имя в отчёте, в порядке отчёта.
@@ -869,7 +874,7 @@ public class ExcelWarehouseImporter {
                 case OEM_SUBSTITUTES -> changed |= refillSubstitutes(row, partId, label, report);
                 case PHOTOS -> changed |= refillPhotos(row, partId, label, report);
                 case WARRANTY, PICKUP, DELIVERY, DROM_KIND, DROM_SECTION, APPLICABILITY,
-                     CHARACTERISTICS ->
+                     CHARACTERISTICS, MAY_FIT ->
                         termsFilled |= refillTerm(termOf(field), row, part, partId, report);
                 default -> changed |= refillScalar(scalarOf(field), row, part, partId, report);
             }
@@ -1305,12 +1310,12 @@ public class ExcelWarehouseImporter {
      */
     private record Terms(String warranty, String pickup, String delivery,
                          String kind, String section, String applicability,
-                         String characteristics) {
+                         String characteristics, String mayFit) {
 
         boolean isEmpty() {
             return warranty == null && pickup == null && delivery == null
                     && kind == null && section == null && applicability == null
-                    && characteristics == null;
+                    && characteristics == null && mayFit == null;
         }
     }
 

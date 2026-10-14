@@ -8,7 +8,7 @@ import jakarta.persistence.Table;
 /**
  * Блоки карточки объявления Дрома: гарантия, самовывоз, доставка и оплата
  * (задача 0285), вид детали и раздел как у клиента (задача 0286), «Подходит»
- * (задача 0287), «Характеристики» (задача 0292).
+ * (задача 0287), «Характеристики» (задача 0292), «Может подойти» (задача 0293).
  *
  * <p><b>Отдельной сущностью, а не полями {@link Part}.</b> Тексты длинные
  * (доставка — около тысячи знаков на каждой позиции), а {@code Part} читают
@@ -65,6 +65,15 @@ public class PartDromCard {
     @Column(name = "characteristics")
     private String characteristics;
 
+    /**
+     * «Может подойти» объявления Дрома (задача 0293): второй блок применимости,
+     * догадка самого Дрома — строка на машину «Марка Модель — КОД, КОД…», как
+     * пришла. Только текст: в справочную {@code part_applicability} не
+     * раскладывается (решение владельца 14.10.2026, {@code tasks/0293}).
+     */
+    @Column(name = "may_fit")
+    private String mayFit;
+
     protected PartDromCard() {
     }
 
@@ -113,9 +122,13 @@ public class PartDromCard {
         return characteristics;
     }
 
+    public String getMayFit() {
+        return mayFit;
+    }
+
     public void set(String warranty, String pickup, String deliveryPayment,
                     String dromKind, String dromSection, String applicability,
-                    String characteristics) {
+                    String characteristics, String mayFit) {
         this.warranty = clean(warranty);
         this.pickup = clean(pickup);
         this.deliveryPayment = clean(deliveryPayment);
@@ -123,5 +136,6 @@ public class PartDromCard {
         this.dromSection = clean(dromSection);
         this.applicability = clean(applicability);
         this.characteristics = clean(characteristics);
+        this.mayFit = clean(mayFit);
     }
 }

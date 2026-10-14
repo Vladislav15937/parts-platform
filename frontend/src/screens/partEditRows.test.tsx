@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import { PartEditForm, changedNote } from './PartEditForm';
 import type { CatalogRow } from '../inventory/catalog';
@@ -351,6 +351,45 @@ describe('блоки карточки Дрома', () => {
     expect(sent[0]!['characteristics']).toBe(CHARACTERISTICS);
   });
 
+  it('«Может подойти» стоит под «Подходит», показано пунктами и свёрнуто; правка открывает текст как есть; очистка — пустая строка (задача 0293)', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Может подойти')).toBeTruthy());
+
+    // Слово Дрома и место: строкой сразу под «Подходит», а не где-то в карточке.
+    const labels = [...document.querySelectorAll('.card-edit__label')].map((l) => l.textContent ?? '');
+    const fits = labels.findIndex((l) => l.startsWith('Подходит'));
+    expect(fits, 'строки «Подходит» нет').toBeGreaterThanOrEqual(0);
+    expect(labels[fits + 1], '«Может подойти» стоит не под «Подходит»').toMatch(/^Может подойти/);
+
+    const view = line('Может подойти').querySelector('.fits')!;
+    expect(view, '«Может подойти» показано не пунктами').toBeTruthy();
+    // Свёрнуто: пять строк из семи, кириллическая «К» в коде как пришла.
+    expect([...view.querySelectorAll('div')].map((d) => d.textContent)).toEqual(MAY_FIT.split('\n').slice(0, 5));
+    fireEvent.click(within(view as HTMLElement).getByText('Показать все (7 строк)'));
+    expect([...view.querySelectorAll('div')].map((d) => d.textContent)).toEqual(MAY_FIT.split('\n'));
+
+    fireEvent.click(screen.getByLabelText('Изменить: Может подойти'));
+    expect((screen.getByLabelText('Может подойти') as HTMLTextAreaElement).value).toBe(MAY_FIT);
+    fireEvent.change(screen.getByLabelText('Может подойти'), { target: { value: '' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['mayFit'], 'очистка — пустая строка, null сервер прочёл бы как «не трогать»')
+      .toBe('');
+    expect(sent[0]!['applicability'], 'очистка «Может подойти» задела «Подходит»').toBe(APPLICABILITY);
+  });
+
+  it('нетронутое «Может подойти» уезжает как прочитано, байт в байт', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
+    fireEvent.click(save());
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['mayFit']).toBe(MAY_FIT);
+  });
+
   it('нетронутое «Подходит» уезжает как прочитано, байт в байт', async () => {
     render(<PartEditForm partId={7} row={row()} role="OWNER"
                          onSaved={() => {}} onCancel={() => {}} />);
@@ -414,6 +453,20 @@ const CHARACTERISTICS = [
   'Размер [size]: 2 DIN — 178x100 мм',
 ].join('\n');
 
+/**
+ * «Может подойти» как у клиента Strikexz: строка на машину, без поколений; семь строк —
+ * больше пяти, значит свёрнуто. Во второй строке первая буква кода — кириллическая «К».
+ */
+const MAY_FIT = [
+  'Toyota Land Cruiser Prado — KDJ120, KDJ120W, KZJ120, LJ120, LJ150L',
+  'Toyota Land Cruiser Prado — \u041aZJ95, \u041aZJ90',
+  'Toyota Hilux Surf — KZN185, VZN185',
+  'Toyota 4Runner — KZN185, VZN185',
+  'Lexus GX470 — UZJ120',
+  'Toyota Land Cruiser — HDJ100',
+  'Toyota Fortuner — KUN60',
+].join('\n');
+
 /** Восемь пунктов: больше пяти — значит, свёрнуто. Пустая часть и «Для двигателей» — как у клиента. */
 const APPLICABILITY = [
   'Lexus GX400 | GRJ158 | ',
@@ -443,6 +496,7 @@ function card(): Record<string, unknown> {
     dromSection: 'Автозапчасти → Трансмиссия',
     applicability: APPLICABILITY,
     characteristics: CHARACTERISTICS,
+    mayFit: MAY_FIT,
   };
 }
 

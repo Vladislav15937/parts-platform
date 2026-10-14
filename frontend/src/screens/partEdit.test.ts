@@ -19,6 +19,7 @@ function card(overrides: Partial<PartEdit> = {}): PartEdit {
     dromSection: 'Автозапчасти → Трансмиссия',
     applicability: 'Toyota 4Runner | 5 поколение (2009–2013) | TRN285, GRN285\nДля двигателей | 1GR-FE',
     characteristics: 'Бренд [model]: Zapco\nКоличество каналов [channel]: 4-канальный',
+    mayFit: 'Toyota Land Cruiser Prado — KDJ120, KDJ120W\nToyota Land Cruiser Prado — \u041aZJ95',
     ...overrides,
   };
 }
@@ -90,6 +91,14 @@ describe('форма правки карточки', () => {
     expect(toEdit(draftOf(card())).characteristics).toBe(card().characteristics);
     expect(toEdit({ ...draftOf(card()), characteristics: '' }).characteristics).toBe('');
     expect(draftOf(card({ characteristics: null })).characteristics).toBe('');
+  });
+
+  it('«Может подойти» уезжает дословно — с переводами строк и кириллической «К», очистка — пустая строка (задача 0293)', () => {
+    const text = ' Toyota Land Cruiser Prado — \u041aZJ95, \u041aZJ90\nLexus GX470 — UZJ120  ';
+    expect(toEdit({ ...draftOf(card()), mayFit: text }).mayFit).toBe(text);
+    expect(toEdit(draftOf(card())).mayFit).toBe(card().mayFit);
+    expect(toEdit({ ...draftOf(card()), mayFit: '' }).mayFit).toBe('');
+    expect(draftOf(card({ mayFit: null })).mayFit).toBe('');
   });
 
   it('очищенный блок уезжает пустой строкой, а не null', () => {
