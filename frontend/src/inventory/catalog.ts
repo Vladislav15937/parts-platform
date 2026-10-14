@@ -99,6 +99,13 @@ export interface CatalogRow {
   vehicleSource?: VehicleSource | null;
   /** Поколений у своей машины в применимости; больше одного — поколение не показано. */
   vehicleSpans?: number | null;
+  /**
+   * Номер кузова из наименования («120») и номера кузовов единственного
+   * поколения блока («150, 151»), когда поколение не показано потому, что
+   * они другого ряда (задача 0294); иначе пусто.
+   */
+  vehicleTitleBody?: string | null;
+  vehicleBlockBodies?: string | null;
   /** Остаток по складам: ключ — идентификатор склада, число колонок = число складов. */
   stock: Record<string, number>;
 }
@@ -132,6 +139,10 @@ export function vehicleHint(row: CatalogRow): string | undefined {
   const base = source === 'VERIFIED'
     ? 'По применимости, подтверждена человеком'
     : 'По применимости, разобрана автоматически';
+  if (row.vehicleTitleBody && row.vehicleBlockBodies) {
+    return `${base}. Поколение не определено: в наименовании ${row.vehicleTitleBody}, `
+      + `а «Подходит» называет кузова ${row.vehicleBlockBodies}`;
+  }
   const spans = row.vehicleSpans ?? 0;
   return spans > 1
     ? `${base}. Поколений у этой машины ${spans} — какое у детали, не указано; все — в карточке`
