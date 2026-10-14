@@ -677,6 +677,8 @@ class DromShopTermsTest extends PostgresTestBase {
             + "Модель диска [discFirmAndModel]: noname";
 
     /** Магнитола (строка 211 файла клиента): первые две строки дублируют друг друга. */
+    private static final String AMPLIFIER = "Бренд [brand]: Pioneer\nКоличество каналов [channels]: 4";
+
     private static final String RADIO = "model [model]: Toyota NHZT-W58\n"
             + "Модель магнитолы [model]: Toyota NHZT-W58\n"
             + "Размер [size]: 2 DIN — 178x100 мм";
@@ -738,8 +740,11 @@ class DromShopTermsTest extends PostgresTestBase {
     void secondLoadFillsCharacteristicsAndKeepsEdits() throws Exception {
         Map<String, String> a = row(AD_A, "Магнитола NHZT-W58");
         a.put(OTHER, RADIO);
-        Map<String, String> b = row(AD_B, "Колеса Bridgestone Blizzak DM-Z3 265/65 R17");
-        b.put(OTHER, WHEELS_466);
+        // Вторая строка — не колесо: колёсную строку повтор перекладывает в колёса
+        // (задача 0291), и «позиция не тронута» тут было бы неправдой. Перекладку
+        // стережёт DromWheelTransferTest.
+        Map<String, String> b = row(AD_B, "Усилитель Pioneer GM-D8604");
+        b.put(OTHER, AMPLIFIER);
         List<Map<String, String>> rows = List.of(a, b);
 
         load(file(rows, Set.of(OTHER), null));
@@ -751,7 +756,7 @@ class DromShopTermsTest extends PostgresTestBase {
         assertThat(repeat.path("refilled").asInt()).as("%s", repeat).isEqualTo(2);
         assertThat(repeat.path("fields").findValuesAsText("field")).containsExactly("Характеристики");
         assertThat(characteristics(AD_A)).isEqualTo(RADIO);
-        assertThat(characteristics(AD_B)).isEqualTo(WHEELS_466);
+        assertThat(characteristics(AD_B)).isEqualTo(AMPLIFIER);
         assertThat(partRows()).as("повтор тронул саму позицию").isEqualTo(before);
         assertThat(feedMarks()).as("дозаполнение характеристик двинуло отметку для площадки").isZero();
 

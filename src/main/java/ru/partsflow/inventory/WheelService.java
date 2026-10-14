@@ -132,24 +132,7 @@ public class WheelService {
                     Long.class, title, request.price(), request.costPrice(),
                     request.condition(), createdBy);
 
-            jdbc.update("""
-                    INSERT INTO part_wheel (part_id, kind, set_no, diameter,
-                                            tyre_width, tyre_height, construction, tyre_type,
-                                            season, wear_mm, made_year,
-                                            disc_type, disc_width, offset_mm, bolt_pattern,
-                                            hub_bore, brand, model, disc_brand, disc_model,
-                                            marking_type, tread_type, run_flat, light_truck,
-                                            speed_index, load_index)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                            ?, ?, ?, ?, ?, ?)""",
-                    partId, request.kind(), setNo, request.diameter(),
-                    request.tyreWidth(), request.tyreHeight(), request.construction(),
-                    request.tyreType(), request.season(), request.wearMm(), request.madeYear(),
-                    request.discType(), request.discWidth(), request.offsetMm(),
-                    request.boltPattern(), request.hubBore(), request.brand(), request.model(),
-                    request.discBrand(), request.discModel(),
-                    request.markingType(), request.treadType(), request.runFlat(),
-                    request.lightTruck(), request.speedIndex(), request.loadIndex());
+            insertProperties(partId, request, setNo, null);
 
             // Остаток появляется только движением, и записать его мало —
             // применить движение к раскладке и карточке должен тот же вызов.
@@ -165,6 +148,73 @@ public class WheelService {
         // список мест, который надо не забыть дополнить, никому не нужен.
         partChanges.changed(ids);
         return new Created(setNo, title, ids);
+    }
+
+    /**
+     * Делает позицию колёсной: свойства колеса к уже заведённой строке {@code part}.
+     *
+     * <p><b>Зачем, когда есть {@link #createSet}.</b> Перенос с Дрома (задача 0291)
+     * заводит комплект клиента <b>одной</b> позицией — решение владельца от 14.10.2026:
+     * «только целиком, по цене из файла», — с наименованием клиента дословно,
+     * номером объявления и блоками карточки Дрома, а не четыре карточки
+     * с собранным заголовком. Строку {@code part} и её приход пишет импорт,
+     * а свойства колеса — только здесь: та же проверка значений и та же отметка
+     * для площадки, что у заведения комплектом, и одна вставка в {@code part_wheel}
+     * на оба пути.
+     *
+     * <p><b>Один путь и для новой позиции, и для перекладки уже перенесённой.</b>
+     * Запчасть, заведённая переносом до этой задачи, становится колесом на месте:
+     * номер, публичный код, снимки, остаток и движения остаются её. Обе записи —
+     * одной инструкцией с условием ({@code product_line = 'PART'},
+     * {@code ON CONFLICT DO NOTHING}), поэтому повтор и одновременная загрузка
+     * не меняют уже переложенное.
+     *
+     * @param setPieces колёс в комплекте, за который названа цена; {@code null} —
+     *                  колесо продаётся поштучно
+     * @return {@code true}, если позиция стала колесом этим вызовом
+     */
+    @Transactional
+    public boolean attachWheel(long partId, WheelRequest request, Integer setPieces) {
+        requireKind(request.kind());
+        requireKnown("Сезон", request.season(), SEASONS);
+        requireKnown("Тип маркировки", request.markingType(), MARKING);
+        requireKnown("Тип протектора", request.treadType(), TREAD);
+        if (setPieces != null && setPieces < 1) {
+            throw new IllegalArgumentException("Колёс в комплекте — от одного");
+        }
+        int moved = jdbc.update(
+                "UPDATE part SET product_line = 'WHEEL' WHERE id = ? AND product_line = 'PART'",
+                partId);
+        int added = insertProperties(partId, request, null, setPieces);
+        if (moved + added == 0) {
+            return false;
+        }
+        partChanges.changed(partId);
+        return true;
+    }
+
+    /** Свойства колеса — одна вставка на {@link #createSet} и {@link #attachWheel}. */
+    private int insertProperties(long partId, WheelRequest request, Integer setNo,
+                                 Integer setPieces) {
+        return jdbc.update("""
+                INSERT INTO part_wheel (part_id, kind, set_no, set_pieces, diameter,
+                                        tyre_width, tyre_height, construction, tyre_type,
+                                        season, wear_mm, made_year,
+                                        disc_type, disc_width, offset_mm, bolt_pattern,
+                                        hub_bore, brand, model, disc_brand, disc_model,
+                                        marking_type, tread_type, run_flat, light_truck,
+                                        speed_index, load_index)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (part_id) DO NOTHING""",
+                partId, request.kind(), setNo, setPieces, request.diameter(),
+                request.tyreWidth(), request.tyreHeight(), request.construction(),
+                request.tyreType(), request.season(), request.wearMm(), request.madeYear(),
+                request.discType(), request.discWidth(), request.offsetMm(),
+                request.boltPattern(), request.hubBore(), request.brand(), request.model(),
+                request.discBrand(), request.discModel(),
+                request.markingType(), request.treadType(), request.runFlat(),
+                request.lightTruck(), request.speedIndex(), request.loadIndex());
     }
 
     /**
@@ -203,7 +253,7 @@ public class WheelService {
                        p.condition, p.description, p.note, p.section, p.is_published,
                        p.barcode, p.legacy_code, p.created_at, p.updated_at,
                        p.price_changed_at,
-                       w.kind, w.set_no, w.diameter, w.tyre_width, w.tyre_height,
+                       w.kind, w.set_no, w.set_pieces, w.diameter, w.tyre_width, w.tyre_height,
                        w.construction, w.tyre_type, w.season, w.wear_mm, w.made_year,
                        w.disc_type, w.disc_width, w.offset_mm, w.bolt_pattern, w.hub_bore,
                        w.brand, w.model, w.disc_brand, w.disc_model,
@@ -242,6 +292,7 @@ public class WheelService {
                         rs.getBigDecimal("price"), rs.getString("status"),
                         rs.getBigDecimal("qty_on_hand"),
                         rs.getString("kind"), (Integer) rs.getObject("set_no"),
+                        (Integer) rs.getObject("set_pieces"),
                         rs.getBigDecimal("diameter"),
                         (Integer) rs.getObject("tyre_width"), (Integer) rs.getObject("tyre_height"),
                         rs.getString("construction"), rs.getString("tyre_type"),
@@ -533,6 +584,7 @@ public class WheelService {
     private static final Map<String, String> FILTERS = Map.ofEntries(
             Map.entry("code", "p.public_code"),
             Map.entry("set", "trim_scale(w.set_no)::text"),
+            Map.entry("setPieces", "trim_scale(w.set_pieces)::text"),
             Map.entry("kind", "CASE w.kind WHEN 'TYRE' THEN 'Шина'"
                     + " WHEN 'DISC' THEN 'Диск' ELSE 'Колесо' END"),
             Map.entry("diameter", "trim_scale(w.diameter)::text"),
@@ -628,7 +680,7 @@ public class WheelService {
                 SELECT p.number, p.public_code, p.title, p.price, p.condition, p.description,
                        p.note, p.section, p.is_published, p.barcode, p.legacy_code,
                        p.created_at, p.updated_at, p.price_changed_at,
-                       w.kind, w.set_no, w.diameter, w.tyre_width, w.tyre_height,
+                       w.kind, w.set_no, w.set_pieces, w.diameter, w.tyre_width, w.tyre_height,
                        w.construction, w.tyre_type, w.season, w.wear_mm, w.made_year,
                        w.disc_type, w.disc_width, w.offset_mm, w.bolt_pattern, w.hub_bore,
                        w.brand, w.model, w.disc_brand, w.disc_model,
@@ -670,6 +722,7 @@ public class WheelService {
                     nullToEmpty(rs.getString("part_name")),
                     kindName(rs.getString("kind")),
                     number(rs, "set_no"),
+                    number(rs, "set_pieces"),
                     number(rs, "diameter"),
                     nullToEmpty(rs.getString("tyre_type")),
                     number(rs, "tyre_width"),
@@ -726,7 +779,8 @@ public class WheelService {
     public static List<String> exportHeader(List<CatalogService.Warehouse> warehouses) {
         List<String> header = new java.util.ArrayList<>(List.of(
                 "№ позиции",
-                "Номер товара", "Наименование", "Товар", "Номер комплекта", "Диаметр",
+                "Номер товара", "Наименование", "Товар", "Номер комплекта", "Штук в комплекте",
+                "Диаметр",
                 "Тип шины", "Ширина шины", "Тип маркировки", "Тип протектора",
                 "Тип конструкции", "Высота шины", "Износ", "Производитель шины",
                 "Модель шины", "Сезон", "Год производства", "Тип диска", "Ширина диска",
@@ -830,6 +884,7 @@ public class WheelService {
             Map.entry("number", "p.number"),
             Map.entry("code", "p.public_code"),
             Map.entry("set", "w.set_no"),
+            Map.entry("setPieces", "w.set_pieces"),
             Map.entry("kind", "w.kind"),
             Map.entry("diameter", "w.diameter"),
             Map.entry("tyreWidth", "w.tyre_width"),
@@ -1013,7 +1068,13 @@ public class WheelService {
                            Long number,
                            String publicCode, String title, BigDecimal price,
                            String status, BigDecimal qty,
-                           String kind, Integer setNo, BigDecimal diameter,
+                           String kind, Integer setNo,
+                           /**
+                            * Колёс в позиции, продаваемой одним комплектом (задача 0291):
+                            * пусто — колесо продаётся поштучно.
+                            */
+                           Integer setPieces,
+                           BigDecimal diameter,
                            Integer tyreWidth, Integer tyreHeight, String construction,
                            String tyreType, String season, BigDecimal wearMm, Integer madeYear,
                            String discType, BigDecimal discWidth, Integer offsetMm,
@@ -1033,7 +1094,7 @@ public class WheelService {
 
         WheelRow withStock(Map<Long, BigDecimal> byWarehouse) {
             return new WheelRow(id, number, publicCode, title, price, status, qty, kind, setNo,
-                    diameter,
+                    setPieces, diameter,
                     tyreWidth, tyreHeight, construction, tyreType, season, wearMm, madeYear,
                     discType, discWidth, offsetMm, boltPattern, hubBore, brand, model,
                     discBrand, discModel, markingType, treadType, runFlat, lightTruck, speedIndex, loadIndex,

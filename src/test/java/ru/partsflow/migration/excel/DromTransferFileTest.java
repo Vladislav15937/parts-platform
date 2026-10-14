@@ -274,6 +274,34 @@ class DromTransferFileTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Колёсные строки: договор называет ровно те ключи «Прочих полей», что читает импорт")
+    void wheelKeysAreTheContract() throws Exception {
+        // Задача 0291: у колёсной строки колонка 25 — договорная. Ключ, который импорт
+        // научили читать, а договор не назвал, парсер не обязан класть; названный
+        // в договоре и не читаемый — обещание, которого импорт не держит.
+        List<String> keys = new ArrayList<>();
+        boolean inSection = false;
+        for (String line : Files.readAllLines(CONTRACT, StandardCharsets.UTF_8)) {
+            if (line.startsWith("## ")) {
+                inSection = line.startsWith("## Колёсные строки");
+                continue;
+            }
+            Matcher key = Pattern.compile("^\\| `([^`]+)` \\|").matcher(line);
+            if (inSection && key.find()) {
+                keys.add(key.group(1));
+            }
+        }
+        assertThat(keys)
+                .as("ключи раздела «Колёсные строки» в %s разошлись с DromWheelCard.KEYS", CONTRACT)
+                .containsExactlyInAnyOrderElementsOf(DromWheelCard.KEYS);
+        String characteristics = documentRows().stream()
+                .filter(r -> r[0].equals("Прочие поля")).findFirst().orElseThrow()[2];
+        assertThat(characteristics)
+                .as("строка «Прочие поля» договора не говорит, что у колёсной строки колонка договорная")
+                .contains("колёсной строки").contains("договорная");
+    }
+
+    @Test
     @DisplayName("Каждая колонка договора — либо проверена, либо ждёт названной задачи, и не то и другое")
     void everyColumnIsEitherCheckedOrPending() {
         Set<String> seen = new HashSet<>();

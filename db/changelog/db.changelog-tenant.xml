@@ -102,6 +102,7 @@
     <include file="tenant/083-part-drom-card-characteristics.sql" relativeToChangelogFile="true"/>
     <include file="tenant/084-part-drom-card-may-fit.sql" relativeToChangelogFile="true"/>
     <include file="tenant/085-part-applicability-generation-label.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/086-part-wheel-set-pieces.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>
