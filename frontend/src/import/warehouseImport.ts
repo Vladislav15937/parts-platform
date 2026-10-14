@@ -369,6 +369,14 @@ export interface DromApplicabilityReport {
   refined: number;
   removed: number;
   misses: DromApplicabilityMiss[];
+  /** Позиций, получивших поколение своей машины по коду кузова (задача 0295). */
+  byBody?: number;
+  /**
+   * Позиции, у которых блок поколения не называет и по кузову оно не
+   * определилось, — по причинам; названия — наименование позиции и пояснение.
+   * У итога, сохранённого до задачи 0295, поля нет.
+   */
+  bodyMisses?: DromApplicabilityMiss[] | null;
 }
 
 /**

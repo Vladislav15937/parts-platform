@@ -78,8 +78,13 @@ public class DromApplicabilityService {
      * @param refined строк дополнено годами и кузовами (та же машина, что была)
      * @param removed строк без годов снято, потому что та же машина легла точнее
      * @param misses  пункты, не легшие целиком, — по причинам
+     * @param byBody  позиций, получивших поколение своей машины по коду кузова (0295)
+     * @param bodyMisses позиции, у которых блок поколения не называет и по кузову
+     *                   оно не определилось, — по причинам; названия — наименование
+     *                   позиции и пояснение
      */
-    public record Report(int parts, int added, int refined, int removed, List<Miss> misses) {
+    public record Report(int parts, int added, int refined, int removed, List<Miss> misses,
+                         int byBody, List<Miss> bodyMisses) {
     }
 
     /**
@@ -101,10 +106,22 @@ public class DromApplicabilityService {
                 new EnumMap<>(DromApplicability.Reason.class);
         private final Map<DromApplicability.Reason, Set<String>> names =
                 new EnumMap<>(DromApplicability.Reason.class);
+        private int byBody;
+        private final Map<BodyGeneration.Reason, Integer> bodyItems =
+                new EnumMap<>(BodyGeneration.Reason.class);
+        private final Map<BodyGeneration.Reason, Set<String>> bodyNames =
+                new EnumMap<>(BodyGeneration.Reason.class);
+        /** Позиции, которым загрузка разложила текст: по ним идёт проход по кузову (0295). */
+        private final Set<Long> touched = new LinkedHashSet<>();
 
         void miss(DromApplicability.Miss miss) {
             items.merge(miss.reason(), 1, Integer::sum);
             names.computeIfAbsent(miss.reason(), r -> new LinkedHashSet<>()).add(miss.name());
+        }
+
+        void bodyMiss(BodyGeneration.Reason reason, String name) {
+            bodyItems.merge(reason, 1, Integer::sum);
+            bodyNames.computeIfAbsent(reason, r -> new LinkedHashSet<>()).add(name);
         }
 
         public Report toReport() {
@@ -118,7 +135,18 @@ public class DromApplicabilityService {
                 misses.add(new Miss(reason.words(), count,
                         all.stream().limit(NAMES_LIMIT).toList(), all.size()));
             }
-            return new Report(parts, added, refined, removed, List.copyOf(misses));
+            List<Miss> bodyMisses = new ArrayList<>();
+            for (BodyGeneration.Reason reason : BodyGeneration.Reason.values()) {
+                Integer count = bodyItems.get(reason);
+                if (count == null) {
+                    continue;
+                }
+                Set<String> all = bodyNames.get(reason);
+                bodyMisses.add(new Miss(reason.words(), count,
+                        all.stream().limit(NAMES_LIMIT).toList(), all.size()));
+            }
+            return new Report(parts, added, refined, removed, List.copyOf(misses),
+                    byBody, List.copyOf(bodyMisses));
         }
     }
 
@@ -165,13 +193,179 @@ public class DromApplicabilityService {
             }
             after = last;
         }
+        // Второй проход — поколение по коду кузова (0295): сопоставление
+        // собирается со всего склада, поэтому после первого, а не внутри него.
+        long byBodyStarted = System.nanoTime();
+        BodyGeneration.Index index = tx.execute(status -> bodyIndex(dictionary));
+        after = 0;
+        while (true) {
+            long cursor = after;
+            Long last = tx.execute(status -> byBodyBatch(cursor, dictionary, index, tally));
+            if (last == null) {
+                break;
+            }
+            after = last;
+        }
         Report report = tally.toReport();
         log.info("Применимость из карточек Дрома: позиций {}, заведено {}, дополнено {}, снято {}, "
-                        + "не легло пунктов {} — за {} мс",
+                        + "не легло пунктов {}, поколение по коду кузова {} — за {} мс (по кузову {} мс)",
                 report.parts(), report.added(), report.refined(), report.removed(),
-                report.misses().stream().mapToInt(Miss::items).sum(),
-                (System.nanoTime() - started) / 1_000_000);
+                report.misses().stream().mapToInt(Miss::items).sum(), report.byBody(),
+                (System.nanoTime() - started) / 1_000_000,
+                (System.nanoTime() - byBodyStarted) / 1_000_000);
         return report;
+    }
+
+    /**
+     * Поколение по коду кузова у позиций, которым загрузка разложила текст, —
+     * после всех строк файла, в транзакции загрузки (задача 0295). Не по ходу
+     * строк: пары «код → поколение» новой позиции дают карточки, стоящие в файле
+     * ниже неё, а на складе их ещё нет.
+     */
+    @Transactional
+    public void applyByBodyTo(DromApplicability.Dictionary dictionary, Tally tally) {
+        if (tally.touched.isEmpty()) {
+            return;
+        }
+        lock();
+        BodyGeneration.Index index = bodyIndex(dictionary);
+        List<Long> touched = new ArrayList<>(tally.touched);
+        for (int from = 0; from < touched.size(); from += BATCH) {
+            List<Long> chunk = touched.subList(from, Math.min(touched.size(), from + BATCH));
+            Map<Long, PartText> parts = new java.util.LinkedHashMap<>();
+            jdbc.query("""
+                    SELECT c.part_id, p.title, c.applicability
+                      FROM part_drom_card c JOIN part p ON p.id = c.part_id
+                     WHERE c.part_id = ANY (?) AND c.applicability IS NOT NULL
+                     ORDER BY c.part_id""", rs -> {
+                parts.put(rs.getLong(1), new PartText(rs.getString(2), rs.getString(3)));
+            }, (Object) chunk.toArray(Long[]::new));
+            byBody(parts, dictionary, index, tally);
+        }
+    }
+
+    /**
+     * Сопоставление «код кузова → поколение» по текстам «Подходит» всего склада
+     * арендатора. Держится в памяти на проход: таблицы под него нет намеренно
+     * (схема не меняется, а пары — производное от текста, который и так лежит).
+     */
+    private BodyGeneration.Index bodyIndex(DromApplicability.Dictionary dictionary) {
+        BodyGeneration.Index index = new BodyGeneration.Index();
+        // Порядок — чтобы отчёт называл строки поколения одинаково от прохода к проходу.
+        jdbc.query("SELECT applicability FROM part_drom_card WHERE applicability IS NOT NULL"
+                        + " ORDER BY part_id",
+                rs -> {
+                    DromApplicability.bodyPairs(rs.getString(1), dictionary).forEach(index::add);
+                });
+        return index;
+    }
+
+    private Long byBodyBatch(long after, DromApplicability.Dictionary dictionary,
+                             BodyGeneration.Index index, Tally tally) {
+        lock();
+        Map<Long, PartText> parts = new java.util.LinkedHashMap<>();
+        jdbc.query("""
+                SELECT c.part_id, p.title, c.applicability
+                  FROM part_drom_card c JOIN part p ON p.id = c.part_id
+                 WHERE c.applicability IS NOT NULL AND c.part_id > ?
+                 ORDER BY c.part_id
+                 LIMIT ?""", rs -> {
+            parts.put(rs.getLong(1), new PartText(rs.getString(2), rs.getString(3)));
+        }, after, BATCH);
+        if (parts.isEmpty()) {
+            return null;
+        }
+        byBody(parts, dictionary, index, tally);
+        return parts.keySet().stream().reduce((a, b) -> b).orElseThrow();
+    }
+
+    /**
+     * Своя машина без поколения и с кузовами — поколение по сопоставлению
+     * (задача 0295). Ставится строкой поколения с годами клиента и пометкой
+     * в {@code note}; грубая строка своей машины уступает ей по правилу
+     * уточнения 0289 (подтверждённая человеком — нет). У своей машины уже
+     * есть поколение или годы — блок их назвал, или это сделал прошлый проход:
+     * ничего не делается, и повтор поэтому — «ничего нового».
+     */
+    private record PartText(String title, String applicability) {
+    }
+
+    private void byBody(Map<Long, PartText> parts, DromApplicability.Dictionary dictionary,
+                        BodyGeneration.Index index, Tally tally) {
+        Map<Long, List<Row>> existing = existing(parts.keySet());
+        for (Map.Entry<Long, PartText> entry : parts.entrySet()) {
+            long partId = entry.getKey();
+            String title = entry.getValue().title();
+            List<Row> rows = existing.getOrDefault(partId, List.of());
+            BodyGeneration.Own own = BodyGeneration.own(title, rows.stream()
+                    .map(r -> new BodyGeneration.Fit(r.key().brandId(), r.key().modelId()))
+                    .toList(), dictionary);
+            if (own == null) {
+                continue;
+            }
+            List<Row> ownRows = rows.stream()
+                    .filter(r -> BodyGeneration.same(own, r.key().brandId(), r.key().modelId()))
+                    .toList();
+            if (ownRows.stream().anyMatch(r -> r.key().generationId() != null || r.hasYears())) {
+                continue;
+            }
+            // Кузова — из текста блока, а не из примечаний строк: подтверждённая
+            // человеком строка того же ключа не дополняется кузовами (0289),
+            // а блок их всё равно называет.
+            List<Target> ownTargets = DromApplicability.parse(entry.getValue().applicability(),
+                            dictionary).targets().stream()
+                    .filter(t -> BodyGeneration.same(own, t.brandId(), t.modelId()))
+                    .toList();
+            if (ownTargets.stream().anyMatch(t -> t.generationId() != null || t.hasYears())) {
+                continue;
+            }
+            List<String> codes = ownTargets.stream()
+                    .flatMap(t -> BodyGeneration.codesOf(t.note()).stream())
+                    .distinct().toList();
+            if (codes.isEmpty()) {
+                tally.bodyMiss(BodyGeneration.Reason.NO_BODIES, title);
+                continue;
+            }
+            String titleBody = BodyGeneration.titleBody(title, own.model());
+            if (titleBody != null) {
+                codes = codes.stream().filter(c -> BodyGeneration.sameSeries(c, titleBody)).toList();
+                if (codes.isEmpty()) {
+                    tally.bodyMiss(BodyGeneration.Reason.OTHER_SERIES, title);
+                    continue;
+                }
+            }
+            BodyGeneration.Outcome outcome = index.decide(own.modelId(), codes);
+            if (!outcome.found()) {
+                tally.bodyMiss(outcome.reason(), title + ": " + outcome.detail());
+                continue;
+            }
+            // По строке на строку справочника поколения: у рестайлингов их
+            // несколько, и метка Дрома склеивает их на витрине в одно (0297).
+            int inserted = 0;
+            for (BodyGeneration.Span span : outcome.spans()) {
+                inserted += jdbc.update("""
+                        INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id,
+                                                        year_from, year_to, note, generation_label,
+                                                        is_verified)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, false)
+                        ON CONFLICT (part_id, brand_id, model_id, generation_id, modification_id)
+                        DO NOTHING""",
+                        partId, own.brandId(), own.modelId(), span.generationId(),
+                        span.yearFrom(), span.yearTo(),
+                        BodyGeneration.note(codes, outcome.decisive()), outcome.label());
+            }
+            // Позиций, а не строк: рестайлинги одной позиции — одно поколение.
+            tally.byBody += inserted > 0 ? 1 : 0;
+            for (Row row : ownRows) {
+                if (row.verified()) {
+                    continue;
+                }
+                tally.removed += jdbc.update("""
+                        DELETE FROM part_applicability
+                         WHERE id = ? AND NOT is_verified AND generation_id IS NULL
+                           AND year_from IS NULL AND year_to IS NULL""", row.id());
+            }
+        }
     }
 
     /** Одна пачка после позиции {@code after}; последняя разобранная или {@code null}, если пусто. */
@@ -232,6 +426,7 @@ public class DromApplicabilityService {
             DromApplicability.Parsed parsed = DromApplicability.parse(entry.getValue(), dictionary);
             parsed.misses().forEach(tally::miss);
             tally.parts++;
+            tally.touched.add(partId);
             applyPart(partId, parsed.targets(), existing.getOrDefault(partId, List.of()), tally);
         }
     }

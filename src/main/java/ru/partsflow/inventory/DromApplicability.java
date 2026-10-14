@@ -136,6 +136,9 @@ public final class DromApplicability {
         private final List<Brand> brands;
         private final Map<Long, Map<String, Model>> modelsByBrand = new HashMap<>();
         private final Map<Long, List<Generation>> generationsByModel = new HashMap<>();
+        /** Названия по номеру — своя машина позиции ищется по наименованию (0295). */
+        private final Map<Long, String> brandNames = new HashMap<>();
+        private final Map<Long, String> modelNames = new HashMap<>();
 
         public Dictionary(List<Brand> brands, List<Model> models, List<Generation> generations) {
             // Длинные названия первыми: «Land Rover» не должен уступить «Land».
@@ -150,6 +153,16 @@ public final class DromApplicability {
                 generationsByModel.computeIfAbsent(generation.modelId(), k -> new ArrayList<>())
                         .add(generation);
             }
+            brands.forEach(b -> brandNames.put(b.id(), b.name()));
+            models.forEach(m -> modelNames.put(m.id(), m.name()));
+        }
+
+        String brandName(long id) {
+            return brandNames.get(id);
+        }
+
+        String modelName(long id) {
+            return modelNames.get(id);
         }
 
         Brand brandOf(String heading) {
@@ -412,6 +425,50 @@ public final class DromApplicability {
                 items.add(new Item(heading, null, item));
             }
         }
+    }
+
+    /**
+     * Пары «код кузова → поколение» из пунктов блока с поколением (задача 0295):
+     * {@code 3 поколение (2002–2009): GRJ121W, KDJ120} даёт две пары. Пункт без
+     * годов, без кузовов или с машиной вне справочника пар не даёт; поколение
+     * справочника — тем же годом начала, что у разбора ({@link Dictionary#generationOf}),
+     * не нашлось — пара есть, но без него: решать, что с ней делать, не здесь.
+     */
+    static List<BodyGeneration.Pair> bodyPairs(String text, Dictionary dictionary) {
+        if (text == null || text.isBlank()) {
+            return List.of();
+        }
+        List<BodyGeneration.Pair> pairs = new ArrayList<>();
+        for (Item item : items(text)) {
+            if (item.generation() == null || item.bodies() == null) {
+                continue;
+            }
+            Brand brand = dictionary.brandOf(item.heading());
+            if (brand == null) {
+                continue;
+            }
+            String rest = item.heading().substring(brand.name().length()).strip();
+            Model model = rest.isEmpty() ? null : dictionary.modelOf(brand.id(), rest);
+            Matcher years = YEARS.matcher(item.generation());
+            if (model == null || !years.find()) {
+                continue;
+            }
+            int from = Integer.parseInt(years.group(1));
+            Integer to = years.group(2).startsWith("н") ? null : Integer.valueOf(years.group(2));
+            if (to != null && to < from) {
+                continue;
+            }
+            Generation generation = dictionary.generationOf(model.id(), from, to);
+            String label = item.generation().substring(0, years.start()).strip();
+            for (String code : item.bodies().split(",")) {
+                String body = code.strip().toUpperCase(Locale.ROOT);
+                if (!body.isEmpty()) {
+                    pairs.add(new BodyGeneration.Pair(model.id(), body, label, from, to,
+                            generation == null ? null : generation.id()));
+                }
+            }
+        }
+        return pairs;
     }
 
     private static String blankToNull(String value) {

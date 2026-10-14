@@ -293,6 +293,22 @@ public class CatalogService {
             + " WHEN own.verified THEN 'VERIFIED' ELSE 'PARSED' END";
 
     /**
+     * Коды кузова, по которым поколение своей машины выведено проходом
+     * «Подходит» (задача 0295), — для подсказки клетки: заявление клиента
+     * и наш вывод владелец должен различать. Подзапрос на строку страницы,
+     * а не шаг своей машины: нужен только пятидесяти показанным позициям.
+     * Строка с пометкой ставится только своей машине и только когда другого
+     * поколения у неё нет, так что найденная — та самая, что в колонке.
+     */
+    private static final String GENERATION_BY_BODY =
+            "(SELECT substr(a.note, strpos(a.note, '; " + BodyGeneration.MARK + "') + "
+            + ("; " + BodyGeneration.MARK).length() + ")"
+            + " FROM part_applicability a"
+            + " WHERE a.part_id = p.id AND p.donor_id IS NULL AND a.generation_id IS NOT NULL"
+            + " AND strpos(a.note, '; " + BodyGeneration.MARK + "') > 0"
+            + " ORDER BY a.id LIMIT 1)";
+
+    /**
      * Разрешённые сортировки: имя из запроса → выражение SQL.
      *
      * <p>Белый список, а не экранирование: {@code ORDER BY} не принимает
@@ -1170,6 +1186,7 @@ public class CatalogService {
                        -- «Ячейка».
                        (SELECT c.code FROM storage_cell c
                          WHERE c.id = p.storage_cell_id) AS cell_code,
+                       """ + GENERATION_BY_BODY + " AS generation_by_body," + """
                        -- Поставка и комплектация — для карточки позиции.
                        -- Читаются вместе со строкой: карточка открывается
                        -- по нажатию и второй запрос ради двух полей не делает.
@@ -1242,6 +1259,7 @@ public class CatalogService {
                         (Integer) rs.getObject("vehicle_spans"),
                         rs.getString("vehicle_title_body"),
                         bodyNumbers(rs.getString("vehicle_block_bodies")),
+                        rs.getString("generation_by_body"),
                         rs.getBoolean("vehicle_generation_merged"),
                         Map.of()),
                 pageArgs.toArray());
@@ -1644,6 +1662,12 @@ public class CatalogService {
                       /** Номера кузовов того поколения блока («150, 151») — к той же подсказке. */
                       String vehicleBlockBodies,
                       /**
+                       * Коды кузова, по которым поколение своей машины определено
+                       * нами, а не названо клиентом («GRJ120, KDJ120», задача 0295);
+                       * иначе пусто.
+                       */
+                      String vehicleGenerationBodies,
+                      /**
                        * Поколение в колонке — поколение Дрома целиком, собранное из
                        * нескольких строк справочника (рестайлингов, задача 0297):
                        * годы от первой строки до последней.
@@ -1662,7 +1686,8 @@ public class CatalogService {
                     videoUrl, textBlock, weightKg, dimensions, packageDimensions,
                     packageWeightKg, createdAt, updatedAt, updatedByName,
                     priceChangedAt, priceChangedByName, photoCount, vehicleSource,
-                    vehicleSpans, vehicleTitleBody, vehicleBlockBodies, vehicleGenerationMerged,
+                    vehicleSpans, vehicleTitleBody, vehicleBlockBodies, vehicleGenerationBodies,
+                    vehicleGenerationMerged,
                     found);
         }
     }

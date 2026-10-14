@@ -70,6 +70,30 @@ describe('применимость из карточек Дрома', () => {
     expect(text()).not.toContain('Строк применимости заведено');
     expect(text()).not.toContain('не легших');
   });
+
+  it('поколение по коду кузова — отдельной строкой, и не определившиеся названы причиной (0295)', async () => {
+    report = {
+      parts: 2897, added: 0, refined: 0, removed: 380, misses: [], byBody: 383,
+      bodyMisses: [
+        { reason: 'у поколения несколько строк (рестайлинги) — какая у детали, не определить',
+          items: 25, names: ['Проводка Toyota Land Cruiser Prado 150: 4 поколение (2009–2013); '
+            + '4 поколение, рестайлинг (2013–2017)'], unique: 25 },
+        { reason: 'кузова встречаются в разных поколениях', items: 1,
+          names: ['Крыло Toyota Land Cruiser Prado: кузов GRN215 есть в поколениях 3 и 4'], unique: 1 },
+      ],
+    };
+    render(<ImportScreen reference={reference()} canImport />);
+    fireEvent.click(screen.getByRole('button', { name: 'Разложить «Подходит»' }));
+
+    await waitFor(() => expect(text()).toContain('Поколение определено по коду кузова: 383.'));
+    expect(text(), 'проход с поколениями по кузову назван «ничего нового»')
+      .not.toContain('Ничего нового');
+    expect(text()).toContain('по коду кузова оно не определено — позиций: 26.');
+    expect(text()).toContain('кузова встречаются в разных поколениях: '
+      + 'Крыло Toyota Land Cruiser Prado: кузов GRN215 есть в поколениях 3 и 4');
+    expect(text()).toContain('Проводка Toyota Land Cruiser Prado 150: 4 поколение (2009–2013); '
+      + '4 поколение, рестайлинг (2013–2017) и ещё 24');
+  });
 });
 
 describe('итог разложения в отчёте загрузки файла', () => {

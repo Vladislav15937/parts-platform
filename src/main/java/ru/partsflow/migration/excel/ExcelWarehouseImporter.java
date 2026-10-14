@@ -207,6 +207,11 @@ public class ExcelWarehouseImporter {
         if (stitching[0]) {
             continuation.finish(firstSheet).forEach(p -> report.continuation(p.row(), p.reason()));
         }
+        // Поколение по коду кузова (0295) — после всех строк: пары «код → поколение»
+        // дают и карточки, стоящие в файле ниже позиции.
+        if (report.vehicles != null) {
+            dromApplicability.applyByBodyTo(report.vehicles, report.applicability);
+        }
 
         // Движения записаны, применить их надо пачкой: тысяча строк — тысяча
         // обращений к базе, если делать это по одному. Остаток и статус

@@ -109,6 +109,7 @@ public class CatalogController {
                 row.priceChangedAt(), row.priceChangedByName(), row.photoCount(),
                 row.vehicleSource(), row.vehicleSpans(),
                 row.vehicleTitleBody(), row.vehicleBlockBodies(),
+                row.vehicleGenerationBodies(),
                 row.vehicleGenerationMerged(),
                 row.stock());
     }
@@ -426,6 +427,8 @@ public class CatalogController {
                        * (задачи 0294, 0299); кузовов нет — второе поле пусто.
                        */
                       String vehicleTitleBody, String vehicleBlockBodies,
+                      /** Коды кузова, по которым поколение определено нами (задача 0295). */
+                      String vehicleGenerationBodies,
                       /**
                        * Поколение Дрома целиком из нескольких строк справочника
                        * (рестайлинги, задача 0297) — подсказка клетки так и говорит.

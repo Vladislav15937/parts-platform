@@ -238,6 +238,30 @@ describe('подсказка клетки машины', () => {
     expect(vehicleHint(row())).toBeUndefined();
     expect(vehicleHint(row({ vehicleSource: null }))).toBeUndefined();
   });
+
+  it('говорит, что поколение определено нами по коду кузова, а не названо клиентом (0295)', () => {
+    expect(hint('generation', row({ vehicleSource: 'PARSED', vehicleSpans: 1,
+      generation: '2002—2008', vehicleGenerationBodies: 'GRJ121W' })))
+      .toBe('По применимости, разобрана автоматически. '
+        + 'Поколение определено по коду кузова GRJ121W');
+    expect(vehicleHint(row({ vehicleSource: 'PARSED', vehicleSpans: 1, generation: '2002—2008',
+      vehicleGenerationBodies: 'GRJ120, GRJ121W, KDJ120, VZJ120W, LJ120' })))
+      .toBe('По применимости, разобрана автоматически. '
+        + 'Поколение определено по кодам кузова GRJ120, GRJ121W, KDJ120 и ещё 2');
+    // Поколения в колонке нет — о том, откуда оно, не говорится.
+    expect(vehicleHint(row({ vehicleSource: 'PARSED', vehicleSpans: 1,
+      vehicleGenerationBodies: 'GRJ121W' })))
+      .toBe('По применимости, разобрана автоматически');
+  });
+
+  it('у рестайлингов по коду кузова называет код, а не блок «Подходит» (0295, ответ владельца)', () => {
+    const merged = row({ vehicleSource: 'PARSED', vehicleSpans: 2, vehicleGenerationMerged: true,
+      generation: '4 поколение', vehicleGenerationBodies: 'GRJ150' });
+    const text = 'По применимости, разобрана автоматически. Поколение определено по коду кузова '
+      + 'GRJ150: одно поколение Дрома, годы — от первого рестайлинга до последнего';
+    expect(vehicleHint(merged)).toBe(text);
+    expect(hint('generation', merged)).toBe(text);
+  });
 });
 
 /**

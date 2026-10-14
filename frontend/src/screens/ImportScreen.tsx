@@ -562,8 +562,11 @@ function AfterImport({ reload }: { reload: number }) {
  * по ним видно, чего нет в справочнике машин.
  */
 function DromFitsReport({ report }: { report: DromApplicabilityReport }) {
-  const changed = report.added + report.refined + report.removed;
+  const byBody = report.byBody ?? 0;
+  const bodyMisses = report.bodyMisses ?? [];
+  const changed = report.added + report.refined + report.removed + byBody;
   const notLaid = report.misses.reduce((sum, miss) => sum + miss.items, 0);
+  const notByBody = bodyMisses.reduce((sum, miss) => sum + miss.items, 0);
   return (
     <>
       {changed === 0 ? (
@@ -576,6 +579,7 @@ function DromFitsReport({ report }: { report: DromApplicabilityReport }) {
           Позиций обработано: {count(report.parts)}. Строк применимости заведено:{' '}
           {count(report.added)}, дополнено годами: {count(report.refined)}, снято менее
           точных: {count(report.removed)}.
+          {byBody > 0 && ` Поколение определено по коду кузова: ${count(byBody)}.`}
         </p>
       )}
       {notLaid > 0 && (
@@ -587,6 +591,23 @@ function DromFitsReport({ report }: { report: DromApplicabilityReport }) {
                 {miss.reason}
                 {miss.reason === 'поколение не найдено' && ' (марка, модель и годы легли)'}:{' '}
                 {miss.names.join(', ')}
+                {miss.unique > miss.names.length &&
+                  ` и ещё ${count(miss.unique - miss.names.length)}`}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {notByBody > 0 && (
+        <>
+          <p className="note">
+            Блок «Подходит» не называет поколения, и по коду кузова оно не определено — позиций:{' '}
+            {count(notByBody)}. Поколение у них пусто, машина — в применимости.
+          </p>
+          <ul className="note">
+            {bodyMisses.map((miss) => (
+              <li key={miss.reason}>
+                {miss.reason}: {miss.names.join('; ')}
                 {miss.unique > miss.names.length &&
                   ` и ещё ${count(miss.unique - miss.names.length)}`}
               </li>
