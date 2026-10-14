@@ -141,6 +141,7 @@ class DromWheelTransferTest extends PostgresTestBase {
             jdbc.update("DELETE FROM part_stock");
             jdbc.update("DELETE FROM stock_movement");
             jdbc.update("DELETE FROM part");
+            jdbc.update("DELETE FROM part_name");
             jdbc.update("DELETE FROM marketplace_account");
             if (jdbc.queryForList("SELECT id FROM tenant_member WHERE login = 'owner'").isEmpty()) {
                 jdbc.update("""
@@ -171,7 +172,9 @@ class DromWheelTransferTest extends PostgresTestBase {
         report.path("wheels").path("notes").forEach(n -> notes.add(n.path("adNumber").asText()
                 + " " + n.path("row").asInt() + " " + n.path("text").asText()));
         assertThat(notes).containsExactly("127641183 2 Размер: в наименовании 235/55 R19, "
-                + "в «Прочих полях» 265/65 R19 — взят из «Прочих полей»");
+                        + "в «Прочих полях» 265/65 R19 — взят из «Прочих полей»",
+                "127641914 5 Вылет: 37.5 мм записан как 38 — у нас вылет целый, "
+                        + "точное значение в «Характеристиках»");
         assertThat(report.path("quantityDefaulted").asInt())
                 .as("число комплектов из «Прочих полей» засчитано догадкой «по одной штуке»")
                 .isEqualTo(PART_ADS.size());
@@ -303,8 +306,18 @@ class DromWheelTransferTest extends PostgresTestBase {
             jdbc.update("DELETE FROM part_wheel");
             jdbc.update("UPDATE part SET product_line = 'PART'");
             jdbc.update("DELETE FROM part_change");
+            // До задачи импорт заводил колёсную строку запчастью через справочник
+            // наименований: у позиции есть написание, у написания — счётчик.
+            for (String ad : WHEEL_ADS) {
+                jdbc.update("""
+                        WITH n AS (INSERT INTO part_name (name, usage_count)
+                                   SELECT title, 1 FROM part WHERE drom_ad_number = ? RETURNING id)
+                        UPDATE part SET part_name_id = (SELECT id FROM n) WHERE drom_ad_number = ?""",
+                        ad, ad);
+            }
             return null;
         });
+        assertThat(count("SELECT count(*) FROM part WHERE part_name_id IS NOT NULL")).isEqualTo(ROWS.size());
         assertThat(getJson("/api/parts/catalog?size=50").path("total").asInt()).isEqualTo(ROWS.size());
         assertThat(getJson("/api/wheels").path("total").asInt()).isZero();
         List<Map<String, Object>> before = identity();
@@ -337,6 +350,15 @@ class DromWheelTransferTest extends PostgresTestBase {
         assertThat(count("SELECT count(*) FROM part_photo_import")).isEqualTo(photos);
         assertThat(count("SELECT count(*) FROM v_stock_discrepancy")).isZero();
         assertThat(count("SELECT count(*) FROM part_change")).isEqualTo(5);
+        // Колесо не числится за написанием справочника: иначе оно висело бы в «Не разобрано»,
+        // а сопоставление написания с эталоном переписало бы заголовок клиента.
+        assertThat(count("SELECT count(*) FROM part WHERE product_line = 'WHEEL' AND part_name_id IS NOT NULL"))
+                .as("переложенное колесо осталось за написанием справочника наименований").isZero();
+        assertThat(count("SELECT coalesce(sum(n.usage_count), 0) FROM part_name n "
+                + "WHERE n.name IN (SELECT title FROM part WHERE product_line = 'WHEEL')"))
+                .as("счётчик написаний считает переложенные колёса").isZero();
+        assertThat(count("SELECT coalesce(sum(usage_count), 0) FROM part_name"))
+                .as("пересчёт потерял запчасти").isEqualTo(PART_ADS.size());
 
         JsonNode third = load(file(), UUID.randomUUID().toString());
         assertThat(third.path("imported").asInt()).isZero();
@@ -345,9 +367,62 @@ class DromWheelTransferTest extends PostgresTestBase {
         assertThat(third.path("repeat").path("unchanged").asInt()).isEqualTo(ROWS.size());
     }
 
+    @Test
+    @DisplayName("Два комплекта в объявлении — остаток позиции 2, приход одним движением на 2, прайс отдаёт 2")
+    void setsCountIsTheStock() throws Exception {
+        // У клиента везде «1 шт», и на одних его строках «остаток — число комплектов»
+        // неотличимо от «остаток — всегда один»: нужна строка, где комплектов два.
+        Map<String, String> two = new HashMap<>(ROWS.get(4));
+        two.put("Прочие поля", DromWheelCardTest.TYRE_993.replace(
+                "Всего комплектов [quantity]: 1 шт", "Всего комплектов [quantity]: 2 шт"));
+        assertThat(two.get("Прочие поля")).contains("[quantity]: 2 шт");
+        JsonNode report = load(file(List.of(two)), UUID.randomUUID().toString());
+
+        assertThat(report.path("imported").asInt()).isEqualTo(1);
+        assertThat(report.path("quantityDefaulted").asInt())
+                .as("число комплектов из «Прочих полей» засчитано догадкой «по одной штуке»").isZero();
+        assertThat(decimal("SELECT qty_on_hand FROM part WHERE drom_ad_number = ?", "118479106"))
+                .as("остаток не равен числу комплектов из «Прочих полей»").isEqualByComparingTo("2");
+        assertThat(decimal("SELECT sum(m.qty_delta) FROM stock_movement m JOIN part p ON p.id = m.part_id "
+                + "WHERE p.drom_ad_number = ?", "118479106")).isEqualByComparingTo("2");
+        assertThat(count("SELECT count(*) FROM v_stock_discrepancy")).isZero();
+
+        Element set = offers(price("WHEEL")).get(column(
+                "SELECT public_code FROM part WHERE drom_ad_number = ?", "118479106"));
+        assertThat(text(set, "inSet")).isEqualTo("4");
+        assertThat(text(set, "quantity")).as("в прайс ушло не число комплектов").isEqualTo("2");
+    }
+
+    @Test
+    @DisplayName("Повтор, принёсший «Подходит» колёсной позиции, кладёт текст и не раскладывает применимость")
+    void refillDoesNotLayApplicabilityOnAWheel() throws Exception {
+        // Первая загрузка — без «Применимости»: колесо заведено, раскладывать нечего.
+        List<Map<String, String>> withoutFits = new ArrayList<>();
+        for (Map<String, String> row : ROWS) {
+            Map<String, String> copy = new HashMap<>(row);
+            copy.remove("Применимость");
+            withoutFits.add(copy);
+        }
+        load(file(withoutFits), UUID.randomUUID().toString());
+        assertThat(count("SELECT count(*) FROM part_drom_card WHERE applicability IS NOT NULL")).isZero();
+
+        // Повтор с ней: текст дозаполняется, справочная применимость колесу не заводится.
+        JsonNode again = load(file(), UUID.randomUUID().toString());
+        assertThat(again.path("repeat").path("refilled").asInt()).as("%s", again.path("repeat")).isEqualTo(1);
+        assertThat(column("SELECT applicability FROM part_drom_card d JOIN part p ON p.id = d.part_id "
+                + "WHERE p.drom_ad_number = ?", "121359555"))
+                .isEqualTo(ROWS.get(1).get("Применимость"));
+        assertThat(count("SELECT count(*) FROM part_applicability"))
+                .as("повтор разложил колесу применимость").isZero();
+    }
+
     // --- файл ---
 
     private static byte[] file() throws Exception {
+        return file(ROWS);
+    }
+
+    private static byte[] file(List<Map<String, String>> rows) throws Exception {
         List<String> titles = DromTransferFile.COLUMNS.stream().map(Column::title).toList();
         try (XSSFWorkbook book = new XSSFWorkbook();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
@@ -356,10 +431,10 @@ class DromWheelTransferTest extends PostgresTestBase {
             for (int c = 0; c < titles.size(); c++) {
                 head.createCell(c).setCellValue(titles.get(c));
             }
-            for (int r = 0; r < ROWS.size(); r++) {
+            for (int r = 0; r < rows.size(); r++) {
                 Map<String, String> values = new HashMap<>(Map.of(
                         "Наличие", ExcelWarehouseImporter.IN_STOCK, "Состояние", "Б/у"));
-                values.putAll(ROWS.get(r));
+                values.putAll(rows.get(r));
                 Row row = sheet.createRow(r + 1);
                 for (int c = 0; c < titles.size(); c++) {
                     String value = values.getOrDefault(titles.get(c), "");

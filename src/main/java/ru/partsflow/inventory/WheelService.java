@@ -182,8 +182,15 @@ public class WheelService {
         if (setPieces != null && setPieces < 1) {
             throw new IllegalArgumentException("Колёс в комплекте — от одного");
         }
-        int moved = jdbc.update(
-                "UPDATE part SET product_line = 'WHEEL' WHERE id = ? AND product_line = 'PART'",
+        // Наименование из справочника колесу не принадлежит — у заведённого
+        // комплектом его нет вовсе. Оставленное, оно держало бы переложенную
+        // позицию в «Не разобрано», а сопоставление этого написания с эталоном
+        // (PartService.applyMatchedNames) переписало бы заголовок клиента,
+        // который решено хранить дословно. Счётчик написания пересчитывает
+        // тот, кто перекладывает (импорт): пересчёт — по всему справочнику.
+        int moved = jdbc.update("""
+                UPDATE part SET product_line = 'WHEEL', part_name_id = NULL
+                 WHERE id = ? AND product_line = 'PART'""",
                 partId);
         int added = insertProperties(partId, request, null, setPieces);
         if (moved + added == 0) {

@@ -110,7 +110,7 @@ final class DromWheelCard {
 
     /** Колёсная ли строка (правило — в описании класса). */
     static boolean recognizes(String section, String characteristics) {
-        if (characteristics != null && lines(characteristics).containsKey(MARKER)) {
+        if (characteristics != null && !read(lines(characteristics), MARKER).isEmpty()) {
             return true;
         }
         List<String> path = sectionPath(section);
@@ -144,7 +144,7 @@ final class DromWheelCard {
         Integer loadIndex = null;
         String carcass = null;
         String marking = null;
-        for (Line line : byKey.getOrDefault("marking", List.of())) {
+        for (Line line : read(byKey, "marking")) {
             String value = line.value();
             Matcher m;
             if ((m = INCHES.matcher(value)).matches()) {
@@ -186,7 +186,7 @@ final class DromWheelCard {
             construction = "R";
         }
 
-        for (Line line : byKey.getOrDefault("wheelDiameter", List.of())) {
+        for (Line line : read(byKey, "wheelDiameter")) {
             Matcher m = NUMBER.matcher(line.value());
             if (m.matches()) {
                 diameter = diameter == null ? decimal(m.group(1)) : diameter;
@@ -272,7 +272,7 @@ final class DromWheelCard {
 
         BigDecimal discWidth = null;
         Integer offset = null;
-        for (Line line : byKey.getOrDefault("discParameters", List.of())) {
+        for (Line line : read(byKey, "discParameters")) {
             Matcher w = DISC_WIDTH.matcher(line.value());
             if (w.find()) {
                 discWidth = decimal(w.group(1));
@@ -281,7 +281,13 @@ final class DromWheelCard {
             if (o.find()) {
                 // offset_mm у нас целое (031-wheels.sql), а у клиента бывает 37.5:
                 // целое округляется, точное значение лежит в «Характеристиках» дословно.
-                offset = decimal(o.group(1)).setScale(0, RoundingMode.HALF_UP).intValueExact();
+                BigDecimal exact = decimal(o.group(1));
+                offset = exact.setScale(0, RoundingMode.HALF_UP).intValueExact();
+                if (exact.compareTo(BigDecimal.valueOf(offset)) != 0) {
+                    // Округлённое число — уже не слово клиента, и молча его не подменяем.
+                    problems.add("Вылет: " + plain(exact) + " мм записан как " + offset
+                            + " — у нас вылет целый, точное значение в «Характеристиках»");
+                }
             }
             if (discWidth == null && offset == null) {
                 problems.add("Параметры диска: «" + line.value() + "» не разобраны");
@@ -380,7 +386,7 @@ final class DromWheelCard {
 
     private static boolean has(Map<String, List<Line>> byKey, String... keys) {
         for (String key : keys) {
-            if (byKey.containsKey(key)) {
+            if (!read(byKey, key).isEmpty()) {
                 return true;
             }
         }
@@ -388,16 +394,26 @@ final class DromWheelCard {
     }
 
     private static String first(Map<String, List<Line>> byKey, String key) {
-        List<Line> found = byKey.get(key);
-        if (found == null) {
-            return null;
-        }
-        for (Line line : found) {
+        for (Line line : read(byKey, key)) {
             if (!line.value().isEmpty()) {
                 return line.value();
             }
         }
         return null;
+    }
+
+    /**
+     * Строки под ключом — единственный вход к ячейке. Ключ вне {@link #KEYS}
+     * — отказ, а не пустота: договор файла называет ровно {@code KEYS}
+     * ({@code DromTransferFileTest.wheelKeysAreTheContract}), и ключ, который
+     * разбор научили читать мимо списка, разошёлся бы с договором молча.
+     */
+    private static List<Line> read(Map<String, List<Line>> byKey, String key) {
+        if (!KEYS.contains(key)) {
+            throw new IllegalStateException("ключ «Прочих полей» " + key
+                    + " читается, но не назван в DromWheelCard.KEYS и договоре файла");
+        }
+        return byKey.getOrDefault(key, List.of());
     }
 
     private static BigDecimal decimal(String text) {

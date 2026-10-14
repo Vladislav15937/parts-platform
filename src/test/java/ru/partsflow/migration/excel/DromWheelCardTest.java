@@ -100,6 +100,13 @@ class DromWheelCardTest {
         // По разделу без «Прочих полей» — тоже колесо: подраздел «Шины», «Диски» или нет его.
         assertThat(DromWheelCard.recognizes("Шины и диски → Шины → Шины Nokian", null)).isTrue();
         assertThat(DromWheelCard.recognizes("Шины и диски", null)).isTrue();
+        // Служебная строка Дрома узнаёт колесо и без раздела — и под чужим разделом
+        // (критерий 1: «model~tireFirmAndModel ИЛИ раздел»). Строки клиента выше
+        // проходят и по разделу, поэтому одни они правило про служебную строку не держат.
+        assertThat(DromWheelCard.recognizes(null, TYRE_349))
+                .as("шина без раздела, со служебной строкой Дрома, не узнана").isTrue();
+        assertThat(DromWheelCard.recognizes("Автозапчасти → Расходники и комплектующие", DISC_946))
+                .as("диски со служебной строкой Дрома под чужим разделом не узнаны").isTrue();
 
         // Строка 970 — аксессуар в том же разделе.
         assertThat(DromWheelCard.recognizes("Шины и диски → Аксессуары для колес", null))
@@ -205,6 +212,17 @@ class DromWheelCardTest {
         assertThat(r.season()).isNull();
         assertThat(parsed.setPieces()).isEqualTo(4);
         assertThat(parsed.sets()).isEqualTo(1);
+        // Округлённое — уже не слово клиента: владелец узнаёт об этом из отчёта загрузки.
+        assertThat(parsed.problems()).containsExactly(
+                "Вылет: 37.5 мм записан как 38 — у нас вылет целый, точное значение в «Характеристиках»");
+    }
+
+    @Test
+    @DisplayName("Вылет целым числом записывается как есть и в отчёт не попадает")
+    void wholeOffsetIsNotNamed() {
+        DromWheelCard.Parsed parsed = DromWheelCard.parse("Диски", "Шины и диски → Диски",
+                DISC_946.replace("37.5 мм", "45 мм"));
+        assertThat(parsed.request().offsetMm()).isEqualTo(45);
         assertThat(parsed.problems()).isEmpty();
     }
 
