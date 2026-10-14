@@ -168,7 +168,7 @@ declared() {
     # Сначала спрашиваем compose, ПОТОМ разбираем: в конвейере отказ compose
     # доезжал бы до python'а пустым вводом, и человек читал бы traceback разбора
     # вместо «нет файла окружения». Тот же класс, что «код возврата брать
-    # до конвейера» (ops/CLAUDE.md, задача 0137) — поймано живым прогоном
+    # до конвейера» (docs/ops-history.md, задача 0137) — поймано живым прогоном
     # на дереве без .env.
     $DC -f "$COMPOSE_FILE" --project-directory . --env-file "$ENV_FILE" \
         --profile blue --profile green --profile kafka --profile backup \
