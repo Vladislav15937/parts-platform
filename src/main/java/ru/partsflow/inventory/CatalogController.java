@@ -109,6 +109,7 @@ public class CatalogController {
                 row.priceChangedAt(), row.priceChangedByName(), row.photoCount(),
                 row.vehicleSource(), row.vehicleSpans(),
                 row.vehicleTitleBody(), row.vehicleBlockBodies(),
+                row.vehicleGenerationBodies(),
                 row.stock());
     }
 
@@ -424,6 +425,8 @@ public class CatalogController {
                        * поколение не показано из-за их расхождения (задача 0294).
                        */
                       String vehicleTitleBody, String vehicleBlockBodies,
+                      /** Коды кузова, по которым поколение определено нами (задача 0295). */
+                      String vehicleGenerationBodies,
                       Map<Long, java.math.BigDecimal> stock) {
     }
 }

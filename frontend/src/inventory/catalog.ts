@@ -106,6 +106,11 @@ export interface CatalogRow {
    */
   vehicleTitleBody?: string | null;
   vehicleBlockBodies?: string | null;
+  /**
+   * Коды кузова, по которым поколение своей машины определено нами, а не
+   * названо клиентом в «Подходит» («GRJ120, KDJ120», задача 0295); иначе пусто.
+   */
+  vehicleGenerationBodies?: string | null;
   /** Остаток по складам: ключ — идентификатор склада, число колонок = число складов. */
   stock: Record<string, number>;
 }
@@ -146,7 +151,23 @@ export function vehicleHint(row: CatalogRow): string | undefined {
   const spans = row.vehicleSpans ?? 0;
   return spans > 1
     ? `${base}. Поколений у этой машины ${spans} — какое у детали, не указано; все — в карточке`
-    : base;
+    : base + generationByBody(row);
+}
+
+/**
+ * «. Поколение определено по коду кузова GRJ120» — когда поколение в колонке
+ * выведено нами по кузову, а не названо клиентом (задача 0295): владелец
+ * должен отличать заявление клиента от нашего вывода. Только при показанном
+ * поколении — без него говорить не о чем.
+ */
+function generationByBody(row: CatalogRow): string {
+  const codes = (row.vehicleGenerationBodies ?? '').split(', ').filter((c) => c !== '');
+  if (!row.generation || codes.length === 0) return '';
+  const head = codes.slice(0, 3).join(', ');
+  const rest = codes.length > 3 ? ` и ещё ${codes.length - 3}` : '';
+  return codes.length === 1
+    ? `. Поколение определено по коду кузова ${head}`
+    : `. Поколение определено по кодам кузова ${head}${rest}`;
 }
 
 /** Машина, к которой подбирают деталь. Пустая марка — подбора нет. */
