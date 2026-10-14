@@ -132,6 +132,42 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
         assertThat(row.path("engine").isNull()).isTrue();
     }
 
+    // --- задача 0298: смесь алфавитов в наименовании ---
+
+    /**
+     * Файл клиента Strikexz, 12 позиций: «Toyota Land \u0421ruiser Prado 120» с кириллической
+     * «С» в середине латинского слова. Марка находилась, модели не было — колонка
+     * «Модель» пуста, подбор по машине позицию не видел.
+     */
+    @Test
+    @DisplayName("«Land Сruiser Prado» с кириллической «С» — своя машина Land Cruiser Prado, наименование дословно")
+    void cyrillicLetterInsideTheModelWord() throws Exception {
+        String title = "Подкрылок передний Toyota Land \u0421ruiser Prado 120";
+        long part = part(title);
+        row(part, prado, generation(prado, 2002), false, "Кузова: GRJ120W, KDJ121W");
+
+        JsonNode row = only(page(""));
+        assertThat(row.path("brand").asText()).isEqualTo("Toyota");
+        assertThat(row.path("model").asText())
+                .as("модель не находилась из-за кириллической «С»").isEqualTo("Land Cruiser Prado");
+        assertThat(row.path("yearFrom").asInt())
+                .as("номер кузова «120» из наименования сверяется после приведения слова")
+                .isEqualTo(2002);
+        // Наименование на витрине дословное, а не «починенное».
+        assertThat(row.path("title").asText()).isEqualTo(title);
+        assertThat(titles(page("&filter=model:Land Cruiser Prado"))).containsExactly(title);
+    }
+
+    @Test
+    @DisplayName("Чисто русское слово в наименовании свою машину не меняет")
+    void pureCyrillicWordsKeepTheirMeaning() throws Exception {
+        long part = part("Хонда сорт Toyota Land Cruiser Prado 120");
+        row(part, prado, generation(prado, 2002), false, "Кузова: GRJ120W");
+
+        JsonNode row = only(page(""));
+        assertThat(row.path("model").asText()).isEqualTo("Land Cruiser Prado");
+    }
+
     @Test
     @DisplayName("Несколько поколений своей машины — поколение и годы пусты, марка и модель есть")
     void severalGenerationsAreNotGuessed() throws Exception {

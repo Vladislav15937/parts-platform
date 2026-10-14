@@ -43,6 +43,25 @@ class TitleApplicabilityTest {
                     new TitleApplicability.Model(50, AMBER, "A3")));
 
     @Test
+    @DisplayName("«Land Сruiser Prado» с кириллической «С» — та же модель, что с латинской (0298)")
+    void cyrillicLetterInsideLatinModel() {
+        assertThat(TitleApplicability.parse("Накладка Toyota Land \u0421ruiser Prado 120", DICT))
+                .containsExactly(new TitleApplicability.Vehicle(TOYOTA, 11));
+    }
+
+    @Test
+    @DisplayName("Чисто русское слово смесью не считается: «сорт» не совпадает с моделью «Copt»")
+    void pureCyrillicWordIsNotFolded() {
+        TitleApplicability.Dictionary dict = new TitleApplicability.Dictionary(
+                List.of(new TitleApplicability.Brand(TOYOTA, "Toyota")),
+                List.of(new TitleApplicability.Model(90, TOYOTA, "Copt")));
+        assertThat(TitleApplicability.parse("Toyota \u0441\u043e\u0440\u0442", dict)).isEmpty();
+        // Тот же набор букв, но слово смешанное («pt» латиницей) — это «Copt».
+        assertThat(TitleApplicability.parse("Toyota \u0441\u043ept", dict))
+                .containsExactly(new TitleApplicability.Vehicle(TOYOTA, 90));
+    }
+
+    @Test
     @DisplayName("Одна машина в заголовке")
     void singleVehicle() {
         assertThat(TitleApplicability.parse("Брызговик Kia Cerato задн. лев. (б/у) 86861A7100", DICT))

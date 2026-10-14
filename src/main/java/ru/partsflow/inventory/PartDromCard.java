@@ -74,6 +74,13 @@ public class PartDromCard {
     @Column(name = "may_fit")
     private String mayFit;
 
+    /**
+     * «Дата» объявления Дрома (задача 0298): ГГГГ-ММ-ДД текстом, как в ячейке файла
+     * переноса. Что она значит у Дрома, снаружи не определить, поэтому не «Создан» позиции.
+     */
+    @Column(name = "ad_date")
+    private String adDate;
+
     protected PartDromCard() {
     }
 
@@ -126,9 +133,13 @@ public class PartDromCard {
         return mayFit;
     }
 
+    public String getAdDate() {
+        return adDate;
+    }
+
     public void set(String warranty, String pickup, String deliveryPayment,
                     String dromKind, String dromSection, String applicability,
-                    String characteristics, String mayFit) {
+                    String characteristics, String mayFit, String adDate) {
         this.warranty = clean(warranty);
         this.pickup = clean(pickup);
         this.deliveryPayment = clean(deliveryPayment);
@@ -137,5 +148,6 @@ public class PartDromCard {
         this.applicability = clean(applicability);
         this.characteristics = clean(characteristics);
         this.mayFit = clean(mayFit);
+        this.adDate = clean(adDate);
     }
 }

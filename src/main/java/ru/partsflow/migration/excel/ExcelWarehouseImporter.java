@@ -260,7 +260,8 @@ public class ExcelWarehouseImporter {
             return null;
         }
         return new Report(imported.get(0), skippedOf(requestId), quantityDefaultedOf(requestId),
-                repeatOf(requestId), applicabilityOf(requestId), wheelsOf(requestId));
+                repeatOf(requestId), applicabilityOf(requestId), wheelsOf(requestId),
+                substituteIsPrimaryOf(requestId));
     }
 
     /**
@@ -355,6 +356,21 @@ public class ExcelWarehouseImporter {
     }
 
     /**
+     * Сколько позиций прошлый прогон завёл без номера замены, потому что тот
+     * совпал с основным (задача 0298) — тем же обходом, что «по одной штуке».
+     */
+    private int substituteIsPrimaryOf(String requestId) {
+        Integer count = jdbc.queryForObject("""
+                        SELECT COALESCE(sum((e->>'substituteIsPrimary')::int), 0)::int
+                          FROM import_run r
+                         CROSS JOIN LATERAL jsonb_array_elements(r.skipped) e
+                         WHERE r.client_request_id = ?
+                           AND e->>'substituteIsPrimary' IS NOT NULL""",
+                Integer.class, requestId);
+        return count == null ? 0 : count;
+    }
+
+    /**
      * Пропущенные строки прошлого прогона — разбирает их Postgres, а не мы.
      *
      * <p>Колонка объявлена {@code jsonb}, и база хранит не тот текст, что мы
@@ -424,7 +440,12 @@ public class ExcelWarehouseImporter {
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new IllegalStateException("итог повтора не записан", e);
         }
-        return java.util.stream.Stream.of(skipped, defaulted, repeat, applicability, wheels)
+        java.util.stream.Stream<String> samePrimary = report.substituteIsPrimary() == 0
+                ? java.util.stream.Stream.empty()
+                : java.util.stream.Stream.of(
+                        "{\"substituteIsPrimary\":%d}".formatted(report.substituteIsPrimary()));
+        return java.util.stream.Stream.of(skipped, defaulted, repeat, applicability, wheels,
+                        samePrimary)
                 .flatMap(s -> s)
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
     }
@@ -536,7 +557,8 @@ public class ExcelWarehouseImporter {
                 verbatim(mapping.value(row, Field.DROM_SECTION)),
                 verbatim(mapping.value(row, Field.APPLICABILITY)),
                 characteristics(mapping.value(row, Field.CHARACTERISTICS)),
-                verbatim(mapping.value(row, Field.MAY_FIT)));
+                verbatim(mapping.value(row, Field.MAY_FIT)),
+                verbatim(mapping.value(row, Field.DROM_DATE)));
 
         // Шина, колесо или диск (задача 0291): свойства — из «Прочих полей»,
         // остаток — число комплектов оттуда же, если колонка «Количество» пуста
@@ -756,13 +778,13 @@ public class ExcelWarehouseImporter {
             jdbc.update("""
                     INSERT INTO part_drom_card (part_id, warranty, pickup, delivery_payment,
                                                 drom_kind, drom_section, applicability,
-                                                characteristics, may_fit)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                characteristics, may_fit, ad_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (part_id) DO NOTHING""",
                     partId, row.terms().warranty(), row.terms().pickup(),
                     row.terms().delivery(), row.terms().kind(), row.terms().section(),
                     row.terms().applicability(), row.terms().characteristics(),
-                    row.terms().mayFit());
+                    row.terms().mayFit(), row.terms().date());
             // Применимости у колеса нет намеренно (inventory/CLAUDE.md): шина
             // подходит по размеру, и «Подходит» у неё остаётся только текстом.
             if (row.wheel() == null) {
@@ -785,8 +807,15 @@ public class ExcelWarehouseImporter {
         // ячейки: прайс и карточка собирают их по порядку заведения.
         // Номер, от которого после приведения ничего не осталось,
         // отбрасывается — та же причина, что у главного выше.
+        boolean sameAsPrimary = false;
         for (String substitute : card.substitutes()) {
             String normalized = ru.partsflow.catalog.OemNumbers.normalize(substitute);
+            if (normalized != null && normalized.equals(normalizedOem)) {
+                // Уникальность номера у позиции не даст завести его второй раз, и это
+                // верно: номер на карточке есть как основной. Но сказать об этом
+                // нужно — иначе «замен в файле» и «замен на складе» расходятся молча.
+                sameAsPrimary = true;
+            }
             if (normalized != null) {
                 jdbc.update("""
                         INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
@@ -794,6 +823,9 @@ public class ExcelWarehouseImporter {
                         ON CONFLICT DO NOTHING""",
                         partId, substitute, normalized);
             }
+        }
+        if (sameAsPrimary) {
+            report.substituteIsPrimary++;
         }
 
         // Снимки только ставятся в очередь: качает их отдельный проход
@@ -849,7 +881,7 @@ public class ExcelWarehouseImporter {
                        p.note, p.description, p.condition, p.manufacturer, p.authenticity,
                        p.side_lr, p.side_fr, p.side_ud,
                        d.warranty, d.pickup, d.delivery_payment, d.drom_kind, d.drom_section,
-                       d.applicability, d.characteristics, d.may_fit
+                       d.applicability, d.characteristics, d.may_fit, d.ad_date
                   FROM part p
                   LEFT JOIN storage_cell c ON c.id = p.storage_cell_id
                   LEFT JOIN part_drom_card d ON d.part_id = p.id
@@ -912,7 +944,9 @@ public class ExcelWarehouseImporter {
                     Terms::characteristics),
             // «Может подойти» дословно (задача 0293): догадка Дрома текстом. В справочную
             // применимость не раскладывается — решение владельца 14.10.2026, tasks/0293.
-            new Term(Field.MAY_FIT, "may_fit", "Может подойти", Terms::mayFit));
+            new Term(Field.MAY_FIT, "may_fit", "Может подойти", Terms::mayFit),
+            // «Дата» объявления Дрома текстом (задача 0298): не «Создан» позиции.
+            new Term(Field.DROM_DATE, "ad_date", "Дата", Terms::date));
 
     /**
      * Что повтор дозаполняет — поле и его имя в отчёте, в порядке отчёта.
@@ -995,7 +1029,7 @@ public class ExcelWarehouseImporter {
                 case OEM_SUBSTITUTES -> changed |= refillSubstitutes(row, partId, label, report);
                 case PHOTOS -> changed |= refillPhotos(row, partId, label, report);
                 case WARRANTY, PICKUP, DELIVERY, DROM_KIND, DROM_SECTION, APPLICABILITY,
-                     CHARACTERISTICS, MAY_FIT ->
+                     CHARACTERISTICS, MAY_FIT, DROM_DATE ->
                         termsFilled |= refillTerm(termOf(field), row, part, partId, report);
                 default -> changed |= refillScalar(scalarOf(field), row, part, partId, report);
             }
@@ -1432,12 +1466,12 @@ public class ExcelWarehouseImporter {
      */
     private record Terms(String warranty, String pickup, String delivery,
                          String kind, String section, String applicability,
-                         String characteristics, String mayFit) {
+                         String characteristics, String mayFit, String date) {
 
         boolean isEmpty() {
             return warranty == null && pickup == null && delivery == null
                     && kind == null && section == null && applicability == null
-                    && characteristics == null && mayFit == null;
+                    && characteristics == null && mayFit == null && date == null;
         }
     }
 
@@ -1487,7 +1521,12 @@ public class ExcelWarehouseImporter {
     public record Report(int imported, List<Skipped> skipped, int quantityDefaulted,
                          Repeat repeat,
                          ru.partsflow.inventory.DromApplicabilityService.Report applicability,
-                         Wheels wheels) {
+                         Wheels wheels,
+                         // Позиций, у которых номер замены совпал с основным и потому не заведён
+                         // (задача 0298): информация не теряется — номер на карточке есть как
+                         // основной, — но без строки отчёта «1 338 замен в файле» и «1 337 на
+                         // складе» не сходились без чтения кода.
+                         int substituteIsPrimary) {
 
         /**
          * Шины, колёса и диски файла переноса (задача 0291), отдельной строкой отчёта:
@@ -1566,6 +1605,8 @@ public class ExcelWarehouseImporter {
          * не входит (задача 0284).
          */
         private int quantityDefaulted;
+        /** Позиций, у которых замена совпала с основным номером (задача 0298). */
+        private int substituteIsPrimary;
         private final List<Skipped> skipped = new ArrayList<>();
 
         /** Колёсные строки (задача 0291); {@code false} у {@link #wheelsSeen} — их не было. */
@@ -1682,7 +1723,8 @@ public class ExcelWarehouseImporter {
             return new Report(imported, List.copyOf(skipped), quantityDefaulted, repeat(),
                     vehicles == null ? null : applicability.toReport(),
                     wheelsSeen ? new Report.Wheels(wheelsCreated, wheelsConverted,
-                            List.copyOf(wheelNotes)) : null);
+                            List.copyOf(wheelNotes)) : null,
+                    substituteIsPrimary);
         }
     }
 }

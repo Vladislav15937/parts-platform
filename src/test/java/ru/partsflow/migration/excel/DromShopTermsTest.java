@@ -83,6 +83,8 @@ class DromShopTermsTest extends PostgresTestBase {
     @Autowired
     private JdbcTemplate jdbc;
     @Autowired
+    private ru.partsflow.inventory.PartService partService;
+    @Autowired
     private TransactionTemplate transactionTemplate;
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -816,6 +818,134 @@ class DromShopTermsTest extends PostgresTestBase {
         return found.get(0);
     }
 
+    // --- «Дата» объявления Дрома (задача 0298) ---
+
+    private static final String DATE = "Дата";
+
+    @Test
+    @DisplayName("«Дата» ложится текстом как в ячейке, пусто — NULL; «Создан» позиции остаётся днём загрузки")
+    void dateLandsVerbatimAndDoesNotTouchCreated() throws Exception {
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Camry");
+        a.put(DATE, "2026-09-28");
+        Map<String, String> b = row(AD_B, "Фара правая Toyota Camry");
+
+        JsonNode report = load(file(List.of(a, b), Set.of(), null));
+
+        assertThat(report.path("imported").asInt()).as("%s", report.path("skipped")).isEqualTo(2);
+        assertThat(adDate(AD_A)).as("«Дата» доехала не как в ячейке").isEqualTo("2026-09-28");
+        assertThat(adDate(AD_B)).as("пустая колонка дала не NULL").isNull();
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT created_at::date = current_date FROM part WHERE drom_ad_number = ?",
+                Boolean.class, AD_A)))
+                .as("«Дата» подменила «Создан» позиции").isTrue();
+    }
+
+    @Test
+    @DisplayName("Файл без «Даты», затем с ней: дозаполнено, отметка не двинулась; поправленное не затирается, расхождение названо")
+    void secondLoadFillsTheDateAndKeepsEdits() throws Exception {
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Camry");
+        a.put(DATE, "2026-09-28");
+        List<Map<String, String>> rows = List.of(a);
+
+        load(file(rows, Set.of(DATE), null));
+        assertThat(adDate(AD_A)).isNull();
+
+        JsonNode repeat = load(file(rows, Set.of(), null)).path("repeat");
+        assertThat(repeat.path("refilled").asInt()).as("%s", repeat).isEqualTo(1);
+        assertThat(repeat.path("fields").findValuesAsText("field")).containsExactly("Дата");
+        assertThat(adDate(AD_A)).isEqualTo("2026-09-28");
+        assertThat(feedMarks()).as("дозаполнение «Даты» двинуло отметку для площадки").isZero();
+
+        long part = partOf(AD_A);
+        ObjectNode form = editable(part);
+        assertThat(form.path("adDate").asText()).isEqualTo("2026-09-28");
+        form.put("adDate", "2026-10-01");
+        update(part, form);
+        assertThat(adDate(AD_A)).isEqualTo("2026-10-01");
+        assertThat(feedMarks()).as("правка одной «Даты» двинула отметку").isZero();
+
+        JsonNode again = load(file(rows, Set.of(), null)).path("repeat");
+        assertThat(adDate(AD_A)).as("повтор затёр поправленную дату").isEqualTo("2026-10-01");
+        assertThat(again.path("discrepancies").get(0).path("field").asText()).isEqualTo("Дата");
+    }
+
+    @Test
+    @DisplayName("Карточка: форма без ключа «Даты» её не стирает, пустая строка — NULL, лента называет «Дата (Дром)»")
+    void cardKeepsAndClearsTheDate() throws Exception {
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Camry");
+        a.put(DATE, "2026-09-28");
+        load(file(List.of(a), Set.of(), null));
+        long part = partOf(AD_A);
+
+        ObjectNode stale = editable(part);
+        stale.remove("adDate");
+        stale.put("note", "с полки 3");
+        update(part, stale);
+        assertThat(adDate(AD_A)).as("форма без ключа стёрла «Дату» клиента").isEqualTo("2026-09-28");
+
+        ObjectNode form = editable(part);
+        form.put("adDate", "");
+        update(part, form);
+        assertThat(adDate(AD_A)).isNull();
+
+        JsonNode history = json.readTree(mvc.perform(get("/api/parts/" + part + "/history")
+                        .session(login()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8));
+        List<String> labels = new ArrayList<>();
+        history.path("changes").forEach(c -> c.path("fields").forEach(f -> labels.add(f.path("label").asText())));
+        assertThat(labels).contains("Дата (Дром)");
+    }
+
+    // --- Смесь алфавитов в номере и замена, равная основному (задача 0298) ---
+
+    @Test
+    @DisplayName("Номер с кириллической «С» на конце находится по латинскому; raw_number как набрал клиент")
+    void numberWithCyrillicLetterIsFoundByLatin() throws Exception {
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Camry");
+        a.put("Номер", "FP8518100\u0421");
+
+        load(file(List.of(a), Set.of(), null));
+
+        long part = partOf(AD_A);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT raw_number FROM part_oem WHERE part_id = ? AND is_primary", String.class, part)))
+                .isEqualTo("FP8518100\u0421");
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT normalized FROM part_oem WHERE part_id = ? AND is_primary", String.class, part)))
+                .isEqualTo("FP8518100C");
+        for (String query : List.of("FP8518100C", "FP8518100\u0421")) {
+            assertThat(inTenant(() -> partService.findByOem(query)))
+                    .as("поиск «%s» не нашёл позицию", query).hasSize(1);
+        }
+    }
+
+    @Test
+    @DisplayName("Замена, равная основному номеру, не заводится и называется строкой отчёта; повтор по ключу отдаёт её же")
+    void substituteEqualToPrimaryIsNamedInTheReport() throws Exception {
+        Map<String, String> same = row(AD_A, "Бардачок центральной консоли Toyota");
+        same.put("Номер", "5890560060B0");
+        same.put("Номера замен", "5890560060B0");
+        Map<String, String> other = row(AD_B, "Фара правая Toyota Camry");
+        other.put("Номер", "81170-33550");
+        other.put("Номера замен", "A111, B222");
+
+        JsonNode report = load(file(List.of(same, other), Set.of(), null), "same-primary-1");
+
+        assertThat(report.path("imported").asInt()).as("%s", report.path("skipped")).isEqualTo(2);
+        assertThat(report.path("substituteIsPrimary").asInt())
+                .as("отчёт промолчал о замене, равной основному номеру").isEqualTo(1);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_oem WHERE part_id = ?", Integer.class, partOf(AD_A))))
+                .as("номер задвоен").isEqualTo(1);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM part_oem WHERE part_id = ? AND NOT is_primary",
+                Integer.class, partOf(AD_B)))).isEqualTo(2);
+
+        JsonNode replay = load(file(List.of(same, other), Set.of(), null), "same-primary-1");
+        assertThat(replay.path("substituteIsPrimary").asInt()).isEqualTo(1);
+    }
+
     // --- «Может подойти» дословно (задача 0293) ---
 
     private static final String MAY_FIT = "Может подойти";
@@ -958,6 +1088,16 @@ class DromShopTermsTest extends PostgresTestBase {
         List<String> labels = new ArrayList<>();
         history.path("changes").forEach(c -> c.path("fields").forEach(f -> labels.add(f.path("label").asText())));
         assertThat(labels).contains("Может подойти");
+    }
+
+    private String adDate(String ad) {
+        List<String> found = inTenant(() -> jdbc.query("""
+                SELECT c.ad_date
+                  FROM part p LEFT JOIN part_drom_card c ON c.part_id = p.id
+                 WHERE p.drom_ad_number = ?""",
+                (rs, i) -> rs.getString(1), ad));
+        assertThat(found).as("позиции № %s нет", ad).hasSize(1);
+        return found.get(0);
     }
 
     private String mayFit(String ad) {
@@ -1133,6 +1273,10 @@ class DromShopTermsTest extends PostgresTestBase {
     }
 
     private JsonNode load(byte[] file) throws Exception {
+        return load(file, UUID.randomUUID().toString());
+    }
+
+    private JsonNode load(byte[] file, String requestId) throws Exception {
         MockHttpSession session = login();
         String previewBody = mvc.perform(multipart("/api/import/excel/preview").file(xlsx(file))
                         .with(csrf()).session(session))
@@ -1147,7 +1291,7 @@ class DromShopTermsTest extends PostgresTestBase {
         fields.forEach(request::param);
         String body = mvc.perform(request.with(csrf()).session(session)
                         .param("warehouseId", String.valueOf(warehouseId))
-                        .param("requestId", UUID.randomUUID().toString()))
+                        .param("requestId", requestId))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         return json.readTree(body);

@@ -42,7 +42,11 @@ public final class OemNumbers {
         if (rawNumber == null) {
             return null;
         }
-        String normalized = rawNumber.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+        // Смешанное слово («FP8518100С» с кириллической «С») читается латиницей, иначе
+        // последняя буква вырезалась бы вместе с разделителями (задача 0298). Номер без
+        // смеси алфавитов — а таких подавляющее большинство — не меняется ни на знак.
+        String normalized = MixedAlphabet.latinize(rawNumber)
+                .replaceAll("[^A-Za-z0-9]", "").toUpperCase();
         return normalized.isEmpty() ? null : normalized;
     }
 }

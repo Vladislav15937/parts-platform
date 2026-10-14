@@ -390,6 +390,33 @@ describe('блоки карточки Дрома', () => {
     expect(sent[0]!['mayFit']).toBe(MAY_FIT);
   });
 
+  it('«Дата (Дром)» показана как ДД.ММ.ГГГГ, правка открывает хранимый текст, очистка — пустая строка (задача 0298)', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Дата (Дром)')).toBeTruthy());
+
+    expect(line('Дата (Дром)').textContent).toContain('28.09.2026');
+    expect(line('Дата (Дром)').textContent, 'показано хранимое ГГГГ-ММ-ДД').not.toContain('2026-09-28');
+
+    fireEvent.click(screen.getByLabelText('Изменить: Дата (Дром)'));
+    expect((screen.getByLabelText('Дата (Дром)') as HTMLInputElement).value).toBe('2026-09-28');
+    fireEvent.change(screen.getByLabelText('Дата (Дром)'), { target: { value: '' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['adDate'], 'очистка — пустая строка, null сервер прочёл бы как «не трогать»').toBe('');
+  });
+
+  it('нетронутая «Дата (Дром)» уезжает как прочитана, байт в байт', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
+    fireEvent.click(save());
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['adDate']).toBe('2026-09-28');
+  });
+
   it('нетронутое «Подходит» уезжает как прочитано, байт в байт', async () => {
     render(<PartEditForm partId={7} row={row()} role="OWNER"
                          onSaved={() => {}} onCancel={() => {}} />);
@@ -497,6 +524,7 @@ function card(): Record<string, unknown> {
     applicability: APPLICABILITY,
     characteristics: CHARACTERISTICS,
     mayFit: MAY_FIT,
+    adDate: '2026-09-28',
   };
 }
 
