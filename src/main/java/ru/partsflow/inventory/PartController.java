@@ -362,6 +362,8 @@ public class PartController {
                                 String applicability,
                                 // «Характеристики» («Прочие поля» Дрома) дословно (задача 0292): так же.
                                 String characteristics,
+                                // «Может подойти» дословно (задача 0293): так же.
+                                String mayFit,
                                 // Что сделать с ценой: «Изменить» (умолчание и прежнее
                                 // поведение), процент, сумма, округление. При арифметике
                                 // поле price несёт значение операции, а не новую цену, —
@@ -384,6 +386,7 @@ public class PartController {
                     card == null ? null : card.getDromSection(),
                     card == null ? null : card.getApplicability(),
                     card == null ? null : card.getCharacteristics(),
+                    card == null ? null : card.getMayFit(),
                     // Форма открывается на «Изменить»: самый частый случай —
                     // вписать новое число — остаётся одним движением.
                     PriceOperation.SET);
@@ -396,7 +399,7 @@ public class PartController {
                     color, section, barcode, weightKg, lengthMm, widthMm, heightMm,
                     packageLengthMm, packageWidthMm, packageHeightMm, packageWeightKg,
                     storageCellId, published, warranty, pickup, deliveryPayment,
-                    dromKind, dromSection, applicability, characteristics, priceOp);
+                    dromKind, dromSection, applicability, characteristics, mayFit, priceOp);
         }
     }
 

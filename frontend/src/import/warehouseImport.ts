@@ -63,6 +63,8 @@ export const FIELDS = [
   { key: 'APPLICABILITY', label: 'Применимость', required: false, dromOnly: true },
   // «Прочие поля» объявления дословно — на карточке «Характеристики» (задача 0292).
   { key: 'CHARACTERISTICS', label: 'Характеристики', required: false, dromOnly: true },
+  // «Может подойти» — догадка Дрома, дословно текстом (задача 0293): не справочная применимость.
+  { key: 'MAY_FIT', label: 'Может подойти', required: false, dromOnly: true },
 ] as const;
 
 export type FieldKey = (typeof FIELDS)[number]['key'];

@@ -116,6 +116,8 @@ public final class AuditedColumns {
         PART_DROM_CARD.put("applicability", "Подходит");
         // Задача 0292: «Прочие поля» объявления Дрома — подпись карточки.
         PART_DROM_CARD.put("characteristics", "Характеристики");
+        // Задача 0293: слово Дрома для второго блока применимости — не «Подходит».
+        PART_DROM_CARD.put("may_fit", "Может подойти");
     }
 
     /**
