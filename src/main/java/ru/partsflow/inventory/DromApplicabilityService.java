@@ -217,7 +217,7 @@ public class DromApplicabilityService {
     }
 
     private record Row(long id, Key key, Integer yearFrom, Integer yearTo, String note,
-                       boolean verified) {
+                       String generationLabel, boolean verified) {
 
         boolean hasYears() {
             return yearFrom != null || yearTo != null;
@@ -240,7 +240,7 @@ public class DromApplicabilityService {
         Map<Long, List<Row>> byPart = new HashMap<>();
         jdbc.query("""
                 SELECT id, part_id, brand_id, model_id, generation_id, modification_id,
-                       year_from, year_to, note, is_verified
+                       year_from, year_to, note, generation_label, is_verified
                   FROM part_applicability
                  WHERE part_id = ANY (?)""", rs -> {
             Number modification = (Number) rs.getObject("modification_id");
@@ -259,7 +259,8 @@ public class DromApplicabilityService {
                             model == null ? null : model.longValue(),
                             generation == null ? null : generation.longValue()),
                     from == null ? null : from.intValue(), to == null ? null : to.intValue(),
-                    rs.getString("note"), rs.getBoolean("is_verified")));
+                    rs.getString("note"), rs.getString("generation_label"),
+                    rs.getBoolean("is_verified")));
         }, (Object) parts.toArray(Long[]::new));
         return byPart;
     }
@@ -279,30 +280,35 @@ public class DromApplicabilityService {
                 }
                 tally.added += jdbc.update("""
                         INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id,
-                                                        year_from, year_to, note, is_verified)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, false)
+                                                        year_from, year_to, note, generation_label,
+                                                        is_verified)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, false)
                         ON CONFLICT (part_id, brand_id, model_id, generation_id, modification_id)
                         DO NOTHING""",
                         partId, target.brandId(), target.modelId(), target.generationId(),
-                        target.yearFrom(), target.yearTo(), target.note());
+                        target.yearFrom(), target.yearTo(), target.note(), target.generationLabel());
                 present.add(key);
                 continue;
             }
             if (row.verified() || !target.hasYears() && target.note() == null) {
                 continue;
             }
+            // Метка поколения Дрома (0297) — тоже уточнение: строки, разобранные
+            // до неё, получают её повторным проходом, годы и кузова при этом прежние.
             if (Objects.equals(row.yearFrom(), target.yearFrom())
                     && Objects.equals(row.yearTo(), target.yearTo())
-                    && Objects.equals(row.note(), target.note())) {
+                    && Objects.equals(row.note(), target.note())
+                    && Objects.equals(row.generationLabel(), target.generationLabel())) {
                 continue;
             }
             // Условие в WHERE, а не только проверка выше: человек мог подтвердить
             // строку в карточке между нашим чтением и записью.
             tally.refined += jdbc.update("""
                     UPDATE part_applicability
-                       SET year_from = ?, year_to = ?, note = ?
+                       SET year_from = ?, year_to = ?, note = ?, generation_label = ?
                      WHERE id = ? AND NOT is_verified""",
-                    target.yearFrom(), target.yearTo(), target.note(), row.id());
+                    target.yearFrom(), target.yearTo(), target.note(), target.generationLabel(),
+                    row.id());
         }
 
         for (Row row : rows) {

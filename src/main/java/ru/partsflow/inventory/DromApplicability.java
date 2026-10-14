@@ -3,6 +3,7 @@ package ru.partsflow.inventory;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -86,9 +87,13 @@ public final class DromApplicability {
      * @param yearFrom {@code null} вместе с {@code yearTo} — годов в пункте нет
      * @param yearTo   {@code null} при заданном {@code yearFrom} — «н.в.»
      * @param note     кузова пункта поколения, через «, »; {@code null} — не названы
+     * @param generationLabel поколение Дрома словами клиента — «4 поколение» из
+     *                 «4 поколение, рестайлинг (2013–2017)» (задача 0297); {@code null} —
+     *                 у строки нет годов, пункт не начинается с номера поколения
+     *                 или слитые пункты назвали разные поколения
      */
     public record Target(long brandId, Long modelId, Long generationId,
-                         Integer yearFrom, Integer yearTo, String note) {
+                         Integer yearFrom, Integer yearTo, String note, String generationLabel) {
 
         boolean hasYears() {
             return yearFrom != null || yearTo != null;
@@ -213,7 +218,7 @@ public final class DromApplicability {
         String rest = item.heading().substring(brand.name().length()).strip();
         if (rest.isEmpty()) {
             // «Toyota — »: клиент назвал одну марку.
-            found.add(new Target(brand.id(), null, null, null, null, null));
+            found.add(new Target(brand.id(), null, null, null, null, null, null));
             return;
         }
         Model model = dictionary.modelOf(brand.id(), rest);
@@ -223,7 +228,7 @@ public final class DromApplicability {
         }
         String note = item.bodies() == null ? null : "Кузова: " + item.bodies();
         if (item.generation() == null) {
-            found.add(new Target(brand.id(), model.id(), null, null, null, note));
+            found.add(new Target(brand.id(), model.id(), null, null, null, note, null));
             return;
         }
         String named = item.heading() + " — " + item.generation();
@@ -236,17 +241,33 @@ public final class DromApplicability {
         }
         if (from == null || (to != null && to < from)) {
             misses.add(new Miss(Reason.NO_YEARS, named));
-            found.add(new Target(brand.id(), model.id(), null, null, null, note));
+            found.add(new Target(brand.id(), model.id(), null, null, null, note, null));
             return;
         }
+        String label = dromGeneration(item.generation());
         Generation generation = dictionary.generationOf(model.id(), from, to);
         if (generation == null) {
             // Марка, модель и годы клиента верны и ложатся; поколение не угадывается.
             misses.add(new Miss(Reason.NO_GENERATION, named));
-            found.add(new Target(brand.id(), model.id(), null, from, to, note));
+            found.add(new Target(brand.id(), model.id(), null, from, to, note, label));
             return;
         }
-        found.add(new Target(brand.id(), model.id(), generation.id(), from, to, note));
+        found.add(new Target(brand.id(), model.id(), generation.id(), from, to, note, label));
+    }
+
+    /** «4 поколение» в начале пункта: номер и слово, как их написал клиент. */
+    private static final Pattern DROM_GENERATION = Pattern.compile("^(\\d{1,2})\\s*поколение(?![\\p{L}])");
+
+    /**
+     * Поколение Дрома словами клиента (задача 0297): «4 поколение, 2-й рестайлинг
+     * (2017–2024)» → «4 поколение». Наш справочник делит поколение Дрома
+     * на рестайлинги, и только этот номер говорит, что три наши строки — одно
+     * поколение. Берётся из текста, а не выводится: пункт, не начинающийся
+     * с номера поколения, метки не получает.
+     */
+    static String dromGeneration(String generation) {
+        Matcher m = DROM_GENERATION.matcher(generation);
+        return m.find() ? m.group(1) + " " + GENERATION_WORD : null;
     }
 
     /**
@@ -256,17 +277,35 @@ public final class DromApplicability {
      */
     private static List<Target> reduce(List<Target> found) {
         Map<Key, Target> byKey = new LinkedHashMap<>();
+        Map<Key, Set<String>> labels = new HashMap<>();
         for (Target target : found) {
             byKey.merge(target.key(), target, DromApplicability::merge);
+            if (target.hasYears()) {
+                // Метку несёт только пункт с годами; null — тоже голос: пункт
+                // поколения без номера делает метку слитой строки сомнительной.
+                labels.computeIfAbsent(target.key(), k -> new HashSet<>())
+                        .add(target.generationLabel());
+            }
         }
         List<Target> kept = new ArrayList<>();
         for (Target target : byKey.values()) {
             if (!target.hasYears() && dominated(target.key(), byKey.keySet())) {
                 continue;
             }
-            kept.add(target);
+            kept.add(withLabel(target, labels.get(target.key())));
         }
         return List.copyOf(kept);
+    }
+
+    /**
+     * Метка слитой строки — только если все её пункты с годами назвали одно
+     * поколение Дрома: «4 поколение» и «5 поколение» в одной строке
+     * справочника меткой не становятся («3 и 4 поколения» не придумывается).
+     */
+    private static Target withLabel(Target target, Set<String> labels) {
+        String label = labels != null && labels.size() == 1 ? labels.iterator().next() : null;
+        return new Target(target.brandId(), target.modelId(), target.generationId(),
+                target.yearFrom(), target.yearTo(), target.note(), label);
     }
 
     static boolean dominated(Key key, java.util.Collection<Key> others) {
@@ -299,7 +338,7 @@ public final class DromApplicability {
             notes.add(b.note());
         }
         return new Target(a.brandId(), a.modelId(), a.generationId(), from, to,
-                notes.isEmpty() ? null : String.join("; ", notes));
+                notes.isEmpty() ? null : String.join("; ", notes), null);
     }
 
     /** Пункты блока в обоих написаниях; двигатели, «Другие кузова» и пустые строки — мимо. */

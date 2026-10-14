@@ -83,8 +83,8 @@ class DromApplicabilityTest {
                 + "5 поколение (2009–2013): TRN285, GRN285; Другие кузова: KZN215\n"
                 + "Для двигателей — 1GRFE, 5VZFE";
         assertThat(targets(block)).containsExactly(
-                new Target(TOYOTA, RUNNER, RUNNER_5R, 2013, 2024, "Кузова: GRN285"),
-                new Target(TOYOTA, RUNNER, RUNNER_5, 2009, 2013, "Кузова: TRN285, GRN285"));
+                new Target(TOYOTA, RUNNER, RUNNER_5R, 2013, 2024, "Кузова: GRN285", "5 поколение"),
+                new Target(TOYOTA, RUNNER, RUNNER_5, 2009, 2013, "Кузова: TRN285, GRN285", "5 поколение"));
         assertThat(misses(block)).isEmpty();
     }
 
@@ -97,17 +97,17 @@ class DromApplicabilityTest {
                 Toyota Land Cruiser Prado | Другие кузова | GRJ120, GRJ120W
                 Для двигателей | 1GRFE, 5VZFE, 2TRFE""";
         assertThat(targets(block)).containsExactly(
-                new Target(TOYOTA, RUNNER, RUNNER_5R, 2013, 2024, "Кузова: GRN285"),
-                new Target(TOYOTA, RUNNER, RUNNER_5, 2009, 2013, "Кузова: TRN285, GRN285"));
+                new Target(TOYOTA, RUNNER, RUNNER_5R, 2013, 2024, "Кузова: GRN285", "5 поколение"),
+                new Target(TOYOTA, RUNNER, RUNNER_5, 2009, 2013, "Кузова: TRN285, GRN285", "5 поколение"));
     }
 
     @Test
     @DisplayName("Невидимый U+2060 вокруг тире и «н.в.» в годах разбираются")
     void wordJoinerAndUpToNow() {
         assertThat(targets("Toyota 4Runner | 5 поколение (2009⁠–⁠2013) | TRN285"))
-                .containsExactly(new Target(TOYOTA, RUNNER, RUNNER_5, 2009, 2013, "Кузова: TRN285"));
+                .containsExactly(new Target(TOYOTA, RUNNER, RUNNER_5, 2009, 2013, "Кузова: TRN285", "5 поколение"));
         assertThat(targets("Toyota Land Cruiser Prado — 4 поколение, рестайлинг (2013–н.в.)"))
-                .containsExactly(new Target(TOYOTA, PRADO, PRADO_4R, 2013, null, null));
+                .containsExactly(new Target(TOYOTA, PRADO, PRADO_4R, 2013, null, null, "4 поколение"));
     }
 
     @Test
@@ -117,7 +117,7 @@ class DromApplicabilityTest {
                 .extracting(Target::modelId).containsExactly(PRADO);
         assertThat(targets("Land Rover Defender — GRJ1"))
                 .as("марка из двух слов не уступает короткой «Land»")
-                .containsExactly(new Target(LAND_ROVER, DEFENDER, null, null, null, "Кузова: GRJ1"));
+                .containsExactly(new Target(LAND_ROVER, DEFENDER, null, null, null, "Кузова: GRJ1", null));
     }
 
     @Test
@@ -150,8 +150,8 @@ class DromApplicabilityTest {
                 new Miss(Reason.NO_YEARS, "Toyota 4Runner — 5 поколение"));
         assertThat(targets(block)).as("поколение не нашлось — годы клиента всё равно ложатся")
                 .containsExactly(
-                        new Target(TOYOTA, PRADO, null, 2002, 2009, "Кузова: LJ120"),
-                        new Target(TOYOTA, RUNNER, null, null, null, null));
+                        new Target(TOYOTA, PRADO, null, 2002, 2009, "Кузова: LJ120", "3 поколение"),
+                        new Target(TOYOTA, RUNNER, null, null, null, null, null));
     }
 
     @Test
@@ -173,7 +173,7 @@ class DromApplicabilityTest {
                 Toyota Land Cruiser Prado — GRJ120, GRJ120W
                 Toyota Land Cruiser Prado — 4 поколение (2009–2013): GRJ150""";
         assertThat(targets(block)).containsExactly(
-                new Target(TOYOTA, PRADO, PRADO_4, 2009, 2013, "Кузова: GRJ150"));
+                new Target(TOYOTA, PRADO, PRADO_4, 2009, 2013, "Кузова: GRJ150", "4 поколение"));
     }
 
     @Test
@@ -181,5 +181,35 @@ class DromApplicabilityTest {
     void emptyLinesAreSilent() {
         assertThat(DromApplicability.parse(" — \n\n   \n", DICT).targets()).isEmpty();
         assertThat(DromApplicability.parse(" — \n\n   \n", DICT).misses()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Метка поколения Дрома — номер и слово из текста клиента: «4 поколение, 2-й рестайлинг» → «4 поколение» (0297)")
+    void dromGenerationLabelIsTheClientsWords() {
+        String block = "Toyota Land Cruiser Prado — 4 поколение (2009–2013): GRJ150; "
+                + "4 поколение, рестайлинг (2013–2017): GRJ150W; "
+                + "4 поколение, 2-й рестайлинг (2017–2024): GDJ150W";
+        assertThat(targets(block)).extracting(Target::generationLabel)
+                .containsExactly("4 поколение", "4 поколение", "4 поколение");
+        assertThat(DromApplicability.dromGeneration("4 поколение, 2-й рестайлинг (2017–2024)"))
+                .isEqualTo("4 поколение");
+        assertThat(DromApplicability.dromGeneration("рестайлинг (2013–2017)"))
+                .as("пункт без номера поколения метки не получает — она не выводится").isNull();
+        assertThat(DromApplicability.dromGeneration("3 и 4 поколения (2002–2017)"))
+                .as("«3 и 4 поколения» — не одно поколение").isNull();
+    }
+
+    @Test
+    @DisplayName("Пункты, слитые в одну строку справочника, называющие разные поколения Дрома, метки не дают (0297)")
+    void mergedDifferentGenerationsGiveNoLabel() {
+        // Оба пункта — без поколения в справочнике (год начала 2003 нигде не начинается),
+        // значит одна строка «Prado без поколения» с годами обоих.
+        String block = "Toyota Land Cruiser Prado — 3 поколение (2003–2009): LJ120; "
+                + "4 поколение (2003–2010): GRJ150";
+        assertThat(targets(block)).containsExactly(
+                new Target(TOYOTA, PRADO, null, 2003, 2010, "Кузова: LJ120; Кузова: GRJ150", null));
+        String same = "Toyota Land Cruiser Prado — 3 поколение (2003–2005): LJ120; "
+                + "3 поколение, рестайлинг (2006–2009): LJ125";
+        assertThat(targets(same)).extracting(Target::generationLabel).containsExactly("3 поколение");
     }
 }
