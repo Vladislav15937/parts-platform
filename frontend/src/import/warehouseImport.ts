@@ -131,6 +131,21 @@ export interface Report {
    * версии — поля нет либо `null`.
    */
   applicability?: DromApplicabilityReport | null;
+  /**
+   * Шины, колёса и диски файла переноса (задача 0291): заведено колёсными
+   * позициями и переложено из запчастей, плюс что в свойствах не разобралось.
+   * Колёсных строк не было или ответ прежней версии — поля нет либо `null`.
+   */
+  wheels?: WheelsReport | null;
+}
+
+export interface WheelsReport {
+  /** Заведено колёсных позиций — комплект одной позицией; входят в `imported`. */
+  created: number;
+  /** Уже перенесённых запчастей, ставших колёсными на месте. */
+  converted: number;
+  /** Что не разобралось, с названием поля; `row` — строка файла. */
+  notes: { row: number; adNumber: string | null; text: string }[];
 }
 
 export interface RepeatReport {

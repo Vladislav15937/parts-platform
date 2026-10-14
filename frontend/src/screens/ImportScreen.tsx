@@ -29,6 +29,7 @@ import type {
   Preview,
   RepeatReport,
   Report,
+  WheelsReport,
 } from '../import/warehouseImport';
 import type { Reference } from '../reference/reference';
 import { useMounted } from '../ui/useMounted';
@@ -255,6 +256,7 @@ export function ImportScreen({ reference, canImport }: Props) {
             </p>
           )}
           <RepeatSummary repeat={report.repeat} />
+          {report.wheels != null && <WheelsSummary wheels={report.wheels} />}
           {report.applicability != null && (
             <>
               <h4>Применимость из блока «Подходит»</h4>
@@ -835,6 +837,42 @@ function describe(cause: unknown, fallback: string): string {
     return cause.message;
   }
   return fallback;
+}
+
+/**
+ * Шины, колёса и диски файла переноса (задача 0291) — отдельной строкой:
+ * «Шины и диски: 5 позиций». Позиция одна на комплект, колёс не считаем.
+ * Ниже — что в свойствах не разобралось, с полем и строкой файла: такое
+ * свойство у позиции пусто, и заполнит его владелец.
+ */
+function WheelsSummary({ wheels }: { wheels: WheelsReport }) {
+  const positions = (n: number) => plural(n, 'позиция', 'позиции', 'позиций');
+  return (
+    <>
+      {wheels.created > 0 && (
+        <p className="note">
+          Шины и диски: {count(wheels.created)} {positions(wheels.created)} — на вкладке
+          «Шины и диски», комплект одной позицией.
+        </p>
+      )}
+      {wheels.converted > 0 && (
+        <p className="note">
+          Шины и диски: переложено из запчастей {count(wheels.converted)}{' '}
+          {positions(wheels.converted)} — номер, код, снимки и остаток прежние.
+        </p>
+      )}
+      {wheels.notes.length > 0 && (
+        <ul className="note">
+          {wheels.notes.map((note, index) => (
+            // Ключ — место в списке: у одной строки файла заметок бывает несколько.
+            <li key={index}>
+              Строка {note.row}{note.adNumber !== null && `, № ${note.adNumber}`}: {note.text}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
 }
 
 /**

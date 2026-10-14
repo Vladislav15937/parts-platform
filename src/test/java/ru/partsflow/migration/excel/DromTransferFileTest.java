@@ -274,6 +274,69 @@ class DromTransferFileTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Колёсные строки: договор называет ровно те ключи «Прочих полей», что читает импорт")
+    void wheelKeysAreTheContract() throws Exception {
+        // Задача 0291: у колёсной строки колонка 25 — договорная. Ключ, который импорт
+        // научили читать, а договор не назвал, парсер не обязан класть; названный
+        // в договоре и не читаемый — обещание, которого импорт не держит.
+        List<String> keys = new ArrayList<>();
+        boolean inSection = false;
+        for (String line : Files.readAllLines(CONTRACT, StandardCharsets.UTF_8)) {
+            if (line.startsWith("## ")) {
+                inSection = line.startsWith("## Колёсные строки");
+                continue;
+            }
+            Matcher key = Pattern.compile("^\\| `([^`]+)` \\|").matcher(line);
+            if (inSection && key.find()) {
+                keys.add(key.group(1));
+            }
+        }
+        assertThat(keys)
+                .as("ключи раздела «Колёсные строки» в %s разошлись с DromWheelCard.KEYS", CONTRACT)
+                .containsExactlyInAnyOrderElementsOf(DromWheelCard.KEYS);
+        // Список — не только то, что договор называет, но и то, что разбор читает.
+        // В одну сторону это держит сам DromWheelCard: ключ мимо KEYS — отказ разбора
+        // на любой строке. В другую — здесь: ключ из списка, значение которого разбор
+        // не читает, — обещание без исполнения. Поэтому у каждого ключа два значения,
+        // и разбор обязан их различить: одного присутствия мало, вид колеса меняется
+        // от самого ключа, а не от того, что под ним написано.
+        Map<String, String[]> samples = Map.ofEntries(
+                Map.entry(DromWheelCard.MARKER, new String[] {"Dunlop Grandtrek PT3", "Maxxis Bravo"}),
+                Map.entry("tireFirmAndModel", new String[] {"Dunlop Grandtrek PT3", "Maxxis Bravo"}),
+                Map.entry("inSetQuantity", new String[] {"4 шт", "2 шт"}),
+                Map.entry("quantity", new String[] {"1 шт", "3 шт"}),
+                Map.entry("year", new String[] {"2023", "2013"}),
+                Map.entry("wheelSeason", new String[] {"Летние", "Зимние"}),
+                Map.entry("wheelTireWear", new String[] {"10 %", "50 %"}),
+                Map.entry("marking", new String[] {"265/65 R19", "245/40 R18"}),
+                Map.entry("wheelDiameter", new String[] {"17\"", "18\""}),
+                Map.entry("diskType", new String[] {"Литой", "Штампованный"}),
+                Map.entry("discFirmAndModel", new String[] {"noname", "Enkei"}),
+                Map.entry("discParameters", new String[] {
+                        "Ширина диска 7.5\" Вылет (ET) 37 мм.", "Ширина диска 8\" Вылет (ET) 45 мм."}),
+                Map.entry("wheelPcd", new String[] {"6x139.7", "5x114.3"}),
+                Map.entry("predestination", new String[] {"Обычная", "Внедорожная"}));
+        assertThat(samples.keySet()).as("образцы значений разошлись с DromWheelCard.KEYS")
+                .containsExactlyInAnyOrderElementsOf(DromWheelCard.KEYS);
+        for (String wheelKey : DromWheelCard.KEYS) {
+            String[] values = samples.get(wheelKey);
+            DromWheelCard.Parsed one = DromWheelCard.parse("Колёса", DromWheelCard.SECTION,
+                    "Подпись [" + wheelKey + "]: " + values[0]);
+            DromWheelCard.Parsed other = DromWheelCard.parse("Колёса", DromWheelCard.SECTION,
+                    "Подпись [" + wheelKey + "]: " + values[1]);
+            assertThat(one)
+                    .as("ключ %s назван в договоре и KEYS, а разбор его значения не читает", wheelKey)
+                    .isNotEqualTo(other);
+        }
+
+        String characteristics = documentRows().stream()
+                .filter(r -> r[0].equals("Прочие поля")).findFirst().orElseThrow()[2];
+        assertThat(characteristics)
+                .as("строка «Прочие поля» договора не говорит, что у колёсной строки колонка договорная")
+                .contains("колёсной строки").contains("договорная");
+    }
+
+    @Test
     @DisplayName("Каждая колонка договора — либо проверена, либо ждёт названной задачи, и не то и другое")
     void everyColumnIsEitherCheckedOrPending() {
         Set<String> seen = new HashSet<>();

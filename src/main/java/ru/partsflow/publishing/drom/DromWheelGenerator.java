@@ -71,7 +71,7 @@ public class DromWheelGenerator {
                    w.tyre_width, w.tyre_height, w.diameter,
                    w.speed_index, w.load_index, w.run_flat, w.light_truck,
                    w.disc_width, w.offset_mm, w.bolt_pattern,
-                   w.season, w.wear_mm, w.made_year,
+                   w.season, w.wear_mm, w.made_year, w.set_pieces,
                    photos.ids AS photo_ids
               FROM part p
               JOIN part_wheel w ON w.part_id = p.id
@@ -299,8 +299,11 @@ public class DromWheelGenerator {
                     // в карточку, и так называется цена. Площадка требует,
                     // чтобы цена соответствовала числу шин в комплекте
                     // (п. 6.4.3), поэтому здесь единица, а не размер набора:
-                    // покупатель берёт и одну запаску.
-                    1,
+                    // покупатель берёт и одну запаску. Исключение — позиция,
+                    // которая сама и есть комплект (перенос с Дрома, задача 0291:
+                    // «одной позицией, только целиком, по цене из файла»):
+                    // её цена названа за все колёса, и столько их и уходит.
+                    inSet(rs),
                     rs.getBigDecimal("qty_available"),
                     // Цена объявления, а не складская: наценка принадлежит
                     // прайс-листу, а колесо на складе стоит по-прежнему.
@@ -417,6 +420,12 @@ public class DromWheelGenerator {
                 case "WINTER_FRICTION", "SUMMER", "ALL_SEASON" -> "Нешипуемая";
                 default -> null;
             };
+        }
+
+        /** Колёс, за которые названа цена: комплект одной позицией — его число, иначе одно. */
+        private static Integer inSet(ResultSet rs) throws SQLException {
+            int pieces = rs.getInt("set_pieces");
+            return rs.wasNull() ? 1 : pieces;
         }
 
         private static Integer year(ResultSet rs) throws SQLException {

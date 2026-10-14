@@ -52,6 +52,12 @@ export interface Wheel {
   kind: string;
   /** Пусто — колесо заведено поштучно, а не комплектом. */
   setNo: number | null;
+  /**
+   * Колёс в позиции, продаваемой одним комплектом, — за столько названа цена
+   * и столько уходит в колёсный прайс (перенос с Дрома, задача 0291). Пусто —
+   * колесо продаётся поштучно. Ответ прежней версии поля не несёт.
+   */
+  setPieces?: number | null;
   diameter: number | null;
   tyreWidth: number | null;
   tyreHeight: number | null;
@@ -350,6 +356,10 @@ export const WHEEL_COLUMNS: WheelColumn[] = [
   { key: 'photo', title: 'Превью', fixed: true, filter: false, value: () => '',
     image: (row) => row.photoUrl },
   { key: 'set', title: 'Номер комплекта', sort: 'set', numeric: true, value: (w) => text(w.setNo) },
+  // Не путать с номером комплекта: тот связывает отдельные карточки, а здесь
+  // одна позиция и есть комплект, продаваемый только целиком (задача 0291).
+  { key: 'setPieces', title: 'Штук в комплекте', sort: 'setPieces', numeric: true,
+    value: (w) => text(w.setPieces ?? null) },
   { key: 'kind', title: 'Товар', sort: 'kind', value: (w) => kindName(w.kind) },
   { key: 'diameter', title: 'Диаметр', sort: 'diameter', numeric: true, value: (w) => text(w.diameter) },
   { key: 'tyreType', title: 'Тип шины', value: (w) => text(w.tyreType) },
@@ -413,7 +423,7 @@ export const WHEEL_COLUMNS: WheelColumn[] = [
  * остальное владелец включает сам, и выбор запоминается.
  */
 export const WHEEL_DEFAULT_VISIBLE = [
-  'number', 'code', 'photo', 'set', 'kind', 'diameter', 'tyreWidth', 'tyreHeight',
+  'number', 'code', 'photo', 'set', 'setPieces', 'kind', 'diameter', 'tyreWidth', 'tyreHeight',
   'season', 'wear', 'tyreBrand', 'tyreModel', 'price', 'section',
 ];
 
@@ -495,6 +505,7 @@ export function wheelFields(w: Wheel): Array<[string, string]> {
 
   add('Товар', kindName(w.kind));
   add('Номер комплекта', text(w.setNo));
+  add('Штук в комплекте', w.setPieces == null ? '' : `${w.setPieces} шт`);
   add('Размер', sizeOf(w));
   if (w.kind !== 'DISC') {
     add('Тип шины', text(w.tyreType));

@@ -61,18 +61,21 @@ public class ExcelWarehouseImporter {
     private final ru.partsflow.inventory.PartChangeLog changeLog;
     private final com.fasterxml.jackson.databind.ObjectMapper json;
     private final ru.partsflow.inventory.DromApplicabilityService dromApplicability;
+    private final ru.partsflow.inventory.WheelService wheels;
 
     public ExcelWarehouseImporter(JdbcTemplate jdbc, PartNameService partNames,
                                   ru.partsflow.inventory.StockLedger ledger,
                                   ru.partsflow.inventory.PartChangeLog changeLog,
                                   com.fasterxml.jackson.databind.ObjectMapper json,
-                                  ru.partsflow.inventory.DromApplicabilityService dromApplicability) {
+                                  ru.partsflow.inventory.DromApplicabilityService dromApplicability,
+                                  ru.partsflow.inventory.WheelService wheels) {
         this.jdbc = jdbc;
         this.partNames = partNames;
         this.ledger = ledger;
         this.changeLog = changeLog;
         this.json = json;
         this.dromApplicability = dromApplicability;
+        this.wheels = wheels;
     }
 
     /**
@@ -222,6 +225,13 @@ public class ExcelWarehouseImporter {
         if (report.imported > 0) {
             ledger.recomputeAll();
         }
+        // Переложенная в колёса запчасть больше не числится за своим написанием
+        // (WheelService.attachWheel снимает part_name_id), и счётчик написания
+        // должен это знать: иначе «Не разобрано» показывало бы позиции, которых
+        // под ним нет. Пересчёт по всему справочнику — только когда перекладка была.
+        if (report.wheelsConverted > 0) {
+            partNames.recountUsage();
+        }
 
         log.info("Импорт из таблицы: заведено {} позиций, дозаполнено {}, без изменений {}, "
                         + "расхождений {}, пропущено {}",
@@ -250,7 +260,7 @@ public class ExcelWarehouseImporter {
             return null;
         }
         return new Report(imported.get(0), skippedOf(requestId), quantityDefaultedOf(requestId),
-                repeatOf(requestId), applicabilityOf(requestId));
+                repeatOf(requestId), applicabilityOf(requestId), wheelsOf(requestId));
     }
 
     /**
@@ -281,6 +291,26 @@ public class ExcelWarehouseImporter {
                     ru.partsflow.inventory.DromApplicabilityService.Report.class);
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             log.warn("Итог разложения «Подходит» по ключу {} не разобран: {}", requestId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** Итог по колёсным строкам прошлого прогона — элемент {@code {"wheels": …}}; нет — {@code null}. */
+    private Report.Wheels wheelsOf(String requestId) {
+        List<String> stored = jdbc.queryForList("""
+                        SELECT (e->'wheels')::text
+                          FROM import_run r
+                         CROSS JOIN LATERAL jsonb_array_elements(r.skipped) e
+                         WHERE r.client_request_id = ?
+                           AND e->'wheels' IS NOT NULL""",
+                String.class, requestId);
+        if (stored.isEmpty()) {
+            return null;
+        }
+        try {
+            return json.readValue(stored.get(0), Report.Wheels.class);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            log.warn("Итог по колёсам по ключу {} не разобран: {}", requestId, e.getMessage());
             return null;
         }
     }
@@ -378,6 +408,7 @@ public class ExcelWarehouseImporter {
         // ту дыру, что уже ронялась на обратной косой (задача 0281).
         java.util.stream.Stream<String> repeat;
         java.util.stream.Stream<String> applicability;
+        java.util.stream.Stream<String> wheels;
         try {
             repeat = java.util.stream.Stream.of(
                     "{\"repeat\":" + json.writeValueAsString(report.repeat()) + "}");
@@ -386,10 +417,14 @@ public class ExcelWarehouseImporter {
             applicability = report.applicability() == null ? java.util.stream.Stream.empty()
                     : java.util.stream.Stream.of("{\"applicability\":"
                             + json.writeValueAsString(report.applicability()) + "}");
+            // Колёсные строки (0291): в заметках текст из файла — сериализатором.
+            wheels = report.wheels() == null ? java.util.stream.Stream.empty()
+                    : java.util.stream.Stream.of("{\"wheels\":"
+                            + json.writeValueAsString(report.wheels()) + "}");
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new IllegalStateException("итог повтора не записан", e);
         }
-        return java.util.stream.Stream.of(skipped, defaulted, repeat, applicability)
+        return java.util.stream.Stream.of(skipped, defaulted, repeat, applicability, wheels)
                 .flatMap(s -> s)
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
     }
@@ -494,6 +529,27 @@ public class ExcelWarehouseImporter {
             return null;
         }
 
+        Terms terms = new Terms(verbatim(mapping.value(row, Field.WARRANTY)),
+                verbatim(mapping.value(row, Field.PICKUP)),
+                verbatim(mapping.value(row, Field.DELIVERY)),
+                verbatim(mapping.value(row, Field.DROM_KIND)),
+                verbatim(mapping.value(row, Field.DROM_SECTION)),
+                verbatim(mapping.value(row, Field.APPLICABILITY)),
+                characteristics(mapping.value(row, Field.CHARACTERISTICS)),
+                verbatim(mapping.value(row, Field.MAY_FIT)));
+
+        // Шина, колесо или диск (задача 0291): свойства — из «Прочих полей»,
+        // остаток — число комплектов оттуда же, если колонка «Количество» пуста
+        // (на карточке Дрома её нет). Комплект заводится одной позицией —
+        // решение владельца 14.10.2026, tasks/0291.
+        DromWheelCard.Parsed wheel = DromWheelCard.recognizes(terms.section(), terms.characteristics())
+                ? DromWheelCard.parse(name, terms.section(), terms.characteristics())
+                : null;
+        if (wheel != null && !quantityFromFile && wheel.sets() != null) {
+            quantity = BigDecimal.valueOf(wheel.sets());
+            quantityFromFile = true;
+        }
+
         return new Row(
                 row.number(),
                 name,
@@ -507,14 +563,8 @@ public class ExcelWarehouseImporter {
                 adNumber,
                 verbatim(mapping.value(row, Field.DESCRIPTION)),
                 card,
-                new Terms(verbatim(mapping.value(row, Field.WARRANTY)),
-                        verbatim(mapping.value(row, Field.PICKUP)),
-                        verbatim(mapping.value(row, Field.DELIVERY)),
-                        verbatim(mapping.value(row, Field.DROM_KIND)),
-                        verbatim(mapping.value(row, Field.DROM_SECTION)),
-                        verbatim(mapping.value(row, Field.APPLICABILITY)),
-                        characteristics(mapping.value(row, Field.CHARACTERISTICS)),
-                        verbatim(mapping.value(row, Field.MAY_FIT))));
+                terms,
+                wheel);
     }
 
     /**
@@ -603,6 +653,10 @@ public class ExcelWarehouseImporter {
                     continue;
                 }
             }
+            if (row.wheel() != null) {
+                insertWheel(row, warehouseId, cells, report);
+                continue;
+            }
             Long cellId = row.cell() == null ? null
                     : cells.computeIfAbsent(row.cell().toUpperCase(),
                             code -> createCell(warehouseId, row.cell()));
@@ -643,87 +697,138 @@ public class ExcelWarehouseImporter {
                 }
                 continue;
             }
-            Long partId = inserted.get(0);
-
-            // Блоки карточки Дрома — своя таблица, строка только если хоть один блок
-            // есть в файле (задача 0285). ON CONFLICT нужен не для одновременного
-            // повтора (вставку позиции выше выиграл один), а чтобы строка не роняла
-            // загрузку, если она по какой-то причине уже есть.
-            if (!row.terms().isEmpty()) {
-                jdbc.update("""
-                        INSERT INTO part_drom_card (part_id, warranty, pickup, delivery_payment,
-                                                    drom_kind, drom_section, applicability,
-                                                    characteristics, may_fit)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT (part_id) DO NOTHING""",
-                        partId, row.terms().warranty(), row.terms().pickup(),
-                        row.terms().delivery(), row.terms().kind(), row.terms().section(),
-                        row.terms().applicability(), row.terms().characteristics(),
-                        row.terms().mayFit());
-                layApplicability(partId, row.terms().applicability(), report);
-            }
-
-            // Номер, от которого после приведения ничего не осталось, — не номер:
-            // колонка normalized объявлена NOT NULL, и такая строка отвечает
-            // отказом базы вместо загруженной позиции.
-            String normalizedOem = ru.partsflow.catalog.OemNumbers.normalize(row.oem());
-            if (normalizedOem != null) {
-                jdbc.update("""
-                        INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
-                        VALUES (?, ?, ?, true)
-                        ON CONFLICT DO NOTHING""",
-                        partId, row.oem(), normalizedOem);
-            }
-            // Номера замен — не главные, по одному на строку и в порядке
-            // ячейки: прайс и карточка собирают их по порядку заведения.
-            // Номер, от которого после приведения ничего не осталось,
-            // отбрасывается — та же причина, что у главного выше.
-            for (String substitute : card.substitutes()) {
-                String normalized = ru.partsflow.catalog.OemNumbers.normalize(substitute);
-                if (normalized != null) {
-                    jdbc.update("""
-                            INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
-                            VALUES (?, ?, ?, false)
-                            ON CONFLICT DO NOTHING""",
-                            partId, substitute, normalized);
-                }
-            }
-
-            // Снимки только ставятся в очередь: качает их отдельный проход
-            // (PhotoMigration), который можно прервать и продолжить. Внутри
-            // запроса импорта это часы — у клиента с Дрома 2 897 карточек
-            // по 14–16 снимков. Повтор той же ссылки той же позиции отбивает
-            // part_photo_import_uk, а не проверка «нет ли уже такого».
-            List<Object[]> photos = new ArrayList<>(row.photos().size());
-            for (int order = 0; order < row.photos().size(); order++) {
-                photos.add(new Object[] {partId, row.photos().get(order), order});
-            }
-            if (!photos.isEmpty()) {
-                jdbc.batchUpdate("""
-                        INSERT INTO part_photo_import (part_id, url, sort_order)
-                        VALUES (?, ?, ?)
-                        ON CONFLICT (part_id, url) DO NOTHING""", photos);
-            }
-
-            // Остаток появляется движением: писать qty_on_hand напрямую значит
-            // разъехаться с part_stock на первой же продаже.
-            jdbc.update("""
-                    INSERT INTO stock_movement (part_id, movement_type, qty_delta,
-                                                to_warehouse_id, to_cell_id, reason)
-                    VALUES (?, 'INTAKE', ?, ?, ?, 'Импорт из таблицы')""",
-                    partId, row.quantity(), warehouseId, cellId);
-            // Применяется это пачкой, после всех строк — см. recomputeAll
-            // в конце importInto.
-
-            report.imported++;
-            if (!row.quantityFromFile()) {
-                report.quantityDefaulted++;
-            }
-            if (row.dromAd() == null) {
-                report.withoutAdNumber++;
-            }
+            fillNewPosition(row, inserted.get(0), warehouseId, cellId, report);
         }
         batch.clear();
+    }
+
+    /**
+     * Колёсная строка (задача 0291): позиция той же вставкой, что запчасть,
+     * но мимо справочника наименований — вида детали у колеса нет, а наименование
+     * клиента («Автошина Dunlop …») легло бы в «Не разобрано» рядом с фарами, —
+     * и колёсной её делает {@link ru.partsflow.inventory.WheelService#attachWheel}.
+     * Категория — та же служебная, что у колеса, заведённого комплектом.
+     */
+    private void insertWheel(Row row, long warehouseId, Map<String, Long> cells, Tally report) {
+        Long cellId = row.cell() == null ? null
+                : cells.computeIfAbsent(row.cell().toUpperCase(),
+                        code -> createCell(warehouseId, row.cell()));
+        CardFields card = row.card();
+        List<Long> inserted = jdbc.queryForList("""
+                INSERT INTO part (category_id, title, price, note,
+                                  storage_cell_id, drom_ad_number, description,
+                                  condition, manufacturer, authenticity)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (drom_ad_number) WHERE drom_ad_number IS NOT NULL
+                DO NOTHING
+                RETURNING id""",
+                Long.class, row.name(), row.price(), row.note(), cellId, row.dromAd(),
+                row.description(),
+                (card.condition() == null
+                        ? ru.partsflow.inventory.PartCondition.USED : card.condition()).name(),
+                card.manufacturer(), card.authenticity());
+        if (inserted.isEmpty()) {
+            // Одновременная загрузка завела позицию между чтением и вставкой —
+            // та же развилка, что у запчасти.
+            Map<String, Object> existing = existing(row.dromAd());
+            if (existing == null) {
+                skipAsTaken(row, report);
+            } else {
+                refill(row, existing, report);
+            }
+            return;
+        }
+        long partId = inserted.get(0);
+        wheels.attachWheel(partId, row.wheel().request(), row.wheel().setPieces());
+        report.wheelCreated(row);
+        fillNewPosition(row, partId, warehouseId, cellId, report);
+    }
+
+    /** Всё, что у новой позиции после строки {@code part}: блоки Дрома, номера, снимки, приход. */
+    private void fillNewPosition(Row row, long partId, long warehouseId, Long cellId, Tally report) {
+        CardFields card = row.card();
+
+        // Блоки карточки Дрома — своя таблица, строка только если хоть один блок
+        // есть в файле (задача 0285). ON CONFLICT нужен не для одновременного
+        // повтора (вставку позиции выше выиграл один), а чтобы строка не роняла
+        // загрузку, если она по какой-то причине уже есть.
+        if (!row.terms().isEmpty()) {
+            jdbc.update("""
+                    INSERT INTO part_drom_card (part_id, warranty, pickup, delivery_payment,
+                                                drom_kind, drom_section, applicability,
+                                                characteristics, may_fit)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (part_id) DO NOTHING""",
+                    partId, row.terms().warranty(), row.terms().pickup(),
+                    row.terms().delivery(), row.terms().kind(), row.terms().section(),
+                    row.terms().applicability(), row.terms().characteristics(),
+                    row.terms().mayFit());
+            // Применимости у колеса нет намеренно (inventory/CLAUDE.md): шина
+            // подходит по размеру, и «Подходит» у неё остаётся только текстом.
+            if (row.wheel() == null) {
+                layApplicability(partId, row.terms().applicability(), report);
+            }
+        }
+
+        // Номер, от которого после приведения ничего не осталось, — не номер:
+        // колонка normalized объявлена NOT NULL, и такая строка отвечает
+        // отказом базы вместо загруженной позиции.
+        String normalizedOem = ru.partsflow.catalog.OemNumbers.normalize(row.oem());
+        if (normalizedOem != null) {
+            jdbc.update("""
+                    INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
+                    VALUES (?, ?, ?, true)
+                    ON CONFLICT DO NOTHING""",
+                    partId, row.oem(), normalizedOem);
+        }
+        // Номера замен — не главные, по одному на строку и в порядке
+        // ячейки: прайс и карточка собирают их по порядку заведения.
+        // Номер, от которого после приведения ничего не осталось,
+        // отбрасывается — та же причина, что у главного выше.
+        for (String substitute : card.substitutes()) {
+            String normalized = ru.partsflow.catalog.OemNumbers.normalize(substitute);
+            if (normalized != null) {
+                jdbc.update("""
+                        INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
+                        VALUES (?, ?, ?, false)
+                        ON CONFLICT DO NOTHING""",
+                        partId, substitute, normalized);
+            }
+        }
+
+        // Снимки только ставятся в очередь: качает их отдельный проход
+        // (PhotoMigration), который можно прервать и продолжить. Внутри
+        // запроса импорта это часы — у клиента с Дрома 2 897 карточек
+        // по 14–16 снимков. Повтор той же ссылки той же позиции отбивает
+        // part_photo_import_uk, а не проверка «нет ли уже такого».
+        List<Object[]> photos = new ArrayList<>(row.photos().size());
+        for (int order = 0; order < row.photos().size(); order++) {
+            photos.add(new Object[] {partId, row.photos().get(order), order});
+        }
+        if (!photos.isEmpty()) {
+            jdbc.batchUpdate("""
+                    INSERT INTO part_photo_import (part_id, url, sort_order)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT (part_id, url) DO NOTHING""", photos);
+        }
+
+        // Остаток появляется движением: писать qty_on_hand напрямую значит
+        // разъехаться с part_stock на первой же продаже.
+        jdbc.update("""
+                INSERT INTO stock_movement (part_id, movement_type, qty_delta,
+                                            to_warehouse_id, to_cell_id, reason)
+                VALUES (?, 'INTAKE', ?, ?, ?, 'Импорт из таблицы')""",
+                partId, row.quantity(), warehouseId, cellId);
+        // Применяется это пачкой, после всех строк — см. recomputeAll
+        // в конце importInto.
+
+        report.imported++;
+        if (!row.quantityFromFile()) {
+            report.quantityDefaulted++;
+        }
+        if (row.dromAd() == null) {
+            report.withoutAdNumber++;
+        }
     }
 
     /** Второе появление номера в одном файле: строка пропущена и названа. */
@@ -740,6 +845,7 @@ public class ExcelWarehouseImporter {
     private Map<String, Object> existing(String adNumber) {
         List<Map<String, Object>> found = jdbc.queryForList("""
                 SELECT p.id, p.public_code, p.title, p.price, p.qty_on_hand, c.code AS cell,
+                       p.product_line,
                        p.note, p.description, p.condition, p.manufacturer, p.authenticity,
                        p.side_lr, p.side_fr, p.side_ud,
                        d.warranty, d.pickup, d.delivery_payment, d.drom_kind, d.drom_section,
@@ -867,6 +973,16 @@ public class ExcelWarehouseImporter {
         long partId = ((Number) part.get("id")).longValue();
         String ad = row.dromAd();
         boolean changed = false;
+
+        // Перекладка (задача 0291, п. 7): запчасть, заведённая переносом до этой
+        // задачи из колёсной строки, становится колесом на месте — номер, публичный
+        // код, снимки, остаток и движения остаются её. Путь один — повтор того же
+        // файла; уже колёсную позицию вызов не трогает.
+        if (row.wheel() != null && "PART".equals(part.get("product_line"))
+                && wheels.attachWheel(partId, row.wheel().request(), row.wheel().setPieces())) {
+            report.wheelConverted(row);
+            changed = true;
+        }
         // Блоки карточки Дрома считаются дозаполненными, но отметки не двигают
         // (задача 0285, пункт 7): прайс их пока не несёт.
         boolean termsFilled = false;
@@ -945,7 +1061,7 @@ public class ExcelWarehouseImporter {
                     partId, fromFile);
             if (updated > 0) {
                 report.filled(rule.label(), 0);
-                if (rule.field() == Field.APPLICABILITY) {
+                if (rule.field() == Field.APPLICABILITY && row.wheel() == null) {
                     layApplicability(partId, fromFile, report);
                 }
                 return true;
@@ -1306,7 +1422,8 @@ public class ExcelWarehouseImporter {
      */
     private record Row(int number, String name, BigDecimal price, BigDecimal quantity,
                        boolean quantityFromFile, String cell, String oem, String note, List<String> photos,
-                       String dromAd, String description, CardFields card, Terms terms) {
+                       String dromAd, String description, CardFields card, Terms terms,
+                       DromWheelCard.Parsed wheel) {
     }
 
     /**
@@ -1369,7 +1486,23 @@ public class ExcelWarehouseImporter {
      */
     public record Report(int imported, List<Skipped> skipped, int quantityDefaulted,
                          Repeat repeat,
-                         ru.partsflow.inventory.DromApplicabilityService.Report applicability) {
+                         ru.partsflow.inventory.DromApplicabilityService.Report applicability,
+                         Wheels wheels) {
+
+        /**
+         * Шины, колёса и диски файла переноса (задача 0291), отдельной строкой отчёта:
+         * «Шины и диски: 5 позиций». Позиция — одна на комплект, колёс не считаем.
+         *
+         * @param created   заведено колёсных позиций (входят и в {@code imported})
+         * @param converted уже перенесённых запчастей, ставших колёсными на месте
+         * @param notes     что в свойствах не разобралось или разошлось с наименованием
+         */
+        public record Wheels(int created, int converted, List<WheelNote> notes) {
+        }
+
+        /** @param text что не разобралось, с названием поля, словами человека */
+        public record WheelNote(int row, String adNumber, String text) {
+        }
 
         /**
          * Что сделала загрузка с позициями, номер объявления которых уже был
@@ -1434,6 +1567,32 @@ public class ExcelWarehouseImporter {
          */
         private int quantityDefaulted;
         private final List<Skipped> skipped = new ArrayList<>();
+
+        /** Колёсные строки (задача 0291); {@code false} у {@link #wheelsSeen} — их не было. */
+        private boolean wheelsSeen;
+        private int wheelsCreated;
+        private int wheelsConverted;
+        private final List<Report.WheelNote> wheelNotes = new ArrayList<>();
+
+        void wheelCreated(Row row) {
+            wheelsCreated++;
+            wheelNotes(row);
+        }
+
+        void wheelConverted(Row row) {
+            wheelsConverted++;
+            wheelNotes(row);
+        }
+
+        /** Заметки называются один раз — когда позиция стала колёсной, а не на каждом повторе. */
+        private void wheelNotes(Row row) {
+            wheelsSeen = true;
+            for (String text : row.wheel().problems()) {
+                if (wheelNotes.size() < DISCREPANCY_LIMIT) {
+                    wheelNotes.add(new Report.WheelNote(row.number(), row.dromAd(), text));
+                }
+            }
+        }
 
         /** Номера объявлений, уже встреченные в этом файле. */
         private final java.util.Set<String> seenAds = new java.util.HashSet<>();
@@ -1521,7 +1680,9 @@ public class ExcelWarehouseImporter {
 
         Report toReport() {
             return new Report(imported, List.copyOf(skipped), quantityDefaulted, repeat(),
-                    vehicles == null ? null : applicability.toReport());
+                    vehicles == null ? null : applicability.toReport(),
+                    wheelsSeen ? new Report.Wheels(wheelsCreated, wheelsConverted,
+                            List.copyOf(wheelNotes)) : null);
         }
     }
 }
