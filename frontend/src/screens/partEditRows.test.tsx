@@ -317,6 +317,40 @@ describe('блоки карточки Дрома', () => {
       .toBe('');
   });
 
+  it('«Характеристики» показаны «Подпись: значение» без [ключей] и служебных дублей; правка открывает текст как есть; очистка — пустая строка (задача 0292)', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Характеристики')).toBeTruthy());
+
+    const view = line('Характеристики').querySelector('.fits')!;
+    expect([...view.querySelectorAll('div')].map((d) => d.textContent)).toEqual([
+      'Модель магнитолы: Toyota NHZT-W58',
+      'Размер: 2 DIN — 178x100 мм',
+    ]);
+    expect(view.textContent).not.toContain('[');
+    expect(view.textContent).not.toContain('model');
+
+    // Правка открывает хранимое как есть — с [ключами] и служебной строкой.
+    fireEvent.click(screen.getByLabelText('Изменить: Характеристики'));
+    expect((screen.getByLabelText('Характеристики') as HTMLTextAreaElement).value).toBe(CHARACTERISTICS);
+    fireEvent.change(screen.getByLabelText('Характеристики'), { target: { value: '' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['characteristics'], 'очистка — пустая строка, null сервер прочёл бы как «не трогать»')
+      .toBe('');
+  });
+
+  it('нетронутые «Характеристики» уезжают как прочитаны, байт в байт', async () => {
+    render(<PartEditForm partId={7} row={row()} role="OWNER"
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
+    fireEvent.click(save());
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['characteristics']).toBe(CHARACTERISTICS);
+  });
+
   it('нетронутое «Подходит» уезжает как прочитано, байт в байт', async () => {
     render(<PartEditForm partId={7} row={row()} role="OWNER"
                          onSaved={() => {}} onCancel={() => {}} />);
@@ -373,6 +407,13 @@ function save(): HTMLButtonElement {
   return screen.getByText('Сохранить') as HTMLButtonElement;
 }
 
+/** Магнитола из файла клиента (строка 211): первые две строки — один и тот же model. */
+const CHARACTERISTICS = [
+  'model [model]: Toyota NHZT-W58',
+  'Модель магнитолы [model]: Toyota NHZT-W58',
+  'Размер [size]: 2 DIN — 178x100 мм',
+].join('\n');
+
 /** Восемь пунктов: больше пяти — значит, свёрнуто. Пустая часть и «Для двигателей» — как у клиента. */
 const APPLICABILITY = [
   'Lexus GX400 | GRJ158 | ',
@@ -401,6 +442,7 @@ function card(): Record<string, unknown> {
     dromKind: 'Карданный вал Lexus GX400',
     dromSection: 'Автозапчасти → Трансмиссия',
     applicability: APPLICABILITY,
+    characteristics: CHARACTERISTICS,
   };
 }
 

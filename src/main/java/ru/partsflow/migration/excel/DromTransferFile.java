@@ -66,7 +66,10 @@ public final class DromTransferFile {
             new Column("Гарантия", false, Field.WARRANTY),
             new Column("Самовывоз", false, Field.PICKUP),
             new Column("Доставка и оплата", false, Field.DELIVERY),
-            new Column("Фото", false, Field.PHOTOS));
+            new Column("Фото", false, Field.PHOTOS),
+            new Column("Дата", false, null),
+            new Column("Может подойти", false, null),
+            new Column("Прочие поля", false, Field.CHARACTERISTICS));
 
     private DromTransferFile() {
     }

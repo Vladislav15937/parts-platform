@@ -61,6 +61,8 @@ export const FIELDS = [
   { key: 'DROM_SECTION', label: 'Раздел', required: false, dromOnly: true },
   // «Применимость» («Подходит») текстом блоками, как у клиента (задача 0287): не справочная.
   { key: 'APPLICABILITY', label: 'Применимость', required: false, dromOnly: true },
+  // «Прочие поля» объявления дословно — на карточке «Характеристики» (задача 0292).
+  { key: 'CHARACTERISTICS', label: 'Характеристики', required: false, dromOnly: true },
 ] as const;
 
 export type FieldKey = (typeof FIELDS)[number]['key'];

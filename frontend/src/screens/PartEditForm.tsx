@@ -9,6 +9,7 @@ import { generationOf } from '../inventory/partCard';
 import { count, plural } from '../ui/plural';
 import { useMounted } from '../ui/useMounted';
 import { ApplicabilityView } from './ApplicabilityView';
+import { CharacteristicsView } from './CharacteristicsView';
 
 /**
  * Правка карточки товара — списком «подпись — значение», а не формой
@@ -273,6 +274,9 @@ function shownValue(field: Field, form: Draft, row: CatalogRow): JSX.Element | s
   if (field.kind === 'fits' && value.trim() !== '') {
     return <ApplicabilityView text={value} />;
   }
+  if (field.kind === 'specs' && value.trim() !== '') {
+    return <CharacteristicsView text={value} />;
+  }
   // «Не заполнено», а не прочерк: прочерк читается как «не знаем»,
   // а тут мы знаем — поле просто пустое, и заполнить его можно отсюда же.
   return value === '' ? <span className="muted">не заполнено</span> : value;
@@ -334,6 +338,7 @@ function input(
                onChange={(e) => set(field.key, e.target.value.replace(',', '.'))} />
       );
     case 'fits':
+    case 'specs':
       return (
         <textarea aria-label={field.label} rows={10} autoFocus value={form[field.key]}
                   onChange={(e) => set(field.key, e.target.value)} />
@@ -391,7 +396,7 @@ type Field =
   | { kind: 'condition'; key: 'condition'; label: string }
   | { kind: 'grade'; key: 'qualityGrade'; label: string }
   | { kind: 'check'; key: 'published'; label: string }
-  | { kind: 'text' | 'area' | 'fits'; key: StringKey; label: string }
+  | { kind: 'text' | 'area' | 'fits' | 'specs'; key: StringKey; label: string }
   | { kind: 'num'; key: StringKey; label: string; unit?: string };
 
 /**
@@ -433,6 +438,9 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
       { kind: 'text', key: 'dromSection', label: 'Раздел' },
       // Слово Дрома; текст как у клиента, показ — блоками, правка — как есть (задача 0287).
       { kind: 'fits', key: 'applicability', label: 'Подходит' },
+      // «Прочие поля» объявления Дрома (задача 0292): показ — «Подпись: значение»,
+      // правка — хранимый текст как есть.
+      { kind: 'specs', key: 'characteristics', label: 'Характеристики' },
       { kind: 'text', key: 'note', label: 'Заметка' },
       { kind: 'text', key: 'barcode', label: 'Ст. баркод' },
     ],
@@ -553,6 +561,7 @@ export interface Draft {
   dromKind: string;
   dromSection: string;
   applicability: string;
+  characteristics: string;
 }
 
 export function draftOf(card: PartEdit): Draft {
@@ -591,6 +600,7 @@ export function draftOf(card: PartEdit): Draft {
     dromKind: card.dromKind ?? '',
     dromSection: card.dromSection ?? '',
     applicability: card.applicability ?? '',
+    characteristics: card.characteristics ?? '',
   };
 }
 
@@ -633,6 +643,7 @@ export function toEdit(form: Draft): PartEdit {
     dromKind: form.dromKind,
     dromSection: form.dromSection,
     applicability: form.applicability,
+    characteristics: form.characteristics,
   };
 }
 

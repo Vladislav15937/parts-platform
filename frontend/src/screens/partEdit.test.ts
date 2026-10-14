@@ -18,6 +18,7 @@ function card(overrides: Partial<PartEdit> = {}): PartEdit {
     dromKind: 'Карданный вал Lexus GX400',
     dromSection: 'Автозапчасти → Трансмиссия',
     applicability: 'Toyota 4Runner | 5 поколение (2009–2013) | TRN285, GRN285\nДля двигателей | 1GR-FE',
+    characteristics: 'Бренд [model]: Zapco\nКоличество каналов [channel]: 4-канальный',
     ...overrides,
   };
 }
@@ -81,6 +82,14 @@ describe('форма правки карточки', () => {
     expect(toEdit(draftOf(card())).applicability).toBe(card().applicability);
     expect(toEdit({ ...draftOf(card()), applicability: '' }).applicability).toBe('');
     expect(draftOf(card({ applicability: null })).applicability).toBe('');
+  });
+
+  it('«Характеристики» уезжают дословно — с [ключами], переводами строк и краями, очистка — пустая строка (задача 0292)', () => {
+    const text = ' model [model]: Zapco\nБренд [model]: Zapco  ';
+    expect(toEdit({ ...draftOf(card()), characteristics: text }).characteristics).toBe(text);
+    expect(toEdit(draftOf(card())).characteristics).toBe(card().characteristics);
+    expect(toEdit({ ...draftOf(card()), characteristics: '' }).characteristics).toBe('');
+    expect(draftOf(card({ characteristics: null })).characteristics).toBe('');
   });
 
   it('очищенный блок уезжает пустой строкой, а не null', () => {
