@@ -213,6 +213,48 @@ class DromApplicabilityPassTest extends PostgresTestBase {
         assertThat(rowsOf(partOf(AD_C))).containsExactly("Toyota/Land Cruiser Prado/-/-/-/да");
     }
 
+    // --- задача 0297: метка поколения Дрома ---
+
+    @Test
+    @DisplayName("Повторный проход дополняет метку поколения Дрома у строк, разобранных до неё; "
+            + "подтверждённое не тронуто, позиция не отмечена изменившейся")
+    void repeatedPassAddsTheDromGenerationLabel() throws Exception {
+        loadAsBeforeTheFeature();
+        pressButton();
+        long a = partOf(AD_A);
+        long b = partOf(AD_B);
+        long c = partOf(AD_C);
+        assertThat(labelsOf(a)).as("разбор кладёт метку сразу")
+                .containsExactlyInAnyOrder("2009:4 поколение", "2013:4 поколение");
+        // Как на ПРОМ: строки разобраны до 0297 — метки нет. У B строку
+        // поколения человек подтвердил в карточке.
+        inTenant(() -> jdbc.update("UPDATE part_applicability SET generation_label = NULL"));
+        inTenant(() -> jdbc.update(
+                "UPDATE part_applicability SET is_verified = true WHERE part_id = ?", b));
+        inTenant(() -> jdbc.update("DELETE FROM part_change"));
+        List<Map<String, Object>> verifiedBefore = verified();
+        List<String> updatedBefore = updatedAt();
+        List<String> rowsBefore = allRows();
+
+        JsonNode report = pressButton();
+
+        assertThat(report.path("refined").asInt()).as("две строки A и строка C получили метку")
+                .isEqualTo(3);
+        assertThat(report.path("added").asInt() + report.path("removed").asInt()).isZero();
+        assertThat(labelsOf(a)).containsExactlyInAnyOrder("2009:4 поколение", "2013:4 поколение");
+        assertThat(labelsOf(c)).as("поколения нет в справочнике — метка всё равно слова клиента")
+                .containsExactly("-:9 поколение");
+        assertThat(labelsOf(b)).as("подтверждённое человеком проход не дополняет")
+                .containsExactly("2009:-");
+        assertThat(verified()).isEqualTo(verifiedBefore);
+        assertThat(allRows()).as("годы и строки — прежние").isEqualTo(rowsBefore);
+        assertThat(updatedAt()).as("part.updated_at сдвинулся").isEqualTo(updatedBefore);
+        assertThat(marks()).as("проход поставил отметку «позиция изменилась»").isEmpty();
+
+        JsonNode again = pressButton();
+        assertThat(again.path("refined").asInt()).as("третий проход нашёл, что дополнять").isZero();
+    }
+
     // --- 4: повтор ---
 
     @Test
@@ -376,6 +418,21 @@ class DromApplicabilityPassTest extends PostgresTestBase {
                   LEFT JOIN catalog.model m ON m.id = a.model_id
                   LEFT JOIN catalog.generation g ON g.id = a.generation_id
                  WHERE a.part_id = ?""", String.class, part));
+    }
+
+    /** Метки поколения Дрома строк позиции: «год начала поколения справочника:метка». */
+    private List<String> labelsOf(long part) {
+        return inTenant(() -> jdbc.queryForList("""
+                SELECT coalesce(g.year_from::text, '-') || ':' || coalesce(a.generation_label, '-')
+                  FROM part_applicability a
+                  LEFT JOIN catalog.generation g ON g.id = a.generation_id
+                 WHERE a.part_id = ? AND (a.generation_id IS NOT NULL OR a.year_from IS NOT NULL)""",
+                String.class, part));
+    }
+
+    private List<String> updatedAt() {
+        return inTenant(() -> jdbc.queryForList(
+                "SELECT id || ':' || updated_at::text FROM part ORDER BY id", String.class));
     }
 
     private List<String> allRows() {

@@ -327,6 +327,147 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
         assertThat(only(page("")).path("yearFrom").asInt()).isEqualTo(2009);
     }
 
+    // --- задача 0297: рестайлинги одного поколения Дрома ---
+
+    /**
+     * Блок «Подходит» называет у Prado одно поколение Дрома с рестайлингами:
+     * «4 поколение (2009–2013); 4 поколение, рестайлинг (2013–2017);
+     * 4 поколение, 2-й рестайлинг (2017–2024)». Наш справочник держит их тремя
+     * строками, и правило 0290 «одно поколение» видело три. Ответ владельца
+     * 14.10.2026 — «целиком»: «4 поколение», годы от первой строки до последней.
+     */
+    @Test
+    @DisplayName("Три рестайлинга одного поколения Дрома — колонка «4 поколение», 2009–2024, на всех поверхностях")
+    void restylingsOfOneDromGenerationShowTheWholeGeneration() throws Exception {
+        long part = part("Суппорт тормозной передний левый Toyota Land Cruiser Prado");
+        drom(part, 2009, 2013, "Кузова: GRJ150W, KDJ150L", "4 поколение");
+        drom(part, 2013, 2017, "Кузова: GRJ150W", "4 поколение");
+        drom(part, 2017, 2024, "Кузова: GDJ150W", "4 поколение");
+        long other = part("Суппорт тормозной передний правый Toyota Land Cruiser Prado");
+        drom(other, 2002, 2009, "Кузова: GRJ120W", "3 поколение");
+        drom(other, 2009, 2013, "Кузова: GRJ150W", "4 поколение");
+
+        JsonNode rows = page("&sort=number").path("rows");
+        JsonNode row = rows.get(0);
+        assertThat(row.path("generation").asText())
+                .as("поколение Дрома целиком, словами клиента").isEqualTo("4 поколение");
+        assertThat(row.path("yearFrom").asInt()).isEqualTo(2009);
+        assertThat(row.path("yearTo").asInt()).as("до последнего рестайлинга").isEqualTo(2024);
+        assertThat(row.path("vehicleSpans").asInt()).isEqualTo(3);
+        assertThat(row.path("vehicleGenerationMerged").asBoolean()).isTrue();
+        assertThat(rows.get(1).path("generation").isNull())
+                .as("3 и 4 поколение — метка двух поколений не придумывается").isTrue();
+        assertThat(rows.get(1).path("vehicleGenerationMerged").asBoolean()).isFalse();
+
+        // Все поверхности — одно выражение: отбор, сортировка, список значений, файл.
+        assertThat(titles(page("&filter=generation:4 поколение")))
+                .containsExactly("Суппорт тормозной передний левый Toyota Land Cruiser Prado");
+        assertThat(titles(page("&find=generation:поколение")))
+                .containsExactly("Суппорт тормозной передний левый Toyota Land Cruiser Prado");
+        assertThat(values("generation")).containsExactly("4 поколение");
+        assertThat(titles(page("&sort=generation")).get(0))
+                .isEqualTo("Суппорт тормозной передний левый Toyota Land Cruiser Prado");
+        // В файле поколения нет — только «Поколение с» и «Поколение по».
+        assertThat(export()).contains("\"Суппорт тормозной передний левый Toyota Land Cruiser Prado\";"
+                + "\"\";\"Toyota\";\"Land Cruiser Prado\";\"2009\";\"2024\"");
+    }
+
+    @Test
+    @DisplayName("Одна строка с меткой — колонка называет поколение Дрома, а не диапазон справочника")
+    void singleLabelledRowIsNamedByDrom() throws Exception {
+        long part = part("Фара левая Toyota Land Cruiser Prado");
+        drom(part, 2013, 2017, "Кузова: GRJ150W", "4 поколение");
+
+        JsonNode row = only(page(""));
+        assertThat(row.path("generation").asText()).isEqualTo("4 поколение");
+        assertThat(row.path("yearFrom").asInt()).isEqualTo(2013);
+        assertThat(row.path("yearTo").asInt()).isEqualTo(2017);
+        assertThat(row.path("vehicleGenerationMerged").asBoolean())
+                .as("строка одна — объединять было нечего").isFalse();
+    }
+
+    @Test
+    @DisplayName("Строка без метки рядом с рестайлингами (разобрана до 0297) — сомнение, поколение пусто")
+    void unlabelledRowKeepsItEmpty() throws Exception {
+        long part = part("Зеркало правое Toyota Land Cruiser Prado");
+        drom(part, 2009, 2013, "Кузова: GRJ150W", "4 поколение");
+        drom(part, 2013, 2017, "Кузова: GRJ150W", null);
+
+        JsonNode row = only(page(""));
+        assertThat(row.path("generation").isNull()).isTrue();
+        assertThat(row.path("yearFrom").isNull()).isTrue();
+        assertThat(row.path("vehicleSpans").asInt()).as("подсказка «поколений 2», как было").isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("Последний рестайлинг «н.в.» — и у поколения целиком год конца пуст")
+    void upToNowStaysOpen() throws Exception {
+        long part = part("Бампер Toyota Land Cruiser Prado");
+        drom(part, 2009, 2013, null, "4 поколение");
+        drom(part, 2013, null, null, "4 поколение");
+
+        JsonNode row = only(page(""));
+        assertThat(row.path("generation").asText()).isEqualTo("4 поколение");
+        assertThat(row.path("yearFrom").asInt()).isEqualTo(2009);
+        assertThat(row.path("yearTo").isNull()).as("«н.в.», а не год справочника").isTrue();
+    }
+
+    /**
+     * Сверка 0294/0299 идёт по строкам до объединения: номер кузова
+     * в наименовании обязан подтвердиться у каждого рестайлинга. Одна строка
+     * без кузовов или с чужим рядом — всё поколение Дрома не подтверждено.
+     */
+    @Test
+    @DisplayName("Номер кузова в наименовании сверяется с каждой строкой до объединения рестайлингов")
+    void bodyNumberIsCheckedPerRowBeforeMerging() throws Exception {
+        long confirmed = part("Капот Toyota Land Cruiser Prado 150");
+        drom(confirmed, 2009, 2013, "Кузова: GRJ150W, KDJ150L", "4 поколение");
+        drom(confirmed, 2013, 2017, "Кузова: GRJ151W", "4 поколение");
+        long oneWithout = part("Крыло Toyota Land Cruiser Prado 150");
+        drom(oneWithout, 2009, 2013, "Кузова: GRJ150W", "4 поколение");
+        drom(oneWithout, 2013, 2017, null, "4 поколение");
+        long alien = part("Дверь Toyota Land Cruiser Prado 120");
+        drom(alien, 2009, 2013, "Кузова: GRJ150W", "4 поколение");
+        drom(alien, 2013, 2017, "Кузова: GRJ150W", "4 поколение");
+
+        JsonNode rows = page("&sort=number").path("rows");
+        assertThat(rows.get(0).path("generation").asText()).isEqualTo("4 поколение");
+        assertThat(rows.get(0).path("yearTo").asInt()).isEqualTo(2017);
+
+        JsonNode without = rows.get(1);
+        assertThat(without.path("generation").isNull())
+                .as("у рестайлинга кузовов нет — номер 150 им не подтверждён").isTrue();
+        assertThat(without.path("yearFrom").isNull()).isTrue();
+        assertThat(without.path("vehicleTitleBody").asText()).isEqualTo("150");
+
+        JsonNode other = rows.get(2);
+        assertThat(other.path("generation").isNull()).as("«Prado 120» при кузовах 150").isTrue();
+        assertThat(other.path("vehicleTitleBody").asText()).isEqualTo("120");
+        assertThat(other.path("vehicleBlockBodies").asText()).isEqualTo("150");
+        assertThat(values("generation")).containsExactly("4 поколение");
+    }
+
+    @Test
+    @DisplayName("Донор побеждает и поколение Дрома из применимости: колонка — поколение донора")
+    void donorWinsOverDromGeneration() throws Exception {
+        long donor = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO donor (brand_id, model_id, generation_id, status)
+                VALUES (?, ?, ?, 'DISMANTLING') RETURNING id""",
+                Long.class, toyota, prado, generation(prado, 2002)));
+        long part = part("Стекло Toyota Land Cruiser Prado");
+        inTenant(() -> jdbc.update("UPDATE part SET donor_id = ? WHERE id = ?", donor, part));
+        drom(part, 2009, 2013, null, "4 поколение");
+        drom(part, 2013, 2017, null, "4 поколение");
+
+        JsonNode row = only(page(""));
+        assertThat(row.path("generation").asText()).isEqualTo(inTenant(() -> jdbc.queryForObject(
+                "SELECT name FROM catalog.generation WHERE id = ?", String.class,
+                generation(prado, 2002))));
+        assertThat(row.path("yearFrom").asInt()).isEqualTo(2002);
+        assertThat(row.path("vehicleSource").asText()).isEqualTo("DONOR");
+        assertThat(row.path("vehicleGenerationMerged").asBoolean()).isFalse();
+    }
+
     @Test
     @DisplayName("Марка в наименовании есть, модели нет — показана одна марка, без чужой модели")
     void brandWithoutModelInTitle() throws Exception {
@@ -621,6 +762,19 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
                 INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id,
                                                 is_verified, note)
                 VALUES (?, ?, ?, ?, ?, ?)""", part, toyota, model, generation, verified, note));
+    }
+
+    /**
+     * Строка поколения Prado, как её пишет разбор блока (0289, 0297): поколение
+     * справочника по году начала, годы клиента, кузова и метка поколения Дрома.
+     */
+    private void drom(long part, int from, Integer to, String note, String label) {
+        inTenant(() -> jdbc.update("""
+                INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id,
+                                                year_from, year_to, note, generation_label,
+                                                is_verified)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, false)""",
+                part, toyota, prado, generation(prado, from), from, to, note, label));
     }
 
     private MockHttpSession login() throws Exception {

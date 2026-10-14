@@ -109,6 +109,7 @@ public class CatalogController {
                 row.priceChangedAt(), row.priceChangedByName(), row.photoCount(),
                 row.vehicleSource(), row.vehicleSpans(),
                 row.vehicleTitleBody(), row.vehicleBlockBodies(),
+                row.vehicleGenerationMerged(),
                 row.stock());
     }
 
@@ -425,6 +426,11 @@ public class CatalogController {
                        * (задачи 0294, 0299); кузовов нет — второе поле пусто.
                        */
                       String vehicleTitleBody, String vehicleBlockBodies,
+                      /**
+                       * Поколение Дрома целиком из нескольких строк справочника
+                       * (рестайлинги, задача 0297) — подсказка клетки так и говорит.
+                       */
+                      boolean vehicleGenerationMerged,
                       Map<Long, java.math.BigDecimal> stock) {
     }
 }
