@@ -423,29 +423,68 @@ broken() {  # $1 — строка человеку в лог, $2 — текст 
 # контейнер ДО Telegram по IPv6. Спрашивается это у самой сети — разовым
 # контейнером в ней, — а не у хоста: у хоста IPv6 может работать при
 # неработающем NAT66 в docker, и ровно на этой разнице стояла авария.
+#
+# Три разных отказа, и человек идёт чинить РАЗНОЕ (задача 0156): сети нет,
+# образ не скачался, docker не смог запустить контейнер. Раньше stderr
+# уходил в /dev/null, и пустой ответ от неудавшегося `docker pull` попадал
+# в ту же ветку, что «нет дороги по IPv6»: пробу зовут ровно тогда, когда
+# тревоги не доходят, и в эту минуту она уверенно отправляла чинить NAT66,
+# которого, возможно, никто не ломал. Теперь образ добывается ОТДЕЛЬНО,
+# stderr сохраняется и печатается, а код возврата docker различается:
+# 125/126/127 — отказ самого docker, а не сети.
+DOCKER_CMD="${ALERT_CHECK_DOCKER:-docker}"
+
+# Один запрос из контейнера. Результат — в P_CODE (http-код curl), P_RC (код
+# выхода docker run) и P_ERR (stderr, как есть).
+probe_curl() {  # $1 — -6 или -4
+    local errf
+    errf=$(mktemp)
+    P_CODE=$("$DOCKER_CMD" run --rm --network "$IPV6_NET" "$PROBE_IMAGE" \
+        "$1" -s -S -o /dev/null -w '%{http_code}' --max-time 10 https://api.telegram.org 2>"$errf")
+    P_RC=$?
+    P_ERR=$(cat "$errf")
+    rm -f "$errf"
+}
+
 probe() {
-    local code4 code6
+    local pull_err code6 rc6 err6
     printf 'Проба дороги до Telegram (сеть %s)\n' "$IPV6_NET"
 
-    if ! docker network inspect "$IPV6_NET" >/dev/null 2>&1; then
+    if ! "$DOCKER_CMD" network inspect "$IPV6_NET" >/dev/null 2>&1; then
         red "  Сети ${IPV6_NET} нет — правка compose не применена (docker compose up -d alertmanager)"
         return 1
     fi
-    case "$(docker network inspect -f '{{.EnableIPv6}}' "$IPV6_NET" 2>/dev/null)" in
+    case "$("$DOCKER_CMD" network inspect -f '{{.EnableIPv6}}' "$IPV6_NET" 2>/dev/null)" in
         true) printf '  ✓ у сети %s включён IPv6\n' "$IPV6_NET" ;;
         *)    red "  ✗ у сети ${IPV6_NET} IPv6 ВЫКЛЮЧЕН — сеть создана до правки, пересоздайте её"; return 1 ;;
     esac
 
-    code6=$(docker run --rm --network "$IPV6_NET" "$PROBE_IMAGE" \
-        -6 -s -o /dev/null -w '%{http_code}' --max-time 10 https://api.telegram.org 2>/dev/null)
-    code4=$(docker run --rm --network "$IPV6_NET" "$PROBE_IMAGE" \
-        -4 -s -o /dev/null -w '%{http_code}' --max-time 10 https://api.telegram.org 2>/dev/null)
+    # Образ — отдельным шагом: нет его, и до сети дело не дошло.
+    if ! "$DOCKER_CMD" image inspect "$PROBE_IMAGE" >/dev/null 2>&1; then
+        if ! pull_err=$("$DOCKER_CMD" pull "$PROBE_IMAGE" 2>&1); then
+            red "  ✗ образ ${PROBE_IMAGE} не удалось получить — про дорогу по IPv6 проба НИЧЕГО не узнала"
+            printf '%s\n' "$pull_err" | sed 's/^/    | /' >&2
+            red "    Это не NAT66: проверьте доступ ячейки к реестру образов (или задайте ALERT_PROBE_IMAGE на образ, уже лежащий на машине)"
+            return 1
+        fi
+    fi
+
+    probe_curl -6
+    if [ "$P_RC" -ge 125 ] && [ "$P_RC" -le 127 ]; then
+        red "  ✗ docker не смог запустить пробный контейнер (код ${P_RC}) — про дорогу по IPv6 проба НИЧЕГО не узнала"
+        [ -z "$P_ERR" ] || printf '%s\n' "$P_ERR" | sed 's/^/    | /' >&2
+        red "    Это не NAT66: смотрите сообщение docker выше"
+        return 1
+    fi
+    code6="$P_CODE"; rc6="$P_RC"; err6="$P_ERR"
+    probe_curl -4
 
     printf '  IPv6 к api.telegram.org: %s\n' "${code6:-нет ответа}"
-    printf '  IPv4 к api.telegram.org: %s (на боевой ячейке он закрыт — это норма)\n' "${code4:-нет ответа}"
+    printf '  IPv4 к api.telegram.org: %s (на боевой ячейке он закрыт — это норма)\n' "${P_CODE:-нет ответа}"
 
     case "${code6:-000}" in
-        000|"") red "  ✗ по IPv6 из этой сети до Telegram НЕ достучаться"
+        000|"") red "  ✗ дороги по IPv6 из этой сети до Telegram нет (curl вышел с кодом ${rc6})"
+                [ -z "$err6" ] || printf '%s\n' "$err6" | sed 's/^/    | /' >&2
                 red "    Если IPv6 работает с хоста (curl -6 https://api.telegram.org), значит docker не делает NAT66:"
                 red "    смотрите docs/ops-history.md, «Если NAT66 на машине не работает» — там запасной путь без простоя"
                 return 1 ;;
@@ -821,6 +860,91 @@ EOF
                 *) printf '  ✓ возврат дефекта: копия с зелёным «не проверялся» валит самопроверку\n' ;;
             esac
         fi
+    fi
+
+    # 12. Проба дороги различает отказы (задача 0156). Docker подменён
+    #     заглушкой: настоящая NAT66 на этой машине непроверяема (Docker
+    #     Desktop IPv6 наружу не выпускает), а различать надо не сеть, а то,
+    #     КАК ОТВЕЧАЕТ docker. Утверждается по два факта: свои слова отказа
+    #     и stderr docker целиком, и — что чужих слов нет.
+    cat > "$tmp/docker-stub" <<'EOF'
+#!/bin/sh
+case "$1" in
+    network) [ "$2" = inspect ] && [ "$3" = -f ] && echo true; exit 0 ;;
+    image)   [ "$STUB_MODE" = nopull ] && exit 1; exit 0 ;;
+    pull)    echo "Error response from daemon: manifest for curlimages/curl:0.0 not found: manifest unknown" >&2; exit 1 ;;
+    run)
+        case "$STUB_MODE" in
+            nonet) echo "curl: (28) Connection timed out after 10001 milliseconds" >&2; printf 000; exit 28 ;;
+            norun) echo "docker: Error response from daemon: exec: not found" >&2; exit 127 ;;
+            *)     if [ "$*" != "${*#*-4 }" ]; then printf 000; exit 7; fi; printf 302; exit 0 ;;
+        esac ;;
+esac
+exit 0
+EOF
+    chmod +x "$tmp/docker-stub"
+    run_probe() {  # $1 — режим заглушки
+        set +e
+        out=$(STUB_MODE="$1" ALERT_CHECK_DOCKER="$tmp/docker-stub" ENV_FILE=/dev/null \
+              "$RUNNER" "$SELF" --probe 2>&1)
+        rc=$?
+        set -e
+    }
+    run_probe nopull
+    [ "$rc" = 1 ] || { red "  ✗ проба: образ не скачался, а код ${rc}"; bad=1; }
+    says "проба: нет образа — так и сказано" "не удалось получить"
+    says "проба: stderr docker pull доехал до человека" "manifest unknown"
+    says_not "проба: отказ образа не назван отсутствием дороги" "дороги по IPv6 из этой сети"
+    run_probe nonet
+    [ "$rc" = 1 ] || { red "  ✗ проба: сети нет, а код ${rc}"; bad=1; }
+    says "проба: нет сети — так и сказано" "дороги по IPv6 из этой сети до Telegram нет"
+    says "проба: stderr curl доехал до человека" "Connection timed out"
+    says_not "проба: отказ сети не назван отказом образа" "не удалось получить"
+    run_probe norun
+    [ "$rc" = 1 ] || { red "  ✗ проба: docker не запустил контейнер, а код ${rc}"; bad=1; }
+    says "проба: docker не запустил — так и сказано" "не смог запустить"
+    says "проба: stderr docker run доехал до человека" "exec: not found"
+    says_not "проба: отказ docker не назван отсутствием дороги" "дороги по IPv6 из этой сети"
+    run_probe ok
+    [ "$rc" = 0 ] || { red "  ✗ проба: на исправном пути код ${rc}"; bad=1; }
+    says "проба: исправный путь — дорога есть" "дорога есть"
+    says_not "проба: на исправном пути нет отказов" "✗"
+
+    # 13. ВОЗВРАТ ДЕФЕКТА 0156: stderr снова глушится. Две подделки — на
+    #     `docker run` и на `docker pull`; каждая обязана валить самопроверку.
+    #     Тот же устрой, что в случае 11: свой каталог `ops`, целость до
+    #     запуска, рекурсию обрывает переменная.
+    if [ -z "${ALERT_CHECK_NO_FAKE:-}" ]; then
+        local pair name pat rep
+        for pair in 'run|2>"\$errf"|2>/dev/null' 'pull|2>&1)|2>/dev/null)'; do
+            name="${pair%%|*}"; pair="${pair#*|}"; pat="${pair%%|*}"; rep="${pair#*|}"
+            fake="$tmp/poddelka-0156-$name"
+            mkdir -p "$fake/ops"
+            if [ "$name" = run ]; then
+                sed "s@$pat@$rep@" "$SELF" > "$fake/ops/alert-channel-check.sh"
+            else
+                sed "/pull_err=/ s@$pat@$rep@" "$SELF" > "$fake/ops/alert-channel-check.sh"
+            fi
+            chmod +x "$fake/ops/alert-channel-check.sh"
+            if cmp -s "$SELF" "$fake/ops/alert-channel-check.sh"; then
+                red "  ✗ возврат дефекта 0156 (${name}): подделку негде поставить — образец не нашёлся"
+                bad=1
+            elif ! "$RUNNER" -n "$fake/ops/alert-channel-check.sh" 2>/dev/null; then
+                red "  ✗ возврат дефекта 0156 (${name}): подделка сломала синтаксис"
+                bad=1
+            else
+                set +e
+                fake_out=$(ALERT_CHECK_NO_FAKE=1 ENV_FILE=/dev/null PUSHGATEWAY_URL="file:///dev/null" \
+                    "$RUNNER" "$fake/ops/alert-channel-check.sh" --selftest 2>&1)
+                fake_rc=$?
+                set -e
+                case "$fake_rc" in
+                    0) red "  ✗ ВОЗВРАТ ДЕФЕКТА 0156 (${name}): копия с заглушённым stderr ПРОШЛА самопроверку"
+                       bad=1 ;;
+                    *) printf '  ✓ возврат дефекта: заглушённый stderr у docker %s валит самопроверку\n' "$name" ;;
+                esac
+            fi
+        done
     fi
 
     [ $bad = 0 ] || { red "Самопроверка не прошла"; exit 1; }
