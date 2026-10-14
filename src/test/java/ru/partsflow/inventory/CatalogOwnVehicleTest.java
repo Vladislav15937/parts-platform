@@ -359,14 +359,13 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
                 .as("3 и 4 поколение — метка двух поколений не придумывается").isTrue();
         assertThat(rows.get(1).path("vehicleGenerationMerged").asBoolean()).isFalse();
 
-        // Все поверхности — одно выражение: отбор, сортировка, список значений, файл.
+        // Все поверхности — одно выражение: отбор, список значений, файл
+        // (сортировки по поколению на витрине нет и не было).
         assertThat(titles(page("&filter=generation:4 поколение")))
                 .containsExactly("Суппорт тормозной передний левый Toyota Land Cruiser Prado");
         assertThat(titles(page("&find=generation:поколение")))
                 .containsExactly("Суппорт тормозной передний левый Toyota Land Cruiser Prado");
         assertThat(values("generation")).containsExactly("4 поколение");
-        assertThat(titles(page("&sort=generation")).get(0))
-                .isEqualTo("Суппорт тормозной передний левый Toyota Land Cruiser Prado");
         // В файле поколения нет — только «Поколение с» и «Поколение по».
         assertThat(export()).contains("\"Суппорт тормозной передний левый Toyota Land Cruiser Prado\";"
                 + "\"\";\"Toyota\";\"Land Cruiser Prado\";\"2009\";\"2024\"");

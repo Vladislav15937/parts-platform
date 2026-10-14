@@ -223,6 +223,17 @@ describe('подсказка клетки машины', () => {
       .toBe('По применимости, разобрана автоматически');
   });
 
+  it('говорит, что поколение собрано из рестайлингов по блоку «Подходит» (0297)', () => {
+    const merged = row({ vehicleSource: 'PARSED', vehicleSpans: 3, vehicleGenerationMerged: true });
+    const text = 'По применимости, разобрана автоматически. Поколение определено по блоку '
+      + '«Подходит»: одно поколение Дрома, годы — от первого рестайлинга до последнего';
+    expect(vehicleHint(merged)).toBe(text);
+    expect(hint('generation', merged)).toBe(text);
+    // Три строки без объединения — прежняя подсказка «поколений 3».
+    expect(vehicleHint(row({ vehicleSource: 'PARSED', vehicleSpans: 3 })))
+      .toContain('Поколений у этой машины 3');
+  });
+
   it('молчит, когда машины нет', () => {
     expect(vehicleHint(row())).toBeUndefined();
     expect(vehicleHint(row({ vehicleSource: null }))).toBeUndefined();
