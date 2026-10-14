@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   COLUMNS, DEFAULT_VISIBLE, DEFAULT_SORT, DEFAULT_DESC, defaultQuery,
-  hasFilters, isSorted, withDefaultSort, withoutFilters, viewKey,
+  hasFilters, isSorted, withDefaultSort, withoutFilters, viewKey, vehicleHint,
   type CatalogRow,
 } from './catalog';
 
@@ -112,9 +112,30 @@ describe('паритет колонок с прежней системой', () 
     'Цена изменена в', 'Кто изменил цену',
   ];
 
+  /**
+   * Переименованные намеренно: у позиции без донора там своя машина из
+   * применимости, и «донора» читалось бы как «снято с этой машины». Решение
+   * владельца продукта 14.10.2026, tasks/0290, раздел «Вопрос владельцу —
+   * как подписать колонки, которые про донора».
+   */
+  const RENAMED: Record<string, string> = {
+    'Поколение донора': 'Поколение',
+    'Рестайлинг донора': 'Рестайлинг',
+  };
+
   it('показывает всё, что показывает кабинет клиента', () => {
     const mine = COLUMNS.map((c) => c.title);
-    expect(BAZON.filter((title) => !mine.includes(title))).toEqual([]);
+    expect(BAZON.filter((title) => !mine.includes(RENAMED[title] ?? title))).toEqual([]);
+  });
+
+  // Направленно, задача 0290 п. 4: подписи — по ответу владельца, слово
+  // «донора» не вернулось ни в одну колонку машины.
+  it('колонки поколения и рестайлинга подписаны без «донора»', () => {
+    const title = (key: string) => COLUMNS.find((c) => c.key === key)?.title;
+    expect(title('generation')).toBe('Поколение');
+    expect(title('restyling')).toBe('Рестайлинг');
+    expect(COLUMNS.map((c) => c.title).filter((t) => t.includes('донора')))
+      .toEqual(['Номер донора']);
   });
 
   // Поле, доехавшее до строки, но не показанное ни одной колонкой, — это
@@ -151,6 +172,35 @@ describe('паритет колонок с прежней системой', () 
     expect(value('dimensions', empty)).toBe('');
     expect(value('photoCount', empty)).toBe('');
     expect(value('published', empty)).toBe('');
+  });
+});
+
+/**
+ * Откуда машина в клетке — задача 0290, п. 2: разобранное автоматически
+ * не читается как подтверждённый факт.
+ */
+describe('подсказка клетки машины', () => {
+  const hint = (key: string, r: CatalogRow) => COLUMNS.find((c) => c.key === key)?.hint?.(r);
+
+  it('называет источник у марки, модели и поколения', () => {
+    for (const key of ['brand', 'model', 'generation']) {
+      expect(hint(key, row({ brand: 'Toyota', vehicleSource: 'DONOR' }))).toBe('По донору');
+      expect(hint(key, row({ brand: 'Toyota', vehicleSource: 'VERIFIED' })))
+        .toBe('По применимости, подтверждена человеком');
+      expect(hint(key, row({ brand: 'Toyota', vehicleSource: 'PARSED' })))
+        .toBe('По применимости, разобрана автоматически');
+    }
+  });
+
+  it('объясняет пустое поколение, когда поколений несколько', () => {
+    expect(vehicleHint(row({ vehicleSource: 'PARSED', vehicleSpans: 2 })))
+      .toBe('По применимости, разобрана автоматически. Поколений у этой машины 2 — '
+        + 'какое у детали, не указано; все — в карточке');
+  });
+
+  it('молчит, когда машины нет', () => {
+    expect(vehicleHint(row())).toBeUndefined();
+    expect(vehicleHint(row({ vehicleSource: null }))).toBeUndefined();
   });
 });
 
