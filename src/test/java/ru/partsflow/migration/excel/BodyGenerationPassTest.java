@@ -135,7 +135,7 @@ class BodyGenerationPassTest extends PostgresTestBase {
     void loadSetsTheGenerationByBody() throws Exception {
         JsonNode report = load(file(cards())).path("applicability");
 
-        assertThat(report.path("byBody").asInt()).as("капот и стекло: %s", report).isEqualTo(2);
+        assertThat(report.path("byBody").asInt()).as("капот, стекло и бампер: %s", report).isEqualTo(3);
         long hood = partOf(HOOD);
         assertThat(rowsOf(hood)).as("строка поколения по коду кузова").containsExactly(
                 "Toyota/Land Cruiser Prado/2002/2002-2009/"
@@ -147,17 +147,20 @@ class BodyGenerationPassTest extends PostgresTestBase {
         assertThat(row.path("yearTo").asInt()).isEqualTo(2009);
         assertThat(row.path("vehicleSource").asText()).isEqualTo("PARSED");
         assertThat(row.path("vehicleGenerationBodies").asText()).isEqualTo("GRJ120");
+        assertThat(row.path("generation").asText())
+                .as("одна строка с меткой — тоже поколение Дрома, как у 0297 («у всех»)")
+                .isEqualTo("3 поколение");
         // Чужая 120-я деталь без пометки — поле пусто: подсказка не врёт про заявленное клиентом.
         assertThat(catalogRow(FRAME).path("vehicleGenerationBodies").isNull()).isTrue();
     }
 
     @Test
-    @DisplayName("Сомнение — пусто: два поколения, кузов в двух поколениях, рестайлинги, другой ряд, "
+    @DisplayName("Сомнение — пусто: два поколения, кузов в двух поколениях, другой ряд, "
             + "«Prado 12», неизвестный код — поколения нет, машина в применимости, причина в отчёте")
     void doubtLeavesItEmptyAndNamesTheReason() throws Exception {
         JsonNode report = load(file(cards())).path("applicability");
 
-        for (String title : List.of(FRAME, WING, BUMPER, DOOR, MIRROR, SHORT)) {
+        for (String title : List.of(FRAME, WING, DOOR, MIRROR, SHORT)) {
             assertThat(rowsOf(partOf(title))).as("у «%s» поколение поставлено по догадке", title)
                     .singleElement().asString().startsWith("Toyota/Land Cruiser Prado/-/-/Кузова: ");
             assertThat(catalogRow(title).path("generation").isNull()).as(title).isTrue();
@@ -167,9 +170,6 @@ class BodyGenerationPassTest extends PostgresTestBase {
                 .extracting(JsonNode::asText)
                 .containsExactlyInAnyOrder(FRAME + ": поколения 3 и 4",
                         WING + ": кузов GRN215 есть в поколениях 3 и 4");
-        assertThat(bodyMiss(report, "у поколения несколько строк (рестайлинги) — какая у детали, "
-                + "не определить").path("names").get(0).asText())
-                .isEqualTo(BUMPER + ": 4 поколение (2009–2013); 4 поколение, рестайлинг (2013–2017)");
         assertThat(bodyMiss(report, "кузова блока другого ряда, чем номер в наименовании")
                 .path("names")).extracting(JsonNode::asText)
                 .as("«Prado 12» — не сокращение 120-го (решение владельца, 0294)")
@@ -197,7 +197,7 @@ class BodyGenerationPassTest extends PostgresTestBase {
 
         JsonNode first = press();
 
-        assertThat(first.path("byBody").asInt()).as("отчёт: %s", first).isEqualTo(2);
+        assertThat(first.path("byBody").asInt()).as("отчёт: %s", first).isEqualTo(3);
         assertThat(rowsOf(partOf(HOOD))).containsExactly("Toyota/Land Cruiser Prado/2002/2002-2009/"
                 + "Кузова: GRJ120, GRJ120W; Поколение по коду кузова: GRJ120/нет");
         assertThat(rowsOf(glass)).as("подтверждённая строка снята или поправлена")
@@ -214,6 +214,34 @@ class BodyGenerationPassTest extends PostgresTestBase {
         assertThat(inTenant(() -> jdbc.queryForObject("SELECT count(*) FROM part_change", Integer.class)))
                 .as("проход поставил отметку «позиция изменилась»").isZero();
         assertThat(updatedAt()).isEqualTo(updatedBefore);
+    }
+
+    @Test
+    @DisplayName("Рестайлинги по коду кузова — поколение Дрома целиком (ответ владельца 14.10.2026, п. 2): "
+            + "строка на рестайлинг с меткой, витрина показывает «4 поколение» 2009–2017 и код")
+    void restylingsByBodyShowTheWholeDromGeneration() throws Exception {
+        JsonNode report = load(file(cards())).path("applicability");
+
+        long bumper = partOf(BUMPER);
+        assertThat(rowsOf(bumper)).as("строки рестайлингов по коду кузова").containsExactlyInAnyOrder(
+                "Toyota/Land Cruiser Prado/2009/2009-2013/"
+                        + "Кузова: GRJ150; Поколение по коду кузова: GRJ150/нет",
+                "Toyota/Land Cruiser Prado/2013/2013-2017/"
+                        + "Кузова: GRJ150; Поколение по коду кузова: GRJ150/нет");
+        assertThat(inTenant(() -> jdbc.queryForList(
+                "SELECT DISTINCT generation_label FROM part_applicability WHERE part_id = ?",
+                String.class, bumper))).as("метка Дрома у каждой строки").containsExactly("4 поколение");
+
+        JsonNode row = catalogRow(BUMPER);
+        assertThat(row.path("generation").asText()).as("витрина: %s", row).isEqualTo("4 поколение");
+        assertThat(row.path("yearFrom").asInt()).isEqualTo(2009);
+        assertThat(row.path("yearTo").asInt()).isEqualTo(2017);
+        assertThat(row.path("vehicleGenerationMerged").asBoolean()).isTrue();
+        assertThat(row.path("vehicleGenerationBodies").asText()).isEqualTo("GRJ150");
+        for (JsonNode miss : report.path("bodyMisses")) {
+            assertThat(miss.path("names").toString()).as("бампер назван пропущенным: %s", miss)
+                    .doesNotContain(BUMPER);
+        }
     }
 
     // --- помощники ---

@@ -162,30 +162,32 @@ export function vehicleHint(row: CatalogRow): string | undefined {
   }
   // Рестайлинги одного поколения Дрома показаны поколением целиком (0297):
   // годы шире, чем у любой одной строки, и человек должен знать почему.
+  // Поколение по коду кузова (0295) — наш вывод, а не слова клиента, и у
+  // рестайлингов тоже: «по блоку «Подходит»» тут было бы неправдой.
+  const byBody = generationByBody(row);
   if (row.vehicleGenerationMerged) {
-    return `${base}. Поколение определено по блоку «Подходит»: одно поколение Дрома, `
+    return `${base}. Поколение определено по ${byBody ?? 'блоку «Подходит»'}: одно поколение Дрома, `
       + 'годы — от первого рестайлинга до последнего';
   }
   const spans = row.vehicleSpans ?? 0;
-  return spans > 1
-    ? `${base}. Поколений у этой машины ${spans} — какое у детали, не указано; все — в карточке`
-    : base + generationByBody(row);
+  if (spans > 1) {
+    return `${base}. Поколений у этой машины ${spans} — какое у детали, не указано; все — в карточке`;
+  }
+  return byBody ? `${base}. Поколение определено по ${byBody}` : base;
 }
 
 /**
- * «. Поколение определено по коду кузова GRJ120» — когда поколение в колонке
- * выведено нами по кузову, а не названо клиентом (задача 0295): владелец
- * должен отличать заявление клиента от нашего вывода. Только при показанном
- * поколении — без него говорить не о чем.
+ * «коду кузова GRJ120» — когда поколение в колонке выведено нами по кузову,
+ * а не названо клиентом (задача 0295): владелец должен отличать заявление
+ * клиента от нашего вывода. Только при показанном поколении — без него
+ * говорить не о чем.
  */
-function generationByBody(row: CatalogRow): string {
+function generationByBody(row: CatalogRow): string | undefined {
   const codes = (row.vehicleGenerationBodies ?? '').split(', ').filter((c) => c !== '');
-  if (!row.generation || codes.length === 0) return '';
+  if (!row.generation || codes.length === 0) return undefined;
   const head = codes.slice(0, 3).join(', ');
   const rest = codes.length > 3 ? ` и ещё ${codes.length - 3}` : '';
-  return codes.length === 1
-    ? `. Поколение определено по коду кузова ${head}`
-    : `. Поколение определено по кодам кузова ${head}${rest}`;
+  return codes.length === 1 ? `коду кузова ${head}` : `кодам кузова ${head}${rest}`;
 }
 
 /** Машина, к которой подбирают деталь. Пустая марка — подбора нет. */

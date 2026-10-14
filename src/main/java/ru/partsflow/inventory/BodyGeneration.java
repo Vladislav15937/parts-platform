@@ -28,12 +28,17 @@ import java.util.regex.Pattern;
  *
  * <p><b>Только при уверенности</b> (решение владельца 14.10.2026,
  * {@code tasks/0294}, «Следствие»). Поколение ставится, если все коды,
- * для которых пара нашлась, ведут в одно поколение Дрома, у этого поколения
- * в карточках склада ровно одна строка (рестайлинги — несколько строк,
- * задача 0297), и оно нашлось в справочнике. Код без пары ничего не даёт —
- * ни «за», ни «против» (так в критерии задачи: «все найденные коды»);
- * разные поколения, рестайлинги, ни одного найденного кода — пусто,
- * и позиция названа в отчёте причиной.
+ * для которых пара нашлась, ведут в одно поколение Дрома и каждая его строка
+ * нашлась в справочнике. Код без пары ничего не даёт — ни «за», ни «против»
+ * (ответ владельца 14.10.2026, {@code tasks/0295}: «да»); разные поколения,
+ * ни одного найденного кода — пусто, и позиция названа в отчёте причиной.
+ *
+ * <p><b>Рестайлинги — поколение Дрома целиком</b> (ответ владельца 14.10.2026,
+ * {@code tasks/0295}, п. 2; как задача 0297). Строк у поколения в карточках
+ * склада несколько («4 поколение (2009–2013)», «4 поколение, рестайлинг
+ * (2013–2017)») — позиция получает по строке применимости на каждую, все
+ * с меткой «4 поколение»: витрина собирает их в одно поколение тем же правилом,
+ * что строки, названные клиентом в самом блоке.
  *
  * <p><b>Номер кузова в наименовании сужает коды до поиска</b> — тем же
  * правилом ряда, что у сверки колонки (0294): «Prado 120» — ряд «12», код
@@ -66,7 +71,8 @@ final class BodyGeneration {
         OTHER_SERIES("кузова блока другого ряда, чем номер в наименовании"),
         UNKNOWN_BODY("кузова не встречаются в карточках с поколением"),
         TWO_GENERATIONS("кузова встречаются в разных поколениях"),
-        RESTYLING("у поколения несколько строк (рестайлинги) — какая у детали, не определить"),
+        RESTYLING("у поколения несколько строк, а номера поколения Дрома в тексте нет — "
+                + "собрать их в одно не по чему"),
         NOT_IN_CATALOG("поколение не найдено в справочнике");
 
         private final String words;
@@ -80,15 +86,21 @@ final class BodyGeneration {
         }
     }
 
+    /** Строка справочника поколения с годами клиента — одна строка применимости. */
+    record Span(long generationId, int yearFrom, Integer yearTo) {
+    }
+
     /**
-     * Итог для одной позиции: либо поколение с годами клиента и кодами,
-     * по которым оно определено, либо причина и пояснение для отчёта.
+     * Итог для одной позиции: либо строки поколения (одна, или по строке
+     * на рестайлинг), метка поколения Дрома («3 поколение», {@code null} — номера
+     * в тексте нет) и коды, по которым оно определено, — либо причина
+     * и пояснение для отчёта.
      */
-    record Outcome(Long generationId, Integer yearFrom, Integer yearTo, List<String> decisive,
+    record Outcome(List<Span> spans, String label, List<String> decisive,
                    Reason reason, String detail) {
 
         static Outcome skip(Reason reason, String detail) {
-            return new Outcome(null, null, null, List.of(), reason, detail);
+            return new Outcome(List.of(), null, List.of(), reason, detail);
         }
 
         boolean found() {
@@ -171,17 +183,41 @@ final class BodyGeneration {
                 return Outcome.skip(Reason.TWO_GENERATIONS, "поколения " + numbered(numbers));
             }
             Set<Line> group = byNumber.get(new GroupKey(modelId, numbers.iterator().next()));
-            if (group.size() > 1) {
-                return Outcome.skip(Reason.RESTYLING, group.stream().map(Line::words)
-                        .reduce((a, b) -> a + "; " + b).orElseThrow());
+            // Метка — словами того же разбора, что пишет её строкам блока (0297):
+            // витрина склеивает рестайлинги по равенству меток.
+            String label = DromApplicability.dromGeneration(group.iterator().next().label());
+            if (group.size() > 1 && label == null) {
+                return Outcome.skip(Reason.RESTYLING, words(group));
             }
-            Line line = group.iterator().next();
-            if (line.generationId() == null) {
-                return Outcome.skip(Reason.NOT_IN_CATALOG, line.words());
+            for (Line line : group) {
+                if (line.generationId() == null) {
+                    return Outcome.skip(Reason.NOT_IN_CATALOG, line.words());
+                }
             }
-            return new Outcome(line.generationId(), line.yearFrom(), line.yearTo(),
-                    List.copyOf(decisive), null, null);
+            return new Outcome(spans(group), label, List.copyOf(decisive), null, null);
         }
+
+        /**
+         * Строки поколения — по одной на строку справочника. Два написания
+         * одной строки («2009–2013» и «2009–2012» у разных карточек, или
+         * рестайлинг, легший годом начала в ту же строку справочника) дают одну:
+         * уникальный ключ применимости — поколение справочника, и годы
+         * берутся от раннего начала до позднего конца («н.в.» — шире всего).
+         */
+        private static List<Span> spans(Set<Line> group) {
+            Map<Long, Span> byGeneration = new LinkedHashMap<>();
+            group.stream().sorted(java.util.Comparator.comparingInt(Line::yearFrom)).forEach(line ->
+                    byGeneration.merge(line.generationId(),
+                            new Span(line.generationId(), line.yearFrom(), line.yearTo()),
+                            (a, b) -> new Span(a.generationId(), Math.min(a.yearFrom(), b.yearFrom()),
+                                    a.yearTo() == null || b.yearTo() == null ? null
+                                            : Integer.valueOf(Math.max(a.yearTo(), b.yearTo())))));
+            return List.copyOf(byGeneration.values());
+        }
+    }
+
+    private static String words(Set<Line> group) {
+        return group.stream().map(Line::words).reduce((a, b) -> a + "; " + b).orElseThrow();
     }
 
     private static String numbered(Set<String> numbers) {

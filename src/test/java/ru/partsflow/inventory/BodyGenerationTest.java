@@ -82,9 +82,8 @@ class BodyGenerationTest {
 
         BodyGeneration.Outcome found = index.decide(PRADO, List.of("GRJ120", "GRJ120W", "KDJ120"));
         assertThat(found.found()).isTrue();
-        assertThat(found.generationId()).isEqualTo(300);
-        assertThat(found.yearFrom()).isEqualTo(2002);
-        assertThat(found.yearTo()).isEqualTo(2009);
+        assertThat(found.spans()).containsExactly(new BodyGeneration.Span(300, 2002, 2009));
+        assertThat(found.label()).as("метка — словами разбора блока (0297)").isEqualTo("3 поколение");
         assertThat(found.decisive()).as("код без пары ничего не даёт").containsExactly("GRJ120", "KDJ120");
 
         assertThat(index.decide(PRADO, List.of("GRJ120", "GRJ150")).reason())
@@ -97,13 +96,46 @@ class BodyGenerationTest {
 
         DromApplicability.bodyPairs("Toyota Land Cruiser Prado — 4 поколение, рестайлинг (2013–2017): GRJ151",
                 DICT).forEach(index::add);
-        assertThat(index.decide(PRADO, List.of("GRJ150")).reason())
-                .isEqualTo(BodyGeneration.Reason.RESTYLING);
+        BodyGeneration.Outcome whole = index.decide(PRADO, List.of("GRJ150"));
+        assertThat(whole.found()).as("рестайлинги — поколение целиком (ответ владельца, п. 2): %s", whole)
+                .isTrue();
+        assertThat(whole.spans()).as("по строке на рестайлинг, годы клиента").containsExactly(
+                new BodyGeneration.Span(400, 2009, 2013), new BodyGeneration.Span(401, 2013, 2017));
+        assertThat(whole.label()).isEqualTo("4 поколение");
 
         DromApplicability.bodyPairs("Toyota Land Cruiser Prado — 9 поколение (1950–1955): XJ9", DICT)
                 .forEach(index::add);
         assertThat(index.decide(PRADO, List.of("XJ9")).reason())
                 .isEqualTo(BodyGeneration.Reason.NOT_IN_CATALOG);
+    }
+
+    @Test
+    @DisplayName("Рестайлинги: строка справочника одна на два написания, строки нет в справочнике — "
+            + "пусто, номера поколения в тексте нет — склеивать не по чему")
+    void restylings() {
+        BodyGeneration.Index index = new BodyGeneration.Index();
+        DromApplicability.bodyPairs("Toyota Land Cruiser Prado — 4 поколение (2009–2012): GRJ150; "
+                + "4 поколение (2009–2013): GRJ150; 4 поколение, 2-й рестайлинг (2013–н.в.): "
+                + "GRJ151", DICT).forEach(index::add);
+        assertThat(index.decide(PRADO, List.of("GRJ150")).spans())
+                .as("два написания одной строки справочника («2009–2012» и «2009–2013») — одна строка, годы шире; "
+                        + "«н.в.» остаётся открытым")
+                .containsExactly(new BodyGeneration.Span(400, 2009, 2013),
+                        new BodyGeneration.Span(401, 2013, null));
+
+        BodyGeneration.Index gap = new BodyGeneration.Index();
+        DromApplicability.bodyPairs("Toyota Land Cruiser Prado — 4 поколение (2009–2013): GRJ150; "
+                + "4 поколение, рестайлинг (1990–1995): GRJ151", DICT).forEach(gap::add);
+        BodyGeneration.Outcome missing = gap.decide(PRADO, List.of("GRJ150"));
+        assertThat(missing.reason()).as("строку поколения без справочника не придумываем")
+                .isEqualTo(BodyGeneration.Reason.NOT_IN_CATALOG);
+        assertThat(missing.detail()).isEqualTo("4 поколение, рестайлинг (1990–1995)");
+
+        BodyGeneration.Index unnumbered = new BodyGeneration.Index();
+        DromApplicability.bodyPairs("Toyota Land Cruiser Prado — поколение, рестайлинг (2009–2013): GRJ150; "
+                + "поколение, рестайлинг (2013–2016): GRJ150", DICT).forEach(unnumbered::add);
+        assertThat(unnumbered.decide(PRADO, List.of("GRJ150")).reason())
+                .isEqualTo(BodyGeneration.Reason.RESTYLING);
     }
 
     @Test

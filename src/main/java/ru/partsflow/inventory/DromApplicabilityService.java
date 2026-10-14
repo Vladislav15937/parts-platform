@@ -339,16 +339,23 @@ public class DromApplicabilityService {
                 tally.bodyMiss(outcome.reason(), title + ": " + outcome.detail());
                 continue;
             }
-            int inserted = jdbc.update("""
-                    INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id,
-                                                    year_from, year_to, note, is_verified)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, false)
-                    ON CONFLICT (part_id, brand_id, model_id, generation_id, modification_id)
-                    DO NOTHING""",
-                    partId, own.brandId(), own.modelId(), outcome.generationId(),
-                    outcome.yearFrom(), outcome.yearTo(),
-                    BodyGeneration.note(codes, outcome.decisive()));
-            tally.byBody += inserted;
+            // По строке на строку справочника поколения: у рестайлингов их
+            // несколько, и метка Дрома склеивает их на витрине в одно (0297).
+            int inserted = 0;
+            for (BodyGeneration.Span span : outcome.spans()) {
+                inserted += jdbc.update("""
+                        INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id,
+                                                        year_from, year_to, note, generation_label,
+                                                        is_verified)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, false)
+                        ON CONFLICT (part_id, brand_id, model_id, generation_id, modification_id)
+                        DO NOTHING""",
+                        partId, own.brandId(), own.modelId(), span.generationId(),
+                        span.yearFrom(), span.yearTo(),
+                        BodyGeneration.note(codes, outcome.decisive()), outcome.label());
+            }
+            // Позиций, а не строк: рестайлинги одной позиции — одно поколение.
+            tally.byBody += inserted > 0 ? 1 : 0;
             for (Row row : ownRows) {
                 if (row.verified()) {
                     continue;

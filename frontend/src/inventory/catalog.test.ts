@@ -253,6 +253,15 @@ describe('подсказка клетки машины', () => {
       vehicleGenerationBodies: 'GRJ121W' })))
       .toBe('По применимости, разобрана автоматически');
   });
+
+  it('у рестайлингов по коду кузова называет код, а не блок «Подходит» (0295, ответ владельца)', () => {
+    const merged = row({ vehicleSource: 'PARSED', vehicleSpans: 2, vehicleGenerationMerged: true,
+      generation: '4 поколение', vehicleGenerationBodies: 'GRJ150' });
+    const text = 'По применимости, разобрана автоматически. Поколение определено по коду кузова '
+      + 'GRJ150: одно поколение Дрома, годы — от первого рестайлинга до последнего';
+    expect(vehicleHint(merged)).toBe(text);
+    expect(hint('generation', merged)).toBe(text);
+  });
 });
 
 /**
