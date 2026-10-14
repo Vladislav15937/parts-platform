@@ -650,6 +650,166 @@ class DromShopTermsTest extends PostgresTestBase {
         assertThat(labels).contains("Подходит");
     }
 
+    // --- «Прочие поля» → «Характеристики» (задача 0292) ---
+
+    private static final String OTHER = "Прочие поля";
+
+    /**
+     * Ячейка «Прочие поля» строки 466 файла клиента Strikexz (колёса Bridgestone
+     * Blizzak DM-Z3 на литых дисках) — как есть: служебные дубли Дрома
+     * ({@code model~tireFirmAndModel}, {@code marking [marking]}), кавычка дюйма,
+     * «колёс» с «ё». Пятнадцать строк (в задаче сказано «14» — пересчитано по файлу).
+     */
+    private static final String WHEELS_466 = "model~tireFirmAndModel [model~tireFirmAndModel]: Bridgestone Blizzak DM-Z3\n"
+            + "Количество колёс в комплекте [inSetQuantity]: 4 шт\n"
+            + "Количество комплектов [quantity]: 1 шт\n"
+            + "Год выпуска шин [year]: 2006\n"
+            + "Протектор [wheelSeason]: Зимние\n"
+            + "Износ [wheelTireWear]: 10 %\n"
+            + "marking [marking]: 265/65 R17\n"
+            + "Диаметр [marking]: 17\"\n"
+            + "Ширина профиля [marking]: 265 мм\n"
+            + "Высота профиля [marking]: 65 %\n"
+            + "Каркас [marking]: радиальный\n"
+            + "Тип [diskType]: Литой\n"
+            + "Модель шины [tireFirmAndModel]: Bridgestone Blizzak DM-Z3\n"
+            + "Тип шины [predestination]: Обычная\n"
+            + "Модель диска [discFirmAndModel]: noname";
+
+    /** Магнитола (строка 211 файла клиента): первые две строки дублируют друг друга. */
+    private static final String RADIO = "model [model]: Toyota NHZT-W58\n"
+            + "Модель магнитолы [model]: Toyota NHZT-W58\n"
+            + "Размер [size]: 2 DIN — 178x100 мм";
+
+    @Test
+    @DisplayName("«Прочие поля» ложатся в «Характеристики» побайтно (ячейка клиента, 15 строк); пустая колонка — NULL")
+    void characteristicsLandVerbatim() throws Exception {
+        assertThat(WHEELS_466.split("\n")).hasSize(15);
+        Map<String, String> a = row(AD_A, "Колеса Bridgestone Blizzak DM-Z3 265/65 R17");
+        a.put(OTHER, WHEELS_466);
+        Map<String, String> b = row(AD_B, "Фара левая Toyota Camry");
+
+        JsonNode report = load(file(List.of(a, b), Set.of(), null));
+
+        assertThat(report.path("imported").asInt()).as("%s", report.path("skipped")).isEqualTo(2);
+        assertThat(characteristics(AD_A)).as("характеристики доехали не дословно").isEqualTo(WHEELS_466);
+        assertThat(characteristics(AD_B)).as("пустая колонка дала не NULL").isNull();
+    }
+
+    @Test
+    @DisplayName("Строка парсера «Обложка в выдаче Дрома (isMain): …» в характеристики не переносится, остальные — как есть")
+    void coverLineIsNotACharacteristic() throws Exception {
+        Map<String, String> a = row(AD_A, "Усилитель звука Zapco ST-4B");
+        a.put(OTHER, "Обложка в выдаче Дрома (isMain): https://static.baza.drom.ru/drom/1737520136727_full\n"
+                + "Количество каналов [channel]: 4-канальный\n"
+                + "Номинальная мощность [nominalPower]: 65 Вт");
+        Map<String, String> b = row(AD_B, "Видеорегистратор Nextec");
+        b.put(OTHER, "Обложка в выдаче Дрома (isMain): https://static.baza.drom.ru/drom/1_full");
+
+        load(file(List.of(a, b), Set.of(), null));
+
+        assertThat(characteristics(AD_A)).as("в блоке не ровно две характеристики")
+                .isEqualTo("Количество каналов [channel]: 4-канальный\n"
+                        + "Номинальная мощность [nominalPower]: 65 Вт");
+        assertThat(characteristics(AD_B)).as("одна строка обложки — это пусто, а не характеристика").isNull();
+    }
+
+    @Test
+    @DisplayName("Характеристики не входят в поиск и не трогают справочную применимость")
+    void characteristicsAreNotSearched() throws Exception {
+        Map<String, String> a = row(AD_A, "Магнитола Toyota");
+        a.put(OTHER, "Модель магнитолы [model]: ZQXRADIO-58");
+        int before = inTenant(() -> jdbc.queryForObject("SELECT count(*) FROM part_applicability", Integer.class));
+
+        load(file(List.of(a), Set.of(), null));
+
+        assertThat(characteristics(AD_A)).contains("ZQXRADIO");
+        assertThat(inTenant(() -> jdbc.queryForObject("SELECT count(*) FROM part_applicability", Integer.class)))
+                .isEqualTo(before);
+        JsonNode found = json.readTree(mvc.perform(get("/api/parts/search").param("q", "ZQXRADIO")
+                        .session(login()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8));
+        assertThat(found).as("поиск нашёл позицию по тексту характеристик").isEmpty();
+    }
+
+    @Test
+    @DisplayName("Файл без «Прочих полей», затем с ними: дозаполнены, отметка не двинулась; поправленные не затираются, расхождение названо")
+    void secondLoadFillsCharacteristicsAndKeepsEdits() throws Exception {
+        Map<String, String> a = row(AD_A, "Магнитола NHZT-W58");
+        a.put(OTHER, RADIO);
+        Map<String, String> b = row(AD_B, "Колеса Bridgestone Blizzak DM-Z3 265/65 R17");
+        b.put(OTHER, WHEELS_466);
+        List<Map<String, String>> rows = List.of(a, b);
+
+        load(file(rows, Set.of(OTHER), null));
+        assertThat(characteristics(AD_A)).isNull();
+        Map<String, Object> before = partRows();
+
+        JsonNode repeat = load(file(rows, Set.of(), null)).path("repeat");
+
+        assertThat(repeat.path("refilled").asInt()).as("%s", repeat).isEqualTo(2);
+        assertThat(repeat.path("fields").findValuesAsText("field")).containsExactly("Характеристики");
+        assertThat(characteristics(AD_A)).isEqualTo(RADIO);
+        assertThat(characteristics(AD_B)).isEqualTo(WHEELS_466);
+        assertThat(partRows()).as("повтор тронул саму позицию").isEqualTo(before);
+        assertThat(feedMarks()).as("дозаполнение характеристик двинуло отметку для площадки").isZero();
+
+        long part = partOf(AD_A);
+        ObjectNode form = editable(part);
+        form.put("characteristics", "Модель магнитолы [model]: Toyota NHZT-W59");
+        update(part, form);
+        JsonNode again = load(file(rows, Set.of(), null)).path("repeat");
+        assertThat(characteristics(AD_A)).isEqualTo("Модель магнитолы [model]: Toyota NHZT-W59");
+        assertThat(again.path("discrepancies").findValuesAsText("field")).containsExactly("Характеристики");
+    }
+
+    @Test
+    @DisplayName("Карточка: «Характеристики» видны, правятся тем же PUT, пустой ввод — NULL, форма без ключа их не стирает, отметка не двигается")
+    void cardShowsEditsAndClearsCharacteristics() throws Exception {
+        Map<String, String> a = row(AD_A, "Магнитола NHZT-W58");
+        a.put(OTHER, RADIO);
+        load(file(List.of(a), Set.of(), null));
+        long part = partOf(AD_A);
+
+        ObjectNode form = editable(part);
+        assertThat(form.path("characteristics").asText()).isEqualTo(RADIO);
+
+        String edited = RADIO + "\nЦвет подсветки: синий";
+        form.put("characteristics", edited);
+        update(part, form);
+        assertThat(characteristics(AD_A)).isEqualTo(edited);
+        assertThat(feedMarks()).as("правка одних характеристик двинула отметку").isZero();
+
+        ObjectNode stale = form.deepCopy();
+        stale.remove("characteristics");
+        stale.put("note", "с полки 3");
+        update(part, stale);
+        assertThat(characteristics(AD_A)).as("форма без ключа стёрла характеристики клиента").isEqualTo(edited);
+
+        form.put("characteristics", "");
+        update(part, form);
+        assertThat(characteristics(AD_A)).isNull();
+
+        JsonNode history = json.readTree(mvc.perform(get("/api/parts/" + part + "/history")
+                        .session(login()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8));
+        List<String> labels = new ArrayList<>();
+        history.path("changes").forEach(c -> c.path("fields").forEach(f -> labels.add(f.path("label").asText())));
+        assertThat(labels).contains("Характеристики");
+    }
+
+    private String characteristics(String ad) {
+        List<String> found = inTenant(() -> jdbc.query("""
+                SELECT c.characteristics
+                  FROM part p LEFT JOIN part_drom_card c ON c.part_id = p.id
+                 WHERE p.drom_ad_number = ?""",
+                (rs, i) -> rs.getString(1), ad));
+        assertThat(found).as("позиции № %s нет", ad).hasSize(1);
+        return found.get(0);
+    }
+
     // --- файлы ---
 
     private static byte[] sample() throws Exception {

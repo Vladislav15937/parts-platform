@@ -129,7 +129,13 @@ public final class ColumnMapping {
          * «Применимость» («Подходит») объявления дословно (задача 0287) — {@code part_drom_card.applicability}.
          * Текст блоками со « | », а не справочная {@code part_applicability}; без синонимов.
          */
-        APPLICABILITY(true);
+        APPLICABILITY(true),
+        /**
+         * «Прочие поля» объявления дословно (задача 0292) — {@code part_drom_card.characteristics},
+         * на карточке «Характеристики»: строки «Подпись [ключ]: значение» (модель магнитолы,
+         * размер DIN, каналы). Без синонимов, как описание.
+         */
+        CHARACTERISTICS(true);
 
         private final boolean imported;
         private final List<String> synonyms;

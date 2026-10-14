@@ -507,7 +507,8 @@ public class ExcelWarehouseImporter {
                         verbatim(mapping.value(row, Field.DELIVERY)),
                         verbatim(mapping.value(row, Field.DROM_KIND)),
                         verbatim(mapping.value(row, Field.DROM_SECTION)),
-                        verbatim(mapping.value(row, Field.APPLICABILITY))));
+                        verbatim(mapping.value(row, Field.APPLICABILITY)),
+                        characteristics(mapping.value(row, Field.CHARACTERISTICS))));
     }
 
     /**
@@ -645,12 +646,13 @@ public class ExcelWarehouseImporter {
             if (!row.terms().isEmpty()) {
                 jdbc.update("""
                         INSERT INTO part_drom_card (part_id, warranty, pickup, delivery_payment,
-                                                    drom_kind, drom_section, applicability)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                                                    drom_kind, drom_section, applicability,
+                                                    characteristics)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT (part_id) DO NOTHING""",
                         partId, row.terms().warranty(), row.terms().pickup(),
                         row.terms().delivery(), row.terms().kind(), row.terms().section(),
-                        row.terms().applicability());
+                        row.terms().applicability(), row.terms().characteristics());
                 layApplicability(partId, row.terms().applicability(), report);
             }
 
@@ -734,7 +736,7 @@ public class ExcelWarehouseImporter {
                        p.note, p.description, p.condition, p.manufacturer, p.authenticity,
                        p.side_lr, p.side_fr, p.side_ud,
                        d.warranty, d.pickup, d.delivery_payment, d.drom_kind, d.drom_section,
-                       d.applicability
+                       d.applicability, d.characteristics
                   FROM part p
                   LEFT JOIN storage_cell c ON c.id = p.storage_cell_id
                   LEFT JOIN part_drom_card d ON d.part_id = p.id
@@ -791,7 +793,10 @@ public class ExcelWarehouseImporter {
             new Term(Field.DROM_KIND, "drom_kind", "Вид детали", Terms::kind),
             new Term(Field.DROM_SECTION, "drom_section", "Раздел", Terms::section),
             // Применимость текстом (задача 0287): блоками как у клиента, не part_applicability.
-            new Term(Field.APPLICABILITY, "applicability", "Применимость", Terms::applicability));
+            new Term(Field.APPLICABILITY, "applicability", "Применимость", Terms::applicability),
+            // «Прочие поля» Дрома дословно (задача 0292): характеристики не-запчастей.
+            new Term(Field.CHARACTERISTICS, "characteristics", "Характеристики",
+                    Terms::characteristics));
 
     /**
      * Что повтор дозаполняет — поле и его имя в отчёте, в порядке отчёта.
@@ -863,7 +868,8 @@ public class ExcelWarehouseImporter {
                 case OEM -> changed |= refillPrimaryOem(row, partId, label, report);
                 case OEM_SUBSTITUTES -> changed |= refillSubstitutes(row, partId, label, report);
                 case PHOTOS -> changed |= refillPhotos(row, partId, label, report);
-                case WARRANTY, PICKUP, DELIVERY, DROM_KIND, DROM_SECTION, APPLICABILITY ->
+                case WARRANTY, PICKUP, DELIVERY, DROM_KIND, DROM_SECTION, APPLICABILITY,
+                     CHARACTERISTICS ->
                         termsFilled |= refillTerm(termOf(field), row, part, partId, report);
                 default -> changed |= refillScalar(scalarOf(field), row, part, partId, report);
             }
@@ -1263,6 +1269,26 @@ public class ExcelWarehouseImporter {
         return value == null || value.isBlank() ? null : value;
     }
 
+    /** Строка, которую парсер до задачи 0273 писал в «Прочие поля» про обложку выдачи. */
+    static final String COVER_LINE = "Обложка в выдаче Дрома (isMain):";
+
+    /**
+     * «Прочие поля» объявления (задача 0292): дословно, как {@link #verbatim}, но без
+     * служебной строки парсера про обложку ({@link #COVER_LINE}). Она — пометка парсера,
+     * а не характеристика объявления (порядок снимков решает колонка «Фото», 0273), и в
+     * уже собранных файлах может остаться. Остальные строки не трогаются ни на знак;
+     * нет служебной строки — ячейка возвращается как есть.
+     */
+    static String characteristics(String cell) {
+        String value = verbatim(cell);
+        if (value == null || !value.contains(COVER_LINE)) {
+            return value;
+        }
+        return verbatim(java.util.Arrays.stream(value.split("\n", -1))
+                .filter(line -> !line.strip().startsWith(COVER_LINE))
+                .collect(java.util.stream.Collectors.joining("\n")));
+    }
+
     /**
      * @param quantityFromFile {@code false} — количества в файле не было,
      *                         и одна штука подставлена: сверять её с остатком
@@ -1278,11 +1304,13 @@ public class ExcelWarehouseImporter {
      * доставка и оплата. Дословно — без чистки и без сопоставления со справочником.
      */
     private record Terms(String warranty, String pickup, String delivery,
-                         String kind, String section, String applicability) {
+                         String kind, String section, String applicability,
+                         String characteristics) {
 
         boolean isEmpty() {
             return warranty == null && pickup == null && delivery == null
-                    && kind == null && section == null && applicability == null;
+                    && kind == null && section == null && applicability == null
+                    && characteristics == null;
         }
     }
 

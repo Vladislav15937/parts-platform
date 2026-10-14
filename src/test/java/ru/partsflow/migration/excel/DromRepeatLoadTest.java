@@ -91,6 +91,8 @@ class DromRepeatLoadTest extends PostgresTestBase {
             Map.entry(Field.DROM_SECTION, new Facet("Раздел", "drom_section")),
             // Применимость текстом (задача 0287) — туда же.
             Map.entry(Field.APPLICABILITY, new Facet("Применимость", "applicability")),
+            // «Прочие поля» — «Характеристики» дословно (задача 0292) — туда же.
+            Map.entry(Field.CHARACTERISTICS, new Facet("Прочие поля", "characteristics")),
             Map.entry(Field.MANUFACTURER, new Facet("Производитель", "manufacturer")),
             Map.entry(Field.AUTHENTICITY, new Facet("Оригинальность", "authenticity")),
             Map.entry(Field.SIDE_LR, new Facet("Сторона", "side_lr")),
@@ -582,7 +584,7 @@ class DromRepeatLoadTest extends PostgresTestBase {
             return null;
         });
         load(file(rows, Set.of("Гарантия", "Самовывоз", "Доставка и оплата",
-                "Вид детали", "Раздел", "Применимость"), null));
+                "Вид детали", "Раздел", "Применимость", "Прочие поля"), null));
 
         List<JsonNode> reports = concurrently(6, full);
 
@@ -603,9 +605,9 @@ class DromRepeatLoadTest extends PostgresTestBase {
                 .as("блок насчитан дозаполненным не один раз на позицию")
                 .isEqualTo(Map.of("Гарантия и условия возврата", 20, "Самовывоз", 20,
                         "Доставка и оплата", 20, "Вид детали", 20, "Раздел", 20,
-                        "Применимость", 20));
-        // Позицию могут разделить победители разных блоков (их шесть), поэтому не ровно 20.
-        assertThat(refilled).isBetween(20, 120);
+                        "Применимость", 20, "Характеристики", 20));
+        // Позицию могут разделить победители разных блоков (их семь), поэтому не ровно 20.
+        assertThat(refilled).isBetween(20, 140);
         assertThat(contentByAd()).as("итог шести повторов не тот, что у одной загрузки")
                 .isEqualTo(reference);
     }
@@ -707,6 +709,7 @@ class DromRepeatLoadTest extends PostgresTestBase {
         row.put("Вид детали", "Фара левая Toyota Camry");
         row.put("Раздел", "Автозапчасти → Электрооборудование → Фары");
         row.put("Применимость", "Toyota Camry | 7 поколение (2017–2024) | XV70\nДля двигателей | 2AR-FE");
+        row.put("Прочие поля", "Модель магнитолы [model]: Toyota NHZT-W58\nРазмер [size]: 2 DIN — 178x100 мм");
         row.put("Гарантия", "Обговаривается индивидуально");
         row.put("Самовывоз", "Самовывоз — улица Георгия Исакова 9");
         row.put("Доставка и оплата", "Доставка по городу — 300 р.\n\nОплата при получении");
@@ -733,6 +736,7 @@ class DromRepeatLoadTest extends PostgresTestBase {
         row.put("Вид детали", "Бампер задний Toyota Camry");
         row.put("Раздел", "Автозапчасти → Кузов → Бампера");
         row.put("Применимость", "Toyota Camry | Другие кузова | ACV40");
+        row.put("Прочие поля", "Бренд [model]: Zapco\nКоличество каналов [channel]: 4-канальный");
         row.put("Гарантия", "Гарантия 14 дней");
         row.put("Самовывоз", "Самовывоз — склад на Ленина 5");
         row.put("Доставка и оплата", "Доставка ТК — по тарифу\nОплата картой");
@@ -844,7 +848,7 @@ class DromRepeatLoadTest extends PostgresTestBase {
                          ORDER BY id""", String.class, id));
                 // Блоки карточки Дрома: нет строки — все NULL (задача 0285).
                 for (String block : List.of("warranty", "pickup", "delivery_payment",
-                        "drom_kind", "drom_section", "applicability")) {
+                        "drom_kind", "drom_section", "applicability", "characteristics")) {
                     List<String> value = jdbc.queryForList(
                             "SELECT " + block + " FROM part_drom_card WHERE part_id = ?",
                             String.class, id);

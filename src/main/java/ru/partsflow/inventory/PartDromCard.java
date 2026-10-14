@@ -7,7 +7,8 @@ import jakarta.persistence.Table;
 
 /**
  * Блоки карточки объявления Дрома: гарантия, самовывоз, доставка и оплата
- * (задача 0285), вид детали и раздел как у клиента (задача 0286).
+ * (задача 0285), вид детали и раздел как у клиента (задача 0286), «Подходит»
+ * (задача 0287), «Характеристики» (задача 0292).
  *
  * <p><b>Отдельной сущностью, а не полями {@link Part}.</b> Тексты длинные
  * (доставка — около тысячи знаков на каждой позиции), а {@code Part} читают
@@ -56,6 +57,14 @@ public class PartDromCard {
     @Column(name = "applicability")
     private String applicability;
 
+    /**
+     * «Характеристики» объявления Дрома («Прочие поля» файла переноса, задача 0292):
+     * строки «Подпись [ключ]: значение» — модель магнитолы, размер DIN, каналы,
+     * мощность — как пришли. Набор зависит от рубрики Дрома, полей под него нет.
+     */
+    @Column(name = "characteristics")
+    private String characteristics;
+
     protected PartDromCard() {
     }
 
@@ -100,13 +109,19 @@ public class PartDromCard {
         return applicability;
     }
 
+    public String getCharacteristics() {
+        return characteristics;
+    }
+
     public void set(String warranty, String pickup, String deliveryPayment,
-                    String dromKind, String dromSection, String applicability) {
+                    String dromKind, String dromSection, String applicability,
+                    String characteristics) {
         this.warranty = clean(warranty);
         this.pickup = clean(pickup);
         this.deliveryPayment = clean(deliveryPayment);
         this.dromKind = clean(dromKind);
         this.dromSection = clean(dromSection);
         this.applicability = clean(applicability);
+        this.characteristics = clean(characteristics);
     }
 }

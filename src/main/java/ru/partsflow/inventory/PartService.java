@@ -398,13 +398,16 @@ public class PartService {
         String section = termOf(update.dromSection(), card == null ? null : card.getDromSection());
         String applicability = termOf(update.applicability(),
                 card == null ? null : card.getApplicability());
+        String characteristics = termOf(update.characteristics(),
+                card == null ? null : card.getCharacteristics());
         if (card == null) {
             if (warranty == null && pickup == null && delivery == null
-                    && kind == null && section == null && applicability == null) {
+                    && kind == null && section == null && applicability == null
+                    && characteristics == null) {
                 return false;
             }
             card = new PartDromCard(partId);
-            card.set(warranty, pickup, delivery, kind, section, applicability);
+            card.set(warranty, pickup, delivery, kind, section, applicability, characteristics);
             entityManager.persist(card);
             return true;
         }
@@ -413,10 +416,11 @@ public class PartService {
                 && java.util.Objects.equals(card.getDeliveryPayment(), delivery)
                 && java.util.Objects.equals(card.getDromKind(), kind)
                 && java.util.Objects.equals(card.getDromSection(), section)
-                && java.util.Objects.equals(card.getApplicability(), applicability)) {
+                && java.util.Objects.equals(card.getApplicability(), applicability)
+                && java.util.Objects.equals(card.getCharacteristics(), characteristics)) {
             return false;
         }
-        card.set(warranty, pickup, delivery, kind, section, applicability);
+        card.set(warranty, pickup, delivery, kind, section, applicability, characteristics);
         return true;
     }
 
@@ -969,6 +973,8 @@ public class PartService {
                              String dromSection,
                              // «Применимость» («Подходит») дословно (задача 0287): так же.
                              String applicability,
+                             // «Характеристики» («Прочие поля» Дрома) дословно (задача 0292): так же.
+                             String characteristics,
                              // Что сделать с ценой: заменить (умолчание), подвинуть
                              // процентом или суммой, округлить. При арифметике
                              // price — значение операции, а не новая цена.
