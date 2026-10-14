@@ -96,8 +96,18 @@ public class CatalogService {
      * считается ещё и сокращением трёхзначного («Prado 12» — это 120-й).
      * Ни один кузов не того ряда — {@code body_conflict}, и поколение пусто.
      * Кузовов в примечании нет вовсе — сверять не с чем, правило 0290
-     * как было ({@code body_fits} остаётся пустым, и {@code bool_or} его
-     * пропускает).
+     * как было.
+     *
+     * <p><b>Запись — три шага, вложенных снизу вверх, и это ради цены,
+     * а не порядка.</b> Шаг 1 — своя машина ({@code DISTINCT ON}
+     * по применимости, 0290); шаг 2 — номер кузова из наименования; шаг 3 —
+     * сверка его с кузовами. Шаги 2 и 3 идут один раз на позицию над уже
+     * выбранной машиной: то же выражение на каждой строке применимости
+     * удваивало проход по складу (228 → 431 мс в базе на 35 841 позиции,
+     * замер в PR задачи 0294), а над выбранной стоит около 40 мс. Следующие
+     * правки своей машины (поколение по коду кузова, рестайлинг) ложатся
+     * сюда же — колонкой шага 2–3 или своим шагом сверху, а не выражением
+     * на строку шага 1.
      *
      * <p><b>Донор побеждает:</b> позиции с донором в подзапрос не входят
      * ({@code op.donor_id IS NULL}), и колонки берут его машину, как до задачи.
@@ -108,6 +118,27 @@ public class CatalogService {
     private static final String OWN_VEHICLE_OF = """
 
               LEFT JOIN %s(
+                -- Шаг 3 (0294): номер кузова из наименования против кузовов
+                -- поколения своей машины. Кузовов нет или номера нет — пусто.
+                SELECT n.*,
+                       coalesce(n.bodies !~ ('(^|, )[^,0-9]*('
+                                             || left(n.title_body, -1) || '|' || n.title_body
+                                             || ')[0-9]([^0-9]|$)'), false) AS body_conflict
+                  FROM (
+                -- Шаг 2 (0294): номер кузова сразу после модели. «Prado 120» → 120;
+                -- «RX350», «Prado120», «Prado 120/150» → пусто. Проверка
+                -- сопоставлением, а цифры — строковыми функциями: substring
+                -- с группой захвата стоил в Postgres вдесятеро дороже
+                -- (62 мс против 5 на 9 417 позициях, замер в PR задачи 0294).
+                SELECT o.*,
+                       CASE WHEN o.after_model ~ '^ +[0-9]{2,3}([^[:alnum:]/]|$)'
+                            THEN left(ltrim(o.after_model),
+                                      CASE WHEN strpos('0123456789',
+                                                       substr(ltrim(o.after_model), 3, 1)) > 0
+                                           THEN 3 ELSE 2 END)
+                       END AS title_body
+                  FROM (
+                -- Шаг 1 (0290): своя машина — строки применимости, названные в наименовании.
                   SELECT DISTINCT ON (x.part_id) x.part_id, x.brand, x.model,
                          count(DISTINCT (x.generation_id, x.year_from, x.year_to))
                              FILTER (WHERE x.model IS NOT NULL
@@ -116,31 +147,18 @@ public class CatalogService {
                          max(x.generation) FILTER (WHERE x.model IS NOT NULL) AS generation,
                          max(x.year_from) FILTER (WHERE x.model IS NOT NULL) AS year_from,
                          max(x.year_to) FILTER (WHERE x.model IS NOT NULL) AS year_to,
-                         -- 0294: номер кузова из наименования против кузовов
-                         -- строки поколения. Пусто у body_fits — сверять не с чем.
-                         max(x.title_body) FILTER (WHERE x.model IS NOT NULL) AS title_body,
-                         NOT coalesce(bool_or(x.bodies ~ ('(^|, )[^,0-9]*('
-                                                  || left(x.title_body, -1) || '|' || x.title_body
-                                                  || ')[0-9](?![0-9])'))
-                                          FILTER (WHERE x.model IS NOT NULL
-                                                    AND (x.generation_id IS NOT NULL
-                                                         OR x.year_from IS NOT NULL)),
-                                      true) AS body_conflict,
+                         -- Кузова строк поколения своей машины («GRJ150W, GRJ151W»), 0294.
                          string_agg(x.bodies, ', ')
                              FILTER (WHERE x.model IS NOT NULL
                                        AND (x.generation_id IS NOT NULL
                                             OR x.year_from IS NOT NULL)) AS bodies,
+                         -- Наименование после своей модели — для шага 2.
+                         substr(max(x.title), min(x.model_at) FILTER (WHERE x.model IS NOT NULL)
+                                              + length(x.model)) AS after_model,
                          bool_or(x.is_verified) AS verified
-                    FROM (SELECT a.part_id, ab.name AS brand,
+                    FROM (SELECT a.part_id, ab.name AS brand, op.title,
                                  CASE WHEN strpos(lower(op.title), lower(am.name)) > 0
                                       THEN am.name END AS model,
-                                 -- «Prado 120» → 120; «RX350», «Prado 120/150» → пусто.
-                                 CASE WHEN strpos(lower(op.title), lower(am.name)) > 0
-                                      THEN substring(substr(op.title, strpos(lower(op.title),
-                                                                             lower(am.name))
-                                                                      + length(am.name))
-                                                     FROM '^\\s+([0-9]{2,3})(?![[:alnum:]/])')
-                                 END AS title_body,
                                  CASE WHEN starts_with(a.note, 'Кузова: ')
                                       THEN substr(a.note, 9) END AS bodies,
                                  strpos(lower(op.title), lower(ab.name)) AS brand_at,
@@ -158,7 +176,8 @@ public class CatalogService {
                    GROUP BY x.part_id, x.brand, x.model
                    ORDER BY x.part_id, min(x.brand_at), x.model IS NULL,
                             min(x.model_at) FILTER (WHERE x.model IS NOT NULL),
-                            length(x.model) DESC) own ON own.part_id = p.id""";
+                            length(x.model) DESC
+                          ) o) n) own ON own.part_id = p.id""";
 
     /** Своя машина каждой позиции склада — для отбора, сортировки, счёта и файла. */
     static final String OWN_VEHICLE = OWN_VEHICLE_OF.formatted("", "");
