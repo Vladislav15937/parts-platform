@@ -83,6 +83,32 @@ public class CatalogService {
      * — правда. При одном поколении блок совпадает с наименованием в 975
      * случаях из 981 (замер по файлу клиента: «Prado 120» → «3 поколение»).
      *
+     * <p><b>И одно поколение — только если его кузова того же ряда, что номер
+     * в наименовании</b> (задача 0294). Шесть из 981 не совпали, и это не шум:
+     * Дром складывает ряды одной модели в один блок, и «Втулка … Prado 120»
+     * с единственным поколением 2009 года (кузова GRJ150) показала бы чужое
+     * поколение как факт. Поэтому, если сразу после модели в наименовании
+     * стоит отдельный номер из двух-трёх цифр ({@code title_body}: «Prado 120»,
+     * но не «RX350» — там число и есть модель, и не «120/150» — это не один
+     * кузов), он сверяется с кузовами из примечания строки поколения
+     * («Кузова: GRJ150W, …», пишет разбор блока, 0289). Ряд — номер без
+     * последней цифры: 120 и 121 — ряд «12», 95 и 90 — «9»; двузначный номер
+     * считается ещё и сокращением трёхзначного («Prado 12» — это 120-й).
+     * Ни один кузов не того ряда — {@code body_conflict}, и поколение пусто.
+     * Кузовов в примечании нет вовсе — сверять не с чем, правило 0290
+     * как было.
+     *
+     * <p><b>Запись — три шага, вложенных снизу вверх, и это ради цены,
+     * а не порядка.</b> Шаг 1 — своя машина ({@code DISTINCT ON}
+     * по применимости, 0290); шаг 2 — номер кузова из наименования; шаг 3 —
+     * сверка его с кузовами. Шаги 2 и 3 идут один раз на позицию над уже
+     * выбранной машиной: то же выражение на каждой строке применимости
+     * удваивало проход по складу (228 → 431 мс в базе на 35 841 позиции,
+     * замер в PR задачи 0294), а над выбранной стоит около 40 мс. Следующие
+     * правки своей машины (поколение по коду кузова, рестайлинг) ложатся
+     * сюда же — колонкой шага 2–3 или своим шагом сверху, а не выражением
+     * на строку шага 1.
+     *
      * <p><b>Донор побеждает:</b> позиции с донором в подзапрос не входят
      * ({@code op.donor_id IS NULL}), и колонки берут его машину, как до задачи.
      *
@@ -92,6 +118,27 @@ public class CatalogService {
     private static final String OWN_VEHICLE_OF = """
 
               LEFT JOIN %s(
+                -- Шаг 3 (0294): номер кузова из наименования против кузовов
+                -- поколения своей машины. Кузовов нет или номера нет — пусто.
+                SELECT n.*,
+                       coalesce(n.bodies !~ ('(^|, )[^,0-9]*('
+                                             || left(n.title_body, -1) || '|' || n.title_body
+                                             || ')[0-9]([^0-9]|$)'), false) AS body_conflict
+                  FROM (
+                -- Шаг 2 (0294): номер кузова сразу после модели. «Prado 120» → 120;
+                -- «RX350», «Prado120», «Prado 120/150» → пусто. Проверка
+                -- сопоставлением, а цифры — строковыми функциями: substring
+                -- с группой захвата стоил в Postgres вдесятеро дороже
+                -- (62 мс против 5 на 9 417 позициях, замер в PR задачи 0294).
+                SELECT o.*,
+                       CASE WHEN o.after_model ~ '^ +[0-9]{2,3}([^[:alnum:]/]|$)'
+                            THEN left(ltrim(o.after_model),
+                                      CASE WHEN strpos('0123456789',
+                                                       substr(ltrim(o.after_model), 3, 1)) > 0
+                                           THEN 3 ELSE 2 END)
+                       END AS title_body
+                  FROM (
+                -- Шаг 1 (0290): своя машина — строки применимости, названные в наименовании.
                   SELECT DISTINCT ON (x.part_id) x.part_id, x.brand, x.model,
                          count(DISTINCT (x.generation_id, x.year_from, x.year_to))
                              FILTER (WHERE x.model IS NOT NULL
@@ -100,10 +147,20 @@ public class CatalogService {
                          max(x.generation) FILTER (WHERE x.model IS NOT NULL) AS generation,
                          max(x.year_from) FILTER (WHERE x.model IS NOT NULL) AS year_from,
                          max(x.year_to) FILTER (WHERE x.model IS NOT NULL) AS year_to,
+                         -- Кузова строк поколения своей машины («GRJ150W, GRJ151W»), 0294.
+                         string_agg(x.bodies, ', ')
+                             FILTER (WHERE x.model IS NOT NULL
+                                       AND (x.generation_id IS NOT NULL
+                                            OR x.year_from IS NOT NULL)) AS bodies,
+                         -- Наименование после своей модели — для шага 2.
+                         substr(max(x.title), min(x.model_at) FILTER (WHERE x.model IS NOT NULL)
+                                              + length(x.model)) AS after_model,
                          bool_or(x.is_verified) AS verified
-                    FROM (SELECT a.part_id, ab.name AS brand,
+                    FROM (SELECT a.part_id, ab.name AS brand, op.title,
                                  CASE WHEN strpos(lower(op.title), lower(am.name)) > 0
                                       THEN am.name END AS model,
+                                 CASE WHEN starts_with(a.note, 'Кузова: ')
+                                      THEN substr(a.note, 9) END AS bodies,
                                  strpos(lower(op.title), lower(ab.name)) AS brand_at,
                                  strpos(lower(op.title), lower(am.name)) AS model_at,
                                  a.generation_id, ag.name AS generation,
@@ -119,7 +176,8 @@ public class CatalogService {
                    GROUP BY x.part_id, x.brand, x.model
                    ORDER BY x.part_id, min(x.brand_at), x.model IS NULL,
                             min(x.model_at) FILTER (WHERE x.model IS NOT NULL),
-                            length(x.model) DESC) own ON own.part_id = p.id""";
+                            length(x.model) DESC
+                          ) o) n) own ON own.part_id = p.id""";
 
     /** Своя машина каждой позиции склада — для отбора, сортировки, счёта и файла. */
     static final String OWN_VEHICLE = OWN_VEHICLE_OF.formatted("", "");
@@ -143,12 +201,18 @@ public class CatalogService {
      */
     static final String VEHICLE_BRAND = "coalesce(b.name, own.brand)";
     static final String VEHICLE_MODEL = "coalesce(m.name, own.model)";
+    /**
+     * Когда поколение своей машины показывается: оно одно (0290) и его кузова
+     * не спорят с номером кузова в наименовании (0294). Одно условие на три
+     * колонки — иначе поколение и годы разошлись бы на первой правке.
+     */
+    private static final String OWN_GENERATION_SHOWN = "own.spans = 1 AND NOT own.body_conflict";
     static final String VEHICLE_GENERATION =
-            "coalesce(g.name, CASE WHEN own.spans = 1 THEN own.generation END)";
+            "coalesce(g.name, CASE WHEN " + OWN_GENERATION_SHOWN + " THEN own.generation END)";
     static final String VEHICLE_YEAR_FROM =
-            "coalesce(g.year_from, CASE WHEN own.spans = 1 THEN own.year_from END)";
+            "coalesce(g.year_from, CASE WHEN " + OWN_GENERATION_SHOWN + " THEN own.year_from END)";
     static final String VEHICLE_YEAR_TO =
-            "coalesce(g.year_to, CASE WHEN own.spans = 1 THEN own.year_to END)";
+            "coalesce(g.year_to, CASE WHEN " + OWN_GENERATION_SHOWN + " THEN own.year_to END)";
 
     /**
      * Откуда машина в колонках — для подсказки клетки: машинный разбор
@@ -996,7 +1060,11 @@ public class CatalogService {
                        + VEHICLE_GENERATION + " AS generation, "
                        + VEHICLE_YEAR_FROM + " AS year_from, "
                        + VEHICLE_YEAR_TO + " AS year_to, "
-                       + VEHICLE_SOURCE + " AS vehicle_source, own.spans::int AS vehicle_spans," + """
+                       + VEHICLE_SOURCE + " AS vehicle_source, own.spans::int AS vehicle_spans,"
+                       + " CASE WHEN own.spans = 1 AND own.body_conflict THEN own.title_body END"
+                       + " AS vehicle_title_body,"
+                       + " CASE WHEN own.spans = 1 AND own.body_conflict THEN own.bodies END"
+                       + " AS vehicle_block_bodies," + """
                        d.body_code, d.engine_code,
                        d.year, d.public_code AS donor_code, d.legacy_code AS donor_legacy,
                        p.price, p.installation_price, p.color, p.description, p.note,
@@ -1100,6 +1168,8 @@ public class CatalogService {
                         rs.getInt("photo_count"),
                         rs.getString("vehicle_source"),
                         (Integer) rs.getObject("vehicle_spans"),
+                        rs.getString("vehicle_title_body"),
+                        bodyNumbers(rs.getString("vehicle_block_bodies")),
                         Map.of()),
                 pageArgs.toArray());
 
@@ -1126,6 +1196,29 @@ public class CatalogService {
             throws java.sql.SQLException {
         java.sql.Timestamp value = rs.getTimestamp(column);
         return value == null ? null : value.toInstant();
+    }
+
+    private static final java.util.regex.Pattern BODY_NUMBER =
+            java.util.regex.Pattern.compile("(?<![0-9])[0-9]{2,3}(?![0-9])");
+
+    /**
+     * Номера кузовов блока для подсказки клетки (задача 0294): «GRJ150W,
+     * GRJ151W, KDJ150» → «150, 151». Человек сверяет их с номером
+     * в наименовании, а не коды целиком — двадцать кодов одного ряда
+     * в подсказке не прочесть.
+     */
+    static String bodyNumbers(String bodies) {
+        if (bodies == null) {
+            return null;
+        }
+        var numbers = new java.util.TreeSet<Integer>();
+        BODY_NUMBER.matcher(bodies).results()
+                .forEach(found -> numbers.add(Integer.parseInt(found.group())));
+        if (numbers.isEmpty()) {
+            return null;
+        }
+        return numbers.stream().map(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(", "));
     }
 
     private static String dimensions(Integer length, Integer width, Integer height) {
@@ -1469,6 +1562,14 @@ public class CatalogService {
                        * у детали, неизвестно.
                        */
                       Integer vehicleSpans,
+                      /**
+                       * Номер кузова из наименования («120»), когда поколение
+                       * не показано потому, что кузова блока другого ряда
+                       * (задача 0294); иначе пусто.
+                       */
+                      String vehicleTitleBody,
+                      /** Номера кузовов того поколения блока («150, 151») — к той же подсказке. */
+                      String vehicleBlockBodies,
                       Map<Long, BigDecimal> stock) {
 
         Row withStock(Map<Long, BigDecimal> found) {
@@ -1482,7 +1583,7 @@ public class CatalogService {
                     videoUrl, textBlock, weightKg, dimensions, packageDimensions,
                     packageWeightKg, createdAt, updatedAt, updatedByName,
                     priceChangedAt, priceChangedByName, photoCount, vehicleSource,
-                    vehicleSpans, found);
+                    vehicleSpans, vehicleTitleBody, vehicleBlockBodies, found);
         }
     }
 }

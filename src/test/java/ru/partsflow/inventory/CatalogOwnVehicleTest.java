@@ -145,6 +145,146 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
         assertThat(row.path("vehicleSpans").asInt()).isEqualTo(2);
     }
 
+    // --- задача 0294: номер кузова в наименовании против кузовов блока ---
+
+    /**
+     * «Втулка амортизатора … Prado 120» (строка 924 файла клиента): блок
+     * «Подходит» назвал у Prado одно поколение — 2009 года, кузова 150-го
+     * ряда. Правило 0290 «одно в блоке — значит своё» показало бы его
+     * в колонке как факт; деталь же от 120-го.
+     */
+    @Test
+    @DisplayName("«Prado 120», а блок назвал одно поколение кузовов 150 — поколение пусто, причина названа")
+    void titleBodyDisagreesWithTheOnlyGeneration() throws Exception {
+        long part = part("Втулка амортизатора зад (TEMS)Toyota Land Cruiser Prado 120");
+        row(part, prado, generation(prado, 2009), false,
+                "Кузова: GRJ150W, GRJ150L, KDJ150L, KDJ150, GRJ150, GRJ151W");
+        row(part, prado, null, false, null);
+
+        JsonNode row = only(page(""));
+        assertThat(row.path("model").asText()).isEqualTo("Land Cruiser Prado");
+        assertThat(row.path("vehicleSpans").asInt()).isEqualTo(1);
+        assertThat(row.path("generation").isNull())
+                .as("поколение 150-го ряда у детали от 120-го — чужое").isTrue();
+        assertThat(row.path("yearFrom").isNull()).isTrue();
+        assertThat(row.path("yearTo").isNull()).isTrue();
+        assertThat(row.path("vehicleTitleBody").asText()).isEqualTo("120");
+        assertThat(row.path("vehicleBlockBodies").asText()).isEqualTo("150, 151");
+
+        // Все поверхности — одно выражение: отбор, список значений, файл.
+        String shown = inTenant(() -> jdbc.queryForObject(
+                "SELECT name FROM catalog.generation WHERE id = ?", String.class,
+                generation(prado, 2009)));
+        assertThat(titles(page("&filter=generation:" + shown))).isEmpty();
+        assertThat(values("generation")).doesNotContain(shown);
+        assertThat(export()).contains("\"Toyota\";\"Land Cruiser Prado\";\"\";\"\"")
+                .doesNotContain("2009");
+    }
+
+    @Test
+    @DisplayName("«Prado 200», а блок назвал одно поколение кузовов 250 — поколение пусто")
+    void prado200IsNot250() throws Exception {
+        long part = part("Направляющая суппорта переднего Toyota Land Cruiser Prado 200");
+        row(part, prado, generation(prado, 2023), false, "Кузова: TJA250, GDJ250, TRJ250");
+
+        JsonNode row = only(page(""));
+        assertThat(row.path("generation").isNull()).isTrue();
+        assertThat(row.path("yearFrom").isNull()).isTrue();
+        assertThat(row.path("vehicleTitleBody").asText()).isEqualTo("200");
+        assertThat(row.path("vehicleBlockBodies").asText()).isEqualTo("250");
+    }
+
+    /**
+     * Положительный контроль (строки 354, 1521, 1564 файла): «Prado 120»,
+     * поколение 2002 с кузовами 121 — тот же ряд «12». Правило не должно
+     * потерять верное.
+     */
+    @Test
+    @DisplayName("«Prado 120» и кузова 121 того же ряда — поколение показано, как было")
+    void sameSeriesKeepsTheGeneration() throws Exception {
+        long part = part("Мотор печки Toyota Land Cruiser Prado 120");
+        row(part, prado, generation(prado, 2002), false, "Кузова: GRJ121W, VZJ121W, KDJ121W");
+
+        JsonNode row = only(page(""));
+        assertThat(row.path("yearFrom").asInt()).isEqualTo(2002);
+        assertThat(row.path("generation").isNull()).isFalse();
+        assertThat(row.path("vehicleTitleBody").isNull()).isTrue();
+        assertThat(row.path("vehicleBlockBodies").isNull()).isTrue();
+        assertThat(titles(page("&filter=generation:" + row.path("generation").asText())))
+                .containsExactly("Мотор печки Toyota Land Cruiser Prado 120");
+    }
+
+    /**
+     * «Накладка кнопки стеклоподъемника … Prado 12» (строка 1675 файла):
+     * клиент сократил 120 до «12». Ряд по правилу «число без последней
+     * цифры» был бы «1» и не совпал бы с кузовами 120 — правило потеряло бы
+     * верное поколение. Сокращение — тот же ряд.
+     */
+    @Test
+    @DisplayName("«Prado 12» — сокращение 120-го ряда: кузова 120 его, кузова 150 нет")
+    void twoDigitShorthandIsTheSeries() throws Exception {
+        long own = part("Накладка кнопки стеклоподъемника заднее R Toyota Land Cruiser Prado 12");
+        row(own, prado, generation(prado, 2002), false, "Кузова: GRJ120W, KDJ121W");
+        long alien = part("Молдинг двери Toyota Land Cruiser Prado 12");
+        row(alien, prado, generation(prado, 2009), false, "Кузова: GRJ150W");
+
+        JsonNode page = page("&sort=number");
+        assertThat(page.path("rows").get(0).path("yearFrom").asInt()).isEqualTo(2002);
+        assertThat(page.path("rows").get(1).path("yearFrom").isNull()).isTrue();
+    }
+
+    @Test
+    @DisplayName("«Lexus RX350» — число вплотную к модели и есть модель: правило не применяется")
+    void numberGluedToTheModelIsTheModel() throws Exception {
+        long lexus = brand("Lexus");
+        long rx = model(lexus, "RX350");
+        long generation = firstGeneration(rx);
+        long part = part("Фара левая Lexus RX350");
+        inTenant(() -> jdbc.update("""
+                INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id,
+                                                is_verified, note)
+                VALUES (?, ?, ?, ?, false, 'Кузова: GGL15W, GGL10W')""",
+                part, lexus, rx, generation));
+
+        JsonNode row = only(page(""));
+        assertThat(row.path("model").asText()).isEqualTo("RX350");
+        assertThat(row.path("generation").isNull())
+                .as("у «RX350» нет номера кузова после модели — сверять не с чем").isFalse();
+        assertThat(row.path("vehicleTitleBody").isNull()).isTrue();
+
+        // В справочнике «RX350» — целая модель, и до числа дело не доходит.
+        // Вплотную к модели, у которой в справочнике номера нет, число тоже
+        // не отдельный токен: правило 0294 его не читает.
+        long glued = part("Фара правая Toyota Land Cruiser Prado150");
+        row(glued, prado, generation(prado, 2009), false, "Кузова: GRJ150W");
+        long gluedOther = part("Фара левая Toyota Land Cruiser Prado120");
+        row(gluedOther, prado, generation(prado, 2009), false, "Кузова: GRJ150W");
+        JsonNode pradoRows = page("&filter=model:Land Cruiser Prado").path("rows");
+        assertThat(pradoRows).hasSize(2);
+        for (JsonNode found : pradoRows) {
+            assertThat(found.path("yearFrom").asInt()).as(found.path("title").asText())
+                    .isEqualTo(2009);
+        }
+    }
+
+    @Test
+    @DisplayName("Номер кузова в наименовании, но блок кузовов не назвал — прежнее правило 0290")
+    void noBodiesInTheBlockKeepsTheOldRule() throws Exception {
+        long part = part("Рейлинг на крышу Toyota Land Cruiser Prado 150");
+        row(part, prado, generation(prado, 2009), false, null);
+
+        assertThat(only(page("")).path("yearFrom").asInt()).isEqualTo(2009);
+    }
+
+    @Test
+    @DisplayName("Номер через косую («Prado 120/150») — не один кузов: правило не применяется")
+    void slashListIsNotOneBody() throws Exception {
+        long part = part("Датчик ABS передний левый Toyota Land Cruiser Prado 120/150");
+        row(part, prado, generation(prado, 2009), false, "Кузова: GRJ150W, GRJ151W");
+
+        assertThat(only(page("")).path("yearFrom").asInt()).isEqualTo(2009);
+    }
+
     @Test
     @DisplayName("Марка в наименовании есть, модели нет — показана одна марка, без чужой модели")
     void brandWithoutModelInTitle() throws Exception {
@@ -430,9 +570,15 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
     }
 
     private void row(long part, long model, Long generation, boolean verified) {
+        row(part, model, generation, verified, null);
+    }
+
+    /** Строка применимости с примечанием кузовов — как её пишет разбор блока (0289). */
+    private void row(long part, long model, Long generation, boolean verified, String note) {
         inTenant(() -> jdbc.update("""
-                INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id, is_verified)
-                VALUES (?, ?, ?, ?, ?)""", part, toyota, model, generation, verified));
+                INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id,
+                                                is_verified, note)
+                VALUES (?, ?, ?, ?, ?, ?)""", part, toyota, model, generation, verified, note));
     }
 
     private MockHttpSession login() throws Exception {

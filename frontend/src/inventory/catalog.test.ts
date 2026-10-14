@@ -198,6 +198,17 @@ describe('подсказка клетки машины', () => {
         + 'какое у детали, не указано; все — в карточке');
   });
 
+  it('называет причину, когда поколение спорит с номером кузова в наименовании (0294)', () => {
+    const text = vehicleHint(row({
+      vehicleSource: 'PARSED', vehicleSpans: 1,
+      vehicleTitleBody: '120', vehicleBlockBodies: '150, 151',
+    }));
+    expect(text).toBe('По применимости, разобрана автоматически. Поколение не определено: '
+      + 'в наименовании 120, а «Подходит» называет кузова 150, 151');
+    expect(hint('generation', row({ vehicleSource: 'PARSED', vehicleSpans: 1,
+      vehicleTitleBody: '120', vehicleBlockBodies: '150, 151' }))).toBe(text);
+  });
+
   it('молчит, когда машины нет', () => {
     expect(vehicleHint(row())).toBeUndefined();
     expect(vehicleHint(row({ vehicleSource: null }))).toBeUndefined();
