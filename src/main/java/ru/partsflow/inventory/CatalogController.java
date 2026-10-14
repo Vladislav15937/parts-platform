@@ -108,6 +108,7 @@ public class CatalogController {
                 row.createdAt(), row.updatedAt(), row.updatedByName(),
                 row.priceChangedAt(), row.priceChangedByName(), row.photoCount(),
                 row.vehicleSource(), row.vehicleSpans(),
+                row.vehicleTitleBody(), row.vehicleBlockBodies(),
                 row.stock());
     }
 
@@ -418,6 +419,11 @@ public class CatalogController {
                       String vehicleSource,
                       /** Поколений у своей машины в применимости. */
                       Integer vehicleSpans,
+                      /**
+                       * Номер кузова в наименовании и номера кузовов блока, когда
+                       * поколение не показано из-за их расхождения (задача 0294).
+                       */
+                      String vehicleTitleBody, String vehicleBlockBodies,
                       Map<Long, java.math.BigDecimal> stock) {
     }
 }
