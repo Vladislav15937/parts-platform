@@ -104,6 +104,16 @@ public class CatalogService {
      * нет — {@code body_confirmed} пуст, правило 0290 как было: принцип на
      * такие строки эта задача не распространяет.
      *
+     * <p><b>Рестайлинги одного поколения Дрома — одно поколение (задача 0297,
+     * ответ владельца «целиком»).</b> Справочник делит поколение Дрома на
+     * строки рестайлингов, и «поколений три» у «4 поколение; рестайлинг;
+     * 2-й рестайлинг» было бы неправдой. Если все строки поколения своей
+     * машины несут одну метку Дрома ({@code generation_label}, её пишет
+     * разбор блока словами клиента) — {@code one_drom}: колонка показывает
+     * метку, годы от первой строки до последней. Строка без метки или две
+     * метки — как прежде. Номер кузова в наименовании сверяется с каждой
+     * строкой до объединения ({@code bodies_each}).
+     *
      * <p><b>Запись — три шага, вложенных снизу вверх, и это ради цены,
      * а не порядка.</b> Шаг 1 — своя машина ({@code DISTINCT ON}
      * по применимости, 0290); шаг 2 — номер кузова из наименования; шаг 3 —
@@ -127,11 +137,16 @@ public class CatalogService {
                 -- Шаг 3 (0294, 0299): подтверждён ли номер кузова из наименования
                 -- кузовами поколения своей машины. Номера нет — пусто (правило
                 -- 0290); номер есть, а кузовов нет — не подтверждён.
+                -- Сверяется каждая строка поколения отдельно, до объединения
+                -- рестайлингов (0297): строка без кузовов или с чужим рядом
+                -- не подтверждает и всё поколение Дрома. При одной строке это
+                -- то же, что прежде.
                 SELECT n.*,
                        CASE WHEN n.title_body IS NOT NULL
-                            THEN coalesce(n.bodies ~ ('(^|, )[^,0-9]*'
-                                                      || left(n.title_body, -1)
-                                                      || '[0-9]([^0-9]|$)'), false)
+                            THEN (SELECT coalesce(bool_and(e.b ~ ('(^|, )[^,0-9]*'
+                                                                  || left(n.title_body, -1)
+                                                                  || '[0-9]([^0-9]|$)')), false)
+                                    FROM unnest(n.bodies_each) e(b))
                        END AS body_confirmed
                   FROM (
                 -- Шаг 2 (0294): номер кузова сразу после модели. «Prado 120» → 120;
@@ -140,6 +155,15 @@ public class CatalogService {
                 -- с группой захвата стоил в Postgres вдесятеро дороже
                 -- (62 мс против 5 на 9 417 позициях, замер в PR задачи 0294).
                 SELECT o.*,
+                       -- Поколение и годы, которые колонка покажет: поколение Дрома
+                       -- целиком (годы от первой строки до последней) или, без
+                       -- метки, единственная строка справочника, как в 0290.
+                       CASE WHEN o.one_drom THEN o.drom_generation
+                            ELSE o.catalog_generation END AS generation,
+                       CASE WHEN o.one_drom THEN o.year_from_min
+                            ELSE o.year_from_max END AS year_from,
+                       CASE WHEN o.one_drom AND o.up_to_now THEN NULL
+                            ELSE o.year_to_max END AS year_to,
                        CASE WHEN o.after_model ~ '^ +[0-9]{2,3}([^[:alnum:]/]|$)'
                             THEN left(ltrim(o.after_model),
                                       CASE WHEN strpos('0123456789',
@@ -153,14 +177,36 @@ public class CatalogService {
                              FILTER (WHERE x.model IS NOT NULL
                                        AND (x.generation_id IS NOT NULL
                                             OR x.year_from IS NOT NULL)) AS spans,
-                         max(x.generation) FILTER (WHERE x.model IS NOT NULL) AS generation,
-                         max(x.year_from) FILTER (WHERE x.model IS NOT NULL) AS year_from,
-                         max(x.year_to) FILTER (WHERE x.model IS NOT NULL) AS year_to,
+                         -- Все строки поколения своей машины несут одну метку
+                         -- Дрома («4 поколение», 0297): рестайлинги, которые наш
+                         -- справочник держит разными строками, — одно поколение.
+                         -- Строка без метки (до 0297, руками) — сомнение, не голос «за».
+                         coalesce(count(DISTINCT x.generation_label)
+                                      FILTER (WHERE x.model IS NOT NULL
+                                                AND (x.generation_id IS NOT NULL
+                                                     OR x.year_from IS NOT NULL)) = 1
+                                  AND bool_and(x.generation_label IS NOT NULL)
+                                      FILTER (WHERE x.model IS NOT NULL
+                                                AND (x.generation_id IS NOT NULL
+                                                     OR x.year_from IS NOT NULL)), false)
+                             AS one_drom,
+                         max(x.generation) FILTER (WHERE x.model IS NOT NULL) AS catalog_generation,
+                         max(x.generation_label) FILTER (WHERE x.model IS NOT NULL) AS drom_generation,
+                         max(x.year_from) FILTER (WHERE x.model IS NOT NULL) AS year_from_max,
+                         min(x.year_from) FILTER (WHERE x.model IS NOT NULL) AS year_from_min,
+                         max(x.year_to) FILTER (WHERE x.model IS NOT NULL) AS year_to_max,
+                         -- «н.в.» у последнего рестайлинга — и у поколения целиком.
+                         bool_or(x.up_to_now) FILTER (WHERE x.model IS NOT NULL) AS up_to_now,
                          -- Кузова строк поколения своей машины («GRJ150W, GRJ151W»), 0294.
                          string_agg(x.bodies, ', ')
                              FILTER (WHERE x.model IS NOT NULL
                                        AND (x.generation_id IS NOT NULL
                                             OR x.year_from IS NOT NULL)) AS bodies,
+                         -- Те же кузова построчно — сверка 0294 идёт по каждой строке.
+                         array_agg(coalesce(x.bodies, ''))
+                             FILTER (WHERE x.model IS NOT NULL
+                                       AND (x.generation_id IS NOT NULL
+                                            OR x.year_from IS NOT NULL)) AS bodies_each,
                          -- Наименование после своей модели — для шага 2.
                          substr(max(x.title), min(x.model_at) FILTER (WHERE x.model IS NOT NULL)
                                               + length(x.model)) AS after_model,
@@ -172,7 +218,9 @@ public class CatalogService {
                                       THEN substr(a.note, 9) END AS bodies,
                                  strpos(lower(op.title), lower(ab.name)) AS brand_at,
                                  strpos(lower(op.title), lower(am.name)) AS model_at,
-                                 a.generation_id, ag.name AS generation,
+                                 a.generation_id, ag.name AS generation, a.generation_label,
+                                 -- Годы клиента «2013–н.в.»: справочник подставил бы свой год конца.
+                                 a.year_from IS NOT NULL AND a.year_to IS NULL AS up_to_now,
                                  coalesce(a.year_from, ag.year_from) AS year_from,
                                  coalesce(a.year_to, ag.year_to) AS year_to,
                                  a.is_verified
@@ -219,10 +267,16 @@ public class CatalogService {
      * поколение и годы разошлись бы на первой правке.
      */
     private static final String OWN_GENERATION_SHOWN =
-            "own.spans = 1 AND own.body_confirmed IS NOT FALSE";
+            "(own.spans = 1 OR own.one_drom) AND own.body_confirmed IS NOT FALSE";
     /** Поколение одно, но номер кузова в наименовании им не подтверждён — для подсказки. */
     private static final String OWN_GENERATION_UNCONFIRMED =
-            "own.spans = 1 AND NOT own.body_confirmed";
+            "(own.spans = 1 OR own.one_drom) AND NOT own.body_confirmed";
+    /**
+     * Показано поколение Дрома, собранное из нескольких строк справочника
+     * (рестайлингов, 0297), — для подсказки: годы клетки шире любой из строк.
+     */
+    private static final String OWN_GENERATION_MERGED =
+            "own.spans > 1 AND " + OWN_GENERATION_SHOWN;
     static final String VEHICLE_GENERATION =
             "coalesce(g.name, CASE WHEN " + OWN_GENERATION_SHOWN + " THEN own.generation END)";
     static final String VEHICLE_YEAR_FROM =
@@ -1096,7 +1150,9 @@ public class CatalogService {
                        + " CASE WHEN " + OWN_GENERATION_UNCONFIRMED + " THEN own.title_body END"
                        + " AS vehicle_title_body,"
                        + " CASE WHEN " + OWN_GENERATION_UNCONFIRMED + " THEN own.bodies END"
-                       + " AS vehicle_block_bodies," + """
+                       + " AS vehicle_block_bodies,"
+                       + " coalesce(" + OWN_GENERATION_MERGED + ", false) AS vehicle_generation_merged,"
+                       + """
                        d.body_code, d.engine_code,
                        d.year, d.public_code AS donor_code, d.legacy_code AS donor_legacy,
                        p.price, p.installation_price, p.color, p.description, p.note,
@@ -1204,6 +1260,7 @@ public class CatalogService {
                         rs.getString("vehicle_title_body"),
                         bodyNumbers(rs.getString("vehicle_block_bodies")),
                         rs.getString("generation_by_body"),
+                        rs.getBoolean("vehicle_generation_merged"),
                         Map.of()),
                 pageArgs.toArray());
 
@@ -1610,6 +1667,12 @@ public class CatalogService {
                        * иначе пусто.
                        */
                       String vehicleGenerationBodies,
+                      /**
+                       * Поколение в колонке — поколение Дрома целиком, собранное из
+                       * нескольких строк справочника (рестайлингов, задача 0297):
+                       * годы от первой строки до последней.
+                       */
+                      boolean vehicleGenerationMerged,
                       Map<Long, BigDecimal> stock) {
 
         Row withStock(Map<Long, BigDecimal> found) {
@@ -1624,6 +1687,7 @@ public class CatalogService {
                     packageWeightKg, createdAt, updatedAt, updatedByName,
                     priceChangedAt, priceChangedByName, photoCount, vehicleSource,
                     vehicleSpans, vehicleTitleBody, vehicleBlockBodies, vehicleGenerationBodies,
+                    vehicleGenerationMerged,
                     found);
         }
     }
