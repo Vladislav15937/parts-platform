@@ -447,7 +447,7 @@ probe() {
     case "${code6:-000}" in
         000|"") red "  ✗ по IPv6 из этой сети до Telegram НЕ достучаться"
                 red "    Если IPv6 работает с хоста (curl -6 https://api.telegram.org), значит docker не делает NAT66:"
-                red "    смотрите ops/CLAUDE.md, «Если NAT66 на машине не работает» — там запасной путь без простоя"
+                red "    смотрите docs/ops-history.md, «Если NAT66 на машине не работает» — там запасной путь без простоя"
                 return 1 ;;
         *)      green "  ✓ дорога есть: диспетчеру из этой сети Telegram доступен" ;;
     esac
