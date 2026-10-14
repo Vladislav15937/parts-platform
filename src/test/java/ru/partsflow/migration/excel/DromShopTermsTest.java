@@ -810,6 +810,160 @@ class DromShopTermsTest extends PostgresTestBase {
         return found.get(0);
     }
 
+    // --- «Может подойти» дословно (задача 0293) ---
+
+    private static final String MAY_FIT = "Может подойти";
+
+    /**
+     * Блок «Может подойти» в том виде, как его пишет парсер (колонка X файла клиента
+     * Strikexz): строка на машину «Марка Модель — КОД, КОД…», без поколений. Первая
+     * буква кода во второй строке — кириллическая «К» (у клиента 185 таких ячеек):
+     * хранится как пришла.
+     */
+    private static final String MAY_FIT_PRADO = "Toyota Land Cruiser Prado — KDJ120, KDJ120W, KZJ120, LJ120, LJ150L\n"
+            + "Toyota Land Cruiser Prado — КZJ95, КZJ90, RZJ95\n"
+            + "Toyota Hilux Surf — KZN185, VZN185";
+
+    @Test
+    @DisplayName("«Может подойти» ложится побайтно — переводы строк и кириллическая «К» в коде целы; пустая колонка — NULL")
+    void mayFitLandsVerbatim() throws Exception {
+        assertThat(MAY_FIT_PRADO).contains("КZJ95");
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Land Cruiser Prado");
+        a.put(MAY_FIT, MAY_FIT_PRADO);
+        Map<String, String> b = row(AD_B, "Фара левая Toyota Camry");
+
+        JsonNode report = load(file(List.of(a, b), Set.of(), null));
+
+        assertThat(report.path("imported").asInt()).as("%s", report.path("skipped")).isEqualTo(2);
+        assertThat(mayFit(AD_A)).as("«Может подойти» доехало не дословно").isEqualTo(MAY_FIT_PRADO);
+        assertThat(mayFit(AD_B)).as("пустая колонка дала не NULL").isNull();
+        assertThat(applicability(AD_A)).as("«Может подойти» легло в «Подходит»").isNull();
+    }
+
+    @Test
+    @DisplayName("«Может подойти» длиннее ячейки Excel (≥ 33 000 знаков) приходит склейкой с листа «Продолжение» побайтно")
+    void longMayFitIsGluedFromTheContinuationSheet() throws Exception {
+        StringBuilder value = new StringBuilder();
+        for (int i = 0; value.length() < 34_000; i++) {
+            value.append("Toyota Land Cruiser Prado — KDJ").append(i).append(", КZJ").append(i).append('\n');
+        }
+        String text = value.toString().strip();
+        assertThat(text.length()).isGreaterThan(33_000);
+        List<String> chunks = DromContinuationTest.split(text,
+                DromContinuationTest.CELL_MAX, DromContinuationTest.PART_MAX);
+        assertThat(chunks).as("значение обязано резаться на ячейку и часть").hasSizeGreaterThan(1);
+
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Land Cruiser Prado");
+        a.put(MAY_FIT, chunks.get(0));
+        byte[] file = file(List.of(a), Set.of(), DromContinuationTest.partsOf(AD_A, MAY_FIT, chunks));
+
+        JsonNode report = load(file);
+
+        assertThat(report.path("skipped")).as("пропущено: %s", report.path("skipped")).isEmpty();
+        assertThat(mayFit(AD_A)).as("склейка не побайтная").isEqualTo(text);
+    }
+
+    @Test
+    @DisplayName("«Может подойти» не заводит справочной применимости и не входит в поиск")
+    void mayFitIsNotTheReferenceApplicability() throws Exception {
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Land Cruiser Prado");
+        // Настоящая машина справочника: разложи импорт этот блок, как «Подходит», строка бы легла.
+        a.put(MAY_FIT, "Toyota Camry — ZQXMAYFIT, ACV40");
+        int before = inTenant(() -> jdbc.queryForObject("SELECT count(*) FROM part_applicability", Integer.class));
+
+        load(file(List.of(a), Set.of(), null));
+
+        assertThat(mayFit(AD_A)).contains("ZQXMAYFIT");
+        assertThat(inTenant(() -> jdbc.queryForObject("SELECT count(*) FROM part_applicability", Integer.class)))
+                .as("«Может подойти» завело строки справочной применимости").isEqualTo(before);
+        JsonNode found = json.readTree(mvc.perform(get("/api/parts/search").param("q", "ZQXMAYFIT")
+                        .session(login()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8));
+        assertThat(found).as("поиск нашёл позицию по тексту «Может подойти»").isEmpty();
+    }
+
+    @Test
+    @DisplayName("Файл без «Может подойти», затем с ним: дозаполнено, отметка не двинулась; поправленное не затирается, расхождение названо и усечено")
+    void secondLoadFillsMayFitAndKeepsEdits() throws Exception {
+        String huge = ("Toyota Land Cruiser Prado — KDJ120, KDJ120W, KZJ120, LJ120, LJ150L\n").repeat(200).strip();
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Land Cruiser Prado");
+        a.put(MAY_FIT, huge);
+        Map<String, String> b = row(AD_B, "Бампер задний Toyota Land Cruiser Prado");
+        b.put(MAY_FIT, MAY_FIT_PRADO);
+        List<Map<String, String>> rows = List.of(a, b);
+
+        load(file(rows, Set.of(MAY_FIT), null));
+        assertThat(mayFit(AD_A)).isNull();
+        Map<String, Object> before = partRows();
+
+        JsonNode repeat = load(file(rows, Set.of(), null)).path("repeat");
+
+        assertThat(repeat.path("refilled").asInt()).as("%s", repeat).isEqualTo(2);
+        assertThat(repeat.path("fields").findValuesAsText("field")).containsExactly("Может подойти");
+        assertThat(mayFit(AD_A)).isEqualTo(huge);
+        assertThat(mayFit(AD_B)).isEqualTo(MAY_FIT_PRADO);
+        assertThat(partRows()).as("повтор тронул саму позицию").isEqualTo(before);
+        assertThat(feedMarks()).as("дозаполнение «Может подойти» двинуло отметку для площадки").isZero();
+
+        long part = partOf(AD_A);
+        ObjectNode form = editable(part);
+        form.put("mayFit", huge.replace("KDJ120W", "KDJ999"));
+        update(part, form);
+        JsonNode again = load(file(rows, Set.of(), null)).path("repeat");
+        assertThat(mayFit(AD_A)).isEqualTo(huge.replace("KDJ120W", "KDJ999"));
+        JsonNode discrepancy = again.path("discrepancies").get(0);
+        assertThat(discrepancy.path("field").asText()).isEqualTo("Может подойти");
+        assertThat(discrepancy.path("text").asText().length())
+                .as("значения «Может подойти» в отчёте не усечены").isLessThan(400);
+    }
+
+    @Test
+    @DisplayName("Карточка: «Может подойти» видно, правится тем же PUT, пустой ввод — NULL, форма без ключа его не стирает, отметка не двигается, лента называет «Может подойти»")
+    void cardShowsEditsAndClearsMayFit() throws Exception {
+        Map<String, String> a = row(AD_A, "Фара левая Toyota Land Cruiser Prado");
+        a.put(MAY_FIT, MAY_FIT_PRADO);
+        load(file(List.of(a), Set.of(), null));
+        long part = partOf(AD_A);
+
+        ObjectNode form = editable(part);
+        assertThat(form.path("mayFit").asText()).isEqualTo(MAY_FIT_PRADO);
+
+        String edited = MAY_FIT_PRADO + "\nLexus GX470 — UZJ120";
+        form.put("mayFit", edited);
+        update(part, form);
+        assertThat(mayFit(AD_A)).isEqualTo(edited);
+        assertThat(feedMarks()).as("правка одного «Может подойти» двинула отметку").isZero();
+
+        ObjectNode stale = form.deepCopy();
+        stale.remove("mayFit");
+        stale.put("note", "с полки 3");
+        update(part, stale);
+        assertThat(mayFit(AD_A)).as("форма без ключа стёрла «Может подойти» клиента").isEqualTo(edited);
+
+        form.put("mayFit", "");
+        update(part, form);
+        assertThat(mayFit(AD_A)).isNull();
+
+        JsonNode history = json.readTree(mvc.perform(get("/api/parts/" + part + "/history")
+                        .session(login()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8));
+        List<String> labels = new ArrayList<>();
+        history.path("changes").forEach(c -> c.path("fields").forEach(f -> labels.add(f.path("label").asText())));
+        assertThat(labels).contains("Может подойти");
+    }
+
+    private String mayFit(String ad) {
+        List<String> found = inTenant(() -> jdbc.query("""
+                SELECT c.may_fit
+                  FROM part p LEFT JOIN part_drom_card c ON c.part_id = p.id
+                 WHERE p.drom_ad_number = ?""",
+                (rs, i) -> rs.getString(1), ad));
+        assertThat(found).as("позиции № %s нет", ad).hasSize(1);
+        return found.get(0);
+    }
+
     // --- файлы ---
 
     private static byte[] sample() throws Exception {

@@ -438,6 +438,9 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
       { kind: 'text', key: 'dromSection', label: 'Раздел' },
       // Слово Дрома; текст как у клиента, показ — блоками, правка — как есть (задача 0287).
       { kind: 'fits', key: 'applicability', label: 'Подходит' },
+      // Второй блок применимости Дрома — его догадка (задача 0293): слово Дрома, сразу
+      // под «Подходит», показ тот же — пунктами и свёрнуто; справочной применимости не трогает.
+      { kind: 'fits', key: 'mayFit', label: 'Может подойти' },
       // «Прочие поля» объявления Дрома (задача 0292): показ — «Подпись: значение»,
       // правка — хранимый текст как есть.
       { kind: 'specs', key: 'characteristics', label: 'Характеристики' },
@@ -562,6 +565,7 @@ export interface Draft {
   dromSection: string;
   applicability: string;
   characteristics: string;
+  mayFit: string;
 }
 
 export function draftOf(card: PartEdit): Draft {
@@ -601,6 +605,7 @@ export function draftOf(card: PartEdit): Draft {
     dromSection: card.dromSection ?? '',
     applicability: card.applicability ?? '',
     characteristics: card.characteristics ?? '',
+    mayFit: card.mayFit ?? '',
   };
 }
 
@@ -644,6 +649,7 @@ export function toEdit(form: Draft): PartEdit {
     dromSection: form.dromSection,
     applicability: form.applicability,
     characteristics: form.characteristics,
+    mayFit: form.mayFit,
   };
 }
 

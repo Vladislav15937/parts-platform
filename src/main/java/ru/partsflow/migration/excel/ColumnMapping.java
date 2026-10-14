@@ -135,7 +135,13 @@ public final class ColumnMapping {
          * на карточке «Характеристики»: строки «Подпись [ключ]: значение» (модель магнитолы,
          * размер DIN, каналы). Без синонимов, как описание.
          */
-        CHARACTERISTICS(true);
+        CHARACTERISTICS(true),
+        /**
+         * «Может подойти» объявления дословно (задача 0293) — {@code part_drom_card.may_fit}:
+         * догадка Дрома строкой на машину «Марка Модель — КОД, КОД…». Текстом, не справочная
+         * {@code part_applicability} (решение владельца 14.10.2026); без синонимов.
+         */
+        MAY_FIT(true);
 
         private final boolean imported;
         private final List<String> synonyms;

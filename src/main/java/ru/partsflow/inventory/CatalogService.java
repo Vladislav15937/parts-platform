@@ -92,11 +92,17 @@ public class CatalogService {
      * но не «RX350» — там число и есть модель, и не «120/150» — это не один
      * кузов), он сверяется с кузовами из примечания строки поколения
      * («Кузова: GRJ150W, …», пишет разбор блока, 0289). Ряд — номер без
-     * последней цифры: 120 и 121 — ряд «12», 95 и 90 — «9»; двузначный номер
-     * считается ещё и сокращением трёхзначного («Prado 12» — это 120-й).
-     * Ни один кузов не того ряда — {@code body_conflict}, и поколение пусто.
-     * Кузовов в примечании нет вовсе — сверять не с чем, правило 0290
-     * как было.
+     * последней цифры: 120 и 121 — ряд «12», 95 и 90 — «9».
+     *
+     * <p><b>Показывается только подтверждённое (задача 0299, принцип
+     * владельца 14.10.2026: «если я не уверен я не хочу ставить, только при
+     * уверенности»).</b> {@code body_confirmed} — {@code true}, только когда
+     * среди кузовов есть код того же ряда. Кузовов в примечании нет вовсе —
+     * сверять не с чем, {@code false}, поколение пусто (PR 419 ставил здесь
+     * правило 0290). Двузначный номер сокращением трёхзначного не считается:
+     * «Prado 12» — ряд «1», с кузовами 120 не совпадает. Номера в наименовании
+     * нет — {@code body_confirmed} пуст, правило 0290 как было: принцип на
+     * такие строки эта задача не распространяет.
      *
      * <p><b>Запись — три шага, вложенных снизу вверх, и это ради цены,
      * а не порядка.</b> Шаг 1 — своя машина ({@code DISTINCT ON}
@@ -118,12 +124,15 @@ public class CatalogService {
     private static final String OWN_VEHICLE_OF = """
 
               LEFT JOIN %s(
-                -- Шаг 3 (0294): номер кузова из наименования против кузовов
-                -- поколения своей машины. Кузовов нет или номера нет — пусто.
+                -- Шаг 3 (0294, 0299): подтверждён ли номер кузова из наименования
+                -- кузовами поколения своей машины. Номера нет — пусто (правило
+                -- 0290); номер есть, а кузовов нет — не подтверждён.
                 SELECT n.*,
-                       coalesce(n.bodies !~ ('(^|, )[^,0-9]*('
-                                             || left(n.title_body, -1) || '|' || n.title_body
-                                             || ')[0-9]([^0-9]|$)'), false) AS body_conflict
+                       CASE WHEN n.title_body IS NOT NULL
+                            THEN coalesce(n.bodies ~ ('(^|, )[^,0-9]*'
+                                                      || left(n.title_body, -1)
+                                                      || '[0-9]([^0-9]|$)'), false)
+                       END AS body_confirmed
                   FROM (
                 -- Шаг 2 (0294): номер кузова сразу после модели. «Prado 120» → 120;
                 -- «RX350», «Prado120», «Prado 120/150» → пусто. Проверка
@@ -202,11 +211,18 @@ public class CatalogService {
     static final String VEHICLE_BRAND = "coalesce(b.name, own.brand)";
     static final String VEHICLE_MODEL = "coalesce(m.name, own.model)";
     /**
-     * Когда поколение своей машины показывается: оно одно (0290) и его кузова
-     * не спорят с номером кузова в наименовании (0294). Одно условие на три
-     * колонки — иначе поколение и годы разошлись бы на первой правке.
+     * Когда поколение своей машины показывается: оно одно (0290) и, если
+     * в наименовании стоит номер кузова, кузова поколения его подтверждают
+     * (0294, 0299). {@code body_confirmed} пуст, когда номера нет, — тогда
+     * правило 0290 как было; {@code false} — номер не подтверждён (кузова
+     * другого ряда или их нет вовсе). Одно условие на три колонки — иначе
+     * поколение и годы разошлись бы на первой правке.
      */
-    private static final String OWN_GENERATION_SHOWN = "own.spans = 1 AND NOT own.body_conflict";
+    private static final String OWN_GENERATION_SHOWN =
+            "own.spans = 1 AND own.body_confirmed IS NOT FALSE";
+    /** Поколение одно, но номер кузова в наименовании им не подтверждён — для подсказки. */
+    private static final String OWN_GENERATION_UNCONFIRMED =
+            "own.spans = 1 AND NOT own.body_confirmed";
     static final String VEHICLE_GENERATION =
             "coalesce(g.name, CASE WHEN " + OWN_GENERATION_SHOWN + " THEN own.generation END)";
     static final String VEHICLE_YEAR_FROM =
@@ -1077,9 +1093,9 @@ public class CatalogService {
                        + VEHICLE_YEAR_FROM + " AS year_from, "
                        + VEHICLE_YEAR_TO + " AS year_to, "
                        + VEHICLE_SOURCE + " AS vehicle_source, own.spans::int AS vehicle_spans,"
-                       + " CASE WHEN own.spans = 1 AND own.body_conflict THEN own.title_body END"
+                       + " CASE WHEN " + OWN_GENERATION_UNCONFIRMED + " THEN own.title_body END"
                        + " AS vehicle_title_body,"
-                       + " CASE WHEN own.spans = 1 AND own.body_conflict THEN own.bodies END"
+                       + " CASE WHEN " + OWN_GENERATION_UNCONFIRMED + " THEN own.bodies END"
                        + " AS vehicle_block_bodies," + """
                        d.body_code, d.engine_code,
                        d.year, d.public_code AS donor_code, d.legacy_code AS donor_legacy,
@@ -1582,8 +1598,8 @@ public class CatalogService {
                       Integer vehicleSpans,
                       /**
                        * Номер кузова из наименования («120»), когда поколение
-                       * не показано потому, что кузова блока другого ряда
-                       * (задача 0294); иначе пусто.
+                       * не показано потому, что кузова блока его не подтвердили —
+                       * другого ряда или их нет вовсе (задачи 0294, 0299); иначе пусто.
                        */
                       String vehicleTitleBody,
                       /** Номера кузовов того поколения блока («150, 151») — к той же подсказке. */

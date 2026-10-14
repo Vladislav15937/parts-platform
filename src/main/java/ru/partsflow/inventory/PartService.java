@@ -400,14 +400,16 @@ public class PartService {
                 card == null ? null : card.getApplicability());
         String characteristics = termOf(update.characteristics(),
                 card == null ? null : card.getCharacteristics());
+        String mayFit = termOf(update.mayFit(), card == null ? null : card.getMayFit());
         if (card == null) {
             if (warranty == null && pickup == null && delivery == null
                     && kind == null && section == null && applicability == null
-                    && characteristics == null) {
+                    && characteristics == null && mayFit == null) {
                 return false;
             }
             card = new PartDromCard(partId);
-            card.set(warranty, pickup, delivery, kind, section, applicability, characteristics);
+            card.set(warranty, pickup, delivery, kind, section, applicability, characteristics,
+                    mayFit);
             entityManager.persist(card);
             return true;
         }
@@ -417,10 +419,12 @@ public class PartService {
                 && java.util.Objects.equals(card.getDromKind(), kind)
                 && java.util.Objects.equals(card.getDromSection(), section)
                 && java.util.Objects.equals(card.getApplicability(), applicability)
-                && java.util.Objects.equals(card.getCharacteristics(), characteristics)) {
+                && java.util.Objects.equals(card.getCharacteristics(), characteristics)
+                && java.util.Objects.equals(card.getMayFit(), mayFit)) {
             return false;
         }
-        card.set(warranty, pickup, delivery, kind, section, applicability, characteristics);
+        card.set(warranty, pickup, delivery, kind, section, applicability, characteristics,
+                    mayFit);
         return true;
     }
 
@@ -975,6 +979,8 @@ public class PartService {
                              String applicability,
                              // «Характеристики» («Прочие поля» Дрома) дословно (задача 0292): так же.
                              String characteristics,
+                             // «Может подойти» дословно (задача 0293): так же.
+                             String mayFit,
                              // Что сделать с ценой: заменить (умолчание), подвинуть
                              // процентом или суммой, округлить. При арифметике
                              // price — значение операции, а не новая цена.
