@@ -118,6 +118,8 @@ public final class AuditedColumns {
         PART_DROM_CARD.put("characteristics", "Характеристики");
         // Задача 0293: слово Дрома для второго блока применимости — не «Подходит».
         PART_DROM_CARD.put("may_fit", "Может подойти");
+        // Задача 0298: «Дата» объявления Дрома; не «Создан» позиции.
+        PART_DROM_CARD.put("ad_date", "Дата (Дром)");
     }
 
     /**

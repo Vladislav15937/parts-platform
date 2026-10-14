@@ -65,6 +65,8 @@ export const FIELDS = [
   { key: 'CHARACTERISTICS', label: 'Характеристики', required: false, dromOnly: true },
   // «Может подойти» — догадка Дрома, дословно текстом (задача 0293): не справочная применимость.
   { key: 'MAY_FIT', label: 'Может подойти', required: false, dromOnly: true },
+  // «Дата» объявления Дрома текстом (задача 0298): не «Создан» позиции.
+  { key: 'DROM_DATE', label: 'Дата (Дром)', required: false, dromOnly: true },
 ] as const;
 
 export type FieldKey = (typeof FIELDS)[number]['key'];
@@ -119,6 +121,11 @@ export interface Report {
    * не было. Ответ прежней версии поля не несёт — читать через `?? 0`.
    */
   quantityDefaulted?: number;
+  /**
+   * Сколько позиций заведено без номера замены, потому что он совпал с основным
+   * (задача 0298). Ответ прежней версии поля не несёт — читать через `?? 0`.
+   */
+  substituteIsPrimary?: number;
   /**
    * Что загрузка сделала с позициями, номер объявления которых уже был
    * (задача 0282): дозаполнила пустое, оставила как есть, назвала разницу.

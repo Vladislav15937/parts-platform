@@ -40,6 +40,24 @@ public class CatalogService {
     private static final Logger log = LoggerFactory.getLogger(CatalogService.class);
 
     /**
+     * Наименование позиции с приведёнными к латинице смешанными словами (задача 0298):
+     * слово, где есть и латинская, и кириллическая буква, читается латиницей, чисто русское
+     * остаётся как есть. Список двойников один с {@code MixedAlphabet}. Дешёвая проверка
+     * впереди (латинская буква вплотную к кириллической) отсекает почти все наименования,
+     * поэтому разбор по словам идёт только там, где он что-то меняет. Длина не меняется,
+     * и позиции в {@code strpos} годятся для среза исходного наименования.
+     */
+    private static final String MIXED_TITLE = "CASE WHEN op.title ~ '[A-Za-z][А-Яа-яЁё]|[А-Яа-яЁё][A-Za-z]'"
+            + " THEN (SELECT string_agg(CASE WHEN w.s ~ '[A-Za-z]' AND w.s ~ '[А-Яа-яЁё]'"
+            + " THEN translate(w.s, '" + ru.partsflow.catalog.MixedAlphabet.SQL_CYRILLIC
+            + "', '" + ru.partsflow.catalog.MixedAlphabet.SQL_LATIN + "')"
+            + " ELSE w.s END, '' ORDER BY w.n)"
+            + " FROM (SELECT m.g[1] AS s, m.n"
+            + " FROM regexp_matches(op.title,"
+            + " '[A-Za-z0-9А-Яа-яЁё]+|[^A-Za-z0-9А-Яа-яЁё]+', 'g') WITH ORDINALITY AS m(g, n)) w)"
+            + " ELSE op.title END";
+
+    /**
      * Своя машина позиции без донора — та, деталью которой запчасть
      * и является, из её применимости (задача 0290).
      *
@@ -225,7 +243,16 @@ public class CatalogService {
                                  coalesce(a.year_to, ag.year_to) AS year_to,
                                  a.is_verified
                             FROM part_applicability a
-                            JOIN part op ON op.id = a.part_id AND op.donor_id IS NULL%s
+                            -- Наименование со смешанными словами приведено к латинице (0298):
+                            -- «Сruiser» с кириллической «С» — слово Land Cruiser. Считается
+                            -- один раз на позицию, а не на каждую строку её применимости
+                            -- (четыре с лишним на позицию): OFFSET 0 не даёт планировщику
+                            -- подставить выражение в каждое место чтения — замер в записи
+                            -- памятки (подстановка удваивала проход по складу).
+                            JOIN (SELECT op.id, §t§ AS title
+                                    FROM part op
+                                   WHERE op.donor_id IS NULL%s
+                                  OFFSET 0) op ON op.id = a.part_id
                             JOIN catalog.brand ab ON ab.id = a.brand_id
                             LEFT JOIN catalog.model am ON am.id = a.model_id
                             LEFT JOIN catalog.generation ag ON ag.id = a.generation_id
@@ -234,7 +261,7 @@ public class CatalogService {
                    ORDER BY x.part_id, min(x.brand_at), x.model IS NULL,
                             min(x.model_at) FILTER (WHERE x.model IS NOT NULL),
                             length(x.model) DESC
-                          ) o) n) own ON own.part_id = p.id""";
+                          ) o) n) own ON own.part_id = p.id""".replace("§t§", MIXED_TITLE);
 
     /** Своя машина каждой позиции склада — для отбора, сортировки, счёта и файла. */
     static final String OWN_VEHICLE = OWN_VEHICLE_OF.formatted("", "");

@@ -141,7 +141,14 @@ public final class ColumnMapping {
          * догадка Дрома строкой на машину «Марка Модель — КОД, КОД…». Текстом, не справочная
          * {@code part_applicability} (решение владельца 14.10.2026); без синонимов.
          */
-        MAY_FIT(true);
+        MAY_FIT(true),
+        /**
+         * «Дата» объявления Дрома (задача 0298) — {@code part_drom_card.ad_date} текстом как
+         * в ячейке (ГГГГ-ММ-ДД). Что она значит у Дрома, снаружи не определить, поэтому
+         * «Создан» позиции она не подменяет. Без синонимов: «Дата» в чужой таблице — чаще
+         * дата прихода.
+         */
+        DROM_DATE(true);
 
         private final boolean imported;
         private final List<String> synonyms;

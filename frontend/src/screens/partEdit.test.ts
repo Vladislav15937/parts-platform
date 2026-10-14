@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { draftOf, toEdit } from './PartEditForm';
+import { draftOf, dromDateShown, toEdit } from './PartEditForm';
 import type { PartEdit } from '../inventory/catalog';
 
 function card(overrides: Partial<PartEdit> = {}): PartEdit {
@@ -20,6 +20,7 @@ function card(overrides: Partial<PartEdit> = {}): PartEdit {
     applicability: 'Toyota 4Runner | 5 поколение (2009–2013) | TRN285, GRN285\nДля двигателей | 1GR-FE',
     characteristics: 'Бренд [model]: Zapco\nКоличество каналов [channel]: 4-канальный',
     mayFit: 'Toyota Land Cruiser Prado — KDJ120, KDJ120W\nToyota Land Cruiser Prado — \u041aZJ95',
+    adDate: '2026-09-28',
     ...overrides,
   };
 }
@@ -99,6 +100,15 @@ describe('форма правки карточки', () => {
     expect(toEdit(draftOf(card())).mayFit).toBe(card().mayFit);
     expect(toEdit({ ...draftOf(card()), mayFit: '' }).mayFit).toBe('');
     expect(draftOf(card({ mayFit: null })).mayFit).toBe('');
+  });
+
+  it('«Дата (Дром)» уезжает дословно, очистка — пустая строка, а чужой формат показывается как есть (задача 0298)', () => {
+    expect(toEdit(draftOf(card())).adDate).toBe('2026-09-28');
+    expect(toEdit({ ...draftOf(card()), adDate: '' }).adDate).toBe('');
+    expect(draftOf(card({ adDate: null })).adDate).toBe('');
+    expect(dromDateShown('2026-09-28')).toBe('28.09.2026');
+    expect(dromDateShown('вчера')).toBe('вчера');
+    expect(dromDateShown('')).toBe('');
   });
 
   it('очищенный блок уезжает пустой строкой, а не null', () => {

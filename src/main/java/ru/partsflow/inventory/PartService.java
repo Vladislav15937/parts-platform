@@ -401,15 +401,16 @@ public class PartService {
         String characteristics = termOf(update.characteristics(),
                 card == null ? null : card.getCharacteristics());
         String mayFit = termOf(update.mayFit(), card == null ? null : card.getMayFit());
+        String adDate = termOf(update.adDate(), card == null ? null : card.getAdDate());
         if (card == null) {
             if (warranty == null && pickup == null && delivery == null
                     && kind == null && section == null && applicability == null
-                    && characteristics == null && mayFit == null) {
+                    && characteristics == null && mayFit == null && adDate == null) {
                 return false;
             }
             card = new PartDromCard(partId);
             card.set(warranty, pickup, delivery, kind, section, applicability, characteristics,
-                    mayFit);
+                    mayFit, adDate);
             entityManager.persist(card);
             return true;
         }
@@ -420,11 +421,12 @@ public class PartService {
                 && java.util.Objects.equals(card.getDromSection(), section)
                 && java.util.Objects.equals(card.getApplicability(), applicability)
                 && java.util.Objects.equals(card.getCharacteristics(), characteristics)
-                && java.util.Objects.equals(card.getMayFit(), mayFit)) {
+                && java.util.Objects.equals(card.getMayFit(), mayFit)
+                && java.util.Objects.equals(card.getAdDate(), adDate)) {
             return false;
         }
         card.set(warranty, pickup, delivery, kind, section, applicability, characteristics,
-                    mayFit);
+                    mayFit, adDate);
         return true;
     }
 
@@ -981,6 +983,8 @@ public class PartService {
                              String characteristics,
                              // «Может подойти» дословно (задача 0293): так же.
                              String mayFit,
+                             // «Дата» объявления Дрома текстом (задача 0298): так же.
+                             String adDate,
                              // Что сделать с ценой: заменить (умолчание), подвинуть
                              // процентом или суммой, округлить. При арифметике
                              // price — значение операции, а не новая цена.

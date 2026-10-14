@@ -82,6 +82,9 @@ public final class TitleApplicability {
         if (title == null || title.isBlank()) {
             return List.of();
         }
+        // «Сruiser» с кириллической «С» — латинское слово (задача 0298). Длина строки не
+        // меняется, поэтому индексы в lower годятся и для среза исходного заголовка ниже.
+        title = ru.partsflow.catalog.MixedAlphabet.latinize(title);
         String lower = title.toLowerCase(Locale.ROOT);
 
         Found first = firstBrand(lower, dictionary);

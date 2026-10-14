@@ -268,6 +268,15 @@ export function changedNote(changed: number): string {
   return `${verb} ${count(changed)} ${noun}`;
 }
 
+/**
+ * «2026-09-28» → «28.09.2026»; всё, что не похоже на дату, показывается как есть:
+ * хранится текст клиента, и подправлять его на показе нельзя.
+ */
+export function dromDateShown(text: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text.trim());
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : text;
+}
+
 /** Значение строки текстом — то, что видно, пока строку не раскрыли. */
 function shownValue(field: Field, form: Draft, row: CatalogRow): JSX.Element | string {
   const value = field.kind === 'locked' ? field.value(row) : draftText(field, form);
@@ -302,6 +311,8 @@ function draftText(field: Field, form: Draft): string {
     }
     case 'locked':
       return '';
+    case 'date':
+      return dromDateShown(form.adDate);
     default:
       return form[field.key];
   }
@@ -396,7 +407,7 @@ type Field =
   | { kind: 'condition'; key: 'condition'; label: string }
   | { kind: 'grade'; key: 'qualityGrade'; label: string }
   | { kind: 'check'; key: 'published'; label: string }
-  | { kind: 'text' | 'area' | 'fits' | 'specs'; key: StringKey; label: string }
+  | { kind: 'text' | 'area' | 'fits' | 'specs' | 'date'; key: StringKey; label: string }
   | { kind: 'num'; key: StringKey; label: string; unit?: string };
 
 /**
@@ -444,6 +455,8 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
       // «Прочие поля» объявления Дрома (задача 0292): показ — «Подпись: значение»,
       // правка — хранимый текст как есть.
       { kind: 'specs', key: 'characteristics', label: 'Характеристики' },
+      // «Дата» объявления Дрома (задача 0298): показ — ДД.ММ.ГГГГ, правка — хранимый текст.
+      { kind: 'date', key: 'adDate', label: 'Дата (Дром)' },
       { kind: 'text', key: 'note', label: 'Заметка' },
       { kind: 'text', key: 'barcode', label: 'Ст. баркод' },
     ],
@@ -566,6 +579,7 @@ export interface Draft {
   applicability: string;
   characteristics: string;
   mayFit: string;
+  adDate: string;
 }
 
 export function draftOf(card: PartEdit): Draft {
@@ -606,6 +620,7 @@ export function draftOf(card: PartEdit): Draft {
     applicability: card.applicability ?? '',
     characteristics: card.characteristics ?? '',
     mayFit: card.mayFit ?? '',
+    adDate: card.adDate ?? '',
   };
 }
 
@@ -650,6 +665,7 @@ export function toEdit(form: Draft): PartEdit {
     applicability: form.applicability,
     characteristics: form.characteristics,
     mayFit: form.mayFit,
+    adDate: form.adDate,
   };
 }
 

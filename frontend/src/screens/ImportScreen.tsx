@@ -255,6 +255,14 @@ export function ImportScreen({ reference, canImport }: Props) {
               остаток.
             </p>
           )}
+          {(report.substituteIsPrimary ?? 0) > 0 && (
+            <p className="note">
+              Номер замены совпадает с основным — не заведён:{' '}
+              {count(report.substituteIsPrimary ?? 0)}{' '}
+              {plural(report.substituteIsPrimary ?? 0, 'позиция', 'позиции', 'позиций')}.
+              Номер на карточке есть как основной.
+            </p>
+          )}
           <RepeatSummary repeat={report.repeat} />
           {report.wheels != null && <WheelsSummary wheels={report.wheels} />}
           {report.applicability != null && (

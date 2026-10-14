@@ -364,6 +364,8 @@ public class PartController {
                                 String characteristics,
                                 // «Может подойти» дословно (задача 0293): так же.
                                 String mayFit,
+                                // «Дата» объявления Дрома текстом (задача 0298): так же.
+                                String adDate,
                                 // Что сделать с ценой: «Изменить» (умолчание и прежнее
                                 // поведение), процент, сумма, округление. При арифметике
                                 // поле price несёт значение операции, а не новую цену, —
@@ -387,6 +389,7 @@ public class PartController {
                     card == null ? null : card.getApplicability(),
                     card == null ? null : card.getCharacteristics(),
                     card == null ? null : card.getMayFit(),
+                    card == null ? null : card.getAdDate(),
                     // Форма открывается на «Изменить»: самый частый случай —
                     // вписать новое число — остаётся одним движением.
                     PriceOperation.SET);
@@ -399,7 +402,7 @@ public class PartController {
                     color, section, barcode, weightKg, lengthMm, widthMm, heightMm,
                     packageLengthMm, packageWidthMm, packageHeightMm, packageWeightKg,
                     storageCellId, published, warranty, pickup, deliveryPayment,
-                    dromKind, dromSection, applicability, characteristics, mayFit, priceOp);
+                    dromKind, dromSection, applicability, characteristics, mayFit, adDate, priceOp);
         }
     }
 
