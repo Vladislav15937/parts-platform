@@ -1132,3 +1132,11 @@ changeset'ом, сужения нет); теряет применимость к
 `DROP CONSTRAINT`, `DROP COLUMN` (колонка только добавлена тем же changeset'ом, сужения нет); теряет
 блок клиента (`--rollback-теряет`). Проверено: `db/check-changelog.py`, `db/verify.sh` (шаги 7 и 8),
 `db/verify-rollback.py --only tenant`.
+
+## `tenant/087` — «Дата» объявления Дрома текстом (задача 0298, 14 октября 2026)
+
+Колонка `part_drom_card.ad_date` с `CHECK (ad_date ~ '\S')`: expand, прежний код её не знает.
+Колонка 23 договора `docs/drom-transfer-file.md`, формат ГГГГ-ММ-ДД, хранится текстом как в ячейке
+(не `date`: перенос не должен отбивать и править присланное), NULL при пустом. В боковой таблице по
+той же причине, что у 082–084; индекса нет. Откат — `DROP CONSTRAINT`, `DROP COLUMN`; теряет даты
+клиента (`--rollback-теряет`). Проверено: `db/check-changelog.py`, `db/verify.sh` (шаги 7 и 8).
