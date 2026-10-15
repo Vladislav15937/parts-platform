@@ -370,42 +370,24 @@ class PartUpdateTest extends PostgresTestBase {
     }
 
     /**
-     * Состояние правит владелец, а карточку — и менеджер.
-     *
-     * <p>Проверяется **изменение**, а не присутствие поля: форма уезжает
-     * PUT'ом целиком, и менеджер, правящий заметку, отправляет состояние
-     * тоже. Отказ по самому факту отнял бы у него правку карточки вовсе —
-     * ровно так уже ломалась оценка состояния, уносившая с собой всю
-     * остальную правку (задача 0033).
-     *
-     * <p>Право записано как **временное**: владелец просил «все полномочия
-     * тому, кому он их дал», а раздавать их поштучно система не умеет
-     * (задача 0044).
+     * Состояние меняет и менеджер (задача 0302, решение владельца продукта
+     * 15.10.2026: «никаких замков и запретов»). До неё его правил только
+     * владелец (задача 0039), и менеджер получал 409.
      */
     @Test
-    @DisplayName("Менеджер правит карточку, но не состояние")
-    void onlyOwnerChangesCondition() throws Exception {
+    @DisplayName("Менеджер правит карточку вместе с состоянием")
+    void managerChangesConditionToo() throws Exception {
         MockHttpSession manager = login("menedzher");
 
         mvc.perform(put("/api/parts/" + partId).with(csrf()).session(manager)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"price":4500,"condition":"USED","note":"менеджер смотрел",
+                                {"price":4500,"condition":"NEW","note":"менеджер смотрел",
                                  "published":true}"""))
                 .andExpect(status().isOk());
-        assertThat(note())
-                .as("прежнее состояние в теле формы отняло у менеджера правку карточки")
-                .isEqualTo("менеджер смотрел");
 
-        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(manager)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"price":4500,"condition":"NEW","published":true}"""))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.message").value(
-                        org.hamcrest.Matchers.containsString("владелец")));
-
-        assertThat(conditionOf()).as("менеджер сменил состояние").isEqualTo("USED");
+        assertThat(note()).isEqualTo("менеджер смотрел");
+        assertThat(conditionOf()).isEqualTo("NEW");
     }
 
     private String conditionOf() {

@@ -33,10 +33,18 @@ import { CharacteristicsView } from './CharacteristicsView';
  * когда стёр значение и оставил пусто. Счёт «изменено N параметров» внизу
  * считает ровно раскрытые строки.
  *
- * <p><b>Неправимые поля показаны с замком, а не спрятаны.</b> Спрятанное
- * поле читается как «этого у вас нет»: номер товара, донорские сведения
- * и номера производителя система собирает сама, и правка руками разошлась бы
- * с ними при первом же пересопоставлении наименований.
+ * <p><b>Замков нет ни у одного поля</b> (задача 0302, решение владельца
+ * продукта 15.10.2026: «Клиент может править у себя абсолютно всё… Никаких
+ * замков и запретов»). До неё номер товара, наименование, стороны, номера
+ * производителя, машина и идентификаторы стояли с замком и подсказкой «Это
+ * поле система ведёт сама» — неверной: номер производителя система не ведёт
+ * вовсе, и клиент, заведя позицию, не мог вписать его ничем.
+ *
+ * <p><b>Поля, которых не знала прежняя форма, уезжают, только если их строку
+ * раскрыли</b>; нераскрытые не отправляются вовсе, и сервер их не трогает.
+ * Иначе каждое сохранение цены переписывало бы и номер производителя, и машину
+ * позиции тем, что форма прочитала, — а машина, не вписанная у позиции руками,
+ * показывается донорская, и записалась бы своей.
  *
  * <p><b>Цена двигается операцией, а не только новым числом.</b> Торг
  * на разборке идёт словами «минус десять» и «скинь пятьсот», и считать это
@@ -45,7 +53,7 @@ import { CharacteristicsView } from './CharacteristicsView';
  * Считает сервер: тот же расчёт нужен правке списком, и две копии
  * разошлись бы на первом округлении.
  */
-export function PartEditForm({ partId, row, role, onSaved, onCancel }: {
+export function PartEditForm({ partId, row, onSaved, onCancel }: {
   partId: number;
   /**
    * Строка витрины — за неправимыми полями. Второго запроса за ними
@@ -53,12 +61,6 @@ export function PartEditForm({ partId, row, role, onSaved, onCancel }: {
    * в таблице, и карточка её уже держит.
    */
   row: CatalogRow;
-  /**
-   * Роль вошедшего: состояние правит владелец, остальные поля — и менеджер
-   * (задача 0039, пункт 6 критерия). Временно и по нынешнему устройству —
-   * полномочия поштучно придут задачей 0044.
-   */
-  role: string;
   onSaved: () => void;
   onCancel: () => void;
 }) {
@@ -75,23 +77,6 @@ export function PartEditForm({ partId, row, role, onSaved, onCancel }: {
   const [priceOp, setPriceOp] = useState<PriceOperation>('SET');
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
-
-  /**
-   * Правит ли эту строку вошедший. Неправимая показывается с замком,
-   * а не прячется: спрятанное поле читается как «этого у вас нет»,
-   * а состояние у детали есть — его просто меняет владелец. То же
-   * правило, по которому с замком стоят номер товара и донорские
-   * сведения.
-   *
-   * <p>Предикат типа, а не просто `boolean`: у неправимой строки ключ
-   * объявлен строкой (она не лежит в черновике), и без сужения союза
-   * `set(field.key, …)` перестаёт собираться. Проверка типов это и
-   * поймала — `vitest` типов не смотрит вовсе.
-   */
-  function editable(field: Field): field is Exclude<Field, { kind: 'locked' }> {
-    return field.kind !== 'locked'
-      && !(field.kind === 'condition' && role !== 'OWNER');
-  }
 
   useEffect(() => {
     let alive = true;
@@ -111,7 +96,12 @@ export function PartEditForm({ partId, row, role, onSaved, onCancel }: {
   }
 
   function edit(field: Field): void {
-    if (!editable(field) || open.includes(field.key)) return;
+    if (open.includes(field.key)) return;
+    // Своей машины у позиции нет — в поле подставляется то, что видно
+    // (донор или применимость): править начинают от него, а не с пустого.
+    if (field.kind === 'vehicle' && form !== null && form[field.key].trim() === '') {
+      set(field.key, field.fallback(row));
+    }
     setOpen((keys) => [...keys, field.key]);
   }
 
@@ -120,7 +110,6 @@ export function PartEditForm({ partId, row, role, onSaved, onCancel }: {
    * снова становится текстом, остальные раскрытые остаются как были.
    */
   function revert(field: Field): void {
-    if (!editable(field)) return;
     setOpen((keys) => keys.filter((k) => k !== field.key));
     if (loaded !== null) set(field.key, loaded[field.key]);
     // Цена возвращается вместе с операцией: «Уменьшить на %» при закрытой
@@ -142,6 +131,10 @@ export function PartEditForm({ partId, row, role, onSaved, onCancel }: {
 
   async function save(): Promise<void> {
     if (form === null || loaded === null || open.length === 0) return;
+    if (open.includes('number') && !/^\s*[1-9][0-9]*\s*$/.test(form.number)) {
+      setError('№ позиции — целое число больше нуля');
+      return;
+    }
     setError('');
     setSaving(true);
     try {
@@ -149,7 +142,7 @@ export function PartEditForm({ partId, row, role, onSaved, onCancel }: {
       // прочитанное значение простой заменой, и арифметика к нему
       // не применяется.
       const touched = open.includes('price');
-      const body = toEdit(touched ? form : { ...form, price: loaded.price });
+      const body = toEdit(touched ? form : { ...form, price: loaded.price }, open);
       await savePart(partId, body, touched ? priceOp : 'SET');
       if (mounted.current) onSaved();
     } catch (e) {
@@ -178,37 +171,21 @@ export function PartEditForm({ partId, row, role, onSaved, onCancel }: {
           <h4>{section.title}</h4>
           {section.fields.map((field) => {
             const opened = open.includes(field.key);
-            /*
-             * Записано разбором разметки, а не через `editable`, и это
-             * не дубль. Предикат сужает союз — причём и через `const`
-             * (TypeScript помнит условие за именем), — и в ветке «неправимо»
-             * он решал бы, что строка непременно `locked`, тогда как
-             * состояние у менеджера тоже неправимо: сравнение с `condition`
-             * ниже становилось невозможным. Поймала это проверка типов,
-             * а `vitest` типов не смотрит вовсе.
-             */
-            const locked = field.kind === 'locked'
-              || (field.kind === 'condition' && role !== 'OWNER');
             return (
               <div
                 key={field.key}
                 className={opened ? 'card-edit__row card-edit__row--changed'
                                   : 'card-edit__row'}
               >
-                <span className="card-edit__label">
-                  {field.label}
-                  {locked
-                    && <span title={field.kind === 'condition'
-                      ? 'Состояние детали меняет владелец'
-                      : 'Это поле система ведёт сама'}> 🔒</span>}
-                </span>
+                <span className="card-edit__label">{field.label}</span>
                 <span className="card-edit__value">
                   {opened
                     ? input(field, form, set, priceOp, changeOp)
                     : shownValue(field, form, row)}
+                  {opened && 'note' in field && field.note !== undefined
+                    && <span className="muted"> {field.note}</span>}
                 </span>
-                {!locked && (
-                  opened
+                {opened
                     ? (
                       <button type="button" className="button--ghost"
                               aria-label={`Отменить: ${field.label}`}
@@ -222,8 +199,7 @@ export function PartEditForm({ partId, row, role, onSaved, onCancel }: {
                               onClick={() => edit(field)}>
                         Изменить
                       </button>
-                    )
-                )}
+                    )}
               </div>
             );
           })}
@@ -279,7 +255,7 @@ export function dromDateShown(text: string): string {
 
 /** Значение строки текстом — то, что видно, пока строку не раскрыли. */
 function shownValue(field: Field, form: Draft, row: CatalogRow): JSX.Element | string {
-  const value = field.kind === 'locked' ? field.value(row) : draftText(field, form);
+  const value = draftText(field, form, row);
   if (field.kind === 'fits' && value.trim() !== '') {
     return <ApplicabilityView text={value} />;
   }
@@ -291,8 +267,13 @@ function shownValue(field: Field, form: Draft, row: CatalogRow): JSX.Element | s
   return value === '' ? <span className="muted">не заполнено</span> : value;
 }
 
-function draftText(field: Field, form: Draft): string {
+function draftText(field: Field, form: Draft, row: CatalogRow): string {
   switch (field.kind) {
+    case 'vehicle':
+      // Своё пусто — видно то, что показывает витрина: донор или применимость.
+      return form[field.key].trim() !== '' ? form[field.key] : field.fallback(row);
+    case 'side':
+      return form[field.key] === '' ? '' : field.options[form[field.key]] ?? form[field.key];
     case 'check':
       return form.published ? 'Да' : 'Нет';
     case 'condition':
@@ -309,8 +290,6 @@ function draftText(field: Field, form: Draft): string {
       const shown = Number.isFinite(parsed) ? count(parsed) : raw;
       return field.unit === undefined ? shown : `${shown} ${field.unit}`;
     }
-    case 'locked':
-      return '';
     case 'date':
       return dromDateShown(form.adDate);
     default:
@@ -326,8 +305,16 @@ function input(
   changeOp: (op: PriceOperation) => void,
 ): JSX.Element | null {
   switch (field.kind) {
-    case 'locked':
-      return null;
+    case 'side':
+      return (
+        <select aria-label={field.label} autoFocus value={form[field.key]}
+                onChange={(e) => set(field.key, e.target.value)}>
+          <option value="">—</option>
+          {Object.entries(field.options).map(([key, title]) => (
+            <option key={key} value={key}>{title}</option>
+          ))}
+        </select>
+      );
     case 'price':
       return (
         <span className="row">
@@ -401,14 +388,24 @@ const BLOCK_KEYS: string[] = ['warranty', 'pickup', 'deliveryPayment'];
 /** Ключи черновика, в которых лежит строка: всё, кроме флажка и ячейки. */
 type StringKey = { [K in keyof Draft]: Draft[K] extends string ? K : never }[keyof Draft];
 
+/** Машина позиции: своё значение, а пусто — донор или применимость из строки витрины. */
+type VehicleKey = 'donorCode' | 'brand' | 'model' | 'generation' | 'body' | 'engine' | 'year'
+  | 'equipment';
+
 type Field =
-  | { kind: 'locked'; key: string; label: string; value: (row: CatalogRow) => string }
+  | { kind: 'vehicle'; key: VehicleKey; label: string; fallback: (row: CatalogRow) => string }
+  | { kind: 'side'; key: 'sideLr' | 'sideFr'; label: string; options: Record<string, string> }
   | { kind: 'price'; key: 'price'; label: string; unit?: string }
   | { kind: 'condition'; key: 'condition'; label: string }
   | { kind: 'grade'; key: 'qualityGrade'; label: string }
   | { kind: 'check'; key: 'published'; label: string }
-  | { kind: 'text' | 'area' | 'fits' | 'specs' | 'date'; key: StringKey; label: string }
+  | { kind: 'text' | 'area' | 'fits' | 'specs' | 'date'; key: StringKey; label: string;
+      /** Последствие правки — словами у раскрытого поля, а не замком. */
+      note?: string }
   | { kind: 'num'; key: StringKey; label: string; unit?: string };
+
+const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.', BOTH: 'лев., прав.' };
+const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.', BOTH: 'перед., задн.' };
 
 /**
  * Разделы и порядок строк — от ориентира, из которого приходят клиенты:
@@ -420,16 +417,14 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
   {
     title: 'Общая информация',
     fields: [
-      // Номер, которым деталь называют в разговоре. Правке не подлежит —
-      // его раздаёт последовательность, и названный однажды человеку
-      // он обязан остаться тем же; спрятать его тут было нельзя,
-      // иначе форма правки теряет то, что видно в карточке.
-      { kind: 'locked', key: 'number', label: '№ позиции',
-        value: (r) => plainText(String(r.number)) },
-      { kind: 'locked', key: 'code', label: 'Номер товара', value: (r) => plainText(r.code) },
-      // Состояние правится с задачи 0039 — у владельца; менеджер видит
-      // его с замком. Стоит второй строкой, как у ориентира: сразу
-      // под номером товара.
+      // Номер, которым деталь называют в разговоре. Правится (задача 0302);
+      // новые позиции система нумерует дальше вписанного.
+      { kind: 'text', key: 'number', label: '№ позиции',
+        note: 'Номер называют вслух — поменяв его, скажите об этом тем, кто знал прежний' },
+      { kind: 'text', key: 'code', label: 'Номер товара',
+        note: 'Он напечатан на этикетке и уходит в прайс Дрома: после смены перепечатайте'
+          + ' этикетку, а объявление на площадке может завестись заново' },
+      // Состояние стоит второй строкой, как у ориентира: сразу под номером товара.
       { kind: 'condition', key: 'condition', label: 'Состояние' },
       { kind: 'grade', key: 'qualityGrade', label: 'Оценка состояния' },
       { kind: 'price', key: 'price', label: 'Цена', unit: '₽' },
@@ -464,22 +459,16 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
   {
     title: 'Основные параметры',
     fields: [
-      { kind: 'locked', key: 'partName', label: 'Наименование',
-        value: (r) => plainText(r.partName) },
-      { kind: 'locked', key: 'sideFr', label: 'Передний / Задний',
-        value: (r) => (r.sideFr === null ? '' : SIDE_FR[r.sideFr] ?? r.sideFr) },
-      { kind: 'locked', key: 'sideLr', label: 'Левый / Правый',
-        value: (r) => (r.sideLr === null ? '' : SIDE_LR[r.sideLr] ?? r.sideLr) },
+      // Наименование — то, что стоит в колонке «Наименование» витрины и уходит
+      // в объявление. Правленое руками справочник больше не пересобирает.
+      { kind: 'text', key: 'title', label: 'Наименование' },
+      { kind: 'side', key: 'sideFr', label: 'Передний / Задний', options: SIDE_FR },
+      { kind: 'side', key: 'sideLr', label: 'Левый / Правый', options: SIDE_LR },
       { kind: 'text', key: 'manufacturer', label: 'Производитель' },
-      // Слово клиента с карточки Дрома (задача 0277). С замком: правки
-      // оригинальности у сервера нет, а спрятанное поле читается как «этого
-      // у вас нет».
-      { kind: 'locked', key: 'authenticity', label: 'Оригинальность',
-        value: (r) => plainText(r.authenticity ?? null) },
-      { kind: 'locked', key: 'oem', label: 'Номер производителя',
-        value: (r) => plainText(r.oem) },
-      { kind: 'locked', key: 'crosses', label: 'Кросс-номера',
-        value: (r) => plainText(r.crosses) },
+      // Слово клиента с карточки Дрома (задача 0277).
+      { kind: 'text', key: 'authenticity', label: 'Оригинальность' },
+      { kind: 'text', key: 'oem', label: 'Номер производителя' },
+      { kind: 'text', key: 'crosses', label: 'Кросс-номера', note: 'Через запятую' },
       { kind: 'text', key: 'marking', label: 'Маркировка' },
       { kind: 'text', key: 'color', label: 'Цвет' },
       { kind: 'text', key: 'section', label: 'Секция' },
@@ -494,22 +483,25 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
     ],
   },
   {
-    // Донора правят на машине, а не на детали: сведения приезжают с неё
-    // и на каждой её детали одинаковы. Поэтому весь раздел — с замком.
+    // Правка здесь меняет эту позицию, а не машину-донора и не соседние
+    // детали с неё (задача 0302): у позиции свои колонки, и пустое своё
+    // значит «как у донора или применимости».
     title: 'Автомобиль-донор',
     fields: [
-      { kind: 'locked', key: 'donorCode', label: 'Номер донора',
-        value: (r) => plainText(r.donorCode) },
-      { kind: 'locked', key: 'brand', label: 'Марка', value: (r) => plainText(r.brand) },
-      { kind: 'locked', key: 'model', label: 'Модель', value: (r) => plainText(r.model) },
-      { kind: 'locked', key: 'body', label: 'Модель кузова', value: (r) => plainText(r.body) },
-      { kind: 'locked', key: 'engine', label: 'Модель двигателя',
-        value: (r) => plainText(r.engine) },
-      { kind: 'locked', key: 'year', label: 'Год выпуска', value: (r) => plainText(r.year) },
-      { kind: 'locked', key: 'equipment', label: 'Комплектация',
-        value: (r) => plainText(r.equipment) },
-      { kind: 'locked', key: 'generation', label: 'Поколение',
-        value: (r) => plainText(generationOf(r)) },
+      { kind: 'vehicle', key: 'donorCode', label: 'Номер донора',
+        fallback: (r) => plainText(r.donorCode) },
+      { kind: 'vehicle', key: 'brand', label: 'Марка', fallback: (r) => plainText(r.brand) },
+      { kind: 'vehicle', key: 'model', label: 'Модель', fallback: (r) => plainText(r.model) },
+      { kind: 'vehicle', key: 'body', label: 'Модель кузова',
+        fallback: (r) => plainText(r.body) },
+      { kind: 'vehicle', key: 'engine', label: 'Модель двигателя',
+        fallback: (r) => plainText(r.engine) },
+      { kind: 'vehicle', key: 'year', label: 'Год выпуска',
+        fallback: (r) => plainText(r.year) },
+      { kind: 'vehicle', key: 'equipment', label: 'Комплектация',
+        fallback: (r) => plainText(r.equipment) },
+      { kind: 'vehicle', key: 'generation', label: 'Поколение',
+        fallback: (r) => plainText(generationOf(r)) },
     ],
   },
   {
@@ -523,16 +515,23 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
   {
     title: 'Другие настройки',
     fields: [
-      { kind: 'locked', key: 'legacyCode', label: 'Старые данные',
-        value: (r) => plainText(r.legacyCode) },
-      { kind: 'locked', key: 'dromAdNumber', label: 'Номер объявления Дрома',
-        value: (r) => plainText(r.dromAdNumber) },
+      { kind: 'text', key: 'legacyCode', label: 'Старые данные' },
+      { kind: 'text', key: 'dromAdNumber', label: 'Номер объявления Дрома',
+        note: 'Связывает позицию с объявлением на Дроме: с другим номером она'
+          + ' будет числиться за другим объявлением' },
     ],
   },
 ];
 
-const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.', BOTH: 'лев., прав.' };
-const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.', BOTH: 'перед., задн.' };
+
+/**
+ * Поля задачи 0302: уезжают, только если их строку раскрыли (см. описание
+ * формы). Нераскрытое — `undefined`, то есть ключа в запросе нет, и сервер
+ * поле не трогает.
+ */
+const SENT_WHEN_OPEN = ['code', 'title', 'sideLr', 'sideFr', 'authenticity', 'oem',
+  'crosses', 'legacyCode', 'dromAdNumber', 'donorCode', 'brand', 'model', 'generation',
+  'body', 'engine', 'year', 'equipment'] as const;
 
 function plainText(value: string | number | null): string {
   return value === null || value === undefined ? '' : String(value);
@@ -580,6 +579,24 @@ export interface Draft {
   characteristics: string;
   mayFit: string;
   adDate: string;
+  number: string;
+  code: string;
+  title: string;
+  sideLr: string;
+  sideFr: string;
+  authenticity: string;
+  oem: string;
+  crosses: string;
+  legacyCode: string;
+  dromAdNumber: string;
+  donorCode: string;
+  brand: string;
+  model: string;
+  generation: string;
+  body: string;
+  engine: string;
+  year: string;
+  equipment: string;
 }
 
 export function draftOf(card: PartEdit): Draft {
@@ -621,11 +638,50 @@ export function draftOf(card: PartEdit): Draft {
     characteristics: card.characteristics ?? '',
     mayFit: card.mayFit ?? '',
     adDate: card.adDate ?? '',
+    number: card.number === null || card.number === undefined ? '' : String(card.number),
+    code: card.code ?? '',
+    title: card.title ?? '',
+    sideLr: card.sideLr ?? '',
+    sideFr: card.sideFr ?? '',
+    authenticity: card.authenticity ?? '',
+    oem: card.oem ?? '',
+    crosses: card.crosses ?? '',
+    legacyCode: card.legacyCode ?? '',
+    dromAdNumber: card.dromAdNumber ?? '',
+    donorCode: card.donorCode ?? '',
+    brand: card.brand ?? '',
+    model: card.model ?? '',
+    generation: card.generation ?? '',
+    body: card.body ?? '',
+    engine: card.engine ?? '',
+    year: card.year ?? '',
+    equipment: card.equipment ?? '',
   };
 }
 
-export function toEdit(form: Draft): PartEdit {
+export function toEdit(form: Draft, open: readonly string[] = []): PartEdit {
+  const sent = (key: typeof SENT_WHEN_OPEN[number]): string | undefined =>
+    (open.includes(key) ? form[key] : undefined);
   return {
+    // Поля задачи 0302 — только раскрытые; очистка — пустая строка.
+    number: open.includes('number') ? Number(form.number.trim()) : undefined,
+    code: sent('code'),
+    title: sent('title'),
+    sideLr: sent('sideLr'),
+    sideFr: sent('sideFr'),
+    authenticity: sent('authenticity'),
+    oem: sent('oem'),
+    crosses: sent('crosses'),
+    legacyCode: sent('legacyCode'),
+    dromAdNumber: sent('dromAdNumber'),
+    donorCode: sent('donorCode'),
+    brand: sent('brand'),
+    model: sent('model'),
+    generation: sent('generation'),
+    body: sent('body'),
+    engine: sent('engine'),
+    year: sent('year'),
+    equipment: sent('equipment'),
     price: number(form.price),
     minPrice: number(form.minPrice),
     costPrice: number(form.costPrice),

@@ -35,6 +35,8 @@ interface Item {
   cellId: number | null;
   sideLr: 'LEFT' | 'RIGHT' | null;
   sideFr: 'FRONT' | 'REAR' | null;
+  /** Номер производителя (задача 0302): вписывают сразу, не открывая потом карточку. */
+  oemNumber: string;
   photos: ResizedPhoto[];
 }
 
@@ -51,6 +53,8 @@ interface Payload {
     quantity: number;
     /** Заведённая заранее позиция; пусто — обычная приёмка новой карточки. */
     partId: number | null;
+    /** Пусто — номера нет; сервер приводит его тем же правилом, что поиск. */
+    oemNumber: string | null;
   }[];
 }
 
@@ -280,6 +284,15 @@ export function IntakeScreen({ reference, onSend }: Props) {
         </label>
       </div>
 
+      <label>
+        Номер производителя
+        <input
+          value={draft.oemNumber}
+          autoCapitalize="characters"
+          onChange={(e) => setDraft({ ...draft, oemNumber: e.target.value })}
+        />
+      </label>
+
       <div className="row">
         <label>
           Цена
@@ -336,6 +349,9 @@ export function IntakeScreen({ reference, onSend }: Props) {
             {items.map((item) => (
               <li key={item.key}>
                 {item.rawName} · {item.price} ₽
+                {item.oemNumber.trim() !== '' && (
+                  <span className="muted"> · {item.oemNumber.trim()}</span>
+                )}
                 {item.partId !== null && (
                   <span className="muted"> · заведена заранее, {item.quantity} шт</span>
                 )}
@@ -442,6 +458,7 @@ export function IntakeScreen({ reference, onSend }: Props) {
         sideFr: item.sideFr,
         quantity: item.quantity,
         partId: item.partId,
+        oemNumber: item.oemNumber.trim() === '' ? null : item.oemNumber.trim(),
       })),
     };
     // Снимки привязываются к позиции по номеру, а не по идентификатору:
@@ -479,6 +496,7 @@ function emptyItem(): Item {
     cellId: null,
     sideLr: null,
     sideFr: null,
+    oemNumber: '',
     photos: [],
   };
 }

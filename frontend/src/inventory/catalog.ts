@@ -135,7 +135,7 @@ export interface CatalogPage {
   filterable: string[];
 }
 
-export type VehicleSource = 'DONOR' | 'VERIFIED' | 'PARSED';
+export type VehicleSource = 'MANUAL' | 'DONOR' | 'VERIFIED' | 'PARSED';
 
 /**
  * Подсказка клетки машины: откуда значение (задача 0290).
@@ -148,6 +148,9 @@ export function vehicleHint(row: CatalogRow): string | undefined {
   const source = row.vehicleSource ?? null;
   if (source === null) return undefined;
   if (source === 'DONOR') return 'По донору';
+  // Вписано в карточке позиции руками (задача 0302): побеждает и донора,
+  // и применимость.
+  if (source === 'MANUAL') return 'Вписано у позиции руками';
   const base = source === 'VERIFIED'
     ? 'По применимости, подтверждена человеком'
     : 'По применимости, разобрана автоматически';
@@ -1100,6 +1103,31 @@ export interface PartEdit {
    * Те же два способа «пусто».
    */
   adDate: string | null;
+  /**
+   * Задача 0302 — поля, стоявшие с замком. С сервера приходит то, что лежит
+   * у позиции; уезжают только раскрытые строки, остальных ключей нет («не
+   * трогать»), пустая строка — очистить. У машины (`donorCode` … `equipment`)
+   * с сервера приходит только вписанное у позиции руками: пусто — у позиции
+   * своего нет, и показывается донор или применимость из строки витрины.
+   */
+  number?: number | null | undefined;
+  code?: string | null | undefined;
+  title?: string | null | undefined;
+  sideLr?: string | null | undefined;
+  sideFr?: string | null | undefined;
+  authenticity?: string | null | undefined;
+  oem?: string | null | undefined;
+  crosses?: string | null | undefined;
+  legacyCode?: string | null | undefined;
+  dromAdNumber?: string | null | undefined;
+  donorCode?: string | null | undefined;
+  brand?: string | null | undefined;
+  model?: string | null | undefined;
+  generation?: string | null | undefined;
+  body?: string | null | undefined;
+  engine?: string | null | undefined;
+  year?: string | null | undefined;
+  equipment?: string | null | undefined;
 }
 
 /**

@@ -65,6 +65,10 @@ class InternalIdsNotShownTest {
      * не принимается, иначе список превращается в способ обойти перебор.
      */
     private static final List<Allowed> ALLOWED = List.of(
+            new Allowed("inventory/PartIdentity.java",
+                    "«№ позиции» — номер, который человек сам вписал и называет вслух"
+                            + " (part.number), а не id строки; позиция-владелец названа"
+                            + " публичным кодом (задача 0302)"),
             new Allowed("platform/tenant/ProvisioningLimits.java",
                     "предел частоты и потолок схем — сами числа и есть ответ оператору"),
             new Allowed("platform/tenant/RegistrationLimits.java",

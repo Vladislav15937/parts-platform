@@ -52,10 +52,13 @@ public class PartService {
     /** Блоки карточки Дрома лежат в своей таблице и правятся вместе с формой (задача 0285). */
     private final jakarta.persistence.EntityManager entityManager;
 
+    private final PartIdentity identity;
+
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
                        PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc,
                        VehicleWords vehicleWords, StockNaming naming, StockLedger ledger,
-                       PartTitleGenerator titles, jakarta.persistence.EntityManager entityManager) {
+                       PartTitleGenerator titles, jakarta.persistence.EntityManager entityManager,
+                       PartIdentity identity) {
         this.partRepository = partRepository;
         this.eventPublisher = eventPublisher;
         this.partNames = partNames;
@@ -66,6 +69,7 @@ public class PartService {
         this.ledger = ledger;
         this.titles = titles;
         this.entityManager = entityManager;
+        this.identity = identity;
     }
 
     /**
@@ -302,6 +306,30 @@ public class PartService {
             part.changePrice(wanted, authorId);
         }
 
+        // Наименование правится руками (задача 0302, решение владельца: «никаких
+        // замков»). Справочник его после этого не пересобирает: правка руками
+        // и есть то, что владелец хочет видеть в объявлении. Пустое — «не
+        // трогать»: колонка NOT NULL, позиции без наименования не бывает.
+        if (update.title() != null && !update.title().isBlank()
+                && !update.title().strip().equals(part.getTitle())) {
+            part.setTitle(update.title().strip());
+        }
+        // Стороны: null — ключа не было, не трогать; пустое — снять сторону.
+        if (update.sideLr() != null || update.sideFr() != null) {
+            part.setSides(
+                    update.sideLr() == null ? part.getSideLr() : side(LateralSide.class, update.sideLr()),
+                    update.sideFr() == null ? part.getSideFr()
+                            : side(LongitudinalSide.class, update.sideFr()),
+                    part.getSideUd());
+        }
+        if (update.legacyCode() != null) {
+            String legacy = blankToNull(update.legacyCode());
+            if (legacy != null) {
+                identity.requireFree(partId, "legacy_code", legacy, "Старые данные");
+            }
+            part.setLegacyCode(legacy);
+        }
+
         // Состояние и пометка заголовка двигаются вместе, и только когда
         // состояние действительно другое: пересчитывать заголовок на правке
         // заметки незачем, а у перенесённой позиции он несёт ещё и список
@@ -341,6 +369,11 @@ public class PartService {
         // как руку приложили автор и блоки карточки Дрома: в прайс они пока
         // не уходят, и правка одних блоков не должна слать площадке дельту.
         boolean partChanged = entityManager.unwrap(org.hibernate.Session.class).isDirty();
+        // Номер производителя, кросс-номера, номер позиции и товара, номер
+        // объявления Дрома, своя машина позиции — мимо сущности (см. PartIdentity).
+        if (update.identity() != null && identity.apply(partId, update.identity(), authorId)) {
+            partChanged = true;
+        }
         part.touchedBy(authorId);
         boolean termsChanged = applyDromCard(partId, update);
 
@@ -988,7 +1021,27 @@ public class PartService {
                              // Что сделать с ценой: заменить (умолчание), подвинуть
                              // процентом или суммой, округлить. При арифметике
                              // price — значение операции, а не новая цена.
-                             PriceOperation priceOp) {
+                             PriceOperation priceOp,
+                             // Задача 0302: всё, что раньше стояло в форме с замком.
+                             // {@code null} — ключа не было, не трогать; пустое — очистить
+                             // (у наименования — не трогать: колонка NOT NULL).
+                             String title,
+                             String sideLr,
+                             String sideFr,
+                             String legacyCode,
+                             PartIdentity.Edit identity) {
+    }
+
+    /** Сторона кодом перечисления; пусто — стороны нет; чужое слово — отказ словами. */
+    private static <E extends Enum<E>> E side(Class<E> type, String code) {
+        if (code.isBlank()) {
+            return null;
+        }
+        try {
+            return Enum.valueOf(type, code.strip());
+        } catch (IllegalArgumentException unknown) {
+            throw new IllegalArgumentException("Сторона «" + code.strip() + "» не распознана");
+        }
     }
 
     /**

@@ -87,6 +87,24 @@ public final class AuditedColumns {
         PART.put("package_width_mm", "Ширина упаковки, мм");
         PART.put("package_height_mm", "Высота упаковки, мм");
         PART.put("product_line", "Вид товара");
+        // Задача 0302: поля, которые до неё стояли в форме с замком. Пишет их
+        // inventory.PartIdentity через AuditJournal, мимо сущности: oem и crosses
+        // не колонки part, а номера производителя из part_oem, названные так
+        // в снимке правки.
+        PART.put("number", "№ позиции");
+        PART.put("public_code", "Номер товара");
+        PART.put("oem", "Номер производителя");
+        PART.put("crosses", "Кросс-номера");
+        PART.put("authenticity", "Оригинальность");
+        PART.put("drom_ad_number", "Номер объявления Дрома");
+        PART.put("manual_donor_code", "Номер донора");
+        PART.put("manual_brand", "Марка");
+        PART.put("manual_model", "Модель");
+        PART.put("manual_generation", "Поколение");
+        PART.put("manual_body", "Модель кузова");
+        PART.put("manual_engine", "Модель двигателя");
+        PART.put("manual_year", "Год выпуска");
+        PART.put("manual_equipment", "Комплектация");
     }
 
     /**
