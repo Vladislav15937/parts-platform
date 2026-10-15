@@ -28,7 +28,8 @@
 # ЧЕМ ДОКАЗАН ВОЗВРАТ (задача 0238): расширения — ответом базы, а не списком,
 # напечатанным после psql с выводом в /dev/null; каждая схема арендатора —
 # сверкой пяти агрегатов с описью набора (те же числа и тот же вердикт, что
-# у ops/verify-backup.sh). Код 0 — сошлось; 1 — не вернулось, и сказано что;
+# у ops/verify-backup.sh); снимки (задача 0300) — счётом объектов в хранилище
+# после зеркала, не меньше отправленного. Код 0 — сошлось; 1 — не вернулось, и сказано что;
 # 2 — вызов неправильный.
 set -euo pipefail
 case "$0" in
@@ -88,6 +89,7 @@ restore_cell_selftest() {
     says() { printf '%s' "$out" | grep -qF -- "$1"; }
     healthy() {
         rm -f "$tmp/stub/"*
+        rm -rf "$tmp/backups/photos"
         {
             echo "снято: 20261015T030000Z"
             echo "база: parts"
@@ -172,13 +174,100 @@ restore_cell_selftest() {
         _bad "лишний аргумент обязан отбиваться кодом 2 (код $rc)"
     fi
 
+    # 6–10. ФОТОГРАФИИ (задача 0300). До неё каталога photos рядом с набором
+    #    в самопроверке не было вовсе: шаг ни разу не исполнялся, и вызов,
+    #    которому не к чему подключиться, жил под зелёной самопроверкой.
+    #    Зеркало — как его кладёт ops/backup.sh: $BACKUPS/photos, префиксы схем.
+    with_photos() {   # $1 — сколько объектов ответит хранилище после зеркала
+        local i
+        mkdir -p "$tmp/backups/photos/t_000042/parts" "$tmp/backups/photos/t_000043/parts"
+        printf 'jpg\n' > "$tmp/backups/photos/t_000042/parts/a.jpg"
+        printf 'jpg\n' > "$tmp/backups/photos/t_000043/parts/b.jpg"
+        : > "$tmp/stub/ls"
+        for i in $(seq 1 "$1"); do
+            printf '[2026-10-15 03:00:00 UTC]  4B STANDARD t_00004%s/parts/%s.jpg\n' "$i" "$i" >> "$tmp/stub/ls"
+        done
+    }
+    # Форма вызова — по записи вызовов, а не по подстроке «mc mirror»: так же,
+    # как бэкап (ops/backup.sh) и возврат клиента (ops/restore-tenant.sh) —
+    # разовый контейнер с каталогом флагом -v и псевдонимом cell. Ни exec
+    # (mc не живёт), ни local/ (такого псевдонима в окружении mc нет).
+    photo_calls_right() {
+        grep -qE ' run --rm -v [^ ]+/photos:/restore mc mirror --overwrite --quiet /restore cell/parts-photos$' "$tmp/stub/calls" \
+            && grep -qE ' run --rm mc ls --recursive cell/parts-photos/$' "$tmp/stub/calls" \
+            && ! grep -qE ' exec( -T)? mc |local/' "$tmp/stub/calls"
+    }
+
+    # 6. Зеркало есть, хранилище после него отвечает тем же числом — код 0,
+    #    число названо с той стороны, форма вызова — как у бэкапа.
+    healthy
+    with_photos 2
+    run "$set" "$tmp/env"
+    if [ "$rc" = 0 ] && says 'снимков в хранилище: 2 (из зеркала отправлено 2)' \
+        && says 'Ячейка восстановлена' && photo_calls_right; then
+        _ok 'зеркало снимков: код 0, run --rm -v … mc mirror … cell/, счёт на той стороне'
+    else
+        _bad "зеркало снимков обязано подниматься разовым mc с псевдонимом cell и считаться в хранилище (код $rc)"
+        sed 's/^/      вызов: /' "$tmp/stub/calls" | grep -E ' mc ' || true
+    fi
+
+    # 7. Зеркало отказало (хранилище не поднялось) — код 1, причина названа,
+    #    а база при этом всё равно сверена до конца.
+    healthy
+    with_photos 2
+    : > "$tmp/stub/mirror_fail"
+    run "$set" "$tmp/env"
+    if [ "$rc" = 1 ] && says 'снимки НЕ возвращены: зеркало не поднялось' \
+        && says 'Но снимки не возвращены' && says 'реестр и схемы сошлись'; then
+        _ok 'отказ зеркала: код 1, названо, база при этом сверена'
+    else
+        _bad "отказ зеркала обязан краснеть и называться (код $rc)"
+    fi
+
+    # 8. Зеркало «прошло», а хранилище не отвечает (нет прав) — не установлено,
+    #    значит красное, а не «возвращены».
+    healthy
+    with_photos 2
+    : > "$tmp/stub/ls_fail"
+    run "$set" "$tmp/env"
+    if [ "$rc" = 1 ] && says 'хранилище не ответило' && ! says 'снимков в хранилище:'; then
+        _ok 'хранилище не отвечает после зеркала: код 1, «не установлено», а не «возвращены»'
+    else
+        _bad "молчащее хранилище обязано краснеть (код $rc)"
+    fi
+
+    # 9. В хранилище меньше, чем отправляли (не тот бакет) — код 1, оба числа.
+    healthy
+    with_photos 1
+    run "$set" "$tmp/env"
+    if [ "$rc" = 1 ] && says 'в хранилище у клиента 1 объектов, а из копии отправляли 2'; then
+        _ok 'в хранилище меньше отправленного: код 1, оба числа названы'
+    else
+        _bad "недостача снимков обязана краснеть (код $rc)"
+    fi
+
+    # 10. ЗАКОННЫЙ КРАЙ: зеркала нет вовсе (ячейка без снимков) — код 0,
+    #     сказано словами, mc не зовётся.
+    healthy
+    run "$set" "$tmp/env"
+    if [ "$rc" = 0 ] && says 'зеркала нет: склад поднимется без фотографий' \
+        && ! grep -qE ' mc ' "$tmp/stub/calls"; then
+        _ok 'зеркала нет: код 0, сказано словами, mc не звали'
+    else
+        _bad "ячейка без зеркала снимков обязана проходить нулём (код $rc)"
+    fi
+
     # 5. ВОЗВРАТ ДЕФЕКТА: копия в .scratch/, подделка по метке строки.
     if [ -z "${RESTORE_SELFTEST_CHILD:-}" ]; then
         mkdir -p .scratch
         local fake copy
-        for fake in флаг расширения содержимое; do
+        for fake in флаг расширения содержимое вызов счёт; do
             copy=".scratch/restore-cell-fake-${fake}-0238.sh"
             case "$fake" in
+                # 0300: вернуть exec-форму, ни разу не работавшую; снять счёт
+                # на той стороне — «возвращены», раз зеркало вышло нулём.
+                вызов)      sed 's|^    if ! \$COMPOSE run .*# 0300-вызов$|    if ! $COMPOSE exec -T mc sh -c "mc mirror --overwrite /backup/photos local/$BUCKET"; then|' "$SELF" > "$copy" ;;
+                счёт)       sed 's|^        photos_back_check .*# 0300-счёт$|        GOT="$SENT"|' "$SELF" > "$copy" ;;
                 флаг)       sed '/# 0238-флаг$/d' "$SELF" > "$copy" ;;
                 расширения) sed 's|^if ! extensions_present_check .*# 0238-расширения$|if false; then|' "$SELF" > "$copy" ;;
                 содержимое) sed 's|^    agg_check_schema .*# 0238-содержимое$|    CONTENT=0|' "$SELF" > "$copy" ;;
@@ -338,17 +427,37 @@ fi
 
 step "Фотографии"
 MIRROR="$BACKUPS/photos"
+PHOTOS_FAILED=0
 if [ -d "$MIRROR" ]; then
-    # «Снимки возвращены из зеркала» печаталось БЕЗУСЛОВНО, то есть при отказе
-    # человек видел рядом две строки: «зеркало не поднялось» и «снимки
-    # возвращены». Вторая читается как итог и отменяет первую.
-    if $COMPOSE exec -T mc sh -c "mc mirror --overwrite /backup/photos local/${S3_BUCKET:-parts-photos}"; then
-        ok "снимки возвращены из зеркала"
-    else
-        printf '\033[1;31m    зеркало не поднялось — снимки НЕ возвращены (проверьте mc и путь %s)\033[0m\n' \
-            "$MIRROR"
-        printf '\033[1;31m    склад со ссылками в никуда — это не возвращённый клиент\033[0m\n'
+    # Вызов — тот же, что у бэкапа (ops/backup.sh) и возврата клиента
+    # (ops/restore-tenant.sh): разовый контейнер mc, каталог зеркала флагом -v,
+    # псевдоним cell из его окружения. До задачи 0300 здесь стоял
+    # `exec -T mc sh -c "mc mirror … /backup/photos local/…"` — и все три его
+    # части неверны: mc живёт в профиле backup с командой `--version` (вышел,
+    # войти не во что: «service "mc" is not running»), /backup в нём
+    # не смонтирован, псевдонима local в окружении нет. Шаг отказывал всегда,
+    # а самопроверка его не исполняла вовсе.
+    #
+    # Зеркало без --remove: снимки, загруженные после снятия набора, остаются
+    # (ключи неизменяемы, копируется только недостающее).
+    BUCKET="${S3_BUCKET:-parts-photos}"
+    SENT=$(find "$MIRROR" -type f | wc -l | tr -d ' ')
+    if ! $COMPOSE run --rm -v "$(cd "$MIRROR" && pwd):/restore" mc mirror --overwrite --quiet /restore "cell/$BUCKET" > /dev/null; then   # 0300-вызов
+        PHOTOS_BACK_WHY="зеркало не поднялось (mc mirror в cell/$BUCKET отказал; хранилище, ключи S3, путь $MIRROR)"
         PHOTOS_FAILED=1
+    else
+        # Счёт — на той стороне, куда вернули (как у restore-tenant.sh, 0238):
+        # «снимки возвращены» прежде печаталось по коду возврата, то есть
+        # называло, что собирались отправить.
+        GOT=$($COMPOSE run --rm mc ls --recursive "cell/$BUCKET/" 2>/dev/null \
+            | wc -l | tr -d ' ') || GOT=""
+        photos_back_check "$SENT" "$GOT" || PHOTOS_FAILED=1   # 0300-счёт
+    fi
+    if [ "$PHOTOS_FAILED" = 0 ]; then
+        ok "снимков в хранилище: $GOT (из зеркала отправлено $SENT)"
+    else
+        printf '\033[1;31m    снимки НЕ возвращены: %s\033[0m\n' "$PHOTOS_BACK_WHY"
+        printf '\033[1;31m    склад со ссылками в никуда — это не возвращённый клиент\033[0m\n'
     fi
 else
     echo "    зеркала нет: склад поднимется без фотографий"
