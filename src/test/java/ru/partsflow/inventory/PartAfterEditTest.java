@@ -328,52 +328,44 @@ class PartAfterEditTest extends PostgresTestBase {
         assertThat(lexusRow.path("brandParts").asLong()).isEqualTo(1);
     }
 
-    // ---------------------------------------------------------- пункт 3: заголовок
+    // ---------------------------------------------------------- название (0304)
 
     @Test
-    @DisplayName("Собранный заголовок получает новый номер производителя — в карточке и в <name> прайса")
-    void builtTitleFollowsTheOem() throws Exception {
+    @DisplayName("Номер производителя название не трогает — собранное, вписанное, при смене и при снятии")
+    void oemEditNeverTouchesTheTitle() throws Exception {
         MockHttpSession owner = login();
+        String history = historyOf(owner);
 
         save(owner, "\"oem\":\"81170-33671\"");
-
-        assertThat(titleOf(partId)).isEqualTo("Фара левая (б/у) 81170-33671");
-        assertThat(offer(price(DromPriceGenerator.FeedFilter.everything()), "Фара левая"))
-                .contains("<name>Фара левая 81170-33671</name>");
-        String history = mvc.perform(get("/api/parts/" + partId + "/history").session(owner))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-        assertThat(history).as("пересборка не попала в историю позиции")
-                .contains("Наименование", "Фара левая (б/у) 81170-33671");
-
-        // Снятый номер уходит и из заголовка, добавленный встаёт на своё место.
+        assertThat(titleOf(partId)).isEqualTo("Фара левая (б/у) 81170-33670");
         save(owner, "\"oem\":\"\"");
-        assertThat(titleOf(partId)).isEqualTo("Фара левая (б/у)");
-        save(owner, "\"oem\":\"81170-33672\"");
-        assertThat(titleOf(partId)).isEqualTo("Фара левая (б/у) 81170-33672");
-    }
-
-    @Test
-    @DisplayName("Вписанный руками заголовок правка номера не трогает — даже с прежним номером в конце")
-    void manualTitleIsNeverRebuilt() throws Exception {
-        MockHttpSession owner = login();
-        save(owner, "\"title\":\"Моя фара\"");
-        save(owner, "\"oem\":\"81170-33671\"");
-        assertThat(titleOf(partId)).isEqualTo("Моя фара");
+        assertThat(titleOf(partId)).isEqualTo("Фара левая (б/у) 81170-33670");
 
         save(owner, "\"title\":\"Моя фара (б/у) 81170-33671\"");
         save(owner, "\"oem\":\"81170-33679\"");
-        assertThat(titleOf(partId)).as("ручной текст в форме собранного").isEqualTo(
-                "Моя фара (б/у) 81170-33671");
+        assertThat(titleOf(partId)).as("ручной текст в форме собранного")
+                .isEqualTo("Моя фара (б/у) 81170-33671");
         save(owner, "\"oem\":\"\"");
         assertThat(titleOf(partId)).isEqualTo("Моя фара (б/у) 81170-33671");
+
+        assertThat(historyOf(owner).split("Наименование", -1).length)
+                .as("правка номера написала в историю «Наименование: … → …»")
+                .isEqualTo(history.split("Наименование", -1).length + 1);
     }
 
     @Test
-    @DisplayName("Наименование и номер в одной правке: побеждает вписанное, пересборки нет")
-    void titleAndOemTogetherKeepTheTitle() throws Exception {
-        save(login(), "\"title\":\"Фара ксенон\",\"oem\":\"81170-33671\"");
-        assertThat(titleOf(partId)).isEqualTo("Фара ксенон");
+    @DisplayName("Прямая правка «Наименования» работает: в карточке, в истории и в <name> прайса")
+    void humanTitleEditStillWorks() throws Exception {
+        MockHttpSession owner = login();
+        save(owner, "\"title\":\"Моя фара\",\"oem\":\"81170-33671\"");
+
+        assertThat(titleOf(partId)).isEqualTo("Моя фара");
+        assertThat(offer(price(DromPriceGenerator.FeedFilter.everything()), "Моя фара"))
+                .contains("<name>Моя фара</name>");
+        assertThat(historyOf(owner)).contains("Наименование", "Моя фара");
+
+        save(owner, "\"title\":\"Другая фара\"");
+        assertThat(titleOf(partId)).isEqualTo("Другая фара");
     }
 
     // ------------------------------------------------------------------ помощники
@@ -386,6 +378,12 @@ class PartAfterEditTest extends PostgresTestBase {
                 // Форма уезжает целиком, и пустая маркировка — «очищено»: шлём свою.
                 .content("{\"price\":4500,\"published\":true,\"marking\":\"" + marking + "\","
                         + fields + "}"));
+    }
+
+    private String historyOf(MockHttpSession owner) throws Exception {
+        return mvc.perform(get("/api/parts/" + partId + "/history").session(owner))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
     }
 
     private void save(MockHttpSession session, String fields) throws Exception {

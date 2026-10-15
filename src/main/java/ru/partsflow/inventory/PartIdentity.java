@@ -100,13 +100,12 @@ public class PartIdentity {
     }
 
     /**
-     * Что изменилось у номера производителя — пересборке заголовка
-     * ({@code PartService.update}) нужны оба значения: прежнее ищется в конце
-     * заголовка, новое встаёт на его место.
+     * Что изменилось. Прежние и новые значения номера производителя здесь
+     * не нужны: с задачи 0304 правка номера названия позиции не трогает.
      *
      * @param changed изменилось ли хоть что-то
      */
-    public record Applied(boolean changed, boolean oemChanged, String oemBefore, String oemAfter) {
+    public record Applied(boolean changed) {
     }
 
     /**
@@ -179,8 +178,7 @@ public class PartIdentity {
                     authorId, partId);
         }
 
-        Applied applied = new Applied(!after.isEmpty(), after.containsKey("oem"),
-                was.oem(), (String) after.get("oem"));
+        Applied applied = new Applied(!after.isEmpty());
         if (after.isEmpty()) {
             return applied;
         }

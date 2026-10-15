@@ -86,14 +86,6 @@ public class Part {
     @Column(nullable = false)
     private String title;
 
-    /**
-     * Наименование вписано руками в карточке (задача 0303, {@code tenant/089}).
-     * Такой заголовок правка номера производителя не пересобирает: ручной текст
-     * не затирается никогда. Ставит только {@link #editTitle}.
-     */
-    @Column(name = "title_manual", nullable = false)
-    private boolean titleManual;
-
     /** Комментарий к товару; выводится в объявлении. */
     private String description;
 
@@ -300,18 +292,9 @@ public class Part {
         return title;
     }
 
+    /** Название меняет только человек, вписав его в карточке (задача 0304). */
     public void setTitle(String title) {
         this.title = title;
-    }
-
-    /** Наименование, вписанное человеком: дальше система его не пересобирает. */
-    public void editTitle(String title) {
-        this.title = title;
-        this.titleManual = true;
-    }
-
-    public boolean isTitleManual() {
-        return titleManual;
     }
 
     public String getDescription() {

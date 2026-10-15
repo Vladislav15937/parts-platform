@@ -347,6 +347,11 @@ class IntakeServiceTest extends PostgresTestBase {
                 warehouse, supply.getId(), null,
                 List.of(item("фара левая", "8500")), null, requestId));
 
+        // Владелец успел вписать своё название (задача 0304): повтор приёмки
+        // возвращает результат первого раза и название не пересобирает.
+        Long firstPart = first.parts().get(0).getId();
+        inTenant(() -> jdbc.update("UPDATE part SET title = 'Моя фара' WHERE id = ?", firstPart));
+
         // Телефон отправил партию, соединение оборвалось до ответа, очередь
         // повторила. Без ключа здесь появилась бы вторая деталь на складе.
         IntakeService.Receipt again = inTenant(() -> intake.receive(
@@ -360,6 +365,9 @@ class IntakeServiceTest extends PostgresTestBase {
 
         Long partId = first.parts().get(0).getId();
         assertThat(qtyOf(partId)).as("повтор удвоил остаток").isEqualByComparingTo("1");
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT title FROM part WHERE id = ?", String.class, partId)))
+                .as("повтор приёмки переписал название").isEqualTo("Моя фара");
         assertThat(inTenant(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM stock_document WHERE client_request_id = ?",
                 Integer.class, requestId))).isEqualTo(1);

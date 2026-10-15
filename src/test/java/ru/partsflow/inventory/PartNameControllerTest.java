@@ -84,7 +84,7 @@ class PartNameControllerTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Сопоставление доводит карточки: категория и эталонный заголовок")
+    @DisplayName("Сопоставление доводит карточки: категория и вид детали, а название остаётся прежним")
     void matchFixesExistingCards() throws Exception {
         Long nameId = unmatchedName("фара лев.");
         Long partId = partUnder(nameId, "фара лев. Toyota Camry 2006 (б/у)");
@@ -97,14 +97,39 @@ class PartNameControllerTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.updated").value(1))
                 .andExpect(jsonPath("$.partName.matchStatus").value("MANUAL"));
 
-        // Ради этих двух строк экран и заведён: без них сопоставление
-        // не меняет ничего из того, что видит владелец.
+        // Задача 0304, решение владельца 15.10.2026: «название не должно меняться
+        // само». Раньше начало заголовка подменялось эталоном.
         assertThat(titleOf(partId))
-                .as("заголовок остался в написании приёмщика — склад так и будет неоднородным")
-                .isEqualTo("Фара Toyota Camry 2006 (б/у)");
+                .as("сопоставление переписало название, вписанное человеком или принятое")
+                .isEqualTo("фара лев. Toyota Camry 2006 (б/у)");
+        assertThat(kindOf(partId)).isEqualTo(headlightKindId);
         assertThat(categoryOf(partId))
                 .as("категория не проставлена — карточка не попадёт ни в один разрез склада")
                 .isEqualTo(headlightCategoryId);
+    }
+
+    /**
+     * Пакетная доводка («пересопоставить всё», она же шаг переноса) — второе
+     * место, где название переписывалось SQL-ом (задача 0304).
+     */
+    @Test
+    @DisplayName("Пересопоставление всех: карточки получают вид детали, название не меняется")
+    void rematchAllLeavesTitles() throws Exception {
+        Long nameId = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part_name (name, match_status, part_kind_id, category_id)
+                VALUES ('фара лев.', 'MANUAL', ?, ?) RETURNING id""",
+                Long.class, headlightKindId, headlightCategoryId));
+        Long partId = partUnder(nameId, "фара лев. Toyota Camry 2006 (б/у)");
+        Long ownId = partUnder(nameId, "Моя фара");
+
+        mvc.perform(post("/api/part-names/rematch").with(csrf()).session(login("vladelec")))
+                .andExpect(status().isOk());
+
+        assertThat(titleOf(partId)).as("пакетная доводка переписала название")
+                .isEqualTo("фара лев. Toyota Camry 2006 (б/у)");
+        assertThat(titleOf(ownId)).isEqualTo("Моя фара");
+        assertThat(kindOf(partId)).as("доводка не отработала — тест ничего не доказывает")
+                .isEqualTo(headlightKindId);
     }
 
     @Test
@@ -257,14 +282,11 @@ class PartNameControllerTest extends PostgresTestBase {
         mvc.perform(get("/api/part-names/matched").session(session))
                 .andExpect(jsonPath("$.total").value(0));
 
-        // Пункт 6 критерия приёмки задачи 0167: что делается с позициями,
-        // сопоставленными ошибочно. Они остаются как есть — обратная подмена
-        // заголовка вернула бы «фару лев.» и тем карточкам, которые правили
-        // руками уже после сопоставления. Экран говорит это словами.
+        // Пункт 6 критерия приёмки задачи 0167: позиции, сопоставленные ошибочно,
+        // остаются как есть. Название с 0304 не менялось и при сопоставлении.
         assertThat(titleOf(partId))
-                .as("заголовок откатился: обратная подмена стёрла бы правки, "
-                        + "сделанные после сопоставления")
-                .isEqualTo("Фара Toyota Camry 2006 (б/у)");
+                .as("название изменилось от сопоставления или от его снятия")
+                .isEqualTo("фара лев. Toyota Camry 2006 (б/у)");
         assertThat(categoryOf(partId))
                 .as("категория снята с карточки — позиция выпала бы из разрезов склада")
                 .isEqualTo(headlightCategoryId);
@@ -306,10 +328,9 @@ class PartNameControllerTest extends PostgresTestBase {
                 // названия означает «снять неизвестно что».
                 .andExpect(jsonPath("$.items[0].kindName").value("Фара"))
                 .andExpect(jsonPath("$.items[0].partName.usageCount").value(40))
-                // Образец заголовка — по нему и видно, что сопоставление
-                // оказалось не тем.
+                // Образец заголовка — прежний: сопоставление его не меняет (0304).
                 .andExpect(jsonPath("$.items[0].partName.sampleTitle")
-                        .value("Фара Toyota Camry 2006 (б/у)"));
+                        .value("фара лев. Toyota Camry 2006 (б/у)"));
     }
 
     @Test
@@ -346,6 +367,11 @@ class PartNameControllerTest extends PostgresTestBase {
     private String titleOf(Long partId) {
         return inTenant(() -> jdbc.queryForObject(
                 "SELECT title FROM part WHERE id = ?", String.class, partId));
+    }
+
+    private Long kindOf(Long partId) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT part_kind_id FROM part WHERE id = ?", Long.class, partId));
     }
 
     private Long categoryOf(Long partId) {
