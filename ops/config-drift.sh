@@ -131,6 +131,15 @@ write_manifest() {  # репозиторий, коммит, куда
     commit=$(git -C "$repo" rev-parse --verify "$rev^{commit}" 2>/dev/null) \
         || { red "Нет коммита $rev в $repo — манифест не снят"; return 2; }
     : | hash_stdin >/dev/null || { red "Нечем считать сумму (ни sha256sum, ни shasum) — манифест не снят"; return 2; }
+    # Что кнопка НЕ привозит, в манифест не входит ЯВНО, независимо от признака
+    # в шапке файла У ЭТОГО коммита: выкладывая старый SHA (откат), мы снимаем
+    # манифест с коммита, где признака ещё не было, а файл состояния после
+    # переключения трафика отличается от репозитория законно. Источник один —
+    # список `--exclude` шага rsync в deploy.yml ветки кнопки; не нашёлся —
+    # отказ, а не молча пустой список (манифест краснил бы переключения).
+    local wf="$ROOT/.github/workflows/deploy.yml"
+    [ -f "$wf" ] || { red "Нет $wf — неизвестно, что кнопка не привозит; манифест не снят"; return 2; }
+    grep -o "exclude '[^']*'" "$wf" | sed "s/exclude '//; s/'\$//" | grep -v '/$' | sed 's|^|ops/|' > "$TMP/excluded"
     {
         echo "# config-manifest v1"
         echo "# commit $commit"
@@ -138,6 +147,7 @@ write_manifest() {  # репозиторий, коммит, куда
         # что лежит на диске у того, кто его снимает.
         while IFS= read -r -d '' path; do
             [ "$path" = "$MANIFEST_REL" ] && continue
+            grep -Fxq -- "$path" "$TMP/excluded" && continue
             git -C "$repo" cat-file blob "$commit:$path" > "$TMP/blob" 2>/dev/null \
                 || { echo "ОШИБКА: не прочитать $path" >&2; exit 1; }
             is_state "$TMP/blob" && continue
@@ -268,6 +278,30 @@ selftest() {
         printf '  ✓ ячейка с тем же коммитом сходится молча (без .git, без сети)\n'
     else
         red "  ✗ исправная ячейка обязана проходить (код $rc)"; printf '%s\n' "$out" | sed 's/^/      /' >&2; bad=1
+    fi
+
+    # Откат на СТАРЫЙ коммит: у него в active-build.caddy признака ещё нет.
+    # Манифест, снятый с такого SHA, обязан не включать файл состояния (его
+    # не привозит кнопка), и переключение трафика после этого — тишина.
+    if [ -f "$ROOT/.github/workflows/deploy.yml" ]; then
+        local O="$TMP/old" c0
+        mkdir -p "$O/ops"; cp "$R/docker-compose.prod.yml" "$O/"; cp "$R/ops/a.sh" "$R/ops/alerts.yml" "$O/ops/"
+        printf '# Активная сборка (старая шапка, без признака)\nreverse_proxy app-blue:8080\n' > "$O/ops/active-build.caddy"
+        git -C "$O" init -q . ; git -C "$O" config user.email t@example.com; git -C "$O" config user.name t
+        git -C "$O" add -A; git -C "$O" commit -q -m old
+        c0=$(git -C "$O" rev-parse HEAD)
+        mkdir -p "$TMP/oldm"; git -C "$O" archive "$c0" | tar -x -C "$TMP/oldm"
+        bash "$SELF" --write --repo "$O" --commit "$c0" --out "$TMP/oldm/ops/config-manifest.sha256" >/dev/null
+        sed -n '/^write_active() {/,/^}/p' "$ROOT/ops/switch-build.sh" > "$TMP/write_active_old.sh"
+        ACTIVE_FILE="$TMP/oldm/ops/active-build.caddy" bash -c 'source "$1"; write_active app-green' _ "$TMP/write_active_old.sh"
+        probe "$TMP/oldm" "$c0"
+        if [ $rc = 0 ] && ! grep -q 'active-build' <<< "$out"; then
+            printf '  ✓ откат на коммит БЕЗ признака: файл состояния в манифест не попал, переключение молчит\n'
+        else
+            red "  ✗ манифест со старого коммита не должен включать файл состояния (код $rc)"; printf '%s\n' "$out" | sed 's/^/      /' >&2; bad=1
+        fi
+    else
+        yellow "  · .github рядом нет — случай «откат на коммит без признака» не проверен"
     fi
 
     # Подделка 1: ОДИН файл подменён мимо выкладки — назван именно он, чужие нет.
@@ -423,6 +457,7 @@ selftest() {
         }
         fake_case "сверка суммы снята" 's/if \[ "\$have" != "\$want" \]; then/if false; then/'
         fake_case "признак состояния снят" "s/grep -aq '\^# STATE-FILE'/grep -aq 'никогда-не-встретится-0215'/"
+        fake_case "исключения кнопки не учтены при снятии" 's/grep -Fxq -- "\$path" "\$TMP\/excluded" \&\& continue/false \&\& continue/'
         fake_case "точка отсчёта — любой SHA" 's/elif \[ "\$expected" != "\$commit" \]; then/elif false; then/'
     fi
 
