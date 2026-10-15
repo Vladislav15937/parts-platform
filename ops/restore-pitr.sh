@@ -48,6 +48,9 @@ cd "$(dirname "$0")/.."
 # Разбор момента общий с ops/wal-archive.sh: «к какому моменту возвращаемся»
 # и «до какого можно вернуться» обязаны понимать введённое одинаково.
 . ops/moment.sh
+# Опись ночного набора и SQL агрегатов — тот же оракул, что у проверки бэкапа
+# и у ops/restore-tenant.sh (задача 0238): им репетиция сверяет содержимое.
+. ops/backup-aggregates.sh
 
 TARGET=""
 TENANT=""
@@ -171,6 +174,99 @@ qc_asked() {   # $1 — запрос, $2 — что спрашиваем сло�
         return 1
     fi
     printf '%s\n' "$out"
+}
+
+# --- След репетиции: у каждого исхода, а не только у удачного (задача 0238) ---
+#
+# Отметка `partsflow_pitr_verified_timestamp_seconds` ставится только в конце
+# удачного прогона, и на неё смотрит тревога ВозвратНеПроверялся через absent().
+# Этого мало: «не проверялось» тогда значит одинаково «репетиция не ходила»,
+# «ходила и упала» и «ходила и вышла нулём, ничего не проверив» — последнее
+# и делала репетиция на пустом архиве WAL, ровно на той аварии (0101), ради
+# которой стоит в расписании. Та же болезнь, что у 0152.
+#
+# Поэтому `--verify` при ЛЮБОМ выходе кладёт два числа:
+#   partsflow_pitr_rehearsal_timestamp_seconds — когда ходила;
+#   partsflow_pitr_rehearsal_result            — чем кончила:
+#       0 — возврат проверен разворотом (тогда же ставится и verified);
+#       1 — провал (накат, копия, сверка — причина в выводе);
+#       2 — в архиве WAL нет ни одного сегмента: проверять возврат не из чего.
+# Числом, а не меткой `result="…"`: pushgateway хранит каждую серию меток
+# до удаления руками, и вчерашний «провал» висел бы рядом с сегодняшним успехом.
+# Отметка verified и правило тревоги не тронуты: «возврат проверен» по-прежнему
+# значит ровно то, что значило.
+REHEARSAL_RESULT=""
+rehearsal_mark() {   # $1 — код выхода прогона
+    local result
+    if [ -n "$REHEARSAL_RESULT" ]; then
+        result="$REHEARSAL_RESULT"
+    elif [ "$1" = 0 ]; then
+        result=0
+    else
+        result=1
+    fi
+    if printf '# TYPE partsflow_pitr_rehearsal_timestamp_seconds gauge\npartsflow_pitr_rehearsal_timestamp_seconds %s\n# TYPE partsflow_pitr_rehearsal_result gauge\npartsflow_pitr_rehearsal_result %s\n' \
+            "$(date -u +%s)" "$result" \
+        | curl -sf --max-time 10 --data-binary @- \
+            "${PUSHGATEWAY_URL:-http://localhost:9091}/metrics/job/backup" > /dev/null
+    then
+        printf '    след репетиции в наблюдении: partsflow_pitr_rehearsal_result %s\n' "$result"
+    else
+        printf '\033[1;33m    след репетиции (исход %s) в наблюдение не ушёл — проверьте pushgateway\033[0m\n' "$result"
+    fi
+}
+
+# --- Содержимое: журнал движений не короче ночного набора (задача 0238) ------
+#
+# Сверка репетиции была одна: count(*) по реестру и только неравенством —
+# содержимое схем не смотрелось ни разу. Оракул — опись ночного набора
+# (ops/backup.sh пишет туда числа, снятые вокруг дампа), а не живая база:
+# сверка с живой даёт ложное красное на законном росте (задача 0244).
+#
+# Сравнивается ОДНО число из пяти, и это не небрежность: репетиция накатывает
+# архив до конца, то есть к «сейчас», а набор снят ночью. Позиции продают,
+# остаток уходит, сделки отменяют — эти числа законно меньше ночных. Журнал
+# движений только растёт: рабочей роли на нём даны лишь SELECT и INSERT. Значит
+# у него, и только у него, ночное число — нижняя граница: в восстановленном
+# кластере записей НЕ МЕНЬШЕ, чем было в наборе после дампа. Меньше — накат
+# потерял то, что набор видел, а сторож сегментов этого не заметил.
+#
+# Исходы как у aggregate_verdict: 0 — по каждой схеме не меньше; 1 — меньше
+# или восстановленная схема не ответила; 2 — сверить не с чем.
+JOURNAL_CHECKED=0
+journal_floor_check() {   # файл-описи функция-запроса
+    local manifest="$1" runner="$2" schema pair floor actual rc worst=0
+    JOURNAL_CHECKED=0
+    if [ ! -r "$manifest" ]; then
+        printf 'НЕ СВЕРЕНО: описи ночного набора нет (%s)\n' "$manifest"
+        return 2
+    fi
+    for schema in $(awk -v m="$AGG_MARK" '$1 == m && $3 == "stock_movement" { print $2 }' "$manifest"); do
+        pair="$(agg_pair "$manifest" "$schema" stock_movement)"
+        floor="${pair##* }"
+        rc=0
+        actual="$("$runner" "$(agg_sql stock_movement "$schema")" 2>/dev/null)" || rc=$?
+        actual="$(printf '%s' "$actual" | tr -d '[:space:]')"
+        if [ "$rc" != 0 ] || ! agg_numeric "$actual" || ! agg_numeric "$floor"; then
+            printf 'НЕ СПРОСИТЬ: %s.stock_movement — восстановленный кластер не ответил (код %s, ответ «%s»), а в наборе было %s\n' \
+                "$schema" "$rc" "$actual" "$floor"
+            worst=1
+            continue
+        fi
+        if ! LC_ALL=C awk -v a="$actual" -v f="$floor" 'BEGIN { exit !(a + 0 >= f + 0) }'; then   # 0238-журнал
+            printf 'ЖУРНАЛ КОРОЧЕ НАБОРА: %s — в восстановленном кластере %s записей движений, а ночной набор снят при %s\n' \
+                "$schema" "$actual" "$floor"
+            printf 'Журнал только растёт: накат потерял то, что набор видел. Возврат к моменту НЕ доказан.\n'
+            worst=1
+            continue
+        fi
+        JOURNAL_CHECKED=$((JOURNAL_CHECKED + 1))
+    done
+    if [ "$worst" = 0 ] && [ "$JOURNAL_CHECKED" = 0 ]; then
+        printf 'НЕ СВЕРЕНО: в описи %s нет чисел журнала движений (набор снят до задачи 0244)\n' "$manifest"
+        return 2
+    fi
+    return "$worst"
 }
 
 # --- Самопроверка времён в сообщениях ----------------------------------------
@@ -362,6 +458,89 @@ DOCKER
     esac
     _p_done 'немой и отказавший psql названы неотвеченным вопросом, а не данными'
 
+    # РЕПЕТИЦИЯ НА ПУСТОМ АРХИВЕ И СЛЕД КАЖДОГО ИСХОДА (задача 0238). Прогоном
+    # всего пути `--verify`, а не вызовом функции: отказ приходит раньше
+    # разворота, docker не нужен. pushgateway подменён заглушкой curl, которая
+    # записывает, что ей отдали, — предмет тут то, что ушло в наблюдение.
+    mkdir -p "$bdir/wal" "$bdir/cbin"
+    cat > "$bdir/cbin/curl" <<'CURL'
+#!/bin/sh
+cat >> "$PUSHED"
+exit 0
+CURL
+    chmod +x "$bdir/cbin/curl"
+    local rv_out rv_rc
+    rehearse() {   # каталог-архива каталог-бэкапов
+        rm -f "$bdir/pushed"
+        set +e
+        rv_out=$(ENV_FILE=/dev/null DB_USER=app BACKUP_DIR="$2" WAL_ARCHIVE_DIR="$1" \
+            PUSHED="$bdir/pushed" PATH="$bdir/cbin:$PATH" bash "$0" --verify 2>&1); rv_rc=$?
+        set -e
+    }
+    pushed() { [ -f "$bdir/pushed" ] && grep -qx "$1" "$bdir/pushed"; }
+
+    rehearse "$bdir/wal" "$bdir/backups"
+    [ "$rv_rc" != 0 ] || _p_bad 'репетиция на ПУСТОМ архиве WAL вышла нулём — это и есть авария 0101'
+    case "$rv_out" in
+        *'нет ни одного сегмента'*) : ;;
+        *) _p_bad "пустой архив не назван пустым: $(printf '%s' "$rv_out" | tr '\n' ' ')" ;;
+    esac
+    pushed 'partsflow_pitr_rehearsal_result 2' \
+        || _p_bad 'репетиция на пустом архиве не оставила следа «исход 2» в pushgateway'
+    grep -q '^partsflow_pitr_rehearsal_timestamp_seconds [0-9]' "$bdir/pushed" 2>/dev/null \
+        || _p_bad 'у следа репетиции нет времени — absent() не отличит «не ходила»'
+    ! grep -q partsflow_pitr_verified_timestamp_seconds "$bdir/pushed" 2>/dev/null \
+        || _p_bad 'пустой архив поставил отметку «возврат проверен»'
+    _p_done 'репетиция на пустом архиве краснеет и оставляет след «исход 2», без «проверено»'
+
+    # Провал по другой причине — тоже след, и другого исхода. Сегмент в архиве
+    # есть, каталога базовых копий нет вовсе: отказ раньше разворота.
+    : > "$bdir/wal/000000010000000000000001.gz"
+    rehearse "$bdir/wal" "$bdir/net-bekapov"
+    [ "$rv_rc" != 0 ] || _p_bad 'репетиция без базовой копии вышла нулём'
+    pushed 'partsflow_pitr_rehearsal_result 1' \
+        || _p_bad 'провал репетиции не оставил следа «исход 1» — его не отличить от «не ходила»'
+    _p_done 'провал репетиции оставляет след «исход 1»'
+
+    # Удачный исход (код 0) поднимает кластер — docker, — поэтому здесь вызов
+    # той же функции, которую зовёт ловушка выхода: «0 → исход 0».
+    rm -f "$bdir/pushed"
+    ( export PUSHED="$bdir/pushed" PATH="$bdir/cbin:$PATH"; REHEARSAL_RESULT=""; rehearsal_mark 0 ) > /dev/null
+    pushed 'partsflow_pitr_rehearsal_result 0' || _p_bad 'удачный выход не дал следа «исход 0»'
+    _p_done 'удачный выход даёт след «исход 0»'
+
+    # СОДЕРЖИМОЕ: журнал движений восстановленного кластера не короче набора.
+    local jm="$bdir/manifest.txt" jo jrc
+    { echo 'арендаторов: 1'
+      agg_line t_000042 part 10 10
+      agg_line t_000042 stock_movement 5 5; } > "$jm"
+    _jr_more()  { printf '7\n'; }
+    _jr_same()  { printf '5\n'; }
+    _jr_short() { printf '4\n'; }
+    _jr_err()   { printf 'ERROR: relation does not exist\n' >&2; return 1; }
+    jcheck() { jrc=0; jo="$(journal_floor_check "$1" "$2")" || jrc=$?; }
+    jcheck "$jm" _jr_more;  [ "$jrc" = 0 ] || _p_bad "журнал длиннее набора объявлен потерей: $jo"
+    jcheck "$jm" _jr_same;  [ "$jrc" = 0 ] || _p_bad "журнал, равный набору, объявлен потерей: $jo"
+    jcheck "$jm" _jr_short
+    case "$jrc|$jo" in
+        1\|*'ЖУРНАЛ КОРОЧЕ НАБОРА: t_000042'*) : ;;
+        *) _p_bad "журнал короче набора не покраснел: ${jrc} ${jo}" ;;
+    esac
+    jcheck "$jm" _jr_err
+    case "$jrc|$jo" in
+        1\|*'НЕ СПРОСИТЬ: t_000042'*) : ;;
+        *) _p_bad "схема, не ответившая на запрос, не названа потерей: ${jrc} ${jo}" ;;
+    esac
+    printf 'арендаторов: 1\n' > "$jm"
+    jcheck "$jm" _jr_more
+    case "$jrc|$jo" in
+        2\|*'НЕ СВЕРЕНО'*) : ;;
+        *) _p_bad "опись без чисел выдана за сверку: ${jrc} ${jo}" ;;
+    esac
+    jcheck "$bdir/net-opisi.txt" _jr_more
+    [ "$jrc" = 2 ] || _p_bad "отсутствующая опись выдана за сверку: ${jrc} ${jo}"
+    _p_done 'содержимое: журнал короче ночного набора краснеет, длиннее и равный — нет, без описи — «не сверено»'
+
     # ВОЗВРАТ ДЕФЕКТА, две подделки — по одной на находку. Копии лежат
     # в `.scratch/`: каталог игнорируется git и стоит на той же глубине,
     # что `ops/`, то есть корень репозитория разрешается туда же (0151, 0248).
@@ -386,6 +565,27 @@ DOCKER
             rm -f "$rcf"
         done
         _p_done 'возврат дефекта: обе прежние редакции валят самопроверку'
+
+        # И три подделки задачи 0238: выход нулём на пустом архиве, след
+        # только у удачного исхода (то есть никакого — ловушка снята)
+        # и сверка журнала, всегда отвечающая «не короче».
+        for fake in пустой след журнал; do
+            rcf=".scratch/restore-pitr-${fake}-fake-0238.sh"
+            case "$fake" in
+                пустой) sed 's|^        fail "в архиве WAL нет ни одного сегмента.*# 0238-пустой$|        REHEARSAL_RESULT=""; exit 0|' "$0" > "$rcf" ;;
+                след)   sed 's|^    \[ "\$VERIFY" = 0 \] [|][|] rehearsal_mark "\$code"   # 0238-след$|    :|' "$0" > "$rcf" ;;
+                журнал) sed 's|^        if ! LC_ALL=C awk .*# 0238-журнал$|        if false; then|' "$0" > "$rcf" ;;
+            esac
+            if cmp -s "$0" "$rcf"; then
+                _p_bad "подделку «${fake}» негде поставить — метка строки потерялась"
+            elif ! bash -n "$rcf" 2>/dev/null; then
+                _p_bad "подделка «${fake}» сломала синтаксис — её красное скажет не о том"
+            elif PITR_SELFTEST_FAKE=yes bash "$rcf" --selftest >/dev/null 2>&1; then
+                _p_bad "ВОЗВРАТ ДЕФЕКТА «${fake}»: прежнее поведение самопроверку НЕ валит"
+            fi
+            rm -f "$rcf"
+        done
+        _p_done 'возврат дефекта 0238: пустой архив нулём, след без ловушки и сверка-всегда-да валят самопроверку'
     fi
     rm -rf "$bdir"
 
@@ -406,6 +606,19 @@ if [ "$SELFTEST" = 1 ]; then
     printf '\n\033[1;32mРазбор момента и времена в сообщениях проверены на себе.\033[0m\n'
     exit 0
 fi
+
+# Выход — одно место на всё: черновик убирается, если был поднят, а репетиция
+# оставляет след при ЛЮБОМ исходе (задача 0238). Ловушка ставится до чтения
+# окружения: отказ на первой же строке (нет DB_USER, не узнать базу) — тоже
+# исход репетиции, и молчать о нём значило бы снова «не ходила».
+DRAFT=0
+on_exit() {
+    local code=$?
+    [ "$DRAFT" = 0 ] || cleanup_draft "$code"
+    [ "$VERIFY" = 0 ] || rehearsal_mark "$code"   # 0238-след
+    return "$code"
+}
+trap on_exit EXIT
 
 ENV_FILE="${ENV_FILE:-.env}"
 [ -f "$ENV_FILE" ] && set -a && . "$ENV_FILE" && set +a
@@ -476,10 +689,21 @@ if [ "$VERIFY" = 1 ]; then
         warn "поднимите wal-archive-init; группа задаётся WAL_ARCHIVE_GID в .env"
         fail "каталог архива не читается этим пользователем: $WAL_DIR — проверить возврат нечем"
     fi
+    # Пустой архив — НЕ «рано проверять», а в точности та авария, которую
+    # репетиция обязана поймать (задача 0101: archive_command отбит, WAL
+    # не уехал ни разу, база здорова, тревоги молчат). До задачи 0238 здесь
+    # стоял выход нулём со словами «репетиция осмысленна, когда ячейка
+    # поработает» — и без следа, то есть тревога на absent() молчала тоже.
+    # Законного пустого архива у ячейки, дошедшей до репетиции, нет: базовая
+    # копия снимается раньше (воскресенье, ops/install-cron.sh) и сама
+    # закрывает сегмент, который уезжает в архив; без копии репетиция
+    # и так краснеет («нет базовой копии»).
     if [ -z "$(find "$WAL_DIR" -maxdepth 1 -type f -name '????????????????????????.gz' 2>/dev/null | head -1)" ]
     then
-        printf 'В архиве нет ни одного сегмента — репетиция осмысленна, когда ячейка поработает.\n'
-        exit 0
+        REHEARSAL_RESULT=2
+        warn "базовая копия закрывает сегмент сама, значит пустой архив — это archive_command, который не работает"
+        warn "смотрите: ops/wal-archive.sh --chain, журнал postgres (archive command failed), права $WAL_DIR"
+        fail "в архиве WAL нет ни одного сегмента: $WAL_DIR — возврат к моменту проверить НЕ из чего"   # 0238-пустой
     fi
     TARGET="latest"
     TENANT=""
@@ -603,8 +827,9 @@ docker run -d --name "$CNAME" \
     -v "$WAL_ABS:/wal-archive:ro" \
     "$IMAGE" "${RECOVERY_ARGS[@]}" > /dev/null
 
-cleanup() {
-    local code=$?
+DRAFT=1
+cleanup_draft() {   # $1 — код выхода; зовёт on_exit
+    local code="$1"
     if [ "$KEEP" = 1 ] && [ "$code" = 0 ]; then
         printf '\nЧерновик оставлен: контейнер %s, том %s\n' "$CNAME" "$VOL"
         printf 'Посмотреть:  docker exec -it %s psql -U %s -d %s\n' "$CNAME" "$DB_USER" "$PITR_DB"
@@ -613,9 +838,8 @@ cleanup() {
         docker rm -f "$CNAME" > /dev/null 2>&1 || true
         docker volume rm -f "$VOL" > /dev/null 2>&1 || true
     fi
-    return $code
+    return 0
 }
-trap cleanup EXIT
 
 # Два адресата, и путать их нельзя. Состояние наката — свойство кластера,
 # и спрашивается в служебной базе: спрошенное в рабочей, которой в кластере
@@ -735,6 +959,32 @@ if [ "$VERIFY" = 1 ]; then
     # моменте. Отказавшись дойти, Postgres не поднимается вовсе, и до этого
     # места мы бы не добрались.
     ok "накат прошёл весь архив, реестр читается"
+
+    step "Содержимое против ночного набора"
+    # Набор берётся самый свежий из снятых ДО начала репетиции больше чем
+    # за час: числа в его описи обязаны лежать в уже уехавших сегментах,
+    # а сегмент закрывается не реже archive_timeout (300 с). Набор, который
+    # снимается прямо сейчас, сравнивал бы с тем, чего в архиве ещё нет.
+    JOURNAL_SET=""
+    for dir in $(find "$BACKUPS" -maxdepth 1 -type d -name '20*' 2>/dev/null | sort); do
+        [ -f "$dir/manifest.txt" ] || continue
+        set_epoch="$(stamp_epoch "$(basename "$dir")" 2>/dev/null)" || continue
+        [ -n "$set_epoch" ] && [ "$set_epoch" -le "$(( STARTED - 3600 ))" ] || continue
+        JOURNAL_SET="$dir"
+    done
+    JOURNAL_RC=0
+    JOURNAL_LOG="$(mktemp)"
+    journal_floor_check "${JOURNAL_SET:-$BACKUPS/нет-набора}/manifest.txt" q > "$JOURNAL_LOG" \
+        || JOURNAL_RC=$?
+    case "$JOURNAL_RC" in
+        0) ok "журнал движений не короче ночного набора $(basename "$JOURNAL_SET"): схем сверено $JOURNAL_CHECKED" ;;
+        2) while IFS= read -r line; do warn "$line"; done < "$JOURNAL_LOG"
+           warn "содержимое НЕ сверено — накат до конца архива при этом проверен" ;;
+        *) sed 's/^/    /' "$JOURNAL_LOG"
+           rm -f "$JOURNAL_LOG"
+           fail "восстановленный кластер беднее ночного набора — возврат к моменту НЕ доказан" ;;
+    esac
+    rm -f "$JOURNAL_LOG"
 
     # Отметка ставится только здесь: «архив непрерывен» и «к моменту можно
     # вернуться» — разные утверждения, и следить надо за вторым. Цепочка
