@@ -39,7 +39,7 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('открывается значениями, а не двумя десятками полей ввода', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByText('скол на креплении')).toBeTruthy());
 
@@ -53,7 +53,7 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('раскрывает только ту строку, у которой нажали «Изменить»', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
 
@@ -68,7 +68,7 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('считает изменённое и склоняет слово при числе', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
 
@@ -81,7 +81,7 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('«Отменить» у строки возвращает её значение, а не всю форму', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
 
@@ -107,7 +107,7 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('уезжает вся форма, а изменены ровно тронутые поля', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Заметка')).toBeTruthy());
 
@@ -131,7 +131,7 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('ничего не изменено — «Сохранить» погашена и говорит почему', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
 
@@ -143,7 +143,7 @@ describe('правка карточки по одному полю', () => {
   });
 
   it('стёртое руками поле по-прежнему очищается', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Заметка')).toBeTruthy());
 
@@ -156,28 +156,72 @@ describe('правка карточки по одному полю', () => {
     expect(sent[0]!['note']).toBeNull();
   });
 
-  it('неправимое поле показано с замком и нажатием не раскрывается', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+  it('ни одно поле формы не стоит с замком: у каждой строки есть «Изменить»', async () => {
+    // Задача 0302, решение владельца 15.10.2026: «никаких замков и запретов».
+    // Перебором по всем разделам, а не по списку полей: новое поле с замком
+    // покраснит здесь само. Роли у формы больше нет вовсе — менеджер видит
+    // ту же форму, что владелец, включая «Состояние».
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
 
-    // Спрятанное поле читается как «этого у вас нет», поэтому оно на месте —
-    // просто не раскрывается: номер товара система ведёт сама.
-    const code = line('Номер товара');
-    expect(code.textContent).toContain('🔒');
-    expect(code.textContent).toContain('B-40219');
-    expect(code.querySelector('button'), 'у неправимой строки есть «Изменить»').toBeNull();
+    const rows = [...document.querySelectorAll('.card-edit__row')];
+    for (const label of ['№ позиции', 'Номер товара', 'Состояние', 'Наименование',
+      'Передний / Задний', 'Левый / Правый', 'Оригинальность', 'Номер производителя',
+      'Кросс-номера', 'Номер донора', 'Марка', 'Модель', 'Модель кузова',
+      'Модель двигателя', 'Год выпуска', 'Комплектация', 'Поколение', 'Старые данные',
+      'Номер объявления Дрома']) {
+      expect(screen.queryByLabelText(`Изменить: ${label}`), `«${label}» не правится`)
+        .not.toBeNull();
+    }
+    for (const r of rows) {
+      const label = r.querySelector('.card-edit__label')?.textContent ?? '';
+      expect(r.textContent, `у «${label}» стоит замок`).not.toContain('🔒');
+      expect(r.querySelector('button'), `у «${label}» нет «Изменить»`).not.toBeNull();
+    }
+    expect(document.body.textContent).not.toContain('система ведёт сама');
+  });
 
-    // Донорские сведения — оттуда же: они приезжают с машины, а не с детали.
-    expect(line('Номер донора').textContent).toContain('261');
-    expect(line('Марка').querySelector('button')).toBeNull();
+  it('номер производителя вписывается и уезжает, нераскрытые новые поля не уезжают', async () => {
+    render(<PartEditForm partId={7} row={row()}
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Номер производителя'))
+      .toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText('Изменить: Номер производителя'));
+    fireEvent.change(screen.getByLabelText('Номер производителя'),
+      { target: { value: '81170-33670' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['oem']).toBe('81170-33670');
+    // Нераскрытое поле задачи 0302 не уезжает вовсе: сервер его не трогает.
+    for (const key of ['crosses', 'brand', 'code', 'number', 'title']) {
+      expect(key in sent[0]!, `«${key}» уехал, хотя строку не раскрывали`).toBe(false);
+    }
+  });
+
+  it('марка правится от показанного донора и уезжает своей у позиции', async () => {
+    render(<PartEditForm partId={7} row={row()}
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Марка')).toBeTruthy());
+
+    expect(line('Марка').textContent).toContain('Toyota');
+    fireEvent.click(screen.getByLabelText('Изменить: Марка'));
+    const brand = screen.getByLabelText('Марка') as HTMLInputElement;
+    expect(brand.value, 'поле открылось пустым, а не с маркой донора').toBe('Toyota');
+    fireEvent.change(brand, { target: { value: 'Lexus' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['brand']).toBe('Lexus');
   });
 
   it('владелец меняет состояние выбором из списка, и уезжает код', async () => {
     // До задачи 0039 эта строка стояла с замком: состояние писалось один
     // раз, в приёмке, и «б/у» вместо «новой» исправлялось только заведением
     // второй карточки.
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Состояние')).toBeTruthy());
 
@@ -190,19 +234,6 @@ describe('правка карточки по одному полю', () => {
     expect(sent[0]!['condition']).toBe('CONTRACT');
   });
 
-  it('менеджеру состояние показано с замком, а не спрятано', async () => {
-    // Спрятанное поле читается как «этого у вас нет», а состояние у детали
-    // есть — его просто меняет владелец (пункт 6 критерия 0039).
-    render(<PartEditForm partId={7} row={row()} role="MANAGER"
-                         onSaved={() => {}} onCancel={() => {}} />);
-    await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
-
-    const condition = line('Состояние');
-    expect(condition.textContent).toContain('б/у');
-    expect(condition.textContent).toContain('🔒');
-    expect(condition.querySelector('button'),
-      'менеджеру предложено менять состояние — сервер это отобьёт').toBeNull();
-  });
 });
 
 /**
@@ -229,7 +260,7 @@ describe('блоки карточки Дрома', () => {
   });
 
   it('показаны подписями Дрома, с замком не стоят и сохраняют переводы строк', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Самовывоз')).toBeTruthy());
 
@@ -244,7 +275,7 @@ describe('блоки карточки Дрома', () => {
   });
 
   it('изменённый блок уезжает тем же PUT, остальные блоки — как были', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Самовывоз')).toBeTruthy());
 
@@ -263,7 +294,7 @@ describe('блоки карточки Дрома', () => {
   });
 
   it('«Вид детали» и «Раздел» показаны подписями Дрома, правятся и стираются тем же PUT (задача 0286)', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Раздел')).toBeTruthy());
 
@@ -287,7 +318,7 @@ describe('блоки карточки Дрома', () => {
   });
 
   it('«Подходит» показано блоками и свёрнуто; правка открывает текст как есть; очистка уезжает пустой строкой (задача 0287)', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Подходит')).toBeTruthy());
 
@@ -318,7 +349,7 @@ describe('блоки карточки Дрома', () => {
   });
 
   it('«Характеристики» показаны «Подпись: значение» без [ключей] и служебных дублей; правка открывает текст как есть; очистка — пустая строка (задача 0292)', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Характеристики')).toBeTruthy());
 
@@ -342,7 +373,7 @@ describe('блоки карточки Дрома', () => {
   });
 
   it('нетронутые «Характеристики» уезжают как прочитаны, байт в байт', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
     fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
@@ -352,7 +383,7 @@ describe('блоки карточки Дрома', () => {
   });
 
   it('«Может подойти» стоит под «Подходит», показано пунктами и свёрнуто; правка открывает текст как есть; очистка — пустая строка (задача 0293)', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Может подойти')).toBeTruthy());
 
@@ -381,7 +412,7 @@ describe('блоки карточки Дрома', () => {
   });
 
   it('нетронутое «Может подойти» уезжает как прочитано, байт в байт', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
     fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
@@ -391,7 +422,7 @@ describe('блоки карточки Дрома', () => {
   });
 
   it('«Дата (Дром)» показана как ДД.ММ.ГГГГ, правка открывает хранимый текст, очистка — пустая строка (задача 0298)', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Дата (Дром)')).toBeTruthy());
 
@@ -408,7 +439,7 @@ describe('блоки карточки Дрома', () => {
   });
 
   it('нетронутая «Дата (Дром)» уезжает как прочитана, байт в байт', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
     fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
@@ -418,7 +449,7 @@ describe('блоки карточки Дрома', () => {
   });
 
   it('нетронутое «Подходит» уезжает как прочитано, байт в байт', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
     fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
@@ -428,7 +459,7 @@ describe('блоки карточки Дрома', () => {
   });
 
   it('стёртый руками блок уезжает пустой строкой, а не null', async () => {
-    render(<PartEditForm partId={7} row={row()} role="OWNER"
+    render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Гарантия и условия возврата'))
       .toBeTruthy());
@@ -457,7 +488,7 @@ describe('счётчик изменённого', () => {
   });
 });
 
-/** Строка формы по подписи: у неправимой кнопки нет, и найти её иначе нечем. */
+/** Строка формы по подписи. */
 function line(label: string): HTMLElement {
   const found = [...document.querySelectorAll('.card-edit__row')].find(
     (r) => r.querySelector('.card-edit__label')?.textContent?.startsWith(label) === true);
@@ -525,6 +556,11 @@ function card(): Record<string, unknown> {
     characteristics: CHARACTERISTICS,
     mayFit: MAY_FIT,
     adDate: '2026-09-28',
+    // Задача 0302: то, что раньше стояло с замком. Машины своей у позиции нет.
+    number: 7, code: 'B-40219', title: 'Фара левая Toyota Camry',
+    sideLr: 'LEFT', sideFr: 'FRONT', authenticity: null, oem: null, crosses: null,
+    legacyCode: null, dromAdNumber: null, donorCode: null, brand: null, model: null,
+    generation: null, body: null, engine: null, year: null, equipment: null,
   };
 }
 

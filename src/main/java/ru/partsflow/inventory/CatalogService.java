@@ -283,8 +283,17 @@ public class CatalogService {
      * из списка перестало бы находить. Подзапрос {@code own} у позиции
      * с донором пуст, поэтому {@code coalesce} и есть «донор побеждает».
      */
-    static final String VEHICLE_BRAND = "coalesce(b.name, own.brand)";
-    static final String VEHICLE_MODEL = "coalesce(m.name, own.model)";
+    static final String VEHICLE_BRAND = "coalesce(p.manual_brand, b.name, own.brand)";
+    static final String VEHICLE_MODEL = "coalesce(p.manual_model, m.name, own.model)";
+    /*
+     * Вписанное у позиции руками (задача 0302) побеждает и донора, и
+     * применимость: правка «Марки» в карточке меняет эту позицию, а не машину
+     * и не соседние детали с неё. Пусто — как раньше, донор или своя машина.
+     */
+    static final String VEHICLE_BODY = "coalesce(p.manual_body, d.body_code)";
+    static final String VEHICLE_ENGINE = "coalesce(p.manual_engine, d.engine_code)";
+    static final String VEHICLE_YEAR = "coalesce(p.manual_year, d.year)";
+    static final String DONOR_CODE = "coalesce(p.manual_donor_code, d.legacy_code, d.public_code)";
     /**
      * Когда поколение своей машины показывается: оно одно (0290) и, если
      * в наименовании стоит номер кузова, кузова поколения его подтверждают
@@ -304,18 +313,25 @@ public class CatalogService {
      */
     private static final String OWN_GENERATION_MERGED =
             "own.spans > 1 AND " + OWN_GENERATION_SHOWN;
+    // Вписанное руками поколение — текст человека целиком: годы справочника
+    // к нему не дописываются (они были бы годами чужого поколения).
     static final String VEHICLE_GENERATION =
-            "coalesce(g.name, CASE WHEN " + OWN_GENERATION_SHOWN + " THEN own.generation END)";
+            "coalesce(p.manual_generation, g.name, CASE WHEN " + OWN_GENERATION_SHOWN
+            + " THEN own.generation END)";
     static final String VEHICLE_YEAR_FROM =
-            "coalesce(g.year_from, CASE WHEN " + OWN_GENERATION_SHOWN + " THEN own.year_from END)";
+            "CASE WHEN p.manual_generation IS NULL THEN coalesce(g.year_from, CASE WHEN "
+            + OWN_GENERATION_SHOWN + " THEN own.year_from END) END";
     static final String VEHICLE_YEAR_TO =
-            "coalesce(g.year_to, CASE WHEN " + OWN_GENERATION_SHOWN + " THEN own.year_to END)";
+            "CASE WHEN p.manual_generation IS NULL THEN coalesce(g.year_to, CASE WHEN "
+            + OWN_GENERATION_SHOWN + " THEN own.year_to END) END";
 
     /**
      * Откуда машина в колонках — для подсказки клетки: машинный разбор
      * не должен читаться как подтверждённый факт.
      */
-    static final String VEHICLE_SOURCE = "CASE WHEN p.donor_id IS NOT NULL THEN 'DONOR'"
+    static final String VEHICLE_SOURCE = "CASE WHEN p.manual_brand IS NOT NULL"
+            + " OR p.manual_model IS NOT NULL OR p.manual_generation IS NOT NULL THEN 'MANUAL'"
+            + " WHEN p.donor_id IS NOT NULL THEN 'DONOR'"
             + " WHEN own.brand IS NULL THEN NULL"
             + " WHEN own.verified THEN 'VERIFIED' ELSE 'PARSED' END";
 
@@ -353,7 +369,7 @@ public class CatalogService {
             Map.entry("price", "p.price"),
             Map.entry("brand", VEHICLE_BRAND),
             Map.entry("model", VEHICLE_MODEL),
-            Map.entry("year", "d.year"),
+            Map.entry("year", VEHICLE_YEAR),
             Map.entry("qty", "p.qty_on_hand"),
             Map.entry("created", "p.created_at"),
             Map.entry("manufacturer", "p.manufacturer"),
@@ -813,14 +829,14 @@ public class CatalogService {
             Map.entry("brand", VEHICLE_BRAND),
             Map.entry("model", VEHICLE_MODEL),
             Map.entry("generation", VEHICLE_GENERATION),
-            Map.entry("body", "d.body_code"),
-            Map.entry("engine", "d.engine_code"),
-            Map.entry("year", "trim_scale(d.year)::text"),
+            Map.entry("body", VEHICLE_BODY),
+            Map.entry("engine", VEHICLE_ENGINE),
+            Map.entry("year", VEHICLE_YEAR + "::text"),
             Map.entry("sideFr", "CASE p.side_fr WHEN 'FRONT' THEN 'Перед.'"
                     + " WHEN 'REAR' THEN 'Задн.' WHEN 'BOTH' THEN 'Перед., задн.' END"),
             Map.entry("sideLr", "CASE p.side_lr WHEN 'LEFT' THEN 'Лев.'"
                     + " WHEN 'RIGHT' THEN 'Прав.' WHEN 'BOTH' THEN 'Лев., прав.' END"),
-            Map.entry("donor", "coalesce(d.legacy_code, d.public_code)"),
+            Map.entry("donor", DONOR_CODE),
             Map.entry("price", "trim_scale(p.price)::text"),
             Map.entry("installation", "trim_scale(p.installation_price)::text"),
             Map.entry("color", "p.color"),
@@ -1180,8 +1196,8 @@ public class CatalogService {
                        + " AS vehicle_block_bodies,"
                        + " coalesce(" + OWN_GENERATION_MERGED + ", false) AS vehicle_generation_merged,"
                        + """
-                       d.body_code, d.engine_code,
-                       d.year, d.public_code AS donor_code, d.legacy_code AS donor_legacy,
+                       """ + VEHICLE_BODY + " AS body_code, " + VEHICLE_ENGINE + " AS engine_code, "
+                       + VEHICLE_YEAR + " AS year, " + DONOR_CODE + " AS donor_code," + """
                        p.price, p.installation_price, p.color, p.description, p.note,
                        p.manufacturer, p.marking, p.section, p.side_lr, p.side_fr,
                        p.qty_on_hand, p.is_published, p.barcode, p.legacy_code,
@@ -1219,7 +1235,7 @@ public class CatalogService {
                        -- по нажатию и второй запрос ради двух полей не делает.
                        """
                        + SupplyKinds.sqlLabelWithArrival("s") + " AS supply," + """
-                       nullif(concat_ws(', ',
+                       coalesce(p.manual_equipment, nullif(concat_ws(', ',
                            CASE d.steering WHEN 'RIGHT' THEN 'правый руль'
                                            WHEN 'LEFT' THEN 'левый руль' END,
                            CASE d.transmission_type WHEN 'AT' THEN 'АКПП'
@@ -1230,7 +1246,7 @@ public class CatalogService {
                                              WHEN 'RWD' THEN 'задний'
                                              WHEN 'AWD' THEN 'полный' END,
                            d.transmission_model,
-                           d.equipment_code), '') AS equipment,
+                           d.equipment_code), '')) AS equipment,
                        -- Только подтверждённый снимок: у оборванной загрузки
                        -- и у неподтверждённой записи файла в хранилище нет,
                        -- и в колонке «Превью» висит битая картинка. Прайс
@@ -1251,8 +1267,7 @@ public class CatalogService {
                         (Integer) rs.getObject("year_from"), (Integer) rs.getObject("year_to"),
                         rs.getString("body_code"), rs.getString("engine_code"),
                         (Integer) rs.getObject("year"),
-                        rs.getString("donor_legacy") != null
-                                ? rs.getString("donor_legacy") : rs.getString("donor_code"),
+                        rs.getString("donor_code"),
                         rs.getBigDecimal("price"), rs.getBigDecimal("installation_price"),
                         rs.getString("color"), rs.getString("description"), rs.getString("note"),
                         rs.getString("manufacturer"), rs.getString("marking"),
@@ -1420,9 +1435,9 @@ public class CatalogService {
                 SELECT p.number, p.public_code, p.title, p.condition,
                        """ + VEHICLE_BRAND + " AS brand, " + VEHICLE_MODEL + " AS model, "
                        + VEHICLE_YEAR_FROM + " AS year_from, "
-                       + VEHICLE_YEAR_TO + " AS year_to," + """
-                       d.body_code, d.engine_code, d.year,
-                       COALESCE(d.legacy_code, d.public_code) AS donor_code,
+                       + VEHICLE_YEAR_TO + " AS year_to,"
+                       + VEHICLE_BODY + " AS body_code, " + VEHICLE_ENGINE + " AS engine_code, "
+                       + VEHICLE_YEAR + " AS year, " + DONOR_CODE + " AS donor_code," + """
                        p.side_fr, p.side_lr, p.price, p.installation_price, p.color,
                        p.description, p.manufacturer, p.marking, p.section, p.note,
                        (SELECT o.raw_number FROM part_oem o
@@ -1449,7 +1464,7 @@ public class CatalogService {
                        // тут взяться неоткуда.
                        + QUALITY_GRADE + " AS quality_grade,"
                        + SupplyKinds.sqlLabelWithArrival("sp") + " AS supply_label," + """
-                       nullif(concat_ws(', ',
+                       coalesce(p.manual_equipment, nullif(concat_ws(', ',
                            CASE d.steering WHEN 'RIGHT' THEN 'правый руль'
                                            WHEN 'LEFT' THEN 'левый руль' END,
                            CASE d.transmission_type WHEN 'AT' THEN 'АКПП'
@@ -1459,7 +1474,7 @@ public class CatalogService {
                                              WHEN 'RWD' THEN 'задний'
                                              WHEN 'AWD' THEN 'полный' END,
                            d.transmission_model,
-                           d.equipment_code), '') AS equipment"""
+                           d.equipment_code), '')) AS equipment"""
                 + stock + """
 
                   FROM part p

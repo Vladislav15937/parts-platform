@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import ru.partsflow.intake.DonorDirectory;
@@ -32,12 +33,14 @@ public class PartController {
     private final PartService partService;
     private final PartHistoryService history;
     private final DonorDirectory donors;
+    private final PartIdentity identity;
 
     public PartController(PartService partService, PartHistoryService history,
-                          DonorDirectory donors) {
+                          DonorDirectory donors, PartIdentity identity) {
         this.partService = partService;
         this.history = history;
         this.donors = donors;
+        this.identity = identity;
     }
 
     /**
@@ -211,7 +214,8 @@ public class PartController {
     @GetMapping("/{id}/editable")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public UpdateRequest editable(@PathVariable Long id) {
-        return UpdateRequest.of(partService.require(id), partService.dromCardOf(id));
+        return UpdateRequest.of(partService.require(id), partService.dromCardOf(id),
+                identity.of(id));
     }
 
     /**
@@ -227,37 +231,26 @@ public class PartController {
      * не даёт стереть заметку.
      */
     /**
-     * Состояние среди полей формы — единственное, у которого своя роль:
-     * его правит **владелец**, и это записано как временное состояние,
-     * а не как решение (задача 0039, пункт 6 критерия). Владелец просил
-     * «все полномочия тому, кому он их дал», а раздавать полномочия
-     * поштучно система не умеет — ролей пять, и они перечислены строками;
-     * придёт задача 0044 — проверка станет полномочием, и роль из неё уйдёт.
+     * <p><b>Замков на полях нет ни у одного, и у состояния тоже</b> (задача 0302,
+     * решение владельца продукта 15.10.2026: «Клиент может править у себя
+     * абсолютно всё… Никаких замков и запретов»). До неё состояние менял только
+     * владелец (задача 0039), а номер производителя, наименование, стороны,
+     * машина и идентификаторы не правились вовсе. Роль на самом методе осталась:
+     * кто вообще правит карточку, решает владелец, назначая роли.
      *
-     * <p>Проверяется **изменение**, а не присутствие поля: форма уезжает
-     * PUT'ом целиком, и менеджер, сохраняющий цену, отправляет состояние
-     * тоже — отказ по самому факту отнял бы у него правку карточки вовсе.
-     *
-     * <p>Отказ — 409 со словами, а не 403: роль у метода проверена
-     * аннотацией и пройдена, а это нарушение правила внутри разрешённой
-     * операции. Офлайн-очередь читает 4xx как «требует внимания» —
-     * повторять такое незачем, менять надо запрос.
+     * <p>Занятый номер, код или штрихкод отвечает словами и называет позицию,
+     * которая его держит, — и при одновременной правке тоже: проигравшего
+     * отбивает уникальный индекс, и ответ перечитывается новой транзакцией.
      */
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public PartView update(@PathVariable Long id, @Valid @RequestBody UpdateRequest request) {
-        requireMayChangeCondition(id, request.condition());
-        return PartView.of(partService.update(id, request.toUpdate(), CurrentUser.memberId()));
-    }
-
-    private void requireMayChangeCondition(Long id, PartCondition wanted) {
-        if (wanted == null || CurrentUser.require().actsAsOwner()) {
-            return;
-        }
-        if (wanted != partService.require(id).getCondition()) {
-            throw new IllegalStateException(
-                    "Состояние детали меняет владелец: оно уходит в объявление"
-                            + " и в заголовок товара");
+        try {
+            return PartView.of(partService.update(id, request.toUpdate(), CurrentUser.memberId()));
+        } catch (DataIntegrityViolationException taken) {
+            identity.explainConflict(id, request.identity(), request.barcode(),
+                    request.legacyCode(), taken);
+            throw taken;
         }
     }
 
@@ -308,10 +301,10 @@ public class PartController {
     /**
      * Тело правки карточки.
      *
-     * <p>Заголовка и стороны тут нет намеренно: заголовок собирается
-     * из них справочником, и правка руками разошлась бы с ним при первом
-     * же пересопоставлении. **Состояние с задачи 0039 правится** — оно
-     * в заголовок входит, и пометку в нём двигает сервер.
+     * <p>С задачи 0302 здесь всё, что есть в форме, включая наименование,
+     * стороны, номер производителя и машину позиции: замков нет ни у одного
+     * поля (решение владельца продукта 15.10.2026). Правленое руками
+     * наименование справочник не пересобирает.
      *
      * <p>Пустое состояние означает «не трогать», а не «очистить», —
      * и это единственное поле формы с такой семантикой. У детали нет
@@ -370,9 +363,34 @@ public class PartController {
                                 // поведение), процент, сумма, округление. При арифметике
                                 // поле price несёт значение операции, а не новую цену, —
                                 // поэтому @PositiveOrZero на нём верен и там.
-                                PriceOperation priceOp) {
+                                PriceOperation priceOp,
+                                // Задача 0302 — всё, что в форме стояло с замком. У всех
+                                // два способа «пусто», как у блоков Дрома выше: null (ключа
+                                // нет) — не трогать, пустая строка — очистить. Наименование
+                                // и номер товара пустыми не бывают: пустое наименование —
+                                // не трогать, пустой номер товара — отказ словами.
+                                Long number,
+                                String code,
+                                String title,
+                                String sideLr,
+                                String sideFr,
+                                String authenticity,
+                                String oem,
+                                String crosses,
+                                String legacyCode,
+                                String dromAdNumber,
+                                // Машина позиции — вписанное у неё руками; пусто —
+                                // показывается донор или применимость.
+                                String donorCode,
+                                String brand,
+                                String model,
+                                String generation,
+                                String body,
+                                String engine,
+                                String year,
+                                String equipment) {
 
-        static UpdateRequest of(Part part, PartDromCard card) {
+        static UpdateRequest of(Part part, PartDromCard card, PartIdentity.Values own) {
             return new UpdateRequest(part.getPrice(), part.getMinPrice(), part.getCostPrice(),
                     part.getInstallationPrice(), part.getCondition(),
                     part.getQualityGrade(), part.getDescription(),
@@ -392,7 +410,21 @@ public class PartController {
                     card == null ? null : card.getAdDate(),
                     // Форма открывается на «Изменить»: самый частый случай —
                     // вписать новое число — остаётся одним движением.
-                    PriceOperation.SET);
+                    PriceOperation.SET,
+                    own.number(), own.code(), part.getTitle(),
+                    part.getSideLr() == null ? null : part.getSideLr().name(),
+                    part.getSideFr() == null ? null : part.getSideFr().name(),
+                    own.authenticity(), own.oem(), own.crosses(), part.getLegacyCode(),
+                    own.dromAdNumber(),
+                    own.donorCode(), own.brand(), own.model(), own.generation(),
+                    own.body(), own.engine(),
+                    own.year() == null ? null : String.valueOf(own.year()),
+                    own.equipment());
+        }
+
+        PartIdentity.Edit identity() {
+            return new PartIdentity.Edit(number, code, authenticity, dromAdNumber, oem, crosses,
+                    donorCode, brand, model, generation, body, engine, year, equipment);
         }
 
         PartService.PartUpdate toUpdate() {
@@ -402,7 +434,8 @@ public class PartController {
                     color, section, barcode, weightKg, lengthMm, widthMm, heightMm,
                     packageLengthMm, packageWidthMm, packageHeightMm, packageWeightKg,
                     storageCellId, published, warranty, pickup, deliveryPayment,
-                    dromKind, dromSection, applicability, characteristics, mayFit, adDate, priceOp);
+                    dromKind, dromSection, applicability, characteristics, mayFit, adDate, priceOp,
+                    title, sideLr, sideFr, legacyCode, identity());
         }
     }
 
