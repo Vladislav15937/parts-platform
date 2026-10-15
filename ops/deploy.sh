@@ -9,6 +9,7 @@
 #   ops/deploy.sh --abort                              доделать откат оборвавшейся выкладки
 #   ops/deploy.sh --drop-previous                      убрать прежнюю базу, когда по новой снялся дамп
 #   ops/deploy.sh --databases                          какие базы лежат в ячейке и кто они
+#   ops/deploy.sh --databases-metrics                  то же числами для наблюдения (ops/wal-archive.sh)
 #   ops/deploy.sh --verdict --tag <SHA>                не то же ли это, что уже под трафиком
 #   ops/deploy.sh --tag <SHA> --dry-run                напечатать шаги, ничего не делая
 #   ops/deploy.sh --selftest                           проверка самого порядка шагов
@@ -245,6 +246,7 @@ while [ $# -gt 0 ]; do
         --abort) ABORT=yes; shift ;;
         --drop-previous) DROP_PREV=yes; shift ;;
         --databases) DATABASES=yes; shift ;;
+        --databases-metrics) DATABASES=metrics; shift ;;
         --verdict) VERDICT_ONLY=yes; shift ;;
         # Пустое значение — законный ответ: у ячейки без APP_IMAGE_TAG
         # сравнивать не с чем, и это третий исход, а не «сходится». Поэтому
@@ -903,6 +905,7 @@ db_list_raw() {
 db_inventory_report() {  # таблица, база под трафиком, база второй сборки, копия идущей выкладки
     local text="$1" heir="$2" other="$3" copy="$4"
     local verify strangers=0 stranger_mb=0 name size frozen allowed conns state role mb
+    INVENTORY_ROWS=""
     verify=$(verify_check_db)
     printf 'Базы ячейки (служебные — postgres, template0, template1 — не перечисляются):\n'
     if [ -z "$text" ]; then
@@ -930,6 +933,11 @@ db_inventory_report() {  # таблица, база под трафиком, б�
         else  # ← эту строку целиком снимает подделка самопроверки (случай 15г)
             role="ПОСТОРОННЯЯ: не названа ни APP_DB_BLUE, ни APP_DB_GREEN"; strangers=$((strangers + 1)); stranger_mb=$(( stranger_mb + mb ))
         fi
+        # Что решено о базе — для отметок наблюдения (задача 0229). Пишется
+        # сама напечатанная роль, а не свой признак: метрика и перечень
+        # обязаны называть базу одинаково, и место, решающее «своя или
+        # посторонняя», здесь одно — ветки выше.
+        INVENTORY_ROWS="${INVENTORY_ROWS}${name}|${size:-0}|${role}"$'\n'
         # Столбцами пробелами не выравниваем: printf считает БАЙТЫ, а не буквы,
         # и на «заморожена» столбец разъезжается — читается это как поломка
         # вывода. Поймано живым прогоном, а не рассуждением.
@@ -971,18 +979,102 @@ db_inventory() {  # база под трафиком, база второй сб
     db_inventory_report "$text" "$1" "$2" "$3"
 }
 
+# ─────────────────── состав баз числами для наблюдения (0229) ──────────────────
+#
+# Посторонняя база до задачи 0229 была видна только тому, кто открыл перечень
+# сам, — а это всегда случайность (29 сентября 2026 их стало две за день,
+# и оба раза их увидел человек, читавший лог выкладки). Числа кладёт
+# ops/wal-archive.sh, который каждые пять минут и так ходит в базу и в
+# pushgateway; решает тревога ПосторонняяБазаЛежит в ops/alerts.yml.
+#
+# КЛАССИФИКАЦИЯ ЗДЕСЬ НЕ ПОВТОРЕНА. Роль в метрике — это роль из перечня
+# выше, переведённая в слово для метки; «своя или посторонняя» по-прежнему
+# решают ветки db_inventory_report, и только они. Второе место, отличающее
+# свою базу от посторонней, разошлось бы с первым молча (болезнь 0177).
+#
+# Отметки:
+#   partsflow_db_size_bytes{db,role}   — каждая база кластера, роль словом;
+#   partsflow_db_idle_seconds{db,role} — сколько база не принимает работу,
+#                                        у посторонней и у базы второй сборки,
+#                                        и только когда журнал выкладок это знает;
+#   partsflow_db_strangers             — сколько посторонних.
+role_key() {  # напечатанная роль → слово для метки
+    case "$1" in
+        "под трафиком"*)            printf 'traffic' ;;
+        "копия идущей выкладки")    printf 'deploy_copy' ;;
+        "база второй сборки")       printf 'second_build' ;;
+        "рабочая база проверки"*)   printf 'backup_check' ;;
+        ПОСТОРОННЯЯ*)               printf 'stranger' ;;
+        *)                          printf 'unknown' ;;
+    esac
+}
+
+iso_epoch() {  # 2026-09-19T21:03:11Z → секунды эпохи; GNU date на ячейке, BSD на машине разработчика
+    date -u -d "$1" +%s 2>/dev/null || date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null
+}
+
+# С какого момента база не принимает работу — тем же журналом и в том же
+# порядке, что since_words: сперва «с неё сняли копию», иначе «её завели».
+# Не знает журнал — пусто, а не ноль: ноль читался бы «только что».
+idle_since() {  # имя базы → секунды эпохи или ничего
+    local at
+    at=$(history_when "$1")
+    [ -n "$at" ] || at=$(history_born "$1")
+    [ -n "$at" ] || return 0
+    iso_epoch "$at"
+}
+
+db_inventory_metrics() {  # таблица, база под трафиком, база второй сборки, копия идущей выкладки
+    local rc=0 now name size role key since strangers=0
+    db_inventory_report "$@" >/dev/null 2>&1 || rc=$?
+    [ "$rc" -lt 2 ] || return 2
+    now=$(date -u +%s)
+    while IFS='|' read -r name size role; do
+        [ -n "$name" ] || continue
+        key=$(role_key "$role")
+        printf 'partsflow_db_size_bytes{db="%s",role="%s"} %s\n' "$name" "$key" "$size"
+        case "$key" in
+            stranger|second_build)
+                since=$(idle_since "$name")
+                [ -z "$since" ] \
+                    || printf 'partsflow_db_idle_seconds{db="%s",role="%s"} %s\n' "$name" "$key" "$(( now - since ))" ;;
+        esac
+        [ "$key" != stranger ] || strangers=$((strangers + 1))
+    done <<EOF
+$INVENTORY_ROWS
+EOF
+    printf 'partsflow_db_strangers %s\n' "$strangers"
+}
+
+# Кто под трафиком, кто вторая сборка, идёт ли выкладка — одним местом для
+# перечня человеку и для отметок наблюдению.
+cell_db_names() {
+    PG_USER="${DB_USER:-$(read_env DB_USER)}"
+    CELL_ACTIVE=$(active_build) || { red "Не удалось узнать сборку под трафиком"; return 1; }
+    CELL_OTHER=$(other_of "$CELL_ACTIVE") || { red "Непонятное имя активной сборки: $CELL_ACTIVE"; return 1; }
+    CELL_HEIR=$(db_of "$CELL_ACTIVE") || { red "Не узнать базу сборки $CELL_ACTIVE"; return 1; }
+    CELL_PREV=$(db_of "$CELL_OTHER") || { red "Не узнать базу сборки $CELL_OTHER"; return 1; }
+    CELL_COPY=$(read_env DEPLOY_COPY_DB)
+}
+
+# Код 0 — отметки напечатаны (сколько бы посторонних ни было: решает тревога);
+# 2 — спросить не вышло, и тогда не напечатано НИ ОДНОЙ строки. Ноль
+# посторонних на неотвеченном вопросе читался бы «посторонних нет».
+databases_metrics_now() {
+    local text
+    cell_db_names || return 2
+    text=$(db_list_raw) || { red "Перечня баз не спросить у Postgres — отметок о составе баз нет"; return 2; }
+    db_inventory_metrics "$text" "$CELL_HEIR" "$CELL_PREV" "$CELL_COPY"
+}
+
 # Перечислить базы, ничего не трогая. Красным и ненулевым кодом отвечает
 # только эта команда: у неё одна работа — назвать то, чего не видит никто,
 # — а перечень в конце выкладки и в --drop-previous сообщает, не делая
 # их красными: удавшуюся работу посторонняя база не отменяет.
 databases_now() {
     local active other heir prev copy rc=0
-    PG_USER="${DB_USER:-$(read_env DB_USER)}"
-    active=$(active_build) || fail "Не удалось узнать сборку под трафиком"
-    other=$(other_of "$active") || fail "Непонятное имя активной сборки: $active"
-    heir=$(db_of "$active") || fail "Не узнать базу сборки $active"
-    prev=$(db_of "$other") || fail "Не узнать базу сборки $other"
-    copy=$(read_env DEPLOY_COPY_DB)
+    cell_db_names || exit 1
+    active="$CELL_ACTIVE" other="$CELL_OTHER" heir="$CELL_HEIR" prev="$CELL_PREV" copy="$CELL_COPY"
     printf 'Под трафиком:  %s (база %s)\n' "$active" "$heir"
     printf 'Вторая сборка: %s (база %s)\n' "$other" "$prev"
     [ -z "$copy" ] || printf 'Идёт выкладка: копия %s (метка DEPLOY_COPY_DB в %s)\n' "$copy" "$ENV_FILE"
@@ -2669,6 +2761,107 @@ selftest() {
         fi
     fi
 
+    # 15е. Состав баз числами для наблюдения (задача 0229). Роль в метрике
+    #      обязана совпадать с напечатанной: тревога ПосторонняяБазаЛежит
+    #      смотрит только на role="stranger", и база второй сборки, названная
+    #      там посторонней, будила бы после каждой выкладки.
+    local mt mline
+    HISTORY="$dir/hist"
+    printf '2026-09-19T21:03:11Z\tprom\t%s\tvladislav\tвыкладка\tмиграции: apply\tбаза: %s → %s\tуспех\n' \
+        "$sha" "$strange" "$green_db" > "$HISTORY"
+    table=$(printf '%s|432013312|0|t|7\n%s|398458880|1|t|0\n%s|390070272|1|t|0\n%s|8388608|0|t|0\n%s|1048576|1|t|0\n' \
+        "$blue_db" "$green_db" "$strange" "${verify_db:-parts_verify}" parts_nikto_ne_zapisal)
+    mt=$(db_inventory_metrics "$table" "$blue_db" "$green_db" "" 2>&1)
+    out=$(db_inventory_report "$table" "$blue_db" "$green_db" "" 2>&1)
+    metric_has() {  # имя случая, точная строка отметки
+        if printf '%s\n' "$mt" | grep -qxF -- "$2"; then say "$1"; else nope "$1: в отметках нет «$2»"; fi
+    }
+    metric_has "ПОСТОРОННЯЯ БАЗА В ОТМЕТКАХ ПОСТОРОННЯЯ, С ИМЕНЕМ И РАЗМЕРОМ" \
+        "partsflow_db_size_bytes{db=\"$strange\",role=\"stranger\"} 390070272"
+    metric_has "база под трафиком в отметках — под трафиком" \
+        "partsflow_db_size_bytes{db=\"$blue_db\",role=\"traffic\"} 432013312"
+    metric_has "БАЗА ВТОРОЙ СБОРКИ В ОТМЕТКАХ НЕ ПОСТОРОННЯЯ" \
+        "partsflow_db_size_bytes{db=\"$green_db\",role=\"second_build\"} 398458880"
+    metric_has "рабочая база проверки бэкапа в отметках своя" \
+        "partsflow_db_size_bytes{db=\"${verify_db:-parts_verify}\",role=\"backup_check\"} 8388608"
+    metric_has "посторонних сосчитано столько же, сколько напечатано" "partsflow_db_strangers 2"
+    case "$out" in *"Посторонних баз: 2"*) say "перечень человеку называет тех же двух" ;;
+        *) nope "перечень человеку назвал не двух посторонних: $(printf '%s\n' "$out" | tail -n1)" ;; esac
+    # Каждая напечатанная роль переводится в ту, что стоит в отметке, — перебором
+    # строк перечня, а не списком в пробе.
+    local pname prole pkey
+    while IFS= read -r mline; do
+        case "$mline" in "  Посторонних"*) continue ;; "  "[!\ ]*" — "*) ;; *) continue ;; esac
+        pname=${mline#  }; pname=${pname%% — *}; prole=${mline#* — }
+        pkey=$(role_key "$prole")
+        printf '%s\n' "$mt" | grep -qF "partsflow_db_size_bytes{db=\"$pname\",role=\"$pkey\"}" \
+            || nope "РОЛЬ В ОТМЕТКЕ РАСХОДИТСЯ С НАПЕЧАТАННОЙ: $pname — «$prole»"
+    done <<EOF
+$out
+EOF
+    mline=$(printf '%s\n' "$mt" | grep -F "partsflow_db_idle_seconds{db=\"$strange\",role=\"stranger\"} ")
+    if [ -n "$mline" ] && [ "${mline##* }" -gt 86400 ] 2>/dev/null; then
+        say "ВОЗРАСТ ПОСТОРОННЕЙ ВЗЯТ ИЗ ЖУРНАЛА ВЫКЛАДОК (${mline##* } с)"
+    else
+        nope "возраст посторонней базы не взят из журнала: «${mline:-нет строки}»"
+    fi
+    case "$mt" in
+        *"partsflow_db_idle_seconds{db=\"parts_nikto_ne_zapisal\""*)
+            nope "возраст базы, о которой журнал молчит, выдуман" ;;
+        *) say "о базе, которой нет в журнале, возраста нет — пусто, а не ноль" ;;
+    esac
+    mt=$(db_inventory_metrics "$(printf '%s|432013312|0|t|7\n%s|398458880|1|t|0\n' "$blue_db" "$green_db")" \
+        "$blue_db" "$green_db" "" 2>&1)
+    metric_has "посторонних нет — так и сказано числом" "partsflow_db_strangers 0"
+
+    #      Целиком, как зовёт сторож архива: база ответила — отметки и код 0;
+    #      не ответила — код 2 и НИ ОДНОЙ отметки (ноль посторонних на
+    #      неотвеченном вопросе читался бы «посторонних нет»).
+    local stub="$dir/compose-stub"
+    printf '#!/bin/sh\n[ -z "$STUB_TABLE" ] && { echo "Error: service postgres is not running" >&2; exit 1; }\nprintf "%%s\\n" "$STUB_TABLE"\n' > "$stub"
+    chmod +x "$stub"
+    fresh_env
+    mt=$(env -u APP_DB_BLUE -u APP_DB_GREEN ENV_FILE="$dir/env" DEPLOY_ACTIVE=app-blue DEPLOY_HISTORY="$HISTORY" \
+        COMPOSE="$stub" STUB_TABLE="$table" bash "$0" --databases-metrics 2>/dev/null)
+    code=$?
+    [ "$code" = 0 ] && say "--databases-metrics на ответившей базе — код 0" \
+        || nope "--databases-metrics на ответившей базе ответил кодом $code"
+    metric_has "--databases-metrics печатает постороннюю базу" \
+        "partsflow_db_size_bytes{db=\"$strange\",role=\"stranger\"} 390070272"
+    mt=$(env -u APP_DB_BLUE -u APP_DB_GREEN ENV_FILE="$dir/env" DEPLOY_ACTIVE=app-blue DEPLOY_HISTORY="$HISTORY" \
+        COMPOSE="$stub" STUB_TABLE= bash "$0" --databases-metrics 2>/dev/null)
+    code=$?
+    [ "$code" = 2 ] && say "база не ответила — код 2" || nope "база не ответила, а код $code"
+    [ -z "$mt" ] && say "БАЗА НЕ ОТВЕТИЛА — НИ ОДНОЙ ОТМЕТКИ, а не ноль посторонних" \
+        || nope "база не ответила, а отметки напечатаны: $(printf '%s' "$mt" | head -n2 | tr '\n' ' ')"
+
+    # 15ж. ВОЗВРАТ ДЕФЕКТА: отметка, не отличающая базу второй сборки
+    #      от посторонней, обязана валить ЭТУ самопроверку. Копия в .scratch/:
+    #      она на той же глубине, что ops/, и не отслеживается git (0248).
+    if [ -n "${DEPLOY_SELFTEST_FAKE:-}" ]; then
+        say "подделка своей копии не заводит — рекурсии нет"
+    else
+        local fake2 fake2_out
+        mkdir -p .scratch
+        fake2=$(mktemp .scratch/deploy-0229-XXXXXX 2>/dev/null) || fake2=""
+        if [ -z "$fake2" ]; then
+            nope "подделку 0229 некуда положить — возврат дефекта не проверен"
+        else
+            sed "s/^\( *\"база второй сборки\")  *printf\) 'second_build' ;;$/\1 'stranger' ;;/" "$0" > "$fake2"
+            if cmp -s "$0" "$fake2"; then
+                nope "подделку 0229 негде поставить: перевода роли второй сборки не нашлось"
+            elif fake2_out=$(DEPLOY_SELFTEST_FAKE=yes bash "$fake2" --selftest 2>&1); then
+                nope "ВОЗВРАТ ДЕФЕКТА: отметка, зовущая вторую сборку посторонней, самопроверку ПРОШЛА"
+            else
+                case "$fake2_out" in
+                    *"БАЗА ВТОРОЙ СБОРКИ В ОТМЕТКАХ НЕ ПОСТОРОННЯЯ"*) say "ВОЗВРАТ ДЕФЕКТА: подделка валит самопроверку на базе второй сборки" ;;
+                    *) nope "подделка 0229 покраснела не тем местом: $(printf '%s\n' "$fake2_out" | grep '✗' | head -2 | tr '\n' ' ')" ;;
+                esac
+            fi
+            rm -f "$fake2"
+        fi
+    fi
+
     # 16. Отметка берётся САМАЯ СВЕЖАЯ, а не последняя напечатанная (задача 0214,
     #     пункт 6). Живого дефекта сегодня нет — под выражение подходит ровно
     #     одна строка, — но это свойство ДАННЫХ, а не проверки: pushgateway
@@ -3181,6 +3374,11 @@ fi
 
 if [ -n "$DROP_PREV" ]; then
     drop_previous_now
+    exit $?
+fi
+
+if [ "$DATABASES" = metrics ]; then
+    databases_metrics_now
     exit $?
 fi
 
