@@ -196,6 +196,15 @@ PY
         forge "снимки не сверяются" \
             'if photo_check "$PHOTO_SRC" "$PHOTO_LOCAL"; then' 'if true; then' \
             'не зовёт photo_check'
+        forge "итоговый код не учитывает снимки" \
+            '[ "$PHOTO_FAILED" = 0 ] || exit 1' 'true' \
+            'итогового exit 1'
+        forge "красные снимки всё же ставят отметку" \
+            '    PHOTO_FAILED=1
+' '    PHOTO_FAILED=1
+    mark_success partsflow_photo_backup_success_timestamp_seconds
+' \
+            'отметку снимков'
         forge "флаг снова становится именем файла" \
             '-*) printf '"'"'Неизвестный флаг' '--zzz) printf '"'"'Неизвестный флаг' \
             'обязан давать код 2'
@@ -213,6 +222,16 @@ PY
     if printf '%s' "$BODY" | grep -qF 'photo_check "$PHOTO_SRC" "$PHOTO_LOCAL"'; then
         pass "снимки сверяются с хранилищем"
     else flunk "ops/backup.sh не зовёт photo_check"; fi
+    # Хвост: красные снимки не ставят отметку и дают итоговый код 1. Обе половины
+    # решения — отдельные случаи: без них подделка «exit 1 заменён на true» и
+    # «отметка поставлена и в красной ветке» оставляли самопроверку зелёной.
+    RED_BRANCH=$(printf '%s\n' "$BODY" | awk '/^    PHOTO_FAILED=1$/ {on=1} on && /^fi$/ {exit} on')
+    if [ -n "$RED_BRANCH" ] && ! printf '%s' "$RED_BRANCH" | grep -qF 'mark_success'; then
+        pass "ветка красных снимков не ставит отметку снимков"
+    else flunk "красные снимки не должны ставить отметку снимков (ветка PHOTO_FAILED=1 пуста или зовёт mark_success): отметку снимков ставит только зелёная ветка"; fi
+    if printf '%s' "$BODY" | grep -qF '[ "$PHOTO_FAILED" = 0 ] || exit 1'; then
+        pass "итоговый код 1 при красных снимках"
+    else flunk "после красных снимков нет итогового exit 1"; fi
 
     if [ "$bad" != 0 ]; then
         printf '\033[1;31mСамопроверка ops/backup.sh: ЕСТЬ ОШИБКИ\033[0m\n'
@@ -520,6 +539,9 @@ else
     esac
 fi
 
+if [ "$PHOTO_FAILED" != 0 ]; then
+    printf '\n\033[1;33m    Дампы сняты, но зеркало снимков НЕ подтверждено — прогон завершится с кодом 1\033[0m\n'
+fi
 printf '\n\033[1;32mБэкап снят: %s\033[0m\n' "$OUT"
 printf 'Фотографии: %s (зеркало, общее на все наборы)\n' "$PHOTOS"
 [ -n "${OFFSITE_REMOTE:-}" ] && printf 'Офсайт: %s\n' "$OFFSITE_REMOTE"
