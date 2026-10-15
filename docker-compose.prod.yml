@@ -27,6 +27,8 @@
 # версия оставляет ячейку лежать. Сборок две, синяя и зелёная, и старая
 # гаснет последней:
 #
+#   APP_IMAGE_TAG_GREEN=<новый SHA> \
+#       docker compose -f docker-compose.prod.yml pull app-green   # отказ реестра — здесь
 #   COMPOSE_PROFILES=blue,green APP_IMAGE_TAG_GREEN=<новый SHA> \
 #       docker compose -f docker-compose.prod.yml up -d app-green
 #   ops/switch-build.sh green          # ждёт готовности и переводит трафик
