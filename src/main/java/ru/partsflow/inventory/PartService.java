@@ -47,8 +47,6 @@ public class PartService {
     private final StockNaming naming;
     /** В {@code part_stock} не пишет никто мимо журнала — перестановка тоже. */
     private final StockLedger ledger;
-    /** Правка состояния двигает пометку в заголовке — её ставит он же. */
-    private final PartTitleGenerator titles;
     /** Блоки карточки Дрома лежат в своей таблице и правятся вместе с формой (задача 0285). */
     private final jakarta.persistence.EntityManager entityManager;
 
@@ -57,7 +55,7 @@ public class PartService {
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
                        PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc,
                        VehicleWords vehicleWords, StockNaming naming, StockLedger ledger,
-                       PartTitleGenerator titles, jakarta.persistence.EntityManager entityManager,
+                       jakarta.persistence.EntityManager entityManager,
                        PartIdentity identity) {
         this.partRepository = partRepository;
         this.eventPublisher = eventPublisher;
@@ -67,7 +65,6 @@ public class PartService {
         this.vehicleWords = vehicleWords;
         this.naming = naming;
         this.ledger = ledger;
-        this.titles = titles;
         this.entityManager = entityManager;
         this.identity = identity;
     }
@@ -96,21 +93,10 @@ public class PartService {
      * и существует — сопоставление, не меняющее ни одного заголовка, владельцу
      * незаметно.
      *
-     * <p>Заголовок правится подменой начала, а не пересборкой: собрать его
-     * заново значит достать донора, стороны и состояние. Условий два, и второе
-     * дороже первого.
-     *
-     * <p><b>Заголовок должен быть длиннее написания.</b> У позиции из чужой
-     * таблицы он и есть само написание, целиком: подмена «Фара левая» на эталон
-     * «Фара» стёрла бы сторону, и левая с правой стали бы одной деталью —
-     * колонки {@code side_lr} у импорта тоже нет, восстановить её будет неоткуда.
-     * Заголовок, собранный нами, длиннее: за видом детали идут машина, сторона
-     * и состояние, и они остаются на месте. Пойман живым прогоном на складе,
-     * загруженном из таблицы, — тесты на приёмочных заголовках этого не видели.
-     *
-     * <p>Карточки, чей заголовок начинается иначе (правили руками, пришли
-     * из другой системы), не трогаются вовсе: подменять в них нечего.
-     * Категорию и эталон получают все — они от заголовка не зависят.
+     * <p><b>Заголовок не трогается (задача 0304, решение владельца 15.10.2026:
+     * «название не должно меняться само»).</b> Раньше начало заголовка, совпавшее
+     * с написанием, подменялось эталоном; теперь карточки получают только вид
+     * детали и категорию. Название меняет человек, вписав его в карточке.
      *
      * @return сколько карточек доведено
      */
@@ -126,17 +112,12 @@ public class PartService {
                        part_kind_id = ?,
                        -- Момент правки раньше ставил триггер; теперь его
                        -- ставит тот, кто правит.
-                       updated_at = now(),
-                       title = CASE WHEN left(title, length(?)) = ?
-                                     AND length(title) > length(?)
-                                    THEN ? || substr(title, length(?) + 1)
-                                    ELSE title END
+                       updated_at = now()
                  WHERE part_name_id = ?""",
                 matched.getCategoryId(), matched.getPartKindId(),
-                localSpelling, localSpelling, localSpelling, kindName, localSpelling,
                 partNameId);
 
-        // Заголовок и категория уехали в прайс — площадке надо сообщить.
+        // Категория и вид детали уехали в прайс — площадке надо сообщить.
         markByPartName(partNameId);
 
         log.info("Наименование «{}» сопоставлено с «{}», доведено карточек: {}",
@@ -186,13 +167,8 @@ public class PartService {
      * во всей красе: наименования распознаны, а двести карточек по-прежнему
      * без категории.
      *
-     * <p>Заголовок правится по тому же правилу, что и в {@link #applyMatch}:
-     * начало подменяется эталоном, только если оно совпадает с написанием
-     * и в заголовке есть что-то ещё. Ради этого справочник и нужен — чтобы
-     * «мозги» и «телевизор» стали блоком управления и рамкой радиатора,
-     * а прайс перестал быть словарём чужого сленга. Позиция, у которой
-     * заголовок и есть само написание, не трогается: подмена стёрла бы
-     * сторону, и левая фара слилась бы с правой.
+     * <p>Заголовок не трогается, как и в {@link #applyMatch} (задача 0304):
+     * доводятся категория и вид детали, название меняет только человек.
      *
      * @return сколько карточек доведено
      */
@@ -205,13 +181,8 @@ public class PartService {
                 UPDATE part p
                    SET category_id = pn.category_id,
                        part_kind_id = pn.part_kind_id,
-                       updated_at = now(),
-                       title = CASE WHEN left(p.title, length(pn.name)) = pn.name
-                                     AND length(p.title) > length(pn.name)
-                                    THEN k.name || substr(p.title, length(pn.name) + 1)
-                                    ELSE p.title END
+                       updated_at = now()
                   FROM part_name pn
-                  JOIN catalog.part_kind k ON k.id = pn.part_kind_id
                  WHERE p.part_name_id = pn.id
                    AND pn.part_kind_id IS NOT NULL
                    AND p.part_kind_id IS DISTINCT FROM pn.part_kind_id""");
@@ -261,14 +232,13 @@ public class PartService {
      * По той же причине не правится сторона: ошибку в ней лечит разбор
      * наименований, а не поле в карточке.
      *
-     * <p><b>А состояние правится — и двигает пометку в заголовке</b>
+     * <p><b>А состояние правится — и название при этом не меняется (0304)</b>
      * (задача 0039, решение владельца продукта от 8 сентября 2026).
      * До неё {@code part.condition} писался ровно один раз, в приёмке:
      * приёмщик, поставивший «б/у» вместо «новой», исправить это мог только
-     * заведением второй карточки. Заголовок при этом обязан поехать
-     * за состоянием — иначе карточка разойдётся со своим же названием,
-     * уже уехавшим в объявление, — но **пересобирается он не целиком**:
-     * почему, записано у {@link PartTitleGenerator#remark}.
+     * заведением второй карточки. Пометка состояния в заголовке до 15.10.2026
+     * ехала за ним; решение владельца — «название само не меняется никогда»,
+     * и теперь заголовок остаётся тем, что вписал человек.
      *
      * <p>Событие о смене цены уходит только когда цена действительно другая:
      * площадке незачем дельта на правку заметки, а {@code price_changed_at}
@@ -307,12 +277,12 @@ public class PartService {
         }
 
         // Наименование правится руками (задача 0302, решение владельца: «никаких
-        // замков»). Справочник его после этого не пересобирает: правка руками
-        // и есть то, что владелец хочет видеть в объявлении. Пустое — «не
+        // замков») и только руками (0304: «название не должно меняться само»):
+        // правка номера, состояния, машины и сопоставление написания его не трогают. Пустое — «не
         // трогать»: колонка NOT NULL, позиции без наименования не бывает.
         if (update.title() != null && !update.title().isBlank()
                 && !update.title().strip().equals(part.getTitle())) {
-            part.editTitle(update.title().strip());
+            part.setTitle(update.title().strip());
         }
         // Стороны: null — ключа не было, не трогать; пустое — снять сторону.
         if (update.sideLr() != null || update.sideFr() != null) {
@@ -330,13 +300,9 @@ public class PartService {
             part.setLegacyCode(legacy);
         }
 
-        // Состояние и пометка заголовка двигаются вместе, и только когда
-        // состояние действительно другое: пересчитывать заголовок на правке
-        // заметки незачем, а у перенесённой позиции он несёт ещё и список
-        // машин (см. PartTitleGenerator.remark).
+        // Состояние меняется, название — нет (0304): оно только то, что вписал человек.
         if (update.condition() != null && update.condition() != part.getCondition()) {
             part.setCondition(update.condition());
-            part.setTitle(titles.remark(part.getTitle(), update.condition()));
         }
 
         part.setMinPrice(update.minPrice());
@@ -375,16 +341,6 @@ public class PartService {
             PartIdentity.Applied applied = identity.apply(partId, update.identity(), authorId);
             if (applied.changed()) {
                 partChanged = true;
-            }
-            // Заголовок следует за номером производителя (задача 0303): собранный
-            // заголовок кончается номером, и после правки номера в карточке, на
-            // витрине и в <name> прайса оставался прежний. Вписанный руками
-            // не трогается никогда — ни целиком, ни хвостом (PartTitleGenerator
-            // .renumber, решение исполнителя названо в PR). Сущностью, а не SQL:
-            // правка уходит в историю позиции «Наименование: … → …».
-            if (applied.oemChanged() && !part.isTitleManual()) {
-                part.setTitle(titles.renumber(part.getTitle(),
-                        applied.oemBefore(), applied.oemAfter()));
             }
         }
         part.touchedBy(authorId);

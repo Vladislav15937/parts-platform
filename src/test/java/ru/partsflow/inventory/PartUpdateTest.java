@@ -328,7 +328,7 @@ class PartUpdateTest extends PostgresTestBase {
     }
 
     /**
-     * Состояние принятой детали правится из карточки, и заголовок едет за ним.
+     * Состояние принятой детали правится из карточки; название при этом не меняется (0304).
      *
      * <p>До задачи 0039 {@code part.condition} писался ровно один раз,
      * в приёмке: приёмщик, поставивший «б/у» вместо «новой», исправить это
@@ -340,7 +340,7 @@ class PartUpdateTest extends PostgresTestBase {
      * сервиса напрямую её не касается.
      */
     @Test
-    @DisplayName("Владелец меняет состояние, и пометка в заголовке едет за ним")
+    @DisplayName("Владелец меняет состояние, а название остаётся прежним")
     void conditionIsEditableFromTheCard() throws Exception {
         MockHttpSession session = login("vladelec");
 
@@ -354,12 +354,10 @@ class PartUpdateTest extends PostgresTestBase {
                 "SELECT condition, title FROM part WHERE id = ?", partId));
 
         assertThat(card.get("condition")).isEqualTo("CONTRACT");
-        // Заголовок уже уехал в объявление, и карточка не должна разойтись
-        // со своим же названием. Меняется ровно пометка состояния —
-        // остальное в заголовке не наше (см. PartTitleGenerator.remark).
+        // Задача 0304, решение владельца 15.10.2026: название меняет только человек.
         assertThat((String) card.get("title"))
-                .as("пометка состояния в заголовке осталась прежней")
-                .isEqualTo("Фара Toyota Camry 2006 перед. лев. (контракт)");
+                .as("смена состояния переписала название")
+                .isEqualTo("Фара Toyota Camry 2006 перед. лев. (б/у)");
 
         // Площадка узнаёт об изменении дельтой, а не полным забором прайса
         // (до трёх суток): «любой апдейт должен ехать до площадки дельтой».
