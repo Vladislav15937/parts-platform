@@ -402,3 +402,133 @@ tests:
       - eval_time: 20m
         alertname: ЯчейкаЗаполняется
         exp_alerts: []
+
+  # ── Посторонняя база (задача 0229) ──────────────────────────────────────
+  #
+  # Правило берёт МГНОВЕННОЕ значение возраста, поэтому шаг рядов — 1m: при
+  # часовом шаге ряд жив одну минуту из шестидесяти, выдержка не набирается,
+  # и случаи, ждущие пустоты, проходили бы от устарелости ряда, ничего
+  # не проверив (ловушка 0089). Возраст растёт вместе с часами — +60 в минуту,
+  # как его и считает ops/deploy.sh от журнала выкладок. Метки — как у
+  # отдельной группы pushgateway: job="wal", census="databases".
+
+  # 16. Посторонняя база лежит третьи сутки: тревога обязана прийти — и не
+  #     раньше часа выдержки, — назвать базу по имени, размер, возраст и что
+  #     делать. Снятое правило валит именно этот случай.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_db_size_bytes{job="wal", census="databases", db="parts_blue_cccccccccccc", role="traffic"}'
+        values: '432013312+0x90'
+      - series: 'partsflow_db_size_bytes{job="wal", census="databases", db="parts_green_38505a9e2bee", role="stranger"}'
+        values: '390070272+0x90'
+      - series: 'partsflow_db_idle_seconds{job="wal", census="databases", db="parts_green_38505a9e2bee", role="stranger"}'
+        values: '259200+60x90'
+      - series: 'partsflow_db_strangers{job="wal", census="databases"}'
+        values: '1+0x90'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: ПосторонняяБазаЛежит
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: ПосторонняяБазаЛежит
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              db: parts_green_38505a9e2bee
+            exp_annotations:
+              summary: '[] посторонняя база parts_green_38505a9e2bee лежит забытой — убрать руками'
+              description: >-
+                База parts_green_38505a9e2bee занимает 372MiB и не названа
+                ни APP_DB_BLUE, ни APP_DB_GREEN: её не видит ни бэкап,
+                ни выкладка. Работу не принимает 3d 1h 10m 0s. Посмотреть:
+                ops/deploy.sh --databases. Удаляет человек, автоматически её
+                не уберёт никто, и ops/deploy.sh --drop-previous тоже — он
+                про базу второй сборки. Сверьте, что имени нет в .env
+                (grep APP_DB_ .env) и что в deploy-history.log она прежняя
+                база выкладки, затем DROP DATABASE "parts_green_38505a9e2bee"
+                WITH (FORCE) владельцем схем.
+
+  # 17. Обычная выкладка: посторонняя база младше порога (20 часов и растёт
+  #     четыре часа — до ночного дампа сменщицы) — правило молчать обязано.
+  #     Порог, заменённый с 48 часов на час, валит именно этот случай.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_db_size_bytes{job="wal", census="databases", db="parts_green_59b076a19552", role="stranger"}'
+        values: '390070272+0x240'
+      - series: 'partsflow_db_idle_seconds{job="wal", census="databases", db="parts_green_59b076a19552", role="stranger"}'
+        values: '72000+60x240'
+      - series: 'partsflow_db_strangers{job="wal", census="databases"}'
+        values: '1+0x240'
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: ПосторонняяБазаЛежит
+        exp_alerts: []
+
+  # 18. Посторонних нет вовсе: своя база и база второй сборки — тишина.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_db_size_bytes{job="wal", census="databases", db="parts_blue_cccccccccccc", role="traffic"}'
+        values: '432013312+0x120'
+      - series: 'partsflow_db_size_bytes{job="wal", census="databases", db="parts_green_dddddddddddd", role="second_build"}'
+        values: '398458880+0x120'
+      - series: 'partsflow_db_strangers{job="wal", census="databases"}'
+        values: '0+0x120'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: ПосторонняяБазаЛежит
+        exp_alerts: []
+
+  # 19. База ВТОРОЙ СБОРКИ лежит пятые сутки — законно: это прежняя база
+  #     для отката, её убирает выкладка или --drop-previous, и посторонней
+  #     она не является. Правило, не различающее роли (без role="stranger"),
+  #     будило бы на ней после каждой выкладки — и валит именно этот случай.
+  #     Рабочая база проверки бэкапа лежит рядом по той же причине.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_db_size_bytes{job="wal", census="databases", db="parts_blue_cccccccccccc", role="traffic"}'
+        values: '432013312+0x120'
+      - series: 'partsflow_db_size_bytes{job="wal", census="databases", db="parts_green_dddddddddddd", role="second_build"}'
+        values: '398458880+0x120'
+      - series: 'partsflow_db_idle_seconds{job="wal", census="databases", db="parts_green_dddddddddddd", role="second_build"}'
+        values: '432000+60x120'
+      - series: 'partsflow_db_size_bytes{job="wal", census="databases", db="parts_verify", role="backup_check"}'
+        values: '8388608+0x120'
+      - series: 'partsflow_db_strangers{job="wal", census="databases"}'
+        values: '0+0x120'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: ПосторонняяБазаЛежит
+        exp_alerts: []
+
+  # 20. Посторонняя база, о которой журнал выкладок молчит: возраста нет.
+  #     Законная посторонняя всегда рождается выкладкой и всегда записана,
+  #     поэтому неизвестно чья будит после выдержки — и тревога честно
+  #     говорит, что числа нет, а не печатает ноль.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_db_size_bytes{job="wal", census="databases", db="parts_rukami", role="stranger"}'
+        values: '1048576+0x90'
+      - series: 'partsflow_db_strangers{job="wal", census="databases"}'
+        values: '1+0x90'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: ПосторонняяБазаЛежит
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: ПосторонняяБазаЛежит
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              db: parts_rukami
+            exp_annotations:
+              summary: '[] посторонняя база parts_rukami лежит забытой — убрать руками'
+              description: >-
+                База parts_rukami занимает 1MiB и не названа
+                ни APP_DB_BLUE, ни APP_DB_GREEN: её не видит ни бэкап,
+                ни выкладка. С какого числа она не в работе, журнал выкладок
+                не знает. Посмотреть: ops/deploy.sh --databases. Удаляет
+                человек, автоматически её не уберёт никто, и ops/deploy.sh
+                --drop-previous тоже — он про базу второй сборки. Сверьте,
+                что имени нет в .env (grep APP_DB_ .env) и что
+                в deploy-history.log она прежняя база выкладки, затем
+                DROP DATABASE "parts_rukami" WITH (FORCE) владельцем схем.

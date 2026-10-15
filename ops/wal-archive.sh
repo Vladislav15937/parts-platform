@@ -289,6 +289,65 @@ archiver_broken() {  # отказов, когда уехал последний,
     return 1
 }
 
+# ── Состав баз (задача 0229) ─────────────────────────────────────────────────
+#
+# Посторонняя замороженная база — та, которую не называет ни один ключ .env, —
+# занимает столько же, сколько живая, и выглядит как данные. До 0229 её видел
+# только тот, кто сам открыл ops/deploy.sh --databases, а 29 сентября 2026 их
+# стало две за один день. Здесь — потому что этот сторож и так каждые пять
+# минут ходит в базу и в pushgateway; решает тревога ПосторонняяБазаЛежит
+# (ops/alerts.yml), а не этот скрипт.
+#
+# «СВОЯ ИЛИ ПОСТОРОННЯЯ» РЕШАЕТ ops/deploy.sh, И ТОЛЬКО ОН. Сюда приезжают
+# готовые отметки (--databases-metrics), и разбора ролей в этом файле нет:
+# два места, отличающие свою базу от посторонней, разошлись бы молча (0177).
+#
+# Код возврата посторонняя база НЕ меняет — тем же доводом, что кончающийся
+# диск ниже: законно она лежит до ночного дампа (до ~27 часов), а ненулевой
+# код — это письмо от cron каждые пять минут. Меняет его неотвеченный вопрос.
+WAL_DEPLOY="${WAL_DEPLOY:-ops/deploy.sh}"
+DB_CENSUS=""
+db_census() {
+    local out rc=0 n line name size idle
+    DB_CENSUS=""
+    out=$(ENV_FILE="$ENV_FILE" COMPOSE="$COMPOSE" "$WAL_DEPLOY" --databases-metrics 2>/dev/null) || rc=$?
+    if [ "$rc" != 0 ] || ! printf '%s\n' "$out" | grep -q '^partsflow_db_strangers [0-9]'; then
+        bad "состав баз не спросить ($WAL_DEPLOY --databases-metrics, код $rc) — посторонней базы сейчас не увидит никто"
+        bad "отметки о составе баз сняты, а не обнулены: ноль читался бы «посторонних нет»"
+        return 1
+    fi
+    DB_CENSUS="$out"
+    n=$(printf '%s\n' "$out" | sed -n 's/^partsflow_db_strangers //p')
+    if [ "$n" = 0 ]; then
+        ok "посторонних баз нет"
+        return 0
+    fi
+    # Жёлтым, а не красным: до ночного дампа посторонняя база лежит законно,
+    # а красное на ожидаемом приучает не читать красное.
+    printf '%s\n' "$out" | grep '^partsflow_db_size_bytes{.*role="stranger"' | while IFS= read -r line; do
+        name=${line#*db=\"}; name=${name%%\"*}
+        size=${line##* }
+        idle=$(printf '%s\n' "$out" | grep -F "partsflow_db_idle_seconds{db=\"$name\"," | sed 's/.* //') || idle=""
+        warn "посторонняя база $name: $(( size / 1048576 )) МБ, $(
+            [ -n "$idle" ] && printf 'не в работе %s ч' "$(( idle / 3600 ))" || printf 'с какого числа — журнал выкладок не знает')"
+    done
+    warn "посмотреть: ops/deploy.sh --databases; удаляет человек, тревога — через двое суток"
+    return 0
+}
+
+# Отдельной группой pushgateway и целиком (PUT), а не в общий кусок задачи
+# wal (POST): POST заменяет только присланные имена, и база, которую убрали,
+# или вопрос, оставшийся без ответа, оставляли бы в наблюдении последнее
+# значение навсегда — тревога горела бы об удалённой базе, а неотвеченный
+# вопрос выглядел бы прежним ответом. Не спросили — группа удаляется.
+census_push() {  # адрес группы
+    if [ -n "$DB_CENSUS" ]; then
+        printf '%s\n' "$DB_CENSUS" | "${WAL_CURL:-curl}" -sf --max-time 10 -X PUT --data-binary @- "$1" > /dev/null
+    else
+        "${WAL_CURL:-curl}" -sf --max-time 10 -X DELETE "$1" > /dev/null
+    fi
+}
+
 # Сторож, который не краснеет на дефекте, хуже отсутствующего — и установить
 # это можно только попыткой. Поэтому три случая: целая цепочка молчит,
 # цепочка с дырой краснеет и называет момент, а момент ДО дыры по-прежнему
@@ -616,6 +675,79 @@ RCLONE
             return 1 ;;
     esac
 
+    # Состав баз (задача 0229) — на подделанном ответе ops/deploy.sh. Роли здесь
+    # не разбираются: их проверяет самопроверка ops/deploy.sh, а этот случай —
+    # что приехавшее уходит в наблюдение как есть, а неприехавшее НЕ уходит
+    # нулём.
+    local cdir="$tmp/census" c_out c_rc
+    mkdir -p "$cdir"
+    cat > "$cdir/deploy" <<'STUB'
+#!/bin/sh
+case "$STUB_CENSUS" in
+    чужая)
+        printf 'partsflow_db_size_bytes{db="parts_blue_aaaaaaaaaaaa",role="traffic"} 432013312\n'
+        printf 'partsflow_db_size_bytes{db="parts_green_bbbbbbbbbbbb",role="stranger"} 390070272\n'
+        printf 'partsflow_db_idle_seconds{db="parts_green_bbbbbbbbbbbb",role="stranger"} 266400\n'
+        printf 'partsflow_db_strangers 1\n' ;;
+    чисто)
+        printf 'partsflow_db_size_bytes{db="parts_blue_aaaaaaaaaaaa",role="traffic"} 432013312\n'
+        printf 'partsflow_db_strangers 0\n' ;;
+    мусор)
+        printf 'Error: service postgres is not running\n' ;;
+    *)
+        echo "Перечня баз не спросить у Postgres" >&2; exit 2 ;;
+esac
+STUB
+    cat > "$cdir/curl" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "$CURL_LOG"
+case "$*" in *--data-binary*) cat >> "$CURL_LOG" ;; esac
+STUB
+    chmod +x "$cdir/deploy" "$cdir/curl"
+    census_case() {  # режим заглушки → c_out, c_rc, журнал curl в $cdir/log
+        : > "$cdir/log"
+        set +e
+        c_out=$(WAL_DEPLOY="$cdir/deploy" WAL_CURL="$cdir/curl" CURL_LOG="$cdir/log" \
+            STUB_CENSUS="$1" ENV_FILE=/dev/null COMPOSE=: bash -c '
+                . "$0"; db_census; rc=$?; census_push http://pg/metrics/job/wal/census/databases; exit $rc
+            ' "$cdir/funcs" 2>&1)
+        c_rc=$?
+        set -e
+    }
+    # Функции сторожа — отдельным файлом: сам скрипт при сорсинге ушёл бы
+    # в самопроверку по аргументам, а вырезанные функции идут как есть.
+    sed -n '/^ok()   {/p; /^warn() {/p; /^bad()  {/p; /^WAL_DEPLOY=/,/^# Сторож, который не краснеет/p' "$0" > "$cdir/funcs"
+
+    census_case чужая
+    [ "$c_rc" = 0 ] || { printf 'САМОПРОВЕРКА: посторонняя база покрасила код сторожа (%s)\n%s\n' "$c_rc" "$c_out"; return 1; }
+    grep -q 'посторонняя база parts_green_bbbbbbbbbbbb: 372 МБ, не в работе 74 ч' <<< "$c_out" \
+        || { printf 'САМОПРОВЕРКА: посторонняя база не названа в журнале по имени, размеру и возрасту\n%s\n' "$c_out"; return 1; }
+    grep -q '^-sf --max-time 10 -X PUT --data-binary @- http://pg/metrics/job/wal/census/databases$' "$cdir/log" \
+        && grep -qx 'partsflow_db_size_bytes{db="parts_green_bbbbbbbbbbbb",role="stranger"} 390070272' "$cdir/log" \
+        && grep -qx 'partsflow_db_strangers 1' "$cdir/log" \
+        || { printf 'САМОПРОВЕРКА: отметки о составе баз не ушли целиком своей группой\n'; cat "$cdir/log"; return 1; }
+    ok "посторонняя база названа в журнале и уехала в наблюдение, код сторожа не тронут"
+
+    census_case чисто
+    [ "$c_rc" = 0 ] && grep -q 'посторонних баз нет' <<< "$c_out" && grep -qx 'partsflow_db_strangers 0' "$cdir/log" \
+        || { printf 'САМОПРОВЕРКА: «посторонних нет» не сказано или не ушло нулём\n%s\n' "$c_out"; cat "$cdir/log"; return 1; }
+    ok "посторонних нет — сказано и ушло нулём"
+
+    local mode
+    for mode in отказ мусор; do
+        census_case "$mode"
+        [ "$c_rc" != 0 ] || { printf 'САМОПРОВЕРКА: база не ответила (%s), а сторож доволен\n%s\n' "$mode" "$c_out"; return 1; }
+        grep -q 'состав баз не спросить' <<< "$c_out" \
+            || { printf 'САМОПРОВЕРКА: неотвеченный вопрос о составе баз (%s) не назван\n%s\n' "$mode" "$c_out"; return 1; }
+        if grep -q 'partsflow_db_' "$cdir/log"; then
+            printf 'САМОПРОВЕРКА: база не ответила (%s), а отметки о составе баз ушли — ноль читался бы «посторонних нет»\n' "$mode"
+            cat "$cdir/log"; return 1
+        fi
+        grep -q '^-sf --max-time 10 -X DELETE http://pg/metrics/job/wal/census/databases$' "$cdir/log" \
+            || { printf 'САМОПРОВЕРКА: база не ответила (%s), а прежние отметки о составе баз оставлены в наблюдении\n' "$mode"; cat "$cdir/log"; return 1; }
+    done
+    ok "база не ответила — красная строка, код 1, отметки сняты, а не обнулены"
+
     # ВОЗВРАТ ДЕФЕКТА к офсайту: вернув глушение отказа `lsf` (в прежней
     # редакции `2>/dev/null`, здесь — одна строка признака), самопроверка
     # обязана покраснеть. Копии лежат в `.scratch/` — он игнорируется git
@@ -930,6 +1062,16 @@ if [ -n "$DISK_FREE_MIN" ] && [ -n "$RESERVE" ] && [ "$DISK_FREE_MIN" -lt "$RESE
     bad "свободного меньше, чем нужно под копию базы: выкладка откажется ДО заморозки"
     bad "кончится диск — Postgres перестанет писать, а с ним встанет архив WAL"
 fi
+
+step "Состав баз"
+# Почему здесь и почему отдельной группой — у db_census и census_push выше.
+# Пропали эти числа целиком (сторож не ходит вовсе) — это СторожАрхиваНеХодит
+# по отметке ниже; отдельной тревоги на это нет, потому что спрашивает их
+# этот же прогон. Не ответила одна база — красная строка, код 1 и группа
+# снята: тот же прогон краснит и шаг про архиватор, база у них одна.
+db_census || RC=1
+census_push "$PUSH/census/databases" \
+    || warn "отметки о составе баз в наблюдение не ушли — проверьте pushgateway"
 
 # Отметка о самом прогоне — последней, и она означает «сторож ходил»,
 # а не «всё хорошо»: absent() по ней ловит ячейку, где эту задачу забыли
