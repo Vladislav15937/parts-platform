@@ -75,7 +75,11 @@ selftest() {
 
     pass() { printf '  ✓ %s\n' "$1"; }
     flunk() { printf '\033[1;31m  ✗ %s\033[0m\n' "$1"; bad=1; }
-    says() { printf '%s' "$1" | grep -qF -- "$2"; }
+    # Подстрока ищется `case`, а не `printf | grep -q`: grep -q выходит на
+    # первом совпадении, printf пишет дальше в закрытую трубу — «Broken pipe»,
+    # и под pipefail совпадение читается как отсутствие (замер в ubuntu:24.04:
+    # 26 отказов из 500 на теле скрипта; поймано задачей CI «Часы вперёд»).
+    says() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
 
     # Заглушка `pg_restore -l`: настоящая читает файл со stdin и отказывает на
     # не-дампе. Сверено с настоящей 15 октября 2026 (postgres:16-alpine):
@@ -213,23 +217,25 @@ PY
     # 5. Проводка в самом скрипте: нужные вызовы стоят. Смотрим на тело после
     #    самопроверки — внутри неё те же строки стоят образцами и нашлись бы всегда.
     BODY=$(sed -n '/^if \[ "\$SELFTEST" = 1 \]/,$p' "$SELF")
-    if printf '%s' "$BODY" | grep -qF 'dump_check "$OUT/shared.dump"'; then
+    if says "$BODY" 'dump_check "$OUT/shared.dump"'; then
         pass "общий дамп проверяется оглавлением"
     else flunk "ops/backup.sh не зовёт dump_check для shared.dump"; fi
-    if printf '%s' "$BODY" | grep -qF 'dump_check "$OUT/$schema.dump"'; then
+    if says "$BODY" 'dump_check "$OUT/$schema.dump"'; then
         pass "дамп арендатора проверяется оглавлением"
     else flunk "ops/backup.sh не зовёт dump_check для дампа арендатора"; fi
-    if printf '%s' "$BODY" | grep -qF 'photo_check "$PHOTO_SRC" "$PHOTO_LOCAL"'; then
+    if says "$BODY" 'photo_check "$PHOTO_SRC" "$PHOTO_LOCAL"'; then
         pass "снимки сверяются с хранилищем"
     else flunk "ops/backup.sh не зовёт photo_check"; fi
     # Хвост: красные снимки не ставят отметку и дают итоговый код 1. Обе половины
     # решения — отдельные случаи: без них подделка «exit 1 заменён на true» и
     # «отметка поставлена и в красной ветке» оставляли самопроверку зелёной.
-    RED_BRANCH=$(printf '%s\n' "$BODY" | awk '/^    PHOTO_FAILED=1$/ {on=1} on && /^fi$/ {exit} on')
-    if [ -n "$RED_BRANCH" ] && ! printf '%s' "$RED_BRANCH" | grep -qF 'mark_success'; then
+    # awk дочитывает вход до конца (без exit): ранний выход — та же закрытая
+    # труба, что у grep -q выше.
+    RED_BRANCH=$(printf '%s\n' "$BODY" | awk '/^    PHOTO_FAILED=1$/ {on=1} on && !done {print} on && /^fi$/ {done=1}')
+    if [ -n "$RED_BRANCH" ] && ! says "$RED_BRANCH" 'mark_success'; then
         pass "ветка красных снимков не ставит отметку снимков"
     else flunk "красные снимки не должны ставить отметку снимков (ветка PHOTO_FAILED=1 пуста или зовёт mark_success): отметку снимков ставит только зелёная ветка"; fi
-    if printf '%s' "$BODY" | grep -qF '[ "$PHOTO_FAILED" = 0 ] || exit 1'; then
+    if says "$BODY" '[ "$PHOTO_FAILED" = 0 ] || exit 1'; then
         pass "итоговый код 1 при красных снимках"
     else flunk "после красных снимков нет итогового exit 1"; fi
 

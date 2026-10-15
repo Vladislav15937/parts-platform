@@ -62,7 +62,10 @@ selftest() {
 
     pass() { printf '  ✓ %s\n' "$1"; }
     flunk() { printf '\033[1;31m  ✗ %s\033[0m\n' "$1"; bad=1; }
-    says() { printf '%s' "$1" | grep -qF -- "$2"; }
+    # `case`, а не `printf | grep -q`: ранний выход grep -q закрывает трубу,
+    # printf получает «Broken pipe», и под pipefail совпадение читается как
+    # отсутствие (то же поймано у ops/backup.sh --selftest задачей «Часы вперёд»).
+    says() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
 
     # Имена сегментов: линия времени 1, логический файл 0, номера 01..0A.
     S1=000000010000000000000001; S3=000000010000000000000003
@@ -210,17 +213,20 @@ PY
     #    после. Смотрим на тело после самопроверки: внутри неё те же строки
     #    стоят образцами и нашлись бы всегда.
     BODY=$(sed -n '/^if \[ "\$SELFTEST" = 1 \]/,$p' "$SELF")
-    if printf '%s' "$BODY" | grep -qF 'base_size_check "$SIZE_BYTES"'; then
+    if says "$BODY" 'base_size_check "$SIZE_BYTES"'; then
         pass "размер копии проверяется числом"
     else flunk "ops/basebackup.sh не зовёт base_size_check"; fi
-    if printf '%s' "$BODY" | grep -qF 'wal_boundary_check "$OLDEST_WAL"'; then
+    if says "$BODY" 'wal_boundary_check "$OLDEST_WAL"'; then
         pass "граница уборки утверждается"
     else flunk "ops/basebackup.sh не зовёт wal_boundary_check"; fi
-    if printf '%s' "$BODY" | grep -qF 'wal_after_check "$OLDEST_WAL"'; then
+    if says "$BODY" 'wal_after_check "$OLDEST_WAL"'; then
         pass "итог уборки утверждается"
     else flunk "ops/basebackup.sh не зовёт wal_after_check"; fi
-    pre=$(printf '%s' "$BODY" | grep -nF 'wal_boundary_check "$OLDEST_WAL"' | head -1 | cut -d: -f1)
-    cut_at=$(printf '%s' "$BODY" | grep -nF 'pg_archivecleanup -x' | head -1 | cut -d: -f1)
+    # Номер первой строки с подстрокой. awk дочитывает вход до конца: grep -m1
+    # и `| head -1` выходят раньше и закрывают трубу пишущему (см. says выше).
+    line_of() { printf '%s\n' "$BODY" | awk -v s="$1" 'index($0, s) && !n {n = NR} END {if (n) print n}'; }
+    pre=$(line_of 'wal_boundary_check "$OLDEST_WAL"')
+    cut_at=$(line_of 'pg_archivecleanup -x')
     if [ -n "$pre" ] && [ -n "$cut_at" ] && [ "$pre" -lt "$cut_at" ]; then
         pass "граница проверяется ДО удаления"
     else flunk "проверка границы обязана стоять до pg_archivecleanup"; fi
