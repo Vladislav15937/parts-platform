@@ -2,6 +2,7 @@
 # Резервное копирование ячейки.
 #
 #   ops/backup.sh [файл-окружения]
+#   ops/backup.sh --selftest        # проверка самих проверок, без docker
 #
 # Схема-на-арендатора выбиралась ради одного: восстановить одного клиента,
 # не трогая остальных. Поэтому каждый арендатор выгружается отдельным дампом,
@@ -39,11 +40,196 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Разбор флагов (задача 0237). Прежде позиционный аргумент становился ИМЕНЕМ
+# файла окружения без разбора, и `--selftest` или `--apply` молча превращались
+# в имя файла: файла нет, окружение берётся из среды — и шёл настоящий прогон
+# снятия копии. Любой аргумент с дефисом, кроме --selftest, отбивается словами
+# и кодом 2; образец — ops/restore-pitr.sh.
+SELFTEST=0
+case "${1:-}" in
+    --selftest) SELFTEST=1; shift ;;
+    -*) printf 'Неизвестный флаг: %s\nИспользование: %s [файл-окружения] | --selftest\n' "$1" "$0" >&2
+        exit 2 ;;
+esac
+if [ "$#" -gt 1 ]; then
+    printf 'Лишние аргументы: %s\nИспользование: %s [файл-окружения] | --selftest\n' "$*" "$0" >&2
+    exit 2
+fi
+
+# Проверки по следу: дамп открывается, снимков не меньше, чем в хранилище.
+. ops/backup-checks.sh
+
+# --- проверка самих проверок (задача 0237) -----------------------------------
+# Без docker, ячейки и дампов: оглавление дампа подменяется заглушкой, файлы
+# кладутся во временный каталог. Каждый случай утверждает КРАСНОЕ на подделке,
+# а не только зелёное на здоровом: проверка, не краснеющая на дефекте, хуже
+# отсутствующей.
+SELF="$0"
+selftest() {
+    local bad=0 out rc d
+    tmp="$(mktemp -d)"
+    # FAKE не local: ловушка EXIT срабатывает, когда функции уже нет (урок 0151).
+    FAKE=""
+    trap 'rm -rf "${tmp:-}"; rm -f "${FAKE:-}"' EXIT
+    echo "Самопроверка ops/backup.sh"
+
+    pass() { printf '  ✓ %s\n' "$1"; }
+    flunk() { printf '\033[1;31m  ✗ %s\033[0m\n' "$1"; bad=1; }
+    says() { printf '%s' "$1" | grep -qF -- "$2"; }
+
+    # Заглушка `pg_restore -l`: настоящая читает файл со stdin и отказывает на
+    # не-дампе. Сверено с настоящей 15 октября 2026 (postgres:16-alpine):
+    # пустой файл — «input file is too short», текст — «does not appear to be
+    # a valid archive», оба код 1; у дампа схемы — строки «TABLE s1 t».
+    fake_toc() {
+        local data
+        data=$(cat)
+        case "$data" in
+            PGDMP*NOTABLES*) printf '; Selected TOC Entries:\n6; 2615 16384 SCHEMA - s1 owner\n' ;;
+            PGDMP*) printf '; Selected TOC Entries:\n6; 2615 16384 SCHEMA - s1 owner\n216; 1259 16385 TABLE s1 t owner\n3444; 0 16385 TABLE DATA s1 t owner\n' ;;
+            '') echo 'pg_restore: error: input file is too short (read 0, expected 5)' >&2; return 1 ;;
+            *)  echo 'pg_restore: error: input file does not appear to be a valid archive' >&2; return 1 ;;
+        esac
+    }
+    DUMP_TOC_CMD=fake_toc
+
+    # 1. Дамп: здоровый проходит; пустой файл, текст вместо custom, дамп без
+    #    таблиц и отсутствующий файл — каждый красный СВОИМ словом.
+    printf 'PGDMP real' > "$tmp/ok.dump"
+    : > "$tmp/empty.dump"
+    printf 'это не дамп\n' > "$tmp/text.dump"
+    printf 'PGDMP NOTABLES' > "$tmp/notables.dump"
+    if dump_check "$tmp/ok.dump" && [ "$DUMP_TABLES" = 1 ]; then
+        pass "здоровый дамп проходит, таблицы посчитаны"
+    else flunk "здоровый дамп отбит: $DUMP_WHY"; fi
+    if ! dump_check "$tmp/empty.dump" && says "$DUMP_WHY" 'пуст'; then
+        pass "пустой файл нужного имени — красный: $DUMP_WHY"
+    else flunk "пустой файл обязан краснеть словом «пуст» (получено: $DUMP_WHY)"; fi
+    if ! dump_check "$tmp/text.dump" && says "$DUMP_WHY" 'не открывается как дамп' \
+       && says "$DUMP_WHY" 'valid archive'; then
+        pass "текст вместо custom — красный, причина pg_restore показана"
+    else flunk "текст вместо дампа обязан краснеть «не открывается» с причиной (получено: $DUMP_WHY)"; fi
+    if ! dump_check "$tmp/notables.dump" && says "$DUMP_WHY" 'нет таблиц'; then
+        pass "оглавление без таблиц — красный: $DUMP_WHY"
+    else flunk "дамп без таблиц обязан краснеть «нет таблиц» (получено: $DUMP_WHY)"; fi
+    if ! dump_check "$tmp/net.dump" && says "$DUMP_WHY" 'файла нет'; then
+        pass "отсутствующий файл — красный"
+    else flunk "отсутствующий файл обязан краснеть (получено: $DUMP_WHY)"; fi
+
+    # 2. Снимки: ноль при непустом хранилище — красный (каталог отнят или путь
+    #    опечатан); ноль при нуле — законная пустая ячейка; недокопировано —
+    #    красный; хранилище не ответило — красный иным словом.
+    if photo_check 120 120 && photo_check 0 0 && photo_check 100 130; then
+        pass "полная копия, пустая ячейка и копия с запасом проходят"
+    else flunk "здоровые исходы сбора снимков отбиты: $PHOTO_WHY"; fi
+    if ! photo_check 120 0 && says "$PHOTO_WHY" '0 файлов' && says "$PHOTO_WHY" 'опечатан'; then
+        pass "0 файлов при 120 в хранилище — красный, а не «снимков: 0»"
+    else flunk "ноль при непустом хранилище обязан краснеть (получено: $PHOTO_WHY)"; fi
+    if ! photo_check 120 90 && says "$PHOTO_WHY" 'недокопировало'; then
+        pass "90 из 120 — красный: $PHOTO_WHY"
+    else flunk "недокопированное зеркало обязано краснеть (получено: $PHOTO_WHY)"; fi
+    if ! photo_check "" 5 && says "$PHOTO_WHY" 'не ответило'; then
+        pass "хранилище не ответило — красный иными словами, не «0»"
+    else flunk "молчание хранилища обязано краснеть «не ответило» (получено: $PHOTO_WHY)"; fi
+
+    # 3. Чужой флаг отбивается словами и кодом 2, а не становится именем файла.
+    for d in --apply --dry-run -x; do
+        set +e; out=$(ENV_FILE=/dev/null bash "$SELF" "$d" 2>&1); rc=$?; set -e
+        if [ "$rc" = 2 ] && says "$out" 'Неизвестный флаг'; then
+            pass "$d отбит: код 2, слова"
+        else flunk "$d обязан давать код 2 и «Неизвестный флаг» (код $rc): $(printf '%s' "$out" | head -1)"; fi
+    done
+    set +e; out=$(ENV_FILE=/dev/null bash "$SELF" a b 2>&1); rc=$?; set -e
+    if [ "$rc" = 2 ] && says "$out" 'Лишние аргументы'; then
+        pass "лишние аргументы отбиты: код 2"
+    else flunk "два аргумента обязаны давать код 2 (код $rc)"; fi
+
+    # 4. Проводка: проверки не просто существуют, а ЗВАНЫ. Рядом возврат
+    #    дефекта — копия скрипта без вызова обязана валить свою самопроверку.
+    #    Копия живёт в .scratch/ (единственное место подделок, docs/agent-workflow.md)
+    #    на той же глубине, что ops/: `cd "$(dirname "$0")/.."` уводит её в корень.
+    if [ "${BACKUP_SELFTEST_CHILD:-}" != 1 ]; then
+        plant() {   # $1 — что заменить, $2 — на что
+            mkdir -p .scratch
+            FAKE=".scratch/backup-fake.sh"
+            python3 - "$SELF" "$FAKE" "$1" "$2" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:5]
+t = open(src, encoding="utf-8").read()
+# Подделка ложится только в ТЕЛО скрипта после самопроверки: тексты, которые
+# она ищет, стоят и внутри самой самопроверки, и первая замена попала бы туда.
+m1 = "\n" + "# --- проверка самих проверок"
+m2 = "\n" + "if [ \"$SELFTEST\" = 1 ]; then selftest"
+a, b = t.index(m1), t.index(m2)
+pre, mid, post = t[:a], t[a:b], t[b:]
+if old in pre:
+    pre = pre.replace(old, new, 1)
+else:
+    assert old in post, "подделка не легла — изменилось место: " + old[:60]
+    post = post.replace(old, new, 1)
+open(dst, "w", encoding="utf-8").write(pre + mid + post)
+PY
+            bash -n "$FAKE"
+        }
+        child() {
+            set +e
+            BACKUP_SELFTEST_CHILD=1 ENV_FILE=/dev/null bash "$FAKE" --selftest >"$tmp/fake.log" 2>&1
+            rc=$?
+            set -e
+        }
+        forge() {   # $1 — название, $2 — что заменить, $3 — на что, $4 — слово в отказе
+            plant "$2" "$3"
+            child
+            if [ "$rc" != 0 ] && grep -qF -- "$4" "$tmp/fake.log"; then
+                pass "подделка «$1» валит самопроверку"
+            else
+                flunk "подделка «$1» не уронила самопроверку (код $rc, ждали «$4»)"
+                sed 's/^/      /' "$tmp/fake.log" | tail -5
+            fi
+        }
+        forge "общий дамп не проверяется" \
+            'dump_check "$OUT/shared.dump" || fail "shared.dump негоден: $DUMP_WHY"' 'true' \
+            'не зовёт dump_check для shared.dump'
+        forge "дамп арендатора не проверяется" \
+            'dump_check "$OUT/$schema.dump" || fail "$schema.dump негоден: $DUMP_WHY"' 'true' \
+            'не зовёт dump_check для дампа арендатора'
+        forge "снимки не сверяются" \
+            'if photo_check "$PHOTO_SRC" "$PHOTO_LOCAL"; then' 'if true; then' \
+            'не зовёт photo_check'
+        forge "флаг снова становится именем файла" \
+            '-*) printf '"'"'Неизвестный флаг' '--zzz) printf '"'"'Неизвестный флаг' \
+            'обязан давать код 2'
+    fi
+
+    # 5. Проводка в самом скрипте: нужные вызовы стоят. Смотрим на тело после
+    #    самопроверки — внутри неё те же строки стоят образцами и нашлись бы всегда.
+    BODY=$(sed -n '/^if \[ "\$SELFTEST" = 1 \]/,$p' "$SELF")
+    if printf '%s' "$BODY" | grep -qF 'dump_check "$OUT/shared.dump"'; then
+        pass "общий дамп проверяется оглавлением"
+    else flunk "ops/backup.sh не зовёт dump_check для shared.dump"; fi
+    if printf '%s' "$BODY" | grep -qF 'dump_check "$OUT/$schema.dump"'; then
+        pass "дамп арендатора проверяется оглавлением"
+    else flunk "ops/backup.sh не зовёт dump_check для дампа арендатора"; fi
+    if printf '%s' "$BODY" | grep -qF 'photo_check "$PHOTO_SRC" "$PHOTO_LOCAL"'; then
+        pass "снимки сверяются с хранилищем"
+    else flunk "ops/backup.sh не зовёт photo_check"; fi
+
+    if [ "$bad" != 0 ]; then
+        printf '\033[1;31mСамопроверка ops/backup.sh: ЕСТЬ ОШИБКИ\033[0m\n'
+        return 1
+    fi
+    printf '\033[1;32mСамопроверка ops/backup.sh: всё сошлось\033[0m\n'
+}
+if [ "$SELFTEST" = 1 ]; then selftest; exit $?; fi
+
 ENV_FILE="${1:-${ENV_FILE:-.env}}"
 [ -f "$ENV_FILE" ] && set -a && . "$ENV_FILE" && set +a
 
 COMPOSE="docker compose -f docker-compose.prod.yml --env-file $ENV_FILE"
 DB_USER="${DB_USER:?укажите DB_USER}"
+# Оглавление дампа читается ВНУТРИ контейнера: клиентских утилит на хосте нет,
+# а версия pg_restore обязана совпадать с версией pg_dump, снявшего файл.
+DUMP_TOC_CMD="$COMPOSE exec -T postgres pg_restore -l"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 # Каталог свой на каждую ячейку: два комплекта дампов в одной папке
 # различались бы только временем снятия, и восстановление пошло бы не туда.
@@ -131,7 +317,10 @@ step "Общие схемы: реестр арендаторов и справо
 $COMPOSE exec -T postgres pg_dump -U "$DB_USER" -d "$DB_NAME" \
     --format=custom --schema=public --schema=catalog \
     > "$OUT/shared.dump"
-ok "shared.dump — $(du -h "$OUT/shared.dump" | cut -f1)"
+# Код возврата pg_dump говорит «вышел без ошибки», а не «получился дамп»:
+# пустой файл нужного имени проходил зелёным. Спрашиваем оглавление (задача 0237).
+dump_check "$OUT/shared.dump" || fail "shared.dump негоден: $DUMP_WHY"
+ok "shared.dump — $(du -h "$OUT/shared.dump" | cut -f1), таблиц в оглавлении: $DUMP_TABLES"
 
 step "Арендаторы"
 # Берём из реестра, а не перечисляем схемы: схема без записи в реестре —
@@ -159,6 +348,7 @@ else
         # их данные не пересекаются.
         $COMPOSE exec -T postgres pg_dump -U "$DB_USER" -d "$DB_NAME" \
             --format=custom --schema="$schema" > "$OUT/$schema.dump"
+        dump_check "$OUT/$schema.dump" || fail "$schema.dump негоден: $DUMP_WHY"
 
         [ -z "$AGG_BEFORE" ] || AGG_AFTER=$(agg_snap "$schema") || AGG_AFTER=""
         if [ -n "$AGG_BEFORE" ] && [ -n "$AGG_AFTER" ]; then
@@ -249,11 +439,27 @@ step "Фотографии"
 # вернуть одного клиента — это скопировать обратно одну папку.
 PHOTOS="$BACKUPS/photos"
 mkdir -p "$PHOTOS"
+# Сколько объектов в хранилище ДО зеркала (задача 0237): число файлов в копии
+# без этого ни с чем не сверялось, и «снимков: 0» читалось одинаково для пустой
+# ячейки, неподключённого тома и опечатанного пути. Считаем ДО, а не после:
+# снимок, загруженный во время зеркала, не должен краснить копию.
+PHOTO_SRC=$($COMPOSE run --rm mc ls --recursive "cell/${S3_BUCKET:-parts-photos}" 2>/dev/null \
+    | wc -l | tr -d ' ') || PHOTO_SRC=""
 $COMPOSE run --rm -v "$(cd "$PHOTOS" && pwd):/backup" mc \
     mirror --overwrite --quiet "cell/${S3_BUCKET:-parts-photos}" /backup > /dev/null
-ok "снимков: $(find "$PHOTOS" -type f | wc -l | tr -d ' '), $(du -sh "$PHOTOS" | cut -f1)"
-
-mark_success partsflow_photo_backup_success_timestamp_seconds
+PHOTO_LOCAL=$(find "$PHOTOS" -type f | wc -l | tr -d ' ')
+# Красное здесь не валит скрипт на месте: ниже офсайт, терять который из-за
+# зеркала нельзя (та же логика, что у уборки). Но отметка снимков НЕ ставится,
+# а код возврата в конце ненулевой.
+PHOTO_FAILED=0
+if photo_check "$PHOTO_SRC" "$PHOTO_LOCAL"; then
+    ok "снимков: $PHOTO_LOCAL (в хранилище до зеркала $PHOTO_SRC), $(du -sh "$PHOTOS" | cut -f1)"
+    mark_success partsflow_photo_backup_success_timestamp_seconds
+else
+    PHOTO_FAILED=1
+    printf '\033[1;31m    Зеркало снимков НЕ подтверждено: %s\033[0m\n' "$PHOTO_WHY"
+    printf '\033[1;31m    отметка снимков не ставится — тревога по её возрасту сработает\033[0m\n'
+fi
 
 # Офсайт — ПОСЛЕ обеих локальных отметок, и своя отметка у него отдельная.
 # «Дамп снялся» и «копия уехала наружу» — разные утверждения, и следят
@@ -318,3 +524,5 @@ printf '\n\033[1;32mБэкап снят: %s\033[0m\n' "$OUT"
 printf 'Фотографии: %s (зеркало, общее на все наборы)\n' "$PHOTOS"
 [ -n "${OFFSITE_REMOTE:-}" ] && printf 'Офсайт: %s\n' "$OFFSITE_REMOTE"
 printf 'Проверить восстановлением: ops/verify-backup.sh %s\n' "$OUT"
+# Зеркало снимков не подтверждено — прогон не «зелёный», хотя дампы лежат.
+[ "$PHOTO_FAILED" = 0 ] || exit 1
