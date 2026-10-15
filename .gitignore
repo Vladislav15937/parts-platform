@@ -51,3 +51,4 @@ ops/secrets/
 # Правило целиком — `docs/agent-workflow.md`, «Подделки доказательства живут
 # в одном месте»; сторож — `tools/fake-guard.py`.
 .scratch/
+ops/config-manifest.sha256

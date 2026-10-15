@@ -986,6 +986,7 @@ jobs:
           ./ops/config-guard.sh --selftest
           ./ops/image-state.sh --selftest
           ./ops/apply-config.sh --selftest
+          ./ops/config-drift.sh --selftest
 
       # Секрет провижининга, забытый включённым (задача 0197). На боевой ячейке
       # он простоял так трое суток, и узнать об этом было нечем: готовность про
