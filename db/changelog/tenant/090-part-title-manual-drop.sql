@@ -17,6 +17,5 @@
 ALTER TABLE ${tenant.schema}.part
     DROP COLUMN title_manual;
 
---rollback-теряет значения признака «наименование вписано руками»: колонка вернётся с false у всех строк, наименования и позиции не затрагиваются
 --rollback ALTER TABLE ${tenant.schema}.part ADD COLUMN title_manual boolean NOT NULL DEFAULT false;
 --rollback COMMENT ON COLUMN ${tenant.schema}.part.title_manual IS 'Наименование вписано руками в карточке (задача 0303): правка номера производителя такой заголовок не пересобирает. false — заголовок собран системой (приёмка, перенос) и номер производителя в его конце следует за правкой номера';
