@@ -1,1 +1,2 @@
 2026-10-15T08:17:16Z голова=c58c91aa136d53a69e4fa76b7070ee922a673a65 причина=0222 (PR 431): своя голова красная — publish-needs-guard: md-headings не в needs у publish
+2026-10-15T08:17:22Z голова=728aa79010a5d6ad0e4fdcddda45c3d978f0ee8f причина=0237 (PR 432): своя голова красная — verify-backup.sh --selftest: shared.dump негоден (TABLE 0); на своде ещё Broken pipe в backup.sh --selftest при сдвиге часов
