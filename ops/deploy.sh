@@ -648,6 +648,43 @@ db_exists() {  # база: 0 — есть, 1 — нет, 2 — не спроси
     [ "$n" = 1 ]
 }
 
+# ─────────────────────── имя копии: первое свободное ─────────────────────────
+#
+# До задачи 0127 хвост был один — `_2`, и только при совпадении с прежней
+# базой сборки. Второе столкновение подряд его не выдерживало: откат A→B→A
+# дважды за день (дамп ночной, прежние базы ещё лежат) просил либо занятое
+# `_2`, либо основу, которая лежит посторонней базой, — и выкладка
+# останавливалась у check_copy_room словами «копию прошлой выкладки
+# не убрали», то есть советом, к делу не относящимся. Теперь имя ищется
+# перебором хвостов, и занятым считается всё, что есть в кластере, а не
+# только две базы, названные в .env: посторонняя база с тем же именем
+# занимает его не меньше.
+COPY_NAME_MAX=99
+
+# Чистая функция — её самопроверка зовёт напрямую, без docker.
+free_name() {  # основа, занятые имена по строке → основа, основа_2, основа_3…
+    local base="$1" taken="$2" n=1 name="$1"
+    while printf '%s\n' "$taken" | grep -q -x -F -- "$name"; do
+        n=$((n + 1))
+        [ "$n" -le "$COPY_NAME_MAX" ] || return 1
+        name="${base}_$n"
+    done
+    printf '%s\n' "$name"
+}
+
+# При --dry-run кластера не спросить, и план видит только две базы из .env —
+# это сказано, а не подразумевается: занятое посторонней базой имя план
+# не покажет, его увидит настоящий прогон. «Только миграции» копии
+# не снимает, и спрашивать кластер ради неиспользуемого имени незачем.
+# Код: 0 — имя, 1 — свободного нет, 2 — не спросить, какие базы есть.
+copy_name() {  # основа, прежняя база сборки, база под трафиком
+    local cluster=""
+    if [ -z "$DRY" ] && [ "$MIGRATIONS" != only ]; then
+        cluster=$(pg -c "SELECT datname FROM pg_database") || return 2
+    fi
+    free_name "$1" "$(printf '%s\n%s\n%s' "$2" "$3" "$cluster")"
+}
+
 # ──────────────── отметки бэкапа: снялся ли он по НОВОЙ базе ─────────────────
 #
 # Решение владельца от 15 сентября 2026 (задача 0117): прежнюю базу удаляем
@@ -1431,14 +1468,21 @@ deploy() {
     # Имя копии называет сборку и версию: «какой сборке эта база» читается
     # в списке баз без расспросов. Цвет в имени — от повторной выкладки
     # того же SHA: в сборку другого цвета, то есть в другую базу.
-    COPY_DB="parts_${COLOR}_$(printf '%s' "$TAG" | cut -c1-12)"
     # Тот же образ в ту же сборку второй раз — это и есть откат приложения:
     # выложили A в зелёную, B в синюю, возвращаемся к A. Имя копии тогда
     # совпало бы с прежней базой зелёной, а её мы с задачи 0117 удаляем ПОСЛЕ
     # выкладки, не перед, — и занятое имя остановило бы откат словами «копию
     # прошлой выкладки не убрали», то есть ровно в ту минуту, когда он нужен.
-    [ "$COPY_DB" = "$PREV_TARGET_DB" ] && COPY_DB="${COPY_DB}_2"
+    # Свободное имя ищет copy_name — и ищет среди баз кластера, а не только
+    # среди двух названных в .env (задача 0127, раздел у copy_name).
     PG_USER="${DB_USER:-$(read_env DB_USER)}"
+    local name_rc=0
+    COPY_DB=$(copy_name "parts_${COLOR}_$(printf '%s' "$TAG" | cut -c1-12)" "$PREV_TARGET_DB" "$SOURCE_DB") || name_rc=$?
+    case "$name_rc" in
+        0) ;;
+        1) fail "Свободного имени для копии нет до хвоста _${COPY_NAME_MAX}: в ячейке лежат прежние копии этого образа — ops/deploy.sh --databases. Выкладка остановлена до единого изменения" ;;
+        *) fail "Не спросить, какие базы есть в ячейке, — имя копии не выбрать. Выкладка остановлена до единого изменения" ;;
+    esac
 
     printf 'Стенд:        %s\n' "$STAND"
     printf 'Выкладываем:  %s\n' "$TAG"
@@ -3352,6 +3396,188 @@ EOF
         returns_defect "третий исход перепроверки гашения снова молчит" \
             's|^    if \[ -z "${OLD_CHECKED-yes}" \] && \[ -n "${OLD_STOPPED-yes}" \]; then$|    if false; then # podelka-0148|' \
             'if false; then # podelka-0148' "НЕОТВЕЧЕННАЯ ПЕРЕПРОВЕРКА"
+    fi
+
+    # 27. РУЧНОЕ УДАЛЕНИЕ ПРЕЖНЕЙ БАЗЫ (задача 0127). Удаление — самое
+    #     необратимое, что умеет этот файл, и сторожей у него четыре: метка
+    #     идущей выкладки, «прежняя — это та, с которой работают», бэкап
+    #     новой базы и отказ drop_db трогать базу под трафиком. До 0127
+    #     последний проверялся только сам по себе (случай 11): снятый из
+    #     drop_db вызов самопроверку не красил — замерено подделкой.
+    #
+    # 27а. --drop-previous по плану: своя прежняя база удаляется, чужая нет.
+    fresh_env
+    plan_of app-blue --drop-previous
+    [ "$code" = 0 ] && say "--drop-previous: проходит" || nope "--drop-previous: упал: $plan"
+    present "--drop-previous: прежняя база своего цвета удаляется" "drop_db $green_db"
+    absent "--DROP-PREVIOUS: БАЗА ПОД ТРАФИКОМ НЕ УДАЛЯЕТСЯ" "drop_db $blue_db"
+    before "--drop-previous: бэкап новой базы спрашивается до удаления" "backup_covers $blue_db" "drop_db $green_db"
+
+    # 27б. Бэкапа по новой базе нет — команда зелёная, но ничего не удаляет
+    #      и говорит, до какого условия база лежит.
+    fresh_env
+    plan=$(env -u APP_DB_BLUE -u APP_DB_GREEN -u DB_USER ENV_FILE="$dir/env" DEPLOY_ACTIVE=app-blue \
+        DEPLOY_HISTORY="$dir/h" DEPLOY_DRY_FAIL="backup_covers" bash "$0" --drop-previous --dry-run 2>&1)
+    code=$?
+    [ "$code" = 0 ] && say "--drop-previous без бэкапа новой базы — не отказ, а «ждём»" \
+        || nope "--drop-previous без бэкапа новой базы покраснел (код ${code})"
+    absent "--DROP-PREVIOUS БЕЗ БЭКАПА НОВОЙ БАЗЫ НИЧЕГО НЕ УДАЛЯЕТ" "drop_db"
+    says "--drop-previous без бэкапа: сказано, до какого условия база лежит" "$plan" "до ночного дампа"
+
+    # 27в. Обе сборки на одной базе (ячейка, не выкладывавшаяся копией):
+    #      «прежняя» — это та, в которой люди.
+    printf 'COMPOSE_PROFILES=blue\nAPP_IMAGE_TAG=%s\nDB_USER=partsflow\nAPP_DB_BLUE=parts\nAPP_DB_GREEN=parts\n' \
+        "$(printf 'a%.0s' $(seq 40))" > "$dir/env"
+    plan_of app-blue --drop-previous
+    [ "$code" = 0 ] && say "--drop-previous на общей базе: проходит" || nope "--drop-previous на общей базе упал: $plan"
+    absent "--DROP-PREVIOUS: ОБЩАЯ БАЗА ПОД ТРАФИКОМ НЕ УДАЛЯЕТСЯ" "drop_db"
+    absent "--drop-previous на общей базе: бэкап даже не спрашивается" "backup_covers"
+
+    # 27г. Идёт выкладка (метка в .env) — команда отказывает до единого шага:
+    #      прежняя база в эту минуту может быть базой, на которую откатятся.
+    fresh_env
+    printf 'DEPLOY_COPY_DB=%s\n' "$copy" >> "$dir/env"
+    plan_of app-blue --drop-previous
+    refused_before_changes "--DROP-PREVIOUS ВО ВРЕМЯ ВЫКЛАДКИ"
+    says "--drop-previous во время выкладки: причина названа" "$plan" "Идёт выкладка"
+    fresh_env
+
+    # 27д. Сам drop_db, а не план: сторож обязан стоять В НЁМ — план печатает
+    #      шаг «drop_db …», не выполняя тела. psql подменён, каждый вызов
+    #      пишется в журнал: «DROP не послан» проверяется журналом, а не
+    #      кодом возврата. Имя случая одно на все его ветки — по нему
+    #      возврат дефекта (27ж) узнаёт, что покраснел именно этот случай.
+    local real_pg_27 real_switch_27 droplog="$dir/drop27.log" c27 got27
+    real_pg_27=$(declare -f pg)
+    real_switch_27="$SWITCH"
+    PG_USER=stub
+    pg() {
+        printf '%s\n' "$*" >> "$droplog"
+        case "$*" in
+            *"count(*) FROM pg_database"*) printf '0\n' ;;
+            *) printf '\n' ;;
+        esac
+    }
+    SWITCH="$dir/switch27.sh"
+    printf '#!/usr/bin/env bash\n[ -n "${STUB27_SWITCH_FAIL:-}" ] && exit 1\necho parts_pod_trafikom\n' > "$SWITCH"
+    chmod +x "$SWITCH"
+
+    drop27() {  # имя случая, база, образец слов отказа, «да» — переключатель не отвечает
+        local name="$1" db="$2" words="$3" rc=0
+        : > "$droplog"
+        ( [ "${4:-}" = да ] && export STUB27_SWITCH_FAIL=yes; drop_db "$db" ) >"$dir/drop27.out" 2>&1 || rc=$?
+        if [ "$rc" = 0 ]; then
+            nope "$name: шаг отчитался успехом — база удалена"
+        elif grep -q DROP "$droplog"; then
+            nope "$name: отказ, но DROP послан: $(tr '\n' ' ' < "$droplog")"
+        else
+            says "$name" "$(cat "$dir/drop27.out")" "$words"
+        fi
+    }
+    drop27 "DROP_DB: БАЗА ПОД ТРАФИКОМ — ОТКАЗ, DROP НЕ ПОСЛАН" parts_pod_trafikom "в ней люди"
+    drop27 "DROP_DB: НЕ УЗНАТЬ БАЗУ ПОД ТРАФИКОМ — НИЧЕГО НЕ УДАЛЯЕТСЯ" parts_prezhnyaya "ничего не удаляю" да
+
+    : > "$droplog"
+    if drop_db parts_prezhnyaya >"$dir/drop27.out" 2>&1 \
+        && grep -q 'DROP DATABASE IF EXISTS "parts_prezhnyaya"' "$droplog"; then
+        say "drop_db: прежняя база не под трафиком удаляется"
+    else
+        nope "drop_db: прежняя база не под трафиком не удалена: $(tr '\n' ' ' < "$dir/drop27.out")"
+    fi
+    eval "$real_pg_27"
+    SWITCH="$real_switch_27"
+
+    # 27е. Имя копии выдерживает столкновения подряд: каждое следующее даёт
+    #      новое имя, и ни одно не занято.
+    local b27=parts_green_b1b1b1b1b1b1 n27 taken27 prev27=""
+    taken27="$b27"
+    for n27 in 2 3 4; do
+        c27="ИМЯ КОПИИ: $(( n27 - 1 )) СТОЛКНОВЕНИ$([ "$n27" = 2 ] && printf 'Е' || printf 'Я') ПОДРЯД"
+        got27=$(free_name "$b27" "$taken27") || got27="(отказ)"
+        if [ "$got27" = "${b27}_$n27" ] && [ "$got27" != "$prev27" ] \
+            && ! printf '%s\n' "$taken27" | grep -q -x -F -- "$got27"; then
+            say "$c27 — свободное ${got27#"$b27"}"
+        else
+            nope "$c27: при занятых «$(printf '%s' "$taken27" | tr '\n' ' ')» выбрано «${got27}», ждали ${b27}_$n27"
+        fi
+        prev27="$got27"
+        taken27=$(printf '%s\n%s' "$taken27" "$got27")
+    done
+    c27="имя копии: занят только хвост — берётся основа"
+    got27=$(free_name "$b27" "${b27}_2") || got27="(отказ)"
+    [ "$got27" = "$b27" ] && say "$c27" || nope "$c27: выбрано «${got27}»"
+    c27="имя копии: дыра в хвостах занимается первой"
+    got27=$(free_name "$b27" "$(printf '%s\n%s' "$b27" "${b27}_3")") || got27="(отказ)"
+    [ "$got27" = "${b27}_2" ] && say "$c27" || nope "$c27: заняты основа и _3, а выбрано «${got27}»"
+    c27="имя копии: занятое _20 не занимает основу — сравнение целым именем"
+    got27=$(free_name "$b27" "${b27}_20") || got27="(отказ)"
+    [ "$got27" = "$b27" ] && say "$c27" || nope "$c27: выбрано «${got27}»"
+    c27="имя копии: все хвосты до _${COPY_NAME_MAX} заняты — отказ, а не занятое имя"
+    taken27="$b27"
+    n27=2
+    while [ "$n27" -le "$COPY_NAME_MAX" ]; do taken27=$(printf '%s\n%s_%s' "$taken27" "$b27" "$n27"); n27=$((n27 + 1)); done
+    if got27=$(free_name "$b27" "$taken27"); then nope "$c27: выбрано «${got27}»"; else say "$c27"; fi
+
+    # Занятым считается и база, которой не называет ни один ключ .env: такую
+    # видит только кластер — а он подменён здесь psql-заглушкой.
+    pg() {
+        case "$*" in
+            *"SELECT datname FROM pg_database"*)
+                [ -n "${STUB27_ASK_FAIL:-}" ] && return 1
+                printf 'postgres\nparts_blue_cccccccccccc\n%s\n%s_2\n' "$b27" "$b27" ;;
+            *) printf '\n' ;;
+        esac
+    }
+    c27="ИМЯ КОПИИ: БАЗА КЛАСТЕРА С ХВОСТОМ _2 ИМЯ ЗАНИМАЕТ"
+    got27=$( DRY=""; MIGRATIONS=apply; copy_name "$b27" "$b27" parts_blue_cccccccccccc ) || got27="(отказ)"
+    [ "$got27" = "${b27}_3" ] && say "$c27 — выбрано _3" \
+        || nope "$c27: в кластере лежат основа и _2, а выбрано «${got27}»"
+    c27="имя копии: кластер не спросить — отказ, а не имя наугад"
+    if got27=$( DRY=""; MIGRATIONS=apply; STUB27_ASK_FAIL=yes; copy_name "$b27" "$b27" parts_blue_cccccccccccc ); then
+        nope "$c27: выбрано «${got27}»"
+    else
+        say "$c27"
+    fi
+    c27="имя копии: «только миграции» кластер не спрашивает"
+    got27=$( DRY=""; MIGRATIONS=only; STUB27_ASK_FAIL=yes; copy_name "$b27" "$b27" parts_blue_cccccccccccc ) || got27="(отказ)"
+    [ "$got27" = "${b27}_2" ] && say "$c27" || nope "$c27: выбрано «${got27}»"
+    eval "$real_pg_27"
+
+    # Выкладка зовёт copy_name, а не свою копию правила: занятое в плане
+    # (прежняя база сборки на хвосте _2) обходится и там.
+    printf 'COMPOSE_PROFILES=blue\nAPP_IMAGE_TAG=%s\nDB_USER=partsflow\nAPP_DB_BLUE=%s\nAPP_DB_GREEN=%s_2\n' \
+        "$(printf 'a%.0s' $(seq 40))" "$blue_db" "$copy" > "$dir/env"
+    plan_of app-blue --tag "$sha"
+    present "выкладка: прежняя база сборки на хвосте _2 — копия берёт основу" "copy_db $blue_db $copy"
+    fresh_env
+
+    # 27ж. ВОЗВРАТ ДЕФЕКТА: снятый сторож обязан валить самопроверку, и валить
+    #      именно своим случаем. Образцы подделок собираются на ходу там, где
+    #      иначе нашлись бы в этой же строке (ловушка 0195 и 0214).
+    if [ -n "${DEPLOY_SELFTEST_FAKE:-}" ]; then
+        say "подделок сторожей удаления не заводим — рекурсии нет"
+    else
+        returns_defect "сторож базы под трафиком снят из drop_db" \
+            's|^    drop_guard "$db" "$active" .. return 1$|    : # podelka-0127a|' \
+            'podelka-0127a$' "БАЗА ПОД ТРАФИКОМ — ОТКАЗ, DROP НЕ ПОСЛАН"
+        returns_defect "drop_db удаляет, не узнав базы под трафиком" \
+            's|^    active=$("$SWITCH" --current-db) .. {.*|    active=""; : # podelka-0127b|' \
+            'podelka-0127b$' "НЕ УЗНАТЬ БАЗУ ПОД ТРАФИКОМ"
+        returns_defect "drop_previous снова путает прежнюю базу с рабочей" \
+            's|^    if \[ -z "$prev" \] .. \[ "$prev" = "$heir" \]; then$|    if [ -z "$prev" ]; then # podelka-0127c|' \
+            'podelka-0127c$' "ОБЩАЯ БАЗА ПОД ТРАФИКОМ НЕ УДАЛЯЕТСЯ"
+        returns_defect "drop_previous удаляет без бэкапа новой базы" \
+            's|^    if ! run backup_covers "$heir"; then$|    if false; then # podelka-0127d|' \
+            'podelka-0127d$' "БЕЗ БЭКАПА НОВОЙ БАЗЫ НИЧЕГО НЕ УДАЛЯЕТ"
+        returns_defect "--drop-previous не смотрит на метку идущей выкладки" \
+            's|^        .. fail "Идёт выкладка (метка DEPLOY_COPY_DB.*|        \|\| true # podelka-0127e|' \
+            'podelka-0127e$' "ВО ВРЕМЯ ВЫКЛАДКИ"
+        returns_defect "имя копии снова выдерживает одно столкновение" \
+            's|^        name="${base}_$n"$|        name="${base}_2" # podelka-0127f|' \
+            'podelka-0127f$' "2 СТОЛКНОВЕНИЯ ПОДРЯД"
+        returns_defect "имя копии снова не видит баз кластера" \
+            's|^        cluster=$(pg -c "SELECT datname FROM pg_database") .. return 2$|        cluster="" # podelka-0127g|' \
+            'podelka-0127g$' "БАЗА КЛАСТЕРА С ХВОСТОМ _2"
     fi
 
     if [ "$bad" != 0 ]; then
