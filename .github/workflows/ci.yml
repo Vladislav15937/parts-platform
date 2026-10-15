@@ -275,6 +275,24 @@ jobs:
       - name: tools/date-mine-guard.py
         run: ./tools/date-mine-guard.py
 
+  md-headings:
+    name: Заголовки памяток
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # Заголовок, прилипший к чужому абзацу, рождается при каждом сведении
+      # памяток (средний маркер конфликта удалили, а не заменили пустой
+      # строкой). Команда-способ была записана в `docs/ops-history.md` и не
+      # гонялась ничем: 29 сентября 2026 она отдавала три строки при записанном
+      # «Пусто — склеек нет» (задача 0222). Ни сети, ни docker — секунды.
+      - name: tools/md-heading-guard.py --selftest
+        run: ./tools/md-heading-guard.py --selftest
+
+      - name: tools/md-heading-guard.py
+        run: ./tools/md-heading-guard.py
+
   clock-shift:
     name: Часы вперёд
     # Ждёт зеркало по той же причине, что «Бэкенд»: со `--java` этот прогон
