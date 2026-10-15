@@ -532,3 +532,190 @@ tests:
                 что имени нет в .env (grep APP_DB_ .env) и что
                 в deploy-history.log она прежняя база выкладки, затем
                 DROP DATABASE "parts_rukami" WITH (FORCE) владельцем схем.
+
+  # ── Исход репетиции возврата (задача 0301) ──────────────────────────────
+  #
+  # `ops/restore-pitr.sh --verify` по понедельникам кладёт
+  # partsflow_pitr_rehearsal_result: 0 — проверено, 1 — провал, 2 — архив WAL
+  # пуст. Ряд лежит в pushgateway до следующей репетиции и не мигает. Шаг
+  # рядов 1m по той же причине, что у случаев 10 и 16: мгновенное значение
+  # устаревает через пять минут после последней точки (ловушка 0089).
+  # Метки — как у прочих отметок задачи backup.
+  #
+  # Значения различаются на единицу, поэтому стережётся каждое: порог `== 1`
+  # вместо `== 2` валит 21, 23 и 24, `>= 2` — 26.
+
+  # 21. Архив пуст: тревога обязана прийти в день репетиции — не раньше
+  #     пяти минут выдержки и не через девять дней — и назвать причину.
+  #     Тревога о провале на этом исходе молчит: будить двумя текстами
+  #     об одном — значит звать не туда.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_pitr_rehearsal_result{job="backup", instance="pushgateway:9091"}'
+        values: '2+0x30'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: АрхивWALПуст
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: АрхивWALПуст
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: backup
+              instance: pushgateway:9091
+            exp_annotations:
+              summary: '[] архив WAL пуст — возврат к моменту невозможен'
+              description: >-
+                Репетиция возврата (ops/restore-pitr.sh --verify) не нашла
+                в архиве ни одного сегмента WAL. Вернуть клиента к минуте
+                перед поломкой не из чего: остаётся ночной снимок на 3:00,
+                то есть потеря до суток работы — продаж, приёмки, оплат.
+                Смотреть: ops/wal-archive.sh --chain и docker logs postgres;
+                такая авария уже была — архиватор отбит при здоровой базе
+                (tasks/0101). Починив, повторите репетицию руками
+                (ops/restore-pitr.sh --verify): тревога гаснет, когда она
+                выйдет нулём.
+      - eval_time: 10m
+        alertname: РепетицияВозвратаПровалилась
+        exp_alerts: []
+
+  # 22. Возврат проверен: оба правила молчат.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_pitr_rehearsal_result{job="backup", instance="pushgateway:9091"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: АрхивWALПуст
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: РепетицияВозвратаПровалилась
+        exp_alerts: []
+
+  # 23. Провал не из-за пустого архива (накат, копия, сверка). Решение
+  #     владельца 15.10.2026 (tasks/0301): будить сразу, как при пустом
+  #     архиве, — но своим текстом. «Архив пуст» на этом исходе молчит:
+  #     назвать причину, которой нет, значит послать чинить не то.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_pitr_rehearsal_result{job="backup", instance="pushgateway:9091"}'
+        values: '1+0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: АрхивWALПуст
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: РепетицияВозвратаПровалилась
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: РепетицияВозвратаПровалилась
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: backup
+              instance: pushgateway:9091
+            exp_annotations:
+              summary: '[] репетиция возврата к моменту провалилась'
+              description: >-
+                ops/restore-pitr.sh --verify не довёл возврат до конца:
+                не прошёл накат, базовая копия не найдена или повреждена,
+                либо реестр после наката разошёлся с живым. Причина —
+                в выводе репетиции (tail -n 100 logs/parts-backup.log).
+                Если так же откажет в аварию, вернуть клиента к минуте
+                перед поломкой не получится: останется ночной снимок
+                на 3:00, потеря до суток работы. Провал бывает и от самой
+                репетиции (мало места под временную базу) — тогда
+                освободите место и повторите её руками
+                (ops/restore-pitr.sh --verify): тревога гаснет, когда она
+                выйдет нулём.
+
+  # 24. Архив починили, репетицию повторили руками — вышла нулём: тревога
+  #     гаснет. Ряд меняет значение, а не пропадает: pushgateway кладёт
+  #     новое число поверх прежнего.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_pitr_rehearsal_result{job="backup", instance="pushgateway:9091"}'
+        values: '2x30 0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: АрхивWALПуст
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: backup
+              instance: pushgateway:9091
+            exp_annotations:
+              summary: '[] архив WAL пуст — возврат к моменту невозможен'
+              description: >-
+                Репетиция возврата (ops/restore-pitr.sh --verify) не нашла
+                в архиве ни одного сегмента WAL. Вернуть клиента к минуте
+                перед поломкой не из чего: остаётся ночной снимок на 3:00,
+                то есть потеря до суток работы — продаж, приёмки, оплат.
+                Смотреть: ops/wal-archive.sh --chain и docker logs postgres;
+                такая авария уже была — архиватор отбит при здоровой базе
+                (tasks/0101). Починив, повторите репетицию руками
+                (ops/restore-pitr.sh --verify): тревога гаснет, когда она
+                выйдет нулём.
+      - eval_time: 50m
+        alertname: АрхивWALПуст
+        exp_alerts: []
+
+  # 25. То же для провала: 1 → 0, тревога гаснет.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_pitr_rehearsal_result{job="backup", instance="pushgateway:9091"}'
+        values: '1x30 0x30'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: РепетицияВозвратаПровалилась
+        exp_alerts: []
+
+  # 26. Неизвестный исход (скрипт однажды заведёт код 3): «архив пуст» его
+  #     не называет, а будит провал — «не проверено и не пусто» для клиента
+  #     значит то же, что провал. Без этого случая порог `>= 2` вместо `== 2`
+  #     на значениях 0/1/2 был бы неотличим от верного.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_pitr_rehearsal_result{job="backup", instance="pushgateway:9091"}'
+        values: '3+0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: АрхивWALПуст
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: РепетицияВозвратаПровалилась
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: backup
+              instance: pushgateway:9091
+            exp_annotations:
+              summary: '[] репетиция возврата к моменту провалилась'
+              description: >-
+                ops/restore-pitr.sh --verify не довёл возврат до конца:
+                не прошёл накат, базовая копия не найдена или повреждена,
+                либо реестр после наката разошёлся с живым. Причина —
+                в выводе репетиции (tail -n 100 logs/parts-backup.log).
+                Если так же откажет в аварию, вернуть клиента к минуте
+                перед поломкой не получится: останется ночной снимок
+                на 3:00, потеря до суток работы. Провал бывает и от самой
+                репетиции (мало места под временную базу) — тогда
+                освободите место и повторите её руками
+                (ops/restore-pitr.sh --verify): тревога гаснет, когда она
+                выйдет нулём.
+
+  # 27. Ряда нет вовсе (репетиция не ходила ни разу): оба правила молчат.
+  #     Это работа ВозвратНеПроверялся — «не проверялся», а не «пуст»
+  #     и не «провалился».
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_pitr_verified_timestamp_seconds{job="backup", instance="pushgateway:9091"}'
+        values: '-86400+0x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: АрхивWALПуст
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: РепетицияВозвратаПровалилась
+        exp_alerts: []
