@@ -22,11 +22,197 @@
 # смешать старое с новым.
 #
 # Файл окружения выбирается переменной ENV_FILE — как и у остальных скриптов.
+#
+#   ops/restore-cell.sh --selftest     # без docker и ячейки: заглушка docker
+#
+# ЧЕМ ДОКАЗАН ВОЗВРАТ (задача 0238): расширения — ответом базы, а не списком,
+# напечатанным после psql с выводом в /dev/null; каждая схема арендатора —
+# сверкой пяти агрегатов с описью набора (те же числа и тот же вердикт, что
+# у ops/verify-backup.sh). Код 0 — сошлось; 1 — не вернулось, и сказано что;
+# 2 — вызов неправильный.
 set -euo pipefail
+case "$0" in
+    /*) SELF="$0" ;;
+    *)  SELF="$PWD/$0" ;;
+esac
 cd "$(dirname "$0")/.."
+. ops/restore-checks.sh
+. ops/backup-aggregates.sh
 
-SET_DIR="${1:-}"
-ENV_FILE="${2:-${ENV_FILE:-.env}}"
+step() { printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
+ok()   { printf '\033[1;32m    %s\033[0m\n' "$1"; }
+red()  { printf '\033[1;31m    %s\033[0m\n' "$1"; }
+usage() {
+    printf 'Использование: %s [КАТАЛОГ-НАБОРА] [ФАЙЛ-ОКРУЖЕНИЯ]\n' "$0" >&2
+    printf '               %s --selftest\n' "$0" >&2
+    exit 2
+}
+
+# Разбор аргументов (задача 0238). Прежде его не было вовсе, и `--selftest`
+# становился каталогом набора — «Набор не найден: --selftest»: отказ был,
+# но случайный. Образец — цикл while/case у ops/restore-pitr.sh.
+SELFTEST=0
+POS=0
+ARG_SET=""
+ARG_ENV=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --selftest) SELFTEST=1 ;;
+        -*) printf 'Незнакомый флаг: %s — набор и окружение называют без флагов\n' "$1" >&2; usage ;;   # 0238-флаг
+        *)  POS=$((POS + 1))
+            case "$POS" in
+                1) ARG_SET="$1" ;;
+                2) ARG_ENV="$1" ;;
+                *) printf 'Лишний аргумент: %s\n' "$1" >&2; usage ;;
+            esac ;;
+    esac
+    shift
+done
+
+# --- Самопроверка ------------------------------------------------------------
+#
+# Весь путь на заглушке docker (ops/restore-checks.sh). Обратный край первым:
+# проверка, краснеющая на исправном возврате, будет снята в первую же аварию.
+restore_cell_selftest() {
+    local tmp bad=0 rc out set
+    tmp="$(mktemp -d)"
+    restore_stub_docker "$tmp/bin"
+    mkdir -p "$tmp/stub" "$tmp/backups/20261015T030000Z"
+    set="$tmp/backups/20261015T030000Z"
+    printf 'DB_USER=app\nBACKUP_DIR=%s\n' "$tmp/backups" > "$tmp/env"
+    printf 'дамп\n' > "$set/shared.dump"
+    printf 'дамп\n' > "$set/t_000042.dump"
+
+    _ok()  { printf '  ✓ %s\n' "$1"; }
+    _bad() { printf '\033[1;31m  ✗ %s\033[0m\n' "$1"; printf '%s\n' "$out" | sed 's/^/      /'; bad=1; }
+    says() { printf '%s' "$out" | grep -qF -- "$1"; }
+    healthy() {
+        rm -f "$tmp/stub/"*
+        {
+            echo "снято: 20261015T030000Z"
+            echo "база: parts"
+            echo "арендаторов: 1"
+            echo "1 t_000042 demo ACTIVE"
+            agg_line t_000042 part 10 10
+            agg_line t_000042 part_stock_qty 7.000 7.000
+            agg_line t_000042 stock_movement 5 5
+            agg_line t_000042 deal 2 2
+            agg_line t_000042 tenant_member 3 3
+        } > "$set/manifest.txt"
+        {
+            printf '%s\t%s\n' "SELECT count(*) FROM pg_database WHERE datname = 'parts'" 1
+            printf '%s\t%s\n' "$EXT_QUERY" 'ltree\npg_trgm\npgcrypto\nplpgsql'
+            printf '%s\t%s\n' "$(agg_sql part t_000042)" 10
+            printf '%s\t%s\n' "$(agg_sql part_stock_qty t_000042)" 7.000
+            printf '%s\t%s\n' "$(agg_sql stock_movement t_000042)" 5
+            printf '%s\t%s\n' "$(agg_sql deal t_000042)" 2
+            printf '%s\t%s\n' "$(agg_sql tenant_member t_000042)" 3
+            printf '%s\t%s\n' "SELECT count(*) FROM public.tenant_registry WHERE status IN ('ACTIVE','SUSPENDED')" 1
+            printf '%s\t%s\n' 'SELECT count(*) FROM information_schema.schemata WHERE schema_name LIKE '"'"'t\_%'"'" 1
+        } > "$tmp/stub/answers"
+    }
+    answer() {   # SQL ответ — подменить один ответ базы
+        Q="$1" A="$2" awk -F'\t' 'BEGIN { OFS = "\t" } $1 == ENVIRON["Q"] { $2 = ENVIRON["A"] } { print }' \
+            "$tmp/stub/answers" > "$tmp/stub/answers.new"
+        mv "$tmp/stub/answers.new" "$tmp/stub/answers"
+    }
+    run() {
+        set +e
+        out="$(PATH="$tmp/bin:$PATH" STUB="$tmp/stub" bash "$SELF" "$@" 2>&1 < /dev/null)"
+        rc=$?
+        set -e
+    }
+
+    # 1. ОБРАТНЫЙ КРАЙ: здоровый набор — код 0, расширения названы ответом базы,
+    #    содержимое схемы сошлось с описью.
+    healthy
+    run "$set" "$tmp/env"
+    if [ "$rc" = 0 ] && says 'в базе: ltree pg_trgm pgcrypto' \
+        && says 't_000042 — сошлось с описью набора' && says 'Ячейка восстановлена' \
+        && ! says 'ОТКАЗ'; then
+        _ok 'здоровый набор: код 0, расширения спрошены у базы, содержимое сошлось с описью'
+    else
+        _bad "здоровый набор обязан проходить нулём (код $rc)"
+    fi
+
+    # 2. Расширение не встало: прежде печаталось «pg_trgm, ltree, pgcrypto»
+    #    жёстко вписанным текстом. Шаг краснеет и называет КАКОЕ.
+    healthy
+    answer "$EXT_QUERY" 'pg_trgm\npgcrypto\nplpgsql'
+    run "$set" "$tmp/env"
+    if [ "$rc" = 1 ] && says 'в базе нет расширений: ltree' && ! says 'Ячейка восстановлена' \
+        && ! grep -q pg_restore "$tmp/stub/calls"; then
+        _ok 'не вставшее расширение: код 1, названо по имени, до разворота не дошло'
+    else
+        _bad "не вставшее расширение обязано краснеть и называться (код $rc)"
+    fi
+
+    # 3. Дамп без движений склада: реестр и схемы сходятся, а журнала нет.
+    healthy
+    answer "$(agg_sql stock_movement t_000042)" 0
+    run "$set" "$tmp/env"
+    if [ "$rc" = 1 ] && says 'РАСХОЖДЕНИЕ: t_000042.stock_movement' && ! says 'Ячейка восстановлена'; then
+        _ok 'дамп без движений склада: код 1, расхождение названо по схеме и таблице'
+    else
+        _bad "дамп без движений склада обязан краснеть (код $rc)"
+    fi
+
+    # 4. Чужой флаг и лишний аргумент — код 2, до docker не доходит.
+    healthy
+    run --bogus "$tmp/env"
+    if [ "$rc" = 2 ] && says 'Незнакомый флаг: --bogus' && ! [ -s "$tmp/stub/calls" ]; then
+        _ok 'чужой флаг: код 2, до docker дело не дошло'
+    else
+        _bad "чужой флаг обязан отбиваться кодом 2 (код $rc)"
+    fi
+    run "$set" "$tmp/env" lishniy
+    if [ "$rc" = 2 ] && says 'Лишний аргумент: lishniy'; then
+        _ok 'лишний аргумент: код 2'
+    else
+        _bad "лишний аргумент обязан отбиваться кодом 2 (код $rc)"
+    fi
+
+    # 5. ВОЗВРАТ ДЕФЕКТА: копия в .scratch/, подделка по метке строки.
+    if [ -z "${RESTORE_SELFTEST_CHILD:-}" ]; then
+        mkdir -p .scratch
+        local fake copy
+        for fake in флаг расширения содержимое; do
+            copy=".scratch/restore-cell-fake-${fake}-0238.sh"
+            case "$fake" in
+                флаг)       sed '/# 0238-флаг$/d' "$SELF" > "$copy" ;;
+                расширения) sed 's|^if ! extensions_present_check .*# 0238-расширения$|if false; then|' "$SELF" > "$copy" ;;
+                содержимое) sed 's|^    agg_check_schema .*# 0238-содержимое$|    CONTENT=0|' "$SELF" > "$copy" ;;
+            esac
+            if cmp -s "$SELF" "$copy"; then
+                printf '\033[1;31m  ✗ подделку «%s» негде поставить — метка строки потерялась\033[0m\n' "$fake"; bad=1
+            elif ! bash -n "$copy" 2>/dev/null; then
+                printf '\033[1;31m  ✗ подделка «%s» сломала синтаксис — её красное скажет не о том\033[0m\n' "$fake"; bad=1
+            elif RESTORE_SELFTEST_CHILD=1 bash "$copy" --selftest > /dev/null 2>&1; then
+                printf '\033[1;31m  ✗ ВОЗВРАТ ДЕФЕКТА «%s»: прежнее поведение самопроверку НЕ валит\033[0m\n' "$fake"; bad=1
+            else
+                _ok "возврат дефекта «${fake}»: прежнее поведение валит самопроверку"
+            fi
+            rm -f "$copy"
+        done
+    fi
+
+    rm -rf "$tmp"
+    [ "$bad" = 0 ]
+}
+
+if [ "$SELFTEST" = 1 ]; then
+    [ "$POS" = 0 ] || usage
+    printf '\n\033[1;34m==> Самопроверка ops/restore-cell.sh (заглушка docker)\033[0m\n'
+    if restore_cell_selftest; then
+        printf '\033[1;32mСамопроверка пройдена: путь возврата ячейки на заглушке. Ячейка не трогалась.\033[0m\n'
+        exit 0
+    fi
+    printf '\033[1;31mСамопроверка не прошла\033[0m\n'
+    exit 1
+fi
+
+SET_DIR="$ARG_SET"
+ENV_FILE="${ARG_ENV:-${ENV_FILE:-.env}}"
 [ -f "$ENV_FILE" ] && set -a && . "$ENV_FILE" && set +a
 
 : "${DB_USER:?укажите DB_USER}"
@@ -35,8 +221,6 @@ BACKUPS="${BACKUP_DIR:-./backups/${APP_CELL:-cell01}}"
 [ -d "$SET_DIR" ] || { echo "Набор не найден: $SET_DIR"; exit 1; }
 
 COMPOSE="docker compose -f docker-compose.prod.yml"
-step() { printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
-ok()   { printf '\033[1;32m    %s\033[0m\n' "$1"; }
 
 # Разворачивать — в базу сборки под трафиком (задача 0112): её имя записано
 # в .env и с первой выкладки копией уже не «parts». На новой машине такой базы
@@ -72,8 +256,19 @@ step "Расширения Postgres"
 # теперь пользуются восстановление одного клиента и еженедельная проверка
 # бэкапа, а два списка расширений разошлись бы молча.
 $COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 \
-    -f /dev/stdin < ops/restore-extensions.sql >/dev/null
-ok "pg_trgm, ltree, pgcrypto"
+    -f /dev/stdin < "$EXT_SQL" >/dev/null
+# Встали ли — спрашиваем у базы (задача 0238). Прежде следующей строкой
+# печаталось «pg_trgm, ltree, pgcrypto» жёстко вписанным текстом: вывод psql
+# уходил в /dev/null, и три имени, которых никто не спрашивал, стояли на месте
+# ответа. Запрос к pg_extension один на проект (EXT_QUERY).
+cq() { $COMPOSE exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -tAc "$1"; }
+EXT_NOW="$(cq "$EXT_QUERY" 2>/dev/null)" || EXT_NOW=""
+if ! extensions_present_check "$EXT_NOW" "$(ours_extensions)"; then   # 0238-расширения
+    red "ОТКАЗ: $EXT_WHY"
+    red "дальше идти нельзя: без них разворот упадёт на первой же таблице"
+    exit 1
+fi
+ok "в базе: $EXT_FOUND"
 
 step "Общие схемы"
 # --clean не нужен: разворот идёт в пустую базу. Отказ «schema public
@@ -100,13 +295,29 @@ ok "реестр и справочники подняты"
 
 step "Арендаторы"
 COUNT=0
+# Содержимое каждой схемы — с описью набора (задача 0238): тот же оракул, что
+# чуть ниже сверяет число арендаторов, распространённый на то, что в схемах
+# лежит. Прежде схема считалась вернувшейся, раз pg_restore вышел нулём, —
+# дамп без журнала движений давал ту же строку «t_000042».
+CONTENT_FAILED=""
+CONTENT_UNVERIFIED=""
+AGG_LOG="$(mktemp)"
 for dump in "$SET_DIR"/t_*.dump; do
     [ -e "$dump" ] || break
     schema=$(basename "$dump" .dump)
     $COMPOSE exec -T postgres pg_restore -U "$DB_USER" -d "$DB_NAME" --no-owner < "$dump"
     COUNT=$((COUNT + 1))
-    ok "$schema"
+    CONTENT=0
+    agg_check_schema "$SET_DIR/manifest.txt" "$schema" cq > "$AGG_LOG" || CONTENT=$?   # 0238-содержимое
+    case "$CONTENT" in
+        0) ok "$schema — сошлось с описью набора: $AGG_SUMMARY" ;;
+        2) printf '\033[1;33m    %s — содержимое НЕ СВЕРЕНО: в описи набора нет чисел\033[0m\n' "$schema"
+           CONTENT_UNVERIFIED="$CONTENT_UNVERIFIED $schema" ;;
+        *) printf '\033[1;31m%s\033[0m\n' "$(sed 's/^/    /' "$AGG_LOG")"
+           CONTENT_FAILED="$CONTENT_FAILED $schema" ;;
+    esac
 done
+rm -f "$AGG_LOG"
 # «Восстановлено арендаторов: 0» с последующим «Ячейка восстановлена» — ровно
 # искомый класс: число печаталось и ни с чем не сверялось. Оракул лежит рядом,
 # в описи самого набора (её пишет ops/backup.sh строкой «арендаторов: N»).
@@ -174,6 +385,16 @@ if [ "$REG" != "$SCH" ]; then
     exit 1
 fi
 ok "реестр и схемы сошлись: $REG"
+# Число схем сошлось — а что в них лежит, сверено выше по описи. Не сошлось
+# хоть по одной — ячейка НЕ восстановлена, и зелёной строки ниже быть не должно.
+if [ -n "$CONTENT_FAILED" ]; then
+    red "ОТКАЗ: содержимое не сошлось с описью набора:$CONTENT_FAILED"
+    red "ячейка НЕ восстановлена целиком: схемы есть, но в них не то, что снимали"
+    exit 1
+fi
+if [ -n "$CONTENT_UNVERIFIED" ]; then
+    printf '\033[1;33m    содержимое НЕ СВЕРЕНО (в описи нет чисел):%s\033[0m\n' "$CONTENT_UNVERIFIED"
+fi
 
 printf '\n\033[1;32mЯчейка восстановлена за %d с.\033[0m\n' "$(( $(date +%s) - STARTED ))"
 
