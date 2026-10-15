@@ -1,7 +1,7 @@
 ---
 id: 0108
 title: Полноту `ops/env.pilot.example` не проверяет ничто — у `.env.example` сторож есть, у шаблона живого пилота нет
-status: готово
+status: слита
 assignee: coder (ветка feature/0108)
 source: находка разбора, волна 14 сентября 2026
 pr: 426
