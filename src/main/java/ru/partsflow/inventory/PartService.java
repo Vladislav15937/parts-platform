@@ -154,7 +154,7 @@ public class PartService {
         return samples;
     }
 
-    /** @param updated сколько карточек получили категорию и эталонный заголовок */
+    /** @param updated сколько карточек получили категорию и вид детали (заголовок не меняется, 0304) */
     public record MatchResult(PartName partName, int updated) {
     }
 
