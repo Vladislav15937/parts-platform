@@ -209,10 +209,17 @@ cmd_stand() {
     "$GH" variable set STAND_URL --env "$stand" --repo "$R" --body "$url"
   fi
 
-  green "Готово. Осталось два секрета, которые знает только человек:"
+  # Проверка ЗОВЁТСЯ, а не советуется (задача 0240): совет, который никто
+  # не выполнил, от выполненного не отличить, а залитое могло не лечь
+  # (gh secret set вернул 0, в окружении секрета нет). Два секрета, которые
+  # знает только человек, проверка называет «ожидаемо», а не красным.
+  step "Проверяю, что залитое легло (спрашиваю у GitHub, а не верю ответу заливки)"
+  cmd_check "$stand" после-стенда
+  printf '\n'
+  green "Осталось два секрета, которые знает только человек:"
   printf '  ops/deploy-access.sh секрет %s DEPLOY_FEED_URLS   # ссылки на прайсы через пробел, либо слово «нет»\n' "$stand"
   printf '  ops/deploy-access.sh секрет %s DEPLOY_SMOKE       # три строки: код компании, логин продавца, пароль\n' "$stand"
-  printf '  ops/deploy-access.sh проверить %s\n' "$stand"
+  printf '  ops/deploy-access.sh проверить %s                  # когда оба введены — полный ответ\n' "$stand"
 }
 
 # ── секрет ────────────────────────────────────────────────────────────────
@@ -238,7 +245,7 @@ cmd_secret() {
 # Отвечает на вопрос «доедет ли кнопка»: перечисляет, чего не хватает,
 # и отказывает, если не хватает хоть чего-нибудь.
 cmd_check() {
-  local stand="$1"; check_stand "$stand"
+  local stand="$1" after_stand="${2:-}"; check_stand "$stand"
   local R; R="$(repo_name)"
   local bad=0
 
@@ -248,14 +255,57 @@ cmd_check() {
   for name in DEPLOY_SSH_KEY DEPLOY_SSH_HOST DEPLOY_SSH_USER DEPLOY_SSH_KNOWN_HOSTS DEPLOY_FEED_URLS DEPLOY_SMOKE; do
     if printf '%s\n' "$have" | grep -qxF "$name"; then
       printf '  ✓ %s\n' "$name"
+    elif [ -n "$after_stand" ] && { [ "$name" = DEPLOY_FEED_URLS ] || [ "$name" = DEPLOY_SMOKE ]; }; then
+      # Эти два знает только человек: сразу после заведения стенда их нет
+      # законно, и красное здесь приучило бы не читать красное.
+      printf '  · %s — ещё не задан (вводит человек, команда ниже)\n' "$name"
     else
       printf '  ✗ %s — не задан\n' "$name"; bad=1
     fi
   done
 
-  local vars
-  vars="$("$GH" api "repos/$R/environments/$stand/variables" --jq '.variables[]|"\(.name)=\(.value)"' 2>/dev/null || true)"
-  printf '  переменные: %s\n' "${vars:-нет ни одной}"
+  # Переменные сверяются ПОИМЁННО, как секреты (задача 0240): раньше они только
+  # печатались, и опечатка в имени (DEPLOY_SSH_PROT) оставляла порт 22 тихо.
+  # Какие из них обязательны, измерено по .github/workflows/deploy.yml: НИ ОДНА —
+  # у порта и каталога там умолчания (22 и parts-platform), STAND_URL нужен
+  # только для ссылки на странице Environments. Поэтому отсутствие не краснит
+  # (красное на исправном стенде дороже пропуска), а называет, что будет
+  # вместо неё; краснит неспрошенное и негодное значение порта, а чужое имя
+  # только предупреждает.
+  local vars vrc=0 known="DEPLOY_SSH_PORT DEPLOY_PATH STAND_URL" val vname
+  vars="$("$GH" api "repos/$R/environments/$stand/variables" --jq '.variables[]|"\(.name)=\(.value)"' 2>&1)" || vrc=$?
+  if [ "$vrc" != 0 ]; then
+    printf '  ✗ переменные окружения не спросились (gh вышел кодом %s: %s)\n' "$vrc" "$(printf '%s' "$vars" | tr '\n' ' ' | cut -c1-120)"
+    bad=1
+  else
+    for vname in $known; do
+      val="$(printf '%s\n' "$vars" | sed -n "s/^${vname}=//p" | sed -n 1p)"
+      if [ -n "$val" ]; then
+        case "$vname" in
+          DEPLOY_SSH_PORT)
+            case "$val" in
+              *[!0-9]*) printf '  ✗ %s=%s — порт не число, ssh не подключится\n' "$vname" "$val"; bad=1 ;;
+              *) if [ "$val" -ge 1 ] && [ "$val" -le 65535 ]; then printf '  ✓ %s=%s\n' "$vname" "$val"
+                 else printf '  ✗ %s=%s — вне 1–65535\n' "$vname" "$val"; bad=1; fi ;;
+            esac ;;
+          *) printf '  ✓ %s=%s\n' "$vname" "$val" ;;
+        esac
+      else
+        case "$vname" in
+          DEPLOY_SSH_PORT) printf '  · %s не задана — кнопка берёт 22\n' "$vname" ;;
+          DEPLOY_PATH)     printf '  · %s не задана — кнопка берёт parts-platform\n' "$vname" ;;
+          STAND_URL)       printf '  · %s не задана — на странице Environments не будет ссылки\n' "$vname" ;;
+        esac
+      fi
+    done
+    local other
+    for other in $(printf '%s\n' "$vars" | sed -n 's/=.*//p'); do
+      case " $known " in
+        *" $other "*) ;;
+        *) printf '  ! переменная %s кнопке неизвестна — опечатка в имени? (читаются: %s)\n' "$other" "$known" ;;
+      esac
+    done
+  fi
 
   if [ "$stand" = prom ]; then
     local revs
@@ -276,14 +326,14 @@ cmd_check() {
   fi
 
   [ "$bad" = 0 ] || fail "Кнопка на «${stand}» сейчас не доедет — смотрите отметки ✗ выше."
-  # «Всё на месте.» утверждало больше проверенного: переменные окружения только
-  # печатаются (в `bad` они не идут), а вход ключом отсюда не проверяется вовсе —
-  # адрес машины лежит секретом. Требовать переменные я не стал: какие из них
-  # обязательны, а какие имеют умолчание в deploy.yml, эта ветка не измеряла,
-  # а ложное красное на исправном стенде дороже пропуска. Поэтому сужено
-  # утверждение, а не строгость.
-  green "Секреты окружения «${stand}» заданы."
-  printf '  переменные окружения и вход ключом здесь НЕ проверялись — см. строки выше\n'
+  # Вход ключом отсюда не проверяется вовсе — адрес машины лежит секретом, —
+  # и это сказано словами. Секреты и переменные сверены поимённо (0240).
+  if [ -n "$after_stand" ]; then
+    green "Залитое легло: окружение «${stand}» отвечает так, как заливали."
+  else
+    green "Секреты окружения «${stand}» заданы, переменные сверены поимённо."
+  fi
+  printf '  вход ключом здесь НЕ проверялся — см. строки выше\n'
 }
 
 # ── забыть ────────────────────────────────────────────────────────────────
@@ -321,8 +371,15 @@ selftest() {
     # Режимы подложенных ответов задаёт окружение пробы (0141): FAKE_GH_USER
     # не задан — номер 42, задан пустым — пустой ответ, задан словом — слово.
     printf '  *users/*) echo "${FAKE_GH_USER-42}" ;;\n'
+    # Состояние окружения (0240): заливка ложится в файлы, листинги читают их.
+    # FAKE_GH_DROP — заливка «успешна», но не легла (ровно то, что проверка
+    # после заведения обязана заметить); FAKE_GH_VARS_FAIL — GitHub не ответил.
+    printf '  *"secret set"*) [ -n "${FAKE_GH_DROP:-}" ] || echo "$3" >> %s/secrets.state ;;\n' "$base"
+    printf '  *"variable set"*) for a; do last=$a; done; [ -n "${FAKE_GH_DROP:-}" ] || echo "$3=$last" >> %s/vars.state ;;\n' "$base"
     printf '  *"-X PUT"*) ;;\n'
     printf '  *environments/prom*protection_rules*) [ -n "${FAKE_GH_NO_REVIEWERS:-}" ] || echo hozyain ;;\n'
+    printf '  */secrets*) cat %s/secrets.state 2>/dev/null ;;\n' "$base"
+    printf '  */variables*) [ -z "${FAKE_GH_VARS_FAIL:-}" ] || { echo "HTTP 502" >&2; exit 1; }; cat %s/vars.state 2>/dev/null; [ -z "${FAKE_GH_EXTRA_VAR:-}" ] || echo "$FAKE_GH_EXTRA_VAR" ;;\n' "$base"
     printf 'esac\n'
     printf 'exit 0\n'
   } > "$fakegh"; chmod +x "$fakegh"
@@ -459,9 +516,79 @@ selftest() {
     printf '  ✓ без подтверждающего заливки не было\n'
   fi
 
-  # «проверить» обязана краснеть на неполном окружении: подменный gh
-  # не отдаёт ни одного секрета, значит все шесть отметок — ✗.
+  # «проверить» обязана краснеть на неполном окружении: после заведения
+  # стендов выше в окружении нет двух секретов, которые вводит человек.
   probe "проверить краснеет на неполном окружении" "не доедет" run проверить ift
+
+  # ── Отчёт говорит о результате, а не о запуске (задача 0240) ──────────────
+  # Пустое окружение, стенд заводится с нуля, адрес указан.
+  : > "$base/secrets.state"; : > "$base/vars.state"
+  local sout src=0
+  sout="$(runk стенд ift --host 192.0.2.1 --отпечаток "$real_fp" --url http://stand.example 2>&1)" || src=$?
+  if [ "$src" = 0 ] && [[ $sout == *"Залитое легло"* ]] && [[ $sout == *"STAND_URL=http://stand.example"* ]] \
+     && [[ $sout == *"ещё не задан"* ]]; then
+    printf '  ✓ стенд сам зовёт проверку: залитое видно в ответе GitHub, два секрета человека — «ожидаемо»\n'
+  else
+    red "  ✗ после заведения стенда проверка не позвана или краснит ожидаемое (код $src)"
+    printf '%s\n' "$sout" | sed 's/^/      /' >&2; bad=$((bad+1))
+  fi
+
+  # Заливка «прошла» (gh вернул 0), а в окружении ничего нет.
+  : > "$base/secrets.state"; : > "$base/vars.state"
+  src=0
+  sout="$(FAKE_GH_DROP=1 runk стенд ift --host 192.0.2.1 --отпечаток "$real_fp" 2>&1)" || src=$?
+  if [ "$src" != 0 ] && [[ $sout == *"DEPLOY_SSH_KEY — не задан"* ]] && [[ $sout != *"Залитое легло"* ]]; then
+    printf '  ✓ заливка не легла — стенд краснеет и не говорит «легло»\n'
+  else
+    red "  ✗ незалитые секреты не замечены после заведения стенда (код $src)"
+    printf '%s\n' "$sout" | sed 's/^/      /' >&2; bad=$((bad+1))
+  fi
+
+  # Возврат дефекта: копия без вызова проверки пропускает ту же незалитую заливку.
+  grep -v '^  cmd_check "\$stand" после-стенда$' "$SELF" > "$base/bez-proverki.sh"; chmod +x "$base/bez-proverki.sh"
+  : > "$base/secrets.state"; : > "$base/vars.state"
+  src=0
+  sout="$(FAKE_GH_DROP=1 env DEPLOY_ACCESS_HOME="$base" DEPLOY_ACCESS_GH="$fakegh" \
+          DEPLOY_ACCESS_KEYSCAN="$base/keyscan" "$base/bez-proverki.sh" стенд ift --host 192.0.2.1 --отпечаток "$real_fp" 2>&1)" || src=$?
+  if cmp -s "$SELF" "$base/bez-proverki.sh"; then
+    red "  ✗ возврат дефекта: строка вызова проверки не найдена в скрипте"; bad=$((bad+1))
+  elif [ "$src" = 0 ]; then
+    printf '  ✓ возврат дефекта: без вызова проверки незалитое проходит с кодом 0\n'
+  else
+    red "  ✗ возврат дефекта: копия без проверки обязана пропустить незалитое (код $src)"; bad=$((bad+1))
+  fi
+
+  # Переменные — поимённо. Полное окружение: все шесть секретов.
+  printf '%s\n' DEPLOY_SSH_KEY DEPLOY_SSH_HOST DEPLOY_SSH_USER DEPLOY_SSH_KNOWN_HOSTS DEPLOY_FEED_URLS DEPLOY_SMOKE > "$base/secrets.state"
+  printf 'DEPLOY_SSH_PORT=2222\n' > "$base/vars.state"
+  src=0; sout="$(run проверить ift 2>&1)" || src=$?
+  if [ "$src" = 0 ] && [[ $sout == *"DEPLOY_SSH_PORT=2222"* ]] && [[ $sout == *"DEPLOY_PATH не задана — кнопка берёт parts-platform"* ]]; then
+    printf '  ✓ переменные сверены поимённо: заданная названа, незаданная — с тем, что будет вместо неё\n'
+  else
+    red "  ✗ полное окружение обязано проходить, переменные — называться (код $src)"
+    printf '%s\n' "$sout" | sed 's/^/      /' >&2; bad=$((bad+1))
+  fi
+  src=0; sout="$(FAKE_GH_EXTRA_VAR='DEPLOY_SSH_PROT=2222' run проверить ift 2>&1)" || src=$?
+  if [[ $sout == *"DEPLOY_SSH_PROT кнопке неизвестна"* ]]; then
+    printf '  ✓ переменная с опечаткой в имени названа\n'
+  else
+    red "  ✗ опечатка в имени переменной не замечена"; printf '%s\n' "$sout" | sed 's/^/      /' >&2; bad=$((bad+1))
+  fi
+  printf 'DEPLOY_SSH_PORT=dvadtsat\n' > "$base/vars.state"
+  src=0; sout="$(run проверить ift 2>&1)" || src=$?
+  if [ "$src" != 0 ] && [[ $sout == *"порт не число"* ]]; then
+    printf '  ✓ негодный порт — красное\n'
+  else
+    red "  ✗ порт «dvadtsat» обязан краснить проверку (код $src)"; bad=$((bad+1))
+  fi
+  printf 'DEPLOY_SSH_PORT=2222\n' > "$base/vars.state"
+  src=0; sout="$(FAKE_GH_VARS_FAIL=1 run проверить ift 2>&1)" || src=$?
+  if [ "$src" != 0 ] && [[ $sout == *"переменные окружения не спросились"* ]]; then
+    printf '  ✓ GitHub не ответил про переменные — «не спросились», а не «нет ни одной»\n'
+  else
+    red "  ✗ отказ GitHub по переменным выдан за пустой список (код $src)"
+    printf '%s\n' "$sout" | sed 's/^/      /' >&2; bad=$((bad+1))
+  fi
 
   # «забыть» стирает закрытую часть и говорит, если стирать нечего.
   if run забыть prom >/dev/null 2>&1 && [ ! -f "$base/.parts-deploy-keys/prom" ]; then

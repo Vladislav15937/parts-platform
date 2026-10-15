@@ -267,6 +267,73 @@ tests:
         alertname: БэкапНеПроверялся
         exp_alerts: []
 
+  # 15. Прокрутка журнала (задача 0240). Шаг ряда 1m ОБЯЗАТЕЛЕН: мгновенное
+  #     значение устаревает через пять минут после последней точки, и ряд
+  #     с часовым шагом жив одну минуту из шестидесяти — выдержка не
+  #     набирается, а случай «молчит» проходит от устарелости ряда, ничего
+  #     не проверив (ловушка записана в памятке ops, задача 0245).
+  #     Возраст отметки задан ОТРИЦАТЕЛЬНЫМ значением: часы promtool идут
+  #     от нуля эпохи. К моменту проверки (2h) возраст = 2h + |значение|.
+  #
+  #     15а. Отметке девять часов (−25200 + 7200 → 32400 с > 21600, порог
+  #     пройден ещё до начала ряда): выдержка 90 минут набрана, тревога
+  #     обязана прийти.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_log_rotate_success_timestamp_seconds{job="logrotate", instance="pushgateway:9091"}'
+        values: '-25200+0x120'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: ПрокруткаЖурналаНеХодит
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: logrotate
+              instance: pushgateway:9091
+            exp_annotations:
+              summary: '[] прокрутка журнала расписания не отрабатывала шесть часов'
+              description: >-
+                ops/rotate-log.sh не ставит отметку: либо его нет в crontab
+                (ops/install-cron.sh --diff), либо он падает — тогда причина
+                красной строкой в самом журнале (tail -n 50 logs/parts-backup.log)
+                и ops/rotate-log.sh <журнал> руками. Журнал при этом растёт, а
+                заполненный диск ячейки останавливает Postgres и архив WAL.
+
+  # 15б. Обратный край: отметке пять часов — пять пропущенных часов не повод
+  #     будить, и правило молчать обязано. Без случая порог прошёл бы
+  #     и перевёрнутым, и заниженным до часа.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_log_rotate_success_timestamp_seconds{job="logrotate", instance="pushgateway:9091"}'
+        values: '-10800+0x120'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: ПрокруткаЖурналаНеХодит
+        exp_alerts: []
+
+  # 15в. Отметки нет вовсе при живом наблюдении (задачи нет в crontab):
+  #     absent() обязан поднять тревогу. Постороннее семейство подложено,
+  #     чтобы не проверять голую пустоту. У absent() нет меток job/instance —
+  #     это другая серия тревоги, и ждём её без них.
+  - interval: 1m
+    input_series:
+      - series: 'partsflow_basebackup_success_timestamp_seconds{job="backup", instance="pushgateway:9091"}'
+        values: '-3600+0x120'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: ПрокруткаЖурналаНеХодит
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: '[] прокрутка журнала расписания не отрабатывала шесть часов'
+              description: >-
+                ops/rotate-log.sh не ставит отметку: либо его нет в crontab
+                (ops/install-cron.sh --diff), либо он падает — тогда причина
+                красной строкой в самом журнале (tail -n 50 logs/parts-backup.log)
+                и ops/rotate-log.sh <журнал> руками. Журнал при этом растёт, а
+                заполненный диск ячейки останавливает Postgres и архив WAL.
+
   # 9. Место освободили (убрали посторонние базы, подрезали архив) — наклон
   #    вверх, и тревога о скорости молчать обязана. Без этого случая правило
   #    прошло бы и с `> 0` вместо `< 0`: знак не проверялся бы ничем.

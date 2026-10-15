@@ -129,6 +129,47 @@ ENTRIES="$MARK
 
 current() { $CRONTAB -l 2>/dev/null || true; }
 without_ours() { current | sed "/^$MARK\$/,/^# конец parts-platform\$/d"; }
+ours_now() { current | sed -n "/^$MARK\$/,/^# конец parts-platform\$/p"; }
+
+# Записать расписание и ПЕРЕЧИТАТЬ (задача 0240). `crontab -` отвечает кодом
+# на разбор того, что ему подали, а не на то, что осталось в таблице: подделка,
+# молча ничего не делающая, и реальные отказы (диск, права на спул, корзина
+# пользователя) дают тот же «успех» — и напечатанное «Расписание установлено»
+# описывало бы собранный текст, а не crontab. Ровно так расписание стояло
+# мёртвым девять дней (0152): «стоит» и «отработает» — разные утверждения,
+# а здесь не доказано даже первое. Поэтому после записи спрашивается
+# crontab -l, и сказанное человеку берётся из его ответа.
+write_and_verify() {  # $1 — что записать, $2 — "ours" (должно стоять) или "gone" (не должно)
+    local want="$1" mode="$2" wrc=0 after
+    # `|| true` у grep: на пустом расписании (снимали единственное) он выходит 1,
+    # и под pipefail это выглядело бы отказом crontab.
+    { printf '%s\n' "$want" | grep -v '^$' || true; } | $CRONTAB - || wrc=$?
+    if [ "$wrc" != 0 ]; then
+        red "  ✗ crontab отказал в записи (код $wrc) — расписание НЕ изменено"
+        exit 1
+    fi
+    after=$(ours_now)
+    case "$mode" in
+        ours)
+            if [ "$after" != "$ENTRIES" ]; then
+                red "  ✗ crontab принял запись, но перечитанное расписание — НЕ то, что записано"
+                if [ -z "$after" ]; then
+                    red "      расписания parts-platform в crontab нет вовсе (или crontab -l не отвечает)"
+                else
+                    diff <(printf '%s\n' "$after") <(printf '%s\n' "$ENTRIES") | sed 's/^/        /' >&2 || true
+                fi
+                red "      бэкапов эта установка не обеспечила; проверьте: $CRONTAB -l"
+                exit 1
+            fi ;;
+        gone)
+            if [ -n "$after" ]; then
+                red "  ✗ crontab принял запись, но расписание parts-platform в нём ВСЁ ЕЩЁ стоит:"
+                printf '%s\n' "$after" | grep -v '^#' | sed 's/^/        /' >&2 || true
+                red "      задачи будут запускаться; уберите вручную: $CRONTAB -e"
+                exit 1
+            fi ;;
+    esac
+}
 
 # Предел журнала и глубина хранения живут в ops/rotate-log.sh — ОДНИМ местом
 # на оба скрипта. Второе место с тем же числом разъезжается с первым молча,
@@ -219,7 +260,7 @@ selftest() {
 f="$FAKE_CRONTAB"
 case "${1:-}" in
     -l) [ -s "$f" ] || exit 1; cat "$f" ;;
-    -)  cat > "$f" ;;
+    -)  if [ -n "${NOOP_WRITE:-}" ]; then cat >/dev/null; else cat > "$f"; fi ;;
     *)  echo "подделка crontab: не умеет $*" >&2; exit 2 ;;
 esac
 SH
@@ -490,6 +531,65 @@ SH
         rm -f "$fake"
     fi
 
+    # Задача 0240: отчёт говорит о стоящем в crontab, а не о собранном тексте.
+    # Подделка, на запись отвечающая «да» и ничего не делающая: установка обязана
+    # покраснеть и НЕ сказать «установлено».
+    rm -f "$tmp/cron-file"
+    NOOP_WRITE=1 probe "$tmp/zhurnal/parts-backup.log"
+    if [ "$rc" != 0 ] && grep -q 'НЕ то, что записано' <<< "$out" \
+       && ! grep -q 'Расписание установлено' <<< "$out"; then
+        printf '  ✓ crontab принял запись и ничего не сохранил — установка краснеет, «установлено» не сказано\n'
+    else
+        red "  ✗ молчаливо не пишущий crontab обязан валить установку (код $rc)"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=1
+    fi
+    # Снятие: расписание стоит, подделка запись проглатывает — «снято» говорить нельзя.
+    probe "$tmp/zhurnal/parts-backup.log" install >/dev/null 2>&1
+    NOOP_WRITE=1 probe "$tmp/zhurnal/parts-backup.log" --remove
+    if [ "$rc" != 0 ] && grep -q 'ВСЁ ЕЩЁ стоит' <<< "$out" && ! grep -q 'Расписание снято' <<< "$out"; then
+        printf '  ✓ crontab не снял расписание — «снято» не сказано, красное\n'
+    else
+        red "  ✗ --remove на молчаливо не пишущем crontab обязан краснеть (код $rc)"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=1
+    fi
+    # Здоровые пути: установка называет состав из ответа crontab, снятие чистит.
+    probe "$tmp/zhurnal/parts-backup.log" --remove
+    if [ "$rc" = 0 ] && grep -q 'Расписание снято' <<< "$out" && ! grep -q 'parts-platform' "$tmp/cron-file" 2>/dev/null; then
+        printf '  ✓ исправный crontab: снятие проходит и перечитанное чисто\n'
+    else
+        red "  ✗ на исправном crontab снятие обязано проходить (код $rc)"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=1
+    fi
+    # Возврат дефекта: копия без перечитывания (запись как была) обязана сказать
+    # «установлено» на той же подделке — иначе случаи выше ничего не стерегут.
+    fake=$(mktemp ops/.install-cron-XXXXXX 2>/dev/null) || fake=""
+    if [ -z "$fake" ]; then
+        red "  ✗ подделку некуда положить — возврат дефекта не проверен"
+        bad=1
+    else
+        sed 's#^    after=$(ours_now)$#    after="$ENTRIES"#' "$SELF" > "$fake"
+        if cmp -s "$SELF" "$fake" || ! bash -n "$fake" 2>/dev/null; then
+            red "  ✗ подделка не встала или сломана — возврат дефекта не проверен"
+            bad=1
+        else
+            rm -f "$tmp/cron-file"
+            set +e
+            out=$(NOOP_WRITE=1 BACKUP_LOG="$tmp/zhurnal/parts-backup.log" CRONTAB_CMD="$tmp/crontab" \
+                  FAKE_CRONTAB="$tmp/cron-file" bash "$fake" 2>&1); rc=$?
+            set -e
+            if [ "$rc" = 0 ] && grep -q 'Расписание установлено' <<< "$out"; then
+                printf '  ✓ возврат дефекта: без перечитывания «установлено» говорится при пустом crontab\n'
+            else
+                red "  ✗ копия без перечитывания обязана соврать — иначе случаи выше ничего не стерегут (код $rc)"
+                bad=1
+            fi
+        fi
+        rm -f "$fake"
+    fi
+
     [ $bad = 0 ] || { red "Самопроверка не прошла"; exit 1; }
     green "Самопроверка пройдена: установка, --show и --diff на подделках. crontab машины не тронут, расписание ячейки не проверялось."
 }
@@ -591,8 +691,8 @@ case "${1:-install}" in
         exit 1
         ;;
     --remove)
-        without_ours | $CRONTAB -
-        printf '\033[1;32mРасписание снято. Тревога «БэкапНеСнимался» придёт через сутки.\033[0m\n'
+        write_and_verify "$(without_ours)" gone
+        printf '\033[1;32mРасписание снято (crontab перечитан: расписания parts-platform в нём нет). Тревога «БэкапНеСнимался» придёт через сутки.\033[0m\n'
         ;;
     install)
         # Путь журнала — ДО постановки. Поставленное и не запускающееся
@@ -606,8 +706,10 @@ case "${1:-install}" in
         # весь набор в отдельную базу, и на ячейке с двумя сотнями арендаторов
         # это часы диска и процессора. Раз в неделю отвечает на тот же вопрос —
         # «получится ли вернуть клиента», — не мешая работать.
-        printf '%s\n' "$(without_ours)" "$ENTRIES" | grep -v '^$' | $CRONTAB -
-        printf '\033[1;32mРасписание установлено:\033[0m\n'
+        write_and_verify "$(without_ours)"$'\n'"$ENTRIES" ours
+        printf '\033[1;32mРасписание установлено (crontab перечитан и совпал с записанным):\033[0m\n'
+        # Состав — из ответа crontab -l, а не из того, что собирались записать.
+        ours_now | grep -v '^#' | sed 's/^/  /' || true
         printf '  архив WAL   — каждые 5 минут (цепочка и офсайт)\n'
         printf '  базовая     — по воскресеньям в 1:00\n'
         printf '  бэкап       — каждый день в 3:00\n'

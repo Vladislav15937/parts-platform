@@ -471,13 +471,26 @@ selftest() {
             другой) printf 'чужой-сегмент'    | gzip -c > "$dst" ;;
             битый)  printf 'обрывок, а не gzip' > "$dst" ;;
         esac
+        : > "$awdir/fsync.log"
         set +e
-        out=$(WAL_ARCHIVE="$awdir" sh "$aw_script" \
+        out=$(PATH="$awdir/bin:$PATH" STUB_FSYNC="${STUB_FSYNC:-ok}" \
+              FSYNC_LOG="$awdir/fsync.log" WAL_ARCHIVE="$awdir" sh "$aw_script" \
               "$awdir/src" 000000010000000000000099 2>&1)
         rc=$?
         set -e
         printf '%s\nкод=%s\n' "$out" "$rc"
     }
+    # Сброс на диск проверяется заглушкой `fsync`, которая пишет, что ей
+    # передали: на машине разработчика и на раннере настоящей утилиты нет
+    # (в образе базы она есть — applet BusyBox), а доказывать надо одно —
+    # что скрипт её ЗОВЁТ и что отказ сброса валит архивацию (задача 0240).
+    mkdir -p "$awdir/bin"
+    cat > "$awdir/bin/fsync" <<'FSYNC'
+#!/bin/sh
+printf '%s\n' "$1" >> "$FSYNC_LOG"
+[ "${STUB_FSYNC:-ok}" = ok ] || { echo "fsync: отказ заглушки" >&2; exit 1; }
+FSYNC
+    chmod +x "$awdir/bin/fsync"
     if [ ! -f "$aw_script" ]; then
         printf 'САМОПРОВЕРКА: не найден %s — исходы архиватора НЕ ПРОВЕРЕНЫ\n' "$aw_script"
         return 1
@@ -487,6 +500,43 @@ selftest() {
     case "$aw_out" in
         *"код=0"*) ok "свежий сегмент уезжает в архив" ;;
         *) printf 'САМОПРОВЕРКА: свежий сегмент не уехал\n%s\n' "$aw_out"; return 1 ;;
+    esac
+    # Сброс на диск: и файл до переименования, и каталог после. Что в журнале
+    # заглушки именно эти два адреса, а не «что-нибудь вызвали».
+    local fl_n fl_dir fl_tmp
+    fl_n=$(grep -c . "$awdir/fsync.log" || true)
+    fl_dir=$(sed -n '$p' "$awdir/fsync.log")
+    fl_tmp=$(sed -n '1p' "$awdir/fsync.log")
+    case "$fl_tmp" in
+        "$awdir"/.000000010000000000000099.*.tmp) : ;;
+        *) printf 'САМОПРОВЕРКА: сброс на диск не зван на временный файл: «%s»\n' "$fl_tmp"; return 1 ;;
+    esac
+    if [ "$fl_n" != 2 ] || [ "$fl_dir" != "$awdir" ]; then
+        printf 'САМОПРОВЕРКА: сброс на диск зван %s раз, последний на «%s» (ждали 2 и каталог архива)\n' "$fl_n" "$fl_dir"
+        return 1
+    fi
+    ok "сегмент сброшен на диск: файл до переименования и каталог после"
+    # Отказ сброса — отказ архивации, и сегмента в архиве нет.
+    aw_out=$(STUB_FSYNC=отказ aw нет)
+    case "$aw_out" in
+        *"сброс на диск не удался"*"код=1"*) : ;;
+        *) printf 'САМОПРОВЕРКА: отказ fsync не валит архивацию словами\n%s\n' "$aw_out"; return 1 ;;
+    esac
+    if [ -e "$awdir/000000010000000000000099.gz" ]; then
+        printf 'САМОПРОВЕРКА: при отказе сброса сегмент всё же лёг в архив\n'; return 1
+    fi
+    ok "отказ сброса на диск — отказ архивации словами, сегмент не лёг"
+    # Нечем сбросить вовсе: ни fsync, ни sync -d. Путь с одними нужными
+    # утилитами и заглушкой `sync`, которая отказывает.
+    mkdir -p "$awdir/bare"
+    local t
+    for t in gzip cmp rm chmod mv sed; do ln -sf "$(command -v "$t")" "$awdir/bare/$t"; done
+    printf '#!/bin/sh\nexit 1\n' > "$awdir/bare/sync"; chmod +x "$awdir/bare/sync"
+    rm -f "$awdir/000000010000000000000099.gz"
+    aw_out=$(PATH="$awdir/bare" WAL_ARCHIVE="$awdir" /bin/sh "$aw_script" "$awdir/src" 000000010000000000000099 2>&1; echo "код=$?")
+    case "$aw_out" in
+        *"нужен fsync"*"код=1"*) ok "нет ни fsync, ни sync -d — отказ словами, а не тихий пропуск" ;;
+        *) printf 'САМОПРОВЕРКА: без утилиты сброса архивация молчит или проходит\n%s\n' "$aw_out"; return 1 ;;
     esac
     aw_out=$(aw тот)
     case "$aw_out" in
