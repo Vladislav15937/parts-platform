@@ -111,6 +111,46 @@ public class PartTitleGenerator {
         return title + " " + mark;
     }
 
+    /**
+     * Меняет номер производителя в собранном заголовке (задача 0303).
+     *
+     * <p>{@link #generate} ставит номер <b>последней частью</b>, сразу за
+     * пометкой состояния. Поэтому меняется ровно хвост: заголовок, который
+     * кончается прежним номером отдельным словом, получает новый на его
+     * место (или теряет его, если номер сняли); заголовок без прежнего
+     * номера, кончающийся пометкой состояния, получает новый номер в конце —
+     * там, куда его поставила бы приёмка. Всё остальное не трогается: целиком
+     * заголовок не пересобирается по той же причине, что у {@link #remark}, —
+     * у перенесённой позиции в нём список машин.
+     *
+     * <p>Зовётся только для заголовка, который не вписан руками
+     * ({@code part.title_manual}); вписанный руками не меняется никогда.
+     */
+    public String renumber(String title, String oldOem, String newOem) {
+        if (title == null || title.isBlank()) {
+            return title;
+        }
+        String text = title.strip();
+        String fresh = newOem == null || newOem.isBlank() ? null : newOem.strip();
+        if (oldOem != null && !oldOem.isBlank()) {
+            String tail = " " + oldOem.strip();
+            if (!text.endsWith(tail)) {
+                return title;
+            }
+            String head = text.substring(0, text.length() - tail.length());
+            return fresh == null ? head : head + " " + fresh;
+        }
+        if (fresh == null) {
+            return title;
+        }
+        for (String mark : PartCondition.titleMarks()) {
+            if (text.endsWith(mark)) {
+                return text + " " + fresh;
+            }
+        }
+        return title;
+    }
+
     /** Часть заголовка, описывающая машину. Любое поле может отсутствовать. */
     public record VehicleTitlePart(String brand, String model, String bodyCode,
                                    String engineCode, Integer year) {

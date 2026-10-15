@@ -267,7 +267,7 @@ public class WheelService {
                        w.marking_type, w.tread_type, w.run_flat, w.light_truck,
                        w.speed_index, w.load_index,
                        pn.name AS part_name,
-                       d.legacy_code AS donor_legacy, d.public_code AS donor_code,
+                       """ + CatalogService.DONOR_CODE + " AS donor_code," + """
                        (SELECT tm.display_name FROM tenant_member tm
                          WHERE tm.id = p.updated_by)       AS updated_by_name,
                        (SELECT tm.display_name FROM tenant_member tm
@@ -315,8 +315,7 @@ public class WheelService {
                         rs.getString("speed_index"), (Integer) rs.getObject("load_index"),
                         rs.getString("part_name"), rs.getString("condition"),
                         rs.getString("supply"),
-                        rs.getString("donor_legacy") != null
-                                ? rs.getString("donor_legacy") : rs.getString("donor_code"),
+                        rs.getString("donor_code"),
                         rs.getString("oem"),
                         rs.getString("description"), rs.getString("note"), rs.getString("section"),
                         rs.getBoolean("is_published"), rs.getString("barcode"),
@@ -638,7 +637,9 @@ public class WheelService {
             Map.entry("lightTruck", "CASE WHEN w.light_truck THEN 'да' END"),
             Map.entry("speedIndex", "w.speed_index"),
             Map.entry("loadIndex", "trim_scale(w.load_index)::text"),
-            Map.entry("donor", "coalesce(d.legacy_code, d.public_code)"),
+            // Номер донора — вписанный у позиции в карточке, иначе донора
+            // (задачи 0302, 0303): тем же выражением, что на витрине.
+            Map.entry("donor", CatalogService.DONOR_CODE),
             Map.entry("published", "CASE WHEN p.is_published THEN 'Везде' ELSE 'Нет' END"),
             Map.entry("legacy", "p.legacy_code"),
             Map.entry("barcode", "p.barcode"),
@@ -694,7 +695,7 @@ public class WheelService {
                        w.marking_type, w.tread_type, w.run_flat,
                        w.light_truck, w.speed_index, w.load_index,
                        pn.name AS part_name,
-                       d.legacy_code AS donor_legacy, d.public_code AS donor_code,
+                       """ + CatalogService.DONOR_CODE + " AS donor_code," + """
                        (SELECT tm.display_name FROM tenant_member tm
                          WHERE tm.id = p.updated_by)       AS updated_by_name,
                        (SELECT tm.display_name FROM tenant_member tm
@@ -765,8 +766,7 @@ public class WheelService {
                     rs.getBoolean("light_truck") ? "да" : "",
                     nullToEmpty(rs.getString("speed_index")),
                     number(rs, "load_index"),
-                    nullToEmpty(rs.getString("donor_legacy") != null
-                            ? rs.getString("donor_legacy") : rs.getString("donor_code")),
+                    nullToEmpty(rs.getString("donor_code")),
                     rs.getBoolean("is_published") ? "Везде" : "Нет",
                     rs.getInt("photo_count") == 0 ? "" : String.valueOf(rs.getInt("photo_count")),
                     nullToEmpty(rs.getString("legacy_code")),

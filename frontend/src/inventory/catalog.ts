@@ -1110,7 +1110,12 @@ export interface PartEdit {
    * с сервера приходит только вписанное у позиции руками: пусто — у позиции
    * своего нет, и показывается донор или применимость из строки витрины.
    */
-  number?: number | null | undefined;
+  /**
+   * № позиции. Уезжает строкой цифр, а не числом (задача 0303): число
+   * в браузере точно только до 2^53 − 1, и вписанное больше уехало бы
+   * округлённым — сервер принял бы не тот номер. Приходит числом.
+   */
+  number?: number | string | null | undefined;
   code?: string | null | undefined;
   title?: string | null | undefined;
   sideLr?: string | null | undefined;

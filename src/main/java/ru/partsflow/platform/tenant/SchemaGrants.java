@@ -113,6 +113,18 @@ public class SchemaGrants {
                 .formatted(schema, role));
         owner.execute(
                 "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %s TO %s".formatted(schema, role));
+        // Нумерация позиций — единственная последовательность, которую рабочая
+        // роль двигает сама (задача 0303): «№ позиции», вписанный выше выданных,
+        // сдвигает её одной инструкцией setval, а setval требует UPDATE. Без
+        // него вписать номер на миллион вперёд можно было только миллионом
+        // nextval — минуты, из-за которых в PR 440 и стоял предел. Остальные
+        // последовательности по-прежнему без UPDATE: двигать их назад рабочей
+        // роли незачем. Схема старше tenant/064 последовательности не имеет.
+        if (owner.queryForObject("SELECT to_regclass(?) IS NOT NULL", Boolean.class,
+                schema + ".part_number_seq")) {
+            owner.execute("GRANT UPDATE ON SEQUENCE %s.part_number_seq TO %s"
+                    .formatted(schema, role));
+        }
 
         for (String journal : JournalProtection.JOURNALS) {
             owner.execute("REVOKE UPDATE, DELETE ON %s.%s FROM %s".formatted(schema, journal, role));

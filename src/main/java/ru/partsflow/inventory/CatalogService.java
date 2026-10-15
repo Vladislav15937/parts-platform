@@ -283,17 +283,17 @@ public class CatalogService {
      * из списка перестало бы находить. Подзапрос {@code own} у позиции
      * с донором пуст, поэтому {@code coalesce} и есть «донор побеждает».
      */
-    static final String VEHICLE_BRAND = "coalesce(p.manual_brand, b.name, own.brand)";
-    static final String VEHICLE_MODEL = "coalesce(p.manual_model, m.name, own.model)";
+    static final String VEHICLE_BRAND = PartVehicle.brand("b.name, own.brand");
+    static final String VEHICLE_MODEL = PartVehicle.model("m.name, own.model");
     /*
      * Вписанное у позиции руками (задача 0302) побеждает и донора, и
      * применимость: правка «Марки» в карточке меняет эту позицию, а не машину
      * и не соседние детали с неё. Пусто — как раньше, донор или своя машина.
      */
-    static final String VEHICLE_BODY = "coalesce(p.manual_body, d.body_code)";
-    static final String VEHICLE_ENGINE = "coalesce(p.manual_engine, d.engine_code)";
-    static final String VEHICLE_YEAR = "coalesce(p.manual_year, d.year)";
-    static final String DONOR_CODE = "coalesce(p.manual_donor_code, d.legacy_code, d.public_code)";
+    static final String VEHICLE_BODY = PartVehicle.body("d.body_code");
+    static final String VEHICLE_ENGINE = PartVehicle.engine("d.engine_code");
+    static final String VEHICLE_YEAR = PartVehicle.year("d.year");
+    static final String DONOR_CODE = PartVehicle.donorCode("d.legacy_code, d.public_code");
     /**
      * Когда поколение своей машины показывается: оно одно (0290) и, если
      * в наименовании стоит номер кузова, кузова поколения его подтверждают
@@ -315,15 +315,21 @@ public class CatalogService {
             "own.spans > 1 AND " + OWN_GENERATION_SHOWN;
     // Вписанное руками поколение — текст человека целиком: годы справочника
     // к нему не дописываются (они были бы годами чужого поколения).
-    static final String VEHICLE_GENERATION =
-            "coalesce(p.manual_generation, g.name, CASE WHEN " + OWN_GENERATION_SHOWN
-            + " THEN own.generation END)";
+    static final String VEHICLE_GENERATION = PartVehicle.generation(
+            "g.name, CASE WHEN " + OWN_GENERATION_SHOWN + " THEN own.generation END");
     static final String VEHICLE_YEAR_FROM =
             "CASE WHEN p.manual_generation IS NULL THEN coalesce(g.year_from, CASE WHEN "
             + OWN_GENERATION_SHOWN + " THEN own.year_from END) END";
     static final String VEHICLE_YEAR_TO =
             "CASE WHEN p.manual_generation IS NULL THEN coalesce(g.year_to, CASE WHEN "
             + OWN_GENERATION_SHOWN + " THEN own.year_to END) END";
+
+    /**
+     * Марка и модель позиции номерами справочника — для подбора по машине
+     * и его списка: своя, вписанная в карточке, иначе донора (задача 0303).
+     */
+    static final String VEHICLE_BRAND_ID = PartVehicle.brandId("d.brand_id");
+    static final String VEHICLE_MODEL_ID = PartVehicle.modelId("d.model_id", "d.brand_id");
 
     /**
      * Откуда машина в колонках — для подсказки клетки: машинный разбор
@@ -582,19 +588,23 @@ public class CatalogService {
         }
 
         if (vehicle != null && vehicle.brandId() != null) {
-            StringBuilder donor = new StringBuilder("d.brand_id = ?");
+            // Машина позиции — своя, вписанная в карточке, иначе донора (задача
+            // 0303, PartVehicle): исправленная на Lexus деталь с Camry находится
+            // подбором «Lexus», а не «Toyota». Применимость — «что подходит» —
+            // остаётся второй половиной, как была.
+            StringBuilder donor = new StringBuilder(VEHICLE_BRAND_ID + " = ?");
             List<Object> donorArgs = new ArrayList<>();
             donorArgs.add(vehicle.brandId());
             if (vehicle.modelId() != null) {
-                donor.append(" AND d.model_id = ?");
+                donor.append(" AND " + VEHICLE_MODEL_ID + " = ?");
                 donorArgs.add(vehicle.modelId());
             }
             if (vehicle.body() != null && !vehicle.body().isBlank()) {
-                donor.append(" AND d.body_code ILIKE ?");
+                donor.append(" AND " + VEHICLE_BODY + " ILIKE ?");
                 donorArgs.add("%" + vehicle.body().strip() + "%");
             }
             if (vehicle.engine() != null && !vehicle.engine().isBlank()) {
-                donor.append(" AND d.engine_code ILIKE ?");
+                donor.append(" AND " + VEHICLE_ENGINE + " ILIKE ?");
                 donorArgs.add("%" + vehicle.engine().strip() + "%");
             }
 
@@ -893,18 +903,26 @@ public class CatalogService {
     public List<VehicleOption> vehicles() {
         return jdbc.query("""
                 WITH fits AS (
-                    SELECT p.id AS part_id, d.brand_id, d.model_id, d.body_code, d.engine_code
+                    SELECT p.id AS part_id,
+                           """ + VEHICLE_BRAND_ID + " AS brand_id, "
+                           + VEHICLE_MODEL_ID + " AS model_id, "
+                           + VEHICLE_BODY + " AS body_code, "
+                           + VEHICLE_ENGINE + " AS engine_code" + """
+
                       FROM part p
-                      JOIN donor d ON d.id = p.donor_id
+                      LEFT JOIN donor d ON d.id = p.donor_id
                      WHERE p.product_line = 'PART'
+                       -- Машина позиции: донора или вписанная в карточке (0303).
+                       AND (p.donor_id IS NOT NULL OR p.manual_brand IS NOT NULL)
                     UNION
                     SELECT a.part_id, a.brand_id, a.model_id, NULL, NULL
                       FROM part_applicability a
                       JOIN part p ON p.id = a.part_id
+                      LEFT JOIN donor d ON d.id = p.donor_id
                      WHERE p.product_line = 'PART'
-                       AND NOT EXISTS (SELECT 1 FROM donor d
-                                        WHERE d.id = p.donor_id AND d.brand_id = a.brand_id
-                                          AND d.model_id IS NOT DISTINCT FROM a.model_id)
+                       AND NOT coalesce(""" + VEHICLE_BRAND_ID + " = a.brand_id AND "
+                           + VEHICLE_MODEL_ID + " IS NOT DISTINCT FROM a.model_id, false)" + """
+
                 ), brands AS (
                     SELECT brand_id, count(DISTINCT part_id) AS parts FROM fits GROUP BY brand_id
                 )

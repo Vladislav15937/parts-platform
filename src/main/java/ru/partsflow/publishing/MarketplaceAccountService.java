@@ -999,26 +999,16 @@ public class MarketplaceAccountService {
                         CASE WHEN ?::boolean
                              THEN COALESCE(p.part_kind_id <> ALL (?::bigint[]), true)
                              ELSE p.part_kind_id = ANY (?::bigint[]) END)
-                   -- Марка берётся и из применимости — тем же условием,
-                   -- что и генератор. У контрактной детали донора нет,
-                   -- а марка есть, и прайс её публикует: пока отбор смотрел
-                   -- только на донора, счётчик обещал 12 537 позиций там,
-                   -- где витрина по той же марке показывала 16 529.
-                   AND (?::bigint[] IS NULL OR
-                        CASE WHEN ?::boolean
-                             THEN COALESCE(d.brand_id <> ALL (?::bigint[]), true)
-                                  AND NOT EXISTS (SELECT 1 FROM part_applicability pa
-                                                   WHERE pa.part_id = p.id
-                                                     AND pa.brand_id = ANY (?::bigint[]))
-                             ELSE (d.brand_id = ANY (?::bigint[])
-                                   OR EXISTS (SELECT 1 FROM part_applicability pa
-                                               WHERE pa.part_id = p.id
-                                                 AND pa.brand_id = ANY (?::bigint[]))) END)"""
+                   -- Марка — тем же текстом, что у генератора (задача 0303):
+                   -- своя машина позиции, иначе донор, плюс применимость.
+                   ${brandFilter}"""
                 .replace("${statuses}", inTransit
                         ? "('IN_STOCK', 'SOLD', 'DRAFT')"
                         : "('IN_STOCK', 'SOLD')")
                 .replace("${preordered}",
                         ru.partsflow.publishing.drom.DromPriceGenerator.PREORDERED)
+                .replace("${brandFilter}",
+                        ru.partsflow.publishing.drom.DromPriceGenerator.BRAND_FILTER)
                 + columnsSql,
                 Long.class,
                 argsOf(args, columnArgs,

@@ -66,7 +66,7 @@ public class PartIdentity {
      * этих ключей не шлёт, и стереть написанное ей нельзя), пустой текст —
      * очистить.
      */
-    public record Edit(Long number, String code, String authenticity, String dromAdNumber,
+    public record Edit(java.math.BigInteger number, String code, String authenticity, String dromAdNumber,
                        String oem, String crosses,
                        String donorCode, String brand, String model, String generation,
                        String body, String engine, String year, String equipment) {
@@ -100,25 +100,36 @@ public class PartIdentity {
     }
 
     /**
+     * Что изменилось у номера производителя — пересборке заголовка
+     * ({@code PartService.update}) нужны оба значения: прежнее ищется в конце
+     * заголовка, новое встаёт на его место.
+     *
+     * @param changed изменилось ли хоть что-то
+     */
+    public record Applied(boolean changed, boolean oemChanged, String oemBefore, String oemAfter) {
+    }
+
+    /**
      * Записывает тронутое.
      *
      * <p>Только внутри транзакции правки карточки ({@code PartService.update}):
      * журнал и запись обязаны попасть в базу вместе, а без транзакции
      * {@code JdbcTemplate} ушёл бы в {@code public}.
      *
-     * @return изменилось ли хоть что-то
+     * @return что изменилось
      */
     @Transactional
-    public boolean apply(Long partId, Edit edit, Long authorId) {
+    public Applied apply(Long partId, Edit edit, Long authorId) {
         Values was = of(partId);
         Map<String, Object> before = new LinkedHashMap<>();
         Map<String, Object> after = new LinkedHashMap<>();
         List<String> sets = new ArrayList<>();
         List<Object> args = new ArrayList<>();
 
-        if (edit.number() != null && !edit.number().equals(was.number())) {
-            requireNumber(partId, edit.number());
-            column("number", was.number(), edit.number(), before, after, sets, args);
+        Long number = edit.number() == null ? null : numberOf(edit.number());
+        if (number != null && !number.equals(was.number())) {
+            claimNumber(partId, number);
+            column("number", was.number(), number, before, after, sets, args);
         }
         if (edit.code() != null) {
             String code = edit.code().strip();
@@ -160,9 +171,6 @@ public class PartIdentity {
             args.add(partId);
             jdbc.update("UPDATE part SET " + String.join(", ", sets)
                     + ", updated_at = now(), updated_by = ? WHERE id = ?", args.toArray());
-            if (after.containsKey("number")) {
-                keepSequenceAhead(edit.number());
-            }
         }
 
         boolean oemChanged = applyOem(partId, was, edit, before, after);
@@ -171,11 +179,13 @@ public class PartIdentity {
                     authorId, partId);
         }
 
+        Applied applied = new Applied(!after.isEmpty(), after.containsKey("oem"),
+                was.oem(), (String) after.get("oem"));
         if (after.isEmpty()) {
-            return false;
+            return applied;
         }
         journal.changed("part", partId, before, after);
-        return true;
+        return applied;
     }
 
     /**
@@ -188,8 +198,9 @@ public class PartIdentity {
     @Transactional(readOnly = true)
     public void explainConflict(Long partId, Edit edit, String barcode, String legacyCode,
                                 DataIntegrityViolationException original) {
-        if (edit.number() != null) {
-            requireNumberFree(partId, edit.number());
+        if (edit.number() != null && edit.number().signum() > 0
+                && edit.number().compareTo(java.math.BigInteger.valueOf(NUMBER_MAX)) <= 0) {
+            requireNumberFree(partId, edit.number().longValueExact());
         }
         if (edit.code() != null && !edit.code().isBlank()) {
             requireFree(partId, "public_code", edit.code().strip(), "Номер товара");
@@ -224,21 +235,84 @@ public class PartIdentity {
         }
     }
 
-    private void requireNumber(Long partId, Long number) {
-        if (number <= 0) {
+    /**
+     * Наибольший «№ позиции» — граница типа, а не запрет (задача 0303).
+     *
+     * <p>Колонка и последовательность — {@code bigint}, до 9 223 372 036 854 775 807,
+     * но номер показывают экраны, а число в браузере точно только до
+     * 2<sup>53</sup> − 1 = 9 007 199 254 740 991: всё, что больше, витрина,
+     * карточка, продавец и файл покажут округлённым, то есть «позицией 347»
+     * назовут другую. Значит настоящая граница — эта, и отказ за ней говорит
+     * словами, почему.
+     */
+    static final long NUMBER_MAX = 9_007_199_254_740_991L;
+
+    /**
+     * Номер из запроса: целое больше нуля и не больше {@link #NUMBER_MAX}.
+     * Приходит {@code BigInteger}, а не {@code Long}: номер за пределом
+     * {@code long} иначе отбил бы разбор тела, и человек прочитал бы
+     * «запрос не разобран» вместо причины.
+     */
+    private static Long numberOf(java.math.BigInteger number) {
+        if (number.signum() <= 0) {
             throw new IllegalArgumentException("№ позиции — целое число больше нуля");
         }
-        requireNumberFree(partId, number);
-        Long last = lastIssued();
-        if (number - last > SEQUENCE_STEP_LIMIT) {
-            // Не замок, а предел того, что можно сделать за одну правку:
-            // следующие номера система раздаёт после вписанного (иначе
-            // приёмка однажды выдала бы его второй раз), а продвинуть
-            // последовательность на миллионы шагов — это минуты ожидания.
-            throw new IllegalArgumentException(("№ позиции %d больше последнего выданного (%d)"
-                    + " более чем на %d — новые позиции продолжили бы нумерацию от него."
-                    + " Похоже на опечатку; проверьте число").formatted(
-                    number, last, SEQUENCE_STEP_LIMIT));
+        if (number.compareTo(java.math.BigInteger.valueOf(NUMBER_MAX)) > 0) {
+            throw new IllegalArgumentException(("№ позиции %s больше наибольшего возможного"
+                    + " (9 007 199 254 740 991): такое число экран не покажет точно,"
+                    + " и позицию назовут другим номером").formatted(number));
+        }
+        return number.longValueExact();
+    }
+
+    /**
+     * Занимает номер, вписанный руками, и двигает за ним нумерацию.
+     *
+     * <p><b>Предела «не дальше 100 000» больше нет</b> (задача 0303, решение
+     * владельца продукта 15.10.2026: снять). Он стоял из-за скорости: PR 440
+     * продвигал последовательность шагами {@code nextval}, и миллионы шагов
+     * занимали минуты. Теперь сдвиг — одна инструкция {@code setval}; рабочей
+     * роли на неё выдан {@code UPDATE} одной этой последовательности
+     * ({@code SchemaGrants}).
+     *
+     * <p><b>Гонка с приёмкой закрыта блокировкой таблицы, а не надеждой.</b>
+     * Номер выше выданных — это номер, который приёмка выдаст следующим.
+     * Между проверкой «свободен» и сдвигом нумерации приёмка успела бы взять
+     * его же, и одна из двух операций получила бы отказ уникального индекса —
+     * хуже всего приёмка, которую телефон уведёт в «требует внимания».
+     * {@code SHARE ROW EXCLUSIVE} на {@code part} пропускает чтение и ждёт
+     * всех, кто в эту таблицу пишет: начатые приёмки дописываются и становятся
+     * видны проверке, новые ждут конца правки (миллисекунды) и получают номер
+     * уже после вписанного. Две такие правки тоже идут по очереди: вторая
+     * увидит номер первой и ответит словами.
+     *
+     * <p>Номер не выше выданных блокировки не требует: нумерация его уже
+     * прошла, и столкнуться с ним может только существующая позиция — её
+     * ловит проверка, а одновременную — уникальный индекс ({@link #explainConflict}).
+     */
+    private void claimNumber(Long partId, long number) {
+        if (number > lastIssued()) {
+            lockNumbering();
+            requireNumberFree(partId, number);
+            // Под блокировкой нумерацию никто не двигает, но перечитать
+            // дешевле, чем полагаться: setval назад раздал бы номера второй раз.
+            jdbc.queryForObject("SELECT setval('part_number_seq', greatest(?,"
+                    + " (SELECT last_value FROM part_number_seq)))", Long.class, number);
+        } else {
+            requireNumberFree(partId, number);
+        }
+    }
+
+    private void lockNumbering() {
+        try {
+            jdbc.execute("LOCK TABLE part IN SHARE ROW EXCLUSIVE MODE");
+        } catch (org.springframework.dao.PessimisticLockingFailureException busy) {
+            // lock_timeout (5 с) — склад держит долгая запись: перенос, правка
+            // списком. Повтор через минуту пройдёт; пятисотка увела бы искать
+            // поломку сервера.
+            throw new IllegalStateException("Нумерацию позиций сейчас занимает другая операция"
+                    + " со складом (перенос или правка списком) — сохраните № позиции"
+                    + " ещё раз через минуту", busy);
         }
     }
 
@@ -252,28 +326,10 @@ public class PartIdentity {
         }
     }
 
-    /** На сколько номеров вперёд можно вписать позицию одной правкой. */
-    static final long SEQUENCE_STEP_LIMIT = 100_000;
-
     private Long lastIssued() {
         return jdbc.queryForObject(
                 "SELECT CASE WHEN is_called THEN last_value ELSE last_value - 1 END"
                         + " FROM part_number_seq", Long.class);
-    }
-
-    /**
-     * Номер, вписанный выше последнего выданного, — и последовательность
-     * идёт за ним, иначе приёмка через N позиций выдала бы его второй раз
-     * и получила отказ уникального индекса (а офлайн-очередь — «требует
-     * внимания»). {@code setval} рабочей роли не выдан (только USAGE
-     * и SELECT), поэтому продвигается {@code nextval}, который ей разрешён.
-     */
-    private void keepSequenceAhead(Long number) {
-        Long last = lastIssued();
-        if (number > last) {
-            jdbc.queryForObject("SELECT max(nextval('part_number_seq')) FROM generate_series(1, ?)",
-                    Long.class, number - last);
-        }
     }
 
     /**
