@@ -1145,6 +1145,7 @@ jobs:
       - test-output-filter
       - test-schemas
       - date-mines
+      - md-headings
       - clock-shift
       - worktrees
       - recovery-point
