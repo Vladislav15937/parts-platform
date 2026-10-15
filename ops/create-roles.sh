@@ -53,6 +53,90 @@ fail()  { red "$1"; exit 1; }
 # а в .env вписал другую.
 DEFAULT_ROLE=partsflow_app
 
+# Роль проверяется у базы, а не по тому, что команды дошли до конца (задача
+# 0240). GRANT отвечает «успешно» и на роль, которой потом нельзя войти
+# напечатанным паролем, и на суперпользователя, которому REVOKE не указ, —
+# а этот пароль оператор сейчас перенесёт в .env. Два вопроса:
+#   1. входит ли роль ЭТИМ паролем (по сети, иначе пароль не проверяется);
+#   2. что она МОЖЕТ — has_*_privilege спрашивает права, а не выводит их
+#      из выполненных GRANT, и не суперпользователь ли она (тогда любая
+#      строка REVOKE выше ничего не ограничивает: «неизменяемые» журналы
+#      правятся прямым SQL; проверено опытом, корневой CLAUDE.md).
+# Пустой ответ на второй вопрос — не «нет замечаний», а «не спросили».
+verify_role() {  # роль пароль база psql psql_login
+    local role="$1" password="$2" db="$3" psql="$4" psql_login="$5"
+    local out rc=0 pairs i label expr
+    echo "==> Проверяем у базы: вход напечатанным паролем и права"
+
+    out=$(PGUSER="$role" PGPASSWORD="$password" $psql_login <<< "SELECT current_user" 2>&1) || rc=$?
+    if [ "$rc" != 0 ] || [ "$(printf '%s' "$out" | tail -n1)" != "$role" ]; then
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        fail "Вход ролью $role напечатанным паролем НЕ ПРОШЁЛ — в $ENV_FILE его вставлять нельзя. Роль заведена, пароль у неё другой или база недоступна по сети compose; повторный запуск скрипта переустановит пароль."
+    fi
+
+    # has_table_privilege с перечнем «A, B» отвечает «да», если есть ЛЮБОЕ из
+    # них, — для «есть все» привилегии спрашиваются по одной.
+    all_of() {  # таблица привилегии…
+        local t="$1" pr e="" sep=""
+        shift
+        for pr in "$@"; do e+="${sep}has_table_privilege('$role', '$t', '$pr')"; sep=" AND "; done
+        printf '%s' "$e"
+    }
+    local -a checks=(
+        "роль не суперпользователь|NOT (SELECT rolsuper FROM pg_roles WHERE rolname = '$role')"
+        "роль может входить|(SELECT rolcanlogin FROM pg_roles WHERE rolname = '$role')"
+        "CONNECT на базу|has_database_privilege('$role', '$db', 'CONNECT')"
+        "USAGE на схему catalog|has_schema_privilege('$role', 'catalog', 'USAGE')"
+        "USAGE на схему public|has_schema_privilege('$role', 'public', 'USAGE')"
+        "SELECT на public.tenant_registry|has_table_privilege('$role', 'public.tenant_registry', 'SELECT')"
+        "НЕТ записи в public.tenant_registry|NOT has_table_privilege('$role', 'public.tenant_registry', 'INSERT, UPDATE, DELETE')"
+        "запись в public.shedlock|$(all_of public.shedlock SELECT INSERT UPDATE DELETE)"
+        "запись в public.spring_session|$(all_of public.spring_session SELECT INSERT UPDATE DELETE)"
+        "запись в public.spring_session_attributes|$(all_of public.spring_session_attributes SELECT INSERT UPDATE DELETE)"
+        "запись в public.mail_message|$(all_of public.mail_message SELECT INSERT UPDATE DELETE)"
+        "запись в public.mail_event_pending|$(all_of public.mail_event_pending SELECT INSERT UPDATE DELETE)"
+        "чтение public.service_admin|has_table_privilege('$role', 'public.service_admin', 'SELECT')"
+        "журнал допусков: чтение и добавление|$(all_of public.admin_access_grant SELECT INSERT)"
+        "журнал допусков: НЕТ правки и стирания|NOT has_table_privilege('$role', 'public.admin_access_grant', 'UPDATE, DELETE')"
+        "запросы доступа: чтение и добавление|$(all_of public.admin_access_request SELECT INSERT)"
+        "запросы доступа: НЕТ правки и стирания|NOT has_table_privilege('$role', 'public.admin_access_request', 'UPDATE, DELETE')"
+    )
+    # Узкая правка колонок журналов: has_table_privilege её не видит (у таблицы
+    # UPDATE нет — это проверено строкой выше), поэтому спрашивается колонка.
+    checks+=(
+        "допуск: правка closed_at разрешена|has_column_privilege('$role', 'public.admin_access_grant', 'closed_at', 'UPDATE')"
+        "запрос: правка closed_at разрешена|has_column_privilege('$role', 'public.admin_access_request', 'closed_at', 'UPDATE')"
+    )
+    # Одна метка = одна строка вида `SELECT 'метка', (выражение)::text;` — по
+    # тому же шаблону отвечает заглушка самопроверки.
+    local sql=""
+    for pairs in "${checks[@]}"; do
+        label="${pairs%%|*}"; expr="${pairs#*|}"
+        sql+="SELECT '$label', COALESCE(($expr)::text, 'null');"$'\n'
+    done
+    rc=0
+    out=$($psql -tA -F'|' <<< "$sql" 2>&1) || rc=$?
+    if [ "$rc" != 0 ]; then
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        fail "Права роли $role у базы спросить не вышло — «готово» говорить не на чем"
+    fi
+    local said bad=""
+    said=$(printf '%s\n' "$out" | grep -c '|' || true)
+    if [ "$said" != "${#checks[@]}" ]; then
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        fail "База ответила на $said вопросов из ${#checks[@]} — права роли $role НЕ проверены"
+    fi
+    while IFS= read -r label; do
+        case "$label" in *'|true') ;; *) bad+="    ${label%|*}"$'\n' ;; esac
+    done <<< "$out"
+    if [ -n "$bad" ]; then
+        red "У роли $role не те права, база ответила «нет»:"
+        printf '%s' "$bad" >&2
+        fail "Выданное и спрошенное у базы разошлись — «готово» говорить нельзя. Если в списке суперпользователь: REVOKE его не ограничивает, нужен ALTER ROLE $role NOSUPERUSER."
+    fi
+    green "    Вход этим паролем прошёл; прав проверено у базы: ${#checks[@]}"
+}
+
 main() {
     local ENV_FILE="${ENV_FILE:-.env}"
     [ -f "$ENV_FILE" ] || fail "Нет файла окружения $ENV_FILE"
@@ -97,6 +181,14 @@ main() {
     # Через переменную, чтобы самопроверка могла подменить psql заглушкой:
     # весь смысл этого скрипта, кроме SQL, — что он печатает человеку.
     local PSQL="${PSQL:-$COMPOSE exec -T postgres psql -U $DB_USER -d $DB_NAME -v ON_ERROR_STOP=1}"
+    # Вход ролью — ОТДЕЛЬНАЯ команда, и `-h postgres` в ней не украшение.
+    # Образ postgres пускает по сокету и по 127.0.0.1 БЕЗ пароля (trust):
+    # `psql -U роль` изнутри контейнера скажет «вошёл» с любым паролем, в том
+    # числе с неверным (замерено: пароль «wrong» пускает). Пароль проверяется
+    # только соединением по адресу контейнера в сети compose — то есть именем
+    # сервиса. Имя и пароль берутся из окружения вызова (PGUSER, PGPASSWORD),
+    # а не из командной строки: пароль не должен попасть в список процессов.
+    local PSQL_LOGIN="${PSQL_LOGIN:-$COMPOSE exec -T -e PGUSER -e PGPASSWORD postgres psql -h postgres -d $DB_NAME -v ON_ERROR_STOP=1 -tA}"
 
     echo "==> Заводим рабочую роль $role"
     $PSQL <<SQL
@@ -154,6 +246,8 @@ REVOKE UPDATE, DELETE ON public.admin_access_request FROM $role;
 GRANT SELECT, INSERT ON public.admin_access_request TO $role;
 GRANT UPDATE (closed_at, outcome) ON public.admin_access_request TO $role;
 SQL
+
+    verify_role "$role" "$password" "$DB_NAME" "$PSQL" "$PSQL_LOGIN"
 
     # ПОЧЕМУ ЗДЕСЬ НЕ ops/migrate-tenants.sh, который стоял тут до задачи 0210.
     # Тот ходит в управляющий контур по HTTP и требует APP_PROVISIONING_TOKEN
@@ -227,8 +321,34 @@ selftest() {
     trap "rm -rf '$dir'" EXIT
     echo "Самопроверка ops/create-roles.sh"
 
-    printf '#!/usr/bin/env bash\ncat >/dev/null\n' > "$dir/psql"
-    chmod +x "$dir/psql"
+    # Заглушка владельца: SQL выбрасывает, а на вопросы про права (строки
+    # `SELECT 'метка', …`) отвечает по режиму STUB_PRIV — все «true», одна
+    # «false», пусто, меньше строк, чем спрошено.
+    cat > "$dir/psql" <<'STUB'
+#!/usr/bin/env bash
+sql=$(cat)
+case "$sql" in
+    *"SELECT '"*)
+        rows=$(printf '%s\n' "$sql" | sed -n "s/^SELECT '\([^']*\)'.*/\1|true/p")
+        case "${STUB_PRIV:-ok}" in
+            ok)    printf '%s\n' "$rows" ;;
+            deny)  printf '%s\n' "$rows" | sed '1s/|true$/|false/' ;;
+            short) printf '%s\n' "$rows" | sed -n '1p' ;;
+            empty) : ;;
+        esac ;;
+esac
+STUB
+    # Заглушка входа: «база», у роли которой пароль STUB_DB_PW (если задан).
+    cat > "$dir/psql_login" <<'STUB'
+#!/usr/bin/env bash
+cat >/dev/null
+if [ -n "${STUB_DB_PW:-}" ] && [ "$PGPASSWORD" != "$STUB_DB_PW" ]; then
+    echo 'FATAL:  password authentication failed for user "'"$PGUSER"'"' >&2
+    exit 2
+fi
+printf '%s\n' "$PGUSER"
+STUB
+    chmod +x "$dir/psql" "$dir/psql_login"
 
     run() {  # содержимое .env… → вывод скрипта, код возврата в rc
         local script="${SCRIPT:-$0}"
@@ -236,7 +356,7 @@ selftest() {
         set +e
         out=$(env -u APP_RUNTIME_ROLE -u APP_RUNTIME_PASSWORD \
                   -u APP_DB_BLUE -u APP_DB_GREEN \
-                  PSQL="$dir/psql" ENV_FILE="$dir/env" bash "$script" 2>&1)
+                  PSQL="$dir/psql" PSQL_LOGIN="$dir/psql_login" ENV_FILE="$dir/env" bash "$script" 2>&1)
         rc=$?
         set -e
     }
@@ -404,12 +524,64 @@ selftest() {
         *) printf '  ✓ совет про права выполним при выключенном секрете\n' ;;
     esac
 
+    # 11–14. Скрипт отчитывается результатом, а не запуском (задача 0240).
+    #     «Готово» говорится только после того, как база подтвердила вход
+    #     напечатанным паролем и права. Заглушка играет базу, где у роли
+    #     ДРУГОЙ пароль / нет одного права / ответ пуст.
+    run 'DB_USER=partsflow' 'APP_RUNTIME_ROLE=my_app' 'APP_RUNTIME_PASSWORD=parol-iz-env'
+    has "проверка у базы" 'прав проверено у базы'
+    printf '  ✓ здоровый путь: вход и права подтверждены базой, об этом сказано\n'
+
+    STUB_DB_PW=drugoy-parol run 'DB_USER=partsflow' 'APP_RUNTIME_ROLE=my_app' 'APP_RUNTIME_PASSWORD=parol-iz-env'
+    if [ "$rc" = 0 ] || [[ $out != *"НЕ ПРОШЁЛ"* ]] || [[ $out == *"==> Готово"* ]]; then
+        red "  ✗ напечатанный пароль не подходит роли, а скрипт говорит «готово» (код $rc)"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=$((bad + 1))
+    else
+        printf '  ✓ у роли другой пароль — отказ словами, «готово» не сказано\n'
+    fi
+
+    STUB_PRIV=deny run 'DB_USER=partsflow'
+    if [ "$rc" = 0 ] || [[ $out != *"база ответила «нет»"* ]] || [[ $out == *"==> Готово"* ]]; then
+        red "  ✗ база ответила «нет» на право, а скрипт говорит «готово» (код $rc)"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=$((bad + 1))
+    else
+        printf '  ✓ база ответила «нет» на право — отказ с названием права\n'
+    fi
+
+    for mode in empty short; do
+        STUB_PRIV=$mode run 'DB_USER=partsflow'
+        if [ "$rc" = 0 ] || [[ $out != *"НЕ проверены"* ]]; then
+            red "  ✗ ответ базы «$mode» принят за «замечаний нет» (код $rc)"
+            printf '%s\n' "$out" | sed 's/^/      /' >&2
+            bad=$((bad + 1))
+        else
+            printf '  ✓ ответ базы «%s» — это «не спросили», а не «всё в порядке»\n' "$mode"
+        fi
+    done
+
+    # 15. Возврат дефекта: копия без вызова проверки обязана дойти до «готово»
+    #     при чужом пароле и пустых правах — иначе случаи 11–14 ничего
+    #     не стерегут. Строка вызова срезается по ЯКОРЮ, не по номеру.
+    grep -v '^    verify_role "\$role"' "$0" | fix_cd > "$dir/noverify.sh"
+    SCRIPT="$dir/noverify.sh" STUB_DB_PW=drugoy-parol STUB_PRIV=empty run 'DB_USER=partsflow'
+    if [ "$rc" != 0 ] || [[ $out != *"==> Готово"* ]]; then
+        red "  ✗ возврат дефекта: копия без проверки обязана сказать «готово» (код $rc)"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        bad=$((bad + 1))
+    else
+        printf '  ✓ возврат дефекта: без проверки у базы «готово» говорится при чужом пароле\n'
+    fi
+
     [ "$bad" = 0 ] || fail "Самопроверка не прошла: $bad"
-    # Сужено намеренно: `psql` здесь подменён заглушкой, которая весь SQL
-    # выбрасывает, — то есть проверено только напечатанное. Роль не заведена,
-    # права не выданы, база не тронута; путать это с «разделение ролей
-    # работает» нельзя, а строка «Самопроверка пройдена» к этому склоняла.
-    green "Самопроверка пройдена: печать и отказы. SQL в базу не уходил — роль не заведена и права не выданы."
+    # Сужено намеренно: `psql` здесь подменён заглушками, играющими базу
+    # (весь SQL выбрасывают, на вопросы про вход и права отвечают по режиму), —
+    # проверено только то, что скрипт ВЫПОЛНЯЕТ проверку и верит ей. Роль не
+    # заведена, права не выданы, база не тронута; настоящий ответ базы
+    # (в том числе что только соединение по сети проверяет пароль) стоит
+    # в записи ops-roли-схемы и снят живым прогоном на postgres:16-alpine.
+    green "Самопроверка пройдена: печать, отказы и проверка роли у базы. SQL в настоящую базу не уходил."
 }
 
 case "${1:-}" in
