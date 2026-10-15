@@ -369,7 +369,10 @@ public class PartController {
                                 // нет) — не трогать, пустая строка — очистить. Наименование
                                 // и номер товара пустыми не бывают: пустое наименование —
                                 // не трогать, пустой номер товара — отказ словами.
-                                Long number,
+                                // Целым любой длины, а не long: номер за пределом long
+                                // иначе отбил бы разбор тела словами «запрос не разобран»,
+                                // а не причиной (задача 0303). Границу проверяет PartIdentity.
+                                java.math.BigInteger number,
                                 String code,
                                 String title,
                                 String sideLr,
@@ -411,7 +414,8 @@ public class PartController {
                     // Форма открывается на «Изменить»: самый частый случай —
                     // вписать новое число — остаётся одним движением.
                     PriceOperation.SET,
-                    own.number(), own.code(), part.getTitle(),
+                    own.number() == null ? null : java.math.BigInteger.valueOf(own.number()),
+                    own.code(), part.getTitle(),
                     part.getSideLr() == null ? null : part.getSideLr().name(),
                     part.getSideFr() == null ? null : part.getSideFr().name(),
                     own.authenticity(), own.oem(), own.crosses(), part.getLegacyCode(),

@@ -132,15 +132,20 @@ public class DromPriceGenerator {
                    -- потом — перечисленные в применимости. У контрактной
                    -- машины нет вовсе, а подходит она к нескольким, и без
                    -- второй половины такая позиция уезжает безадресной.
-                   COALESCE(db.name, fit.brands)  AS car_brand,
-                   COALESCE(dm.name, fit.models)  AS car_model,
+                   --
+                   -- Впереди обоих — машина, вписанная у позиции в карточке
+                   -- (задача 0303, inventory.PartVehicle): исправленная там
+                   -- марка обязана уехать в объявление, иначе клиент видит
+                   -- в карточке одну машину, а на Дроме другую.
+                   ${carBrand}  AS car_brand,
+                   ${carModel}  AS car_model,
                    -- Кузов и двигатель лежат в двух местах: своими полями
                    -- машины (их вводят руками и заполняет перенос) и ссылками
                    -- в каталог. Введённое руками сильнее — оно написано
                    -- в документах, а поколение подобрано по году.
-                   COALESCE(d.body_code, dg.code)            AS body_code,
-                   COALESCE(d.engine_code, dmo.engine_code)  AS engine_code,
-                   d.year,
+                   ${carBody}    AS body_code,
+                   ${carEngine}  AS engine_code,
+                   ${carYear}    AS year,
                    -- Снята с машины или пришла контейнером: у контрактной
                    -- марка берётся из применимости, и «снято с» про неё
                    -- было бы неправдой.
@@ -288,25 +293,7 @@ public class DromPriceGenerator {
                     CASE WHEN ?::boolean
                          THEN COALESCE(p.part_kind_id <> ALL (?::bigint[]), true)
                          ELSE p.part_kind_id = ANY (?::bigint[]) END)
-               -- Марка берётся и из применимости, а не только из машины.
-               -- У контрактной детали донора нет вовсе, а марка у неё есть —
-               -- и прайс её публикует тегом brandcars именно отсюда. Пока
-               -- отбор смотрел только на донора, «только Toyota» отдавало
-               -- 12 537 позиций там, где витрина по той же марке показывала
-               -- 16 529: четыре тысячи контрактных Тойот в прайс-лист
-               -- не попадали, хотя сам прайс объявляет их Тойотами.
-               -- Два ответа на один вопрос, и неправ был тот, о котором
-               -- не спрашивали.
-               AND (?::bigint[] IS NULL OR
-                    CASE WHEN ?::boolean
-                         THEN COALESCE(d.brand_id <> ALL (?::bigint[]), true)
-                              AND NOT EXISTS (SELECT 1 FROM part_applicability pa
-                                               WHERE pa.part_id = p.id
-                                                 AND pa.brand_id = ANY (?::bigint[]))
-                         ELSE (d.brand_id = ANY (?::bigint[])
-                               OR EXISTS (SELECT 1 FROM part_applicability pa
-                                           WHERE pa.part_id = p.id
-                                             AND pa.brand_id = ANY (?::bigint[]))) END)
+               ${brandFilter}
             """;
 
     /**
@@ -351,6 +338,56 @@ public class DromPriceGenerator {
     public static final String PREORDERED = """
             (p.status = 'DRAFT' AND in_transit.id IS NOT NULL
               AND p.quantity - """ + PREORDERED_QTY + " <= 0)";
+
+    /** Марка и модель тегов {@code brandcars}/{@code model}: своя, иначе донора, иначе применимости. */
+    private static final String CAR_BRAND =
+            ru.partsflow.inventory.PartVehicle.brand("db.name, fit.brands");
+    private static final String CAR_MODEL =
+            ru.partsflow.inventory.PartVehicle.model("dm.name, fit.models");
+    private static final String CAR_BODY =
+            ru.partsflow.inventory.PartVehicle.body("d.body_code, dg.code");
+    private static final String CAR_ENGINE =
+            ru.partsflow.inventory.PartVehicle.engine("d.engine_code, dmo.engine_code");
+    private static final String CAR_YEAR = ru.partsflow.inventory.PartVehicle.year("d.year");
+
+    /**
+     * Отбор выгрузки по маркам — один текст на прайс, дельту и счётчик
+     * {@code MarketplaceAccountService.countMatching} (задача 0303). Две копии
+     * уже расходились: счётчик обещал одно число, а уезжало другое.
+     *
+     * <p>Марка берётся и из применимости, а не только из машины. У контрактной
+     * детали донора нет вовсе, а марка у неё есть — и прайс её публикует тегом
+     * brandcars именно отсюда. Пока отбор смотрел только на донора, «только
+     * Toyota» отдавало 12 537 позиций там, где витрина по той же марке
+     * показывала 16 529: четыре тысячи контрактных Тойот в прайс-лист
+     * не попадали, хотя сам прайс объявляет их Тойотами. Два ответа на один
+     * вопрос, и неправ был тот, о котором не спрашивали.
+     *
+     * <p>Машина позиции — своя, вписанная в карточке, иначе донора
+     * ({@code PartVehicle.brandId}): деталь с донора Toyota, исправленная
+     * на Lexus, уезжает в «только Lexus» и не уезжает в «только Toyota».
+     *
+     * <p>Шесть параметров, по порядку: список, «кроме», список ×4. Требует
+     * в запросе псевдонимов {@code p} и {@code d} (донор, может быть пуст).
+     * COALESCE нужен для позиций без марки: при «только эти» они не проходят
+     * (мы не знаем, те ли они), при «кроме этих» — проходят, иначе исключение
+     * одной марки выкинуло бы и контрактные.
+     */
+    public static final String BRAND_FILTER = """
+            AND (?::bigint[] IS NULL OR
+                 CASE WHEN ?::boolean
+                      THEN COALESCE(""" + ru.partsflow.inventory.PartVehicle.brandId("d.brand_id")
+            + " <> ALL (?::bigint[]), true)" + """
+
+                           AND NOT EXISTS (SELECT 1 FROM part_applicability pa
+                                            WHERE pa.part_id = p.id
+                                              AND pa.brand_id = ANY (?::bigint[]))
+                      ELSE (""" + ru.partsflow.inventory.PartVehicle.brandId("d.brand_id")
+            + " = ANY (?::bigint[])" + """
+
+                            OR EXISTS (SELECT 1 FROM part_applicability pa
+                                        WHERE pa.part_id = p.id
+                                          AND pa.brand_id = ANY (?::bigint[]))) END)""";
 
     /** Дельта — тот же запрос по списку позиций: формат обязан совпасть с прайсом. */
     private static final String DELTA_FILTER = " AND p.id = ANY (?)";
@@ -646,6 +683,12 @@ public class DromPriceGenerator {
                 // Порядок «кто ближний» подставляется во все три выражения
                 // разом: написанный порознь, он однажды разойдётся.
                 .replace("${nearest}", NEAREST_WAREHOUSE)
+                .replace("${carBrand}", CAR_BRAND)
+                .replace("${carModel}", CAR_MODEL)
+                .replace("${carBody}", CAR_BODY)
+                .replace("${carEngine}", CAR_ENGINE)
+                .replace("${carYear}", CAR_YEAR)
+                .replace("${brandFilter}", BRAND_FILTER)
                 + columnsSql + (partIds == null ? "" : DELTA_FILTER) + ORDER;
 
         return session.doReturningWork(connection -> {

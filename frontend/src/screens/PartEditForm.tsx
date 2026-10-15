@@ -664,7 +664,9 @@ export function toEdit(form: Draft, open: readonly string[] = []): PartEdit {
     (open.includes(key) ? form[key] : undefined);
   return {
     // Поля задачи 0302 — только раскрытые; очистка — пустая строка.
-    number: open.includes('number') ? Number(form.number.trim()) : undefined,
+    // Строкой цифр: Number() округлил бы номер больше 2^53 − 1, и сервер
+    // принял бы не тот (задача 0303). Границу называет сервер словами.
+    number: open.includes('number') ? form.number.trim() : undefined,
     code: sent('code'),
     title: sent('title'),
     sideLr: sent('sideLr'),

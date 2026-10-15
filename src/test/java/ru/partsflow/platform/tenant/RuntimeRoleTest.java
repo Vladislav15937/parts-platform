@@ -184,6 +184,22 @@ class RuntimeRoleTest extends PostgresTestBase {
         }
     }
 
+    @Test
+    @DisplayName("Нумерацию позиций рабочая роль двигает одной инструкцией и блокирует таблицу на время правки номера")
+    void runtimeRoleMovesPartNumbering() {
+        createRole();
+        grants.apply(TENANT);
+        JdbcTemplate runtime = new JdbcTemplate(runtimeDataSource());
+
+        // Вписанный «№ позиции» на миллионы вперёд — одна инструкция (задача 0303).
+        Long moved = runtime.queryForObject(
+                "SELECT setval('%s.part_number_seq', 7000000)".formatted(TENANT), Long.class);
+        assertThat(moved).isEqualTo(7_000_000L);
+        // И таблицу на время правки номера она запирает от приёмки сама.
+        runtime.execute("BEGIN; LOCK TABLE %s.part IN SHARE ROW EXCLUSIVE MODE; COMMIT"
+                .formatted(TENANT));
+    }
+
     private void createRole() {
         Integer exists = jdbc.queryForObject(
                 "SELECT count(*) FROM pg_roles WHERE rolname = ?", Integer.class, ROLE);

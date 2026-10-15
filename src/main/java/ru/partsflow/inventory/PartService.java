@@ -312,7 +312,7 @@ public class PartService {
         // трогать»: колонка NOT NULL, позиции без наименования не бывает.
         if (update.title() != null && !update.title().isBlank()
                 && !update.title().strip().equals(part.getTitle())) {
-            part.setTitle(update.title().strip());
+            part.editTitle(update.title().strip());
         }
         // Стороны: null — ключа не было, не трогать; пустое — снять сторону.
         if (update.sideLr() != null || update.sideFr() != null) {
@@ -371,8 +371,21 @@ public class PartService {
         boolean partChanged = entityManager.unwrap(org.hibernate.Session.class).isDirty();
         // Номер производителя, кросс-номера, номер позиции и товара, номер
         // объявления Дрома, своя машина позиции — мимо сущности (см. PartIdentity).
-        if (update.identity() != null && identity.apply(partId, update.identity(), authorId)) {
-            partChanged = true;
+        if (update.identity() != null) {
+            PartIdentity.Applied applied = identity.apply(partId, update.identity(), authorId);
+            if (applied.changed()) {
+                partChanged = true;
+            }
+            // Заголовок следует за номером производителя (задача 0303): собранный
+            // заголовок кончается номером, и после правки номера в карточке, на
+            // витрине и в <name> прайса оставался прежний. Вписанный руками
+            // не трогается никогда — ни целиком, ни хвостом (PartTitleGenerator
+            // .renumber, решение исполнителя названо в PR). Сущностью, а не SQL:
+            // правка уходит в историю позиции «Наименование: … → …».
+            if (applied.oemChanged() && !part.isTitleManual()) {
+                part.setTitle(titles.renumber(part.getTitle(),
+                        applied.oemBefore(), applied.oemAfter()));
+            }
         }
         part.touchedBy(authorId);
         boolean termsChanged = applyDromCard(partId, update);
@@ -1488,7 +1501,10 @@ public class PartService {
     private Facets facetsOf(Match match) {
         // Одним запросом, а не тремя: у каждого свой проход по найденному,
         // а различных троек «марка · модель · оценка» в нём десятки.
-        String values = "SELECT b.name AS brand, m.name AS model, "
+        // Марка и модель — машина позиции (задача 0303): вписанная в карточке,
+        // иначе донора. Тем же правилом, что отбор ниже, иначе выбранное из
+        // списка значение не находило бы позицию, которая его дала.
+        String values = "SELECT " + SELLER_BRAND + " AS brand, " + SELLER_MODEL + " AS model, "
                 + CatalogService.QUALITY_GRADE + " AS grade\n";
         String donors = "\n  LEFT JOIN donor d ON d.id = p.donor_id"
                 + "\n  LEFT JOIN catalog.brand b ON b.id = d.brand_id"
@@ -1577,40 +1593,37 @@ public class PartService {
     /**
      * Отбор продавца: марка, модель, год, стороны, склад, оценка и цена.
      *
-     * <p>Марка, модель и год берутся у машины, с которой снята деталь, —
-     * тем же полем, каким названа колонка «Марка» на витрине владельца.
-     * У позиции без машины марки нет, и отбор по марке её не найдёт: это
-     * то же поведение, что у витрины, и продавец видит в списке ровно те
-     * марки, которые в найденном есть.
+     * <p>Марка, модель и год — машина позиции: вписанная в карточке
+     * (задача 0303), иначе машина, с которой снята деталь. У позиции без
+     * донора и без своей машины марки нет, и отбор по марке её не найдёт;
+     * своей машины из применимости (витрина, 0290) здесь по-прежнему нет —
+     * это отдельная задача. Продавец видит в списке ровно те марки, которые
+     * в найденном есть.
      */
     private static Narrowing narrowingOf(StockFilter filter) {
         StringBuilder where = new StringBuilder();
         List<Object> args = new ArrayList<>();
 
-        StringBuilder donor = new StringBuilder();
-        List<Object> donorArgs = new ArrayList<>();
+        // Машина позиции — своя, вписанная в карточке, иначе донора (задача
+        // 0303, PartVehicle). Донор читается подзапросом на строку, а не
+        // соединением: условие встаёт в WHERE обеих ветвей выдачи, где своих
+        // соединений с донором нет. Подзапрос в coalesce считается только
+        // у позиций без своего значения.
         if (notBlank(filter.brand())) {
-            donor.append(" AND b.name = ?");
-            donorArgs.add(filter.brand().strip());
+            where.append("\n AND ").append(PartVehicle.brand(DONOR_BRAND_OF_ROW)).append(" = ?");
+            args.add(filter.brand().strip());
         }
         if (notBlank(filter.model())) {
-            donor.append(" AND m.name = ?");
-            donorArgs.add(filter.model().strip());
+            where.append("\n AND ").append(PartVehicle.model(DONOR_MODEL_OF_ROW)).append(" = ?");
+            args.add(filter.model().strip());
         }
         if (filter.yearFrom() != null) {
-            donor.append(" AND d.year >= ?");
-            donorArgs.add(filter.yearFrom());
+            where.append("\n AND ").append(PartVehicle.year(DONOR_YEAR_OF_ROW)).append(" >= ?");
+            args.add(filter.yearFrom());
         }
         if (filter.yearTo() != null) {
-            donor.append(" AND d.year <= ?");
-            donorArgs.add(filter.yearTo());
-        }
-        if (!donor.isEmpty()) {
-            where.append("\n AND p.donor_id IN (SELECT d.id FROM donor d")
-                    .append(" LEFT JOIN catalog.brand b ON b.id = d.brand_id")
-                    .append(" LEFT JOIN catalog.model m ON m.id = d.model_id")
-                    .append(" WHERE true").append(donor).append(")");
-            args.addAll(donorArgs);
+            where.append("\n AND ").append(PartVehicle.year(DONOR_YEAR_OF_ROW)).append(" <= ?");
+            args.add(filter.yearTo());
         }
 
         if (notBlank(filter.side())) {
@@ -1646,6 +1659,18 @@ public class PartService {
         }
         return new Narrowing(where.toString(), args);
     }
+
+    /** Марка и модель продавца для списка значений: соединения с донором — {@code b}, {@code m}. */
+    private static final String SELLER_BRAND = PartVehicle.brand("b.name");
+    private static final String SELLER_MODEL = PartVehicle.model("m.name");
+
+    /** Машина донора строки {@code p} — для отбора, где соединений с донором нет. */
+    private static final String DONOR_BRAND_OF_ROW = "(SELECT b.name FROM donor d"
+            + " JOIN catalog.brand b ON b.id = d.brand_id WHERE d.id = p.donor_id)";
+    private static final String DONOR_MODEL_OF_ROW = "(SELECT m.name FROM donor d"
+            + " JOIN catalog.model m ON m.id = d.model_id WHERE d.id = p.donor_id)";
+    private static final String DONOR_YEAR_OF_ROW =
+            "(SELECT d.year FROM donor d WHERE d.id = p.donor_id)";
 
     private static boolean notBlank(String value) {
         return value != null && !value.isBlank();
