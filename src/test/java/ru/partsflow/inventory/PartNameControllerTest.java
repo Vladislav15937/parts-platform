@@ -328,10 +328,9 @@ class PartNameControllerTest extends PostgresTestBase {
                 // названия означает «снять неизвестно что».
                 .andExpect(jsonPath("$.items[0].kindName").value("Фара"))
                 .andExpect(jsonPath("$.items[0].partName.usageCount").value(40))
-                // Образец заголовка — по нему и видно, что сопоставление
-                // оказалось не тем.
+                // Образец заголовка — прежний: сопоставление его не меняет (0304).
                 .andExpect(jsonPath("$.items[0].partName.sampleTitle")
-                        .value("Фара Toyota Camry 2006 (б/у)"));
+                        .value("фара лев. Toyota Camry 2006 (б/у)"));
     }
 
     @Test
