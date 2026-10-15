@@ -107,6 +107,13 @@ photos_back_check() {   # $1 — файлов в копии, $2 — объект
 #   ls_fail      — хранилище недоступно: `mc ls` отказывает;
 #   mirror_fail  — `mc mirror` отказывает;
 #   calls        — сюда пишется каждый вызов: по нему видно, ЧТО скрипт сделал.
+#
+# `exec` в сервис mc отказывает всегда, как на ячейке (задача 0300): mc
+# живёт в профиле backup с командой `--version` — отработал и вышел, войти
+# не во что. Прежде заглушка узнавала зеркало по подстроке «mc mirror» в любой
+# форме и принимала `exec -T mc sh -c "mc mirror … local/…"` за исправный
+# вызов — поэтому шаг «Фотографии» возврата ячейки, ни разу не работавший,
+# выглядел работающим.
 restore_stub_docker() {   # $1 — каталог, куда положить исполняемый docker
     mkdir -p "$1"
     cat > "$1/docker" <<'STUB'
@@ -115,6 +122,8 @@ all="$*"
 last="${*: -1}"
 printf '%s\n' "$all" >> "$STUB/calls"
 case "$all" in
+    *" exec -T mc "*|*" exec mc "*)
+        echo 'service "mc" is not running' >&2; exit 1 ;;
     *pg_restore*)
         cat > /dev/null; exit 0 ;;
     *"mc mirror"*)
