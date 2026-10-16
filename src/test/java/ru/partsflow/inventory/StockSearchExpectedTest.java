@@ -196,6 +196,7 @@ class StockSearchExpectedTest extends PostgresTestBase {
                 "фары",                             // морфология — ветка tsvector
                 "ожидаемая",                        // подстрока заголовка
                 "8114048A90",                       // кросс-номер — ветка part_oem
+                "81140-48a90",                      // другое написание — приведённый номер (0306)
                 "№ " + expectedNumber,              // номер позиции — своя ветка UNION
                 "#" + expectedNumber)) {
             PartService.StockSearch found = search(query, 1);
@@ -295,11 +296,13 @@ class StockSearchExpectedTest extends PostgresTestBase {
         // Каждая ветка условия поиска по part сужена предикатом индекса (их
         // пять: код, заголовок, морфология, номер позиции, номер объявления Дрома); ветка кросс-номеров
         // сужает через part и пишет то же условие со своим псевдонимом.
-        String narrowed = PartService.textMatch(true, true);
+        String narrowed = PartService.textMatch(true, true, true);
         assertThat(narrowed.split(Pattern.quote(" AND " + PartService.EXPECTED_PREDICATE), -1).length - 1)
                 .as("не каждая ветка поиска по part сужена предикатом индекса")
                 .isEqualTo(5);
-        assertThat(narrowed).contains("e.expected_origin AND e.status = 'DRAFT'");
+        assertThat(narrowed.split("e.expected_origin AND e.status = 'DRAFT'", -1).length - 1)
+                .as("ветки part_oem — набранный и приведённый номер (0306) — не сужены до ожидаемых")
+                .isEqualTo(2);
     }
 
     /**

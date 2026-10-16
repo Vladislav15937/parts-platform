@@ -37,6 +37,25 @@ import java.util.Set;
 @Service
 public class CatalogService {
 
+    /**
+     * Условие на приведённый номер производителя (задача 0306) — одно на витрину
+     * и продавца; аргумент — {@link #oemNormalizedArg}. Номер записан
+     * «ab-123 456x», покупатель называет «AB123456X»: подстрокой по набранному
+     * не найти, по приведённому — да. Ключ состоит из одних [A-Z0-9], поэтому
+     * знаков шаблона в нём не бывает; идёт по триграммному {@code part_oem_trgm}.
+     */
+    static final String OEM_NORMALIZED = "normalized LIKE ?";
+
+    /** Ветка {@code UNION} с {@link #OEM_NORMALIZED} — как {@code PartNumberQuery.UNION_BRANCH}. */
+    static final String OEM_NORMALIZED_BRANCH =
+            "\n                          UNION SELECT part_id FROM part_oem WHERE " + OEM_NORMALIZED;
+
+    /** Подстрока по приведённому виду: «123» находит и «AB1234», как и по набранному. */
+    static String oemNormalizedArg(String key) {
+        return "%" + key + "%";
+    }
+
+
     private static final Logger log = LoggerFactory.getLogger(CatalogService.class);
 
     /**
@@ -534,6 +553,10 @@ public class CatalogService {
             // иначе «347» притащило бы 1347, 3470 и 2347 — шум того же рода,
             // от которого номер и спасает.
             Long number = PartNumberQuery.parse(query);
+            // Номер производителя в любом написании (задача 0306): запрос
+            // приводится тем же OemNumbers.normalize, что и запись, и ищется
+            // в part_oem.normalized подстрокой. Не похож на номер — ветки нет.
+            String oemKey = ru.partsflow.catalog.OemNumbers.searchKey(query);
             // Публичный код при запросе-номере сравнивается точно (задача 0263):
             // двенадцать случайных знаков содержат «347» у каждой четырёхсотой
             // записи, и подстрока приносила бы чужие позиции рядом с названной.
@@ -549,6 +572,7 @@ public class CatalogService {
                                            || coalesce(marking, ''))
                                        @@ plainto_tsquery('russian', ?)
                           UNION SELECT part_id FROM part_oem WHERE raw_number ILIKE ?"""
+                    + (oemKey == null ? "" : OEM_NORMALIZED_BRANCH)
                     + (number == null ? ""
                             : PartNumberQuery.UNION_BRANCH + PartNumberQuery.DROM_AD_BRANCH)
                     + ")");
@@ -558,6 +582,9 @@ public class CatalogService {
             args.add(like);
             args.add(query.strip());
             args.add(like);
+            if (oemKey != null) {
+                args.add(oemNormalizedArg(oemKey));
+            }
             if (number != null) {
                 args.add(number);
                 // Номер объявления Дрома (задача 0274): те же цифры, но текстом.
