@@ -579,7 +579,7 @@ public class ExcelWarehouseImporter {
                 quantity,
                 quantityFromFile,
                 blankToNull(mapping.value(row, Field.CELL)),
-                blankToNull(mapping.value(row, Field.OEM)),
+                oem(mapping.value(row, Field.OEM)),
                 blankToNull(mapping.value(row, Field.NOTE)),
                 photoLinks(mapping.value(row, Field.PHOTOS)),
                 adNumber,
@@ -594,18 +594,21 @@ public class ExcelWarehouseImporter {
      *
      * <p>Договор пишет их через «, » (у амортизатора клиента их 55, и все
      * обязаны доехать: по ним площадка находит деталь, когда спрашивают
-     * номером аналога). Точка с запятой и перевод строки тоже делят —
-     * таблица, поправленная руками, приносит и их. Повтор номера отбивает
+     * номером аналога). Точка с запятой, перевод строки и табуляция тоже
+     * делят — таблица, поправленная руками, приносит и их. Повтор номера отбивает
      * {@code part_oem_uk}, совпадение с главным — он же.
      */
     static List<String> substitutes(String cell) {
-        if (cell == null || cell.isBlank()) {
-            return List.of();
-        }
-        return java.util.Arrays.stream(cell.split("[,;\\n\\r]"))
-                .map(String::strip)
-                .filter(number -> !number.isEmpty())
-                .toList();
+        // Делит и чистит OemNumbers.list — одно место с карточкой (задача 0309):
+        // табуляция тоже разделитель, края без неразрывного пробела, русские
+        // двойники латиницей.
+        return List.copyOf(ru.partsflow.catalog.OemNumbers.list(cell));
+    }
+
+    /** Номер детали из ячейки — тем же {@code OemNumbers.clean}, что у карточки; пусто — {@code null}. */
+    private static String oem(String cell) {
+        String cleaned = ru.partsflow.catalog.OemNumbers.clean(cell);
+        return cleaned == null || cleaned.isEmpty() ? null : cleaned;
     }
 
     /**

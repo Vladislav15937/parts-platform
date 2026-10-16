@@ -491,6 +491,9 @@ public class IntakeService {
      * {@code normalized} объявлена {@code NOT NULL}: строка ушла бы отказом
      * базы, то есть пятисоткой на приёмке — а её офлайн-очередь повторяет
      * вечно. Деталь при этом заводится, просто без номера.
+     *
+     * <p>Хранится {@code OemNumbers.clean} (задача 0309): края без любых
+     * пробелов, русские двойники латиницей — тем же правилом, что у карточки.
      */
     private void primaryOem(Long partId, String rawNumber) {
         String normalized = ru.partsflow.catalog.OemNumbers.normalize(rawNumber);
@@ -501,7 +504,7 @@ public class IntakeService {
                 INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
                 VALUES (?, ?, ?, true)
                 ON CONFLICT DO NOTHING""",
-                partId, rawNumber.strip(), normalized);
+                partId, ru.partsflow.catalog.OemNumbers.clean(rawNumber), normalized);
     }
 
     private void publishCreated(Part part) {

@@ -66,7 +66,9 @@ class MixedAlphabetTest {
         assertThat(OemNumbers.normalize("АНАЛОГ")).isNull();
         assertThat(OemNumbers.normalize("б/н")).isNull();
         assertThat(OemNumbers.normalize(null)).isNull();
-        // Цифры алфавита не несут: «8518100С» без латинской буквы не смешанное слово.
-        assertThat(OemNumbers.normalize("8518100" + CYRILLIC_C)).isEqualTo("8518100");
+        // До задачи 0309 «8518100С» без латинской буквы приводилось к «8518100»:
+        // смешанным словом оно не считается. Теперь слово из одних двойников
+        // читается латиницей целиком (OemNumbersTest) — буква не теряется.
+        assertThat(OemNumbers.normalize("8518100" + CYRILLIC_C)).isEqualTo("8518100C");
     }
 }
