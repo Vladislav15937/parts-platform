@@ -339,6 +339,31 @@ class PartAllFieldsEditTest extends PostgresTestBase {
                 .containsExactly("dd-444", "\u0412\u04121");
     }
 
+    @Test
+    @DisplayName("Марка и модель вне справочника сохраняются как набраны: «Лексус» — не отказ, «тойота» — не Toyota")
+    void brandOutsideTheCatalogIsKeptAsTyped() throws Exception {
+        // Задача 0308, решение владельца 16.10.2026: подсказка из справочника,
+        // «но также должна быть возможность свободного текста»; русские
+        // названия со справочником не сопоставлять. Экран шлёт набранное
+        // как есть — сервер обязан так же его и записать, без замены
+        // на «похожее» и без отказа.
+        MockHttpSession owner = login("vladelec0302");
+        String code = codeOf(partId);
+
+        save(owner, "\"brand\":\"Лексус\",\"model\":\"Эр-икс\"");
+        assertThat(editable(owner).path("brand").asText()).isEqualTo("Лексус");
+        assertThat(editable(owner).path("model").asText()).isEqualTo("Эр-икс");
+        assertThat(catalogRow(owner, code).path("brand").asText())
+                .as("витрина показывает набранное, а не марку донора и не «похожую»")
+                .isEqualTo("Лексус");
+
+        save(owner, "\"brand\":\"тойота\"");
+        assertThat(editable(owner).path("brand").asText())
+                .as("русское написание сопоставилось со справочником")
+                .isEqualTo("тойота");
+        assertThat(catalogRow(owner, code).path("brand").asText()).isEqualTo("тойота");
+    }
+
     // ------------------------------------------------------------------ помощники
 
     /** Правки номера производителя и кросс-номеров в истории позиции. */
