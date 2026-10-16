@@ -2361,6 +2361,13 @@ hr {
   width: auto;
 }
 
+/* Предупреждение о длинном номере (задача 0310) — своей строкой под полем,
+   а не хвостом за ним: поле во всю ширину, и хвост ушёл бы за край. */
+.long-number-note {
+  display: block;
+  color: var(--danger);
+}
+
 .card-edit__row .button--ghost {
   border: none;
   padding: 0 0.5rem;
