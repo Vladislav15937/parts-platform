@@ -72,6 +72,8 @@ class OemAnySpellingSearchTest extends PostgresTestBase {
     private static final String PLAIN = "AAAAAAAAAAA3";
     /** Номер без «123» вовсе — контроль, что подстрока не тащит лишнего. */
     private static final String OTHER = "AAAAAAAAAAA4";
+    /** Цифры те же, что у главного, буквы другие: «ZZ-123456». */
+    private static final String SAME_DIGITS = "AAAAAAAAAAA5";
 
     private MockHttpSession session;
 
@@ -109,6 +111,7 @@ class OemAnySpellingSearchTest extends PostgresTestBase {
             oem(part("Фара правая", JOINED, warehouse), "dd444", false);
             oem(part("Стартер", PLAIN, warehouse), "8117033670", true);
             oem(part("Генератор", OTHER, warehouse), "XZ-9876", true);
+            oem(part("Помпа", SAME_DIGITS, warehouse), "ZZ-123456", true);
             return null;
         });
         session = login();
@@ -120,10 +123,13 @@ class OemAnySpellingSearchTest extends PostgresTestBase {
         for (String query : List.of("AB123456X", "ab123456x", "AB 123 456 X",
                 // Набранное как было — находит, как и до задачи.
                 "ab-123 456x", "ab-123",
-                // Русскими буквами: приводится тем же OemNumbers, что запись (0309).
                 "\u0410\u0412123456\u0425")) {
             assertBoth(query).contains(MAIN);
         }
+        // Русскими буквами: приводится тем же OemNumbers, что запись (0309),
+        // и буквы не теряются — «ZZ-123456» с теми же цифрами сюда не попадает.
+        assertBoth("\u0410\u0412123456\u0425").containsExactly(MAIN);
+        assertBoth("AB123456X").containsExactly(MAIN);
     }
 
     @Test
@@ -147,7 +153,7 @@ class OemAnySpellingSearchTest extends PostgresTestBase {
     @Test
     @DisplayName("Короткий цифровой запрос — подстрокой, как раньше; слова с цифрой не становятся номером (п. 4, 6)")
     void shortAndWordQueriesStayAsBefore() throws Exception {
-        assertBoth("123").containsExactly(MAIN);
+        assertBoth("123").containsExactlyInAnyOrder(MAIN, SAME_DIGITS);
         // «фара 1» привела бы к «1» и отдала бы всё, где есть единица: Стартер
         // и Генератор сюда не попадают — у них ни «фары», ни «фара 1» в тексте.
         assertBoth("фара 1").doesNotContain(PLAIN, OTHER);
