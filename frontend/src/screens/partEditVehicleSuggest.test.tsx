@@ -109,6 +109,24 @@ describe('подсказки марки и модели в правке карт
     expect(suggestions(), 'подсказана модель чужой марки').toEqual(['Corolla']);
   });
 
+  it('марка « toyota » узнаётся как сервер — без регистра и пробелов по краям', async () => {
+    // Сервер узнаёт свою марку позиции `lower(cb.name) = lower(btrim(manual_brand))`
+    // (`PartVehicle.brandId`). Поле обязано узнавать её так же: иначе у марки,
+    // которую сервер считает Toyota, модели не подсказывались бы.
+    await openForm('Марка', { brand: null, model: null, donorCode: null });
+    typeInto('Марка', ' toyota ');
+    fireEvent.click(screen.getByLabelText('Изменить: Модель'));
+    typeInto('Модель', 'co');
+
+    await waitFor(() => expect(
+      document.querySelector(MODEL_LIST) ?? screen.queryByText(/Марки .* нет в справочнике/),
+      'поле модели не ответило ни подсказкой, ни словами').toBeTruthy(), WAIT);
+    expect(screen.queryByText(/Марки «toyota» нет в справочнике/),
+      'марка « toyota » не узнана: поле сравнивает не так, как сервер').toBeNull();
+    expect([...document.querySelectorAll(`${MODEL_LIST} button`)].map((b) => b.textContent))
+      .toEqual(['Corolla']);
+  });
+
   it('марка набрана текстом и в справочнике её нет — у модели подсказок нет, поле свободное', async () => {
     const saved = await openForm('Марка');
     typeInto('Марка', 'Лексус');
@@ -160,6 +178,9 @@ describe('подсказки марки и модели в правке карт
  * (тот же урок, что у `feedsMountedGuard.test.tsx`).
  */
 const WAIT = { timeout: 5000 };
+
+/** Список подсказок поля «Модель» — у «Марки» свой, и он может стоять рядом. */
+const MODEL_LIST = 'ul[aria-label="Подсказки: Модель"]';
 
 async function openForm(label: string, over: Partial<CatalogRow> = {}): Promise<() => boolean> {
   let saved = false;
