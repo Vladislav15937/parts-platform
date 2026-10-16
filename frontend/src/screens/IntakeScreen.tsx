@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { LongNumberNote } from '../inventory/LongNumberNote';
 import { PhotoPicker } from '../photos/PhotoPicker';
 import type { ResizedPhoto } from '../photos/resize';
 import { donorTitle } from '../intake/donors';
@@ -292,6 +293,8 @@ export function IntakeScreen({ reference, onSend }: Props) {
           onChange={(e) => setDraft({ ...draft, oemNumber: e.target.value })}
         />
       </label>
+      {/* Необычно длинный номер — предупреждение, а не запрет (задача 0310). */}
+      <LongNumberNote field="oem" value={draft.oemNumber} />
 
       <div className="row">
         <label>

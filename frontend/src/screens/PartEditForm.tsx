@@ -6,6 +6,7 @@ import {
   type CatalogRow, type PartEdit, type PriceOperation,
 } from '../inventory/catalog';
 import { generationOf } from '../inventory/partCard';
+import { LongNumberNote } from '../inventory/LongNumberNote';
 import { count, plural } from '../ui/plural';
 import { useMounted } from '../ui/useMounted';
 import { ApplicabilityView } from './ApplicabilityView';
@@ -198,6 +199,10 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
                     : shownValue(field, form, row)}
                   {opened && 'note' in field && field.note !== undefined
                     && <span className="muted"> {field.note}</span>}
+                  {/* И у раскрытой строки — пока набирают, — и у закрытой:
+                      длинное значение, сохранённое раньше, видно при открытии. */}
+                  {(field.key === 'oem' || field.key === 'crosses')
+                    && <LongNumberNote field={field.key} value={form[field.key]} />}
                 </span>
                 {opened
                     ? (

@@ -339,6 +339,48 @@ class PartAllFieldsEditTest extends PostgresTestBase {
                 .containsExactly("dd-444", "\u0412\u04121");
     }
 
+    /**
+     * Задача 0310, решение владельца продукта 16.10.2026: «длина как сейчас, но
+     * с предупреждением» — предупреждает экран, а сервер нового предела
+     * не вводит: номер много длиннее порога предупреждения (64 знака)
+     * и кросс-номера на 5000 знаков в сумме (порог 1000) сохраняются целиком.
+     *
+     * <p>Знаки случайные, а не повтор одной буквы: повтор Postgres сжимает,
+     * и строка индекса укладывается в предел B-дерева при любой длине.
+     * Предел этот есть и до задачи: один номер длиннее примерно 2 700
+     * несжимаемых знаков отбивает {@code part_oem_uk} («index row size …
+     * exceeds btree version 4 maximum 2704»), и наружу уходит 500. Здесь
+     * он не проверяется — что с ним делать, вопрос владельцу (tasks/0310).
+     */
+    @Test
+    @DisplayName("Номер в 2000 знаков и кросс-номера на 5000 знаков сохраняются целиком: предела у порога предупреждения нет")
+    void longNumbersAreSaved() throws Exception {
+        MockHttpSession owner = login("vladelec0302");
+        java.util.Random random = new java.util.Random(310);
+        String oem = randomNumber(random, 2000);
+        List<String> crosses = new java.util.ArrayList<>();
+        for (int i = 0; i < 250; i++) {
+            crosses.add(randomNumber(random, 20));
+        }
+
+        save(owner, "\"oem\":\"" + oem + "\",\"crosses\":\"" + String.join(", ", crosses) + "\"");
+
+        JsonNode form = editable(owner);
+        assertThat(form.path("oem").asText()).as("номер производителя обрезан или не сохранён")
+                .isEqualTo(oem);
+        assertThat(form.path("crosses").asText()).as("кросс-номера обрезаны или не сохранены")
+                .isEqualTo(String.join(", ", crosses));
+    }
+
+    private static String randomNumber(java.util.Random random, int length) {
+        String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        StringBuilder number = new StringBuilder(length);
+        for (int i = 0; i < length; i++) {
+            number.append(alphabet.charAt(random.nextInt(alphabet.length())));
+        }
+        return number.toString();
+    }
+
     // ------------------------------------------------------------------ помощники
 
     /** Правки номера производителя и кросс-номеров в истории позиции. */
