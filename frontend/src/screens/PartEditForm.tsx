@@ -10,6 +10,7 @@ import { count, plural } from '../ui/plural';
 import { useMounted } from '../ui/useMounted';
 import { ApplicabilityView } from './ApplicabilityView';
 import { CharacteristicsView } from './CharacteristicsView';
+import { VehicleNameInput, useVehicleCatalog } from './VehicleNameInput';
 
 /**
  * Правка карточки товара — списком «подпись — значение», а не формой
@@ -86,6 +87,8 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
   const [priceOp, setPriceOp] = useState<PriceOperation>('SET');
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
+  // Подсказки марки и модели (задача 0308): справочник — по первому раскрытию.
+  const vehicles = useVehicleCatalog(open.includes('brand') || open.includes('model'));
 
   useEffect(() => {
     let alive = true;
@@ -193,7 +196,14 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
               >
                 <span className="card-edit__label">{field.label}</span>
                 <span className="card-edit__value">
-                  {opened
+                  {opened && (field.key === 'brand' || field.key === 'model')
+                    ? (
+                      <VehicleNameInput kind={field.key} label={field.label}
+                                        value={form[field.key]} catalog={vehicles}
+                                        brand={form.brand.trim() !== '' ? form.brand : plainText(row.brand)}
+                                        onChange={(v) => set(field.key as 'brand' | 'model', v)} />
+                    )
+                    : opened
                     ? input(field, form, set, priceOp, changeOp)
                     : shownValue(field, form, row)}
                   {opened && 'note' in field && field.note !== undefined

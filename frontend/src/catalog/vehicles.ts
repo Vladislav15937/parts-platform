@@ -164,3 +164,47 @@ export function generationForYear(
 export function isValidVin(vin: string): boolean {
   return /^[A-HJ-NPR-Z0-9]{17}$/.test(vin.trim().toUpperCase());
 }
+
+/**
+ * Подсказки по написанию справочника — для свободного поля, куда вписывают
+ * свою машину позиции (правка карточки, задача 0308).
+ *
+ * <p><b>Только по `name`, без `nameRu`, — в отличие от {@link suggestBrands}.</b>
+ * Там приёмщик выбирает марку донора из справочника, и русская раскладка —
+ * лишь способ её найти. Здесь поле свободное, и владелец продукта
+ * (16.10.2026) отклонил сопоставление русских названий со справочником:
+ * набранное «тойота» остаётся «тойота», и «Toyota» ему не предлагается.
+ * Регистр не важен: «toy» находит Toyota.
+ *
+ * <p>Предел — восемь строк: длинный список на телефоне отжимает поле
+ * и кнопки за край экрана. Начало названия выше середины.
+ */
+export function suggestByName<T extends { name: string }>(
+  items: readonly T[],
+  input: string,
+  limit = 8,
+): T[] {
+  const term = input.trim().toLowerCase();
+  if (term === '') {
+    return [];
+  }
+  const starts = (item: T): number => Number(item.name.toLowerCase().startsWith(term));
+  return items
+    .filter((item) => item.name.toLowerCase().includes(term))
+    .sort((a, b) => starts(b) - starts(a))
+    .slice(0, limit);
+}
+
+/**
+ * Марка справочника, написанная в поле, — без учёта регистра и пробелов
+ * по краям. Тем же сравнением сервер узнаёт свою марку позиции
+ * (`PartVehicle.brandId`): разойдись они, поле подсказывало бы модели марки,
+ * которую сервер не узнаёт, или молчало бы у той, которую узнаёт.
+ */
+export function brandNamed(brands: readonly Brand[], text: string): Brand | null {
+  const wanted = text.trim().toLowerCase();
+  if (wanted === '') {
+    return null;
+  }
+  return brands.find((b) => b.name.toLowerCase() === wanted) ?? null;
+}
