@@ -900,7 +900,7 @@ class DromShopTermsTest extends PostgresTestBase {
     // --- Смесь алфавитов в номере и замена, равная основному (задача 0298) ---
 
     @Test
-    @DisplayName("Номер с кириллической «С» на конце находится по латинскому; raw_number как набрал клиент")
+    @DisplayName("Номер с кириллической «С» на конце находится по латинскому; raw_number — латиницей (0309)")
     void numberWithCyrillicLetterIsFoundByLatin() throws Exception {
         Map<String, String> a = row(AD_A, "Фара левая Toyota Camry");
         a.put("Номер", "FP8518100\u0421");
@@ -908,9 +908,12 @@ class DromShopTermsTest extends PostgresTestBase {
         load(file(List.of(a), Set.of(), null));
 
         long part = partOf(AD_A);
+        // До задачи 0309 raw_number хранился как набрал клиент («FP8518100С»
+        // с русской «С»); решение владельца 16.10.2026 — русские двойники
+        // заменять латиницей и при переносе из таблицы.
         assertThat(inTenant(() -> jdbc.queryForObject(
                 "SELECT raw_number FROM part_oem WHERE part_id = ? AND is_primary", String.class, part)))
-                .isEqualTo("FP8518100\u0421");
+                .isEqualTo("FP8518100C");
         assertThat(inTenant(() -> jdbc.queryForObject(
                 "SELECT normalized FROM part_oem WHERE part_id = ? AND is_primary", String.class, part)))
                 .isEqualTo("FP8518100C");
