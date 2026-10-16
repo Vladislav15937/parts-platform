@@ -249,9 +249,11 @@ class PartUpdateTest extends PostgresTestBase {
         mvc.perform(put("/api/parts/" + partId).with(csrf()).session(session)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"price":4500,"published":true}"""))
+                                {"price":4500,"published":true,"note":null}"""))
                 .andExpect(status().isOk());
 
+        // С задачи 0307 очищает пришедший пустым ключ, а не отсутствующий:
+        // отсутствующий значит «не трогать».
         assertThat(note()).isNull();
     }
 

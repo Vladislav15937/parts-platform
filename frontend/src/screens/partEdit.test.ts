@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { draftOf, dromDateShown, toEdit } from './PartEditForm';
+import { changedEdit, draftOf, dromDateShown, toEdit } from './PartEditForm';
 import type { PartEdit } from '../inventory/catalog';
 
 function card(overrides: Partial<PartEdit> = {}): PartEdit {
@@ -152,5 +152,33 @@ describe('форма правки карточки', () => {
     // с умолчанием. Пустое поле формы поэтому означает «оставить как было»,
     // и это единственное поле формы с такой семантикой.
     expect(toEdit({ ...draftOf(card()), condition: '' }).condition).toBeNull();
+  });
+
+  it('уезжает только изменённое, а увиденное — как пришло с сервера (задача 0307)', () => {
+    const read = card({ number: 7, code: 'B-40219', note: 'скол ' });
+    const was = toEdit(draftOf(read), ['number', 'code']);
+    const now = toEdit({ ...draftOf(read), price: '5000', minPrice: '4000' }, ['number', 'code']);
+
+    const { edit, seen } = changedEdit(now, was, read, 'SET');
+    // № позиции туда и обратно — строка «7» против прочитанного 7: не правка.
+    expect(edit).toEqual({ price: 5000 });
+    expect(seen).toEqual({ price: 4500 });
+  });
+
+  it('арифметика с ценой — правка, даже если число в поле то же (задача 0307)', () => {
+    const read = card();
+    const form = draftOf(read);
+    const { edit } = changedEdit(toEdit(form), toEdit(form), read, 'DECREASE_PERCENT');
+    expect(edit).toEqual({ price: 4500 });
+  });
+
+  it('увиденное — сырое значение сервера, а не обрезанная копия черновика', () => {
+    // Заметка в базе с пробелом на конце: черновик и запись его срежут,
+    // а сервер сверяет увиденное с тем, что лежит у него, — копия из черновика
+    // дала бы конфликт на ровном месте.
+    const read = card({ note: 'скол ' });
+    const { seen } = changedEdit(toEdit({ ...draftOf(read), note: 'трещина' }),
+      toEdit(draftOf(read)), read, 'SET');
+    expect(seen).toEqual({ note: 'скол ' });
   });
 });

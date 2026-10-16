@@ -21,17 +21,20 @@ import { CharacteristicsView } from './CharacteristicsView';
  * маркировку исправить, — по многу раз в день. Что из двадцати полей задето,
  * на экране не было написано нигде.
  *
- * <p>Цена у этого была не косметическая: <b>форма уезжает PUT'ом целиком,
- * и пустое поле означает «очистить»</b> (см. {@code blank} ниже). Случайно
- * задетое поле уходило молча вместе со всем, что в нём было написано,
- * а возврата у формы нет — только «Отмена» до сохранения. Теперь пустым
- * поле становится только руками и только у раскрытой строки.
+ * <p>Цена у этого была не косметическая: пустое поле означает «очистить»
+ * (см. {@code blank} ниже). Случайно задетое поле уходило молча вместе
+ * со всем, что в нём было написано, а возврата у формы нет — только «Отмена»
+ * до сохранения. Теперь пустым поле становится только руками и только
+ * у раскрытой строки.
  *
- * <p><b>Изменённым считается раскрытое,</b> а не то, что отличается
- * от прочитанного. Так у ориентира, и так честнее при PUT'е целиком:
- * раскрыв строку, человек взял её под свою ответственность — в том числе
- * когда стёр значение и оставил пусто. Счёт «изменено N параметров» внизу
- * считает ровно раскрытые строки.
+ * <p><b>Счёт «изменено N параметров» считает раскрытые строки,</b> как
+ * у ориентира: раскрыв строку, человек взял её под свою ответственность.
+ * А <b>уезжает только то, что отличается от увиденного</b> (задача 0307,
+ * решение владельца продукта 16.10.2026: «1-б») — вместе с увиденным,
+ * чтобы сервер узнал чужую правку того же поля. До неё форма уезжала
+ * PUT'ом целиком, и вторая вкладка, сохраняя заметку, откатывала цену,
+ * которую успела поменять первая. Раскрытая и нетронутая строка не уезжает:
+ * её значение и есть то, что в базе.
  *
  * <p><b>Замков нет ни у одного поля</b> (задача 0302, решение владельца
  * продукта 15.10.2026: «Клиент может править у себя абсолютно всё… Никаких
@@ -70,6 +73,12 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
    * прежнее значение этой строки — а не всей формы, как «Отмена» внизу.
    */
   const [loaded, setLoaded] = useState<Draft | null>(null);
+  /**
+   * Карточка, как её отдал сервер, — без приведения к строкам. Её значения
+   * уезжают «увиденными» (`seen`): сервер сравнивает их с базой в том же
+   * виде, в каком отдал (задача 0307).
+   */
+  const [card, setCard] = useState<PartEdit | null>(null);
   /** Раскрытые строки: они же изменённые, они же уезжают с ответственностью. */
   const [open, setOpen] = useState<string[]>([]);
   const [error, setError] = useState('');
@@ -86,6 +95,7 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
         const draft = draftOf(card);
         setForm(draft);
         setLoaded(draft);
+        setCard(card);
       })
       .catch(() => { if (alive) setError('Не удалось прочитать карточку'); });
     return () => { alive = false; };
@@ -130,7 +140,7 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
   }
 
   async function save(): Promise<void> {
-    if (form === null || loaded === null || open.length === 0) return;
+    if (form === null || loaded === null || card === null || open.length === 0) return;
     if (open.includes('number') && !/^\s*[1-9][0-9]*\s*$/.test(form.number)) {
       setError('№ позиции — целое число больше нуля');
       return;
@@ -142,8 +152,12 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
       // прочитанное значение простой заменой, и арифметика к нему
       // не применяется.
       const touched = open.includes('price');
-      const body = toEdit(touched ? form : { ...form, price: loaded.price }, open);
-      await savePart(partId, body, touched ? priceOp : 'SET');
+      const op = touched ? priceOp : 'SET';
+      const { edit, seen } = changedEdit(
+        toEdit(touched ? form : { ...form, price: loaded.price }, open),
+        toEdit(shownDraft(loaded, row), open), card, op);
+      // Раскрыли и ничего не поменяли — писать нечего: в базе то, что видно.
+      if (Object.keys(edit).length > 0) await savePart(partId, edit, op, seen);
       if (mounted.current) onSaved();
     } catch (e) {
       if (mounted.current) {
@@ -532,6 +546,56 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
 const SENT_WHEN_OPEN = ['code', 'title', 'sideLr', 'sideFr', 'authenticity', 'oem',
   'crosses', 'legacyCode', 'dromAdNumber', 'donorCode', 'brand', 'model', 'generation',
   'body', 'engine', 'year', 'equipment'] as const;
+
+/**
+ * Черновик таким, каким его видел человек: у машины позиции без своего
+ * значения на экране стоит донор или применимость, и раскрытая строка
+ * открывается с ним же. Нетронутым считается это значение, а не пустота:
+ * иначе раскрытая и нетронутая «Марка» уехала бы донорской маркой своей.
+ */
+function shownDraft(loaded: Draft, row: CatalogRow): Draft {
+  const shown = { ...loaded };
+  for (const section of SECTIONS) {
+    for (const field of section.fields) {
+      if (field.kind === 'vehicle' && loaded[field.key].trim() === '') {
+        shown[field.key] = field.fallback(row);
+      }
+    }
+  }
+  return shown;
+}
+
+/**
+ * Изменённое и увиденное — то, что уезжает на сервер (задача 0307).
+ *
+ * <p>`now` и `was` — одна и та же форма, собранная `toEdit` из правленого
+ * и из увиденного черновика: поле изменено, если они разошлись. Цена
+ * с арифметикой изменена всегда — «−10 %» от любого числа это правка.
+ * Увиденное берётся из ответа сервера как есть (`card`), а не из черновика:
+ * сервер сравнивает его с базой, и приведённая к строке или обрезанная копия
+ * дала бы конфликт на ровном месте.
+ */
+export function changedEdit(
+  now: PartEdit,
+  was: PartEdit,
+  card: PartEdit,
+  priceOp: PriceOperation,
+): { edit: Partial<PartEdit>; seen: Partial<PartEdit> } {
+  const edit: Record<string, unknown> = {};
+  const seen: Record<string, unknown> = {};
+  const nowValues = now as unknown as Record<string, unknown>;
+  const wasValues = was as unknown as Record<string, unknown>;
+  const cardValues = card as unknown as Record<string, unknown>;
+  for (const key of Object.keys(nowValues)) {
+    const value = nowValues[key];
+    if (value === undefined) continue;
+    const arithmetic = key === 'price' && priceOp !== 'SET';
+    if (!arithmetic && JSON.stringify(value) === JSON.stringify(wasValues[key] ?? null)) continue;
+    edit[key] = value;
+    seen[key] = cardValues[key] ?? null;
+  }
+  return { edit: edit as Partial<PartEdit>, seen: seen as Partial<PartEdit> };
+}
 
 function plainText(value: string | number | null): string {
   return value === null || value === undefined ? '' : String(value);

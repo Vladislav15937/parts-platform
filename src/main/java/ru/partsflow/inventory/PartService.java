@@ -52,11 +52,15 @@ public class PartService {
 
     private final PartIdentity identity;
 
+    /** Карточка формы правки — тем же разбором, что ответ наружу (сверка задачи 0307). */
+    private final com.fasterxml.jackson.databind.ObjectMapper json;
+
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
                        PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc,
                        VehicleWords vehicleWords, StockNaming naming, StockLedger ledger,
                        jakarta.persistence.EntityManager entityManager,
-                       PartIdentity identity) {
+                       PartIdentity identity, com.fasterxml.jackson.databind.ObjectMapper json) {
+        this.json = json;
         this.partRepository = partRepository;
         this.eventPublisher = eventPublisher;
         this.partNames = partNames;
@@ -222,9 +226,11 @@ public class PartService {
      * владелец изменить не мог вовсе — а на разборке это ежедневная работа,
      * от «повисло полгода, снижаем» до опечатки в приёмке.
      *
-     * <p><b>Форма, а не патч.</b> Приходят все поля разом, и {@code null}
-     * означает «очищено», а не «не трогать». Иначе стереть заметку с экрана
-     * невозможно: пустое поле формы неотличимо от непереданного.
+     * <p><b>Правится только пришедшее</b> (задача 0307; до неё — «форма, а не
+     * патч»). Ключа нет — поле не трогается ({@link PartUpdate#has}); ключ есть
+     * и {@code null} — очищено. Вторая вкладка, сохранявшая форму целиком,
+     * откатывала чужую цену до увиденной при открытии. Увиденное, разошедшееся
+     * с базой, — отказ целиком ({@link PartEditConflicts}).
      *
      * <p><b>Заголовок сюда не входит.</b> Он производный — собирается
      * из эталона наименования, машины, стороны и состояния, — и правка руками
@@ -254,10 +260,25 @@ public class PartService {
      */
     @Transactional
     public Part update(Long partId, PartUpdate update, Long authorId) {
-        Part part = partRepository.findById(partId)
+        // Под блокировкой строки (задача 0307): две правки одной карточки идут
+        // по очереди, и вторая сверяет увиденное уже с записанным первой.
+        // Без неё обе прочли бы одно и то же и обе прошли бы сверку — ровно
+        // тот read-modify-write, от которого сверка и заведена.
+        Part part = partRepository.findByIdForUpdate(partId)
                 .orElseThrow(() -> NotFound.PART.error(partId));
 
         PriceOperation priceOp = update.priceOp() == null ? PriceOperation.SET : update.priceOp();
+        // До всякой записи: отказ по чужой правке не сохраняет из запроса
+        // ничего — полусохранённая форма хуже отказа целиком.
+        if (update.base() != null && update.base().seen() != null) {
+            List<String> taken = PartEditConflicts.conflicting(formOf(part),
+                    update.base().wanted(), update.base().seen(), priceOp.arithmetic());
+            if (!taken.isEmpty()) {
+                log.warn("Правка позиции {} отбита: поля {} уже изменил другой", partId, taken);
+                throw new IllegalStateException(PartEditConflicts.message(taken));
+            }
+        }
+
         if (!priceOp.arithmetic() && update.price() != null && update.price().signum() < 0) {
             throw new IllegalArgumentException("Цена не может быть отрицательной");
         }
@@ -268,8 +289,11 @@ public class PartService {
         // «поднять на 5 %» от ничего превратилось бы в «поставить ноль»,
         // то есть в снятое объявление. Здесь правят одну карточку, и человек
         // выбрал операцию именно ей — молчать нельзя.
-        BigDecimal wanted = priceOp.apply(part.getPrice(), update.price(),
-                MoneyField.PRICE, part.getPublicCode());
+        // Цену трогает её ключ — или арифметика без него: выбранная операция
+        // это просьба о цене, и «округлить» без шага обязано отказать словами.
+        boolean priceSent = update.has("price") || (update.has("priceOp") && priceOp.arithmetic());
+        BigDecimal wanted = !priceSent ? null : priceOp.apply(part.getPrice(),
+                update.price(), MoneyField.PRICE, part.getPublicCode());
         boolean priceChanged = wanted != null
                 && (part.getPrice() == null || part.getPrice().compareTo(wanted) != 0);
         if (priceChanged) {
@@ -305,32 +329,42 @@ public class PartService {
             part.setCondition(update.condition());
         }
 
-        part.setMinPrice(update.minPrice());
-        part.setCostPrice(update.costPrice());
-        part.setInstallationPrice(update.installationPrice());
-        part.setQualityGrade(update.qualityGrade());
-        part.setDescription(update.description());
-        part.setNote(update.note());
-        part.setTextBlock(update.textBlock());
-        part.setVideoUrl(update.videoUrl());
-        part.setMarking(update.marking());
-        part.setManufacturer(update.manufacturer());
-        part.setColor(update.color());
-        part.setSection(update.section());
-        requireFreeBarcode(partId, update.barcode());
-        // Пустое — это «штрихкода нет», то есть NULL, а не пустая строка.
-        // Пустых строк в уникальном индексе может быть только одна: сняв
-        // штрихкод с одной позиции, владелец на второй получал «Операция
-        // нарушает целостность данных» — при том что ничего не задвоил.
-        // NULL же в Postgres друг с другом не сталкиваются.
-        part.setBarcode(blankToNull(update.barcode()));
-        part.setWeightKg(update.weightKg());
-        part.setDimensionsMm(update.lengthMm(), update.widthMm(), update.heightMm());
-        part.setPackageDimensionsMm(update.packageLengthMm(), update.packageWidthMm(),
-                update.packageHeightMm());
-        part.setPackageWeightKg(update.packageWeightKg());
-        part.setStorageCellId(update.storageCellId());
-        part.setPublished(update.published());
+        // Каждое поле — только если его ключ пришёл (задача 0307): форма шлёт
+        // изменённое, и отсутствующий ключ значит «не трогать», а не «очистить».
+        if (update.has("minPrice")) part.setMinPrice(update.minPrice());
+        if (update.has("costPrice")) part.setCostPrice(update.costPrice());
+        if (update.has("installationPrice")) part.setInstallationPrice(update.installationPrice());
+        if (update.has("qualityGrade")) part.setQualityGrade(update.qualityGrade());
+        if (update.has("description")) part.setDescription(update.description());
+        if (update.has("note")) part.setNote(update.note());
+        if (update.has("textBlock")) part.setTextBlock(update.textBlock());
+        if (update.has("videoUrl")) part.setVideoUrl(update.videoUrl());
+        if (update.has("marking")) part.setMarking(update.marking());
+        if (update.has("manufacturer")) part.setManufacturer(update.manufacturer());
+        if (update.has("color")) part.setColor(update.color());
+        if (update.has("section")) part.setSection(update.section());
+        if (update.has("barcode")) {
+            requireFreeBarcode(partId, update.barcode());
+            // Пустое — это «штрихкода нет», то есть NULL, а не пустая строка.
+            // Пустых строк в уникальном индексе может быть только одна: сняв
+            // штрихкод с одной позиции, владелец на второй получал «Операция
+            // нарушает целостность данных» — при том что ничего не задвоил.
+            // NULL же в Postgres друг с другом не сталкиваются.
+            part.setBarcode(blankToNull(update.barcode()));
+        }
+        if (update.has("weightKg")) part.setWeightKg(update.weightKg());
+        part.setDimensionsMm(
+                update.has("lengthMm") ? update.lengthMm() : part.getLengthMm(),
+                update.has("widthMm") ? update.widthMm() : part.getWidthMm(),
+                update.has("heightMm") ? update.heightMm() : part.getHeightMm());
+        part.setPackageDimensionsMm(
+                update.has("packageLengthMm") ? update.packageLengthMm() : part.getPackageLengthMm(),
+                update.has("packageWidthMm") ? update.packageWidthMm() : part.getPackageWidthMm(),
+                update.has("packageHeightMm") ? update.packageHeightMm() : part.getPackageHeightMm());
+        if (update.has("packageWeightKg")) part.setPackageWeightKg(update.packageWeightKg());
+        if (update.has("storageCellId")) part.setStorageCellId(update.storageCellId());
+        // Пустое — «не трогать»: у позиции нет состояния «не знаем, выгружать ли».
+        if (update.published() != null) part.setPublished(update.published());
         // Меняло ли форму что-нибудь в самой позиции — спрашивается до того,
         // как руку приложили автор и блоки карточки Дрома: в прайс они пока
         // не уходят, и правка одних блоков не должна слать площадке дельту.
@@ -364,6 +398,17 @@ public class PartService {
                     "part", part.getId(), "part.price_changed.v1", payloadOf(part)));
         }
         return part;
+    }
+
+    /**
+     * Карточка в том виде, в каком её отдаёт форма правки, — с ней сверяется
+     * увиденное человеком (задача 0307). Тот же {@code UpdateRequest.of},
+     * что у {@code GET /api/parts/{id}/editable}: собери сверку своими руками —
+     * и поле, которое форма показывает одним написанием, сравнивалось бы с другим.
+     */
+    private com.fasterxml.jackson.databind.JsonNode formOf(Part part) {
+        return json.valueToTree(PartController.UpdateRequest.of(part,
+                entityManager.find(PartDromCard.class, part.getId()), identity.of(part.getId())));
     }
 
     /**
@@ -969,7 +1014,7 @@ public class PartService {
                              Integer packageHeightMm,
                              BigDecimal packageWeightKg,
                              Long storageCellId,
-                             boolean published,
+                             Boolean published,
                              // Блоки карточки Дрома (задача 0285). {@code null} — в запросе
                              // ключа не было, блок не трогать; пустой текст — очистить,
                              // в базу уходит NULL.
@@ -998,7 +1043,28 @@ public class PartService {
                              String sideLr,
                              String sideFr,
                              String legacyCode,
-                             PartIdentity.Edit identity) {
+                             PartIdentity.Edit identity,
+                             // Какие ключи пришли в запросе (задача 0307): правятся только они.
+                             // {@code null} — «все», так зовёт тот, кто собрал запись сам.
+                             java.util.Set<String> sent,
+                             // С чем сверять чужую правку; {@code null} — не сверять.
+                             EditBase base) {
+
+        /** Пришёл ли ключ: нет — поле не трогается, как бы ни было пусто значение. */
+        boolean has(String key) {
+            return sent == null || sent.contains(key);
+        }
+    }
+
+    /**
+     * Что человек хотел записать и что видел при открытии формы (задача 0307).
+     *
+     * @param wanted тело запроса как пришло — его значения сравниваются с текущими
+     * @param seen   увиденное у изменённых полей; {@code null} — сверки нет
+     *               (вкладка, открытая до выкладки, шлёт форму целиком)
+     */
+    public record EditBase(com.fasterxml.jackson.databind.JsonNode wanted,
+                           com.fasterxml.jackson.databind.JsonNode seen) {
     }
 
     /** Сторона кодом перечисления; пусто — стороны нет; чужое слово — отказ словами. */

@@ -13,6 +13,15 @@ public interface PartRepository extends JpaRepository<Part, Long> {
 
     Optional<Part> findByPublicCode(String publicCode);
 
+    /**
+     * Позиция под блокировкой строки — для правки карточки (задача 0307):
+     * сверка «увиденное ещё в базе» и запись обязаны стоять в одной очереди,
+     * иначе две одновременные правки одного поля прошли бы сверку обе.
+     */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("SELECT p FROM Part p WHERE p.id = :id")
+    Optional<Part> findByIdForUpdate(Long id);
+
     Optional<Part> findByClientRequestId(String clientRequestId);
 
     Page<Part> findByStatus(PartStatus status, Pageable pageable);

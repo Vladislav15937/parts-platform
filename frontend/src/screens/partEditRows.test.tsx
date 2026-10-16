@@ -100,13 +100,15 @@ describe('правка карточки по одному полю', () => {
     expect(screen.getByDisplayValue('27000')).toBeTruthy();
     expect(screen.getByLabelText('Цвет')).toBeTruthy();
 
+    fireEvent.change(screen.getByLabelText('Цвет'), { target: { value: 'чёрный' } });
     fireEvent.click(save());
     await waitFor(() => expect(sent.length).toBe(1));
-    expect(sent[0]!['note'], 'отменённая строка всё равно уехала изменённой')
-      .toBe('скол на креплении');
+    expect('note' in sent[0]!, 'отменённая строка всё равно уехала изменённой').toBe(false);
+    expect('price' in sent[0]!, 'раскрытая и нетронутая цена уехала').toBe(false);
+    expect(sent[0]!['color']).toBe('чёрный');
   });
 
-  it('уезжает вся форма, а изменены ровно тронутые поля', async () => {
+  it('уезжают только изменённые поля и то, что человек видел (задача 0307)', async () => {
     render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Заметка')).toBeTruthy());
@@ -119,15 +121,54 @@ describe('правка карточки по одному полю', () => {
 
     await waitFor(() => expect(sent.length).toBe(1));
     const body = sent[0]!;
+    // До задачи 0307 уезжала вся форма — и вторая вкладка, сохраняя заметку,
+    // откатывала цену первой до увиденной при открытии (замер на ПРОМ).
+    expect(Object.keys(body).sort(), 'уехало нетронутое').toEqual(['marking', 'note', 'seen']);
     expect(body['note']).toBe('трещина');
     expect(body['marking']).toBe('81170-05');
-    // Остальное уехало таким же, каким пришло: PUT целиком не значит
-    // «перетереть нетронутое».
-    expect(body['price']).toBe(27000);
-    expect(body['priceOp'], 'к нетронутой цене применилась арифметика').toBe('SET');
-    expect(body['description']).toBe('Фара в сборе');
-    expect(body['manufacturer']).toBe('Toyota');
-    expect(body['published']).toBe(true);
+    // Увиденное — как пришло с сервера: с ним сервер сверяет базу.
+    expect(body['seen']).toEqual({ note: 'скол на креплении', marking: null });
+  });
+
+  it('раскрытая и нетронутая строка не уезжает, и запроса нет вовсе', async () => {
+    let saved = false;
+    render(<PartEditForm partId={7} row={row()}
+                         onSaved={() => { saved = true; }} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Марка')).toBeTruthy());
+
+    // «Марка» открывается донорской: нетронутая, она не должна стать своей.
+    fireEvent.click(screen.getByLabelText('Изменить: Марка'));
+    fireEvent.click(screen.getByLabelText('Изменить: Цена'));
+    fireEvent.click(save());
+
+    await waitFor(() => expect(saved).toBe(true));
+    expect(sent.length, 'нетронутое ушло на сервер').toBe(0);
+  });
+
+  it('поле успел изменить другой — предупреждение сервера на экране, правка не пропадает', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') !== 'GET') {
+        return new Response(JSON.stringify({ message: 'Поле «Цена» уже изменил другой человек.'
+          + ' Перезагрузите страницу и повторите правку' }), {
+          status: 409, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return json(card());
+    }));
+    let saved = false;
+    render(<PartEditForm partId={7} row={row()}
+                         onSaved={() => { saved = true; }} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText('Изменить: Цена'));
+    fireEvent.change(screen.getByLabelText('Значение операции с ценой'),
+      { target: { value: '25000' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(screen.getByText(/уже изменил другой человек/)).toBeTruthy());
+    expect(screen.getByText(/Перезагрузите страницу/)).toBeTruthy();
+    expect(saved, 'форма закрылась, будто сохранено').toBe(false);
+    expect(screen.getByDisplayValue('25000'), 'набранное пропало').toBeTruthy();
   });
 
   it('ничего не изменено — «Сохранить» погашена и говорит почему', async () => {
@@ -288,9 +329,9 @@ describe('блоки карточки Дрома', () => {
 
     await waitFor(() => expect(sent.length).toBe(1));
     expect(sent[0]!['pickup']).toBe('Самовывоз — склад на Ленина 5');
-    expect(sent[0]!['warranty']).toBe('Обговаривается индивидуально');
-    expect(sent[0]!['deliveryPayment'])
-      .toBe('Доставка по городу — 300 р.\n\nОплата при получении');
+    // Нетронутые блоки не уезжают вовсе (задача 0307): сервер их не трогает.
+    expect('warranty' in sent[0]!).toBe(false);
+    expect('deliveryPayment' in sent[0]!).toBe(false);
   });
 
   it('«Вид детали» и «Раздел» показаны подписями Дрома, правятся и стираются тем же PUT (задача 0286)', async () => {
@@ -314,7 +355,7 @@ describe('блоки карточки Дрома', () => {
     expect(sent[0]!['dromSection']).toBe('Автозапчасти → Кузов');
     expect(sent[0]!['dromKind'], 'очистка — пустая строка, null сервер прочёл бы как «не трогать»')
       .toBe('');
-    expect(sent[0]!['section'], '«Секция» склада поехала вместо «Раздела»').toBe(null);
+    expect('section' in sent[0]!, '«Секция» склада поехала вместо «Раздела»').toBe(false);
   });
 
   it('«Подходит» показано блоками и свёрнуто; правка открывает текст как есть; очистка уезжает пустой строкой (задача 0287)', async () => {
@@ -372,14 +413,16 @@ describe('блоки карточки Дрома', () => {
       .toBe('');
   });
 
-  it('нетронутые «Характеристики» уезжают как прочитаны, байт в байт', async () => {
+  it('нетронутые «Характеристики» не уезжают вовсе (задача 0307)', async () => {
     render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
     fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
+    fireEvent.change(screen.getByLabelText('Самовывоз'), { target: { value: 'Самовывоз завтра' } });
     fireEvent.click(save());
     await waitFor(() => expect(sent.length).toBe(1));
-    expect(sent[0]!['characteristics']).toBe(CHARACTERISTICS);
+    // Раньше форма уезжала целиком, и сторожем было «как прочитано, байт в байт».
+    expect('characteristics' in sent[0]!, 'нетронутое уехало').toBe(false);
   });
 
   it('«Может подойти» стоит под «Подходит», показано пунктами и свёрнуто; правка открывает текст как есть; очистка — пустая строка (задача 0293)', async () => {
@@ -408,17 +451,19 @@ describe('блоки карточки Дрома', () => {
     await waitFor(() => expect(sent.length).toBe(1));
     expect(sent[0]!['mayFit'], 'очистка — пустая строка, null сервер прочёл бы как «не трогать»')
       .toBe('');
-    expect(sent[0]!['applicability'], 'очистка «Может подойти» задела «Подходит»').toBe(APPLICABILITY);
+    expect('applicability' in sent[0]!, 'очистка «Может подойти» задела «Подходит»').toBe(false);
   });
 
-  it('нетронутое «Может подойти» уезжает как прочитано, байт в байт', async () => {
+  it('нетронутое «Может подойти» не уезжает вовсе (задача 0307)', async () => {
     render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
     fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
+    fireEvent.change(screen.getByLabelText('Самовывоз'), { target: { value: 'Самовывоз завтра' } });
     fireEvent.click(save());
     await waitFor(() => expect(sent.length).toBe(1));
-    expect(sent[0]!['mayFit']).toBe(MAY_FIT);
+    // Раньше форма уезжала целиком, и сторожем было «как прочитано, байт в байт».
+    expect('mayFit' in sent[0]!, 'нетронутое уехало').toBe(false);
   });
 
   it('«Дата (Дром)» показана как ДД.ММ.ГГГГ, правка открывает хранимый текст, очистка — пустая строка (задача 0298)', async () => {
@@ -438,24 +483,28 @@ describe('блоки карточки Дрома', () => {
     expect(sent[0]!['adDate'], 'очистка — пустая строка, null сервер прочёл бы как «не трогать»').toBe('');
   });
 
-  it('нетронутая «Дата (Дром)» уезжает как прочитана, байт в байт', async () => {
+  it('нетронутая «Дата (Дром)» не уезжает вовсе (задача 0307)', async () => {
     render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
     fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
+    fireEvent.change(screen.getByLabelText('Самовывоз'), { target: { value: 'Самовывоз завтра' } });
     fireEvent.click(save());
     await waitFor(() => expect(sent.length).toBe(1));
-    expect(sent[0]!['adDate']).toBe('2026-09-28');
+    // Раньше форма уезжала целиком, и сторожем было «как прочитано, байт в байт».
+    expect('adDate' in sent[0]!, 'нетронутое уехало').toBe(false);
   });
 
-  it('нетронутое «Подходит» уезжает как прочитано, байт в байт', async () => {
+  it('нетронутое «Подходит» не уезжает вовсе (задача 0307)', async () => {
     render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
     fireEvent.click(screen.getByLabelText('Изменить: Самовывоз'));
+    fireEvent.change(screen.getByLabelText('Самовывоз'), { target: { value: 'Самовывоз завтра' } });
     fireEvent.click(save());
     await waitFor(() => expect(sent.length).toBe(1));
-    expect(sent[0]!['applicability']).toBe(APPLICABILITY);
+    // Раньше форма уезжала целиком, и сторожем было «как прочитано, байт в байт».
+    expect('applicability' in sent[0]!, 'нетронутое уехало').toBe(false);
   });
 
   it('стёртый руками блок уезжает пустой строкой, а не null', async () => {

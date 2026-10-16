@@ -226,9 +226,20 @@ public class PartController {
      * подвинуть себе нижнюю границу. Кладовщику править нечего — адрес полки
      * он меняет перемещением, а не карточкой.
      *
-     * <p>PUT, а не PATCH: приходит вся форма разом, и пустое поле означает
-     * «очищено». Патч, в котором отсутствие ключа значит «не трогать»,
-     * не даёт стереть заметку.
+     * <p><b>Ключа нет — поле не трогается; ключ есть и пуст — очищается</b>
+     * (задача 0307, решение владельца продукта 16.10.2026: «1-б»). До неё
+     * приходила вся форма разом, и вторая вкладка, сохраняя заметку, откатывала
+     * цену, которую успела поменять первая, — замерено на ПРОМ. Различие
+     * «нет ключа» и «пусто» читается из самого тела ({@link EditRequest}):
+     * Jackson отсутствующий ключ и явный {@code null} в записи не различает.
+     * Вкладка, открытая до выкладки, шлёт форму целиком — все ключи есть,
+     * и принимается это как раньше.
+     *
+     * <p><b>Рядом с изменённым экран шлёт то, что человек видел</b> ({@code seen}).
+     * Не совпало с базой — поле успел изменить другой, и сервер не сохраняет
+     * из запроса ничего, отвечая 409 с названием поля
+     * ({@link PartEditConflicts}). Без {@code seen} сверять не с чем, и правка
+     * принимается без проверки — так шлёт старая вкладка.
      */
     /**
      * <p><b>Замков на полях нет ни у одного, и у состояния тоже</b> (задача 0302,
@@ -244,13 +255,64 @@ public class PartController {
      */
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public PartView update(@PathVariable Long id, @Valid @RequestBody UpdateRequest request) {
+    public PartView update(@PathVariable Long id, @Valid @RequestBody EditRequest request) {
+        UpdateRequest fields = request.fields();
         try {
-            return PartView.of(partService.update(id, request.toUpdate(), CurrentUser.memberId()));
+            return PartView.of(partService.update(id, fields.toUpdate(request.sent(),
+                    new PartService.EditBase(request.wanted(), request.seen())),
+                    CurrentUser.memberId()));
         } catch (DataIntegrityViolationException taken) {
-            identity.explainConflict(id, request.identity(), request.barcode(),
-                    request.legacyCode(), taken);
+            identity.explainConflict(id, fields.identity(), fields.barcode(),
+                    fields.legacyCode(), taken);
             throw taken;
+        }
+    }
+
+    /**
+     * Тело правки карточки вместе с тем, какие ключи в нём были (задача 0307).
+     *
+     * <p>Свой разбор, а не запись с полями-{@code Optional}: правило «нет ключа —
+     * не трогать» нужно у полусотни полей, и обёртка у каждого читалась бы хуже
+     * одного множества {@code sent}. Поля разбираются тем же {@code ObjectMapper},
+     * что и прежде ({@code readTreeAsValue}), — и валидация, и ответ «запрос
+     * не разобран» на строку вместо числа остаются прежними.
+     *
+     * @param fields поля формы — как раньше, отсутствующий ключ здесь {@code null}
+     * @param sent   какие ключи пришли: только они и правятся
+     * @param wanted тело без {@code seen} — с ним сравнивается текущее, чтобы
+     *               одинаковая правка двух людей конфликтом не считалась
+     * @param seen   что человек видел у изменённых полей; нет — сверки нет
+     */
+    @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using = EditRequest.Reader.class)
+    public record EditRequest(@Valid @NotNull UpdateRequest fields,
+                              java.util.Set<String> sent,
+                              com.fasterxml.jackson.databind.JsonNode wanted,
+                              com.fasterxml.jackson.databind.JsonNode seen) {
+
+        public static final class Reader
+                extends com.fasterxml.jackson.databind.deser.std.StdDeserializer<EditRequest> {
+
+            public Reader() {
+                super(EditRequest.class);
+            }
+
+            @Override
+            public EditRequest deserialize(com.fasterxml.jackson.core.JsonParser parser,
+                                           com.fasterxml.jackson.databind.DeserializationContext context)
+                    throws java.io.IOException {
+                com.fasterxml.jackson.databind.JsonNode tree = context.readTree(parser);
+                if (!(tree instanceof com.fasterxml.jackson.databind.node.ObjectNode body)) {
+                    throw com.fasterxml.jackson.databind.exc.MismatchedInputException.from(
+                            parser, EditRequest.class, "тело правки — не объект");
+                }
+                com.fasterxml.jackson.databind.node.ObjectNode wanted = body.deepCopy();
+                com.fasterxml.jackson.databind.JsonNode seen = wanted.remove("seen");
+                UpdateRequest fields = context.readTreeAsValue(wanted, UpdateRequest.class);
+                java.util.Set<String> sent = new java.util.HashSet<>();
+                wanted.fieldNames().forEachRemaining(sent::add);
+                return new EditRequest(fields, java.util.Set.copyOf(sent), wanted,
+                        seen == null || seen.isNull() ? null : seen);
+            }
         }
     }
 
@@ -309,6 +371,9 @@ public class PartController {
      * <p>Пустое состояние означает «не трогать», а не «очистить», —
      * и это единственное поле формы с такой семантикой. У детали нет
      * состояния «не заполнено»: колонка {@code NOT NULL} с умолчанием.
+     *
+     * <p>Отсутствующий ключ с задачи 0307 — «не трогать» у всех полей: какие
+     * ключи пришли, знает {@link EditRequest}, а не эта запись.
      */
     public record UpdateRequest(@PositiveOrZero BigDecimal price,
                                 @PositiveOrZero BigDecimal minPrice,
@@ -334,7 +399,9 @@ public class PartController {
                                 @PositiveOrZero Integer packageHeightMm,
                                 @PositiveOrZero BigDecimal packageWeightKg,
                                 Long storageCellId,
-                                boolean published,
+                                // Объект, а не примитив (задача 0307): отсутствующий ключ
+                                // был бы false, то есть снятием позиции с выгрузки.
+                                Boolean published,
                                 // Блоки карточки Дрома (задача 0285): гарантия, самовывоз,
                                 // доставка и оплата — тексты клиента, хранятся дословно.
                                 // В отличие от остальных текстов формы, у них два способа
@@ -431,7 +498,7 @@ public class PartController {
                     donorCode, brand, model, generation, body, engine, year, equipment);
         }
 
-        PartService.PartUpdate toUpdate() {
+        PartService.PartUpdate toUpdate(java.util.Set<String> sent, PartService.EditBase base) {
             return new PartService.PartUpdate(price, minPrice, costPrice, installationPrice,
                     condition, qualityGrade, description, note, textBlock, videoUrl,
                     marking, manufacturer,
@@ -439,7 +506,7 @@ public class PartController {
                     packageLengthMm, packageWidthMm, packageHeightMm, packageWeightKg,
                     storageCellId, published, warranty, pickup, deliveryPayment,
                     dromKind, dromSection, applicability, characteristics, mayFit, adDate, priceOp,
-                    title, sideLr, sideFr, legacyCode, identity());
+                    title, sideLr, sideFr, legacyCode, identity(), sent, base);
         }
     }
 
