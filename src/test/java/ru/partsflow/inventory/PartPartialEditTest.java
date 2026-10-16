@@ -337,6 +337,58 @@ class PartPartialEditTest extends PostgresTestBase {
                 .isEqualByComparingTo("4500");
     }
 
+    /**
+     * Кросс-номер, лежащий с русской буквой (заведён до 0309), не трогает правка
+     * других полей — ни цены, ни номера производителя.
+     *
+     * <p>Шов 0307 и 0309: форма теперь шлёт одно изменённое поле, а набор номеров
+     * переписывается целиком, когда тронут хоть один. Прочитай нетронутые
+     * кросс-номера из склеенной строки заново — и они уехали бы латиницей,
+     * а история назвала бы правку, которой человек не делал.
+     */
+    @Test
+    @DisplayName("Кросс-номер с русской буквой: правка цены, затем номера производителя — кроссы и их история прежние")
+    void storedCyrillicCrossSurvivesPriceAndOemEdits() throws Exception {
+        MockHttpSession owner = login("vladelec0307");
+        String cross = "АВ123-45";  // русские «А» и «В», как лежало до 0309
+        inTenant(() -> {
+            jdbc.update("DELETE FROM part_oem WHERE part_id = ?", partId);
+            jdbc.update("INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)"
+                    + " VALUES (?, '81170-33670', '8117033670', true)", partId);
+            jdbc.update("INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)"
+                    + " VALUES (?, ?, '12345', false)", partId, cross);
+            return null;
+        });
+
+        JsonNode opened = editable(owner);
+        assertThat(send(owner, edit(opened, "price", 4700)).getResponse().getStatus())
+                .isEqualTo(200);
+        opened = editable(owner);
+        assertThat(send(owner, edit(opened, "oem", "81170-33680")).getResponse().getStatus())
+                .isEqualTo(200);
+
+        assertThat(inTenant(() -> jdbc.queryForList("SELECT raw_number FROM part_oem"
+                + " WHERE part_id = ? AND NOT is_primary", String.class, partId)))
+                .as("нетронутый кросс-номер переписан правкой номера производителя")
+                .containsExactly(cross);
+        assertThat(editable(owner).get("crosses").asText()).isEqualTo(cross);
+
+        JsonNode history = json.readTree(text(mvc.perform(get("/api/parts/" + partId
+                + "/history").session(owner)).andReturn()));
+        List<String> crossEdits = new ArrayList<>();
+        for (JsonNode change : history.path("changes")) {
+            for (JsonNode field : change.path("fields")) {
+                if (field.path("label").asText().equals("Кросс-номера")) {
+                    crossEdits.add(field.toString());
+                }
+            }
+        }
+        // Одна правка — заполнение в fixtures(); подмена в базе выше идёт мимо журнала.
+        assertThat(crossEdits)
+                .as("история назвала правку кросс-номеров, которой не было")
+                .hasSize(1);
+    }
+
     // ------------------------------------------------------------------ значения
 
     /** Заполнение позиции целиком — до проверок. */
