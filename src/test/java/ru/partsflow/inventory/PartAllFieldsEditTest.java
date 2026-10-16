@@ -284,7 +284,70 @@ class PartAllFieldsEditTest extends PostgresTestBase {
                 "Марка", "Lexus", "Наименование", "Фара левая");
     }
 
+    /**
+     * Задача 0309: «АВ-123С» с русскими буквами, набранное в карточке,
+     * хранится латиницей — иначе на Дроме оно не совпадёт ни с чьим поиском.
+     * Русские буквы — escape-последовательностями: в исходнике они неотличимы.
+     */
+    @Test
+    @DisplayName("Номер и кросс-номера карточки: двойники латиницей, неразрывный пробел срезан, табуляция делит")
+    void cardStoresLatinNumbers() throws Exception {
+        MockHttpSession owner = login("vladelec0302");
+        String nbsp = "\u00A0";
+        save(owner, "\"oem\":\"" + nbsp + "\u0410\u0412-123\u0421" + nbsp + "\","
+                + "\"crosses\":\"\u0430\u0430111\\t\u0412\u0412222" + nbsp + ", dd-444\\t4520\u0411\"");
+
+        List<Map<String, Object>> rows = inTenant(() -> jdbc.queryForList(
+                "SELECT raw_number, normalized, is_primary FROM part_oem"
+                        + " WHERE part_id = ? ORDER BY id", partId));
+        assertThat(rows).extracting(r -> r.get("raw_number"), r -> r.get("normalized"))
+                .as("в raw_number обязана лечь латиница, табуляция — разделить номера")
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("AB-123C", "AB123C"),
+                        org.assertj.core.groups.Tuple.tuple("aa111", "AA111"),
+                        org.assertj.core.groups.Tuple.tuple("BB222", "BB222"),
+                        org.assertj.core.groups.Tuple.tuple("dd-444", "DD444"),
+                        // «Б» двойника не имеет: слово не трогается, а не портится.
+                        org.assertj.core.groups.Tuple.tuple("4520\u0411", "4520"));
+
+        JsonNode form = editable(owner);
+        assertThat(form.path("oem").asText()).isEqualTo("AB-123C");
+        assertThat(form.path("crosses").asText()).isEqualTo("aa111, BB222, dd-444, 4520\u0411");
+    }
+
+    @Test
+    @DisplayName("Повторное сохранение того же номера ничего не меняет и не пишет правку в историю")
+    void sameNumberAgainIsNoEdit() throws Exception {
+        MockHttpSession owner = login("vladelec0302");
+        save(owner, "\"oem\":\"\u0410\u0412-123\u0421\",\"crosses\":\"dd-444\"");
+        // Кросс-номер с русскими буквами, лежащий с прежних времён: задача
+        // уже сохранённое не пересчитывает (п. 6), и правка одного номера
+        // производителя не должна молча переписывать кросс-номера.
+        inTenant(() -> jdbc.update("INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)"
+                + " VALUES (?, '\u0412\u04121', 'BB1', false)", partId));
+        int before = historyRows();
+
+        save(owner, "\"oem\":\"AB-123C\"");
+        save(owner, "\"oem\":\"\u0410\u0412-123\u0421\"");
+
+        assertThat(historyRows())
+                .as("номер не менялся, а история записала правку")
+                .isEqualTo(before);
+        assertThat(inTenant(() -> jdbc.queryForList("SELECT raw_number FROM part_oem"
+                + " WHERE part_id = ? AND NOT is_primary ORDER BY id", String.class, partId)))
+                .as("нетронутые кросс-номера переписаны")
+                .containsExactly("dd-444", "\u0412\u04121");
+    }
+
     // ------------------------------------------------------------------ помощники
+
+    /** Правки номера производителя и кросс-номеров в истории позиции. */
+    private int historyRows() {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM audit_log WHERE table_name = 'part' AND record_id = ?"
+                        + " AND (jsonb_exists(new_value, 'oem') OR jsonb_exists(new_value, 'crosses'))",
+                Integer.class, partId));
+    }
 
     private void save(MockHttpSession session, String fields) throws Exception {
         mvc.perform(put("/api/parts/" + partId).with(csrf()).session(session)
