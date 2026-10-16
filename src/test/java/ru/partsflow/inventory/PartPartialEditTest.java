@@ -58,7 +58,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 @AutoConfigureMockMvc
 class PartPartialEditTest extends PostgresTestBase {
 
-    private static final String TENANT = "t_000997";
+    private static final String TENANT = "t_000987";
 
     /** Не поле карточки, а указание, что сделать с ценой. */
     private static final Set<String> NOT_A_FIELD = Set.of("priceOp");
@@ -113,10 +113,10 @@ class PartPartialEditTest extends PostgresTestBase {
 
     @BeforeEach
     void fixtures() throws Exception {
-        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 997");
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 987");
         jdbc.update("""
                 INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
-                VALUES (997, ?, 'Разборка', 'partial0307')""", TENANT);
+                VALUES (987, ?, 'Разборка', 'partial0307')""", TENANT);
         suffix = String.valueOf(SEQ.incrementAndGet());
 
         inTenant(() -> {
