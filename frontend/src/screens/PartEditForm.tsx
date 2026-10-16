@@ -5,7 +5,7 @@ import {
   priceOperationHint, PRICE_OPERATIONS,
   type CatalogRow, type PartEdit, type PriceOperation,
 } from '../inventory/catalog';
-import { generationOf } from '../inventory/partCard';
+import { generationOf, shownTitle } from '../inventory/partCard';
 import { count, plural } from '../ui/plural';
 import { useMounted } from '../ui/useMounted';
 import { ApplicabilityView } from './ApplicabilityView';
@@ -704,7 +704,10 @@ export function draftOf(card: PartEdit): Draft {
     adDate: card.adDate ?? '',
     number: card.number === null || card.number === undefined ? '' : String(card.number),
     code: card.code ?? '',
-    title: card.title ?? '',
+    // Без пометки состояния, как в шапке и в просмотре (задача 0311). Увиденным
+    // уезжает ответ сервера как есть (`card`), поэтому раскрытая и нетронутая
+    // строка не шлёт ничего, а правленая — то, что набрал человек.
+    title: shownTitle(card.title ?? null) ?? '',
     sideLr: card.sideLr ?? '',
     sideFr: card.sideFr ?? '',
     authenticity: card.authenticity ?? '',

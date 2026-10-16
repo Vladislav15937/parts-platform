@@ -1,4 +1,4 @@
-import { CONDITION, qualityTitle, type Applicability, type CatalogRow } from './catalog';
+import { CONDITION, CONDITION_MARK, qualityTitle, type Applicability, type CatalogRow } from './catalog';
 
 const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.', BOTH: 'лев., прав.' };
 const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.', BOTH: 'перед., задн.' };
@@ -25,10 +25,15 @@ export function cardFields(row: CatalogRow): Array<[string, string]> {
   // («посмотри позицию 347»). Номер товара рядом — он про этикетку и сканер.
   add('№ позиции', row.number);
   add('Номер товара', row.code);
+  // Та же строка, что в шапке карточки и в поле «Наименование» формы правки
+  // (задача 0311): здесь стояло написание вида детали, и одним словом
+  // назывались две разные строки — «фара левая» в просмотре и «фара левая
+  // (б/у)» в правке.
+  add('Наименование', shownTitle(row.title));
   // Написание вида детали — не то же, что заголовок: «фара лев.» против
-  // «Фара Toyota Corolla Fielder 2002 перед. лев. (б/у)». По написанию
-  // разбирают нераспознанные, и в кабинете это отдельное поле.
-  add('Наименование', row.partName);
+  // «Фара Toyota Corolla Fielder 2002 перед. лев.». По написанию разбирают
+  // нераспознанные, и в кабинете это отдельное поле.
+  add('Наименование в справочнике', row.partName);
   add('Состояние', row.condition === null ? null : CONDITION[row.condition] ?? row.condition);
   add('Поставка', row.supply);
   // Словом, а не кодом: в карточке стояло «NO_DEFECTS» рядом с переведённым
@@ -84,6 +89,29 @@ export function cardFields(row: CatalogRow): Array<[string, string]> {
   add('Кто изменил цену', row.priceChangedByName);
 
   return rows;
+}
+
+const MARKS = new RegExp(
+  `\\s*(?:${Object.values(CONDITION_MARK).map((m) => m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`,
+  'g');
+
+/**
+ * Наименование позиции, каким его показывает карточка: без пометки
+ * состояния (задача 0311, решение владельца 16.10.2026).
+ *
+ * <p>Пометку дописывает сервер при сборке наименования, а состояние стоит
+ * в карточке своим полем — показанная, она повторяла бы его, а после смены
+ * состояния (с 0304 наименование само не меняется) ему противоречила бы.
+ * Одна функция на шапку карточки, строку «Наименование» и форму правки:
+ * три копии и дали ту разницу, ради которой задача заведена.
+ *
+ * <p>Только показ: хранимое наименование, витрина, этикетка и прайс
+ * не меняются. Вычищается то же, что вычищает прайс Дрома
+ * (`DromPriceWriter.plainName`), — пометка отдельным словом.
+ */
+export function shownTitle(title: string | null): string | null {
+  if (title === null) return null;
+  return title.replace(MARKS, '').replace(/\s{2,}/g, ' ').trim();
 }
 
 /**

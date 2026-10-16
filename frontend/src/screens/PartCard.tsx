@@ -17,7 +17,7 @@ import {
   type PartPhoto,
   type Warehouse,
 } from '../inventory/catalog';
-import { cardFields, fitLabel } from '../inventory/partCard';
+import { cardFields, fitLabel, shownTitle } from '../inventory/partCard';
 import { deletePhoto, makeMainPhoto, photoArchiveUrl, uploadPhoto } from '../inventory/photos';
 import { PartCellBlock } from './PartCellBlock';
 import { PartQualityBlock } from './PartQualityBlock';
@@ -347,7 +347,7 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
     <div className="modal-backdrop" onClick={close}>
       <div className="card-view" onClick={(event) => event.stopPropagation()}>
         <header className="card-view__head">
-          <h2>{row.title}</h2>
+          <h2>{shownTitle(row.title)}</h2>
           <button type="button" className="button--ghost" onClick={close}>
             Закрыть
           </button>

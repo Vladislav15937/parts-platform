@@ -61,6 +61,26 @@ class WordingConsistencyTest {
     }
 
     /**
+     * Пометку состояния в наименовании экран знает той же, что дописывает сервер.
+     *
+     * <p><b>Зачем.</b> Карточка показывает наименование без пометки
+     * (задача 0311): шапка, строка «Наименование» и форма правки обязаны
+     * показывать одну строку. Пометка, которой экран не знает, осталась бы
+     * в наименовании — и при новом состоянии разница вернулась бы молча.
+     */
+    @Test
+    @DisplayName("Пометка состояния в наименовании записана на экране так же, как на сервере")
+    void conditionMarksMatch() throws IOException {
+        String client = read(CLIENT.resolve("catalog.ts"));
+
+        for (PartCondition condition : PartCondition.values()) {
+            assertThat(client)
+                    .as("экран не знает пометки «%s» (%s)", condition.titleMark(), condition.name())
+                    .contains(condition.name() + ": '" + condition.titleMark() + "'");
+        }
+    }
+
+    /**
      * Вкладка колёс берёт словарь состояний, а не пишет свой.
      *
      * <p>Копия там и была, и жила ровно до первого нового значения: слово

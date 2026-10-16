@@ -85,7 +85,7 @@ describe('печать этикетки из карточки позиции', (
   it('продавцу этикетки не показываются', async () => {
     render(<PartCard {...props(row())} role="SELLER" />);
 
-    await waitFor(() => expect(screen.getByText('Фара левая Toyota Camry')).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Фара левая Toyota Camry' })).toBeTruthy());
     expect(screen.queryByRole('button', { name: 'Печать штрих-кода' }),
       'кнопка показана роли, которой печать закрыта').toBeNull();
   });

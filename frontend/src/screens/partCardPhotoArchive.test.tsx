@@ -60,7 +60,7 @@ describe('скачивание всех снимков из карточки п�
   it('видно «Просмотру»: это те же снимки, что он и так смотрит', async () => {
     render(<PartCard {...props()} role="VIEWER" />);
 
-    await waitFor(() => expect(screen.getByText('Фара левая Toyota Camry')).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Фара левая Toyota Camry' })).toBeTruthy());
     expect(screen.queryByRole('link', { name: 'Скачать все фото' }),
       'роли, которой снимки показаны, скачать их нечем').toBeTruthy();
   });
