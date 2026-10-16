@@ -95,12 +95,53 @@ class ExcelImportRestTest extends PostgresTestBase {
                 .isEqualTo(2);
     }
 
+    /**
+     * Перенос из таблицы пишет номер тем же правилом, что карточка (задача 0309):
+     * номер детали и номера замен — русские двойники латиницей, неразрывный
+     * пробел по краям срезан, табуляция делит замены.
+     */
+    @Test
+    @DisplayName("Номер детали и замены из таблицы: двойники латиницей, неразрывный пробел срезан, табуляция делит")
+    void tableNumbersAreStoredLatin() throws Exception {
+        String code = "oem" + UUID.randomUUID().toString().substring(0, 8);
+        TenantProvisioning.Result tenant = provisioning.provision(new TenantProvisioning.Request(
+                code, "Разборка", "vladelec", "пароль-8симв", null));
+        MockHttpSession session = login(code);
+        long warehouseId = jdbc.queryForObject(
+                "SELECT id FROM %s.warehouse ORDER BY id LIMIT 1".formatted(tenant.schemaName()),
+                Long.class);
+        // «АВ-123С» с русскими А, В, С; замены — через табуляцию, одна с русскими «ВВ».
+        MockMultipartFile file = new MockMultipartFile("file", "sklad.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", workbook(List.of(
+                        List.of("Название", "Кол-во", "Артикул", "Замены"),
+                        List.of("Фара левая", "1", "\u00A0\u0410\u0412-123\u0421\u00A0",
+                                "aa111\t\u0412\u0412222\u00A0, dd-444"))));
+
+        mvc.perform(multipart("/api/import/excel").file(file).with(csrf()).session(session)
+                        .param("warehouseId", String.valueOf(warehouseId))
+                        .param("requestId", UUID.randomUUID().toString())
+                        .param("NAME", "0").param("QUANTITY", "1")
+                        .param("OEM", "2").param("OEM_SUBSTITUTES", "3"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.imported").value(1));
+
+        List<String> raw = jdbc.queryForList(
+                "SELECT raw_number FROM %s.part_oem ORDER BY is_primary DESC, id"
+                        .formatted(tenant.schemaName()), String.class);
+        org.assertj.core.api.Assertions.assertThat(raw)
+                .as("в raw_number легли русские буквы, неразрывный пробел или табуляция")
+                .containsExactly("AB-123C", "aa111", "BB222", "dd-444");
+    }
+
     /** Настоящий xlsx: это zip с XML, сторонние библиотеки в тесте не нужны. */
     private static byte[] workbook() throws Exception {
-        List<List<String>> rows = List.of(
+        return workbook(List.of(
                 List.of("№", "Название", "Кол-во", "Цена, руб"),
                 List.of("1", "Фара левая", "2", "9 500"),
-                List.of("2", "Бампер", "1", "14 000"));
+                List.of("2", "Бампер", "1", "14 000")));
+    }
+
+    private static byte[] workbook(List<List<String>> rows) throws Exception {
 
         StringBuilder sheet = new StringBuilder("""
                 <?xml version="1.0" encoding="UTF-8"?>\

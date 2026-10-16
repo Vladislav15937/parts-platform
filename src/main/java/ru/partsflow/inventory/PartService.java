@@ -1265,7 +1265,7 @@ public class PartService {
      * ожидаемой один раз. Параметры у обоих построений одни и те же, в том же
      * порядке.
      */
-    static String textMatch(boolean expectedOnly, boolean byNumber) {
+    static String textMatch(boolean expectedOnly, boolean byNumber, boolean byOem) {
         // Разделитель — явной строкой, а не отступом текстового блока: пробел
         // в конце строки блок срезает, и «?» склеивался бы со следующим словом.
         String only = expectedOnly ? " AND " + EXPECTED_PREDICATE : "";
@@ -1273,6 +1273,15 @@ public class PartService {
                 ? "SELECT o.part_id FROM part_oem o JOIN part e ON e.id = o.part_id"
                         + " WHERE o.raw_number ILIKE ? AND e.expected_origin AND e.status = 'DRAFT'"
                 : "SELECT part_id FROM part_oem WHERE raw_number ILIKE ?";
+        // Номер производителя в любом написании (задача 0306) — условие общее
+        // с витриной (CatalogService.OEM_NORMALIZED), у ожидаемых сужено тем же
+        // соединением с part, что ветка набранного номера.
+        String oemNormalized = !byOem ? ""
+                : expectedOnly
+                ? "\n          UNION SELECT o.part_id FROM part_oem o JOIN part e ON e.id = o.part_id"
+                        + " WHERE o." + CatalogService.OEM_NORMALIZED
+                        + " AND e.expected_origin AND e.status = 'DRAFT'"
+                : CatalogService.OEM_NORMALIZED_BRANCH;
         return "p.id IN (\n"
                 + "         SELECT id FROM part WHERE "
                 + PartNumberQuery.publicCodeMatch("public_code", byNumber) + only + "\n"
@@ -1283,6 +1292,7 @@ public class PartService {
                 + "                           || coalesce(marking, ''))\n"
                 + "                       @@ plainto_tsquery('russian', ?)" + only + "\n"
                 + "          UNION " + oem
+                + oemNormalized
                 + (byNumber ? PartNumberQuery.UNION_BRANCH + only
                         + PartNumberQuery.DROM_AD_BRANCH + only : "") + ")";
     }
@@ -1347,16 +1357,22 @@ public class PartService {
         // не разбираются вовсе (у шины нужен «/», у диаметра — «R»), поэтому
         // ветка номера живёт только тут, в текстовом условии.
         Long number = PartNumberQuery.parse(text);
+        // Номер производителя приводится от набранного, а не от переведённого
+        // словарём машин: так же, как на витрине (задача 0306).
+        String oemKey = ru.partsflow.catalog.OemNumbers.searchKey(query);
         // Публичный код при запросе-номере сравнивается точно (задача 0263).
-        List<Object> args = new ArrayList<>(List.of(
-                PartNumberQuery.publicCodeArg(text, number != null), like, text, like));
+        String codeArg = PartNumberQuery.publicCodeArg(text, number != null);
+        List<Object> args = new ArrayList<>(List.of(codeArg, like, text, like));
+        if (oemKey != null) {
+            args.add(CatalogService.oemNormalizedArg(oemKey));
+        }
         if (number != null) {
             args.add(number);
             // Номер объявления Дрома (задача 0274): те же цифры, но текстом.
-            args.add(args.get(0));
+            args.add(codeArg);
         }
-        return new Match(textMatch(false, number != null), textMatch(true, number != null),
-                args, text, number);
+        return new Match(textMatch(false, number != null, oemKey != null),
+                textMatch(true, number != null, oemKey != null), args, text, number);
     }
 
     private static void appendSize(StringBuilder where, List<Object> args,

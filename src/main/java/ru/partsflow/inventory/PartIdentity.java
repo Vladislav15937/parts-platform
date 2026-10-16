@@ -345,8 +345,12 @@ public class PartIdentity {
             return false;
         }
         String primary = edit.oem() == null ? was.oem() : cleanOem(edit.oem());
+        // Нетронутое поле переписывается тем, что лежит, а не прочитанным
+        // заново из склеенной строки: иначе правка одного номера производителя
+        // привела бы к латинице и кросс-номера, которых человек не менял,
+        // и история назвала бы правку, которой не было (задача 0309, п. 4).
         List<String> crosses = edit.crosses() == null
-                ? splitCrosses(was.crosses()) : splitCrosses(edit.crosses());
+                ? storedCrosses(partId) : OemNumbers.list(edit.crosses());
 
         Set<String> seen = new LinkedHashSet<>();
         String primaryNormalized = primary == null ? null : OemNumbers.normalize(primary);
@@ -396,26 +400,17 @@ public class PartIdentity {
      * человек и написал.
      */
     private static String cleanOem(String raw) {
-        String stripped = raw.strip();
-        return stripped.isEmpty() || OemNumbers.normalize(stripped) == null ? null : stripped;
+        // Каким номер хранить — OemNumbers.clean (задача 0309): края без любых
+        // пробелов, русские двойники латиницей. Одно место на карточку,
+        // приёмку и перенос из таблицы.
+        String cleaned = OemNumbers.clean(raw);
+        return cleaned.isEmpty() || OemNumbers.normalize(cleaned) == null ? null : cleaned;
     }
 
-    /**
-     * Кросс-номера через запятую, точку с запятой или с новой строки.
-     * Пробел разделителем не считается: «81170 33670» — один номер.
-     */
-    static List<String> splitCrosses(String text) {
-        List<String> numbers = new ArrayList<>();
-        if (text == null) {
-            return numbers;
-        }
-        for (String piece : text.split("[,;\\n\\r]+")) {
-            String stripped = piece.strip();
-            if (!stripped.isEmpty()) {
-                numbers.add(stripped);
-            }
-        }
-        return numbers;
+    /** Кросс-номера позиции как лежат, в порядке заведения. */
+    private List<String> storedCrosses(Long partId) {
+        return jdbc.queryForList("SELECT raw_number FROM part_oem"
+                + " WHERE part_id = ? AND NOT is_primary ORDER BY id", String.class, partId);
     }
 
     /** «№ 125696381» и «125696381» — одно; пусто — номера нет. */
