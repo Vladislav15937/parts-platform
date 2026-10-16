@@ -107,4 +107,20 @@ class OemNumbersTest {
             assertThat(OemNumbers.clean(once)).isEqualTo(once);
         }
     }
+
+    @Test
+    @DisplayName("Ключ поиска (0306): тем же приведением, что запись; не номер — ключа нет")
+    void searchKey() {
+        assertThat(OemNumbers.searchKey("AB 123 456 X")).isEqualTo("AB123456X");
+        assertThat(OemNumbers.searchKey(RUSSIAN_AB_123C)).isEqualTo(OemNumbers.normalize("AB-123C"));
+        assertThat(OemNumbers.searchKey("81170\u201333670")).isEqualTo("8117033670");
+        // Русское слово в запросе — это не номер: «фара 1» привела бы к «1».
+        assertThat(OemNumbers.searchKey("\u0444\u0430\u0440\u0430 1")).isNull();
+        assertThat(OemNumbers.searchKey(NO_NUMBER)).isNull();
+        // Короче трёх знаков — подстрокой набранного, как раньше.
+        assertThat(OemNumbers.searchKey("12")).isNull();
+        assertThat(OemNumbers.searchKey("123")).isEqualTo("123");
+        assertThat(OemNumbers.searchKey("--")).isNull();
+        assertThat(OemNumbers.searchKey(null)).isNull();
+    }
 }

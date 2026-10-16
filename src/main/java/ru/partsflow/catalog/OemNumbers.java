@@ -127,6 +127,36 @@ public final class OemNumbers {
         return numbers;
     }
 
+    /**
+     * Приведённый запрос для поиска по {@code part_oem.normalized} (задача 0306) —
+     * тем же {@link #normalize}, что и запись: набравший «AB 123 456 X», «ab123456x»
+     * или русскими «АВ123456Х» находит записанное «ab-123 456x».
+     *
+     * <p>{@code null} — запрос не похож на номер, и ветки по приведённому виду
+     * быть не должно. Два случая. В запросе осталась русская буква, не ставшая
+     * латиницей: «фара 1» привела бы к «1» и отдала бы пол-склада. Или после
+     * приведения короче {@link #SEARCH_MIN_LENGTH} знаков: триграммный индекс
+     * {@code part_oem_trgm} на двух знаках не работает, а одна-две цифры и так
+     * находятся подстрокой набранного.
+     */
+    public static String searchKey(String query) {
+        if (query == null) {
+            return null;
+        }
+        String latin = latinizeDoubles(MixedAlphabet.latinize(query));
+        for (int i = 0; i < latin.length(); i++) {
+            char c = latin.charAt(i);
+            if (Character.isLetter(c) && !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) {
+                return null;
+            }
+        }
+        String normalized = normalize(query);
+        return normalized == null || normalized.length() < SEARCH_MIN_LENGTH ? null : normalized;
+    }
+
+    /** Короче поиск по приведённому виду не идёт ({@link #searchKey}). */
+    private static final int SEARCH_MIN_LENGTH = 3;
+
     /** Края без любых пробелов — обычных, неразрывных, узких и нулевой ширины. */
     private static String stripSpaces(String text) {
         int start = 0;
