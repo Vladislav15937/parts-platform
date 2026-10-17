@@ -429,9 +429,11 @@ class ConditionBesideTitleTest extends PostgresTestBase {
         mvc.perform(post("/api/deals").with(csrf()).session(login("prodavec"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"customerId":%d,"reservedUntil":"2099-01-01T00:00:00Z",
+                                {"customerId":%d,"reservedUntil":"%s",
                                  "items":[{"partId":%d,"quantity":2,"warehouseId":%d}]}"""
-                                .formatted(customer, partId, warehouse)))
+                                .formatted(customer,
+                                        java.time.Instant.now().plus(java.time.Duration.ofDays(30)),
+                                        partId, warehouse)))
                 .andExpect(status().is4xxClientError())
                 .andExpect(jsonPath("$.message").value(containsString(
                         "Ожидаемую деталь «Фара в пути · новая» уже отложили")));
