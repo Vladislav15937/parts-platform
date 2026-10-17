@@ -541,6 +541,41 @@ class ExcelImportTest extends PostgresTestBase {
                 .hasMessageContaining("NAME");
     }
 
+    /**
+     * Таблица пишет наименование как в файле — пометка состояния в него
+     * не дописывается ни при каком состоянии (задача 0315). Генератор
+     * заголовка импорт из таблицы не зовёт и до задачи; проверка стоит,
+     * чтобы так и осталось: состояние идёт в своё поле, а не в название.
+     */
+    @Test
+    @DisplayName("Наименование из таблицы — как в файле, без пометки состояния")
+    void titleIsAsInFileWithoutConditionMark() throws Exception {
+        byte[] book = workbook(
+                List.of("Наименование", "Кол-во", "Состояние"),
+                List.of(List.of("Фара 0315 первая", "1", "Б/у"),
+                        List.of("Фара 0315 вторая", "1", "Новый"),
+                        List.of("Фара 0315 третья", "1", "Контракт"),
+                        List.of("Фара 0315 четвёртая", "1", "Восстановленный")));
+
+        ExcelWarehouseImporter.Report report = inTenant(() -> load(book,
+                Map.of(Field.NAME, 0, Field.QUANTITY, 1, Field.CONDITION, 2)));
+
+        assertThat(report.imported()).as("пропущено: %s", report.skipped()).isEqualTo(4);
+        Map<String, String> conditionByTitle = new java.util.HashMap<>();
+        inTenant(() -> {
+            jdbc.query("SELECT title, condition FROM part WHERE title LIKE 'Фара 0315 %'",
+                    rs -> {
+                        conditionByTitle.put(rs.getString(1), rs.getString(2));
+                    });
+            return null;
+        });
+        assertThat(conditionByTitle).containsOnly(
+                Map.entry("Фара 0315 первая", "USED"),
+                Map.entry("Фара 0315 вторая", "NEW"),
+                Map.entry("Фара 0315 третья", "CONTRACT"),
+                Map.entry("Фара 0315 четвёртая", "REFURBISHED"));
+    }
+
     private BigDecimal stockOf(String title) {
         return inTenant(() -> jdbc.queryForObject("""
                 SELECT COALESCE(sum(s.qty), 0) FROM part_stock s

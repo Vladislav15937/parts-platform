@@ -7,12 +7,14 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.support.PostgresTestBase;
 
 import javax.sql.DataSource;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -495,12 +497,14 @@ class BazonImporterTest extends PostgresTestBase {
     void conditionColumnIsImported() throws Exception {
         Path catalog = write("catalog-condition.csv", CATALOG_HEADER.strip()
                 + ";\"Состояние\"\n" + """
-                "A-700";"Фара левая";"";"";"";"";"";"";"";"";"";"";"";"";"";"9500";"";\
-                "1";"0";"0";"0";"0";"0";"да";"0";"Контракт"
+                "A-700";"Фара левая";"";"Toyota";"Camry";"";"";"";"";"";"";"";"";"";"";"9500";\
+                "8414012530";"1";"0";"0";"0";"0";"0";"да";"0";"Контракт"
                 "A-701";"Бампер передний";"";"";"";"";"";"";"";"";"";"";"";"";"";"7000";"";\
                 "1";"0";"0";"0";"0";"0";"да";"0";"БУ"
                 "A-702";"Стартер";"";"";"";"";"";"";"";"";"";"";"";"";"";"3500";"";\
                 "1";"0";"0";"0";"0";"0";"да";"0";""
+                "A-703";"Генератор";"";"";"";"";"";"";"";"";"";"";"";"";"";"4500";"27060-28110";\
+                "1";"0";"0";"0";"0";"0";"да";"0";"Новый"
                 """);
 
         new BazonImporter(dataSource, CONDITION_COL).importAll(donorsFixture(), catalog);
@@ -510,18 +514,55 @@ class BazonImporterTest extends PostgresTestBase {
                         + " 9 417 позиций из 35 841")
                 .isEqualTo("CONTRACT");
         assertThat(textOf(CONDITION_COL, "A-701", "condition")).isEqualTo("USED");
+        assertThat(textOf(CONDITION_COL, "A-703", "condition")).isEqualTo("NEW");
 
         // Пустое значение — «в файле не сказано», а не выдуманное состояние:
         // остаётся прежнее умолчание.
         assertThat(textOf(CONDITION_COL, "A-702", "condition")).isEqualTo("USED");
 
-        // Пометка в заголовке идёт за состоянием тем же генератором, что
-        // и при приёмке: иначе карточка говорила бы «(б/у)» при состоянии
-        // «контрактная».
+        // Пометки состояния в заголовке нет ни у одного (задача 0315): она была
+        // второй копией поля condition, и копия врала. Номер производителя
+        // по-прежнему последним словом.
         assertThat(textOf(CONDITION_COL, "A-700", "title"))
-                .as("заголовок разошёлся с состоянием")
-                .contains("(контракт)");
-        assertThat(textOf(CONDITION_COL, "A-701", "title")).contains("(б/у)");
+                .isEqualTo("Фара левая Toyota Camry 8414012530");
+        assertThat(textOf(CONDITION_COL, "A-701", "title")).isEqualTo("Бампер передний");
+        assertThat(textOf(CONDITION_COL, "A-702", "title")).isEqualTo("Стартер");
+        assertThat(textOf(CONDITION_COL, "A-703", "title")).isEqualTo("Генератор 27060-28110");
+        for (String code : List.of("A-700", "A-701", "A-702", "A-703")) {
+            for (String mark : PartCondition.titleMarks()) {
+                assertThat(textOf(CONDITION_COL, code, "title"))
+                        .as("в заголовок %s дописана пометка «%s»", code, mark)
+                        .doesNotContain(mark);
+            }
+        }
+    }
+
+    /**
+     * Повтор переноса заголовок существующей позиции не трогает — ни новый
+     * (без пометки), ни прежний, собранный до задачи 0315 с «(б/у)»: снимает
+     * пометки с хранимого задача 0316, разово и с замером, а не каждый повтор
+     * выгрузки молча.
+     */
+    @Test
+    @DisplayName("Повтор переноса не меняет заголовок перенесённой позиции")
+    void repeatKeepsTitles() throws Exception {
+        Path catalog = write("catalog-condition-repeat.csv", CATALOG_HEADER.strip()
+                + ";\"Состояние\"\n" + """
+                "A-710";"Фара правая";"";"";"";"";"";"";"";"";"";"";"";"";"";"9500";\
+                "8414012531";"1";"0";"0";"0";"0";"0";"да";"0";"БУ"
+                "A-711";"Бампер задний";"";"";"";"";"";"";"";"";"";"";"";"";"";"7000";"";\
+                "1";"0";"0";"0";"0";"0";"да";"0";"Контракт"
+                """);
+        new BazonImporter(dataSource, CONDITION_COL).importAll(donorsFixture(), catalog);
+        jdbc.update("UPDATE " + CONDITION_COL + ".part SET title = 'Бампер задний (контракт)'"
+                + " WHERE legacy_code = 'A-711'");
+
+        new BazonImporter(dataSource, CONDITION_COL).importAll(donorsFixture(), catalog);
+
+        assertThat(textOf(CONDITION_COL, "A-710", "title")).isEqualTo("Фара правая 8414012531");
+        assertThat(textOf(CONDITION_COL, "A-711", "title"))
+                .as("повтор переписал заголовок, собранный до задачи 0315")
+                .isEqualTo("Бампер задний (контракт)");
     }
 
     private ImportReport importFixture(String schema) throws Exception {
