@@ -374,6 +374,69 @@ class ConditionBesideTitleTest extends PostgresTestBase {
                         "«Фара чужой поставки · контрактная» ожидается по другой поставке")));
     }
 
+    /**
+     * Отказы возврата: продавец читает их, стоя перед покупателем, и в сделке
+     * с «Фарой…» новой и б/у должен понять, о какой речь.
+     */
+    @Test
+    @DisplayName("Отказы возврата называют состояние позиции")
+    void returnRefusalsNameTheCondition() throws Exception {
+        Long warehouse = warehouse("Склад возврата");
+        Long partId = inTenant(() -> {
+            Long id = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, cost_price, condition)
+                    VALUES (1, 'Фара для возврата', 5000, 2000, 'CONTRACT') RETURNING id""",
+                    Long.class);
+            ledger.record(StockMovement.intake(id, BigDecimal.ONE, warehouse, null));
+            return id;
+        });
+        long dealId = createDeal(Map.of(PartCondition.CONTRACT, partId), warehouse, false);
+        Long itemId = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM deal_item WHERE deal_id = ?", Long.class, dealId));
+        MockHttpSession seller = login("prodavec");
+        String refund = """
+                {"warehouseId":%d,"items":[{"dealItemId":%d,"quantity":%d,"restocked":true}]}""";
+
+        mvc.perform(post("/api/deals/%d/returns".formatted(dealId)).with(csrf()).session(seller)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(refund.formatted(warehouse, itemId, 1)))
+                .andExpect(status().is4xxClientError())
+                .andExpect(jsonPath("$.message").value(containsString(
+                        "«Фара для возврата · контрактная»")));
+
+        mvc.perform(post("/api/deals/%d/issue".formatted(dealId)).with(csrf()).session(seller))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals/%d/returns".formatted(dealId)).with(csrf()).session(seller)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(refund.formatted(warehouse, itemId, 2)))
+                .andExpect(status().is4xxClientError())
+                .andExpect(jsonPath("$.message").value(containsString(
+                        "Возвращают больше, чем выдали: «Фара для возврата · контрактная»")));
+    }
+
+    /** Отказ предзаказа: ожидаемую деталь уже отложили под других покупателей. */
+    @Test
+    @DisplayName("Отказ предзаказа называет состояние ожидаемой детали")
+    void preorderRefusalNamesTheCondition() throws Exception {
+        Long warehouse = warehouse("Склад предзаказа");
+        Long supply = supply("З-318", "EXPECTED");
+        Long partId = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price, condition, quantity, status,
+                                  supply_id, expected_origin)
+                VALUES (1, 'Фара в пути', 5000, 'NEW', 1, 'DRAFT', ?, true) RETURNING id""",
+                Long.class, supply));
+
+        mvc.perform(post("/api/deals").with(csrf()).session(login("prodavec"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customerId":%d,"reservedUntil":"2099-01-01T00:00:00Z",
+                                 "items":[{"partId":%d,"quantity":2,"warehouseId":%d}]}"""
+                                .formatted(customer, partId, warehouse)))
+                .andExpect(status().is4xxClientError())
+                .andExpect(jsonPath("$.message").value(containsString(
+                        "Ожидаемую деталь «Фара в пути · новая» уже отложили")));
+    }
+
     // ---------- фикстура ----------
 
     /** Четыре позиции, по одной на каждое состояние, без пометки в наименовании. */
