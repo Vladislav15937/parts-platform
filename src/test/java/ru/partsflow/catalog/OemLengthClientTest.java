@@ -38,6 +38,20 @@ class OemLengthClientTest {
                 .isEqualTo(serverClass);
     }
 
+    /**
+     * Предел хранилища на экране и на сервере — одно число (задача 0312): экран
+     * гасит «Сохранить» по своей копии, и разойдись она с сервером, он либо
+     * пропускал бы то, что сервер отобьёт, либо запрещал бы то, что сервер примет.
+     */
+    @Test
+    @DisplayName("Предел номера на экране — тот же, что OemNumbers.MAX_NORMALIZED_LENGTH")
+    void storeLimitMatches() throws IOException {
+        String client = Files.readString(Path.of("frontend/src/inventory/oemLength.ts"));
+        assertThat(Integer.parseInt(group(client, "OEM_STORE_LIMIT = (\\d+);")))
+                .as("предел экрана разошёлся с OemNumbers.MAX_NORMALIZED_LENGTH")
+                .isEqualTo(OemNumbers.MAX_NORMALIZED_LENGTH);
+    }
+
     private static String group(String source, String regex) {
         Matcher m = Pattern.compile(regex).matcher(source);
         assertThat(m.find()).as("не найдено объявление «%s»", regex).isTrue();

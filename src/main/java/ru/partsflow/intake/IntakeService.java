@@ -172,6 +172,19 @@ public class IntakeService {
         }
         Donor donor = donorId == null ? null : requireDonor(donorId);
 
+        // Номер, который нельзя сохранить, — отказ словами (400) до любой
+        // записи, а не отбой индекса пятисоткой (задача 0312): пятисотку
+        // офлайн-очередь повторяет вечно, отказ по существу уводит запись
+        // в «требует внимания». Позиция названа написанием приёмщика: в партии
+        // их десятки, и искать надо ту, на которой споткнулись.
+        for (ItemRequest item : items) {
+            String tooLong = ru.partsflow.catalog.OemNumbers.tooLong(item.oemNumber(), false);
+            if (tooLong != null) {
+                throw new IllegalArgumentException(item.rawName() == null || item.rawName().isBlank()
+                        ? tooLong : "«" + item.rawName().strip() + "»: " + tooLong);
+            }
+        }
+
         // Заведённые заранее (ожидаемые по поставке) принимаются той же
         // позицией, а не новой: вторая карточка той же детали ломает
         // окупаемость машины и историю, а объявление уводит покупателя на
@@ -500,6 +513,7 @@ public class IntakeService {
         if (normalized == null) {
             return;
         }
+
         jdbc.update("""
                 INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
                 VALUES (?, ?, ?, true)

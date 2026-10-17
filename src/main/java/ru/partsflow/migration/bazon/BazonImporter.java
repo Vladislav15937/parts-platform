@@ -806,7 +806,7 @@ public final class BazonImporter {
                             boolean filled = false;
                             if (existing != null) {
                                 filled = fillPart(fillPart, values, row.get("Номер товара")) > 0;
-                                insertNumbers(insertOem, row, existing);
+                                insertNumbers(insertOem, row, existing, report);
                                 filled |= queuePhotos(insertPhoto, row, existing, report) > 0;
                             }
                             c.releaseSavepoint(savepoint);
@@ -816,7 +816,7 @@ public final class BazonImporter {
                         }
 
                         insertStock(insertMovement, setReserved, row, partId, warehouseColumns, warehouses);
-                        insertNumbers(insertOem, row, partId);
+                        insertNumbers(insertOem, row, partId, report);
                         queuePhotos(insertPhoto, row, partId, report);
                         c.releaseSavepoint(savepoint);
 
@@ -1112,12 +1112,12 @@ public final class BazonImporter {
         }
     }
 
-    private void insertNumbers(PreparedStatement ps, BazonCsvReader.Row row, long partId)
-            throws SQLException {
+    private void insertNumbers(PreparedStatement ps, BazonCsvReader.Row row, long partId,
+                               ImportReport report) throws SQLException {
 
-        writeNumber(ps, partId, row.get("Номер производителя"), true);
+        writeNumber(ps, partId, row.get("Номер производителя"), true, row.lineNumber(), report);
         for (String cross : BazonValueParser.parseList(row.get("Кросс-номера"))) {
-            writeNumber(ps, partId, cross, false);
+            writeNumber(ps, partId, cross, false, row.lineNumber(), report);
         }
     }
 
@@ -1131,11 +1131,20 @@ public final class BazonImporter {
      * с остатком и очередью снимков. В выгрузке живого клиента такое есть:
      * в кросс-номерах стоит «АНАЛОГ». Пропускаем номер, а не теряем товар.
      */
-    private void writeNumber(PreparedStatement ps, long partId, String raw, boolean primary)
-            throws SQLException {
+    private void writeNumber(PreparedStatement ps, long partId, String raw, boolean primary,
+                             long line, ImportReport report) throws SQLException {
 
         String normalized = ru.partsflow.catalog.OemNumbers.normalize(raw);
         if (normalized == null) {
+            return;
+        }
+        // Номер, который нельзя сохранить (задача 0312): по тому же правилу,
+        // что «АНАЛОГ» выше, теряется номер, а не товар, — но называется
+        // строкой отчёта, а не отбоем индекса, который унёс бы карточку
+        // целиком вместе с остатком и снимками.
+        String tooLong = ru.partsflow.catalog.OemNumbers.tooLong(raw, !primary);
+        if (tooLong != null) {
+            report.problem(line, tooLong + " — товар перенесён без него");
             return;
         }
         ps.setLong(1, partId);

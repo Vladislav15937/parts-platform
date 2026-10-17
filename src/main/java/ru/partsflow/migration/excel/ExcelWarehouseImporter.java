@@ -572,6 +572,19 @@ public class ExcelWarehouseImporter {
             quantityFromFile = true;
         }
 
+        // Номер, который нельзя сохранить (задача 0312), — построчная причина,
+        // а не отбой индекса: тот унёс бы строку пятисоткой без слов, а здесь
+        // пропускается одна строка, остальные файла переносятся.
+        String oem = oem(mapping.value(row, Field.OEM));
+        String tooLong = ru.partsflow.catalog.OemNumbers.tooLong(oem, false);
+        for (int i = 0; tooLong == null && i < card.substitutes().size(); i++) {
+            tooLong = ru.partsflow.catalog.OemNumbers.tooLong(card.substitutes().get(i), true);
+        }
+        if (tooLong != null) {
+            report.skip(row.number(), tooLong);
+            return null;
+        }
+
         return new Row(
                 row.number(),
                 name,
@@ -579,7 +592,7 @@ public class ExcelWarehouseImporter {
                 quantity,
                 quantityFromFile,
                 blankToNull(mapping.value(row, Field.CELL)),
-                oem(mapping.value(row, Field.OEM)),
+                oem,
                 blankToNull(mapping.value(row, Field.NOTE)),
                 photoLinks(mapping.value(row, Field.PHOTOS)),
                 adNumber,

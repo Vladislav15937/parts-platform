@@ -270,6 +270,9 @@ public class PartService {
         Part part = partRepository.findByIdForUpdate(partId)
                 .orElseThrow(() -> NotFound.PART.error(partId));
 
+        // Номер, который нельзя сохранить (задача 0312), — отказ словами раньше
+        // сверки чужой правки: он про сам запрос, а не про то, что успел другой.
+        PartIdentity.requireStorable(request.identity());
         PartUpdate update = request;
         List<NotSaved> notSaved = List.of();
         // Сверка — до всякой записи и под той же блокировкой (задача 0313):

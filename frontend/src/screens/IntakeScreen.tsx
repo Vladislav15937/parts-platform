@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { LongNumberNote } from '../inventory/LongNumberNote';
+import { numberTooLong } from '../inventory/oemLength';
 import { PhotoPicker } from '../photos/PhotoPicker';
 import type { ResizedPhoto } from '../photos/resize';
 import { donorTitle } from '../intake/donors';
@@ -116,8 +117,12 @@ export function IntakeScreen({ reference, onSend }: Props) {
   const suggestions = pickedName ? [] : suggestNames(reference.partNames, draft.rawName);
   // Склад проверяется здесь, а не при отправке: остановить приёмщика надо
   // до того, как он наберёт двадцать позиций, а не после.
+  // Номер, который нельзя сохранить (задача 0312), останавливает здесь же:
+  // ушедший в очередь, он вернулся бы отказом сервера уже из «требует внимания».
+  // Причина стоит под полем (`LongNumberNote`).
   const canAdd = warehouseId !== null
-    && draft.rawName.trim().length > 0 && Number(draft.price) > 0;
+    && draft.rawName.trim().length > 0 && Number(draft.price) > 0
+    && numberTooLong('oem', draft.oemNumber) === null;
 
   return (
     <section className="card">

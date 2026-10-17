@@ -7,6 +7,7 @@ import {
 } from '../inventory/catalog';
 import { generationOf, shownTitle } from '../inventory/partCard';
 import { LongNumberNote } from '../inventory/LongNumberNote';
+import { numberTooLong } from '../inventory/oemLength';
 import { notSavedNote, notSavedSummary, type NotSavedField } from '../inventory/notSaved';
 import { count, plural } from '../ui/plural';
 import { useMounted } from '../ui/useMounted';
@@ -150,8 +151,19 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
     set('price', next === 'SET' ? (loaded?.price ?? '') : '');
   }
 
+  /**
+   * Раскрытый номер, который нельзя сохранить (задача 0312): «Сохранить» гаснет,
+   * пока его не укоротят, а причина названа и у поля, и у кнопки.
+   */
+  const tooLong = form === null ? null
+    : (['oem', 'crosses'] as const)
+      .filter((key) => open.includes(key))
+      .map((key) => numberTooLong(key, form[key]))
+      .find((problem) => problem !== null) ?? null;
+
   async function save(): Promise<void> {
     if (form === null || loaded === null || card === null || open.length === 0) return;
+    if (tooLong !== null) return;
     if (open.includes('number') && !/^\s*[1-9][0-9]*\s*$/.test(form.number)) {
       setError('№ позиции — целое число больше нуля');
       return;
@@ -303,9 +315,10 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
           ? 'Менять нечего — нажмите «Изменить» у поля, которое надо поправить'
           : changedNote(open.length)}
       </p>
+      {tooLong !== null && <p className="note note--error">{tooLong}</p>}
 
       <div className="filter-row">
-        <button type="button" disabled={saving || open.length === 0}
+        <button type="button" disabled={saving || open.length === 0 || tooLong !== null}
                 onClick={() => void save()}>
           {saving ? 'Сохраняем…' : 'Сохранить'}
         </button>

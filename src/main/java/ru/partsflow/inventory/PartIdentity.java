@@ -331,6 +331,32 @@ public class PartIdentity {
     }
 
     /**
+     * Номер производителя и каждый кросс-номер не длиннее, чем можно сохранить
+     * ({@link OemNumbers#tooLong}, задача 0312) — отказ словами, 400.
+     *
+     * <p>Зовётся из {@code PartService.update} первым делом, до сверки чужой
+     * правки (0313) и до любой записи: отказ здесь — про сам запрос, а не про
+     * то, что успел сделать другой, и половины правки за собой не оставляет.
+     */
+    static void requireStorable(Edit edit) {
+        if (edit == null) {
+            return;
+        }
+        String problem = edit.oem() == null ? null : OemNumbers.tooLong(edit.oem(), false);
+        if (problem == null && edit.crosses() != null) {
+            for (String cross : OemNumbers.list(edit.crosses())) {
+                problem = OemNumbers.tooLong(cross, true);
+                if (problem != null) {
+                    break;
+                }
+            }
+        }
+        if (problem != null) {
+            throw new IllegalArgumentException(problem);
+        }
+    }
+
+    /**
      * Номер производителя — главная строка {@code part_oem}, кросс-номера —
      * остальные. Приведение тем же {@link OemNumbers#normalize}, что у приёмки
      * и поиска: разойдись они, номер переставал бы находиться.

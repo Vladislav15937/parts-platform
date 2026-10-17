@@ -5,7 +5,8 @@ import { PartEditForm } from './PartEditForm';
 import { IntakeScreen } from './IntakeScreen';
 import type { CatalogRow } from '../inventory/catalog';
 import {
-  LONG_NUMBER_LIMITS, crossesLength, longNumberWarning, oemLength,
+  LONG_NUMBER_LIMITS, OEM_STORE_LIMIT, crossesLength, longNumberWarning, normalizedLength,
+  numberTooLong, oemLength,
 } from '../inventory/oemLength';
 
 /**
@@ -53,10 +54,56 @@ describe('предупреждение о длинном номере', () => {
     fireEvent.change(input, { target: { value: 'A'.repeat(64) } });
     expect(warnings(), 'укороченный номер всё ещё предупреждает').toEqual([]);
 
-    fireEvent.change(input, { target: { value: 'A'.repeat(5000) } });
+    // До 0312 здесь уезжали 5000 знаков; теперь предел хранилища — 1000,
+    // и ровно предел по-прежнему уезжает.
+    fireEvent.change(input, { target: { value: 'A'.repeat(OEM_STORE_LIMIT) } });
+    expect(save().disabled, 'номер ровно в предел запрещён').toBe(false);
     fireEvent.click(save());
     await waitFor(() => expect(sent.length).toBe(1));
-    expect(sent[0]!['oem'], 'длинный номер не уехал на сервер').toBe('A'.repeat(5000));
+    expect(sent[0]!['oem'], 'номер в предел не уехал на сервер').toBe('A'.repeat(OEM_STORE_LIMIT));
+  });
+
+  it('сверх предела хранилища (задача 0312) — «сохранить нельзя», «Сохранить» гаснет, укоротили — снова можно', async () => {
+    renderForm();
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Номер производителя')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Изменить: Номер производителя'));
+    const input = screen.getByLabelText('Номер производителя');
+
+    fireEvent.change(input, { target: { value: 'A'.repeat(OEM_STORE_LIMIT + 1) } });
+    const refusal = 'Номер производителя длиннее 1000 знаков: сохранить нельзя.'
+      + ' Похоже, вставлено не то — проверьте номер';
+    expect(warnings(), 'сверх предела — не предупреждение, а отказ').toEqual([refusal]);
+    expect(save().disabled, '«Сохранить» не погасла').toBe(true);
+    expect(screen.getAllByText(refusal).length, 'у погашенной кнопки нет причины')
+      .toBeGreaterThanOrEqual(2);
+    fireEvent.click(save());
+    expect(sent.length, 'погашенная кнопка всё-таки отправила').toBe(0);
+
+    fireEvent.change(input, { target: { value: 'A'.repeat(OEM_STORE_LIMIT) } });
+    expect(save().disabled).toBe(false);
+  });
+
+  it('один кросс-номер сверх предела — отказ с его началом; сумма без длинного — только предупреждение', async () => {
+    renderForm();
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Кросс-номера')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Изменить: Кросс-номера'));
+    const input = screen.getByLabelText('Кросс-номера');
+
+    fireEvent.change(input, { target: { value: `AB-1, ${'Z'.repeat(1001)}, CD-2` } });
+    expect(warnings()).toEqual([`Кросс-номер «${'Z'.repeat(20)}…» длиннее 1000 знаков:`
+      + ' сохранить нельзя. Похоже, вставлено не то — проверьте номер']);
+    expect(save().disabled).toBe(true);
+
+    // Две тысячи знаков в сумме, но каждый номер — по пятьсот: хранилище примет.
+    fireEvent.change(input, { target: { value: `${'Y'.repeat(500)}, ${'X'.repeat(500)}, ${'W'.repeat(500)}, ${'V'.repeat(500)}` } });
+    expect(warnings()[0]).toContain('Сохранить всё равно можно');
+    expect(save().disabled).toBe(false);
+  });
+
+  it('длина — приведённого номера: разделители внутри не в счёт', () => {
+    expect(normalizedLength('81170-33 670')).toBe(10);
+    expect(numberTooLong('oem', `${'1-'.repeat(1000)}`)).toBeNull();
+    expect(numberTooLong('oem', 'А'.repeat(1001)), 'русский двойник не засчитан').not.toBeNull();
   });
 
   it('кросс-номера: больше 1000 знаков в сумме — предупреждение, 1000 — нет', async () => {
@@ -93,6 +140,20 @@ describe('предупреждение о длинном номере', () => {
 
     fireEvent.change(input, { target: { value: 'E'.repeat(64) } });
     expect(warnings()).toEqual([]);
+  });
+
+  it('на приёмке сверх предела — «сохранить нельзя», «Добавить в партию» гаснет (задача 0312)', () => {
+    render(<IntakeScreen reference={reference()} onSend={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Склад'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Вид детали'), { target: { value: 'стартер' } });
+    fireEvent.change(screen.getByLabelText('Цена'), { target: { value: '5000' } });
+    const add = screen.getByText('Добавить в партию') as HTMLButtonElement;
+    expect(add.disabled, 'заполненная форма не даёт добавить').toBe(false);
+
+    fireEvent.change(screen.getByLabelText('Номер производителя'),
+      { target: { value: 'E'.repeat(1001) } });
+    expect(warnings()[0]).toContain('сохранить нельзя');
+    expect(add.disabled, 'номер сверх предела ушёл бы в очередь').toBe(true);
   });
 });
 
