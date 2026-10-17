@@ -1148,7 +1148,11 @@ public final class BazonImporter {
             return;
         }
         ps.setLong(1, partId);
-        ps.setString(2, raw);
+        // Хранится тем же правилом, что у карточки, приёмки и переноса из таблицы
+        // (OemNumbers.clean, задача 0309): русские двойники латиницей, невидимые
+        // пробелы по краям срезаны. До задачи 0317 перенос писал номер как пришёл,
+        // и каждый следующий переезд плодил позиции, которые потом пересчитывать.
+        ps.setString(2, ru.partsflow.catalog.OemNumbers.clean(raw));
         ps.setString(3, normalized);
         ps.setBoolean(4, primary);
         ps.executeUpdate();
