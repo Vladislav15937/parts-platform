@@ -289,6 +289,10 @@ function Lines({ lines }: { lines: PrintLine[] }) {
         <tr>
           <th>№</th>
           <th>Наименование</th>
+          {/* Своей колонкой (задача 0314): новая и б/у — разный товар
+              и разная цена, а пометка, которая это называла, уходит
+              из наименования. У услуги клетка пуста. */}
+          <th>Состояние</th>
           <th className="num">Кол-во</th>
           <th className="num">Цена</th>
           <th className="num">Сумма</th>
@@ -299,6 +303,7 @@ function Lines({ lines }: { lines: PrintLine[] }) {
           <tr key={`${line.title}-${at}`}>
             <td>{at + 1}</td>
             <td>{line.title}</td>
+            <td>{line.condition ?? ''}</td>
             <td className="num">{Number(line.quantity).toLocaleString('ru-RU')}</td>
             <td className="num">{money(line.price)}</td>
             <td className="num">{money(line.amount)}</td>

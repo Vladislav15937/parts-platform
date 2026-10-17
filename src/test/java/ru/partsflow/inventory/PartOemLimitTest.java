@@ -274,6 +274,33 @@ class PartOemLimitTest extends PostgresTestBase {
                 .isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("Перенос из Bazon: длинный кросс-номер назван кросс-номером с его началом, товар и короткие номера перенесены")
+    void bazonNamesALongCrossAsCross() throws Exception {
+        String longCross = randomNumber(5000);
+        String catalog = """
+                "Номер товара";"Запчасть";"Цена";"Номер производителя";"Кросс-номера";"Основной (свободно)";"Выгружать"
+                "C-1-%1$s";"Бампер базона";"9000";"52119-33660";"AB-100, %2$s";"1";"да"
+                """.formatted(SEQ.get(), longCross);
+        MvcResult result = mvc.perform(multipart("/api/import/bazon")
+                        .file(csv("donors", """
+                                "Номер донора";"Марка";"Модель";"Год выпуска"
+                                """))
+                        .file(csv("catalog", catalog))
+                        .with(csrf()).session(login()))
+                .andReturn();
+
+        assertThat(result.getResponse().getStatus()).as(text(result)).isEqualTo(200);
+        assertThat(text(result))
+                .as("длинный кросс-номер назван не кросс-номером — человек будет искать его не там")
+                .contains("Кросс-номер «" + longCross.substring(0, 20) + "…» длиннее " + LIMIT + " знаков");
+        assertThat(inTenant(() -> jdbc.queryForList("""
+                SELECT o.normalized FROM part_oem o JOIN part p ON p.id = o.part_id
+                 WHERE p.title LIKE 'Бампер базона%' ORDER BY o.id""", String.class)))
+                .as("короткие номера той же строки не перенесены")
+                .containsExactly("5211933660", "AB100");
+    }
+
     // ------------------------------------------------------------------ помощники
 
     private void assertRefused(MvcResult result, String words) throws Exception {

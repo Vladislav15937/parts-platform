@@ -51,6 +51,11 @@ export interface PrintLegal {
 export interface PrintLine {
   title: string;
   /**
+   * Состояние позиции словом («б/у», «контрактная»), как его называет сервер;
+   * у услуги — пусто. Своим полем, а не пометкой в наименовании (задача 0314).
+   */
+  condition?: string | null;
+  /**
    * Числа строкой: `numeric` из Postgres Jackson отдаёт как есть, и объявленная
    * не тем типом цена уже роняла экран выгрузок на `.trim()`. Здесь они приходят
    * строками — такими же, как `price` и `quantity` в {@link DealItem}.

@@ -1276,7 +1276,7 @@ public class PartService {
                    s.qty_reserved + CASE WHEN pn.pending IS NULL THEN 0
                         ELSE LEAST(s.qty - s.qty_reserved,
                                    GREATEST(pn.pending - COALESCE(pre.before, 0), 0)) END AS qty_reserved,
-                   false AS expected, sup.expected_on
+                   false AS expected, sup.expected_on, p.condition
               FROM part p
               JOIN part_stock s ON s.part_id = p.id AND s.qty > 0
               LEFT JOIN (SELECT part_id, sum(quantity) AS pending FROM deal_item
@@ -1301,7 +1301,7 @@ public class PartService {
                    w.id, w.name, NULL::text,
                    p.quantity - COALESCE((SELECT sum(i.quantity) FROM deal_item i
                                            WHERE i.part_id = p.id AND i.status = 'PREORDER'), 0),
-                   0, true, sup.expected_on
+                   0, true, sup.expected_on, p.condition
               FROM part p
               JOIN supply sup ON sup.id = p.supply_id AND sup.status IN ('EXPECTED', 'IN_TRANSIT')
               JOIN (SELECT min(w0.id) AS warehouse_id FROM warehouse w0 WHERE w0.is_active) s ON true
@@ -1541,7 +1541,7 @@ public class PartService {
                 "SELECT r.id, r.number, r.public_code, r.title, r.price, r.status,\n"
                 + "       r.warehouse_id, r.warehouse_name, r.cell_code,\n"
                 + "       r.qty, r.qty_reserved, r.qty - r.qty_reserved AS qty_available,\n"
-                + "       r.expected, r.expected_on\n"
+                + "       r.expected, r.expected_on, r.condition\n"
                 + "  FROM (\n"
                 + STOCK_BRANCH + " WHERE " + match.stockSql() + narrowing.sql() + "\n"
                 + "UNION ALL\n"
@@ -1566,7 +1566,8 @@ public class PartService {
                         rs.getBigDecimal("qty_available"),
                         rs.getBoolean("expected"),
                         rs.getDate("expected_on") == null
-                                ? null : rs.getDate("expected_on").toLocalDate()),
+                                ? null : rs.getDate("expected_on").toLocalDate(),
+                        rs.getString("condition")),
                 // Ветки UNION, потом отбор, потом ранжирование, потом предел.
                 args.toArray());
 
@@ -1862,12 +1863,18 @@ public class PartService {
      * @param number порядковый номер позиции — тот, которым её называют вслух.
      *               Продавец как раз и есть тот, кто произносит его в трубку:
      *               публичный код («7584A8FEAE3D») по телефону не диктуют
+     * @param condition состояние позиции кодом {@link PartCondition} («USED»);
+     *                  слово ставит экран тем же словарём, что колонка
+     *                  «Состояние» на складе (задача 0314). До неё состояние
+     *                  продавец читал только из пометки в наименовании,
+     *                  а пометка после смены состояния врёт (0304)
      */
     public record StockRow(Long partId, long number, String publicCode, String title, BigDecimal price,
                            String status, Long warehouseId, String warehouseName,
                            String cellCode, BigDecimal qty, BigDecimal qtyReserved,
                            BigDecimal qtyAvailable,
-                           boolean expected, java.time.LocalDate expectedOn) {
+                           boolean expected, java.time.LocalDate expectedOn,
+                           String condition) {
     }
 
     /**
@@ -1924,6 +1931,28 @@ public class PartService {
             titles.put(part.getId(), part.getTitle());
         }
         return titles;
+    }
+
+    /**
+     * Состояние позиций словом («б/у», «контрактная») по идентификаторам.
+     *
+     * <p>Нужно печати сделки (задача 0314): накладная и чек называли
+     * состояние только пометкой в наименовании, а пометка уходит из него
+     * (0315, 0316) и уже сегодня врёт после смены состояния (0304). Слово —
+     * {@link PartCondition#title()}, то же, что в колонке «Состояние» склада.
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, String> conditionsOf(Collection<Long> partIds) {
+        if (partIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, String> conditions = new HashMap<>();
+        for (Part part : partRepository.findAllById(partIds)) {
+            if (part.getCondition() != null) {
+                conditions.put(part.getId(), part.getCondition().title());
+            }
+        }
+        return conditions;
     }
 
     /**

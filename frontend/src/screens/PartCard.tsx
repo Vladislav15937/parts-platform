@@ -707,6 +707,7 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
                 code={row.code}
                 title={row.title}
                 price={row.price}
+                condition={row.condition}
               />
             )}
 
