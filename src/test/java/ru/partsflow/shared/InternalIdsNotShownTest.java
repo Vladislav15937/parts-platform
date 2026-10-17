@@ -69,6 +69,10 @@ class InternalIdsNotShownTest {
                     "«№ позиции» — номер, который человек сам вписал и называет вслух"
                             + " (part.number), а не id строки; позиция-владелец названа"
                             + " публичным кодом (задача 0302)"),
+            new Allowed("inventory/OemRecount.java",
+                    "отчёт разового пересчёта номеров читает оператор ячейки, а не клиент:"
+                            + " номер позиции и строки part_oem — ключ построчного возврата,"
+                            + " ровно то, по чему восстанавливают (задача 0317)"),
             new Allowed("platform/tenant/ProvisioningLimits.java",
                     "предел частоты и потолок схем — сами числа и есть ответ оператору"),
             new Allowed("platform/tenant/RegistrationLimits.java",

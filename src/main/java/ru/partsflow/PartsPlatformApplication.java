@@ -3,6 +3,7 @@ package ru.partsflow;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import ru.partsflow.oneshot.OneShotCommand;
 import ru.partsflow.platform.tenant.SchemaSyncCommand;
 
 @SpringBootApplication
@@ -26,6 +27,11 @@ public class PartsPlatformApplication {
     public static void main(String[] args) {
         if (SchemaSyncCommand.requested(args)) {
             System.exit(SchemaSyncCommand.run(args));
+        }
+        // Третий запуск того же артефакта — разовая правка данных по реестру
+        // (задача 0317): см. OneShotCommand.
+        if (OneShotCommand.requested(args)) {
+            System.exit(OneShotCommand.run(args));
         }
         SpringApplication.run(PartsPlatformApplication.class, args);
     }
