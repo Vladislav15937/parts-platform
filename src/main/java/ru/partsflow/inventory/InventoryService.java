@@ -329,7 +329,7 @@ public class InventoryService {
     public List<Line> lines(Long sessionId) {
         return jdbc.query("""
                 SELECT l.part_id, l.qty_expected, l.qty_counted, l.cell_id,
-                       p.number, p.title, c.code AS cell_code
+                       p.number, p.title, p.condition, c.code AS cell_code
                   FROM inventory_line l
                   JOIN part p ON p.id = l.part_id
                   LEFT JOIN storage_cell c ON c.id = l.cell_id
@@ -339,6 +339,7 @@ public class InventoryService {
                         rs.getLong("part_id"),
                         rs.getLong("number"),
                         rs.getString("title"),
+                        rs.getString("condition"),
                         rs.getObject("cell_id") == null ? null : rs.getLong("cell_id"),
                         rs.getString("cell_code"),
                         rs.getBigDecimal("qty_expected"),
@@ -667,14 +668,14 @@ public class InventoryService {
     public List<WarehouseCode> warehouseCodes(Long sessionId) {
         InventorySession session = require(sessionId);
         return jdbc.query("""
-                SELECT p.id AS part_id, p.number, p.title, p.public_code, p.barcode,
+                SELECT p.id AS part_id, p.number, p.title, p.condition, p.public_code, p.barcode,
                        ps.cell_id, c.code AS cell_code
                   FROM part_stock ps
                   JOIN part p ON p.id = ps.part_id
                   LEFT JOIN storage_cell c ON c.id = ps.cell_id
                  WHERE ps.warehouse_id = ? AND ps.qty > 0""",
                 (rs, i) -> new WarehouseCode(rs.getLong("part_id"), rs.getLong("number"),
-                        rs.getString("title"),
+                        rs.getString("title"), rs.getString("condition"),
                         rs.getString("public_code"), rs.getString("barcode"),
                         rs.getObject("cell_id") == null ? null : rs.getLong("cell_id"),
                         rs.getString("cell_code")),
@@ -688,8 +689,11 @@ public class InventoryService {
      *               деталь, которой не было в листе обхода, заводится строкой
      *               обхода из этой записи — и без номера такая строка оказалась
      *               бы единственной в листе, которую нечем назвать вслух
+     * @param condition состояние кодом (задача 0318): из этой записи заводится
+     *                  строка листа обхода, и она обязана нести его так же, как
+     *                  строки, пришедшие с сервера
      */
-    public record WarehouseCode(Long partId, Long number, String title,
+    public record WarehouseCode(Long partId, Long number, String title, String condition,
                                 String publicCode, String barcode,
                                 Long cellId, String cellCode) {
     }
@@ -720,6 +724,7 @@ public class InventoryService {
                     return new DiscrepancyLine(d.partId(),
                             named == null ? null : named.number(),
                             named == null ? null : named.title(),
+                            named == null ? null : named.condition(),
                             d.qtyExpectedAtOpen(), d.qtyExpectedAtCount(), d.qtyCounted(),
                             d.delta(), d.isShortage(), line.isApplied());
                 })
@@ -739,16 +744,21 @@ public class InventoryService {
                 .collect(java.util.stream.Collectors.joining(","));
         // Номер и наименование одним запросом: второй проход по тем же
         // строкам ради номера — это ещё один повод разойтись с первым.
-        jdbc.query("SELECT id, number, title FROM part WHERE id IN (" + in + ")",
+        jdbc.query("SELECT id, number, title, condition FROM part WHERE id IN (" + in + ")",
                 rs -> {
                     naming.put(rs.getLong("id"),
-                            new PartNaming(rs.getLong("number"), rs.getString("title")));
+                            new PartNaming(rs.getLong("number"), rs.getString("title"),
+                                    rs.getString("condition")));
                 });
         return naming;
     }
 
-    /** Как позицию зовут человеку: номер вслух, наименование глазами. */
-    private record PartNaming(Long number, String title) {
+    /**
+     * Как позицию зовут человеку: номер вслух, наименование и состояние глазами
+     * (состояние — задача 0318: недостачу считают по конкретной детали, а новая
+     * и б/у с одним наименованием — разные).
+     */
+    private record PartNaming(Long number, String title, String condition) {
     }
 
     /**
@@ -762,8 +772,9 @@ public class InventoryService {
      *                а корректировка записана позже, — и без этой отметки
      *                экран показывает «скорректировано» рядом с той же
      *                минусовой строкой
+     * @param condition состояние кодом (задача 0318); слово ставит экран
      */
-    public record DiscrepancyLine(Long partId, Long number, String title,
+    public record DiscrepancyLine(Long partId, Long number, String title, String condition,
                                   BigDecimal qtyExpectedAtOpen, BigDecimal qtyExpectedAtCount,
                                   BigDecimal qtyCounted, BigDecimal delta,
                                   boolean shortage, boolean applied) {
@@ -953,8 +964,12 @@ public class InventoryService {
      * @param number порядковый номер позиции (задача 0168): найдя на полке
      *               не то, кладовщик называет деталь вслух тому, кто сводит
      *               расхождения, — а публичного кода в листе обхода нет вовсе
+     * @param condition состояние кодом («USED», «CONTRACT»; задача 0318) — слово
+     *                  ставит экран. Кладовщик ищет на полке конкретную деталь,
+     *                  а «Фара Toyota Camry» новая и б/у лежат рядом
      */
-    public record Line(Long partId, Long number, String title, Long cellId, String cellCode,
+    public record Line(Long partId, Long number, String title, String condition,
+                       Long cellId, String cellCode,
                        BigDecimal qtyExpected, BigDecimal qtyCounted) {
     }
 

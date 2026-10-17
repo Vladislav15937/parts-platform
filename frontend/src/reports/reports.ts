@@ -316,6 +316,8 @@ export interface OriginItem {
   /** Вид детали из справочника. Пусто — наименование не распознано. */
   kind: string | null;
   title: string;
+  /** Состояние кодом (задача 0318); слово ставит экран. */
+  condition?: string | null;
   /** Смысл зависит от вкладки: принято, продано, списано или лежит. */
   quantity: number;
   price: number | null;

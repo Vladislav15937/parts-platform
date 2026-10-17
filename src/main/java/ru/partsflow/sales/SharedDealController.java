@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
+import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.PartService;
 import ru.partsflow.platform.tenant.TenantContext;
 
@@ -61,8 +62,12 @@ public class SharedDealController {
         try {
             Deal deal = sales.byShareToken(token)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
-            Map<Long, String> titles = parts.titlesOf(
-                    deal.getItems().stream().map(DealItem::getPartId).toList());
+            List<Long> partIds = deal.getItems().stream().map(DealItem::getPartId).toList();
+            Map<Long, String> titles = parts.titlesOf(partIds);
+            // Состояние — то, за что покупатель платит: «б/у» против «новая»
+            // (задача 0318). Пометка в наименовании, которая говорила это
+            // до сих пор, из него уходит (0315, 0316).
+            Map<Long, PartCondition> conditions = parts.conditionsOf(partIds);
             // Услуги идут в тот же список: без них итог не сходится с суммой
             // строк, и клиент видит «итого 4800» под деталью за 4500. Спор
             // об этом начнётся в момент оплаты.
@@ -83,11 +88,13 @@ public class SharedDealController {
                                     .filter(item -> item.getStatus() != DealItemStatus.CANCELLED)
                                     .map(item -> new SharedItem(
                                             titles.get(item.getPartId()),
+                                            conditions.get(item.getPartId()),
                                             item.getQuantity(),
                                             item.getPrice())),
                             deal.getServices().stream()
                                     .map(service -> new SharedItem(
                                             serviceNames.get(service.getServiceId()),
+                                            null,
                                             service.getQuantity(),
                                             service.getPrice())))
                             .toList());
@@ -113,6 +120,12 @@ public class SharedDealController {
                              List<SharedItem> items) {
     }
 
-    public record SharedItem(String title, BigDecimal quantity, BigDecimal price) {
+    /**
+     * @param condition состояние позиции кодом (задача 0318); слово на языке
+     *                  покупателя ставит страница ({@code conditionTitle}), а
+     *                  незнакомый код она не печатает вовсе. У услуги пусто
+     */
+    public record SharedItem(String title, PartCondition condition, BigDecimal quantity,
+                             BigDecimal price) {
     }
 }

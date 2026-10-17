@@ -9,6 +9,7 @@ import { useReference } from '../reference/useReference';
 import { warmUpDecoder } from '../scan/decoder';
 import { useOnline } from '../shell/useOnline';
 import { useMounted } from '../ui/useMounted';
+import { countLabel } from '../inventory/inventory';
 import { IntakeScreen } from './IntakeScreen';
 import { DonorScreen } from './DonorScreen';
 import { ImportScreen } from './ImportScreen';
@@ -330,7 +331,7 @@ export function HomeScreen() {
               void outbox.add(
                 'count',
                 { sessionId, partId: line.partId, qty, countedAt },
-                `${line.title} · ${qty} шт`,
+                countLabel(line, qty),
               )
             }
             onNote={COUNTER_NOTE_ROLES.includes(rights)

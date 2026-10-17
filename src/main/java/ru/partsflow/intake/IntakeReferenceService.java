@@ -109,7 +109,7 @@ public class IntakeReferenceService {
      */
     private List<ExpectedPartRef> expectedParts() {
         return jdbc.query("""
-                SELECT p.id, p.supply_id, p.title, p.price,
+                SELECT p.id, p.supply_id, p.title, p.condition, p.price,
                        p.quantity - COALESCE((SELECT sum(m.qty_delta) FROM stock_movement m
                                                WHERE m.part_id = p.id
                                                  AND m.movement_type = 'INTAKE'), 0) AS remaining
@@ -122,8 +122,8 @@ public class IntakeReferenceService {
                                                  AND m.movement_type = 'INTAKE'), 0) > 0
                  ORDER BY p.id""",
                 (rs, i) -> new ExpectedPartRef(rs.getLong("id"), rs.getLong("supply_id"),
-                        rs.getString("title"), rs.getBigDecimal("price"),
-                        rs.getBigDecimal("remaining")));
+                        rs.getString("title"), rs.getString("condition"),
+                        rs.getBigDecimal("price"), rs.getBigDecimal("remaining")));
     }
 
     /**
@@ -198,9 +198,10 @@ public class IntakeReferenceService {
     /**
      * @param remaining сколько ещё не принято: обещано по поставке минус
      *                  уже принятое
+     * @param condition состояние кодом (задача 0318), слово ставит экран приёмки
      */
-    public record ExpectedPartRef(long id, long supplyId, String title, BigDecimal price,
-                                  BigDecimal remaining) {
+    public record ExpectedPartRef(long id, long supplyId, String title, String condition,
+                                  BigDecimal price, BigDecimal remaining) {
     }
 
     public record Warehouse(long id, String name, List<Cell> cells) {

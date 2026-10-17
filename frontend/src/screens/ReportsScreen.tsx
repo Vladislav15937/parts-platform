@@ -49,6 +49,7 @@ import type { Warehouse } from '../organization/warehouses';
 import { paymentSourceTypeLabel } from '../sales/sales';
 import { customerName } from '../sales/dealStatus';
 import { useMounted } from '../ui/useMounted';
+import { conditionTitle } from '../inventory/catalog';
 
 /**
  * Отчёты владельца.
@@ -1081,6 +1082,10 @@ export function ReportsScreen({ canRead }: Props) {
                     <th>Номер товара</th>
                     <th>Тип запчасти</th>
                     <th>Наименование</th>
+                    {/* Столбцом, как в «Проданных позициях» (задача 0318):
+                        разрез открывают узнать, что именно с машины лежит
+                        и что продано, а новая и б/у — разный товар. */}
+                    <th>Состояние</th>
                     <th className="num">Количество</th>
                     {/* На «Продано» это цена сделки, а не прайс карточки,
                         и колонка обязана называться тем, что показывает:
@@ -1100,6 +1105,7 @@ export function ReportsScreen({ canRead }: Props) {
                           и это правда о карточке. */}
                       <td>{row.kind ?? '—'}</td>
                       <td>{row.title}</td>
+                      <td>{conditionTitle(row.condition) ?? ''}</td>
                       <td className="num">{pieces(row.quantity)}</td>
                       <td className="num">{row.price === null ? '—' : money(row.price)}</td>
                       <td className="num">

@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.PartService;
 import ru.partsflow.platform.security.CurrentUser;
 
@@ -703,6 +704,14 @@ public class SalesController {
                 .map(DealItem::getPartId)
                 .distinct()
                 .toList());
+        // Состояние — тем же приёмом (задача 0318): «Фара Toyota Camry 2007»
+        // новая и б/у — разный товар, и в составе сделки их различала только
+        // пометка в наименовании, а она из наименования уходит (0315, 0316).
+        Map<Long, PartCondition> conditions = parts.conditionsOf(deals.stream()
+                .flatMap(deal -> deal.getItems().stream())
+                .map(DealItem::getPartId)
+                .distinct()
+                .toList());
         // Справочник услуг — это несколько строк на арендатора, и читается он
         // одним запросом на всю выдачу: по запросу на строку история клиента
         // превратилась бы в сотню обращений к базе.
@@ -734,8 +743,8 @@ public class SalesController {
         Map<Long, java.time.LocalDate> expectedDates = sales.expectedDatesOf(
                 deals.stream().map(Deal::getId).toList());
         return deals.stream()
-                .map(deal -> DealView.of(deal, titles, partNumbers, serviceNames, managerNames,
-                        stages, customerNames, expectedDates))
+                .map(deal -> DealView.of(deal, titles, partNumbers, conditions, serviceNames,
+                        managerNames, stages, customerNames, expectedDates))
                 .toList();
     }
 
@@ -875,6 +884,7 @@ public class SalesController {
                            boolean overpaid) {
 
         static DealView of(Deal deal, Map<Long, String> titles, Map<Long, Long> partNumbers,
+                           Map<Long, PartCondition> conditions,
                            Map<Long, String> serviceNames, Map<Long, String> managerNames,
                            Map<Long, String> stages, Map<Long, String> customerNames,
                            Map<Long, java.time.LocalDate> expectedDates) {
@@ -890,7 +900,8 @@ public class SalesController {
                     deal.getReplyDeadline(), deal.getOrderAcceptedAt(),
                     deal.getDeliveryNote(),
                     deal.getItems().stream()
-                            .map(item -> ItemView.of(item, titles, partNumbers)).toList(),
+                            .map(item -> ItemView.of(item, titles, partNumbers, conditions))
+                            .toList(),
                     deal.getServices().stream()
                             .map(s -> new ServiceLineView(s.getId(), s.getServiceId(),
                                     serviceNames.get(s.getServiceId()),
@@ -944,15 +955,24 @@ public class SalesController {
      *               сотня одинаковых строк, и в составе сделки их надо
      *               различать: по этому номеру кладовщик идёт к полке. Пусто,
      *               если карточку удалили, — строка сделки переживает запчасть
+     * @param condition состояние позиции кодом («USED», «CONTRACT»; задача 0318),
+     *                  слово ставит экран ({@code conditionTitle}) — как у строки
+     *                  выдачи продавца. Сотня «Фара Toyota Camry 2007» на складе
+     *                  различается как раз им, а пометка «(б/у)» из наименования
+     *                  уходит (0315, 0316). Пусто у удалённой карточки и у позиции
+     *                  без состояния
      */
-    public record ItemView(Long id, Long partId, Long number, String title, BigDecimal quantity,
+    public record ItemView(Long id, Long partId, Long number, String title,
+                           PartCondition condition, BigDecimal quantity,
                            BigDecimal price, BigDecimal discount, Long warehouseId,
                            DealItemStatus status) {
 
-        static ItemView of(DealItem item, Map<Long, String> titles, Map<Long, Long> numbers) {
+        static ItemView of(DealItem item, Map<Long, String> titles, Map<Long, Long> numbers,
+                           Map<Long, PartCondition> conditions) {
             return new ItemView(item.getId(), item.getPartId(),
                     numbers.get(item.getPartId()),
-                    titles.get(item.getPartId()), item.getQuantity(),
+                    titles.get(item.getPartId()), conditions.get(item.getPartId()),
+                    item.getQuantity(),
                     item.getPrice(), item.getDiscount(), item.getWarehouseId(), item.getStatus());
         }
     }

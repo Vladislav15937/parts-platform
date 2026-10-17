@@ -1934,22 +1934,27 @@ public class PartService {
     }
 
     /**
-     * Состояние позиций словом («б/у», «контрактная») по идентификаторам.
+     * Состояние позиций по идентификаторам.
      *
-     * <p>Нужно печати сделки (задача 0314): накладная и чек называли
-     * состояние только пометкой в наименовании, а пометка уходит из него
-     * (0315, 0316) и уже сегодня врёт после смены состояния (0304). Слово —
-     * {@link PartCondition#title()}, то же, что в колонке «Состояние» склада.
+     * <p>Нужно печати сделки (задача 0314) и составу сделки — у продавца,
+     * в заказах с площадок и на странице по ссылке (0318): там состояние
+     * несла только пометка в наименовании, а пометка уходит из него (0315,
+     * 0316) и уже сегодня врёт после смены состояния (0304).
+     *
+     * <p>Отдаётся перечислением, а не словом: печать ставит слово сама
+     * ({@link PartCondition#title()}), а в ответ экрану уходит код — слово
+     * там ставит {@code conditionTitle}, один словарь на все экраны. Позиции
+     * без состояния в карте нет.
      */
     @Transactional(readOnly = true)
-    public Map<Long, String> conditionsOf(Collection<Long> partIds) {
+    public Map<Long, PartCondition> conditionsOf(Collection<Long> partIds) {
         if (partIds.isEmpty()) {
             return Map.of();
         }
-        Map<Long, String> conditions = new HashMap<>();
+        Map<Long, PartCondition> conditions = new HashMap<>();
         for (Part part : partRepository.findAllById(partIds)) {
             if (part.getCondition() != null) {
-                conditions.put(part.getId(), part.getCondition().title());
+                conditions.put(part.getId(), part.getCondition());
             }
         }
         return conditions;

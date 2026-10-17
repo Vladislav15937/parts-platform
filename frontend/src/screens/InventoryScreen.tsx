@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ConditionWord } from '../inventory/ConditionWord';
 import { useMounted } from '../ui/useMounted';
 import {
   countPositions,
@@ -452,6 +453,7 @@ export function InventoryScreen({ reference, onCount, onNote, noteQueue = [] }: 
       partId: match.code.partId,
       number: match.code.number,
       title: match.code.title,
+      condition: match.code.condition ?? null,
       cellId: match.code.cellId,
       cellCode: match.code.cellCode,
       qtyExpected: '0',
@@ -563,6 +565,10 @@ function CountRow({
     <li className={status === 'scanned' ? 'count-row count-row--done' : 'count-row'}>
       <div className="count-title">
         {line.title}
+        {/* Состояние (задача 0318): на полке ищут конкретную деталь, а «Фара…»
+            новая и б/у лежат рядом. Пометку в наименовании, которая говорила
+            это до сих пор, снимают (0315, 0316). */}
+        <ConditionWord code={line.condition} />
         {/* Номер позиции (задача 0168): найдя на полке не то, кладовщик
             называет деталь вслух тому, кто сводит расхождения, — а публичного
             кода в листе обхода нет вовсе, и «Фара Toyota Camry» на складе

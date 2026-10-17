@@ -275,11 +275,12 @@ public class IntakeService {
             if (!part.isExpectedOrigin()) {
                 throw new IllegalArgumentException(
                         "«%s» не заводили как ожидаемую по поставке — принимайте её обычной приёмкой"
-                                .formatted(part.getTitle()));
+                                .formatted(PartCondition.named(part.getTitle(), part.getCondition())));
             }
             if (!supplyId.equals(part.getSupplyId())) {
                 throw new IllegalArgumentException(
-                        "«%s» ожидается по другой поставке — выберите её".formatted(part.getTitle()));
+                        "«%s» ожидается по другой поставке — выберите её"
+                                .formatted(PartCondition.named(part.getTitle(), part.getCondition())));
             }
             incoming.merge(part.getId(), item.quantity(), BigDecimal::add);
         }
@@ -430,7 +431,7 @@ public class IntakeService {
     public List<ExpectedPart> expectedPartsOf(Long supplyId) {
         requireSupply(supplyId);
         return jdbc.query("""
-                SELECT p.id, p.number, p.title, p.quantity, p.price,
+                SELECT p.id, p.number, p.title, p.condition, p.quantity, p.price,
                        COALESCE((SELECT sum(m.qty_delta) FROM stock_movement m
                                   WHERE m.part_id = p.id AND m.movement_type = 'INTAKE'), 0)
                            AS received,
@@ -441,7 +442,8 @@ public class IntakeService {
                  WHERE p.supply_id = ? AND p.expected_origin
                  ORDER BY p.id""",
                 (rs, i) -> new ExpectedPart(rs.getLong("id"), rs.getLong("number"),
-                        rs.getString("title"), rs.getBigDecimal("quantity"),
+                        rs.getString("title"), rs.getString("condition"),
+                        rs.getBigDecimal("quantity"),
                         rs.getBigDecimal("price"), rs.getBigDecimal("received"),
                         rs.getBigDecimal("preordered")),
                 supplyId);
@@ -451,8 +453,10 @@ public class IntakeService {
      * @param quantity   обещано по поставке
      * @param received   принято на склад по этой позиции
      * @param preordered отложено под клиентов, но ещё не принято
+     * @param condition  состояние кодом (задача 0318), слово ставит экран
      */
-    public record ExpectedPart(long id, long number, String title, BigDecimal quantity,
+    public record ExpectedPart(long id, long number, String title, String condition,
+                               BigDecimal quantity,
                                BigDecimal price, BigDecimal received, BigDecimal preordered) {
     }
 

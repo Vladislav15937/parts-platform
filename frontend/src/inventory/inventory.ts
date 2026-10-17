@@ -1,6 +1,7 @@
 import { request } from '../api/client';
 import { get, put, STORE_INVENTORY } from '../storage/db';
 import { normalizeCode } from '../scan/codes';
+import { titleWithCondition } from './catalog';
 
 /**
  * Инвентаризация с телефона.
@@ -22,11 +23,29 @@ export interface InventoryLine {
   /** Порядковый номер позиции — им кладовщик называет деталь вслух. */
   number: number;
   title: string;
+  /**
+   * Состояние кодом (задача 0318); слово ставит `ConditionWord`. Кладовщик ищет
+   * на полке конкретную деталь, а «Фара…» новая и б/у лежат рядом.
+   * Необязательное: лист обхода, скачанный до правки, лежит в телефоне без него.
+   */
+  condition?: string | null;
   cellId: number | null;
   cellCode: string | null;
   qtyExpected: string;
   /** Пусто — до полки не дошли. Это не то же самое, что «не нашли». */
   qtyCounted: string | null;
+}
+
+/**
+ * Подпись подсчёта в очереди отправки: «Фара левая · б/у · 2 шт».
+ *
+ * <p>Со словом состояния (задача 0318): запись, ушедшая в «требует внимания»,
+ * обязана назвать ту же деталь, что и строка листа обхода, — а «Фара левая»
+ * новая и б/у лежат рядом. Пометку в наименовании, которая это говорила,
+ * снимают (0315, 0316).
+ */
+export function countLabel(line: InventoryLine, qty: string): string {
+  return `${titleWithCondition(line.title, line.condition)} · ${qty} шт`;
 }
 
 /**
@@ -207,6 +226,8 @@ export interface WarehouseCode {
    */
   number: number;
   title: string;
+  /** Состояние кодом: строка «вне списка» заводится из этой записи (задача 0318). */
+  condition?: string | null;
   publicCode: string | null;
   barcode: string | null;
   cellId: number | null;
@@ -471,6 +492,8 @@ export interface Discrepancy {
   /** Порядковый номер позиции: публичного кода в расхождениях нет вовсе. */
   number: number | null;
   title: string | null;
+  /** Состояние кодом (задача 0318); слово ставит экран. */
+  condition?: string | null;
   qtyExpectedAtOpen: number;
   qtyExpectedAtCount: number;
   qtyCounted: number;

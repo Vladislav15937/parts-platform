@@ -1,11 +1,12 @@
 import { useState } from 'react';
+import { ConditionWord } from '../inventory/ConditionWord';
 import { LongNumberNote } from '../inventory/LongNumberNote';
 import { numberTooLong } from '../inventory/oemLength';
 import { PhotoPicker } from '../photos/PhotoPicker';
 import type { ResizedPhoto } from '../photos/resize';
 import { donorTitle } from '../intake/donors';
 import { suggestNames } from '../reference/reference';
-import type { Reference } from '../reference/reference';
+import type { ExpectedPartRef, Reference } from '../reference/reference';
 import { ScanOverlay } from '../scan/ScanOverlay';
 import { resolveScan } from '../scan/codes';
 import type { PendingPhoto } from '../outbox/outbox';
@@ -31,6 +32,11 @@ interface Item {
   key: string;
   /** Принимается заведённая заранее позиция, а не новая карточка. */
   partId: number | null;
+  /**
+   * Состояние заведённой заранее позиции — только для показа в партии
+   * (задача 0318); на сервер не уходит, там оно уже есть у карточки.
+   */
+  condition: string | null;
   quantity: number;
   rawName: string;
   price: string;
@@ -196,6 +202,9 @@ export function IntakeScreen({ reference, onSend }: Props) {
               return (
                 <li key={part.id}>
                   {part.title}
+                  {/* Состояние (задача 0318): «Фара…» новая и б/у по одной
+                      поставке — две разные ожидаемые позиции. */}
+                  <ConditionWord code={part.condition} />
                   <span className="muted"> · ждём {part.remaining} шт</span>
                   <label>
                     Пришло, шт
@@ -210,7 +219,7 @@ export function IntakeScreen({ reference, onSend }: Props) {
                     type="button"
                     className="button--ghost"
                     disabled={warehouseId === null || taken || !(quantity > 0)}
-                    onClick={() => acceptExpected(part.id, part.title, part.price, quantity)}
+                    onClick={() => acceptExpected(part, quantity)}
                   >
                     {taken ? 'в партии' : 'Принять'}
                   </button>
@@ -356,7 +365,9 @@ export function IntakeScreen({ reference, onSend }: Props) {
           <ul className="suggestions">
             {items.map((item) => (
               <li key={item.key}>
-                {item.rawName} · {item.price} ₽
+                {item.rawName}
+                <ConditionWord code={item.condition} />
+                {' '}· {item.price} ₽
                 {item.oemNumber.trim() !== '' && (
                   <span className="muted"> · {item.oemNumber.trim()}</span>
                 )}
@@ -428,14 +439,15 @@ export function IntakeScreen({ reference, onSend }: Props) {
    * <p>Ячейка — та, что выбрана в форме ниже: на экране один выбор ячейки, и
    * второй такой же для ожидаемой позиции был бы вторым способом сделать то же.
    */
-  function acceptExpected(partId: number, title: string, price: number, quantity: number) {
+  function acceptExpected(part: ExpectedPartRef, quantity: number) {
     setItems([...items, {
       ...emptyItem(),
       key: crypto.randomUUID(),
-      partId,
+      partId: part.id,
+      condition: part.condition ?? null,
       quantity,
-      rawName: title,
-      price: String(price),
+      rawName: part.title,
+      price: String(part.price),
       cellId: draft.cellId,
     }]);
   }
@@ -498,6 +510,7 @@ function emptyItem(): Item {
   return {
     key: '',
     partId: null,
+    condition: null,
     quantity: 1,
     rawName: '',
     price: '',

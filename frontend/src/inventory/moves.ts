@@ -26,6 +26,8 @@ export interface MoveLine {
   number: number;
   publicCode: string;
   title: string;
+  /** Состояние кодом (задача 0318); слово ставит экран. */
+  condition?: string | null;
   qty: number;
 }
 

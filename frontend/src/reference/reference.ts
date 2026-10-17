@@ -38,6 +38,11 @@ export interface ExpectedPartRef {
   id: number;
   supplyId: number;
   title: string;
+  /**
+   * Состояние кодом (задача 0318); слово ставит экран. Необязательное:
+   * справочник, скачанный до правки, лежит в телефоне без него.
+   */
+  condition?: string | null;
   price: number;
   remaining: number;
 }
