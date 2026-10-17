@@ -48,6 +48,12 @@ export interface StockRow {
   expected: boolean;
   /** Ожидаемая дата поставки; пусто — её не называли. */
   expectedOn: string | null;
+  /**
+   * Состояние кодом (`PartCondition`: «NEW», «USED»…); слово — `conditionTitle`.
+   * Своим полем, а не пометкой в наименовании (задача 0314): пометка уходит
+   * из наименования, а после смены состояния и сегодня врёт.
+   */
+  condition: string | null;
 }
 
 export interface Customer {

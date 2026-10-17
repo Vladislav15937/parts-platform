@@ -167,10 +167,12 @@ public class DealPrintService {
      * выходов сделки наружу.
      */
     private List<Line> linesOf(Deal deal) {
-        Map<Long, String> titles = parts.titlesOf(deal.getItems().stream()
+        List<Long> partIds = deal.getItems().stream()
                 .map(DealItem::getPartId)
                 .distinct()
-                .toList());
+                .toList();
+        Map<Long, String> titles = parts.titlesOf(partIds);
+        Map<Long, String> conditions = parts.conditionsOf(partIds);
         Map<Long, String> serviceNames = sales.serviceKinds().stream()
                 .collect(java.util.stream.Collectors.toMap(
                         ServiceKind::getId, ServiceKind::getName));
@@ -180,6 +182,7 @@ public class DealPrintService {
             String title = titles.get(item.getPartId());
             lines.add(new Line(
                     title == null ? "Товар без наименования" : title,
+                    conditions.get(item.getPartId()),
                     item.getQuantity(), item.getPrice(),
                     item.getPrice().multiply(item.getQuantity())));
         }
@@ -187,6 +190,7 @@ public class DealPrintService {
             String name = serviceNames.get(service.getServiceId());
             lines.add(new Line(
                     name == null ? "Услуга" : name,
+                    null,
                     service.getQuantity(), service.getPrice(),
                     service.getPrice().multiply(service.getQuantity())));
         }
@@ -217,8 +221,15 @@ public class DealPrintService {
                         String note) {
     }
 
-    /** @param amount цена, умноженная на количество: его считает сервер, а не экран */
-    public record Line(String title, BigDecimal quantity, BigDecimal price,
+    /**
+     * @param condition состояние позиции словом («б/у», «контрактная»); у услуги
+     *                  пусто. Своим полем, а не пометкой в наименовании (задача
+     *                  0314): пометка из наименования уходит (0315, 0316), а новая
+     *                  и б/у — разный товар, и в бумаге, которую покупатель
+     *                  приносит обратно по гарантии, это должно быть написано
+     * @param amount    цена, умноженная на количество: его считает сервер, а не экран
+     */
+    public record Line(String title, String condition, BigDecimal quantity, BigDecimal price,
                        BigDecimal amount) {
     }
 

@@ -38,6 +38,7 @@ function row(overrides: Partial<StockRow> = {}): StockRow {
     qtyAvailable: '3',
     expected: false,
     expectedOn: null,
+    condition: 'USED',
     ...overrides,
   };
 }

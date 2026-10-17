@@ -1,5 +1,6 @@
 import { request } from '../api/client';
 import { normalizeCode } from '../scan/codes';
+import { conditionTitle } from '../inventory/catalog';
 
 /**
  * Этикетки для термопринтера.
@@ -60,6 +61,13 @@ export interface PartLabel {
  * <p>Кодируется неугадываемый код карточки, а не её номер: этикетка попадает
  * к покупателю вместе с деталью, и порядковый номер сказал бы ему, сколько
  * позиций на складе.
+ *
+ * <p>Состояние — полным словом перед ценой, в той же строке: «контрактная ·
+ * 12 500 ₽» (задача 0314). До неё его несла только пометка в наименовании,
+ * а пометка из наименования уходит (0315, 0316) и после смены состояния
+ * и сегодня врёт (0304). Строкой с ценой, а не своей: на 58×40 под
+ * наименованием и штрихкодом лишней строки нет, а самое длинное
+ * «восстановленная · 1 250 000 ₽» в ширину этикетки укладывается.
  */
 export function partLabel(
   publicCode: string,
@@ -68,12 +76,18 @@ export function partLabel(
   // строкой. Приводит её всё равно `Number`, и одна этикетка на оба места
   // дороже, чем один лишний тип в подписи.
   price: string | number | null,
+  /** Код состояния (`PartCondition`); слово ставит {@link conditionTitle}. */
+  condition: string | null | undefined,
 ): PartLabel {
+  const parts = [
+    conditionTitle(condition),
+    price === null ? null : `${Math.round(Number(price)).toLocaleString('ru-RU')} ₽`,
+  ].filter((part): part is string => part !== null);
   return {
     kind: 'part',
     code: normalizeCode(publicCode),
     title,
-    note: price === null ? null : `${Math.round(Number(price)).toLocaleString('ru-RU')} ₽`,
+    note: parts.length === 0 ? null : parts.join(' · '),
   };
 }
 

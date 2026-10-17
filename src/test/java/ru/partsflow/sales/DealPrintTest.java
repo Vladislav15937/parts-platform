@@ -187,6 +187,48 @@ class DealPrintTest extends PostgresTestBase {
     }
 
     /**
+     * Строка документа несёт состояние позиции своим полем (задача 0314).
+     *
+     * <p><b>Как это выглядело для человека.</b> В накладной и чеке состояние
+     * стояло только пометкой в наименовании («Фара … (б/у)»), а пометка
+     * уходит из наименования (0315, 0316). Новая и контрактная — разный товар
+     * и разная цена, и бумага, которую покупатель приносит обратно
+     * по гарантии, обязана это называть. Наименование здесь заведено без
+     * пометки — состояние должно приехать полем.
+     *
+     * <p>У услуги состояния нет: «Доставка (б/у)» не значит ничего.
+     */
+    @Test
+    @DisplayName("В строке документа есть состояние позиции, у услуги его нет")
+    void lineCarriesTheCondition() throws Exception {
+        Long partId = part(tkatskaya, "Насос для состояния в чеке");
+        inTenant(() -> jdbc.update("UPDATE part SET condition = 'CONTRACT' WHERE id = ?", partId));
+        Long delivery = inTenant(() -> {
+            Long found = soleId("SELECT id FROM service WHERE NOT is_archived ORDER BY id LIMIT 1");
+            return found != null ? found : jdbc.queryForObject(
+                    "INSERT INTO service (name, price) VALUES ('Доставка', 500) RETURNING id",
+                    Long.class);
+        });
+
+        var created = mvc.perform(post("/api/deals").with(csrf()).session(login("prodavec"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customerId":%d,
+                                 "items":[{"partId":%d,"quantity":1,"warehouseId":%d}],
+                                 "services":[{"serviceId":%d,"quantity":1,"price":500}]}"""
+                                .formatted(customer, partId, tkatskaya, delivery)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        long dealId = idOf(created.getResponse().getContentAsString());
+
+        mvc.perform(get("/api/deals/" + dealId + "/print").session(login("prodavec")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[0].title").value("Насос для состояния в чеке"))
+                .andExpect(jsonPath("$.lines[0].condition").value("контрактная"))
+                .andExpect(jsonPath("$.lines[1].condition").doesNotExist());
+    }
+
+    /**
      * Пункт 5: счёт выставляет организация, и её реквизиты в документе —
      * не блок склада.
      *
