@@ -21,7 +21,7 @@ import java.util.function.BiFunction;
  *   java -jar app.jar --one-shot=oem-recount                     # проверка: ничего не пишет, печатает отчёт
  *   java -jar app.jar --one-shot=oem-recount --apply             # пересчитать
  *   java -jar app.jar --one-shot=oem-recount --tenant=t_000042   # одна схема
- *   java -jar app.jar --one-shot=oem-recount --apply --no-feed-marks
+ *   java -jar app.jar --one-shot=oem-recount --apply --feed-marks   # и отметки для площадки
  * </pre>
  *
  * <p><b>Проверка — умолчание, правка — явным {@code --apply}</b> (задача 0317).
@@ -45,7 +45,7 @@ public final class OneShotCommand {
     private static final String APPLY = "--apply";
     private static final String DRY_RUN = "--dry-run";
     private static final String TENANT = "--tenant=";
-    private static final String NO_FEED_MARKS = "--no-feed-marks";
+    private static final String FEED_MARKS = "--feed-marks";
 
     /** Разобранная команда. */
     record Plan(String job, boolean apply, String tenant, boolean feedMarks) {
@@ -93,7 +93,7 @@ public final class OneShotCommand {
         boolean apply = false;
         boolean dryRun = false;
         String tenant = null;
-        boolean feedMarks = true;
+        boolean feedMarks = false;
         for (String arg : args) {
             if (arg.startsWith(FLAG)) {
                 job = arg.substring(FLAG.length()).strip();
@@ -103,14 +103,16 @@ public final class OneShotCommand {
                 dryRun = true;
             } else if (arg.startsWith(TENANT)) {
                 tenant = arg.substring(TENANT.length()).strip();
-            } else if (NO_FEED_MARKS.equals(arg)) {
-                feedMarks = false;
+            } else if (FEED_MARKS.equals(arg)) {
+                // Отметки для площадки — только явно: тысячи дельт Дрому разом
+                // не уходят, пока человек не попросил (решение до слова владельца).
+                feedMarks = true;
             } else if (arg.startsWith("--") && !arg.contains("=")) {
                 // Опечатка в «--aply» молча означала бы проверку там, где просили
                 // правку, — безопасно, но человек ушёл бы, считая склад пересчитанным.
                 // С «=» пропускаем: это настройка Spring (адрес базы и т. п.).
                 throw new IllegalArgumentException("Непонятный аргумент " + arg + ". Годятся "
-                        + String.join(", ", List.of(APPLY, DRY_RUN, TENANT + "<схема>", NO_FEED_MARKS)));
+                        + String.join(", ", List.of(APPLY, DRY_RUN, TENANT + "<схема>", FEED_MARKS)));
             }
         }
         if (job == null || !JOBS.containsKey(job)) {

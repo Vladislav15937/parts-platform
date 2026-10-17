@@ -134,6 +134,16 @@ class OemRecountPlanTest {
     }
 
     @Test
+    @DisplayName("Разделитель внутри и русская «А» в той же строке — строка не трогается целиком")
+    void separatorWithAnotherDefectIsLeftWhole() {
+        Row row = row(1, "\u0410-1\t222", "1222", true);
+        PartPlan plan = OemRecount.plan(List.of(row));
+        assertThat(plan.writes()).as("строку с разделителем поправили наполовину").isFalse();
+        assertThat(plan.updates()).isEmpty();
+        assertThat(plan.notes()).extracting(OemRecount.Noted::note).containsExactly(Note.HAS_SEPARATOR);
+    }
+
+    @Test
     @DisplayName("Новый ключ строки держит другая меняющаяся строка — та меняется первой")
     void chainIsOrdered() {
         // Строка 1 займёт ключ «X», который сейчас у строки 2; строка 2 уходит на «Y».

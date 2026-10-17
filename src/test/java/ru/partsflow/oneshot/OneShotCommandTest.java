@@ -18,19 +18,19 @@ class OneShotCommandTest {
         OneShotCommand.Plan plan = OneShotCommand.planOf(new String[]{"--one-shot=oem-recount"});
         assertThat(plan.apply()).isFalse();
         assertThat(plan.tenant()).isNull();
-        assertThat(plan.feedMarks()).isTrue();
+        assertThat(plan.feedMarks()).as("отметки для площадки — только явно").isFalse();
         assertThat(OneShotCommand.planOf(new String[]{"--one-shot=oem-recount", "--dry-run"}).apply()).isFalse();
     }
 
     @Test
-    @DisplayName("--apply, одна схема и без отметок для площадки")
+    @DisplayName("--apply, одна схема и отметки для площадки по ключу")
     void keysAreRead() {
         OneShotCommand.Plan plan = OneShotCommand.planOf(new String[]{
-                "--one-shot=oem-recount", "--apply", "--tenant=t_000042", "--no-feed-marks",
+                "--one-shot=oem-recount", "--apply", "--tenant=t_000042", "--feed-marks",
                 "--spring.datasource.url=jdbc:postgresql://x/y"});
         assertThat(plan.apply()).isTrue();
         assertThat(plan.tenant()).isEqualTo("t_000042");
-        assertThat(plan.feedMarks()).isFalse();
+        assertThat(plan.feedMarks()).isTrue();
     }
 
     @Test
@@ -38,6 +38,9 @@ class OneShotCommandTest {
     void mistakesAreRefused() {
         assertThatThrownBy(() -> OneShotCommand.planOf(new String[]{"--one-shot=oem-recount", "--aply"}))
                 .hasMessageContaining("Непонятный аргумент --aply");
+        assertThatThrownBy(() -> OneShotCommand.planOf(new String[]{"--one-shot=oem-recount", "--no-feed-marks"}))
+                .as("прежний ключ снят: молча принятый, он обещал бы отметки по умолчанию")
+                .hasMessageContaining("Непонятный аргумент --no-feed-marks");
         assertThatThrownBy(() -> OneShotCommand.planOf(new String[]{"--one-shot=nothing"}))
                 .hasMessageContaining("Неизвестная разовая работа");
         assertThatThrownBy(() -> OneShotCommand.planOf(

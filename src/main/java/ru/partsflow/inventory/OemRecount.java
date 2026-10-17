@@ -74,7 +74,10 @@ import java.util.Set;
  *
  * <p><b>Отметка для площадки</b> ({@link PartChangeLog}) ставится позиции, у которой
  * изменился текст номера: прайс Дрома несёт {@code raw_number}, а не приведённый.
- * Сколько таких — отдельное число отчёта; у запуска есть ключ без отметок.
+ * Сколько таких — отдельное число отчёта. <b>По умолчанию отметки не ставятся</b>
+ * (решение координатора до слова владельца: тысячи дельт Дрому молча не слать);
+ * включает их ключ {@code --feed-marks}. Без отметок номер уедет полным прайсом
+ * при следующем заборе.
  */
 @Component
 public class OemRecount {
@@ -162,6 +165,16 @@ public class OemRecount {
         for (Row row : rows) {
             String raw = row.raw();
             String norm = row.normalized();
+            // Строка с разделителем внутри — по правилу записи это несколько номеров,
+            // и делить её пересчёт не берётся (порядок кросс-номеров). Не трогается
+            // целиком, даже если в ней есть и другое отличие от правила (русская «А»):
+            // поправленная наполовину, она выглядела бы пересчитанной и ушла бы
+            // из отчёта о том, что с ней надо решать.
+            if (OemNumbers.list(row.raw()).size() > 1) {
+                notes.add(new Noted(row, Note.HAS_SEPARATOR));
+                target.put(row.id(), new String[]{raw, norm});
+                continue;
+            }
             String cleaned = OemNumbers.clean(row.raw());
             String normalized = OemNumbers.normalize(cleaned);
             boolean differs = !cleaned.equals(row.raw()) || !Objects.equals(normalized, row.normalized());
@@ -174,9 +187,6 @@ public class OemRecount {
                     raw = cleaned;
                     norm = normalized;
                 }
-            }
-            if (OemNumbers.list(row.raw()).size() > 1) {
-                notes.add(new Noted(row, Note.HAS_SEPARATOR));
             }
             target.put(row.id(), new String[]{raw, norm});
         }
@@ -499,12 +509,13 @@ public class OemRecount {
                     t.noted(Note.NOT_A_NUMBER), t.noted(Note.TOO_LONG), t.noted(Note.HAS_SEPARATOR),
                     t.busy, t.cycles);
         }
-        log.info("Итого: позиций {} {}; отметок для площадки {}{}", changed,
+        log.info("Итого: позиций {} {}; позиций, изменившихся для площадки, {} — {}", changed,
                 options.apply() ? "пересчитано" : "будет пересчитано", marks,
-                options.feedMarks() ? "" : " (не ставятся: --no-feed-marks)");
-        if (marks > DELTA_PACKET) {
-            log.warn("Отметок больше пакета дельты ({}): Дром получит их {} пакетами подряд. "
-                            + "Без отметок (--no-feed-marks) номера уедут полным прайсом при следующем заборе",
+                options.feedMarks() ? "отметки ставятся (--feed-marks)"
+                        : "отметки НЕ ставятся (по умолчанию; номера уедут полным прайсом"
+                        + " при следующем заборе, включить — --feed-marks)");
+        if (options.feedMarks() && marks > DELTA_PACKET) {
+            log.warn("Отметок больше пакета дельты ({}): Дром получит их {} пакетами подряд",
                     DELTA_PACKET, (marks + DELTA_PACKET - 1) / DELTA_PACKET);
         }
     }

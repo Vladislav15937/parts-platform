@@ -89,6 +89,40 @@ psql -At -c "select nspname, (xpath('/row/p/text()', x))[1]::text positions, (xp
 * **0312** — предел длины номера; пересчёт не должен породить номер длиннее предела (латинизация длину не меняет, но слияние + срез пробелов — проверить тестом на границе).
 * Порядок относительно серии 0314–0316 не задан: независимы.
 
+## Команды для ПРОМ (исполнитель, PR 457; запускает человек, каждая — одной строкой)
+
+Запускать после выкладки образа с этой задачей, из `~/parts-platform`, в окно наименьшей
+нагрузки. Отметки для площадки по умолчанию **не ставятся** (решение до слова владельца,
+разбор PR 457); включить — дописать ` --feed-marks` к строке пересчёта. Каждый запуск пишет
+свой лог с отметкой времени, пересчёт рядом кладёт файл возврата — повторный `--apply`
+прежний не затирает.
+
+Замер до и после:
+
+```
+docker exec partsflow-cell01-postgres-1 psql -U partsflow -d "$(ops/switch-build.sh --current-db)" -At -c "select nspname, (xpath('/row/p/text()', x))[1]::text positions, (xpath('/row/r/text()', x))[1]::text rows from (select nspname, query_to_xml(format('select count(distinct part_id) p, count(*) r from %I.part_oem where raw_number ~ %L', nspname, '[АВЕКМНОРСТХаеорсх]|^[[:space:]' || chr(160) || chr(8203) || ']|[[:space:]' || chr(160) || chr(8203) || ']$'), false, true, '') x from pg_namespace where nspname ~ '^t_[0-9]+$') s order by 1"
+```
+
+Проверка (ничего не пишет):
+
+```
+B=$(ops/switch-build.sh --current) && L=~/oem-recount-dry-$(date -u +%Y%m%dT%H%M%SZ).log && docker compose -f docker-compose.prod.yml --env-file .env --profile ${B#app-} run --rm --no-deps -T $B --one-shot=oem-recount 2>&1 | tee $L | grep -E "OemRecount|ERROR" | grep -v "restore-sql\|: позиция"; echo "отчёт целиком: $L"
+```
+
+Пересчёт (сохраните лог проверки до этого шага):
+
+```
+B=$(ops/switch-build.sh --current) && L=~/oem-recount-apply-$(date -u +%Y%m%dT%H%M%SZ).log && docker compose -f docker-compose.prod.yml --env-file .env --profile ${B#app-} run --rm --no-deps -T $B --one-shot=oem-recount --apply 2>&1 | tee $L | grep -E "OemRecount|ERROR" | grep -v "restore-sql\|: позиция"; sed -n 's/.*restore-sql: //p' $L > ${L%.log}.restore.sql; echo "лог: $L; возврат: ${L%.log}.restore.sql ($(wc -l < ${L%.log}.restore.sql) строк)"
+```
+
+После: строка замера и строка проверки ещё раз — у каждого арендатора «0 позиций будет
+пересчитано» (кроме «не номер», они остаются названными). Возврат, только если надо
+откатить, — одной транзакцией, ВРЕМЯ — из имени файла, напечатанного пересчётом:
+
+```
+docker exec -i partsflow-cell01-postgres-1 psql -1 -v ON_ERROR_STOP=1 -U partsflow -d "$(ops/switch-build.sh --current-db)" < ~/oem-recount-apply-ВРЕМЯ.restore.sql
+```
+
 ## Замер на ПРОМ (заполняется человеком)
 
 До: — (не снято)
