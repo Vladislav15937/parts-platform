@@ -20,11 +20,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
 
-import java.lang.reflect.RecordComponent;
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -60,9 +57,6 @@ class PartPartialEditTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000987";
 
-    /** Не поле карточки, а указание, что сделать с ценой. */
-    private static final Set<String> NOT_A_FIELD = Set.of("priceOp");
-
     /**
      * Пустое значение здесь — «не трогать», как и до задачи: у колонки
      * {@code NOT NULL} пустого не бывает, а пустая цена значит «цену не трогаем»;
@@ -83,7 +77,7 @@ class PartPartialEditTest extends PostgresTestBase {
      * поле этими словами: читаются они из самого экрана, а не переписываются
      * сюда, — иначе разошлись бы на первой правке подписи.
      */
-    private static final Map<String, String> SCREEN_LABELS = screenLabels();
+    private static final Map<String, String> SCREEN_LABELS = PartEditValues.screenLabels();
 
     @Autowired
     private MockMvc mvc;
@@ -217,8 +211,15 @@ class PartPartialEditTest extends PostgresTestBase {
         }
     }
 
+    /**
+     * Занято всё присланное — записывать нечего, и ответ прежний: 409 со словами
+     * экрана (задача 0313, п. 3). До 0313 здесь же стояло соседнее поле без
+     * конфликта и проверялось, что не сохраняется и оно («всё или ничего»,
+     * решение исполнителя в PR 449); владелец выбрал другое, и соседнее поле
+     * теперь сохраняется — это стережёт {@code PartConflictSaveTest}.
+     */
     @Test
-    @DisplayName("Поле успели изменить — 409 с его названием, и не сохраняется ничего из запроса")
+    @DisplayName("Занято единственное присланное поле — 409 с его названием, и не сохраняется ничего")
     void staleSeenValueIsRefusedByName() throws Exception {
         MockHttpSession owner = login("vladelec0307");
         Map<String, JsonNode> changed = changed();
@@ -227,12 +228,7 @@ class PartPartialEditTest extends PostgresTestBase {
             JsonNode before = editable(owner);
             ObjectNode body = json.createObjectNode();
             body.set(key, changed.get(key));
-            // Соседнее поле без конфликта: «всё или ничего» — оно тоже не сохраняется.
-            String neighbour = key.equals("note") ? "marking" : "note";
-            body.put(neighbour, "соседнее из того же запроса " + key);
-            ObjectNode seen = body.putObject("seen");
-            seen.set(key, foreign(before.get(key)));
-            seen.set(neighbour, before.get(neighbour));
+            body.putObject("seen").set(key, foreign(before.get(key)));
 
             MvcResult result = send(owner, body);
             String message = json.readTree(text(result)).path("message").asText();
@@ -391,152 +387,32 @@ class PartPartialEditTest extends PostgresTestBase {
 
     // ------------------------------------------------------------------ значения
 
-    /** Заполнение позиции целиком — до проверок. */
+    private PartEditValues values() {
+        return new PartEditValues(json, suffix, number, cellA, cellB);
+    }
+
     private Map<String, JsonNode> initial() {
-        Map<String, Object> v = new LinkedHashMap<>();
-        v.put("price", 4500);
-        v.put("minPrice", 3000);
-        v.put("costPrice", 1000);
-        v.put("installationPrice", 500);
-        v.put("condition", "USED");
-        v.put("qualityGrade", "AS_NEW");
-        v.put("description", "Комментарий исходный");
-        v.put("note", "Заметка исходная");
-        v.put("textBlock", "Блок исходный");
-        v.put("videoUrl", "https://video.example/1");
-        v.put("marking", "МАРК-1");
-        v.put("manufacturer", "Koito");
-        v.put("color", "чёрный");
-        v.put("section", "С-1");
-        v.put("barcode", "BC1-" + suffix);
-        v.put("weightKg", 2.5);
-        v.put("lengthMm", 100);
-        v.put("widthMm", 200);
-        v.put("heightMm", 300);
-        v.put("packageLengthMm", 110);
-        v.put("packageWidthMm", 210);
-        v.put("packageHeightMm", 310);
-        v.put("packageWeightKg", 3.5);
-        v.put("storageCellId", cellA);
-        v.put("published", true);
-        v.put("warranty", "Гарантия 14 дней");
-        v.put("pickup", "Самовывоз с Ткацкой");
-        v.put("deliveryPayment", "Доставка ТК");
-        v.put("dromKind", "Фара");
-        v.put("dromSection", "Оптика");
-        v.put("applicability", "Toyota Camry");
-        v.put("characteristics", "Цвет: чёрный");
-        v.put("mayFit", "Toyota Mark X");
-        v.put("adDate", "2026-09-28");
-        v.put("priceOp", "SET");
-        v.put("number", number);
-        v.put("code", "CODE1-" + suffix);
-        v.put("title", "Фара исходная");
-        v.put("sideLr", "LEFT");
-        v.put("sideFr", "FRONT");
-        v.put("authenticity", "Оригинал");
-        v.put("oem", "81170-33670");
-        v.put("crosses", "81170-33671");
-        v.put("legacyCode", "LEG1-" + suffix);
-        v.put("dromAdNumber", "1256963" + suffix);
-        v.put("donorCode", "261");
-        v.put("brand", "Toyota");
-        v.put("model", "Camry");
-        v.put("generation", "XV40");
-        v.put("body", "ACV40");
-        v.put("engine", "2AZ-FE");
-        v.put("year", "2006");
-        v.put("equipment", "полный привод");
-        return nodes(v);
+        return values().initial();
     }
 
-    /** Новое значение каждого поля — другое, чем в {@link #initial()}. */
     private Map<String, JsonNode> changed() {
-        Map<String, Object> v = new LinkedHashMap<>();
-        v.put("price", 4600);
-        v.put("minPrice", 3100);
-        v.put("costPrice", 1100);
-        v.put("installationPrice", 600);
-        v.put("condition", "CONTRACT");
-        v.put("qualityGrade", "WITH_DEFECTS");
-        v.put("description", "Комментарий новый");
-        v.put("note", "Заметка новая");
-        v.put("textBlock", "Блок новый");
-        v.put("videoUrl", "https://video.example/2");
-        v.put("marking", "МАРК-2");
-        v.put("manufacturer", "Depo");
-        v.put("color", "белый");
-        v.put("section", "С-2");
-        v.put("barcode", "BC2-" + suffix);
-        v.put("weightKg", 2.7);
-        v.put("lengthMm", 101);
-        v.put("widthMm", 201);
-        v.put("heightMm", 301);
-        v.put("packageLengthMm", 111);
-        v.put("packageWidthMm", 211);
-        v.put("packageHeightMm", 311);
-        v.put("packageWeightKg", 3.7);
-        v.put("storageCellId", cellB);
-        v.put("published", false);
-        v.put("warranty", "Гарантия 30 дней");
-        v.put("pickup", "Самовывоз с Дальнего");
-        v.put("deliveryPayment", "Доставка курьером");
-        v.put("dromKind", "Фара противотуманная");
-        v.put("dromSection", "Освещение");
-        v.put("applicability", "Toyota Camry, Toyota Aurion");
-        v.put("characteristics", "Цвет: белый");
-        v.put("mayFit", "Toyota Windom");
-        v.put("adDate", "2026-10-01");
-        v.put("number", number + 1);
-        v.put("code", "CODE2-" + suffix);
-        v.put("title", "Фара новая");
-        v.put("sideLr", "RIGHT");
-        v.put("sideFr", "REAR");
-        v.put("authenticity", "Копия");
-        v.put("oem", "81170-33680");
-        v.put("crosses", "81170-33681");
-        v.put("legacyCode", "LEG2-" + suffix);
-        v.put("dromAdNumber", "1256964" + suffix);
-        v.put("donorCode", "262");
-        v.put("brand", "Lexus");
-        v.put("model", "ES350");
-        v.put("generation", "XV50");
-        v.put("body", "GSV40");
-        v.put("engine", "2GR-FE");
-        v.put("year", "2008");
-        v.put("equipment", "передний привод");
-        return nodes(v);
+        return values().changed();
     }
 
-    /** «Увиденное», которого в базе уже нет: значение, отличное от текущего. */
     private JsonNode foreign(JsonNode current) {
-        if (current == null || current.isNull()) {
-            return json.getNodeFactory().textNode("чужое значение");
-        }
-        if (current.isBoolean()) {
-            return json.getNodeFactory().booleanNode(!current.booleanValue());
-        }
-        if (current.isNumber()) {
-            return json.getNodeFactory().numberNode(current.decimalValue().add(BigDecimal.valueOf(7)));
-        }
-        return json.getNodeFactory().textNode(current.asText() + " — чужая правка");
+        return values().foreign(current);
     }
 
-    private Map<String, JsonNode> nodes(Map<String, Object> values) {
-        Map<String, JsonNode> out = new LinkedHashMap<>();
-        values.forEach((key, value) -> out.put(key, json.valueToTree(value)));
-        return out;
-    }
-
-    /** Все поля формы — компоненты записи, кроме указания про цену. */
     private static List<String> fieldKeys() {
-        List<String> keys = new ArrayList<>();
-        for (RecordComponent component : PartController.UpdateRequest.class.getRecordComponents()) {
-            if (!NOT_A_FIELD.contains(component.getName())) {
-                keys.add(component.getName());
-            }
-        }
-        return keys;
+        return PartEditValues.fieldKeys();
+    }
+
+    private static boolean same(JsonNode a, JsonNode b) {
+        return PartEditValues.same(a, b);
+    }
+
+    private static boolean blank(JsonNode node) {
+        return PartEditValues.blank(node);
     }
 
     /** Правка одного поля так, как её шлёт экран: значение и то, что человек видел. */
@@ -547,41 +423,7 @@ class PartPartialEditTest extends PostgresTestBase {
         return body;
     }
 
-    private static boolean same(JsonNode a, JsonNode b) {
-        if (blank(a) && blank(b)) {
-            return true;
-        }
-        if (a == null || b == null) {
-            return false;
-        }
-        if (a.isNumber() && b.isNumber()) {
-            return a.decimalValue().compareTo(b.decimalValue()) == 0;
-        }
-        return a.equals(b);
-    }
-
-    private static boolean blank(JsonNode node) {
-        return node == null || node.isNull() || (node.isTextual() && node.asText().isEmpty());
-    }
-
     // ------------------------------------------------------------------ помощники
-
-    private static Map<String, String> screenLabels() {
-        try {
-            String form = java.nio.file.Files.readString(
-                    java.nio.file.Path.of("frontend/src/screens/PartEditForm.tsx"));
-            Map<String, String> labels = new LinkedHashMap<>();
-            var m = java.util.regex.Pattern.compile("key: '(\\w+)', label: '([^']+)'").matcher(form);
-            while (m.find()) {
-                labels.put(m.group(1), m.group(2));
-            }
-            assertThat(labels).as("подписи формы правки не нашлись в PartEditForm.tsx")
-                    .containsKeys("price", "note", "oem");
-            return labels;
-        } catch (java.io.IOException e) {
-            throw new IllegalStateException(e);
-        }
-    }
 
     private MvcResult send(MockHttpSession session, JsonNode body) throws Exception {
         return mvc.perform(put("/api/parts/" + partId).with(csrf()).session(session)

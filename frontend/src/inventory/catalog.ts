@@ -1,5 +1,6 @@
 import { request } from '../api/client';
 import { count, plural } from '../ui/plural';
+import type { NotSavedField } from './notSaved';
 
 /**
  * Витрина склада: таблица товаров для владельца.
@@ -1172,16 +1173,18 @@ export function loadEditable(partId: number): Promise<PartEdit> {
  * откатывала цену, которую успела поменять первая.
  *
  * <p>`seen` — что человек видел у этих полей при открытии формы, как пришло
- * с сервера. Разошлось с базой — поле успел изменить другой, и сервер
- * отвечает 409 с его названием, не сохраняя из запроса ничего.
+ * с сервера. Разошлось с базой — поле успел изменить другой, и сервер его
+ * не сохраняет, а остальное сохраняет (задача 0313): ответ 200, несохранённое —
+ * в `notSaved`. Занято всё присланное — 409 с названием поля, и не сохранено
+ * ничего.
  */
 export function savePart(
   partId: number,
   edit: Partial<PartEdit>,
   priceOp: PriceOperation = 'SET',
   seen?: Partial<PartEdit>,
-): Promise<{ price: number | null }> {
-  return request<{ price: number | null }>(`/api/parts/${partId}`, {
+): Promise<SavedPart> {
+  return request<SavedPart>(`/api/parts/${partId}`, {
     method: 'PUT',
     // При арифметике `price` несёт не новую цену, а значение операции —
     // процент, сумму или шаг. Считает сервер: тот же расчёт нужен правке
@@ -1193,6 +1196,20 @@ export function savePart(
       ...(seen === undefined ? {} : { seen }),
     } as unknown as Record<string, unknown>,
   });
+}
+
+/**
+ * Ответ сохранения карточки.
+ *
+ * <p>`notSaved` и `form` необязательны: сервер прежней версии (выкладка идёт,
+ * вкладка новая) их не шлёт, и отсутствие читается как «сохранено всё».
+ */
+export interface SavedPart {
+  price: number | null;
+  /** Что не сохранилось из-за чужой правки; пусто — сохранено всё (задача 0313). */
+  notSaved?: NotSavedField[];
+  /** Форма после записи — тем же видом, что `loadEditable`. */
+  form?: PartEdit;
 }
 
 /**

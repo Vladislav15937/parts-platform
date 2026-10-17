@@ -230,7 +230,10 @@ public class PartService {
      * патч»). Ключа нет — поле не трогается ({@link PartUpdate#has}); ключ есть
      * и {@code null} — очищено. Вторая вкладка, сохранявшая форму целиком,
      * откатывала чужую цену до увиденной при открытии. Увиденное, разошедшееся
-     * с базой, — отказ целиком ({@link PartEditConflicts}).
+     * с базой, снимает с записи только это поле (задача 0313, ответ владельца
+     * продукта 17.10.2026: «не сохраняются только конфликтные поля, а остальные
+     * сохраняются»); занято всё присланное — отказ целиком
+     * ({@link PartEditConflicts}).
      *
      * <p><b>Заголовок сюда не входит.</b> Он производный — собирается
      * из эталона наименования, машины, стороны и состояния, — и правка руками
@@ -259,7 +262,7 @@ public class PartService {
      * списком, и две копии разошлись бы на первом округлении.
      */
     @Transactional
-    public Part update(Long partId, PartUpdate update, Long authorId) {
+    public Edited update(Long partId, PartUpdate request, Long authorId) {
         // Под блокировкой строки (задача 0307): две правки одной карточки идут
         // по очереди, и вторая сверяет увиденное уже с записанным первой.
         // Без неё обе прочли бы одно и то же и обе прошли бы сверку — ровно
@@ -267,17 +270,31 @@ public class PartService {
         Part part = partRepository.findByIdForUpdate(partId)
                 .orElseThrow(() -> NotFound.PART.error(partId));
 
-        PriceOperation priceOp = update.priceOp() == null ? PriceOperation.SET : update.priceOp();
-        // До всякой записи: отказ по чужой правке не сохраняет из запроса
-        // ничего — полусохранённая форма хуже отказа целиком.
-        if (update.base() != null && update.base().seen() != null) {
+        PartUpdate update = request;
+        List<NotSaved> notSaved = List.of();
+        // Сверка — до всякой записи и под той же блокировкой (задача 0313):
+        // занятое поле исключается из присваиваний, а не откатывается после.
+        // Так история, журнал и событие цены для площадок видят только то, что
+        // прошло сверку, — откат после записи оставил бы в них правку, которой нет.
+        if (request.base() != null && request.base().seen() != null) {
+            PriceOperation askedOp = request.priceOp() == null ? PriceOperation.SET : request.priceOp();
             List<String> taken = PartEditConflicts.conflicting(formOf(part),
-                    update.base().wanted(), update.base().seen(), priceOp.arithmetic());
+                    request.base().wanted(), request.base().seen(), askedOp.arithmetic());
             if (!taken.isEmpty()) {
-                log.warn("Правка позиции {} отбита: поля {} уже изменил другой", partId, taken);
-                throw new IllegalStateException(PartEditConflicts.message(taken));
+                notSaved = PartEditConflicts.notSaved(taken, request.base().wanted());
+                update = withoutTaken(request, notSaved);
+                if (update == null) {
+                    // Записывать нечего — тот же отказ, что и до 0313: 409 честнее,
+                    // чем «сохранено» над пустой записью.
+                    log.warn("Правка позиции {} отбита: поля {} уже изменил другой", partId, taken);
+                    throw new IllegalStateException(PartEditConflicts.message(
+                            taken.stream().map(PartEditConflicts::label).toList()));
+                }
+                log.warn("Правка позиции {}: поля {} уже изменил другой, сохранено остальное",
+                        partId, taken);
             }
         }
+        PriceOperation priceOp = update.priceOp() == null ? PriceOperation.SET : update.priceOp();
 
         if (!priceOp.arithmetic() && update.price() != null && update.price().signum() < 0) {
             throw new IllegalArgumentException("Цена не может быть отрицательной");
@@ -397,7 +414,43 @@ public class PartService {
             eventPublisher.publish(DomainEvent.of(
                     "part", part.getId(), "part.price_changed.v1", payloadOf(part)));
         }
-        return part;
+        return new Edited(part, notSaved, formValues(part));
+    }
+
+    /**
+     * Запрос без занятых полей и их связок — тем же разбором, что у контроллера:
+     * поле, снятое из тела, становится «ключа нет», то есть «не трогать», у всех
+     * полей разом, включая те, что мимо сущности. Оставшийся набор — подмножество
+     * уже проверенного тела, поэтому валидация не повторяется.
+     *
+     * @return {@code null}, если снимать пришлось всё присланное
+     */
+    private PartUpdate withoutTaken(PartUpdate request, List<NotSaved> notSaved) {
+        com.fasterxml.jackson.databind.node.ObjectNode rest =
+                ((com.fasterxml.jackson.databind.node.ObjectNode) request.base().wanted()).deepCopy();
+        for (NotSaved field : notSaved) {
+            rest.remove(field.key());
+            if (field.key().equals("price")) {
+                // Операция без цены — снова просьба о цене (0307), поэтому уходит вместе с ней.
+                rest.remove(PartEditConflicts.PRICE_OP);
+            }
+        }
+        java.util.Set<String> left = new java.util.HashSet<>();
+        rest.fieldNames().forEachRemaining(left::add);
+        left.remove(PartEditConflicts.PRICE_OP);
+        if (left.isEmpty()) {
+            return null;
+        }
+        try {
+            PartController.UpdateRequest fields = json.treeToValue(rest, PartController.UpdateRequest.class);
+            java.util.Set<String> sent = new java.util.HashSet<>();
+            rest.fieldNames().forEachRemaining(sent::add);
+            return fields.toUpdate(java.util.Set.copyOf(sent),
+                    new EditBase(rest, request.base().seen()));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException unreadable) {
+            // То же тело уже разобрано контроллером; сюда не дойти.
+            throw new IllegalStateException("Запрос не разобран", unreadable);
+        }
     }
 
     /**
@@ -407,8 +460,12 @@ public class PartService {
      * и поле, которое форма показывает одним написанием, сравнивалось бы с другим.
      */
     private com.fasterxml.jackson.databind.JsonNode formOf(Part part) {
-        return json.valueToTree(PartController.UpdateRequest.of(part,
-                entityManager.find(PartDromCard.class, part.getId()), identity.of(part.getId())));
+        return json.valueToTree(formValues(part));
+    }
+
+    private PartController.UpdateRequest formValues(Part part) {
+        return PartController.UpdateRequest.of(part,
+                entityManager.find(PartDromCard.class, part.getId()), identity.of(part.getId()));
     }
 
     /**
@@ -1065,6 +1122,25 @@ public class PartService {
      */
     public record EditBase(com.fasterxml.jackson.databind.JsonNode wanted,
                            com.fasterxml.jackson.databind.JsonNode seen) {
+    }
+
+    /**
+     * Поле запроса, не сохранённое из-за чужой правки (задача 0313).
+     *
+     * @param key   ключ поля формы — по нему экран находит строку
+     * @param label подпись строки, словами формы
+     * @param cause подпись поля, которое изменил другой: у занятого — оно само,
+     *              у члена связки — тот, из-за кого связку не записали
+     */
+    public record NotSaved(String key, String label, String cause) {
+    }
+
+    /**
+     * Итог правки: позиция, что не сохранилось и форма после записи — той же
+     * транзакцией, чтобы экран обновил снимок тем, что легло, а не перечитал
+     * позже и не принял чужую правку за увиденную.
+     */
+    public record Edited(Part part, List<NotSaved> notSaved, PartController.UpdateRequest form) {
     }
 
     /** Сторона кодом перечисления; пусто — стороны нет; чужое слово — отказ словами. */

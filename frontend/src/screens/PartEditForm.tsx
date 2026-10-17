@@ -7,6 +7,7 @@ import {
 } from '../inventory/catalog';
 import { generationOf, shownTitle } from '../inventory/partCard';
 import { LongNumberNote } from '../inventory/LongNumberNote';
+import { notSavedNote, notSavedSummary, type NotSavedField } from '../inventory/notSaved';
 import { count, plural } from '../ui/plural';
 import { useMounted } from '../ui/useMounted';
 import { ApplicabilityView } from './ApplicabilityView';
@@ -86,6 +87,12 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [priceOp, setPriceOp] = useState<PriceOperation>('SET');
+  /**
+   * Что из последнего сохранения не легло: то же поле успел изменить другой
+   * (задача 0313). Остальное сохранено, и форма об этом говорит, а не
+   * закрывается молча.
+   */
+  const [notSaved, setNotSaved] = useState<NotSavedField[]>([]);
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
   // Подсказки марки и модели (задача 0308): справочник — по первому раскрытию.
@@ -161,8 +168,15 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
         toEdit(touched ? form : { ...form, price: loaded.price }, open),
         toEdit(shownDraft(loaded, row), open), card, op);
       // Раскрыли и ничего не поменяли — писать нечего: в базе то, что видно.
-      if (Object.keys(edit).length > 0) await savePart(partId, edit, op, seen);
-      if (mounted.current) onSaved();
+      const saved = Object.keys(edit).length > 0
+        ? await savePart(partId, edit, op, seen) : null;
+      if (!mounted.current) return;
+      const lost = saved?.notSaved ?? [];
+      if (lost.length === 0) {
+        onSaved();
+        return;
+      }
+      keepNotSaved(lost, saved?.form ?? null);
     } catch (e) {
       if (mounted.current) {
         setError(e instanceof ApiError ? e.message : 'Не удалось сохранить');
@@ -171,6 +185,44 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
       if (mounted.current) setSaving(false);
     }
   }
+
+  /**
+   * Сохранено не всё (задача 0313): сохранённое перестаёт быть изменённым,
+   * несохранённое остаётся раскрытым с набранным.
+   *
+   * <p>Снимок формы (`card`, `loaded`) берётся из ответа сервера — тем, что
+   * легло, — и следующее «Сохранить» не шлёт сохранённое заново. У несохранённых
+   * полей снимок остаётся прежним, а не чужим: подставь туда значение другого
+   * человека увиденным — и повторное «Сохранить» молча затёрло бы его правку,
+   * которой этот человек так и не видел. Поэтому повтор без перезагрузки снова
+   * получит отказ, и ровно об этом просит строка у поля.
+   */
+  function keepNotSaved(lost: NotSavedField[], after: PartEdit | null): void {
+    if (form === null || card === null) return;
+    const keys = new Set(lost.map((f) => f.key));
+    const nextCard = { ...(after ?? card) } as unknown as Record<string, unknown>;
+    const wasCard = card as unknown as Record<string, unknown>;
+    for (const key of keys) nextCard[key] = wasCard[key];
+    const nextLoaded = draftOf(nextCard as unknown as PartEdit);
+    const nextForm = { ...nextLoaded } as unknown as Record<string, unknown>;
+    const typed = form as unknown as Record<string, unknown>;
+    for (const key of keys) {
+      if (key in nextForm) nextForm[key] = typed[key];
+    }
+    setCard(nextCard as unknown as PartEdit);
+    setLoaded(nextLoaded);
+    setForm(nextForm as unknown as Draft);
+    setOpen((was) => was.filter((k) => keys.has(k)));
+    if (!keys.has('price')) setPriceOp('SET');
+    setNotSaved(lost);
+  }
+
+  /**
+   * После частичного сохранения «Отмена» уже ничего не отменяет: часть легла.
+   * Закрытие перечитывает карточку (`onSaved` — «закрыть и перечитать»), иначе
+   * за формой осталась бы прежняя цена или заметка.
+   */
+  const close = notSaved.length > 0 ? onSaved : onCancel;
 
   if (form === null) {
     return (
@@ -184,11 +236,15 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
 
   return (
     <div className="card-edit">
+      {notSaved.length > 0 && (
+        <p className="note note--error" role="status">{notSavedSummary(notSaved)}</p>
+      )}
       {SECTIONS.map((section) => (
         <Fragment key={section.title}>
           <h4>{section.title}</h4>
           {section.fields.map((field) => {
             const opened = open.includes(field.key);
+            const lost = notSavedOf(notSaved, field.key);
             return (
               <div
                 key={field.key}
@@ -213,6 +269,8 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
                       длинное значение, сохранённое раньше, видно при открытии. */}
                   {(field.key === 'oem' || field.key === 'crosses')
                     && <LongNumberNote field={field.key} value={form[field.key]} />}
+                  {opened && lost !== null
+                    && <span className="card-edit__not-saved">{notSavedNote(lost)}</span>}
                 </span>
                 {opened
                     ? (
@@ -251,12 +309,16 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
                 onClick={() => void save()}>
           {saving ? 'Сохраняем…' : 'Сохранить'}
         </button>
-        <button type="button" className="button--ghost" onClick={onCancel}>
-          Отмена
+        <button type="button" className="button--ghost" onClick={close}>
+          {notSaved.length > 0 ? 'Закрыть' : 'Отмена'}
         </button>
       </div>
     </div>
   );
+}
+
+function notSavedOf(list: readonly NotSavedField[], key: string): NotSavedField | null {
+  return list.find((f) => f.key === key) ?? null;
 }
 
 /**

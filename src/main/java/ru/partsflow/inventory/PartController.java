@@ -237,9 +237,13 @@ public class PartController {
      *
      * <p><b>Рядом с изменённым экран шлёт то, что человек видел</b> ({@code seen}).
      * Не совпало с базой — поле успел изменить другой, и сервер не сохраняет
-     * из запроса ничего, отвечая 409 с названием поля
-     * ({@link PartEditConflicts}). Без {@code seen} сверять не с чем, и правка
-     * принимается без проверки — так шлёт старая вкладка.
+     * только его (задача 0313, ответ владельца продукта 17.10.2026: «не
+     * сохраняются только конфликтные поля, а остальные сохраняются»): ответ 200,
+     * а в {@code notSaved} — что не легло, словами формы ({@link PartEditConflicts}).
+     * 409 при частичном успехе нельзя: любой клиент прочёл бы его как «ничего
+     * не сохранено» и показал красное над уже записанным. Занято всё присланное —
+     * записывать нечего, и ответ прежний: 409 с названием поля. Без {@code seen}
+     * сверять не с чем, и правка принимается без проверки — так шлёт старая вкладка.
      */
     /**
      * <p><b>Замков на полях нет ни у одного, и у состояния тоже</b> (задача 0302,
@@ -255,10 +259,10 @@ public class PartController {
      */
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public PartView update(@PathVariable Long id, @Valid @RequestBody EditRequest request) {
+    public EditResult update(@PathVariable Long id, @Valid @RequestBody EditRequest request) {
         UpdateRequest fields = request.fields();
         try {
-            return PartView.of(partService.update(id, fields.toUpdate(request.sent(),
+            return EditResult.of(partService.update(id, fields.toUpdate(request.sent(),
                     new PartService.EditBase(request.wanted(), request.seen())),
                     CurrentUser.memberId()));
         } catch (DataIntegrityViolationException taken) {
@@ -507,6 +511,31 @@ public class PartController {
                     storageCellId, published, warranty, pickup, deliveryPayment,
                     dromKind, dromSection, applicability, characteristics, mayFit, adDate, priceOp,
                     title, sideLr, sideFr, legacyCode, identity(), sent, base);
+        }
+    }
+
+    /**
+     * Ответ правки карточки: прежние поля {@link PartView} на своих местах —
+     * вкладка, не знающая {@code notSaved}, читает ответ как раньше, — плюс
+     * что не сохранилось (пусто — сохранено всё) и форма после записи: экран
+     * обновляет ею снимок у сохранённого, чтобы следующее «Сохранить» не слало
+     * его заново (задача 0313).
+     */
+    public record EditResult(
+            Long id,
+            String publicCode,
+            String title,
+            BigDecimal price,
+            BigDecimal qtyOnHand,
+            PartStatus status,
+            List<PartService.NotSaved> notSaved,
+            UpdateRequest form
+    ) {
+        static EditResult of(PartService.Edited edited) {
+            Part part = edited.part();
+            return new EditResult(part.getId(), part.getPublicCode(), part.getTitle(),
+                    part.getPrice(), part.getQtyOnHand(), part.getStatus(),
+                    edited.notSaved(), edited.form());
         }
     }
 

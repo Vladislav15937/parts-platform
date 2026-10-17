@@ -5,8 +5,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Чужая правка того же поля карточки — задача 0307.
@@ -22,6 +24,13 @@ import java.util.Map;
  * а не по колонкам: экран видел именно его, и именно его он присылает обратно.
  * Отсюда один перебор на все поля, включая номер производителя и машину
  * позиции, которые лежат мимо сущности.
+ *
+ * <p><b>Не сохраняются только занятые поля, остальные сохраняются</b> (задача
+ * 0313, ответ владельца продукта 17.10.2026 дословно: «3 - не сохраняются только
+ * конфликтные поля, а остальные сохраняются»). До неё отказ по одному полю
+ * не сохранял из запроса ничего — решение исполнителя в PR 449, отменённое.
+ * Единица — поле формы, кроме связок ({@link #BUNDLES}): их нельзя записать
+ * врозь, и занятый член связки снимает с записи всю связку.
  */
 final class PartEditConflicts {
 
@@ -85,11 +94,63 @@ final class PartEditConflicts {
             // В форме строки нет — ячейку правят перестановкой, — но ключ в запросе бывает.
             Map.entry("storageCellId", "Ячейка"));
 
+    /**
+     * Поля, которые пишутся только вместе.
+     *
+     * <p>Номер производителя и кросс-номера — одна связка: набор номеров
+     * переписывается целиком, когда тронут хоть один ({@code PartIdentity.applyOem}),
+     * и номер, ставший главным, мог стоять среди кросс-номеров, — записать одну
+     * половину набора поверх чужой второй значит собрать набор, которого не видел
+     * ни один из двоих. Цена с арифметикой связана с {@code priceOp}, но это
+     * не поле формы: операция просто уходит вместе с ценой ({@link #PRICE_OP}).
+     *
+     * <p>Марка и модель — <b>не</b> связка, и это проверено по коду: у позиции
+     * свои колонки на каждое ({@code PartIdentity.apply}, по одной на поле), и
+     * «пустое своё — по полю» решено в 0302 — марку правят, не трогая модель.
+     * Так же размеры, стороны и цены с минимальной ценой: каждое пишется само.
+     */
+    private static final List<Set<String>> BUNDLES = List.of(Set.of("oem", "crosses"));
+
+    /** Указание, что сделать с ценой: не поле формы, а часть цены. */
+    static final String PRICE_OP = "priceOp";
+
     private PartEditConflicts() {
     }
 
+    /** Подпись поля словами строки формы; ключ без строки — сам ключ не печатается. */
+    static String label(String key) {
+        return LABELS.getOrDefault(key, "поле формы");
+    }
+
     /**
-     * Названия полей, которые успел изменить другой.
+     * Что из запроса не сохраняется: занятые поля и пришедшие вместе с ними
+     * члены их связок. Порядок — порядок занятых, за каждым — его связка.
+     *
+     * @param taken  ключи занятых полей ({@link #conflicting})
+     * @param wanted тело запроса: член связки не пришёл — и снимать нечего
+     */
+    static List<PartService.NotSaved> notSaved(List<String> taken, JsonNode wanted) {
+        Map<String, PartService.NotSaved> out = new LinkedHashMap<>();
+        for (String key : taken) {
+            out.put(key, new PartService.NotSaved(key, label(key), label(key)));
+        }
+        for (String key : taken) {
+            for (Set<String> bundle : BUNDLES) {
+                if (!bundle.contains(key)) {
+                    continue;
+                }
+                for (String partner : bundle) {
+                    if (wanted.has(partner) && !out.containsKey(partner)) {
+                        out.put(partner, new PartService.NotSaved(partner, label(partner), label(key)));
+                    }
+                }
+            }
+        }
+        return new ArrayList<>(out.values());
+    }
+
+    /**
+     * Ключи полей, которые успел изменить другой.
      *
      * @param current         карточка в базе сейчас, видом формы правки
      * @param wanted          тело запроса: что хотят записать
@@ -115,12 +176,15 @@ final class PartEditConflicts {
             if (!arithmetic && same(wanted.get(key), current.get(key))) {
                 continue;
             }
-            taken.add(LABELS.get(key));
+            taken.add(key);
         }
         return taken;
     }
 
-    /** Текст отказа — один на все поля; номеров в нём нет, только слова экрана. */
+    /**
+     * Текст отказа, когда занято всё присланное, — один на все поля; номеров
+     * в нём нет, только слова экрана.
+     */
     static String message(List<String> labels) {
         String tail = " уже изменил другой человек. Перезагрузите страницу и повторите правку";
         if (labels.size() == 1) {

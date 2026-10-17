@@ -2368,6 +2368,12 @@ hr {
   color: var(--danger);
 }
 
+/* Поле не сохранилось — его успел изменить другой (задача 0313). */
+.card-edit__not-saved {
+  display: block;
+  color: var(--danger);
+}
+
 .card-edit__row .button--ghost {
   border: none;
   padding: 0 0.5rem;
