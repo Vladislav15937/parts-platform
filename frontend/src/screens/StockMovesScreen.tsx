@@ -1,7 +1,9 @@
 import { Fragment, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { loadMoveJournal, loadMoveLines, type MoveDocument, type MoveLine } from '../inventory/moves';
-import { loadCatalog, NO_VEHICLE, type CatalogRow, type Warehouse } from '../inventory/catalog';
+import {
+  conditionTitle, loadCatalog, NO_VEHICLE, type CatalogRow, type Warehouse,
+} from '../inventory/catalog';
 import { EMPTY_WHEEL_QUERY, listWheels, rowOfWheel } from '../inventory/wheels';
 import { PartCard } from './PartCard';
 import { count, positions } from '../ui/plural';
@@ -175,6 +177,10 @@ export function StockMovesScreen({ role }: { role: string }) {
                                   <th className="num">№ позиции</th>
                                   <th>Номер товара</th>
                                   <th>Наименование</th>
+                                  {/* Состояние столбцом (задача 0318):
+                                      принимающий сверяет, та ли деталь
+                                      приехала. */}
+                                  <th>Состояние</th>
                                   <th className="num">Количество</th>
                                 </tr>
                               </thead>
@@ -188,6 +194,7 @@ export function StockMovesScreen({ role }: { role: string }) {
                                     <td className="num">{line.number}</td>
                                     <td>{line.publicCode}</td>
                                     <td>{line.title}</td>
+                                    <td>{conditionTitle(line.condition) ?? ''}</td>
                                     <td className="num">{line.qty}</td>
                                   </tr>
                                 ))}

@@ -3,6 +3,7 @@ package ru.partsflow.sales;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.PartService;
 import ru.partsflow.platform.settings.PrintSettingsService;
 import ru.partsflow.shared.RetailCustomer;
@@ -172,7 +173,7 @@ public class DealPrintService {
                 .distinct()
                 .toList();
         Map<Long, String> titles = parts.titlesOf(partIds);
-        Map<Long, String> conditions = parts.conditionsOf(partIds);
+        Map<Long, PartCondition> conditions = parts.conditionsOf(partIds);
         Map<Long, String> serviceNames = sales.serviceKinds().stream()
                 .collect(java.util.stream.Collectors.toMap(
                         ServiceKind::getId, ServiceKind::getName));
@@ -182,7 +183,7 @@ public class DealPrintService {
             String title = titles.get(item.getPartId());
             lines.add(new Line(
                     title == null ? "Товар без наименования" : title,
-                    conditions.get(item.getPartId()),
+                    wordOf(conditions.get(item.getPartId())),
                     item.getQuantity(), item.getPrice(),
                     item.getPrice().multiply(item.getQuantity())));
         }
@@ -195,6 +196,10 @@ public class DealPrintService {
                     service.getPrice().multiply(service.getQuantity())));
         }
         return lines;
+    }
+
+    private static String wordOf(PartCondition condition) {
+        return condition == null ? null : condition.title();
     }
 
     /**

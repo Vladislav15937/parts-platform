@@ -3,6 +3,7 @@ package ru.partsflow.sales;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.StockReservationRepository;
 
 import java.math.BigDecimal;
@@ -103,14 +104,17 @@ public class PreorderService {
     @Transactional
     public Claim claim(Long partId, BigDecimal quantity, BigDecimal alreadyInRequest) {
         List<Claim> found = jdbc.query("""
-                SELECT p.title, p.quantity, s.number, s.kind, s.expected_on
+                SELECT p.title, p.condition, p.quantity, s.number, s.kind, s.expected_on
                   FROM part p
                   JOIN supply s ON s.id = p.supply_id
                  WHERE p.id = ?
                    AND p.expected_origin AND p.status = 'DRAFT'
                    AND s.status IN ('EXPECTED', 'IN_TRANSIT')
                    FOR UPDATE OF p""",
-                (rs, i) -> new Claim(rs.getString("title"), rs.getBigDecimal("quantity"),
+                // Слово состояния в отказе (задача 0318): продавец отвечает
+                // покупателю про конкретную деталь, а «Фара…» новая и б/у —
+                // две разные ожидаемые позиции.
+                (rs, i) -> new Claim(named(rs), rs.getBigDecimal("quantity"),
                         rs.getDate("expected_on") == null
                                 ? null : rs.getDate("expected_on").toLocalDate()),
                 partId);
@@ -178,9 +182,25 @@ public class PreorderService {
         BigDecimal free = jdbc.queryForObject("""
                 SELECT COALESCE(sum(qty - qty_reserved), 0) FROM part_stock
                  WHERE part_id = ?""", BigDecimal.class, partId);
-        String title = jdbc.queryForObject("SELECT title FROM part WHERE id = ?",
-                String.class, partId);
+        String title = namedPart(partId);
         return new Hold(title, pending, free == null ? BigDecimal.ZERO : free);
+    }
+
+    /**
+     * Деталь так, как её называют в отказе: наименование и слово состояния
+     * (задача 0318). Продавец и приёмщик отвечают про конкретную деталь,
+     * а «Фара…» новая и б/у — две разные ожидаемые позиции; пометка
+     * в наименовании, которая это говорила, из него уходит (0315).
+     */
+    private String namedPart(Long partId) {
+        return jdbc.queryForObject("SELECT title, condition FROM part WHERE id = ?",
+                (rs, i) -> named(rs), partId);
+    }
+
+    private static String named(java.sql.ResultSet rs) throws java.sql.SQLException {
+        String condition = rs.getString("condition");
+        return PartCondition.named(rs.getString("title"),
+                condition == null ? null : PartCondition.valueOf(condition));
     }
 
     private BigDecimal pendingOf(Long partId) {
@@ -349,8 +369,7 @@ public class PreorderService {
                 .filter(e -> e.getValue().signum() > 0)
                 .map(e -> "«%s» — %s".formatted(warehouseName(e.getKey()), plain(e.getValue())))
                 .collect(Collectors.joining(", "));
-        String title = jdbc.queryForObject("SELECT title FROM part WHERE id = ?",
-                String.class, partId);
+        String title = namedPart(partId);
         // Приёмка не записана: ни движения, ни документа. Текст говорит, что
         // случилось и что делать, — иначе приёмщик увидит красное, заведёт
         // деталь второй раз руками и получит ровно то удвоение, ради

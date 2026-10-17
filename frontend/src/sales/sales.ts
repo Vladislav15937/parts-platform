@@ -74,6 +74,11 @@ export interface DealItem {
   number: number | null;
   /** Пусто, если карточку удалили: строка сделки переживает запчасть. */
   title: string | null;
+  /**
+   * Состояние кодом (`PartCondition`); слово — `conditionTitle` (задача 0318).
+   * Необязательное: ответ прежнего сервера его не несёт.
+   */
+  condition?: string | null;
   quantity: string;
   price: string;
   discount: string | null;

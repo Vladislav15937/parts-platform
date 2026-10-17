@@ -52,7 +52,7 @@ import {
   customerName, dealItemStatusName, dealStageStatus, dealStatusNameLower,
 } from '../sales/dealStatus';
 import { useMounted } from '../ui/useMounted';
-import { conditionTitle } from '../inventory/catalog';
+import { ConditionWord } from '../inventory/ConditionWord';
 import { DealPrintMenu } from './DealPrintMenu';
 import type { CustomerAccount,
   HistoryEntry,
@@ -949,17 +949,6 @@ function BasketBadge({
  * продавцу нужно ответить «есть, но отложена до завтра», иначе он скажет
  * «нет», и клиент уедет к соседям за деталью, которая освободится к вечеру.
  */
-/**
- * Состояние словом сразу за наименованием (задача 0314): «новая» и «контрактная»
- * — разный товар и разная цена, и различить их продавец обязан в строке
- * выдачи, не раскрывая карточку. До этого состояние стояло только пометкой
- * в хвосте наименования, а пометка из наименования уходит (0315, 0316).
- */
-function ConditionWord({ code }: { code: string | null | undefined }) {
-  const word = conditionTitle(code);
-  return word === null ? null : <span className="muted"> · {word}</span>;
-}
-
 function StockItem({
   row,
   room,
@@ -1729,6 +1718,7 @@ function DealCard({
                 />
               )}{' '}
               {item.title ?? 'удалённая позиция'}
+              <ConditionWord code={item.condition} />
               <span className="muted">
                 {' '}
                 {/* Номер позиции (задача 0168): состав сделки и выбор позиций

@@ -26,6 +26,7 @@ describe('разрез по машине на экране отчётов', () =
       publicCode: 'A1B2C3',
       kind: 'Фара',
       title: 'Фара передняя левая',
+      condition: 'CONTRACT',
       quantity: 1,
       price: 7500,
       costPrice: 700,
@@ -242,6 +243,34 @@ describe('разрез по машине на экране отчётов', () =
 
     releaseSold();
     await waitFor(() => expect(text()).toContain('24товара(24шт.):продано—331716'));
+  });
+
+  /**
+   * Состояние строки разреза (задача 0318): владелец открывает его, чтобы
+   * узнать, что именно с машины лежит и что продано, а «Фара…» новая и б/у —
+   * разный товар. Пометку в наименовании, которая это говорила, снимают
+   * (0315, 0316). Столбцом за «Наименованием», как в «Проданных позициях»;
+   * у строки без поля клетка пуста.
+   */
+  it('строка разреза несёт состояние столбцом за наименованием', async () => {
+    render(<ReportsScreen canRead />);
+    await pickMachine();
+    await waitFor(() => expect(screen.getByText('Фара передняя левая')).toBeTruthy());
+
+    const row = screen.getByText('Фара передняя левая').closest('tr')!;
+    const headers = [...row.closest('table')!.querySelectorAll('thead th')]
+      .map((th) => (th.textContent ?? '').trim());
+    const at = headers.indexOf('Состояние');
+    expect(at, `столбца «Состояние» в разрезе нет: ${headers.join(' · ')}`)
+      .toBeGreaterThanOrEqual(0);
+    expect(headers[at - 1]).toBe('Наименование');
+    expect([...row.querySelectorAll('td')][at]?.textContent,
+      'в разрезе по машине состояние не названо').toBe('контрактная');
+
+    fireEvent.click(screen.getByText('Продано'));
+    const sold = (await screen.findByText('Бампер передний')).closest('tr')!;
+    expect([...sold.querySelectorAll('td')][at]?.textContent,
+      'у строки без состояния в клетке появилось лишнее').toBe('');
   });
 
   async function pickMachine() {

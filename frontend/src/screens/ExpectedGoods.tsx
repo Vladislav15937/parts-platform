@@ -11,6 +11,7 @@ import {
   type ExpectedPartEntry,
 } from '../intake/donors';
 import type { SupplyRef } from '../reference/reference';
+import { ConditionWord } from '../inventory/ConditionWord';
 import { useMounted } from '../ui/useMounted';
 
 /**
@@ -175,6 +176,9 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
           {parts.map((part) => (
             <li key={part.id}>
               № {part.number} · {part.title}
+              {/* Состояние (задача 0318) — тем же словом, что у продавца,
+                  который отложит эту деталь предзаказом. */}
+              <ConditionWord code={part.condition} />
               <span className="muted">
                 {' '}· обещано {part.quantity} шт · принято {part.received}
                 {part.preordered > 0 && ` · отложено под клиентов ${part.preordered}`}

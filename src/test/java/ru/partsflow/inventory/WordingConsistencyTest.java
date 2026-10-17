@@ -6,7 +6,11 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import ru.partsflow.shared.SupplyKinds;
 
@@ -215,6 +219,105 @@ class WordingConsistencyTest {
                     .as("экран не знает оценки «%s» (%s)", grade.title(), grade.name())
                     .contains("key: '" + grade.name() + "', title: '" + grade.title() + "'");
         }
+    }
+
+    /**
+     * Ни один экран не держит своих слов состояния — только {@code catalog.ts}.
+     *
+     * <p><b>Зачем.</b> Состояние показывается теперь в десятке мест (задачи 0314,
+     * 0318): склад, продавец, состав сделки, страница по ссылке, заказы, обход,
+     * перевозка, отчёты, приёмка. Слово ставит {@code conditionTitle}
+     * ({@code ConditionWord} в разметке), и третий источник слов появился бы
+     * незаметно — экран, переписавший «контрактная» у себя, разошёлся бы
+     * с остальными на первой правке, а {@link #conditionWordsMatch} сверяет
+     * только {@code catalog.ts}. Перебор — по всем исходникам экрана, а слова —
+     * из перечисления: новое состояние попадает в проверку само.
+     *
+     * <p>Разрешённое названо с причиной. Отбор выгрузки ({@code feeds.ts})
+     * держит свои слова во множественном числе («новые · б/у · контрактные» —
+     * так подписан отбор у ориентира), и «б/у» там совпадает с нашим случайно:
+     * это подпись отбора, а не состояние позиции.
+     */
+    @Test
+    @DisplayName("Слова состояния на экране записаны только в catalog.ts")
+    void screensKeepNoOwnConditionWords() throws IOException {
+        Map<String, String> allowed = Map.of(
+                "frontend/src/inventory/catalog.ts", "сам словарь",
+                "frontend/src/publishing/feeds.ts",
+                "подпись отбора выгрузки во множественном числе; «б/у» совпадает случайно");
+
+        List<String> found = new ArrayList<>();
+        try (Stream<Path> files = Files.walk(Path.of("frontend/src"))) {
+            for (Path file : files.filter(p -> p.toString().matches(".*\\.tsx?$"))
+                    .filter(p -> !p.getFileName().toString().contains(".test."))
+                    .toList()) {
+                if (allowed.containsKey(file.toString().replace('\\', '/'))) {
+                    continue;
+                }
+                found.addAll(conditionLiterals(file));
+            }
+        }
+        assertThat(found)
+                .as("слово состояния записано мимо `CONDITION` в catalog.ts — берите"
+                        + " `conditionTitle` или `ConditionWord`")
+                .isEmpty();
+    }
+
+    /**
+     * Сервер не собирает слово состояния сам — только {@link PartCondition#title()}.
+     *
+     * <p><b>Зачем.</b> Ответы, которые несут состояние (задача 0318), отдают
+     * код, а тексты, которые собирает сервер (отказы продажи, возврата,
+     * приёмки, предзаказа), берут слово из {@link PartCondition#named}. Своё
+     * {@code CASE WHEN 'USED' THEN 'б/у'} в запросе или литерал в отказе —
+     * второй словарь, и он разошёлся бы с экраном на первой правке слова.
+     * Выражение для SQL у перечисления есть своё ({@link PartCondition#sqlLabel}).
+     *
+     * <p>Разрешённое названо с причиной: разбор файла Bazon читает их написания
+     * («б/у», «контрактная»…) — это вход, а не показ, и слов там больше, чем
+     * у нас («бу», «контрактный»).
+     */
+    @Test
+    @DisplayName("Слова состояния на сервере записаны только в PartCondition")
+    void serverBuildsNoOwnConditionWords() throws IOException {
+        Map<String, String> allowed = Map.of(
+                "src/main/java/ru/partsflow/inventory/PartCondition.java", "сам словарь",
+                "src/main/java/ru/partsflow/migration/bazon/BazonValueParser.java",
+                "разбор чужого файла: написания Bazon на входе, не показ");
+
+        List<String> found = new ArrayList<>();
+        try (Stream<Path> files = Files.walk(Path.of("src/main/java"))) {
+            for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
+                if (allowed.containsKey(file.toString().replace('\\', '/'))) {
+                    continue;
+                }
+                found.addAll(conditionLiterals(file));
+            }
+        }
+        assertThat(found)
+                .as("слово состояния записано мимо `PartCondition` — берите `title()`"
+                        + " или `PartCondition.named`")
+                .isEmpty();
+    }
+
+    /**
+     * Строковые литералы, равные слову состояния целиком: {@code 'б/у'},
+     * {@code "контрактная"}, {@code `новая`}. Целиком — потому что «новая»
+     * встречается и в «Новая сделка», а это не состояние.
+     */
+    private static List<String> conditionLiterals(Path file) throws IOException {
+        List<String> found = new ArrayList<>();
+        List<String> lines = Files.readAllLines(file);
+        for (int at = 0; at < lines.size(); at++) {
+            for (PartCondition condition : PartCondition.values()) {
+                Pattern literal = Pattern.compile(
+                        "['\"`]" + Pattern.quote(condition.title()) + "['\"`]");
+                if (literal.matcher(lines.get(at)).find()) {
+                    found.add(file + ":" + (at + 1) + " — «" + condition.title() + "»");
+                }
+            }
+        }
+        return found;
     }
 
     private static String read(Path path) throws IOException {

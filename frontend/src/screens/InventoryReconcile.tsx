@@ -21,6 +21,7 @@ import {
 import { count as num, shown } from '../ui/plural';
 import { shortDate } from '../ui/shortDate';
 import { useMounted } from '../ui/useMounted';
+import { conditionTitle } from '../inventory/catalog';
 import type { Reference } from '../reference/reference';
 
 /**
@@ -335,6 +336,11 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
                     нет вовсе. */}
                 <th className="num">№ позиции</th>
                 <th>Деталь</th>
+                {/* Столбцом, как в соседних таблицах (отчёт «Проданные
+                    позиции», печать сделки; задача 0318): разницу считают
+                    по конкретной детали, а новая и б/у с одним
+                    наименованием — разные. */}
+                <th>Состояние</th>
                 <th className="num">Учёт на момент подсчёта</th>
                 <th className="num">Факт</th>
                 <th className="num">Разница</th>
@@ -349,6 +355,7 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
                       удалили. */}
                   <td className="num">{r.number ?? '—'}</td>
                   <td>{r.title ?? 'удалённая позиция'}</td>
+                  <td>{conditionTitle(r.condition) ?? ''}</td>
                   <td className="num">{r.qtyExpectedAtCount}</td>
                   <td className="num">{r.qtyCounted}</td>
                   <td className="num">{r.shortage ? '' : '+'}{r.delta}</td>

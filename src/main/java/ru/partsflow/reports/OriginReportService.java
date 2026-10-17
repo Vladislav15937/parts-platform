@@ -418,7 +418,7 @@ public class OriginReportService {
         args.add(limit + 1);
 
         List<Item> rows = jdbc.query("""
-                SELECT p.id, p.number, p.public_code, k.name AS kind, p.title,
+                SELECT p.id, p.number, p.public_code, k.name AS kind, p.title, p.condition,
                 """ + "       " + tab.quantity + " AS qty,\n"
                 // Цена и себестоимость проданного — из сделки, а не из карточки:
                 // разделитель явной строкой, иначе текстовый блок съест отступ.
@@ -439,6 +439,7 @@ public class OriginReportService {
                         rs.getString("public_code"),
                         rs.getString("kind"),
                         rs.getString("title"),
+                        rs.getString("condition"),
                         rs.getBigDecimal("qty"),
                         rs.getBigDecimal("price"),
                         rs.getBigDecimal("cost_price"),
@@ -502,9 +503,12 @@ public class OriginReportService {
      *                   задним числом не должна переписывать прошлую прибыль
      * @param supplyNumber номер партии, которой позиция пришла
      * @param date       день, когда позицию завели
+     * @param condition  состояние кодом (задача 0318); слово ставит экран. Разрез
+     *                   открывают, чтобы узнать, что именно с машины лежит и что
+     *                   продано, а новая и б/у с одним наименованием — разный товар
      */
     public record Item(long partId, long number, String publicCode, String kind, String title,
-                       BigDecimal quantity, BigDecimal price, BigDecimal costPrice,
+                       String condition, BigDecimal quantity, BigDecimal price, BigDecimal costPrice,
                        String supplyNumber, LocalDate date) {
     }
 

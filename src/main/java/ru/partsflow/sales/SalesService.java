@@ -4,6 +4,7 @@ import ru.partsflow.shared.NotFound;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.inventory.Part;
+import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.PartRepository;
 import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.inventory.StockReservationRepository;
@@ -453,7 +454,8 @@ public class SalesService {
             if (available.compareTo(item.quantity()) < 0) {
                 Part part = requirePart(item.partId());
                 missing.add("%s — нужно %s, свободно %s".formatted(
-                        part.getTitle(), item.quantity().stripTrailingZeros().toPlainString(),
+                        PartCondition.named(part.getTitle(), part.getCondition()),
+                        item.quantity().stripTrailingZeros().toPlainString(),
                         available.stripTrailingZeros().toPlainString()));
             }
         }
@@ -754,7 +756,7 @@ public class SalesService {
             if (quantity.compareTo(item.getQuantity()) > 0) {
                 throw new IllegalArgumentException(
                         "Возвращают больше, чем выдали: «%s», выдано %s, возврат %s"
-                                .formatted(requirePart(item.getPartId()).getTitle(),
+                                .formatted(namedPart(item.getPartId()),
                                         item.getQuantity(), quantity));
             }
             dealReturn.addItem(item.getPartId(), quantity,
@@ -1738,7 +1740,7 @@ public class SalesService {
         if (item.getStatus() != DealItemStatus.ISSUED) {
             throw new IllegalStateException(
                     "Вернуть можно только выданное, а «%s» в состоянии %s"
-                            .formatted(requirePart(item.getPartId()).getTitle(),
+                            .formatted(namedPart(item.getPartId()),
                                     item.getStatus()));
         }
         return item;
@@ -2335,6 +2337,15 @@ public class SalesService {
     private Part requirePart(Long partId) {
         return partRepository.findById(partId)
                 .orElseThrow(() -> NotFound.PART.error(partId));
+    }
+
+    /**
+     * Позиция так, как её называют в отказе: наименование и слово состояния
+     * (задача 0318). Запрос — только на пути отказа, как и раньше.
+     */
+    private String namedPart(Long partId) {
+        Part part = requirePart(partId);
+        return PartCondition.named(part.getTitle(), part.getCondition());
     }
 
     private byte[] payloadOf(Deal deal) {

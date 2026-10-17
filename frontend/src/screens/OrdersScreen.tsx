@@ -6,6 +6,7 @@ import {
   ordersAwaitingReply,
   type Deal,
 } from '../sales/sales';
+import { ConditionWord } from '../inventory/ConditionWord';
 import { useMounted } from '../ui/useMounted';
 
 /**
@@ -147,6 +148,9 @@ export function OrdersScreen({ canSell }: { canSell: boolean }) {
                         собирает кладовщик, и названное вслух «позиция 347» —
                         единственный способ связать строку заказа с полкой. */}
                     {item.title ?? 'удалённая позиция'}
+                    {/* Состояние (задача 0318): заказ собирает кладовщик,
+                        и «Фара…» новая и б/у лежат на соседних полках. */}
+                    <ConditionWord code={item.condition} />
                     {typeof item.number === 'number' && ` · № ${item.number}`} — {item.quantity} шт.
                   </li>
                 ))}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { request } from '../api/client';
+import { ConditionWord } from '../inventory/ConditionWord';
 import { sharedDealStatusName } from '../sales/dealStatus';
 import { useMounted } from '../ui/useMounted';
 
@@ -16,6 +17,11 @@ import { useMounted } from '../ui/useMounted';
  */
 interface SharedItem {
   title: string | null;
+  /**
+   * Состояние кодом; у услуги пусто. Слово ставит `ConditionWord` — на языке
+   * покупателя, а незнакомый код не печатается вовсе (задача 0318).
+   */
+  condition?: string | null;
   quantity: string;
   price: string;
 }
@@ -81,7 +87,12 @@ export function SharedDealScreen({ company, token }: { company: string; token: s
       <ul className="suggestions">
         {deal.items.map((item, at) => (
           <li key={at}>
-            {item.title ?? 'позиция'} — {Number(item.quantity)} шт. ×{' '}
+            {item.title ?? 'позиция'}
+            {/* «б/у» против «новая» — то, за что покупатель платит, а пометку
+                в наименовании, которая говорила это до сих пор, снимают
+                (0315, 0316). */}
+            <ConditionWord code={item.condition} />
+            {' '}— {Number(item.quantity)} шт. ×{' '}
             {Number(item.price).toLocaleString('ru-RU')} ₽
           </li>
         ))}

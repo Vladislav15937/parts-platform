@@ -752,6 +752,19 @@ export function conditionTitle(code: string | null | undefined): string | null {
 }
 
 /**
+ * Наименование со словом состояния одной строкой: «Фара Toyota Camry 2007 · б/у».
+ *
+ * <p>Для подписей, которые собираются текстом, а не разметкой (задача 0318):
+ * запись очереди отправки на телефоне — «Фара … · б/у · 1 шт», — где
+ * `ConditionWord` поставить некуда. Без состояния — наименование как есть.
+ * Слово — тем же {@link conditionTitle}: своего словаря подпись не держит.
+ */
+export function titleWithCondition(title: string, code: string | null | undefined): string {
+  const word = conditionTitle(code);
+  return word === null ? title : `${title} · ${word}`;
+}
+
+/**
  * Порядок по умолчанию — номер позиции по возрастанию.
  *
  * <p>До задачи 0060 здесь стояло `sort: 'code', desc: true`, а `code` —

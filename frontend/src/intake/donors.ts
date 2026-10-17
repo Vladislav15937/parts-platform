@@ -168,6 +168,8 @@ export interface ExpectedPartEntry {
   id: number;
   number: number;
   title: string;
+  /** Состояние кодом (задача 0318); слово ставит экран. */
+  condition?: string | null;
   quantity: number;
   price: number;
   received: number;

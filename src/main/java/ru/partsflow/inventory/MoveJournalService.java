@@ -76,14 +76,16 @@ public class MoveJournalService {
     @Transactional(readOnly = true)
     public List<MoveLine> lines(long documentId) {
         return jdbc.query("""
-                        SELECT p.id AS part_id, p.number, p.public_code, p.title, l.qty
+                        SELECT p.id AS part_id, p.number, p.public_code, p.title, p.condition,
+                               l.qty
                           FROM stock_document_line l
                           JOIN part p ON p.id = l.part_id
                          WHERE l.document_id = ?
                          ORDER BY l.id""",
                 (rs, i) -> new MoveLine(rs.getLong("part_id"), rs.getLong("number"),
                         rs.getString("public_code"),
-                        rs.getString("title"), rs.getBigDecimal("qty")),
+                        rs.getString("title"), rs.getString("condition"),
+                        rs.getBigDecimal("qty")),
                 documentId);
     }
 
@@ -96,8 +98,11 @@ public class MoveJournalService {
      * @param number порядковый номер позиции — тот, которым её называют вслух
      *               (задача 0060). Публичный код рядом остаётся: его читают
      *               с этикетки на самой детали
+     * @param condition состояние кодом (задача 0318), слово ставит экран:
+     *                  кладовщик, принимающий перевозку, сверяет, та ли деталь
+     *                  приехала, а новая и б/у с одним наименованием — разные
      */
     public record MoveLine(Long partId, Long number, String publicCode, String title,
-                           BigDecimal qty) {
+                           String condition, BigDecimal qty) {
     }
 }
