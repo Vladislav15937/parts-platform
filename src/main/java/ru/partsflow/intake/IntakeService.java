@@ -471,7 +471,6 @@ public class IntakeService {
                 partNames.displayNameOf(partName),
                 vehicle,
                 new PartTitleGenerator.Sides(item.sideFr(), item.sideLr(), item.sideUd()),
-                item.condition(),
                 item.oemNumber());
 
         Part part = new Part(partName.getCategoryId(), title, item.price());

@@ -978,18 +978,12 @@ public final class BazonImporter {
 
         var years = BazonValueParser.parseYearRange(row.get("Год выпуска"));
 
-        // Состояние разбирается до заголовка, потому что входит в него
-        // пометкой: разойдись они — карточка говорила бы «(б/у)» при
-        // состоянии «контрактная», и это ровно то расхождение, из-за
-        // которого задача 0039 и заведена.
-        PartCondition condition = conditionOf(row);
-
         int at = 1;
         for (int i = 0; i < PART_FIELDS.size(); i++) {
             bind(ps, at++, PART_FIELDS.get(i), values[i]);
         }
         ps.setLong(at++, categoryId);
-        ps.setString(at++, buildTitle(row, row.get("Запчасть"), years, condition));
+        ps.setString(at++, buildTitle(row, row.get("Запчасть"), years));
         // Номер в прежней системе — естественный ключ импорта: по нему повторный
         // запуск узнаёт уже загруженное.
         ps.setString(at++, row.get("Номер товара"));
@@ -1009,7 +1003,7 @@ public final class BazonImporter {
             unknownPublish.add(publishRaw.trim());
         }
         ps.setBoolean(at++, Boolean.TRUE.equals(publish));
-        ps.setString(at, condition.name());
+        ps.setString(at, conditionOf(row).name());
 
         try (ResultSet rs = ps.executeQuery()) {
             return rs.next() ? rs.getLong(1) : null;
@@ -1043,8 +1037,8 @@ public final class BazonImporter {
      *
      * <p>Колонки в выгрузке может не быть вовсе — она в «Неактивных», как
      * «Выгружать» и «Превью», — и тогда остаётся прежнее умолчание, а не
-     * выдуманное состояние. По той же причине умолчание стоит здесь, а
-     * не в базе: оно входит ещё и в заголовок.
+     * выдуманное состояние. Умолчание стоит здесь, а не в базе, по истории:
+     * до задачи 0315 состояние входило ещё и в заголовок пометкой.
      *
      * <p><b>Дозаполнение повтором его не трогает</b> — {@code condition}
      * нет в {@code PART_FIELDS}: колонка {@code NOT NULL}, пустой её
@@ -1058,8 +1052,7 @@ public final class BazonImporter {
     }
 
     private String buildTitle(BazonCsvReader.Row row, String partName,
-                              BazonValueParser.YearRange years,
-                              PartCondition condition) {
+                              BazonValueParser.YearRange years) {
         if (partName == null) {
             return "Без наименования";
         }
@@ -1071,7 +1064,11 @@ public final class BazonImporter {
                 BazonValueParser.parseLateralSide(row.get("Левый / Правый")),
                 null);
 
-        return titleGenerator.generate(partName, vehicle, sides, condition,
+        // Состояния в заголовке нет (задача 0315): оно пишется в condition
+        // и показывается словом рядом, а пометка «(б/у)» была его второй
+        // копией. У Bazon она в заголовке есть — расхождение осознанное,
+        // docs/bazon-vs-us.md.
+        return titleGenerator.generate(partName, vehicle, sides,
                 row.get("Номер производителя"));
     }
 

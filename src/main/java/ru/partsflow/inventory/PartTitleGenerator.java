@@ -10,7 +10,7 @@ import java.util.List;
  *
  * <p>Приёмщик название не пишет. Он выбирает вид детали, донора и стороны —
  * заголовок собирается сам:
- * {@code Блок подрулевых переключателей Toyota Wish ZNE10 1ZZFE 2006 (б/у) 8414012530}
+ * {@code Блок подрулевых переключателей Toyota Wish ZNE10 1ZZFE 2006 8414012530}
  *
  * <p>Причина не в удобстве, а в поиске. Название, набранное руками, у каждого
  * своё: «фара лев.», «Фара левая перед», «фара L». По такому складу нельзя ни
@@ -19,6 +19,15 @@ import java.util.List;
  *
  * <p>Порядок частей повторяет то, как деталь спрашивают по телефону: сначала
  * что это, потом с какой машины, потом уточнения.
+ *
+ * <p><b>Состояния в заголовке нет</b> (задача 0315, решение владельца продукта
+ * 17.10.2026). До неё сюда дописывалась пометка «(б/у)», «(новая)», «(восст.)»,
+ * «(контракт)» — вторая копия поля {@code condition}, и копия врала: с 0304
+ * наименование меняет только человек, поэтому смена состояния пометку
+ * не обновляла, а правка названия руками её теряла. Состояние показывается
+ * рядом словом ({@code conditionTitle}, 0314 и 0318). Пометки у позиций,
+ * принятых раньше, снимает задача 0316; до неё карточку от них бережёт
+ * {@code shownTitle}, прайс — {@code DromPriceWriter.plainName}.
  */
 @Component
 public class PartTitleGenerator {
@@ -27,13 +36,11 @@ public class PartTitleGenerator {
      * @param partName   вид детали в написании арендатора, обязателен
      * @param vehicle    марка, модель, кузов, двигатель и год донора; может быть null
      * @param sides      стороны установки; null-поля просто не попадут в заголовок
-     * @param condition  состояние
      * @param oemNumber  номер производителя, может быть null
      */
     public String generate(String partName,
                            VehicleTitlePart vehicle,
                            Sides sides,
-                           PartCondition condition,
                            String oemNumber) {
 
         if (partName == null || partName.isBlank()) {
@@ -57,7 +64,6 @@ public class PartTitleGenerator {
             addIfPresent(parts, sides.asText());
         }
 
-        parts.add(conditionText(condition));
         addIfPresent(parts, oemNumber);
 
         return String.join(" ", parts);
@@ -67,10 +73,6 @@ public class PartTitleGenerator {
         if (value != null && !value.isBlank()) {
             target.add(value.trim());
         }
-    }
-
-    private static String conditionText(PartCondition condition) {
-        return (condition == null ? PartCondition.USED : condition).titleMark();
     }
 
     /** Часть заголовка, описывающая машину. Любое поле может отсутствовать. */

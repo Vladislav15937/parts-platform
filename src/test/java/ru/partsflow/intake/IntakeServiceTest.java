@@ -114,7 +114,7 @@ class IntakeServiceTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Заголовок собирается сам: вид детали, машина, стороны, состояние")
+    @DisplayName("Заголовок собирается сам: вид детали, машина, стороны — без состояния")
     void titleIsAssembledNotTyped() {
         Supply supply = arrivedSupply("30");
         Donor donor = inTenant(() -> intake.registerDonor(camry(), supply.getId(), null));
@@ -128,7 +128,8 @@ class IntakeServiceTest extends PostgresTestBase {
                 .contains("фара левая")
                 .contains("Toyota")
                 .contains("перед. лев.")
-                .contains("(б/у)");
+                // Состояние — поле, а не пометка в названии (задача 0315).
+                .doesNotContain("(б/у)");
     }
 
     @Test

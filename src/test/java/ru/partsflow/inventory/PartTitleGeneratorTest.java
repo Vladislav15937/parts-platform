@@ -24,11 +24,10 @@ class PartTitleGeneratorTest {
                 "Блок подрулевых переключателей",
                 new VehicleTitlePart("Toyota", "Wish", "ZNE10", "1ZZFE", 2006),
                 null,
-                PartCondition.USED,
                 "8414012530");
 
         assertThat(title)
-                .isEqualTo("Блок подрулевых переключателей Toyota Wish ZNE10 1ZZFE 2006 (б/у) 8414012530");
+                .isEqualTo("Блок подрулевых переключателей Toyota Wish ZNE10 1ZZFE 2006 8414012530");
     }
 
     @Test
@@ -38,10 +37,9 @@ class PartTitleGeneratorTest {
                 "Стойка",
                 new VehicleTitlePart("Honda", "Airwave", "GJ1", null, 2002),
                 new Sides(LongitudinalSide.FRONT, LateralSide.LEFT, VerticalSide.LOWER),
-                PartCondition.USED,
                 null);
 
-        assertThat(title).isEqualTo("Стойка Honda Airwave GJ1 2002 перед. лев. ниж. (б/у)");
+        assertThat(title).isEqualTo("Стойка Honda Airwave GJ1 2002 перед. лев. ниж.");
     }
 
     @Test
@@ -51,11 +49,10 @@ class PartTitleGeneratorTest {
                 "Стойка",
                 new VehicleTitlePart("Honda", "Airwave", "GJ1", null, 2002),
                 new Sides(LongitudinalSide.BOTH, LateralSide.BOTH, VerticalSide.BOTH),
-                PartCondition.USED,
                 null);
 
         assertThat(title).isEqualTo(
-                "Стойка Honda Airwave GJ1 2002 перед. задн. лев. прав. верх. ниж. (б/у)");
+                "Стойка Honda Airwave GJ1 2002 перед. задн. лев. прав. верх. ниж.");
     }
 
     @Test
@@ -65,41 +62,37 @@ class PartTitleGeneratorTest {
                 "Датчик ABS",
                 new VehicleTitlePart("Toyota", "Duet", "M100A", "EJDE", null),
                 new Sides(LongitudinalSide.FRONT, LateralSide.RIGHT, null),
-                PartCondition.USED,
                 "89544-97401");
 
-        assertThat(title).isEqualTo("Датчик ABS Toyota Duet M100A EJDE перед. прав. (б/у) 89544-97401");
+        assertThat(title).isEqualTo("Датчик ABS Toyota Duet M100A EJDE перед. прав. 89544-97401");
     }
 
     @Test
     @DisplayName("Контрактная запчасть без донора: заголовок остаётся осмысленным")
     void worksWithoutVehicle() {
-        String title = generator.generate("Амортизатор", null, null, PartCondition.NEW, "334388");
+        String title = generator.generate("Амортизатор", null, null, "334388");
 
-        assertThat(title).isEqualTo("Амортизатор (новая) 334388");
-    }
-
-    @Test
-    @DisplayName("Состояние подставляется всегда, по умолчанию — б/у")
-    void alwaysMarksCondition() {
-        assertThat(generator.generate("Фара", null, null, null, null)).isEqualTo("Фара (б/у)");
-        assertThat(generator.generate("Фара", null, null, PartCondition.REFURBISHED, null))
-                .isEqualTo("Фара (восст.)");
+        assertThat(title).isEqualTo("Амортизатор 334388");
     }
 
     /**
-     * Контрактная деталь помечается своим словом, а не «б/у».
+     * Состояния в заголовке нет (задача 0315, решение владельца 17.10.2026).
      *
-     * <p>Контрактная снята с целой машины и не ремонтировалась, б/у —
-     * с разборки: на разборке это разные товары и разная цена. Пока
-     * значения не было, все девять с лишним тысяч контрактных позиций
-     * переехавшего клиента назывались в заголовке «(б/у)».
+     * <p>Пометка «(б/у)» была второй копией поля {@code condition}, и копия
+     * врала: с 0304 наименование меняет только человек, поэтому смена
+     * состояния пометку не обновляла. Состояние показывается рядом словом.
+     * Генератор состояния не принимает вовсе — вернуть его можно только
+     * правкой подписи, а не забытым аргументом.
      */
     @Test
-    @DisplayName("Контрактная деталь помечается своим словом")
-    void marksContract() {
-        assertThat(generator.generate("Фара", null, null, PartCondition.CONTRACT, null))
-                .isEqualTo("Фара (контракт)");
+    @DisplayName("Пометки состояния в заголовке нет: ни «(б/у)», ни остальных")
+    void noConditionMark() {
+        String title = generator.generate("Фара", null, null, null);
+
+        assertThat(title).isEqualTo("Фара");
+        for (String mark : PartCondition.titleMarks()) {
+            assertThat(title).doesNotContain(mark);
+        }
     }
 
     @Test
@@ -109,17 +102,16 @@ class PartTitleGeneratorTest {
                 "  Радиатор  ",
                 new VehicleTitlePart("Nissan", "  ", null, "", 1999),
                 new Sides(null, null, null),
-                PartCondition.USED,
                 "  ");
 
-        assertThat(title).isEqualTo("Радиатор Nissan 1999 (б/у)");
+        assertThat(title).isEqualTo("Радиатор Nissan 1999");
         assertThat(title).doesNotContain("  ");
     }
 
     @Test
     @DisplayName("Без вида детали заголовок не собирается: это не «пустое поле», а ошибка ввода")
     void requiresPartName() {
-        assertThatThrownBy(() -> generator.generate(" ", null, null, PartCondition.USED, null))
+        assertThatThrownBy(() -> generator.generate(" ", null, null, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Вид детали");
     }
