@@ -52,6 +52,7 @@ import {
   customerName, dealItemStatusName, dealStageStatus, dealStatusNameLower,
 } from '../sales/dealStatus';
 import { useMounted } from '../ui/useMounted';
+import { conditionTitle } from '../inventory/catalog';
 import { DealPrintMenu } from './DealPrintMenu';
 import type { CustomerAccount,
   HistoryEntry,
@@ -392,6 +393,7 @@ export function SellerScreen({
               <li key={index} className="stock-row">
                 <div className="stock-info">
                   {line.row.title}
+                  <ConditionWord code={line.row.condition} />
                   {/* Номер позиции и здесь: набранную корзину продавец
                       называет вслух — кладовщику, который пойдёт снимать
                       с полки, или клиенту при сверке. До этого в строке
@@ -947,6 +949,17 @@ function BasketBadge({
  * продавцу нужно ответить «есть, но отложена до завтра», иначе он скажет
  * «нет», и клиент уедет к соседям за деталью, которая освободится к вечеру.
  */
+/**
+ * Состояние словом сразу за наименованием (задача 0314): «новая» и «контрактная»
+ * — разный товар и разная цена, и различить их продавец обязан в строке
+ * выдачи, не раскрывая карточку. До этого состояние стояло только пометкой
+ * в хвосте наименования, а пометка из наименования уходит (0315, 0316).
+ */
+function ConditionWord({ code }: { code: string | null | undefined }) {
+  const word = conditionTitle(code);
+  return word === null ? null : <span className="muted"> · {word}</span>;
+}
+
 function StockItem({
   row,
   room,
@@ -970,6 +983,7 @@ function StockItem({
     <li className="stock-row">
       <div className="stock-info">
         <strong>{row.title}</strong>
+        <ConditionWord code={row.condition} />
         {/* Номер позиции перед публичным кодом — тем же порядком, каким они
             стоят колонками на витрине. Продавец диктует в трубку именно
             его: «7584A8FEAE3D» по телефону не произносят. */}

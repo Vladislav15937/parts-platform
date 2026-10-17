@@ -296,6 +296,19 @@ details > .muted {
   color: var(--muted);
 }
 
+/* Состояние словом рядом с наименованием в клетке «Запчасть» (задача 0314).
+   Приглушённо и вне выделения: копируют из клетки название, а не «б/у». */
+.title-aside {
+  color: var(--muted);
+  margin-left: 0.4em;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.title-aside::before {
+  content: '· ';
+}
+
 .todo {
   margin: 0;
   padding-left: 1.25rem;

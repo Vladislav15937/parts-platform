@@ -68,6 +68,39 @@ describe('печать документов сделки', () => {
   });
 
   /**
+   * Состояние позиции — своей колонкой (задача 0314).
+   *
+   * <p>В бумаге, которую покупатель приносит обратно по гарантии, «новая»
+   * и «контрактная» — разный товар, а называла их только пометка в хвосте
+   * наименования, которая из наименования уходит. Наименование здесь без
+   * пометки: состояние обязано прийти своим полем. У услуги клетка пуста.
+   */
+  it('в чеке и накладной состояние стоит своей колонкой, у услуги пусто', async () => {
+    stubApi({
+      lines: [
+        { title: 'Фара левая Toyota Camry', condition: 'контрактная',
+          quantity: '1', price: '5000.00', amount: '5000.00' },
+        { title: 'Доставка', quantity: '1', price: '0.00', amount: '0.00' },
+      ],
+    });
+    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    await openDeal();
+
+    fireEvent.click(button('Печатать')!);
+    fireEvent.click(button('Товарная накладная')!);
+    await waitFor(() => expect(sheet()).toBeTruthy());
+
+    const table = sheet()!.querySelector('.print-table')!;
+    const headers = [...table.querySelectorAll('th')].map((th) => clean(th.textContent));
+    const at = headers.indexOf('Состояние');
+    expect(at, `в документе нет колонки состояния: ${headers.join(' | ')}`)
+      .toBe(headers.indexOf('Наименование') + 1);
+    const cells = [...table.querySelectorAll('tbody tr')]
+      .map((tr) => clean(tr.children[at]?.textContent));
+    expect(cells, 'состояние позиции не напечатано').toEqual(['контрактная', '']);
+  });
+
+  /**
    * Пункт 6 критерия приёмки, и проверяется он **отсутствием**: утверждение
    * «пометка показана, когда задана» прошло бы и на документе, который печатает
    * пустую строку про НДС всегда.

@@ -292,7 +292,7 @@ export function LabelsScreen({ canPrint }: Props) {
         setPartLabels(
           physical
             .filter((row) => row.publicCode !== null)
-            .map((row) => partLabel(row.publicCode!, row.title, row.price)),
+            .map((row) => partLabel(row.publicCode!, row.title, row.price, row.condition)),
         );
       }
     } catch (cause) {

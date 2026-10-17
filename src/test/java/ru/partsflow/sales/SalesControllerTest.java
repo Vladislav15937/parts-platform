@@ -465,6 +465,38 @@ class SalesControllerTest extends PostgresTestBase {
     }
 
     /**
+     * Выдача продавца несёт состояние позиции своим полем (задача 0314).
+     *
+     * <p><b>Как это выглядело для человека.</b> «Новая» и «контрактная» —
+     * разный товар и разная цена, а продавец различал их только по пометке
+     * в хвосте наименования. Пометка уходит из наименования (0315, 0316)
+     * и уже сегодня врёт после смены состояния (0304), поэтому здесь
+     * наименование заведено <b>без</b> пометки: состояние обязано приехать
+     * полем, а не текстом.
+     *
+     * <p>Через HTTP: до экрана поле доезжает ответом, и потерянное видно
+     * только здесь.
+     */
+    @Test
+    @DisplayName("Выдача продавца несёт состояние позиции, а не только наименование")
+    void stockSearchCarriesTheCondition() throws Exception {
+        Long contract = partWithStock("Генератор для состояния контрактный", 1);
+        Long fresh = partWithStock("Генератор для состояния новый", 1);
+        inTenant(() -> {
+            jdbc.update("UPDATE part SET condition = 'CONTRACT' WHERE id = ?", contract);
+            jdbc.update("UPDATE part SET condition = 'NEW' WHERE id = ?", fresh);
+            return null;
+        });
+
+        mvc.perform(get("/api/parts/stock?q=генератор для состояния").session(login("seller")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rows[?(@.partId == %d)].condition".formatted(contract))
+                        .value("CONTRACT"))
+                .andExpect(jsonPath("$.rows[?(@.partId == %d)].condition".formatted(fresh))
+                        .value("NEW"));
+    }
+
+    /**
      * Состав сделки называет позицию номером — им её и спрашивают (задача 0168).
      *
      * <p><b>Как это выглядело для человека.</b> Продавец открывает сделку,

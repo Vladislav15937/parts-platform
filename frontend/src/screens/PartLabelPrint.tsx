@@ -17,11 +17,13 @@ import { LABEL_SIZE_NOTE, partLabel } from '../labels/labels';
  * с первым на первой же правке ширины модуля штрихкода — и разошёлся бы
  * незаметно, потому что сравнивать наклейки из двух мест никто не станет.
  */
-export function PartLabelPrint({ code, title, price }: {
+export function PartLabelPrint({ code, title, price, condition }: {
   /** Публичный код позиции: он и кодируется штрихкодом. */
   code: string | null;
   title: string;
   price: number | null;
+  /** Код состояния: печатается словом рядом с ценой (задача 0314). */
+  condition: string | null;
 }) {
   const [sheet, setSheet] = useState(false);
 
@@ -61,7 +63,7 @@ export function PartLabelPrint({ code, title, price }: {
       {/* Предпросмотр он же то, что уйдёт в печать, — как и на экране
           «Этикетки»: отдельная вёрстка для принтера разошлась бы
           с увиденным незаметно. */}
-      <LabelSheet labels={[partLabel(code, title, price)]} />
+      <LabelSheet labels={[partLabel(code, title, price, condition)]} />
       <p className="note no-print">{LABEL_SIZE_NOTE}</p>
       <div className="filter-row no-print">
         {/* Диалог печати закрывают и по ошибке, и чтобы поправить размер:

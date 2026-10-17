@@ -10,6 +10,7 @@ import {
   loadPhotos,
   exportUrl,
   DEFAULT_VISIBLE,
+  conditionAside,
   defaultQuery,
   loadView,
   saveView,
@@ -719,6 +720,9 @@ export function CatalogScreen({ role }: { role: string }) {
                             </span>
                           )
                         : column.value(row)}
+                      {column.key === 'title' && conditionAside(row, visible) !== null && (
+                        <span className="title-aside">{conditionAside(row, visible)}</span>
+                      )}
                     </td>
                   ))}
                   {warehouses.map((warehouse) => (
