@@ -198,6 +198,34 @@ class IntakeTitleLikeBazonTest extends PostgresTestBase {
                 .isEqualTo(BASE + " (б/у) 8414012530");
     }
 
+    /**
+     * Переходное правило до разового пересчёта (0336, пункт 4): у позиции,
+     * перенесённой из Bazon без донора и без своей машины, машины лежат только
+     * в названии — пересборка правкой состояния стёрла бы их. Вписав машину
+     * позиции, владелец даёт формуле поля — и название собирается.
+     */
+    @Test
+    @DisplayName("Перенесённая из Bazon без донора и своей машины: правка состояния название не стирает")
+    void bazonPartWithoutVehicleKeepsTitle() throws Exception {
+        String stored = "Блок круиз-контроля Lincoln,Ford Navigator,Expedition UN173 TRITON54L (б/у)";
+        long id = inTenant(() -> {
+            Long name = jdbc.queryForObject("""
+                    INSERT INTO part_name (name) VALUES ('Блок круиз-контроля')
+                    ON CONFLICT (lower(btrim(name))) DO UPDATE SET name = EXCLUDED.name
+                    RETURNING id""", Long.class);
+            return jdbc.queryForObject("""
+                    INSERT INTO part (category_id, part_name_id, title, price, legacy_code, condition)
+                    VALUES (1, ?, ?, 100, ?, 'CONTRACT') RETURNING id""",
+                    Long.class, name, stored, "B-" + System.nanoTime());
+        });
+
+        assertThat(edit(id, "{\"condition\":\"NEW\"}"))
+                .as("пересборка стёрла машины, лежавшие только в названии")
+                .isEqualTo(stored);
+        assertThat(edit(id, "{\"brand\":\"Lincoln\",\"model\":\"Navigator\"}"))
+                .isEqualTo("Блок круиз-контроля Lincoln Navigator");
+    }
+
     private List<Map<String, Object>> receive(String requestId, PartCondition... conditions)
             throws Exception {
         StringBuilder items = new StringBuilder();
