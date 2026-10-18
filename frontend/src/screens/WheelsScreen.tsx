@@ -570,7 +570,8 @@ function SetForm({
         tyreWidth: value('tyreWidth'),
         tyreHeight: value('tyreHeight'),
         season: value('season'),
-        wearMm: value('wearMm'),
+        // «30%» набирают со знаком — так он написан у клиента в Bazon.
+        wearPercent: value('wearPercent')?.replace(/\s*%$/, '') ?? null,
         madeYear: value('madeYear'),
         discType: value('discType'),
         discWidth: value('discWidth'),
@@ -662,9 +663,8 @@ function SetForm({
                 ))}
               </select>
             </label>
-            {/* Миллиметры остатка протектора, а не проценты: покупатель
-                мерил глубиномером, а «осталось 25 %» он не пересчитает. */}
-            <Field name="wearMm" label="Протектор, мм" hint="5" set={set} field={field} />
+            {/* Износ в процентах, как у клиента в Bazon: «Износ, %» (задача 0340). */}
+            <Field name="wearPercent" label="Износ, %" hint="30" set={set} field={field} />
             <Field name="madeYear" label="Год" hint="2022" set={set} field={field} />
           </div>
           <div className="filter-row">

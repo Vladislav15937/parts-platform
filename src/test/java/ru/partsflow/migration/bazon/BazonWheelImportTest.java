@@ -13,6 +13,7 @@ import ru.partsflow.support.PostgresTestBase;
 
 import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
+import java.util.Map;
 import java.nio.charset.Charset;
 import java.util.function.Supplier;
 
@@ -72,7 +73,7 @@ class BazonWheelImportTest extends PostgresTestBase {
     private static final String TYRES = String.join(";",
             "\"К122\"", "\"шина\"", "\"4\"", "\"\"", "\"\"", "\"\"", "\"\"", "\"\"", "\"\"",
             "\"\"", "\"\"", "\"Bridgestone\"", "\"Blizzak\"", "\"225\"", "\"55\"", "\"18\"",
-            "\"Зимняя (липучка)\"", "\"2022\"", "\"10%\"", "\"БУ\"", "\"\"", "\"7500\"",
+            "\"Зимняя (липучка)\"", "\"2022\"", "\"12%\"", "\"БУ\"", "\"\"", "\"7500\"",
             "\"\"", "\"В наличии\"", "\"\"");
 
     @Autowired
@@ -94,7 +95,7 @@ class BazonWheelImportTest extends PostgresTestBase {
     @BeforeEach
     void fixtures(org.junit.jupiter.api.TestInfo test) {
         tenant = switch (test.getTestMethod().orElseThrow().getName()) {
-            case "wearBecomesMillimetres" -> WEAR;
+            case "wearStaysPercent" -> WEAR;
             case "repeatIsSafe" -> REPEAT;
             case "photosAreQueued" -> PHOTOS;
             case "wrongFileIsRefused" -> WRONG;
@@ -124,7 +125,7 @@ class BazonWheelImportTest extends PostgresTestBase {
 
         var tyre = inTenant(() -> jdbc.queryForMap("""
                 SELECT w.kind, w.brand, w.model, w.tyre_width, w.tyre_height, w.diameter,
-                       w.season, w.wear_mm, w.made_year, w.set_no, p.price, p.title
+                       w.season, w.wear_percent, w.made_year, w.set_no, p.price, p.title
                   FROM part_wheel w JOIN part p ON p.id = w.part_id
                  WHERE p.legacy_code = 'К122-1'"""));
         assertThat(tyre).containsEntry("kind", "TYRE")
@@ -164,23 +165,27 @@ class BazonWheelImportTest extends PostgresTestBase {
     }
 
     /**
-     * Износ у клиента в процентах, у нас в миллиметрах.
+     * Износ хранится процентом, как вписан у клиента (задача 0340).
      *
-     * <p>Расхождение записано и намеренно: покупатель мерил глубиномером.
-     * Обратный пересчёт опирается на те же восемь миллиметров новой шины,
-     * что и выгрузка на площадку, — иначе одна и та же шина проехала бы
-     * туда и обратно с разной глубиной.
+     * <p>Двенадцать — нарочно: через миллиметры (8 мм за новую шину)
+     * 12 % и 13 % ложатся одним числом 7,0 мм, и до решения владельца
+     * 19.10.2026 «12%» клиента возвращалось на Дром «13%». Миллиметры
+     * ещё пишутся рядом для прежнего образа — до снятия {@code wear_mm}.
      */
     @Test
-    @DisplayName("Износ из процентов переводится в миллиметры остатка")
-    void wearBecomesMillimetres() {
+    @DisplayName("Износ «12%» хранится как 12, а не пересчётом в миллиметры")
+    void wearStaysPercent() {
         load(HEADER + "\n" + TYRES);
 
-        assertThat(inTenant(() -> jdbc.queryForObject("""
-                SELECT w.wear_mm FROM part_wheel w JOIN part p ON p.id = w.part_id
-                 WHERE p.legacy_code = 'К122-1'""", BigDecimal.class)))
-                .as("десять процентов износа — это 7,2 мм остатка, а не 10")
-                .isEqualByComparingTo("7.2");
+        Map<String, Object> wear = inTenant(() -> jdbc.queryForMap("""
+                SELECT w.wear_percent, w.wear_mm FROM part_wheel w JOIN part p ON p.id = w.part_id
+                 WHERE p.legacy_code = 'К122-1'"""));
+        assertThat(((Number) wear.get("wear_percent")).intValue())
+                .as("«12%» у клиента обязано лечь двенадцатью, а не пересчётом")
+                .isEqualTo(12);
+        assertThat((BigDecimal) wear.get("wear_mm"))
+                .as("прежнему образу — те же миллиметры, что клал перенос до 0340")
+                .isEqualByComparingTo("7.0");
     }
 
     @Test

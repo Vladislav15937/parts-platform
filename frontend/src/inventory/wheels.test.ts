@@ -25,7 +25,7 @@ function wheel(overrides: Partial<Wheel> = {}): Wheel {
   return {
     id: 1, number: 1, publicCode: null, title: '', price: null, status: 'IN_STOCK', qty: 1,
     kind: 'TYRE', setNo: null, diameter: null, tyreWidth: null, tyreHeight: null,
-    construction: null, tyreType: null, season: null, wearMm: null, madeYear: null,
+    construction: null, tyreType: null, season: null, wearPercent: null, madeYear: null,
     discType: null, discWidth: null, offsetMm: null, boltPattern: null, hubBore: null,
     brand: null, model: null, discBrand: null, discModel: null,
     markingType: null, treadType: null, runFlat: null, lightTruck: null,
@@ -157,14 +157,14 @@ describe('карточка колеса', () => {
   it('показывает свойства шины и молчит про дисковые', () => {
     const fields = wheelFields(wheel({
       kind: 'TYRE', tyreWidth: 195, tyreHeight: 65, diameter: 15, construction: 'R',
-      season: 'WINTER', wearMm: 7, runFlat: true, speedIndex: 'V', loadIndex: 94,
+      season: 'WINTER', wearPercent: 30, runFlat: true, speedIndex: 'V', loadIndex: 94,
     }));
     const titles = fields.map(([t]) => t);
 
     expect(titles).toContain('Сезон');
     expect(titles).toContain('Индекс нагрузки');
     expect(titles).not.toContain('Сверловка');
-    expect(fields.find(([t]) => t === 'Износ')?.[1]).toBe('7 мм');
+    expect(fields.find(([t]) => t === 'Износ')?.[1]).toBe('30%');
     expect(fields.find(([t]) => t === 'Размер')?.[1]).toBe('195/65 R15');
   });
 
@@ -263,7 +263,7 @@ describe('отбор вкладки колёс', () => {
 describe('колесо в сборе', () => {
   const assembly = () => wheel({
     kind: 'ASSEMBLY', diameter: 18, tyreWidth: 225, tyreHeight: 55, construction: 'R',
-    season: 'WINTER_FRICTION', wearMm: 4, brand: 'Dunlop', model: 'Winter Maxx SJ8',
+    season: 'WINTER_FRICTION', wearPercent: 50, brand: 'Dunlop', model: 'Winter Maxx SJ8',
     discType: 'Литой', discWidth: 7, offsetMm: 38, boltPattern: '5x114.3', hubBore: 66,
     discBrand: 'Mitsubishi', discModel: 'Rays',
   });

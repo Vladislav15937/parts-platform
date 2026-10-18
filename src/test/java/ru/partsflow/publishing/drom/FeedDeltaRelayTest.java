@@ -401,7 +401,7 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         drainQueue();
 
         inTenant(() -> {
-            jdbc.update("UPDATE part_wheel SET wear_mm = 5 WHERE part_id = ?", wheelId);
+            jdbc.update("UPDATE part_wheel SET wear_percent = 40 WHERE part_id = ?", wheelId);
             partChanges.changed(wheelId);
             return null;
         });

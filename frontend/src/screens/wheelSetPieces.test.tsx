@@ -21,7 +21,7 @@ describe('штук в комплекте на вкладке «Шины и ди�
       title: 'Автошина Dunlop Grandtrek PT5 235/55 R19',
       price: 45000, status: 'IN_STOCK', qty: 1,
       kind: 'TYRE', setNo: null, setPieces: 3, diameter: 19, tyreWidth: 265, tyreHeight: 65,
-      construction: 'R', tyreType: 'Обычная', season: 'SUMMER', wearMm: 7.6,
+      construction: 'R', tyreType: 'Обычная', season: 'SUMMER', wearPercent: 5,
       madeYear: 2023, discType: null, discWidth: null, offsetMm: null,
       boltPattern: null, hubBore: null,
       brand: 'Dunlop', model: 'Grandtrek PT3', discBrand: null, discModel: null,

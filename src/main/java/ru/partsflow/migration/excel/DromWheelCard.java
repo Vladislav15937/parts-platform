@@ -55,9 +55,6 @@ final class DromWheelCard {
             "wheelSeason", "wheelTireWear", "marking", "wheelDiameter", "diskType",
             "discFirmAndModel", "discParameters", "wheelPcd", "predestination");
 
-    /** Глубина протектора новой шины — то же число, что у переноса с Bazon и у прайса. */
-    private static final BigDecimal NEW_TREAD_MM = new BigDecimal("8");
-
     /**
      * Сезон словами Дрома. «Зимние» — просто зимняя: шипы или липучку Дром
      * пишет отдельно, а выдумать их нельзя (`publishing/CLAUDE.md`, «Шиповка
@@ -219,15 +216,15 @@ final class DromWheelCard {
             }
         }
 
-        BigDecimal wearMm = null;
+        Integer wearPercent = null;
         String wear = first(byKey, "wheelTireWear");
         if (wear != null) {
             Matcher m = WEAR.matcher(wear);
             int percent = m.matches() ? Integer.parseInt(m.group(1)) : -1;
             if (percent >= 0 && percent <= 100) {
-                // «До 5 %» читается как 5 %: тем же пересчётом, что BazonWheelImporter.wearMm.
-                wearMm = NEW_TREAD_MM.multiply(BigDecimal.valueOf(100 - percent))
-                        .divide(BigDecimal.valueOf(100), 1, RoundingMode.HALF_UP);
+                // «До 5 %» читается как 5 %. Хранится процентом, как у клиента
+                // (задача 0340), — без пересчёта в миллиметры.
+                wearPercent = percent;
             } else {
                 problems.add("Износ: «" + wear + "» не разобран");
             }
@@ -308,7 +305,7 @@ final class DromWheelCard {
         WheelService.WheelRequest request = new WheelService.WheelRequest(
                 kind, diameter, tyreKind ? width : null, tyreKind ? height : null,
                 tyreKind ? construction : null, first(byKey, "predestination"),
-                season, wearMm, year,
+                season, wearPercent, year,
                 first(byKey, "diskType"), discWidth, offset, first(byKey, "wheelPcd"), null,
                 brand, model, discBrand, discModel,
                 tyreKind ? markingType : null, null, null, null,

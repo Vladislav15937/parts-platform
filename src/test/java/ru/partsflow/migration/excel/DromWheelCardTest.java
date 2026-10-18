@@ -136,8 +136,8 @@ class DromWheelCardTest {
         assertThat(r.loadIndex()).isNull();
         assertThat(r.speedIndex()).isNull();
         assertThat(r.season()).isEqualTo("SUMMER");
-        // «До 5 %» — 5 %: 8 × 95 / 100.
-        assertThat(r.wearMm()).isEqualByComparingTo("7.6");
+        // «До 5 %» — 5 %: процентом, как у клиента (задача 0340).
+        assertThat(r.wearPercent()).isEqualTo(5);
         assertThat(r.madeYear()).isEqualTo(2023);
         assertThat(r.brand()).isEqualTo("Dunlop");
         assertThat(r.model()).isEqualTo("Grandtrek PT3");
@@ -162,7 +162,7 @@ class DromWheelCardTest {
         assertThat(r.diameter()).isEqualByComparingTo("17");
         // «Зимние» без слова о шипах — просто зимняя: шипы не выдумываются.
         assertThat(r.season()).isEqualTo("WINTER");
-        assertThat(r.wearMm()).isEqualByComparingTo("7.2");
+        assertThat(r.wearPercent()).isEqualTo(10);
         assertThat(r.madeYear()).isEqualTo(2006);
         assertThat(r.brand()).isEqualTo("Bridgestone");
         assertThat(r.model()).isEqualTo("Blizzak DM-Z3");
@@ -186,7 +186,7 @@ class DromWheelCardTest {
         assertThat(r.loadIndex()).isEqualTo(114);
         assertThat(r.speedIndex()).isEqualTo("H");
         assertThat(r.season()).isEqualTo("ALL_SEASON");
-        assertThat(r.wearMm()).isEqualByComparingTo("7.6");
+        assertThat(r.wearPercent()).isEqualTo(5);
         assertThat(r.madeYear()).isEqualTo(2024);
         assertThat(r.brand()).isEqualTo("Maxxis");
         assertThat(r.model()).isEqualTo("Bravo HT-770");
@@ -237,7 +237,7 @@ class DromWheelCardTest {
         assertThat(r.tyreHeight()).isEqualTo(65);
         assertThat(r.diameter()).isEqualByComparingTo("17");
         assertThat(r.season()).isEqualTo("SUMMER");
-        assertThat(r.wearMm()).isEqualByComparingTo("4.0");
+        assertThat(r.wearPercent()).isEqualTo(50);
         assertThat(r.madeYear()).isEqualTo(2013);
         assertThat(r.brand()).isEqualTo("Bridgestone");
         assertThat(r.model()).isEqualTo("Dueler H/L");
@@ -255,7 +255,7 @@ class DromWheelCardTest {
                 Количество шин в неделимом комплекте [inSetQuantity]: четыре""");
         WheelRequest r = parsed.request();
         assertThat(r.season()).isNull();
-        assertThat(r.wearMm()).isNull();
+        assertThat(r.wearPercent()).isNull();
         assertThat(r.tyreWidth()).isNull();
         assertThat(parsed.setPieces()).isNull();
         assertThat(parsed.problems()).containsExactlyInAnyOrder(

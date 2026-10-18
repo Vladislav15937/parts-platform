@@ -74,7 +74,7 @@ class DromWheelGeneratorTest extends PostgresTestBase {
     @DisplayName("Маркировка собирается в порядке площадки и слитными индексами")
     void markingFollowsTheRequiredOrder() {
         String title = "Шина 225/55 R18 Dunlop зимняя";
-        Long partId = tyre(title, "8000", "WINTER_STUDDED", 225, 55, "18", 100, "Q", "5.5");
+        Long partId = tyre(title, "8000", "WINTER_STUDDED", 225, 55, "18", 100, "Q", 30);
 
         String offer = offerOf(title);
 
@@ -89,13 +89,13 @@ class DromWheelGeneratorTest extends PostgresTestBase {
     @DisplayName("Сезон и шиповка едут словами площадки")
     void seasonAndSpikeAreSpelledOut() {
         String studded = "Шина 195/65 R15 Nokian шипы";
-        tyre(studded, "5000", "WINTER_STUDDED", 195, 65, "15", 91, "T", "7");
+        tyre(studded, "5000", "WINTER_STUDDED", 195, 65, "15", 91, "T", 10);
         assertThat(offerOf(studded))
                 .contains("<season>Зимняя</season>")
                 .contains("<spike>Шипованная</spike>");
 
         String velcro = "Шина 195/65 R15 Nokian липучка";
-        tyre(velcro, "5000", "WINTER_FRICTION", 195, 65, "15", 91, "T", "7");
+        tyre(velcro, "5000", "WINTER_FRICTION", 195, 65, "15", 91, "T", 10);
         assertThat(offerOf(velcro))
                 .contains("<season>Зимняя</season>")
                 .contains("<spike>Нешипуемая</spike>");
@@ -105,7 +105,7 @@ class DromWheelGeneratorTest extends PostgresTestBase {
     @DisplayName("У просто «зимней» шиповка не выдумывается")
     void unknownSpikeIsNotInvented() {
         String title = "Шина 205/55 R16 неизвестной зимы";
-        tyre(title, "4000", "WINTER", 205, 55, "16", 91, "H", "6");
+        tyre(title, "4000", "WINTER", 205, 55, "16", 91, "H", 25);
 
         // Сказать «нешипуемая» там, где шипы неизвестны, значит обмануть
         // покупателя, который ищет именно шипы. У заведённых до появления
@@ -114,15 +114,16 @@ class DromWheelGeneratorTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Износ уходит процентами: площадка меряет им, мы миллиметрами")
-    void wearIsConvertedToPercent() {
-        String title = "Шина 185/65 R15 с остатком 6 мм";
-        tyre(title, "3000", "SUMMER", 185, 65, "15", 88, "H", "6");
+    @DisplayName("Износ уходит тем процентом, что вписан: без пересчёта через миллиметры")
+    void wearGoesAsWritten() {
+        String title = "Шина 185/65 R15 с износом 12 %";
+        tyre(title, "3000", "SUMMER", 185, 65, "15", 88, "H", 12);
 
-        // Остаток 6 мм от восьми — износ 25 %. База пересчёта названа
-        // в генераторе: своего значения «новая шина» у нас нет, а без поля
-        // б/у шина выпадает из фильтра «износ до 20 %».
-        assertThat(offerOf(title)).contains("<iznos>25</iznos>");
+        // Двенадцать, а не тринадцать: через миллиметры (8 мм за новую)
+        // 12 % и 13 % лежат одним числом 7,0 мм, и до задачи 0340 вписанное
+        // «12%» уезжало «13%». Без поля б/у шина выпадает из фильтра
+        // «износ до 20 %».
+        assertThat(offerOf(title)).contains("<iznos>12</iznos>");
     }
 
     @Test
@@ -141,7 +142,7 @@ class DromWheelGeneratorTest extends PostgresTestBase {
     @DisplayName("Цена названа за одну шину, и это же стоит в комплекте")
     void priceMatchesTheDeclaredSetSize() {
         String title = "Шина 215/60 R17 одиночная";
-        tyre(title, "4500", "SUMMER", 215, 60, "17", 96, "V", "7");
+        tyre(title, "4500", "SUMMER", 215, 60, "17", 96, "V", 10);
 
         // П. 6.4.3: стоимость обязана соответствовать количеству шин
         // в комплекте. Мы продаём поштучно — значит единица и цена штуки,
@@ -186,7 +187,7 @@ class DromWheelGeneratorTest extends PostgresTestBase {
     @DisplayName("Проданное колесо остаётся в прайсе недоступным")
     void soldWheelStaysUnavailable() {
         String title = "Шина 175/70 R14 проданная";
-        Long partId = tyre(title, "2000", "SUMMER", 175, 70, "14", 84, "T", "5");
+        Long partId = tyre(title, "2000", "SUMMER", 175, 70, "14", 84, "T", 40);
         inTenant(() -> {
             ledger.record(StockMovement.sale(partId, BigDecimal.ONE, warehouse, null));
             return null;
@@ -214,7 +215,7 @@ class DromWheelGeneratorTest extends PostgresTestBase {
     @DisplayName("Снятое с выгрузки колесо в прайс не идёт вовсе")
     void unpublishedWheelDisappears() {
         String title = "Шина 185/65 R15 снятая с выгрузки";
-        Long partId = tyre(title, "3000", "SUMMER", 185, 65, "15", 88, "H", "6");
+        Long partId = tyre(title, "3000", "SUMMER", 185, 65, "15", 88, "H", 25);
         inTenant(() -> {
             ledger.record(StockMovement.intake(partId, BigDecimal.ONE, warehouse, null));
             return null;
@@ -249,8 +250,8 @@ class DromWheelGeneratorTest extends PostgresTestBase {
         BigDecimal from = new BigDecimal("987000");
         BigDecimal to = new BigDecimal("988000");
 
-        tyre("Счётчик: шина первая", "987500", "SUMMER", 205, 55, "16", 91, "V", "6");
-        tyre("Счётчик: шина вторая", "987600", "SUMMER", 215, 60, "17", 94, "H", "5");
+        tyre("Счётчик: шина первая", "987500", "SUMMER", 205, 55, "16", 91, "V", 25);
+        tyre("Счётчик: шина вторая", "987600", "SUMMER", 215, 60, "17", 94, "H", 40);
         inTenant(() -> {
             Long partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price, cost_price, is_published)
@@ -288,8 +289,8 @@ class DromWheelGeneratorTest extends PostgresTestBase {
         BigDecimal from = new BigDecimal("991000");
         BigDecimal to = new BigDecimal("992000");
 
-        tyre("Отбор: шина летняя", "991100", "SUMMER", 205, 55, "16", 91, "V", "6");
-        tyre("Отбор: шина зимняя", "991200", "WINTER_STUDDED", 215, 60, "17", 94, "H", "5");
+        tyre("Отбор: шина летняя", "991100", "SUMMER", 205, 55, "16", 91, "V", 25);
+        tyre("Отбор: шина зимняя", "991200", "WINTER_STUDDED", 215, 60, "17", 94, "H", 40);
 
         DromPriceGenerator.FeedFilter summer = new DromPriceGenerator.FeedFilter(
                 from, to, java.util.List.of(), java.util.List.of(),
@@ -329,7 +330,7 @@ class DromWheelGeneratorTest extends PostgresTestBase {
         BigDecimal from = new BigDecimal("993000");
         BigDecimal to = new BigDecimal("994000");
         Long partId = tyre("Снимки: шина летняя", "993100", "SUMMER",
-                205, 55, "16", 91, "V", "6");
+                205, 55, "16", 91, "V", 25);
         inTenant(() -> {
             for (int i = 0; i < 5; i++) {
                 jdbc.update("""
@@ -374,13 +375,13 @@ class DromWheelGeneratorTest extends PostgresTestBase {
     }
 
     private Long tyre(String title, String price, String season, int width, int height,
-                      String diameter, Integer loadIndex, String speedIndex, String wearMm) {
+                      String diameter, Integer loadIndex, String speedIndex, Integer wearPercent) {
         Long partId = wheelPart(title, price);
         inTenant(() -> jdbc.update("""
                 INSERT INTO part_wheel (part_id, kind, diameter, tyre_width, tyre_height,
-                                        season, wear_mm, load_index, speed_index, made_year)
-                VALUES (?, 'TYRE', ?::numeric, ?, ?, ?, ?::numeric, ?, ?, 2021)""",
-                partId, diameter, width, height, season, wearMm, loadIndex, speedIndex));
+                                        season, wear_percent, load_index, speed_index, made_year)
+                VALUES (?, 'TYRE', ?::numeric, ?, ?, ?, ?, ?, ?, 2021)""",
+                partId, diameter, width, height, season, wearPercent, loadIndex, speedIndex));
         return partId;
     }
 

@@ -15,8 +15,8 @@ import java.util.List;
  *                 {@code 225/55R18 100Q TL}
  * @param inSet    сколько шин в комплекте, за который названа цена
  * @param quantity сколько штук на складе
- * @param wearPercent износ в процентах — площадка меряет им, мы миллиметрами
- *                 остатка протектора; пересчёт объяснён в {@link DromWheelGenerator}
+ * @param wearPercent износ в процентах, как хранится у позиции (задача 0340:
+ *                 проценты, как у клиента в Bazon, без пересчёта)
  */
 public record DromWheelOffer(
         String orderCode,

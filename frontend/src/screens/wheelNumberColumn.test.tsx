@@ -29,7 +29,7 @@ describe('номер позиции на вкладке «Шины и диски
       title: 'Шина 195/65 R15 Goodyear EfficientGrip летняя',
       price: 3500, status: 'IN_STOCK', qty: 4,
       kind: 'TYRE', setNo: 12, diameter: 15, tyreWidth: 195, tyreHeight: 65,
-      construction: 'R', tyreType: 'Легковая', season: 'SUMMER', wearMm: 5,
+      construction: 'R', tyreType: 'Легковая', season: 'SUMMER', wearPercent: 40,
       madeYear: 2022, discType: null, discWidth: null, offsetMm: null,
       boltPattern: null, hubBore: null,
       brand: 'Goodyear', model: 'EfficientGrip', discBrand: null, discModel: null,

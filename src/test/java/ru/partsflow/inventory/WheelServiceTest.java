@@ -124,7 +124,7 @@ class WheelServiceTest extends PostgresTestBase {
         assertThat(row.loadIndex()).isEqualTo(91);
         assertThat(row.runFlat()).isFalse();
         assertThat(row.lightTruck()).isFalse();
-        assertThat(row.wearMm()).isEqualByComparingTo("5");
+        assertThat(row.wearPercent()).isEqualTo(30);
         assertThat(row.season()).isEqualTo("SUMMER");
         // Колонки складов не фиксированы: у одного клиента их два,
         // у другого пять, — поэтому остаток едет картой, а не числом.
@@ -250,7 +250,7 @@ class WheelServiceTest extends PostgresTestBase {
         WheelService.WheelRequest base = tyre();
         return new WheelService.WheelRequest(base.kind(), base.diameter(),
                 base.tyreWidth(), base.tyreHeight(), base.construction(),
-                base.tyreType(), season, base.wearMm(), base.madeYear(),
+                base.tyreType(), season, base.wearPercent(), base.madeYear(),
                 base.discType(), base.discWidth(), base.offsetMm(),
                 base.boltPattern(), base.hubBore(),
                 base.brand(), base.model(), base.discBrand(), base.discModel(),
@@ -427,7 +427,7 @@ class WheelServiceTest extends PostgresTestBase {
     void unknownKindIsRejectedOnCreate() {
         WheelService.WheelRequest wrong = new WheelService.WheelRequest("WHEEL",
                 new BigDecimal("18"), 225, 55, "R", "Легковая", "SUMMER",
-                new BigDecimal("7"), 2021, null, null, null, null, null,
+                10, 2021, null, null, null, null, null,
                 "Dunlop", "SP Sport", null, null, "METRIC", "DIRECTIONAL",
                 false, false, "V", 95, new BigDecimal("21000"), null, null);
 
@@ -673,7 +673,7 @@ class WheelServiceTest extends PostgresTestBase {
 
     private WheelService.WheelRequest assembly() {
         return new WheelService.WheelRequest("ASSEMBLY", new BigDecimal("18"),
-                225, 55, "R", "Легковая", "WINTER_FRICTION", new BigDecimal("4"), 2014,
+                225, 55, "R", "Легковая", "WINTER_FRICTION", 50, 2014,
                 "Литой", new BigDecimal("7.0"), 38, "5x114.3", new BigDecimal("66"),
                 "Dunlop", "Winter Maxx SJ8", "Mitsubishi", "Rays",
                 "METRIC", "STANDARD", false, false, "Q", 98,
@@ -811,7 +811,7 @@ class WheelServiceTest extends PostgresTestBase {
 
     private WheelService.WheelRequest tyre() {
         return new WheelService.WheelRequest("TYRE", new BigDecimal("15"),
-                195, 65, "R", "Легковая", "SUMMER", new BigDecimal("5"), 2022,
+                195, 65, "R", "Легковая", "SUMMER", 30, 2022,
                 null, null, null, null, null,
                 "Goodyear", "EfficientGrip", null, null,
                 "METRIC", "DIRECTIONAL", false, false, "H", 91,

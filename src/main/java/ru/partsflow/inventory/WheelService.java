@@ -102,6 +102,37 @@ public class WheelService {
     }
 
     /**
+     * Износ — процент от нуля до ста, как у клиента в Bazon (задача 0340).
+     *
+     * <p>Проверяется здесь, а не только {@code CHECK} колонки, по той же причине,
+     * что сезон выше: «операция нарушает целостность данных» не говорит
+     * человеку, что он вписал 150 там, где ждали процент.
+     */
+    private static void requireWear(Integer percent) {
+        if (percent != null && (percent < 0 || percent > 100)) {
+            throw new IllegalArgumentException(
+                    "Износ — процент от 0 до 100, а не " + percent);
+        }
+    }
+
+    /**
+     * Износ в миллиметрах для прежнего образа — до снятия {@code wear_mm}.
+     *
+     * <p>Колонка остаётся одним релизом (expand/contract, {@code tenant/093}):
+     * откатанное приложение читает только её, и колесо, заведённое после
+     * перехода на проценты, иначе уехало бы у него на Дром без износа. Пересчёт
+     * тот же, каким переносы клали проценты в миллиметры до 0340: от восьми мм
+     * новой шины. Снимается вместе с колонкой — следующим changeset'ом.
+     */
+    static BigDecimal legacyMillimetres(Integer percent) {
+        if (percent == null) {
+            return null;
+        }
+        return new BigDecimal("8").multiply(BigDecimal.valueOf(100 - percent))
+                .divide(BigDecimal.valueOf(100), 1, java.math.RoundingMode.HALF_UP);
+    }
+
+    /**
      * Заводит комплект: {@code quantity} одинаковых колёс под общим номером.
      *
      * @return номера заведённых карточек
@@ -123,6 +154,7 @@ public class WheelService {
         requireKnown("Состояние", request.condition(), CONDITIONS);
         requireKnown("Тип маркировки", request.markingType(), MARKING);
         requireKnown("Тип протектора", request.treadType(), TREAD);
+        requireWear(request.wearPercent());
 
         Integer setNo = quantity > 1
                 ? jdbc.queryForObject("SELECT nextval('wheel_set_no_seq')", Integer.class)
@@ -189,6 +221,7 @@ public class WheelService {
         requireKnown("Сезон", request.season(), SEASONS);
         requireKnown("Тип маркировки", request.markingType(), MARKING);
         requireKnown("Тип протектора", request.treadType(), TREAD);
+        requireWear(request.wearPercent());
         if (setPieces != null && setPieces < 1) {
             throw new IllegalArgumentException("Колёс в комплекте — от одного");
         }
@@ -216,17 +249,18 @@ public class WheelService {
         return jdbc.update("""
                 INSERT INTO part_wheel (part_id, kind, set_no, set_pieces, diameter,
                                         tyre_width, tyre_height, construction, tyre_type,
-                                        season, wear_mm, made_year,
+                                        season, wear_percent, wear_mm, made_year,
                                         disc_type, disc_width, offset_mm, bolt_pattern,
                                         hub_bore, brand, model, disc_brand, disc_model,
                                         marking_type, tread_type, run_flat, light_truck,
                                         speed_index, load_index)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (part_id) DO NOTHING""",
                 partId, request.kind(), setNo, setPieces, request.diameter(),
                 request.tyreWidth(), request.tyreHeight(), request.construction(),
-                request.tyreType(), request.season(), request.wearMm(), request.madeYear(),
+                request.tyreType(), request.season(), request.wearPercent(),
+                legacyMillimetres(request.wearPercent()), request.madeYear(),
                 request.discType(), request.discWidth(), request.offsetMm(),
                 request.boltPattern(), request.hubBore(), request.brand(), request.model(),
                 request.discBrand(), request.discModel(),
@@ -271,7 +305,7 @@ public class WheelService {
                        p.barcode, p.legacy_code, p.created_at, p.updated_at,
                        p.price_changed_at,
                        w.kind, w.set_no, w.set_pieces, w.diameter, w.tyre_width, w.tyre_height,
-                       w.construction, w.tyre_type, w.season, w.wear_mm, w.made_year,
+                       w.construction, w.tyre_type, w.season, w.wear_percent, w.made_year,
                        w.disc_type, w.disc_width, w.offset_mm, w.bolt_pattern, w.hub_bore,
                        w.brand, w.model, w.disc_brand, w.disc_model,
                        w.marking_type, w.tread_type, w.run_flat, w.light_truck,
@@ -313,7 +347,7 @@ public class WheelService {
                         rs.getBigDecimal("diameter"),
                         (Integer) rs.getObject("tyre_width"), (Integer) rs.getObject("tyre_height"),
                         rs.getString("construction"), rs.getString("tyre_type"),
-                        rs.getString("season"), rs.getBigDecimal("wear_mm"),
+                        rs.getString("season"), (Integer) rs.getObject("wear_percent"),
                         (Integer) rs.getObject("made_year"),
                         rs.getString("disc_type"), rs.getBigDecimal("disc_width"),
                         (Integer) rs.getObject("offset_mm"), rs.getString("bolt_pattern"),
@@ -613,7 +647,7 @@ public class WheelService {
                     + " WHEN 'DIRECTIONAL' THEN 'Направленный' END"),
             Map.entry("construction", "w.construction"),
             Map.entry("tyreHeight", "trim_scale(w.tyre_height)::text"),
-            Map.entry("wear", "trim_scale(w.wear_mm)::text"),
+            Map.entry("wear", "w.wear_percent::text"),
             Map.entry("tyreBrand", "w.brand"),
             Map.entry("tyreModel", "w.model"),
             Map.entry("season", "CASE w.season WHEN 'SUMMER' THEN 'летняя'"
@@ -699,7 +733,7 @@ public class WheelService {
                        p.note, p.section, p.is_published, p.barcode, p.legacy_code,
                        p.created_at, p.updated_at, p.price_changed_at,
                        w.kind, w.set_no, w.set_pieces, w.diameter, w.tyre_width, w.tyre_height,
-                       w.construction, w.tyre_type, w.season, w.wear_mm, w.made_year,
+                       w.construction, w.tyre_type, w.season, w.wear_percent, w.made_year,
                        w.disc_type, w.disc_width, w.offset_mm, w.bolt_pattern, w.hub_bore,
                        w.brand, w.model, w.disc_brand, w.disc_model,
                        w.marking_type, w.tread_type, w.run_flat,
@@ -748,7 +782,7 @@ public class WheelService {
                     TREAD.getOrDefault(nullToEmpty(rs.getString("tread_type")), ""),
                     nullToEmpty(rs.getString("construction")),
                     number(rs, "tyre_height"),
-                    number(rs, "wear_mm"),
+                    number(rs, "wear_percent"),
                     nullToEmpty(rs.getString("brand")),
                     nullToEmpty(rs.getString("model")),
                     SEASONS.getOrDefault(nullToEmpty(rs.getString("season")), ""),
@@ -906,7 +940,7 @@ public class WheelService {
             Map.entry("diameter", "w.diameter"),
             Map.entry("tyreWidth", "w.tyre_width"),
             Map.entry("tyreHeight", "w.tyre_height"),
-            Map.entry("wear", "w.wear_mm"),
+            Map.entry("wear", "w.wear_percent"),
             Map.entry("season", "w.season"),
             Map.entry("madeYear", "w.made_year"),
             Map.entry("tyreBrand", "w.brand"),
@@ -1044,12 +1078,12 @@ public class WheelService {
      *             в сборе, у которого заполнены оба набора свойств
      * @param brand производитель шины; у диска своё поле — у колеса в сборе
      *              они разные: шина Dunlop на диске Mitsubishi
-     * @param wearMm остаток протектора в миллиметрах, а не в процентах:
-     *               покупатель мерил глубиномером, а не долями
+     * @param wearPercent износ шины в процентах, 0…100, как у клиента в Bazon
+     *                    («30%»): решение владельца 19.10.2026, задача 0340
      */
     public record WheelRequest(String kind, BigDecimal diameter,
                                Integer tyreWidth, Integer tyreHeight, String construction,
-                               String tyreType, String season, BigDecimal wearMm,
+                               String tyreType, String season, Integer wearPercent,
                                Integer madeYear,
                                String discType, BigDecimal discWidth, Integer offsetMm,
                                String boltPattern, BigDecimal hubBore,
@@ -1093,7 +1127,7 @@ public class WheelService {
                            Integer setPieces,
                            BigDecimal diameter,
                            Integer tyreWidth, Integer tyreHeight, String construction,
-                           String tyreType, String season, BigDecimal wearMm, Integer madeYear,
+                           String tyreType, String season, Integer wearPercent, Integer madeYear,
                            String discType, BigDecimal discWidth, Integer offsetMm,
                            String boltPattern, BigDecimal hubBore,
                            String brand, String model,
@@ -1112,7 +1146,7 @@ public class WheelService {
         WheelRow withStock(Map<Long, BigDecimal> byWarehouse) {
             return new WheelRow(id, number, publicCode, title, price, status, qty, kind, setNo,
                     setPieces, diameter,
-                    tyreWidth, tyreHeight, construction, tyreType, season, wearMm, madeYear,
+                    tyreWidth, tyreHeight, construction, tyreType, season, wearPercent, madeYear,
                     discType, discWidth, offsetMm, boltPattern, hubBore, brand, model,
                     discBrand, discModel, markingType, treadType, runFlat, lightTruck, speedIndex, loadIndex,
                     partName, condition, supply, donorCode, oem, description, note, section,

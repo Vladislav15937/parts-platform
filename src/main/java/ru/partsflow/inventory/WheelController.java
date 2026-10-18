@@ -208,7 +208,7 @@ public class WheelController {
                 new WheelService.WheelRequest(
                         request.kind(), request.diameter(),
                         request.tyreWidth(), request.tyreHeight(), request.construction(),
-                        request.tyreType(), request.season(), request.wearMm(),
+                        request.tyreType(), request.season(), request.wearPercent(),
                         request.madeYear(),
                         request.discType(), request.discWidth(), request.offsetMm(),
                         request.boltPattern(), request.hubBore(),
@@ -223,14 +223,14 @@ public class WheelController {
     /**
      * @param quantity сколько колёс в комплекте: обычно четыре, но продают
      *                 и одну запаску
-     * @param wearMm   остаток протектора в миллиметрах
+     * @param wearPercent износ шины в процентах, 0…100 (задача 0340)
      */
     public record SetRequest(@NotBlank String kind,
                              @NotNull Long warehouseId,
                              int quantity,
                              BigDecimal diameter,
                              Integer tyreWidth, Integer tyreHeight, String construction,
-                             String tyreType, String season, BigDecimal wearMm,
+                             String tyreType, String season, Integer wearPercent,
                              Integer madeYear,
                              String discType, BigDecimal discWidth, Integer offsetMm,
                              String boltPattern, BigDecimal hubBore,

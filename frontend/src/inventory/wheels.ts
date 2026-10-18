@@ -64,7 +64,8 @@ export interface Wheel {
   construction: string | null;
   tyreType: string | null;
   season: string | null;
-  wearMm: number | null;
+  /** Износ шины в процентах, как у клиента в Bazon («30%»), задача 0340. */
+  wearPercent: number | null;
   madeYear: number | null;
   discType: string | null;
   discWidth: number | null;
@@ -228,7 +229,7 @@ export interface SetRequest {
   tyreWidth: string | null;
   tyreHeight: string | null;
   season: string | null;
-  wearMm: string | null;
+  wearPercent: string | null;
   madeYear: string | null;
   discType: string | null;
   discWidth: string | null;
@@ -323,6 +324,11 @@ const TREAD: Record<string, string> = {
 // и расходилась бы молча — выбранное из списка перестало бы находиться
 // (задача 0039).
 
+/** Износ процентом со знаком, как пишет Bazon: «30%»; пусто — не указан. */
+function wearText(percent: number | null | undefined): string {
+  return percent == null ? '' : `${percent}%`;
+}
+
 function text(value: string | number | null): string {
   return value === null || value === undefined ? '' : String(value);
 }
@@ -370,9 +376,9 @@ export const WHEEL_COLUMNS: WheelColumn[] = [
     value: (w) => TREAD[w.treadType ?? ''] ?? text(w.treadType) },
   { key: 'construction', title: 'Тип конструкции', value: (w) => text(w.construction) },
   { key: 'tyreHeight', title: 'Высота шины', sort: 'tyreHeight', numeric: true, value: (w) => text(w.tyreHeight) },
-  // Износ в миллиметрах остатка протектора: покупатель мерил глубиномером,
-  // и «осталось 25 %» он пересчитывать не станет.
-  { key: 'wear', title: 'Износ', sort: 'wear', numeric: true, value: (w) => text(w.wearMm) },
+  // Износ в процентах, как у клиента в Bazon (решение владельца 19.10.2026,
+  // задача 0340): «30%» вписано — «30%» и показано.
+  { key: 'wear', title: 'Износ', sort: 'wear', numeric: true, value: (w) => wearText(w.wearPercent) },
   { key: 'tyreBrand', title: 'Производитель шины', sort: 'tyreBrand',
     value: (w) => text(w.brand) },
   { key: 'tyreModel', title: 'Модель шины', value: (w) => text(w.model) },
@@ -512,8 +518,7 @@ export function wheelFields(w: Wheel): Array<[string, string]> {
     add('Тип маркировки', MARKING[w.markingType ?? ''] ?? text(w.markingType));
     add('Тип протектора', TREAD[w.treadType ?? ''] ?? text(w.treadType));
     add('Сезон', SEASONS.find((s) => s.code === w.season)?.name ?? '');
-    // Миллиметры остатка протектора: покупатель мерил глубиномером.
-    add('Износ', w.wearMm === null ? '' : `${w.wearMm} мм`);
+    add('Износ', wearText(w.wearPercent));
     add('Год производства', text(w.madeYear));
     add('Индекс скорости', text(w.speedIndex));
     add('Индекс нагрузки', text(w.loadIndex));

@@ -422,7 +422,7 @@ def core(base, ctx):
     storekeeper.post("/api/wheels/sets", {
         "kind": "TYRE", "warehouseId": ctx["wh"][MAIN_WAREHOUSE], "quantity": 4,
         "diameter": 15, "tyreWidth": 195, "tyreHeight": 65, "season": "SUMMER",
-        "wearMm": 6, "madeYear": 2021, "brand": "Goodyear", "model": "EfficientGrip",
+        "wearPercent": 25, "madeYear": 2021, "brand": "Goodyear", "model": "EfficientGrip",
         "price": 3000, "costPrice": 1000, "condition": "USED"}, step="комплект шин")
     storekeeper.post("/api/wheels/sets", {
         "kind": "DISC", "warehouseId": ctx["wh"][MAIN_WAREHOUSE], "quantity": 2,

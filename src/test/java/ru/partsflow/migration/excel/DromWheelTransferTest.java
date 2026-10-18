@@ -231,7 +231,7 @@ class DromWheelTransferTest extends PostgresTestBase {
         assertThat((BigDecimal) tyre.get("diameter")).isEqualByComparingTo("19");
         assertThat(tyre.get("construction")).isEqualTo("R");
         assertThat(tyre.get("season")).isEqualTo("SUMMER");
-        assertThat((BigDecimal) tyre.get("wear_mm")).isEqualByComparingTo("7.6");
+        assertThat(((Number) tyre.get("wear_percent")).intValue()).isEqualTo(5);
         assertThat(tyre.get("made_year")).isEqualTo(2023);
         assertThat(tyre.get("brand")).isEqualTo("Dunlop");
         assertThat(tyre.get("model")).isEqualTo("Grandtrek PT3");

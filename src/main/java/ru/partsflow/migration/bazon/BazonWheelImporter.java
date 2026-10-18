@@ -9,7 +9,6 @@ import ru.partsflow.inventory.WheelService;
 
 import java.io.InputStream;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.List;
 import java.util.Map;
 
@@ -41,18 +40,6 @@ public class BazonWheelImporter {
 
     /** Опорная колонка: по ней отличается прайс колёс от выгрузки товаров. */
     static final String ANCHOR = "Тип (диск, шина, колесо)";
-
-    /**
-     * Глубина протектора новой легковой шины.
-     *
-     * <p>У клиента износ в процентах, у нас в миллиметрах — расхождение
-     * записано и намеренно: покупатель мерил глубиномером, а «осталось
-     * 25 %» он пересчитывать не станет. Обратный пересчёт при переезде
-     * опирается на то же число, что и выгрузка на площадку: восемь
-     * миллиметров. Иначе одна и та же шина проехала бы туда и обратно
-     * с разной глубиной.
-     */
-    private static final BigDecimal NEW_TREAD_MM = new BigDecimal("8");
 
     private static final Map<String, String> KINDS = Map.of(
             "шина", "TYRE", "диск", "DISC", "колесо", "ASSEMBLY");
@@ -132,7 +119,7 @@ public class BazonWheelImporter {
                         integer(row.get("Высота профиля шины")),
                         null, null,
                         lookup(SEASONS, row.get("Сезон шины (лето, зима, шипы)")),
-                        wearMm(row.get("Износ шин")),
+                        wearPercent(row.get("Износ шин")),
                         integer(row.get("Дата производства")),
                         text(row.get("Тип диска")),
                         decimal(row.get("Ширина диска"), null),
@@ -211,19 +198,19 @@ public class BazonWheelImporter {
     }
 
     /**
-     * Износ из процентов в миллиметры остатка протектора.
+     * Износ в процентах, как он вписан у клиента: «30%» — это 30.
      *
-     * <p>«10 %» у клиента значит «износилось на десятую», то есть осталось
-     * девять десятых от новой шины.
+     * <p>До задачи 0340 проценты здесь переводились в миллиметры от восьми мм
+     * новой шины, и «12%» возвращалось в прайс как «13%»: два процента
+     * помещаются в одну десятую миллиметра. Решение владельца 19.10.2026 —
+     * хранить как у Bazon, без пересчёта.
      */
-    private static BigDecimal wearMm(String value) {
+    private static Integer wearPercent(String value) {
         Integer percent = integer(value == null ? null : value.replace("%", ""));
         if (percent == null || percent < 0 || percent > 100) {
             return null;
         }
-        return NEW_TREAD_MM
-                .multiply(BigDecimal.valueOf(100 - percent))
-                .divide(BigDecimal.valueOf(100), 1, RoundingMode.HALF_UP);
+        return percent;
     }
 
     private static int quantity(String value) {

@@ -8,7 +8,6 @@ import org.springframework.transaction.annotation.Transactional;
 import javax.xml.stream.XMLStreamException;
 import java.io.OutputStream;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -35,26 +34,6 @@ public class DromWheelGenerator {
     private static final int FETCH_SIZE = 500;
 
     /**
-     * Глубина протектора новой шины, от которой считается износ в процентах.
-     *
-     * <p><b>Здесь мы производим число, которого у нас нет, и это надо
-     * понимать.</b> Мы храним остаток протектора в миллиметрах — так его
-     * мерил приёмщик глубиномером, и так его называет покупатель. Площадка
-     * же фильтрует б/у шины по износу в процентах и другого поля не знает.
-     *
-     * <p>Не отдавать износ вовсе — значит выпасть из фильтра «износ до 20 %»,
-     * то есть из основного способа искать б/у шину. Отдавать пересчёт —
-     * значит опираться на глубину новой шины, которой в карточке нет.
-     * Выбрано второе: восемь миллиметров — типовая глубина легковой шины,
-     * и ошибка в один миллиметр даёт двенадцать процентов, а отсутствие
-     * поля даёт ноль показов.
-     *
-     * <p>Настоящий остаток при этом уезжает в наименовании: человек, открывший
-     * объявление, видит «остаток протектора 6 мм», а не только процент.
-     */
-    private static final BigDecimal NEW_TREAD_MM = new BigDecimal("8");
-
-    /**
      * В прайс идёт то, что имеет смысл показывать: колесо с остатком либо уже
      * проданное. Проданное — недоступным, чтобы не потерять объявление вместе
      * с просмотрами; то же соображение, что и в прайсе запчастей.
@@ -71,7 +50,7 @@ public class DromWheelGenerator {
                    w.tyre_width, w.tyre_height, w.diameter,
                    w.speed_index, w.load_index, w.run_flat, w.light_truck,
                    w.disc_width, w.offset_mm, w.bolt_pattern,
-                   w.season, w.wear_mm, w.made_year, w.set_pieces,
+                   w.season, w.wear_percent, w.made_year, w.set_pieces,
                    photos.ids AS photo_ids
               FROM part p
               JOIN part_wheel w ON w.part_id = p.id
@@ -317,7 +296,9 @@ public class DromWheelGenerator {
                     rs.getBoolean("light_truck") ? "Грузовая" : "Легковая",
                     spike(rs.getString("season")),
                     year(rs),
-                    used ? wearPercent(rs.getBigDecimal("wear_mm")) : null,
+                    // Износ хранится процентами, как у клиента (задача 0340): что вписано,
+                    // то и уходит — пересчёта из миллиметров больше нет.
+                    used ? (Integer) rs.getObject("wear_percent") : null,
                     photoLinks(rs.getString("photo_ids"), photoBase, settings));
         }
 
@@ -435,21 +416,6 @@ public class DromWheelGenerator {
         private static Integer year(ResultSet rs) throws SQLException {
             int value = rs.getInt("made_year");
             return rs.wasNull() ? null : value;
-        }
-
-        /** Остаток протектора в миллиметрах → износ в процентах. */
-        private static Integer wearPercent(BigDecimal remainingMm) {
-            if (remainingMm == null) {
-                return null;
-            }
-            BigDecimal worn = NEW_TREAD_MM.subtract(remainingMm);
-            if (worn.signum() <= 0) {
-                return 0;
-            }
-            int percent = worn.multiply(new BigDecimal("100"))
-                    .divide(NEW_TREAD_MM, 0, RoundingMode.HALF_UP)
-                    .intValue();
-            return Math.min(percent, 100);
         }
 
         /** Число снимков задаёт выгрузка; ноль у неё — «без ограничения». */
