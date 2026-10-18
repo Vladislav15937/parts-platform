@@ -4,6 +4,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.inventory.PartCondition;
+import ru.partsflow.inventory.PartNaming;
 import ru.partsflow.inventory.PartService;
 import ru.partsflow.platform.settings.PrintSettingsService;
 import ru.partsflow.shared.RetailCustomer;
@@ -37,13 +38,16 @@ public class DealPrintService {
     private final PartService parts;
     private final PrintSettingsService printSettings;
     private final JdbcTemplate jdbc;
+    private final PartNaming naming;
 
     public DealPrintService(SalesService sales, PartService parts,
-                           PrintSettingsService printSettings, JdbcTemplate jdbc) {
+                           PrintSettingsService printSettings, JdbcTemplate jdbc,
+                           PartNaming naming) {
         this.sales = sales;
         this.parts = parts;
         this.printSettings = printSettings;
         this.jdbc = jdbc;
+        this.naming = naming;
     }
 
     /**
@@ -174,6 +178,11 @@ public class DealPrintService {
                 .toList();
         Map<Long, String> titles = parts.titlesOf(partIds);
         Map<Long, PartCondition> conditions = parts.conditionsOf(partIds);
+        // Основной номер производителя (задача 0329): по нему покупатель
+        // опознаёт деталь, когда приходит с бумагой по гарантии, — «Фара левая
+        // Toyota Camry» в чеке не отличить от соседней. Тем же выражением,
+        // что у списков продажи, одним запросом на документ.
+        Map<Long, String> oems = naming.primaryOemsOf(partIds);
         Map<Long, String> serviceNames = sales.serviceKinds().stream()
                 .collect(java.util.stream.Collectors.toMap(
                         ServiceKind::getId, ServiceKind::getName));
@@ -184,6 +193,7 @@ public class DealPrintService {
             lines.add(new Line(
                     title == null ? "Товар без наименования" : title,
                     wordOf(conditions.get(item.getPartId())),
+                    oems.get(item.getPartId()),
                     item.getQuantity(), item.getPrice(),
                     item.getPrice().multiply(item.getQuantity())));
         }
@@ -191,6 +201,7 @@ public class DealPrintService {
             String name = serviceNames.get(service.getServiceId());
             lines.add(new Line(
                     name == null ? "Услуга" : name,
+                    null,
                     null,
                     service.getQuantity(), service.getPrice(),
                     service.getPrice().multiply(service.getQuantity())));
@@ -232,10 +243,13 @@ public class DealPrintService {
      *                  0314): пометка из наименования уходит (0315, 0316), а новая
      *                  и б/у — разный товар, и в бумаге, которую покупатель
      *                  приносит обратно по гарантии, это должно быть написано
+     * @param primaryOem основной номер производителя как хранится (задача 0329);
+     *                  основного нет — пусто, кросс-номер не подставляется.
+     *                  У услуги пусто
      * @param amount    цена, умноженная на количество: его считает сервер, а не экран
      */
-    public record Line(String title, String condition, BigDecimal quantity, BigDecimal price,
-                       BigDecimal amount) {
+    public record Line(String title, String condition, String primaryOem,
+                       BigDecimal quantity, BigDecimal price, BigDecimal amount) {
     }
 
     /**

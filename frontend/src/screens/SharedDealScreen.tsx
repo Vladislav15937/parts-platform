@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { request } from '../api/client';
 import { ConditionWord } from '../inventory/ConditionWord';
+import { OemWord } from '../inventory/OemWord';
 import { sharedDealStatusName } from '../sales/dealStatus';
 import { useMounted } from '../ui/useMounted';
 
@@ -22,6 +23,12 @@ interface SharedItem {
    * покупателя, а незнакомый код не печатается вовсе (задача 0318).
    */
   condition?: string | null;
+  /**
+   * Основной номер производителя, как хранится (задача 0329, ответ владельца
+   * «Всё да»): покупатель опознаёт деталь по нему так же, как продавец
+   * в выдаче. Основного нет — пусто; у услуги пусто.
+   */
+  primaryOem?: string | null;
   quantity: string;
   price: string;
 }
@@ -92,6 +99,7 @@ export function SharedDealScreen({ company, token }: { company: string; token: s
                 в наименовании, которая говорила это до сих пор, снимают
                 (0315, 0316). */}
             <ConditionWord code={item.condition} />
+            <OemWord number={item.primaryOem} />
             {' '}— {Number(item.quantity)} шт. ×{' '}
             {Number(item.price).toLocaleString('ru-RU')} ₽
           </li>
