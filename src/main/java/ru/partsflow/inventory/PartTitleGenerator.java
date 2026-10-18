@@ -1,6 +1,7 @@
 package ru.partsflow.inventory;
 
 import org.springframework.stereotype.Component;
+import ru.partsflow.catalog.OemNumbers;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -28,6 +29,13 @@ import java.util.List;
  * рядом словом ({@code conditionTitle}, 0314 и 0318). Пометки у позиций,
  * принятых раньше, снимает задача 0316; до неё карточку от них бережёт
  * {@code shownTitle}, прайс — {@code DromPriceWriter.plainName}.
+ *
+ * <p><b>Номер производителя в заголовке — один, основной</b> (задача 0330, решение
+ * владельца продукта 18.10.2026: «у детали один номер производителя, остальное —
+ * кросс-номера»). Вписанное «8414012530, 8414012531» даёт «… 8414012530»: второй
+ * номер уходит кросс-номером, и в названии ему не место. Делит
+ * {@link OemNumbers#primary} — то же правило, по которому пишется {@code part_oem};
+ * своего делителя здесь нет. См. {@link #titleNumber}.
  */
 @Component
 public class PartTitleGenerator {
@@ -36,7 +44,8 @@ public class PartTitleGenerator {
      * @param partName   вид детали в написании арендатора, обязателен
      * @param vehicle    марка, модель, кузов, двигатель и год донора; может быть null
      * @param sides      стороны установки; null-поля просто не попадут в заголовок
-     * @param oemNumber  номер производителя, может быть null
+     * @param oemNumber  текст поля «Номер производителя», как вписан; может быть null.
+     *                   В заголовок идёт только основной номер ({@link #titleNumber})
      */
     public String generate(String partName,
                            VehicleTitlePart vehicle,
@@ -64,9 +73,32 @@ public class PartTitleGenerator {
             addIfPresent(parts, sides.asText());
         }
 
-        addIfPresent(parts, oemNumber);
+        addIfPresent(parts, titleNumber(oemNumber));
 
         return String.join(" ", parts);
+    }
+
+    /**
+     * Что из поля «Номер производителя» встаёт в заголовок.
+     *
+     * <p>Если {@link OemNumbers#primary} отделил от текста кросс-номера (или пустые
+     * куски, «АНАЛОГ»), — его основной номер, в виде хранения ({@code raw_number}),
+     * а не приведённом. Иначе — текст как пришёл, байт в байт как до задачи 0330:
+     * номер без разделителя; «не номер» в начале («АНАЛОГ, FP-3» — основной
+     * не угадывается, 0323) и текст без номера вовсе («б/н») — тоже целиком,
+     * иначе пропало бы то, что человек вписал. Признак «отделил» — основной
+     * не совпал с {@link OemNumbers#clean} всего текста: так одно правило решает
+     * и деление, и «не номер», а не вторая копия разделителей.
+     */
+    static String titleNumber(String oemNumber) {
+        if (oemNumber == null) {
+            return null;
+        }
+        String primary = OemNumbers.primary(oemNumber).primary();
+        if (primary == null || primary.equals(OemNumbers.clean(oemNumber))) {
+            return oemNumber;
+        }
+        return primary;
     }
 
     private static void addIfPresent(List<String> target, String value) {
