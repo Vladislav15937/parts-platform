@@ -107,7 +107,7 @@ class FeedDeltaRelayTest extends PostgresTestBase {
     void priceChangeReachesTheMarketplace() {
         account("12345", null, null);
         Long partId = part("Фара левая", "5000");
-        String code = publicCodeOf(partId);
+        String code = feedKeyOf(partId);
         drainQueue();
 
         inTenant(() -> {
@@ -550,9 +550,10 @@ class FeedDeltaRelayTest extends PostgresTestBase {
                 "SELECT count(*) FROM part_change WHERE claimed_at IS NOT NULL", Integer.class));
     }
 
-    private String publicCodeOf(Long partId) {
+    /** Ключ позиции в прайсе — её номер (задача 0334), а не публичный код. */
+    private String feedKeyOf(Long partId) {
         return inTenant(() -> jdbc.queryForObject(
-                "SELECT public_code FROM part WHERE id = ?", String.class, partId));
+                "SELECT number::text FROM part WHERE id = ?", String.class, partId));
     }
 
     private String capturedDelta() {

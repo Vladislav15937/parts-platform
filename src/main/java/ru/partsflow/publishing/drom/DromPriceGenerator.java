@@ -55,7 +55,10 @@ public class DromPriceGenerator {
      * лежит деталь, важно, сколько её можно продать.
      */
     private static final String SQL = """
-            SELECT p.public_code,
+            SELECT -- Ключ позиции в прайсе — её номер, а не публичный код
+                   -- (задача 0334): у перенесённой с Bazon это «Номер товара»,
+                   -- по которому Дром узнаёт её прежние объявления.
+                   p.number,
                    p.title,
                    p.description,
                    -- Дополнительный текст и ссылка на ролик: владелец их пишет,
@@ -901,7 +904,7 @@ public class DromPriceGenerator {
                                      FeedSettings settings)
                 throws SQLException {
             return new DromOffer(
-                    rs.getString("public_code"),
+                    Long.toString(rs.getLong("number")),
                     rs.getString("title"),
                     rs.getString("part_kind"),
                     rs.getString("description"),

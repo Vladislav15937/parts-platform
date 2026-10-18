@@ -1,6 +1,7 @@
 package ru.partsflow.migration.bazon;
 
 import ru.partsflow.inventory.PartCondition;
+import ru.partsflow.inventory.PartIdentity;
 import ru.partsflow.inventory.PartTitleGenerator;
 
 import javax.sql.DataSource;
@@ -748,6 +749,12 @@ public final class BazonImporter {
             throw new IllegalStateException("Не удалось прочитать заголовок выгрузки товаров", e);
         }
 
+        // Нумерация вперёд — до первой вставки, а не после: позиция без своего
+        // номера товара (занятого или нецелого) и приёмка, идущая рядом,
+        // получат номер за наибольшим из файла, а не займут тот, что строкой
+        // ниже принесёт другая перенесённая позиция.
+        moveNumberingPast(maxItemNumber(catalogCsv));
+
         try (Connection c = dataSource.getConnection()) {
             c.setAutoCommit(false);
 
@@ -758,11 +765,11 @@ public final class BazonImporter {
             // не лежит. У переехавшего клиента таких оказалось десять.
             try (PreparedStatement insertPart = c.prepareStatement("""
                      INSERT INTO %s.part (%s, category_id, title, legacy_code, is_published,
-                                          condition, status)
-                     VALUES (%s, ?, ?, ?, ?, ?, 'DRAFT')
+                                          condition, status, number)
+                     VALUES (%s, ?, ?, ?, ?, ?, 'DRAFT', COALESCE(?, nextval('%s.part_number_seq')))
                      ON CONFLICT (legacy_code) WHERE legacy_code IS NOT NULL DO NOTHING
-                     RETURNING id"""
-                     .formatted(schema, partColumns(), partHolders()));
+                     RETURNING id, number"""
+                     .formatted(schema, partColumns(), partHolders(), schema));
                  // Дозаполнение уже загруженной позиции — то же, что у машин:
                  // колонка, появившаяся в переносе позже, иначе не доедет
                  // до клиента, загруженного раньше, никогда.
@@ -795,7 +802,25 @@ public final class BazonImporter {
                         savepoint = c.setSavepoint();
 
                         Object[] values = partValues(row, donorSupplies, donors, partNames);
-                        Long partId = insertPart(insertPart, values, row, unknownPublishValues, categoryId);
+                        ItemNumber wanted = itemNumber(c, row);
+                        Inserted inserted;
+                        try {
+                            inserted = insertPart(insertPart, values, row, unknownPublishValues,
+                                    categoryId, wanted.free());
+                        } catch (SQLException e) {
+                            if (wanted.free() == null || !violates(e, "part_number_uk")) {
+                                throw e;
+                            }
+                            // Номер заняли между проверкой и вставкой: правка
+                            // «№ позиции» руками или второй перенос рядом.
+                            // Позиция заводится с обычным номером, а не теряется.
+                            c.rollback(savepoint);
+                            wanted = new ItemNumber(wanted.raw(), wanted.parsed(), null,
+                                    occupant(c, wanted.parsed(), row.get("Номер товара")));
+                            inserted = insertPart(insertPart, values, row, unknownPublishValues,
+                                    categoryId, null);
+                        }
+                        Long partId = inserted == null ? null : inserted.id();
                         if (partId == null) {
                             // Уже загружена. Не пропускаем целиком, как раньше:
                             // дозаполняем пустое, дописываем номера и ставим
@@ -815,6 +840,7 @@ public final class BazonImporter {
                             return;
                         }
 
+                        wanted.reportIfLost(report, row.lineNumber(), inserted.number());
                         insertStock(insertMovement, setReserved, row, partId, warehouseColumns, warehouses);
                         insertNumbers(insertOem, row, partId, report);
                         queuePhotos(insertPhoto, row, partId, report);
@@ -972,9 +998,9 @@ public final class BazonImporter {
         return value == null ? null : value.name();
     }
 
-    private Long insertPart(PreparedStatement ps, Object[] values, BazonCsvReader.Row row,
-                            java.util.Set<String> unknownPublish,
-                            long categoryId) throws SQLException {
+    private Inserted insertPart(PreparedStatement ps, Object[] values, BazonCsvReader.Row row,
+                                java.util.Set<String> unknownPublish,
+                                long categoryId, Long number) throws SQLException {
 
         var years = BazonValueParser.parseYearRange(row.get("Год выпуска"));
 
@@ -1003,10 +1029,117 @@ public final class BazonImporter {
             unknownPublish.add(publishRaw.trim());
         }
         ps.setBoolean(at++, Boolean.TRUE.equals(publish));
-        ps.setString(at, conditionOf(row).name());
+        ps.setString(at++, conditionOf(row).name());
+        // Номер позиции — «Номер товара» прежней системы (задача 0334): по нему
+        // клиент называет деталь вслух, и он же уходит ключом позиции в прайс
+        // Дрома. NULL — номер не годится или занят, и позиция берёт обычный.
+        setLong(ps, at, number);
 
         try (ResultSet rs = ps.executeQuery()) {
-            return rs.next() ? rs.getLong(1) : null;
+            return rs.next() ? new Inserted(rs.getLong(1), rs.getLong(2)) : null;
+        }
+    }
+
+    private record Inserted(long id, long number) {
+    }
+
+    /**
+     * Что сталось с «Номером товара» строки как с номером позиции.
+     *
+     * @param raw      значение колонки как есть
+     * @param parsed   целое из него; {@code null} — не целое
+     * @param free     номер, который позиция получит; {@code null} — обычный
+     * @param occupant публичный код позиции, у которой этот номер уже стоит
+     */
+    private record ItemNumber(String raw, Long parsed, Long free, String occupant) {
+
+        /**
+         * Называет потерю в отчёте — только у заведённой позиции: повтор
+         * переноса номер не меняет, и твердить ему про занятый номер
+         * на каждом прогоне значило бы называть то, что уже названо.
+         */
+        void reportIfLost(ImportReport report, long line, long given) {
+            if (raw == null || raw.isBlank() || Long.valueOf(given).equals(parsed)) {
+                return;
+            }
+            if (parsed == null) {
+                report.problem(line, ("номер товара «%s» не целое число — позиция"
+                        + " получила № %d").formatted(raw.strip(), given));
+            } else {
+                // Занявшая могла успеть откатиться (одновременная правка) —
+                // тогда назвать её нечем, но потеря номера всё равно названа.
+                report.problem(line, ("номер товара %d занят %s — перенесённая"
+                        + " получила № %d").formatted(parsed,
+                        occupant == null ? "другой позицией" : "позицией " + occupant, given));
+            }
+            report.count("номеров товара не сохранено");
+        }
+    }
+
+    /**
+     * Номер позиции из «Номера товара»: свободен ли он.
+     *
+     * <p>Занятым не считается номер позиции с тем же «Номером товара» — это
+     * она сама на повторе переноса, и её вставку всё равно погасит
+     * {@code ON CONFLICT (legacy_code)}.
+     */
+    private ItemNumber itemNumber(Connection c, BazonCsvReader.Row row) throws SQLException {
+        String raw = row.get("Номер товара");
+        Long parsed = BazonValueParser.parseItemNumber(raw, PartIdentity.NUMBER_MAX);
+        if (parsed == null) {
+            return new ItemNumber(raw, null, null, null);
+        }
+        String occupant = occupant(c, parsed, raw);
+        return new ItemNumber(raw, parsed, occupant == null ? parsed : null, occupant);
+    }
+
+    private String occupant(Connection c, long number, String legacyCode) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("SELECT public_code FROM " + schema
+                + ".part WHERE number = ? AND legacy_code IS DISTINCT FROM ?")) {
+            ps.setLong(1, number);
+            ps.setString(2, legacyCode);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
+            }
+        }
+    }
+
+    private static boolean violates(SQLException e, String constraint) {
+        // Драйвер в сборке только на время выполнения, поэтому имя ограничения
+        // читается из текста: Postgres называет его в сообщении всегда.
+        return "23505".equals(e.getSQLState())
+                && e.getMessage() != null && e.getMessage().contains("\"" + constraint + "\"");
+    }
+
+    /** Наибольший годный «Номер товара» файла; {@code null} — ни одного. */
+    private Long maxItemNumber(Path catalogCsv) {
+        long[] max = {0};
+        forEachRow(catalogCsv, new ImportReport(), row -> {
+            Long n = BazonValueParser.parseItemNumber(row.get("Номер товара"), PartIdentity.NUMBER_MAX);
+            if (n != null && n > max[0]) {
+                max[0] = n;
+            }
+        });
+        return max[0] == 0 ? null : max[0];
+    }
+
+    /**
+     * Двигает нумерацию позиций за {@code number} — и никогда назад: назад она
+     * раздала бы номера второй раз. Та же инструкция, что у правки «№ позиции»
+     * руками ({@code PartIdentity.claimNumber}, задача 0303); рабочей роли
+     * {@code UPDATE} на эту последовательность выдан ({@code SchemaGrants}).
+     */
+    private void moveNumberingPast(Long number) throws SQLException {
+        if (number == null) {
+            return;
+        }
+        String seq = schema + ".part_number_seq";
+        try (Connection c = dataSource.getConnection();
+             PreparedStatement ps = c.prepareStatement("SELECT setval('" + seq + "', greatest(?,"
+                     + " (SELECT CASE WHEN is_called THEN last_value ELSE last_value - 1 END"
+                     + " FROM " + seq + ")))")) {
+            ps.setLong(1, number);
+            ps.executeQuery().close();
         }
     }
 

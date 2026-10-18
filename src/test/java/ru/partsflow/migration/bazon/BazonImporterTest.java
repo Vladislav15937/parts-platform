@@ -82,12 +82,12 @@ class BazonImporterTest extends PostgresTestBase {
         // Свободное плюс резерв: отложенная деталь физически лежит на полке,
         // и остаток склада её включает. Взять только свободное значило бы
         // списать обещанное другому клиенту.
-        assertThat(qtyOf(IMPORT, "A-100")).isEqualByComparingTo("3");
-        assertThat(qtyOf(IMPORT, "A-200")).isEqualByComparingTo("1");
+        assertThat(qtyOf(IMPORT, "100")).isEqualByComparingTo("3");
+        assertThat(qtyOf(IMPORT, "200")).isEqualByComparingTo("1");
 
         // Резерв из выгрузки — это обещание другому клиенту, и терять его
         // нельзя: продавец пообещает деталь второму.
-        assertThat(reservedOf(IMPORT, "A-100")).isEqualByComparingTo("1");
+        assertThat(reservedOf(IMPORT, "100")).isEqualByComparingTo("1");
 
         assertThat(report.problems()).isEmpty();
     }
@@ -106,10 +106,10 @@ class BazonImporterTest extends PostgresTestBase {
     void itemWithoutStockIsNotInStock() throws Exception {
         importFixture(IMPORT);
 
-        assertThat(qtyOf(IMPORT, "A-400")).isEqualByComparingTo("0");
-        assertThat(statusOf(IMPORT, "A-400")).isEqualTo("DRAFT");
+        assertThat(qtyOf(IMPORT, "400")).isEqualByComparingTo("0");
+        assertThat(statusOf(IMPORT, "400")).isEqualTo("DRAFT");
         // А у позиции с остатком статус ставит триггер прихода.
-        assertThat(statusOf(IMPORT, "A-100")).isEqualTo("IN_STOCK");
+        assertThat(statusOf(IMPORT, "100")).isEqualTo("IN_STOCK");
     }
 
     @Test
@@ -120,9 +120,9 @@ class BazonImporterTest extends PostgresTestBase {
         // В карточке товара «Цена установки 0 ₽» — обещание покупателю,
         // а в выгрузке прежней системы ноль стоит там, где поле не заполняли:
         // у живого клиента таких строк 367 из 381.
-        assertThat(installationPriceOf(IMPORT, "A-200")).isNull();
-        assertThat(installationPriceOf(IMPORT, "A-400")).isNull();
-        assertThat(installationPriceOf(IMPORT, "A-100")).isEqualByComparingTo("1500");
+        assertThat(installationPriceOf(IMPORT, "200")).isNull();
+        assertThat(installationPriceOf(IMPORT, "400")).isNull();
+        assertThat(installationPriceOf(IMPORT, "100")).isEqualByComparingTo("1500");
     }
 
     @Test
@@ -175,7 +175,7 @@ class BazonImporterTest extends PostgresTestBase {
                 .isEqualTo(3);
         assertThat(count(REPEAT, "donor")).isEqualTo(1);
         assertThat(count(REPEAT, "supply")).isEqualTo(1);
-        assertThat(qtyOf(REPEAT, "A-100"))
+        assertThat(qtyOf(REPEAT, "100"))
                 .as("остаток удвоился: движения записались повторно")
                 .isEqualByComparingTo("3");
         assertThat(second.loaded("товаров пропущено (уже есть)"))
@@ -295,7 +295,7 @@ class BazonImporterTest extends PostgresTestBase {
         // ста девяноста тысяч.
         String headerWithoutPhotos = CATALOG_HEADER;
         Path first = write("catalog-old.csv", headerWithoutPhotos + """
-                "A-500";"Стартер";"";"";"";"";"";"";"";"";"";"";\
+                "500";"Стартер";"";"";"";"";"";"";"";"";"";"";\
                 "";"";"";"7000";"";"1";"0";"0";"0";"0";"0";"да";""
                 """);
         new BazonImporter(dataSource, PARTS_BACKFILL).importAll(donorsFixture(), first);
@@ -303,7 +303,7 @@ class BazonImporterTest extends PostgresTestBase {
         assertThat(photoQueueOf(PARTS_BACKFILL)).isZero();
 
         // Цену владелец подвинул руками — выгрузка старше этой правки.
-        jdbc.update("UPDATE %s.part SET price = 6000 WHERE legacy_code = 'A-500'"
+        jdbc.update("UPDATE %s.part SET price = 6000 WHERE legacy_code = '500'"
                 .formatted(PARTS_BACKFILL));
 
         Path second = write("catalog-new.csv", """
@@ -313,7 +313,7 @@ class BazonImporterTest extends PostgresTestBase {
                 "Секция";"Номер производителя";"Ткацкая (свободно)";"Ткацкая (резерв)";\
                 "Ткацкая (ожидается)";"Ангар (свободно)";"Ангар (резерв)";\
                 "Ангар (ожидается)";"Выгружать";"Установка"
-                "A-500";"http://cdn/1.jpg,http://cdn/2.jpg";"Стартер";"";"";"";"";"";"";\
+                "500";"http://cdn/1.jpg,http://cdn/2.jpg";"Стартер";"";"";"";"";"";"";\
                 "Контракт";"";"";"";"";"";"Denso";"7000";"01-02-03";"28100-0D030";\
                 "1";"0";"0";"0";"0";"0";"да";""
                 """);
@@ -321,13 +321,13 @@ class BazonImporterTest extends PostgresTestBase {
                 .importAll(donorsFixture(), second);
 
         assertThat(report.loaded("товаров дополнено")).isEqualTo(1);
-        assertThat(textOf(PARTS_BACKFILL, "A-500", "section"))
+        assertThat(textOf(PARTS_BACKFILL, "500", "section"))
                 .as("пустая секция так и не заполнилась")
                 .isEqualTo("01-02-03");
-        assertThat(textOf(PARTS_BACKFILL, "A-500", "manufacturer")).isEqualTo("Denso");
-        assertThat(textOf(PARTS_BACKFILL, "A-500", "description")).isEqualTo("Контракт");
+        assertThat(textOf(PARTS_BACKFILL, "500", "manufacturer")).isEqualTo("Denso");
+        assertThat(textOf(PARTS_BACKFILL, "500", "description")).isEqualTo("Контракт");
         assertThat(jdbc.queryForObject(
-                "SELECT price FROM %s.part WHERE legacy_code = 'A-500'".formatted(PARTS_BACKFILL),
+                "SELECT price FROM %s.part WHERE legacy_code = '500'".formatted(PARTS_BACKFILL),
                 BigDecimal.class))
                 .as("выгрузка вернула прежнюю цену поверх правки владельца")
                 .isEqualByComparingTo("6000");
@@ -336,7 +336,7 @@ class BazonImporterTest extends PostgresTestBase {
                         + "«Превью», они не появятся никогда")
                 .isEqualTo(2);
         // Самое опасное в дозаполнении: движения повторить нельзя.
-        assertThat(qtyOf(PARTS_BACKFILL, "A-500"))
+        assertThat(qtyOf(PARTS_BACKFILL, "500"))
                 .as("остаток удвоился — дозаполнение повторило движения")
                 .isEqualByComparingTo("1");
     }
@@ -359,7 +359,7 @@ class BazonImporterTest extends PostgresTestBase {
         importFixture(IMPORT);
 
         // Резерв в part_stock остался — деталь обещана, и продать её нельзя.
-        assertThat(reservedOf(IMPORT, "A-100")).isEqualByComparingTo("1");
+        assertThat(reservedOf(IMPORT, "100")).isEqualByComparingTo("1");
 
         // Но теперь у обещания есть документ. Без него продавец видел
         // «отложено 1» и не мог выяснить, кому и до какого числа.
@@ -421,8 +421,8 @@ class BazonImporterTest extends PostgresTestBase {
         // Цена буквами сюда не годится — разборщик приводит её к пустой,
         // и до базы такая строка доезжает целой.
         Path catalog = write("catalog.csv", CATALOG_HEADER + """
-                "A-100";"Фара левая";"Д-1";"";"";"";"";"";"";"";"";"";"";"";"";"9500";"";"2";"1";"0";"0";"0";"0";"да";""
-                "A-300";"Дверь";"";"";"";"";"";"";"";"";"";"";"";"";"";"-500";"";"1";"0";"0";"0";"0";"0";"да";""
+                "100";"Фара левая";"Д-1";"";"";"";"";"";"";"";"";"";"";"";"";"9500";"";"2";"1";"0";"0";"0";"0";"да";""
+                "300";"Дверь";"";"";"";"";"";"";"";"";"";"";"";"";"";"-500";"";"1";"0";"0";"0";"0";"0";"да";""
                 """);
 
         ImportReport report = new BazonImporter(dataSource, BAD_ROW)
@@ -438,9 +438,9 @@ class BazonImporterTest extends PostgresTestBase {
     @DisplayName("Битая строка называется один раз, а не по разу на проход")
     void brokenRowIsReportedOnce() throws Exception {
         Path catalog = write("catalog-broken.csv", CATALOG_HEADER + """
-                "A-500";"Фара левая";"";"";"";"";"";"";"";"";"";"";"";"";"";"9500";"";\
+                "500";"Фара левая";"";"";"";"";"";"";"";"";"";"";"";"";"";"9500";"";\
                 "1";"0";"0";"0";"0";"0";"да";"0"
-                "A-501";"обрезанная
+                "501";"обрезанная
                 """);
 
         ImportReport report = new BazonImporter(dataSource, BROKEN_ROW)
@@ -461,7 +461,7 @@ class BazonImporterTest extends PostgresTestBase {
     void junkCrossNumberDoesNotLoseThePart() throws Exception {
         Path catalog = write("catalog-junk-oem.csv", CATALOG_HEADER.strip()
                 + ";\"Кросс-номера\"\n" + """
-                "A-900";"Фара левая";"";"";"";"";"";"";"";"";"";"";"";"";"";"9500";\
+                "900";"Фара левая";"";"";"";"";"";"";"";"";"";"";"";"";"";"9500";\
                 "81150-33670";"1";"0";"0";"0";"0";"0";"да";"0";"АНАЛОГ, 8115033671"
                 """);
 
@@ -472,7 +472,7 @@ class BazonImporterTest extends PostgresTestBase {
         // объявлена NOT NULL. Пока номер писали не глядя, отказ базы уносил
         // карточку целиком — вместе с остатком, снимками и деньгами.
         assertThat(count(JUNK_OEM, "part")).isEqualTo(1);
-        assertThat(qtyOf(JUNK_OEM, "A-900")).isEqualByComparingTo("1");
+        assertThat(qtyOf(JUNK_OEM, "900")).isEqualByComparingTo("1");
         assertThat(jdbc.queryForList(
                 "SELECT normalized FROM " + JUNK_OEM + ".part_oem ORDER BY normalized",
                 String.class))
@@ -497,38 +497,38 @@ class BazonImporterTest extends PostgresTestBase {
     void conditionColumnIsImported() throws Exception {
         Path catalog = write("catalog-condition.csv", CATALOG_HEADER.strip()
                 + ";\"Состояние\"\n" + """
-                "A-700";"Фара левая";"";"Toyota";"Camry";"";"";"";"";"";"";"";"";"";"";"9500";\
+                "700";"Фара левая";"";"Toyota";"Camry";"";"";"";"";"";"";"";"";"";"";"9500";\
                 "8414012530";"1";"0";"0";"0";"0";"0";"да";"0";"Контракт"
-                "A-701";"Бампер передний";"";"";"";"";"";"";"";"";"";"";"";"";"";"7000";"";\
+                "701";"Бампер передний";"";"";"";"";"";"";"";"";"";"";"";"";"";"7000";"";\
                 "1";"0";"0";"0";"0";"0";"да";"0";"БУ"
-                "A-702";"Стартер";"";"";"";"";"";"";"";"";"";"";"";"";"";"3500";"";\
+                "702";"Стартер";"";"";"";"";"";"";"";"";"";"";"";"";"";"3500";"";\
                 "1";"0";"0";"0";"0";"0";"да";"0";""
-                "A-703";"Генератор";"";"";"";"";"";"";"";"";"";"";"";"";"";"4500";"27060-28110";\
+                "703";"Генератор";"";"";"";"";"";"";"";"";"";"";"";"";"";"4500";"27060-28110";\
                 "1";"0";"0";"0";"0";"0";"да";"0";"Новый"
                 """);
 
         new BazonImporter(dataSource, CONDITION_COL).importAll(donorsFixture(), catalog);
 
-        assertThat(textOf(CONDITION_COL, "A-700", "condition"))
+        assertThat(textOf(CONDITION_COL, "700", "condition"))
                 .as("«Контракт» потерялся: такого товара у переехавшего клиента"
                         + " 9 417 позиций из 35 841")
                 .isEqualTo("CONTRACT");
-        assertThat(textOf(CONDITION_COL, "A-701", "condition")).isEqualTo("USED");
-        assertThat(textOf(CONDITION_COL, "A-703", "condition")).isEqualTo("NEW");
+        assertThat(textOf(CONDITION_COL, "701", "condition")).isEqualTo("USED");
+        assertThat(textOf(CONDITION_COL, "703", "condition")).isEqualTo("NEW");
 
         // Пустое значение — «в файле не сказано», а не выдуманное состояние:
         // остаётся прежнее умолчание.
-        assertThat(textOf(CONDITION_COL, "A-702", "condition")).isEqualTo("USED");
+        assertThat(textOf(CONDITION_COL, "702", "condition")).isEqualTo("USED");
 
         // Пометки состояния в заголовке нет ни у одного (задача 0315): она была
         // второй копией поля condition, и копия врала. Номер производителя
         // по-прежнему последним словом.
-        assertThat(textOf(CONDITION_COL, "A-700", "title"))
+        assertThat(textOf(CONDITION_COL, "700", "title"))
                 .isEqualTo("Фара левая Toyota Camry 8414012530");
-        assertThat(textOf(CONDITION_COL, "A-701", "title")).isEqualTo("Бампер передний");
-        assertThat(textOf(CONDITION_COL, "A-702", "title")).isEqualTo("Стартер");
-        assertThat(textOf(CONDITION_COL, "A-703", "title")).isEqualTo("Генератор 27060-28110");
-        for (String code : List.of("A-700", "A-701", "A-702", "A-703")) {
+        assertThat(textOf(CONDITION_COL, "701", "title")).isEqualTo("Бампер передний");
+        assertThat(textOf(CONDITION_COL, "702", "title")).isEqualTo("Стартер");
+        assertThat(textOf(CONDITION_COL, "703", "title")).isEqualTo("Генератор 27060-28110");
+        for (String code : List.of("700", "701", "702", "703")) {
             for (String mark : PartCondition.titleMarks()) {
                 assertThat(textOf(CONDITION_COL, code, "title"))
                         .as("в заголовок %s дописана пометка «%s»", code, mark)
@@ -548,19 +548,19 @@ class BazonImporterTest extends PostgresTestBase {
     void repeatKeepsTitles() throws Exception {
         Path catalog = write("catalog-condition-repeat.csv", CATALOG_HEADER.strip()
                 + ";\"Состояние\"\n" + """
-                "A-710";"Фара правая";"";"";"";"";"";"";"";"";"";"";"";"";"";"9500";\
+                "710";"Фара правая";"";"";"";"";"";"";"";"";"";"";"";"";"";"9500";\
                 "8414012531";"1";"0";"0";"0";"0";"0";"да";"0";"БУ"
-                "A-711";"Бампер задний";"";"";"";"";"";"";"";"";"";"";"";"";"";"7000";"";\
+                "711";"Бампер задний";"";"";"";"";"";"";"";"";"";"";"";"";"";"7000";"";\
                 "1";"0";"0";"0";"0";"0";"да";"0";"Контракт"
                 """);
         new BazonImporter(dataSource, CONDITION_COL).importAll(donorsFixture(), catalog);
         jdbc.update("UPDATE " + CONDITION_COL + ".part SET title = 'Бампер задний (контракт)'"
-                + " WHERE legacy_code = 'A-711'");
+                + " WHERE legacy_code = '711'");
 
         new BazonImporter(dataSource, CONDITION_COL).importAll(donorsFixture(), catalog);
 
-        assertThat(textOf(CONDITION_COL, "A-710", "title")).isEqualTo("Фара правая 8414012531");
-        assertThat(textOf(CONDITION_COL, "A-711", "title"))
+        assertThat(textOf(CONDITION_COL, "710", "title")).isEqualTo("Фара правая 8414012531");
+        assertThat(textOf(CONDITION_COL, "711", "title"))
                 .as("повтор переписал заголовок, собранный до задачи 0315")
                 .isEqualTo("Бампер задний (контракт)");
     }
@@ -585,11 +585,11 @@ class BazonImporterTest extends PostgresTestBase {
 
     private Path catalogFixture() throws Exception {
         return write("catalog.csv", CATALOG_HEADER + """
-                "A-100";"Фара левая";"Д-1";"Toyota";"Camry";"2006";"";"";"";"";"Левый";"Передний";\
+                "100";"Фара левая";"Д-1";"Toyota";"Camry";"2006";"";"";"";"";"Левый";"Передний";\
                 "Хорошее";"";"";"9500";"81150-33670";"2";"1";"0";"0";"0";"0";"да";"1500"
-                "A-200";"Бампер передний";"";"";"";"";"";"";"";"";"";"";"";"";"";"12000";"";\
+                "200";"Бампер передний";"";"";"";"";"";"";"";"";"";"";"";"";"";"12000";"";\
                 "0";"0";"0";"1";"0";"0";"да";"0"
-                "A-400";"Стартер";"";"";"";"";"";"";"";"";"";"";"";"";"";"3500";"";\
+                "400";"Стартер";"";"";"";"";"";"";"";"";"";"";"";"";"";"3500";"";\
                 "0";"0";"0";"0";"0";"0";"да";""
                 """);
     }

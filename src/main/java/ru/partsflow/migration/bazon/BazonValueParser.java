@@ -184,6 +184,32 @@ public final class BazonValueParser {
         }
     }
 
+    /**
+     * «Номер товара» прежней системы как номер позиции (задача 0334).
+     *
+     * <p>Целое больше нуля, не больше {@code limit}; разделители разрядов —
+     * пробел и оба неразрывных — снимаются: в карточке Bazon он пишется
+     * «1 349», в файле выгрузки Дрома — {@code 1349}. Всё прочее — {@code null},
+     * и позиция получает обычный номер: номер с буквой или дробью вслух
+     * называть не станут, а угаданное из него число было бы номером, которого
+     * у клиента не было.
+     */
+    public static Long parseItemNumber(String raw, long limit) {
+        String value = trimToNull(raw);
+        if (value == null) {
+            return null;
+        }
+        String digits = value.replaceAll("[\\s  ]", "");
+        if (!digits.matches("[0-9]{1,19}")) {
+            return null;
+        }
+        java.math.BigInteger number = new java.math.BigInteger(digits);
+        if (number.signum() <= 0 || number.compareTo(java.math.BigInteger.valueOf(limit)) > 0) {
+            return null;
+        }
+        return number.longValueExact();
+    }
+
     public static BigDecimal parseAmount(String raw) {
         String value = trimToNull(raw);
         if (value == null) {

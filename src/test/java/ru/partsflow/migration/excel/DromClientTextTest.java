@@ -191,7 +191,7 @@ class DromClientTextTest extends PostgresTestBase {
         assertThat(text(engine, "description")).isEqualTo(LONG);
 
         Element ours = offers.get(inTenant(() -> jdbc.queryForObject(
-                "SELECT public_code FROM part WHERE drom_ad_number IS NULL", String.class)));
+                "SELECT number::text FROM part WHERE drom_ad_number IS NULL", String.class)));
         assertThat(ours).as("контрольной позиции нет в прайсе").isNotNull();
         assertThat(text(ours, "name"))
                 .as("позиция не с Дрома перестала чиститься")
@@ -257,7 +257,7 @@ class DromClientTextTest extends PostgresTestBase {
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
     }
 
-    /** Позиции прайса по {@code ordercode}. Разбор XML, как его прочтёт площадка. */
+    /** Позиции прайса по {@code ordercode} — номеру позиции (задача 0334). Разбор XML, как его прочтёт площадка. */
     private static Map<String, Element> offers(String xml) throws Exception {
         NodeList list = DocumentBuilderFactory.newInstance().newDocumentBuilder()
                 .parse(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)))
@@ -272,7 +272,7 @@ class DromClientTextTest extends PostgresTestBase {
 
     private Element offerOf(Map<String, Element> offers, String adNumber) {
         Element offer = offers.get(column(
-                "SELECT public_code FROM part WHERE drom_ad_number = ?", adNumber));
+                "SELECT number::text FROM part WHERE drom_ad_number = ?", adNumber));
         assertThat(offer).as("объявления № %s нет в прайсе", adNumber).isNotNull();
         return offer;
     }
