@@ -561,8 +561,10 @@ def export(base, ctx):
 
 
 def offers_in(url):
+    # Прайс запчастей — формата файла Bazon (задача 0333): позиция — <part>.
+    # Прежний <offer> здесь давал бы ноль на любом прайсе, то есть «прайс пуст».
     with urllib.request.urlopen(url, timeout=120) as response:
-        return response.read().decode("utf-8").count("<offer>")
+        return response.read().decode("utf-8").count("<part>")
 
 
 def seed(base, token):
@@ -1200,8 +1202,12 @@ def fake_answer(state, method, path, body):
     if re.fullmatch(r"/api/marketplace-accounts/\d+/feed-url", path):
         return 200, {"url": "%s/feed.xml" % base}
     if path == "/feed.xml":
-        offers = "<offer>деталь</offer>" * state["offers"]
-        return 200, ("<offers>%s</offers>" % offers).encode("utf-8")
+        # Разметка нынешнего прайса запчастей (0333). Стенд, отвечающий
+        # прежней <offers><offer>, держал самопроверку зелёной при сломанном
+        # счёте: обе стороны говорили на старом языке.
+        offers = "<part>\n<id>1</id>\n</part>\n" * state["offers"]
+        return 200, ('<?xml version="1.0" encoding="UTF-8" ?>\n<parts>\n%s</parts>'
+                     % offers).encode("utf-8")
     if path.startswith("/storage/"):
         return 200, {}
     return 404, {"message": "поддельный стенд не знает %s %s" % (method, path)}

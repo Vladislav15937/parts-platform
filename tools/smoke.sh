@@ -97,7 +97,8 @@ pc /api/marketplace-accounts "{\"marketplace\":\"DROM\",\"title\":\"Прогон
 ACC=$(num "['id']")
 pc "/api/marketplace-accounts/${ACC}/feed-url" >/dev/null; URL=$(num "['url']")
 curl -s "${URL}" -o /tmp/smoke-feed.xml
-OFFERS=$(grep -o '<offer>' /tmp/smoke-feed.xml | wc -l | tr -d ' ')
+# Позиция прайса запчастей — <part> (формат Bazon, задача 0333).
+OFFERS=$(grep -o '<part>' /tmp/smoke-feed.xml | wc -l | tr -d ' ')
 pc /api/marketplace-accounts/filter/count '{"productLine":"PART"}' >/dev/null
 same "счётчик выгрузки сходится с файлом" "$(num "['parts']")" "${OFFERS}"
 # Проданное остаётся в прайсе недоступным: убрать позицию значит потерять
@@ -109,8 +110,9 @@ same "счётчик выгрузки сходится с файлом" "$(num "
 SOLD_HIDDEN=$(python3 - <<'PY'
 import re
 x = open('/tmp/smoke-feed.xml', encoding='utf-8').read()
-sold = re.search(r'<offer>(?:(?!</offer>).)*<quantity>0</quantity>.*?</offer>', x, re.S)
-print('да' if sold and '<available>false</available>' in sold.group(0) else 'нет')
+# Количества и флага в формате Bazon нет: недоступная — словом в <state>.
+sold = re.search(r'<part>(?:(?!</part>).)*<state>Нет в наличии</state>.*?</part>', x, re.S)
+print('да' if sold else 'нет')
 PY
 )
 same "проданное уехало в прайс недоступным" "${SOLD_HIDDEN}" "да"
