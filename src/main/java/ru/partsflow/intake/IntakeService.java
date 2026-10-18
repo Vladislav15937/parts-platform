@@ -54,6 +54,7 @@ public class IntakeService {
     private final PartTitleGenerator titleGenerator;
     private final DomainEventPublisher eventPublisher;
     private final PreorderService preorders;
+    private final ru.partsflow.inventory.PartNaming partNaming;
     private final JdbcTemplate jdbc;
 
     public IntakeService(SupplyRepository supplies,
@@ -65,7 +66,9 @@ public class IntakeService {
                          PartTitleGenerator titleGenerator,
                          DomainEventPublisher eventPublisher,
                          PreorderService preorders,
+                         ru.partsflow.inventory.PartNaming partNaming,
                          JdbcTemplate jdbc) {
+        this.partNaming = partNaming;
         this.preorders = preorders;
         this.supplies = supplies;
         this.donors = donors;
@@ -275,12 +278,12 @@ public class IntakeService {
             if (!part.isExpectedOrigin()) {
                 throw new IllegalArgumentException(
                         "«%s» не заводили как ожидаемую по поставке — принимайте её обычной приёмкой"
-                                .formatted(PartCondition.named(part.getTitle(), part.getCondition())));
+                                .formatted(partNaming.of(part.getId())));
             }
             if (!supplyId.equals(part.getSupplyId())) {
                 throw new IllegalArgumentException(
                         "«%s» ожидается по другой поставке — выберите её"
-                                .formatted(PartCondition.named(part.getTitle(), part.getCondition())));
+                                .formatted(partNaming.of(part.getId())));
             }
             incoming.merge(part.getId(), item.quantity(), BigDecimal::add);
         }
