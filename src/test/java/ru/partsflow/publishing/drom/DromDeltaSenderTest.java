@@ -221,13 +221,13 @@ class DromDeltaSenderTest extends PostgresTestBase {
         account("12345", "ключ-кабинета");
         Long partId = part("Стартер 1NZ-FE", true);
         long dealId = issuedDeal(partId);
-        String publicCode = publicCodeOf(partId);
+        String key = feedKeyOf(partId);
 
         assertThat(inTenant(() -> sender.onDealIssued(dealId))).isTrue();
 
         String delta = capturedDelta();
         assertThat(delta)
-                .contains("<ordercode>" + publicCode + "</ordercode>")
+                .contains("<ordercode>" + key + "</ordercode>")
                 .contains("<available>false</available>");
     }
 
@@ -274,10 +274,10 @@ class DromDeltaSenderTest extends PostgresTestBase {
         inTenant(() -> sender.onDealIssued(dealId));
 
         String delta = capturedDelta();
-        assertThat(delta).contains(publicCodeOf(sold));
+        assertThat(delta).contains("<ordercode>" + feedKeyOf(sold) + "</ordercode>");
         assertThat(delta)
                 .as("в дельту уехал весь склад вместо одной позиции")
-                .doesNotContain(publicCodeOf(untouched));
+                .doesNotContain("<ordercode>" + feedKeyOf(untouched) + "</ordercode>");
     }
 
     @Test
@@ -423,9 +423,10 @@ class DromDeltaSenderTest extends PostgresTestBase {
         });
     }
 
-    private String publicCodeOf(Long partId) {
+    /** Ключ позиции в прайсе — её номер (задача 0334), а не публичный код. */
+    private String feedKeyOf(Long partId) {
         return inTenant(() -> jdbc.queryForObject(
-                "SELECT public_code FROM part WHERE id = ?", String.class, partId));
+                "SELECT number::text FROM part WHERE id = ?", String.class, partId));
     }
 
     private String capturedDelta() {

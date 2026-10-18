@@ -243,7 +243,7 @@ public class PartIdentity {
      * назовут другую. Значит настоящая граница — эта, и отказ за ней говорит
      * словами, почему.
      */
-    static final long NUMBER_MAX = 9_007_199_254_740_991L;
+    public static final long NUMBER_MAX = 9_007_199_254_740_991L;
 
     /**
      * Номер из запроса: целое больше нуля и не больше {@link #NUMBER_MAX}.

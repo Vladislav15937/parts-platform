@@ -102,7 +102,10 @@ class InternalIdsNotShownTest {
             new Allowed("migration/bazon/ImportReport.java",
                     "номера строк файла и счётчики отчёта о переносе"),
             new Allowed("migration/bazon/BazonImporter.java",
-                    "число позиций без колонки «Выгружать» в отчёте о переносе"),
+                    "число позиций без колонки «Выгружать» в отчёте о переносе;"
+                            + " «№ позиции» и «Номер товара» — номера, которые клиент называет"
+                            + " вслух (part.number), а не id строки; позиция-владелец названа"
+                            + " публичным кодом (задача 0334)"),
             new Allowed("migration/excel/ExcelWarehouseImporter.java",
                     "номер строки таблицы, которую владелец загрузил сам"),
             new Allowed("platform/tenant/TenantConnectionProvider.java",
