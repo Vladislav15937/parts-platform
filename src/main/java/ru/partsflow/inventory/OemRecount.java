@@ -43,12 +43,19 @@ import java.util.Set;
  *       {@link OemNumbers#MAX_NORMALIZED_LENGTH} (0312): старое приведение вырезало
  *       русские буквы, новое их сохраняет, и строка, прежде короткая, перестала бы
  *       помещаться в индекс;</li>
- *   <li>«с разделителем» — в одной строке табуляция, запятая или перевод строки,
- *       то есть по нынешнему правилу записи ({@link OemNumbers#list}) это были бы
- *       несколько номеров. Делить строку пересчёт не берётся: это новые строки
- *       в конце набора, то есть другой порядок кросс-номеров, а он виден в прайсе
- *       и в карточке, — вопрос владельцу.</li>
+ *   <li>«основной с разделителем» — основной номер, в котором {@link OemNumbers#list}
+ *       видит несколько номеров: ввод основной номер не делит нигде (карточка, приёмка,
+ *       оба переноса), и пересчёт не делит тоже — иначе следующий ввод того же текста
+ *       и повтор файла (0282) разошлись бы с пересчитанным.</li>
  * </ul>
+ *
+ * <p><b>Строка кросс-номеров с разделителем делится</b> (задача 0319, решение владельца
+ * продукта 18.10.2026, «1 - б»): «8414012530, 8414012531» одной строкой становится двумя
+ * кросс-номерами — тем же {@link OemNumbers#list}, что и ввод, своих разделителей нет.
+ * Риск, названный владельцу: запятая внутри одного номера развалит его на два; поэтому
+ * каждая разделяемая строка печатается в отчёт проверки отдельной строкой
+ * ({@code split-row:}) — человек просматривает их до {@code --apply}. Как сохраняется
+ * порядок и что попадает в возврат — у {@link #plan}.
  *
  * <p><b>Два написания одного номера у позиции сливаются в одну строку.</b>
  * «8518100С» и «8518100C» после пересчёта — один номер, а {@code part_oem_uk
@@ -100,11 +107,14 @@ public class OemRecount {
     public record Row(long id, long partId, String raw, String normalized, boolean primary) {
     }
 
-    /** Почему строка не тронута, хотя по правилу записи должна была бы. */
+    /** Почему строка (или часть строки) не тронута, хотя по правилу записи должна была бы. */
     public enum Note {
         NOT_A_NUMBER("не номер — после приведения ничего не осталось"),
         TOO_LONG("латиницей стал бы длиннее " + OemNumbers.MAX_NORMALIZED_LENGTH + " знаков"),
-        HAS_SEPARATOR("в строке разделитель кросс-номеров — по правилу записи это были бы несколько номеров");
+        PRIMARY_HAS_SEPARATOR("основной номер с разделителем кросс-номеров — не делится: ввод"
+                + " (карточка, приёмка, оба переноса) основной номер не делит, делит только кросс-номера"),
+        SPLIT_NOT_A_NUMBER("часть «не номер» при делении отброшена — строки не порождает"),
+        SPLIT_EMPTY("пустая часть при делении — строки не порождает");
 
         private final String words;
 
@@ -117,32 +127,57 @@ public class OemRecount {
         }
     }
 
-    /** Строка, которую пересчёт изменит: было — {@code was}, станет — два значения. */
+    /** Строка, которую пересчёт изменит на месте: было — {@code was}, станет — два значения. */
     public record Change(Row was, String raw, String normalized) {
     }
 
-    /** Строка, слитая с другой строкой той же позиции и удаляемая. */
+    /**
+     * Строка, слитая с другой строкой той же позиции и удаляемая. {@code into} с номером
+     * {@code 0} — строка, которую пересчёт вставит (часть разделённой строки).
+     */
     public record Merge(Row was, Row into) {
     }
 
-    /** Отмеченная строка. */
-    public record Noted(Row row, Note note) {
+    /**
+     * Вставляемая строка (кросс-номер): часть разделённой строки ({@code moved == null})
+     * или строка, переставленная за неё ради порядка ({@code moved} — какой она была).
+     */
+    public record Insert(String raw, String normalized, Row moved) {
+    }
+
+    /**
+     * Строка кросс-номеров, разделённая на номера (задача 0319).
+     *
+     * @param numbers части-номера в порядке строки
+     * @param kept    из них породили строку (первая — на месте исходной); остальные слиты
+     *                с номером, который у позиции уже есть
+     */
+    public record Split(Row was, List<String> numbers, List<String> kept) {
+
+        public int merged() {
+            return numbers.size() - kept.size();
+        }
+    }
+
+    /** Отмеченная строка; {@code piece} — часть, о которой речь, если речь о части. */
+    public record Noted(Row row, Note note, String piece) {
     }
 
     /**
      * Что пересчёт сделает с одной позицией.
      *
-     * @param updates изменения в том порядке, в каком их можно выполнить, не столкнувшись
-     *                на {@code part_oem_uk}
+     * @param updates изменения на месте в том порядке, в каком их можно выполнить,
+     *                не столкнувшись на {@code part_oem_uk}
+     * @param inserts вставки в порядке будущих кросс-номеров — после удалений и правок
      * @param cycle   изменения не упорядочиваются (две строки меняются ключами друг
      *                с другом): позиция не трогается и называется в отчёте
      */
-    public record PartPlan(long partId, List<Change> updates, List<Merge> merges,
-                           List<Noted> notes, boolean cycle, String oemWas, String oemNow,
-                           String crossesWas, String crossesNow) {
+    public record PartPlan(long partId, List<Change> updates, List<Merge> merges, List<Insert> inserts,
+                           List<Split> splits, List<Noted> notes, boolean cycle, String oemWas,
+                           String oemNow, String crossesWas, String crossesNow) {
 
         public boolean writes() {
-            return !cycle && (!updates.isEmpty() || !merges.isEmpty());
+            return !cycle && (!updates.isEmpty() || !merges.isEmpty() || !inserts.isEmpty());
         }
 
         /** Изменился текст, который видит площадка, — номер или набор кросс-номеров. */
@@ -156,70 +191,148 @@ public class OemRecount {
      * План по строкам одной позиции. Чистая функция: базы не знает и проверяется
      * без неё (`OemRecountPlanTest`).
      *
+     * <p><b>Деление (задача 0319).</b> Строка кросс-номеров, в которой {@link OemNumbers#list}
+     * видит несколько номеров, становится несколькими строками — тем же правилом, что ввод
+     * кросс-номеров ({@code PartIdentity}): части {@code list}, каждая уже {@code clean},
+     * «не номер» отброшен, повтор номера не заводится (первый выигрывает, основной —
+     * всегда). Первая уцелевшая часть остаётся в исходной строке (тот же {@code id}),
+     * остальные вставляются. <b>Порядок кросс-номеров сохраняется точно:</b> новые
+     * {@code id} больше всех прежних, поэтому строки, стоявшие за разделённой, удаляются
+     * и вставляются заново за её частями — тем же текстом, с новым {@code id}. На
+     * {@code part_oem.id} не ссылается ничто: правка карточки переписывает набор целиком
+     * точно так же.
+     *
      * @param rows строки позиции в порядке {@code id}
      */
     public static PartPlan plan(List<Row> rows) {
         long partId = rows.get(0).partId();
         List<Noted> notes = new ArrayList<>();
-        Map<Long, String[]> target = new LinkedHashMap<>();
+        List<Entry> entries = new ArrayList<>();
+        Map<Row, List<String>> numbersOf = new LinkedHashMap<>();
         for (Row row : rows) {
-            String raw = row.raw();
-            String norm = row.normalized();
-            // Строка с разделителем внутри — по правилу записи это несколько номеров,
-            // и делить её пересчёт не берётся (порядок кросс-номеров). Не трогается
-            // целиком, даже если в ней есть и другое отличие от правила (русская «А»):
-            // поправленная наполовину, она выглядела бы пересчитанной и ушла бы
-            // из отчёта о том, что с ней надо решать.
-            if (OemNumbers.list(row.raw()).size() > 1) {
-                notes.add(new Noted(row, Note.HAS_SEPARATOR));
-                target.put(row.id(), new String[]{raw, norm});
+            List<String> pieces = OemNumbers.list(row.raw());
+            if (pieces.size() > 1) {
+                if (row.primary()) {
+                    // Основной номер ввод не делит ни в одном месте записи (карточка —
+                    // cleanOem, приёмка, оба переноса — clean): разделённый, он разошёлся бы
+                    // с тем, что запишет следующий ввод того же текста, а повтор файла
+                    // (0282) назвал бы номер расхождением. Не трогается целиком — даже
+                    // если в нём есть русская «А»: поправленный наполовину, он ушёл бы
+                    // из отчёта о том, что с ним надо решать.
+                    notes.add(new Noted(row, Note.PRIMARY_HAS_SEPARATOR, null));
+                    entries.add(new Entry(row, row.raw(), row.normalized()));
+                    continue;
+                }
+                List<String> numbers = new ArrayList<>();
+                List<String> notNumbers = new ArrayList<>();
+                String tooLong = null;
+                for (String piece : pieces) {
+                    if (OemNumbers.normalize(piece) == null) {
+                        notNumbers.add(piece);
+                    } else if (OemNumbers.tooLong(piece, true) != null) {
+                        tooLong = piece;
+                    } else {
+                        numbers.add(piece);
+                    }
+                }
+                // Часть, которую нельзя сохранить, — строка остаётся целиком как есть:
+                // отбросить её значило бы потерять номер, а не «не номер».
+                if (tooLong != null || numbers.isEmpty()) {
+                    notes.add(new Noted(row, tooLong != null ? Note.TOO_LONG : Note.NOT_A_NUMBER, tooLong));
+                    entries.add(new Entry(row, row.raw(), row.normalized()));
+                    continue;
+                }
+                for (String piece : notNumbers) {
+                    notes.add(new Noted(row, Note.SPLIT_NOT_A_NUMBER, piece));
+                }
+                for (int i = OemNumbers.emptyPieces(row.raw()); i > 0; i--) {
+                    notes.add(new Noted(row, Note.SPLIT_EMPTY, ""));
+                }
+                numbersOf.put(row, numbers);
+                for (String number : numbers) {
+                    entries.add(new Entry(row, number, OemNumbers.normalize(number)));
+                }
                 continue;
             }
+            String raw = row.raw();
+            String norm = row.normalized();
             String cleaned = OemNumbers.clean(row.raw());
             String normalized = OemNumbers.normalize(cleaned);
             boolean differs = !cleaned.equals(row.raw()) || !Objects.equals(normalized, row.normalized());
             if (differs) {
                 if (normalized == null) {
-                    notes.add(new Noted(row, Note.NOT_A_NUMBER));
+                    notes.add(new Noted(row, Note.NOT_A_NUMBER, null));
                 } else if (OemNumbers.tooLong(cleaned, !row.primary()) != null) {
-                    notes.add(new Noted(row, Note.TOO_LONG));
+                    notes.add(new Noted(row, Note.TOO_LONG, null));
                 } else {
                     raw = cleaned;
                     norm = normalized;
                 }
             }
-            target.put(row.id(), new String[]{raw, norm});
+            entries.add(new Entry(row, raw, norm));
         }
 
-        // Строки, ставшие одним номером: остаётся основная, иначе меньший номер строки.
-        Map<String, List<Row>> byKey = new LinkedHashMap<>();
-        for (Row row : rows) {
-            byKey.computeIfAbsent(target.get(row.id())[1], k -> new ArrayList<>()).add(row);
+        // Одинаковые номера: основная выигрывает всегда, иначе первая по порядку —
+        // как при вводе (основной, затем кросс-номера по порядку, повтор отброшен).
+        // Для строк без деления «первая по порядку» — меньший номер строки, как в 0317.
+        Map<String, Entry> keeper = new LinkedHashMap<>();
+        for (Entry e : entries) {
+            if (e.origin.primary()) {
+                keeper.putIfAbsent(e.normalized, e);
+            }
         }
-        List<Merge> merges = new ArrayList<>();
-        Set<Long> gone = new LinkedHashSet<>();
-        for (List<Row> same : byKey.values()) {
-            if (same.size() < 2) {
+        for (Entry e : entries) {
+            keeper.putIfAbsent(e.normalized, e);
+        }
+        List<Entry> kept = new ArrayList<>();
+        Set<Row> placed = new LinkedHashSet<>();
+        for (Entry e : entries) {
+            if (keeper.get(e.normalized) == e) {
+                // Первая уцелевшая часть строки занимает её место, остальные — новые.
+                e.inPlace = placed.add(e.origin);
+                kept.add(e);
+            }
+        }
+        // Кросс-номера после первой новой строки переставляются за неё: новый id
+        // больше любого прежнего, и без перестановки порядок ORDER BY id сменился бы.
+        // Основной номер порядка не несёт и не переставляется.
+        boolean tail = false;
+        for (Entry e : kept) {
+            if (e.origin.primary()) {
                 continue;
             }
-            Row keeper = same.stream().filter(Row::primary).findFirst().orElse(same.get(0));
-            for (Row row : same) {
-                if (row != keeper) {
-                    merges.add(new Merge(row, keeper));
-                    gone.add(row.id());
-                }
+            if (!e.inPlace) {
+                tail = true;
+            } else if (tail) {
+                e.moved = true;
             }
         }
 
-        List<Change> pending = new ArrayList<>();
+        List<Merge> merges = new ArrayList<>();
         for (Row row : rows) {
-            String[] t = target.get(row.id());
-            if (!gone.contains(row.id()) && (!t[0].equals(row.raw()) || !t[1].equals(row.normalized()))) {
-                pending.add(new Change(row, t[0], t[1]));
+            if (!placed.contains(row)) {
+                Entry first = entries.stream().filter(e -> e.origin == row).findFirst().orElseThrow();
+                merges.add(new Merge(row, keeper.get(first.normalized).slot()));
+            }
+        }
+        List<Split> splits = new ArrayList<>();
+        numbersOf.forEach((row, numbers) -> splits.add(new Split(row, List.copyOf(numbers),
+                kept.stream().filter(e -> e.origin == row).map(e -> e.raw).toList())));
+
+        List<Change> pending = new ArrayList<>();
+        List<Insert> inserts = new ArrayList<>();
+        for (Entry e : kept) {
+            if (e.inPlace && !e.moved) {
+                if (!e.raw.equals(e.origin.raw()) || !e.normalized.equals(e.origin.normalized())) {
+                    pending.add(new Change(e.origin, e.raw, e.normalized));
+                }
+            } else {
+                inserts.add(new Insert(e.raw, e.normalized, e.moved ? e.origin : null));
             }
         }
         // Порядок: строку можно менять, когда её новый ключ не держит другая
-        // ещё не изменённая строка. Удалённые к этому моменту уже удалены.
+        // ещё не изменённая строка. Удалённые и переставляемые к этому моменту
+        // уже удалены, вставки идут после всех правок.
         List<Change> ordered = new ArrayList<>();
         boolean cycle = false;
         while (!pending.isEmpty()) {
@@ -246,15 +359,41 @@ public class OemRecount {
             pending.remove(next);
         }
 
-        List<Row> after = new ArrayList<>();
-        for (Row row : rows) {
-            if (!gone.contains(row.id())) {
-                String[] t = target.get(row.id());
-                after.add(new Row(row.id(), row.partId(), t[0], t[1], row.primary()));
-            }
+        List<Row> after = kept.stream().map(Entry::asRow).toList();
+        return new PartPlan(partId, List.copyOf(ordered), List.copyOf(merges), List.copyOf(inserts),
+                List.copyOf(splits), List.copyOf(notes), cycle, primaryOf(rows), primaryOf(after),
+                crossesOf(rows), crossesOf(after));
+    }
+
+    /** Будущая строка позиции: из какой строки взялась и с какими значениями. */
+    private static final class Entry {
+        final Row origin;
+        final String raw;
+        final String normalized;
+        /** Стоит на месте строки {@code origin} (тот же {@code id}); иначе — новая. */
+        boolean inPlace;
+        /** Была на месте, но стоит за новой строкой: удаляется и вставляется заново. */
+        boolean moved;
+
+        Entry(Row origin, String raw, String normalized) {
+            this.origin = origin;
+            this.raw = raw;
+            this.normalized = normalized;
         }
-        return new PartPlan(partId, List.copyOf(ordered), List.copyOf(merges), List.copyOf(notes),
-                cycle, primaryOf(rows), primaryOf(after), crossesOf(rows), crossesOf(after));
+
+        /** Строка, какой она станет: прежний {@code id} у стоящей на месте, {@code 0} у вставленной. */
+        Row asRow() {
+            boolean same = inPlace && !moved;
+            if (same && raw.equals(origin.raw()) && normalized.equals(origin.normalized())) {
+                return origin;
+            }
+            return new Row(same ? origin.id() : 0, origin.partId(), raw, normalized, origin.primary());
+        }
+
+        /** С какой строкой сливаются: прежняя на месте — она как была, иначе вставляемая. */
+        Row slot() {
+            return inPlace && !moved ? origin : new Row(0, origin.partId(), raw, normalized, origin.primary());
+        }
     }
 
     /** Номер производителя позиции в том виде, в каком его пишет журнал карточки. */
@@ -284,17 +423,36 @@ public class OemRecount {
         public long feedMarks;
         public long busy;
         public long cycles;
+        /** Деление (0319): разделённых строк, полученных из них номеров, частей, слитых с имеющимися. */
+        public long splitRows;
+        public long splitNumbers;
+        public long splitMerged;
+        /** Вставлено строк: части разделённых и переставленные за них ради порядка. */
+        public long rowsInserted;
+        public long rowsMoved;
         public final Map<Note, Long> notes = new LinkedHashMap<>();
-        /** Готовые инструкции возврата: сначала правки, затем вставки слитых. */
+        /**
+         * Готовые инструкции возврата: сначала удаление вставленных, затем правки
+         * в обратном порядке, затем вставки слитых и переставленных с прежним {@code id}.
+         */
+        public final List<String> restoreDeletes = new ArrayList<>();
         public final List<String> restoreUpdates = new ArrayList<>();
         public final List<String> restoreInserts = new ArrayList<>();
         /** Что именно изменено и слито — строками для человека. */
         public final List<String> lines = new ArrayList<>();
+        /** Каждая строка, которая будет разделена, — для просмотра человеком до запуска. */
+        public final List<String> splitLines = new ArrayList<>();
 
         public List<String> restore() {
-            List<String> all = new ArrayList<>(restoreUpdates);
+            List<String> all = new ArrayList<>(restoreDeletes);
+            all.addAll(restoreUpdates);
             all.addAll(restoreInserts);
             return all;
+        }
+
+        /** Частей, не породивших строк: пустые и «не номер». */
+        public long splitSkipped() {
+            return noted(Note.SPLIT_EMPTY) + noted(Note.SPLIT_NOT_A_NUMBER);
         }
 
         public long noted(Note note) {
@@ -348,6 +506,7 @@ public class OemRecount {
         PartChangeLog marks = new PartChangeLog(jdbc);
         AuditJournal journal = new AuditJournal(jdbc);
         List<Long> visible = new ArrayList<>();
+        Map<Long, String> names = names(jdbc, plans);
         for (PartPlan plan : plans) {
             if (plan.cycle()) {
                 tally.cycles++;
@@ -367,7 +526,19 @@ public class OemRecount {
             tally.partsChanged++;
             tally.rowsUpdated += plan.updates().size();
             tally.rowsMerged += plan.merges().size();
-            describe(schema, plan, tally);
+            for (Insert insert : plan.inserts()) {
+                if (insert.moved() == null) {
+                    tally.rowsInserted++;
+                } else {
+                    tally.rowsMoved++;
+                }
+            }
+            for (Split split : plan.splits()) {
+                tally.splitRows++;
+                tally.splitNumbers += split.kept().size();
+                tally.splitMerged += split.merged();
+            }
+            describe(schema, plan, tally, names.get(plan.partId()));
             if (plan.visible()) {
                 tally.feedMarks++;
                 visible.add(plan.partId());
@@ -392,8 +563,30 @@ public class OemRecount {
         }
         for (Noted noted : plan.notes()) {
             tally.lines.add("позиция " + plan.partId() + ", строка " + noted.row().id()
-                    + " «" + visibleText(noted.row().raw()) + "»: " + noted.note().words());
+                    + " «" + visibleText(noted.row().raw()) + "»: " + noted.note().words()
+                    + (noted.piece() == null || noted.piece().isEmpty() ? ""
+                    : " — «" + visibleText(noted.piece()) + "»"));
         }
+    }
+
+    /**
+     * «№ позиции и код» позиций с разделёнными строками — для списка, который человек
+     * просматривает до запуска: по номеру строки базы позицию на витрине не найти.
+     */
+    private static Map<Long, String> names(JdbcTemplate jdbc, List<PartPlan> plans) {
+        List<Long> ids = plans.stream().filter(p -> !p.splits().isEmpty() && !p.cycle())
+                .map(PartPlan::partId).toList();
+        Map<Long, String> names = new LinkedHashMap<>();
+        for (int from = 0; from < ids.size(); from += FETCH) {
+            List<Long> chunk = ids.subList(from, Math.min(ids.size(), from + FETCH));
+            jdbc.query("SELECT id, number, public_code FROM part WHERE id = ANY (?)",
+                    rs -> {
+                        names.put(rs.getLong("id"), "№ позиции " + rs.getLong("number")
+                                + ", код " + rs.getString("public_code"));
+                    },
+                    (Object) chunk.toArray(Long[]::new));
+        }
+        return names;
     }
 
     /**
@@ -410,8 +603,10 @@ public class OemRecount {
         }
         jdbc.execute("SAVEPOINT oem_recount_part");
         try {
-            for (Merge merge : plan.merges()) {
-                Row was = merge.was();
+            List<Row> deleted = new ArrayList<>();
+            plan.merges().forEach(merge -> deleted.add(merge.was()));
+            plan.inserts().stream().map(Insert::moved).filter(Objects::nonNull).forEach(deleted::add);
+            for (Row was : deleted) {
                 if (jdbc.update("""
                         DELETE FROM part_oem
                          WHERE id = ? AND part_id = ? AND raw_number = ? AND normalized = ?
@@ -432,6 +627,12 @@ public class OemRecount {
                     jdbc.execute("ROLLBACK TO SAVEPOINT oem_recount_part");
                     return false;
                 }
+            }
+            // Вставки — в порядке будущих кросс-номеров: id раздаёт последовательность
+            // по возрастанию, и порядок вставки становится порядком ORDER BY id.
+            for (Insert insert : plan.inserts()) {
+                jdbc.update("INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)"
+                        + " VALUES (?, ?, ?, false)", plan.partId(), insert.raw(), insert.normalized());
             }
         } catch (DataAccessException e) {
             // Уникальность отбила строку, которую между чтением и записью завёл
@@ -459,7 +660,35 @@ public class OemRecount {
         journal.changed("part", plan.partId(), was, now);
     }
 
-    private static void describe(String schema, PartPlan plan, Tally tally) {
+    private static void describe(String schema, PartPlan plan, Tally tally, String name) {
+        for (Split split : plan.splits()) {
+            Row was = split.was();
+            List<String> merged = new ArrayList<>(split.numbers());
+            split.kept().forEach(merged::remove);
+            List<String> dropped = plan.notes().stream()
+                    .filter(n -> n.row() == was && n.note() == Note.SPLIT_NOT_A_NUMBER)
+                    .map(n -> "«" + visibleText(n.piece()) + "»").toList();
+            long empty = plan.notes().stream()
+                    .filter(n -> n.row() == was && n.note() == Note.SPLIT_EMPTY).count();
+            tally.splitLines.add((name == null ? "" : name + ", ") + "позиция " + plan.partId()
+                    + ", строка " + was.id() + ": «" + visibleText(was.raw()) + "» → "
+                    + String.join(" | ", split.kept().stream().map(k -> "«" + visibleText(k) + "»").toList())
+                    + (merged.isEmpty() ? "" : "; уже есть у позиции: "
+                    + String.join(", ", merged.stream().map(m -> "«" + visibleText(m) + "»").toList()))
+                    + (dropped.isEmpty() ? "" : "; не номер, отброшено: " + String.join(", ", dropped))
+                    + (empty == 0 ? "" : "; пустых частей " + empty));
+        }
+        for (Insert insert : plan.inserts()) {
+            Row moved = insert.moved();
+            tally.restoreDeletes.add("DELETE FROM " + schema + ".part_oem WHERE part_id = " + plan.partId()
+                    + " AND normalized = " + literal(insert.normalized()) + ";");
+            if (moved != null) {
+                tally.lines.add("позиция " + plan.partId() + ", строка " + moved.id() + " «"
+                        + visibleText(moved.raw()) + "» переставлена за разделённую — тот же номер,"
+                        + " новый номер строки, порядок кросс-номеров прежний");
+                tally.restoreInserts.add(restoreInsert(schema, moved));
+            }
+        }
         for (Change change : plan.updates()) {
             Row was = change.was();
             tally.lines.add("позиция " + plan.partId() + ", строка " + was.id() + ": «"
@@ -472,13 +701,19 @@ public class OemRecount {
         for (Merge merge : plan.merges()) {
             Row was = merge.was();
             tally.lines.add("позиция " + plan.partId() + ", строка " + was.id() + " «"
-                    + visibleText(was.raw()) + "» слита со строкой " + merge.into().id()
+                    + visibleText(was.raw()) + "» слита "
+                    + (merge.into().id() == 0 ? "с частью разделённой строки «" + visibleText(merge.into().raw()) + "»"
+                    : "со строкой " + merge.into().id())
                     + " — тот же номер, удалена");
-            tally.restoreInserts.add("INSERT INTO " + schema + ".part_oem"
-                    + " (id, part_id, raw_number, normalized, is_primary) OVERRIDING SYSTEM VALUE VALUES ("
-                    + was.id() + ", " + was.partId() + ", " + literal(was.raw()) + ", "
-                    + literal(was.normalized()) + ", " + was.primary() + ");");
+            tally.restoreInserts.add(restoreInsert(schema, was));
         }
+    }
+
+    private static String restoreInsert(String schema, Row was) {
+        return "INSERT INTO " + schema + ".part_oem"
+                + " (id, part_id, raw_number, normalized, is_primary) OVERRIDING SYSTEM VALUE VALUES ("
+                + was.id() + ", " + was.partId() + ", " + literal(was.raw()) + ", "
+                + literal(was.normalized()) + ", " + was.primary() + ");";
     }
 
     private static void report(List<TenantSweep.Outcome<Tally>> outcomes, Options options) {
@@ -497,16 +732,26 @@ public class OemRecount {
             for (String line : t.lines) {
                 log.info("{}: {}", outcome.schema(), line);
             }
+            // Каждая разделяемая строка — своей строкой лога с меткой: команда для ПРОМ
+            // складывает их в отдельный файл, и человек просматривает его до --apply
+            // (риск, названный владельцу: запятая внутри одного номера развалит его).
+            for (String line : t.splitLines) {
+                log.info("split-row: {} {}", outcome.schema(), line);
+            }
             for (String sql : t.restore()) {
                 log.info("restore-sql: {}", sql);
             }
-            log.info("{}: строк {}, позиций {}; {} позиций {} (строк изменено {}, слито {}); "
-                            + "для площадки {}; не тронуто: не номер {}, длиннее предела {}, "
-                            + "с разделителем {}; правлены во время запуска {}; меняются местами {}",
+            log.info("{}: строк {}, позиций {}; {} позиций {} (строк изменено {}, слито {}, вставлено {},"
+                            + " переставлено ради порядка {}); деление: строк {}, получено номеров {},"
+                            + " частей слито с имеющимися {}, частей пропущено {} (пустых {}, не номер {});"
+                            + " для площадки {}; не тронуто: не номер {}, длиннее предела {},"
+                            + " основной с разделителем {}; правлены во время запуска {}; меняются местами {}",
                     outcome.schema(), t.rows, t.parts, t.partsChanged,
                     options.apply() ? "пересчитано" : "будет пересчитано",
-                    t.rowsUpdated, t.rowsMerged, t.feedMarks,
-                    t.noted(Note.NOT_A_NUMBER), t.noted(Note.TOO_LONG), t.noted(Note.HAS_SEPARATOR),
+                    t.rowsUpdated, t.rowsMerged, t.rowsInserted, t.rowsMoved,
+                    t.splitRows, t.splitNumbers, t.splitMerged, t.splitSkipped(),
+                    t.noted(Note.SPLIT_EMPTY), t.noted(Note.SPLIT_NOT_A_NUMBER), t.feedMarks,
+                    t.noted(Note.NOT_A_NUMBER), t.noted(Note.TOO_LONG), t.noted(Note.PRIMARY_HAS_SEPARATOR),
                     t.busy, t.cycles);
         }
         log.info("Итого: позиций {} {}; позиций, изменившихся для площадки, {} — {}", changed,
