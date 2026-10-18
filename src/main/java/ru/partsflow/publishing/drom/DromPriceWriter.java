@@ -1,5 +1,6 @@
 package ru.partsflow.publishing.drom;
 
+import ru.partsflow.catalog.OemNumbers;
 import ru.partsflow.inventory.LateralSide;
 import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.LongitudinalSide;
@@ -266,7 +267,9 @@ public class DromPriceWriter {
 
     /**
      * Наименование в прайсе: у перенесённой с Дрома позиции — заголовок
-     * клиента как есть, у прочих — очищенный {@link #plainName}.
+     * клиента как есть, у прочих — очищенный {@link #plainName}; у обеих
+     * без номеров позиции на конце ({@link #withoutNumbers}, задача 0331 —
+     * единственное исключение из 0275 ниже).
      *
      * <p><b>Текст клиента не чистится и не дополняется (задача 0275).</b>
      * Решение владельца продукта от 13 октября 2026, записано в задаче
@@ -280,7 +283,136 @@ public class DromPriceWriter {
      * не писал. Пустое описание так и уходит пустым — элемента нет.
      */
     static String nameOf(DromOffer offer) {
-        return offer.clientText() ? offer.name() : plainName(offer.name());
+        return offer.clientText()
+                ? withoutNumbers(offer.name(), offer)
+                : withoutNumbers(plainName(offer.name()), offer);
+    }
+
+    /**
+     * Наименование без номеров этой позиции на конце (задача 0331).
+     *
+     * <p>Решение владельца продукта 18.10.2026, дословно: «В объявление дром
+     * номера должны идти отдельно а названи отдельно». Номер производителя
+     * и кросс-номера уже уходят своими тегами {@code oem_number}
+     * и {@code analog_numbers}, а генератор заголовка ставит номер последним
+     * словом — в названии объявления он был повторением. Заголовок в базе
+     * не меняется: витрина, этикетка и карточка читают его глазами, и номер
+     * там нужен. Перенесённые с Дрома позиции (0275) теряют только номер —
+     * ответ владельца «Всё да» на вопрос 1 задачи; прочий текст клиента
+     * уходит как есть.
+     *
+     * <p><b>Срезаются номера позиции, а не «похожее на номер».</b> Регулярка
+     * срезала бы год «2006», кузов «E46», модель «2106». Сравнение — по
+     * {@link OemNumbers#normalize}, то есть «81170-33670» в заголовке узнаётся
+     * и при хранимом «8117033670», и русская «С» — при латинской.
+     *
+     * <p><b>Только с конца и каждый номер один раз</b> (решение исполнителя,
+     * предложенное задачей): номер попадает в заголовок последним словом,
+     * и срез ровно его повторяет — номер, совпавший со словом в середине
+     * («Дверь Kia Rio 2012 2012», основной «2012»), там и остаётся. Цена
+     * названа: заголовок, где номер совпал с последним словом не-номера
+     * (основной «2012» у «Дверь Kia Rio 2012»), потеряет это слово.
+     *
+     * <p>Срез, после которого не осталось ничего, не делается: объявление
+     * без названия хуже названия с номером.
+     */
+    static String withoutNumbers(String title, DromOffer offer) {
+        if (title == null || title.isBlank()) {
+            return title;
+        }
+        java.util.Set<String> left = numbersOf(offer);
+        String rest = title;
+        while (!left.isEmpty()) {
+            int end = rest.length();
+            while (end > 0 && isNameSeparator(rest.charAt(end - 1))) {
+                end--;
+            }
+            int longest = left.stream().mapToInt(String::length).max().orElse(0);
+            int cut = -1;
+            String matched = null;
+            for (int start = end - 1; start >= 0; start--) {
+                if (isNameSeparator(rest.charAt(start))
+                        || (start > 0 && !isNameSeparator(rest.charAt(start - 1)))) {
+                    continue;
+                }
+                String tail = rest.substring(start, end);
+                if (!looksLikeNumber(tail)) {
+                    break;
+                }
+                String normalized = OemNumbers.normalize(tail);
+                if (normalized != null && left.contains(normalized)) {
+                    cut = start;
+                    matched = normalized;
+                    break;
+                }
+                if (normalized != null && normalized.length() > longest) {
+                    break;
+                }
+            }
+            if (cut < 0) {
+                break;
+            }
+            int head = cut;
+            while (head > 0 && isNameSeparator(rest.charAt(head - 1))) {
+                head--;
+            }
+            if (head == 0) {
+                break;
+            }
+            rest = rest.substring(0, head);
+            left.remove(matched);
+        }
+        return rest;
+    }
+
+    /**
+     * Приведённые номера позиции: основной и кросс-номера, каждый ещё и по частям
+     * {@link OemNumbers#list} — основной, сохранённый до задачи 0323 строкой
+     * «8414012530, 8414012531», в заголовке стоит теми же двумя словами.
+     */
+    private static java.util.Set<String> numbersOf(DromOffer offer) {
+        java.util.Set<String> numbers = new java.util.LinkedHashSet<>();
+        List<String> all = new java.util.ArrayList<>();
+        if (offer.oemNumber() != null) {
+            all.add(offer.oemNumber());
+        }
+        if (offer.analogNumbers() != null) {
+            all.addAll(offer.analogNumbers());
+        }
+        for (String number : all) {
+            addNormalized(numbers, number);
+            for (String piece : OemNumbers.list(number)) {
+                addNormalized(numbers, piece);
+            }
+        }
+        return numbers;
+    }
+
+    private static void addNormalized(java.util.Set<String> numbers, String number) {
+        String normalized = OemNumbers.normalize(number);
+        if (normalized != null) {
+            numbers.add(normalized);
+        }
+    }
+
+    /** Пробел любого вида, запятая или точка с запятой — между словами названия. */
+    private static boolean isNameSeparator(char c) {
+        return Character.isWhitespace(c) || Character.isSpaceChar(c) || c == ',' || c == ';';
+    }
+
+    /**
+     * Хвост, который может быть номером: каждое слово после {@link OemNumbers#clean}
+     * — латиница, цифры и знаки внутри номера. Без этой проверки «2106 перед»
+     * привёлся бы к «2106» (русские буквы приведение выкидывает) и совпал
+     * с номером «2106».
+     */
+    private static boolean looksLikeNumber(String tail) {
+        for (String word : tail.split("[\\s\\u00A0\\u2007\\u202F,;]+")) {
+            if (!word.isEmpty() && !OemNumbers.clean(word).matches("[A-Za-z0-9./_\\-]+")) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

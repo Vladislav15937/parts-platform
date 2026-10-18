@@ -247,9 +247,11 @@ class DromPriceWriterTest {
             // «Названия максимально простые и понятные, без сокращений» —
             // требование площадки, от него зависит раздел. Сторона
             // и состояние при этом не теряются: они уехали своими полями.
+            // С задачи 0331 то же и с номером: он уехал в oem_number.
             String xml = write(abbreviated);
             assertThat(xml)
-                    .contains("<name>Фара Toyota Camry 2007 81170-33670</name>")
+                    .contains("<name>Фара Toyota Camry 2007</name>")
+                    .contains("<oem_number>81170-33670</oem_number>")
                     .contains("<lr>лево</lr>")
                     .contains("<condition>Б/у</condition>");
         }
@@ -435,7 +437,7 @@ class DromPriceWriterTest {
     class ClientText {
 
         @Test
-        @DisplayName("Заголовок клиента уходит побайтно — без чистки «(б/у)» и сокращений")
+        @DisplayName("Заголовок клиента без номера уходит побайтно — без чистки «(б/у)» и сокращений")
         void nameIsVerbatim() throws Exception {
             // Первые два — заголовки из образца задачи 0272: слитная скобка
             // и пробел после открывающей. Третий — то, что чистка вырезала бы:
@@ -448,6 +450,22 @@ class DromPriceWriterTest {
                         .as("заголовок клиента ушёл не дословно")
                         .isEqualTo(title);
             }
+        }
+
+        @Test
+        @DisplayName("Из заголовка клиента срезан только номер позиции, прочее байт в байт (0331)")
+        void onlyTheNumberIsCutFromTheClientTitle() throws Exception {
+            // Ответ владельца 18.10.2026 «Всё да», вопрос 1: номер у перенесённых
+            // тоже срезается, остальное по 0275 — как у клиента: «(б/у)»,
+            // «перед. лев.» и двойной пробел остаются.
+            String title = "Фара (б/у) перед. лев. Toyota  Camry 3714060380";
+            assertThat(only(write(transferred(title, null)), "name"))
+                    .as("из заголовка клиента срезано не только номер")
+                    .isEqualTo("Фара (б/у) перед. лев. Toyota  Camry");
+
+            assertThat(only(write(withNumbers("Фара (контракт) 8414012530, 8414012531",
+                    "8414012530", List.of("8414012531"), true)), "name"))
+                    .isEqualTo("Фара (контракт)");
         }
 
         @Test
@@ -519,6 +537,106 @@ class DromPriceWriterTest {
             assertThat(found.getLength()).as("элемент <%s> в прайсе", element).isEqualTo(1);
             return found.item(0).getTextContent();
         }
+    }
+
+    @Nested
+    @DisplayName("Номера в наименовании (задача 0331)")
+    class NumbersInName {
+
+        @Test
+        @DisplayName("Номер позиции срезается с конца названия, год, модель и кузов остаются")
+        void numbersOfThePositionAreCut() throws Exception {
+            // Таблица примеров из задачи 0331, строка в строку.
+            assertName("Фара левая Toyota Camry 8414012530", "8414012530", List.of())
+                    .isEqualTo("Фара левая Toyota Camry");
+            assertName("Фара левая Toyota Camry 8414012530, 8414012531",
+                    "8414012530", List.of("8414012531"))
+                    .isEqualTo("Фара левая Toyota Camry");
+            assertName("Бампер передний ВАЗ 2106 5201", "5201", List.of())
+                    .isEqualTo("Бампер передний ВАЗ 2106");
+            assertName("Фара BMW E46 1999 63126904", "63126904", List.of())
+                    .isEqualTo("Фара BMW E46 1999");
+            assertName("Бампер Mazda 3 BK 2006", null, List.of())
+                    .isEqualTo("Бампер Mazda 3 BK 2006");
+        }
+
+        @Test
+        @DisplayName("Номер узнаётся в написании заголовка: дефис, пробел, русская «С», регистр")
+        void numberIsRecognisedAsWritten() throws Exception {
+            assertName("Фара Toyota Camry 2007 81170-33670", "8117033670", List.of())
+                    .isEqualTo("Фара Toyota Camry 2007");
+            assertName("Фара Toyota Camry 81170 33670", "81170-33670", List.of())
+                    .isEqualTo("Фара Toyota Camry");
+            assertName("Вал Nissan 8518100С", "8518100C", List.of())
+                    .isEqualTo("Вал Nissan");
+            assertName("Фара Honda fp-31", "FP-31", List.of())
+                    .isEqualTo("Фара Honda");
+            // Основной, сохранённый до 0323 одной строкой с запятой.
+            assertName("Фара левая 8414012530; 8414012531", "8414012530, 8414012531", List.of())
+                    .isEqualTo("Фара левая");
+        }
+
+        @Test
+        @DisplayName("Запятая и пробелы перед номером уходят вместе с ним")
+        void separatorBeforeTheNumberGoes() throws Exception {
+            assertName("Фара левая, 8414012530", "8414012530", List.of())
+                    .isEqualTo("Фара левая");
+            assertName("Фара левая 8414012530 ,", "8414012530", List.of())
+                    .isEqualTo("Фара левая");
+        }
+
+        @Test
+        @DisplayName("Срезается только хвост и каждый номер один раз")
+        void onlyTheTailAndOnce() throws Exception {
+            // Номер в середине — не тот, что дописал генератор: остаётся.
+            assertName("Блок 8414012530 Toyota Camry", "8414012530", List.of())
+                    .isEqualTo("Блок 8414012530 Toyota Camry");
+            // Номер совпал с годом: срезан последний, год в середине цел.
+            assertName("Дверь Kia Rio 2012 2012", "2012", List.of())
+                    .isEqualTo("Дверь Kia Rio 2012");
+            // «2106 перед» — не номер, хотя без русских букв привёлся бы к «2106».
+            assertName("Бампер ВАЗ 2106 перед", "2106", List.of())
+                    .isEqualTo("Бампер ВАЗ 2106 перед");
+            // Чужой номер, похожий на номер, не срезается.
+            assertName("Фара Toyota 99999", "8414012530", List.of())
+                    .isEqualTo("Фара Toyota 99999");
+        }
+
+        @Test
+        @DisplayName("Название из одного номера не становится пустым")
+        void nameNeverBecomesEmpty() throws Exception {
+            assertName("8414012530", "8414012530", List.of()).isEqualTo("8414012530");
+        }
+
+        @Test
+        @DisplayName("Номера уходят своими тегами, описание с «Номер производителя» не меняется")
+        void numbersStayInTheirFields() throws Exception {
+            String xml = write(withNumbers("Фара левая Toyota Camry 8414012530, 8414012531",
+                    "8414012530", List.of("8414012531"), false));
+
+            assertThat(xml)
+                    .contains("<name>Фара левая Toyota Camry</name>")
+                    .contains("<oem_number>8414012530</oem_number>")
+                    .contains("<analog_numbers>8414012531</analog_numbers>")
+                    .contains("Номер производителя: 8414012530.");
+        }
+
+        private org.assertj.core.api.AbstractStringAssert<?> assertName(
+                String title, String oem, List<String> analogs) throws Exception {
+            String xml = write(withNumbers(title, oem, analogs, false));
+            int from = xml.indexOf("<name>") + "<name>".length();
+            return assertThat(xml.substring(from, xml.indexOf("</name>")))
+                    .as("наименование в прайсе для «%s»", title);
+        }
+    }
+
+    /** Позиция с заданным заголовком и номерами; {@code clientText} — перенос с Дрома. */
+    static DromOffer withNumbers(String title, String oem, List<String> analogs,
+                                 boolean clientText) {
+        return new DromOffer("P-331", title, "Фара", null, new BigDecimal("1000"),
+                BigDecimal.ONE, PartCondition.USED, null, oem, analogs, null, null, null,
+                null, null, null, List.of(), null, null, null, null, null, true,
+                null, null, null, null, null, clientText);
     }
 
     @Nested
