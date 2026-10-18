@@ -5,17 +5,16 @@ import { PartCard } from './PartCard';
 import type { CatalogRow, Warehouse } from '../inventory/catalog';
 
 /**
- * Наименование позиции в шапке карточки, в просмотре и в правке — одна строка
- * (задача 0311, решение владельца 16.10.2026: «показывать одинаково», без «(б/у)»).
+ * Наименование позиции в карточке — как хранится, с пометкой «(б/у)», и руками
+ * не правится (задача 0336, решение владельца 19.10.2026: «всё как в базон»).
  *
- * <p><b>Зачем.</b> Замер на ПРОМ: в просмотре «фара левая», а в шапке и в поле
- * «Наименование» формы правки — «фара левая (б/у)». Строка «Наименование»
- * просмотра показывала написание вида детали, а шапка и форма — собранное
- * наименование с пометкой состояния; правя название руками, человек не знал,
- * какое из двух уйдёт дальше.
+ * <p>У Bazon поля «Наименование» в форме правки нет: название собирается
+ * из вида, машины, года, положения, состояния и номера. Прежняя запись 0311
+ * («показывать без „(б/у)“») отменена тем же решением: у Bazon пометка видна
+ * везде, где видно название.
  *
- * <p>Проверяется то, что видит человек: текст шапки, строки «Наименование»
- * просмотра, строки и поля ввода формы, и что уехало на сервер.
+ * <p>Проверяется то, что видит человек: текст шапки, строка просмотра,
+ * отсутствие строки в форме и что уехало на сервер.
  */
 describe('наименование в карточке позиции', () => {
   let sent: Array<Record<string, unknown>>;
@@ -40,66 +39,32 @@ describe('наименование в карточке позиции', () => {
     vi.unstubAllGlobals();
   });
 
-  it('шапка, просмотр и правка показывают одно и то же — без «(б/у)»', async () => {
-    const expected = 'Фара Toyota Camry 2007 лев. 81170-33670';
+  it('шапка и просмотр показывают наименование как хранится — с «(б/у)»', () => {
     render(<PartCard {...props(row(title))} />);
 
-    const head = screen.getByRole('heading', { level: 2 }).textContent;
-    expect(head, 'шапка').toBe(expected);
-    expect(viewed('Наименование'), 'строка «Наименование» просмотра').toBe(expected);
-    // Состояние видно своим полем, как и было.
+    expect(screen.getByRole('heading', { level: 2 }).textContent, 'шапка').toBe(title);
+    expect(viewed('Наименование'), 'строка «Наименование» просмотра').toBe(title);
+    // Состояние видно и своим полем (серия 0314 в силе).
     expect(viewed('Состояние')).toBe('б/у');
     // Написание вида детали не пропало: по нему разбирают нераспознанные.
     expect(viewed('Наименование в справочнике')).toBe('фара лев.');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Изменить' }));
-    await waitFor(() => expect(screen.getByLabelText('Изменить: Наименование')).toBeTruthy());
-    expect(formLine('Наименование'), 'строка «Наименование» формы правки').toBe(expected);
-
-    fireEvent.click(screen.getByLabelText('Изменить: Наименование'));
-    expect((screen.getByLabelText('Наименование') as HTMLInputElement).value,
-      'поле ввода наименования').toBe(expected);
   });
 
-  it('раскрытое и нетронутое наименование не уезжает, правленое уезжает набранным', async () => {
+  it('в форме правки строки «Наименование» нет, и сохранение его не шлёт', async () => {
     render(<PartCard {...props(row(title))} />);
     fireEvent.click(screen.getByRole('button', { name: 'Изменить' }));
-    await waitFor(() => expect(screen.getByLabelText('Изменить: Наименование')).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Заметка')).toBeTruthy());
 
-    fireEvent.click(screen.getByLabelText('Изменить: Наименование'));
+    expect(screen.queryByLabelText('Изменить: Наименование'), 'кнопка правки наименования')
+      .toBeNull();
+    expect(() => formLine('Наименование')).toThrow();
+
     fireEvent.click(screen.getByLabelText('Изменить: Заметка'));
     fireEvent.change(screen.getByLabelText('Заметка'), { target: { value: 'скол' } });
     fireEvent.click(screen.getByText('Сохранить'));
     await waitFor(() => expect(sent.length).toBe(1));
     expect(sent[0]!['note']).toBe('скол');
-    expect('title' in sent[0]!, 'нетронутое наименование уехало без пометки — то есть изменённым')
-      .toBe(false);
-  });
-
-  it('правленое наименование уезжает тем, что набрал человек', async () => {
-    render(<PartCard {...props(row(title))} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Изменить' }));
-    await waitFor(() => expect(screen.getByLabelText('Изменить: Наименование')).toBeTruthy());
-
-    fireEvent.click(screen.getByLabelText('Изменить: Наименование'));
-    fireEvent.change(screen.getByLabelText('Наименование'),
-      { target: { value: 'Фара Toyota Camry 2007 левая' } });
-    fireEvent.click(screen.getByText('Сохранить'));
-    await waitFor(() => expect(sent.length).toBe(1));
-    expect(sent[0]!['title']).toBe('Фара Toyota Camry 2007 левая');
-    // Увиденным уезжает ответ сервера как есть: сервер сравнивает с базой.
-    expect((sent[0]!['seen'] as Record<string, unknown>)['title']).toBe(title);
-  });
-
-  it('вписанное руками показывается как сохранено, ничего не дописывается', async () => {
-    title = 'Моя фара на Камри, левая';
-    render(<PartCard {...props(row(title))} />);
-
-    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe(title);
-    expect(viewed('Наименование')).toBe(title);
-    fireEvent.click(screen.getByRole('button', { name: 'Изменить' }));
-    await waitFor(() => expect(screen.getByLabelText('Изменить: Наименование')).toBeTruthy());
-    expect(formLine('Наименование')).toBe(title);
+    expect('title' in sent[0]!, 'наименование уехало в правке').toBe(false);
   });
 });
 

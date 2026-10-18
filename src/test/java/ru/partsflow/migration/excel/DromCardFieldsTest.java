@@ -505,10 +505,10 @@ class DromCardFieldsTest extends PostgresTestBase {
         });
     }
 
-    /** Одна позиция {@code <part>} прайса — по публичному коду, он и есть её {@code id}. */
+    /** Одна позиция {@code <part>} прайса — по номеру позиции, он и есть её {@code id} (задачи 0334, 0333). */
     private String offerOf(String price, long partId) {
         String code = inTenant(() -> jdbc.queryForObject(
-                "SELECT public_code FROM part WHERE id = ?", String.class, partId));
+                "SELECT number::text FROM part WHERE id = ?", String.class, partId));
         Matcher offer = Pattern.compile("<part>.*?</part>", Pattern.DOTALL).matcher(price);
         while (offer.find()) {
             if (offer.group().contains("<id>" + code + "</id>")) {

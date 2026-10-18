@@ -655,8 +655,8 @@ class PreorderTest extends PostgresTestBase {
         assertThat(deltaOffer(control)).contains("<state>В наличии</state>");
         assertThat(fullPrice())
                 .as("полный прайс по-прежнему не содержит позицию под предзаказом")
-                .doesNotContain("<id>" + codeOf(part) + "</id>")
-                .contains("<id>" + codeOf(control) + "</id>");
+                .doesNotContain("<id>" + feedKeyOf(part) + "</id>")
+                .contains("<id>" + feedKeyOf(control) + "</id>");
 
         // Отмена: место освободилось, позиция возвращается доступной.
         inTenant(() -> jdbc.update("DELETE FROM part_change"));
@@ -709,7 +709,7 @@ class PreorderTest extends PostgresTestBase {
                 .contains("<state>В наличии</state>");
         assertThat(fullPrice())
                 .as("позиция с частичным предзаказом обязана остаться в полном прайсе")
-                .contains("<id>" + codeOf(part) + "</id>");
+                .contains("<id>" + feedKeyOf(part) + "</id>");
 
         // Отмена: количество возвращается дельтой.
         inTenant(() -> jdbc.update("DELETE FROM part_change"));
@@ -771,8 +771,9 @@ class PreorderTest extends PostgresTestBase {
         return count("SELECT count(*) FROM part_change WHERE part_id = " + partId) > 0;
     }
 
-    private String codeOf(long partId) {
-        return text("SELECT public_code FROM part WHERE id = " + partId);
+    /** Ключ позиции в прайсе — её номер (задача 0334), а не публичный код. */
+    private String feedKeyOf(long partId) {
+        return text("SELECT number::text FROM part WHERE id = " + partId);
     }
 
     private String fullPrice() {
@@ -794,7 +795,7 @@ class PreorderTest extends PostgresTestBase {
                     EXPECTING);
             return out.toString(java.nio.charset.StandardCharsets.UTF_8);
         });
-        int at = xml.indexOf("<id>" + codeOf(partId) + "</id>");
+        int at = xml.indexOf("<id>" + feedKeyOf(partId) + "</id>");
         assertThat(at).as("позиции нет в дельте вовсе: %s", xml).isNotNegative();
         return xml.substring(at, xml.indexOf("</part>", at));
     }

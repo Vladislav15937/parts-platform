@@ -53,7 +53,7 @@ public class DonorVehicleResolver {
                         rs.getString("model"),
                         rs.getString("body_code"),
                         rs.getString("engine_code"),
-                        rs.getObject("year") == null ? null : rs.getInt("year")),
+                        rs.getObject("year") == null ? null : String.valueOf(rs.getInt("year"))),
                 donorId);
 
         return found.isEmpty() ? null : found.get(0);

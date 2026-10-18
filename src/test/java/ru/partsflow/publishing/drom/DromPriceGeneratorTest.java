@@ -212,6 +212,44 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 .endsWith("</part>\n</parts>");
     }
 
+    /**
+     * Ключ позиции — номер позиции в {@code <id>}, и в полном прайсе, и в дельте
+     * (задачи 0334 и 0333 вместе: 0334 решила значение, 0333 — имя тега).
+     * У перенесённой с Bazon позиции номер — её «Номер товара», по которому Дром
+     * узнаёт прежние объявления; публичный код в {@code <id>} завёл бы их заново.
+     * Номер сдвинут далеко от любых других чисел файла, чтобы совпадение
+     * подстрокой не выдало себя за ключ.
+     */
+    @Test
+    @DisplayName("В <id> — номер позиции, а не публичный код: в полном прайсе и в дельте")
+    void idIsThePartNumberInPriceAndDelta() {
+        String name = "Прайс: фара для сверки ключа";
+        Long partId = part(name, new BigDecimal("3100"), true);
+        intake(partId, warehouse, 1);
+        String[] keys = inTenant(() -> {
+            jdbc.update("UPDATE part SET number = 987654 WHERE id = ?", partId);
+            return new String[] {
+                    jdbc.queryForObject("SELECT number::text FROM part WHERE id = ?", String.class, partId),
+                    jdbc.queryForObject("SELECT public_code FROM part WHERE id = ?", String.class, partId)};
+        });
+
+        String full = offerIn(priceWith(DromPriceGenerator.FeedFilter.everything()), name);
+        String delta = offerIn(inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeDelta(out, java.util.List.of(partId),
+                    DromPriceGenerator.FeedFilter.everything(),
+                    ru.partsflow.publishing.FeedSettings.none(), null, null);
+            return out.toString(StandardCharsets.UTF_8);
+        }), name);
+
+        for (String[] file : new String[][] {{"полный прайс", full}, {"дельта", delta}}) {
+            assertThat(file[1])
+                    .as("%s: ключ позиции не её номер", file[0])
+                    .startsWith("<part>\n<id>" + keys[0] + "</id>\n")
+                    .doesNotContain(keys[1]);
+        }
+    }
+
     @Test
     @DisplayName("Невыгружаемая позиция в прайс не попадает")
     void unpublishedIsExcluded() {

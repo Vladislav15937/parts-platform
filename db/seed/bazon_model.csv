@@ -1,0 +1,2258 @@
+id,mark_id,name,model_slug
+1,1,Maxus,maxus
+2,2,CL,cl
+5,2,ILX,ilx
+7,2,Legend,legend
+8,2,MDX,mdx
+10,2,RDX,rdx
+11,2,RL,rl
+12,2,RLX,rlx
+13,2,RSX,rsx
+14,2,TL,tl
+15,2,TLX,tlx
+16,2,TSX,tsx
+17,2,ZDX,zdx
+18,3,145,145
+19,3,146,146
+20,3,147,147
+21,3,155,155
+22,3,156,156
+23,3,159,159
+24,3,164,164
+25,3,166,166
+26,3,33,33
+27,3,4C,4c
+30,3,Brera,brera
+31,3,Giulia,giulia
+32,3,Giulietta,giulietta
+33,3,GT,gt
+34,3,GTV,gtv
+35,3,MiTo,mi-to
+37,3,Stelvio,stelvio
+58,5,TXL,txl
+60,6,Cygnet,cygnet
+61,6,DB11,db11
+63,6,DB9,db9
+67,6,Rapide,rapide
+71,6,Vantage,vantage
+74,7,100,100
+75,7,200,200
+76,7,80,80
+77,7,90,90
+78,7,A1,a1
+79,7,A2,a2
+80,7,A3,a3
+81,7,A4,a4
+82,7,A4 allroad,
+84,7,A5,a5
+85,7,A6,a6
+86,7,A6 allroad,
+88,7,A7,a7
+89,7,A8,a8
+92,7,e-tron,e-tron
+93,7,Q2,q2
+94,7,Q3,q3
+95,7,Q5,q5
+96,7,Q7,q7
+97,7,Q8,q8
+99,7,R8,r8
+102,7,RS Q3,rs_q3
+103,7,RS3,rs3
+104,7,RS4,rs4
+105,7,RS Q8,rs_q8
+106,7,RS5,rs5
+107,7,RS6,rs6
+109,7,RS7,rs7
+110,7,S2,s2
+111,7,S3,s3
+112,7,S4,s4
+114,7,S5,s5
+115,7,S6,s6
+117,7,S7,s7
+118,7,S8,s8
+119,7,SQ5,sq5
+120,7,SQ7,sq7
+121,7,TT,tt
+122,7,TT RS,tt_rs
+123,7,TTS,tts
+125,8,Arnage,arnage
+127,8,Bentayga,bentayga
+130,8,Continental GT,continental_gt
+132,8,Flying Spur,flying_spur
+133,8,Mulsanne,mulsanne
+134,8,Turbo R,turbo_r
+135,9,1-Series,1-series
+136,9,2-Series,2-series
+139,9,3-Series,3-series
+141,9,4-Series,4-series
+142,9,5-Series,5-series
+144,9,6-Series,6-series
+146,9,7-Series,7-series
+147,9,8-Series,8-series
+148,9,i3,i3
+149,9,i8,i8
+150,9,M2,m2
+151,9,M3,m3
+152,9,M4,m4
+153,9,M5,m5
+154,9,M6,m6
+155,9,X1,x1
+156,9,X2,x2
+157,9,X3,x3
+158,9,X4,x4
+159,9,X5,x5
+160,9,X6,x6
+161,9,X7,x7
+162,9,Z1,z1
+163,9,Z3,z3
+164,9,Z4,z4
+165,9,Z8,z8
+166,10,H230,h230
+167,10,H530,h530
+168,10,M1,m1
+169,10,M2,m2
+171,10,V3,v3
+172,10,V5,v5
+177,12,Encore,encore
+178,12,LaCrosse,lacrosse
+183,12,Regal,regal
+190,13,F3,f3
+195,13,Flyer,flyer
+203,14,ATS,ats
+204,14,BLS,bls
+207,14,CT6,ct6
+208,14,CTS,cts
+209,14,DeVille,deville
+210,14,DTS,dts
+213,14,Escalade,escalade
+215,14,Seville,seville
+216,14,SRX,srx
+217,14,STS,sts
+219,14,XT5,xt5
+220,14,XT6,xt6
+221,14,XTS,xts
+222,15,CS35,cs35
+223,15,CS75,cs75
+224,15,Eado,eado
+225,15,UNI-V,uni-v
+226,16,Arrizo 8,arrizo_8
+232,16,Amulet A15,amulet
+233,16,Arrizo 7,arrizo_7
+234,16,Oriental Son B11,
+236,16,Bonus A13,bonus
+238,16,CrossEastar B14,
+240,16,Fora A21,fora
+241,16,indiS,
+244,16,Kimo A1,kimo
+245,16,M11,m11
+247,16,QQ6,
+248,16,Sweet QQ,
+249,16,Tiggo 4 Pro,tiggo_4_pro
+250,16,Tiggo 2,tiggo_2
+251,16,Tiggo 3,tiggo_3
+252,16,Tiggo 4,tiggo_4
+253,16,Tiggo 5,tiggo_5
+254,16,Tiggo 7,tiggo_7
+255,16,Tiggo T11,tiggo
+258,16,Very A13,very
+262,17,Astro,astro
+263,17,Avalanche,avalanche
+264,17,Aveo,aveo
+266,17,Blazer,blazer
+267,17,Bolt,bolt
+269,17,Camaro,camaro
+270,17,Caprice,caprice
+271,17,Captiva,captiva
+272,17,Cavalier,cavalier
+277,17,Cobalt,cobalt
+278,17,Colorado,colorado
+281,17,Corvette,corvette
+282,17,Cruze,cruze
+284,17,Epica,epica
+285,17,Equinox,equinox
+287,17,Evanda,evanda
+290,17,HHR,hhr
+291,17,Impala,impala
+292,17,Lacetti,lacetti
+293,17,Lanos,lanos
+294,17,Lumina,lumina
+296,17,Malibu,malibu
+297,17,Metro,metro
+300,17,Monza,monza
+301,17,MW,mw
+302,17,Niva,niva
+303,17,Nubira,nubira
+306,17,Orlando,orlando
+307,17,Rezzo,rezzo
+310,17,Silverado,silverado
+311,17,Spark,spark
+315,17,Suburban,suburban
+316,17,Tacuma,tacuma
+317,17,Tahoe,tahoe
+318,17,Tracker,tracker
+319,17,TrailBlazer,trailblazer
+320,17,Traverse,traverse
+321,17,Trax,trax
+322,17,Uplander,uplander
+325,17,Viva,viva
+326,17,Volt,volt
+328,18,200,200
+329,18,300C,300c
+330,18,300M,300m
+332,18,Cirrus,cirrus
+333,18,Concorde,concorde
+334,18,Crossfire,crossfire
+336,18,Grand Voyager,grand_voyager
+339,18,LHS,lhs
+340,18,Neon,neon
+341,18,New Yorker,new_yorker
+342,18,Pacifica,pacifica
+344,18,PT Cruiser,pt_cruiser
+346,18,Sebring,sebring
+347,18,Stratus,stratus
+348,18,Town&Country,
+350,18,Voyager,voyager
+353,19,Berlingo,berlingo
+354,19,BX,bx
+355,19,C-Crosser,c-crosser
+356,19,C-Elysee,c-elysee
+358,19,C1,c1
+360,19,C2,c2
+361,19,C3,c3
+362,19,C3 Aircross,c3_aircross
+363,19,C3 Picasso,c3_picasso
+364,19,C4,c4
+365,19,C4 Aircross,c4_aircross
+366,19,C4 Cactus,c4_cactus
+368,19,C4 Picasso,c4_picasso
+369,19,C4 Spacetourer,c4_spacetourer
+370,19,C5,c5
+371,19,C5 Aircross,c5_aircross
+372,19,C6,c6
+373,19,C8,c8
+374,19,DS3,ds3
+375,19,DS4,ds4
+376,19,DS5,ds5
+378,19,Evasion,evasion
+379,19,Grand C4 Picasso,grand_c4_picasso
+381,19,Jumpy,jumpy
+382,19,Nemo,nemo
+383,19,Saxo,saxo
+384,19,Spacetourer,spacetourer
+386,19,Xantia,xantia
+387,19,XM,xm
+388,19,Xsara,xsara
+389,19,Xsara Picasso,xsara_picasso
+390,19,ZX,zx
+391,20,Dokker,
+392,20,Duster,duster
+393,20,Lodgy,lodgy
+394,20,Logan,logan
+396,20,Sandero,sandero
+397,20,Solenza,
+399,21,Alpheon,alpheon
+404,21,Damas,damas
+405,21,Espero,espero
+408,21,Gentra,gentra
+409,21,Kalos,kalos
+410,21,Korando,korando
+411,21,Lacetti,lacetti
+412,21,Lanos,lanos
+413,21,Leganza,leganza
+415,21,Magnus,magnus
+416,21,Matiz,matiz
+417,21,Nexia,nexia
+418,21,Nubira,nubira
+419,21,Prince,prince
+421,21,Sens,sens
+422,21,Tacuma,tacuma
+423,21,Tico,tico
+425,21,Winstorm,winstorm
+426,22,Altis,altis
+427,22,Applause,applause
+428,22,Atrai,atrai
+429,22,Atrai7,atrai7
+430,22,Be-Go,be-go
+432,22,Boon,boon
+433,22,Boon Luminas,boon_luminas
+435,22,Cast,cast
+436,22,Charade,charade
+439,22,Charade Social,charade_social
+443,22,Coo,coo
+444,22,Copen,copen
+445,22,Cuore,cuore
+446,22,Delta,delta
+448,22,Esse,esse
+452,22,Gran Max,gran_max
+453,22,Gran Move,
+454,22,Hijet,hijet
+455,22,Hijet Caddie,caddie
+457,22,Hijet Truck,
+458,22,Leeza,leeza
+459,22,Materia,materia
+460,22,Max,max
+461,22,Mebius,mebius
+462,22,Midget II,midget_ii
+463,22,Mira,mira
+464,22,Mira Avy,mira_avy
+465,22,Mira Cocoa,mira_cocoa
+466,22,Mira e:S,mira_e-s
+467,22,Mira Gino,mira_gino
+468,22,Mira Gino 1000,mira_gino_1000
+469,22,Mira Moderno,mira_moderno
+470,22,Mira Tocot,mira_tocot
+472,22,Move,move
+473,22,Move Canbus,move_canbus
+474,22,Move Conte,move_conte
+475,22,Move Latte,move_latte
+476,22,Naked,naked
+477,22,Opti,opti
+478,22,Pyzar,pyzar
+479,22,Rocky,rocky
+480,22,Rugger,rugger
+481,22,Sirion,sirion
+482,22,Sonica,sonica
+483,22,Storia,storia
+484,22,Taft,taft
+485,22,Tanto,tanto
+486,22,Tanto Exe,tanto_exe
+487,22,Terios,terios
+488,22,Terios Kid,terios_kid
+489,22,Terios Lucia,terios_lucia
+490,22,Thor,thor
+492,22,Wake,wake
+494,22,YRV,yrv
+498,24,mi-Do,mi-do
+499,24,on-DO,on-do
+502,26,Aurora,aurora
+508,27,Avenger,avenger
+509,27,Caliber,caliber
+510,27,Caravan,caravan
+511,27,Challenger,challenger
+512,27,Charger,charger
+515,27,Dart,dart
+516,27,Durango,durango
+518,27,Grand Caravan,grand_caravan
+519,27,Intrepid,intrepid
+520,27,Journey,journey
+521,27,Magnum,magnum
+522,27,Neon,neon
+523,27,Nitro,nitro
+525,27,Ram,ram
+529,27,Stratus,stratus
+531,28,A30,
+532,28,AX4,ax4
+533,28,AX7,ax7
+534,28,DF6,df6
+535,28,AX3,
+536,28,H30 Cross,h30_cross
+537,28,AX5,
+538,28,A60,
+539,28,580,580
+540,28,S30,s30
+548,31,1041,
+551,31,Besturn B50,besturn_b50
+552,31,Bestune B70,bestune_b70
+553,31,Besturn X40,besturn_x40
+554,31,Besturn X80,besturn_x80
+559,31,V2,v2
+560,31,V5,v5
+561,31,Vita,vita
+564,32,360,360
+566,32,458 Italia,458_italia
+569,32,488 GTB,488_gtb
+574,32,599 GTB Fiorano,599_gtb_fiorano
+578,32,California,california
+584,32,FF,ff
+588,32,Portofino,portofino
+592,33,124 Spider,124_spider
+594,33,500,500
+595,33,500L,
+597,33,500X,500x
+598,33,Albea,albea
+599,33,Barchetta,
+600,33,Brava,brava
+601,33,Bravo,bravo
+602,33,Cinquecento,
+604,33,Croma,croma
+605,33,Doblo,doblo
+606,33,Fiorino,
+607,33,Freemont,freemont
+608,33,Fullback,fullback
+609,33,Grande Punto,grande_punto
+610,33,Idea,
+611,33,Linea,linea
+612,33,Marea,
+613,33,Multipla,multipla
+614,33,Palio,palio
+615,33,Panda,panda
+616,33,Punto,punto
+617,33,Qubo,qubo
+618,33,Regata,regata
+620,33,Scudo,scudo
+621,33,Sedici,sedici
+622,33,Seicento,seicento
+624,33,Stilo,stilo
+627,33,Tipo,tipo
+628,33,Ulysse,ulysse
+629,33,Uno,uno
+630,34,Karma,karma
+633,35,B-MAX,b-max
+634,35,Bronco,bronco
+635,35,C-MAX,c-max
+638,35,Cougar,cougar
+641,35,EcoSport,ecosport
+642,35,Edge,edge
+644,35,Escape,escape
+645,35,Escort,escort
+646,35,Everest,everest
+647,35,Excursion,excursion
+648,35,Expedition,expedition
+649,35,Explorer,explorer
+650,35,F150,f150
+651,35,F250,f250
+655,35,Festiva,festiva
+656,35,Fiesta,fiesta
+659,35,Focus,focus
+660,35,Focus RS,focus_rs
+661,35,Focus ST,focus_st
+662,35,Freda,freda
+665,35,Fusion,fusion
+666,35,Galaxy,galaxy
+667,35,Granada,granada
+668,35,Grand C-MAX,grand_c_max
+672,35,Ixion,ixion
+673,35,Ka,ka
+674,35,Kuga,kuga
+675,35,Laser,laser
+676,35,Maverick,maverick
+678,35,Mondeo,mondeo
+679,35,Mustang,mustang
+680,35,Orion,orion
+682,35,Probe,probe
+683,35,Puma,puma
+684,35,Ranger,ranger
+685,35,S-MAX,s-max
+686,35,Scorpio,scorpio
+687,35,Sierra,sierra
+691,35,Taurus,taurus
+692,35,Telstar,telstar
+696,35,Tourneo Connect,tourneo_connect
+697,35,Tourneo Courier,tourneo_courier
+698,35,Tourneo Custom,tourneo_custom
+699,35,Transit Connect,
+700,35,Windstar,windstar
+704,36,Tunland G7,tunland_g7
+705,36,View G7,
+706,37,GS3,trumpchi_gs3
+707,37,GS5,gs5
+711,39,Atlas,atlas
+712,39,Atlas Pro,atlas_pro
+713,39,GS,gs
+714,39,Emgrand EC7,emgrand
+715,39,Emgrand EC8,emgrand_ec8
+716,39,Emgrand GT,emgrand_gt
+717,39,Emgrand X7,ex7
+720,39,GC6,gc6
+721,39,Monjaro,monjaro
+722,39,MK,mk
+723,39,MK Cross,mk_cross
+724,39,Otaka CK,
+725,39,Coolray,sx11
+726,39,Vision,
+727,40,G70,g70
+728,40,G80,g80
+729,40,G90,g90
+732,42,Acadia,acadia
+734,42,Envoy,envoy
+735,42,Jimmy,jimmy
+737,42,Savana,
+738,42,Sierra,sierra
+741,42,Terrain,terrain
+742,42,Typhoon,typhoon
+744,42,Yukon,yukon
+745,43,Coolbear,coolbear
+747,43,Deer,
+748,43,Florid,florid
+749,43,Hover,hover
+750,43,Hover H3,hover_h3
+751,43,Hover H5,hover_h5
+752,43,Hover H6,hover_h6
+753,43,Hover M2,hover_m2
+754,43,Hover M4,hover_m4
+755,43,Pegasus,
+756,43,Peri,peri
+757,43,Safe,safe
+758,43,Sailor,sailor
+761,43,Voleex c30,voleex_c30
+762,43,Wingle,wingle
+763,44,Brio,brio
+764,44,Princip,princip
+766,44,Simbo,simbo
+768,45,3,3
+769,45,7,7
+772,45,M3,m3
+773,46,F7,f7
+774,46,H2,h2
+775,46,H6,h6
+776,46,H7,h7
+777,46,H8,h8
+778,46,H9,h9
+781,47,Boliger,boliger
+785,48,Accord,accord
+787,48,Accord Inspire,accord_inspire
+789,48,Acty,acty
+790,48,Acty Truck,
+791,48,Airwave,airwave
+792,48,Ascot,ascot
+793,48,Ascot Innova,ascot_innova
+794,48,Avancier,avancier
+796,48,Beat,beat
+798,48,Capa,capa
+799,48,City,city
+800,48,Civic,civic
+803,48,Civic Ferio,civic_ferio
+805,48,Civic Shuttle,civic_shuttle
+806,48,Civic Type R,civic_type_r
+808,48,Concerto,concerto
+809,48,CR-V,cr-v
+810,48,CR-X,cr-x
+811,48,CR-X del Sol,cr-x_delsol
+812,48,CR-Z,cr-z
+813,48,Crossroad,crossroad
+814,48,Crosstour,crosstour
+815,48,Domani,domani
+816,48,Edix,edix
+817,48,Element,element
+818,48,Elysion,elysion
+819,48,Fit,fit
+820,48,Fit Aria,fit_aria
+822,48,Fit Shuttle,fit_shuttle
+824,48,FR-V,fr-v
+825,48,Freed,freed
+827,48,Freed Spike,freed_spike
+829,48,Freed+,freed_plus
+830,48,Grace,grace
+831,48,Horizon,horizon
+832,48,HR-V,hr-v
+833,48,Insight,insight
+834,48,Inspire,inspire
+835,48,Integra,integra
+836,48,Integra SJ,integra_sj
+837,48,Jade,jade
+838,48,Jazz,jazz
+840,48,Lagreat,lagreat
+841,48,Legend,legend
+842,48,Life,life
+843,48,Life Dunk,life_dunk
+844,48,Logo,logo
+845,48,MDX,mdx
+846,48,Mobilio,mobilio
+847,48,Mobilio Spike,mobilio_spike
+849,48,N-BOX,n-box
+850,48,N-BOX Slash,n_box_slash
+851,48,N-BOX+,n-box_plus
+852,48,N-ONE,n-one
+853,48,N-VAN,n-van
+854,48,N-WGN,n-wgn
+856,48,NSX,nsx
+857,48,Odyssey,odyssey
+858,48,Orthia,orthia
+859,48,Partner,partner
+860,48,Pilot,pilot
+861,48,Prelude,prelude
+864,48,Rafaga,rafaga
+865,48,Ridgeline,ridgeline
+866,48,S-MX,s-mx
+867,48,S2000,s2000
+870,48,S660,s660
+871,48,Saber,saber
+872,48,Shuttle,shuttle
+873,48,Stepwgn,stepwgn
+874,48,Stream,stream
+875,48,Street,street
+876,48,That's,
+877,48,Today,today
+878,48,Torneo,torneo
+879,48,Vamos,vamos
+880,48,Vamos Hobio,vamos_hobio
+881,48,Vezel,vezel
+882,48,Vigor,vigor
+883,48,Z,z
+884,48,Zest,zest
+885,49,H1 Alpha,
+886,49,H2,h2
+887,49,H3,h3
+888,50,Accent,accent
+889,50,Aslan,
+890,50,Atos,atos
+891,50,Avante,avante
+892,50,Azera,azera
+895,50,Click,
+896,50,Coupe,coupe-model
+897,50,Creta,creta
+899,50,Elantra,elantra
+900,50,Entourage,entourage
+902,50,Equus,equus
+904,50,Galloper,galloper
+905,50,Genesis,genesis
+906,50,Getz,getz
+907,50,Grace,grace
+908,50,Grand Santa Fe,grand_santa_fe
+909,50,Grand Starex,
+910,50,Grandeur,grandeur
+911,50,H1,h1
+912,50,H100,h100
+914,50,HD35,
+915,50,i10,i10
+916,50,i20,i20
+917,50,i30,i30
+918,50,i40,i40
+920,50,Ioniq,ioniq
+921,50,ix20,
+922,50,ix35,ix35
+923,50,ix55,ix55
+924,50,Kona,kona
+925,50,Lantra,lantra
+926,50,Lavita,lavita
+928,50,Marcia,
+929,50,Matrix,matrix
+931,50,NF,nf
+932,50,Palisade,palisade
+933,50,Pony,
+934,50,Porter,
+936,50,Santa Fe,santa_fe
+937,50,Santa Fe Classic,santa_fe_classic
+938,50,Santamo,
+941,50,Solaris,solaris
+942,50,Sonata,sonata
+943,50,Starex,starex
+944,50,Staria,staria
+946,50,Terracan,terracan
+947,50,Tiburon,tiburon
+948,50,Trajet,trajet
+949,50,Tucson,tucson
+951,50,Veloster,veloster
+952,50,Veracruz,veracruz
+953,50,Verna,verna
+954,50,XG,hg
+955,51,EX25,ex25
+956,51,EX30d,ex30d
+957,51,EX35,ex35
+958,51,EX37,ex37
+959,51,FX30d,fx30d
+960,51,FX35,fx35
+961,51,FX37,fx37
+962,51,FX45,fx45
+963,51,FX50,fx50
+964,51,G20,g20
+965,51,G25,g25
+966,51,G35,g35
+967,51,G37,g37
+968,51,I30,i30
+969,51,I35,i35
+970,51,J30,j30
+971,51,JX35,jx35
+972,51,M25,m25
+974,51,M35,m35
+976,51,M37,m37
+977,51,M45,m45
+978,51,M56,m56
+979,51,Q30,q30
+980,51,Q40,q40
+981,51,Q45,q45
+982,51,Q50,q50
+984,51,Q60,q60
+985,51,Q70,q70
+986,51,QX30,qx30
+987,51,QX4,qx4
+988,51,QX50,qx50
+989,51,QX56,qx56
+990,51,QX60,qx60
+991,51,QX70,qx70
+992,51,QX80,qx80
+995,52,Samand,samand
+1001,53,Aska,aska
+1002,53,Axiom,axiom
+1004,53,Bighorn,bighorn
+1006,53,D-MAX,d-max
+1007,53,Fargo,fargo
+1008,53,Fargo Filly,fargo_filly
+1010,53,Filly,filly
+1012,53,Gemini,gemini
+1016,53,Midi,midi
+1017,53,MU,mu
+1019,53,Pa Nero,pa_nero
+1021,53,Piazza,piazza
+1022,53,Piazza Nero,piazza_nero
+1023,53,Rodeo,rodeo
+1026,53,Trooper,trooper
+1027,53,VehiCross,vehicross
+1028,53,Wizard,wizard
+1033,54,JS6,js6
+1034,54,J7,j7
+1035,54,S7,s7
+1036,54,S3,s3
+1037,54,S5,s5
+1038,54,N35,
+1040,55,E-Pace,e-pace
+1041,55,F-Pace,f-pace
+1042,55,F-Type,f-type
+1043,55,i-Pace,i-pace
+1044,55,S-Type,s-type
+1046,55,X-Type,x-type
+1047,55,XE,xe
+1048,55,XF,xf
+1049,55,XJ,xj
+1051,55,XK,xk
+1052,56,Cherokee,cherokee
+1053,56,Commander,commander
+1054,56,Compass,compass
+1055,56,Gladiator,gladiator
+1056,56,Grand Cherokee,grand_cherokee
+1057,56,Liberty,liberty
+1058,56,Patriot,patriot
+1059,56,Renegade,renegade
+1060,56,Wrangler,wrangler
+1061,57,Avella,avella
+1062,57,Besta,besta
+1063,57,Bongo,bongo
+1064,57,Borrego,borrego
+1065,57,Cadenza,cadenza
+1067,57,Carens,carens
+1068,57,Carnival,carnival
+1070,57,Ceed,
+1072,57,Cerato,cerato
+1073,57,Cerato Koup,cerato_koup
+1074,57,Clarus,clarus
+1079,57,Forte,forte
+1083,57,K3600,
+1084,57,K3,k3
+1085,57,K5,k5
+1086,57,K7,k7
+1087,57,K9,k9
+1088,57,K900,k900
+1089,57,KX3,kx3
+1090,57,Magentis,magentis
+1092,57,Mohave,mohave
+1093,57,Morning,morning
+1094,57,Niro,niro
+1095,57,Opirus,opirus
+1096,57,Optima,optima
+1098,57,Picanto,picanto
+1100,57,Pregio,pregio
+1101,57,Pride,pride
+1102,57,ProCeed,
+1104,57,Quoris,quoris
+1105,57,Ray,ray
+1107,57,Retona,retona
+1108,57,Rio,rio
+1109,57,Rio X-Line,
+1110,57,Sedona,sedona
+1111,57,Sephia,sephia
+1112,57,Shuma,shuma
+1113,57,Sorento,sorento
+1114,57,Soul,soul
+1115,57,Spectra,spectra
+1116,57,Sportage,sportage
+1117,57,Stinger,stinger
+1118,57,Telluride,telluride
+1120,57,Venga,venga
+1122,57,X-Trek,x-trek
+1131,59,Aventador,aventador
+1136,59,Huracan,huracan
+1141,59,Murcielago,murcielago
+1143,59,Urus,urus
+1144,60,Dedra,dedra
+1145,60,Delta,delta
+1146,60,Kappa,
+1147,60,Lybra,
+1150,60,Phedra,
+1152,60,Thema,thema
+1155,60,Ypsilon,
+1157,61,Defender,defender
+1158,61,Discovery,discovery
+1159,61,Discovery Sport,discovery_sport
+1160,61,Freelander,freelander
+1161,61,Range Rover,range_rover
+1162,61,Range Rover Evoque,range_rover_evoque
+1163,61,Range Rover Sport,range_rover_sport
+1164,61,Range Rover Velar,range_rover_velar
+1165,62,CT200h,ct200h
+1166,62,ES200,es200
+1167,62,ES250,es250
+1168,62,ES300,es300
+1169,62,ES300h,es300h
+1170,62,ES330,es330
+1171,62,ES350,es350
+1172,62,GS F,gs_f
+1173,62,GS200t,gs200t
+1174,62,GS250,gs250
+1175,62,GS300,gs300
+1176,62,GS300h,gs300h
+1177,62,GS350,gs350
+1178,62,GS400,gs400
+1179,62,GS430,gs430
+1180,62,GS450h,gs450h
+1181,62,GS460,gs460
+1182,62,GX400,
+1183,62,GX460,gx460
+1184,62,GX470,gx470
+1185,62,HS250h,hs250h
+1186,62,IS F,is_f
+1187,62,IS200,is200
+1188,62,IS200d,is200d
+1189,62,IS200t,is200t
+1190,62,IS220d,is220d
+1191,62,IS250,is250
+1192,62,IS250C,is250c
+1193,62,IS300,is300
+1194,62,IS300h,is300h
+1195,62,IS350,is350
+1196,62,IS350C,is350c
+1197,62,LC500,lc500
+1198,62,LC500h,lc500h
+1199,62,LFA,lfa
+1200,62,LS350,ls350
+1201,62,LS400,ls400
+1202,62,LS430,ls430
+1203,62,LS460,ls460
+1204,62,LS460L,ls460l
+1205,62,LS500,ls500
+1206,62,LS500h,ls500h
+1207,62,LS600h,ls600h
+1208,62,LS600HL,ls600hl
+1209,62,LX450,lx450
+1210,62,LX450d,lx450d
+1212,62,LX470,lx470
+1213,62,LX570,lx570
+1214,62,NX200,nx200
+1215,62,NX200t,nx200t
+1216,62,NX300,nx300
+1217,62,NX300h,nx300h
+1218,62,RC F,rc_f
+1219,62,RC200t,rc200t
+1220,62,RC300,rc300
+1221,62,RC300h,rc300h
+1222,62,RC350,rc350
+1223,62,RX200t,rx200t
+1224,62,RX270,rx270
+1225,62,RX300,rx300
+1226,62,RX330,rx330
+1227,62,RX350,rx350
+1228,62,RX350L,rx350l
+1229,62,RX400h,rx400h
+1230,62,RX450h,rx450h
+1231,62,RX450hL,rx450hl
+1232,62,SC300,sc300
+1233,62,SC400,sc400
+1234,62,SC430,sc430
+1235,62,UX200,ux200
+1236,62,UX250h,ux250h
+1237,63,Breez,breez
+1238,63,Cebrium,cebrium
+1239,63,Celliya,celliya
+1240,63,Murman,murman
+1241,63,Myway,myway
+1242,63,Smily,smily
+1243,63,Solano,solano
+1244,63,X50,x50
+1245,63,X60,x60
+1246,63,X70,x70
+1247,64,Aviator,aviator
+1248,64,Corsair,corsair
+1249,64,Continental,continental
+1250,64,LS,ls
+1253,64,MKC,mkc
+1255,64,MKT,mkt
+1256,64,MKX,mkx
+1257,64,MKZ,mkz
+1258,64,Nautilus,nautilus
+1259,64,Navigator,navigator
+1260,64,Town Car,town_car
+1270,67,3200GT,3200gt
+1273,67,Ghibli,ghibli
+1276,67,GranTurismo,granturismo
+1277,67,Levante,levante
+1279,67,Quattroporte,quattroporte
+1281,68,57,57
+1282,68,62,62
+1283,69,121,121
+1284,69,323,323
+1287,69,626,626
+1288,69,929,929
+1289,69,Atenza,atenza
+1295,69,Axela,axela
+1296,69,AZ-Offroad,az-offroad
+1297,69,AZ-Wagon,az-wagon
+1298,69,B-Series,b-series
+1299,69,Biante,biante
+1300,69,Bongo,bongo
+1301,69,Bongo Brawny,bongo_brawny
+1303,69,Bongo Friendee,bongo_friendee
+1305,69,BT-50,bt-50
+1306,69,Capella,capella
+1307,69,Carol,carol
+1310,69,Cronos,cronos
+1312,69,CX-3,cx-3
+1313,69,CX-4,cx-4
+1314,69,CX-5,cx-5
+1315,69,CX-7,cx-7
+1316,69,CX-8,cx-8
+1317,69,CX-9,cx-9
+1318,69,Demio,demio
+1320,69,Efini MS-6,efini_ms-6
+1321,69,Efini MS-8,efini_ms-8
+1322,69,Efini MS-9,efini_ms-9
+1325,69,Eunos 100,eunos_100
+1326,69,Eunos 300,eunos_300
+1327,69,Eunos 500,eunos_500
+1328,69,Eunos 800,eunos_800
+1329,69,Eunos Cargo,eunos_cargo
+1331,69,Eunos Presso,eunos_presso
+1332,69,Eunos Roadster,eunos_roadster
+1333,69,Familia,familia
+1334,69,Familia S-Wagon,familia_s-wagon
+1335,69,Flair,flair
+1336,69,Flair Crossover,flair_crossover
+1337,69,Flair Wagon,flairwagon
+1340,69,Lantis,lantis
+1341,69,Laputa,laputa
+1342,69,Luce,luce
+1343,69,Mazda2,mazda2
+1344,69,Mazda3,mazda3
+1345,69,Mazda3 MPS,mazda3_mps
+1346,69,Mazda5,mazda5
+1347,69,Mazda6,mazda6
+1348,69,Mazda6 MPS,mazda6_mps
+1349,69,Millenia,millenia
+1350,69,MPV,mpv
+1352,69,MX-3,mx-3
+1353,69,MX-5,mx-5
+1354,69,MX-6,mx-6
+1357,69,Persona,persona
+1358,69,Premacy,premacy
+1359,69,Proceed,proceed
+1360,69,Proceed Levante,proceed_levante
+1361,69,Proceed Marvie,proceed_marvie
+1362,69,Protege,protege
+1366,69,Revue,revue
+1368,69,Roadster,roadster
+1369,69,RX-7,rx-7
+1370,69,RX-8,rx-8
+1372,69,Scrum,scrum
+1374,69,Sentia,sentia
+1375,69,Spiano,spiano
+1376,69,Titan,
+1378,69,Tribute,tribute
+1380,69,Verisa,verisa
+1381,69,Xedos 6,xedos_6
+1382,69,Xedos 9,xedos_9
+1387,71,190,190
+1388,71,A-Class,a-class
+1389,71,AMG GT,amg_gt
+1390,71,B-Class,b-class
+1391,71,C-Class,c-class
+1392,71,Citan,citan
+1393,71,CL-Class,cl-class
+1394,71,CLA-Class,cla-class
+1395,71,CLC-Class,clc-class
+1396,71,CLK-Class,clk-class
+1397,71,CLS-Class,cls-class
+1398,71,E-Class,e-class
+1399,71,G-Class,g-class
+1400,71,GL-Class,gl-class
+1401,71,GLA-Class,gla-class
+1402,71,GLC-Class,glc-class
+1403,71,GLE-Class,gle-class
+1404,71,GLK-Class,glk-class
+1405,71,GLS-Class,gls-class
+1406,71,M-Class,m-class
+1407,71,R-Class,r-class
+1408,71,S-Class,s-class
+1409,71,SL-Class,sl-class
+1410,71,SLC-Class,slc-class
+1411,71,SLK-Class,slk-class
+1412,71,SLR McLaren,slr_mclaren
+1413,71,SLS AMG,sls_amg
+1414,71,V-Class,v-class
+1415,71,Vaneo,vaneo
+1416,71,Viano,viano
+1417,71,Vito,vito
+1418,71,X-Class,x-class
+1434,73,Cabrio,cabrio
+1435,73,Clubman,clubman
+1439,73,Countryman,countryman
+1440,73,Coupe,coupe-model
+1441,73,Hatch,hatch
+1444,73,Paceman,paceman
+1445,73,Roadster,roadster
+1447,74,3000GT,3000gt
+1449,74,Airtrek,airtrek
+1450,74,Aspire,aspire
+1451,74,ASX,asx
+1452,74,Attrage,attrage
+1453,74,Bravo,bravo
+1454,74,Carisma,carisma
+1455,74,Challenger,challenger
+1456,74,Chariot,chariot
+1457,74,Chariot Grandis,chariot_grandis
+1458,74,Colt,colt
+1459,74,Colt Plus,colt_plus
+1461,74,Debonair,debonair
+1462,74,Delica,delica
+1463,74,Delica D:2,delica_d_2
+1464,74,Delica D:3,delica_d_3
+1465,74,Delica D:5,delica_d_5
+1466,74,Diamante,diamante
+1467,74,Dignity,dignity
+1468,74,Mirage Dingo,dingo
+1469,74,Dion,dion
+1470,74,Eclipse,eclipse
+1471,74,Eclipse Cross,eclipse_cross
+1472,74,ek Custom,ek-custom
+1473,74,eK Space,ek_space
+1474,74,eK Active,ek-active
+1475,74,eK Classy,ek-classy
+1476,74,eK Sport,ek-sport
+1477,74,eK Wagon,ek-wagon
+1478,74,Emeraude,emeraude
+1479,74,Endeavor,endeavor
+1480,74,Eterna,eterna
+1483,74,FTO,fto
+1484,74,Galant,galant
+1485,74,Galant Fortis,galant_fortis
+1486,74,Grandis,grandis
+1487,74,GTO,gto
+1488,74,i,i
+1489,74,i-MiEV,i-miev
+1490,74,Jeep,jeep
+1491,74,L200,l200
+1492,74,L300,l300
+1494,74,L400,l400
+1495,74,Lancer,lancer
+1496,74,Lancer Cedia,lancer_cedia
+1497,74,Lancer Evolution,lancer_evolution
+1498,74,Legnum,legnum
+1499,74,Libero,libero
+1502,74,Minica,minica
+1503,74,Minica Toppo,minica_toppo
+1504,74,Minicab,minicab
+1506,74,Mirage,mirage
+1508,74,Montero,montero
+1509,74,Montero Sport,montero_sport
+1512,74,Outlander,outlander
+1513,74,Pajero,pajero
+1514,74,Pajero Evolution,
+1515,74,Pajero iO,pajero_io
+1516,74,Pajero Junior,pajero_junior
+1517,74,Pajero Mini,pajero_mini
+1518,74,Pajero Pinin,pajero_pinin
+1519,74,Pajero Sport,pajero_sport
+1521,74,Proudia,proudia
+1524,74,RVR,rvr
+1527,74,Sigma,sigma
+1528,74,Space Gear,space_gear
+1529,74,Space Runner,space_runner
+1530,74,Space Star,space_star
+1531,74,Space Wagon,space_wagon
+1532,74,Starion,starion
+1533,74,Strada,strada
+1534,74,Toppo,toppo
+1535,74,Toppo BJ,toppo_bj
+1536,74,Toppo BJ Wide,toppo_bj_wide
+1537,74,Town Box,town_box
+1538,74,Town Box Wide,town_box_wide
+1541,74,Triton,triton
+1563,76,100NX,100nx
+1564,76,180SX,180sx
+1565,76,200SX,200sx
+1567,76,240SX,240sx
+1569,76,300ZX,300zx
+1570,76,350Z,350z
+1571,76,370Z,370z
+1572,76,AD,adwagon
+1573,76,Almera,almera
+1574,76,Almera Classic,almera_classic
+1575,76,Altima,altima
+1577,76,Armada,armada
+1578,76,Atlas,
+1580,76,Avenir,avenir
+1582,76,Bassara,bassara
+1584,76,Bluebird,bluebird
+1586,76,Bluebird Sylphy,bluebird_sylphy
+1587,76,Caravan,caravan
+1588,76,Caravan Elgrand,caravan_elgrand
+1589,76,Cedric,cedric
+1590,76,Cedric Cima,cedric_cima
+1591,76,Cefiro,cefiro
+1592,76,Cherry,cherry
+1593,76,Cima,cima
+1594,76,Clipper,clipper
+1595,76,Crew,crew
+1596,76,Cube,cube
+1597,76,Cube Cubic,cube_cubic
+1598,76,Datsun,datsun
+1600,76,DAYZ,dayz
+1601,76,DAYZ Roox,dayz_roox
+1603,76,Dualis,dualis
+1604,76,e-NV200,e-nv200
+1605,76,Elgrand,elgrand
+1606,76,Exa,exa
+1607,76,Expert,expert
+1608,76,Fairlady Z,fairlady_z
+1609,76,Figaro,figaro
+1611,76,Frontier,frontier
+1612,76,Fuga,fuga
+1615,76,Gloria,gloria
+1616,76,Gloria Cima,gloria_cima
+1618,76,GT-R,gt-r
+1619,76,Hardbody,
+1620,76,Homy,homy
+1621,76,Homy Elgrand,homy_elgrand
+1623,76,Juke,juke
+1624,76,Kicks,kicks
+1627,76,Kix,kix
+1628,76,Lafesta,lafesta
+1629,76,Langley,langley
+1631,76,Largo,largo
+1632,76,Latio,latio
+1633,76,Laurel,laurel
+1635,76,Leaf,leaf
+1636,76,Leopard,leopard
+1638,76,Liberty,liberty
+1640,76,Lucino,lucino
+1641,76,March,march
+1642,76,March Box,march_box
+1643,76,Maxima,maxima
+1644,76,Micra,micra
+1645,76,Micra C+C,micra_c_c
+1646,76,Mistral,mistral
+1647,76,Moco,moco
+1648,76,Murano,murano
+1649,76,Navara,navara
+1650,76,Note,note
+1651,76,NP300,np300
+1652,76,NT100 Clipper,
+1653,76,NV100 Clipper,nv100_clipper
+1654,76,NV150 AD,
+1655,76,NV200,nv200
+1656,76,NV350 Caravan,nv350_caravan
+1657,76,NX-Coupe,nx-coupe
+1658,76,Otti,otti
+1659,76,Pao,pao
+1660,76,Pathfinder,pathfinder
+1661,76,Patrol,patrol
+1663,76,Pino,pino
+1664,76,Pixo,pixo
+1665,76,Prairie,prairie
+1666,76,Prairie Joy,prairie_joy
+1667,76,Presage,presage
+1668,76,Presea,presea
+1669,76,President,president
+1670,76,Primastar,primastar
+1671,76,Primera,primera
+1672,76,Primera Camino,primera_camino
+1673,76,Pulsar,pulsar
+1674,76,Qashqai,qashqai
+1675,76,Qashqai+2,qashqai_2
+1676,76,Quest,quest
+1677,76,R'nessa,
+1678,76,Rasheen,rasheen
+1679,76,Rogue,rogue
+1680,76,Roox,roox
+1681,76,S-Cargo,s-cargo
+1682,76,Safari,safari
+1683,76,Sentra,sentra
+1684,76,Serena,serena
+1685,76,Silvia,silvia
+1686,76,Skyline,skyline
+1687,76,Skyline Crossover,skyline_crossover
+1688,76,Skyline GT-R,skyline_gt-r
+1689,76,Stagea,stagea
+1691,76,Sunny,sunny
+1692,76,Sunny California,sunny_california
+1693,76,Sunny RZ-1,sunny_rz-1
+1695,76,Sylphy,sylphy
+1696,76,Teana,teana
+1697,76,Terrano,terrano
+1698,76,Terrano II,terrano_ii
+1699,76,Terrano Regulus,terrano_regulus
+1700,76,Tiida,tiida
+1701,76,Tiida Latio,tiida_latio
+1702,76,Tino,tino
+1703,76,Titan,titan
+1705,76,Urvan,urvan
+1706,76,Vanette,vanette
+1707,76,Vanette Serena,vanette_serena
+1708,76,Vanette Truck,
+1709,76,Versa,versa
+1711,76,Wingroad,wingroad
+1712,76,X-Trail,x-trail
+1713,76,Xterra,xterra
+1716,77,Alero,alero
+1723,78,Adam,adam
+1724,78,Agila,agila
+1725,78,Ampera,ampera
+1726,78,Antara,antara
+1728,78,Ascona,ascona
+1729,78,Astra,astra
+1730,78,Astra Family,astra_family
+1731,78,Astra GTC,astra_gtc
+1732,78,Calibra,calibra
+1735,78,Combo,combo
+1737,78,Corsa,corsa
+1740,78,Frontera,frontera
+1741,78,Grandland X,grandland_x
+1743,78,Insignia,insignia
+1744,78,Kadett,kadett
+1747,78,Meriva,meriva
+1748,78,Mokka,mokka
+1749,78,Monterey,monterey
+1751,78,Movano,
+1752,78,Omega,omega
+1753,78,Rekord,rekord
+1754,78,Senator,senator
+1755,78,Signum,signum
+1756,78,Sintra,sintra
+1757,78,Speedster,speedster
+1758,78,Tigra,tigra
+1759,78,Vectra,vectra
+1760,78,Vita,vita
+1761,78,Vivaro,vivaro
+1762,78,Zafira,zafira
+1765,80,1007,1007
+1766,80,106,106
+1767,80,107,107
+1768,80,108,108
+1769,80,2008,2008
+1770,80,205,205
+1771,80,206,206
+1772,80,207,207
+1773,80,208,208
+1774,80,3008,3008
+1775,80,301,301
+1776,80,306,306
+1777,80,307,307
+1778,80,308,308
+1780,80,4007,4007
+1781,80,4008,4008
+1782,80,405,405
+1783,80,406,406
+1784,80,407,407
+1785,80,408,408
+1786,80,5008,5008
+1788,80,508,508
+1789,80,605,605
+1790,80,607,607
+1791,80,806,806
+1792,80,807,807
+1793,80,Bipper,bipper
+1795,80,Expert,expert
+1797,80,Partner,partner
+1799,80,Partner Tepee,partner_tepee
+1800,80,RCZ,rcz
+1801,80,Traveller,traveller
+1803,81,Breeze,breeze
+1806,81,Neon,neon
+1811,82,Aztek,aztek
+1816,82,Grand Am,grand_am
+1825,82,Trans Sport,trans_sport
+1826,82,Vibe,vibe
+1828,83,911,911
+1830,83,924,924
+1835,83,Boxster,boxster
+1837,83,Carrera GT,carrera
+1838,83,Cayenne,cayenne
+1839,83,Cayman,cayman
+1840,83,Macan,macan
+1841,83,Panamera,panamera
+1846,84,Persona,
+1853,85,Gentra,gentra
+1854,85,Matiz,matiz
+1855,85,Nexia R3,nexia_r3
+1856,85,R2,r2
+1857,85,R4,r4
+1859,86,19,19
+1860,86,21,21
+1861,86,25,25
+1863,86,Arkana,arkana
+1866,86,Clio,clio
+1867,86,Dokker,dokker
+1869,86,Duster,duster
+1870,86,Espace,espace
+1872,86,Fluence,fluence
+1874,86,Grand Scenic,grand_scenic
+1875,86,Kadjar,kadjar
+1876,86,Kangoo,kangoo
+1878,86,Kaptur,kaptur
+1879,86,Koleos,koleos
+1881,86,Laguna,laguna
+1882,86,Latitude,latitude
+1884,86,Logan,logan
+1885,86,Logan Stepway,logan_stepway
+1886,86,Megane,megane
+1887,86,Modus,modus
+1892,86,Rapid,
+1893,86,Safrane,safrane
+1894,86,Sandero,sandero
+1895,86,Sandero Stepway,sandero_stepway
+1896,86,Scenic,scenic
+1898,86,Symbol,symbol
+1899,86,Talisman,talisman
+1900,86,Trafic,trafic
+1901,86,Twingo,twingo
+1903,86,Vel Satis,vel_satis
+1905,86,ZOE,zoe
+1906,87,QM3,qm3
+1907,87,QM5,qm5
+1908,87,SM3,sm3
+1909,87,SM5,sm5
+1910,87,SM7,sm7
+1912,88,Cullinan,cullinan
+1913,88,Dawn,dawn
+1915,88,Ghost,ghost
+1917,88,Phantom,phantom
+1918,88,Phantom Drophead,
+1922,88,Wraith,wraith
+1924,89,200,200
+1925,89,25,25
+1926,89,400,400
+1928,89,45,45
+1929,89,600,600
+1930,89,75,75
+1937,89,Streetwise,streetwise
+1939,90,9-3,9-3
+1941,90,9-5,9-5
+1942,90,9-7X,9-7x
+1943,90,900,900
+1944,90,9000,9000
+1949,91,S-Series,s-series
+1953,91,Vue,vue
+1955,92,iA,ia
+1956,92,iM,im
+1958,92,tC,tc
+1959,92,xA,xa
+1960,92,xB,xb
+1961,92,xD,xd
+1962,93,Alhambra,alhambra
+1963,93,Altea,altea
+1965,93,Arosa,arosa
+1966,93,Ateca,
+1967,93,Cordoba,cordoba
+1968,93,Exeo,exeo
+1969,93,Ibiza,ibiza
+1971,93,Leon,leon
+1973,93,Mii,
+1976,93,Toledo,toledo
+1977,94,Citigo,citigo
+1978,94,Fabia,fabia
+1980,94,Felicia,felicia
+1981,94,Forman,forman
+1982,94,Karoq,karoq
+1983,94,Kodiaq,kodiaq
+1984,94,Octavia,octavia
+1985,94,Kamiq,kamiq
+1986,94,Rapid,rapid
+1987,94,Roomster,roomster
+1988,94,Scala,scala
+1989,94,Superb,superb
+1990,94,Yeti,yeti
+1991,95,City,city
+1993,95,Forfour,forfour
+1994,95,Fortwo,fortwo
+1995,95,Roadster,roadster
+1996,96,Actyon,actyon
+1997,96,Actyon Sports,actyon_sports
+1998,96,Chairman,chairman
+1999,96,Istana,
+2000,96,Korando,korando
+2001,96,Korando Family,korando_family
+2002,96,Korando Sports,korando_sports
+2003,96,Korando Turismo,korando_turismo
+2004,96,Kyron,kyron
+2005,96,Musso,musso
+2006,96,Musso Sports,musso_sports
+2009,96,Nomad,nomad
+2010,96,Rexton,rexton
+2011,96,Rodius,rodius
+2012,96,Stavic,stavic
+2013,96,Tivoli,tivoli
+2019,97,Alcyone,alcyone
+2020,97,Ascent,ascent
+2021,97,B9 Tribeca,b9_tribeca
+2022,97,Baja,baja
+2025,97,BRZ,brz
+2026,97,Chiffon,chiffon
+2027,97,Crosstrek,crosstrek
+2028,97,Dex,dex
+2030,97,Domingo,domingo
+2031,97,Exiga,exiga
+2032,97,Exiga Crossover 7,exiga_crossover_7
+2033,97,Forester,forester
+2034,97,Impreza,impreza
+2035,97,Impreza WRX,impreza_wrx
+2036,97,Impreza WRX STI,impreza_wrx_sti
+2037,97,Impreza XV,impreza_xv
+2038,97,Justy,justy
+2039,97,Legacy,legacy
+2042,97,Legacy Lancaster,legacy_lancaster
+2043,97,Leone,leone
+2044,97,Levorg,levorg
+2046,97,Lucra,lucra
+2047,97,Outback,outback
+2048,97,Pleo,pleo
+2050,97,Pleo Plus,pleo_plus
+2051,97,R1,r1
+2052,97,R2,r2
+2053,97,Rex,rex
+2054,97,Sambar,sambar
+2056,97,Sambar Truck,
+2057,97,Stella,stella
+2058,97,Traviq,traviq
+2059,97,Trezia,trezia
+2060,97,Tribeca,tribeca
+2061,97,Vivio,vivio
+2063,97,XV,xv
+2064,98,Aerio,aerio
+2065,98,Alto,alto
+2066,98,Alto Lapin,alto_lapin
+2068,98,Baleno,baleno
+2069,98,Cappuccino,cappuccino
+2070,98,Cara,cara
+2071,98,Carry Truck,
+2072,98,Carry Van,carry_van
+2073,98,Celerio,celerio
+2074,98,Cervo,cervo
+2075,98,Cultus,cultus
+2078,98,Escudo,escudo
+2080,98,Every,every
+2083,98,Grand Escudo,grand_escudo
+2084,98,Grand Vitara,grand_vitara
+2085,98,Grand Vitara XL-7,grand_vitara_xl-7
+2086,98,Hustler,hustler
+2087,98,Ignis,ignis
+2088,98,Jimny,jimny
+2089,98,Jimny Sierra,jimny_sierra
+2090,98,Jimny Wide,jimny_wide
+2093,98,Kei,kei
+2094,98,Kizashi,kizashi
+2095,98,Landy,landy
+2097,98,Liana,liana
+2099,98,Palette,palette
+2101,98,Sidekick,sidekick
+2102,98,Solio,solio
+2103,98,Spacia,spacia
+2104,98,Splash,splash
+2105,98,Swift,swift
+2106,98,SX4,sx4
+2107,98,Twin,twin
+2109,98,Vitara,vitara
+2110,98,Wagon R,wagon_r
+2111,98,Wagon R Plus,wagon_r_plus
+2112,98,Wagon R Smile,wagon_r_smile
+2113,98,Wagon R Solio,wagon_r_solio
+2114,98,Wagon R Wide,wagon_r_wide
+2115,98,Works,works
+2116,98,X-90,x-90
+2117,98,Xbee,xbee
+2118,98,XL7,xl7
+2119,99,C5,c5
+2120,100,Admiral,admiral
+2123,101,4Runner,4runner
+2125,101,Allex,allex
+2126,101,Allion,allion
+2127,101,Alphard,alphard
+2129,101,Altezza,altezza
+2130,101,Aqua,aqua
+2131,101,Aristo,aristo
+2132,101,Aurion,aurion
+2133,101,Auris,auris
+2134,101,Avalon,avalon
+2135,101,Avanza,avanza
+2136,101,Avensis,avensis
+2137,101,Avensis Verso,avensis_verso
+2138,101,Aygo,aygo
+2139,101,bB,bb
+2140,101,Belta,belta
+2141,101,Blade,blade
+2142,101,Blizzard,blizzard
+2143,101,Brevis,brevis
+2144,101,C-HR,c-hr
+2145,101,Caldina,caldina
+2147,101,Cami,cami
+2148,101,Camry,camry
+2149,101,Camry Gracia,camry_gracia
+2150,101,Camry Prominent,camry_prominent
+2151,101,Carina,carina
+2152,101,Carina E,carina_e
+2153,101,Carina ED,carina_ed
+2154,101,Carina II,carina_ii
+2155,101,Cavalier,cavalier
+2156,101,Celica,celica
+2157,101,Celsior,celsior
+2158,101,Century,century
+2159,101,Chaser,chaser
+2160,101,Classic,classic
+2161,101,Comfort,comfort
+2162,101,Corolla,corolla
+2163,101,Corolla Axio,corolla_axio
+2164,101,Corolla Ceres,corolla_ceres
+2165,101,Corolla Fielder,corolla_fielder
+2166,101,Corolla FX,corolla_fx
+2167,101,Corolla II,corolla_ii
+2168,101,Corolla Levin,corolla_levin
+2170,101,Corolla Rumion,corolla_rumion
+2171,101,Corolla Runx,corolla_runx
+2172,101,Corolla Spacio,corolla_spacio
+2173,101,Corolla Verso,corolla_verso
+2174,101,Corona,corona
+2175,101,Corona Exiv,corona_exiv
+2176,101,Corona Premio,corona_premio
+2177,101,Corona SF,corona_sf
+2178,101,Corsa,corsa
+2180,101,Cresta,cresta
+2181,101,Crown,crown
+2183,101,Crown Majesta,crown_majesta
+2184,101,Curren,curren
+2185,101,Cynos,cynos
+2187,101,Duet,duet
+2188,101,Dyna,
+2189,101,Echo,echo
+2192,101,Esquire,esquire
+2193,101,Estima,estima
+2194,101,Estima Emina,estima_emina
+2196,101,Estima Lucida,estima_lucida
+2198,101,FJ Cruiser,fj_cruiser
+2199,101,Fortuner,fortuner
+2200,101,Funcargo,funcargo
+2201,101,Gaia,gaia
+2202,101,Grand Hiace,grand_hiace
+2203,101,Granvia,granvia
+2204,101,GT 86,gt_86
+2205,101,Harrier,harrier
+2208,101,Hiace,hiace
+2209,101,Hiace Regius,hiace_regius
+2211,101,Highlander,highlander
+2213,101,Hilux,hilux_pick_up
+2214,101,Hilux Surf,hilux_surf
+2216,101,Ipsum,ipsum
+2217,101,iQ,iq
+2218,101,Isis,isis
+2219,101,ist,ist
+2222,101,Kluger V,kluger_v
+2223,101,Land Cruiser,land_cruiser
+2224,101,Land Cruiser Cygnus,land_cruiser_cygnus
+2225,101,Land Cruiser Prado,land_cruiser_prado
+2226,101,Lite Ace,lite_ace
+2227,101,Lite Ace Noah,lite_ace_noah
+2228,101,Lite Ace Truck,
+2229,101,Mark II,mark_ii
+2230,101,Mark II Wagon Blit,mark_ii_wagon_blit
+2231,101,Mark II Wagon Qualis,mark_ii_wagon_qualis
+2232,101,Mark X,mark_x
+2233,101,Mark X Zio,mark_x_zio
+2234,101,Master Ace Surf,master_ace_surf
+2235,101,Matrix,matrix
+2236,101,Mega Cruiser,mega_cruiser
+2237,101,Mirai,mirai
+2239,101,MR-S,mr-s
+2240,101,MR2,mr2
+2241,101,Nadia,nadia
+2242,101,Noah,noah
+2243,101,Opa,opa
+2244,101,Origin,origin
+2246,101,Passo,passo
+2247,101,Passo Sette,passo_sette
+2249,101,Picnic,picnic
+2252,101,Pixis Epoch,pixis_epoch
+2253,101,Pixis Joy,pixis_joy
+2254,101,Pixis Mega,pixis_mega
+2255,101,Pixis Space,pixis_space
+2257,101,Platz,platz
+2258,101,Porte,porte
+2259,101,Premio,premio
+2260,101,Previa,previa
+2261,101,Prius,prius
+2262,101,Prius Alpha,prius_a
+2263,101,Prius C,prius_c
+2264,101,Prius PHV,prius_phv
+2265,101,Prius Prime,prius_prime
+2266,101,Prius v,prius_v
+2267,101,Proace,proace
+2268,101,Probox,probox
+2269,101,Progres,progres
+2270,101,Pronard,pronard
+2273,101,Ractis,ractis
+2274,101,Raum,raum
+2275,101,RAV4,rav4
+2276,101,Regius,regius
+2277,101,Regius Ace,regius_ace
+2279,101,Roomy,roomy
+2280,101,Rush,rush
+2281,101,Sai,sai
+2282,101,Scepter,scepter
+2284,101,Sequoia,sequoia
+2285,101,Sera,sera
+2286,101,Sienna,sienna
+2287,101,Sienta,sienta
+2288,101,Soarer,soarer
+2289,101,Solara,solara
+2292,101,Spade,spade
+2293,101,Sparky,sparky
+2294,101,Sprinter,sprinter
+2295,101,Sprinter Carib,sprinter_carib
+2296,101,Sprinter Marino,sprinter_marino
+2297,101,Sprinter Trueno,sprinter_trueno
+2298,101,Starlet,starlet
+2300,101,Succeed,succeed
+2301,101,Supra,supra
+2304,101,Tacoma,tacoma
+2305,101,Tank,tank
+2307,101,Tercel,tercel
+2308,101,Touring Hiace,touring_hiace
+2309,101,Town Ace,town_ace
+2310,101,Town Ace Noah,town_ace_noah
+2311,101,Town Ace Truck,
+2312,101,ToyoAce,
+2313,101,Tundra,tundra
+2314,101,Urban Cruiser,urban_cruiser
+2316,101,Vanguard,vanguard
+2317,101,Vellfire,vellfire
+2319,101,Venza,venza
+2320,101,Verossa,verossa
+2321,101,Verso,verso
+2322,101,Verso-s,verso-s
+2323,101,Vios,vios
+2324,101,Vista,vista
+2325,101,Vista Ardeo,vista_ardeo
+2326,101,Vitz,vitz
+2327,101,Voltz,voltz
+2328,101,Voxy,voxy
+2329,101,WiLL Cypha,will_cypha
+2330,101,WiLL Vi,will_vi
+2331,101,WiLL VS,will_vs
+2332,101,Windom,windom
+2333,101,Wish,wish
+2334,101,xA,xa
+2335,101,Yaris,yaris
+2336,101,Yaris Verso,yaris_verso
+2337,102,Amarok,amarok
+2339,102,Arteon,arteon
+2340,102,Atlas,atlas
+2341,102,Beetle,beetle
+2342,102,Bora,bora
+2343,102,Caddy,caddy
+2345,102,Caravelle,caravelle
+2350,102,Eos,eos
+2351,102,Fox,fox
+2353,102,Golf,golf
+2354,102,Golf Plus,golf_plus
+2355,102,Jetta,jetta
+2357,102,Lupo,lupo
+2358,102,Multivan,multivan
+2361,102,Passat,passat
+2362,102,Passat CC,passat_cc
+2363,102,Phaeton,phaeton
+2364,102,Pointer,pointer
+2365,102,Polo,polo
+2370,102,Scirocco,scirocco
+2371,102,Sharan,sharan
+2372,102,T-Cross,t-cross
+2373,102,T-Roc,t-roc
+2375,102,Teramont,teramont
+2376,102,Tiguan,tiguan
+2377,102,Touareg,touareg
+2378,102,Touran,touran
+2379,102,Transporter,transporter
+2380,102,up!,up
+2381,102,Vento,vento
+2385,103,440,440
+2386,103,460,460
+2387,103,740,
+2388,103,760,
+2389,103,850,850
+2390,103,940,
+2391,103,960,960
+2392,103,C30,c30
+2394,103,C70,c70
+2395,103,S40,s40
+2396,103,S60,s60
+2397,103,S70,s70
+2398,103,S80,s80
+2399,103,S90,s90
+2401,103,V40,v40
+2402,103,V50,v50
+2403,103,V60,v60
+2404,103,V70,v70
+2405,103,V90,v90
+2407,103,XC40,xc40
+2408,103,XC60,xc60
+2409,103,XC70,xc70
+2410,103,XC90,xc90
+2411,104,Corda,corda
+2412,104,Estina,estina
+2413,104,Tingo,tingo
+2421,107,Coupa,coupa
+2423,107,T600,t600
+2438,110,Соболь 2310,
+2439,110,Волга 24,
+2440,110,Волга 3102,
+2441,110,Волга 31029,
+2442,110,Волга 3110,
+2443,110,Волга 31105,
+2447,110,Волга Сайбер,volga_siber
+2448,110,Газель NN,
+2452,111,Вида,vida
+2454,111,Запорожец,zaporozhets
+2457,111,Сенс,sens
+2458,111,Славута,slavuta
+2459,111,Таврия,tavria
+2460,111,Шанс,chance
+2462,112,2125 Комби,2125
+2463,112,2126 Ода,2126_oda
+2464,112,21261 Фабула,21261_oda_wagon
+2465,112,2715,2715
+2466,112,2717,2717
+2467,113,1111 Ока,oka
+2468,113,2101,2101
+2469,113,2102,2102
+2470,113,2103,2103
+2471,113,2104,2104
+2472,113,2105,2105
+2473,113,2106,2106
+2474,113,2107,2107
+2475,113,2108,2108
+2476,113,2109,2109
+2477,113,21099,21099
+2478,113,2110,2110
+2479,113,2111,2111
+2480,113,2112,2112
+2481,113,2113,
+2483,113,2114,
+2485,113,2115,
+2487,113,Надежда,
+2488,113,2123,
+2489,113,4x4 2121 Нива,2121_4x4_niva
+2490,113,4x4 2131 Нива,2131_4x4_niva
+2491,113,4x4 Бронто,4x4_bronto
+2492,113,4x4 Урбан,4x4_urban
+2493,113,Веста,vesta
+2494,113,Веста Кросс,vesta_cross
+2496,113,Веста Спорт,vesta_sport
+2497,113,Гранта,granta
+2498,113,Гранта Кросс,granta_cross
+2499,113,Гранта Спорт,granta_sport
+2500,113,Калина,kalina
+2501,113,Калина Кросс,kalina_cross
+2502,113,Калина Спорт,kalina_sport
+2503,113,Ларгус,largus
+2504,113,Ларгус Кросс,largus_cross
+2505,113,Приора,priora
+2506,113,Х-рей,xray
+2507,113,Х-рей Кросс,xray_cross
+2513,115,2141,2141
+2516,115,3,3
+2517,115,401,401
+2519,115,403,403
+2520,115,407,407
+2521,115,408,408
+2524,115,412,412
+2530,116,Вега,vega
+2531,116,Роад Партнер,road_partner
+2532,116,С10,c10
+2533,116,C190,
+2534,116,С30,
+2535,116,Тагер,tager
+2537,116,Эстина,
+2538,117,3151,3151
+2543,117,469,469
+2544,117,Буханка,
+2545,117,Карго,
+2546,117,Патриот,patriot
+2547,117,Патриот Пикап,
+2549,117,Профи,
+2550,117,Симбир,simbir
+2551,117,Хантер,hunter
+2552,16,Bonus 3 - A19,a19
+2553,19,Jumper,jumper
+2557,35,Transit,
+2558,46,H6 Coupe,h6_coupe
+2560,118,6,6
+2561,118,ZS,zs
+2562,69,Efini MPV,efini_mpv
+2566,97,Dias Wagon,dias_wagon
+2567,98,MR Wagon,mr_wagon
+2568,119,Model 3,model_3
+2569,119,Model S,model_s
+2570,119,Model X,model_x
+2571,119,Roadster,roadster
+2572,101,Pixis Van,pixis_van
+2577,101,Caldina Van,
+2586,46,H5,h5
+2587,71,Sprinter,
+2588,80,Boxer,
+2589,33,Ducato,
+2592,86,Master,
+2593,102,Crafter,
+2595,74,Canter,
+2597,57,Seltos,seltos
+2599,110,Gazelle NEXT,
+2601,102,LT,
+2603,120,Daily,
+2609,71,W123,w123
+2611,110,Газель 3302,
+2612,15,CS35 Plus,cs35_plus
+2613,9,M8,m8
+2614,57,XCeed,xceed
+2616,15,CS55,cs55
+2617,57,Sorento Prime,
+2618,35,Fusion (America),
+2620,69,CX-30,cx-30
+2621,76,Almera Tino,
+2622,35,Transit Custom,
+2623,53,ELF,
+2625,16,Tiggo 8,tiggo_8
+2627,76,Interstar,
+2629,35,Flex,flex
+2630,86,Captur,captur
+2632,78,Zafira Life,zafira_life
+2633,39,Tugella,tugella
+2634,71,GLB-Class,glb
+2635,116,Мастер,
+2636,16,Tiggo 7 Pro,tiggo_7_pro
+2637,40,GV80,gv80
+2638,46,F7X,f7x
+2639,17,Cruze HR,
+2640,19,C3 Pluriel,
+2641,16,Tiggo 8 Pro,tiggo_8_pro
+2642,48,Passport,passport
+2643,17,Kalos,
+2644,35,Mustang Mach-E,mustang_mach_e
+2645,62,UX300e,ux300e
+2646,17,City Express,
+2647,101,Raize,raize
+2649,46,Jolion,jolion
+2650,37,GS8,gs8
+2651,76,Rogue Sport,rogue_sport
+2653,83,Taycan,taycan
+2654,40,GV70,gv70
+2655,102,Taos,taos
+2656,14,XT4,xt4
+2657,101,Yaris Cross,yaris_cross
+2658,5,LX,lx
+2659,5,VX,vx
+2660,62,LX500D,lx500d
+2661,62,LX600,lx600
+2662,57,K8,k8
+2664,62,NX350,nx350
+2665,62,NX350H,nx350h
+2666,62,NX450H,
+2667,119,Model Y,model_y
+2668,101,Corolla Cross,corolla_cross
+2669,101,C+pod,c_pod
+2670,76,Cabstar,
+2671,9,XM,xm
+2672,54,JS4,js4
+2673,62,NX250,nx250
+2674,71,EQC,eqc
+2675,115,3e,
+2677,1,Convoy,convoy
+2678,42,Hummer EV,hummer_ev
+2679,43,Poer,poer
+2681,101,GR 86,gr_86
+2682,101,GranAce,granace
+2683,102,ID.4,id4
+2684,71,EQS,eqs
+2685,9,iX3,ix3
+2686,48,ZR-V,zr-v
+2687,62,RX500h,rx500h
+2688,99,S5,s5
+2689,69,CX-60,cx-60
+2691,110,Газель 2705,
+2692,110,Соболь 2752,
+2693,110,Газель 3221,
+2694,110,Соболь 2217,
+2695,62,GX550,gx550
+2696,15,UNI-K,uni-k
+2697,15,UNI-T,uni-t
+2698,113,Нива Тревел,niva_travel
+2703,121,Polestar 2,
+2704,121,Polestar 1,
+2705,46,Dargo,dargo
+2706,122,500,500
+2707,122,300,300
+2708,76,Aura,aura
+2709,62,RX350h,rx350h
+2710,62,RX450h+,rx450hplus
+2711,7,SQ8,sq8
+2712,50,Venue,venue
+2713,39,Emgrand,emgrand_iv
+2716,51,QX55,qx55
+2717,5,RX,rx
+2718,5,TX,tx
+2719,87,QM6,qm6
+2720,87,SM6,sm6
+2721,123,ET5,et5
+2722,6,DBX,dbx
+2723,102,Tayron,tayron
+2724,124,i-Joy,i-joy
+2725,124,i-Pro,i-pro
+2727,15,Benni,
+2728,9,i4,i4
+2729,15,Alsvin,alsvin
+2731,16,Arrizo 5,arrizo_5
+2732,15,CS55 Plus,cs55_plus
+2733,125,001,001
+2734,125,009,009
+2735,54,T6,t6
+2736,62,IS500,is500
+2737,102,Golf Sportsvan,golf_sportsvan
+2738,126,Dashing,dasheng
+2739,126,Traveller,traveller
+2741,127,Atlant,
+2742,128,L7,
+2743,128,L8,
+2744,128,L9,
+2745,128,ONE,
+2747,12,Encore GX,encore_gx
+2748,69,MX-30,mx-30
+2749,9,iX,ix
+2784,16,Tiggo 7 Pro Max,tiggo_7_pro_max
+2785,16,Tiggo 7 Plus,tiggo_7_plus
+2786,16,Tiggo 8 Pro Max,tiggo_8_pro_max
+2787,16,Tiggo 8 Plus,tiggo_8_plus
+2788,16,Tiggo 9,tiggo_9
+2789,71,EQA,eqa
+2791,126,X90 Plus,x90_plus
+2792,126,X70,x70
+2793,126,X70 Plus,x70_plus
+2795,126,X95,x95
+2796,125,X,x
+2797,15,CS75 Plus,cs75_plus
+2798,212,Komendant,
+2799,39,Okavango,okavango
+2800,71,EQE,eqe
+2801,71,EQB,eqb
+2802,213,Free,free
+2803,71,CLE-Class,cle-class
+2804,71,EQE SUV,eqe_suv
+2805,71,EQS SUV,eqs_suv
+2806,16,Explore 06,explore_06
+2807,36,Tunland G9,tunland_g9
+2808,46,M6,m6
+2809,214,J7,j7
+2810,118,ZT,
+2812,213,Dream,dreamer
+2813,215,VS5,vs5
+2814,102,ID.6 Crozz,id6_crozz
+2815,102,ID.6 X,id6_x
+2816,126,T2,t2
+2818,16,Tiggo 2 Pro,tiggo_2_pro
+2819,216,E5,e5
+2820,217,HS5,hs5
+2821,217,E-HS9,e-hs9
+2822,217,H9,h9
+2823,217,H5,h5
+2824,57,EV6,ev6
+2825,76,NV400,
+2826,43,Wingle 7,wingle_7
+2827,15,CS95,cs95
+2828,31,Bestune T99,bestune_t99
+2829,214,J8,j8
+2830,15,CS85 Coupe,cs85_coupe
+2831,103,360,360
+2832,218,U5 Plus,u5_plus
+2833,15,Hunter Plus,hunter_plus
+2834,54,T8 Pro,t8_pro
+2835,71,MB100,
+2836,31,Bestune T55,bestune_t55
+2837,43,Poer King Kong,poer_kingkong
+2838,219,X3 Pro,x3_pro
+2839,219,X6 Pro,x6_pro
+2840,219,S6 Pro,s6_pro
+2841,31,Bestune T77,bestune_t77
+2842,15,Lamore,lamore
+2843,220,G01,g01
+2844,76,Kubistar,
+2845,39,Boyue Cool,boyue_cool
+2846,39,Preface,preface
+2847,7,Q5 e-tron,q5_e-tron
+2848,7,Q6,q6
+2849,221,11,11
+2850,221,12,12
+2851,7,Q6 e-tron,q6_e-tron
+2852,101,Yaris iA,yaris_ia
+2853,15,Eado Plus,eado_plus
+2854,101,bZ4X,bz4x
+2855,13,Yuan Plus,yuan_plus
+2856,13,Song Plus,song_plus
+2857,222,DS7 Crossback,
+2858,222,DS5,
+2859,222,DS3,
+2860,222,DS 3 Crossback,
+2861,222,DS 4,
+2862,223,City Leading,city_leading
+2863,36,Toano,
+2864,13,Qin Plus,qin_plus
+2865,39,Galaxy L7,galaxy_l7
+2866,122,400,400
+2867,122,700,700
+2868,101,Corolla Altis,corolla_altis
+2869,224,X50,x50
+2870,224,X70,x70
+2871,39,Cityray,cityray
+2872,115,6,6
+2873,62,TX500h,tx500h
+2874,62,TX350,tx350
+2875,28,K33-561,k33-561
+2876,48,WR-V,wr-v
+2877,101,Wildlander,wildlander
+2878,17,K1500,
+2879,67,Grecale,grecale
+2880,57,Stonic,stonic
+2881,62,LBX,lbx
+2882,215,VA3,va3
+2883,225,Good Cat,good_cat
+2884,226,1500,1500
+2885,76,Vanette Cargo,
+2886,62,LM350,lm350
+2887,62,LM300h,lm300h
+2888,128,L6,
+2889,101,Levin,levin
+2890,46,H3,h3
+2891,227,05,05
+2892,35,Transit Courier,
+2893,28,Captain-T,
+2894,37,GN8,gn8
+2895,54,N56,
+2896,213,Passion EV,passion_ev
+2897,35,Econovan,econovan
+2898,228,Paladin,paladin
+2899,229,M5,m5
+2900,99,S5 GT,s5_gt
+2901,230,X-Cross 7,x-cross_7
+2902,230,X-Cross 8,x-cross_8
+2903,54,T9,t9
+2904,50,Casper,casper
+2905,50,Nexo,nexo
+2906,50,Santa Cruz,santa_cruz
+2907,50,Mufasa,mufasa
+2908,40,GV80 Coupe,gv80_coupe
+2909,87,XM3,xm3
+2910,40,GV60,gv60
+2912,96,Torres,torres
+2913,96,Rexton Sports,rexton_sports
+2914,50,Ioniq 5,ioniq_5
+2915,50,Ioniq 6,ioniq_6
+2916,57,EV9,ev9
+2917,7,Q8 E-tron,q8_e-tron
+2918,37,M8,trumpchi_m8
+2919,48,e:NS1,e-ns1
+2920,48,e:NP1,e-np1
+2921,223,Smoothing,smoothing
+2922,231,S07,s07
+2925,80,Rifter,rifter
+2926,26,Shuttle,shuttle
+2927,218,X55,x55
+2928,101,Crown Kluger,crown_kluger
+2929,227,06,06
+2930,227,09,09
+2931,215,VS7,vs7
+2932,101,Grand Highlander,grand_highlander
+2933,113,Аура,aura
+2934,113,Нива Спорт,niva_sport
+2935,39,SC7,sc7
+2936,13,Atto 3,
+2937,97,Layback,layback
+2938,232,ES6,es6
+2939,232,ES7,es7
+2940,232,ES8,es8
+2941,232,EC6,ec6
+2942,216,X3,x3
+2943,16,Tiggo 7L,tiggo_7l
+2944,13,Seal,seal
+2945,124,i-Space,i-space
+2946,74,Xpander,xpander
+2947,233,05,05
+2948,127,Argo,
+2949,217,H7,h7
+2950,217,HS3,hs3
+2951,216,X7 Kunlun,x7_kunlun
+2952,234,Antelope,antelope
+2953,15,UNI-S,uni-s
+2954,235,001,001
+2955,124,i-SKY,i-sky
+2956,99,C9,
+2957,7,Q4 E-tron,q4_e-tron
+2958,62,RZ450e,rz450e
+2959,62,RZ300e,rz300e
+2960,101,GR Corolla,gr_corolla
+2961,35,Bronco Sport,bronco_sport
+2962,236,Z,z
+2963,74,Xpander Cross,xpander_cross
+2964,126,X50,x50
+2965,71,T1,
+2966,237,HS,hs
+2967,69,CX-50,cx-50
+2968,13,Tang,tang
+2969,28,DFSK Fengon ix5,fengon_ix5
+2971,233,07,07
+2972,13,Leopard 5,
+2973,218,BJ40,beijing_bj40
+2974,16,Tiggo 3x,tiggo_3x
+2975,17,Prizm,prizm
+2976,39,EX5,ex5
+2977,99,C7,c7
+2978,102,Talagon,talagon
+2979,218,X7,beijing_x7
+2981,53,MU-X,mu-x
+2982,5,Exlantix ES,exlantix_es
+2983,5,Exlantix ET,exlantix_et
+2984,238,T4,t4
+2985,238,T7,t7
+2986,238,T8,t8
+2987,231,S09,s09
+2988,86,Lutecia,lutecia
+2989,12,Envist,
+2990,36,Tunland F9,tunland_f9
+2991,74,Outlander Sport,outlander_sport
+2992,102,Tharu,tharu
+2993,76,NT400 Cabstar,
+2994,101,Izoa,izoa
+2995,125,007,007
+2996,125,7X,7x
+2997,126,T1,t1
+2998,229,M7,m7
+2999,239,D9,d9
+3000,240,T90,t90
+3001,214,J5,j5
+3002,48,UR-V,ur-v
+3003,48,Breeze,breeze
+3004,48,XR-V,xr-v
+3006,15,CS95 Plus,cs95_plus
+3007,127,ST6,st6
+3008,220,G05,g05
+3009,220,G05 Pro,g05_pro
+3010,224,S50,s50
+3011,102,Tavendor,tavendor
+3012,37,GS4,gs4
+3013,12,Envision,envision
+3014,17,Matiz,
+3015,241,T5 EVO,forthing_t5_evo
+3016,113,Нива Легенд,niva_legend
+3017,54,Sunray,
+3018,54,JS3,js3
+3019,56,Avenger,avenger
+3020,93,Tarraco,tarraco
+3021,242,01,01
+3022,126,X90,x90
+3023,97,Solterra,solterra
+3024,19,C5 X,c5_x
+3025,39,EX5 EM-i,ex5_em-i
+3026,60,Voyager,
+3027,243,Actyon,
+3028,243,Korando,
+3029,243,Rexton,
+3030,243,Tivoli,
+3031,243,Torres,
+3032,212,Senat,
+3033,212,Arsenal,
+3034,37,Trumpchi Empow,trumpchi_empow
+3035,37,Empow,empow
+3036,102,Teramont Pro,teramont_pro
+3037,57,Sonet,sonet
+3038,28,Shine Max,shine_max
+3039,233,80,80
+3040,35,Courier,
+3041,7,S1,s1
+3042,125,9X,9x
+3043,244,Mona M03,
+3044,218,X35,x35
+3045,218,X75,x75
+3046,102,Viloran,viloran
+3047,52,Tara,tara
+3048,57,Pegas,pegas
+3049,102,Magotan,magotan
+3050,217,HQ9,hq9
+3051,217,H6,h6
+3052,101,Frontlander,frontlander
+3053,69,CX-90,cx-90
+3054,50,Custo,custo
+3055,50,Custin,custin
+3056,221,07,07
+3057,225,03 GT,
+3058,227,01,01
+3059,15,X5 Plus,x5_plus
+3060,245,X5 Plus,x5_plus
+3061,237,HC,hc
+3062,237,KRS,krs
+3063,237,KRX,krx
+3064,102,Teramont X,teramont_x
+3065,102,Lamando L,lamando_l
+3066,102,Tharu XR,tharu_xr
+3067,102,Sagitar,sagitar
+3068,102,C-Trek,c_trek
+3069,102,Lavida,lavida
+3070,102,ID.3,id3
+3071,229,M9,m9
+3072,102,Sagitar L,sagitar_l
+3073,94,Kushaq,kushaq
+3074,102,ID.4 X,id4_x
+3075,102,ID.7,id7
+3076,62,GX550h,gx550h
+3077,62,LM350h,lm350h
+3078,62,LM500h,lm500h
+3079,113,Искра,iskra
+3080,246,3,3
+3081,224,X50+,x50_plus
+3082,238,T4L,t4l
+3083,214,J6,j6
+3084,247,01,01
+3085,57,KX1,kx1
+3086,227,900,900
+3087,248,SU7,su7
+3088,125,8X,8x
+3089,48,Crider,crider
+3090,227,08,08
+3091,39,Galaxy Starship 7,galaxy_starship_7
+3092,37,Aion Y,aion_y
+3093,239,N9,n9
+3094,229,M8,m8
+3095,37,S7,s7
+3096,111,Форца,forza
+3097,62,ES260,es260
+3098,62,ES350e,es350e
+3099,62,ES350h,es350h
+3100,62,ES500e,es500e
+3101,213,Courage,courage
+3102,213,Taishan,taishan_l9
+3103,213,Passion EVR,passion
+3104,213,Passion L,passion_l
+3105,39,Geometry C,geometry_c
+3106,249,J6,j6
+3107,249,J7,j7
+3108,249,J8,j8
+3109,249,C5,c5
+3110,39,Boyue L,boyue_l
+3111,250,K40,k40
+3112,36,View,view
+3113,102,ID.5,id5
+3114,9,i5,i5
+3115,9,i7,i7
+3116,71,Sprinter Classic,
+3117,250,K50,k50
+3118,224,X80,x80
+3119,37,GS8 Dragon,
+3120,7,Q5L,
+3121,46,Dargo X,
+3122,7,A3L,
+3123,252,124 Spider,124_spider
+3124,50,Maxcruze,maxcruze
+3125,57,K4,k4
+3126,74,eK X,ek_x_ev
+3127,253,5,5
+3128,37,Aion Y Plus,aion_y_plus
+3129,15,CS75 Pro,cs75_pro
+3130,15,UNI-Z,uni-z
+3131,102,Tiguan L Pro,

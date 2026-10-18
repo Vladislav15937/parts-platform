@@ -61,12 +61,16 @@ public class PartService {
      */
     private final ru.partsflow.platform.audit.AuditJournal journal;
 
+    /** Пересборка названия из полей формулы (задача 0336). */
+    private final PartTitles titles;
+
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
                        PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc,
                        VehicleWords vehicleWords, StockNaming naming, StockLedger ledger,
                        jakarta.persistence.EntityManager entityManager,
                        PartIdentity identity, com.fasterxml.jackson.databind.ObjectMapper json,
-                       ru.partsflow.platform.audit.AuditJournal journal) {
+                       ru.partsflow.platform.audit.AuditJournal journal, PartTitles titles) {
+        this.titles = titles;
         this.json = json;
         this.journal = journal;
         this.partRepository = partRepository;
@@ -105,10 +109,10 @@ public class PartService {
      * и существует — сопоставление, не меняющее ни одного заголовка, владельцу
      * незаметно.
      *
-     * <p><b>Заголовок не трогается (задача 0304, решение владельца 15.10.2026:
-     * «название не должно меняться само»).</b> Раньше начало заголовка, совпавшее
-     * с написанием, подменялось эталоном; теперь карточки получают только вид
-     * детали и категорию. Название меняет человек, вписав его в карточке.
+     * <p><b>Заголовок не трогается.</b> Раньше начало заголовка, совпавшее
+     * с написанием, подменялось эталоном; с 0304 карточки получают только вид
+     * детали и категорию, а с 0336 это и есть правило: вид в названии —
+     * написание клиента, а не эталон (как у Bazon).
      *
      * @return сколько карточек доведено
      */
@@ -302,19 +306,16 @@ public class PartService {
      * сохраняются»); занято всё присланное — отказ целиком
      * ({@link PartEditConflicts}).
      *
-     * <p><b>Заголовок сюда не входит.</b> Он производный — собирается
-     * из эталона наименования, машины, стороны и состояния, — и правка руками
-     * разъехалась бы с ним при первом же пересопоставлении справочника.
-     * По той же причине не правится сторона: ошибку в ней лечит разбор
-     * наименований, а не поле в карточке.
+     * <p><b>Наименование руками не правится — оно производное</b> (задача 0336,
+     * решение владельца продукта 19.10.2026, «как в Bazon»): вид, машина, год,
+     * положение, состояние и основной номер — правка любого из них
+     * пересобирает название ({@link PartTitles}). Присланное другое
+     * наименование — отказ словами: «сохранено» над молча выброшенным полем
+     * было бы неправдой. Записи 0302 и 0304 («название меняет только
+     * человек») с этого дня — история.
      *
-     * <p><b>А состояние правится — и название при этом не меняется (0304)</b>
-     * (задача 0039, решение владельца продукта от 8 сентября 2026).
-     * До неё {@code part.condition} писался ровно один раз, в приёмке:
-     * приёмщик, поставивший «б/у» вместо «новой», исправить это мог только
-     * заведением второй карточки. Пометка состояния в заголовке до 15.10.2026
-     * ехала за ним; решение владельца — «название само не меняется никогда»,
-     * и теперь заголовок остаётся тем, что вписал человек.
+     * <p><b>Состояние правится</b> (задача 0039, решение владельца продукта
+     * от 8 сентября 2026) — и с 0336 меняет пометку «(б/у)» в названии.
      *
      * <p>Событие о смене цены уходит только когда цена действительно другая:
      * площадке незачем дельта на правку заметки, а {@code price_changed_at}
@@ -328,6 +329,19 @@ public class PartService {
      * {@link PriceOperation}, а не браузер: тот же расчёт нужен правке
      * списком, и две копии разошлись бы на первом округлении.
      */
+    /**
+     * Ключи формы, которые пишет {@link PartIdentity} и читает формула названия
+     * (задача 0336): номер производителя и машина позиции. Положение и состояние
+     * сверяются у сущности.
+     */
+    private static final List<String> TITLE_KEYS =
+            List.of("oem", "brand", "model", "body", "engine", "year");
+
+    /** Отказ на присланное наименование (задача 0336) — его же видит форма правки. */
+    static final String TITLE_IS_DERIVED = "Наименование собирается само — из вида детали, "
+            + "машины, года, положения, состояния и номера производителя — и руками не правится. "
+            + "Исправьте эти поля, и наименование поменяется вместе с ними.";
+
     @Transactional
     public Edited update(Long partId, PartUpdate request, Long authorId) {
         // Под блокировкой строки (задача 0307): две правки одной карточки идут
@@ -336,6 +350,15 @@ public class PartService {
         // тот read-modify-write, от которого сверка и заведена.
         Part part = partRepository.findByIdForUpdate(partId)
                 .orElseThrow(() -> NotFound.PART.error(partId));
+
+        // Наименование производное (задача 0336): другое присланное — отказ
+        // словами до любой записи. Совпадающее с хранимым — не правка: так шлёт
+        // форму вкладка, открытая до выкладки, и отказывать ей не в чем.
+        if (request.title() != null && !request.title().isBlank()
+                && !request.title().strip().equals(part.getTitle())) {
+            log.warn("Правка позиции {} отбита: прислано наименование", partId);
+            throw new IllegalArgumentException(TITLE_IS_DERIVED);
+        }
 
         // Номер, который нельзя сохранить (задача 0312), — отказ словами раньше
         // сверки чужой правки: он про сам запрос, а не про то, что успел другой.
@@ -383,18 +406,15 @@ public class PartService {
                 update.price(), MoneyField.PRICE, part.getPublicCode());
         boolean priceChanged = wanted != null
                 && (part.getPrice() == null || part.getPrice().compareTo(wanted) != 0);
+        // Поля формулы названия до правки (задача 0336): пересобирается оно,
+        // только если одно из них стало другим.
+        PartCondition conditionWas = part.getCondition();
+        LateralSide lrWas = part.getSideLr();
+        LongitudinalSide frWas = part.getSideFr();
         if (priceChanged) {
             part.changePrice(wanted, authorId);
         }
 
-        // Наименование правится руками (задача 0302, решение владельца: «никаких
-        // замков») и только руками (0304: «название не должно меняться само»):
-        // правка номера, состояния, машины и сопоставление написания его не трогают. Пустое — «не
-        // трогать»: колонка NOT NULL, позиции без наименования не бывает.
-        if (update.title() != null && !update.title().isBlank()
-                && !update.title().strip().equals(part.getTitle())) {
-            part.setTitle(update.title().strip());
-        }
         // Стороны: null — ключа не было, не трогать; пустое — снять сторону.
         if (update.sideLr() != null || update.sideFr() != null) {
             part.setSides(
@@ -411,7 +431,8 @@ public class PartService {
             part.setLegacyCode(legacy);
         }
 
-        // Состояние меняется, название — нет (0304): оно только то, что вписал человек.
+        // Состояние меняется, и с ним пометка в названии (0336) — её ставит
+        // пересборка ниже, после всех полей формулы.
         //
         // Пустое — «не трогать», и с задачи 0322 это уже не следствие NOT NULL,
         // а решение: позиция без состояния бывает (ожидаемая, «Не указано»),
@@ -465,11 +486,23 @@ public class PartService {
         boolean partChanged = entityManager.unwrap(org.hibernate.Session.class).isDirty();
         // Номер производителя, кросс-номера, номер позиции и товара, номер
         // объявления Дрома, своя машина позиции — мимо сущности (см. PartIdentity).
+        boolean ownChanged = false;
         if (update.identity() != null) {
             PartIdentity.Applied applied = identity.apply(partId, update.identity(), authorId);
             if (applied.changed()) {
                 partChanged = true;
+                ownChanged = TITLE_KEYS.stream().anyMatch(update::has);
             }
+        }
+        // Название — после всех полей формулы, включая записанные мимо сущности
+        // (номер производителя, машина позиции): собранное раньше несло бы
+        // прежний номер (задача 0336). Только когда поле формулы стало другим:
+        // правка заметки название не трогает — у позиции, перенесённой с Дрома
+        // или собранной до 0336, она меняла бы его без единой правки формулы.
+        boolean formulaChanged = ownChanged || conditionWas != part.getCondition()
+                || lrWas != part.getSideLr() || frWas != part.getSideFr();
+        if (formulaChanged && titles.retitle(part)) {
+            partChanged = true;
         }
         part.touchedBy(authorId);
         boolean termsChanged = applyDromCard(partId, update);
