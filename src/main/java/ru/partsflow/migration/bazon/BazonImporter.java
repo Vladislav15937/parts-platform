@@ -916,7 +916,8 @@ public final class BazonImporter {
             new Column("color", Types.VARCHAR),
             new Column("section", Types.VARCHAR),
             new Column("installation_price", Types.NUMERIC),
-            new Column("price", Types.NUMERIC));
+            new Column("price", Types.NUMERIC),
+            new Column("year_text", Types.VARCHAR));
 
     private static String partColumns() {
         return PART_FIELDS.stream().map(Column::name)
@@ -965,7 +966,15 @@ public final class BazonImporter {
                 // утверждение, которого никто не делал. У переехавшего клиента
                 // таких строк 367 из 381.
                 zeroToNull(BazonValueParser.parseAmount(row.get("Установка"))),
-                BazonValueParser.parseAmount(row.get("Цена"))};
+                BazonValueParser.parseAmount(row.get("Цена")),
+                // «Год выпуска» текстом, как в файле: «03-08» у новых деталей.
+                // parseYearRange оставляет от него одно «от» — 2003, — а название
+                // в файле Дрома у Bazon несёт поле целиком (задача 0335). Через
+                // PART_FIELDS, а не отдельной записью: тогда повтор переноса
+                // дозаполняет текст и у позиций, перенесённых до этой колонки,
+                // по тому же legacy_code и тем же COALESCE — правка человека
+                // и прежнее значение не затираются.
+                row.get("Год выпуска")};
     }
 
     private static String name(Enum<?> value) {

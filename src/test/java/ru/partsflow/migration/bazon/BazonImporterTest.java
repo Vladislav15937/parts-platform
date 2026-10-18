@@ -51,6 +51,8 @@ class BazonImporterTest extends PostgresTestBase {
     private static final String BROKEN_ROW = "t_000100";
     private static final String NO_PUBLISH = "t_000105";
     private static final String CONDITION_COL = "t_000940";
+    private static final String YEAR_TEXT = "t_000917";
+    private static final String YEAR_REFILL = "t_000918";
 
     @Autowired
     private DataSource dataSource;
@@ -64,7 +66,8 @@ class BazonImporterTest extends PostgresTestBase {
     @BeforeAll
     static void migrate() {
         provisionTenants(IMPORT, REPEAT, HEADER, NAMES, BAD_ROW, UNKNOWN, BACKFILL,
-                PARTS_BACKFILL, JUNK_OEM, BROKEN_ROW, NO_PUBLISH, CONDITION_COL);
+                PARTS_BACKFILL, JUNK_OEM, BROKEN_ROW, NO_PUBLISH, CONDITION_COL,
+                YEAR_TEXT, YEAR_REFILL);
     }
 
     @Test
@@ -563,6 +566,86 @@ class BazonImporterTest extends PostgresTestBase {
         assertThat(textOf(CONDITION_COL, "A-711", "title"))
                 .as("повтор переписал заголовок, собранный до задачи 0315")
                 .isEqualTo("Бампер задний (контракт)");
+    }
+
+    /**
+     * «Год выпуска» доезжает до позиции текстом, как в файле (задача 0335).
+     *
+     * <p>Название в файле Дрома у Bazon несёт это поле целиком — «03-08»
+     * у новых деталей, — а {@code parseYearRange} оставляет от него одно
+     * «от». Строки взяты из образцов задачи: № 27 079 (новая, «03-08»),
+     * № 88 487 («2010»), период месяц.год и позиция без года.
+     */
+    @Test
+    @DisplayName("Текст года переносится как в файле, без разбора в число")
+    void yearTextIsKeptAsInFile() throws Exception {
+        new BazonImporter(dataSource, YEAR_TEXT).importAll(donorsFixture(), yearCatalog());
+
+        assertThat(textOf(YEAR_TEXT, "A-910", "year_text"))
+                .as("диапазон новой детали потерян: Bazon пишет в название «03-08»")
+                .isEqualTo("03-08");
+        assertThat(textOf(YEAR_TEXT, "A-911", "year_text")).isEqualTo("2010");
+        assertThat(textOf(YEAR_TEXT, "A-912", "year_text")).isEqualTo("10.09-09.15");
+        assertThat(textOf(YEAR_TEXT, "A-913", "year_text"))
+                .as("пустой год — это «текста нет», а не пустая строка")
+                .isNull();
+    }
+
+    /**
+     * Позиции, перенесённые до колонки, получают текст года повтором того же
+     * файла: ключ — {@code legacy_code}, номер, публичный код и остаток
+     * не меняются, а уже стоящее значение не затирается.
+     */
+    @Test
+    @DisplayName("Повтор переноса дописывает текст года уже перенесённым позициям")
+    void repeatFillsYearTextOfTransferredParts() throws Exception {
+        Path catalog = yearCatalog();
+        new BazonImporter(dataSource, YEAR_REFILL).importAll(donorsFixture(), catalog);
+
+        // Так лежат позиции клиента, перенесённого до tenant/092: текста нет.
+        jdbc.update("UPDATE " + YEAR_REFILL + ".part SET year_text = NULL");
+        // А это значение уже стоит — повтор выгрузки не имеет права его сменить.
+        jdbc.update("UPDATE " + YEAR_REFILL + ".part SET year_text = '2009'"
+                + " WHERE legacy_code = 'A-911'");
+        List<String> before = identities(YEAR_REFILL);
+
+        ImportReport repeat = new BazonImporter(dataSource, YEAR_REFILL)
+                .importAll(donorsFixture(), catalog);
+
+        assertThat(textOf(YEAR_REFILL, "A-910", "year_text"))
+                .as("повтор не дописал текст года позиции, перенесённой до колонки")
+                .isEqualTo("03-08");
+        assertThat(textOf(YEAR_REFILL, "A-912", "year_text")).isEqualTo("10.09-09.15");
+        assertThat(textOf(YEAR_REFILL, "A-911", "year_text"))
+                .as("повтор затёр уже стоящий текст года")
+                .isEqualTo("2009");
+        assertThat(repeat.loaded("товаров дополнено")).isEqualTo(2);
+        assertThat(identities(YEAR_REFILL))
+                .as("повтор сменил номер, код или завёл позицию заново")
+                .isEqualTo(before);
+        assertThat(qtyOf(YEAR_REFILL, "A-910"))
+                .as("остаток удвоился — дозаполнение повторило движения")
+                .isEqualByComparingTo("1");
+    }
+
+    private Path yearCatalog() throws Exception {
+        return write("catalog-year.csv", CATALOG_HEADER + """
+                "A-910";"Бампер";"";"Lexus";"RX300";"03-08";"MCU31W";"1MZFE";"";"";"";\
+                "Передний";"";"";"";"15000";"5211948910";"1";"0";"0";"0";"0";"0";"да";""
+                "A-911";"Кнопка стеклоподъемника";"";"Toyota";"Harrier";"2010";"ACU30";\
+                "2AZFE";"";"";"Левый";"Задний";"";"";"";"800";"7428048120";\
+                "1";"0";"0";"0";"0";"0";"да";""
+                "A-912";"Фара";"";"";"";"10.09-09.15";"";"";"";"";"";"";"";"";"";"5000";"";\
+                "1";"0";"0";"0";"0";"0";"да";""
+                "A-913";"Карман";"";"Mazda";"Millenia";"";"";"";"";"";"";"";"";"";"";"300";\
+                "TA0164440C";"1";"0";"0";"0";"0";"0";"да";""
+                """);
+    }
+
+    /** Номер базы, номер позиции и публичный код всех позиций — по порядку кода прежней системы. */
+    private List<String> identities(String schema) {
+        return jdbc.queryForList("SELECT legacy_code || ' ' || id || ' ' || number || ' '"
+                + " || public_code FROM " + schema + ".part ORDER BY legacy_code", String.class);
     }
 
     private ImportReport importFixture(String schema) throws Exception {
