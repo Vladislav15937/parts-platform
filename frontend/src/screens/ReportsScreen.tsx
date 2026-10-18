@@ -50,6 +50,7 @@ import { paymentSourceTypeLabel } from '../sales/sales';
 import { customerName } from '../sales/dealStatus';
 import { useMounted } from '../ui/useMounted';
 import { conditionTitle } from '../inventory/catalog';
+import { OemWord } from '../inventory/OemWord';
 
 /**
  * Отчёты владельца.
@@ -897,7 +898,9 @@ export function ReportsScreen({ canRead }: Props) {
                   <td>{row.dealNumber}</td>
                   <td className="num">{row.number}</td>
                   <td>{row.publicCode ?? '—'}</td>
-                  <td>{row.title}</td>
+                  {/* Номер производителя за наименованием (задача 0329); в файле
+                      он своей колонкой — там по колонкам сортируют. */}
+                  <td>{row.title}<OemWord number={row.primaryOem} /></td>
                   <td>{row.condition ?? '—'}</td>
                   <td className="num">
                     {money(row.price)}
@@ -1104,7 +1107,8 @@ export function ReportsScreen({ canRead }: Props) {
                       {/* Прочерк, а не пусто: наименование не распознано,
                           и это правда о карточке. */}
                       <td>{row.kind ?? '—'}</td>
-                      <td>{row.title}</td>
+                      {/* Номер производителя за наименованием (задача 0329). */}
+                      <td>{row.title}<OemWord number={row.primaryOem} /></td>
                       <td>{conditionTitle(row.condition) ?? ''}</td>
                       <td className="num">{pieces(row.quantity)}</td>
                       <td className="num">{row.price === null ? '—' : money(row.price)}</td>

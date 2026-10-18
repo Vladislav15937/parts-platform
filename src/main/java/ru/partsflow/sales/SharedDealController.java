@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import ru.partsflow.inventory.PartCondition;
+import ru.partsflow.inventory.PartNaming;
 import ru.partsflow.inventory.PartService;
 import ru.partsflow.platform.tenant.TenantContext;
 
@@ -40,13 +41,15 @@ public class SharedDealController {
     private final SalesService sales;
     private final PartService parts;
     private final ServiceKindRepository serviceKinds;
+    private final PartNaming naming;
 
     public SharedDealController(JdbcTemplate jdbc, SalesService sales, PartService parts,
-                                ServiceKindRepository serviceKinds) {
+                                ServiceKindRepository serviceKinds, PartNaming naming) {
         this.jdbc = jdbc;
         this.sales = sales;
         this.parts = parts;
         this.serviceKinds = serviceKinds;
+        this.naming = naming;
     }
 
     @GetMapping("/api/shared/{company}/{token}")
@@ -68,6 +71,11 @@ public class SharedDealController {
             // (задача 0318). Пометка в наименовании, которая говорила это
             // до сих пор, из него уходит (0315, 0316).
             Map<Long, PartCondition> conditions = parts.conditionsOf(partIds);
+            // Основной номер производителя (задача 0329, ответ владельца «Всё да»
+            // на вопрос 2 после 0327): по нему покупатель опознаёт деталь так же,
+            // как продавец в выдаче. Тем же выражением, что у списков продажи
+            // и отказов, одним запросом на страницу.
+            Map<Long, String> oems = naming.primaryOemsOf(partIds);
             // Услуги идут в тот же список: без них итог не сходится с суммой
             // строк, и клиент видит «итого 4800» под деталью за 4500. Спор
             // об этом начнётся в момент оплаты.
@@ -89,11 +97,13 @@ public class SharedDealController {
                                     .map(item -> new SharedItem(
                                             titles.get(item.getPartId()),
                                             conditions.get(item.getPartId()),
+                                            oems.get(item.getPartId()),
                                             item.getQuantity(),
                                             item.getPrice())),
                             deal.getServices().stream()
                                     .map(service -> new SharedItem(
                                             serviceNames.get(service.getServiceId()),
+                                            null,
                                             null,
                                             service.getQuantity(),
                                             service.getPrice())))
@@ -124,8 +134,11 @@ public class SharedDealController {
      * @param condition состояние позиции кодом (задача 0318); слово на языке
      *                  покупателя ставит страница ({@code conditionTitle}), а
      *                  незнакомый код она не печатает вовсе. У услуги пусто
+     * @param primaryOem основной номер производителя как хранится (задача 0329);
+     *                   основного нет — пусто, кросс-номер не подставляется.
+     *                   У услуги пусто
      */
-    public record SharedItem(String title, PartCondition condition, BigDecimal quantity,
-                             BigDecimal price) {
+    public record SharedItem(String title, PartCondition condition, String primaryOem,
+                             BigDecimal quantity, BigDecimal price) {
     }
 }

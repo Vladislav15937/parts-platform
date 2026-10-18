@@ -4,6 +4,7 @@ import { loadMoveJournal, loadMoveLines, type MoveDocument, type MoveLine } from
 import {
   conditionTitle, loadCatalog, NO_VEHICLE, type CatalogRow, type Warehouse,
 } from '../inventory/catalog';
+import { OemWord } from '../inventory/OemWord';
 import { EMPTY_WHEEL_QUERY, listWheels, rowOfWheel } from '../inventory/wheels';
 import { PartCard } from './PartCard';
 import { count, positions } from '../ui/plural';
@@ -193,7 +194,9 @@ export function StockMovesScreen({ role }: { role: string }) {
                                   >
                                     <td className="num">{line.number}</td>
                                     <td>{line.publicCode}</td>
-                                    <td>{line.title}</td>
+                                    {/* Номер производителя (задача 0329):
+                                        принимающий сверяет по нему деталь. */}
+                                    <td>{line.title}<OemWord number={line.primaryOem} /></td>
                                     <td>{conditionTitle(line.condition) ?? ''}</td>
                                     <td className="num">{line.qty}</td>
                                   </tr>

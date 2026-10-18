@@ -22,6 +22,7 @@ import { count as num, shown } from '../ui/plural';
 import { shortDate } from '../ui/shortDate';
 import { useMounted } from '../ui/useMounted';
 import { conditionTitle } from '../inventory/catalog';
+import { OemWord } from '../inventory/OemWord';
 import type { Reference } from '../reference/reference';
 
 /**
@@ -354,7 +355,9 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
                       ничего. Пусто бывает у позиции, карточку которой
                       удалили. */}
                   <td className="num">{r.number ?? '—'}</td>
-                  <td>{r.title ?? 'удалённая позиция'}</td>
+                  {/* Номер производителя за наименованием (задача 0329),
+                      как у продавца: разницу считают по конкретной детали. */}
+                  <td>{r.title ?? 'удалённая позиция'}<OemWord number={r.primaryOem} /></td>
                   <td>{conditionTitle(r.condition) ?? ''}</td>
                   <td className="num">{r.qtyExpectedAtCount}</td>
                   <td className="num">{r.qtyCounted}</td>

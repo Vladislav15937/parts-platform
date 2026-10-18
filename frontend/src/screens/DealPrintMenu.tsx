@@ -7,6 +7,7 @@ import {
   PRINT_FORMS,
 } from '../sales/dealPrint';
 import type { DealPrintDoc, PrintForm, PrintLine, PrintSeller } from '../sales/dealPrint';
+import { OemWord } from '../inventory/OemWord';
 import { useMounted } from '../ui/useMounted';
 
 /**
@@ -302,7 +303,11 @@ function Lines({ lines }: { lines: PrintLine[] }) {
         {lines.map((line, at) => (
           <tr key={`${line.title}-${at}`}>
             <td>{at + 1}</td>
-            <td>{line.title}</td>
+            {/* Номер производителя за наименованием (задача 0329): по нему
+                деталь опознают, когда покупатель приходит с бумагой по гарантии.
+                Целиком, без обрезки — у бумаги нет подсказки; длинный
+                переносится в клетке. */}
+            <td>{line.title}<OemWord number={line.primaryOem} whole /></td>
             <td>{line.condition ?? ''}</td>
             <td className="num">{Number(line.quantity).toLocaleString('ru-RU')}</td>
             <td className="num">{money(line.price)}</td>

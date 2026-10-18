@@ -327,9 +327,13 @@ public class InventoryService {
      */
     @Transactional(readOnly = true)
     public List<Line> lines(Long sessionId) {
+        // Основной номер производителя (задача 0329) — тем же выражением, что
+        // у списков продажи и отказов; подзапрос по частичному индексу
+        // part_oem_primary_uk, по одной строке на позицию.
         return jdbc.query("""
                 SELECT l.part_id, l.qty_expected, l.qty_counted, l.cell_id,
-                       p.number, p.title, p.condition, c.code AS cell_code
+                       p.number, p.title, p.condition, c.code AS cell_code,
+                """ + "       " + ru.partsflow.inventory.PartNaming.primaryOemSql("p") + "\n" + """
                   FROM inventory_line l
                   JOIN part p ON p.id = l.part_id
                   LEFT JOIN storage_cell c ON c.id = l.cell_id
@@ -340,6 +344,7 @@ public class InventoryService {
                         rs.getLong("number"),
                         rs.getString("title"),
                         rs.getString("condition"),
+                        rs.getString(ru.partsflow.inventory.PartNaming.OEM_COLUMN),
                         rs.getObject("cell_id") == null ? null : rs.getLong("cell_id"),
                         rs.getString("cell_code"),
                         rs.getBigDecimal("qty_expected"),
@@ -669,13 +674,15 @@ public class InventoryService {
         InventorySession session = require(sessionId);
         return jdbc.query("""
                 SELECT p.id AS part_id, p.number, p.title, p.condition, p.public_code, p.barcode,
-                       ps.cell_id, c.code AS cell_code
+                       ps.cell_id, c.code AS cell_code,
+                """ + "       " + ru.partsflow.inventory.PartNaming.primaryOemSql("p") + "\n" + """
                   FROM part_stock ps
                   JOIN part p ON p.id = ps.part_id
                   LEFT JOIN storage_cell c ON c.id = ps.cell_id
                  WHERE ps.warehouse_id = ? AND ps.qty > 0""",
                 (rs, i) -> new WarehouseCode(rs.getLong("part_id"), rs.getLong("number"),
                         rs.getString("title"), rs.getString("condition"),
+                        rs.getString(ru.partsflow.inventory.PartNaming.OEM_COLUMN),
                         rs.getString("public_code"), rs.getString("barcode"),
                         rs.getObject("cell_id") == null ? null : rs.getLong("cell_id"),
                         rs.getString("cell_code")),
@@ -692,9 +699,12 @@ public class InventoryService {
      * @param condition состояние кодом (задача 0318): из этой записи заводится
      *                  строка листа обхода, и она обязана нести его так же, как
      *                  строки, пришедшие с сервера
+     * @param primaryOem основной номер производителя (задача 0329) — по той же
+     *                   причине: строка «вне списка» обязана нести его, как
+     *                   строки листа обхода
      */
     public record WarehouseCode(Long partId, Long number, String title, String condition,
-                                String publicCode, String barcode,
+                                String primaryOem, String publicCode, String barcode,
                                 Long cellId, String cellCode) {
     }
 
@@ -725,6 +735,7 @@ public class InventoryService {
                             named == null ? null : named.number(),
                             named == null ? null : named.title(),
                             named == null ? null : named.condition(),
+                            named == null ? null : named.primaryOem(),
                             d.qtyExpectedAtOpen(), d.qtyExpectedAtCount(), d.qtyCounted(),
                             d.delta(), d.isShortage(), line.isApplied());
                 })
@@ -744,11 +755,14 @@ public class InventoryService {
                 .collect(java.util.stream.Collectors.joining(","));
         // Номер и наименование одним запросом: второй проход по тем же
         // строкам ради номера — это ещё один повод разойтись с первым.
-        jdbc.query("SELECT id, number, title, condition FROM part WHERE id IN (" + in + ")",
+        jdbc.query("SELECT p.id, p.number, p.title, p.condition, "
+                        + ru.partsflow.inventory.PartNaming.primaryOemSql("p")
+                        + " FROM part p WHERE p.id IN (" + in + ")",
                 rs -> {
                     naming.put(rs.getLong("id"),
                             new PartNaming(rs.getLong("number"), rs.getString("title"),
-                                    rs.getString("condition")));
+                                    rs.getString("condition"),
+                                    rs.getString(ru.partsflow.inventory.PartNaming.OEM_COLUMN)));
                 });
         return naming;
     }
@@ -756,9 +770,14 @@ public class InventoryService {
     /**
      * Как позицию зовут человеку: номер вслух, наименование и состояние глазами
      * (состояние — задача 0318: недостачу считают по конкретной детали, а новая
-     * и б/у с одним наименованием — разные).
+     * и б/у с одним наименованием — разные), основной номер производителя
+     * (задача 0329: по нему деталь опознают, когда наименование у двух одно).
+     *
+     * <p>Имя совпадает с классом {@code inventory.PartNaming} — отсюда полные
+     * имена выше: тот отвечает за выражение основного номера, этот только
+     * держит строку.
      */
-    private record PartNaming(Long number, String title, String condition) {
+    private record PartNaming(Long number, String title, String condition, String primaryOem) {
     }
 
     /**
@@ -773,9 +792,11 @@ public class InventoryService {
      *                экран показывает «скорректировано» рядом с той же
      *                минусовой строкой
      * @param condition состояние кодом (задача 0318); слово ставит экран
+     * @param primaryOem основной номер производителя как хранится (задача 0329);
+     *                   основного нет — пусто, кросс-номер не подставляется
      */
     public record DiscrepancyLine(Long partId, Long number, String title, String condition,
-                                  BigDecimal qtyExpectedAtOpen, BigDecimal qtyExpectedAtCount,
+                                  String primaryOem, BigDecimal qtyExpectedAtOpen, BigDecimal qtyExpectedAtCount,
                                   BigDecimal qtyCounted, BigDecimal delta,
                                   boolean shortage, boolean applied) {
     }
@@ -967,9 +988,11 @@ public class InventoryService {
      * @param condition состояние кодом («USED», «CONTRACT»; задача 0318) — слово
      *                  ставит экран. Кладовщик ищет на полке конкретную деталь,
      *                  а «Фара Toyota Camry» новая и б/у лежат рядом
+     * @param primaryOem основной номер производителя как хранится (задача 0329);
+     *                   основного нет — пусто, кросс-номер не подставляется
      */
     public record Line(Long partId, Long number, String title, String condition,
-                       Long cellId, String cellCode,
+                       String primaryOem, Long cellId, String cellCode,
                        BigDecimal qtyExpected, BigDecimal qtyCounted) {
     }
 

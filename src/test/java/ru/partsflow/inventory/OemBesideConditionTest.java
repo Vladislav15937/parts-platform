@@ -230,26 +230,22 @@ class OemBesideConditionTest extends PostgresTestBase {
      * поставившее {@code ConditionWord} без {@code OemWord}, называло бы позицию
      * не так, как соседний список и отказ, — ровно то расхождение, ради которого
      * задача заведена. Номер ищется в той же строке разметки, что слово, или
-     * в двух следующих: так они стоят во всех пяти местах.
+     * в двух соседних с каждой стороны: в списках он стоит следом за словом,
+     * в таблицах — в клетке наименования, перед клеткой состояния.
+     *
+     * <p>С задачи 0329 (ответ владельца «Всё да») номер стоит и там, куда 0327
+     * его не несла: страница по ссылке, печать сделки, лист обхода, сведение
+     * пересчёта, состав перевозки, отчёты. Пять файлов из перечня ушли, а слово,
+     * которое печать и «Проданные позиции» берут готовым с сервера
+     * ({@code line.condition ?? ''}), перебор теперь тоже видит.
      */
     private static final Map<String, String> CONDITION_WITHOUT_OEM = Map.ofEntries(
-            Map.entry("frontend/src/screens/SharedDealScreen.tsx",
-                    "страница сделки уходит покупателю — номер там не добавлять без слова"
-                            + " владельца (задача 0327)"),
-            Map.entry("frontend/src/screens/InventoryScreen.tsx",
-                    "лист обхода пересчёта — владелец назвал списки продажи, не пересчёт (0327)"),
             Map.entry("frontend/src/screens/ExpectedGoods.tsx",
                     "ожидаемый товар у владельца — не список продажи (0327)"),
             Map.entry("frontend/src/screens/IntakeScreen.tsx",
                     "приёмка — номер там вписывают, а не читают; не список продажи (0327)"),
             Map.entry("frontend/src/screens/AuditJournalScreen.tsx",
                     "журнал действий — номер там не просили (0321)"),
-            Map.entry("frontend/src/screens/InventoryReconcile.tsx",
-                    "сведение пересчёта — таблица со столбцом, не список продажи (0327)"),
-            Map.entry("frontend/src/screens/StockMovesScreen.tsx",
-                    "состав перевозки — таблица со столбцом, не список продажи (0327)"),
-            Map.entry("frontend/src/screens/ReportsScreen.tsx",
-                    "разрез по машине — таблица отчёта, не список продажи (0327)"),
             Map.entry("frontend/src/inventory/inventory.ts",
                     "подпись очереди отправки на приёмке — не список продажи (0327)"),
             Map.entry("frontend/src/inventory/catalog.ts",
@@ -262,7 +258,8 @@ class OemBesideConditionTest extends PostgresTestBase {
     @Test
     @DisplayName("Где стоит слово состояния, там стоит и номер производителя")
     void oemStandsWhereConditionWordStands() throws IOException {
-        Pattern word = Pattern.compile("<ConditionWord\\b|\\bconditionTitle\\(|\\btitleWithCondition\\(");
+        Pattern word = Pattern.compile("<ConditionWord\\b|\\bconditionTitle\\(|\\btitleWithCondition\\("
+                + "|\\{\\s*[\\w.]+\\.condition\\s*\\?\\?");
         List<String> found = new ArrayList<>();
         try (Stream<Path> files = Files.walk(Path.of("frontend/src"))) {
             for (Path file : files.filter(p -> p.toString().matches(".*\\.tsx?$"))
@@ -281,7 +278,7 @@ class OemBesideConditionTest extends PostgresTestBase {
                         continue;
                     }
                     String near = String.join("\n",
-                            lines.subList(i, Math.min(lines.size(), i + 3)));
+                            lines.subList(Math.max(0, i - 2), Math.min(lines.size(), i + 3)));
                     if (!near.contains("<OemWord")) {
                         found.add(name + ":" + (i + 1) + ": " + lines.get(i).strip());
                     }

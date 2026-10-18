@@ -29,6 +29,11 @@ export interface InventoryLine {
    * Необязательное: лист обхода, скачанный до правки, лежит в телефоне без него.
    */
   condition?: string | null;
+  /**
+   * Основной номер производителя, как хранится (задача 0329); основного нет —
+   * пусто. Необязательное: ответ прежней версии и кэш телефона его не несут.
+   */
+  primaryOem?: string | null;
   cellId: number | null;
   cellCode: string | null;
   qtyExpected: string;
@@ -228,6 +233,11 @@ export interface WarehouseCode {
   title: string;
   /** Состояние кодом: строка «вне списка» заводится из этой записи (задача 0318). */
   condition?: string | null;
+  /**
+   * Основной номер производителя, как хранится (задача 0329); основного нет —
+   * пусто. Необязательное: ответ прежней версии и кэш телефона его не несут.
+   */
+  primaryOem?: string | null;
   publicCode: string | null;
   barcode: string | null;
   cellId: number | null;
@@ -494,6 +504,11 @@ export interface Discrepancy {
   title: string | null;
   /** Состояние кодом (задача 0318); слово ставит экран. */
   condition?: string | null;
+  /**
+   * Основной номер производителя, как хранится (задача 0329); основного нет —
+   * пусто. Необязательное: ответ прежней версии и кэш телефона его не несут.
+   */
+  primaryOem?: string | null;
   qtyExpectedAtOpen: number;
   qtyExpectedAtCount: number;
   qtyCounted: number;

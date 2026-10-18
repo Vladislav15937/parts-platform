@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConditionWord } from '../inventory/ConditionWord';
+import { OemWord } from '../inventory/OemWord';
 import { useMounted } from '../ui/useMounted';
 import {
   countPositions,
@@ -454,6 +455,7 @@ export function InventoryScreen({ reference, onCount, onNote, noteQueue = [] }: 
       number: match.code.number,
       title: match.code.title,
       condition: match.code.condition ?? null,
+      primaryOem: match.code.primaryOem ?? null,
       cellId: match.code.cellId,
       cellCode: match.code.cellCode,
       qtyExpected: '0',
@@ -569,6 +571,9 @@ function CountRow({
             новая и б/у лежат рядом. Пометку в наименовании, которая говорила
             это до сих пор, снимают (0315, 0316). */}
         <ConditionWord code={line.condition} />
+        <OemWord number={line.primaryOem} />
+        {/* Основной номер производителя (задача 0329): две «Фары Toyota Camry
+            · б/у» на одной полке различает только он. */}
         {/* Номер позиции (задача 0168): найдя на полке не то, кладовщик
             называет деталь вслух тому, кто сводит расхождения, — а публичного
             кода в листе обхода нет вовсе, и «Фара Toyota Camry» на складе

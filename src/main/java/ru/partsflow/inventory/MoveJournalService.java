@@ -75,9 +75,12 @@ public class MoveJournalService {
      */
     @Transactional(readOnly = true)
     public List<MoveLine> lines(long documentId) {
+        // Основной номер производителя (задача 0329): принимающий сверяет
+        // деталь по номеру, когда наименование у двух одно.
         return jdbc.query("""
                         SELECT p.id AS part_id, p.number, p.public_code, p.title, p.condition,
-                               l.qty
+                               l.qty,
+                        """ + "       " + PartNaming.primaryOemSql("p") + "\n" + """
                           FROM stock_document_line l
                           JOIN part p ON p.id = l.part_id
                          WHERE l.document_id = ?
@@ -85,6 +88,7 @@ public class MoveJournalService {
                 (rs, i) -> new MoveLine(rs.getLong("part_id"), rs.getLong("number"),
                         rs.getString("public_code"),
                         rs.getString("title"), rs.getString("condition"),
+                        rs.getString(PartNaming.OEM_COLUMN),
                         rs.getBigDecimal("qty")),
                 documentId);
     }
@@ -101,8 +105,10 @@ public class MoveJournalService {
      * @param condition состояние кодом (задача 0318), слово ставит экран:
      *                  кладовщик, принимающий перевозку, сверяет, та ли деталь
      *                  приехала, а новая и б/у с одним наименованием — разные
+     * @param primaryOem основной номер производителя как хранится (задача 0329);
+     *                   основного нет — пусто, кросс-номер не подставляется
      */
     public record MoveLine(Long partId, Long number, String publicCode, String title,
-                           String condition, BigDecimal qty) {
+                           String condition, String primaryOem, BigDecimal qty) {
     }
 }

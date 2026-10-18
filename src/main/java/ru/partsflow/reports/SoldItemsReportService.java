@@ -4,6 +4,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.inventory.CatalogService;
+import ru.partsflow.inventory.PartNaming;
 
 import java.math.BigDecimal;
 import java.sql.Timestamp;
@@ -140,6 +141,9 @@ public class SoldItemsReportService {
                         + " p.id AS part_id, p.number AS part_number,"
                         + " p.public_code, p.title,\n"
                         + "       " + CatalogService.CONDITION + " AS condition_word,\n"
+                        // Основной номер производителя (задача 0329) — тем же
+                        // выражением, что у списков продажи.
+                        + "       " + PartNaming.primaryOemSql("p") + ",\n"
                         + "       " + UNIT_PRICE + " AS unit_price,\n"
                         + "       di.price AS list_price, di.quantity,\n"
                         + "       di.cost_price_snapshot AS cost_price,\n"
@@ -161,6 +165,7 @@ public class SoldItemsReportService {
                         rs.getString("public_code"),
                         rs.getString("title"),
                         rs.getString("condition_word"),
+                        rs.getString(PartNaming.OEM_COLUMN),
                         rs.getBigDecimal("unit_price"),
                         rs.getBigDecimal("list_price"),
                         rs.getBigDecimal("quantity"),
@@ -239,6 +244,7 @@ public class SoldItemsReportService {
         String sql = "SELECT dl.closed_at, dl.number AS deal_number,\n"
                 + "       p.number AS part_number, p.public_code, p.title,\n"
                 + "       " + CatalogService.CONDITION + " AS condition_word,\n"
+                + "       " + PartNaming.primaryOemSql("p") + ",\n"
                 + "       " + UNIT_PRICE + " AS unit_price, di.price AS list_price,\n"
                 + "       di.quantity, di.cost_price_snapshot AS cost_price,\n"
                 + "       " + UNIT_PROFIT + " AS unit_profit,\n"
@@ -265,6 +271,7 @@ public class SoldItemsReportService {
                     text(rs.getString("public_code")),
                     text(rs.getString("title")),
                     text(rs.getString("condition_word")),
+                    text(rs.getString(PartNaming.OEM_COLUMN)),
                     number(rs.getBigDecimal("unit_price")),
                     number(rs.getBigDecimal("list_price")),
                     number(rs.getBigDecimal("cost_price")),
@@ -277,11 +284,19 @@ public class SoldItemsReportService {
         });
     }
 
-    /** Заголовок файла — теми же словами, что колонки на экране. */
+    /**
+     * Заголовок файла — теми же словами, что колонки на экране.
+     *
+     * <p>Кроме одной: номер производителя на экране стоит в клетке наименования
+     * за « · », как у продавца (задача 0329), а в файле — своей колонкой.
+     * Файл сортируют и отбирают в Excel по колонкам, и номер, приклеенный
+     * к наименованию, испортил бы и то и другое. Решение исполнителя, названо
+     * в PR.
+     */
     public static List<String> exportHeader() {
         return List.of("Дата выдачи", "Номер сделки", "№ позиции", "Номер товара",
                 "Наименование",
-                "Состояние", "Цена продажи", "Прежняя цена", "Себестоимость", "Выгода",
+                "Состояние", "Номер производителя", "Цена продажи", "Прежняя цена", "Себестоимость", "Выгода",
                 "Количество", "Склад выдачи", "Ответственный", "Поставка", "Номер донора");
     }
 
@@ -418,6 +433,8 @@ public class SoldItemsReportService {
      * @param soldAt    момент выдачи сделки: «дата выдачи» у ориентира
      * @param number    порядковый номер позиции — тот, которым её называют
      *                  вслух (задача 0060); публичный код рядом про этикетку
+     * @param primaryOem основной номер производителя как хранится (задача 0329);
+     *                  основного нет — пусто, кросс-номер не подставляется
      * @param price     цена продажи за штуку — из сделки, а не из карточки
      * @param listPrice цена до скидки. Совпала с {@code price} — скидки
      *                  не было, и зачёркивать нечего
@@ -430,7 +447,7 @@ public class SoldItemsReportService {
      */
     public record Item(long itemId, Instant soldAt, long dealId, long dealNumber,
                        long partId, long number, String publicCode, String title,
-                       String condition,
+                       String condition, String primaryOem,
                        BigDecimal price, BigDecimal listPrice, BigDecimal quantity,
                        BigDecimal costPrice, BigDecimal profit,
                        String warehouse, String manager,

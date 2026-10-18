@@ -419,7 +419,10 @@ public class OriginReportService {
 
         List<Item> rows = jdbc.query("""
                 SELECT p.id, p.number, p.public_code, k.name AS kind, p.title, p.condition,
-                """ + "       " + tab.quantity + " AS qty,\n"
+                """ + "       " + ru.partsflow.inventory.PartNaming.primaryOemSql("p") + ",\n"
+                // Основной номер производителя (задача 0329) — тем же выражением,
+                // что у списков продажи; по строке страницы, подвал его не несёт.
+                + "       " + tab.quantity + " AS qty,\n"
                 // Цена и себестоимость проданного — из сделки, а не из карточки:
                 // разделитель явной строкой, иначе текстовый блок съест отступ.
                 + "       " + tab.price + " AS price,\n"
@@ -440,6 +443,7 @@ public class OriginReportService {
                         rs.getString("kind"),
                         rs.getString("title"),
                         rs.getString("condition"),
+                        rs.getString(ru.partsflow.inventory.PartNaming.OEM_COLUMN),
                         rs.getBigDecimal("qty"),
                         rs.getBigDecimal("price"),
                         rs.getBigDecimal("cost_price"),
@@ -506,9 +510,11 @@ public class OriginReportService {
      * @param condition  состояние кодом (задача 0318); слово ставит экран. Разрез
      *                   открывают, чтобы узнать, что именно с машины лежит и что
      *                   продано, а новая и б/у с одним наименованием — разный товар
+     * @param primaryOem основной номер производителя как хранится (задача 0329);
+     *                   основного нет — пусто, кросс-номер не подставляется
      */
     public record Item(long partId, long number, String publicCode, String kind, String title,
-                       String condition, BigDecimal quantity, BigDecimal price, BigDecimal costPrice,
+                       String condition, String primaryOem, BigDecimal quantity, BigDecimal price, BigDecimal costPrice,
                        String supplyNumber, LocalDate date) {
     }
 

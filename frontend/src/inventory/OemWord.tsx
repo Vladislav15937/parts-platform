@@ -19,12 +19,20 @@
  */
 export const OEM_SHOWN = 40;
 
-export function OemWord({ number }: { number: string | null | undefined }) {
+/**
+ * @param whole не обрезать (задача 0329, печать сделки): у бумаги нет
+ *              подсказки, и обрезанный «…» номер покупатель не прочтёт
+ *              никак — номер переносится по ширине клетки целиком
+ */
+export function OemWord({ number, whole = false }: {
+  number: string | null | undefined;
+  whole?: boolean;
+}) {
   const value = number?.trim() ?? '';
   if (value === '') {
     return null;
   }
-  const shown = value.length > OEM_SHOWN ? `${value.slice(0, OEM_SHOWN)}…` : value;
+  const shown = !whole && value.length > OEM_SHOWN ? `${value.slice(0, OEM_SHOWN)}…` : value;
   return (
     <span className="muted">
       {' · '}
