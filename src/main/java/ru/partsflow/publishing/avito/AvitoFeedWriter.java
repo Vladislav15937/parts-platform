@@ -42,7 +42,15 @@ public class AvitoFeedWriter {
             writer.writeAttribute("target", "Avito.ru");
 
             while (parts.hasNext()) {
-                writeAd(writer, parts.next(), mapping);
+                Part part = parts.next();
+                // Без состояния («Не указано», задача 0322) объявления нет:
+                // Condition у площадки обязателен, а «Б/у», подставленное
+                // молча, — ложное слово. Падать здесь нельзя: это посреди
+                // записи потока, то есть обрывок тела при коде 200.
+                if (part.getCondition() == null) {
+                    continue;
+                }
+                writeAd(writer, part, mapping);
                 written++;
             }
 

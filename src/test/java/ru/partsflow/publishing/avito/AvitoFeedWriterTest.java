@@ -51,6 +51,21 @@ class AvitoFeedWriterTest {
     }
 
     @Test
+    @DisplayName("Позиция без состояния объявлением не уходит, и фид дописывается (задача 0322)")
+    void partWithoutConditionIsSkipped() throws Exception {
+        Part unknown = part("Капот", BigDecimal.TEN);
+        unknown.setCondition(null);
+        Part known = part("Бампер", BigDecimal.TEN);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        int count = writer.write(out, List.of(unknown, known).iterator(), mapping);
+
+        String xml = out.toString(StandardCharsets.UTF_8);
+        assertThat(count).isEqualTo(1);
+        assertThat(xml).contains("Бампер").doesNotContain("Капот").contains("</Ads>");
+    }
+
+    @Test
     @DisplayName("50 000 объявлений пишутся без роста потребления памяти")
     void streamsLargeFeedWithoutMaterializing() throws Exception {
         Iterator<Part> many = Stream.generate(() -> part("Деталь", BigDecimal.TEN))

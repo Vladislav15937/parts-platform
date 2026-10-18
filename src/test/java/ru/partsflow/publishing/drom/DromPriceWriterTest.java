@@ -139,6 +139,29 @@ class DromPriceWriterTest {
             assertThat(xml).contains("<description>Состояние: б/у.</description>");
         }
 
+        /**
+         * Отбор такую позицию не пускает ({@code HAS_CONDITION}, задача 0322), но
+         * если она всё же доедет — запись не падает посреди потока: падение здесь
+         * — 200 с обрывком файла, то есть «снять все объявления».
+         */
+        @Test
+        @DisplayName("Позиция без состояния дописывается без элемента и без строки о состоянии")
+        void offerWithoutConditionIsWrittenWithoutIt() throws Exception {
+            DromOffer unknown = new DromOffer("P-2", "Деталь", "Деталь", null, new BigDecimal("100"),
+                    BigDecimal.ONE, null, null, null, List.of(),
+                    null, null, null, null, null, null, List.of(),
+                    null, null, null, null, null, true, null, null, null, null);
+
+            String xml = write(unknown, offer());
+
+            assertThat(xml)
+                    .contains("<ordercode>P-2</ordercode>")
+                    .contains("<ordercode>P-100500</ordercode>")
+                    .contains("</offers>");
+            String first = xml.substring(xml.indexOf("<ordercode>P-2"), xml.indexOf("<ordercode>P-100500"));
+            assertThat(first).doesNotContain("<condition>").doesNotContain("Состояние:");
+        }
+
         @Test
         @DisplayName("Вид детали уходит отдельным полем")
         void writesPartKind() throws Exception {

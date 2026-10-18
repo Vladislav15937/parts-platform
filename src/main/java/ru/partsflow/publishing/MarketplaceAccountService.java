@@ -989,6 +989,9 @@ public class MarketplaceAccountService {
                    -- не идёт, потому что «0 ₽» в объявлении — обещание отдать
                    -- деталь даром, а на деле это незаполненное поле.
                    AND p.price > 0
+                   -- Тем же условием, что и генераторы: позиция без состояния
+                   -- в прайс не идёт (задача 0322), и счётчик её не обещает.
+                   AND ${hasCondition}
                    AND (?::numeric IS NULL OR p.price >= ?::numeric)
                    AND (?::numeric IS NULL OR p.price <= ?::numeric)
                    AND (?::text[] IS NULL OR p.condition = ANY (?::text[]))
@@ -1009,6 +1012,8 @@ public class MarketplaceAccountService {
                         ru.partsflow.publishing.drom.DromPriceGenerator.PREORDERED)
                 .replace("${brandFilter}",
                         ru.partsflow.publishing.drom.DromPriceGenerator.BRAND_FILTER)
+                .replace("${hasCondition}",
+                        ru.partsflow.publishing.drom.DromPriceGenerator.HAS_CONDITION)
                 + columnsSql,
                 Long.class,
                 argsOf(args, columnArgs,

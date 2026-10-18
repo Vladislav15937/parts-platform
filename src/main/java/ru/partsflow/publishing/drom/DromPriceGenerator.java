@@ -282,6 +282,11 @@ public class DromPriceGenerator {
                -- тридцати шести тысяч, и уезжали они молча. Позиция
                -- остаётся на складе и уедет, когда цену проставят.
                AND p.price > 0
+               -- Позиция без состояния («Не указано», задача 0322) не уезжает,
+               -- пока его не выберут: поле площадки двузначное, и молча
+               -- отправленное «Б/у» — то самое ложное слово, от которого
+               -- задача уходит. Текстом без параметров: номера ниже на месте.
+               AND ${hasCondition}
                AND (?::numeric IS NULL OR p.price >= ?::numeric)
                AND (?::numeric IS NULL OR p.price <= ?::numeric)
                AND (?::text[]   IS NULL OR p.condition = ANY (?::text[]))
@@ -338,6 +343,21 @@ public class DromPriceGenerator {
     public static final String PREORDERED = """
             (p.status = 'DRAFT' AND in_transit.id IS NOT NULL
               AND p.quantity - """ + PREORDERED_QTY + " <= 0)";
+
+    /**
+     * У позиции выбрано состояние (задача 0322) — без него в прайс она не идёт.
+     *
+     * <p>Одна строка на прайс запчастей, дельту, прайс колёс
+     * ({@code DromWheelGenerator}) и счётчик выгрузки
+     * {@code MarketplaceAccountService.countMatching}: счётчик, о ней
+     * не знающий, обещал бы позиции, которые не уедут. Поле площадки
+     * двузначное («Новое» / «Б/у»), и позиция «Не указано», отправленная
+     * как «Б/у», — ровно то ложное слово, ради которого задача заведена.
+     * Объявления у такой позиции на площадке не бывает: снять состояние
+     * правкой карточки нельзя ({@code PartService.update}), без состояния
+     * заводится только ожидаемая позиция. Требует псевдонима {@code p}.
+     */
+    public static final String HAS_CONDITION = "p.condition IS NOT NULL";
 
     /** Марка и модель тегов {@code brandcars}/{@code model}: своя, иначе донора, иначе применимости. */
     private static final String CAR_BRAND =
@@ -689,6 +709,7 @@ public class DromPriceGenerator {
                 .replace("${carEngine}", CAR_ENGINE)
                 .replace("${carYear}", CAR_YEAR)
                 .replace("${brandFilter}", BRAND_FILTER)
+                .replace("${hasCondition}", HAS_CONDITION)
                 + columnsSql + (partIds == null ? "" : DELTA_FILTER) + ORDER;
 
         return session.doReturningWork(connection -> {

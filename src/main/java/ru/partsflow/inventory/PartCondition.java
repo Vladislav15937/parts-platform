@@ -122,6 +122,11 @@ public enum PartCondition {
      * <p>Запасной ветки нет намеренно, как и у {@link QualityGrade}:
      * колонку держит {@code part_condition_ck}, и появиться там чужое
      * значение может только правкой базы мимо приложения.
+     *
+     * <p>Позиция без состояния (задача 0322, {@code tenant/091}) даёт
+     * {@code NULL} — и это то, что нужно: пустая клетка, отбор «—пусто—»
+     * находит её, список значений её не предлагает. Подставлять сюда слово
+     * для пустого нельзя: оно уехало бы в колонку как состояние.
      */
     public static String sqlLabel(String alias) {
         StringBuilder sql = new StringBuilder("CASE ").append(alias).append(".condition");

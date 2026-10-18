@@ -87,8 +87,9 @@ describe('ожидаемый товар в карточке поставки', (
 
     fireEvent.click(create);
     await waitFor(() => expect(posted).not.toBeNull());
+    // Состояние не трогали — уехало предложенное «б/у» (задача 0322).
     expect(posted).toEqual({ rawName: 'фара левая', donorId: 7, quantity: 3, price: 9000,
-      requestId: expect.any(String) });
+      condition: 'USED', requestId: expect.any(String) });
     // Список показывается после заведения, из ответа.
     await waitFor(() => expect(document.body.textContent).toContain('№ 410'));
   });
@@ -110,7 +111,59 @@ describe('ожидаемый товар в карточке поставки', (
     fireEvent.click(create);
     await waitFor(() => expect(posted).not.toBeNull());
     expect(posted).toEqual({ rawName: 'двигатель', donorId: null, quantity: 1, price: 45000,
-      requestId: expect.any(String) });
+      condition: 'USED', requestId: expect.any(String) });
+  });
+
+  /**
+   * Состояние спрашивается (задача 0322, решение владельца 18.10.2026: «8-а
+   * с возможностью заводить без состояния»): «б/у» предложено без нажатия,
+   * выбрать можно любое из четырёх или «Не указано». Слова — те же, что
+   * у колонки склада (`CONDITION`), а не свой словарь.
+   */
+  it('состояние: «б/у» предложено, любое из четырёх или «Не указано»', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/supplies/19/expected-parts') && init?.method === 'POST') {
+        bodies.push(JSON.parse(String(init.body)));
+        return json([{ id: 5, number: 410, title: 'Двигатель', condition: null,
+          quantity: 1, price: 45000, received: 0, preordered: 0 }]);
+      }
+      return json([]);
+    }));
+    render(<DonorScreen online canExpect reference={reference()} onChanged={() => {}} />);
+    fireEvent.click((await waitFor(() =>
+      screen.getAllByRole('button', { name: 'Ожидаемый товар' })))[0]!);
+    const create = await waitFor(() =>
+      screen.getByRole('button', { name: 'Завести' }) as HTMLButtonElement);
+
+    const field = screen.getByLabelText('Состояние') as HTMLSelectElement;
+    expect(field.value).toBe('USED');
+    expect([...field.options].map((o) => o.textContent))
+      .toEqual(['новая', 'б/у', 'восстановленная', 'контрактная', 'Не указано']);
+
+    fireEvent.change(field, { target: { value: 'CONTRACT' } });
+    fireEvent.change(screen.getByLabelText('Вид детали'), { target: { value: 'двигатель' } });
+    fireEvent.change(screen.getByLabelText('Цена, ₽'), { target: { value: '45000' } });
+    await waitFor(() => expect(create.disabled).toBe(false));
+    fireEvent.click(create);
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]!.condition).toBe('CONTRACT');
+
+    // Следующая позиция снова начинается с «б/у».
+    await waitFor(() => expect(field.value).toBe('USED'));
+    fireEvent.change(field, { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Вид детали'), { target: { value: 'двигатель' } });
+    fireEvent.change(screen.getByLabelText('Цена, ₽'), { target: { value: '45000' } });
+    await waitFor(() => expect(create.disabled).toBe(false));
+    fireEvent.click(create);
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]!.condition).toBeNull();
+
+    // Позиция без состояния в списке — без слова и без висящего разделителя.
+    await waitFor(() => expect(document.body.textContent).toContain('№ 410'));
+    const line = screen.getByText(/№ 410/).closest('li')!.textContent!;
+    expect(line).not.toMatch(/б\/у|null|undefined|· ·/);
   });
 
   it('ключ запроса: тот же при повторе после отказа, новый на следующую позицию', async () => {

@@ -275,6 +275,47 @@ describe('правка карточки по одному полю', () => {
     expect(sent[0]!['condition']).toBe('CONTRACT');
   });
 
+  /**
+   * Позиция без состояния (задача 0322): выбор показывает «Не указано»,
+   * а не первое из четырёх — «новая», которой никто не выбирал, — и выбрать
+   * состояние ей можно. У позиции с состоянием пункта нет: снять состояние
+   * правкой нельзя, и пункт обещал бы то, чего сервер не делает.
+   */
+  it('позиция без состояния показывает «Не указано» и получает состояние выбором', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') !== 'GET') {
+        sent.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+        return json({ price: 27000 });
+      }
+      return json({ ...card(), condition: null });
+    }));
+    render(<PartEditForm partId={7} row={row()}
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Состояние')).toBeTruthy());
+
+    expect(line('Состояние').textContent).not.toMatch(/новая|б\/у/);
+    fireEvent.click(screen.getByLabelText('Изменить: Состояние'));
+    const field = screen.getByLabelText('Состояние') as HTMLSelectElement;
+    expect(field.value).toBe('');
+    expect(field.selectedOptions[0]!.textContent).toBe('Не указано');
+
+    fireEvent.change(field, { target: { value: 'NEW' } });
+    fireEvent.click(save());
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]!['condition']).toBe('NEW');
+  });
+
+  it('у позиции с состоянием пункта «Не указано» нет', async () => {
+    render(<PartEditForm partId={7} row={row()}
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Состояние')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Изменить: Состояние'));
+
+    const field = screen.getByLabelText('Состояние') as HTMLSelectElement;
+    expect([...field.options].map((o) => o.textContent))
+      .toEqual(['новая', 'б/у', 'восстановленная', 'контрактная']);
+  });
+
 });
 
 /**
