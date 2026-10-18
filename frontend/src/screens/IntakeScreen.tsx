@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { CONDITIONS, CONDITION_UNSET } from '../inventory/catalog';
 import { ConditionWord } from '../inventory/ConditionWord';
 import { LongNumberNote } from '../inventory/LongNumberNote';
 import { numberTooLong } from '../inventory/oemLength';
@@ -33,8 +34,9 @@ interface Item {
   /** Принимается заведённая заранее позиция, а не новая карточка. */
   partId: number | null;
   /**
-   * Состояние заведённой заранее позиции — только для показа в партии
-   * (задача 0318); на сервер не уходит, там оно уже есть у карточки.
+   * Состояние кодом. У заведённой заранее позиции — выбранное на приёмке
+   * (задача 0326) и уходит на сервер: пусто там значит «не трогать».
+   * У новой карточки пусто всегда — сервер ставит своё умолчание.
    */
   condition: string | null;
   quantity: number;
@@ -63,6 +65,8 @@ interface Payload {
     partId: number | null;
     /** Пусто — номера нет; сервер приводит его тем же правилом, что поиск. */
     oemNumber: string | null;
+    /** Состояние кодом; пусто — у новой умолчание сервера, у заведённой «не трогать». */
+    condition: string | null;
   }[];
 }
 
@@ -115,6 +119,12 @@ export function IntakeScreen({ reference, onSend }: Props) {
 
   // Сколько пришло по ожидаемой позиции — по умолчанию всё, что оставалось.
   const [arrived, setArrived] = useState<Record<number, string>>({});
+  /**
+   * Каким приехало (задача 0326, решение владельца 18.10.2026 «6 - в»):
+   * выбор стоит на заведённом, и тому, у кого приехало то же, поле не
+   * прибавляет ни одного нажатия. Пусто — «Не указано».
+   */
+  const [arrivedAs, setArrivedAs] = useState<Record<number, string>>({});
 
   const warehouse = reference.warehouses.find((w) => w.id === warehouseId);
   // Ожидаемое по выбранной поставке: принимать его надо этой же позицией.
@@ -199,6 +209,9 @@ export function IntakeScreen({ reference, onSend }: Props) {
             {expectedHere.map((part) => {
               const taken = items.some((item) => item.partId === part.id);
               const quantity = Number(arrived[part.id] ?? part.remaining);
+              // Кэш телефона до 0318 поля не несёт — это «Не указано».
+              const registered = part.condition ?? null;
+              const condition = arrivedAs[part.id] ?? registered ?? '';
               return (
                 <li key={part.id}>
                   {part.title}
@@ -215,11 +228,29 @@ export function IntakeScreen({ reference, onSend }: Props) {
                       onChange={(e) => setArrived({ ...arrived, [part.id]: e.target.value })}
                     />
                   </label>
+                  <label>
+                    Состояние
+                    <select
+                      value={condition}
+                      disabled={taken}
+                      onChange={(e) => setArrivedAs({ ...arrivedAs, [part.id]: e.target.value })}
+                    >
+                      {CONDITIONS.map((c) => (
+                        <option key={c.key} value={c.key}>{c.title}</option>
+                      ))}
+                      {/* Только у заведённой без состояния: снять состояние
+                          приёмкой нельзя, как и правкой карточки (0322). */}
+                      {registered === null && <option value="">{CONDITION_UNSET}</option>}
+                    </select>
+                  </label>
+                  {condition === '' && (
+                    <p className="note">Без состояния позиция не уйдёт на Дром.</p>
+                  )}
                   <button
                     type="button"
                     className="button--ghost"
                     disabled={warehouseId === null || taken || !(quantity > 0)}
-                    onClick={() => acceptExpected(part, quantity)}
+                    onClick={() => acceptExpected(part, quantity, condition)}
                   >
                     {taken ? 'в партии' : 'Принять'}
                   </button>
@@ -439,12 +470,12 @@ export function IntakeScreen({ reference, onSend }: Props) {
    * <p>Ячейка — та, что выбрана в форме ниже: на экране один выбор ячейки, и
    * второй такой же для ожидаемой позиции был бы вторым способом сделать то же.
    */
-  function acceptExpected(part: ExpectedPartRef, quantity: number) {
+  function acceptExpected(part: ExpectedPartRef, quantity: number, condition: string) {
     setItems([...items, {
       ...emptyItem(),
       key: crypto.randomUUID(),
       partId: part.id,
-      condition: part.condition ?? null,
+      condition: condition === '' ? null : condition,
       quantity,
       rawName: part.title,
       price: String(part.price),
@@ -479,6 +510,7 @@ export function IntakeScreen({ reference, onSend }: Props) {
         quantity: item.quantity,
         partId: item.partId,
         oemNumber: item.oemNumber.trim() === '' ? null : item.oemNumber.trim(),
+        condition: item.condition,
       })),
     };
     // Снимки привязываются к позиции по номеру, а не по идентификатору:

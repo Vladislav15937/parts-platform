@@ -208,6 +208,7 @@ public class IntakeService {
         for (ItemRequest item : items) {
             if (item.partId() != null) {
                 Part existing = accepted.get(item.partId());
+                arrivedAs(existing, item.condition(), authorId);
                 document.addLine(existing.getId(), item.quantity(), item.cellId());
                 created.add(existing);
                 continue;
@@ -292,6 +293,36 @@ public class IntakeService {
         return found;
     }
 
+    /**
+     * Состояние, выбранное на приёмке ожидаемой позиции (задача 0326).
+     *
+     * <p>Решение владельца продукта 18.10.2026, «6 - в»: состояние ожидаемой
+     * выбирают заранее, по контейнеру в пути, а приезжает бывает другое.
+     * Экран предлагает заведённое, приёмщик меняет, если пришло не то.
+     *
+     * <p>Пусто — «не трогать», а не «снять»: вкладка, открытая до выкладки,
+     * поля не шлёт, и её приём не должен сбросить состояние; снять его нельзя
+     * и правкой карточки (0322, «5 - а») — снятое ушло бы из прайса. Пишется
+     * через сущность под блокировкой {@link #acceptExpected}: смена попадает
+     * в {@code audit_log} с автором и в ленту правок карточки, а отметку для
+     * дельты Дрома ставит проведение документа. Название не трогается (0304).
+     *
+     * <p>Сбрасывается сразу, до проведения: {@code Part} пишется целиком,
+     * а проведение меняет {@code part.status} и остаток мимо сущности
+     * ({@code StockLedger}). Сегодня сущность успевает уйти в базу раньше
+     * и без этого (снятый сброс тест не краснит), но держится это на чужом
+     * промежуточном запросе; отложенный до коммита, этот же {@code UPDATE}
+     * вернул бы позиции черновик. Следствие стережёт
+     * {@code ExpectedArrivalConditionTest.otherConditionIsAppliedAndLogged}.
+     */
+    private void arrivedAs(Part part, PartCondition chosen, Long authorId) {
+        if (chosen != null && chosen != part.getCondition()) {
+            part.setCondition(chosen);
+            part.touchedBy(authorId);
+            parts.saveAndFlush(part);
+        }
+    }
+
     // ---------- ожидаемый товар ----------
 
     /**
@@ -353,7 +384,7 @@ public class IntakeService {
             throw new IllegalArgumentException(
                     "Цена должна быть больше нуля: с нулевой ценой объявление не уйдёт на площадку");
         }
-        PartCondition chosen = expectedCondition(condition);
+        PartCondition chosen = conditionOf(condition);
         // Машина необязательна: контрактные агрегаты приезжают партиями без
         // машин (ответ владельца 9 октября 2026). Указанная — проверяется.
         Donor donor = donorId == null ? null : requireDonor(donorId);
@@ -398,14 +429,16 @@ public class IntakeService {
     }
 
     /**
-     * Состояние ожидаемой позиции из запроса: код, пусто или отказ словами.
+     * Состояние из запроса: код, пусто или отказ словами.
      *
      * <p>Незнакомое слово — 400 до любой записи, а не пятисотка
      * {@code part_condition_ck} и не молча подставленное «б/у»: форма шлёт
      * только коды из словаря, и чужое значение значит устаревшую вкладку или
-     * чужого клиента. Пустое и пробелы — «Не указано».
+     * чужого клиента. Пустое и пробелы — «Не указано»; что это значит, решает
+     * путь: заведение ожидаемой — позиция без состояния, приёмка новой —
+     * умолчание сущности, приёмка ожидаемой — «не трогать» (задача 0326).
      */
-    private static PartCondition expectedCondition(String code) {
+    static PartCondition conditionOf(String code) {
         if (code == null || code.isBlank()) {
             return null;
         }

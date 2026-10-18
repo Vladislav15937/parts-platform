@@ -20,7 +20,6 @@ import org.springframework.web.bind.annotation.RestController;
 import ru.partsflow.inventory.LateralSide;
 import ru.partsflow.inventory.LongitudinalSide;
 import ru.partsflow.inventory.Part;
-import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.QualityGrade;
 import ru.partsflow.inventory.VerticalSide;
 import ru.partsflow.platform.security.CurrentUser;
@@ -340,7 +339,13 @@ public class IntakeController {
                               LateralSide sideLr,
                               LongitudinalSide sideFr,
                               VerticalSide sideUd,
-                              PartCondition condition,
+                              /* Состояние кодом. Строкой, а не перечислением (задача
+                                 0326): пустое из выбора «Не указано» Jackson
+                                 в перечисление не переводит, а незнакомое слово
+                                 уходило «Запрос не разобран» вместо слов. Пусто —
+                                 у новой позиции умолчание «б/у», у принимаемой
+                                 ожидаемой — «не трогать». */
+                              String condition,
                               QualityGrade qualityGrade,
                               String manufacturer,
                               String oemNumber,
@@ -355,7 +360,7 @@ public class IntakeController {
                     rawName,
                     quantity == null ? BigDecimal.ONE : quantity,
                     price, costPrice, cellId,
-                    sideLr, sideFr, sideUd, condition, qualityGrade,
+                    sideLr, sideFr, sideUd, IntakeService.conditionOf(condition), qualityGrade,
                     manufacturer, oemNumber, marking, note, partId);
         }
     }
