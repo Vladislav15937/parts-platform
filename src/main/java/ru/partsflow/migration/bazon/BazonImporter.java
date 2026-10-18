@@ -976,14 +976,12 @@ public final class BazonImporter {
                             java.util.Set<String> unknownPublish,
                             long categoryId) throws SQLException {
 
-        var years = BazonValueParser.parseYearRange(row.get("Год выпуска"));
-
         int at = 1;
         for (int i = 0; i < PART_FIELDS.size(); i++) {
             bind(ps, at++, PART_FIELDS.get(i), values[i]);
         }
         ps.setLong(at++, categoryId);
-        ps.setString(at++, buildTitle(row, row.get("Запчасть"), years));
+        ps.setString(at++, buildTitle(row, row.get("Запчасть")));
         // Номер в прежней системе — естественный ключ импорта: по нему повторный
         // запуск узнаёт уже загруженное.
         ps.setString(at++, row.get("Номер товара"));
@@ -1051,24 +1049,25 @@ public final class BazonImporter {
         return parsed == null ? PartCondition.USED : parsed;
     }
 
-    private String buildTitle(BazonCsvReader.Row row, String partName,
-                              BazonValueParser.YearRange years) {
+    private String buildTitle(BazonCsvReader.Row row, String partName) {
         if (partName == null) {
             return "Без наименования";
         }
+        // Год — текстом поля «Год выпуска», как у Bazon: первое число
+        // («03-08» → «03»), а не разобранное «от» — у того ведущий ноль
+        // и двузначность уже потеряны. Марка, модель, кузов и двигатель —
+        // списки, генератор берёт первое значение каждого (задача 0336).
         var vehicle = new PartTitleGenerator.VehicleTitlePart(
                 row.get("Марка"), row.get("Модель"), row.get("Кузов"),
-                row.get("Двигатель"), years == null ? null : years.from());
+                row.get("Двигатель"), row.get("Год выпуска"));
         var sides = new PartTitleGenerator.Sides(
                 BazonValueParser.parseLongitudinalSide(row.get("Передний / Задний")),
                 BazonValueParser.parseLateralSide(row.get("Левый / Правый")),
                 null);
 
-        // Состояния в заголовке нет (задача 0315): оно пишется в condition
-        // и показывается словом рядом, а пометка «(б/у)» была его второй
-        // копией. У Bazon она в заголовке есть — расхождение осознанное,
-        // docs/bazon-vs-us.md.
-        return titleGenerator.generate(partName, vehicle, sides,
+        // Пометка состояния в названии — как у Bazon (задача 0336, отменяет 0315):
+        // «(б/у)» у б/у и контрактной, у новой нет.
+        return titleGenerator.generate(partName, vehicle, sides, conditionOf(row),
                 row.get("Номер производителя"));
     }
 

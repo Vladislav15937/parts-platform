@@ -112,7 +112,7 @@ class PartAllFieldsEditTest extends PostgresTestBase {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"price":4500,"published":true,
-                                 "number":%d,"code":"FARA-0302","title":"Фара левая ксенон",
+                                 "number":%d,"code":"FARA-0302",
                                  "sideLr":"RIGHT","sideFr":"REAR","authenticity":"Оригинал",
                                  "oem":"81170-33670","crosses":"81170 33671, 8117033672",
                                  "legacyCode":"ST-0302","dromAdNumber":"№ 125696381",
@@ -126,7 +126,6 @@ class PartAllFieldsEditTest extends PostgresTestBase {
         Map<String, String> expected = Map.ofEntries(
                 Map.entry("number", String.valueOf(freeNumber)),
                 Map.entry("code", "FARA-0302"),
-                Map.entry("title", "Фара левая ксенон"),
                 Map.entry("sideLr", "RIGHT"),
                 Map.entry("sideFr", "REAR"),
                 Map.entry("authenticity", "Оригинал"),
@@ -275,13 +274,13 @@ class PartAllFieldsEditTest extends PostgresTestBase {
     void editIsInTheHistory() throws Exception {
         MockHttpSession owner = login("vladelec0302");
 
-        save(owner, "\"oem\":\"81170-33670\",\"brand\":\"Lexus\",\"title\":\"Фара левая\"");
+        save(owner, "\"oem\":\"81170-33670\",\"brand\":\"Lexus\"");
 
         String history = mvc.perform(get("/api/parts/" + partId + "/history").session(owner))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(history).contains("Номер производителя", "81170-33670",
-                "Марка", "Lexus", "Наименование", "Фара левая");
+                "Марка", "Lexus");
     }
 
     /**

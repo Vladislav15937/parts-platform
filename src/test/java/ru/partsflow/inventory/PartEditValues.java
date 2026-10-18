@@ -22,8 +22,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 final class PartEditValues {
 
-    /** Не поле карточки, а указание, что сделать с ценой. */
-    static final Set<String> NOT_A_FIELD = Set.of("priceOp");
+    /**
+     * Не поля правки: указание, что сделать с ценой, и наименование — оно
+     * в записи формы есть (его отдаёт {@code GET /editable}), но производное
+     * и руками не правится (задача 0336): присланное другое — отказ.
+     */
+    static final Set<String> NOT_A_FIELD = Set.of("priceOp", "title");
 
     private final ObjectMapper json;
     private final String suffix;
@@ -79,7 +83,6 @@ final class PartEditValues {
         v.put("priceOp", "SET");
         v.put("number", number);
         v.put("code", "CODE1-" + suffix);
-        v.put("title", "Фара исходная");
         v.put("sideLr", "LEFT");
         v.put("sideFr", "FRONT");
         v.put("authenticity", "Оригинал");
@@ -137,7 +140,6 @@ final class PartEditValues {
         v.put("adDate", "2026-10-01");
         v.put("number", number + 1);
         v.put("code", "CODE2-" + suffix);
-        v.put("title", "Фара новая");
         v.put("sideLr", "RIGHT");
         v.put("sideFr", "REAR");
         v.put("authenticity", "Копия");
@@ -176,7 +178,7 @@ final class PartEditValues {
         return out;
     }
 
-    /** Все поля формы — компоненты записи, кроме указания про цену. */
+    /** Все поля формы — компоненты записи, кроме {@link #NOT_A_FIELD}. */
     static List<String> fieldKeys() {
         List<String> keys = new ArrayList<>();
         for (RecordComponent component : PartController.UpdateRequest.class.getRecordComponents()) {

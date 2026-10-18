@@ -114,7 +114,7 @@ class IntakeServiceTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Заголовок собирается сам: вид детали, машина, стороны — без состояния")
+    @DisplayName("Заголовок собирается сам: вид детали, машина, стороны, пометка «(б/у)»")
     void titleIsAssembledNotTyped() {
         Supply supply = arrivedSupply("30");
         Donor donor = inTenant(() -> intake.registerDonor(camry(), supply.getId(), null));
@@ -127,30 +127,39 @@ class IntakeServiceTest extends PostgresTestBase {
         assertThat(receipt.parts().get(0).getTitle())
                 .contains("фара левая")
                 .contains("Toyota")
-                .contains("перед. лев.")
-                // Состояние — поле, а не пометка в названии (задача 0315).
-                .doesNotContain("(б/у)");
+                // Пометка состояния — как у Bazon (задача 0336, отменяет 0315).
+                .contains("перед. лев. (б/у)");
     }
 
+    /**
+     * Вид в названии — написание клиента, а не эталон (задача 0336, решение
+     * владельца продукта 19.10.2026, «как в Bazon»): «запаска» и «Запасное
+     * колесо» — два названия, а вид детали у них один — эталон справочника.
+     *
+     * <p>Эталон берётся из поставляемого справочника, а не заводится копией:
+     * копия жила в своей категории, то есть была вторым «Запасным колесом»
+     * с другой категорией — и сопоставление зависело от того, какая строка
+     * попалась первой. Ловит это теперь уникальность имени (catalog/014).
+     */
     @Test
-    @DisplayName("Сопоставленное наименование даёт эталонный заголовок, а не местное написание")
-    void matchedNameGivesCanonicalTitle() {
-        // Эталон с синонимом: местное «запаска» должно превратиться
-        // в «Запасное колесо», иначе однородности склада не будет.
-        //
-        // Эталон берётся из поставляемого справочника, а не заводится копией:
-        // копия жила в своей категории, то есть была вторым «Запасным колесом»
-        // с другой категорией — и сопоставление зависело от того, какая строка
-        // попалась первой. Ловит это теперь уникальность имени (catalog/014).
+    @DisplayName("Два написания одного вида — два названия по написанию, вид детали один")
+    void spellingStaysInTitleKindIsCanonical() {
         Supply supply = arrivedSupply("31");
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
                 warehouse, supply.getId(), null,
-                List.of(item("запаска", "2000")), null, uniqueRequestId()));
+                List.of(item("запаска", "2000"), item("Запасное колесо", "2100")),
+                null, uniqueRequestId()));
 
-        assertThat(receipt.parts().get(0).getTitle())
-                .as("в заголовок ушло местное написание вместо эталонного")
-                .contains("Запасное колесо")
-                .doesNotContain("запаска");
+        var local = receipt.parts().get(0);
+        var canonical = receipt.parts().get(1);
+        assertThat(local.getTitle())
+                .as("в название ушёл эталон вместо написания клиента")
+                .isEqualTo("запаска перед. лев. (б/у)");
+        assertThat(canonical.getTitle()).isEqualTo("Запасное колесо перед. лев. (б/у)");
+        assertThat(local.getPartKindId())
+                .as("вид детали у двух написаний — один эталон")
+                .isNotNull()
+                .isEqualTo(canonical.getPartKindId());
     }
 
     @Test
