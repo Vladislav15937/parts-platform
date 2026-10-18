@@ -170,27 +170,37 @@ public class OrganizationAuditService {
      * Hibernate. Состояние так пишет одно место — дозаполнение повтором файла
      * переноса (0282), и только у позиций, которые человек не правил.
      *
+     * <p><b>Пустое состояние — это значение, а не «нет сведений»</b> (с
+     * {@code tenant/091}, задача 0322, колонка допускает {@code NULL}).
+     * Поэтому снимок отбирается по наличию <b>ключа</b> ({@code -> 'condition'}
+     * — jsonb; ключ есть со значением {@code null} — это JSON {@code null},
+     * а не SQL {@code NULL}), выбор идёт по jsonb, и в текст значение
+     * переводится последним шагом ({@code #>> '{}'}: JSON {@code null} даёт
+     * SQL {@code NULL}). Иначе позиция без состояния, у которой потом
+     * поставили «контрактная», задним числом называлась бы контрактной
+     * во всех прежних записях — найдено разбором свода с 0322.
+     *
      * <p>Подзапросом в той же выборке, а не запросом на строку: страница
      * в пятьдесят записей — один запрос, как и до задачи, а подзапросы идут
      * по {@code audit_log_record_ix}. Литерал {@code ?} оператора jsonb здесь
-     * нельзя — его прочёл бы драйвер как параметр, — отсюда {@code IS NOT NULL}:
-     * колонка {@code part.condition} — {@code NOT NULL}, и в снимке без пустоты.
+     * нельзя — его прочёл бы драйвер как параметр, — отсюда {@code IS NOT NULL}
+     * у jsonb-значения ключа.
      *
      * @param partId  выражение номера позиции
      * @param current нынешнее состояние той же позиции
      */
     static String conditionAt(String partId, String current) {
-        String snapshot = "coalesce(pa.new_value, pa.old_value) ->> 'condition'";
+        String snapshot = "coalesce(pa.new_value, pa.old_value) -> 'condition'";
         return "coalesce("
                 + "(SELECT " + snapshot + " FROM audit_log pa"
                 + " WHERE pa.table_name = 'part' AND pa.record_id = " + partId
                 + " AND pa.id <= a.id AND " + snapshot + " IS NOT NULL"
                 + " ORDER BY pa.id DESC LIMIT 1),"
-                + " (SELECT pa.old_value ->> 'condition' FROM audit_log pa"
+                + " (SELECT pa.old_value -> 'condition' FROM audit_log pa"
                 + " WHERE pa.table_name = 'part' AND pa.record_id = " + partId
-                + " AND pa.id > a.id AND pa.old_value ->> 'condition' IS NOT NULL"
+                + " AND pa.id > a.id AND pa.old_value -> 'condition' IS NOT NULL"
                 + " ORDER BY pa.id LIMIT 1),"
-                + " " + current + ")";
+                + " to_jsonb(" + current + ")) #>> '{}'";
     }
 
     private final JdbcTemplate jdbc;

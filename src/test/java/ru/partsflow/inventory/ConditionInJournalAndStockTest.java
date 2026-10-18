@@ -135,27 +135,30 @@ class ConditionInJournalAndStockTest extends PostgresTestBase {
     }
 
     /**
-     * Пустое состояние (после 0322 у ожидаемой позиции оно бывает) — слова нет
-     * и разделителя тоже. Колонка пока {@code NOT NULL}, поэтому в своей
-     * тестовой схеме ограничение снимается: так выглядит позиция после 0322.
+     * Пустое состояние (с 0322 колонка допускает {@code NULL}, {@code tenant/091})
+     * — слова нет и разделителя тоже. Колонку делает пустой {@link #nullableCondition}.
      */
     @Test
     @DisplayName("Без состояния отказ склада не печатает ни слова, ни разделителя")
-    void stockRefusalWithoutConditionPrintsNoWord() {
+    void stockRefusalWithoutConditionPrintsNoWord() throws Exception {
+        nullableCondition();
         Long warehouse = warehouse("Склад без состояния");
-        Long partId = stockPart("Фара без состояния", PartCondition.USED, warehouse);
-        String named = inTenant(() -> {
-            jdbc.execute("ALTER TABLE part ALTER COLUMN condition DROP NOT NULL");
-            jdbc.update("UPDATE part SET condition = NULL WHERE id = ?", partId);
-            String code = jdbc.queryForObject(
-                    "SELECT public_code FROM part WHERE id = ?", String.class, partId);
-            String result = naming.part(partId);
-            jdbc.update("UPDATE part SET condition = 'USED' WHERE id = ?", partId);
-            jdbc.execute("ALTER TABLE part ALTER COLUMN condition SET NOT NULL");
-            return result + "|" + code;
-        });
-        String[] parts = named.split("\\|");
-        assertThat(parts[0]).isEqualTo("Фара без состояния (" + parts[1] + ")");
+        Long partId = stockPart("Фара без состояния", null, warehouse);
+        String code = inTenant(() -> jdbc.queryForObject(
+                "SELECT public_code FROM part WHERE id = ?", String.class, partId));
+
+        assertThat(inTenant(() -> naming.part(partId)))
+                .isEqualTo("Фара без состояния (" + code + ")");
+        mvc.perform(post("/api/stock/write-offs").with(csrf()).session(login("vladelec"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"разбита",
+                                 "items":[{"partId":%d,"quantity":2}]}"""
+                                .formatted(warehouse, partId)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(containsString(
+                        "Фара без состояния (" + code + ")")))
+                .andExpect(jsonPath("$.message").value(not(containsString("Фара без состояния ·"))));
     }
 
     // ---------- журнал действий ----------
@@ -201,6 +204,47 @@ class ConditionInJournalAndStockTest extends PostgresTestBase {
                 // состояния в снимке нет, оно берётся из снимков позиции.
                 .andExpect(jsonPath("$.items[?(@.kind == 'Позиция сделки')].subjectCondition")
                         .value(org.hamcrest.Matchers.everyItem(org.hamcrest.Matchers.is("USED"))))
+                .andExpect(jsonPath("$.items[?(@.kind == 'Позиция сделки')]")
+                        .value(org.hamcrest.Matchers.hasSize(org.hamcrest.Matchers.greaterThan(0))));
+    }
+
+    /**
+     * Пустое состояние — значение, а не «нет сведений» (шов с 0322, найдено
+     * разбором свода): позиция без состояния, правка цены и сделка, потом
+     * состояние поставили. Прежние записи остаются без состояния — назови
+     * их журнал «контрактная», он соврал бы о прошлом.
+     */
+    @Test
+    @DisplayName("Записи, сделанные без состояния, после его установки остаются без состояния")
+    void journalKeepsEmptyConditionOfOldEntries() throws Exception {
+        String title = "Фара пустая " + UUID.randomUUID().toString().substring(0, 8);
+        nullableCondition();
+        Long warehouse = warehouse("Склад журнала 3");
+        Long partId = stockPart(title, null, warehouse);
+        MockHttpSession owner = login("vladelec");
+
+        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"price\":5500}"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/deals").with(csrf()).session(login("prodavec"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"customerId\":%d,\"items\":[{\"partId\":%d,\"quantity\":1,\"warehouseId\":%d}]}"
+                                .formatted(customer, partId, warehouse)))
+                .andExpect(status().isCreated());
+        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"condition\":\"CONTRACT\"}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/api/organization/audit").param("q", title).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[?(@.kind == 'Товар' && @.changes[0].label == 'Состояние')].subjectCondition")
+                        .value(org.hamcrest.Matchers.contains("CONTRACT")))
+                .andExpect(jsonPath("$.items[?(@.kind == 'Товар' && @.changes[0].label == 'Цена')].subjectCondition")
+                        .value(org.hamcrest.Matchers.contains(org.hamcrest.Matchers.nullValue())))
+                .andExpect(jsonPath("$.items[?(@.kind == 'Позиция сделки')].subjectCondition")
+                        .value(org.hamcrest.Matchers.everyItem(org.hamcrest.Matchers.nullValue())))
                 .andExpect(jsonPath("$.items[?(@.kind == 'Позиция сделки')]")
                         .value(org.hamcrest.Matchers.hasSize(org.hamcrest.Matchers.greaterThan(0))));
     }
@@ -262,12 +306,24 @@ class ConditionInJournalAndStockTest extends PostgresTestBase {
 
     // ---------- фикстура ----------
 
+    /**
+     * До слияния {@code tenant/091} (задача 0322, PR 460): в этой ветке колонка
+     * ещё {@code NOT NULL}, и пустое состояние делается снятием ограничения
+     * в своей схеме {@code t_000963}. <b>После слияния 091 этот метод и его
+     * вызовы убрать</b> — колонка будет допускать пустоту сама.
+     */
+    private void nullableCondition() {
+        inTenant(() -> {
+            jdbc.execute("ALTER TABLE part ALTER COLUMN condition DROP NOT NULL");
+        });
+    }
+
     private Long stockPart(String title, PartCondition condition, Long warehouse) {
         return inTenant(() -> {
             Long id = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price, cost_price, condition)
                     VALUES (1, ?, 5000, 2000, ?) RETURNING id""", Long.class,
-                    title, condition.name());
+                    title, condition == null ? null : condition.name());
             ledger.record(StockMovement.intake(id, BigDecimal.ONE, warehouse, null));
             return id;
         });
