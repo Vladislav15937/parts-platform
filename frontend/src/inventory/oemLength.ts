@@ -18,6 +18,14 @@ import { count, plural } from '../ui/plural';
 export const LONG_NUMBER_LIMITS = { oem: 64, crosses: 1000 } as const;
 
 /**
+ * Подсказка у поля «Номер производителя» — на карточке и на приёмке одна
+ * (задача 0323, решение владельца 18.10.2026: «у детали только один номер
+ * производителя — остальное — кросс номера»). Слова исполнителя, названы в PR.
+ */
+export const OEM_FIELD_NOTE = 'Один номер; если впишете несколько через запятую,'
+  + ' первый останется номером производителя, остальные станут кросс-номерами';
+
+/**
  * Самый длинный номер, который можно сохранить, в знаках приведённого вида —
  * копия `OemNumbers.MAX_NORMALIZED_LENGTH`; сверяет их `OemLengthClientTest`.
  * Каждый номер отдельно: суммарного предела у кросс-номеров нет.
@@ -52,9 +60,19 @@ export function crossesLength(raw: string): number {
   return raw.split(SEPARATORS).reduce((sum, piece) => sum + oemLength(piece), 0);
 }
 
+/**
+ * Длина самого длинного номера в поле «Номер производителя». Сервер делит его
+ * теми же разделителями (`OemNumbers.primary`, задача 0323): первый номер —
+ * основной, остальные уходят в кросс-номера, и предел у каждого свой, а не
+ * у строки «A, B» целиком.
+ */
+export function longestOemLength(raw: string): number {
+  return raw.split(SEPARATORS).reduce((max, piece) => Math.max(max, oemLength(piece)), 0);
+}
+
 /** Текст предупреждения у поля или `null`, если значение обычной длины. */
 export function longNumberWarning(field: 'oem' | 'crosses', raw: string): string | null {
-  const length = field === 'oem' ? oemLength(raw) : crossesLength(raw);
+  const length = field === 'oem' ? longestOemLength(raw) : crossesLength(raw);
   if (length <= LONG_NUMBER_LIMITS[field]) return null;
   const what = field === 'oem' ? 'Необычно длинный номер производителя'
                                : 'Необычно длинные кросс-номера';
@@ -82,7 +100,9 @@ export function numberTooLong(field: 'oem' | 'crosses', raw: string): string | n
   const tail = ` длиннее ${OEM_STORE_LIMIT} знаков: сохранить нельзя.`
     + ' Похоже, вставлено не то — проверьте номер';
   if (field === 'oem') {
-    return normalizedLength(raw) > OEM_STORE_LIMIT ? `Номер производителя${tail}` : null;
+    // Каждый номер поля отдельно, как `OemNumbers.primaryTooLong` (задача 0323).
+    return raw.split(SEPARATORS).some((piece) => normalizedLength(piece) > OEM_STORE_LIMIT)
+      ? `Номер производителя${tail}` : null;
   }
   for (const piece of raw.split(SEPARATORS)) {
     if (normalizedLength(piece) > OEM_STORE_LIMIT) {

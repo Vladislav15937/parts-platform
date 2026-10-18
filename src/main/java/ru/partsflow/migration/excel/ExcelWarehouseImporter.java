@@ -531,6 +531,13 @@ public class ExcelWarehouseImporter {
             return null;
         }
 
+        // Номер детали делится здесь, один раз на строку (задача 0323): лишние
+        // номера основного встают первыми в замены, и заведение, и оба пути
+        // повтора (0282) видят одну и ту же пару «основной — замены».
+        ru.partsflow.catalog.OemNumbers.Primary numbers =
+                ru.partsflow.catalog.OemNumbers.primary(mapping.value(row, Field.OEM));
+        List<String> fileSubstitutes = substitutes(mapping.value(row, Field.OEM_SUBSTITUTES));
+
         // Поля карточки Дрома (задача 0277). Слово, которого разборщик
         // не знает, останавливает строку и называется дословно: молча
         // подставленная сторона или «б/у» — объявление клиента, переехавшее
@@ -541,7 +548,7 @@ public class ExcelWarehouseImporter {
                     DromCardWords.condition(mapping.value(row, Field.CONDITION)),
                     blankToNull(mapping.value(row, Field.MANUFACTURER)),
                     blankToNull(mapping.value(row, Field.AUTHENTICITY)),
-                    substitutes(mapping.value(row, Field.OEM_SUBSTITUTES)),
+                    concat(numbers.crosses(), fileSubstitutes),
                     DromCardWords.lateral(mapping.value(row, Field.SIDE_LR)),
                     DromCardWords.longitudinal(mapping.value(row, Field.SIDE_FR)),
                     DromCardWords.vertical(mapping.value(row, Field.SIDE_UD)));
@@ -575,10 +582,12 @@ public class ExcelWarehouseImporter {
         // Номер, который нельзя сохранить (задача 0312), — построчная причина,
         // а не отбой индекса: тот унёс бы строку пятисоткой без слов, а здесь
         // пропускается одна строка, остальные файла переносятся.
-        String oem = oem(mapping.value(row, Field.OEM));
-        String tooLong = ru.partsflow.catalog.OemNumbers.tooLong(oem, false);
-        for (int i = 0; tooLong == null && i < card.substitutes().size(); i++) {
-            tooLong = ru.partsflow.catalog.OemNumbers.tooLong(card.substitutes().get(i), true);
+        // Номера поля «Номер детали» мерятся как номер производителя — их туда
+        // и вписали, — замены из своей колонки как кросс-номера.
+        String oem = numbers.primary();
+        String tooLong = ru.partsflow.catalog.OemNumbers.primaryTooLong(mapping.value(row, Field.OEM));
+        for (int i = 0; tooLong == null && i < fileSubstitutes.size(); i++) {
+            tooLong = ru.partsflow.catalog.OemNumbers.tooLong(fileSubstitutes.get(i), true);
         }
         if (tooLong != null) {
             report.skip(row.number(), tooLong);
@@ -618,10 +627,13 @@ public class ExcelWarehouseImporter {
         return List.copyOf(ru.partsflow.catalog.OemNumbers.list(cell));
     }
 
-    /** Номер детали из ячейки — тем же {@code OemNumbers.clean}, что у карточки; пусто — {@code null}. */
-    private static String oem(String cell) {
-        String cleaned = ru.partsflow.catalog.OemNumbers.clean(cell);
-        return cleaned == null || cleaned.isEmpty() ? null : cleaned;
+    private static List<String> concat(List<String> first, List<String> second) {
+        if (first.isEmpty()) {
+            return second;
+        }
+        List<String> all = new ArrayList<>(first);
+        all.addAll(second);
+        return List.copyOf(all);
     }
 
     /**

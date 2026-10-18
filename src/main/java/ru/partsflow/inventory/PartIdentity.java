@@ -342,7 +342,9 @@ public class PartIdentity {
         if (edit == null) {
             return;
         }
-        String problem = edit.oem() == null ? null : OemNumbers.tooLong(edit.oem(), false);
+        // Каждый номер поля отдельно (задача 0323): «A, B» — два номера, и предел
+        // 0312 у каждого свой, а не у строки целиком.
+        String problem = edit.oem() == null ? null : OemNumbers.primaryTooLong(edit.oem());
         if (problem == null && edit.crosses() != null) {
             for (String cross : OemNumbers.list(edit.crosses())) {
                 problem = OemNumbers.tooLong(cross, true);
@@ -370,13 +372,19 @@ public class PartIdentity {
         if (edit.oem() == null && edit.crosses() == null) {
             return false;
         }
-        String primary = edit.oem() == null ? was.oem() : cleanOem(edit.oem());
+        // У детали один номер производителя, остальное — кросс-номера (задача 0323):
+        // «8414012530, 8414012531» — основной первый, второй встаёт кросс-номером.
+        // Лишние номера идут первыми, перед набранными или хранимыми: они стояли
+        // рядом с основным, и там их человек и вписал (решение исполнителя, п. 3).
+        OemNumbers.Primary typed = edit.oem() == null ? null : OemNumbers.primary(edit.oem());
+        String primary = typed == null ? was.oem() : typed.primary();
         // Нетронутое поле переписывается тем, что лежит, а не прочитанным
         // заново из склеенной строки: иначе правка одного номера производителя
         // привела бы к латинице и кросс-номера, которых человек не менял,
         // и история назвала бы правку, которой не было (задача 0309, п. 4).
-        List<String> crosses = edit.crosses() == null
-                ? storedCrosses(partId) : OemNumbers.list(edit.crosses());
+        List<String> crosses = new ArrayList<>(typed == null ? List.of() : typed.crosses());
+        crosses.addAll(edit.crosses() == null
+                ? storedCrosses(partId) : OemNumbers.list(edit.crosses()));
 
         Set<String> seen = new LinkedHashSet<>();
         String primaryNormalized = primary == null ? null : OemNumbers.normalize(primary);
@@ -417,20 +425,6 @@ public class PartIdentity {
                     + " VALUES (?, ?, ?, false)", partId, cross, OemNumbers.normalize(cross));
         }
         return true;
-    }
-
-    /**
-     * Пусто — номера нет, строка удаляется. Текст без единой буквы и цифры
-     * («б/н», «—») номером не считается и тоже снимает его: строку с пустым
-     * приведённым номером база не примет, а «нет номера» — ровно то, что
-     * человек и написал.
-     */
-    private static String cleanOem(String raw) {
-        // Каким номер хранить — OemNumbers.clean (задача 0309): края без любых
-        // пробелов, русские двойники латиницей. Одно место на карточку,
-        // приёмку и перенос из таблицы.
-        String cleaned = OemNumbers.clean(raw);
-        return cleaned.isEmpty() || OemNumbers.normalize(cleaned) == null ? null : cleaned;
     }
 
     /** Кросс-номера позиции как лежат, в порядке заведения. */
