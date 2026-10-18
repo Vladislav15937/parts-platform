@@ -27,8 +27,15 @@ public class DealSourceService {
 
     private final JdbcTemplate jdbc;
 
-    public DealSourceService(JdbcTemplate jdbc) {
+    /**
+     * Справочник правится прямым SQL, слушатель Hibernate его не видит:
+     * заведение и архив источника пишутся в журнал здесь (задача 0325).
+     */
+    private final ru.partsflow.platform.audit.AuditJournal journal;
+
+    public DealSourceService(JdbcTemplate jdbc, ru.partsflow.platform.audit.AuditJournal journal) {
         this.jdbc = jdbc;
+        this.journal = journal;
     }
 
     @Transactional(readOnly = true)
@@ -61,6 +68,7 @@ public class DealSourceService {
 
         Long id = jdbc.queryForObject(
                 "INSERT INTO deal_source (name) VALUES (?) RETURNING id", Long.class, trimmed);
+        journal.created("deal_source", id, java.util.Map.of("name", trimmed));
         return new DealSourceEntryView(id, trimmed, false);
     }
 
@@ -75,8 +83,19 @@ public class DealSourceService {
     }
 
     private DealSourceEntryView setArchived(Long id, boolean archived) {
-        int updated = jdbc.update(
-                "UPDATE deal_source SET is_archived = ? WHERE id = ?", archived, id);
+        // Прежнее значение и название — тем же запросом: журналу нужно «было»,
+        // а строке журнала — имя источника (задача 0325).
+        java.util.List<java.util.Map<String, Object>> rows = jdbc.queryForList("""
+                UPDATE deal_source t SET is_archived = ?
+                  FROM (SELECT id, is_archived AS was FROM deal_source WHERE id = ? FOR UPDATE) old
+                 WHERE t.id = old.id
+                RETURNING t.name, old.was""", archived, id);
+        int updated = rows.size();
+        if (updated == 1 && !Boolean.valueOf(archived).equals(rows.get(0).get("was"))) {
+            Object name = rows.get(0).get("name");
+            journal.changed("deal_source", id, java.util.Map.of("name", name, "is_archived", !archived),
+                    java.util.Map.of("name", name, "is_archived", archived));
+        }
         if (updated == 0) {
             // Без номера строки: см. ту же правку в PaymentSourceService.
             throw NotFound.DEAL_SOURCE.error(id);

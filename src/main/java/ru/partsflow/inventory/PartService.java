@@ -55,12 +55,20 @@ public class PartService {
     /** Карточка формы правки — тем же разбором, что ответ наружу (сверка задачи 0307). */
     private final com.fasterxml.jackson.databind.ObjectMapper json;
 
+    /**
+     * Журнал для правок позиции прямым SQL — сопоставление написания
+     * и «Выгружать» пачкой (задача 0325): слушатель Hibernate их не видит.
+     */
+    private final ru.partsflow.platform.audit.AuditJournal journal;
+
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
                        PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc,
                        VehicleWords vehicleWords, StockNaming naming, StockLedger ledger,
                        jakarta.persistence.EntityManager entityManager,
-                       PartIdentity identity, com.fasterxml.jackson.databind.ObjectMapper json) {
+                       PartIdentity identity, com.fasterxml.jackson.databind.ObjectMapper json,
+                       ru.partsflow.platform.audit.AuditJournal journal) {
         this.json = json;
+        this.journal = journal;
         this.partRepository = partRepository;
         this.eventPublisher = eventPublisher;
         this.partNames = partNames;
@@ -110,16 +118,22 @@ public class PartService {
         PartName matched = partNames.matchManually(partNameId, partKindId);
         String kindName = partNames.displayNameOf(matched);
 
-        int updated = jdbc.update("""
-                UPDATE part
-                   SET category_id  = COALESCE(?, category_id),
+        // Прежний вид — тем же запросом, под блокировкой строк: журнал обязан
+        // назвать то «было», которое правка и переписала (задача 0325).
+        List<KindChange> rows = jdbc.query("""
+                UPDATE part p
+                   SET category_id  = COALESCE(?, p.category_id),
                        part_kind_id = ?,
                        -- Момент правки раньше ставил триггер; теперь его
                        -- ставит тот, кто правит.
                        updated_at = now()
-                 WHERE part_name_id = ?""",
-                matched.getCategoryId(), matched.getPartKindId(),
-                partNameId);
+                  FROM (SELECT id, part_kind_id AS was FROM part
+                         WHERE part_name_id = ? FOR UPDATE) old
+                 WHERE p.id = old.id
+                RETURNING p.id, old.was, p.part_kind_id AS now""",
+                KIND_CHANGE, matched.getCategoryId(), matched.getPartKindId(), partNameId);
+        int updated = rows.size();
+        journalKinds(rows);
 
         // Категория и вид детали уехали в прайс — площадке надо сообщить.
         markByPartName(partNameId);
@@ -178,18 +192,71 @@ public class PartService {
      */
     @Transactional
     public int applyMatchedNames() {
+        return applyMatchedNames(false);
+    }
+
+    /**
+     * То же по нажатию «Пересопоставить по справочнику» — с записью в журнал
+     * по каждой доведённой позиции (задача 0325). Перенос из Bazon зовёт
+     * {@link #applyMatchedNames()} без журнала: разовое дозаполнение мимо
+     * интерфейса владелец журналом не требует, а это десятки тысяч строк.
+     */
+    @Transactional
+    public int rematchCards() {
+        return applyMatchedNames(true);
+    }
+
+    private int applyMatchedNames(boolean journaled) {
         // Отметки об изменении здесь нет намеренно: это доводка после
         // переезда, за раз она правит десятки тысяч карточек, и площадка
         // узнает о них полным прайсом. Смотри PartChangeLog.
-        return jdbc.update("""
+        List<KindChange> rows = jdbc.query("""
+                WITH old AS (
+                    SELECT p.id, p.part_kind_id AS was
+                      FROM part p JOIN part_name pn ON pn.id = p.part_name_id
+                     WHERE pn.part_kind_id IS NOT NULL
+                       AND p.part_kind_id IS DISTINCT FROM pn.part_kind_id
+                       FOR UPDATE OF p)
                 UPDATE part p
                    SET category_id = pn.category_id,
                        part_kind_id = pn.part_kind_id,
                        updated_at = now()
-                  FROM part_name pn
-                 WHERE p.part_name_id = pn.id
-                   AND pn.part_kind_id IS NOT NULL
-                   AND p.part_kind_id IS DISTINCT FROM pn.part_kind_id""");
+                  FROM part_name pn, old
+                 WHERE p.id = old.id AND pn.id = p.part_name_id
+                RETURNING p.id, old.was, p.part_kind_id AS now""", KIND_CHANGE);
+        if (journaled) {
+            journalKinds(rows);
+        }
+        return rows.size();
+    }
+
+    /** Позиция, у которой сопоставление поменяло вид детали: было → стало. */
+    private record KindChange(long partId, Long was, Long now) {
+    }
+
+    private static final org.springframework.jdbc.core.RowMapper<KindChange> KIND_CHANGE =
+            (rs, i) -> new KindChange(rs.getLong("id"), rs.getObject("was", Long.class),
+                    rs.getObject("now", Long.class));
+
+    /**
+     * Запись в журнал по позиции на каждую, у которой вид детали стал другим
+     * (задача 0325). Категория в журнал не идёт: её журнал не называет
+     * ({@code AuditedColumns.PART}), и человек видит её через вид детали.
+     */
+    private void journalKinds(List<KindChange> rows) {
+        Map<Long, ru.partsflow.platform.audit.AuditJournal.Change> changes =
+                new java.util.LinkedHashMap<>();
+        for (KindChange row : rows) {
+            if (java.util.Objects.equals(row.was(), row.now())) {
+                continue;
+            }
+            Map<String, Object> was = new HashMap<>();
+            Map<String, Object> now = new HashMap<>();
+            was.put("part_kind_id", row.was());
+            now.put("part_kind_id", row.now());
+            changes.put(row.partId(), new ru.partsflow.platform.audit.AuditJournal.Change(was, now));
+        }
+        journal.changedEach("part", changes);
     }
 
     @Transactional
@@ -1901,12 +1968,33 @@ public class PartService {
         if (partIds == null || partIds.isEmpty()) {
             throw new IllegalArgumentException("Не указано ни одной позиции");
         }
-        int updated = jdbc.update("UPDATE part SET is_published = ?, updated_at = now() WHERE id = ANY (?)",
+        // Прежнее значение — тем же запросом, под блокировкой строк (задача 0325).
+        // Экрана у этого пути нет (`endpoint-coverage.py`: «устарел»), но путь
+        // жив и открыт вошедшему: правка, которой журнал не видит, — ровно
+        // та, о которой потом спрашивают «кто снял с выгрузки».
+        Map<Long, ru.partsflow.platform.audit.AuditJournal.Change> changes =
+                new java.util.LinkedHashMap<>();
+        int[] updated = {0};
+        jdbc.query("""
+                UPDATE part p SET is_published = ?, updated_at = now()
+                  FROM (SELECT id, is_published AS was FROM part
+                         WHERE id = ANY (?) FOR UPDATE) old
+                 WHERE p.id = old.id
+                RETURNING p.id, old.was""",
+                rs -> {
+                    updated[0]++;
+                    if (rs.getBoolean("was") != published) {
+                        changes.put(rs.getLong("id"), new ru.partsflow.platform.audit.AuditJournal
+                                .Change(Map.of("is_published", !published),
+                                        Map.of("is_published", published)));
+                    }
+                },
                 published, partIds.toArray(Long[]::new));
+        journal.changedEach("part", changes);
         // Снятая с публикации позиция обязана уехать недоступной, иначе
         // объявление висит, а продавать её владелец не собирался.
         partChanges.changed(partIds);
-        return updated;
+        return updated[0];
     }
 
     @Transactional(readOnly = true)

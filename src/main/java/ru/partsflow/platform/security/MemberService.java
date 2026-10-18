@@ -53,8 +53,17 @@ public class MemberService {
     private final LoginSessions sessions;
     private final SessionRevocations revocations;
 
+    /**
+     * Кто завёл сотрудника, сменил ему пароль, выключил — до задачи 0325
+     * в журнал не попадало ничего: сотрудник правится прямым SQL. Пароль
+     * пишется фактом замены, без значения и без хэша.
+     */
+    private final ru.partsflow.platform.audit.AuditJournal journal;
+
     public MemberService(JdbcTemplate jdbc, PasswordEncoder passwordEncoder,
-                         LoginSessions sessions, SessionRevocations revocations) {
+                         LoginSessions sessions, SessionRevocations revocations,
+                         ru.partsflow.platform.audit.AuditJournal journal) {
+        this.journal = journal;
         this.jdbc = jdbc;
         this.passwordEncoder = passwordEncoder;
         this.sessions = sessions;
@@ -86,6 +95,12 @@ public class MemberService {
                     displayName == null || displayName.isBlank() ? login.strip() : displayName.strip(),
                     role, login.strip(), passwordEncoder.encode(password), branchId);
 
+            java.util.Map<String, Object> now = new java.util.LinkedHashMap<>();
+            now.put("display_name", displayName == null || displayName.isBlank()
+                    ? login.strip() : displayName.strip());
+            now.put("login", login.strip());
+            now.put("role", role);
+            journal.created("tenant_member", id, now);
             return byId(id);
         } catch (DuplicateKeyException e) {
             // Уникальность по нормализованному логину стоит в БД: «Ivan» и «ivan »
@@ -145,6 +160,11 @@ public class MemberService {
         if (updated == 0) {
             throw NotFound.MEMBER.error(memberId);
         }
+        // Фактом, а не значением: журнал открыт ревизору, и даже хэш пароля
+        // в нём лишний — по нему пароль подбирают офлайн.
+        journal.changed("tenant_member", memberId,
+                java.util.Map.of("display_name", nameOf(memberId), "password", "задан"),
+                java.util.Map.of("display_name", nameOf(memberId), "password", "заменён"));
         revokeSessions(memberId, "смена пароля", actingSessionKey);
     }
 
@@ -161,10 +181,17 @@ public class MemberService {
         if (!active) {
             requireNotLastOwner(memberId);
         }
+        java.util.List<Boolean> was = jdbc.queryForList(
+                "SELECT is_active FROM tenant_member WHERE id = ? FOR UPDATE", Boolean.class, memberId);
         int updated = jdbc.update("UPDATE tenant_member SET is_active = ? WHERE id = ?",
                 active, memberId);
         if (updated == 0) {
             throw NotFound.MEMBER.error(memberId);
+        }
+        if (!was.isEmpty() && !Boolean.valueOf(active).equals(was.get(0))) {
+            journal.changed("tenant_member", memberId,
+                    java.util.Map.of("display_name", nameOf(memberId), "is_active", !active),
+                    java.util.Map.of("display_name", nameOf(memberId), "is_active", active));
         }
         if (!active) {
             // Выключенный сотрудник до этого дня доработывал смену: роль
@@ -354,4 +381,13 @@ public class MemberService {
     public record Member(Long id, String login, String displayName, String role,
                          boolean active, Instant lastLoginAt) {
     }
+
+    /** Имя в снимке журнала: строку о выключенном сотруднике узнают по нему. */
+    private String nameOf(Long memberId) {
+        String name = jdbc.queryForObject(
+                "SELECT coalesce(display_name, login) FROM tenant_member WHERE id = ?",
+                String.class, memberId);
+        return name == null ? "" : name;
+    }
+
 }

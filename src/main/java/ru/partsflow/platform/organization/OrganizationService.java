@@ -28,8 +28,15 @@ public class OrganizationService {
 
     private final JdbcTemplate jdbc;
 
-    public OrganizationService(JdbcTemplate jdbc) {
+    /**
+     * Филиалы, склады и ячейки правятся прямым SQL; заведение и правка
+     * пишутся в журнал здесь (задача 0325).
+     */
+    private final ru.partsflow.platform.audit.AuditJournal journal;
+
+    public OrganizationService(JdbcTemplate jdbc, ru.partsflow.platform.audit.AuditJournal journal) {
         this.jdbc = jdbc;
+        this.journal = journal;
     }
 
     @Transactional(readOnly = true)
@@ -41,9 +48,11 @@ public class OrganizationService {
     @Transactional
     public Branch createBranch(String name) {
         requireName(name, "Название филиала");
-        return jdbc.queryForObject(
+        Branch created = jdbc.queryForObject(
                 "INSERT INTO branch (name) VALUES (?) RETURNING id, name",
                 (rs, i) -> new Branch(rs.getLong("id"), rs.getString("name")), name.strip());
+        journal.created("branch", created.id(), java.util.Map.of("name", created.name()));
+        return created;
     }
 
     /**
@@ -101,12 +110,21 @@ public class OrganizationService {
                     "Верхняя граница вилки дней меньше нижней: " + daysFrom + "–" + daysTo);
         }
 
+        java.util.Map<String, Object> was = jdbc.queryForMap("""
+                SELECT name, availability_note, order_days_from, order_days_to
+                  FROM warehouse WHERE id = ? FOR UPDATE""", warehouseId);
         jdbc.update("""
                 UPDATE warehouse
                    SET availability_note = ?, order_days_from = ?, order_days_to = ?
                  WHERE id = ?""",
                 note == null || note.isBlank() ? null : note.strip(),
                 daysFrom, daysTo, warehouseId);
+        java.util.Map<String, Object> now = jdbc.queryForMap("""
+                SELECT name, availability_note, order_days_from, order_days_to
+                  FROM warehouse WHERE id = ?""", warehouseId);
+        if (!new java.util.HashMap<>(was).equals(new java.util.HashMap<>(now))) {
+            journal.changed("warehouse", warehouseId, was, now);
+        }
 
         return warehouses().stream()
                 .filter(w -> w.id() == warehouseId)
@@ -129,6 +147,7 @@ public class OrganizationService {
         Long id = jdbc.queryForObject(
                 "INSERT INTO warehouse (branch_id, name) VALUES (?, ?) RETURNING id",
                 Long.class, branch, name.strip());
+        journal.created("warehouse", id, java.util.Map.of("name", name.strip()));
 
         return warehouses().stream().filter(w -> w.id().equals(id)).findFirst().orElseThrow();
     }
@@ -188,6 +207,11 @@ public class OrganizationService {
                     RETURNING id, code, zone, is_active""",
                     OrganizationService::cell, warehouseId, code,
                     zone == null || zone.isBlank() ? null : zone.strip());
+            // Ячейка уже была (ON CONFLICT) — заведения не было, и строки нет.
+            for (Cell cell : inserted) {
+                journal.created("storage_cell", cell.id(),
+                        java.util.Map.of("code", cell.code(), "warehouse_id", warehouseId));
+            }
             created.addAll(inserted);
         }
         return created;

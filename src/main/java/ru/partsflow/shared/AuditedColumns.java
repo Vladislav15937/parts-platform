@@ -239,10 +239,175 @@ public final class AuditedColumns {
         MARKETPLACE_ACCOUNT.put("feed_token", "Ссылка на прайс");
     }
 
+    /**
+     * Словари задачи 0325: правки через экран, которых журнал до неё не видел.
+     *
+     * <p>Четыре таблицы — сущности Hibernate, и пишет их слушатель, как
+     * карточку товара (машина, поставка, написание, снимки); остальные
+     * правятся прямым SQL, и запись делает сам сервис через {@code AuditJournal}
+     * теми же колонками. Состояние машины и поставки, роль сотрудника и тип
+     * источника платежа здесь кодом: слово ставит экран своим словарём, как
+     * у состояния сделки, — пятая копия словаря на сервере обошлась бы в то,
+     * за что уже заплачено (задача 0048).
+     */
+    public static final Map<String, String> DONOR = new LinkedHashMap<>();
+
+    static {
+        DONOR.put("status", "Состояние машины");
+        DONOR.put("location", "Место");
+        DONOR.put("vin", "VIN");
+        DONOR.put("plate_number", "Госномер");
+        DONOR.put("year", "Год выпуска");
+        DONOR.put("color", "Цвет");
+        DONOR.put("mileage_km", "Пробег, км");
+        DONOR.put("body_code", "Модель кузова");
+        DONOR.put("engine_code", "Модель двигателя");
+        DONOR.put("supply_id", "Поставка");
+        DONOR.put("purchase_date", "Дата покупки");
+        DONOR.put("supplier_name", "Продавец машины");
+        DONOR.put("note", "Примечание");
+    }
+
+    public static final Map<String, String> SUPPLY = new LinkedHashMap<>();
+
+    static {
+        SUPPLY.put("status", "Состояние поставки");
+        SUPPLY.put("kind", "Вид поставки");
+        SUPPLY.put("number", "Номер поставки");
+        SUPPLY.put("expected_on", "Ожидается");
+        SUPPLY.put("arrived_on", "Пришла");
+        SUPPLY.put("supplier_name", "Поставщик");
+        SUPPLY.put("note", "Примечание");
+    }
+
+    /** Написание наименования и его сопоставление с видом детали (экран «Наименования»). */
+    public static final Map<String, String> PART_NAME = new LinkedHashMap<>();
+
+    static {
+        PART_NAME.put("part_kind_id", "Вид детали");
+        PART_NAME.put("match_status", "Сопоставление");
+    }
+
+    /** Снимок позиции и снимок машины — одни колонки. */
+    public static final Map<String, String> PHOTO = new LinkedHashMap<>();
+
+    static {
+        PHOTO.put("is_main", "Главный снимок");
+        PHOTO.put("status", "Состояние снимка");
+    }
+
+    /** Применимость позиции: строка заводится и снимается, правок полей у неё нет. */
+    public static final Map<String, String> PART_APPLICABILITY = new LinkedHashMap<>();
+
+    static {
+        PART_APPLICABILITY.put("vehicle", "Машина");
+    }
+
+    public static final Map<String, String> CUSTOMER = new LinkedHashMap<>();
+
+    static {
+        CUSTOMER.put("name", "Имя или название");
+        CUSTOMER.put("phone", "Телефон");
+        CUSTOMER.put("email", "Почта");
+        CUSTOMER.put("customer_type", "Данные юридического лица");
+        CUSTOMER.put("company_name", "Название организации");
+        CUSTOMER.put("inn", "ИНН");
+        CUSTOMER.put("public_note", "Примечание (видно клиентам)");
+        CUSTOMER.put("note", "Заметка (видно только вам)");
+    }
+
+    /** Источник платежа и источник сделки — справочники «Настроек». */
+    public static final Map<String, String> SOURCE = new LinkedHashMap<>();
+
+    static {
+        SOURCE.put("name", "Название");
+        SOURCE.put("source_type", "Тип");
+        SOURCE.put("is_archived", "В архиве");
+    }
+
+    public static final Map<String, String> BRANCH = new LinkedHashMap<>();
+
+    static {
+        BRANCH.put("name", "Название филиала");
+    }
+
+    public static final Map<String, String> WAREHOUSE = new LinkedHashMap<>();
+
+    static {
+        WAREHOUSE.put("name", "Название склада");
+        WAREHOUSE.put("availability_note", "Наличие под заказ");
+        WAREHOUSE.put("order_days_from", "Дней заказа от");
+        WAREHOUSE.put("order_days_to", "Дней заказа до");
+        WAREHOUSE.put("print_details", "Реквизиты продавца для печати");
+    }
+
+    public static final Map<String, String> STORAGE_CELL = new LinkedHashMap<>();
+
+    static {
+        STORAGE_CELL.put("code", "Ячейка");
+    }
+
+    /**
+     * Сотрудник. Пароля здесь нет значением и не будет: в снимке лежит факт
+     * («задан» → «заменён»), а не хэш — журнал открыт ревизору.
+     */
+    public static final Map<String, String> TENANT_MEMBER = new LinkedHashMap<>();
+
+    static {
+        TENANT_MEMBER.put("display_name", "Имя");
+        TENANT_MEMBER.put("login", "Логин");
+        TENANT_MEMBER.put("role", "Роль");
+        TENANT_MEMBER.put("is_active", "Работает");
+        TENANT_MEMBER.put("password", "Пароль");
+    }
+
+    /** Настройки компании: срок резерва и печатные формы. */
+    public static final Map<String, String> COMPANY_SETTING = new LinkedHashMap<>();
+
+    static {
+        COMPANY_SETTING.put("reservation_days", "Срок резервирования, дней");
+        COMPANY_SETTING.put("print_extra_text", "Текст про гарантию и возврат");
+        COMPANY_SETTING.put("print_vat_note", "Пометка об НДС");
+        COMPANY_SETTING.put("print_client_signature", "Подпись покупателя");
+        COMPANY_SETTING.put("print_issuer_signature", "Подпись выдавшего");
+        COMPANY_SETTING.put("legal_name", "Организация");
+        COMPANY_SETTING.put("legal_address", "Адрес организации");
+        COMPANY_SETTING.put("legal_inn", "ИНН организации");
+        COMPANY_SETTING.put("legal_kpp", "КПП");
+        COMPANY_SETTING.put("legal_bank_name", "Банк");
+        COMPANY_SETTING.put("legal_bank_bic", "БИК");
+        COMPANY_SETTING.put("legal_bank_account", "Расчётный счёт");
+        COMPANY_SETTING.put("legal_bank_corr_account", "Корр. счёт");
+        COMPANY_SETTING.put("legal_director", "Руководитель");
+        COMPANY_SETTING.put("legal_chief_accountant", "Главный бухгалтер");
+    }
+
     /** Логические колонки журнала выгрузки: в снимке true/false, на экране да/нет. */
     private static final Set<String> FLAGS = Set.of(
             "is_published", "installation_note", "expected_goods",
-            "filter_kinds_excluded", "filter_brands_excluded");
+            "filter_kinds_excluded", "filter_brands_excluded",
+            "is_main", "is_archived", "is_active",
+            "print_client_signature", "print_issuer_signature");
+
+    private static final Map<String, String> MATCH_STATUSES = Map.of(
+            "UNMATCHED", "не сопоставлено", "AUTO", "по справочнику", "MANUAL", "вручную");
+
+    private static final Map<String, String> PHOTO_STATUSES = Map.of(
+            "UPLOADED", "загружается", "PROCESSED", "загружен", "FAILED", "не загрузился");
+
+    /**
+     * Значение словом с учётом таблицы — там, где одно имя колонки у разных
+     * таблиц значит разное: {@code status} у снимка — своё, у сделки, машины
+     * и поставки слово ставит экран.
+     */
+    public static String displayIn(String table, String column, String raw,
+                                   Map<Long, String> lookup) {
+        if (raw != null && "status".equals(column)
+                && ("part_photo".equals(table) || "donor_photo".equals(table))) {
+            return PHOTO_STATUSES.getOrDefault(raw, raw);
+        }
+        return display(column, raw, lookup);
+    }
 
     private static final Map<String, String> FEED_STATUSES = Map.of(
             "ACTIVE", "Включена", "PAUSED", "Выключена", "ERROR", "Ошибка отправки");
@@ -256,6 +421,18 @@ public final class AuditedColumns {
             case "payment" -> PAYMENT;
             case "donor_cost" -> DONOR_COST;
             case "marketplace_account" -> MARKETPLACE_ACCOUNT;
+            case "donor" -> DONOR;
+            case "supply" -> SUPPLY;
+            case "part_name" -> PART_NAME;
+            case "part_photo", "donor_photo" -> PHOTO;
+            case "part_applicability" -> PART_APPLICABILITY;
+            case "customer" -> CUSTOMER;
+            case "payment_source", "deal_source" -> SOURCE;
+            case "branch" -> BRANCH;
+            case "warehouse" -> WAREHOUSE;
+            case "storage_cell" -> STORAGE_CELL;
+            case "tenant_member" -> TENANT_MEMBER;
+            case "company_setting" -> COMPANY_SETTING;
             default -> Map.of();
         };
     }
@@ -361,6 +538,9 @@ public final class AuditedColumns {
             case "payment_type" -> PAYMENT_TYPES.getOrDefault(raw, raw);
             case "cost_type" -> COST_TYPES.getOrDefault(raw, raw);
             case "feed_status" -> FEED_STATUSES.getOrDefault(raw, raw);
+            case "kind" -> SupplyKinds.title(raw);
+            case "match_status" -> MATCH_STATUSES.getOrDefault(raw, raw);
+            case "customer_type" -> "COMPANY".equals(raw) ? "да" : "PERSON".equals(raw) ? "нет" : raw;
             case String flag when FLAGS.contains(flag) -> "true".equals(raw) ? "да" : "нет";
             default -> raw;
         };

@@ -123,7 +123,7 @@ public class PartNameController {
     @PreAuthorize(MANAGES)
     public RematchResult rematch() {
         int matched = partNames.rematchUnmatched(REMATCH_LIMIT);
-        return new RematchResult(matched, parts.applyMatchedNames());
+        return new RematchResult(matched, parts.rematchCards());
     }
 
     /**

@@ -61,7 +61,11 @@ public class AuditLogListener
      * на 35 841 позицию даже при этом списке.
      */
     private static final Set<String> AUDITED = Set.of(
-            "part", "part_drom_card", "deal", "deal_item", "payment", "donor_cost");
+            "part", "part_drom_card", "deal", "deal_item", "payment", "donor_cost",
+            // Задача 0325: правки через экран, которых журнал не видел вовсе, —
+            // машина, поставка, сопоставление написания, снимки позиции и машины.
+            // Строки у них малы и правятся по одной, а не движениями склада.
+            "donor", "supply", "part_name", "part_photo", "donor_photo");
 
     /** Одна запись на два пути: слушатель и {@link AuditJournal}. */
     static final String INSERT = """

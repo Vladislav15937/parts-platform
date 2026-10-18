@@ -3,10 +3,13 @@ package ru.partsflow.intake;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.platform.audit.AuditJournal;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -30,8 +33,16 @@ public class DonorCostService {
 
     private final JdbcTemplate jdbc;
 
-    public DonorCostService(JdbcTemplate jdbc) {
+    /**
+     * Затрата пишется прямым SQL, и слушатель Hibernate её не видел: журнал
+     * действий предлагал вид «Затрата по машине» и не находил ни одной
+     * (задача 0325). Записывается здесь, в той же транзакции.
+     */
+    private final AuditJournal journal;
+
+    public DonorCostService(JdbcTemplate jdbc, AuditJournal journal) {
         this.jdbc = jdbc;
+        this.journal = journal;
     }
 
     @Transactional(readOnly = true)
@@ -39,11 +50,7 @@ public class DonorCostService {
         return jdbc.query("""
                 SELECT id, cost_type, amount, incurred_on, note
                   FROM donor_cost WHERE donor_id = ?
-                 ORDER BY incurred_on, id""",
-                (rs, i) -> new Cost(rs.getLong("id"), rs.getString("cost_type"),
-                        rs.getBigDecimal("amount"),
-                        rs.getObject("incurred_on", LocalDate.class), rs.getString("note")),
-                donorId);
+                 ORDER BY incurred_on, id""", COST, donorId);
     }
 
     @Transactional
@@ -63,10 +70,12 @@ public class DonorCostService {
         if (amount == null || amount.signum() < 0) {
             throw new IllegalArgumentException("Сумма затрат не может быть отрицательной");
         }
-        jdbc.update("""
+        Cost added = jdbc.queryForObject("""
                 INSERT INTO donor_cost (donor_id, cost_type, amount, incurred_on, note, created_by)
-                VALUES (?, ?, ?, coalesce(?, current_date), ?, ?)""",
-                donorId, type, amount, on, note, authorId);
+                VALUES (?, ?, ?, coalesce(?, current_date), ?, ?)
+                RETURNING id, cost_type, amount, incurred_on, note""",
+                COST, donorId, type, amount, on, note, authorId);
+        journal.created("donor_cost", added.id(), snapshot(donorId, added));
         return of(donorId);
     }
 
@@ -78,8 +87,33 @@ public class DonorCostService {
      */
     @Transactional
     public List<Cost> remove(long donorId, long costId) {
-        jdbc.update("DELETE FROM donor_cost WHERE id = ? AND donor_id = ?", costId, donorId);
+        List<Cost> removed = jdbc.query("""
+                DELETE FROM donor_cost WHERE id = ? AND donor_id = ?
+                RETURNING id, cost_type, amount, incurred_on, note""", COST, costId, donorId);
+        // «Было» — сама затрата: после удаления строки журнал назовёт её
+        // только по снимку, а «кто удалил затрату на 40 000» и спрашивают.
+        removed.forEach(cost -> journal.deleted("donor_cost", cost.id(), snapshot(donorId, cost)));
         return of(donorId);
+    }
+
+    private static final org.springframework.jdbc.core.RowMapper<Cost> COST =
+            (rs, i) -> new Cost(rs.getLong("id"), rs.getString("cost_type"),
+                    rs.getBigDecimal("amount"),
+                    rs.getObject("incurred_on", LocalDate.class), rs.getString("note"));
+
+    /**
+     * Колонки, которые журнал называет ({@code AuditedColumns.DONOR_COST}),
+     * и машина: у удалённой затраты строки уже нет, и «Машина …» в журнале
+     * берётся из снимка.
+     */
+    private static Map<String, Object> snapshot(long donorId, Cost cost) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("donor_id", donorId);
+        row.put("amount", cost.amount());
+        row.put("cost_type", cost.type());
+        row.put("incurred_on", cost.incurredOn());
+        row.put("note", cost.note());
+        return row;
     }
 
     public record Cost(long id, String type, BigDecimal amount, LocalDate incurredOn,

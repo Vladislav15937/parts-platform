@@ -67,9 +67,31 @@ public class CompanySettingsService {
 
     private final JdbcTemplate jdbc;
 
-    public CompanySettingsService(JdbcTemplate jdbc) {
+    /**
+     * Настройки правятся прямым SQL; правка пишется в журнал здесь, одной
+     * строкой на сохранение (задача 0325).
+     */
+    private final ru.partsflow.platform.audit.AuditJournal journal;
+
+    public CompanySettingsService(JdbcTemplate jdbc, ru.partsflow.platform.audit.AuditJournal journal) {
         this.jdbc = jdbc;
+        this.journal = journal;
     }
+
+    /** Снимок настроек компании для журнала: колонки, которые он называет. */
+    private java.util.Map<String, Object> settingsRow(String columns) {
+        java.util.List<java.util.Map<String, Object>> rows =
+                jdbc.queryForList("SELECT " + columns + " FROM company_setting WHERE id = 1");
+        if (!rows.isEmpty()) {
+            return new java.util.HashMap<>(rows.get(0));
+        }
+        java.util.Map<String, Object> empty = new java.util.HashMap<>();
+        for (String column : columns.split(",\\s*")) {
+            empty.put(column, null);
+        }
+        return empty;
+    }
+
 
     /**
      * Срок резерва по умолчанию.
@@ -151,11 +173,16 @@ public class CompanySettingsService {
                             + "нужен накат миграций. Пока действует прежний срок "
                             + FALLBACK_RESERVATION_DAYS + " дня.");
         }
+        java.util.Map<String, Object> was = settingsRow("reservation_days");
         jdbc.update("""
                 INSERT INTO company_setting (id, reservation_days) VALUES (1, ?)
                 ON CONFLICT (id)
                 DO UPDATE SET reservation_days = EXCLUDED.reservation_days, updated_at = now()""",
                 reservationDays);
+        java.util.Map<String, Object> now = settingsRow("reservation_days");
+        if (!was.equals(now)) {
+            journal.changed("company_setting", 1, was, now);
+        }
         return new CompanySettings(reservationDays);
     }
 

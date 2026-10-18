@@ -62,6 +62,11 @@ const STATUSES: Record<string, string> = {
   CLOSED: 'закрыта',
 };
 
+/** Состояние поставки словом — тем же словарём, что в списке поставок (журнал, задача 0325). */
+export function supplyStatusTitle(status: string): string {
+  return STATUSES[status] ?? status;
+}
+
 export function SupplyList({ supplies, online, onChanged, canExpect = false }: Props) {
   const [openId, setOpenId] = useState<number | null>(null);
   // Ожидаемый товар — своя панель под строкой, независимая от списка машин.

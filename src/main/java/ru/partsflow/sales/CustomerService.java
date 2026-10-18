@@ -25,8 +25,24 @@ public class CustomerService {
 
     private final JdbcTemplate jdbc;
 
-    public CustomerService(JdbcTemplate jdbc) {
+    /**
+     * Клиент правится прямым SQL, и до задачи 0325 ни заведение, ни правка
+     * карточки в журнал не попадали: «кто поменял телефон клиента»
+     * спросить было не у кого.
+     */
+    private final ru.partsflow.platform.audit.AuditJournal journal;
+
+    public CustomerService(JdbcTemplate jdbc, ru.partsflow.platform.audit.AuditJournal journal) {
         this.jdbc = jdbc;
+        this.journal = journal;
+    }
+
+    /** Колонки, которые журнал называет ({@code AuditedColumns.CUSTOMER}). */
+    private static final String JOURNALED =
+            "name, phone, email, public_note, note, customer_type, inn, company_name";
+
+    private java.util.Map<String, Object> journaled(long id) {
+        return jdbc.queryForMap("SELECT " + JOURNALED + " FROM customer WHERE id = ?", id);
     }
 
     /**
@@ -67,13 +83,15 @@ public class CustomerService {
         if (RetailCustomer.NAME.equalsIgnoreCase(name.strip())) {
             return retail();
         }
-        return jdbc.queryForObject("""
+        Customer created = jdbc.queryForObject("""
                 INSERT INTO customer (name, phone, email, customer_type)
                 VALUES (?, ?, ?, ?)
                 RETURNING id, name, phone, email, customer_type""",
                 CustomerService::map,
                 name.strip(), blankToNull(phone), blankToNull(email),
                 customerType == null || customerType.isBlank() ? "PERSON" : customerType);
+        journal.created("customer", created.id(), journaled(created.id()));
+        return created;
     }
 
     /**
@@ -263,6 +281,10 @@ public class CustomerService {
                             .formatted(RetailCustomer.NAME));
         }
 
+        // «Было» — под блокировкой строки: журнал обязан назвать то, что
+        // правка и переписала, а не то, что успел записать сосед (задача 0325).
+        List<java.util.Map<String, Object>> before = jdbc.queryForList(
+                "SELECT " + JOURNALED + " FROM customer WHERE id = ? FOR UPDATE", id);
         int updated = jdbc.update("""
                 UPDATE customer
                    SET name = ?, phone = ?, email = ?, public_note = ?, note = ?,
@@ -274,6 +296,12 @@ public class CustomerService {
         if (updated == 0) {
             // Без номера строки: см. ту же правку в getDetail выше.
             throw NotFound.CUSTOMER.error(id);
+        }
+        java.util.Map<String, Object> after = journaled(id);
+        // Сохранение без правки строки не пишет: «изменено ничего» в журнале
+        // только мешает его читать.
+        if (!new java.util.HashMap<>(before.get(0)).equals(new java.util.HashMap<>(after))) {
+            journal.changed("customer", id, before.get(0), after);
         }
         return getDetail(id);
     }

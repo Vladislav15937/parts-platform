@@ -80,6 +80,22 @@ public class OrganizationAuditService {
         // Пишет не слушатель, а сам сервис выгрузок через AuditJournal
         // (задача 0267): выгрузка правится прямым SQL мимо Hibernate.
         KINDS.put("marketplace_account", "Выгрузка");
+        // Задача 0325: каждая правка через экран — в журнале. Сущности пишет
+        // слушатель, остальное — сервис через AuditJournal.
+        KINDS.put("donor", "Машина");
+        KINDS.put("supply", "Поставка");
+        KINDS.put("part_name", "Наименование");
+        KINDS.put("part_photo", "Снимок товара");
+        KINDS.put("donor_photo", "Снимок машины");
+        KINDS.put("part_applicability", "Применимость");
+        KINDS.put("customer", "Клиент");
+        KINDS.put("payment_source", "Источник платежа");
+        KINDS.put("deal_source", "Источник сделки");
+        KINDS.put("branch", "Филиал");
+        KINDS.put("warehouse", "Склад");
+        KINDS.put("storage_cell", "Ячейка");
+        KINDS.put("tenant_member", "Сотрудник");
+        KINDS.put("company_setting", "Настройки компании");
     }
 
     /**
@@ -89,21 +105,96 @@ public class OrganizationAuditService {
      * целиком, и называть его перечислением тридцати четырёх полей со значением
      * «стало» бессмысленно: человек спрашивает «кто завёл» и «кто удалил».
      */
-    private static final Map<String, String> CREATED = Map.of(
-            "part", "Товар заведён",
-            "deal", "Сделка заведена",
-            "deal_item", "Позиция добавлена в сделку",
-            "payment", "Платёж записан",
-            "donor_cost", "Затрата записана",
-            "marketplace_account", "Выгрузка заведена");
+    private static final Map<String, String> CREATED = Map.ofEntries(
+            Map.entry("part", "Товар заведён"),
+            Map.entry("deal", "Сделка заведена"),
+            Map.entry("deal_item", "Позиция добавлена в сделку"),
+            Map.entry("payment", "Платёж записан"),
+            Map.entry("donor_cost", "Затрата записана"),
+            Map.entry("marketplace_account", "Выгрузка заведена"),
+            Map.entry("donor", "Машина заведена"),
+            Map.entry("supply", "Поставка заведена"),
+            Map.entry("part_name", "Написание заведено"),
+            // Ссылка на загрузку выдана, а файла ещё нет: «добавлен» было бы
+            // неправдой у снимка, который так и не доехал.
+            Map.entry("part_photo", "Начата загрузка снимка"),
+            Map.entry("donor_photo", "Начата загрузка снимка"),
+            Map.entry("part_applicability", "Машина добавлена в применимость"),
+            Map.entry("customer", "Клиент заведён"),
+            Map.entry("payment_source", "Источник платежа заведён"),
+            Map.entry("deal_source", "Источник сделки заведён"),
+            Map.entry("branch", "Филиал заведён"),
+            Map.entry("warehouse", "Склад заведён"),
+            Map.entry("storage_cell", "Ячейка заведена"),
+            Map.entry("tenant_member", "Сотрудник заведён"),
+            Map.entry("company_setting", "Настройки заведены"));
 
-    private static final Map<String, String> REMOVED = Map.of(
-            "part", "Товар удалён",
-            "deal", "Сделка удалена",
-            "deal_item", "Позиция убрана из сделки",
-            "payment", "Платёж удалён",
-            "donor_cost", "Затрата удалена",
-            "marketplace_account", "Выгрузка удалена");
+    private static final Map<String, String> REMOVED = Map.ofEntries(
+            Map.entry("part", "Товар удалён"),
+            Map.entry("deal", "Сделка удалена"),
+            Map.entry("deal_item", "Позиция убрана из сделки"),
+            Map.entry("payment", "Платёж удалён"),
+            Map.entry("donor_cost", "Затрата удалена"),
+            Map.entry("marketplace_account", "Выгрузка удалена"),
+            Map.entry("donor", "Машина удалена"),
+            Map.entry("supply", "Поставка удалена"),
+            Map.entry("part_name", "Написание удалено"),
+            Map.entry("part_photo", "Снимок удалён"),
+            Map.entry("donor_photo", "Снимок удалён"),
+            Map.entry("part_applicability", "Машина убрана из применимости"),
+            Map.entry("customer", "Клиент удалён"),
+            Map.entry("payment_source", "Источник платежа удалён"),
+            Map.entry("deal_source", "Источник сделки удалён"),
+            Map.entry("branch", "Филиал удалён"),
+            Map.entry("warehouse", "Склад удалён"),
+            Map.entry("storage_cell", "Ячейка удалена"),
+            Map.entry("tenant_member", "Сотрудник удалён"),
+            Map.entry("company_setting", "Настройки удалены"));
+
+    /**
+     * Название вещи у видов задачи 0325 — из её строки, а у позиции снимка
+     * и применимости — позицией, к которой они относятся (номер берётся
+     * из снимка записи: строки применимости после снятия уже нет).
+     * Подзапросом на строку страницы, а не соединением: видов четырнадцать,
+     * и четырнадцать соединений на каждую запись журнала при счёте и поиске
+     * стоили бы дороже пятидесяти подзапросов одной страницы.
+     */
+    /** Виды, у которых до задачи 0325 удалённая вещь называлась номером записи. */
+    private static final Set<String> LEGACY_KINDS = Set.of(
+            "part", "deal", "deal_item", "payment", "donor_cost");
+
+    static final String OTHER_SUBJECT ="CASE a.table_name"
+            + " WHEN 'donor' THEN (SELECT coalesce(x.legacy_code, x.public_code) FROM donor x"
+            + " WHERE x.id = a.record_id)"
+            + " WHEN 'supply' THEN (SELECT " + ru.partsflow.shared.SupplyKinds.sqlLabel("x")
+            + " FROM supply x WHERE x.id = a.record_id)"
+            + " WHEN 'part_name' THEN (SELECT x.name FROM part_name x WHERE x.id = a.record_id)"
+            + " WHEN 'part_photo' THEN (SELECT x.title FROM part x"
+            + " WHERE x.id = (coalesce(a.new_value, a.old_value) ->> 'part_id')::bigint)"
+            + " WHEN 'part_applicability' THEN (SELECT x.title FROM part x"
+            + " WHERE x.id = (coalesce(a.new_value, a.old_value) ->> 'part_id')::bigint)"
+            + " WHEN 'donor_photo' THEN (SELECT coalesce(x.legacy_code, x.public_code) FROM donor x"
+            + " WHERE x.id = (coalesce(a.new_value, a.old_value) ->> 'donor_id')::bigint)"
+            + " WHEN 'customer' THEN coalesce((SELECT x.name FROM customer x WHERE x.id = a.record_id),"
+            + " coalesce(a.new_value, a.old_value) ->> 'name')"
+            + " WHEN 'payment_source' THEN (SELECT x.name FROM payment_source x WHERE x.id = a.record_id)"
+            + " WHEN 'deal_source' THEN (SELECT x.name FROM deal_source x WHERE x.id = a.record_id)"
+            + " WHEN 'branch' THEN (SELECT x.name FROM branch x WHERE x.id = a.record_id)"
+            + " WHEN 'warehouse' THEN (SELECT x.name FROM warehouse x WHERE x.id = a.record_id)"
+            + " WHEN 'storage_cell' THEN (SELECT concat_ws(' · ', w.name, x.code) FROM storage_cell x"
+            + " JOIN warehouse w ON w.id = x.warehouse_id WHERE x.id = a.record_id)"
+            + " WHEN 'tenant_member' THEN (SELECT coalesce(x.display_name, x.login) FROM tenant_member x"
+            + " WHERE x.id = a.record_id)"
+            + " END";
+
+    /**
+     * Что искать у видов задачи 0325 без соединений: название, лежащее
+     * в самом снимке (сервисы кладут его и в «было», и в «стало»).
+     */
+    private static final String OTHER_SEARCHABLE = "coalesce(a.new_value, a.old_value) ->> 'name',"
+            + " coalesce(a.new_value, a.old_value) ->> 'display_name',"
+            + " coalesce(a.new_value, a.old_value) ->> 'code',"
+            + " coalesce(a.new_value, a.old_value) ->> 'vehicle'";
 
     /**
      * Одно выражение, по которому ищут вещь.
@@ -115,7 +206,8 @@ public class OrganizationAuditService {
      */
     private static final String SEARCHABLE = "concat_ws(' ', p.title, p.public_code,"
             + " dip.title, dip.public_code, d.number::text, paid.number::text,"
-            + " coalesce(dcd.legacy_code, dcd.public_code), cust.name, ma.title)";
+            + " coalesce(dcd.legacy_code, dcd.public_code), cust.name, ma.title, "
+            + OTHER_SEARCHABLE + ")";
 
     /**
      * То же без публичных кодов и без номеров сделки и платежа — для запроса,
@@ -126,7 +218,7 @@ public class OrganizationAuditService {
      * подстрочным: «Авто 347» там честный текст.
      */
     private static final String SEARCHABLE_TEXT = "concat_ws(' ', p.title, dip.title,"
-            + " dcd.legacy_code, cust.name, ma.title)";
+            + " dcd.legacy_code, cust.name, ma.title, " + OTHER_SEARCHABLE + ")";
 
     /**
      * Присоединение вещи к записи журнала.
@@ -147,7 +239,9 @@ public class OrganizationAuditService {
             + " LEFT JOIN payment pay ON a.table_name = 'payment' AND pay.id = a.record_id"
             + " LEFT JOIN deal paid ON paid.id = pay.deal_id"
             + " LEFT JOIN donor_cost dc ON a.table_name = 'donor_cost' AND dc.id = a.record_id"
-            + " LEFT JOIN donor dcd ON dcd.id = dc.donor_id"
+            // Машина удалённой затраты — из снимка: строки donor_cost уже нет.
+            + " LEFT JOIN donor dcd ON a.table_name = 'donor_cost' AND dcd.id = coalesce(dc.donor_id,"
+            + " (coalesce(a.new_value, a.old_value) ->> 'donor_id')::bigint)"
             + " LEFT JOIN marketplace_account ma ON a.table_name = 'marketplace_account'"
             + " AND ma.id = a.record_id";
 
@@ -371,7 +465,9 @@ public class OrganizationAuditService {
                         + " paid.number AS payment_deal_number,"
                         + " coalesce(dcd.legacy_code, dcd.public_code) AS cost_donor,"
                         + " ma.title AS feed_title,"
-                        + " a.new_value ->> 'packet_id' AS created_packet"
+                        + " a.new_value ->> 'packet_id' AS created_packet,"
+                        + " coalesce(a.new_value, a.old_value) ->> 'vehicle' AS event_detail,"
+                        + " " + OTHER_SUBJECT + " AS other_subject"
                         + " FROM audit_log a JOIN watched w ON w.table_name = a.table_name"
                         + JOINS + page + " ORDER BY a.id DESC LIMIT ?",
                 (rs, i) -> new Entry(
@@ -382,7 +478,7 @@ public class OrganizationAuditService {
                         KINDS.get(rs.getString("table_name")),
                         subjectOf(rs.getString("table_name"), rs.getString("part_title"),
                                 rs.getString("deal_customer"), rs.getString("item_title"),
-                                rs.getString("feed_title")),
+                                rs.getString("feed_title"), rs.getString("other_subject")),
                         conditionOf(rs.getString("table_name"), rs.getString("part_title"),
                                 rs.getString("part_condition"), rs.getString("item_title"),
                                 rs.getString("item_condition")),
@@ -394,7 +490,7 @@ public class OrganizationAuditService {
                         contextOf(rs.getString("table_name"), rs.getObject("item_deal_number"),
                                 rs.getObject("payment_deal_number"), rs.getString("cost_donor")),
                         actionOf(rs.getString("table_name"), rs.getString("operation"),
-                                rs.getString("created_packet")),
+                                rs.getString("created_packet"), rs.getString("event_detail")),
                         new ArrayList<>()),
                 withWatched(pageArgs));
 
@@ -514,8 +610,8 @@ public class OrganizationAuditService {
             Map<Long, String> lookup = titles.getOrDefault(diff.column(), Map.of());
             entry.changes().add(new Change(diff.table(), diff.column(),
                     AuditedColumns.of(diff.table()).get(diff.column()),
-                    AuditedColumns.display(diff.column(), diff.was(), lookup),
-                    AuditedColumns.display(diff.column(), diff.now(), lookup)));
+                    AuditedColumns.displayIn(diff.table(), diff.column(), diff.was(), lookup),
+                    AuditedColumns.displayIn(diff.table(), diff.column(), diff.now(), lookup)));
         }
     }
 
@@ -550,13 +646,16 @@ public class OrganizationAuditService {
     // ------------------------------------------------------------- слова строки
 
     private static String subjectOf(String table, String partTitle,
-                                    String dealCustomer, String itemTitle, String feedTitle) {
+                                    String dealCustomer, String itemTitle, String feedTitle,
+                                    String otherSubject) {
         return switch (table) {
             case "part" -> partTitle;
             case "deal" -> dealCustomer;
             case "deal_item" -> itemTitle;
             case "marketplace_account" -> feedTitle;
-            default -> null;
+            case "payment", "donor_cost" -> null;
+            // У настроек компании вещь одна — её называет вид.
+            default -> otherSubject;
         };
     }
 
@@ -602,6 +701,11 @@ public class OrganizationAuditService {
             case "deal_item" -> itemCode;
             default -> null;
         };
+        if (found == null && !LEGACY_KINDS.contains(table)) {
+            // Виды задачи 0325 своего кода не имеют: их называет название
+            // (OTHER_SUBJECT), а номер строки базы человеку не говорит ничего.
+            return null;
+        }
         return found != null ? found : "запись №" + recordId;
     }
 
@@ -640,12 +744,17 @@ public class OrganizationAuditService {
      *                      либо событие, либо перечень полей, а заведение —
      *                      событие.
      */
-    private static String actionOf(String table, String operation, String createdPacket) {
+    private static String actionOf(String table, String operation, String createdPacket,
+                                   String detail) {
+        // Машина применимости едет в строке события: полей у этой строки нет,
+        // и «добавлена» без машины не отвечало бы ни на что (задача 0325).
+        String machine = "part_applicability".equals(table) && detail != null && !detail.isBlank()
+                ? ": " + detail : "";
         return switch (operation) {
             case "INSERT" -> createdPacket == null || createdPacket.isBlank()
-                    ? CREATED.get(table)
+                    ? CREATED.get(table) + machine
                     : CREATED.get(table) + ", номер прайс-листа " + createdPacket;
-            case "DELETE" -> REMOVED.get(table);
+            case "DELETE" -> REMOVED.get(table) + machine;
             default -> null;
         };
     }
