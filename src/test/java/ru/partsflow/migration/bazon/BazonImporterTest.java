@@ -496,7 +496,7 @@ class BazonImporterTest extends PostgresTestBase {
      * и клиент включает её по инструкции перед боевой выгрузкой.
      */
     @Test
-    @DisplayName("«Контракт» из выгрузки переезжает состоянием и пометкой заголовка")
+    @DisplayName("«Контракт» из выгрузки переезжает состоянием и пометкой «(б/у)», как у Bazon")
     void conditionColumnIsImported() throws Exception {
         Path catalog = write("catalog-condition.csv", CATALOG_HEADER.strip()
                 + ";\"Состояние\"\n" + """
@@ -523,28 +523,19 @@ class BazonImporterTest extends PostgresTestBase {
         // остаётся прежнее умолчание.
         assertThat(textOf(CONDITION_COL, "702", "condition")).isEqualTo("USED");
 
-        // Пометки состояния в заголовке нет ни у одного (задача 0315): она была
-        // второй копией поля condition, и копия врала. Номер производителя
-        // по-прежнему последним словом.
+        // Пометка состояния — как у Bazon (задача 0336, отменяет 0315): «(б/у)»
+        // у контрактной и б/у, у новой нет. Номер производителя последним словом.
         assertThat(textOf(CONDITION_COL, "700", "title"))
-                .isEqualTo("Фара левая Toyota Camry 8414012530");
-        assertThat(textOf(CONDITION_COL, "701", "title")).isEqualTo("Бампер передний");
-        assertThat(textOf(CONDITION_COL, "702", "title")).isEqualTo("Стартер");
+                .isEqualTo("Фара левая Toyota Camry (б/у) 8414012530");
+        assertThat(textOf(CONDITION_COL, "701", "title")).isEqualTo("Бампер передний (б/у)");
+        assertThat(textOf(CONDITION_COL, "702", "title")).isEqualTo("Стартер (б/у)");
         assertThat(textOf(CONDITION_COL, "703", "title")).isEqualTo("Генератор 27060-28110");
-        for (String code : List.of("700", "701", "702", "703")) {
-            for (String mark : PartCondition.titleMarks()) {
-                assertThat(textOf(CONDITION_COL, code, "title"))
-                        .as("в заголовок %s дописана пометка «%s»", code, mark)
-                        .doesNotContain(mark);
-            }
-        }
     }
 
     /**
-     * Повтор переноса заголовок существующей позиции не трогает — ни новый
-     * (без пометки), ни прежний, собранный до задачи 0315 с «(б/у)»: снимает
-     * пометки с хранимого задача 0316, разово и с замером, а не каждый повтор
-     * выгрузки молча.
+     * Повтор переноса заголовок существующей позиции не трогает — ни новый,
+     * ни собранный прежней формулой: пересчёт хранимых названий — разовый
+     * запуск с замером (0336, пункт 4), а не каждый повтор выгрузки молча.
      */
     @Test
     @DisplayName("Повтор переноса не меняет заголовок перенесённой позиции")
@@ -562,9 +553,9 @@ class BazonImporterTest extends PostgresTestBase {
 
         new BazonImporter(dataSource, CONDITION_COL).importAll(donorsFixture(), catalog);
 
-        assertThat(textOf(CONDITION_COL, "710", "title")).isEqualTo("Фара правая 8414012531");
+        assertThat(textOf(CONDITION_COL, "710", "title")).isEqualTo("Фара правая (б/у) 8414012531");
         assertThat(textOf(CONDITION_COL, "711", "title"))
-                .as("повтор переписал заголовок, собранный до задачи 0315")
+                .as("повтор переписал заголовок, собранный прежней формулой")
                 .isEqualTo("Бампер задний (контракт)");
     }
 

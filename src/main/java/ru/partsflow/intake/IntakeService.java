@@ -52,6 +52,7 @@ public class IntakeService {
     private final StockDocumentService documents;
     private final DonorVehicleResolver vehicles;
     private final PartTitleGenerator titleGenerator;
+    private final ru.partsflow.inventory.PartTitles titles;
     private final DomainEventPublisher eventPublisher;
     private final PreorderService preorders;
     private final ru.partsflow.inventory.PartNaming partNaming;
@@ -64,6 +65,7 @@ public class IntakeService {
                          StockDocumentService documents,
                          DonorVehicleResolver vehicles,
                          PartTitleGenerator titleGenerator,
+                         ru.partsflow.inventory.PartTitles titles,
                          DomainEventPublisher eventPublisher,
                          PreorderService preorders,
                          ru.partsflow.inventory.PartNaming partNaming,
@@ -77,6 +79,7 @@ public class IntakeService {
         this.documents = documents;
         this.vehicles = vehicles;
         this.titleGenerator = titleGenerator;
+        this.titles = titles;
         this.eventPublisher = eventPublisher;
         this.jdbc = jdbc;
     }
@@ -216,7 +219,10 @@ public class IntakeService {
                 continue;
             }
             PartName partName = partNames.resolve(item.rawName(), authorId);
-            Part part = buildPart(item, partName, vehicle, donor, supplyId, authorId);
+            // Без состояния в строке — «б/у», прежнее умолчание приёмки (задача 0322
+            // его не меняла); пишется явно, потому что входит в название (0336).
+            Part part = buildPart(item, partName, vehicle, donor, supplyId, authorId,
+                    item.condition() == null ? PartCondition.USED : item.condition());
 
             Part savedPart = parts.saveAndFlush(part);
             if (item.oemNumber() != null && !item.oemNumber().isBlank()) {
@@ -320,6 +326,8 @@ public class IntakeService {
     private void arrivedAs(Part part, PartCondition chosen, Long authorId) {
         if (chosen != null && chosen != part.getCondition()) {
             part.setCondition(chosen);
+            // Состояние входит в название (задача 0336): «(б/у)» у б/у и контрактной.
+            titles.retitle(part);
             part.touchedBy(authorId);
             parts.saveAndFlush(part);
         }
@@ -391,12 +399,11 @@ public class IntakeService {
         // машин (ответ владельца 9 октября 2026). Указанная — проверяется.
         Donor donor = donorId == null ? null : requireDonor(donorId);
         PartName partName = partNames.resolve(rawName, authorId);
+        // Состояние пишется всегда, и пустое тоже: у сущности умолчание «б/у» (его
+        // держат приёмка и перенос, задача 0322 их не меняет), и Hibernate отправил
+        // бы его в INSERT, не спросив человека.
         Part part = buildPart(ItemRequest.of(rawName, quantity, price, null), partName,
-                vehicles.resolve(donorId), donor, supplyId, authorId);
-        // Пишется всегда, и пустое тоже: у сущности умолчание «б/у» (его держат
-        // приёмка и перенос, задача 0322 их не меняет), и Hibernate отправил бы
-        // его в INSERT, не спросив человека.
-        part.setCondition(chosen);
+                vehicles.resolve(donorId), donor, supplyId, authorId, chosen);
         part.setQuantity(quantity);
         part.setExpectedOrigin(true);
         part.setClientRequestId(key);
@@ -531,15 +538,20 @@ public class IntakeService {
 
     private Part buildPart(ItemRequest item, PartName partName,
                            PartTitleGenerator.VehicleTitlePart vehicle,
-                           Donor donor, Long supplyId, Long authorId) {
+                           Donor donor, Long supplyId, Long authorId,
+                           PartCondition condition) {
 
         // Заголовок собирается, а не приходит извне: набранное руками название
         // у каждого своё, и по такому складу нельзя ни искать, ни выгружать.
-        // Вид детали берётся эталонный — в этом и смысл справочника.
+        // Вид — написание клиента, а не эталон (задача 0336, как у Bazon): «Ремень
+        // поликлиновой» остаётся им и сопоставленный с «Ремнём приводным».
+        // Сопоставление даёт вид детали и категорию, на название не влияет.
+        // Те же поля читает PartTitles при правке карточки — формула одна.
         String title = titleGenerator.generate(
-                partNames.displayNameOf(partName),
+                partName.getName(),
                 vehicle,
                 new PartTitleGenerator.Sides(item.sideFr(), item.sideLr(), item.sideUd()),
+                condition,
                 item.oemNumber());
 
         Part part = new Part(partName.getCategoryId(), title, item.price());
@@ -550,9 +562,7 @@ public class IntakeService {
         part.setManufacturer(item.manufacturer());
         part.setMarking(item.marking());
         part.setNote(item.note());
-        if (item.condition() != null) {
-            part.setCondition(item.condition());
-        }
+        part.setCondition(condition);
         if (item.qualityGrade() != null) {
             part.setQualityGrade(item.qualityGrade());
         }

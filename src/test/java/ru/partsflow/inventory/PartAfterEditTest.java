@@ -328,11 +328,17 @@ class PartAfterEditTest extends PostgresTestBase {
         assertThat(lexusRow.path("brandParts").asLong()).isEqualTo(1);
     }
 
-    // ---------------------------------------------------------- название (0304)
+    // ---------------------------------------------------------- название (0336)
 
+    /**
+     * Название производное (задача 0336), но собрать его можно, только если
+     * у позиции есть вид: эта заведена мимо справочника наименований, и правка
+     * номера её названия не трогает — пересобирать не из чего. Пересборку
+     * у позиции с видом стережёт {@code intake.IntakeTitleLikeBazonTest}.
+     */
     @Test
-    @DisplayName("Номер производителя название не трогает — собранное, вписанное, при смене и при снятии")
-    void oemEditNeverTouchesTheTitle() throws Exception {
+    @DisplayName("Позиция без вида: номер производителя название не трогает, «Наименование» прислать нельзя")
+    void titleWithoutKindIsKeptAndNotEditable() throws Exception {
         MockHttpSession owner = login();
         String history = historyOf(owner);
 
@@ -341,31 +347,11 @@ class PartAfterEditTest extends PostgresTestBase {
         save(owner, "\"oem\":\"\"");
         assertThat(titleOf(partId)).isEqualTo("Фара левая (б/у) 81170-33670");
 
-        save(owner, "\"title\":\"Моя фара (б/у) 81170-33671\"");
-        save(owner, "\"oem\":\"81170-33679\"");
-        assertThat(titleOf(partId)).as("ручной текст в форме собранного")
-                .isEqualTo("Моя фара (б/у) 81170-33671");
-        save(owner, "\"oem\":\"\"");
-        assertThat(titleOf(partId)).isEqualTo("Моя фара (б/у) 81170-33671");
-
+        put(owner, "\"title\":\"Моя фара\"").andExpect(status().isBadRequest());
+        assertThat(titleOf(partId)).isEqualTo("Фара левая (б/у) 81170-33670");
         assertThat(historyOf(owner).split("Наименование", -1).length)
-                .as("правка номера написала в историю «Наименование: … → …»")
-                .isEqualTo(history.split("Наименование", -1).length + 1);
-    }
-
-    @Test
-    @DisplayName("Прямая правка «Наименования» работает: в карточке, в истории и в <name> прайса")
-    void humanTitleEditStillWorks() throws Exception {
-        MockHttpSession owner = login();
-        save(owner, "\"title\":\"Моя фара\",\"oem\":\"81170-33671\"");
-
-        assertThat(titleOf(partId)).isEqualTo("Моя фара");
-        assertThat(offer(price(DromPriceGenerator.FeedFilter.everything()), "Моя фара"))
-                .contains("<name>Моя фара</name>");
-        assertThat(historyOf(owner)).contains("Наименование", "Моя фара");
-
-        save(owner, "\"title\":\"Другая фара\"");
-        assertThat(titleOf(partId)).isEqualTo("Другая фара");
+                .as("правка номера или отказ написали в историю «Наименование: … → …»")
+                .isEqualTo(history.split("Наименование", -1).length);
     }
 
     // ------------------------------------------------------------------ помощники

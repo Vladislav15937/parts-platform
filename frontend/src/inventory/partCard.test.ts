@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardFields, shownTitle } from './partCard';
+import { cardFields } from './partCard';
 import type { CatalogRow } from './catalog';
 
 function row(overrides: Partial<CatalogRow> = {}): CatalogRow {
@@ -28,26 +28,10 @@ function valueOf(r: CatalogRow, title: string): string | undefined {
   return cardFields(r).find(([t]) => t === title)?.[1];
 }
 
-describe('наименование без пометки состояния (задача 0311)', () => {
-  it('снимает пометку любого состояния, где бы она ни стояла', () => {
-    expect(shownTitle('Фара Toyota Camry 2007 лев. (б/у) 81170-33670'))
-      .toBe('Фара Toyota Camry 2007 лев. 81170-33670');
-    expect(shownTitle('Капот (б/у)')).toBe('Капот');
-    expect(shownTitle('Фара (новая)')).toBe('Фара');
-    expect(shownTitle('Стартер (восст.) 28100')).toBe('Стартер 28100');
-    expect(shownTitle('Двигатель 1GR (контракт)')).toBe('Двигатель 1GR');
-  });
-
-  it('вписанное руками без пометки не трогает', () => {
-    expect(shownTitle('Моя фара на Камри, левая')).toBe('Моя фара на Камри, левая');
-    // «б/у» словом — не пометка в скобках, её ставил человек.
-    expect(shownTitle('Фара б/у левая')).toBe('Фара б/у левая');
-    expect(shownTitle(null)).toBeNull();
-  });
-
-  it('строка «Наименование» — наименование, написание вида — своей строкой', () => {
+describe('наименование как хранится, с пометкой (задача 0336)', () => {
+  it('строка «Наименование» — с «(б/у)», как у Bazon; написание вида — своей строкой', () => {
     const r = row({ title: 'Фара Toyota Camry 2007 лев. (б/у)', partName: 'фара лев.' });
-    expect(valueOf(r, 'Наименование')).toBe('Фара Toyota Camry 2007 лев.');
+    expect(valueOf(r, 'Наименование')).toBe('Фара Toyota Camry 2007 лев. (б/у)');
     expect(valueOf(r, 'Наименование в справочнике')).toBe('фара лев.');
   });
 });

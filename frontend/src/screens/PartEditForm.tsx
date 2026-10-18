@@ -5,7 +5,7 @@ import {
   priceOperationHint, PRICE_OPERATIONS,
   type CatalogRow, type PartEdit, type PriceOperation,
 } from '../inventory/catalog';
-import { generationOf, shownTitle } from '../inventory/partCard';
+import { generationOf } from '../inventory/partCard';
 import { LongNumberNote } from '../inventory/LongNumberNote';
 import { OEM_FIELD_NOTE, numberTooLong } from '../inventory/oemLength';
 import { notSavedNote, notSavedSummary, type NotSavedField } from '../inventory/notSaved';
@@ -567,9 +567,9 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
   {
     title: 'Основные параметры',
     fields: [
-      // Наименование — то, что стоит в колонке «Наименование» витрины и уходит
-      // в объявление. Правленое руками справочник больше не пересобирает.
-      { kind: 'text', key: 'title', label: 'Наименование' },
+      // Наименования здесь нет (задача 0336, как у Bazon): оно собирается
+      // из вида, машины, года, положения, состояния и номера и меняется
+      // вместе с ними; руками его не правят.
       { kind: 'side', key: 'sideFr', label: 'Передний / Задний', options: SIDE_FR },
       { kind: 'side', key: 'sideLr', label: 'Левый / Правый', options: SIDE_LR },
       { kind: 'text', key: 'manufacturer', label: 'Производитель' },
@@ -637,7 +637,7 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
  * формы). Нераскрытое — `undefined`, то есть ключа в запросе нет, и сервер
  * поле не трогает.
  */
-const SENT_WHEN_OPEN = ['code', 'title', 'sideLr', 'sideFr', 'authenticity', 'oem',
+const SENT_WHEN_OPEN = ['code', 'sideLr', 'sideFr', 'authenticity', 'oem',
   'crosses', 'legacyCode', 'dromAdNumber', 'donorCode', 'brand', 'model', 'generation',
   'body', 'engine', 'year', 'equipment'] as const;
 
@@ -739,7 +739,6 @@ export interface Draft {
   adDate: string;
   number: string;
   code: string;
-  title: string;
   sideLr: string;
   sideFr: string;
   authenticity: string;
@@ -798,10 +797,6 @@ export function draftOf(card: PartEdit): Draft {
     adDate: card.adDate ?? '',
     number: card.number === null || card.number === undefined ? '' : String(card.number),
     code: card.code ?? '',
-    // Без пометки состояния, как в шапке и в просмотре (задача 0311). Увиденным
-    // уезжает ответ сервера как есть (`card`), поэтому раскрытая и нетронутая
-    // строка не шлёт ничего, а правленая — то, что набрал человек.
-    title: shownTitle(card.title ?? null) ?? '',
     sideLr: card.sideLr ?? '',
     sideFr: card.sideFr ?? '',
     authenticity: card.authenticity ?? '',
@@ -829,7 +824,6 @@ export function toEdit(form: Draft, open: readonly string[] = []): PartEdit {
     // принял бы не тот (задача 0303). Границу называет сервер словами.
     number: open.includes('number') ? form.number.trim() : undefined,
     code: sent('code'),
-    title: sent('title'),
     sideLr: sent('sideLr'),
     sideFr: sent('sideFr'),
     authenticity: sent('authenticity'),
