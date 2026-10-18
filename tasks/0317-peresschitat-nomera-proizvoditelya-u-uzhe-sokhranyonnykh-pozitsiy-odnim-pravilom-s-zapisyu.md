@@ -136,8 +136,22 @@ B=$(ops/switch-build.sh --current) && L=~/oem-recount-dry-$(date -u +%Y%m%dT%H%M
 B=$(ops/switch-build.sh --current) && L=~/oem-recount-apply-$(date -u +%Y%m%dT%H%M%SZ).log && docker compose -f docker-compose.prod.yml --env-file .env --profile ${B#app-} run --rm --no-deps -T $B --one-shot=oem-recount --apply 2>&1 | tee $L | grep -E "OemRecount|ERROR" | grep -v "restore-sql\|: позиция\|split-row:"; sed -n 's/.*restore-sql: //p' $L > ${L%.log}.restore.sql; echo "лог: $L; возврат: ${L%.log}.restore.sql ($(wc -l < ${L%.log}.restore.sql) строк)"
 ```
 
+**С задачи 0324 (основной номер с разделителем делится, PR исполнителя 0324):** запускать после
+выкладки образа **с 0323 и 0324** — ввод и пересчёт делят основной номер одним правилом, и разовый
+запуск без них пришлось бы повторять. Строки проверки, пересчёта и возврата выше — **те же**;
+в `….split.txt` теперь и строки основного номера: «(номер производителя): «8414012530, 8414012531»
+→ основной «8414012530», кросс-номера «8414012531»». Замер до и после — эта строка вместо прежней
+(добавлена колонка `primary_with_separator` — сколько основных номеров с разделителем будет
+разделено; после `--apply` в ней остаются только названные «первая часть не номер» и «часть
+длиннее предела»):
+
+```
+docker exec partsflow-cell01-postgres-1 psql -U partsflow -d "$(ops/switch-build.sh --current-db)" -At -c "select nspname, (xpath('/row/p/text()', x))[1]::text positions, (xpath('/row/r/text()', x))[1]::text rows, (xpath('/row/s/text()', x))[1]::text crosses_with_separator, (xpath('/row/d/text()', x))[1]::text primary_with_separator from (select nspname, query_to_xml(format('select count(distinct part_id) p, count(*) r, (select count(*) from %I.part_oem where not is_primary and raw_number ~ %L) s, (select count(*) from %I.part_oem where is_primary and raw_number ~ %L) d from %I.part_oem where raw_number ~ %L', nspname, '[,;]|[^[:space:]][[:space:]]*[' || chr(9) || chr(10) || chr(13) || '][[:space:]]*[^[:space:]]', nspname, '[,;]|[^[:space:]][[:space:]]*[' || chr(9) || chr(10) || chr(13) || '][[:space:]]*[^[:space:]]', nspname, '[АВЕКМНОРСТХаеорсх]|^[[:space:]' || chr(160) || chr(8203) || ']|[[:space:]' || chr(160) || chr(8203) || ']$'), false, true, '') x from pg_namespace where nspname ~ '^t_[0-9]+$') s order by 1"
+```
+
 После: строка замера и строка проверки ещё раз — у каждого арендатора «0 позиций будет
-пересчитано» (кроме «не номер» и «основной с разделителем», они остаются названными;
+пересчитано» (кроме «не номер» и, с 0324, основного с разделителем, у которого первая часть
+«не номер» или часть длиннее предела, — они остаются названными;
 `crosses_with_separator` — ноль, если среди кросс-номеров нет «длиннее предела» с разделителем
 и строк из одних «не номеров»: такие не делятся и называются). Возврат, только если надо
 откатить, — одной транзакцией, ВРЕМЯ — из имени файла, напечатанного пересчётом:

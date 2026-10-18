@@ -43,11 +43,18 @@ import java.util.Set;
  *       {@link OemNumbers#MAX_NORMALIZED_LENGTH} (0312): старое приведение вырезало
  *       русские буквы, новое их сохраняет, и строка, прежде короткая, перестала бы
  *       помещаться в индекс;</li>
- *   <li>«основной с разделителем» — основной номер, в котором {@link OemNumbers#list}
- *       видит несколько номеров: ввод основной номер не делит нигде (карточка, приёмка,
- *       оба переноса), и пересчёт не делит тоже — иначе следующий ввод того же текста
- *       и повтор файла (0282) разошлись бы с пересчитанным.</li>
+ *   <li>основной номер с разделителем, у которого первая часть «не номер» или часть
+ *       длиннее предела, — не делится (ниже).</li>
  * </ul>
+ *
+ * <p><b>Основной номер с разделителем делится</b> (задача 0324, решение владельца
+ * продукта 18.10.2026: «у детали только один номер производителя — остальное — кросс
+ * номера»): «8414012530, 8414012531» в основном становится основным 8414012530 и
+ * кросс-номером 8414012531 — тем же {@link OemNumbers#primary}, что пишет ввод (0323).
+ * Первая часть остаётся в исходной строке (тот же {@code id}, {@code is_primary}
+ * прежний), лишние номера встают <b>первыми</b> среди кросс-номеров, как при вводе,
+ * а уже имеющиеся кросс-номера переставляются за них. Первая часть «не номер» —
+ * основной не угадывается, строка остаётся целиком (как при вводе).
  *
  * <p><b>Строка кросс-номеров с разделителем делится</b> (задача 0319, решение владельца
  * продукта 18.10.2026, «1 - б»): «8414012530, 8414012531» одной строкой становится двумя
@@ -111,8 +118,10 @@ public class OemRecount {
     public enum Note {
         NOT_A_NUMBER("не номер — после приведения ничего не осталось"),
         TOO_LONG("латиницей стал бы длиннее " + OemNumbers.MAX_NORMALIZED_LENGTH + " знаков"),
-        PRIMARY_HAS_SEPARATOR("основной номер с разделителем кросс-номеров — не делится: ввод"
-                + " (карточка, приёмка, оба переноса) основной номер не делит, делит только кросс-номера"),
+        PRIMARY_FIRST_NOT_A_NUMBER("основной номер с разделителем не разделён: первая часть не номер —"
+                + " основной не угадывается, строка оставлена целиком (как при вводе, задача 0323)"),
+        PRIMARY_TOO_LONG("основной номер с разделителем не разделён: часть длиннее "
+                + OemNumbers.MAX_NORMALIZED_LENGTH + " знаков — строка оставлена целиком"),
         SPLIT_NOT_A_NUMBER("часть «не номер» при делении отброшена — строки не порождает"),
         SPLIT_EMPTY("пустая часть при делении — строки не порождает");
 
@@ -146,13 +155,17 @@ public class OemRecount {
     }
 
     /**
-     * Строка кросс-номеров, разделённая на номера (задача 0319).
+     * Строка, разделённая на номера: кросс-номеров (задача 0319) или основного номера
+     * (задача 0324 — тогда первая часть остаётся основным, остальные становятся
+     * кросс-номерами, {@code was.primary()} истинно).
      *
      * @param numbers части-номера в порядке строки
      * @param kept    из них породили строку (первая — на месте исходной); остальные слиты
      *                с номером, который у позиции уже есть
+     * @param absorbed сколько других строк позиции слито с частями этой (тот же номер
+     *                 стоял у позиции отдельной строкой — остаётся часть, а строка удаляется)
      */
-    public record Split(Row was, List<String> numbers, List<String> kept) {
+    public record Split(Row was, List<String> numbers, List<String> kept, int absorbed) {
 
         public int merged() {
             return numbers.size() - kept.size();
@@ -213,14 +226,11 @@ public class OemRecount {
             List<String> pieces = OemNumbers.list(row.raw());
             if (pieces.size() > 1) {
                 if (row.primary()) {
-                    // Основной номер ввод не делит ни в одном месте записи (карточка —
-                    // cleanOem, приёмка, оба переноса — clean): разделённый, он разошёлся бы
-                    // с тем, что запишет следующий ввод того же текста, а повтор файла
-                    // (0282) назвал бы номер расхождением. Не трогается целиком — даже
-                    // если в нём есть русская «А»: поправленный наполовину, он ушёл бы
-                    // из отчёта о том, что с ним надо решать.
-                    notes.add(new Noted(row, Note.PRIMARY_HAS_SEPARATOR, null));
-                    entries.add(new Entry(row, row.raw(), row.normalized()));
+                    // Основной номер делится тем же правилом, что ввод (задача 0324 после
+                    // 0323): OemNumbers.primary — первый номер основной, остальные
+                    // кросс-номера. Своей копии деления здесь нет: разойдись они, следующий
+                    // ввод того же текста и повтор файла (0282) разошлись бы с пересчитанным.
+                    primaryParts(row, pieces, notes, entries, numbersOf);
                     continue;
                 }
                 List<String> numbers = new ArrayList<>();
@@ -272,12 +282,22 @@ public class OemRecount {
             entries.add(new Entry(row, raw, norm));
         }
 
+        // Лишние номера основного встают первыми среди кросс-номеров — как при вводе
+        // (0323, п. 3: «лишние перед набранными»). Поэтому строки разделённого основного
+        // идут в начало, и уже имеющиеся кросс-номера оказываются за новыми строками —
+        // их переставит тот же приём, что у деления кросс-номеров (0319).
+        if (entries.stream().anyMatch(e -> e.origin.primary() && !e.primary)) {
+            List<Entry> reordered = new ArrayList<>(entries.stream().filter(e -> e.origin.primary()).toList());
+            entries.stream().filter(e -> !e.origin.primary()).forEach(reordered::add);
+            entries = reordered;
+        }
+
         // Одинаковые номера: основная выигрывает всегда, иначе первая по порядку —
         // как при вводе (основной, затем кросс-номера по порядку, повтор отброшен).
         // Для строк без деления «первая по порядку» — меньший номер строки, как в 0317.
         Map<String, Entry> keeper = new LinkedHashMap<>();
         for (Entry e : entries) {
-            if (e.origin.primary()) {
+            if (e.primary) {
                 keeper.putIfAbsent(e.normalized, e);
             }
         }
@@ -298,7 +318,7 @@ public class OemRecount {
         // Основной номер порядка не несёт и не переставляется.
         boolean tail = false;
         for (Entry e : kept) {
-            if (e.origin.primary()) {
+            if (e.primary) {
                 continue;
             }
             if (!e.inPlace) {
@@ -309,15 +329,20 @@ public class OemRecount {
         }
 
         List<Merge> merges = new ArrayList<>();
+        List<Entry> all = entries;
+        Map<Row, Integer> absorbed = new LinkedHashMap<>();
         for (Row row : rows) {
             if (!placed.contains(row)) {
-                Entry first = entries.stream().filter(e -> e.origin == row).findFirst().orElseThrow();
-                merges.add(new Merge(row, keeper.get(first.normalized).slot()));
+                Entry first = all.stream().filter(e -> e.origin == row).findFirst().orElseThrow();
+                Entry target = keeper.get(first.normalized);
+                merges.add(new Merge(row, target.slot()));
+                absorbed.merge(target.origin, 1, Integer::sum);
             }
         }
         List<Split> splits = new ArrayList<>();
         numbersOf.forEach((row, numbers) -> splits.add(new Split(row, List.copyOf(numbers),
-                kept.stream().filter(e -> e.origin == row).map(e -> e.raw).toList())));
+                kept.stream().filter(e -> e.origin == row).map(e -> e.raw).toList(),
+                absorbed.getOrDefault(row, 0))));
 
         List<Change> pending = new ArrayList<>();
         List<Insert> inserts = new ArrayList<>();
@@ -365,20 +390,69 @@ public class OemRecount {
                 crossesOf(rows), crossesOf(after));
     }
 
+    /**
+     * Основной номер с разделителем (задача 0324): части — {@link OemNumbers#primary},
+     * то есть ровно то, что запишет ввод того же текста (0323). Первая часть остаётся
+     * основной на месте строки, остальные — будущие кросс-номера. Не делится и
+     * называется: первая часть «не номер» (основной не угадывается — строка целиком,
+     * как при вводе) и часть длиннее предела 0312 (отбросить её — потерять номер).
+     */
+    private static void primaryParts(Row row, List<String> pieces, List<Noted> notes,
+                                     List<Entry> entries, Map<Row, List<String>> numbersOf) {
+        OemNumbers.Primary split = OemNumbers.primary(row.raw());
+        if (split.primary() == null) {
+            notes.add(new Noted(row, Note.NOT_A_NUMBER, null));
+            entries.add(new Entry(row, row.raw(), row.normalized()));
+            return;
+        }
+        if (OemNumbers.normalize(pieces.get(0)) == null) {
+            notes.add(new Noted(row, Note.PRIMARY_FIRST_NOT_A_NUMBER, pieces.get(0)));
+            entries.add(new Entry(row, row.raw(), row.normalized()));
+            return;
+        }
+        for (String number : split.all()) {
+            if (OemNumbers.tooLong(number, false) != null) {
+                notes.add(new Noted(row, Note.PRIMARY_TOO_LONG, number));
+                entries.add(new Entry(row, row.raw(), row.normalized()));
+                return;
+            }
+        }
+        for (String piece : pieces) {
+            if (OemNumbers.normalize(piece) == null) {
+                notes.add(new Noted(row, Note.SPLIT_NOT_A_NUMBER, piece));
+            }
+        }
+        for (int i = OemNumbers.emptyPieces(row.raw()); i > 0; i--) {
+            notes.add(new Noted(row, Note.SPLIT_EMPTY, ""));
+        }
+        numbersOf.put(row, pieces.stream().filter(p -> OemNumbers.normalize(p) != null).toList());
+        entries.add(new Entry(row, split.primary(), OemNumbers.normalize(split.primary()), true));
+        for (String cross : split.crosses()) {
+            entries.add(new Entry(row, cross, OemNumbers.normalize(cross), false));
+        }
+    }
+
     /** Будущая строка позиции: из какой строки взялась и с какими значениями. */
     private static final class Entry {
         final Row origin;
         final String raw;
         final String normalized;
+        /** Станет основным номером. У части разделённого основного — только у первой. */
+        final boolean primary;
         /** Стоит на месте строки {@code origin} (тот же {@code id}); иначе — новая. */
         boolean inPlace;
         /** Была на месте, но стоит за новой строкой: удаляется и вставляется заново. */
         boolean moved;
 
         Entry(Row origin, String raw, String normalized) {
+            this(origin, raw, normalized, origin.primary());
+        }
+
+        Entry(Row origin, String raw, String normalized, boolean primary) {
             this.origin = origin;
             this.raw = raw;
             this.normalized = normalized;
+            this.primary = primary;
         }
 
         /** Строка, какой она станет: прежний {@code id} у стоящей на месте, {@code 0} у вставленной. */
@@ -387,12 +461,12 @@ public class OemRecount {
             if (same && raw.equals(origin.raw()) && normalized.equals(origin.normalized())) {
                 return origin;
             }
-            return new Row(same ? origin.id() : 0, origin.partId(), raw, normalized, origin.primary());
+            return new Row(same ? origin.id() : 0, origin.partId(), raw, normalized, primary);
         }
 
         /** С какой строкой сливаются: прежняя на месте — она как была, иначе вставляемая. */
         Row slot() {
-            return inPlace && !moved ? origin : new Row(0, origin.partId(), raw, normalized, origin.primary());
+            return inPlace && !moved ? origin : new Row(0, origin.partId(), raw, normalized, primary);
         }
     }
 
@@ -427,6 +501,16 @@ public class OemRecount {
         public long splitRows;
         public long splitNumbers;
         public long splitMerged;
+        /**
+         * Деление основного номера (0324): разделённых основных, полученных из них
+         * кросс-номеров, частей, слитых с имеющимися номерами позиции, и частей,
+         * не породивших строки (пустых и «не номер»). Не разделённые основные — у
+         * {@link Note#PRIMARY_FIRST_NOT_A_NUMBER} и {@link Note#PRIMARY_TOO_LONG}.
+         */
+        public long primarySplitRows;
+        public long primarySplitCrosses;
+        public long primarySplitMerged;
+        public long primarySplitSkipped;
         /** Вставлено строк: части разделённых и переставленные за них ради порядка. */
         public long rowsInserted;
         public long rowsMoved;
@@ -534,6 +618,12 @@ public class OemRecount {
                 }
             }
             for (Split split : plan.splits()) {
+                if (split.was().primary()) {
+                    tally.primarySplitRows++;
+                    tally.primarySplitCrosses += split.kept().size() - 1;
+                    tally.primarySplitMerged += split.merged() + split.absorbed();
+                    continue;
+                }
                 tally.splitRows++;
                 tally.splitNumbers += split.kept().size();
                 tally.splitMerged += split.merged();
@@ -556,6 +646,13 @@ public class OemRecount {
     private static void keep(PartPlan plan, List<PartPlan> plans, Tally tally) {
         tally.parts++;
         for (Noted noted : plan.notes()) {
+            if (noted.row().primary() && (noted.note() == Note.SPLIT_EMPTY
+                    || noted.note() == Note.SPLIT_NOT_A_NUMBER)) {
+                // Части основного считаются своим числом: «пропущено частей» у деления
+                // кросс-номеров (0319) осталось про кросс-номера.
+                tally.primarySplitSkipped++;
+                continue;
+            }
             tally.notes.merge(noted.note(), 1L, Long::sum);
         }
         if (plan.writes() || plan.cycle()) {
@@ -670,13 +767,20 @@ public class OemRecount {
                     .map(n -> "«" + visibleText(n.piece()) + "»").toList();
             long empty = plan.notes().stream()
                     .filter(n -> n.row() == was && n.note() == Note.SPLIT_EMPTY).count();
+            String parts = was.primary()
+                    ? "основной «" + visibleText(split.kept().get(0)) + "»"
+                    + (split.kept().size() > 1 ? ", кросс-номера " + String.join(" | ", split.kept()
+                    .subList(1, split.kept().size()).stream().map(k -> "«" + visibleText(k) + "»").toList()) : "")
+                    : String.join(" | ", split.kept().stream().map(k -> "«" + visibleText(k) + "»").toList());
             tally.splitLines.add((name == null ? "" : name + ", ") + "позиция " + plan.partId()
-                    + ", строка " + was.id() + ": «" + visibleText(was.raw()) + "» → "
-                    + String.join(" | ", split.kept().stream().map(k -> "«" + visibleText(k) + "»").toList())
+                    + ", строка " + was.id() + (was.primary() ? " (номер производителя)" : "")
+                    + ": «" + visibleText(was.raw()) + "» → " + parts
                     + (merged.isEmpty() ? "" : "; уже есть у позиции: "
                     + String.join(", ", merged.stream().map(m -> "«" + visibleText(m) + "»").toList()))
                     + (dropped.isEmpty() ? "" : "; не номер, отброшено: " + String.join(", ", dropped))
-                    + (empty == 0 ? "" : "; пустых частей " + empty));
+                    + (empty == 0 ? "" : "; пустых частей " + empty)
+                    + (!was.primary() || split.absorbed() == 0 ? ""
+                    : "; совпали с имеющимися кросс-номерами, те строки слиты: " + split.absorbed()));
         }
         for (Insert insert : plan.inserts()) {
             Row moved = insert.moved();
@@ -744,14 +848,19 @@ public class OemRecount {
             log.info("{}: строк {}, позиций {}; {} позиций {} (строк изменено {}, слито {}, вставлено {},"
                             + " переставлено ради порядка {}); деление: строк {}, получено номеров {},"
                             + " частей слито с имеющимися {}, частей пропущено {} (пустых {}, не номер {});"
-                            + " для площадки {}; не тронуто: не номер {}, длиннее предела {},"
-                            + " основной с разделителем {}; правлены во время запуска {}; меняются местами {}",
+                            + " деление основного: разделено основных {}, получено кросс-номеров {},"
+                            + " частей слито с имеющимися {}, частей пропущено {}, не разделено"
+                            + " (первая часть не номер {}, часть длиннее предела {});"
+                            + " для площадки {}; не тронуто: не номер {}, длиннее предела {};"
+                            + " правлены во время запуска {}; меняются местами {}",
                     outcome.schema(), t.rows, t.parts, t.partsChanged,
                     options.apply() ? "пересчитано" : "будет пересчитано",
                     t.rowsUpdated, t.rowsMerged, t.rowsInserted, t.rowsMoved,
                     t.splitRows, t.splitNumbers, t.splitMerged, t.splitSkipped(),
-                    t.noted(Note.SPLIT_EMPTY), t.noted(Note.SPLIT_NOT_A_NUMBER), t.feedMarks,
-                    t.noted(Note.NOT_A_NUMBER), t.noted(Note.TOO_LONG), t.noted(Note.PRIMARY_HAS_SEPARATOR),
+                    t.noted(Note.SPLIT_EMPTY), t.noted(Note.SPLIT_NOT_A_NUMBER),
+                    t.primarySplitRows, t.primarySplitCrosses, t.primarySplitMerged, t.primarySplitSkipped,
+                    t.noted(Note.PRIMARY_FIRST_NOT_A_NUMBER), t.noted(Note.PRIMARY_TOO_LONG), t.feedMarks,
+                    t.noted(Note.NOT_A_NUMBER), t.noted(Note.TOO_LONG),
                     t.busy, t.cycles);
         }
         log.info("Итого: позиций {} {}; позиций, изменившихся для площадки, {} — {}", changed,

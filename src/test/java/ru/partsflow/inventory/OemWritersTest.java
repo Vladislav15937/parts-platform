@@ -45,12 +45,12 @@ class OemWritersTest {
      * {@code OemNumbers.primary(} — деление «один номер производителя, остальное —
      * кросс-номера», — а у того, кто пишет кросс-номера из своего поля, ещё
      * {@code OemNumbers.list(}. Обе функции чистят части {@code clean} сами.
-     * Пересчёт (0317, 0319) пока чистит и делит кросс-номера; основной номер
-     * он поделит тем же {@code primary} в задаче 0324.
+     * Пересчёт (0317, 0319, 0324) чистит, делит кросс-номера {@code list} и основной
+     * номер — тем же {@code primary}, что ввод.
      */
     private static final Map<String, List<String>> WRITERS = Map.of(
             "inventory/PartIdentity.java", List.of("OemNumbers.primary(", "OemNumbers.list("),
-            "inventory/OemRecount.java", List.of("OemNumbers.clean("),
+            "inventory/OemRecount.java", List.of("OemNumbers.clean(", "OemNumbers.primary(", "OemNumbers.list("),
             "intake/IntakeService.java", List.of("OemNumbers.primary("),
             "migration/excel/ExcelWarehouseImporter.java", List.of("OemNumbers.primary(", "OemNumbers.list("),
             "migration/bazon/BazonImporter.java", List.of("OemNumbers.primary(", "OemNumbers.list("));
