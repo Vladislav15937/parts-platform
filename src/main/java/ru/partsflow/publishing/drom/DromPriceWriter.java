@@ -103,7 +103,12 @@ public class DromPriceWriter {
         // Уедет ли «Контракт» в прайс своим словом — вопрос владельцу
         // продукта, названный в tasks/0039 и tasks/0166: сегодня поведение
         // прежнее, и нового обещания покупателю мы не даём.
-        element(w, "condition", switch (offer.condition()) {
+        //
+        // Без состояния («Не указано», задача 0322) элемента нет. До писателя
+        // такая позиция не доезжает — её отсекает отбор (HAS_CONDITION), —
+        // но падение здесь случилось бы посреди записи ответа: 200 с обрывком
+        // тела, которое площадка читает как «снять все объявления».
+        element(w, "condition", offer.condition() == null ? null : switch (offer.condition()) {
             case NEW -> "Новое";
             case USED, REFURBISHED, CONTRACT -> "Б/у";
         });
@@ -366,7 +371,9 @@ public class DromPriceWriter {
         // покупатель ищет именно этим словом, и собранное описание —
         // единственное место, где оно до него доходит (поле condition
         // у площадки двузначное, см. выше).
-        lines.add("Состояние: " + offer.condition().title() + ".");
+        if (offer.condition() != null) {
+            lines.add("Состояние: " + offer.condition().title() + ".");
+        }
         return String.join(" ", lines);
     }
 

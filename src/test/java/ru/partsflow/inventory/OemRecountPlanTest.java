@@ -126,21 +126,152 @@ class OemRecountPlanTest {
     }
 
     @Test
-    @DisplayName("Разделитель внутри строки — не делится, а называется")
-    void separatorInsideIsNamed() {
+    @DisplayName("Основной номер с разделителем — не делится (ввод основной не делит), а называется")
+    void primaryWithSeparatorIsNamed() {
         PartPlan plan = OemRecount.plan(List.of(row(1, "111\t222", "111222", true)));
         assertThat(plan.writes()).isFalse();
-        assertThat(plan.notes()).extracting(OemRecount.Noted::note).containsExactly(Note.HAS_SEPARATOR);
+        assertThat(plan.notes()).extracting(OemRecount.Noted::note).containsExactly(Note.PRIMARY_HAS_SEPARATOR);
     }
 
     @Test
-    @DisplayName("Разделитель внутри и русская «А» в той же строке — строка не трогается целиком")
-    void separatorWithAnotherDefectIsLeftWhole() {
+    @DisplayName("Основной с разделителем и русской «А» — строка не трогается целиком")
+    void primaryWithSeparatorAndAnotherDefectIsLeftWhole() {
         Row row = row(1, "\u0410-1\t222", "1222", true);
         PartPlan plan = OemRecount.plan(List.of(row));
-        assertThat(plan.writes()).as("строку с разделителем поправили наполовину").isFalse();
+        assertThat(plan.writes()).as("основной с разделителем поправили наполовину").isFalse();
         assertThat(plan.updates()).isEmpty();
-        assertThat(plan.notes()).extracting(OemRecount.Noted::note).containsExactly(Note.HAS_SEPARATOR);
+        assertThat(plan.notes()).extracting(OemRecount.Noted::note).containsExactly(Note.PRIMARY_HAS_SEPARATOR);
+    }
+
+    // ------------------------------------------------------------ деление (0319)
+
+    @Test
+    @DisplayName("0319: «8414012530, 8414012531» — первая часть на месте строки, вторая вставляется")
+    void crossesInOneRowAreSplit() {
+        Row cross = row(2, "8414012530, 8414012531", "84140125308414012531", false);
+        PartPlan plan = OemRecount.plan(List.of(row(1, "A-1", "A1", true), cross));
+
+        assertThat(plan.updates()).singleElement().satisfies(change -> {
+            assertThat(change.was()).isEqualTo(cross);
+            assertThat(change.raw()).isEqualTo("8414012530");
+            assertThat(change.normalized()).isEqualTo("8414012530");
+        });
+        assertThat(plan.inserts()).singleElement().satisfies(insert -> {
+            assertThat(insert.raw()).isEqualTo("8414012531");
+            assertThat(insert.normalized()).isEqualTo("8414012531");
+            assertThat(insert.moved()).isNull();
+        });
+        assertThat(plan.splits()).singleElement().satisfies(split -> {
+            assertThat(split.kept()).containsExactly("8414012530", "8414012531");
+            assertThat(split.merged()).isZero();
+        });
+        assertThat(plan.crossesNow()).isEqualTo("8414012530, 8414012531");
+        assertThat(plan.oemNow()).as("основной не тронут").isEqualTo("A-1");
+        assertThat(plan.notes()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("0319: строки за разделённой переставляются за её части — порядок кросс-номеров точный")
+    void rowsAfterTheSplitKeepTheirPlace() {
+        Row split = row(2, "X1; " + RU_C + "2", "X1", false);
+        Row after = row(3, "Y1", "Y1", false);
+        Row analog = row(4, ANALOG, "", false);
+        PartPlan plan = OemRecount.plan(List.of(row(1, "A-1", "A1", true), split, after, analog));
+
+        assertThat(plan.updates()).extracting(OemRecount.Change::raw).containsExactly("X1");
+        assertThat(plan.inserts()).extracting(OemRecount.Insert::raw).containsExactly("C2", "Y1", ANALOG);
+        assertThat(plan.inserts()).extracting(OemRecount.Insert::moved).containsExactly(null, after, analog);
+        assertThat(plan.crossesWas()).isEqualTo("X1; " + RU_C + "2, Y1, " + ANALOG);
+        assertThat(plan.crossesNow()).isEqualTo("X1, C2, Y1, " + ANALOG);
+        assertThat(plan.merges()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("0319: часть, уже имеющаяся у позиции, дубля не заводит; основной не теряется")
+    void partAlreadyPresentIsMerged() {
+        Row primary = row(1, "B-1", "B1", true);
+        Row split = row(2, "A-1, b1", "A1B1", false);
+        Row later = row(3, "a1", "A1", false);
+        PartPlan plan = OemRecount.plan(List.of(primary, split, later));
+
+        assertThat(plan.updates()).singleElement().satisfies(change -> {
+            assertThat(change.was()).isEqualTo(split);
+            assertThat(change.raw()).isEqualTo("A-1");
+        });
+        assertThat(plan.inserts()).as("«b1» — уже основной номер").isEmpty();
+        assertThat(plan.merges()).singleElement().satisfies(merge -> {
+            assertThat(merge.was()).isEqualTo(later);
+            assertThat(merge.into()).isEqualTo(split);
+        });
+        assertThat(plan.splits()).singleElement().satisfies(s -> assertThat(s.merged()).isEqualTo(1));
+        assertThat(plan.oemNow()).isEqualTo("B-1");
+        assertThat(plan.crossesNow()).isEqualTo("A-1");
+    }
+
+    @Test
+    @DisplayName("0319: первая часть — повтор основного: место строки занимает первая уцелевшая")
+    void firstSurvivingPartTakesThePlace() {
+        PartPlan plan = OemRecount.plan(List.of(row(1, "A1", "A1", true), row(2, "A1, B2", "A1B2", false)));
+        assertThat(plan.updates()).singleElement().satisfies(change -> assertThat(change.raw()).isEqualTo("B2"));
+        assertThat(plan.inserts()).isEmpty();
+        assertThat(plan.merges()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("0319: все части — уже имеющиеся номера: строка слита и удалена")
+    void allPartsPresentMergeTheRow() {
+        Row primary = row(1, "A1", "A1", true);
+        Row split = row(2, "a-1, A 1", "A1A1", false);
+        PartPlan plan = OemRecount.plan(List.of(primary, split));
+        assertThat(plan.merges()).singleElement().satisfies(merge -> {
+            assertThat(merge.was()).isEqualTo(split);
+            assertThat(merge.into()).isEqualTo(primary);
+        });
+        assertThat(plan.updates()).isEmpty();
+        assertThat(plan.inserts()).isEmpty();
+        assertThat(plan.crossesNow()).isNull();
+    }
+
+    @Test
+    @DisplayName("0319: пустые части и «не номер» строк не порождают и называются")
+    void emptyAndNotANumberPartsAreNamed() {
+        PartPlan plan = OemRecount.plan(List.of(row(2, "A1,,  " + ANALOG + "; ,B2", "A1B2", false)));
+        assertThat(plan.updates()).extracting(OemRecount.Change::raw).containsExactly("A1");
+        assertThat(plan.inserts()).extracting(OemRecount.Insert::raw).containsExactly("B2");
+        assertThat(plan.notes()).extracting(OemRecount.Noted::note)
+                .containsExactlyInAnyOrder(Note.SPLIT_NOT_A_NUMBER, Note.SPLIT_EMPTY, Note.SPLIT_EMPTY);
+        assertThat(plan.notes()).filteredOn(n -> n.note() == Note.SPLIT_NOT_A_NUMBER)
+                .extracting(OemRecount.Noted::piece).containsExactly(ANALOG);
+    }
+
+    @Test
+    @DisplayName("0319: часть длиннее предела 0312 — строка не делится и называется целиком")
+    void tooLongPartLeavesTheRowWhole() {
+        String over = "1".repeat(OemNumbers.MAX_NORMALIZED_LENGTH + 1);
+        PartPlan plan = OemRecount.plan(List.of(row(2, "A1, " + over, "A1" + over, false)));
+        assertThat(plan.writes()).isFalse();
+        assertThat(plan.notes()).extracting(OemRecount.Noted::note).containsExactly(Note.TOO_LONG);
+    }
+
+    @Test
+    @DisplayName("0319: часть ровно в предел делится")
+    void partAtTheLimitIsSplit() {
+        String fits = "1".repeat(OemNumbers.MAX_NORMALIZED_LENGTH);
+        PartPlan plan = OemRecount.plan(List.of(row(2, "A1, " + fits, "A1" + fits, false)));
+        assertThat(plan.inserts()).extracting(OemRecount.Insert::raw).containsExactly(fits);
+    }
+
+    @Test
+    @DisplayName("0319: делится только тем, чем делит ввод — пробел, косая и дефис номер не режут")
+    void onlyInputSeparatorsSplit() {
+        PartPlan whole = OemRecount.plan(List.of(row(2, "81170 33670 / 81170-33671", "81170336708117033671", false)));
+        assertThat(whole.splits()).isEmpty();
+        for (String separator : List.of(",", ";", "\n", "\r\n", "\t")) {
+            PartPlan split = OemRecount.plan(List.of(row(2, "A1" + separator + "B2", "A1B2", false)));
+            assertThat(split.inserts()).as("разделитель %s", OemRecount.visibleText(separator))
+                    .extracting(OemRecount.Insert::raw).containsExactly("B2");
+            assertThat(split.notes()).as("«\\r\\n» — один перевод строки, а не пустая часть").isEmpty();
+        }
     }
 
     @Test

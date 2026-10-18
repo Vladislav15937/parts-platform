@@ -1212,9 +1212,14 @@ class PreorderTest extends PostgresTestBase {
         return json(created).path("id").asLong();
     }
 
+    /**
+     * Состояние — «б/у», как его предлагает форма (задача 0322). Без ключа
+     * позиция заводится «Не указано» и на Дром не уходит, а этот класс
+     * сверяет предзаказ именно с прайсом и дельтой.
+     */
     private String expectedBody(String name, int quantity, String price) {
         return """
-                {"rawName":"%s","donorId":%d,"quantity":%d,"price":%s}"""
+                {"rawName":"%s","donorId":%d,"quantity":%d,"price":%s,"condition":"USED"}"""
                 .formatted(name, donor, quantity, price);
     }
 

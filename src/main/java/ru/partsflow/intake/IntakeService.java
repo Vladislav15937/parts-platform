@@ -310,14 +310,19 @@ public class IntakeService {
      *                агрегаты возят партиями без машин (ответ владельца
      *                9 октября 2026); без неё заголовок собирается из одного
      *                вида детали, а марка в объявлении берётся из применимости
+     * @param condition состояние кодом; пусто — позиция без состояния (задача
+     *                  0322: владелец, заводя ожидаемое, состояния часто
+     *                  не знает, а молчаливое «б/у» видят продавец и
+     *                  покупатель предзаказа). Умолчание «б/у» стоит на форме,
+     *                  а не здесь: сервер пишет то, что выбрал человек
      * @param requestId ключ запроса клиента (задача 0170): повтор с тем же
      *                  ключом возвращает первую позицию, а не заводит вторую;
      *                  пустой — без защиты от повтора
      */
     @Transactional
     public Part registerExpectedPart(Long supplyId, String rawName, Long donorId,
-                                     BigDecimal quantity, BigDecimal price, Long authorId,
-                                     String requestId) {
+                                     BigDecimal quantity, BigDecimal price, String condition,
+                                     Long authorId, String requestId) {
         Supply supply = requireSupply(supplyId);
         String key = requestId == null || requestId.isBlank() ? null : requestId.trim();
         if (key != null) {
@@ -348,12 +353,17 @@ public class IntakeService {
             throw new IllegalArgumentException(
                     "Цена должна быть больше нуля: с нулевой ценой объявление не уйдёт на площадку");
         }
+        PartCondition chosen = expectedCondition(condition);
         // Машина необязательна: контрактные агрегаты приезжают партиями без
         // машин (ответ владельца 9 октября 2026). Указанная — проверяется.
         Donor donor = donorId == null ? null : requireDonor(donorId);
         PartName partName = partNames.resolve(rawName, authorId);
         Part part = buildPart(ItemRequest.of(rawName, quantity, price, null), partName,
                 vehicles.resolve(donorId), donor, supplyId, authorId);
+        // Пишется всегда, и пустое тоже: у сущности умолчание «б/у» (его держат
+        // приёмка и перенос, задача 0322 их не меняет), и Hibernate отправил бы
+        // его в INSERT, не спросив человека.
+        part.setCondition(chosen);
         part.setQuantity(quantity);
         part.setExpectedOrigin(true);
         part.setClientRequestId(key);
@@ -385,6 +395,27 @@ public class IntakeService {
             return null;
         }
         return first;
+    }
+
+    /**
+     * Состояние ожидаемой позиции из запроса: код, пусто или отказ словами.
+     *
+     * <p>Незнакомое слово — 400 до любой записи, а не пятисотка
+     * {@code part_condition_ck} и не молча подставленное «б/у»: форма шлёт
+     * только коды из словаря, и чужое значение значит устаревшую вкладку или
+     * чужого клиента. Пустое и пробелы — «Не указано».
+     */
+    private static PartCondition expectedCondition(String code) {
+        if (code == null || code.isBlank()) {
+            return null;
+        }
+        try {
+            return PartCondition.valueOf(code.strip());
+        } catch (IllegalArgumentException unknown) {
+            throw new IllegalArgumentException(
+                    "Состояние «%s» не знакомо: выберите %s или «Не указано»"
+                            .formatted(code.strip(), String.join(", ", PartCondition.titles().values())));
+        }
     }
 
     private static Part sameSupplyOrRefuse(Part already, Long supplyId) {

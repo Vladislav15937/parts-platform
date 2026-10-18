@@ -92,6 +92,9 @@ public class DromWheelGenerator {
                AND p.product_line = 'WHEEL'
                AND p.status IN ('IN_STOCK', 'SOLD')
                AND p.price > 0
+               -- Тем же условием, что прайс запчастей и счётчик (задача 0322):
+               -- без состояния колесо ушло бы «Новой» без износа.
+               AND ${hasCondition}
                AND (?::numeric IS NULL OR p.price >= ?::numeric)
                AND (?::numeric IS NULL OR p.price <= ?::numeric)
                AND (?::text[]   IS NULL OR p.condition = ANY (?::text[]))
@@ -161,7 +164,8 @@ public class DromWheelGenerator {
                 .map(ru.partsflow.inventory.WheelService.ColumnFilter::args)
                 .orElseGet(List::of);
 
-        String sql = SQL.replace("ORDER BY p.id",
+        String sql = SQL.replace("${hasCondition}", DromPriceGenerator.HAS_CONDITION)
+                .replace("ORDER BY p.id",
                 columnsSql + (partIds == null ? " ORDER BY p.id"
                         : " AND p.id = ANY (?) ORDER BY p.id"));
 

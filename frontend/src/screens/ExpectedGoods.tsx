@@ -12,6 +12,7 @@ import {
 } from '../intake/donors';
 import type { SupplyRef } from '../reference/reference';
 import { ConditionWord } from '../inventory/ConditionWord';
+import { CONDITIONS, CONDITION_UNSET } from '../inventory/catalog';
 import { useMounted } from '../ui/useMounted';
 
 /**
@@ -54,6 +55,10 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
   const [donorId, setDonorId] = useState('');
   const [quantity, setQuantity] = useState('1');
   const [price, setPrice] = useState('');
+  // «б/у» предложено сразу (решение владельца 18.10.2026, задача 0322): тому,
+  // кому оно подходит, поле не прибавляет ни одного нажатия. Пустое —
+  // «Не указано»: позиция заводится без состояния, а не с ложным «б/у».
+  const [condition, setCondition] = useState(DEFAULT_CONDITION);
   const [date, setDate] = useState(supply.expectedOn ?? '');
   // Ключ запроса живёт, пока позиция не заведена: двойное нажатие и повтор
   // после обрыва шлют тот же ключ, и сервер отвечает первым результатом, а не
@@ -141,6 +146,15 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
           </div>
           <div className="row">
             <label className="field">
+              Состояние
+              <select value={condition} onChange={(e) => setCondition(e.target.value)}>
+                {CONDITIONS.map((c) => (
+                  <option key={c.key} value={c.key}>{c.title}</option>
+                ))}
+                <option value="">{CONDITION_UNSET}</option>
+              </select>
+            </label>
+            <label className="field">
               Количество
               <input
                 type="number"
@@ -201,6 +215,7 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
         donorId: donorId === '' ? null : Number(donorId),
         quantity: Number(quantity),
         price: Number(price),
+        condition: condition === '' ? null : condition,
         requestId: requestId.current,
       });
       requestId.current = crypto.randomUUID();
@@ -209,6 +224,7 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
       setRawName('');
       setPrice('');
       setQuantity('1');
+      setCondition(DEFAULT_CONDITION);
     } catch (cause) {
       if (mounted.current) {
         setFailure(cause instanceof ApiError ? cause.message : 'Позицию завести не удалось');
@@ -236,6 +252,9 @@ export function ExpectedGoods({ supply, online, onChanged }: Props) {
     }
   }
 }
+
+/** Что предложено в поле «Состояние» новой позиции: «б/у». */
+const DEFAULT_CONDITION = 'USED';
 
 function addObstacle(rawName: string, quantity: string, price: string): string | null {
   if (rawName.trim() === '') {

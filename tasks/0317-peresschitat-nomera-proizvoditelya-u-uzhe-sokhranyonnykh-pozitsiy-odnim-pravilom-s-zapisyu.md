@@ -105,26 +105,35 @@ psql -At -c "select nspname, (xpath('/row/p/text()', x))[1]::text positions, (xp
 свой лог с отметкой времени, пересчёт рядом кладёт файл возврата — повторный `--apply`
 прежний не затирает.
 
+**С задачи 0319 (PR исполнителя 0319) строки ниже заменены:** запускать только после выкладки
+образа **с 0319**, а не с 0317 — пересчёт теперь и делит строку кросс-номеров с разделителем.
+Замер получил колонку `crosses_with_separator` (сколько строк кросс-номеров будет разделено —
+у локального стенда совпала с числом проверки), проверка — отдельный файл `….split.txt` со всеми
+разделяемыми строками («№ позиции», код, было → части). **Этот файл человек просматривает до
+пересчёта**: риск, принятый владельцем, — запятая внутри одного номера развалит его на два.
+
 Замер до и после:
 
 ```
-docker exec partsflow-cell01-postgres-1 psql -U partsflow -d "$(ops/switch-build.sh --current-db)" -At -c "select nspname, (xpath('/row/p/text()', x))[1]::text positions, (xpath('/row/r/text()', x))[1]::text rows from (select nspname, query_to_xml(format('select count(distinct part_id) p, count(*) r from %I.part_oem where raw_number ~ %L', nspname, '[АВЕКМНОРСТХаеорсх]|^[[:space:]' || chr(160) || chr(8203) || ']|[[:space:]' || chr(160) || chr(8203) || ']$'), false, true, '') x from pg_namespace where nspname ~ '^t_[0-9]+$') s order by 1"
+docker exec partsflow-cell01-postgres-1 psql -U partsflow -d "$(ops/switch-build.sh --current-db)" -At -c "select nspname, (xpath('/row/p/text()', x))[1]::text positions, (xpath('/row/r/text()', x))[1]::text rows, (xpath('/row/s/text()', x))[1]::text crosses_with_separator from (select nspname, query_to_xml(format('select count(distinct part_id) p, count(*) r, (select count(*) from %I.part_oem where not is_primary and raw_number ~ %L) s from %I.part_oem where raw_number ~ %L', nspname, '[,;]|[^[:space:]][[:space:]]*[' || chr(9) || chr(10) || chr(13) || '][[:space:]]*[^[:space:]]', nspname, '[АВЕКМНОРСТХаеорсх]|^[[:space:]' || chr(160) || chr(8203) || ']|[[:space:]' || chr(160) || chr(8203) || ']$'), false, true, '') x from pg_namespace where nspname ~ '^t_[0-9]+$') s order by 1"
 ```
 
 Проверка (ничего не пишет):
 
 ```
-B=$(ops/switch-build.sh --current) && L=~/oem-recount-dry-$(date -u +%Y%m%dT%H%M%SZ).log && docker compose -f docker-compose.prod.yml --env-file .env --profile ${B#app-} run --rm --no-deps -T $B --one-shot=oem-recount 2>&1 | tee $L | grep -E "OemRecount|ERROR" | grep -v "restore-sql\|: позиция"; echo "отчёт целиком: $L"
+B=$(ops/switch-build.sh --current) && L=~/oem-recount-dry-$(date -u +%Y%m%dT%H%M%SZ).log && docker compose -f docker-compose.prod.yml --env-file .env --profile ${B#app-} run --rm --no-deps -T $B --one-shot=oem-recount 2>&1 | tee $L | grep -E "OemRecount|ERROR" | grep -v "restore-sql\|: позиция\|split-row:"; grep "split-row:" $L | sed 's/.*split-row: //' > ${L%.log}.split.txt; echo "отчёт целиком: $L; разделяемые строки — просмотреть до пересчёта: ${L%.log}.split.txt ($(wc -l < ${L%.log}.split.txt) строк)"
 ```
 
-Пересчёт (сохраните лог проверки до этого шага):
+Пересчёт (сохраните лог проверки и просмотрите `….split.txt` до этого шага):
 
 ```
-B=$(ops/switch-build.sh --current) && L=~/oem-recount-apply-$(date -u +%Y%m%dT%H%M%SZ).log && docker compose -f docker-compose.prod.yml --env-file .env --profile ${B#app-} run --rm --no-deps -T $B --one-shot=oem-recount --apply 2>&1 | tee $L | grep -E "OemRecount|ERROR" | grep -v "restore-sql\|: позиция"; sed -n 's/.*restore-sql: //p' $L > ${L%.log}.restore.sql; echo "лог: $L; возврат: ${L%.log}.restore.sql ($(wc -l < ${L%.log}.restore.sql) строк)"
+B=$(ops/switch-build.sh --current) && L=~/oem-recount-apply-$(date -u +%Y%m%dT%H%M%SZ).log && docker compose -f docker-compose.prod.yml --env-file .env --profile ${B#app-} run --rm --no-deps -T $B --one-shot=oem-recount --apply 2>&1 | tee $L | grep -E "OemRecount|ERROR" | grep -v "restore-sql\|: позиция\|split-row:"; sed -n 's/.*restore-sql: //p' $L > ${L%.log}.restore.sql; echo "лог: $L; возврат: ${L%.log}.restore.sql ($(wc -l < ${L%.log}.restore.sql) строк)"
 ```
 
 После: строка замера и строка проверки ещё раз — у каждого арендатора «0 позиций будет
-пересчитано» (кроме «не номер», они остаются названными). Возврат, только если надо
+пересчитано» (кроме «не номер» и «основной с разделителем», они остаются названными;
+`crosses_with_separator` — ноль, если среди кросс-номеров нет «длиннее предела» с разделителем
+и строк из одних «не номеров»: такие не делятся и называются). Возврат, только если надо
 откатить, — одной транзакцией, ВРЕМЯ — из имени файла, напечатанного пересчётом:
 
 ```

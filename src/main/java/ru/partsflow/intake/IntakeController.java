@@ -107,8 +107,8 @@ public class IntakeController {
             @PathVariable Long id, @Valid @RequestBody ExpectedPartRequest request) {
         try {
             intake.registerExpectedPart(id, request.rawName(), request.donorId(),
-                    request.quantity(), request.price(), CurrentUser.memberId(),
-                    request.requestId());
+                    request.quantity(), request.price(), request.condition(),
+                    CurrentUser.memberId(), request.requestId());
         } catch (org.springframework.dao.DataIntegrityViolationException conflict) {
             // Одновременный повтор: первый запрос успел вставить позицию,
             // второй упёрся в part_client_request_uk. Заведение при этом
@@ -273,6 +273,11 @@ public class IntakeController {
      * @param donorId машина; необязательна (ответ владельца 9 октября 2026:
      *                контрактные агрегаты возят партиями без машин) — заголовок
      *                тогда собирается из одного вида детали
+     * @param condition состояние кодом ({@code USED}, {@code CONTRACT}…); пусто
+     *                  или нет ключа — «Не указано», позиция заводится без
+     *                  состояния (задача 0322, решение владельца 18.10.2026).
+     *                  Строкой, а не перечислением: незнакомое слово отбивается
+     *                  словами сервиса, а не «Запрос не разобран»
      * @param requestId ключ запроса: форма заводит его на каждую новую
      *                  позицию и не меняет при повторе (задача 0170)
      */
@@ -280,6 +285,7 @@ public class IntakeController {
                                       Long donorId,
                                       @NotNull @Positive BigDecimal quantity,
                                       @NotNull @Positive BigDecimal price,
+                                      String condition,
                                       String requestId) {
     }
 

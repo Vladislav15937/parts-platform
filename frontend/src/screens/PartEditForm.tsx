@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
-  CONDITION, CONDITIONS, QUALITY, QUALITY_GRADES, loadEditable, savePart,
+  CONDITION, CONDITIONS, CONDITION_UNSET, QUALITY, QUALITY_GRADES, loadEditable, savePart,
   priceOperationHint, PRICE_OPERATIONS,
   type CatalogRow, type PartEdit, type PriceOperation,
 } from '../inventory/catalog';
@@ -273,7 +273,7 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
                                         onChange={(v) => set(field.key as 'brand' | 'model', v)} />
                     )
                     : opened
-                    ? input(field, form, set, priceOp, changeOp)
+                    ? input(field, form, set, priceOp, changeOp, loaded?.condition === '')
                     : shownValue(field, form, row)}
                   {opened && 'note' in field && field.note !== undefined
                     && <span className="muted"> {field.note}</span>}
@@ -407,6 +407,8 @@ function input(
   set: <K extends keyof Draft>(key: K, value: Draft[K]) => void,
   priceOp: PriceOperation,
   changeOp: (op: PriceOperation) => void,
+  /** Позиция открыта без состояния (задача 0322): в выборе есть «Не указано». */
+  unset = false,
 ): JSX.Element | null {
   switch (field.kind) {
     case 'side':
@@ -452,12 +454,14 @@ function input(
                   onChange={(e) => set(field.key, e.target.value)} />
       );
     case 'condition':
-      // Пустого пункта тут нет, в отличие от оценки: у детали всегда
-      // какое-то состояние, и «—» означало бы «очистить» — то, чего
-      // сервер не делает (колонка NOT NULL с умолчанием).
+      // «Не указано» стоит в списке только у позиции без состояния (задача
+      // 0322): без него выбор показал бы первое из четырёх — «новая», которой
+      // никто не выбирал. У позиции с состоянием пустого пункта нет: снять
+      // состояние правкой нельзя, и пункт обещал бы то, чего сервер не делает.
       return (
         <select aria-label={field.label} autoFocus value={form.condition}
                 onChange={(e) => set('condition', e.target.value)}>
+          {unset && <option value="">{CONDITION_UNSET}</option>}
           {CONDITIONS.map((condition) => (
             <option key={condition.key} value={condition.key}>{condition.title}</option>
           ))}
@@ -845,9 +849,10 @@ export function toEdit(form: Draft, open: readonly string[] = []): PartEdit {
     minPrice: number(form.minPrice),
     costPrice: number(form.costPrice),
     installationPrice: number(form.installationPrice),
-    // Пустое состояние — «не трогать», а не «очистить»: у детали нет
-    // состояния «не заполнено». Это единственное поле формы с такой
-    // семантикой, и сервер её повторяет.
+    // Пустое состояние — «не трогать», а не «очистить»: снять состояние
+    // правкой нельзя (задача 0322 — снятое ушло бы из прайса вместе
+    // с объявлением), а выбрать его позиции «Не указано» — можно.
+    // Сервер ту же семантику повторяет.
     condition: blank(form.condition),
     qualityGrade: blank(form.qualityGrade),
     description: blank(form.description),

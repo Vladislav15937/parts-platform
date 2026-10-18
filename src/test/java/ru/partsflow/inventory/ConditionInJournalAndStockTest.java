@@ -136,12 +136,11 @@ class ConditionInJournalAndStockTest extends PostgresTestBase {
 
     /**
      * Пустое состояние (с 0322 колонка допускает {@code NULL}, {@code tenant/091})
-     * — слова нет и разделителя тоже. Колонку делает пустой {@link #nullableCondition}.
+     * — слова нет и разделителя тоже.
      */
     @Test
     @DisplayName("Без состояния отказ склада не печатает ни слова, ни разделителя")
     void stockRefusalWithoutConditionPrintsNoWord() throws Exception {
-        nullableCondition();
         Long warehouse = warehouse("Склад без состояния");
         Long partId = stockPart("Фара без состояния", null, warehouse);
         String code = inTenant(() -> jdbc.queryForObject(
@@ -218,7 +217,6 @@ class ConditionInJournalAndStockTest extends PostgresTestBase {
     @DisplayName("Записи, сделанные без состояния, после его установки остаются без состояния")
     void journalKeepsEmptyConditionOfOldEntries() throws Exception {
         String title = "Фара пустая " + UUID.randomUUID().toString().substring(0, 8);
-        nullableCondition();
         Long warehouse = warehouse("Склад журнала 3");
         Long partId = stockPart(title, null, warehouse);
         MockHttpSession owner = login("vladelec");
@@ -305,18 +303,6 @@ class ConditionInJournalAndStockTest extends PostgresTestBase {
     }
 
     // ---------- фикстура ----------
-
-    /**
-     * До слияния {@code tenant/091} (задача 0322, PR 460): в этой ветке колонка
-     * ещё {@code NOT NULL}, и пустое состояние делается снятием ограничения
-     * в своей схеме {@code t_000963}. <b>После слияния 091 этот метод и его
-     * вызовы убрать</b> — колонка будет допускать пустоту сама.
-     */
-    private void nullableCondition() {
-        inTenant(() -> {
-            jdbc.execute("ALTER TABLE part ALTER COLUMN condition DROP NOT NULL");
-        });
-    }
 
     private Long stockPart(String title, PartCondition condition, Long warehouse) {
         return inTenant(() -> {

@@ -194,6 +194,11 @@ export function addExpectedPart(
     donorId: number | null;
     quantity: number;
     price: number;
+    /**
+     * Состояние кодом; `null` — «Не указано», позиция без состояния
+     * (задача 0322). Форма предлагает «б/у».
+     */
+    condition: string | null;
     /** Ключ запроса: тот же при повторе, новый на следующую позицию. */
     requestId: string;
   },
