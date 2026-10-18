@@ -5,8 +5,8 @@ import { PartEditForm } from './PartEditForm';
 import { IntakeScreen } from './IntakeScreen';
 import type { CatalogRow } from '../inventory/catalog';
 import {
-  LONG_NUMBER_LIMITS, OEM_STORE_LIMIT, crossesLength, longNumberWarning, normalizedLength,
-  numberTooLong, oemLength,
+  LONG_NUMBER_LIMITS, OEM_FIELD_NOTE, OEM_STORE_LIMIT, crossesLength, longNumberWarning,
+  normalizedLength, numberTooLong, oemLength,
 } from '../inventory/oemLength';
 
 /**
@@ -177,6 +177,43 @@ describe('длина номера после приведения', () => {
 
   it('пороги — одно место', () => {
     expect(LONG_NUMBER_LIMITS).toEqual({ oem: 64, crosses: 1000 });
+  });
+});
+
+/**
+ * У детали один номер производителя (задача 0323, решение владельца 18.10.2026):
+ * «A, B» сервер делит на основной и кросс-номер, и предел у каждого свой —
+ * экран мерит так же, а не строку целиком.
+ */
+describe('номер производителя с разделителем', () => {
+  afterEach(() => cleanup());
+
+  it('отказ сверх предела — по каждому номеру, а не по сумме', () => {
+    const half = 'A'.repeat(600);
+    expect(numberTooLong('oem', `${half}, ${'B'.repeat(600)}`),
+      'два номера по 600 померены строкой целиком').toBeNull();
+    expect(numberTooLong('oem', `AB-1; ${'Z'.repeat(OEM_STORE_LIMIT + 1)}`))
+      .toBe('Номер производителя длиннее 1000 знаков: сохранить нельзя.'
+        + ' Похоже, вставлено не то — проверьте номер');
+  });
+
+  it('предупреждение о длине — по самому длинному номеру, а не по сумме', () => {
+    expect(longNumberWarning('oem', `${'A'.repeat(60)}, ${'B'.repeat(60)}`),
+      'два номера по 60 предупредили как один в 122 знака').toBeNull();
+    expect(longNumberWarning('oem', `AB-1\t${'C'.repeat(65)}`)).toContain('65 знаков');
+  });
+
+  it('подсказка у поля — на приёмке и в «Изменить»', async () => {
+    render(<IntakeScreen reference={reference()} onSend={() => {}} />);
+    expect(screen.getByText(OEM_FIELD_NOTE)).toBeTruthy();
+    cleanup();
+
+    vi.stubGlobal('fetch', vi.fn(async () => json(card())));
+    renderForm();
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Номер производителя')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Изменить: Номер производителя'));
+    expect(screen.getByText(OEM_FIELD_NOTE, { exact: false })).toBeTruthy();
+    vi.unstubAllGlobals();
   });
 });
 

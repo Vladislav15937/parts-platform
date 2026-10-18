@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { CONDITIONS, CONDITION_UNSET } from '../inventory/catalog';
 import { ConditionWord } from '../inventory/ConditionWord';
 import { LongNumberNote } from '../inventory/LongNumberNote';
-import { numberTooLong } from '../inventory/oemLength';
+import { OEM_FIELD_NOTE, numberTooLong } from '../inventory/oemLength';
 import { PhotoPicker } from '../photos/PhotoPicker';
 import type { ResizedPhoto } from '../photos/resize';
 import { donorTitle } from '../intake/donors';
@@ -338,6 +338,8 @@ export function IntakeScreen({ reference, onSend }: Props) {
           onChange={(e) => setDraft({ ...draft, oemNumber: e.target.value })}
         />
       </label>
+      {/* У детали один номер производителя (задача 0323): лишние уходят в кросс-номера. */}
+      <span className="muted">{OEM_FIELD_NOTE}</span>
       {/* Необычно длинный номер — предупреждение, а не запрет (задача 0310). */}
       <LongNumberNote field="oem" value={draft.oemNumber} />
 

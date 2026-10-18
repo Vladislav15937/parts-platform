@@ -7,7 +7,7 @@ import {
 } from '../inventory/catalog';
 import { generationOf, shownTitle } from '../inventory/partCard';
 import { LongNumberNote } from '../inventory/LongNumberNote';
-import { numberTooLong } from '../inventory/oemLength';
+import { OEM_FIELD_NOTE, numberTooLong } from '../inventory/oemLength';
 import { notSavedNote, notSavedSummary, type NotSavedField } from '../inventory/notSaved';
 import { count, plural } from '../ui/plural';
 import { useMounted } from '../ui/useMounted';
@@ -575,7 +575,7 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
       { kind: 'text', key: 'manufacturer', label: 'Производитель' },
       // Слово клиента с карточки Дрома (задача 0277).
       { kind: 'text', key: 'authenticity', label: 'Оригинальность' },
-      { kind: 'text', key: 'oem', label: 'Номер производителя' },
+      { kind: 'text', key: 'oem', label: 'Номер производителя', note: OEM_FIELD_NOTE },
       { kind: 'text', key: 'crosses', label: 'Кросс-номера', note: 'Через запятую' },
       { kind: 'text', key: 'marking', label: 'Маркировка' },
       { kind: 'text', key: 'color', label: 'Цвет' },

@@ -27,7 +27,8 @@ import java.util.Locale;
  * кросс-номеров ({@link #list})</b> (задача 0309). Записывают номер карточка,
  * приёмка и перенос из таблицы; правило «русские двойники — латиницей» в одном
  * из них и не в другом дало бы номер, который на Дроме ищется у одной позиции
- * и не ищется у соседней.
+ * и не ищется у соседней. С задачи 0323 здесь же — как делить основной номер,
+ * вписанный несколькими через разделитель ({@link #primary}).
  */
 public final class OemNumbers {
 
@@ -170,6 +171,81 @@ public final class OemNumbers {
             }
         }
         return numbers;
+    }
+
+    /**
+     * Текст поля «Номер производителя», разделённый на основной номер и кросс-номера
+     * (задача 0323, решение владельца продукта 18.10.2026: «у детали только один
+     * номер производителя — остальное — кросс номера»).
+     *
+     * @param primary основной номер, каким его хранить; {@code null} — номера нет
+     * @param crosses лишние номера того же текста, в его порядке, без повторов
+     *                основного и друг друга (по {@link #normalize})
+     */
+    public record Primary(String primary, List<String> crosses) {
+
+        /** Все номера, которые будут записаны, — для проверки предела по каждому. */
+        public List<String> all() {
+            List<String> all = new ArrayList<>(crosses.size() + 1);
+            if (primary != null) {
+                all.add(primary);
+            }
+            all.addAll(crosses);
+            return all;
+        }
+    }
+
+    /**
+     * Одно правило на все места записи основного номера: карточку, приёмку
+     * и оба переноса (задача 0323), а с 0324 — и на пересчёт уже сохранённого.
+     *
+     * <p>Делит тем же {@link #list}: разделители {@link #SEPARATORS}, каждая часть —
+     * {@link #clean}, пустые отброшены. Первая часть — основной номер, следующие —
+     * кросс-номера в порядке текста; часть, от которой после приведения ничего
+     * не остаётся («АНАЛОГ», «б/н»), строки не порождает, повтор номера — тоже.
+     *
+     * <p><b>Первая часть «не номер» — основной не угадывается</b> (решение исполнителя,
+     * п. 2 задачи): текст остаётся одной строкой, как до задачи, и ни один номер
+     * не теряется. Выбрать основным второй номер значило бы назвать номером
+     * производителя то, что человек написал после пометки, — а что значила пометка,
+     * знает только он.
+     */
+    public static Primary primary(String text) {
+        List<String> parts = list(text);
+        if (parts.isEmpty()) {
+            return new Primary(null, List.of());
+        }
+        if (normalize(parts.get(0)) == null) {
+            String whole = clean(text);
+            return new Primary(normalize(whole) == null ? null : whole, List.of());
+        }
+        String primary = parts.get(0);
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        seen.add(normalize(primary));
+        List<String> crosses = new ArrayList<>();
+        for (String part : parts.subList(1, parts.size())) {
+            String normalized = normalize(part);
+            if (normalized != null && seen.add(normalized)) {
+                crosses.add(part);
+            }
+        }
+        return new Primary(primary, List.copyOf(crosses));
+    }
+
+    /**
+     * Почему текст поля «Номер производителя» нельзя сохранить (0312), — по каждому
+     * его номеру отдельно; {@code null} — можно. Лишние номера мерятся как номер
+     * производителя, а не как кросс-номер: человек вписал их в это поле и искать
+     * будет там.
+     */
+    public static String primaryTooLong(String text) {
+        for (String number : primary(text).all()) {
+            String problem = tooLong(number, false);
+            if (problem != null) {
+                return problem;
+            }
+        }
+        return null;
     }
 
     /**

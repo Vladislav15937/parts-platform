@@ -181,7 +181,9 @@ public class IntakeService {
         // в «требует внимания». Позиция названа написанием приёмщика: в партии
         // их десятки, и искать надо ту, на которой споткнулись.
         for (ItemRequest item : items) {
-            String tooLong = ru.partsflow.catalog.OemNumbers.tooLong(item.oemNumber(), false);
+            // По каждому номеру поля (задача 0323): лишние уйдут кросс-номерами,
+            // и предел у каждого свой.
+            String tooLong = ru.partsflow.catalog.OemNumbers.primaryTooLong(item.oemNumber());
             if (tooLong != null) {
                 throw new IllegalArgumentException(item.rawName() == null || item.rawName().isBlank()
                         ? tooLong : "«" + item.rawName().strip() + "»: " + tooLong);
@@ -577,18 +579,31 @@ public class IntakeService {
      *
      * <p>Хранится {@code OemNumbers.clean} (задача 0309): края без любых
      * пробелов, русские двойники латиницей — тем же правилом, что у карточки.
+     *
+     * <p><b>Несколько номеров через разделитель — основной и кросс-номера</b>
+     * (задача 0323, решение владельца 18.10.2026: «у детали только один номер
+     * производителя»): делит {@code OemNumbers.primary}, то же правило, что
+     * у карточки и обоих переносов. Своих кросс-номеров приёмка не принимает,
+     * поэтому лишние номера — единственные.
      */
     private void primaryOem(Long partId, String rawNumber) {
-        String normalized = ru.partsflow.catalog.OemNumbers.normalize(rawNumber);
-        if (normalized == null) {
+        ru.partsflow.catalog.OemNumbers.Primary numbers =
+                ru.partsflow.catalog.OemNumbers.primary(rawNumber);
+        if (numbers.primary() == null) {
             return;
         }
+        insertOem(partId, numbers.primary(), true);
+        for (String cross : numbers.crosses()) {
+            insertOem(partId, cross, false);
+        }
+    }
 
+    private void insertOem(Long partId, String number, boolean primary) {
         jdbc.update("""
                 INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)
-                VALUES (?, ?, ?, true)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT DO NOTHING""",
-                partId, ru.partsflow.catalog.OemNumbers.clean(rawNumber), normalized);
+                partId, number, ru.partsflow.catalog.OemNumbers.normalize(number), primary);
     }
 
     private void publishCreated(Part part) {

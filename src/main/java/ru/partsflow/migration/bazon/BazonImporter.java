@@ -1112,9 +1112,22 @@ public final class BazonImporter {
     private void insertNumbers(PreparedStatement ps, BazonCsvReader.Row row, long partId,
                                ImportReport report) throws SQLException {
 
-        writeNumber(ps, partId, row.get("Номер производителя"), true, row.lineNumber(), report);
-        for (String cross : BazonValueParser.parseList(row.get("Кросс-номера"))) {
-            writeNumber(ps, partId, cross, false, row.lineNumber(), report);
+        // Один номер производителя, остальное — кросс-номера (задача 0323): тем же
+        // OemNumbers.primary, что у карточки, приёмки и переноса из таблицы.
+        // Лишние номера основного встают первыми, перед кросс-номерами выгрузки.
+        ru.partsflow.catalog.OemNumbers.Primary numbers =
+                ru.partsflow.catalog.OemNumbers.primary(row.get("Номер производителя"));
+        if (numbers.primary() != null) {
+            writeNumber(ps, partId, numbers.primary(), true, false, row.lineNumber(), report);
+        }
+        for (String extra : numbers.crosses()) {
+            writeNumber(ps, partId, extra, false, false, row.lineNumber(), report);
+        }
+        // Кросс-номера делит OemNumbers.list, а не BazonValueParser.parseList
+        // (задача 0323, ответ владельца «2 - а»): тот делил только запятой, и строка
+        // с «;», табуляцией или переводом строки ложилась одним номером.
+        for (String cross : ru.partsflow.catalog.OemNumbers.list(row.get("Кросс-номера"))) {
+            writeNumber(ps, partId, cross, false, true, row.lineNumber(), report);
         }
     }
 
@@ -1129,7 +1142,7 @@ public final class BazonImporter {
      * в кросс-номерах стоит «АНАЛОГ». Пропускаем номер, а не теряем товар.
      */
     private void writeNumber(PreparedStatement ps, long partId, String raw, boolean primary,
-                             long line, ImportReport report) throws SQLException {
+                             boolean namedAsCross, long line, ImportReport report) throws SQLException {
 
         String normalized = ru.partsflow.catalog.OemNumbers.normalize(raw);
         if (normalized == null) {
@@ -1139,7 +1152,9 @@ public final class BazonImporter {
         // что «АНАЛОГ» выше, теряется номер, а не товар, — но называется
         // строкой отчёта, а не отбоем индекса, который унёс бы карточку
         // целиком вместе с остатком и снимками.
-        String tooLong = ru.partsflow.catalog.OemNumbers.tooLong(raw, !primary);
+        // Лишний номер поля «Номер производителя» называется номером производителя:
+        // человек вписал его туда и искать будет там (задача 0323).
+        String tooLong = ru.partsflow.catalog.OemNumbers.tooLong(raw, namedAsCross);
         if (tooLong != null) {
             report.problem(line, tooLong + " — товар перенесён без него");
             return;
