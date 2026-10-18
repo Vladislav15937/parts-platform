@@ -107,6 +107,7 @@
     <include file="tenant/088-part-manual-donor-fields.sql" relativeToChangelogFile="true"/>
     <include file="tenant/089-part-title-manual.sql" relativeToChangelogFile="true"/>
     <include file="tenant/090-part-title-manual-drop.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/091-part-condition-nullable.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>
