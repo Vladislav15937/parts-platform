@@ -125,22 +125,134 @@ class OemRecountPlanTest {
         assertThat(beyond.notes()).extracting(OemRecount.Noted::note).containsExactly(Note.TOO_LONG);
     }
 
+    // ------------------------------------------------------------ деление основного (0324)
+
     @Test
-    @DisplayName("Основной номер с разделителем — не делится (ввод основной не делит), а называется")
-    void primaryWithSeparatorIsNamed() {
-        PartPlan plan = OemRecount.plan(List.of(row(1, "111\t222", "111222", true)));
-        assertThat(plan.writes()).isFalse();
-        assertThat(plan.notes()).extracting(OemRecount.Noted::note).containsExactly(Note.PRIMARY_HAS_SEPARATOR);
+    @DisplayName("0324: основной «8414012530, 8414012531» — первый остаётся основным на месте, второй вставляется кросс-номером")
+    void primaryWithSeparatorIsSplit() {
+        Row primary = row(1, "8414012530, 8414012531", "84140125308414012531", true);
+        PartPlan plan = OemRecount.plan(List.of(primary));
+
+        assertThat(plan.updates()).singleElement().satisfies(change -> {
+            assertThat(change.was()).isEqualTo(primary);
+            assertThat(change.raw()).isEqualTo("8414012530");
+            assertThat(change.normalized()).isEqualTo("8414012530");
+        });
+        assertThat(plan.inserts()).singleElement().satisfies(insert -> {
+            assertThat(insert.raw()).isEqualTo("8414012531");
+            assertThat(insert.moved()).isNull();
+        });
+        assertThat(plan.oemNow()).isEqualTo("8414012530");
+        assertThat(plan.crossesNow()).isEqualTo("8414012531");
+        assertThat(plan.splits()).singleElement().satisfies(split -> {
+            assertThat(split.was().primary()).isTrue();
+            assertThat(split.kept()).containsExactly("8414012530", "8414012531");
+        });
+        assertThat(plan.notes()).isEmpty();
     }
 
     @Test
-    @DisplayName("Основной с разделителем и русской «А» — строка не трогается целиком")
-    void primaryWithSeparatorAndAnotherDefectIsLeftWhole() {
-        Row row = row(1, "\u0410-1\t222", "1222", true);
-        PartPlan plan = OemRecount.plan(List.of(row));
-        assertThat(plan.writes()).as("основной с разделителем поправили наполовину").isFalse();
-        assertThat(plan.updates()).isEmpty();
-        assertThat(plan.notes()).extracting(OemRecount.Noted::note).containsExactly(Note.PRIMARY_HAS_SEPARATOR);
+    @DisplayName("0324: лишние номера основного встают первыми, имеющиеся кросс-номера переставляются за них")
+    void primaryExtrasGoFirst() {
+        Row primary = row(1, "A-1; B-2", "A1B2", true);
+        Row cross = row(2, "C-3", "C3", false);
+        PartPlan plan = OemRecount.plan(List.of(primary, cross));
+
+        assertThat(plan.inserts()).extracting(OemRecount.Insert::raw).containsExactly("B-2", "C-3");
+        assertThat(plan.inserts()).extracting(OemRecount.Insert::moved).containsExactly(null, cross);
+        assertThat(plan.crossesNow()).isEqualTo("B-2, C-3");
+        assertThat(plan.oemNow()).isEqualTo("A-1");
+    }
+
+    @Test
+    @DisplayName("0324: лишние первыми и тогда, когда строка основного заведена позже кросс-номера")
+    void primaryExtrasGoFirstWhenPrimaryRowIsLater() {
+        Row cross = row(1, "C-3", "C3", false);
+        Row primary = row(2, "A-1; B-2", "A1B2", true);
+        PartPlan plan = OemRecount.plan(List.of(cross, primary));
+
+        assertThat(plan.crossesNow()).as("лишний номер основного встал за прежним кросс-номером")
+                .isEqualTo("B-2, C-3");
+        assertThat(plan.inserts()).extracting(OemRecount.Insert::moved).containsExactly(null, cross);
+    }
+
+    @Test
+    @DisplayName("0324: часть основного, совпавшая с имеющимся кросс-номером, сливается — номер один, на месте лишнего")
+    void primaryPartMergesWithCross() {
+        Row primary = row(1, "A-1, B-2", "A1B2", true);
+        Row same = row(2, "b2", "B2", false);
+        Row other = row(3, "C-3", "C3", false);
+        PartPlan plan = OemRecount.plan(List.of(primary, same, other));
+
+        assertThat(plan.merges()).singleElement().satisfies(merge -> {
+            assertThat(merge.was()).isEqualTo(same);
+            assertThat(merge.into().id()).as("слита с частью основного, которую вставят").isZero();
+        });
+        assertThat(plan.crossesNow()).isEqualTo("B-2, C-3");
+        assertThat(plan.oemNow()).as("основной не теряется").isEqualTo("A-1");
+    }
+
+    @Test
+    @DisplayName("0324: часть основного, равная другой его части, строки не даёт; «АНАЛОГ» и пустые — называются")
+    void primaryPartsRepeatAndNotANumber() {
+        Row primary = row(1, "A-1, a1,, " + ANALOG + ", B-2", "A1A1B2", true);
+        PartPlan plan = OemRecount.plan(List.of(primary));
+        assertThat(plan.oemNow()).isEqualTo("A-1");
+        assertThat(plan.crossesNow()).isEqualTo("B-2");
+        assertThat(plan.notes()).extracting(OemRecount.Noted::note)
+                .containsExactlyInAnyOrder(Note.SPLIT_NOT_A_NUMBER, Note.SPLIT_EMPTY);
+        assertThat(plan.splits()).singleElement().satisfies(split -> assertThat(split.merged()).isEqualTo(1));
+    }
+
+    @Test
+    @DisplayName("0324: первая часть основного «не номер» — строка целиком, основной не угадывается, причина названа")
+    void primaryFirstNotANumberIsLeftWhole() {
+        PartPlan plan = OemRecount.plan(List.of(row(1, ANALOG + ", FP-3", "FP3", true)));
+        assertThat(plan.writes()).isFalse();
+        assertThat(plan.notes()).extracting(OemRecount.Noted::note).containsExactly(Note.PRIMARY_FIRST_NOT_A_NUMBER);
+    }
+
+    @Test
+    @DisplayName("0324: часть основного длиннее предела — строка целиком, причина названа")
+    void primaryPartTooLongIsLeftWhole() {
+        String longPart = "Z".repeat(OemNumbers.MAX_NORMALIZED_LENGTH + 1);
+        PartPlan plan = OemRecount.plan(List.of(row(1, "A-1, " + longPart, "A1" + longPart, true)));
+        assertThat(plan.writes()).isFalse();
+        assertThat(plan.notes()).extracting(OemRecount.Noted::note).containsExactly(Note.PRIMARY_TOO_LONG);
+    }
+
+    @Test
+    @DisplayName("0324: основной с разделителем и русской «А» — делится, и каждая часть чистится")
+    void primaryWithSeparatorAndAnotherDefectIsSplitAndCleaned() {
+        PartPlan plan = OemRecount.plan(List.of(row(1, "\u0410-1\t222", "1222", true)));
+        assertThat(plan.oemNow()).isEqualTo("A-1");
+        assertThat(plan.crossesNow()).isEqualTo("222");
+    }
+
+    @Test
+    @DisplayName("0324: результат плана равен правилу ввода OemNumbers.primary на тех же входах")
+    void primaryPlanEqualsTheInputRule() {
+        for (String input : List.of("8414012530, 8414012531", "84140-12530;84140-12531", "KR-1\tKR-2",
+                "KR-3\nKR-4\r\nKR-5", "FP-1, " + ANALOG + ", FP-2", ANALOG + ", FP-3", "DS-1, ds1, DS 1",
+                "81170 33670")) {
+            PartPlan plan = OemRecount.plan(List.of(row(1, input, OemNumbers.normalize(input), true)));
+            OemNumbers.Primary rule = OemNumbers.primary(input);
+            String oem = plan.writes() ? plan.oemNow() : input;
+            assertThat(oem).as("основной из «%s»", input).isEqualTo(rule.primary());
+            assertThat(plan.writes() ? plan.crossesNow() : null).as("кросс-номера из «%s»", input)
+                    .isEqualTo(rule.crosses().isEmpty() ? null : String.join(", ", rule.crosses()));
+        }
+    }
+
+    @Test
+    @DisplayName("0324: разделённый основной второй раз не делится — план пуст")
+    void primarySplitIsIdempotent() {
+        Row primary = row(1, "A-1, B-2", "A1B2", true);
+        Row cross = row(2, "C-3", "C3", false);
+        PartPlan plan = OemRecount.plan(List.of(primary, cross));
+        List<Row> after = List.of(row(1, plan.oemNow(), "A1", true), row(3, "B-2", "B2", false),
+                row(4, "C-3", "C3", false));
+        assertThat(OemRecount.plan(after).writes()).isFalse();
     }
 
     // ------------------------------------------------------------ деление (0319)

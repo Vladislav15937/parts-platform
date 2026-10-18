@@ -84,8 +84,12 @@ class OemRecountSplitTest extends PostgresTestBase {
     private long kross;
     /** Весь набор {@link #CROSS_ROWS}, по строке на элемент. */
     private long many;
-    /** Тот же текст в основном номере — не делится. */
+    /** Тот же текст в основном номере — делится с задачи 0324. */
     private long primarySplit;
+    /** Основной с разделителем, его второй номер уже стоит кросс-номером, за ним ещё один. */
+    private long primaryMerge;
+    /** Основной, у которого первая часть «не номер», — не делится. */
+    private long primaryWhole;
 
     @BeforeAll
     static void migrate() {
@@ -120,6 +124,14 @@ class OemRecountSplitTest extends PostgresTestBase {
 
             primarySplit = part("Радиатор");
             oem(primarySplit, "8414012530, 8414012531", true);
+
+            primaryMerge = part("Генератор");
+            oem(primaryMerge, "8414012530, 8414012531", true);
+            oem(primaryMerge, "8414012531", false);
+            oem(primaryMerge, "447260-1234", false);
+
+            primaryWhole = part("Капот");
+            oem(primaryWhole, ANALOG + ", FP-3", true);
             return null;
         });
     }
@@ -173,8 +185,14 @@ class OemRecountSplitTest extends PostgresTestBase {
         assertThat(dry.noted(Note.SPLIT_NOT_A_NUMBER)).isEqualTo(1);
         assertThat(dry.noted(Note.SPLIT_EMPTY)).isEqualTo(1);
         assertThat(dry.splitSkipped()).isEqualTo(2);
-        assertThat(dry.noted(Note.PRIMARY_HAS_SEPARATOR)).isEqualTo(1);
-        assertThat(dry.splitLines).as("каждая разделяемая строка — в список для просмотра").hasSize(8);
+        assertThat(dry.primarySplitRows).as("разделено основных").isEqualTo(2);
+        assertThat(dry.primarySplitCrosses).as("получено кросс-номеров из основных").isEqualTo(2);
+        assertThat(dry.primarySplitMerged).as("8414012531 уже стоял кросс-номером у генератора").isEqualTo(1);
+        assertThat(dry.primarySplitSkipped).isZero();
+        assertThat(dry.noted(Note.PRIMARY_FIRST_NOT_A_NUMBER)).as("«АНАЛОГ, FP-3» не разделён").isEqualTo(1);
+        assertThat(dry.splitLines).as("каждая разделяемая строка — в список для просмотра").hasSize(8 + 2);
+        assertThat(dry.splitLines).anySatisfy(line -> assertThat(line).contains("(номер производителя)")
+                .contains("«8414012530, 8414012531» → основной «8414012530», кросс-номера «8414012531»"));
 
         Tally applied = one(recount.run(new Options(true, TENANT, false)));
         assertThat(applied.splitRows).isEqualTo(dry.splitRows);
@@ -183,6 +201,9 @@ class OemRecountSplitTest extends PostgresTestBase {
         assertThat(applied.rowsInserted).isEqualTo(dry.rowsInserted);
         assertThat(applied.rowsMoved).isEqualTo(dry.rowsMoved);
         assertThat(applied.splitLines).isEqualTo(dry.splitLines);
+        assertThat(applied.primarySplitRows).isEqualTo(dry.primarySplitRows);
+        assertThat(applied.primarySplitCrosses).isEqualTo(dry.primarySplitCrosses);
+        assertThat(applied.primarySplitMerged).isEqualTo(dry.primarySplitMerged);
         assertThat(applied.restore()).isEqualTo(dry.restore());
 
         List<List<Object>> rows = rowsOf(many);
@@ -193,13 +214,63 @@ class OemRecountSplitTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Основной номер с разделителем не делится и называется")
-    void primaryWithSeparatorStaysWhole() {
-        Tally tally = one(recount.run(new Options(true, TENANT, false)));
+    @DisplayName("0324: основной «8414012530, 8414012531» — основной 8414012530 на прежней строке, 8414012531 кросс-номером")
+    void primaryWithSeparatorIsSplit() {
+        List<Long> idsBefore = ids(primarySplit);
+        one(recount.run(new Options(true, TENANT, false)));
         assertThat(rowsOf(primarySplit)).containsExactly(
-                List.of("8414012530, 8414012531", OemNumbers.normalize("8414012530, 8414012531"), true));
+                List.of("8414012530", "8414012530", true),
+                List.of("8414012531", "8414012531", false));
+        assertThat(ids(primarySplit).get(0)).as("основной — на прежней строке").isEqualTo(idsBefore.get(0));
+    }
+
+    @Test
+    @DisplayName("0324: часть основного, уже стоящая кросс-номером, сливается; лишние — первыми, остальные кросс-номера за ними")
+    void primaryPartMergesAndExtrasGoFirst() {
+        one(recount.run(new Options(true, TENANT, false)));
+        assertThat(rowsOf(primaryMerge)).containsExactly(
+                List.of("8414012530", "8414012530", true),
+                List.of("8414012531", "8414012531", false),
+                List.of("447260-1234", "4472601234", false));
+        assertThat(ids(primaryMerge)).isSorted();
+    }
+
+    @Test
+    @DisplayName("0324: первая часть основного «не номер» — строка целиком, причина в отчёте")
+    void primaryFirstNotANumberStaysWhole() {
+        Tally tally = one(recount.run(new Options(true, TENANT, false)));
+        assertThat(rowsOf(primaryWhole)).containsExactly(
+                List.of(ANALOG + ", FP-3", OemNumbers.normalize(ANALOG + ", FP-3"), true));
         assertThat(tally.lines).anySatisfy(line -> assertThat(line)
-                .startsWith("позиция " + primarySplit + ",").contains(Note.PRIMARY_HAS_SEPARATOR.words()));
+                .startsWith("позиция " + primaryWhole + ",").contains(Note.PRIMARY_FIRST_NOT_A_NUMBER.words()));
+    }
+
+    @Test
+    @DisplayName("0324: одно правило с вводом — пересчёт основного даёт то же, что карточка (0323) на том же тексте")
+    void primaryRecountEqualsTheCard() throws Exception {
+        long card = inTenant(() -> part("Генератор (через карточку)"));
+        mvc.perform(put("/api/parts/" + card).with(csrf()).session(login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(java.util.Map.of(
+                                "oem", "8414012530, 8414012531", "crosses", "8414012531, 447260-1234"))))
+                .andExpect(status().isOk());
+
+        one(recount.run(new Options(true, TENANT, false)));
+
+        assertThat(rowsOf(primaryMerge)).isEqualTo(rowsOf(card));
+    }
+
+    @Test
+    @DisplayName("0324: журнал пересчёта называет обе перемены — номер производителя и кросс-номера")
+    void primarySplitIsJournaled() {
+        one(recount.run(new Options(true, TENANT, false)));
+        java.util.Map<String, Object> entry = inTenant(() -> jdbc.queryForMap("""
+                SELECT old_value->>'oem' AS was, new_value->>'oem' AS now, new_value->>'crosses' AS crosses
+                  FROM audit_log WHERE table_name = 'part' AND record_id = ? ORDER BY id DESC LIMIT 1""",
+                primarySplit));
+        assertThat(entry.get("was")).isEqualTo("8414012530, 8414012531");
+        assertThat(entry.get("now")).isEqualTo("8414012530");
+        assertThat(entry.get("crosses")).isEqualTo("8414012531");
     }
 
     @Test
