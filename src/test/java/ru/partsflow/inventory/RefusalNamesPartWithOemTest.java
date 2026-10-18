@@ -288,6 +288,15 @@ class RefusalNamesPartWithOemTest extends PostgresTestBase {
      * в отказе никто не собирает своим запросом «title, condition»: новое место,
      * назвавшее позицию по-своему, осталось бы без номера.
      */
+    /**
+     * Свой запрос «title, condition» без номера производителя разрешён здесь,
+     * и у каждого — причина. Слово состояния и тогда собирает
+     * {@link PartNaming#format}: разрешение про номер, а не про словарь.
+     */
+    private static final java.util.Map<String, String> OWN_QUERY_ALLOWED = java.util.Map.of(
+            "StockNaming.java", "отказы склада называют позицию публичным кодом,"
+                    + " номер производителя там не просили (задача 0321)");
+
     @Test
     @DisplayName("Позицию в отказе называет одно место")
     void namedOnlyHere() throws IOException {
@@ -308,7 +317,8 @@ class RefusalNamesPartWithOemTest extends PostgresTestBase {
                 while (query.find()) {
                     String statement = text.substring(query.start(),
                             Math.min(text.length(), query.end() + 200));
-                    if (!statement.contains("PartNaming.primaryOemSql(")) {
+                    if (!statement.contains("PartNaming.primaryOemSql(")
+                            && !OWN_QUERY_ALLOWED.containsKey(file.getFileName().toString())) {
                         found.add(file + ": свой запрос «title, condition» без номера"
                                 + " производителя — зовите PartNaming");
                     }

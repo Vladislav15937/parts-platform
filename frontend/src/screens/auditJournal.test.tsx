@@ -53,6 +53,26 @@ describe('журнал действий организации', () => {
     expect(row?.textContent).not.toContain('Владимир Петров');
   });
 
+  /**
+   * Состояние позиции на момент записи (задача 0321): сервер отдаёт код,
+   * слово ставит общий словарь — рядом с наименованием, а не кодом. У вещи
+   * без названия (платёж) слова нет.
+   */
+  it('называет состояние позиции словом рядом с наименованием', async () => {
+    stubApi(page());
+    render(<AuditJournalScreen />);
+
+    await waitFor(() => expect(screen.getByText('Фара Toyota Camry 2006 перед. лев. (б/у)')).toBeTruthy());
+
+    const row = screen.getByText('Фара Toyota Camry 2006 перед. лев. (б/у)').closest('tr');
+    expect(row?.textContent).toContain('· контрактная');
+    expect(row?.textContent).not.toContain('CONTRACT');
+    const payment = screen.getByText('Платёж записан').closest('tr');
+    // У безымянной вещи код может и приехать, но слова без наименования
+    // рядом не ставится: «· б/у» само по себе не уточняет ничего.
+    expect(payment?.textContent).not.toContain('б/у');
+  });
+
   /** Слово состояния берётся из общего словаря, а не показывается кодом. */
   it('состояние сделки называет словом, а не кодом', async () => {
     stubApi(page());
@@ -238,6 +258,7 @@ function page() {
         authorRole: 'MANAGER',
         kind: 'Товар',
         subject: 'Фара Toyota Camry 2006 перед. лев. (б/у)',
+        subjectCondition: 'CONTRACT',
         subjectCode: 'A7K3M2',
         subjectNumber: 347,
         context: null,
@@ -271,6 +292,7 @@ function page() {
         authorRole: 'STOREKEEPER',
         kind: 'Платёж',
         subject: null,
+        subjectCondition: 'USED',
         subjectCode: 'запись №88',
         subjectNumber: null,
         context: 'Сделка №1274',

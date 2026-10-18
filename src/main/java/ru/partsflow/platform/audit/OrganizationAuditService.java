@@ -151,6 +151,48 @@ public class OrganizationAuditService {
             + " LEFT JOIN marketplace_account ma ON a.table_name = 'marketplace_account'"
             + " AND ma.id = a.record_id";
 
+    /**
+     * Состояние позиции <b>на момент записи журнала</b>, а не нынешнее
+     * (задача 0321).
+     *
+     * <p>Слушатель кладёт в {@code audit_log} снимок всей строки {@code part}
+     * на каждое её изменение, и состояние в снимке есть. Поэтому на момент
+     * записи {@code a} оно восстанавливается так: последний снимок позиции
+     * не позже этой записи (для самой правки позиции — она же, то есть
+     * состояние <b>после</b> неё); нет такого — «было» первой правки позже
+     * (позиция заведена мимо Hibernate — переносом, — и до той правки
+     * состояние не менялось); нет и её — нынешнее, потому что с тех пор
+     * его не менял никто. Снимок без поля (запись {@code AuditJournal}
+     * с одними изменёнными полями, «было» отсоединённой сущности)
+     * пропускается — ищется следующий.
+     *
+     * <p>Чего это не видит — то же, что не видит весь журнал: правку мимо
+     * Hibernate. Состояние так пишет одно место — дозаполнение повтором файла
+     * переноса (0282), и только у позиций, которые человек не правил.
+     *
+     * <p>Подзапросом в той же выборке, а не запросом на строку: страница
+     * в пятьдесят записей — один запрос, как и до задачи, а подзапросы идут
+     * по {@code audit_log_record_ix}. Литерал {@code ?} оператора jsonb здесь
+     * нельзя — его прочёл бы драйвер как параметр, — отсюда {@code IS NOT NULL}:
+     * колонка {@code part.condition} — {@code NOT NULL}, и в снимке без пустоты.
+     *
+     * @param partId  выражение номера позиции
+     * @param current нынешнее состояние той же позиции
+     */
+    static String conditionAt(String partId, String current) {
+        String snapshot = "coalesce(pa.new_value, pa.old_value) ->> 'condition'";
+        return "coalesce("
+                + "(SELECT " + snapshot + " FROM audit_log pa"
+                + " WHERE pa.table_name = 'part' AND pa.record_id = " + partId
+                + " AND pa.id <= a.id AND " + snapshot + " IS NOT NULL"
+                + " ORDER BY pa.id DESC LIMIT 1),"
+                + " (SELECT pa.old_value ->> 'condition' FROM audit_log pa"
+                + " WHERE pa.table_name = 'part' AND pa.record_id = " + partId
+                + " AND pa.id > a.id AND pa.old_value ->> 'condition' IS NOT NULL"
+                + " ORDER BY pa.id LIMIT 1),"
+                + " " + current + ")";
+    }
+
     private final JdbcTemplate jdbc;
 
     public OrganizationAuditService(JdbcTemplate jdbc) {
@@ -307,6 +349,14 @@ public class OrganizationAuditService {
                         + " p.number AS part_number, dip.number AS item_number,"
                         + " d.number AS deal_number, cust.name AS deal_customer,"
                         + " dip.title AS item_title, dip.public_code AS item_code,"
+                        // Номер позиции у правки позиции — номер записи, а не p.id:
+                        // у удалённой позиции соединение пусто, а снимок есть.
+                        // Подзапросы — только у своих записей: у сделки номер записи
+                        // совпал бы с номером чужой позиции.
+                        + " CASE WHEN a.table_name = 'part' THEN "
+                        + conditionAt("a.record_id", "p.condition") + " END AS part_condition,"
+                        + " CASE WHEN a.table_name = 'deal_item' THEN "
+                        + conditionAt("di.part_id", "dip.condition") + " END AS item_condition,"
                         + " idl.number AS item_deal_number,"
                         + " paid.number AS payment_deal_number,"
                         + " coalesce(dcd.legacy_code, dcd.public_code) AS cost_donor,"
@@ -323,6 +373,9 @@ public class OrganizationAuditService {
                         subjectOf(rs.getString("table_name"), rs.getString("part_title"),
                                 rs.getString("deal_customer"), rs.getString("item_title"),
                                 rs.getString("feed_title")),
+                        conditionOf(rs.getString("table_name"), rs.getString("part_title"),
+                                rs.getString("part_condition"), rs.getString("item_title"),
+                                rs.getString("item_condition")),
                         codeOf(rs.getString("table_name"), rs.getString("part_code"),
                                 rs.getObject("deal_number"), rs.getString("item_code"),
                                 rs.getLong("record_id")),
@@ -498,6 +551,25 @@ public class OrganizationAuditService {
     }
 
     /**
+     * Состояние позиции, которую называет строка, — кодом: слово ставит экран
+     * тем же словарём, что везде (задача 0318), и сервер словаря не множит.
+     *
+     * <p>Только у товара и позиции сделки и только когда вещь названа: слово
+     * состояния без наименования рядом («· б/у» у удалённой позиции) не
+     * уточняло бы ничего. Незнакомый код не отдаётся — экран показал бы его
+     * как есть.
+     */
+    private static String conditionOf(String table, String partTitle, String partCondition,
+                                      String itemTitle, String itemCondition) {
+        String code = switch (table) {
+            case "part" -> partTitle == null ? null : partCondition;
+            case "deal_item" -> itemTitle == null ? null : itemCondition;
+            default -> null;
+        };
+        return AuditedColumns.isCondition(code) ? code : null;
+    }
+
+    /**
      * Код вещи — тот, по которому её находит человек.
      *
      * <p>У товара это публичный код с витрины, у сделки — её номер. Когда сама
@@ -632,9 +704,12 @@ public class OrganizationAuditService {
      *                   у всего, что записано до 8 сентября 2026: текущая
      *                   роль здесь соврала бы задним числом
      * @param action     заполнен у событий без полей («Товар заведён»)
+     * @param subjectCondition состояние позиции кодом <b>на момент записи</b>
+     *                   ({@link #conditionAt}); у прочих вещей {@code null}
      */
     public record Entry(long id, Instant at, String author, String authorRole,
-                        String kind, String subject, String subjectCode, Long subjectNumber,
+                        String kind, String subject, String subjectCondition,
+                        String subjectCode, Long subjectNumber,
                         String context, String action, List<Change> changes) {
     }
 

@@ -31,6 +31,12 @@ export interface AuditEntry {
   authorRole: string | null;
   kind: string;
   subject: string | null;
+  /**
+   * Состояние позиции кодом **на момент записи**, а не нынешнее (задача 0321):
+   * сервер восстанавливает его по снимкам журнала. Есть у товара и позиции
+   * сделки, когда вещь названа; слово ставит `ConditionWord`.
+   */
+  subjectCondition?: string | null;
   subjectCode: string | null;
   /**
    * Порядковый номер позиции — тот, которым её называют вслух (задача 0168).
