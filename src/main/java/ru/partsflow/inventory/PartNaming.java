@@ -76,6 +76,32 @@ public class PartNaming {
         return oem == null || oem.isBlank() ? named : named + " · " + oem.strip();
     }
 
+    /**
+     * Основной номер производителя позиций одним запросом — для строк списков,
+     * где он стоит рядом со словом состояния (задача 0327: состав сделки, выбор
+     * на возврат, заказы с площадок). Тем же выражением {@link #primaryOemSql},
+     * что и в отказах: второй способ узнать «основной номер» разошёлся бы
+     * с первым на первой правке смысла основного (0323). Позиции без основного
+     * номера в карте нет — кросс-номер вместо него не подставляется.
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, String> primaryOemsOf(Collection<Long> partIds) {
+        Map<Long, String> numbers = new HashMap<>();
+        if (partIds.isEmpty()) {
+            return numbers;
+        }
+        jdbc.query("SELECT p.id, " + primaryOemSql("p") + " FROM part p WHERE p.id = ANY (?)",
+                rs -> {
+                    String oem = rs.getString(OEM_COLUMN);
+                    if (oem != null && !oem.isBlank()) {
+                        numbers.put(rs.getLong("id"), oem.strip());
+                    }
+                },
+                (Object) partIds.stream().filter(java.util.Objects::nonNull)
+                        .distinct().toArray(Long[]::new));
+        return numbers;
+    }
+
     /** Одна позиция; {@code null}, если её нет. */
     @Transactional(readOnly = true)
     public String of(Long partId) {

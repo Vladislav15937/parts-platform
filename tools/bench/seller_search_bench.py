@@ -189,7 +189,11 @@ def build_code(java, kind, word, limit):
         sql = ("SELECT r.id, r.number, r.public_code, r.title, r.price, r.status,\n"
                "       r.warehouse_id, r.warehouse_name, r.cell_code,\n"
                "       r.qty, r.qty_reserved, r.qty - r.qty_reserved AS qty_available,\n"
-               "       r.expected, r.expected_on\n"
+               "       r.expected, r.expected_on, r.condition,\n"
+               # Основной номер производителя (0327) — во внешнем запросе, как
+               # в PartService; выражение то же, что PartNaming.primaryOemSql.
+               "       (SELECT o.raw_number FROM part_oem o WHERE o.part_id = r.id"
+               " AND o.is_primary) AS primary_oem\n"
                "  FROM (\n"
                + c("STOCK_BRANCH") + " WHERE " + stock_cond + "\n"
                + "UNION ALL\n"
