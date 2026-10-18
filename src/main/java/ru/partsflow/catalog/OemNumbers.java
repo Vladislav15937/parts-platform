@@ -173,6 +173,35 @@ public final class OemNumbers {
     }
 
     /**
+     * Сколько пустых кусков стоит <b>между</b> номерами («A,,B», «A, ,B»), — для отчёта
+     * пересчёта 0319: {@link #list} их молча отбрасывает, а человеку, просматривающему
+     * деление, надо видеть, что в строке было место без номера. Разделители — те же
+     * {@link #SEPARATORS}, по одному; «\r\n» — один перевод строки, а не пустота
+     * между двумя. Края не считаются: разделитель в конце строки — не пропуск.
+     */
+    public static int emptyPieces(String text) {
+        if (text == null) {
+            return 0;
+        }
+        String[] pieces = text.split("\\r\\n|" + SEPARATORS.substring(0, SEPARATORS.length() - 1), -1);
+        int first = 0;
+        int last = pieces.length - 1;
+        while (first <= last && clean(pieces[first]).isEmpty()) {
+            first++;
+        }
+        while (last >= first && clean(pieces[last]).isEmpty()) {
+            last--;
+        }
+        int empty = 0;
+        for (int i = first; i <= last; i++) {
+            if (clean(pieces[i]).isEmpty()) {
+                empty++;
+            }
+        }
+        return empty;
+    }
+
+    /**
      * Приведённый запрос для поиска по {@code part_oem.normalized} (задача 0306) —
      * тем же {@link #normalize}, что и запись: набравший «AB 123 456 X», «ab123456x»
      * или русскими «АВ123456Х» находит записанное «ab-123 456x».
