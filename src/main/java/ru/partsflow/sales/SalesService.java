@@ -4,7 +4,6 @@ import ru.partsflow.shared.NotFound;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.partsflow.inventory.Part;
-import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.PartRepository;
 import ru.partsflow.inventory.StockMovement;
 import ru.partsflow.inventory.StockReservationRepository;
@@ -49,6 +48,7 @@ public class SalesService {
     private final ru.partsflow.inventory.PartChangeLog partChanges;
     private final CustomerService customers;
     private final PreorderService preorders;
+    private final ru.partsflow.inventory.PartNaming partNaming;
 
     public SalesService(DealRepository dealRepository,
                         DealReturnRepository dealReturnRepository,
@@ -64,7 +64,9 @@ public class SalesService {
                         ru.partsflow.inventory.PartChangeLog partChanges,
                         CustomerService customers,
                         PreorderService preorders,
+                        ru.partsflow.inventory.PartNaming partNaming,
                         org.springframework.jdbc.core.JdbcTemplate jdbc) {
+        this.partNaming = partNaming;
         this.customers = customers;
         this.preorders = preorders;
         this.dealRepository = dealRepository;
@@ -435,7 +437,11 @@ public class SalesService {
      * другому покупателю, для этого заказа всё равно что продана.
      */
     private List<String> shortagesOf(List<ItemRequest> items) {
-        List<String> missing = new ArrayList<>();
+        // Строки нехватки копятся без названия, и названия всех позиций
+        // читаются одним запросом после цикла (задача 0320): заказ на десять
+        // позиций без остатка — один запрос, а не десять.
+        record Short(ItemRequest item, BigDecimal available) { }
+        List<Short> shorts = new ArrayList<>();
         // Строки этого же заказа ещё не отложены: вторая позиция той же детали
         // иначе не увидела бы первой.
         java.util.Map<Long, BigDecimal> asked = new java.util.HashMap<>();
@@ -452,12 +458,23 @@ public class SalesService {
                 asked.merge(item.partId(), item.quantity(), BigDecimal::add);
             }
             if (available.compareTo(item.quantity()) < 0) {
-                Part part = requirePart(item.partId());
-                missing.add("%s — нужно %s, свободно %s".formatted(
-                        PartCondition.named(part.getTitle(), part.getCondition()),
-                        item.quantity().stripTrailingZeros().toPlainString(),
-                        available.stripTrailingZeros().toPlainString()));
+                shorts.add(new Short(item, available));
             }
+        }
+        if (shorts.isEmpty()) {
+            return new ArrayList<>();
+        }
+        java.util.Map<Long, String> names = partNaming.of(
+                shorts.stream().map(m -> m.item().partId()).toList());
+        List<String> missing = new ArrayList<>();
+        for (Short m : shorts) {
+            String name = names.get(m.item().partId());
+            if (name == null) {
+                throw NotFound.PART.error(m.item().partId());
+            }
+            missing.add("%s — нужно %s, свободно %s".formatted(name,
+                    m.item().quantity().stripTrailingZeros().toPlainString(),
+                    m.available().stripTrailingZeros().toPlainString()));
         }
         return missing;
     }
@@ -2340,12 +2357,16 @@ public class SalesService {
     }
 
     /**
-     * Позиция так, как её называют в отказе: наименование и слово состояния
-     * (задача 0318). Запрос — только на пути отказа, как и раньше.
+     * Позиция так, как её называют в отказе: наименование, слово состояния
+     * и номер производителя ({@link ru.partsflow.inventory.PartNaming},
+     * задачи 0318 и 0320). Запрос — только на пути отказа, как и раньше.
      */
     private String namedPart(Long partId) {
-        Part part = requirePart(partId);
-        return PartCondition.named(part.getTitle(), part.getCondition());
+        String name = partNaming.of(partId);
+        if (name == null) {
+            throw NotFound.PART.error(partId);
+        }
+        return name;
     }
 
     private byte[] payloadOf(Deal deal) {

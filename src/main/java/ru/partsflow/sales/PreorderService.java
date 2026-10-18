@@ -3,7 +3,7 @@ package ru.partsflow.sales;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import ru.partsflow.inventory.PartCondition;
+import ru.partsflow.inventory.PartNaming;
 import ru.partsflow.inventory.StockReservationRepository;
 
 import java.math.BigDecimal;
@@ -50,10 +50,13 @@ public class PreorderService {
     private final DealRepository deals;
     private final DocumentEventRepository events;
     private final StockReservationRepository reservations;
+    private final PartNaming partNaming;
 
     public PreorderService(JdbcTemplate jdbc, DealRepository deals,
                            DocumentEventRepository events,
-                           StockReservationRepository reservations) {
+                           StockReservationRepository reservations,
+                           PartNaming partNaming) {
+        this.partNaming = partNaming;
         this.jdbc = jdbc;
         this.deals = deals;
         this.events = events;
@@ -103,18 +106,21 @@ public class PreorderService {
      */
     @Transactional
     public Claim claim(Long partId, BigDecimal quantity, BigDecimal alreadyInRequest) {
-        List<Claim> found = jdbc.query("""
-                SELECT p.title, p.condition, p.quantity, s.number, s.kind, s.expected_on
+        // Разделители — явной строкой: текстовый блок съедает края, и склейка
+        // дала бы «AS primary_oemFROM» (корневой CLAUDE.md).
+        List<Claim> found = jdbc.query("SELECT p.title, p.condition, p.quantity, s.number,"
+                + " s.kind, s.expected_on, " + PartNaming.primaryOemSql("p") + "\n" + """
                   FROM part p
                   JOIN supply s ON s.id = p.supply_id
                  WHERE p.id = ?
                    AND p.expected_origin AND p.status = 'DRAFT'
                    AND s.status IN ('EXPECTED', 'IN_TRANSIT')
                    FOR UPDATE OF p""",
-                // Слово состояния в отказе (задача 0318): продавец отвечает
-                // покупателю про конкретную деталь, а «Фара…» новая и б/у —
-                // две разные ожидаемые позиции.
-                (rs, i) -> new Claim(named(rs), rs.getBigDecimal("quantity"),
+                // Слово состояния и номер производителя в отказе (задачи 0318,
+                // 0320): продавец отвечает покупателю про конкретную деталь,
+                // а «Фара…» новая и б/у — две разные ожидаемые позиции.
+                // Тем же запросом, что под блокировкой, а не вторым.
+                (rs, i) -> new Claim(PartNaming.named(rs), rs.getBigDecimal("quantity"),
                         rs.getDate("expected_on") == null
                                 ? null : rs.getDate("expected_on").toLocalDate()),
                 partId);
@@ -187,20 +193,13 @@ public class PreorderService {
     }
 
     /**
-     * Деталь так, как её называют в отказе: наименование и слово состояния
-     * (задача 0318). Продавец и приёмщик отвечают про конкретную деталь,
-     * а «Фара…» новая и б/у — две разные ожидаемые позиции; пометка
-     * в наименовании, которая это говорила, из него уходит (0315).
+     * Деталь так, как её называют в отказе: наименование, слово состояния
+     * и номер производителя ({@link PartNaming}, задачи 0318 и 0320).
+     * Продавец и приёмщик отвечают про конкретную деталь, а «Фара…» новая
+     * и б/у — две разные ожидаемые позиции.
      */
     private String namedPart(Long partId) {
-        return jdbc.queryForObject("SELECT title, condition FROM part WHERE id = ?",
-                (rs, i) -> named(rs), partId);
-    }
-
-    private static String named(java.sql.ResultSet rs) throws java.sql.SQLException {
-        String condition = rs.getString("condition");
-        return PartCondition.named(rs.getString("title"),
-                condition == null ? null : PartCondition.valueOf(condition));
+        return partNaming.of(partId);
     }
 
     private BigDecimal pendingOf(Long partId) {
