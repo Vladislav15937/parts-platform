@@ -185,3 +185,61 @@ export async function measurePage(screenHtml: string, width = PHONE_WIDTH): Prom
     await page.close();
   }
 }
+
+export interface Box {
+  left: number;
+  right: number;
+  width: number;
+  height: number;
+}
+
+export interface Layout extends PageWidth {
+  /** Прямоугольники элементов по каждому селектору, в порядке документа. */
+  boxes: Record<string, Box[]>;
+}
+
+/**
+ * Ширина страницы и прямоугольники элементов — одной загрузкой.
+ *
+ * <p><b>Зачем высота.</b> Ширина страницы отвечает «уезжает ли вбок»,
+ * ширина колонки — «не сжата ли до нечитаемого», но ни то, ни другое не видит
+ * строку, выросшую в полтора экрана: строка выдачи на 360 px не шире экрана
+ * и всё равно занимала 420 px высоты (задача 0328). Высота строки — то, что
+ * продавец листает пальцем, и мерить её надо тем же браузером.
+ */
+export async function measureLayout(
+  screenHtml: string,
+  selectors: string[],
+  width = PHONE_WIDTH,
+): Promise<Layout> {
+  if (browser === null) throw new Error('openBrowser() не вызван');
+  const page = await browser.newPage();
+  try {
+    await page.setViewport({ width, height: 800 });
+    await page.setContent(
+      `<!doctype html><meta charset="utf-8"><style>${CSS}</style>${shell(screenHtml)}`,
+      { waitUntil: 'load' },
+    );
+    return await page.evaluate((list: string[]) => {
+      const boxes: Record<string, Box[]> = {};
+      for (const css of list) {
+        boxes[css] = [...document.querySelectorAll(css)].map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            left: Math.round(rect.left),
+            right: Math.round(rect.right),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          };
+        });
+      }
+      return {
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+        boxes,
+      };
+    }, selectors);
+  } finally {
+    await page.close();
+  }
+}
