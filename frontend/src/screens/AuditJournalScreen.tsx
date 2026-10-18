@@ -11,6 +11,7 @@ import { roleTitle } from '../organization/members';
 import { dealItemStatusName, dealStatusName } from '../sales/dealStatus';
 import { endOfDay, startOfDay } from '../sales/sales';
 import { ColumnMenu } from './ColumnMenu';
+import { ConditionWord } from '../inventory/ConditionWord';
 import { SessionJournal } from './SessionJournal';
 import { count, plural } from '../ui/plural';
 import { shortDate } from '../ui/shortDate';
@@ -285,6 +286,9 @@ function Row({ entry }: { entry: AuditEntry }) {
       <td>{entry.authorRole === null ? '—' : roleTitle(entry.authorRole)}</td>
       <td>
         <strong>{entry.subject ?? entry.kind}</strong>
+        {/* Состояние на момент записи, а не нынешнее: «Фара… новая»
+            и «Фара… б/у» в журнале — разные позиции (задача 0321). */}
+        {entry.subject !== null && <ConditionWord code={entry.subjectCondition} />}
         <div className="muted">
           {/* Номер позиции (задача 0168) идёт перед публичным кодом: разобрав
               правку, ревизор называет позицию вслух тому, кто её сделал,

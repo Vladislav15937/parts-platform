@@ -287,6 +287,11 @@ public final class AuditedColumns {
      */
     private static final Map<String, String> CONDITIONS = capitalized(PartCondition.titles());
 
+    /** Код состояния, который знает перечисление: «USED» — да, мусор снимка — нет. */
+    public static boolean isCondition(String code) {
+        return code != null && CONDITIONS.containsKey(code);
+    }
+
     private static Map<String, String> capitalized(Map<String, String> titles) {
         Map<String, String> capitalized = new java.util.LinkedHashMap<>();
         titles.forEach((code, title) -> capitalized.put(code,
