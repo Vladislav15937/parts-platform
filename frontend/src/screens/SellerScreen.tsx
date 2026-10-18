@@ -53,6 +53,7 @@ import {
 } from '../sales/dealStatus';
 import { useMounted } from '../ui/useMounted';
 import { ConditionWord } from '../inventory/ConditionWord';
+import { OemWord } from '../inventory/OemWord';
 import { DealPrintMenu } from './DealPrintMenu';
 import type { CustomerAccount,
   HistoryEntry,
@@ -394,6 +395,7 @@ export function SellerScreen({
                 <div className="stock-info">
                   {line.row.title}
                   <ConditionWord code={line.row.condition} />
+                  <OemWord number={line.row.primaryOem} />
                   {/* Номер позиции и здесь: набранную корзину продавец
                       называет вслух — кладовщику, который пойдёт снимать
                       с полки, или клиенту при сверке. До этого в строке
@@ -973,6 +975,7 @@ function StockItem({
       <div className="stock-info">
         <strong>{row.title}</strong>
         <ConditionWord code={row.condition} />
+        <OemWord number={row.primaryOem} />
         {/* Номер позиции перед публичным кодом — тем же порядком, каким они
             стоят колонками на витрине. Продавец диктует в трубку именно
             его: «7584A8FEAE3D» по телефону не произносят. */}
@@ -1719,6 +1722,7 @@ function DealCard({
               )}{' '}
               {item.title ?? 'удалённая позиция'}
               <ConditionWord code={item.condition} />
+              <OemWord number={item.primaryOem} />
               <span className="muted">
                 {' '}
                 {/* Номер позиции (задача 0168): состав сделки и выбор позиций

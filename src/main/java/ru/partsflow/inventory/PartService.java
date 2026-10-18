@@ -1548,7 +1548,13 @@ public class PartService {
                 "SELECT r.id, r.number, r.public_code, r.title, r.price, r.status,\n"
                 + "       r.warehouse_id, r.warehouse_name, r.cell_code,\n"
                 + "       r.qty, r.qty_reserved, r.qty - r.qty_reserved AS qty_available,\n"
-                + "       r.expected, r.expected_on, r.condition\n"
+                + "       r.expected, r.expected_on, r.condition,\n"
+                // Основной номер производителя (задача 0327) — во внешнем
+                // запросе, а не в ветвях: ветви `UNION ALL` сопоставляются
+                // по месту, и столбец, добавленный не туда в одной, сдвинул бы
+                // другую; заодно номер читается только у строк, прошедших
+                // предел, а не у каждой находки. Выражение то же, что в отказах.
+                + "       " + PartNaming.primaryOemSql("r") + "\n"
                 + "  FROM (\n"
                 + STOCK_BRANCH + " WHERE " + match.stockSql() + narrowing.sql() + "\n"
                 + "UNION ALL\n"
@@ -1574,7 +1580,8 @@ public class PartService {
                         rs.getBoolean("expected"),
                         rs.getDate("expected_on") == null
                                 ? null : rs.getDate("expected_on").toLocalDate(),
-                        rs.getString("condition")),
+                        rs.getString("condition"),
+                        rs.getString(PartNaming.OEM_COLUMN)),
                 // Ветки UNION, потом отбор, потом ранжирование, потом предел.
                 args.toArray());
 
@@ -1875,13 +1882,17 @@ public class PartService {
      *                  «Состояние» на складе (задача 0314). До неё состояние
      *                  продавец читал только из пометки в наименовании,
      *                  а пометка после смены состояния врёт (0304)
+     * @param primaryOem основной номер производителя в виде хранения
+     *                   («84140-12530»; задача 0327) — экран ставит его за словом
+     *                   состояния. Только {@code is_primary}, кросс-номер вместо
+     *                   него не подставляется; пусто — основного нет
      */
     public record StockRow(Long partId, long number, String publicCode, String title, BigDecimal price,
                            String status, Long warehouseId, String warehouseName,
                            String cellCode, BigDecimal qty, BigDecimal qtyReserved,
                            BigDecimal qtyAvailable,
                            boolean expected, java.time.LocalDate expectedOn,
-                           String condition) {
+                           String condition, String primaryOem) {
     }
 
     /**

@@ -7,6 +7,7 @@ import {
   type Deal,
 } from '../sales/sales';
 import { ConditionWord } from '../inventory/ConditionWord';
+import { OemWord } from '../inventory/OemWord';
 import { useMounted } from '../ui/useMounted';
 
 /**
@@ -151,6 +152,7 @@ export function OrdersScreen({ canSell }: { canSell: boolean }) {
                     {/* Состояние (задача 0318): заказ собирает кладовщик,
                         и «Фара…» новая и б/у лежат на соседних полках. */}
                     <ConditionWord code={item.condition} />
+                    <OemWord number={item.primaryOem} />
                     {typeof item.number === 'number' && ` · № ${item.number}`} — {item.quantity} шт.
                   </li>
                 ))}

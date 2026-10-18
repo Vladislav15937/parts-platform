@@ -68,12 +68,15 @@ public class SalesController {
     private final ru.partsflow.platform.settings.CompanySettingsService companySettings;
     private final DealPrintService dealPrint;
     private final PreorderService preorders;
+    private final ru.partsflow.inventory.PartNaming partNaming;
 
     public SalesController(SalesService sales, PartService parts,
                            ru.partsflow.platform.security.MemberService members,
                            ru.partsflow.platform.settings.CompanySettingsService companySettings,
-                           DealPrintService dealPrint, PreorderService preorders) {
+                           DealPrintService dealPrint, PreorderService preorders,
+                           ru.partsflow.inventory.PartNaming partNaming) {
         this.preorders = preorders;
+        this.partNaming = partNaming;
         this.sales = sales;
         this.parts = parts;
         this.members = members;
@@ -712,6 +715,15 @@ public class SalesController {
                 .map(DealItem::getPartId)
                 .distinct()
                 .toList());
+        // Основной номер производителя — тем же приёмом (задача 0327, решение
+        // владельца «7 - а»): «Фара левая Toyota Camry · контрактная» бывает
+        // не одна, и в составе сделки, в выборе на возврат и в заказе с площадки
+        // деталь опознают по номеру. Тем же выражением, что в отказах (0320).
+        Map<Long, String> primaryOems = partNaming.primaryOemsOf(deals.stream()
+                .flatMap(deal -> deal.getItems().stream())
+                .map(DealItem::getPartId)
+                .distinct()
+                .toList());
         // Справочник услуг — это несколько строк на арендатора, и читается он
         // одним запросом на всю выдачу: по запросу на строку история клиента
         // превратилась бы в сотню обращений к базе.
@@ -743,7 +755,8 @@ public class SalesController {
         Map<Long, java.time.LocalDate> expectedDates = sales.expectedDatesOf(
                 deals.stream().map(Deal::getId).toList());
         return deals.stream()
-                .map(deal -> DealView.of(deal, titles, partNumbers, conditions, serviceNames,
+                .map(deal -> DealView.of(deal, titles, partNumbers, conditions, primaryOems,
+                        serviceNames,
                         managerNames, stages, customerNames, expectedDates))
                 .toList();
     }
@@ -885,6 +898,7 @@ public class SalesController {
 
         static DealView of(Deal deal, Map<Long, String> titles, Map<Long, Long> partNumbers,
                            Map<Long, PartCondition> conditions,
+                           Map<Long, String> primaryOems,
                            Map<Long, String> serviceNames, Map<Long, String> managerNames,
                            Map<Long, String> stages, Map<Long, String> customerNames,
                            Map<Long, java.time.LocalDate> expectedDates) {
@@ -900,7 +914,8 @@ public class SalesController {
                     deal.getReplyDeadline(), deal.getOrderAcceptedAt(),
                     deal.getDeliveryNote(),
                     deal.getItems().stream()
-                            .map(item -> ItemView.of(item, titles, partNumbers, conditions))
+                            .map(item -> ItemView.of(item, titles, partNumbers, conditions,
+                                    primaryOems))
                             .toList(),
                     deal.getServices().stream()
                             .map(s -> new ServiceLineView(s.getId(), s.getServiceId(),
@@ -961,17 +976,23 @@ public class SalesController {
      *                  различается как раз им, а пометка «(б/у)» из наименования
      *                  уходит (0315, 0316). Пусто у удалённой карточки и у позиции
      *                  без состояния
+     * @param primaryOem основной номер производителя в виде хранения
+     *                   («84140-12530»; задача 0327) — экран ставит его за словом
+     *                   состояния. Только {@code is_primary}: кросс-номер — номер
+     *                   другой детали, и вместо основного он назвал бы не ту
+     *                   позицию. Пусто — основного нет или карточку удалили
      */
     public record ItemView(Long id, Long partId, Long number, String title,
-                           PartCondition condition, BigDecimal quantity,
+                           PartCondition condition, String primaryOem, BigDecimal quantity,
                            BigDecimal price, BigDecimal discount, Long warehouseId,
                            DealItemStatus status) {
 
         static ItemView of(DealItem item, Map<Long, String> titles, Map<Long, Long> numbers,
-                           Map<Long, PartCondition> conditions) {
+                           Map<Long, PartCondition> conditions, Map<Long, String> primaryOems) {
             return new ItemView(item.getId(), item.getPartId(),
                     numbers.get(item.getPartId()),
                     titles.get(item.getPartId()), conditions.get(item.getPartId()),
+                    primaryOems.get(item.getPartId()),
                     item.getQuantity(),
                     item.getPrice(), item.getDiscount(), item.getWarehouseId(), item.getStatus());
         }
