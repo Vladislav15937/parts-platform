@@ -443,8 +443,15 @@ public class CatalogService {
 
     private final VehicleWords vehicleWords;
 
+    /**
+     * Применимость из карточки правится прямым SQL; добавление и снятие
+     * машины пишутся в журнал здесь (задача 0325).
+     */
+    private final ru.partsflow.platform.audit.AuditJournal journal;
+
     public CatalogService(JdbcTemplate jdbc, PartChangeLog partChanges,
-                          VehicleWords vehicleWords) {
+                          VehicleWords vehicleWords, ru.partsflow.platform.audit.AuditJournal journal) {
+        this.journal = journal;
         this.partChanges = partChanges;
         this.jdbc = jdbc;
         this.vehicleWords = vehicleWords;
@@ -1037,11 +1044,19 @@ public class CatalogService {
     /** Добавляет применимость руками — из карточки. Отметка подтверждения стоит. */
     @Transactional
     public boolean addApplicability(long partId, long brandId, Long modelId) {
-        boolean added = jdbc.update("""
+        // xmax = 0 у вставленной строки и не 0 у обновлённой: подтверждение
+        // уже заведённой машины — не заведение, и журнал его так не называет.
+        List<Map<String, Object>> rows = jdbc.queryForList("""
                 INSERT INTO part_applicability (part_id, brand_id, model_id, is_verified)
                 VALUES (?, ?, ?, true)
                 ON CONFLICT (part_id, brand_id, model_id, generation_id, modification_id)
-                DO UPDATE SET is_verified = true""", partId, brandId, modelId) > 0;
+                DO UPDATE SET is_verified = true
+                RETURNING id, (xmax = 0) AS inserted""", partId, brandId, modelId);
+        boolean added = !rows.isEmpty();
+        if (added && Boolean.TRUE.equals(rows.get(0).get("inserted"))) {
+            long id = ((Number) rows.get(0).get("id")).longValue();
+            journal.created("part_applicability", id, applicabilitySnapshot(id));
+        }
         // Марка и модель уезжают в прайс отдельными тегами: у контрактной
         // детали они берутся именно отсюда. Прежний триггер этого не ловил
         // вовсе — на part_applicability его не было.
@@ -1051,9 +1066,32 @@ public class CatalogService {
 
     @Transactional
     public void removeApplicability(long partId, long applicabilityId) {
-        jdbc.update("DELETE FROM part_applicability WHERE id = ? AND part_id = ?",
+        // Снимок до удаления: после него машину назвать будет не по чему.
+        List<Map<String, Object>> was = jdbc.queryForList("""
+                SELECT 1 FROM part_applicability WHERE id = ? AND part_id = ? FOR UPDATE""",
                 applicabilityId, partId);
+        if (!was.isEmpty()) {
+            Map<String, Object> snapshot = applicabilitySnapshot(applicabilityId);
+            jdbc.update("DELETE FROM part_applicability WHERE id = ? AND part_id = ?",
+                    applicabilityId, partId);
+            journal.deleted("part_applicability", applicabilityId, snapshot);
+        }
         partChanges.changed(partId);
+    }
+
+    /**
+     * Строка применимости для журнала: позиция и машина словами — снятую
+     * машину иначе назвать будет не по чему.
+     */
+    private Map<String, Object> applicabilitySnapshot(long applicabilityId) {
+        return jdbc.queryForMap("""
+                SELECT a.part_id,
+                       concat_ws(' ', b.name, m.name, g.name) AS vehicle
+                  FROM part_applicability a
+                  JOIN catalog.brand b ON b.id = a.brand_id
+                  LEFT JOIN catalog.model m ON m.id = a.model_id
+                  LEFT JOIN catalog.generation g ON g.id = a.generation_id
+                 WHERE a.id = ?""", applicabilityId);
     }
 
     /**

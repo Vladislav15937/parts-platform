@@ -39,8 +39,16 @@ public class WheelService {
     private final StockLedger ledger;
     private final ru.partsflow.catalog.VehicleWords vehicleWords;
 
+    /**
+     * Колесо заводится прямым SQL, и слушатель Hibernate его не видит:
+     * «Товар заведён» у комплекта пишется здесь (задача 0325).
+     */
+    private final ru.partsflow.platform.audit.AuditJournal journal;
+
     public WheelService(JdbcTemplate jdbc, PartChangeLog partChanges, StockLedger ledger,
-                        ru.partsflow.catalog.VehicleWords vehicleWords) {
+                        ru.partsflow.catalog.VehicleWords vehicleWords,
+                        ru.partsflow.platform.audit.AuditJournal journal) {
+        this.journal = journal;
         this.partChanges = partChanges;
         this.ledger = ledger;
         this.jdbc = jdbc;
@@ -133,6 +141,8 @@ public class WheelService {
                     request.condition(), createdBy);
 
             insertProperties(partId, request, setNo, null);
+            journal.created("part", partId, jdbc.queryForMap(
+                    "SELECT title, price, condition, product_line FROM part WHERE id = ?", partId));
 
             // Остаток появляется только движением, и записать его мало —
             // применить движение к раскладке и карточке должен тот же вызов.

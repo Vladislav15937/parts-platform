@@ -63,9 +63,37 @@ public class PrintSettingsService {
 
     private final JdbcTemplate jdbc;
 
-    public PrintSettingsService(JdbcTemplate jdbc) {
+    /** Колонки печатных настроек, которые называет журнал ({@code AuditedColumns.COMPANY_SETTING}). */
+    private static final String PRINT_COLUMNS = "print_extra_text, print_vat_note,"
+            + " print_client_signature, print_issuer_signature, legal_name, legal_address,"
+            + " legal_inn, legal_kpp, legal_bank_name, legal_bank_bic, legal_bank_account,"
+            + " legal_bank_corr_account, legal_director, legal_chief_accountant";
+
+    /**
+     * Настройки правятся прямым SQL; правка пишется в журнал здесь, одной
+     * строкой на сохранение (задача 0325).
+     */
+    private final ru.partsflow.platform.audit.AuditJournal journal;
+
+    public PrintSettingsService(JdbcTemplate jdbc, ru.partsflow.platform.audit.AuditJournal journal) {
         this.jdbc = jdbc;
+        this.journal = journal;
     }
+
+    /** Снимок настроек компании для журнала: колонки, которые он называет. */
+    private java.util.Map<String, Object> settingsRow(String columns) {
+        java.util.List<java.util.Map<String, Object>> rows =
+                jdbc.queryForList("SELECT " + columns + " FROM company_setting WHERE id = 1");
+        if (!rows.isEmpty()) {
+            return new java.util.HashMap<>(rows.get(0));
+        }
+        java.util.Map<String, Object> empty = new java.util.HashMap<>();
+        for (String column : columns.split(",\\s*")) {
+            empty.put(column, null);
+        }
+        return empty;
+    }
+
 
     /**
      * Всё, что печатается, одним ответом.
@@ -139,6 +167,7 @@ public class PrintSettingsService {
                             + "без реквизитов и без текста про гарантию.");
         }
         Legal values = legal == null ? Legal.empty() : legal;
+        java.util.Map<String, Object> was = settingsRow(PRINT_COLUMNS);
 
         jdbc.update("""
                 INSERT INTO company_setting (id, print_extra_text, print_vat_note,
@@ -171,12 +200,25 @@ public class PrintSettingsService {
                 blankToNull(values.bankAccount()), blankToNull(values.bankCorrAccount()),
                 blankToNull(values.director()), blankToNull(values.chiefAccountant()));
 
+        java.util.Map<String, Object> now = settingsRow(PRINT_COLUMNS);
+        if (!was.equals(now)) {
+            journal.changed("company_setting", 1, was, now);
+        }
+
         for (WarehouseDetails block : blocks == null ? List.<WarehouseDetails>of() : blocks) {
             if (block == null || block.id() == null) {
                 continue;
             }
+            java.util.List<java.util.Map<String, Object>> before = jdbc.queryForList(
+                    "SELECT name, print_details FROM warehouse WHERE id = ? FOR UPDATE", block.id());
             int updated = jdbc.update("UPDATE warehouse SET print_details = ? WHERE id = ?",
                     blankToNull(block.details()), block.id());
+            if (updated == 1 && !java.util.Objects.equals(
+                    before.get(0).get("print_details"), blankToNull(block.details()))) {
+                java.util.Map<String, Object> after = new java.util.HashMap<>(before.get(0));
+                after.put("print_details", blankToNull(block.details()));
+                journal.changed("warehouse", block.id(), before.get(0), after);
+            }
             if (updated == 0) {
                 // Без номера строки в базе: владелец правил поле у строки
                 // списка, а не набирал идентификатор. Единственный способ сюда

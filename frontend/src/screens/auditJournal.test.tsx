@@ -84,6 +84,33 @@ describe('журнал действий организации', () => {
     expect(screen.queryByText(/CANCELLED/)).toBeNull();
   });
 
+  it('коды новых видов (задача 0325) называет словарями экрана, а не кодом', async () => {
+    const entry = (id: number, table: string, column: string, label: string,
+      before: string, after: string) => ({
+      id, at: '2026-10-18T10:00:00Z', author: 'Владелец', authorRole: 'OWNER',
+      kind: 'Вид', subject: 'Вещь ' + id, subjectCode: null, subjectNumber: null,
+      context: null, action: null, changes: [{ table, column, label, before, after }],
+    });
+    stubApi({
+      total: 4, capped: false, more: false, filterable: ['author', 'field'],
+      items: [
+        entry(4, 'donor', 'status', 'Состояние машины', 'PURCHASED', 'DISMANTLING'),
+        entry(3, 'supply', 'status', 'Состояние поставки', 'EXPECTED', 'ARRIVED'),
+        entry(2, 'tenant_member', 'role', 'Роль', 'SELLER', 'MANAGER'),
+        entry(1, 'payment_source', 'source_type', 'Тип', 'CASH', 'CREDIT'),
+      ],
+    });
+    render(<AuditJournalScreen />);
+
+    await waitFor(() => expect(screen.getByText(/Состояние машины: куплена →/)).toBeTruthy());
+    expect(screen.getByText('в разборе')).toBeTruthy();
+    expect(screen.getByText(/Состояние поставки: ожидается →/)).toBeTruthy();
+    expect(screen.getByText('приехала')).toBeTruthy();
+    for (const code of ['PURCHASED', 'DISMANTLING', 'EXPECTED', 'ARRIVED', 'SELLER', 'MANAGER', 'CASH']) {
+      expect(screen.queryByText(new RegExp(code))).toBeNull();
+    }
+  });
+
   it('событие без полей называет себя, а не перечисляет пустые поля', async () => {
     stubApi(page());
     render(<AuditJournalScreen />);

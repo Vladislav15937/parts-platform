@@ -60,6 +60,38 @@ public class AuditJournal {
     }
 
     /**
+     * Та же правка у многих записей разом — по записи журнала на каждую
+     * (задача 0325).
+     *
+     * <p>Пачкой, а не запросом на запись: сопоставление написания и
+     * «Пересопоставить по справочнику» правят сотни и тысячи позиций одним
+     * {@code UPDATE}, и на «что случилось с позицией 347» журнал обязан
+     * ответить строкой этой позиции, а не одной записью «изменено 3 000».
+     * Строка та же, что у {@link #changed} и у слушателя.
+     *
+     * @param changes запись → (было, стало); пусто — ничего не пишется
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void changedEach(String table, Map<Long, Change> changes) {
+        requireKnown(table);
+        if (changes.isEmpty()) {
+            return;
+        }
+        Long author = CurrentAuthor.get();
+        String role = CurrentAuthor.role();
+        jdbc.batchUpdate(AuditLogListener.INSERT, changes.entrySet().stream()
+                .map(entry -> new Object[]{table, entry.getKey(), "UPDATE",
+                        AuditLogListener.JsonRows.write(entry.getValue().was()),
+                        AuditLogListener.JsonRows.write(entry.getValue().now()),
+                        author, role})
+                .toList());
+    }
+
+    /** Было → стало у одной записи пачки. */
+    public record Change(Map<String, ?> was, Map<String, ?> now) {
+    }
+
+    /**
      * Заведение записи: «было» нет, «стало» — то, что журнал умеет назвать.
      *
      * <p>Экран показывает такую строку событием («Выгрузка заведена»), а не

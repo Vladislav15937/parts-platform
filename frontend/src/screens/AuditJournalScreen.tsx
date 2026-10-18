@@ -9,7 +9,9 @@ import {
 import type { AuditChange, AuditEntry, AuditPage, JournalQuery } from '../organization/auditJournal';
 import { roleTitle } from '../organization/members';
 import { dealItemStatusName, dealStatusName } from '../sales/dealStatus';
-import { endOfDay, startOfDay } from '../sales/sales';
+import { endOfDay, PAYMENT_SOURCE_TYPES, startOfDay } from '../sales/sales';
+import { statusTitle as donorStatusTitle } from '../intake/donors';
+import { supplyStatusTitle } from './SupplyList';
 import { ColumnMenu } from './ColumnMenu';
 import { ConditionWord } from '../inventory/ConditionWord';
 import { SessionJournal } from './SessionJournal';
@@ -324,7 +326,22 @@ function shownValue(change: AuditChange, raw: string | null): string {
   if (raw === null || raw === '') {
     return '—';
   }
-  if (change.column !== 'status') {
+  // Задача 0325: коды, у которых словарь уже живёт на экране, — машина,
+  // поставка, роль сотрудника, тип источника платежа. Копия на сервере
+  // разошлась бы с ним на первой правке.
+  if (change.table === 'donor' && change.column === 'status') {
+    return donorStatusTitle(raw);
+  }
+  if (change.table === 'supply' && change.column === 'status') {
+    return supplyStatusTitle(raw);
+  }
+  if (change.table === 'tenant_member' && change.column === 'role') {
+    return roleTitle(raw);
+  }
+  if (change.table === 'payment_source' && change.column === 'source_type') {
+    return PAYMENT_SOURCE_TYPES.find((type) => type.value === raw)?.label ?? raw;
+  }
+  if (change.column !== 'status' || (change.table !== 'deal' && change.table !== 'deal_item')) {
     return raw;
   }
   return change.table === 'deal_item' ? dealItemStatusName(raw) : dealStatusName(raw);

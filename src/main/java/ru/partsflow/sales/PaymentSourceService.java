@@ -36,8 +36,15 @@ public class PaymentSourceService {
 
     private final JdbcTemplate jdbc;
 
-    public PaymentSourceService(JdbcTemplate jdbc) {
+    /**
+     * Справочник правится прямым SQL, слушатель Hibernate его не видит:
+     * заведение и архив источника пишутся в журнал здесь (задача 0325).
+     */
+    private final ru.partsflow.platform.audit.AuditJournal journal;
+
+    public PaymentSourceService(JdbcTemplate jdbc, ru.partsflow.platform.audit.AuditJournal journal) {
         this.jdbc = jdbc;
+        this.journal = journal;
     }
 
     @Transactional(readOnly = true)
@@ -76,6 +83,7 @@ public class PaymentSourceService {
         Long id = jdbc.queryForObject("""
                 INSERT INTO payment_source (name, source_type) VALUES (?, ?)
                 RETURNING id""", Long.class, trimmed, type);
+        journal.created("payment_source", id, java.util.Map.of("name", trimmed, "source_type", type));
         return new PaymentSourceView(id, trimmed, type, false);
     }
 
@@ -90,8 +98,19 @@ public class PaymentSourceService {
     }
 
     private PaymentSourceView setArchived(Long id, boolean archived) {
-        int updated = jdbc.update(
-                "UPDATE payment_source SET is_archived = ? WHERE id = ?", archived, id);
+        // Прежнее значение и название — тем же запросом: журналу нужно «было»,
+        // а строке журнала — имя источника (задача 0325).
+        java.util.List<java.util.Map<String, Object>> rows = jdbc.queryForList("""
+                UPDATE payment_source t SET is_archived = ?
+                  FROM (SELECT id, is_archived AS was FROM payment_source WHERE id = ? FOR UPDATE) old
+                 WHERE t.id = old.id
+                RETURNING t.name, old.was""", archived, id);
+        int updated = rows.size();
+        if (updated == 1 && !Boolean.valueOf(archived).equals(rows.get(0).get("was"))) {
+            Object name = rows.get(0).get("name");
+            journal.changed("payment_source", id, java.util.Map.of("name", name, "is_archived", !archived),
+                    java.util.Map.of("name", name, "is_archived", archived));
+        }
         if (updated == 0) {
             // Номер строки в базе владельцу не говорит ничего: он нажал
             // на строку таблицы, а не набирал идентификатор. Единственный
