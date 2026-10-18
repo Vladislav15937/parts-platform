@@ -171,21 +171,21 @@ class DromClientTextTest extends PostgresTestBase {
         Map<String, Element> offers = offers(price());
 
         Element shaft = offerOf(offers, "125696381");
-        assertThat(text(shaft, "name")).isEqualTo(rows.get(0).get("Наименование"));
+        assertThat(text(shaft, "title")).isEqualTo(rows.get(0).get("Наименование"));
         assertThat(text(shaft, "description"))
                 .as("описание клиента дописано или потеряло перевод строки")
                 .isEqualTo(TWO_LINES);
 
         Element rack = offerOf(offers, "131811260");
-        assertThat(text(rack, "name"))
+        assertThat(text(rack, "title"))
                 .as("пробел после скобки в заголовке клиента потерян")
                 .isEqualTo(rows.get(1).get("Наименование"));
         assertThat(text(rack, "description"))
                 .as("у клиента описания нет, а прайс его собрал")
-                .isNull();
+                .isEmpty();
 
         Element engine = offerOf(offers, "107112187");
-        assertThat(text(engine, "name"))
+        assertThat(text(engine, "title"))
                 .as("из заголовка клиента вычищено «(б/у)» или сокращения")
                 .isEqualTo(rows.get(2).get("Наименование"));
         assertThat(text(engine, "description")).isEqualTo(LONG);
@@ -193,7 +193,7 @@ class DromClientTextTest extends PostgresTestBase {
         Element ours = offers.get(inTenant(() -> jdbc.queryForObject(
                 "SELECT public_code FROM part WHERE drom_ad_number IS NULL", String.class)));
         assertThat(ours).as("контрольной позиции нет в прайсе").isNotNull();
-        assertThat(text(ours, "name"))
+        assertThat(text(ours, "title"))
                 .as("позиция не с Дрома перестала чиститься")
                 .isEqualTo("Фара Toyota Camry");
         assertThat(text(ours, "description"))
@@ -257,15 +257,15 @@ class DromClientTextTest extends PostgresTestBase {
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
     }
 
-    /** Позиции прайса по {@code ordercode}. Разбор XML, как его прочтёт площадка. */
+    /** Позиции прайса по {@code id}. Разбор XML, как его прочтёт площадка. */
     private static Map<String, Element> offers(String xml) throws Exception {
         NodeList list = DocumentBuilderFactory.newInstance().newDocumentBuilder()
                 .parse(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)))
-                .getElementsByTagName("offer");
+                .getElementsByTagName("part");
         Map<String, Element> byCode = new HashMap<>();
         for (int i = 0; i < list.getLength(); i++) {
             Element offer = (Element) list.item(i);
-            byCode.put(text(offer, "ordercode"), offer);
+            byCode.put(text(offer, "id"), offer);
         }
         return byCode;
     }

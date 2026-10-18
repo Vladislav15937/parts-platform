@@ -179,11 +179,11 @@ class DonorPhotoFeedTest extends PostgresTestBase {
                 .as("свой снимок контрактной детали пропал")
                 .hasSize(1);
         // Пустой элемент хуже отсутствующего: площадка снимает объявление
-        // за мёртвую картинку, а «<photo></photo>» — ровно она.
+        // за мёртвую картинку, а «<photoUrl></photoUrl>» — ровно она.
         assertThat(marked)
                 .as("в объявление уехала пустая ссылка на снимок")
-                .doesNotContain("<photo></photo>")
-                .doesNotContain("<photo/>");
+                .doesNotContain("<photoUrl></photoUrl>")
+                .doesNotContain("<photoUrl/>");
 
         // И то же объявление без настройки обязано быть ровно таким же:
         // появление настройки не меняет прайс тем, кто её не трогал.
@@ -200,7 +200,7 @@ class DonorPhotoFeedTest extends PostgresTestBase {
     /** Ссылки на снимки из объявления, у которых этот адрес. */
     private static List<String> linksTo(String offer, String base) {
         java.util.regex.Matcher found = java.util.regex.Pattern
-                .compile("<photo>(" + java.util.regex.Pattern.quote(base) + "[^<]*)</photo>")
+                .compile("<photoUrl>(" + java.util.regex.Pattern.quote(base) + "[^<]*)</photoUrl>")
                 .matcher(offer);
         List<String> links = new java.util.ArrayList<>();
         while (found.find()) {
@@ -250,7 +250,7 @@ class DonorPhotoFeedTest extends PostgresTestBase {
                 donorId, TENANT + "/donors/" + donorId + "/" + file, main, order));
     }
 
-    /** Один {@code <offer>} из прайса, собранного с этими настройками. */
+    /** Одна позиция {@code <part>} из прайса, собранного с этими настройками. */
     private String offerOf(String name, FeedSettings settings) {
         String xml = inTenant(() -> {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -259,9 +259,9 @@ class DonorPhotoFeedTest extends PostgresTestBase {
             return out.toString(StandardCharsets.UTF_8);
         });
 
-        int nameAt = xml.indexOf("<name>" + name + "</name>");
+        int nameAt = xml.indexOf("<title>" + name + "</title>");
         assertThat(nameAt).as("позиции «%s» нет в прайсе вовсе", name).isNotNegative();
-        return xml.substring(xml.lastIndexOf("<offer>", nameAt), xml.indexOf("</offer>", nameAt));
+        return xml.substring(xml.lastIndexOf("<part>", nameAt), xml.indexOf("</part>", nameAt));
     }
 
     private <T> T inTenant(Supplier<T> action) {

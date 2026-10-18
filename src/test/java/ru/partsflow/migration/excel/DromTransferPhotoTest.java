@@ -359,14 +359,14 @@ class DromTransferPhotoTest extends PostgresTestBase {
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         int at = price.indexOf(richest.name());
         assertThat(at).as("позиции нет в прайсе вовсе").isPositive();
-        String offer = price.substring(at, price.indexOf("</offer>", at));
+        String offer = price.substring(at, price.indexOf("</part>", at));
 
-        assertThat(offer.split("<photo>", -1).length - 1)
+        assertThat(offer.split("<photoUrl>", -1).length - 1)
                 .as("новая выгрузка урезала снимки переехавшей карточки")
                 .isEqualTo(MOST_PHOTOS);
-        assertThat(offer.substring(offer.indexOf("<photo>")))
+        assertThat(offer.substring(offer.indexOf("<photoUrl>")))
                 .as("первой ссылкой прайса ушёл не главный снимок — обложка на Дроме будет другой")
-                .startsWith("<photo>")
+                .startsWith("<photoUrl>")
                 .contains("/photo/%d.".formatted(shown.get(0)));
         assertThat(offer.indexOf("/photo/%d.".formatted(shown.get(0))))
                 .as("главный снимок не первый в прайсе")

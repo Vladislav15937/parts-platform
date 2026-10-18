@@ -58,11 +58,11 @@ class PublicationReachTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        // Ровно то, что показал прогон пустым: <offers></offers>.
+        // Ровно то, что показал прогон пустым: <offers></offers> (до 0333; теперь <parts></parts>).
         // Заголовок собран из эталона справочника, поэтому «Фара», а не «фара».
         assertThat(price)
                 .as("прайс снова пуст — деталь не доезжает до площадки")
-                .contains("<offer>")
+                .contains("<part>")
                 .containsIgnoringCase("фара");
     }
 

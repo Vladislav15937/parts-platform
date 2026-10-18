@@ -84,10 +84,10 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         intake(partId, warehouse, 1);
 
         assertThat(offerOf(name))
-                .contains("<name>" + name + "</name>")
-                // Цена — numeric(14,2), копейки сохраняются как есть.
-                .contains("<price>8500.00</price>")
-                .contains("<available>true</available>");
+                .contains("<title>" + name + "</title>")
+                // Цена целым, как у Bazon (задача 0333): numeric(14,2) без копеек.
+                .contains("<price>8500</price>")
+                .contains("<state>В наличии</state>");
     }
 
     @Test
@@ -98,7 +98,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         intake(partId, warehouse, 2);
         intake(partId, otherWarehouse, 3);
 
-        assertThat(offerOf(name)).contains("<available>true</available>");
+        assertThat(offerOf(name)).contains("<state>В наличии</state>");
     }
 
     @Test
@@ -114,7 +114,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
 
         assertThat(offerOf(name))
                 .as("зарезервированная деталь ушла в прайс как доступная")
-                .contains("<available>false</available>");
+                .contains("<state>Нет в наличии</state>");
     }
 
     @Test
@@ -127,7 +127,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
 
         // Убрать позицию из прайса нельзя: объявление у Дрома исчезнет
         // вместе с накопленными просмотрами.
-        assertThat(offerOf(name)).contains("<available>false</available>");
+        assertThat(offerOf(name)).contains("<state>Нет в наличии</state>");
     }
 
     @Test
@@ -147,7 +147,69 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         // доступным до следующего полного забора, то есть до суток.
         assertThat(delta(partId))
                 .contains(name)
-                .contains("<available>false</available>");
+                .contains("<state>Нет в наличии</state>");
+    }
+
+    /**
+     * Дельта и полный прайс пишут одну позицию одинаково (задача 0333, пункт 5).
+     *
+     * <p>Площадка разбирает дельту той же настройкой, что прайс, — под файл
+     * Bazon. Сверяется вся строка {@code <part>}, вместе со снимками: в формате
+     * Bazon пустой {@code <photoUrls>} значит «снимков нет», и дельта без
+     * ссылок, какой она была до задачи, сообщала бы площадке именно это.
+     */
+    @Test
+    @DisplayName("Дельта несёт позицию той же строкой, что полный прайс, со снимками")
+    void deltaWritesThePartExactlyAsTheFullPrice() {
+        String name = "Прайс: фара для сверки дельты";
+        Long partId = part(name, new BigDecimal("4999.50"), true);
+        intake(partId, warehouse, 1);
+        inTenant(() -> {
+            jdbc.update("""
+                    UPDATE part SET side_lr = 'RIGHT', side_fr = 'FRONT', manufacturer = 'Koito',
+                                    condition = 'CONTRACT'
+                     WHERE id = ?""", partId);
+            jdbc.update("INSERT INTO part_oem (part_id, raw_number, normalized, is_primary) "
+                    + "VALUES (?, '81110-33670', '8111033670', true)", partId);
+            for (int i = 1; i <= 2; i++) {
+                jdbc.update("""
+                        INSERT INTO part_photo (part_id, s3_key, is_main, sort_order, status)
+                        VALUES (?, ?, ?, ?, 'PROCESSED')""",
+                        partId, TENANT + "/parts/" + partId + "/" + i + ".jpg", i == 1, i);
+            }
+            return null;
+        });
+        String base = "https://parts.example.ru/feeds/drom/proba/tok/photo/";
+        String donorBase = "https://parts.example.ru/feeds/drom/proba/tok/donor-photo/";
+
+        String full = inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeTo(out, DromPriceGenerator.FeedFilter.everything(), base, donorBase,
+                    ru.partsflow.publishing.FeedSettings.none());
+            return out.toString(StandardCharsets.UTF_8);
+        });
+        String delta = inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeDelta(out, java.util.List.of(partId),
+                    DromPriceGenerator.FeedFilter.everything(),
+                    ru.partsflow.publishing.FeedSettings.none(), base, donorBase);
+            return out.toString(StandardCharsets.UTF_8);
+        });
+
+        String inFull = offerIn(full, name);
+        assertThat(inFull)
+                .as("контроль: позиция ушла со снимками и словами Bazon")
+                .contains("<photoUrl>" + base)
+                .contains("<price>5000</price>")
+                .contains("<condition>контрактный</condition>")
+                .contains("<leftRight>right</leftRight>");
+        assertThat(offerIn(delta, name))
+                .as("дельта пишет позицию не так, как полный прайс")
+                .isEqualTo(inFull);
+        assertThat(delta)
+                .as("дельта — тот же каркас файла, что полный прайс")
+                .startsWith("<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<parts>\n<part>\n")
+                .endsWith("</part>\n</parts>");
     }
 
     @Test
@@ -200,9 +262,9 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         });
 
         String offer = offerOf(name);
-        assertThat(offer).contains("<oem_number>334388</oem_number>");
-        assertThat(offer).containsPattern("<analog_numbers>[^<]*4853033281[^<]*</analog_numbers>");
-        assertThat(offer).containsPattern("<analog_numbers>[^<]*DS2130GS[^<]*</analog_numbers>");
+        assertThat(offer).contains("<manufactureNumber>334388</manufactureNumber>");
+        assertThat(offer).containsPattern("<analogsNumbers>[^<]*4853033281[^<]*</analogsNumbers>");
+        assertThat(offer).containsPattern("<analogsNumbers>[^<]*DS2130GS[^<]*</analogsNumbers>");
     }
 
     @Test
@@ -217,9 +279,12 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                  WHERE id = ?""", partId));
 
         assertThat(offerOf(name))
-                .contains("<lr>лево</lr>")
-                .contains("<fr>перед</fr>")
-                .contains("<ud>низ</ud>")
+                .contains("<leftRight>left</leftRight>")
+                .contains("<frontRear>front</frontRear>")
+                // Вертикальной оси у Bazon нет тегом — она остаётся
+                // словом в собранном описании.
+                .doesNotContain("<ud>")
+                .contains("Расположение: передняя, левая, нижняя.")
                 .contains("<manufacturer>KYB</manufacturer>");
     }
 
@@ -255,7 +320,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         long counted = inTenant(() -> accounts.countMatching(
                 null, null, null, null, null, false, null, false, "PART",
                 java.util.Map.of(), java.util.Map.of(), false));
-        long offers = price().split("<offer>", -1).length - 1;
+        long offers = price().split("<part>", -1).length - 1;
 
         assertThat(counted)
                 .as("счётчик обещает не то число, которое уедет площадке")
@@ -327,7 +392,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 java.util.Map.of(), java.util.Map.of(), false));
         assertThat(counted)
                 .as("счётчик считает марку не так, как генератор")
-                .isEqualTo(onlyToyota.split("<offer>", -1).length - 1);
+                .isEqualTo(onlyToyota.split("<part>", -1).length - 1);
     }
 
     /**
@@ -358,8 +423,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 java.util.List.of(), false, java.util.List.of(), false);
         assertThat(offerIn(priceWith(own), name))
                 .as("на своём складе деталь есть, а прайс объявил её недоступной")
-                .contains("<available>true</available>")
-                .contains("<quantity>1</quantity>");
+                .contains("<state>В наличии</state>");
 
         DromPriceGenerator.FeedFilter alien = new DromPriceGenerator.FeedFilter(
                 null, null, java.util.List.of(), java.util.List.of(warehouse),
@@ -367,170 +431,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         String other = offerIn(priceWith(alien), name);
         assertThat(other)
                 .as("прайс филиала обещает деталь, которой в этом филиале нет")
-                .contains("<available>false</available>")
-                .contains("<quantity>0</quantity>");
-    }
-
-    /**
-     * Склад уходит в прайс и подчиняется тому же отбору, что и остаток.
-     *
-     * <p><b>Зачем.</b> Покупателю это ответ на «куда ехать»: у клиента филиалы
-     * на разных концах города, и без поля он узнаёт адрес только звонком.
-     *
-     * <p>А отбор здесь важнее самого поля. Прайс филиала обязан называть
-     * его склад, и назвать соседний — хуже, чем промолчать: покупатель
-     * приедет туда, где детали нет. Поэтому склад считается тем же
-     * подзапросом, что и остаток, и на чужом складе не остаётся ничего.
-     */
-    @Test
-    @DisplayName("Склад уходит в прайс и берётся из отбора выгрузки")
-    void warehouseTravelsToTheFeed() {
-        String name = "Прайс: склад в объявлении";
-        Long partId = part(name, new BigDecimal("7000"), true);
-        intake(partId, otherWarehouse, 1);
-
-        DromPriceGenerator.FeedFilter own = new DromPriceGenerator.FeedFilter(
-                null, null, java.util.List.of(), java.util.List.of(otherWarehouse),
-                java.util.List.of(), false, java.util.List.of(), false);
-        assertThat(offerIn(priceWith(own), name))
-                .as("прайс не назвал склад, на котором деталь лежит")
-                .contains("<sklad>54 YARD</sklad>");
-
-        DromPriceGenerator.FeedFilter alien = new DromPriceGenerator.FeedFilter(
-                null, null, java.util.List.of(), java.util.List.of(warehouse),
-                java.util.List.of(), false, java.util.List.of(), false);
-        assertThat(offerIn(priceWith(alien), name))
-                .as("прайс филиала назвал чужой склад — покупатель приедет не туда")
-                .doesNotContain("<sklad>");
-    }
-
-    /**
-     * Текст наличия склада уезжает в объявление (задача 0008, пункт 2).
-     *
-     * <p><b>Зачем.</b> В прайс уходило булево «есть», и покупатель, приехавший
-     * за деталью сегодня, узнавал про дорогу на дальний склад по телефону.
-     */
-    @Test
-    @DisplayName("Товар уезжает с текстом наличия своего склада")
-    void availabilityNoteOfTheWarehouseTravels() {
-        availability(warehouse, "в наличии", 0, null);
-        String name = "Прайс: наличие ближнего склада";
-        Long partId = part(name, new BigDecimal("7000"), true);
-        intake(partId, warehouse, 1);
-
-        assertThat(offerOf(name))
-                .as("прайс не назвал наличие склада, на котором деталь лежит")
-                .contains("<nalichie>в наличии</nalichie>")
-                // Ноль дней и незаданная вилка для покупателя одно: ждать
-                // не надо, — и «0 дн.» в объявлении было бы шумом.
-                .doesNotContain("<srok_zakaza_ot>")
-                .doesNotContain("<srok_zakaza_do>");
-    }
-
-    /**
-     * У дальнего склада свой текст и своя вилка (задача 0008, пункт 3).
-     */
-    @Test
-    @DisplayName("Товар с дальнего склада уезжает со своим текстом и вилкой дней")
-    void remoteWarehouseSendsItsOwnTerm() {
-        availability(otherWarehouse, "под заказ", 2, 4);
-        String name = "Прайс: наличие дальнего склада";
-        Long partId = part(name, new BigDecimal("7000"), true);
-        intake(partId, otherWarehouse, 1);
-
-        assertThat(offerOf(name))
-                .contains("<nalichie>под заказ</nalichie>")
-                .contains("<srok_zakaza_ot>2</srok_zakaza_ot>")
-                .contains("<srok_zakaza_do>4</srok_zakaza_do>");
-    }
-
-    /**
-     * Лежит на обоих — уезжает по ближнему (задача 0008, пункт 4).
-     *
-     * <p><b>Почему именно по лучшему сроку.</b> Покупатель поедет туда, где
-     * быстрее: назвав ему дальний склад, объявление обещает ждать то, что
-     * можно забрать сегодня.
-     *
-     * <p>И это же единственная проверка, которая ловит расхождение трёх
-     * выражений прайса между собой: текст наличия с ближнего склада рядом
-     * с вилкой дальнего — ложь о товаре при полностью исправном складе.
-     * Поэтому у складов здесь <b>и</b> разные тексты, <b>и</b> разные вилки.
-     */
-    @Test
-    @DisplayName("Лежит на обоих складах — уезжает по ближнему, а не по любому")
-    void nearestWarehouseWins() {
-        availability(warehouse, "в наличии", 0, null);
-        availability(otherWarehouse, "под заказ", 2, 4);
-        String name = "Прайс: наличие по ближнему складу";
-        Long partId = part(name, new BigDecimal("7000"), true);
-        intake(partId, warehouse, 1);
-        intake(partId, otherWarehouse, 1);
-
-        String offer = offerOf(name);
-        assertThat(offer)
-                .as("покупателю обещан худший срок из двух")
-                .contains("<nalichie>в наличии</nalichie>")
-                .doesNotContain("под заказ")
-                // Вилка обязана приехать от того же склада, что и текст.
-                .doesNotContain("<srok_zakaza_ot>")
-                .doesNotContain("<srok_zakaza_do>");
-        // Склад при этом назван целиком: раскладка ведётся по складам,
-        // и покупателю говорят, где деталь есть, а не только где быстрее.
-        assertThat(offer).contains("<sklad>54 YARD, Ткацкая</sklad>");
-    }
-
-    /**
-     * Склад без заданного текста ведёт себя как раньше (задача 0008, пункт 5).
-     *
-     * <p>Молча ничего не выдумываем: подставленное нами «в наличии» уехало бы
-     * покупателю от имени разборки, которая этого не обещала. И пустой
-     * элемент тут не годится — площадка читает его как заполненный пустым.
-     */
-    @Test
-    @DisplayName("Склад без заданного текста не добавляет в объявление ничего")
-    void warehouseWithoutNoteAddsNothing() {
-        String name = "Прайс: наличие не задано";
-        Long partId = part(name, new BigDecimal("7000"), true);
-        intake(partId, warehouse, 1);
-
-        assertThat(offerOf(name))
-                .as("прайс выдумал наличие складу, которому его не задавали")
-                .doesNotContain("<nalichie>")
-                .doesNotContain("<srok_zakaza_ot>")
-                .doesNotContain("<srok_zakaza_do>")
-                // Всё остальное — ровно как до задачи.
-                .contains("<sklad>Ткацкая</sklad>")
-                .contains("<available>true</available>");
-    }
-
-    /**
-     * Дельта несёт то же, что прайс.
-     *
-     * <p>Настройка, доехавшая до прайса и не доехавшая до дельты, даёт два
-     * файла с разными обещаниями об одном товаре: полный забор поставит
-     * на площадке срок, а первая же дельта его снимет — и увидеть это можно
-     * будет только на чужом сайте.
-     */
-    @Test
-    @DisplayName("Дельта несёт наличие и срок так же, как полный прайс")
-    void deltaCarriesAvailabilityToo() {
-        availability(otherWarehouse, "под заказ", 2, 4);
-        String name = "Прайс: наличие в дельте";
-        Long partId = part(name, new BigDecimal("7000"), true);
-        intake(partId, otherWarehouse, 1);
-
-        assertThat(offerIn(delta(partId), name))
-                .contains("<nalichie>под заказ</nalichie>")
-                .contains("<srok_zakaza_ot>2</srok_zakaza_ot>")
-                .contains("<srok_zakaza_do>4</srok_zakaza_do>");
-    }
-
-    /** Текст наличия и вилка дней заказа у склада. */
-    private void availability(Long warehouseId, String note, Integer from, Integer to) {
-        inTenant(() -> jdbc.update("""
-                UPDATE warehouse
-                   SET availability_note = ?, order_days_from = ?, order_days_to = ?
-                 WHERE id = ?""", note, from, to, warehouseId));
+                .contains("<state>Нет в наличии</state>");
     }
 
     /**
@@ -590,7 +491,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 java.util.Map.of("section", "A-01"), java.util.Map.of(), false));
         assertThat(counted)
                 .as("счётчик считает не тем условием, каким собирается прайс")
-                .isEqualTo(xml.split("<offer>", -1).length - 1);
+                .isEqualTo(xml.split("<part>", -1).length - 1);
     }
 
     /**
@@ -629,12 +530,12 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 .doesNotContain(alien);
     }
 
-    /** Вырезает {@code <offer>} по названию из готового прайса. */
+    /** Вырезает {@code <part>} по названию из готового прайса. */
     private String offerIn(String xml, String name) {
-        int nameAt = xml.indexOf("<name>" + name + "</name>");
+        int nameAt = xml.indexOf("<title>" + name + "</title>");
         assertThat(nameAt).as("позиции «%s» нет в прайсе вовсе — объявление исчезло", name)
                 .isNotNegative();
-        return xml.substring(xml.lastIndexOf("<offer>", nameAt), xml.indexOf("</offer>", nameAt));
+        return xml.substring(xml.lastIndexOf("<part>", nameAt), xml.indexOf("</part>", nameAt));
     }
 
     private String priceWith(DromPriceGenerator.FeedFilter filter) {
@@ -808,7 +709,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 "UPDATE part SET description = 'Только описание.' WHERE id = ?", partId));
 
         assertThat(offerOf(name))
-                .contains("<description>Только описание.</description>")
+                .contains("<description><![CDATA[Только описание.]]></description>")
                 .doesNotContain("Видео:");
     }
 
@@ -847,15 +748,14 @@ class DromPriceGeneratorTest extends PostgresTestBase {
 
         assertThat(xml)
                 .as("товар по ожидаемой поставке в прайс так и не попал")
-                .contains("<name>" + awaited + "</name>")
+                .contains("<title>" + awaited + "</title>")
                 .as("вместе с ним уехал черновик, поставки в пути не имеющий")
                 .doesNotContain(abandoned);
 
         String offer = offerIn(xml, awaited);
         assertThat(offer)
-                .as("товар в пути уехал нулём — Дром читает это как «снять объявление»")
-                .contains("<quantity>1</quantity>")
-                .contains("<available>true</available>");
+                .as("товар в пути уехал недоступным — объявление, ради которого всё затевалось, не появится")
+                .contains("<state>В наличии</state>");
         assertThat(descriptionIn(offer))
                 .as("приписка обязана стоять в начале описания, а не после него")
                 .startsWith("Ожидается поступление, срок — три недели");
@@ -865,7 +765,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 java.util.Map.of(), java.util.Map.of(), true));
         assertThat(counted)
                 .as("счётчик обещает не то число, которое уедет площадке")
-                .isEqualTo(xml.split("<offer>", -1).length - 1);
+                .isEqualTo(xml.split("<part>", -1).length - 1);
 
         // Дельта собирается теми же настройками: уйдя без них, она завела бы
         // в прайс-листе объявление, которого владелец не заводил.
@@ -898,7 +798,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         assertThat(descriptionIn(offer))
                 .as("приписка осталась на товаре, который уже лежит на складе")
                 .doesNotContain("Ожидается поступление");
-        assertThat(offer).contains("<available>true</available>");
+        assertThat(offer).contains("<state>В наличии</state>");
     }
 
     /**
@@ -948,8 +848,8 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 .as("деталь лежит на полке, а объявление обещает её ждать")
                 .doesNotContain("Ожидается поступление");
         assertThat(offer)
-                .as("уехало количество из карточки вместо настоящего остатка")
-                .contains("<quantity>2</quantity>");
+                .as("принятая деталь уехала не доступной")
+                .contains("<state>В наличии</state>");
     }
 
     /**
@@ -961,7 +861,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
      * не пишется (ноль Дром читает как «удалить»). Контроль в том же прайсе:
      * ожидаемая позиция без предзаказа по-прежнему уезжает, иначе тест
      * прошёл бы и там, где ожидаемое не выгружается вообще. Счётчик выгрузки
-     * сверяется с числом {@code <offer>}, и дельта тем же запросом.
+     * сверяется с числом {@code <part>}, и дельта тем же запросом.
      */
     @Test
     @DisplayName("Позиция под предзаказом в прайс не идёт, без предзаказа — уезжает; после прихода возвращается")
@@ -985,14 +885,14 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 .as("позиция, обещанная клиенту предзаказом, уехала на площадку")
                 .doesNotContain(promised)
                 .as("контроль: ожидаемая позиция без предзаказа должна уезжать")
-                .contains("<name>" + open + "</name>");
+                .contains("<title>" + open + "</title>");
 
         long counted = inTenant(() -> accounts.countMatching(
                 null, null, null, null, null, false, null, false, "PART",
                 java.util.Map.of(), java.util.Map.of(), true));
         assertThat(counted)
                 .as("счётчик выгрузки обещает не то, что уедет площадке")
-                .isEqualTo(xml.split("<offer>", -1).length - 1);
+                .isEqualTo(xml.split("<part>", -1).length - 1);
 
         String delta = inTenant(() -> {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -1006,8 +906,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         // сняться сразу, а не через полный забор (задача 0259).
         assertThat(delta)
                 .as("дельта молчит про позицию под предзаказом: объявление осталось доступным")
-                .contains("<available>false</available>")
-                .contains("<quantity>0</quantity>");
+                .contains("<state>Нет в наличии</state>");
 
         // Деталь пришла, предзаказ стал обычным резервом: строка возвращается
         // и вычитается из остатка, как любой резерв (недоступна, но объявление живо).
@@ -1024,7 +923,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         });
         assertThat(offerIn(priceWith(expects("Ожидается поступление")), promised))
                 .as("после прихода позиция обязана вернуться в прайс")
-                .contains("<available>false</available>");
+                .contains("<state>Нет в наличии</state>");
     }
 
     /**
@@ -1034,7 +933,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
      * <p>Партия 3: предзаказ на 1 — Дром видит 2 и доступное; ещё на 2 (двумя
      * строками 1+2 — считается сумма количеств, не число строк) — строки в
      * прайсе нет, а дельта несёт недоступной с нулём. Счётчик сверяется с
-     * числом {@code <offer>} на каждом шаге.
+     * числом {@code <part>} на каждом шаге.
      */
     @Test
     @DisplayName("Частичный предзаказ уменьшает количество на Дроме; полный снимает; счётчик сверен")
@@ -1046,25 +945,23 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 INSERT INTO deal (status, total_amount) VALUES ('RESERVED', 9000)
                 RETURNING id""", Long.class));
 
-        // Без предзаказа: 3 (контроль, что партия вообще в файле).
+        // Без предзаказа: в файле (контроль, что партия вообще в файле).
         assertThat(offerIn(priceWith(expects("Ожидается поступление")), name))
-                .contains("<quantity>3</quantity>");
+                .contains("<state>В наличии</state>");
 
         inTenant(() -> jdbc.update("""
                 INSERT INTO deal_item (deal_id, part_id, quantity, price, warehouse_id, status)
                 VALUES (?, ?, 1, 9000, ?, 'PREORDER')""", dealId, partId, warehouse));
         String full = priceWith(expects("Ожидается поступление"));
         assertThat(offerIn(full, name))
-                .as("из трёх штук одна под предзаказом: Дром обязан видеть две")
-                .contains("<quantity>2</quantity>")
-                .contains("<available>true</available>");
+                .as("из трёх штук одна под предзаказом: остальные две обязаны остаться в продаже")
+                .contains("<state>В наличии</state>");
         assertThat(offerIn(delta(partId, expects("Ожидается поступление")), name))
-                .as("дельта несёт то же количество, что и полный прайс")
-                .contains("<quantity>2</quantity>")
-                .contains("<available>true</available>");
+                .as("дельта несёт то же наличие, что и полный прайс")
+                .contains("<state>В наличии</state>");
         assertThat(counted())
-                .as("счётчик расходится с числом <offer>: позиция с частичным предзаказом в файле")
-                .isEqualTo(full.split("<offer>", -1).length - 1);
+                .as("счётчик расходится с числом <part>: позиция с частичным предзаказом в файле")
+                .isEqualTo(full.split("<part>", -1).length - 1);
 
         // Ещё две штуки отдельной строкой: всего 1 + 2 = 3, под предзаказом всё.
         inTenant(() -> jdbc.update("""
@@ -1073,14 +970,13 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         String none = priceWith(expects("Ожидается поступление"));
         assertThat(none)
                 .as("все штуки под предзаказом, а строка в прайсе осталась")
-                .doesNotContain("<name>" + name + "</name>");
+                .doesNotContain("<title>" + name + "</title>");
         assertThat(counted())
                 .as("счётчик считает позицию, которой в файле нет")
-                .isEqualTo(none.split("<offer>", -1).length - 1);
+                .isEqualTo(none.split("<part>", -1).length - 1);
         assertThat(delta(partId, expects("Ожидается поступление")))
-                .as("дельта полностью предзаказанной позиции: недоступная с нулём")
-                .contains("<available>false</available>")
-                .contains("<quantity>0</quantity>");
+                .as("дельта полностью предзаказанной позиции: недоступная")
+                .contains("<state>Нет в наличии</state>");
     }
 
     /**
@@ -1102,9 +998,10 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                     VALUES (?, ?, 5, 9000, ?, 'PREORDER')""", deal, partId, warehouse);
             return null;
         });
+        // Количества в файле Bazon-вида нет (задача 0333): «не в минус» видно
+        // тем, что позиция уходит недоступной, а не доступной с отрицательным.
         assertThat(delta(partId, expects("Ожидается поступление")))
-                .doesNotContain("<quantity>-")
-                .contains("<quantity>0</quantity>");
+                .contains("<state>Нет в наличии</state>");
     }
 
     private long counted() {
@@ -1162,21 +1059,22 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         });
     }
 
-    /** Описание объявления как оно уедет площадке. */
+    /** Описание объявления как оно уедет площадке — без обёртки CDATA. */
     private static String descriptionIn(String offer) {
-        int at = offer.indexOf("<description>");
+        String open = "<description><![CDATA[";
+        int at = offer.indexOf(open);
         assertThat(at).as("описания в предложении нет вовсе").isNotNegative();
-        return offer.substring(at + "<description>".length(), offer.indexOf("</description>", at));
+        return offer.substring(at + open.length(), offer.indexOf("]]></description>", at));
     }
 
     /** {@code null}, если позиции в прайсе нет вовсе: снятая с публикации исчезает. */
     private String offerOfOrNull(String name) {
         String xml = price();
-        int nameAt = xml.indexOf("<name>" + name + "</name>");
+        int nameAt = xml.indexOf("<title>" + name + "</title>");
         if (nameAt < 0) {
             return null;
         }
-        return xml.substring(xml.lastIndexOf("<offer>", nameAt), xml.indexOf("</offer>", nameAt));
+        return xml.substring(xml.lastIndexOf("<part>", nameAt), xml.indexOf("</part>", nameAt));
     }
 
     private String delta(Long... partIds) {
@@ -1187,14 +1085,14 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         });
     }
 
-    /** Вырезает из прайса один {@code <offer>} по названию позиции. */
+    /** Вырезает из прайса один {@code <part>} по названию позиции. */
     private String offerOf(String name) {
         String xml = price();
-        int nameAt = xml.indexOf("<name>" + name + "</name>");
+        int nameAt = xml.indexOf("<title>" + name + "</title>");
         assertThat(nameAt).as("позиции «%s» нет в прайсе", name).isNotNegative();
 
-        int start = xml.lastIndexOf("<offer>", nameAt);
-        int end = xml.indexOf("</offer>", nameAt);
+        int start = xml.lastIndexOf("<part>", nameAt);
+        int end = xml.indexOf("</part>", nameAt);
         return xml.substring(start, end);
     }
 

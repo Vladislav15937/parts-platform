@@ -270,7 +270,7 @@ class ExpectedArrivalConditionTest extends PostgresTestBase {
         String body = feed.getBody();
         assertThat(body).as("принятая с состоянием не ушла на Дром")
                 .isNotNull().contains("Капот выбран на приёмке").doesNotContain("оставлен пустым");
-        int offers = body.split("<offer>", -1).length - 1;
+        int offers = body.split("<part>", -1).length - 1;
         assertThat(offers).isEqualTo(1);
         ResponseEntity<String> count = exchange(session, HttpMethod.POST,
                 "/api/marketplace-accounts/filter/count", "{}");

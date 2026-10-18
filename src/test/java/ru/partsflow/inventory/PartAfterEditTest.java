@@ -246,18 +246,19 @@ class PartAfterEditTest extends PostgresTestBase {
     // ---------------------------------------------------------- пункт 2: машина
 
     @Test
-    @DisplayName("Исправленная в карточке марка уходит в теги прайса Дрома, соседняя деталь — нет")
+    @DisplayName("Исправленная в карточке марка уходит в прайс Дрома, соседняя деталь — нет")
     void manualVehicleGoesToTheDromPrice() throws Exception {
         save(login(), "\"brand\":\"Lexus\",\"model\":\"ES250\",\"body\":\"GSV40\",\"year\":\"2008\"");
 
         String xml = price(DromPriceGenerator.FeedFilter.everything());
         String own = offer(xml, "Фара левая");
-        assertThat(own).contains("<brandcars>Lexus</brandcars>", "<modelcars>ES250</modelcars>",
-                "GSV40", "2008");
+        // Отдельных тегов машины в формате Bazon нет (задача 0333): машина
+        // уезжает в собранном описании («Снято с: …»), формула названия — 0335.
+        assertThat(own).contains("Lexus ES250", "GSV40", "2008");
         assertThat(own).doesNotContain("Toyota", "Camry");
         String other = offer(xml, "Фара правая");
         assertThat(other).as("соседняя деталь того же донора")
-                .contains("<brandcars>Toyota</brandcars>", "<modelcars>Camry</modelcars>");
+                .contains("Toyota Camry");
     }
 
     @Test
@@ -277,7 +278,7 @@ class PartAfterEditTest extends PostgresTestBase {
             long counted = inTenant(() -> accounts.countMatching(null, null, null, null, null,
                     false, List.of(c.getKey()), false, "PART", Map.of(), Map.of(), false));
             assertThat(counted).as("счётчик выгрузки разошёлся с прайсом")
-                    .isEqualTo(c.getValue().split("<offer>", -1).length - 1);
+                    .isEqualTo(c.getValue().split("<part>", -1).length - 1);
         }
     }
 
@@ -354,14 +355,14 @@ class PartAfterEditTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Прямая правка «Наименования» работает: в карточке, в истории и в <name> прайса")
+    @DisplayName("Прямая правка «Наименования» работает: в карточке, в истории и в <title> прайса")
     void humanTitleEditStillWorks() throws Exception {
         MockHttpSession owner = login();
         save(owner, "\"title\":\"Моя фара\",\"oem\":\"81170-33671\"");
 
         assertThat(titleOf(partId)).isEqualTo("Моя фара");
         assertThat(offer(price(DromPriceGenerator.FeedFilter.everything()), "Моя фара"))
-                .contains("<name>Моя фара</name>");
+                .contains("<title>Моя фара</title>");
         assertThat(historyOf(owner)).contains("Наименование", "Моя фара");
 
         save(owner, "\"title\":\"Другая фара\"");
@@ -406,7 +407,7 @@ class PartAfterEditTest extends PostgresTestBase {
     private static String offer(String xml, String title) {
         int at = xml.indexOf(title);
         assertThat(at).as("в прайсе нет «%s»", title).isNotNegative();
-        return xml.substring(xml.lastIndexOf("<offer>", at), xml.indexOf("</offer>", at));
+        return xml.substring(xml.lastIndexOf("<part>", at), xml.indexOf("</part>", at));
     }
 
     private JsonNode stock(MockHttpSession session, String param, String value) throws Exception {

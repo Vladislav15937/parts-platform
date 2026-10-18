@@ -638,7 +638,7 @@ class PreorderTest extends PostgresTestBase {
 
         // До предзаказа ожидаемая позиция в дельте доступна: именно такое
         // объявление площадка и держит.
-        assertThat(deltaOffer(part)).contains("<available>true</available>");
+        assertThat(deltaOffer(part)).contains("<state>В наличии</state>");
 
         inTenant(() -> jdbc.update("DELETE FROM part_change"));
         long deal = createDeal(part, 2, near, daysAhead(30)).andReturn().path("id").asLong();
@@ -651,13 +651,12 @@ class PreorderTest extends PostgresTestBase {
         String listed = deltaOffer(part);
         assertThat(listed)
                 .as("дельта молчит о позиции под предзаказом: объявление осталось доступным")
-                .contains("<available>false</available>")
-                .contains("<quantity>0</quantity>");
-        assertThat(deltaOffer(control)).contains("<available>true</available>");
+                .contains("<state>Нет в наличии</state>");
+        assertThat(deltaOffer(control)).contains("<state>В наличии</state>");
         assertThat(fullPrice())
                 .as("полный прайс по-прежнему не содержит позицию под предзаказом")
-                .doesNotContain("<ordercode>" + codeOf(part) + "</ordercode>")
-                .contains("<ordercode>" + codeOf(control) + "</ordercode>");
+                .doesNotContain("<id>" + codeOf(part) + "</id>")
+                .contains("<id>" + codeOf(control) + "</id>");
 
         // Отмена: место освободилось, позиция возвращается доступной.
         inTenant(() -> jdbc.update("DELETE FROM part_change"));
@@ -670,8 +669,7 @@ class PreorderTest extends PostgresTestBase {
                 .as("отмена предзаказа не отметила позицию: объявление так и осталось снятым")
                 .isTrue();
         assertThat(deltaOffer(part))
-                .contains("<available>true</available>")
-                .contains("<quantity>2</quantity>");
+                .contains("<state>В наличии</state>");
 
         // Приход под полный предзаказ: обычный резерв, недоступна, без возврата
         // «доступной» между шагами.
@@ -681,14 +679,17 @@ class PreorderTest extends PostgresTestBase {
                 .getResponse().getStatus()).isEqualTo(201);
         assertThat(stock("qty_reserved", part, near)).isEqualByComparingTo("2");
         assertThat(deltaOffer(part))
-                .contains("<available>false</available>")
-                .contains("<quantity>0</quantity>");
+                .contains("<state>Нет в наличии</state>");
     }
 
     /**
      * Задача 0262: предзаказ на часть партии уменьшает количество на Дроме, отмена
      * возвращает его дельтой, а после прихода предзаказанная штука не вычитается
      * второй раз (она уже обычный резерв).
+     *
+     * <p>С задачи 0333 количества в файле нет (формат Bazon): площадке видно
+     * только «В наличии» или «Нет в наличии», и сверяется теперь оно. Число
+     * штук по-прежнему считает прайс — от него зависит, в наличии ли позиция.
      */
     @Test
     @DisplayName("Частичный предзаказ: Дром видит остаток; отмена возвращает; приход не вычитает второй раз")
@@ -704,12 +705,11 @@ class PreorderTest extends PostgresTestBase {
         long deal = createDeal(part, 1, near, daysAhead(30)).andReturn().path("id").asLong();
         assertThat(marked(part)).as("предзаказ не отметил позицию: дельты не будет").isTrue();
         assertThat(deltaOffer(part))
-                .as("из трёх одна под предзаказом, а Дром видит не две")
-                .contains("<quantity>2</quantity>")
-                .contains("<available>true</available>");
+                .as("из трёх одна под предзаказом, а остальные две сняты с продажи")
+                .contains("<state>В наличии</state>");
         assertThat(fullPrice())
                 .as("позиция с частичным предзаказом обязана остаться в полном прайсе")
-                .contains("<ordercode>" + codeOf(part) + "</ordercode>");
+                .contains("<id>" + codeOf(part) + "</id>");
 
         // Отмена: количество возвращается дельтой.
         inTenant(() -> jdbc.update("DELETE FROM part_change"));
@@ -721,7 +721,7 @@ class PreorderTest extends PostgresTestBase {
         assertThat(marked(part))
                 .as("отмена не отметила позицию: количество не вернётся до полного забора")
                 .isTrue();
-        assertThat(deltaOffer(part)).contains("<quantity>3</quantity>");
+        assertThat(deltaOffer(part)).contains("<state>В наличии</state>");
 
         // Приход при предзаказе на одну: резерв 1, свободно 2, и Дром видит 2, а не 1.
         createDeal(part, 1, near, daysAhead(30));
@@ -731,7 +731,7 @@ class PreorderTest extends PostgresTestBase {
         assertThat(stock("qty_reserved", part, near)).isEqualByComparingTo("1");
         assertThat(deltaOffer(part))
                 .as("предзаказ вычтен второй раз: он уже обычный резерв")
-                .contains("<quantity>2</quantity>");
+                .contains("<state>В наличии</state>");
     }
 
     /**
@@ -750,7 +750,7 @@ class PreorderTest extends PostgresTestBase {
             return null;
         });
         createDeal(part, 2, near, daysAhead(30));
-        assertThat(deltaOffer(part)).contains("<quantity>1</quantity>");
+        assertThat(deltaOffer(part)).contains("<state>В наличии</state>");
 
         assertThat(receipt(near, supply, part, 1, UUID.randomUUID().toString())
                 .getResponse().getStatus()).isEqualTo(201);
@@ -760,8 +760,7 @@ class PreorderTest extends PostgresTestBase {
                 .isEqualTo(1);
         assertThat(deltaOffer(part))
                 .as("после прихода вычитание из карточки не действует")
-                .contains("<quantity>1</quantity>")
-                .contains("<available>true</available>");
+                .contains("<state>В наличии</state>");
     }
 
     private static final ru.partsflow.publishing.FeedSettings EXPECTING =
@@ -795,9 +794,9 @@ class PreorderTest extends PostgresTestBase {
                     EXPECTING);
             return out.toString(java.nio.charset.StandardCharsets.UTF_8);
         });
-        int at = xml.indexOf("<ordercode>" + codeOf(partId) + "</ordercode>");
+        int at = xml.indexOf("<id>" + codeOf(partId) + "</id>");
         assertThat(at).as("позиции нет в дельте вовсе: %s", xml).isNotNegative();
-        return xml.substring(at, xml.indexOf("</offer>", at));
+        return xml.substring(at, xml.indexOf("</part>", at));
     }
 
     // ---------- что видит продавец ----------
@@ -1011,7 +1010,7 @@ class PreorderTest extends PostgresTestBase {
         assertThat(marked(part))
                 .as("снятие не отметило позицию: количество не вернётся на Дром дельтой")
                 .isTrue();
-        assertThat(deltaOffer(part)).contains("<quantity>2</quantity>");
+        assertThat(deltaOffer(part)).contains("<state>В наличии</state>");
 
         // Контроль: не просроченный предзаказ на месте, а обычный просроченный
         // резерв никто не снял — он по-прежнему в «Истек срок».

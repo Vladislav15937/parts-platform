@@ -227,7 +227,7 @@ class ExpectedPartConditionTest extends PostgresTestBase {
                 .isNotNull().contains("Фара на складе новая").contains("Фара ожидаемая контрактная")
                 .endsWith(">").containsPattern("</[a-z_]+>\\s*$");
         assertThat(body).doesNotContain("неизвестная");
-        int offers = body.split("<offer>", -1).length - 1;
+        int offers = body.split("<part>", -1).length - 1;
         assertThat(offers).isEqualTo(2);
 
         ResponseEntity<String> count = exchange(session, HttpMethod.POST,
