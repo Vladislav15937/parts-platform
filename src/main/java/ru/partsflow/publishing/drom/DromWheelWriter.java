@@ -86,12 +86,16 @@ public class DromWheelWriter {
     static final String SEASON_SUMMER = "Летняя";
     static final String SEASON_WINTER = "Зимняя";
     static final String SEASON_FRICTION = "Зимняя (липучка)";
-    /** Слова для шипов у Bazon не видели (по заголовку колонки — «шипы»); до обхода так. */
-    static final String SEASON_STUDDED = "Шипы";
+    /** Подпись списка «Сезон» в форме шины Bazon (обход 19.10.2026): слово «шипы» есть только в заголовке колонки. */
+    static final String SEASON_STUDDED = "Зимняя с шипами";
     static final String SEASON_ALL = "Всесезонная";
 
-    /** Слова для нового у Bazon не видели (в образце одни «БУ» и «Контракт»); до обхода так. */
-    static final String CONDITION_NEW = "Новое";
+    /**
+     * Подпись списка «Состояние» Bazon дословно (обход 19.10.2026): «Новый»;
+     * «Новое» стоит только в заголовке колонки. Строки с новой шиной в файле
+     * не видели — слово выведено из списка.
+     */
+    static final String CONDITION_NEW = "Новый";
     static final String CONDITION_USED = "БУ";
     static final String CONDITION_CONTRACT = "Контракт";
 

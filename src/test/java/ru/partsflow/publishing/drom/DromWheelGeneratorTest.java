@@ -145,8 +145,8 @@ class DromWheelGeneratorTest extends PostgresTestBase {
         assertThat(seasonOf("SUMMER")).isEqualTo("Летняя");
         assertThat(seasonOf("WINTER")).isEqualTo("Зимняя");
         assertThat(seasonOf("WINTER_FRICTION")).isEqualTo("Зимняя (липучка)");
-        // Слова для шипов у Bazon не видели — «Шипы» до обхода (одно место: DromWheelWriter).
-        assertThat(seasonOf("WINTER_STUDDED")).isEqualTo(DromWheelWriter.SEASON_STUDDED);
+        // Подпись списка «Сезон» Bazon дословно (обход 19.10.2026).
+        assertThat(seasonOf("WINTER_STUDDED")).isEqualTo("Зимняя с шипами");
         assertThat(seasonOf("ALL_SEASON")).isEqualTo("Всесезонная");
     }
 
@@ -163,13 +163,13 @@ class DromWheelGeneratorTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("У новой шины износа нет вовсе, состояние — «Новое»")
+    @DisplayName("У новой шины износа нет вовсе, состояние — «Новый» (подпись списка Bazon)")
     void newTyreHasNoWear() {
         Long partId = tyre("Шина 185/65 R15 новая", "6000", "SUMMER", 185, 65, "15", 88, "H", 40);
         inTenant(() -> jdbc.update("UPDATE part SET condition = 'NEW' WHERE id = ?", partId));
 
         assertThat(rowOf(partId)).containsEntry("Износ шин", "")
-                .containsEntry("Новое/БУ", "Новое");
+                .containsEntry("Новое/БУ", "Новый");
     }
 
     @Test
@@ -211,12 +211,12 @@ class DromWheelGeneratorTest extends PostgresTestBase {
     @DisplayName("Комментарий — описание позиции как набрано: кавычки, «;» и одиночный LF сохраняются")
     void commentIsVerbatim() {
         Long partId = tyre("Шина 195/65 R15 с описанием", "4000", "SUMMER", 195, 65, "15", 91, "T", 10);
-        String comment = "Шина #1: \"Контракт\"; без пробега по РФ\nЦена за комплект";
+        String comment = "\"Контракт\"; без пробега по РФ\nЦена за комплект";
         inTenant(() -> jdbc.update("UPDATE part SET description = ? WHERE id = ?", comment, partId));
 
         byte[] bytes = priceBytes();
         assertThat(WheelCsv.parse(bytes).byArticle("К" + numberOf(partId)))
-                .containsEntry("Комментарий", comment);
+                .containsEntry("Комментарий", "Шина #1: " + comment);
         // В самом файле: кавычка удвоена, LF внутри — одиночный, не CRLF.
         assertThat(new String(bytes, WheelCsv.CHARSET))
                 .contains("\"Шина #1: \"\"Контракт\"\"; без пробега по РФ\nЦена за комплект\"");
@@ -229,7 +229,7 @@ class DromWheelGeneratorTest extends PostgresTestBase {
         inTenant(() -> jdbc.update("UPDATE part SET description = ? WHERE id = ?",
                 "Хорошая 😀 шина", partId));
 
-        assertThat(rowOf(partId).get("Комментарий")).startsWith("Хорошая ").endsWith(" шина")
+        assertThat(rowOf(partId).get("Комментарий")).startsWith("Шина #1: Хорошая ").endsWith(" шина")
                 .contains("?");
     }
 
@@ -465,6 +465,134 @@ class DromWheelGeneratorTest extends PostgresTestBase {
         assertThat(deltaCsv.rows()).hasSize(1);
         assertThat(deltaCsv.byArticle(article)).isEqualTo(WheelCsv.parse(full).byArticle(article));
         assertThat(deltaCsv.byArticle(article).get("Фото").split(", ")).hasSize(3);
+    }
+
+    /** Карточка комплекта: общий set_no, как у createSet. */
+    private Long setTyre(long setNo, String price, int width, int height, String season, String comment) {
+        Long id = tyre("Комплект " + setNo + " шина " + width + "/" + height, price, season,
+                width, height, "19", 100, "W", 20);
+        inTenant(() -> jdbc.update("UPDATE part_wheel SET set_no = ?, brand = 'Toyo', model = 'Proxes'"
+                + " WHERE part_id = ?", setNo, id));
+        inTenant(() -> jdbc.update("UPDATE part SET description = ? WHERE id = ?", comment, id));
+        return id;
+    }
+
+    private long newSetNo() {
+        return inTenant(() -> jdbc.queryForObject("SELECT nextval('wheel_set_no_seq')", Long.class));
+    }
+
+    @Test
+    @DisplayName("Комплект из четырёх карточек — одна строка: количество 4, цена — сумма штук, «Шина #1: » и слова клиента")
+    void setOfCardsIsOneRowWithSummedPrice() {
+        long setNo = newSetNo();
+        Long a = setTyre(setNo, "1000", 225, 40, "SUMMER", "Цена за комплект. Из Японии.");
+        setTyre(setNo, "1000", 225, 40, "SUMMER", null);
+        setTyre(setNo, "1000", 225, 40, "SUMMER", null);
+        setTyre(setNo, "1200", 225, 40, "SUMMER", null);
+
+        WheelCsv csv = WheelCsv.parse(priceBytes());
+        // Артикул — «К» и самый малый номер карточек комплекта; строка одна.
+        long first = numberOf(a);
+        Map<String, String> row = csv.byArticle("К" + first);
+        assertThat(row).as("комплект не собран в одну строку").isNotNull();
+        assertThat(row).containsEntry("Количество в комплекте", "4")
+                .containsEntry("Цена", "4200")
+                .containsEntry("Комментарий", "Шина #1: Цена за комплект. Из Японии.");
+        assertThat(csv.rows().stream().filter(r -> r.get("Артикул").startsWith("К"))
+                .filter(r -> r.get("Комментарий").contains("Из Японии"))).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("Разнородный комплект: блок «Продаётся комплект:» с числом, падежом и родом, затем «Шина #N: »")
+    void mixedSetGetsTheGeneratedBlock() {
+        long setNo = newSetNo();
+        Long a = setTyre(setNo, "1000", 225, 40, "SUMMER", "Первый комментарий");
+        setTyre(setNo, "1000", 245, 35, "SUMMER", null);
+        setTyre(setNo, "1000", 245, 35, "SUMMER", null);
+        setTyre(setNo, "1000", 245, 35, "SUMMER", null);
+
+        String comment = WheelCsv.parse(priceBytes()).byArticle("К" + numberOf(a)).get("Комментарий");
+
+        assertThat(comment).isEqualTo("Продаётся комплект:\n"
+                + "1 шина летняя 225/40R19 Toyo Proxes\n"
+                + "3 шины летние 245/35R19 Toyo Proxes\n\n"
+                + "Шина #1: Первый комментарий");
+    }
+
+    @Test
+    @DisplayName("Дельта одной карточки комплекта несёт весь комплект одной строкой")
+    void deltaOfOneCardCarriesTheWholeSet() {
+        long setNo = newSetNo();
+        Long a = setTyre(setNo, "500", 205, 55, "WINTER_STUDDED", null);
+        setTyre(setNo, "500", 205, 55, "WINTER_STUDDED", null);
+
+        byte[] delta = inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeDelta(out, List.of(a), DromPriceGenerator.FeedFilter.everything(),
+                    ru.partsflow.publishing.FeedSettings.none(), null);
+            return out.toByteArray();
+        });
+
+        WheelCsv csv = WheelCsv.parse(delta);
+        assertThat(csv.rows()).hasSize(1);
+        assertThat(csv.rows().get(0)).containsEntry("Количество в комплекте", "2")
+                .containsEntry("Цена", "1000")
+                .containsEntry("Сезон шины (лето, зима, шипы)", "Зимняя с шипами");
+    }
+
+    @Test
+    @DisplayName("Перенесённое колесо несёт прежний номер: «К30-1»…«К30-2» — артикул «К30», строка одна")
+    void migratedSetKeepsTheOldNumber() {
+        long setNo = newSetNo();
+        Long a = setTyre(setNo, "700", 195, 65, "SUMMER", null);
+        Long b = setTyre(setNo, "700", 195, 65, "SUMMER", null);
+        long legacy = 700_000 + setNo;
+        inTenant(() -> {
+            jdbc.update("UPDATE part SET legacy_code = ? WHERE id = ?", "К" + legacy + "-1", a);
+            jdbc.update("UPDATE part SET legacy_code = ? WHERE id = ?", "К" + legacy + "-2", b);
+            return null;
+        });
+
+        Map<String, String> row = WheelCsv.parse(priceBytes()).byArticle("К" + legacy);
+
+        assertThat(row).as("артикул перенесённого комплекта не прежний").isNotNull();
+        assertThat(row).containsEntry("Количество в комплекте", "2");
+        assertThat(WheelCsv.parse(priceBytes()).byArticle("К" + numberOf(a))).isNull();
+    }
+
+    @Test
+    @DisplayName("Номер новой позиции, занятый перенесённым артикулом, не даёт дубля артикулов")
+    void newPositionDoesNotCollideWithMigratedArticle() {
+        Long fresh = tyre("Столкновение: новая", "800", "SUMMER", 185, 60, "15", 88, "H", 20);
+        Long moved = tyre("Столкновение: перенесённая", "800", "SUMMER", 185, 60, "15", 88, "H", 20);
+        long number = numberOf(fresh);
+        inTenant(() -> jdbc.update("UPDATE part SET legacy_code = ? WHERE id = ?", "К" + number, moved));
+
+        WheelCsv csv = WheelCsv.parse(priceBytes());
+
+        assertThat(csv.byArticle("К" + number)).as("перенесённая потеряла свой артикул").isNotNull();
+        assertThat(csv.rows().stream().map(r -> r.get("Артикул")).filter(("К" + number)::equals).count())
+                .as("два колеса с одним артикулом — Дром склеит объявления").isEqualTo(1);
+        assertThat(csv.byArticle("К" + number + DromWheelGenerator.COLLISION_SUFFIX))
+                .as("новая позиция не получила своего артикула").isNotNull();
+    }
+
+    @Test
+    @DisplayName("Счётчик считает строки файла, а не карточки комплекта")
+    void counterCountsSetsAsOneRow() {
+        BigDecimal from = new BigDecimal("981000");
+        BigDecimal to = new BigDecimal("982000");
+        long setNo = newSetNo();
+        setTyre(setNo, "981100", 205, 55, "SUMMER", null);
+        setTyre(setNo, "981100", 205, 55, "SUMMER", null);
+        tyre("Счётчик комплекта: одиночная", "981200", "SUMMER", 215, 60, "17", 94, "H", 40);
+
+        long counted = inTenant(() -> accounts.countMatching(
+                from, to, null, null, null, false, null, false, "WHEEL",
+                Map.of(), Map.of(), false));
+
+        assertThat(WheelCsv.parse(priceWithin(from, to)).rows()).hasSize(2);
+        assertThat(counted).isEqualTo(2);
     }
 
     // ---------- фикстуры ----------
