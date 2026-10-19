@@ -88,7 +88,8 @@ public class AuditLogListener
         String was = event.getOldState() == null
                 ? null : snapshot(event.getPersister(), event.getOldState());
         write(event.getPersister(), event.getId(), "UPDATE",
-                was, snapshot(event.getPersister(), event.getState()), event);
+                was, snapshot(event.getPersister(), event.getState(), AuditBatch.current()),
+                event);
     }
 
     @Override
@@ -159,6 +160,17 @@ public class AuditLogListener
      * и без поля не увидит правку.
      */
     private String snapshot(EntityPersister persister, Object[] state) {
+        return snapshot(persister, state, null);
+    }
+
+    /**
+     * @param batch массовая правка, частью которой эта запись является
+     *              (задача 0373), либо {@code null}. Кладётся в «стало»
+     *              рядом с колонками: история позиции подписывает по нему
+     *              объём правки. Только у правки, а не у заведения
+     *              и удаления — их массовая правка не делает.
+     */
+    private String snapshot(EntityPersister persister, Object[] state, AuditBatch batch) {
         if (state == null) {
             return null;
         }
@@ -172,6 +184,10 @@ public class AuditLogListener
                 continue;
             }
             row.put(column, state[at]);
+        }
+        if (batch != null) {
+            row.put(AuditBatch.SIZE_KEY, batch.size());
+            row.put(AuditBatch.SCOPE_KEY, batch.scope());
         }
         return JsonRows.write(row);
     }

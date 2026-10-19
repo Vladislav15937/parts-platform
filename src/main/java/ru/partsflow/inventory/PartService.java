@@ -835,12 +835,22 @@ public class PartService {
      * увидел причину, а не «изменено 0». Так же поступает {@code moveBatch},
      * когда отложены все строки.
      *
+     * <p><b>История позиции называет такую правку массовой</b> (задача
+     * 0373): «всего были отредактированы 40 товаров по фильтру». Пометка
+     * ложится в журнал изменений при сбросе правок в базу, поэтому сброс
+     * здесь явный, под {@link ru.partsflow.platform.audit.AuditBatch}, —
+     * число изменённых известно только после прохода. Правка одной позиции
+     * (оценка состояния из карточки ходит сюда же) пометки не получает:
+     * для человека это правка карточки, а не массовая.
+     *
+     * @param scope чем выбраны позиции — отмеченные строки или отбор витрины
      * @return сколько карточек изменилось, у скольких арифметике не над чем
      *         было работать и какие не прошли вовсе
      */
     @Transactional
     public BulkOutcome updateAll(List<Long> partIds, Map<String, Object> changes,
-                                 Map<String, PriceOperation> operations, Long authorId) {
+                                 Map<String, PriceOperation> operations, Long authorId,
+                                 ru.partsflow.platform.audit.AuditBatch.Scope scope) {
         if (partIds == null || partIds.isEmpty()) {
             throw new IllegalArgumentException("Не выбрано ни одной позиции");
         }
@@ -920,6 +930,16 @@ public class PartService {
             throw new IllegalArgumentException(rejected == 1 ? rejectedReason
                     : "Ни одна из %d позиций не прошла операцию. Первая причина: %s"
                             .formatted(rejected, rejectedReason));
+        }
+
+        // Массовая — от двух позиций. Сброс здесь, а не при коммите: пометка
+        // живёт, пока открыта, а журнал пишется при сбросе. Ничто в проходе
+        // выше правки позиций в базу не сбрасывает (поиск по номеру, расчёт,
+        // запись события в outbox), и тест на сорок позиций это стережёт.
+        if (changed > 1) {
+            try (var batch = ru.partsflow.platform.audit.AuditBatch.open(changed, scope)) {
+                entityManager.flush();
+            }
         }
 
         // Одной отметкой на позицию, а не по полю: площадке нужно текущее

@@ -165,7 +165,8 @@ public class PartController {
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public BulkResult updateAll(@Valid @RequestBody BulkRequest request) {
         PartService.BulkOutcome outcome = partService.updateAll(request.partIds(),
-                request.changes(), request.operations(), CurrentUser.memberId());
+                request.changes(), request.operations(), CurrentUser.memberId(),
+                ru.partsflow.platform.audit.AuditBatch.Scope.SELECTED);
         return BulkResult.of(outcome);
     }
 

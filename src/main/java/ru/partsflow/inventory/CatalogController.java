@@ -287,7 +287,8 @@ public class CatalogController {
             throw new IllegalArgumentException("Отбор не нашёл ни одной позиции");
         }
         PartService.BulkOutcome outcome = parts.updateAll(ids, request.changes(),
-                request.operations(), CurrentUser.memberId());
+                request.operations(), CurrentUser.memberId(),
+                ru.partsflow.platform.audit.AuditBatch.Scope.FILTER);
         // Ответ тот же, что у правки отмеченного (POST /api/parts/bulk),
         // и запись одна на два пути: экран у них общий, а разойдясь, они дали
         // бы форму, которая после одного нажатия говорит о непрошедших,
