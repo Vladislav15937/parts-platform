@@ -1041,27 +1041,86 @@ public class CatalogService {
     public record Parsed(int parts, int added) {
     }
 
-    /** Добавляет применимость руками — из карточки. Отметка подтверждения стоит. */
+    /**
+     * Добавляет применимость руками — из карточки. Отметка подтверждения стоит.
+     *
+     * @param setBy кто добавил (сотрудник вошедшего запроса); пусто — неизвестно
+     */
     @Transactional
-    public boolean addApplicability(long partId, long brandId, Long modelId) {
+    public boolean addApplicability(long partId, long brandId, Long modelId, Long setBy) {
+        return insertApplicability(partId, brandId, modelId, null, null, null, true, setBy) != null;
+    }
+
+    /**
+     * Применимость позиции, заведённой из донора (задача 0363, «как у Bazon»): марка,
+     * модель и <b>поколение донора</b>, годы поколения. Звать из приёмки и заведения
+     * ожидаемого — одним путём с карточкой, второго пути записи применимости нет.
+     *
+     * <p>Поколения у донора нет — ничего не пишется и об этом говорится словами
+     * ({@link #applicabilityState}): выбирать поколение по марке и модели значило бы
+     * угадывать, а угаданное в «Поиске по применимости» читается как факт.
+     *
+     * <p>Строка разобранная, не подтверждённая человеком ({@code is_verified = false}):
+     * её поставила машина, и повторный разбор наименований или блока «Подходит»
+     * различает такие строки с подтверждёнными. Кузова поколения не пишутся: в нашем
+     * справочнике у поколения один код, а список кузовов — справочник Bazon (0343).
+     *
+     * @return {@code true} — строка заведена; {@code false} — у донора нет поколения
+     *         либо такая строка у позиции уже есть
+     */
+    @Transactional
+    public boolean applyFromDonor(long partId, long donorId, Long setBy) {
+        List<Map<String, Object>> donor = jdbc.queryForList("""
+                SELECT d.brand_id, d.model_id, d.generation_id, g.year_from, g.year_to
+                  FROM donor d
+                  LEFT JOIN catalog.generation g ON g.id = d.generation_id
+                 WHERE d.id = ?""", donorId);
+        if (donor.isEmpty() || donor.get(0).get("generation_id") == null) {
+            return false;
+        }
+        Map<String, Object> d = donor.get(0);
+        return insertApplicability(partId, ((Number) d.get("brand_id")).longValue(),
+                d.get("model_id") == null ? null : ((Number) d.get("model_id")).longValue(),
+                ((Number) d.get("generation_id")).longValue(),
+                (Number) d.get("year_from"), (Number) d.get("year_to"), false, setBy) != null;
+    }
+
+    /**
+     * Единственное место, где в {@code part_applicability} пишут из карточки и из приёмки.
+     * Без собственной аннотации намеренно: журнал требует транзакцию вызывающего.
+     *
+     * @return номер заведённой строки; {@code null} — строка уже была (подтверждённая
+     *         повторно, если {@code verified}) и новой не появилось
+     */
+    private Long insertApplicability(long partId, long brandId, Long modelId, Long generationId,
+                                     Number yearFrom, Number yearTo, boolean verified, Long setBy) {
         // xmax = 0 у вставленной строки и не 0 у обновлённой: подтверждение
         // уже заведённой машины — не заведение, и журнал его так не называет.
-        List<Map<String, Object>> rows = jdbc.queryForList("""
-                INSERT INTO part_applicability (part_id, brand_id, model_id, is_verified)
-                VALUES (?, ?, ?, true)
-                ON CONFLICT (part_id, brand_id, model_id, generation_id, modification_id)
-                DO UPDATE SET is_verified = true
-                RETURNING id, (xmax = 0) AS inserted""", partId, brandId, modelId);
-        boolean added = !rows.isEmpty();
-        if (added && Boolean.TRUE.equals(rows.get(0).get("inserted"))) {
-            long id = ((Number) rows.get(0).get("id")).longValue();
+        // Автор и момент пишутся только вставкой: подтверждая готовую строку,
+        // человек не становится тем, кто её «установил».
+        String conflict = verified
+                ? "ON CONFLICT (part_id, brand_id, model_id, generation_id, modification_id)"
+                  + " DO UPDATE SET is_verified = true"
+                : "ON CONFLICT DO NOTHING";
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id,"
+                        + " year_from, year_to, is_verified, set_by, set_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, now()) " + conflict
+                        + " RETURNING id, (xmax = 0) AS inserted",
+                partId, brandId, modelId, generationId, yearFrom, yearTo, verified, setBy);
+        boolean inserted = !rows.isEmpty() && Boolean.TRUE.equals(rows.get(0).get("inserted"));
+        Long id = rows.isEmpty() ? null : ((Number) rows.get(0).get("id")).longValue();
+        if (inserted) {
             journal.created("part_applicability", id, applicabilitySnapshot(id));
         }
         // Марка и модель уезжают в прайс отдельными тегами: у контрактной
         // детали они берутся именно отсюда. Прежний триггер этого не ловил
-        // вовсе — на part_applicability его не было.
-        partChanges.changed(partId);
-        return added;
+        // вовсе — на part_applicability его не было. Отметка нужна и когда строку
+        // только подтвердили; у новой позиции из приёмки она есть и без нас.
+        if (verified) {
+            partChanges.changed(partId);
+        }
+        return rows.isEmpty() ? null : id;
     }
 
     @Transactional
@@ -1107,8 +1166,10 @@ public class CatalogService {
     public List<Applicability> applicabilityOf(long partId) {
         return jdbc.query("""
                 SELECT a.id, a.is_verified, b.name AS brand, m.name AS model,
-                       g.name AS generation, a.year_from, a.year_to
+                       g.name AS generation, a.year_from, a.year_to,
+                       tm.display_name AS set_by, a.set_at
                   FROM part_applicability a
+                  LEFT JOIN tenant_member tm ON tm.id = a.set_by
                   JOIN catalog.brand b ON b.id = a.brand_id
                   LEFT JOIN catalog.model m ON m.id = a.model_id
                   LEFT JOIN catalog.generation g ON g.id = a.generation_id
@@ -1116,13 +1177,19 @@ public class CatalogService {
                  ORDER BY b.name, m.name""",
                 (rs, i) -> new Applicability(rs.getLong("id"), rs.getBoolean("is_verified"),
                         rs.getString("brand"), rs.getString("model"), rs.getString("generation"),
-                        (Integer) rs.getObject("year_from"), (Integer) rs.getObject("year_to")),
+                        (Integer) rs.getObject("year_from"), (Integer) rs.getObject("year_to"),
+                        rs.getString("set_by"),
+                        // Момент из timestamptz читается через getTimestamp (getObject
+                        // в Instant драйвер не умеет). NULL — установлена до задачи 0363.
+                        rs.getTimestamp("set_at") == null ? null
+                                : rs.getTimestamp("set_at").toInstant()),
                 partId);
     }
 
     /** Строка применимости: к какой машине заявлена деталь. */
     public record Applicability(long id, boolean verified, String brand, String model,
-                                String generation, Integer yearFrom, Integer yearTo) {
+                                String generation, Integer yearFrom, Integer yearTo,
+                                String setBy, Instant setAt) {
     }
 
     /** Машина, к которой подбирают деталь. Пустая марка — отбора нет. */

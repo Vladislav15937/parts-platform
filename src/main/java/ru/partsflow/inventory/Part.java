@@ -231,6 +231,15 @@ public class Part {
     @Column(name = "is_published", nullable = false)
     private boolean published = true;
 
+    /**
+     * «Двигатель важен» для применимости (задача 0363, как у Bazon). Умолчание
+     * «не важен», как у колонки: список видов деталей, где «важен» ставится сам,
+     * отдан обходу. Задан и здесь, а не только в схеме: Hibernate пишет колонку
+     * в каждом INSERT явно.
+     */
+    @Column(name = "engine_matters", nullable = false)
+    private boolean engineMatters = false;
+
     @Column(name = "created_by")
     private Long createdBy;
 
@@ -594,6 +603,14 @@ public class Part {
 
     public void setBarcode(String barcode) {
         this.barcode = barcode;
+    }
+
+    public boolean isEngineMatters() {
+        return engineMatters;
+    }
+
+    public void setEngineMatters(boolean engineMatters) {
+        this.engineMatters = engineMatters;
     }
 
     public boolean isPublished() {

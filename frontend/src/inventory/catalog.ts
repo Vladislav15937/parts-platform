@@ -248,6 +248,52 @@ export interface Applicability {
   generation: string | null;
   yearFrom: number | null;
   yearTo: number | null;
+  /** Кто установил; null — неизвестно (строка лежала до задачи 0363, перенос, разбор). */
+  setBy?: string | null;
+  /** Когда установлена (ISO); null — неизвестно. */
+  setAt?: string | null;
+}
+
+/** «Двигатель важен» позиции и пояснение, почему применимость не поставилась сама. */
+export interface FitState {
+  engineMatters: boolean;
+  note: string | null;
+}
+
+export function loadFitState(partId: number): Promise<FitState> {
+  return request<FitState>(`/api/parts/catalog/${partId}/applicability/state`);
+}
+
+export function setEngineMatters(partId: number, matters: boolean): Promise<FitState> {
+  return request<FitState>(`/api/parts/catalog/${partId}/engine-matters`, {
+    method: 'PUT',
+    body: { matters },
+  });
+}
+
+/** Строка списка «Применимость подробно»: машина применимости позиции либо пустая. */
+export interface FitListRow {
+  partId: number;
+  number: number;
+  title: string;
+  engineMatters: boolean;
+  brand: string | null;
+  model: string | null;
+  generation: string | null;
+  yearFrom: number | null;
+  yearTo: number | null;
+  setBy: string | null;
+  setAt: string | null;
+}
+
+export interface FitListPage {
+  rows: FitListRow[];
+  total: number;
+  size: number;
+}
+
+export function loadFitList(page: number): Promise<FitListPage> {
+  return request<FitListPage>(`/api/parts/catalog/applicability-list?page=${page}`);
 }
 
 /** Заявленная применимость позиции. Пустой список — «не задана». */

@@ -64,6 +64,7 @@ public final class AuditedColumns {
         PART.put("note", "Заметка");
         PART.put("section", "Секция");
         PART.put("is_published", "Выгружать");
+        PART.put("engine_matters", "Двигатель важен");
         PART.put("storage_cell_id", "Ячейка");
         PART.put("donor_id", "Донор");
         PART.put("part_kind_id", "Вид детали");
@@ -384,7 +385,7 @@ public final class AuditedColumns {
 
     /** Логические колонки журнала выгрузки: в снимке true/false, на экране да/нет. */
     private static final Set<String> FLAGS = Set.of(
-            "is_published", "installation_note", "expected_goods",
+            "is_published", "engine_matters", "installation_note", "expected_goods",
             "filter_kinds_excluded", "filter_brands_excluded",
             "is_main", "is_archived", "is_active",
             "print_client_signature", "print_issuer_signature");

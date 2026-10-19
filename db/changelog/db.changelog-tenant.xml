@@ -110,6 +110,7 @@
     <include file="tenant/091-part-condition-nullable.sql" relativeToChangelogFile="true"/>
     <include file="tenant/092-part-year-text.sql" relativeToChangelogFile="true"/>
     <include file="tenant/093-wheel-wear-percent.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/094-part-applicability-author-engine-matters.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

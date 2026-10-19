@@ -4,6 +4,8 @@ import { ApiError } from '../api/client';
 import {
   addApplicability,
   loadApplicability,
+  loadFitState,
+  setEngineMatters,
   loadDonor,
   loadHistory,
   loadPhotos,
@@ -12,6 +14,7 @@ import {
   writeOffPart,
   type Applicability,
   type CatalogRow,
+  type FitState,
   type PartDonor,
   type PartHistory,
   type PartPhoto,
@@ -130,6 +133,8 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
   /** Оценку трогали — витрину за карточкой надо перечитать при закрытии. */
   const [regraded, setRegraded] = useState(false);
   const [fits, setFits] = useState<Applicability[] | null>(null);
+  // «Двигатель важен» и пояснение, почему применимость не поставилась сама (0363).
+  const [fitState, setFitState] = useState<FitState | null>(null);
   // Справочник машин для добавления: он предзагружен и лежит в IndexedDB,
   // тянуть четыре с половиной тысячи моделей ради одной правки незачем.
   const [vehicles, setVehicles] = useState<VehicleCatalog | null>(null);
@@ -147,6 +152,9 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
     void loadApplicability(row.id)
       .then((found) => { if (mounted.current) setFits(found); })
       .catch(() => { if (mounted.current) setFits([]); });
+    void loadFitState(row.id)
+      .then((found) => { if (mounted.current) setFitState(found); })
+      .catch(() => { if (mounted.current) setFitState(null); });
     void loadCached()
       .then((found) => { if (mounted.current) setVehicles(found); })
       .catch(() => { if (mounted.current) setVehicles(null); });
@@ -336,6 +344,11 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
     setModelId(null);
   }
 
+  async function toggleEngine(matters: boolean): Promise<void> {
+    const state = await setEngineMatters(row.id, matters);
+    if (mounted.current) setFitState(state);
+  }
+
   async function drop(id: number): Promise<void> {
     const left = await removeApplicability(row.id, id);
     if (mounted.current) setFits(left);
@@ -394,6 +407,17 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
               <PartDonorView donor={donor} onParts={onDonorParts} />
             ) : tab === 'fits' ? (
               <div className="card-view__fits">
+                {fitState !== null && typeof fitState.engineMatters === 'boolean' && (
+                  <p>
+                    <strong>{fitState.engineMatters ? 'Двигатель важен' : 'Двигатель не важен'}</strong>
+                    {(role === 'OWNER' || role === 'MANAGER') && (
+                      <button type="button" className="mark__link"
+                              onClick={() => void toggleEngine(!fitState.engineMatters)}>
+                        {fitState.engineMatters ? 'сделать «не важен»' : 'сделать «важен»'}
+                      </button>
+                    )}
+                  </p>
+                )}
                 {fits === null ? (
                   <p className="muted">Загружаем…</p>
                 ) : fits.length > 0 ? (
@@ -405,6 +429,12 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
                             или блока «Подходит» с Дрома (0289), — и «из наименования»
                             про вторую было бы неправдой. */}
                         {!fit.verified && <span className="muted"> · разобрано автоматически</span>}
+                        {/* Кто и когда установил (0363); неизвестно — не показываем. */}
+                        {fit.setBy && fit.setAt && (
+                          <span className="muted">
+                            {' '}· {fit.setBy}, {new Date(fit.setAt).toLocaleString('ru-RU')}
+                          </span>
+                        )}
                         <button
                           type="button"
                           className="mark__link"
@@ -415,6 +445,8 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
                       </li>
                     ))}
                   </ul>
+                ) : fitState?.note ? (
+                  <p className="note">{fitState.note}</p>
                 ) : row.brand !== null ? (
                   <p className="note">
                     Применимость не задана. Деталь находится подбором по машине

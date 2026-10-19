@@ -57,6 +57,7 @@ public class IntakeService {
     private final PreorderService preorders;
     private final ru.partsflow.inventory.PartNaming partNaming;
     private final JdbcTemplate jdbc;
+    private final ru.partsflow.inventory.CatalogService catalog;
 
     public IntakeService(SupplyRepository supplies,
                          DonorRepository donors,
@@ -69,7 +70,9 @@ public class IntakeService {
                          DomainEventPublisher eventPublisher,
                          PreorderService preorders,
                          ru.partsflow.inventory.PartNaming partNaming,
-                         JdbcTemplate jdbc) {
+                         JdbcTemplate jdbc,
+                         ru.partsflow.inventory.CatalogService catalog) {
+        this.catalog = catalog;
         this.partNaming = partNaming;
         this.preorders = preorders;
         this.supplies = supplies;
@@ -225,6 +228,7 @@ public class IntakeService {
                     item.condition() == null ? PartCondition.USED : item.condition());
 
             Part savedPart = parts.saveAndFlush(part);
+            fitFromDonor(savedPart, donor, authorId);
             if (item.oemNumber() != null && !item.oemNumber().isBlank()) {
                 primaryOem(savedPart.getId(), item.oemNumber());
             }
@@ -408,6 +412,7 @@ public class IntakeService {
         part.setExpectedOrigin(true);
         part.setClientRequestId(key);
         Part saved = parts.saveAndFlush(part);
+        fitFromDonor(saved, donor, authorId);
         publishCreated(saved);
         return saved;
     }
@@ -605,6 +610,18 @@ public class IntakeService {
         insertOem(partId, numbers.primary(), true);
         for (String cross : numbers.crosses()) {
             insertOem(partId, cross, false);
+        }
+    }
+
+    /**
+     * Применимость заведённой позиции из её донора (задача 0363, как у Bazon: «Товар
+     * создан» и тут же «Применимость: → …» тем же временем и автором). Тем же сервисом,
+     * что ставит её из карточки, — второго пути записи нет. Донора нет или у него нет
+     * поколения — ничего не пишется; почему, карточка говорит словами.
+     */
+    private void fitFromDonor(Part part, Donor donor, Long authorId) {
+        if (donor != null) {
+            catalog.applyFromDonor(part.getId(), donor.getId(), authorId);
         }
     }
 

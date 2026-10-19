@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -37,11 +38,14 @@ public class CatalogController {
     private final PhotoStorage storage;
     private final PartService parts;
     private final DromApplicabilityService dromApplicability;
+    private final ApplicabilityDetails details;
 
     public CatalogController(CatalogService catalog,
                              PhotoStorage storage,
                              PartService parts,
-                             DromApplicabilityService dromApplicability) {
+                             DromApplicabilityService dromApplicability,
+                             ApplicabilityDetails details) {
+        this.details = details;
         this.catalog = catalog;
         this.storage = storage;
         this.parts = parts;
@@ -165,7 +169,7 @@ public class CatalogController {
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public List<CatalogService.Applicability> addApplicability(
             @PathVariable Long id, @RequestBody VehicleRequest request) {
-        catalog.addApplicability(id, request.brandId(), request.modelId());
+        catalog.addApplicability(id, request.brandId(), request.modelId(), CurrentUser.memberId());
         return catalog.applicabilityOf(id);
     }
 
@@ -179,6 +183,34 @@ public class CatalogController {
 
     /** @param modelId пусто — «любая модель этой марки» */
     public record VehicleRequest(Long brandId, Long modelId) {
+    }
+
+    /**
+     * «Двигатель важен» и пояснение, почему применимость не поставилась сама
+     * (задача 0363). Читают все вошедшие, как и саму применимость.
+     */
+    @GetMapping("/{id}/applicability/state")
+    public ApplicabilityDetails.State applicabilityState(@PathVariable Long id) {
+        return details.stateOf(id);
+    }
+
+    /** Ставит «Двигатель важен / не важен». Правит владелец и менеджер, как остальную применимость. */
+    @PutMapping("/{id}/engine-matters")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ApplicabilityDetails.State setEngineMatters(
+            @PathVariable Long id, @RequestBody EngineMattersRequest request) {
+        return details.setEngineMatters(id, request.matters());
+    }
+
+    /** @param matters {@code true} — «Двигатель важен», {@code false} — «не важен» */
+    public record EngineMattersRequest(boolean matters) {
+    }
+
+    /** «Применимость подробно»: позиции склада с автором и временем установки. */
+    @GetMapping("/applicability-list")
+    public ApplicabilityDetails.Page applicabilityList(
+            @RequestParam(defaultValue = "0") int page) {
+        return details.list(page);
     }
 
     /** Заявленная применимость позиции — для карточки. */
