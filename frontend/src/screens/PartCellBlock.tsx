@@ -32,7 +32,7 @@ export function PartCellBlock({ partId, warehouses, stock, reserved, role, onCha
   /** Остаток по складам из строки витрины: ключ — идентификатор склада. */
   stock: Record<string, number>;
   /** Отложенное по складам из той же строки (задача 0367); без него склад показан целым числом. */
-  reserved?: Record<string, number>;
+  reserved?: Record<string, number> | undefined;
   role: string;
   /** Адрес изменился — витрину надо перечитать: в ней есть колонка «Ячейка». */
   onChanged: () => void;
