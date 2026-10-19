@@ -74,14 +74,12 @@ public class DromWheelWriter {
     static final String TYPE_DISC = "диск";
     static final String TYPE_ASSEMBLY = "колесо";
 
-    static final String IN_STOCK = "В наличии";
     /**
-     * Слово недоступной позиции — наше: у Bazon в образце «В наличии» у 65
-     * из 65. Проданное колесо нельзя убрать из файла (объявление пропадёт
-     * вместе с просмотрами), а сказать «В наличии» значило бы звать за
-     * товаром, которого нет. Понимает ли его разбор — вопрос площадке.
+     * «Статус» у всех строк: у Bazon в образце «В наличии» у 65 из 65, и другого
+     * слова в файле нет (задача 0339, решение владельца 19.10.2026). Проданного
+     * колеса в файле нет вовсе — его не пускает отбор генератора.
      */
-    static final String OUT_OF_STOCK = "Нет в наличии";
+    static final String IN_STOCK = "В наличии";
 
     static final String SEASON_SUMMER = "Летняя";
     static final String SEASON_WINTER = "Зимняя";
@@ -137,7 +135,7 @@ public class DromWheelWriter {
         cells.add(o.comment());
         cells.add(o.price());
         cells.add(o.photos() == null ? null : String.join(", ", o.photos()));
-        cells.add(o.available() ? IN_STOCK : OUT_OF_STOCK);
+        cells.add(IN_STOCK);
         // Номер производителя: у колеса его нет (основной номер — задача 0338),
         // колонка остаётся, как в образце, где она пуста.
         cells.add(null);

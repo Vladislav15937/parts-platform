@@ -233,7 +233,7 @@ class ExpectedPartConditionTest extends PostgresTestBase {
         ResponseEntity<String> count = exchange(session, HttpMethod.POST,
                 "/api/marketplace-accounts/filter/count", "{\"expectedGoods\":true}");
         assertThat(count.getBody()).as("счётчик обещает позицию, которая не уедет")
-                .isEqualTo("{\"parts\":" + offers + "}");
+                .isEqualTo("{\"parts\":" + offers + ",\"zeroPrice\":0}");
     }
 
     @Test

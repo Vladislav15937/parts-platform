@@ -336,7 +336,7 @@ public class MarketplaceAccountService {
                 VALUES (?, ?, COALESCE(?::jsonb, '{}'::jsonb), ?)
                 RETURNING id""",
                 Long.class, marketplace, title.strip(),
-                withNewFeedPhotoLimit(marketplace, settingsWithPacketIdNormalized(settingsJson)),
+                withNewFeedDefaults(marketplace, settingsWithPacketIdNormalized(settingsJson)),
                 line);
         feedJournal.created(id);
 
@@ -476,14 +476,19 @@ public class MarketplaceAccountService {
     }
 
     /**
-     * Предел снимков новой выгрузки на Дром, если экран его не прислал, —
-     * {@link FeedSettings#NEW_DROM_FEED_PHOTO_LIMIT}, почему — там.
+     * Умолчания новой выгрузки на Дром, если экран их не прислал: предел
+     * снимков {@link FeedSettings#NEW_DROM_FEED_PHOTO_LIMIT} (почему — там)
+     * и включённое «Выгружать товары, по которым ожидается поступление» —
+     * как у Bazon, где он включён у всех пяти выгрузок клиента (задача 0339,
+     * решение владельца 19.10.2026). «Выгружать товары в резерве» остаётся
+     * незаданным, то есть выключенным, — так же, как у Bazon.
      *
      * <p>Пишется в настройки явно, а не подставляется при чтении: тогда
-     * экран выгрузки показывает настоящее число, владелец может его
-     * поменять, а «не задано» у старых выгрузок сохраняет прежний смысл.
+     * экран выгрузки показывает настоящее значение, владелец может его
+     * поменять, а «не задано» у старых выгрузок сохраняет прежний смысл —
+     * их прайс, который площадка уже забирает, не меняется молча.
      */
-    static String withNewFeedPhotoLimit(String marketplace, String settingsJson) {
+    static String withNewFeedDefaults(String marketplace, String settingsJson) {
         if (!"DROM".equals(marketplace)) {
             return settingsJson;
         }
@@ -498,10 +503,15 @@ public class MarketplaceAccountService {
         } catch (com.fasterxml.jackson.core.JsonProcessingException notJson) {
             throw new IllegalArgumentException("Настройки выгрузки не разобраны");
         }
-        if (settings.hasNonNull("photoLimit")) {
+        if (settings.hasNonNull("photoLimit") && settings.hasNonNull("expectedGoods")) {
             return settingsJson;
         }
-        settings.put("photoLimit", FeedSettings.NEW_DROM_FEED_PHOTO_LIMIT);
+        if (!settings.hasNonNull("photoLimit")) {
+            settings.put("photoLimit", FeedSettings.NEW_DROM_FEED_PHOTO_LIMIT);
+        }
+        if (!settings.hasNonNull("expectedGoods")) {
+            settings.put("expectedGoods", true);
+        }
         return settings.toString();
     }
 
@@ -941,6 +951,41 @@ public class MarketplaceAccountService {
                               java.util.Map<String, String> columns,
                               java.util.Map<String, String> words,
                               boolean expectedGoods) {
+        return count(priceFrom, priceTo, conditions, warehouseIds, kindIds, kindsExcluded,
+                brandIds, brandsExcluded, productLine, columns, words, expectedGoods, false)
+                .parts();
+    }
+
+    /**
+     * Сколько позиций в выгрузке и сколько из них с нулевой ценой.
+     *
+     * @param parts     строк файла — тем же условием, что генератор
+     * @param zeroPrice из них с ценой 0: в файл они идут, как у Bazon (задача
+     *                  0339), а экран называет их красной строкой рядом
+     *                  со счётчиком — «0 ₽» в объявлении обычно значит
+     *                  незаполненное поле, и узнать об этом надо до площадки
+     */
+    public record Counted(long parts, long zeroPrice) {
+    }
+
+    /**
+     * Счётчик «Посчитать» с обоими переключателями состава — ожидаемого товара
+     * и резерва (задача 0339) — и с числом позиций с нулевой ценой.
+     *
+     * <p>Аннотация повторена: {@code @Transactional} перегрузкой не наследуется.
+     *
+     * @param reservedGoods выгрузка выгружает позиции, отложенные целиком,
+     *                      — переключатель «Выгружать товары в резерве»
+     */
+    @Transactional(readOnly = true)
+    public Counted count(java.math.BigDecimal priceFrom, java.math.BigDecimal priceTo,
+                         List<String> conditions, List<Long> warehouseIds,
+                         List<Long> kindIds, boolean kindsExcluded,
+                         List<Long> brandIds, boolean brandsExcluded,
+                         String productLine,
+                         java.util.Map<String, String> columns,
+                         java.util.Map<String, String> words,
+                         boolean expectedGoods, boolean reservedGoods) {
         // Колонки отбираются тем же выражением, каким показаны на экране —
         // и у каждой линии товара своим: у колеса нет вида детали, у запчасти
         // нет сезона.
@@ -964,14 +1009,31 @@ public class MarketplaceAccountService {
         // которой на складе нет. Счётчик обязан считать тем же условием, что
         // и генератор, — в этом модуле он врал уже дважды именно на этом.
         boolean inTransit = expectedGoods && "PART".equals(line(productLine));
+        // Резерв — тот же переключатель и только у запчастей: экран колёсной
+        // выгрузке его не показывает, генератор колёс его не знает.
+        boolean reservedToo = reservedGoods && "PART".equals(line(productLine));
 
         List<Object> args = new java.util.ArrayList<>(List.of());
         // Строка файла колёс — комплект (карточки с общим set_no, обход 19.10.2026),
         // а не карточка: счётчик считает строки, а не штуки. У запчасти
         // part_wheel нет, и каждая — своя строка.
-        Long found = jdbc.queryForObject("""
-                SELECT count(DISTINCT COALESCE(cw.set_no::text, 'p' || p.id)) FROM part p
+        Counted found = jdbc.queryForObject("""
+                SELECT count(DISTINCT COALESCE(cw.set_no::text, 'p' || p.id)) AS parts,
+                       count(DISTINCT COALESCE(cw.set_no::text, 'p' || p.id))
+                           FILTER (WHERE COALESCE(p.price, 0) = 0) AS zero_price
+                  FROM part p
                   LEFT JOIN part_wheel cw ON cw.part_id = p.id
+                  -- Остаток по складам выгрузки — тем же подзапросом, что
+                  -- у генераторов: позиция без остатка на этих складах в файл
+                  -- не идёт (задача 0339), и «есть строка раскладки» тут мало.
+                  LEFT JOIN (
+                      SELECT ps.part_id,
+                             sum(ps.qty - ps.qty_reserved) AS qty_available,
+                             sum(ps.qty) AS qty_total
+                        FROM part_stock ps
+                       WHERE (?::bigint[] IS NULL OR ps.warehouse_id = ANY (?::bigint[]))
+                       GROUP BY ps.part_id
+                  ) s ON s.part_id = p.id
                   LEFT JOIN donor d ON d.id = p.donor_id
                   LEFT JOIN supply in_transit
                          ON in_transit.id = p.supply_id
@@ -989,19 +1051,18 @@ public class MarketplaceAccountService {
                    -- под предзаказом все штуки, в прайс не идёт (задачи 0170, 0262).
                    -- Текст берётся у генератора, а не пишется второй раз.
                    AND NOT ${preordered}
-                   -- Тем же условием, что и генератор: нулевая цена в прайс
-                   -- не идёт, потому что «0 ₽» в объявлении — обещание отдать
-                   -- деталь даром, а на деле это незаполненное поле.
-                   AND p.price > 0
+                   -- Тем же текстом, что генератор: только то, что можно
+                   -- купить (задача 0339). Проданное счётчик больше не обещает.
+                   AND ${inFile}
+                   -- Цена 0 у запчастей в файл идёт, как у Bazon (задача 0339);
+                   -- у колёс — по-прежнему нет, тем же условием, что их генератор.
+                   AND ${priceRule}
                    -- Тем же условием, что и генераторы: позиция без состояния
                    -- в прайс не идёт (задача 0322), и счётчик её не обещает.
                    AND ${hasCondition}
                    AND (?::numeric IS NULL OR p.price >= ?::numeric)
                    AND (?::numeric IS NULL OR p.price <= ?::numeric)
                    AND (?::text[] IS NULL OR p.condition = ANY (?::text[]))
-                   AND (?::bigint[] IS NULL OR EXISTS (
-                           SELECT 1 FROM part_stock s
-                            WHERE s.part_id = p.id AND s.warehouse_id = ANY (?::bigint[])))
                    AND (?::bigint[] IS NULL OR
                         CASE WHEN ?::boolean
                              THEN COALESCE(p.part_kind_id <> ALL (?::bigint[]), true)
@@ -1018,17 +1079,22 @@ public class MarketplaceAccountService {
                         ru.partsflow.publishing.drom.DromPriceGenerator.BRAND_FILTER)
                 .replace("${hasCondition}",
                         ru.partsflow.publishing.drom.DromPriceGenerator.HAS_CONDITION)
+                .replace("${inFile}",
+                        ru.partsflow.publishing.drom.DromPriceGenerator.inFile(reservedToo))
+                .replace("${priceRule}",
+                        "WHEEL".equals(line(productLine)) ? "p.price > 0" : "true")
                 + columnsSql,
-                Long.class,
+                (rs, row) -> new Counted(rs.getLong("parts"), rs.getLong("zero_price")),
                 argsOf(args, columnArgs,
+                // Склады — первыми: подзапрос остатка стоит в FROM, раньше WHERE.
+                longs(warehouseIds), longs(warehouseIds),
                 line(productLine),
                 priceFrom, priceFrom, priceTo, priceTo,
                 text(conditions), text(conditions),
-                longs(warehouseIds), longs(warehouseIds),
                 longs(kindIds), kindsExcluded, longs(kindIds), longs(kindIds),
                 longs(brandIds), brandsExcluded,
                 longs(brandIds), longs(brandIds), longs(brandIds), longs(brandIds)));
-        return found == null ? 0 : found;
+        return found == null ? new Counted(0, 0) : found;
     }
 
     /** Условия колонок идут последними, чтобы не сдвигать номера параметров. */

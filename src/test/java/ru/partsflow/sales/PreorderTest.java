@@ -627,8 +627,8 @@ class PreorderTest extends PostgresTestBase {
     private ru.partsflow.publishing.drom.DromPriceGenerator dromGenerator;
 
     @Test
-    @DisplayName("Предзаказ снимает объявление с Дрома дельтой сразу; отмена возвращает; приход не снимает второй раз")
-    void preorderTakesTheListingOffDromWithTheDelta() throws Exception {
+    @DisplayName("Предзаказ убирает позицию из прайса и дельты; отмена возвращает её дельтой; приход под полный предзаказ не возвращает")
+    void preorderTakesThePartOutOfPriceAndDelta() throws Exception {
         long supply = supply();
         long part = expectedPart(supply, "Фара дельтовая", 2, "9000");
         long control = expectedPart(supply, "Фара без предзаказа", 2, "9100");
@@ -649,10 +649,13 @@ class PreorderTest extends PostgresTestBase {
                         + "висит доступным до полного забора, то есть до трёх суток")
                 .isTrue();
         assertThat(marked(control)).as("отметка легла на чужую позицию").isFalse();
-        String listed = deltaOffer(part);
-        assertThat(listed)
-                .as("дельта молчит о позиции под предзаказом: объявление осталось доступным")
-                .contains("<state>Нет в наличии</state>");
+        // С задачи 0339 дельта несёт тот же набор, что прайс: «недоступна»
+        // в формате Bazon сказать нечем, а «В наличии» о позиции, обещанной
+        // клиенту, — неправда. Решение 0259 «снимать сразу» этим отменено:
+        // объявление снимает полный забор, как у Bazon (названо в PR 0339).
+        assertThat(deltaHas(part))
+                .as("дельта несёт позицию, все штуки которой под предзаказом")
+                .isFalse();
         assertThat(deltaOffer(control)).contains("<state>В наличии</state>");
         assertThat(fullPrice())
                 .as("полный прайс по-прежнему не содержит позицию под предзаказом")
@@ -672,15 +675,14 @@ class PreorderTest extends PostgresTestBase {
         assertThat(deltaOffer(part))
                 .contains("<state>В наличии</state>");
 
-        // Приход под полный предзаказ: обычный резерв, недоступна, без возврата
-        // «доступной» между шагами.
+        // Приход под полный предзаказ: обычный резерв, целиком отложена —
+        // в файл не идёт, пока выгрузка резерв не выгружает (0339).
         createDeal(part, 2, near, daysAhead(30));
         inTenant(() -> jdbc.update("DELETE FROM part_change"));
         assertThat(receipt(near, supply, part, 2, UUID.randomUUID().toString())
                 .getResponse().getStatus()).isEqualTo(201);
         assertThat(stock("qty_reserved", part, near)).isEqualByComparingTo("2");
-        assertThat(deltaOffer(part))
-                .contains("<state>Нет в наличии</state>");
+        assertThat(deltaHas(part)).as("отложенная целиком вернулась в дельту").isFalse();
     }
 
     /**
@@ -688,9 +690,9 @@ class PreorderTest extends PostgresTestBase {
      * возвращает его дельтой, а после прихода предзаказанная штука не вычитается
      * второй раз (она уже обычный резерв).
      *
-     * <p>С задачи 0333 количества в файле нет (формат Bazon): площадке видно
-     * только «В наличии» или «Нет в наличии», и сверяется теперь оно. Число
-     * штук по-прежнему считает прайс — от него зависит, в наличии ли позиция.
+     * <p>С задачи 0333 количества в файле нет (формат Bazon), а с 0339 нет
+     * и слова недоступной позиции: площадке видно только, есть ли строка.
+     * Число штук по-прежнему считает прайс — от него зависит, в файле ли она.
      */
     @Test
     @DisplayName("Частичный предзаказ: Дром видит остаток; отмена возвращает; приход не вычитает второй раз")
@@ -788,6 +790,18 @@ class PreorderTest extends PostgresTestBase {
     }
 
     /** Предложение позиции в дельте; пустая дельта — провал, а не пустая строка. */
+    /** Есть ли позиция в дельте вовсе (задача 0339: недоступной там не бывает). */
+    private boolean deltaHas(long partId) {
+        String xml = inTenant(() -> {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            dromGenerator.writeDelta(out, List.of(partId),
+                    ru.partsflow.publishing.drom.DromPriceGenerator.FeedFilter.everything(),
+                    EXPECTING);
+            return out.toString(java.nio.charset.StandardCharsets.UTF_8);
+        });
+        return xml.contains("<id>" + feedKeyOf(partId) + "</id>");
+    }
+
     private String deltaOffer(long partId) {
         String xml = inTenant(() -> {
             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();

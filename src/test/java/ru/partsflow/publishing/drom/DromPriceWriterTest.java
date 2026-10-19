@@ -255,14 +255,19 @@ class DromPriceWriterTest {
             assertThat(first).contains("<condition></condition>").doesNotContain("Состояние:");
         }
 
+        /**
+         * {@code state} у всех строк — «В наличии», как у Bazon (задача 0339):
+         * что нельзя купить, в файл не пускает отбор генератора, а отложенное,
+         * которое выгрузка выгружает, и товар в пути уходят тем же словом.
+         */
         @Test
-        @DisplayName("Свободный остаток — «В наличии», нет его — «Нет в наличии»")
-        void stateFollowsFreeStock() throws Exception {
+        @DisplayName("Наличие одним словом Bazon у всех строк — «В наличии»")
+        void stateIsAlwaysInStock() throws Exception {
             assertThat(value(write(offer()), "state")).isEqualTo("В наличии");
             assertThat(value(write(stocked(BigDecimal.ZERO)), "state"))
-                    .as("позиция без свободного остатка объявлена в наличии")
-                    .isEqualTo("Нет в наличии");
-            assertThat(value(write(stocked(null)), "state")).isEqualTo("Нет в наличии");
+                    .as("писатель выбрал слово по остатку: в файле Bazon оно одно")
+                    .isEqualTo("В наличии");
+            assertThat(value(write(stocked(null)), "state")).isEqualTo("В наличии");
         }
 
         @Test

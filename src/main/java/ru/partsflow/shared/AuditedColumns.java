@@ -224,6 +224,8 @@ public final class AuditedColumns {
         MARKETPLACE_ACCOUNT.put("installation_template", "Текст приписки об установке");
         MARKETPLACE_ACCOUNT.put("expected_goods", "Выгружать ожидаемый товар");
         MARKETPLACE_ACCOUNT.put("expected_goods_note", "Текст приписки об ожидаемом товаре");
+        MARKETPLACE_ACCOUNT.put("reserved_goods", "Выгружать товары в резерве");
+        MARKETPLACE_ACCOUNT.put("reserved_goods_note", "Текст приставки о резерве");
         MARKETPLACE_ACCOUNT.put("donor_photo_kinds", "Наименования со снимками машины");
         MARKETPLACE_ACCOUNT.put("filter_price_from", "Отбор: цена от");
         MARKETPLACE_ACCOUNT.put("filter_price_to", "Отбор: цена до");
@@ -385,7 +387,7 @@ public final class AuditedColumns {
 
     /** Логические колонки журнала выгрузки: в снимке true/false, на экране да/нет. */
     private static final Set<String> FLAGS = Set.of(
-            "is_published", "engine_matters", "installation_note", "expected_goods",
+            "is_published", "engine_matters", "installation_note", "expected_goods", "reserved_goods",
             "filter_kinds_excluded", "filter_brands_excluded",
             "is_main", "is_archived", "is_active",
             "print_client_signature", "print_issuer_signature");

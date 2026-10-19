@@ -83,6 +83,8 @@ describe('снимки машины-донора в объявлении', () =>
         installationTemplate: 'Стоимость установки на нашем автосервисе: {цена} р.',
         expectedGoods: false,
         expectedGoodsNote: null,
+        reservedGoods: false,
+        reservedGoodsNote: null,
         donorPhotoKinds: [5],
       });
   });

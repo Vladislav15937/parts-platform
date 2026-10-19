@@ -225,16 +225,22 @@ public class MarketplaceAccountController {
     @PostMapping("/filter/count")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public CountView count(@RequestBody FilterRequest request) {
-        return new CountView(accounts.countMatching(
+        MarketplaceAccountService.Counted counted = accounts.count(
                 request.priceFrom(), request.priceTo(),
                 request.conditions(), request.warehouseIds(),
                 request.kindIds(), request.kindsExcluded(),
                 request.brandIds(), request.brandsExcluded(),
                 request.productLine(), request.columns(), request.words(),
-                request.expectedGoods()));
+                request.expectedGoods(), Boolean.TRUE.equals(request.reservedGoods()));
+        return new CountView(counted.parts(), counted.zeroPrice());
     }
 
-    public record CountView(long parts) {
+    /**
+     * @param parts     сколько позиций уедет в файл
+     * @param zeroPrice из них с ценой 0 — экран называет их красной строкой
+     *                  «с нулевой ценой: N» рядом со счётчиком (задача 0339)
+     */
+    public record CountView(long parts, long zeroPrice) {
     }
 
     /**
@@ -367,7 +373,14 @@ public class MarketplaceAccountController {
                                  * ещё до сохранения — как и весь остальной
                                  * отбор.
                                  */
-                                boolean expectedGoods) {
+                                boolean expectedGoods,
+                                /**
+                                 * «Выгружать товары в резерве» из формы
+                                 * (задача 0339) — по той же причине, что
+                                 * {@code expectedGoods}: меняет состав прайса.
+                                 * Нет ключа — выключен, как было до задачи.
+                                 */
+                                Boolean reservedGoods) {
     }
 
     /**

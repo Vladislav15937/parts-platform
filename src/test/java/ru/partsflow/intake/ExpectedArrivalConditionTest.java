@@ -274,7 +274,7 @@ class ExpectedArrivalConditionTest extends PostgresTestBase {
         assertThat(offers).isEqualTo(1);
         ResponseEntity<String> count = exchange(session, HttpMethod.POST,
                 "/api/marketplace-accounts/filter/count", "{}");
-        assertThat(count.getBody()).isEqualTo("{\"parts\":" + offers + "}");
+        assertThat(count.getBody()).isEqualTo("{\"parts\":" + offers + ",\"zeroPrice\":0}");
     }
 
     // ---------- вспомогательное ----------

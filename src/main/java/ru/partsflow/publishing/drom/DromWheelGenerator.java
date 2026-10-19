@@ -34,9 +34,12 @@ public class DromWheelGenerator {
     private static final int FETCH_SIZE = 500;
 
     /**
-     * В прайс идёт то, что имеет смысл показывать: колесо с остатком либо уже
-     * проданное. Проданное — недоступным, чтобы не потерять объявление вместе
-     * с просмотрами; то же соображение, что и в прайсе запчастей.
+     * В прайс идёт то, что можно купить: колесо со свободным остатком на складах
+     * выгрузки (задача 0339, решение владельца 19.10.2026 «всё как в базон»).
+     * Проданного, обнулённого и отложенного целиком в файле нет: у Bazon
+     * «Статус» — «В наличии» у 65 строк из 65, а сказать так о проданном
+     * значило бы звать за колесом, которого нет. Переключателя «Выгружать
+     * товары в резерве» у колёсной выгрузки нет — экран его ей не показывает.
      */
     private static final String SQL = """
             SELECT -- Ключ строки в файле — «К» и номер (0334, 0340), не публичный код.
@@ -78,6 +81,12 @@ public class DromWheelGenerator {
              WHERE p.is_published
                AND p.product_line = 'WHEEL'
                AND p.status IN ('IN_STOCK', 'SOLD')
+               -- Можно купить — тем же условием, что прайс запчастей и счётчик
+               -- (DromPriceGenerator.IN_FILE без резерва и товара в пути).
+               AND COALESCE(s.qty_available, 0) > 0
+               -- Нулевая цена у колёс по-прежнему не уходит: решение 0339
+               -- «цена 0 попадает» снято с файла запчастей Bazon, файла шин
+               -- с нулём у Bazon не видели.
                AND p.price > 0
                -- Тем же условием, что прайс запчастей и счётчик (задача 0322):
                -- без состояния колесо ушло бы «Новой» без износа.
@@ -295,7 +304,7 @@ public class DromWheelGenerator {
 
     /** Одна карточка из курсора — до склейки в строку файла. */
     private record Card(long grp, Long setNo, String legacy, long number, Long setNumber,
-                        DromWheelOffer offer, BigDecimal price, boolean available,
+                        DromWheelOffer offer, BigDecimal price,
                         String noun, String adjective, String spec, String comment) {
 
         String signature() {
@@ -374,13 +383,10 @@ public class DromWheelGenerator {
         }
 
         private DromWheelOffer assemble(List<Card> cards, List<List<String>> photos) {
-            // Считаются карточки, которые можно купить; если их нет вовсе — все
-            // (проданный комплект остаётся в файле недоступным).
-            List<Card> counted = cards.stream().filter(Card::available).toList();
-            boolean available = !counted.isEmpty();
-            if (!available) {
-                counted = cards;
-            }
+            // В курсоре только карточки, которые можно купить (задача 0339):
+            // проданная карточка комплекта из строки уходит, проданный
+            // комплект целиком — из файла.
+            List<Card> counted = cards;
             DromWheelOffer base = counted.get(0).offer();
 
             // Цена комплекта — сумма цен штук (обход 19.10.2026): у Bazon у каждой
@@ -417,8 +423,7 @@ public class DromWheelGenerator {
                     base.tyreDiameter(), base.season(), base.year(), base.wear(), base.condition(),
                     comment(counted),
                     price(sum),
-                    links,
-                    available);
+                    links);
         }
 
         /**
@@ -555,7 +560,6 @@ public class DromWheelGenerator {
             };
             return new Card(rs.getLong("grp"), setNo, rs.getString("legacy_code"), rs.getLong("number"),
                     setNumber, offer, rs.getBigDecimal("price"),
-                    rs.getBigDecimal("qty_available").signum() > 0,
                     noun, adjective, spec, offer.comment());
         }
 
@@ -615,8 +619,7 @@ public class DromWheelGenerator {
                     // Комментарий — текст клиента как набран (описание позиции).
                     rs.getString("description"),
                     price(settings.priceFor(rs.getBigDecimal("price"))),
-                    photoLinks(rs.getString("photo_ids"), photoBase, settings),
-                    rs.getBigDecimal("qty_available").signum() > 0);
+                    photoLinks(rs.getString("photo_ids"), photoBase, settings));
         }
 
         /** Цена целым, копейки вверх — так же, как в файле запчастей (0333). */

@@ -169,21 +169,36 @@ class FeedSettingsTest {
         assertThat(FeedSettings.none().expectsGoodsInTransit()).isFalse();
     }
 
+    /**
+     * Переключатель без текста выгружает товар без приставки (задача 0339,
+     * «как в базон»: у Bazon поле приставки пустое у всех выгрузок клиента).
+     * До неё — «ничего не выгружает» и отказ при сохранении (решение 0007).
+     */
     @Test
-    @DisplayName("Переключатель без текста ничего не выгружает, а не выгружает молча")
-    void expectedGoodsWithoutNoteShipNothing() {
-        // Пустой текст отбивается при сохранении, но настройки в базу может
-        // положить и перенос, и запрос мимо экрана. Товар, уехавший без слов
-        // о том, что его ещё нет, — это объявление, по которому покупатель
-        // приедет за деталью, лежащей в контейнере.
+    @DisplayName("Переключатель без текста выгружает товар без приставки и сохраняется")
+    void expectedGoodsWithoutNoteShipWithoutPrefix() {
         FeedSettings blank = new FeedSettings(null, null, null, null, null, true, "   ");
 
-        assertThat(blank.expectsGoodsInTransit()).isFalse();
+        assertThat(blank.expectsGoodsInTransit()).isTrue();
         assertThat(blank.expectedNoteFor(true)).isNull();
+        assertThat(blank.validated()).isSameAs(blank);
+    }
 
-        assertThatThrownBy(blank::validated)
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Текст приписки");
+    @Test
+    @DisplayName("«Выгружать товары в резерве»: выключен по умолчанию, приставка — только у резерва и только с текстом")
+    void reservedGoodsSwitch() {
+        assertThat(FeedSettings.none().exportsReserved()).isFalse();
+        assertThat(FeedSettings.parse("{\"reservedGoods\":true}").exportsReserved()).isTrue();
+
+        FeedSettings on = FeedSettings.parse(
+                "{\"reservedGoods\":true,\"reservedGoodsNote\":\" В резерве \"}");
+        assertThat(on.reservedNoteFor(true)).isEqualTo("В резерве");
+        assertThat(on.reservedNoteFor(false)).as("приставка резерва у свободной позиции").isNull();
+
+        FeedSettings off = FeedSettings.parse(
+                "{\"reservedGoods\":false,\"reservedGoodsNote\":\"В резерве\"}");
+        assertThat(off.reservedNoteFor(true)).as("приставка при выключенном переключателе").isNull();
+        assertThat(FeedSettings.parse("{\"reservedGoods\":true}").reservedNoteFor(true)).isNull();
     }
 
     @Test

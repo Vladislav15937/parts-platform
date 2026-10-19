@@ -56,8 +56,10 @@ class Fake:
     applied = 0
 
 
-FEED = ('<?xml version="1.0" encoding="UTF-8" ?>\n<parts>\n<part>\n<id>7</id>\n'
-        "<state>Нет в наличии</state>\n</part>\n</parts>")
+# Проданная (№ 7) в файле не стоит — её нет, как у Bazon (задача 0339);
+# в файле одна оставшаяся позиция со словом «В наличии».
+FEED = ('<?xml version="1.0" encoding="UTF-8" ?>\n<parts>\n<part>\n<id>8</id>\n'
+        "<state>В наличии</state>\n</part>\n</parts>")
 
 
 def route(method, path, body):
@@ -78,7 +80,7 @@ def route(method, path, body):
     if p == "/api/deals":
         return 200, {"id": 9, "items": [{"id": 11, "status": "RESERVED"}]}
     if p == "/api/deals/9":
-        return 200, {"id": 9, "status": "ISSUED", "items": [{"id": 11}]}
+        return 200, {"id": 9, "status": "ISSUED", "items": [{"id": 11, "number": 7}]}
     if p == "/api/deals/9/payments":
         return (409 if S.returned else 200), {}
     if p == "/api/deals/9/issue":

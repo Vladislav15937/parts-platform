@@ -101,21 +101,23 @@ curl -s "${URL}" -o /tmp/smoke-feed.xml
 OFFERS=$(grep -o '<part>' /tmp/smoke-feed.xml | wc -l | tr -d ' ')
 pc /api/marketplace-accounts/filter/count '{"productLine":"PART"}' >/dev/null
 same "счётчик выгрузки сходится с файлом" "$(num "['parts']")" "${OFFERS}"
-# Проданное остаётся в прайсе недоступным: убрать позицию значит потерять
-# объявление вместе с накопленными просмотрами.
+# Проданного в прайсе нет, а у оставшихся одно слово наличия — как у Bazon
+# (задача 0339, решение владельца 19.10.2026): «недоступна» в формате Bazon
+# не сказать, и проданное снимает с сайта полный забор.
 # Вердикт идёт через `same`, а не печатается своим `print`. Раньше этот раздел
 # печатал ✗ сам и выходил нулём: `FAILED` не трогался, и подвал говорил
 # «Сквозной прогон прошёл» при видимом ✗ на экране — то есть единственный
 # инвариант, ради которого раздел написан, на исход прогона не влиял вовсе.
-SOLD_HIDDEN=$(python3 - <<'PY'
-import re
+gc "/api/deals/${DEAL}" >/dev/null; SOLD_NUMBER=$(num "['items'][0]['number']")
+SOLD_GONE=$(SOLD_NUMBER="${SOLD_NUMBER}" python3 - <<'PY'
+import os, re
 x = open('/tmp/smoke-feed.xml', encoding='utf-8').read()
-# Количества и флага в формате Bazon нет: недоступная — словом в <state>.
-sold = re.search(r'<part>(?:(?!</part>).)*<state>Нет в наличии</state>.*?</part>', x, re.S)
-print('да' if sold else 'нет')
+sold = '<id>%s</id>' % os.environ['SOLD_NUMBER'] in x
+others = set(re.findall(r'<state>([^<]*)</state>', x)) - {'В наличии'}
+print('нет' if not sold and not others else 'есть')
 PY
 )
-same "проданное уехало в прайс недоступным" "${SOLD_HIDDEN}" "да"
+same "проданного в прайсе нет, у остальных «В наличии»" "${SOLD_GONE}" "нет"
 
 echo "4. Возврат"
 gc "/api/deals/${DEAL}" >/dev/null; ITEM=$(num "['items'][0]['id']")

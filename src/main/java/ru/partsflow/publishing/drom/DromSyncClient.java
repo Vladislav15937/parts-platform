@@ -73,7 +73,8 @@ public class DromSyncClient {
      * @param packetId идентификатор прайс-листа в кабинете клиента
      * @param auth     см. {@link #authHash}
      * @param deltaXml изменённые позиции в формате исходного прайса;
-     *                 снятие с продажи — {@code state} «Нет в наличии» (в формате Bazon количества нет). Не более {@link #maxPacketBytes()}
+     *                 проданного в ней нет — в формате Bazon количества нет, а
+     *                 {@code state} только «В наличии» (задача 0339). Не более {@link #maxPacketBytes()}
      */
     public Result sync(String packetId, String auth, byte[] deltaXml, String fileName) {
         if (deltaXml.length > MAX_PACKET_BYTES) {

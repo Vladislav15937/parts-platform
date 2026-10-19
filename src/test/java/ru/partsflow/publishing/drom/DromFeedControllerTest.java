@@ -471,18 +471,18 @@ class DromFeedControllerTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        // Деталь этого склада — доступна. Деталь соседнего склада в прайс
-        // попадает (объявление живёт и копит просмотры), но доступной
-        // числиться не должна: иначе покупатель приедет за ней на другой
-        // конец города, а её там нет.
+        // Деталь этого склада — в файле. Детали соседнего склада в прайсе
+        // филиала нет вовсе (задача 0339, как у Bazon с режимом склада
+        // «В наличии»): иначе покупатель приедет за ней на другой конец
+        // города, а её там нет.
         assertThat(body).contains("Дверь на дальнем складе");
         assertThat(offerOf(body, "Дверь на дальнем складе"))
                 .as("остаток склада выгрузки потерялся")
                 .contains("<state>В наличии</state>");
-        assertThat(offerOf(body, "Фара левая Camry"))
+        assertThat(body)
                 .as("остаток посчитан по всем складам: покупателю обещана "
                         + "деталь, которой на этом складе нет")
-                .contains("<state>Нет в наличии</state>");
+                .doesNotContain("Фара левая Camry");
     }
 
     @Test
@@ -610,10 +610,11 @@ class DromFeedControllerTest extends PostgresTestBase {
                 .as("округление отбросило копейки вместо того, чтобы поднять до шага")
                 .contains("<price>4960</price>");
         // Ноль у нас означает «цену не назначили»: наценка на незаполненное
-        // поле дала бы цену там, где её нет.
-        assertThat(marked)
-                .as("позиция без цены уехала в прайс — «0 ₽» это обещание отдать даром")
-                .doesNotContain("Прайс: цену не назначили");
+        // поле дала бы цену там, где её нет. С задачи 0339 такая позиция
+        // в файле есть (как у Bazon) — и уходит нулём, а не «10 ₽».
+        assertThat(offerOf(marked, "Прайс: цену не назначили"))
+                .as("наценка с округлением вверх создала цену там, где её не назначали")
+                .contains("<price>0</price>");
 
         // Соседняя выгрузка отдаёт тот же товар за его цену: процент
         // принадлежит прайс-листу, а не товару, и протечь между выгрузками
@@ -938,23 +939,21 @@ class DromFeedControllerTest extends PostgresTestBase {
     }
 
     /**
-     * Переключатель без текста приписки отбивается словами до сохранения.
+     * Переключатель без текста приставки сохраняется (задача 0339).
      *
-     * <p>Пропущенный, он даёт объявление о товаре, которого на складе нет,
-     * без единого слова о том, почему его нет: покупатель приезжает
-     * за деталью, лежащей в контейнере. Умолчания у текста нет намеренно —
-     * слова приписки выбирает владелец.
+     * <p>До неё такое сохранение отбивалось словами (решение 0007). У Bazon
+     * поле приставки пустое у всех выгрузок клиента при включённом
+     * переключателе — «как в базон» значит пустое поле законно.
      */
     @Test
-    @DisplayName("Пустая приписка при включённом переключателе не сохраняется")
-    void expectedGoodsWithoutNoteAreRefused() throws Exception {
+    @DisplayName("Пустая приставка при включённом переключателе сохраняется")
+    void expectedGoodsWithoutNoteAreSaved() throws Exception {
         mvc.perform(put("/api/marketplace-accounts/" + accountId + "/settings")
                         .with(csrf()).session(login("owner"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"expectedGoods\":true,\"expectedGoodsNote\":\"  \"}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message")
-                        .value(org.hamcrest.Matchers.containsString("Текст приписки")));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.settings.expectedGoods").value(true));
     }
 
     /** Описание объявления как оно уедет площадке — без обёртки CDATA. */

@@ -294,18 +294,26 @@ class DromWheelGeneratorTest extends PostgresTestBase {
                 .as("запчасть уехала в файл шин и дисков").isNull();
     }
 
+    /**
+     * Проданного колеса в файле нет (задача 0339): у Bazon «Статус» — «В наличии»
+     * у 65 строк из 65, и решение владельца убирает слово недоступной позиции
+     * и из CSV колёс.
+     */
     @Test
-    @DisplayName("Проданное колесо остаётся в файле, статус «Нет в наличии»")
-    void soldWheelStaysUnavailable() {
+    @DisplayName("Проданного колеса в файле нет, у оставшихся статус «В наличии»")
+    void soldWheelLeavesTheFile() {
         Long partId = tyre("Шина 175/70 R14 проданная", "2000", "SUMMER", 175, 70, "14", 84, "T", 40);
         inTenant(() -> {
             ledger.record(StockMovement.sale(partId, BigDecimal.ONE, warehouse, null));
             return null;
         });
 
-        // То же соображение, что и в прайсе запчастей: убрать позицию —
-        // значит потерять объявление вместе с накопленными просмотрами.
-        assertThat(rowOf(partId)).containsEntry("Статус", "Нет в наличии");
+        WheelCsv csv = WheelCsv.parse(priceBytes());
+        assertThat(csv.byArticle("К" + numberOf(partId)))
+                .as("проданное колесо осталось в файле").isNull();
+        assertThat(csv.rows()).extracting(row -> row.get("Статус"))
+                .as("в файле колёс есть статус, кроме «В наличии»")
+                .isNotEmpty().containsOnly("В наличии");
     }
 
     /**

@@ -31,9 +31,10 @@ import java.math.RoundingMode;
  * ни в другом виде. Против колонки здесь два довода, и оба про человека.
  * Первый: переключатель и его текст — одно решение владельца, и разложенные
  * по колонке и по jsonb они сохранялись бы двумя кнопками, а проверка
- * «включено, а текст пуст» разъехалась бы по двум путям. Второй: без текста
- * выгружать такой товар нельзя вовсе (см. {@link #expectsGoodsInTransit()}),
- * то есть переключатель без своей приписки не имеет смысла.
+ * «включено, а текст пуст» разъехалась бы по двум путям. (Второй довод —
+ * «без текста выгружать нельзя» — снят задачей 0339: у Bazon приставка
+ * необязательна.) Тем же доводом в {@code settings} живёт и переключатель
+ * резерва {@code reservedGoods} со своей приставкой.
  *
  * <p><b>Цена этого решения — счётчик.</b> Отбор в колонках счётчик получает
  * вместе с остальным отбором, а настройку — нет: {@code countMatching}
@@ -85,16 +86,24 @@ import java.math.RoundingMode;
  *                      пусто — {@link #DEFAULT_INSTALLATION_TEMPLATE}
  * @param expectedGoods выгружать ли товар, по которому ожидается поступление:
  *                      он привязан к поставке в пути и на складе его ещё нет.
- *                      {@code null} и {@code false} — не выгружать, как было
- *                      до появления настройки. <b>Это единственная настройка,
- *                      которая меняет не только вид файла, но и его состав</b>
- *                      — см. запись «Почему в settings, а не колонкой» ниже
+ *                      {@code null} и {@code false} — не выгружать: так
+ *                      читаются выгрузки, заведённые до задачи 0339; новая
+ *                      выгрузка на Дром заводится с {@code true}, как у Bazon.
+ *                      Меняет не только вид файла, но и его состав — см.
+ *                      запись «Почему в settings, а не колонкой» выше
  * @param expectedGoodsNote приписка, которая встаёт <b>в начало</b> описания
- *                      такого объявления. Умолчания у неё нет намеренно:
- *                      пустой текст при включённом переключателе отбивается
- *                      при сохранении, потому что товар, уехавший без
- *                      объяснения, — это объявление, по которому покупатель
- *                      приедет за деталью, которой на складе нет
+ *                      такого объявления. Пустая — товар уходит без неё
+ *                      (задача 0339: у Bazon приставка необязательна)
+ * @param reservedGoods выгружать ли позицию, целиком отложенную под клиента
+ *                      (свободного остатка нет, а на складе она лежит).
+ *                      {@code null} и {@code false} — не выгружать: так у Bazon
+ *                      по умолчанию, и так у клиента на всех пяти прайс-листах
+ *                      (задача 0339, решение владельца 19.10.2026). Как
+ *                      и {@code expectedGoods}, меняет состав прайса, поэтому
+ *                      приезжает в счётчик рядом с отбором
+ * @param reservedGoodsNote приставка, которая встаёт <b>первой строкой</b>
+ *                      описания такого объявления. Пустая — объявление уходит
+ *                      без неё: у Bazon поле пустое у всех выгрузок клиента
  * @param donorPhotoKinds наименования (виды деталей), которым в объявление
  *                      дописываются снимки машины-донора. Пусто и
  *                      {@code null} — никому, как было до появления
@@ -108,7 +117,19 @@ public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
                            Integer photoLimit, Boolean installationNote,
                            String installationTemplate,
                            Boolean expectedGoods, String expectedGoodsNote,
-                           java.util.List<Long> donorPhotoKinds) {
+                           java.util.List<Long> donorPhotoKinds,
+                           Boolean reservedGoods, String reservedGoodsNote) {
+
+    /** Прежняя подпись — без переключателя резерва (до задачи 0339). */
+    public FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
+                        Integer photoLimit, Boolean installationNote,
+                        String installationTemplate,
+                        Boolean expectedGoods, String expectedGoodsNote,
+                        java.util.List<Long> donorPhotoKinds) {
+        this(pricePercent, priceRounding, photoLimit, installationNote,
+                installationTemplate, expectedGoods, expectedGoodsNote, donorPhotoKinds,
+                null, null);
+    }
 
     /**
      * Прежняя подпись — без снимков донора.
@@ -126,7 +147,7 @@ public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
                         String installationTemplate,
                         Boolean expectedGoods, String expectedGoodsNote) {
         this(pricePercent, priceRounding, photoLimit, installationNote,
-                installationTemplate, expectedGoods, expectedGoodsNote, null);
+                installationTemplate, expectedGoods, expectedGoodsNote, null, null, null);
     }
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -232,8 +253,9 @@ public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
     public FeedSettings validated() {
         if (pricePercent != null && pricePercent.compareTo(new BigDecimal("-100")) <= 0) {
             // Скидка в сто процентов — это «0 ₽» в объявлении, то есть
-            // публичное обещание отдать деталь даром. Ровно от этого стоит
-            // и отсечка нулевой цены в самом прайсе.
+            // публичное обещание отдать деталь даром. Позиция с нулевой
+            // ценой карточки в файл идёт (задача 0339, как у Bazon), но это
+            // решение владельца о позиции, а не следствие скидки выгрузки.
             throw new IllegalArgumentException(
                     "Скидка в 100 % и больше обнуляет цену объявления: площадка покажет «0 ₽»");
         }
@@ -257,18 +279,6 @@ public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
             throw new IllegalArgumentException(
                     "В тексте приписки нет подстановки " + PRICE_PLACEHOLDER
                             + " — цена установки в объявление не попадёт");
-        }
-        if (Boolean.TRUE.equals(expectedGoods)
-                && (expectedGoodsNote == null || expectedGoodsNote.isBlank())) {
-            // Умолчания у этого текста нет намеренно: слова приписки выбирает
-            // владелец, а не мы. Пропустить пустой текст значило бы выгрузить
-            // товар, которого на складе ещё нет, ничего о нём не сказав, —
-            // покупатель приезжает за деталью, а она в контейнере. Отказ
-            // словами до сохранения, потому что молча уехавшее объявление
-            // видно только с чужого сайта.
-            throw new IllegalArgumentException(
-                    "Текст приписки не задан: товар, которого ещё нет на складе, "
-                            + "уехал бы в объявление без объяснения, почему его ждать");
         }
         return this;
     }
@@ -306,36 +316,59 @@ public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
     /**
      * Идёт ли в эту выгрузку товар, по которому ожидается поступление.
      *
-     * <p><b>Приписка тут не украшение, а условие выгрузки.</b> Товар в пути
-     * лежит в контейнере, а не на полке: объявление о нём честно только
-     * вместе со строкой «ожидается поступление». Поэтому переключатель без
-     * текста не работает вовсе — не потому, что текст обязателен формально,
-     * а потому, что без него покупатель приедет за деталью, которой нет.
-     * Пустой текст отбивается при сохранении ({@link #validated()}), а это
-     * условие закрывает записи, сохранённые мимо экрана.
+     * <p><b>Приписка больше не условие (задача 0339, решение владельца
+     * 19.10.2026 «как в базон»).</b> До неё переключатель без текста
+     * не работал вовсе: товар в пути уезжал только со строкой «ожидается
+     * поступление» (решение 0007). У Bazon поле приставки пустое у всех пяти
+     * выгрузок клиента, а переключатель включён, — и включённый без текста
+     * выгружает товар без приставки. Подпись Bazon говорит о перемещении
+     * между складами; у нас под переключателем пока товар из поставки в пути,
+     * перемещение придёт с задачей 0370.
      */
     public boolean expectsGoodsInTransit() {
-        return Boolean.TRUE.equals(expectedGoods)
-                && expectedGoodsNote != null && !expectedGoodsNote.isBlank();
+        return Boolean.TRUE.equals(expectedGoods);
     }
 
     /**
      * Приписка, которая встанет <b>в начало</b> описания объявления.
      *
      * <p>В начало, а не в конец: остальное описание рассказывает про деталь,
-     * а это — про то, когда её можно забрать. Прочитанное последним (или
-     * не прочитанное вовсе, если описание длинное) оно превращает объявление
-     * в обещание, которого разборка не давала.
+     * а это — про то, когда её можно забрать.
      *
      * @param inTransit позиция привязана к поставке, которая ещё не приехала
-     * @return {@code null} — приписки нет: либо товар уже на складе, либо
-     *         выгрузка ожидаемый товар не выгружает
+     * @return {@code null} — приписки нет: товар уже на складе, выгрузка
+     *         ожидаемый товар не выгружает или текста приставки нет
      */
     public String expectedNoteFor(boolean inTransit) {
-        if (!inTransit || !expectsGoodsInTransit()) {
+        if (!inTransit || !expectsGoodsInTransit()
+                || expectedGoodsNote == null || expectedGoodsNote.isBlank()) {
             return null;
         }
         return expectedGoodsNote.strip();
+    }
+
+    /**
+     * Идёт ли в эту выгрузку позиция, целиком отложенная под клиента
+     * (задача 0339). Выключено по умолчанию — как у Bazon.
+     */
+    public boolean exportsReserved() {
+        return Boolean.TRUE.equals(reservedGoods);
+    }
+
+    /**
+     * Приставка резерва — первой строкой описания, как у Bazon: «Если товар
+     * находится в резерве, то информация об этом добавится в начало
+     * объявления».
+     *
+     * @param reserved позиция лежит на складе, но свободного остатка нет
+     * @return {@code null} — не в резерве, переключатель выключен или текста нет
+     */
+    public String reservedNoteFor(boolean reserved) {
+        if (!reserved || !exportsReserved()
+                || reservedGoodsNote == null || reservedGoodsNote.isBlank()) {
+            return null;
+        }
+        return reservedGoodsNote.strip();
     }
 
     /**
@@ -391,9 +424,9 @@ public record FeedSettings(BigDecimal pricePercent, BigDecimal priceRounding,
      * <p>Незаполненная цена настройкой не оживает. Ноль у нас означает
      * «цену не назначили» — в выгрузке прежней системы он стоит там, где поле
      * не заполняли, — и наценка на «не назначили» дала бы цену там, где её
-     * нет. Из прайса такая позиция отбрасывается запросом, но полагаться
-     * на один только {@code WHERE} тут нельзя: дельта и колёса собираются
-     * своими запросами.
+     * нет. С задачи 0339 такая позиция в прайс запчастей идёт (как у Bazon),
+     * и уходит она той ценой, что в карточке, — нулём, а не «10 ₽» после
+     * округления вверх.
      */
     public BigDecimal priceFor(BigDecimal price) {
         if (price == null || price.signum() <= 0) {

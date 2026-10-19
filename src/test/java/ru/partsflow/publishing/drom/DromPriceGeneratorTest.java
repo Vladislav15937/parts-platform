@@ -23,8 +23,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Сборка прайса Дрома из настоящей схемы арендатора.
  *
  * <p>Проверяет то, чего не видно на объектах: свободный остаток суммируется
- * по складам и уменьшается резервом, проданное остаётся в прайсе недоступным,
- * а невыгружаемое не попадает вовсе.
+ * по складам и уменьшается резервом, а проданное, отложенное целиком
+ * и невыгружаемое не попадает вовсе (задача 0339).
  *
  * <p>Тесты делят одну схему и ничего не удаляют: журнал движений неизменяем
  * на уровне БД. Поэтому каждая проверка работает со своей позицией и ищет
@@ -101,9 +101,10 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         assertThat(offerOf(name)).contains("<state>В наличии</state>");
     }
 
+    /** Резерв выгружает только переключатель «Выгружать товары в резерве» (0339), по умолчанию выключен. */
     @Test
-    @DisplayName("Резерв делает позицию недоступной: обещанное другому не рекламируем")
-    void reservationMakesUnavailable() {
+    @DisplayName("Отложенная целиком в прайс не идёт: обещанное другому не рекламируем")
+    void reservationLeavesThePriceFile() {
         String name = "Прайс: стартер 1NZ-FE";
         Long partId = part(name, new BigDecimal("5000"), true);
         intake(partId, warehouse, 1);
@@ -112,27 +113,28 @@ class DromPriceGeneratorTest extends PostgresTestBase {
             return null;
         });
 
-        assertThat(offerOf(name))
-                .as("зарезервированная деталь ушла в прайс как доступная")
-                .contains("<state>Нет в наличии</state>");
+        assertThat(price())
+                .as("зарезервированная деталь ушла в прайс при выключенном переключателе")
+                .doesNotContain(name);
     }
 
     @Test
-    @DisplayName("Проданное остаётся в прайсе, но недоступным")
-    void soldStaysUnavailable() {
+    @DisplayName("Проданного в прайсе нет — как у Bazon (задача 0339)")
+    void soldLeavesThePriceFile() {
         String name = "Прайс: генератор 2AZ-FE";
         Long partId = part(name, new BigDecimal("7000"), true);
         intake(partId, warehouse, 1);
         sale(partId, warehouse, 1);
 
-        // Убрать позицию из прайса нельзя: объявление у Дрома исчезнет
-        // вместе с накопленными просмотрами.
-        assertThat(offerOf(name)).contains("<state>Нет в наличии</state>");
+        // Решение владельца 19.10.2026 «всё как в базон»: у Bazon проданного
+        // в файле нет, объявление снимает следующий полный забор.
+        assertThat(price()).doesNotContain(name);
+        assertThat(delta(partId)).doesNotContain(name);
     }
 
     @Test
-    @DisplayName("Списанное в прайс не попадает, а в дельту попадает недоступным")
-    void writtenOffIsExcludedFromPriceButSentInDelta() {
+    @DisplayName("Списанного нет ни в прайсе, ни в дельте")
+    void writtenOffIsExcludedFromPriceAndDelta() {
         String name = "Прайс: радиатор кондиционера";
         Long partId = part(name, new BigDecimal("2000"), true);
         intake(partId, warehouse, 1);
@@ -142,12 +144,9 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         // «проверяем, какие товары пропали, и убираем их с сайта».
         assertThat(price()).doesNotContain(name);
 
-        // А дельта об исчезновении сообщить не умеет: сказать можно только
-        // о том, что в неё попало. Отброшенное здесь висело бы на сайте
-        // доступным до следующего полного забора, то есть до суток.
-        assertThat(delta(partId))
-                .contains(name)
-                .contains("<state>Нет в наличии</state>");
+        // Дельта несёт тот же набор (задача 0339): «недоступна» в формате
+        // Bazon сказать нечем, а «В наличии» о списанной — неправда.
+        assertThat(delta(partId)).doesNotContain(name);
     }
 
     /**
@@ -306,29 +305,32 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         assertThat(price()).doesNotContain(name);
     }
 
+    /**
+     * Незаполненная цена — то же, что ноль: у Bazon незаполненное поле
+     * в файле стоит «0», и пустой {@code <price>} площадка прочла бы
+     * позицией без цены, а не ценой «0» (задача 0339, толкование исполнителя).
+     */
     @Test
-    @DisplayName("Позиция без цены в прайс не попадает")
-    void withoutPriceIsExcluded() {
+    @DisplayName("Позиция без цены уходит ценой 0, как у Bazon")
+    void withoutPriceGoesAsZero() {
         String name = "Прайс: без цены";
         Long partId = part(name, null, true);
         intake(partId, warehouse, 1);
 
-        assertThat(price()).doesNotContain(name);
+        assertThat(offerOf(name)).contains("<price>0</price>");
     }
 
     @Test
-    @DisplayName("Нулевая цена в прайс не идёт — это незаполненное поле")
-    void zeroPriceIsExcluded() {
+    @DisplayName("Нулевая цена в прайс идёт — как у Bazon (задача 0339)")
+    void zeroPriceIsInTheFile() {
         String name = "Прайс: цена ноль";
         Long partId = part(name, BigDecimal.ZERO, true);
         intake(partId, warehouse, 1);
 
-        // В выгрузке прежней системы ноль стоит там, где поле не заполняли:
-        // у переехавшего клиента таких десять позиций из тридцати шести тысяч,
-        // и уезжали они молча. А «0 ₽» в объявлении — публичное обещание
-        // отдать деталь даром, за которым идут звонки, а по правилам площадки
-        // и снятие всех объявлений разом.
-        assertThat(price()).doesNotContain(name);
+        // Решение владельца 19.10.2026: «0» у Bazon попадает в файл (4 позиции
+        // из ≈20 тысяч), а экран «Выгрузки» называет такие позиции красной
+        // строкой рядом со счётчиком.
+        assertThat(offerOf(name)).contains("<price>0</price>");
     }
 
     @Test
@@ -534,17 +536,16 @@ class DromPriceGeneratorTest extends PostgresTestBase {
      * по всем складам, он приедет за деталью, которая лежит на другом конце
      * города, и виноват будет магазин, а не он.
      *
-     * <p>Из прайса позиция при этом не исчезает — уезжает недоступной:
-     * убранное из файла объявление площадка снимает вместе с накопленными
-     * просмотрами, за которые и платят.
+     * <p>С задачи 0339 позиции, которой на складах выгрузки нет, в файле нет
+     * вовсе — как у Bazon с режимом склада «В наличии».
      *
      * <p>Правило было записано, но ничем не закрыто: тестов на отбор
      * по складу не было вовсе, и проверить его можно было только глазами
      * на живой выгрузке.
      */
     @Test
-    @DisplayName("Отбор по складу меняет остаток, а не только состав")
-    void warehouseFilterChangesAvailability() {
+    @DisplayName("Отбор по складу меняет состав: прайс филиала несёт только своё")
+    void warehouseFilterChangesComposition() {
         String name = "Прайс: лежит на дальнем складе";
         Long partId = part(name, new BigDecimal("7000"), true);
         intake(partId, otherWarehouse, 1);
@@ -559,10 +560,9 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         DromPriceGenerator.FeedFilter alien = new DromPriceGenerator.FeedFilter(
                 null, null, java.util.List.of(), java.util.List.of(warehouse),
                 java.util.List.of(), false, java.util.List.of(), false);
-        String other = offerIn(priceWith(alien), name);
-        assertThat(other)
+        assertThat(priceWith(alien))
                 .as("прайс филиала обещает деталь, которой в этом филиале нет")
-                .contains("<state>Нет в наличии</state>");
+                .doesNotContain(name);
     }
 
     /**
@@ -934,25 +934,23 @@ class DromPriceGeneratorTest extends PostgresTestBase {
     }
 
     /**
-     * Переключатель без текста приписки не выгружает ничего.
+     * Переключатель без текста приставки выгружает товар без неё (задача 0339).
      *
-     * <p>Пустой текст отбивается при сохранении, но настройки в базу может
-     * положить и перенос, и запрос мимо экрана. Товар, уехавший без слов
-     * о том, что его ещё нет, — это объявление, по которому покупатель
-     * приедет за деталью, лежащей в контейнере.
+     * <p>До неё — «не выгружает ничего» (решение 0007). У Bazon поле
+     * приставки пустое у всех пяти выгрузок клиента, а переключатель включён:
+     * «как в базон» — значит пустая приставка не останавливает товар.
      */
     @Test
-    @DisplayName("Включённый переключатель без текста товар в пути не выгружает")
-    void switchWithoutNoteShipsNothing() {
+    @DisplayName("Включённый переключатель без текста выгружает товар в пути без приставки")
+    void switchWithoutNoteShipsWithoutPrefix() {
         String name = "Прайс: радиатор из контейнера";
         expectedPart(name, new BigDecimal("5500"), "IN_TRANSIT");
 
         String xml = priceWith(new ru.partsflow.publishing.FeedSettings(
                 null, null, null, null, null, true, "   "));
 
-        assertThat(xml)
-                .as("товар в пути уехал без объяснения, почему его нет на складе")
-                .doesNotContain(name);
+        assertThat(xml).as("товар в пути не ушёл без приставки").contains(name);
+        assertThat(descriptionIn(offerIn(xml, name))).doesNotContain("   ");
     }
 
     /**
@@ -1033,15 +1031,16 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                     expects("Ожидается поступление"));
             return out.toString(StandardCharsets.UTF_8);
         });
-        // Дельта, в отличие от прайса, позицию несёт — недоступной: об исчезновении
-        // строки она сообщить не умеет, а опубликованное объявление должно
-        // сняться сразу, а не через полный забор (задача 0259).
+        // С задачи 0339 дельта несёт тот же набор, что прайс: «недоступна»
+        // в формате Bazon сказать нечем, и полностью предзаказанной позиции
+        // нет и в дельте. Решение 0259 «снимать сразу» этим отменено: снимает
+        // полный забор, как у Bazon (названо в PR задачи 0339).
         assertThat(delta)
-                .as("дельта молчит про позицию под предзаказом: объявление осталось доступным")
-                .contains("<state>Нет в наличии</state>");
+                .as("дельта несёт позицию, которую нельзя купить")
+                .doesNotContain(promised);
 
-        // Деталь пришла, предзаказ стал обычным резервом: строка возвращается
-        // и вычитается из остатка, как любой резерв (недоступна, но объявление живо).
+        // Деталь пришла, предзаказ стал обычным резервом: целиком отложенная,
+        // она в прайс не идёт, пока выгрузка резерв не выгружает (0339).
         inTenant(() -> {
             jdbc.update("UPDATE supply SET status = 'ARRIVED', arrived_on = current_date"
                     + " WHERE id = (SELECT supply_id FROM part WHERE id = ?)", promisedId);
@@ -1053,9 +1052,9 @@ class DromPriceGeneratorTest extends PostgresTestBase {
             jdbc.update("UPDATE deal_item SET status = 'RESERVED' WHERE deal_id = ?", dealId);
             return null;
         });
-        assertThat(offerIn(priceWith(expects("Ожидается поступление")), promised))
-                .as("после прихода позиция обязана вернуться в прайс")
-                .contains("<state>Нет в наличии</state>");
+        assertThat(priceWith(expects("Ожидается поступление")))
+                .as("после прихода отложенная целиком ушла в прайс при выключенном резерве")
+                .doesNotContain(promised);
     }
 
     /**
@@ -1064,7 +1063,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
      *
      * <p>Партия 3: предзаказ на 1 — Дром видит 2 и доступное; ещё на 2 (двумя
      * строками 1+2 — считается сумма количеств, не число строк) — строки в
-     * прайсе нет, а дельта несёт недоступной с нулём. Счётчик сверяется с
+     * прайсе нет, и в дельте тоже (задача 0339). Счётчик сверяется с
      * числом {@code <part>} на каждом шаге.
      */
     @Test
@@ -1107,8 +1106,8 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 .as("счётчик считает позицию, которой в файле нет")
                 .isEqualTo(none.split("<part>", -1).length - 1);
         assertThat(delta(partId, expects("Ожидается поступление")))
-                .as("дельта полностью предзаказанной позиции: недоступная")
-                .contains("<state>Нет в наличии</state>");
+                .as("дельта несёт позицию, все штуки которой под предзаказом")
+                .doesNotContain(name);
     }
 
     /**
@@ -1131,9 +1130,10 @@ class DromPriceGeneratorTest extends PostgresTestBase {
             return null;
         });
         // Количества в файле Bazon-вида нет (задача 0333): «не в минус» видно
-        // тем, что позиция уходит недоступной, а не доступной с отрицательным.
+        // тем, что позиции нет вовсе, а не доступной с отрицательным (0339).
         assertThat(delta(partId, expects("Ожидается поступление")))
-                .contains("<state>Нет в наличии</state>");
+                .doesNotContain(name);
+        assertThat(priceWith(expects("Ожидается поступление"))).doesNotContain(name);
     }
 
     private long counted() {

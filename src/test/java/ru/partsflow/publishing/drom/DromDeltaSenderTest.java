@@ -222,20 +222,24 @@ class DromDeltaSenderTest extends PostgresTestBase {
         assertThat(statusOf("Дром").code()).isEqualTo(DeliveryStatus.Code.TOO_BIG);
     }
 
+    /**
+     * Проданная до последней штуки в дельту не идёт (задача 0339): в формате
+     * Bazon сказать «недоступна» нечем, а «В наличии» о проданной — неправда.
+     * Объявление снимает полный забор прайса, как у Bazon. Слать нечего —
+     * и это не отказ: выдача сделки не ломается и ничего не повторяет.
+     */
     @Test
-    @DisplayName("Проданная деталь уезжает недоступной")
-    void soldPartGoesAsUnavailable() {
+    @DisplayName("Проданная до последней штуки в дельту не идёт, и выдача от этого не ломается")
+    void soldOutPartIsNotSent() {
         account("12345", "ключ-кабинета");
         Long partId = part("Стартер 1NZ-FE", true);
         long dealId = issuedDeal(partId);
-        String key = feedKeyOf(partId);
+        inTenant(() -> ledger.record(
+                StockMovement.sale(partId, java.math.BigDecimal.ONE, warehouse, null)));
 
         assertThat(inTenant(() -> sender.onDealIssued(dealId))).isTrue();
 
-        String delta = capturedDelta();
-        assertThat(delta)
-                .contains("<id>" + key + "</id>")
-                .contains("<state>Нет в наличии</state>");
+        assertThat(syncClient.calls()).as("проданная до нуля ушла в дельте").isEmpty();
     }
 
     /**
@@ -299,7 +303,7 @@ class DromDeltaSenderTest extends PostgresTestBase {
             jdbc.update("""
                     INSERT INTO part_wheel (part_id, kind, diameter, tyre_width, tyre_height)
                     VALUES (?, 'TYRE', 16, 205, 55)""", id);
-            ledger.record(StockMovement.intake(id, java.math.BigDecimal.ONE, warehouse, null));
+            ledger.record(StockMovement.intake(id, java.math.BigDecimal.valueOf(2), warehouse, null));
             return id;
         });
         Long photoId = inTenant(() -> {
@@ -500,7 +504,9 @@ class DromDeltaSenderTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price, cost_price, is_published)
                     VALUES (1, ?, 5000, 2000, ?) RETURNING id""",
                     Long.class, title, published);
-            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
+            // Две штуки: выдача одной оставляет позицию в файле, и дельта
+            // ей есть — проданное до нуля в дельту не идёт (задача 0339).
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.valueOf(2), warehouse, null));
             return partId;
         });
     }

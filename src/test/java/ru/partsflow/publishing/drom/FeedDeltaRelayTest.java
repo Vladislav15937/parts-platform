@@ -125,9 +125,15 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         assertThat(queueSize()).isZero();
     }
 
+    /**
+     * Списанное до нуля в дельту не идёт (задача 0339): в формате Bazon
+     * сказать «недоступна» нечем. Отметка при этом снимается — держать её
+     * значило бы копить очередь, которой некуда деться: состояние площадка
+     * узнает полным забором, где этой позиции уже нет.
+     */
     @Test
-    @DisplayName("Списанная позиция уезжает недоступной")
-    void writtenOffGoesAsUnavailable() {
+    @DisplayName("Списанная до нуля позиция в дельту не идёт, и очередь её не держит")
+    void writtenOffIsNotSent() {
         account("12345", null, null);
         Long partId = part("Стартер", "5000");
         drainQueue();
@@ -136,14 +142,15 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         // ещё меняет триггер базы (пункт 1 в docs/triggers-to-java.md),
         // поэтому отметку кладёт тот, кто движение записал.
         inTenant(() -> {
-            ledger.record(StockMovement.writeOff(partId, java.math.BigDecimal.ONE, warehouse));
+            ledger.record(StockMovement.writeOff(partId, java.math.BigDecimal.valueOf(2), warehouse));
             partChanges.changed(partId);
             return null;
         });
 
         assertThat(queueSize()).isEqualTo(1);
         relay.relayFor(TENANT);
-        assertThat(capturedDelta()).contains("<state>Нет в наличии</state>");
+        assertThat(syncClient.calls()).as("списанная до нуля ушла в дельте").isEmpty();
+        assertThat(queueSize()).isZero();
     }
 
     @Test
@@ -504,7 +511,9 @@ class FeedDeltaRelayTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price, is_published)
                     VALUES (1, ?, ?::numeric, true) RETURNING id""",
                     Long.class, title, price);
-            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
+            // Две штуки: проданная одна оставляет позицию в файле и в дельте —
+            // проданное до нуля в дельту не идёт (задача 0339).
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.valueOf(2), warehouse, null));
             return partId;
         });
     }

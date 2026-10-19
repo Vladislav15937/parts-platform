@@ -215,7 +215,10 @@ class DealIssuedHandlerTest extends PostgresTestBase {
             Long partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price, cost_price, is_published)
                     VALUES (1, ?, 5000, 2000, true) RETURNING id""", Long.class, title);
-            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.ONE, warehouse, null));
+            // Две штуки: выдача одной оставляет позицию в файле, и дельта ей
+            // есть — проданное до нуля в дельту не идёт (задача 0339), а тест
+            // про доставку события, не про состав файла.
+            ledger.record(StockMovement.intake(partId, java.math.BigDecimal.valueOf(2), warehouse, null));
             return partId;
         });
     }

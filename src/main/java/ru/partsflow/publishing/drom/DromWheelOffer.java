@@ -17,8 +17,9 @@ import java.util.List;
  * @param inSet     «Количество в комплекте» — за сколько колёс названа цена
  * @param wear      «Износ шин» вместе со знаком процента: {@code 30%}
  * @param price     цена целым, как в карточке: на штуку её никто не делит
- * @param photos    ссылки на снимки в порядке карточки
- * @param available «В наличии» либо слово недоступной позиции
+ * @param photos    ссылки на снимки в порядке карточки. «Статуса» в записи нет:
+ *                  он у всех строк «В наличии» — что нельзя купить, в файл
+ *                  не попадает (задача 0339)
  */
 public record DromWheelOffer(
         String article,
@@ -43,6 +44,5 @@ public record DromWheelOffer(
         String condition,
         String comment,
         String price,
-        List<String> photos,
-        boolean available) {
+        List<String> photos) {
 }

@@ -87,8 +87,8 @@ class PublicationReachTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Позиция без цены в прайс не идёт")
-    void partWithoutPriceIsNotOffered() throws Exception {
+    @DisplayName("Позиция без цены в прайс идёт ценой 0 — как у Bazon (задача 0339)")
+    void partWithoutPriceIsOfferedAtZero() throws Exception {
         Tenant tenant = tenant();
         MockHttpSession session = tenant.session();
 
@@ -100,10 +100,11 @@ class PublicationReachTest extends PostgresTestBase {
                                 .formatted(tenant.warehouseId(), UUID.randomUUID())))
                 .andExpect(status().isCreated());
 
-        // Объявление без цены площадка не примет, а выставить её забыли —
-        // это работа для экрана, а не повод слать пустое предложение.
-        assertThat(mvc.perform(get(feedOf(session))).andReturn().getResponse().getContentAsString())
-                .doesNotContainIgnoringCase("молдинг");
+        // Решение владельца 19.10.2026 «всё как в базон»: у Bazon позиция
+        // с ценой 0 в файле есть, а экран «Выгрузки» называет такие позиции
+        // красной строкой рядом со счётчиком — узнать о них до площадки.
+        String feed = mvc.perform(get(feedOf(session))).andReturn().getResponse().getContentAsString();
+        assertThat(feed).containsIgnoringCase("молдинг").contains("<price>0</price>");
     }
 
     private long receive(MockHttpSession session, long warehouseId, String name) throws Exception {

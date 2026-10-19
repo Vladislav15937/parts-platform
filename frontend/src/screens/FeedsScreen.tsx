@@ -278,12 +278,19 @@ function FeedCard({
 
   // Товар, по которому ожидается поступление. Поле текста открывается пустым
   // намеренно: слова приписки выбирает владелец, а не мы, и подставленный
-  // здесь текст уехал бы к покупателю от его имени. Пустой текст при
-  // включённом переключателе сервер отбивает словами.
+  // здесь текст уехал бы к покупателю от его имени. Пустое — законно: товар
+  // уходит без приставки, как у Bazon (задача 0339).
   const [expectedGoods, setExpectedGoods] = useState(
     feed.settings?.expectedGoods === true);
   const [expectedGoodsNote, setExpectedGoodsNote] = useState(
     feed.settings?.expectedGoodsNote ?? '');
+
+  // «Выгружать товары в резерве» (задача 0339): выключен, пока владелец
+  // не включит, — как у Bazon. Приставка пуста по той же причине, что выше.
+  const [reservedGoods, setReservedGoods] = useState(
+    feed.settings?.reservedGoods === true);
+  const [reservedGoodsNote, setReservedGoodsNote] = useState(
+    feed.settings?.reservedGoodsNote ?? '');
 
   // Наименования, которым в объявление дописываются снимки машины-донора.
   // Пусто — никому, как было до появления настройки: у фары фотографии
@@ -293,6 +300,8 @@ function FeedCard({
 
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState<number | null>(null);
+  // Сколько из попавших в файл стоят 0 — красная строка рядом со счётчиком.
+  const [zeroPrice, setZeroPrice] = useState(0);
 
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
@@ -390,6 +399,9 @@ function FeedCard({
         expectedGoods,
         expectedGoodsNote: expectedGoodsNote.trim() === ''
           ? null : expectedGoodsNote,
+        reservedGoods,
+        reservedGoodsNote: reservedGoodsNote.trim() === ''
+          ? null : reservedGoodsNote,
         donorPhotoKinds,
       });
       if (mounted.current) onChanged();
@@ -403,11 +415,14 @@ function FeedCard({
   async function count() {
     setBusy(true);
     try {
-      // Переключатель ожидаемого товара берётся из формы, как и весь отбор:
-      // счётчик, о нём не знающий, обещал бы меньше, чем уедет площадке.
-      const counted = (await countMatching(
-        current(), feed.productLine, expectedGoods)).parts;
-      if (mounted.current) setMatching(counted);
+      // Переключатели ожидаемого товара и резерва берутся из формы, как и весь
+      // отбор: счётчик, о них не знающий, обещал бы не то, что уедет площадке.
+      const counted = await countMatching(
+        current(), feed.productLine, expectedGoods, reservedGoods);
+      if (mounted.current) {
+        setMatching(counted.parts);
+        setZeroPrice(counted.zeroPrice ?? 0);
+      }
     } catch (cause) {
       if (mounted.current) onError(describe(cause, 'Посчитать не удалось'));
     } finally {
@@ -891,23 +906,55 @@ function FeedCard({
         </div>
       </fieldset>
 
-      {/* Товар, по которому ожидается поступление: он привязан к поставке
-          в пути и на складе его ещё нет. Решение владельца продукта
-          от 5 сентября 2026 — выгружать, но с припиской: товар в пути никому
-          не обещан, продавать его можно, покупателю лишь надо сказать, что
-          придётся подождать.
+      {/* Позиция, целиком отложенная под клиента (задача 0339). Подписи —
+          дословно Bazon: клиент переходит оттуда и ищет эти слова. Поле
+          приставки погашено, пока переключатель выключен, — как у Bazon.
 
-          Колёсной выгрузке этого не показываем: в прайсе шин и дисков
-          элемента описания нет вовсе, приписку дописывать некуда — а без неё
-          такой товар уехал бы объявлением о детали, которой нет на складе. */}
+          Колёсной выгрузке не показываем: генератор колёс резерва не знает,
+          отложенное колесо в файл не идёт никогда. */}
       {!wheels && (
         <fieldset className="choices">
-          <legend>Товар в пути — выгружать с припиской</legend>
+          <legend>Товар в резерве</legend>
+          <label className="choice--wrap">
+            <input
+              type="checkbox"
+              checked={reservedGoods}
+              onChange={(e) => setReservedGoods(e.target.checked)}
+            />
+            Выгружать товары в резерве
+          </label>
+          <label className="field field--sentence">
+            Приставка о резерве
+            <input
+              value={reservedGoodsNote}
+              disabled={!reservedGoods}
+              onChange={(e) => setReservedGoodsNote(e.target.value)}
+            />
+          </label>
           <p className="note">
-            Речь о товаре из поставки, которая ещё не приехала: на складе его
-            нет. Приписка встаёт в начало описания объявления и пропадает
-            сама, когда поставку отметят пришедшей.
+            Если товар находится в резерве, то информация об этом добавится
+            в начало объявления
           </p>
+          <div className="filter-row">
+            <button type="button" disabled={busy}
+                    onClick={() => void saveSettings('Товар в резерве не сохранён')}>
+              Сохранить товар в резерве
+            </button>
+          </div>
+        </fieldset>
+      )}
+
+      {/* Товар, по которому ожидается поступление: он привязан к поставке
+          в пути и на складе его ещё нет. Подпись под переключателем — Bazon
+          дословно (задача 0339): у него это товар в перемещении между
+          складами, у нас пока — из поставки в пути; перемещение войдёт
+          сюда же с задачей 0370. Приставка необязательна, как у Bazon.
+
+          Колёсной выгрузке этого не показываем: в прайсе шин и дисков
+          элемента описания нет вовсе, приписку дописывать некуда. */}
+      {!wheels && (
+        <fieldset className="choices">
+          <legend>Товар в пути</legend>
 
           {/* Подпись длинная, а флажки отбора выше стоят с `nowrap` —
               рассчитан он на «новые» и «б/у». Без переноса эта фраза
@@ -931,10 +978,15 @@ function FeedCard({
             Текст приписки о поступлении
             <input
               value={expectedGoodsNote}
+              disabled={!expectedGoods}
               placeholder="например, ожидается поступление"
               onChange={(e) => setExpectedGoodsNote(e.target.value)}
             />
           </label>
+          <p className="note">
+            Если товар находится в перемещении, то информация об этом
+            добавится в начало объявления
+          </p>
 
           <div className="filter-row">
             <button type="button" disabled={busy}
@@ -1001,6 +1053,13 @@ function FeedCard({
             ? 'С таким отбором в прайс не попадёт ничего. Площадка примет пустой '
               + 'прайс молча, и объявления пропадут вместе с просмотрами'
             : `В прайс попадёт позиций: ${matching}`}
+        </p>
+      )}
+      {/* Цена 0 уходит на площадку, как у Bazon (задача 0339), — и обычно
+          это поле, которое не заполнили. Слова — из решения владельца. */}
+      {matching !== null && matching > 0 && zeroPrice > 0 && (
+        <p className="note note--error">
+          {`с нулевой ценой: ${zeroPrice.toLocaleString('ru-RU')}`}
         </p>
       )}
 

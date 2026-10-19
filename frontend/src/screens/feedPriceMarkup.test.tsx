@@ -72,6 +72,8 @@ describe('наценка на прайс-лист', () => {
         installationTemplate: 'Стоимость установки на нашем автосервисе: {цена} р.',
         expectedGoods: false,
         expectedGoodsNote: null,
+        reservedGoods: false,
+        reservedGoodsNote: null,
         donorPhotoKinds: [],
       });
   });
@@ -96,6 +98,8 @@ describe('наценка на прайс-лист', () => {
       installationTemplate: 'Стоимость установки на нашем автосервисе: {цена} р.',
       expectedGoods: false,
       expectedGoodsNote: null,
+      reservedGoods: false,
+      reservedGoodsNote: null,
       donorPhotoKinds: [],
     });
   });

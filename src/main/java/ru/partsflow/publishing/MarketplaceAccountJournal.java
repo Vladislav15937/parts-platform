@@ -219,6 +219,8 @@ class MarketplaceAccountJournal {
         into.put("installation_template", text(settings, "installationTemplate"));
         into.put("expected_goods", String.valueOf(settings.path("expectedGoods").asBoolean(false)));
         into.put("expected_goods_note", text(settings, "expectedGoodsNote"));
+        into.put("reserved_goods", String.valueOf(settings.path("reservedGoods").asBoolean(false)));
+        into.put("reserved_goods_note", text(settings, "reservedGoodsNote"));
         List<String> ids = new ArrayList<>();
         settings.path("donorPhotoKinds").forEach(node -> ids.add(node.asText()));
         into.put("donor_photo_kind_ids", ids.isEmpty() ? null : String.join(",", ids));
