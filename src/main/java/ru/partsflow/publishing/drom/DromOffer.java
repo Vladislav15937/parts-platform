@@ -62,7 +62,17 @@ import java.util.List;
  *                     без чистки заголовка, без собранного описания и без
  *                     приписок (задача 0275). Признак — номер объявления
  *                     Дрома у позиции: другого носителя у «это объявление
- *                     клиента» нет, а схему ради второго заводить незачем
+ *                     клиента» нет, а схему ради второго заводить незачем.
+ *                     С 0335 касается только описания: название в файле
+ *                     собирается по формуле Bazon у всех
+ * @param partName     вид детали так, как его ввёл клиент ({@code part_name.name}),
+ *                     — первое слово названия в файле (задача 0335); {@code null} —
+ *                     наименование не заведено, тогда берётся {@code partKind}
+ * @param yearText     «Год выпуска» текстом как у Bazon ({@code 2010}, {@code 03-08});
+ *                     пуст — берётся {@code year}
+ * @param titleBrand   марка для названия: своя, иначе донора, иначе ПЕРВАЯ
+ *                     из применимости по порядку строк
+ * @param titleModel   модель для названия — так же
  */
 public record DromOffer(
         String orderCode,
@@ -93,7 +103,30 @@ public record DromOffer(
         String installationNote,
         String expectedNote,
         String authenticity,
-        boolean clientText) {
+        boolean clientText,
+        String partName,
+        String yearText,
+        String titleBrand,
+        String titleModel) {
+
+    /** Прежний состав до задачи 0335: без полей названия в файле. */
+    public DromOffer(String orderCode, String name, String partKind, String description,
+                     BigDecimal price, BigDecimal availableQty, PartCondition condition,
+                     String manufacturer, String oemNumber, List<String> analogNumbers,
+                     LateralSide lateralSide, LongitudinalSide longitudinalSide,
+                     VerticalSide verticalSide, String color, String marking,
+                     Placement placement, List<String> photos, String carBrand,
+                     String carModel, String bodyCode, String engineCode, Integer year,
+                     boolean fromDonor, String textBlock, String videoUrl,
+                     String installationNote, String expectedNote, String authenticity,
+                     boolean clientText) {
+        this(orderCode, name, partKind, description, price, availableQty, condition,
+                manufacturer, oemNumber, analogNumbers, lateralSide, longitudinalSide,
+                verticalSide, color, marking, placement, photos, carBrand, carModel,
+                bodyCode, engineCode, year, fromDonor, textBlock, videoUrl,
+                installationNote, expectedNote, authenticity, clientText,
+                null, null, null, null);
+    }
 
     /**
      * Позиция без оригинальности и с текстом, который собираем мы, —
@@ -119,7 +152,7 @@ public record DromOffer(
                 manufacturer, oemNumber, analogNumbers, lateralSide, longitudinalSide,
                 verticalSide, color, marking, placement, photos, carBrand, carModel,
                 bodyCode, engineCode, year, fromDonor, textBlock, videoUrl,
-                installationNote, expectedNote, null, false);
+                installationNote, expectedNote, null, false, null, null, null, null);
     }
 
     public boolean isAvailable() {

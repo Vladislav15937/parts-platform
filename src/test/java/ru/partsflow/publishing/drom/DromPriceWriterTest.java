@@ -283,10 +283,12 @@ class DromPriceWriterTest {
         @Test
         @DisplayName("Опасные символы экранируются, описание уходит в CDATA и «]]>» его не рвёт")
         void escapesAndCdata() throws Exception {
-            DromOffer tricky = new DromOffer("P-2", "Кронштейн <передний> & правый", "Кронштейн",
+            // Название в файле собирается из вида клиента (0335): опасные знаки — в нём.
+            DromOffer tricky = new DromOffer("P-2", "Кронштейн", "Кронштейн",
                     "Размер ]]> & <б/у>", new BigDecimal("100"), BigDecimal.ONE, PartCondition.USED,
                     null, null, List.of(), null, null, null, null, null, null, List.of(),
-                    null, null, null, null, null, true, null, null, null, null);
+                    null, null, null, null, null, true, null, null, null, null, null, false,
+                    "кронштейн <передний> & правый", null, null, null);
 
             String xml = write(tricky);
 
@@ -297,17 +299,19 @@ class DromPriceWriterTest {
         }
 
         @Test
-        @DisplayName("Название выгрузки очищено от сокращений, вид детали уходит полем partname")
+        @DisplayName("Название выгрузки собрано по формуле Bazon из полей позиции, вид детали уходит полем partname")
         void titleAndPartname() throws Exception {
             DromOffer abbreviated = new DromOffer("P-8",
                     "Фара Toyota Camry 2007 перед. лев. (б/у) 81170-33670", "Фара", null,
                     new BigDecimal("100"), BigDecimal.ONE, PartCondition.USED,
                     null, "81170-33670", List.of(),
                     LateralSide.LEFT, LongitudinalSide.FRONT, null, null, null, null, List.of(),
-                    null, null, null, null, null, true, null, null, null, null);
+                    null, null, null, null, null, true, null, null, null, null, null, false,
+                    "фара", null, "Toyota", "Camry");
 
             String xml = write(abbreviated);
-            assertThat(value(xml, "title")).isEqualTo("Фара Toyota Camry 2007 81170-33670");
+            // Год не задан ни текстом, ни числом — слова нет.
+            assertThat(value(xml, "title")).isEqualTo("Фара Toyota Camry 8117033670, передняя левая");
             assertThat(value(xml, "partname")).isEqualTo("Фара");
             assertThat(value(xml, "id")).isEqualTo("P-8");
         }
@@ -387,15 +391,15 @@ class DromPriceWriterTest {
     class ClientText {
 
         @Test
-        @DisplayName("Заголовок клиента уходит побайтно — без чистки «(б/у)» и сокращений")
-        void nameIsVerbatim() throws Exception {
+        @DisplayName("Заголовок клиента в файл не идёт — название собрано по формуле Bazon (0335)")
+        void nameIsTheFormulaNotTheClientsTitle() throws Exception {
             for (String title : List.of(
                     "Карданный вал передний (Пробег 130т. км)Toyota Land Cruiser Prado 120",
                     "Рулевая рейка ( правый руль 110т. км) Toyota Land Cruiser Prado 120",
                     "Фара (б/у) перед. лев. Toyota Camry  (контракт)")) {
                 assertThat(value(write(transferred(title, null)), "title"))
-                        .as("заголовок клиента ушёл не дословно")
-                        .isEqualTo(title);
+                        .as("заголовок клиента ушёл в файл, а не формула")
+                        .isEqualTo("Фара Toyota Land Cruiser Prado 2008 3714060380, передняя левая");
             }
         }
 
@@ -426,7 +430,8 @@ class DromPriceWriterTest {
                     null, null, null, null, null, true, "Текстовый блок", null, null, null);
 
             String xml = write(ours);
-            assertThat(value(xml, "title")).isEqualTo("Фара Toyota Camry");
+            // Полей названия нет — уходит вид справочника; хранимое название не течёт.
+            assertThat(value(xml, "title")).isEqualTo("Фара");
             assertThat(value(xml, "description")).isEqualTo("Состояние: б/у.\nТекстовый блок");
         }
     }
@@ -579,7 +584,8 @@ class DromPriceWriterTest {
                 null, null, null, null, List.of(),
                 "Toyota", "Land Cruiser Prado", null, null, 2008, true,
                 "Текстовый блок", "https://video.example/1",
-                "Стоимость установки: 500 р.", "Ожидается поступление", null, true);
+                "Стоимость установки: 500 р.", "Ожидается поступление", null, true,
+                "фара", null, "Toyota", "Land Cruiser Prado");
     }
 
     /** Текст единственного элемента с этим именем — как его прочтёт площадка. */
