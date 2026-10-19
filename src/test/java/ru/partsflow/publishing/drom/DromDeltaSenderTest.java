@@ -514,7 +514,10 @@ class DromDeltaSenderTest extends PostgresTestBase {
 
         @Override
         public Result sync(String packetId, String auth, byte[] deltaXml, String fileName) {
-            calls.add(new Call(packetId, auth, new String(deltaXml, StandardCharsets.UTF_8), fileName));
+            // Дельта шин и дисков — CSV в windows-1251 (0340), остальное — XML в UTF-8.
+            java.nio.charset.Charset charset = fileName.endsWith(".csv")
+                    ? java.nio.charset.Charset.forName("windows-1251") : StandardCharsets.UTF_8;
+            calls.add(new Call(packetId, auth, new String(deltaXml, charset), fileName));
             return perPacket.getOrDefault(packetId, answer);
         }
 

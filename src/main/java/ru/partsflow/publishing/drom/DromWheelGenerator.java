@@ -5,7 +5,6 @@ import org.hibernate.Session;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import javax.xml.stream.XMLStreamException;
 import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.sql.PreparedStatement;
@@ -39,8 +38,9 @@ public class DromWheelGenerator {
      * с просмотрами; то же соображение, что и в прайсе запчастей.
      */
     private static final String SQL = """
-            SELECT p.public_code,
-                   p.title,
+            SELECT -- Ключ позиции в файле — её номер (0334, 0340), не публичный код.
+                   p.number,
+                   p.description,
                    p.price,
                    p.condition,
                    COALESCE(s.qty_available, 0) AS qty_available,
@@ -49,7 +49,7 @@ public class DromWheelGenerator {
                    w.disc_brand, w.disc_model,
                    w.tyre_width, w.tyre_height, w.diameter,
                    w.speed_index, w.load_index, w.run_flat, w.light_truck,
-                   w.disc_width, w.offset_mm, w.bolt_pattern,
+                   w.disc_width, w.offset_mm, w.bolt_pattern, w.disc_type, w.hub_bore,
                    w.season, w.wear_percent, w.made_year, w.set_pieces,
                    photos.ids AS photo_ids
               FROM part p
@@ -180,7 +180,7 @@ public class DromWheelGenerator {
                 try (ResultSet rs = statement.executeQuery()) {
                     return writer.write(out, new OfferCursor(rs, photoBase, settings));
                 }
-            } catch (XMLStreamException e) {
+            } catch (java.io.IOException e) {
                 throw new SQLException("Не удалось записать прайс колёс", e);
             }
         });
@@ -189,9 +189,8 @@ public class DromWheelGenerator {
     /**
      * Дельта колёс: те же позиции в том же формате, только выбранные.
      *
-     * <p>Формат обязан совпадать с полным прайсом — площадка разбирает дельту
-     * той же настройкой. Ссылок на снимки в ней нет по той же причине, что
-     * и в дельте запчастей: объявление и его фотографии у Дрома уже есть.
+     * <p>Формат обязан совпадать с полным файлом — площадка разбирает дельту
+     * той же настройкой («смена формата — ошибка», {@code docs/drom-integration.md}).
      */
     @Transactional(readOnly = true)
     public int writeDelta(OutputStream out, List<Long> partIds,
@@ -211,10 +210,25 @@ public class DromWheelGenerator {
     public int writeDelta(OutputStream out, List<Long> partIds,
                           DromPriceGenerator.FeedFilter filter,
                           ru.partsflow.publishing.FeedSettings settings) {
+        return writeDelta(out, partIds, filter, settings, null);
+    }
+
+    /**
+     * Дельта со ссылками на снимки — тем же адресом выдачи, что и полный файл.
+     *
+     * <p>Пустая колонка «Фото» в файле Bazon значит «снимков нет», а не «не
+     * трогать»: дельта без ссылок снимала бы фотографии с объявления
+     * (так же решено для прайса запчастей, 0333). Аннотация повторена:
+     * {@code @Transactional} перегрузкой не наследуется.
+     */
+    @Transactional(readOnly = true)
+    public int writeDelta(OutputStream out, List<Long> partIds,
+                          DromPriceGenerator.FeedFilter filter,
+                          ru.partsflow.publishing.FeedSettings settings, String photoBase) {
         if (partIds == null || partIds.isEmpty()) {
             return 0;
         }
-        return write(out, partIds, filter, null, settings);
+        return write(out, partIds, filter, photoBase, settings);
     }
 
     /** Итератор поверх курсора: строки не накапливаются. */
@@ -271,151 +285,101 @@ public class DromWheelGenerator {
                                           ru.partsflow.publishing.FeedSettings settings)
                 throws SQLException {
             String kind = rs.getString("kind");
-            boolean used = "USED".equals(rs.getString("condition"));
+            boolean disc = !"TYRE".equals(kind);
+            boolean tyre = !"DISC".equals(kind);
+            String condition = rs.getString("condition");
 
             return new DromWheelOffer(
-                    rs.getString("public_code"),
-                    rs.getString("title"),
-                    model(rs, kind),
-                    marking(rs, kind),
-                    // Колесо у нас продаётся поштучно — так его и заводят
-                    // в карточку, и так называется цена. Площадка требует,
-                    // чтобы цена соответствовала числу шин в комплекте
-                    // (п. 6.4.3), поэтому здесь единица, а не размер набора:
-                    // покупатель берёт и одну запаску. Исключение — позиция,
-                    // которая сама и есть комплект (перенос с Дрома, задача 0291:
-                    // «одной позицией, только целиком, по цене из файла»):
-                    // её цена названа за все колёса, и столько их и уходит.
+                    // Ключ позиции в файле — «К» и номер позиции (0334, 0340):
+                    // у перенесённой с Bazon это её «Номер товара». Букву надо
+                    // проверять кодом знака, не глазом: латинская K выглядит так же.
+                    DromWheelWriter.ARTICLE_PREFIX + rs.getLong("number"),
+                    switch (kind) {
+                        case "TYRE" -> DromWheelWriter.TYPE_TYRE;
+                        case "DISC" -> DromWheelWriter.TYPE_DISC;
+                        default -> DromWheelWriter.TYPE_ASSEMBLY;
+                    },
+                    // Колёс, за которые названа цена: комплект одной позицией
+                    // (перенос с Дрома, 0291) — его число, иначе одно. Цена
+                    // не пересчитывается на штуку никогда (решение 2 задачи 0340):
+                    // она уходит как в карточке, число штук — своей колонкой.
                     inSet(rs),
-                    rs.getBigDecimal("qty_available"),
-                    // Цена объявления, а не складская: наценка принадлежит
-                    // прайс-листу, а колесо на складе стоит по-прежнему.
-                    settings.priceFor(rs.getBigDecimal("price")),
-                    used ? "Б/у" : "Новая",
-                    season(rs.getString("season")),
-                    rs.getBoolean("light_truck") ? "Грузовая" : "Легковая",
-                    spike(rs.getString("season")),
-                    year(rs),
-                    // Износ хранится процентами, как у клиента (задача 0340): что вписано,
-                    // то и уходит — пересчёта из миллиметров больше нет.
-                    used ? (Integer) rs.getObject("wear_percent") : null,
-                    photoLinks(rs.getString("photo_ids"), photoBase, settings));
+                    disc ? firstNonBlank(rs.getString("disc_brand"),
+                            "DISC".equals(kind) ? rs.getString("brand") : null) : null,
+                    disc ? firstNonBlank(rs.getString("disc_model"),
+                            "DISC".equals(kind) ? rs.getString("model") : null) : null,
+                    disc ? number(rs.getBigDecimal("diameter")) : null,
+                    disc ? rs.getString("disc_type") : null,
+                    disc ? number(rs.getBigDecimal("disc_width")) : null,
+                    disc ? integer(rs, "offset_mm") : null,
+                    disc ? rs.getString("bolt_pattern") : null,
+                    disc ? number(rs.getBigDecimal("hub_bore")) : null,
+                    tyre ? rs.getString("brand") : null,
+                    tyre ? rs.getString("model") : null,
+                    tyre ? integer(rs, "tyre_width") : null,
+                    tyre ? integer(rs, "tyre_height") : null,
+                    tyre ? number(rs.getBigDecimal("diameter")) : null,
+                    tyre ? season(rs.getString("season")) : null,
+                    tyre ? integer(rs, "made_year") : null,
+                    // Износ хранится процентами, как у клиента (0340): «30%»
+                    // вписано — «30%» уходит. У новой шины его нет.
+                    tyre && !"NEW".equals(condition) && rs.getObject("wear_percent") != null
+                            ? rs.getInt("wear_percent") + "%" : null,
+                    condition(condition),
+                    // Комментарий — текст клиента как набран (описание позиции).
+                    rs.getString("description"),
+                    price(settings.priceFor(rs.getBigDecimal("price"))),
+                    photoLinks(rs.getString("photo_ids"), photoBase, settings),
+                    rs.getBigDecimal("qty_available").signum() > 0);
+        }
+
+        /** Цена целым, копейки вверх — так же, как в файле запчастей (0333). */
+        private static String price(BigDecimal price) {
+            return price == null ? null
+                    : price.setScale(0, java.math.RoundingMode.CEILING).toPlainString();
+        }
+
+        private static String number(BigDecimal value) {
+            return value == null ? null : value.stripTrailingZeros().toPlainString();
+        }
+
+        private static String integer(ResultSet rs, String column) throws SQLException {
+            int value = rs.getInt(column);
+            return rs.wasNull() ? null : String.valueOf(value);
+        }
+
+        private static String firstNonBlank(String first, String second) {
+            return first != null && !first.isBlank() ? first : second;
         }
 
         /**
-         * Производитель и модель. У колеса в сборе их два — шинный и дисковый,
-         * — и площадке нужен тот, по которому ищут шину.
+         * Сезон словами Bazon. Шипы и липучка различаются здесь самим словом
+         * сезона (у площадки XML они были отдельным полем).
          */
-        private static String model(ResultSet rs, String kind) throws SQLException {
-            String brand = "DISC".equals(kind) ? rs.getString("disc_brand") : rs.getString("brand");
-            String model = "DISC".equals(kind) ? rs.getString("disc_model") : rs.getString("model");
-            return join(brand, model);
-        }
-
-        /**
-         * Маркировка по правилам площадки: типоразмер, потом индексы.
-         *
-         * <p>Порядок и слитность взяты из её требований (п. 3.3): «195/65R15
-         * 100Q». Написание «R15 195/65» она честно предупреждает, что
-         * распознает неверно, и покупатель шину не найдёт.
-         *
-         * <p>У диска типоразмера в этом смысле нет; ему отдаётся привычная
-         * запись «7x18 5x114.3 ET38» — та же, что видит человек на самом диске.
-         */
-        private static String marking(ResultSet rs, String kind) throws SQLException {
-            if ("DISC".equals(kind)) {
-                return discMarking(rs);
-            }
-            BigDecimal diameter = rs.getBigDecimal("diameter");
-            int width = rs.getInt("tyre_width");
-            int height = rs.getInt("tyre_height");
-            if (width == 0 || diameter == null) {
-                return null;
-            }
-
-            StringBuilder marking = new StringBuilder();
-            marking.append(width);
-            if (height > 0) {
-                marking.append('/').append(height);
-            }
-            marking.append('R').append(diameter.stripTrailingZeros().toPlainString());
-
-            // Индекс нагрузки и скорости — слитно, как требует площадка
-            // (п. 3.6.1): «100Q», а не «100 Q».
-            int load = rs.getInt("load_index");
-            String speed = rs.getString("speed_index");
-            if (load > 0 || speed != null) {
-                marking.append(' ');
-                if (load > 0) {
-                    marking.append(load);
-                }
-                if (speed != null) {
-                    marking.append(speed);
-                }
-            }
-            return marking.toString();
-        }
-
-        private static String discMarking(ResultSet rs) throws SQLException {
-            BigDecimal width = rs.getBigDecimal("disc_width");
-            BigDecimal diameter = rs.getBigDecimal("diameter");
-            if (width == null || diameter == null) {
-                return null;
-            }
-            StringBuilder marking = new StringBuilder()
-                    .append(width.stripTrailingZeros().toPlainString())
-                    .append('x')
-                    .append(diameter.stripTrailingZeros().toPlainString());
-
-            String bolts = rs.getString("bolt_pattern");
-            if (bolts != null) {
-                marking.append(' ').append(bolts);
-            }
-            int offset = rs.getInt("offset_mm");
-            if (!rs.wasNull()) {
-                marking.append(" ET").append(offset);
-            }
-            return marking.toString();
-        }
-
-        /**
-         * Сезон словами площадки. Шипы и липучка у неё различаются не сезоном,
-         * а отдельным полем — оба «Зимняя».
-         */
-        private static String season(String season) {
+        static String season(String season) {
             return season == null ? null : switch (season) {
-                case "SUMMER" -> "Летняя";
-                case "WINTER", "WINTER_STUDDED", "WINTER_FRICTION" -> "Зимняя";
-                case "ALL_SEASON" -> "Всесезонная";
+                case "SUMMER" -> DromWheelWriter.SEASON_SUMMER;
+                case "WINTER" -> DromWheelWriter.SEASON_WINTER;
+                case "WINTER_FRICTION" -> DromWheelWriter.SEASON_FRICTION;
+                case "WINTER_STUDDED" -> DromWheelWriter.SEASON_STUDDED;
+                case "ALL_SEASON" -> DromWheelWriter.SEASON_ALL;
                 default -> null;
             };
         }
 
-        /**
-         * Шиповка.
-         *
-         * <p>Отвечаем только там, где знаем: у шины, заведённой как просто
-         * «зимняя», шипы неизвестны, и сказать «нешипуемая» значит соврать
-         * покупателю, который ищет шипы. Летняя и всесезонная нешипуемы
-         * по природе.
-         */
-        private static String spike(String season) {
-            return season == null ? null : switch (season) {
-                case "WINTER_STUDDED" -> "Шипованная";
-                case "WINTER_FRICTION", "SUMMER", "ALL_SEASON" -> "Нешипуемая";
-                default -> null;
+        /** Состояние словами Bazon; восстановленная — «БУ», как в прайсе запчастей. */
+        static String condition(String condition) {
+            return condition == null ? null : switch (condition) {
+                case "NEW" -> DromWheelWriter.CONDITION_NEW;
+                case "CONTRACT" -> DromWheelWriter.CONDITION_CONTRACT;
+                default -> DromWheelWriter.CONDITION_USED;
             };
         }
 
         /** Колёс, за которые названа цена: комплект одной позицией — его число, иначе одно. */
-        private static Integer inSet(ResultSet rs) throws SQLException {
+        private static int inSet(ResultSet rs) throws SQLException {
             int pieces = rs.getInt("set_pieces");
             return rs.wasNull() ? 1 : pieces;
-        }
-
-        private static Integer year(ResultSet rs) throws SQLException {
-            int value = rs.getInt("made_year");
-            return rs.wasNull() ? null : value;
         }
 
         /** Число снимков задаёт выгрузка; ноль у неё — «без ограничения». */
@@ -428,16 +392,6 @@ public class DromWheelGenerator {
                     .limit(settings.photosPerOffer())
                     .map(id -> base + id + ".jpg")
                     .toList();
-        }
-
-        private static String join(String first, String second) {
-            if (first == null || first.isBlank()) {
-                return second;
-            }
-            if (second == null || second.isBlank()) {
-                return first;
-            }
-            return first + " " + second;
         }
     }
 }

@@ -25,6 +25,7 @@ import org.w3c.dom.NodeList;
 import ru.partsflow.migration.excel.DromTransferFile.Column;
 import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
+import ru.partsflow.support.WheelCsv;
 
 import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.ByteArrayInputStream;
@@ -265,16 +266,14 @@ class DromWheelTransferTest extends PostgresTestBase {
     void wheelFeedCarriesTheSetAsOneOffer() throws Exception {
         load(file(), UUID.randomUUID().toString());
 
-        Map<String, Element> wheelFeed = offers(price("WHEEL"));
-        assertThat(wheelFeed).as("в колёсном прайсе не все пять").hasSize(5);
-        Element set = wheelFeed.get(column("SELECT public_code FROM part WHERE drom_ad_number = ?",
-                "127641183"));
-        assertThat(set).as("шины № 127641183 нет в колёсном прайсе").isNotNull();
-        assertThat(text(set, "inSet"))
+        WheelCsv wheelFeed = WheelCsv.parse(priceBytes("WHEEL"));
+        assertThat(wheelFeed.rows()).as("в колёсном файле не все пять").hasSize(5);
+        Map<String, String> set = wheelFeed.byArticle(articleOf("127641183"));
+        assertThat(set).as("шины № 127641183 нет в колёсном файле").isNotNull();
+        assertThat(set.get("Количество в комплекте"))
                 .as("цена комплекта ушла ценой одной шины — вчетверо выше рынка").isEqualTo("4");
-        assertThat(new BigDecimal(text(set, "price"))).isEqualByComparingTo("45000");
-        assertThat(text(set, "quantity")).isEqualTo("1");
-        assertThat(text(set, "name")).isEqualTo("Автошина Dunlop Grandtrek PT5 235/55 R19");
+        assertThat(new BigDecimal(set.get("Цена"))).isEqualByComparingTo("45000");
+        assertThat(set.get("Статус")).isEqualTo("В наличии");
 
         Map<String, Element> partsFeed = offers(price("PART"));
         for (String ad : WHEEL_ADS) {
@@ -387,10 +386,10 @@ class DromWheelTransferTest extends PostgresTestBase {
                 + "WHERE p.drom_ad_number = ?", "118479106")).isEqualByComparingTo("2");
         assertThat(count("SELECT count(*) FROM v_stock_discrepancy")).isZero();
 
-        Element set = offers(price("WHEEL")).get(column(
-                "SELECT public_code FROM part WHERE drom_ad_number = ?", "118479106"));
-        assertThat(text(set, "inSet")).isEqualTo("4");
-        assertThat(text(set, "quantity")).as("в прайс ушло не число комплектов").isEqualTo("2");
+        Map<String, String> set = WheelCsv.parse(priceBytes("WHEEL")).byArticle(articleOf("118479106"));
+        assertThat(set.get("Количество в комплекте")).isEqualTo("4");
+        // Остатка в файле Bazon нет: два комплекта на складе — «В наличии».
+        assertThat(set.get("Статус")).isEqualTo("В наличии");
     }
 
     @Test
@@ -468,6 +467,31 @@ class DromWheelTransferTest extends PostgresTestBase {
         return mvc.perform(get(path))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+    }
+
+    private byte[] priceBytes(String productLine) throws Exception {
+        JsonNode feed = json.readTree(mvc.perform(post("/api/marketplace-accounts")
+                        .with(csrf()).session(login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"marketplace":"DROM","title":"Дром %s","settings":"{}",
+                                 "productLine":"%s"}""".formatted(UUID.randomUUID(), productLine)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8));
+        String path = json.readTree(mvc.perform(post("/api/marketplace-accounts/"
+                                + feed.path("id").asLong() + "/feed-url")
+                        .with(csrf()).session(login()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8))
+                .path("path").asText();
+        return mvc.perform(get(path))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsByteArray();
+    }
+
+    /** Ключ позиции в файле колёс: русская «К» и номер позиции с этим номером объявления. */
+    private String articleOf(String adNumber) {
+        return "\u041A" + column("SELECT number FROM part WHERE drom_ad_number = ?", adNumber);
     }
 
     private static Map<String, Element> offers(String xml) throws Exception {

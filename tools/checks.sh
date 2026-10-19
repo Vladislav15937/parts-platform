@@ -113,9 +113,14 @@ d=json.load(sys.stdin); print(d.get("url") or "")')
     printf '  — %s: постоянной ссылки нет — счётчик с файлом НЕ сверялся\n' "${title}"
     continue
   fi
-  # Позиция прайса запчастей — <part> (формат Bazon, задача 0333), колёс — <offer>.
-  tag='<offer>'; [ "$line" = "PART" ] && tag='<part>'
-  actual=$(curl -s "$url" | grep -o "$tag" | wc -l | tr -d ' ')
+  # Позиция прайса запчастей — <part> (формат Bazon, задача 0333); файл колёс —
+  # CSV Bazon (задача 0340): позиция — строка с CRLF, первая — заголовок.
+  if [ "$line" = "PART" ]; then
+    actual=$(curl -s "$url" | grep -o '<part>' | wc -l | tr -d ' ')
+  else
+    rows=$(curl -s "$url" | LC_ALL=C grep -c $'\r$' | tr -d ' ')
+    actual=$(( rows > 0 ? rows - 1 : 0 ))
+  fi
   [ "$promised" = "$actual" ] && ok "${title}: обещано ${promised}, в файле ${actual}" \
     || bad "${title}: обещано ${promised}, а в файле ${actual}"
 done < /tmp/accounts.txt

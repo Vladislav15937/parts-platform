@@ -1,40 +1,48 @@
 package ru.partsflow.publishing.drom;
 
-import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * Позиция прайса шин и дисков — ровно то, что уходит в один {@code <offer>}.
+ * Строка файла шин и дисков — ровно то, что уходит в одну запись CSV Bazon
+ * (25 колонок, порядок и слова — {@link DromWheelWriter#HEADER}).
  *
- * <p>Отдельный тип от {@link DromOffer}, и это не дублирование: у площадки
- * для шин свой набор полей — маркировка, сезон, шиповка, износ, число шин
- * в комплекте, — а у запчасти их нет и быть не может. Общий тип означал бы
- * пятнадцать пустых полей у каждой фары и пятнадцать у каждой шины.
+ * <p>Все значения уже словами файла: писатель ничего не пересчитывает, только
+ * ставит кавычки. Пустое — {@code null}: в файле это {@code ""}, как у Bazon.
  *
- * @param marking  типоразмер с индексами, как того требует площадка:
- *                 {@code 225/55R18 100Q TL}
- * @param inSet    сколько шин в комплекте, за который названа цена
- * @param quantity сколько штук на складе
- * @param wearPercent износ в процентах, как хранится у позиции (задача 0340:
- *                 проценты, как у клиента в Bazon, без пересчёта)
+ * <p>Отдельный тип от {@link DromOffer} по-прежнему не дублирование: у шины и
+ * диска свои пятнадцать колонок, которых у запчасти нет.
+ *
+ * @param article   «Артикул»: русская «К» (U+041A) и номер позиции (задача 0334)
+ * @param type      «шина», «диск» или «колесо» (в сборе: обе половины заполнены)
+ * @param inSet     «Количество в комплекте» — за сколько колёс названа цена
+ * @param wear      «Износ шин» вместе со знаком процента: {@code 30%}
+ * @param price     цена целым, как в карточке: на штуку её никто не делит
+ * @param photos    ссылки на снимки в порядке карточки
+ * @param available «В наличии» либо слово недоступной позиции
  */
 public record DromWheelOffer(
-        String orderCode,
-        String name,
-        String model,
-        String marking,
-        Integer inSet,
-        BigDecimal quantity,
-        BigDecimal price,
-        String condition,
-        String season,
+        String article,
         String type,
-        String spike,
-        Integer year,
-        Integer wearPercent,
-        List<String> photos) {
-
-    public boolean isAvailable() {
-        return quantity != null && quantity.signum() > 0;
-    }
+        int inSet,
+        String discBrand,
+        String discModel,
+        String discDiameter,
+        String discType,
+        String discWidth,
+        String offset,
+        String boltPattern,
+        String hubBore,
+        String tyreBrand,
+        String tyreModel,
+        String tyreWidth,
+        String tyreHeight,
+        String tyreDiameter,
+        String season,
+        String year,
+        String wear,
+        String condition,
+        String comment,
+        String price,
+        List<String> photos,
+        boolean available) {
 }

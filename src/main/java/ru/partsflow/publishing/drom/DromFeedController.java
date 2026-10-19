@@ -159,6 +159,13 @@ public class DromFeedController {
                 .formatted(ru.partsflow.publishing.FeedFileName.isValid(fileName)
                         ? fileName : "price.xml"));
 
+        if (account.isWheelFeed()) {
+            // Файл шин и дисков — CSV в windows-1251 (0340). Кодировка в
+            // заголовке обязана совпасть с байтами, иначе кириллицу прочтут
+            // как UTF-8 и название превратится в мусор.
+            response.setContentType("text/csv; charset=windows-1251");
+        }
+
         TenantContext.set(schema);
         try (OutputStream out = response.getOutputStream()) {
             // Выгрузка знает, чем торгует: у шин свой формат со своими полями,
