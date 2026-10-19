@@ -100,7 +100,7 @@ export function PartHistoryView({ history, tab, onTab }: {
                 </td>
                 {/* Знак не убираем: минус — ушло со склада, плюс — пришло.
                     Без него продажа и возврат выглядят одинаково. */}
-                <td className="num">{qty(move.qty)}</td>
+                <td className="num">{move.held === true ? String(Number(move.qty)) : qty(move.qty)}</td>
                 <td>
                   {move.document ?? '—'}
                   {move.status !== null && <div className="muted">{move.status}</div>}

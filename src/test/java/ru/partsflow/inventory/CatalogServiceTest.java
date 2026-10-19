@@ -145,6 +145,22 @@ class CatalogServiceTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Отложенное приходит по складам рядом с остатком (задача 0367)")
+    void reservedIsPerWarehouse() {
+        Long partId = part("Бампер с резервом", 3);
+        inTenant(() -> jdbc.update(
+                "UPDATE part_stock SET qty_reserved = 1 WHERE part_id = ? AND warehouse_id = ?",
+                partId, warehouseId));
+
+        var row = rowOf(partId, "Бампер с резервом");
+
+        // Остаток остаётся полным, отложенное — отдельной картой: свободно
+        // экран считает как разность, а не получает готовым и не гадает.
+        assertThat(row.stock()).containsEntry(warehouseId, new java.math.BigDecimal("3.000"));
+        assertThat(row.reserved()).containsEntry(warehouseId, new java.math.BigDecimal("1.000"));
+    }
+
+    @Test
     @DisplayName("Неизвестная сортировка не уходит в SQL")
     void unknownSortIsIgnored() {
         part("Дверь", 1);
