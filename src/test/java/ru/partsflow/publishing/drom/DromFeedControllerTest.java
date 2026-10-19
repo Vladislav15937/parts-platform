@@ -478,11 +478,11 @@ class DromFeedControllerTest extends PostgresTestBase {
         assertThat(body).contains("Дверь на дальнем складе");
         assertThat(offerOf(body, "Дверь на дальнем складе"))
                 .as("остаток склада выгрузки потерялся")
-                .contains("<available>true</available>");
+                .contains("<state>В наличии</state>");
         assertThat(offerOf(body, "Фара левая Camry"))
                 .as("остаток посчитан по всем складам: покупателю обещана "
                         + "деталь, которой на этом складе нет")
-                .contains("<available>false</available>");
+                .contains("<state>Нет в наличии</state>");
     }
 
     @Test
@@ -603,12 +603,12 @@ class DromFeedControllerTest extends PostgresTestBase {
 
         assertThat(offerOf(marked, "Прайс: наценка ровная"))
                 .as("наценка не доехала до прайса — комиссия площадки уйдёт из кармана")
-                .contains("<price>4950.00</price>");
+                .contains("<price>4950</price>");
         // 4 505 + 10 % = 4 955,50, и округление до десятки идёт вверх:
         // вниз оно однажды отдаст деталь дешевле, чем владелец задал.
         assertThat(offerOf(marked, "Прайс: наценка с копейками"))
                 .as("округление отбросило копейки вместо того, чтобы поднять до шага")
-                .contains("<price>4960.00</price>");
+                .contains("<price>4960</price>");
         // Ноль у нас означает «цену не назначили»: наценка на незаполненное
         // поле дала бы цену там, где её нет.
         assertThat(marked)
@@ -624,7 +624,7 @@ class DromFeedControllerTest extends PostgresTestBase {
                 .andReturn().getResponse().getContentAsString();
         assertThat(offerOf(plain, "Прайс: наценка ровная"))
                 .as("наценка одной выгрузки протекла в соседнюю")
-                .contains("<price>4500.00</price>");
+                .contains("<price>4500</price>");
 
         // И главное: на складе, на витрине и у продавца цена прежняя.
         // Иначе комиссия площадки поднимет цену тому же товару в зале
@@ -911,9 +911,8 @@ class DromFeedControllerTest extends PostgresTestBase {
                 .as("приписка обязана стоять в начале описания, а не после него")
                 .startsWith("Ожидается поступление");
         assertThat(offer)
-                .as("товар в пути уехал нулём — Дром читает это как «снять объявление»")
-                .contains("<quantity>1</quantity>")
-                .contains("<available>true</available>");
+                .as("товар в пути уехал недоступным — объявление, ради которого всё затевалось, не появится")
+                .contains("<state>В наличии</state>");
 
         assertThat(feedOf(feedPath))
                 .as("товар в пути уехал в выгрузку, у которой этого не включали")
@@ -958,11 +957,12 @@ class DromFeedControllerTest extends PostgresTestBase {
                         .value(org.hamcrest.Matchers.containsString("Текст приписки")));
     }
 
-    /** Описание объявления как оно уедет площадке. */
+    /** Описание объявления как оно уедет площадке — без обёртки CDATA. */
     private static String descriptionOf(String offer) {
-        int at = offer.indexOf("<description>");
+        String open = "<description><![CDATA[";
+        int at = offer.indexOf(open);
         assertThat(at).as("описания в предложении нет вовсе").isNotNegative();
-        return offer.substring(at + "<description>".length(), offer.indexOf("</description>", at));
+        return offer.substring(at + open.length(), offer.indexOf("]]></description>", at));
     }
 
     /** Прайс целиком: тело ответа по постоянной ссылке выгрузки. */
@@ -993,9 +993,9 @@ class DromFeedControllerTest extends PostgresTestBase {
                         .value(org.hamcrest.Matchers.containsString("без ограничения")));
     }
 
-    /** Сколько ссылок на снимки стоит в одном {@code <offer>}. */
+    /** Сколько ссылок на снимки стоит в одной позиции {@code <part>}. */
     private int photoLinksIn(String offer) {
-        return offer.split("<photo>", -1).length - 1;
+        return offer.split("<photoUrl>", -1).length - 1;
     }
 
     /**
@@ -1088,7 +1088,7 @@ class DromFeedControllerTest extends PostgresTestBase {
     private String offerOf(String feed, String title) {
         int at = feed.indexOf(title);
         assertThat(at).as("позиции «%s» в прайсе нет вовсе", title).isGreaterThan(0);
-        int end = feed.indexOf("</offer>", at);
+        int end = feed.indexOf("</part>", at);
         return feed.substring(at, end < 0 ? feed.length() : end);
     }
 

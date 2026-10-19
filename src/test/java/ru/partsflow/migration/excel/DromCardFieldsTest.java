@@ -242,10 +242,10 @@ class DromCardFieldsTest extends PostgresTestBase {
         String price = price();
         assertThat(offerOf(price, connector))
                 .as("в прайсе у пары нет стороны — у клиента на карточке она есть")
-                .contains("<lr>лево,право</lr>");
+                .contains("<leftRight>left,right</leftRight>");
         assertThat(offerOf(price, door))
                 .as("одиночная сторона уезжает прежним словом")
-                .contains("<lr>право</lr>");
+                .contains("<leftRight>right</leftRight>");
 
         // Задача 0283: «Переднее, Заднее» и «Верхнее, Нижнее» — тем же путём.
         long panel = partOf("Панель приборов Toyota Land Cruiser Prado 120");
@@ -253,8 +253,10 @@ class DromCardFieldsTest extends PostgresTestBase {
                 "SELECT side_fr FROM part WHERE id = ?", String.class, connector))).isEqualTo("BOTH");
         assertThat(inTenant(() -> jdbc.queryForObject(
                 "SELECT side_ud FROM part WHERE id = ?", String.class, panel))).isEqualTo("BOTH");
-        assertThat(offerOf(price, connector)).contains("<fr>перед,зад</fr>");
-        assertThat(offerOf(price, panel)).contains("<ud>верх,низ</ud>");
+        assertThat(offerOf(price, connector)).contains("<frontRear>front,rear</frontRear>");
+        // Вертикальной оси в формате Bazon нет вовсе (задача 0333): «Верхнее,
+        // Нижнее» хранится и видно продавцу, а в прайс не уходит.
+        assertThat(offerOf(price, panel)).doesNotContain("<ud>");
         assertThat(positionTitles("Разъем", "FRONT")).contains("Разъем 6 контактов Toyota");
         assertThat(positionTitles("Разъем", "REAR")).contains("Разъем 6 контактов Toyota");
 
@@ -267,20 +269,22 @@ class DromCardFieldsTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Оригинальность видна в карточке и уходит в прайс своим тегом; замены — по порядку страницы")
+    @DisplayName("Оригинальность видна в карточке (в прайсе Bazon-вида её тега нет); замены — по порядку страницы")
     void authenticityAndSubstitutesReachCardAndPrice() throws Exception {
         load(covering());
         long cardan = partOf(
                 "Карданный вал передний (Пробег 130т. км)Toyota Land Cruiser Prado 120");
 
         String offer = offerOf(price(), cardan);
-        assertThat(offer).contains("<authenticity>Оригинал</authenticity>");
+        // Тега оригинальности у Bazon нет, и в нашем файле его нет тоже
+        // (решение 1 задачи 0333); в карточке она остаётся — ниже.
+        assertThat(offer).doesNotContain("<authenticity>");
         assertThat(offer).contains("<manufacturer>Toyota</manufacturer>");
         assertThat(offer)
                 .as("номера замен в прайсе не все или не в порядке страницы клиента")
-                .contains("<analog_numbers>HLKA0017,NWNTY011,ST3714060380,3950TO0380,"
-                        + "ZVPV236,DSZ1140PQ,AFR3714060380</analog_numbers>");
-        assertThat(offer).contains("<fr>перед</fr>");
+                .contains("<analogsNumbers>HLKA0017,NWNTY011,ST3714060380,3950TO0380,"
+                        + "ZVPV236,DSZ1140PQ,AFR3714060380</analogsNumbers>");
+        assertThat(offer).contains("<frontRear>front</frontRear>");
 
         // Карточка позиции читает строку витрины — её и спрашиваем, как экран.
         JsonNode row = catalogRow(cardan);
@@ -501,13 +505,13 @@ class DromCardFieldsTest extends PostgresTestBase {
         });
     }
 
-    /** Один {@code <offer>} прайса — по номеру позиции, он и есть ordercode (задача 0334). */
+    /** Одна позиция {@code <part>} прайса — по номеру позиции, он и есть её {@code id} (задачи 0334, 0333). */
     private String offerOf(String price, long partId) {
         String code = inTenant(() -> jdbc.queryForObject(
                 "SELECT number::text FROM part WHERE id = ?", String.class, partId));
-        Matcher offer = Pattern.compile("<offer>.*?</offer>", Pattern.DOTALL).matcher(price);
+        Matcher offer = Pattern.compile("<part>.*?</part>", Pattern.DOTALL).matcher(price);
         while (offer.find()) {
-            if (offer.group().contains("<ordercode>" + code + "</ordercode>")) {
+            if (offer.group().contains("<id>" + code + "</id>")) {
                 return offer.group();
             }
         }

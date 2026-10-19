@@ -290,7 +290,7 @@ $C up -d $A                             # пересоздать сборку п
 **Проверка прайса Дрома** (число объявлений и снимков в файле)
 ```bash
 URL='https://parts.plus-parts.ru/feeds/drom/<код>/<токен>.xml'
-curl -s "$URL" | grep -o '<offer>' | wc -l     # объявлений
+curl -s "$URL" | grep -oE '<(part|offer)>' | wc -l     # объявлений: <part> у запчастей (формат Bazon, 0333), <offer> у колёс
 curl -s "$URL" | grep -o '<photo>' | wc -l     # снимков
 ```
 

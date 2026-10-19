@@ -56,8 +56,8 @@ class Fake:
     applied = 0
 
 
-FEED = ("<feed><offer><id>7</id><quantity>0</quantity>"
-        "<available>false</available></offer></feed>")
+FEED = ('<?xml version="1.0" encoding="UTF-8" ?>\n<parts>\n<part>\n<id>7</id>\n'
+        "<state>Нет в наличии</state>\n</part>\n</parts>")
 
 
 def route(method, path, body):

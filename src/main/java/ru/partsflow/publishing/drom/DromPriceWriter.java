@@ -8,35 +8,46 @@ import ru.partsflow.inventory.VerticalSide;
 import javax.xml.stream.XMLOutputFactory;
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamWriter;
+import java.io.IOException;
 import java.io.OutputStream;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 import java.util.List;
 
 /**
- * Потоковая запись канонического прайса Дрома.
+ * Потоковая запись прайса запчастей Дрома — в формате файла Bazon.
  *
- * <p><b>Почему схема наша, а не Дрома.</b> Дром дословно обещает «настроим
- * разбор под ваш формат» — фиксированной схемы у него нет. Значит генератор
- * можно написать один раз только при условии, что формат выбираем мы, а при
- * подключении каждого клиента просим Дром настроить разбор под него. Обратная
- * стратегия — генератор под формат каждого клиента — умножает код на число
- * арендаторов. Подробнее в {@code docs/drom-integration.md} §3.
+ * <p><b>Почему схема чужая (задача 0333).</b> Дром обещает «настроим разбор
+ * под ваш формат», и до 19 октября 2026 формат выбирали мы:
+ * {@code <offers><offer>} с именами из эталона площадки и своими тегами склада
+ * и срока. Но клиенты переезжают с Bazon, и у каждого на Дроме уже стоит
+ * прайс-лист, разбор которого техспециалист площадки однажды настроил под
+ * файл Bazon. Наш файл того же вида Дром читает тем же разбором: клиент
+ * меняет в прайс-листе только адрес файла, без заявки и без ожидания
+ * настройки. Решение владельца продукта от 19.10.2026 — «на 100%
+ * соответствовать логике формирования … файлов выгрузки в базон», формат
+ * заменён целиком (решение 1 задачи 0333), второго нет.
  *
- * <p><b>Почему StAX.</b> То же, что и в фиде Авито: у крупного клиента до
- * 50 000 позиций, а полный прайс Дром забирает по постоянному URL и лимитом
- * 5 МБ не ограничен — то есть файл будет большим. Сборка в DOM или в String
- * съест гигабайты и уронит приложение у самого ценного клиента. Вход —
- * {@link Iterator}, чтобы и набор позиций не материализовался.
+ * <p>Образец — файлы Bazon, сохранённые владельцем
+ * ({@code docs/bazon-parity.md}, «Обход 19.10.2026»): заголовок с пробелом
+ * перед {@code ?>}, корень {@code <parts>}, каждая позиция {@code <part>},
+ * каждый тег на своей строке, файл кончается {@code </parts>} без перевода
+ * строки. Теги — {@code id, title, price, deliveryCost, condition, state,
+ * partname, leftRight, frontRear, [color], [marking], [manufacturer],
+ * manufactureNumber, analogsNumbers, photoUrls, description}; пустое
+ * значение пишется <b>пустым элементом</b>, отсутствуют только три в скобках.
+ * Тегов, которых у Bazon нет — количества, флага наличия, склада, срока,
+ * применимости отдельными тегами, вертикальной оси, оригинальности, — нет
+ * и у нас: разбор, настроенный под Bazon, их не читает, а отсутствующий
+ * {@code id} или {@code state} ломает.
  *
- * <p><b>Применимость пишется отдельными тегами.</b> Эталон Дрома для раздела
- * «Автозапчасти» начинается ровно с этого: «укажите применимость», «размещайте
- * информацию о каждом параметре в отдельные теги — марка, модель, кузов,
- * двигатель». Выводить её самому из {@code oem_number} площадка умеет, но
- * только для оригинала и только если номер она знает; у б/у детали с разборки
- * половина номеров ей не известна, и без марки такая позиция не находится
- * фильтром покупателя. Данные лежат у нас с самого начала: марка и модель —
- * в машине-доноре, у контрактной — в {@code part_applicability}, которую
- * разбор наименований наполнил.
+ * <p><b>Почему StAX.</b> У крупного клиента до 50 000 позиций, а полный прайс
+ * Дром забирает по постоянному URL и лимитом 5 МБ не ограничен — то есть файл
+ * будет большим. Сборка в DOM или в String съест гигабайты и уронит
+ * приложение у самого ценного клиента. Вход — {@link Iterator}, чтобы и набор
+ * позиций не материализовался.
  */
 @org.springframework.stereotype.Component
 public class DromPriceWriter {
@@ -44,21 +55,49 @@ public class DromPriceWriter {
     private static final XMLOutputFactory FACTORY = XMLOutputFactory.newInstance();
 
     /**
+     * Заголовок пишется байтами, а не {@code writeStartDocument}: StAX ставит
+     * {@code ?>} вплотную, у Bazon перед ним пробел. Разбор площадки это,
+     * скорее всего, не различает, но проверить нам нечем, а «идентично»
+     * стоит дешевле догадки.
+     */
+    private static final byte[] DECLARATION =
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n".getBytes(StandardCharsets.UTF_8);
+
+    /** Слово наличия у Bazon — у всех позиций всех четырёх файлов. */
+    static final String IN_STOCK = "В наличии";
+
+    /**
+     * Слово для позиции без свободного остатка — <b>наше</b>, у Bazon его
+     * не видели: в его файле такой позиции нет вовсе. У нас она в файле есть
+     * (до задачи 0339 — и в полном прайсе, а дельта иначе снять с продажи
+     * не умеет: количества в формате Bazon нет). Понимает ли его разбор,
+     * настроенный под Bazon, — вопрос площадке, названный в задаче 0333.
+     */
+    static final String OUT_OF_STOCK = "Нет в наличии";
+
+    /**
      * @return сколько позиций записано — попадает в {@code publication_log},
      *         чтобы было с чем сверить «Замечания к товарам» в кабинете Дрома
      */
     public int write(OutputStream out, Iterator<DromOffer> offers) throws XMLStreamException {
+        try {
+            out.write(DECLARATION);
+        } catch (IOException e) {
+            throw new XMLStreamException("Не удалось начать прайс Дрома", e);
+        }
         XMLStreamWriter writer = FACTORY.createXMLStreamWriter(out, "UTF-8");
         int written = 0;
         try {
-            writer.writeStartDocument("UTF-8", "1.0");
-            writer.writeStartElement("offers");
+            writer.writeStartElement("parts");
+            writer.writeCharacters("\n");
 
             while (offers.hasNext()) {
-                writeOffer(writer, offers.next());
+                writePart(writer, offers.next());
+                writer.writeCharacters("\n");
                 written++;
             }
 
+            // Без перевода строки в конце — как у Bazon.
             writer.writeEndElement();
             writer.writeEndDocument();
             writer.flush();
@@ -68,148 +107,108 @@ public class DromPriceWriter {
         return written;
     }
 
-    private void writeOffer(XMLStreamWriter w, DromOffer offer) throws XMLStreamException {
-        w.writeStartElement("offer");
+    private void writePart(XMLStreamWriter w, DromOffer offer) throws XMLStreamException {
+        w.writeStartElement("part");
+        w.writeCharacters("\n");
 
-        // ordercode должен быть стабильным между выгрузками: по нему Дром
-        // узнаёт позицию при обновлении. Меняется — и вместо обновления
-        // получится новое объявление вместо старого.
-        element(w, "ordercode", offer.orderCode());
-        element(w, "name", nameOf(offer));
-        // Вид детали отдельным полем: по нему площадка кладёт товар в раздел,
-        // и заголовка ей для этого мало — она его разбирает, а не читает.
-        element(w, "partname", offer.partKind());
-        element(w, "description", descriptionOf(offer));
-        element(w, "price", offer.price() == null ? null : offer.price().toPlainString());
-
-        // Остаток числом, а не только флагом наличия. Их документация по API
-        // говорит про удаление буквально: «если товар нужно удалить,
-        // в колонке отправить значение "0"», и колонка эта — количество.
-        // Флаг available остаётся: он есть в их же эталоне для автозапчастей.
-        element(w, "quantity", offer.availableQty() == null
-                ? "0" : offer.availableQty().stripTrailingZeros().toPlainString());
-
-        // available считается по свободному остатку, а не по общему. Деталь,
-        // отложенную под клиента, площадка показывать не должна: иначе
-        // приедут двое за одной запчастью — та самая ошибка, от которой
-        // стоят reserve_stock и сверка резервов.
-        w.writeStartElement("available");
-        w.writeCharacters(Boolean.toString(offer.isAvailable()));
-        w.writeEndElement();
-
-        // У площадки это поле двузначное: «Новое» или «Б/у». Контрактная
-        // и восстановленная для неё б/у — а то, что контрактная не то же,
-        // что восстановленная, покупатель читает в наименовании и описании.
-        // Уедет ли «Контракт» в прайс своим словом — вопрос владельцу
-        // продукта, названный в tasks/0039 и tasks/0166: сегодня поведение
-        // прежнее, и нового обещания покупателю мы не даём.
-        //
-        // Без состояния («Не указано», задача 0322) элемента нет. До писателя
+        // id должен быть стабильным между выгрузками: по нему Дром узнаёт
+        // позицию при обновлении. Меняется — и вместо обновления получится
+        // новое объявление вместо старого. Каким числом его писать у
+        // переехавшего с Bazon клиента — задача 0334.
+        element(w, "id", offer.orderCode());
+        element(w, "title", nameOf(offer));
+        element(w, "price", price(offer.price()));
+        // У Bazon пуст во всех 20 324 позициях; доставку мы не считаем вовсе.
+        element(w, "deliveryCost", null);
+        // Без состояния («Не указано», задача 0322) элемент пуст. До писателя
         // такая позиция не доезжает — её отсекает отбор (HAS_CONDITION), —
         // но падение здесь случилось бы посреди записи ответа: 200 с обрывком
         // тела, которое площадка читает как «снять все объявления».
-        element(w, "condition", offer.condition() == null ? null : switch (offer.condition()) {
-            case NEW -> "Новое";
-            case USED, REFURBISHED, CONTRACT -> "Б/у";
-        });
-        // Оригинальность своим тегом, словом клиента дословно (задача 0277).
-        // Имя тега наше, как у sklad и nalichie: формат прайса запчастей
-        // выбираем мы, а техспециалист Дрома настраивает разбор под него.
-        // Взято по имени поля самой карточки Дрома (autoPartsAuthenticity),
-        // чтобы при настройке его было с чем сопоставить; ответа площадки
-        // о своём имени тега нет (tasks/0280).
-        element(w, "authenticity", offer.authenticity());
-        element(w, "manufacturer", offer.manufacturer());
-        element(w, "oem_number", offer.oemNumber());
-        element(w, "analog_numbers", joinAnalogs(offer.analogNumbers()));
+        element(w, "condition", condition(offer.condition()));
+        // Наличие — словом, а не числом: количества у Bazon в файле нет.
+        // Считается по свободному остатку, а не по общему: деталь, отложенную
+        // под клиента, площадка показывать не должна — иначе приедут двое
+        // за одной запчастью.
+        element(w, "state", offer.isAvailable() ? IN_STOCK : OUT_OF_STOCK);
+        // Вид детали отдельным полем: по нему площадка кладёт товар в раздел.
+        element(w, "partname", offer.partKind());
+        element(w, "leftRight", lateral(offer.lateralSide()));
+        element(w, "frontRear", longitudinal(offer.longitudinalSide()));
 
-        // Три независимые оси, а не одно поле «сторона»: «стойка передняя
-        // левая нижняя» иначе не выражается.
-        element(w, "lr", lateral(offer.lateralSide()));
-        element(w, "fr", longitudinal(offer.longitudinalSide()));
-        element(w, "ud", vertical(offer.verticalSide()));
+        // Три необязательных: у Bazon тега нет, когда поле не задано.
+        optional(w, "color", offer.color());
+        optional(w, "marking", offer.marking());
+        optional(w, "manufacturer", offer.manufacturer());
 
-        // Применимость. Порядок тегов — как в эталоне площадки: сначала
-        // машина, потом её кузов и двигатель. Кузов и двигатель есть только
-        // у детали с донора: у контрактной машина не одна, и приписать ей
-        // чужой кузов значит соврать покупателю, который по нему и подбирает.
-        element(w, "brandcars", offer.carBrand());
-        element(w, "modelcars", offer.carModel());
-        element(w, "bodycars", offer.bodyCode());
-        element(w, "engine", offer.engineCode());
-        element(w, "year", offer.year() == null ? null : String.valueOf(offer.year()));
+        element(w, "manufactureNumber", offer.oemNumber());
+        element(w, "analogsNumbers", joinAnalogs(offer.analogNumbers()));
 
-        element(w, "color", offer.color());
-        element(w, "supplier_art", offer.marking());
-
-        // Склад, на котором деталь лежит. Имя, а не адрес: реквизитов складов
-        // у нас нет вовсе, а имена клиент даёт по месту — «Ткацкая», «54 YARD».
-        // Для покупателя это ответ на «куда ехать», и у клиента с филиалами
-        // на разных концах города вопрос не праздный. Проданная позиция едет
-        // без него: она никуда не делась только в том смысле, что объявление
-        // остаётся, — лежать ей уже негде.
-        placement(w, offer.placement());
-
-        // Фотографии повторяющимся элементом, а не одной строкой через
-        // запятую: в ссылке может встретиться что угодно, а разбор по
-        // разделителю ломается ровно на том товаре, у которого он попался.
-        // Первая ссылка — главный снимок: площадка ставит его обложкой.
+        // Снимки — по элементу на ссылку, главный первым: площадка ставит
+        // первую ссылку обложкой. Без снимков контейнер остаётся пустым,
+        // а не пропадает, — так у Bazon.
+        w.writeStartElement("photoUrls");
+        w.writeCharacters("\n");
         if (offer.photos() != null) {
             for (String photo : offer.photos()) {
-                element(w, "photo", photo);
+                element(w, "photoUrl", photo);
             }
         }
+        w.writeEndElement();
+        w.writeCharacters("\n");
 
+        description(w, descriptionOf(offer));
         w.writeEndElement();
     }
 
     /**
-     * Где лежит и через сколько дней можно забрать.
+     * Описание — в {@code CDATA}, как у Bazon; пустое — {@code <description/>}
+     * вплотную к {@code </part>}, тоже как у него (2 позиции из 1 724
+     * в {@code drom-new-parts.xml}).
      *
-     * <p><b>Зачем срок.</b> До этого в прайс уходило булево «есть», и
-     * покупатель, приехавший за деталью сегодня, узнавал про дорогу
-     * на дальний склад уже по телефону. Текст наличия и вилку дней задаёт
-     * владелец каждому складу отдельно (задача 0008).
-     *
-     * <p><b>Отдельными тегами, а не строкой в описании.</b> Эталон площадки
-     * для «Автозапчастей» просит этого прямо: «размещайте информацию о каждом
-     * параметре в отдельные теги». Склеенное в одну фразу площадка не разберёт
-     * ни фильтром, ни сортировкой, а разбирает она именно теги.
-     *
-     * <p><b>Имена элементов наши, и это решение исполнителя.</b> Схему прайса
-     * запчастей выбираем мы — Дром обещает «настроим разбор под ваш формат»,
-     * и его техспециалист настраивает разбор под нас при подключении клиента
-     * (в отличие от прайса колёс, где схема опубликована площадкой и имена
-     * взяты дословно). Соседний элемент склада назван {@code sklad},
-     * поэтому и эти три — тем же письмом.
-     *
-     * <p><b>Незаданное не пишется вовсе.</b> Склад, которому владелец ничего
-     * не задавал, ведёт себя ровно как до этой задачи: пустой
-     * {@code <nalichie>} площадка читает как заполненное пустым значением,
-     * а выдуманное нами «в наличии» уехало бы покупателю от имени разборки,
-     * которая этого не обещала.
+     * <p>{@code ]]>} внутри текста закрыл бы секцию раньше времени, и остаток
+     * описания площадка прочла бы разметкой — то есть файл развалился бы
+     * на чужом тексте. Поэтому такая последовательность режется на две
+     * секции: прочитанный текст остаётся тем же.
      */
-    private void placement(XMLStreamWriter w, DromOffer.Placement placement)
-            throws XMLStreamException {
-        if (placement == null) {
+    private void description(XMLStreamWriter w, String text) throws XMLStreamException {
+        if (text == null || text.isEmpty()) {
+            w.writeEmptyElement("description");
             return;
         }
-        element(w, "sklad", placement.warehouses());
-        element(w, "nalichie", placement.availabilityNote());
-
-        // Ноль дней и незаданные дни покупателю говорят одно — ждать не надо;
-        // элемент с нулём был бы шумом в объявлении. Зато у вилки «0–4»
-        // значима и нижняя граница, поэтому решает пара целиком, а не каждое
-        // число по себе.
-        if (placement.namesLeadTime()) {
-            element(w, "srok_zakaza_ot", number(placement.orderDaysFrom()));
-            element(w, "srok_zakaza_do", number(placement.orderDaysTo()));
+        w.writeStartElement("description");
+        String[] pieces = text.split("]]>", -1);
+        for (int i = 0; i < pieces.length; i++) {
+            String piece = (i == 0 ? "" : ">") + pieces[i] + (i < pieces.length - 1 ? "]]" : "");
+            w.writeCData(piece);
         }
+        w.writeEndElement();
+        w.writeCharacters("\n");
     }
 
-    /** Ноль обязан дойти как «0», а не потеряться пустой строкой. */
-    private static String number(Integer value) {
-        return value == null ? null : String.valueOf(value);
+    /**
+     * Цена — целым числом: у Bazon копеек нет ни у одной позиции. Копейки
+     * округляются <b>вверх</b> (решение 2 задачи 0333, до обхода настройки
+     * «Округлять до» у Bazon): вниз деталь однажды уйдёт дешевле, чем
+     * владелец задал, и узнает он об этом от покупателя.
+     */
+    static String price(BigDecimal price) {
+        return price == null ? null : price.setScale(0, RoundingMode.CEILING).toPlainString();
+    }
+
+    /**
+     * Состояние словами Bazon: {@code контрактный}, {@code б/у}, {@code новый}.
+     *
+     * <p>Контрактная уходит своим словом, а не «б/у», — у Bazon так у 20 321
+     * позиции из 20 324 (закрывает вопрос задач 0039 и 0166). Восстановленной
+     * в файлах Bazon не видели; прежде она уходила «Б/у», и так остаётся,
+     * пока не увидим (повестка обхода).
+     */
+    static String condition(PartCondition condition) {
+        return condition == null ? null : switch (condition) {
+            case NEW -> "новый";
+            case USED, REFURBISHED -> "б/у";
+            case CONTRACT -> "контрактный";
+        };
     }
 
     /**
@@ -223,9 +222,9 @@ public class DromPriceWriter {
      *
      * <p>Поэтому чистится только выгрузка, а собранный заголовок в системе
      * остаётся как был. Сторона и состояние при этом не теряются — они уже
-     * уехали полями {@code lr}, {@code fr}, {@code ud} и {@code condition},
-     * то есть в заголовке они были повторением. Тот же приём у Bazon: у него
-     * заголовок чистый, а сторона живёт отдельными полями.
+     * уехали полями {@code leftRight}, {@code frontRear} и {@code condition}
+     * (верх и низ — строкой «Расположение» в собранном описании), то есть
+     * в заголовке они были повторением. Формула названия Bazon — задача 0335.
      */
     static String plainName(String title) {
         if (title == null || title.isBlank()) {
@@ -401,7 +400,10 @@ public class DromPriceWriter {
         };
     }
 
-    /** Дром ждёт номера одной строкой через запятую. */
+    /**
+     * Кросс-номера одной строкой через запятую. Разделитель Bazon — запятая
+     * с пробелом и предел в 1 024 знака; это задача 0338.
+     */
     private String joinAnalogs(List<String> analogs) {
         if (analogs == null || analogs.isEmpty()) {
             return null;
@@ -409,46 +411,50 @@ public class DromPriceWriter {
         return String.join(",", analogs);
     }
 
+    /**
+     * Сторона по-английски, как у Bazon: {@code left}, {@code right}.
+     *
+     * <p>Слова для «обе» в файлах Bazon не встретилось (повестка обхода),
+     * поэтому — той же формой, что раньше русскими словами: оба через запятую.
+     * Промолчать было бы хуже: сторона у клиента на карточке есть, а у нас
+     * пропала бы.
+     */
     private String lateral(LateralSide side) {
         return side == null ? null : switch (side) {
-            case LEFT -> "лево";
-            case RIGHT -> "право";
-            // «Левая, Правая» на карточке клиента. Какое слово Дром ждёт
-            // для «обе», не известно (вопрос Д в tasks/0280, ответа нет):
-            // пишем оба своих слова через запятую — так же, как номера
-            // в analog_numbers, — чтобы техспециалисту площадки было что
-            // сопоставить при настройке разбора. Промолчать было бы хуже:
-            // сторона у клиента на карточке есть, а у нас пропала бы.
-            case BOTH -> "лево,право";
+            case LEFT -> "left";
+            case RIGHT -> "right";
+            case BOTH -> "left,right";
         };
     }
 
+    /** {@code front}, {@code rear}; «обе» — как у поперечной оси. */
     private String longitudinal(LongitudinalSide side) {
         return side == null ? null : switch (side) {
-            case FRONT -> "перед";
-            case REAR -> "зад";
-            // Слово Дрома для «обе» неизвестно (вопрос Д2 в tasks/0280) —
-            // временно, той же формой, что у поперечной оси: оба своих слова
-            // через запятую (задача 0283).
-            case BOTH -> "перед,зад";
+            case FRONT -> "front";
+            case REAR -> "rear";
+            case BOTH -> "front,rear";
         };
     }
 
-    private String vertical(VerticalSide side) {
-        return side == null ? null : switch (side) {
-            case UPPER -> "верх";
-            case LOWER -> "низ";
-            case BOTH -> "верх,низ";
-        };
-    }
-
-    /** Пустые элементы не пишутся: Дром считает их заполненными пустым значением. */
+    /**
+     * Элемент на своей строке; пустое значение — пустым элементом
+     * {@code <x></x>}, а не пропуском: так у Bazon, и разбор площадки,
+     * настроенный под его файл, видит в каждой позиции один и тот же набор.
+     */
     private void element(XMLStreamWriter w, String name, String value) throws XMLStreamException {
+        w.writeStartElement(name);
+        if (value != null && !value.isBlank()) {
+            w.writeCharacters(value);
+        }
+        w.writeEndElement();
+        w.writeCharacters("\n");
+    }
+
+    /** Необязательный элемент: незаданного нет вовсе — {@code color}, {@code marking}, {@code manufacturer}. */
+    private void optional(XMLStreamWriter w, String name, String value) throws XMLStreamException {
         if (value == null || value.isBlank()) {
             return;
         }
-        w.writeStartElement(name);
-        w.writeCharacters(value);
-        w.writeEndElement();
+        element(w, name, value);
     }
 }

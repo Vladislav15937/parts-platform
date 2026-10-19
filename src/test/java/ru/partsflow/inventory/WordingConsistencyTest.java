@@ -263,7 +263,11 @@ class WordingConsistencyTest {
         Map<String, String> allowed = Map.of(
                 "src/main/java/ru/partsflow/inventory/PartCondition.java", "сам словарь",
                 "src/main/java/ru/partsflow/migration/bazon/BazonValueParser.java",
-                "разбор чужого файла: написания Bazon на входе, не показ");
+                "разбор чужого файла: написания Bazon на входе, не показ",
+                "src/main/java/ru/partsflow/publishing/drom/DromPriceWriter.java",
+                "слова чужого файла на выходе (формат Bazon, задача 0333): «контрактный», "
+                        + "«б/у», «новый» читает разбор площадки, а не человек на нашем экране — "
+                        + "правка слова на экране не должна молча менять файл");
 
         List<String> found = new ArrayList<>();
         try (Stream<Path> files = Files.walk(Path.of("src/main/java"))) {

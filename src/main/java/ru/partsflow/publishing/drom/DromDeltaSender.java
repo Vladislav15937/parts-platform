@@ -76,13 +76,23 @@ public class DromDeltaSender {
     private final SecretCipher cipher;
     private final Duration refusedRetry;
 
+    /**
+     * Внешний адрес приложения — из него строятся ссылки на снимки в дельте,
+     * те же, что в полном прайсе ({@code DromFeedController}). Запроса здесь
+     * нет, поэтому и запасного пути «из запроса», как у выдачи прайса, нет:
+     * без настройки (только в разработке — в боевом compose {@code PUBLIC_ORIGIN}
+     * обязателен) дельта уходит без ссылок.
+     */
+    private final String publicUrl;
+
     public DromDeltaSender(JdbcTemplate jdbc,
                            DromAccountReader accounts,
                            DromPriceGenerator priceGenerator,
                            DromWheelGenerator wheelGenerator,
                            DromSyncClient syncClient,
                            SecretCipher cipher,
-                           @Value("${app.feeds.refused-retry:15m}") Duration refusedRetry) {
+                           @Value("${app.feeds.refused-retry:15m}") Duration refusedRetry,
+                           @Value("${app.public-url:}") String publicUrl) {
         this.jdbc = jdbc;
         this.accounts = accounts;
         this.priceGenerator = priceGenerator;
@@ -90,6 +100,7 @@ public class DromDeltaSender {
         this.syncClient = syncClient;
         this.cipher = cipher;
         this.refusedRetry = refusedRetry;
+        this.publicUrl = publicUrl;
     }
 
     /** Чем кончилась отправка в одну выгрузку. */
@@ -171,6 +182,7 @@ public class DromDeltaSender {
         }
 
         Set<Long> resting = restingAfterRefusal();
+        String origin = feedOrigin();
         boolean allSent = true;
         for (Ready target : targets) {
             if (resting.contains(target.account().id())) {
@@ -180,7 +192,7 @@ public class DromDeltaSender {
                         target.account().id());
                 continue;
             }
-            allSent &= sendToAccount(target, partIds, label) != Outcome.FAILED;
+            allSent &= sendToAccount(target, partIds, label, origin) != Outcome.FAILED;
         }
         return allSent;
     }
@@ -208,7 +220,45 @@ public class DromDeltaSender {
         return resting;
     }
 
-    private Outcome sendToAccount(Ready target, List<Long> partIds, String label) {
+    /**
+     * Начало адреса выдачи этой компании — {@code https://…/feeds/drom/<код>/};
+     * {@code null}, если внешний адрес не задан.
+     *
+     * <p>Код компании берётся из реестра по текущей схеме, как у ссылки
+     * на прайс ({@code MarketplaceAccountService.feedPath}): подставленный
+     * откуда-то ещё, он дал бы ссылки на снимки чужого арендатора. Метод
+     * зовётся внутри {@code @Transactional sendParts}: без транзакции
+     * {@code current_schema()} ответил бы {@code public}.
+     */
+    private String feedOrigin() {
+        if (publicUrl == null || publicUrl.isBlank()) {
+            return null;
+        }
+        // По схеме самой транзакции, а не по TenantContext: ссылки обязаны
+        // принадлежать тому же арендатору, чьи позиции читает дельта, а их
+        // читает search_path этого соединения.
+        List<String> company = jdbc.queryForList(
+                "SELECT code FROM public.tenant_registry WHERE schema_name = current_schema()",
+                String.class);
+        if (company.isEmpty() || company.get(0) == null) {
+            // Без записи в реестре нет и адреса прайса — ссылкам вести некуда.
+            // Дельта всё равно уходит: цена и наличие важнее снимков, которые
+            // площадка и так получит полным прайсом.
+            log.warn("Дром: у схемы арендатора нет кода компании в реестре — дельта уходит без снимков");
+            return null;
+        }
+        return "%s/feeds/drom/%s/".formatted(publicUrl.replaceFirst("/+$", ""), company.get(0));
+    }
+
+    /** Адрес выдачи снимков выгрузки — тот же, что прописан в её полном прайсе. */
+    private static String photoBase(String origin, DromAccountReader.Account account, String kind) {
+        if (origin == null || account.feedToken() == null) {
+            return null;
+        }
+        return origin + account.feedToken() + "/" + kind + "/";
+    }
+
+    private Outcome sendToAccount(Ready target, List<Long> partIds, String label, String origin) {
         ByteArrayOutputStream delta = new ByteArrayOutputStream();
         // Выгрузка колёс собирается своим генератором: у шины свои поля,
         // и дельта обязана быть в том же формате, что и полный прайс —
@@ -220,8 +270,13 @@ public class DromDeltaSender {
         int offers = target.account().isWheelFeed()
                 ? wheelGenerator.writeDelta(delta, partIds, target.account().filter(),
                         target.account().settings())
+                // Со снимками, как полный прайс: в формате Bazon пустой
+                // <photoUrls> значит «снимков нет», а не «не трогать» (0333).
+                // Адреса те же, что у выдачи прайса этой выгрузки, — по её токену.
                 : priceGenerator.writeDelta(delta, partIds, target.account().filter(),
-                        target.account().settings());
+                        target.account().settings(),
+                        photoBase(origin, target.account(), "photo"),
+                        photoBase(origin, target.account(), "donor-photo"));
         if (offers == 0) {
             // Ни одна позиция не проходит отбор этой выгрузки — слать нечего.
             // Обычный случай: пять прайс-листов по ценовым диапазонам, деталь

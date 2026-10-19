@@ -32,7 +32,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * в журнал публикаций и что происходит при отказе площадки.
  */
 @SpringBootTest(properties = {"spring.jpa.hibernate.ddl-auto=none",
-        "app.crypto.key=" + DromDeltaSenderTest.CRYPTO_KEY})
+        "app.crypto.key=" + DromDeltaSenderTest.CRYPTO_KEY,
+        "app.public-url=" + DromDeltaSenderTest.PUBLIC_URL})
 @Import(DromDeltaSenderTest.StubSyncConfig.class)
 class DromDeltaSenderTest extends PostgresTestBase {
 
@@ -43,6 +44,12 @@ class DromDeltaSenderTest extends PostgresTestBase {
      * у них стал бы разным и поднимался дважды.
      */
     static final String CRYPTO_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+
+    /**
+     * Внешний адрес приложения: из него дельта строит ссылки на снимки (задача
+     * 0333). Стоит у обоих классов одинаково — по той же причине, что ключ.
+     */
+    static final String PUBLIC_URL = "https://parts.example.ru";
 
     private static final String TENANT = "t_000047";
 
@@ -227,8 +234,49 @@ class DromDeltaSenderTest extends PostgresTestBase {
 
         String delta = capturedDelta();
         assertThat(delta)
-                .contains("<ordercode>" + key + "</ordercode>")
-                .contains("<available>false</available>");
+                .contains("<id>" + key + "</id>")
+                .contains("<state>Нет в наличии</state>");
+    }
+
+    /**
+     * Дельта несёт снимки адресами полного прайса этой выгрузки (задача 0333).
+     *
+     * <p>В формате Bazon {@code <photoUrls>} есть у каждой позиции, и пустой
+     * значит «снимков нет»: дельта без ссылок, какой она была раньше, сказала бы
+     * площадке именно это про проданную или подешевевшую деталь. Адрес — тот же,
+     * что у выдачи прайса: внешний адрес, код компании из реестра и токен
+     * выгрузки, иначе ссылка в дельте вела бы туда, где снимка не отдадут.
+     */
+    @Test
+    @DisplayName("Дельта уходит со снимками по адресу выдачи своей выгрузки")
+    void deltaCarriesPhotosAtTheFeedAddress() {
+        Long accountId = account("12345", "ключ-кабинета");
+        Long partId = part("Фара со снимком", true);
+        Long photoId = inTenant(() -> {
+            jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 47");
+            jdbc.update("""
+                    INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
+                    VALUES (47, ?, 'Разборка', 'delta-photo')""", TENANT);
+            jdbc.update("UPDATE marketplace_account SET feed_token = 'tok-delta-0333-feed-token-of-32-chars' WHERE id = ?",
+                    accountId);
+            return jdbc.queryForObject("""
+                    INSERT INTO part_photo (part_id, s3_key, is_main, sort_order, status)
+                    VALUES (?, ?, true, 1, 'PROCESSED') RETURNING id""",
+                    Long.class, partId, TENANT + "/parts/" + partId + "/1.jpg");
+        });
+        long dealId = issuedDeal(partId);
+
+        try {
+            assertThat(inTenant(() -> sender.onDealIssued(dealId))).isTrue();
+
+            assertThat(capturedDelta())
+                    .as("дельта ушла без снимков — площадка прочтёт пустой <photoUrls> как «снимков нет»")
+                    .contains("<photoUrls>\n<photoUrl>" + PUBLIC_URL
+                            + "/feeds/drom/delta-photo/tok-delta-0333-feed-token-of-32-chars/photo/" + photoId
+                            + ".jpg</photoUrl>\n</photoUrls>");
+        } finally {
+            inTenant(() -> jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 47"));
+        }
     }
 
     /**
@@ -260,7 +308,7 @@ class DromDeltaSenderTest extends PostgresTestBase {
         // то же самое, что стоит в полном прайсе этой выгрузки.
         assertThat(capturedDelta())
                 .as("дельта вернула объявлению складскую цену — наценка прайса стёрта")
-                .contains("<price>5500.00</price>");
+                .contains("<price>5500</price>");
     }
 
     @Test
@@ -274,10 +322,10 @@ class DromDeltaSenderTest extends PostgresTestBase {
         inTenant(() -> sender.onDealIssued(dealId));
 
         String delta = capturedDelta();
-        assertThat(delta).contains("<ordercode>" + feedKeyOf(sold) + "</ordercode>");
+        assertThat(delta).contains("<id>" + feedKeyOf(sold) + "</id>");
         assertThat(delta)
                 .as("в дельту уехал весь склад вместо одной позиции")
-                .doesNotContain("<ordercode>" + feedKeyOf(untouched) + "</ordercode>");
+                .doesNotContain("<id>" + feedKeyOf(untouched) + "</id>");
     }
 
     @Test

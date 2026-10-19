@@ -34,7 +34,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * трогающий склад, ломал бы утверждения про размер пачки.
  */
 @SpringBootTest(properties = {"spring.jpa.hibernate.ddl-auto=none",
-        "app.crypto.key=" + DromDeltaSenderTest.CRYPTO_KEY})
+        "app.crypto.key=" + DromDeltaSenderTest.CRYPTO_KEY,
+        "app.public-url=" + DromDeltaSenderTest.PUBLIC_URL})
 @Import(DromDeltaSenderTest.StubSyncConfig.class)
 class FeedDeltaRelayTest extends PostgresTestBase {
 
@@ -119,7 +120,7 @@ class FeedDeltaRelayTest extends PostgresTestBase {
 
         assertThat(syncClient.calls()).singleElement()
                 .satisfies(call -> assertThat(call.delta())
-                        .contains("<ordercode>" + code + "</ordercode>")
+                        .contains("<id>" + code + "</id>")
                         .contains("<price>7000"));
         assertThat(queueSize()).isZero();
     }
@@ -142,7 +143,7 @@ class FeedDeltaRelayTest extends PostgresTestBase {
 
         assertThat(queueSize()).isEqualTo(1);
         relay.relayFor(TENANT);
-        assertThat(capturedDelta()).contains("<available>false</available>");
+        assertThat(capturedDelta()).contains("<state>Нет в наличии</state>");
     }
 
     @Test
@@ -562,7 +563,7 @@ class FeedDeltaRelayTest extends PostgresTestBase {
     }
 
     private static int countOffers(String delta) {
-        return delta.split("<offer>", -1).length - 1;
+        return delta.split("<part>", -1).length - 1;
     }
 
     private <T> T inTenant(Supplier<T> action) {
