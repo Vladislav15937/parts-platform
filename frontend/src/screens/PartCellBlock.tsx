@@ -1,3 +1,4 @@
+import { StockCount } from '../inventory/StockCount';
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { useMounted } from '../ui/useMounted';
@@ -112,18 +113,7 @@ export function PartCellBlock({ partId, warehouses, stock, reserved, role, onCha
       {warehouses.map((warehouse) => (
         <div key={warehouse.id}>
           <span>{warehouse.name}{addressOf(cells, warehouse.id)}</span>
-          <b>
-            {stock[String(warehouse.id)] === undefined ? '—' : (
-              Number(reserved?.[String(warehouse.id)] ?? 0) > 0 ? (
-                <>
-                  {Number(stock[String(warehouse.id)]) - Number(reserved?.[String(warehouse.id)])}
-                  <span className="stock-held" title="Отложено под клиента">
-                    {' '}({reserved?.[String(warehouse.id)]})
-                  </span>
-                </>
-              ) : stock[String(warehouse.id)]
-            )}
-          </b>
+          <b><StockCount stock={stock} reserved={reserved} warehouseId={warehouse.id} /></b>
         </div>
       ))}
 

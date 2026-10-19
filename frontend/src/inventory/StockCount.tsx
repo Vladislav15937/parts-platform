@@ -9,13 +9,17 @@ import type { CatalogRow } from './catalog';
  * отдельный элемент своего цвета, а не часть строки: тем же цветом
  * подсвечена строка (`row--held`), это один знак «отложено».
  */
-export function StockCount({ row, warehouseId }: { row: CatalogRow; warehouseId: number }) {
+export function StockCount({ stock, reserved, warehouseId }: {
+  stock: Record<string, number>;
+  reserved?: Record<string, number> | undefined;
+  warehouseId: number;
+}) {
   const key = String(warehouseId);
-  const total = row.stock[key];
+  const total = stock[key];
   if (total === undefined) {
     return <>—</>;
   }
-  const held = Number(row.reserved?.[key] ?? 0);
+  const held = Number(reserved?.[key] ?? 0);
   if (held <= 0) {
     return <>{total}</>;
   }

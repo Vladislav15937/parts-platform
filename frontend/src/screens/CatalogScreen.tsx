@@ -733,7 +733,7 @@ export function CatalogScreen({ role }: { role: string }) {
                       {/* Прочерк, а не ноль: «на этом складе её нет»
                           и «есть ноль штук» читаются одинаково, но первое
                           понятнее. */}
-                      <StockCount row={row} warehouseId={warehouse.id} />
+                      <StockCount stock={row.stock} reserved={row.reserved} warehouseId={warehouse.id} />
                     </td>
                   ))}
                 </tr>
