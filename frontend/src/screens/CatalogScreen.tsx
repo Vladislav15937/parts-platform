@@ -27,6 +27,7 @@ import {
   type PartPhoto,
 } from '../inventory/catalog';
 import { PartCard } from './PartCard';
+import { ApplicabilityList } from './ApplicabilityList';
 import { useMounted } from '../ui/useMounted';
 import { BulkEditForm } from './BulkEditForm';
 import { BulkMoveForm } from './BulkMoveForm';
@@ -106,6 +107,8 @@ export function CatalogScreen({ role }: { role: string }) {
    */
   const [whole, setWhole] = useState(false);
   const [editing, setEditing] = useState(false);
+  // «Применимость подробно» — список позиций с автором и временем (0363).
+  const [fitList, setFitList] = useState(false);
   // Перевозка пачкой — свой режим формы, отдельно от правки: кладовщик
   // видит эту кнопку, а «Изменить» (цена, секция) — нет, роль другая.
   const [movingBulk, setMovingBulk] = useState(false);
@@ -387,6 +390,12 @@ export function CatalogScreen({ role }: { role: string }) {
             {selecting ? 'Выйти из правки' : 'Правка списком'}
           </button>
         )}
+        {(role === 'OWNER' || role === 'MANAGER') && (
+          <button type="button" className="button--ghost" onClick={() => setFitList(!fitList)}>
+            {fitList ? 'Скрыть применимость' : 'Применимость подробно'}
+          </button>
+        )}
+        {fitList && <ApplicabilityList role={role} onClose={() => setFitList(false)} />}
         {/* Кладовщик правку ценой и секцией не делает — «Правка списком»
             ему не показана вовсе, — но перевозит наравне с владельцем:
             деталь у него в руках. Свой вход в тот же режим отметки строк. */}
