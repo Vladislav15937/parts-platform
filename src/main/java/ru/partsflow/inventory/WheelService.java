@@ -110,9 +110,39 @@ public class WheelService {
      */
     private static void requireWear(Integer percent) {
         if (percent != null && (percent < 0 || percent > 100)) {
-            throw new IllegalArgumentException(
-                    "Износ — процент от 0 до 100, а не " + percent);
+            throw new IllegalArgumentException(WEAR_WORDS);
         }
+    }
+
+    /** Слова отказа по износу — одни на разбор формы и проверку диапазона (задача 0345). */
+    static final String WEAR_WORDS = "Износ шины — целое число процентов от 0 до 100";
+
+    /**
+     * Износ из поля формы: целое число процентов, как набрано (задача 0345).
+     *
+     * <p>«30,5» и «30.5» отклоняются, а не округляются: «проценты как вписано» —
+     * решение владельца, молчаливое «30» записало бы не то, что вписали. Знак
+     * «%» в конце допускается — у клиента в Bazon износ так и пишут, экран его
+     * срезает, а прямой запрос не должен отказывать на том же. Пусто — не указан.
+     * Одна проверка на экран и API: запрос приходит строкой, и разбор JSON
+     * числа ответил бы общей фразой.
+     */
+    static Integer parseWear(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String text = raw.strip();
+        if (text.endsWith("%")) {
+            text = text.substring(0, text.length() - 1).strip();
+        }
+        // Только ASCII-цифры: Character.isDigit и Integer.parseInt приняли бы
+        // арабско-индийские, а знак «+» и пробелы внутри — не процент.
+        if (!text.matches("-?[0-9]{1,9}")) {
+            throw new IllegalArgumentException(WEAR_WORDS);
+        }
+        int percent = Integer.parseInt(text);
+        requireWear(percent);
+        return percent;
     }
 
     /**

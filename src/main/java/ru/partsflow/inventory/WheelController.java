@@ -208,7 +208,8 @@ public class WheelController {
                 new WheelService.WheelRequest(
                         request.kind(), request.diameter(),
                         request.tyreWidth(), request.tyreHeight(), request.construction(),
-                        request.tyreType(), request.season(), request.wearPercent(),
+                        request.tyreType(), request.season(),
+                        WheelService.parseWear(request.wearPercent()),
                         request.madeYear(),
                         request.discType(), request.discWidth(), request.offsetMm(),
                         request.boltPattern(), request.hubBore(),
@@ -223,14 +224,18 @@ public class WheelController {
     /**
      * @param quantity сколько колёс в комплекте: обычно четыре, но продают
      *                 и одну запаску
-     * @param wearPercent износ шины в процентах, 0…100 (задача 0340)
+     * @param wearPercent износ шины в процентах, 0…100 (задача 0340). Строкой, а не
+     *                    числом, намеренно (задача 0345): поле формы уходит как набрано,
+     *                    и «30,5» с числом Jackson разобрал бы общей фразой «Запрос
+     *                    не разобран», а {@code 30.5} молча округлил бы до 30
+     *                    ({@link WheelService#parseWear})
      */
     public record SetRequest(@NotBlank String kind,
                              @NotNull Long warehouseId,
                              int quantity,
                              BigDecimal diameter,
                              Integer tyreWidth, Integer tyreHeight, String construction,
-                             String tyreType, String season, Integer wearPercent,
+                             String tyreType, String season, String wearPercent,
                              Integer madeYear,
                              String discType, BigDecimal discWidth, Integer offsetMm,
                              String boltPattern, BigDecimal hubBore,

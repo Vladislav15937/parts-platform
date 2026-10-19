@@ -23,6 +23,7 @@ import {
 } from '../inventory/wheels';
 import type { SetRequest, WheelPage, WheelQuery, WheelRow } from '../inventory/wheels';
 import { bulkNotice } from '../inventory/catalog';
+import { WEAR_WORDS } from '../inventory/wheels';
 import { PartCard } from './PartCard';
 import { useMounted } from '../ui/useMounted';
 import { ColumnMenu } from './ColumnMenu';
@@ -547,10 +548,14 @@ function SetForm({
   const [warehouseId, setWarehouseId] = useState('');
   const [busy, setBusy] = useState(false);
   const [field, setField] = useState<Record<string, string>>({});
+  // Отказ по износу показывается у самого поля (задача 0345), а не только
+  // строкой над таблицей: человек правит одно поле и должен видеть какое.
+  const [wearError, setWearError] = useState('');
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
 
   function set(name: string, value: string) {
+    if (name === 'wearPercent') setWearError('');
     setField({ ...field, [name]: value });
   }
 
@@ -561,6 +566,7 @@ function SetForm({
 
   async function submit() {
     setBusy(true);
+    setWearError('');
     try {
       const body: SetRequest = {
         kind,
@@ -600,7 +606,13 @@ function SetForm({
         onCreated(created.title, created.setNo);
       }
     } catch (cause) {
-      if (mounted.current) onError(describe(cause, 'Комплект не заведён'));
+      if (!mounted.current) return;
+      const message = describe(cause, 'Комплект не заведён');
+      if (message === WEAR_WORDS) {
+        setWearError(message);
+      } else {
+        onError(message);
+      }
     } finally {
       if (mounted.current) setBusy(false);
     }
@@ -664,7 +676,10 @@ function SetForm({
               </select>
             </label>
             {/* Износ в процентах, как у клиента в Bazon: «Износ, %» (задача 0340). */}
-            <Field name="wearPercent" label="Износ, %" hint="30" set={set} field={field} />
+            <Field
+              name="wearPercent" label="Износ, %" hint="30" set={set} field={field}
+              error={wearError}
+            />
             <Field name="madeYear" label="Год" hint="2022" set={set} field={field} />
           </div>
           <div className="filter-row">
@@ -771,12 +786,14 @@ function Field({
   hint,
   set,
   field,
+  error,
 }: {
   name: string;
   label: string;
   hint: string;
   set: (name: string, value: string) => void;
   field: Record<string, string>;
+  error?: string;
 }) {
   return (
     <label className="field">
@@ -785,7 +802,9 @@ function Field({
         value={field[name] ?? ''}
         placeholder={hint}
         onChange={(e) => set(name, e.target.value)}
+        aria-invalid={error ? true : undefined}
       />
+      {error && <span className="note note--error" role="alert">{error}</span>}
     </label>
   );
 }
