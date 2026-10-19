@@ -161,12 +161,13 @@ class PreorderTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Без цены, вида детали и количества позицию не завести; машина необязательна")
+    @DisplayName("Без вида детали и количества, с отрицательной ценой позицию не завести; машина и цена необязательны")
     void minimumIsEnforcedInWords() throws Exception {
         long supply = supply();
         MockHttpSession owner = login("vladelec");
         for (String bad : List.of(
-                expectedBody("Фара левая", 3, "0"),
+                // Ноль больше не отказ (0362, «как у Bazon»): отрицательная — отказ.
+                expectedBody("Фара левая", 3, "-1"),
                 expectedBody("Фара левая", 0, "9000"),
                 "{\"quantity\":1,\"price\":100}")) {
             mvc.perform(post("/api/intake/supplies/" + supply + "/expected-parts")
