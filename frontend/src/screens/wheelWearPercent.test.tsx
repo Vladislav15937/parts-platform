@@ -14,6 +14,8 @@ import type { Wheel } from '../inventory/wheels';
  */
 describe('износ шины в процентах', () => {
   const posted: Array<Record<string, unknown>> = [];
+  // Что ответит сервер на заведение: пусто — принял, иначе 400 с этими словами.
+  let refuse = '';
 
   function wheel(): Wheel {
     return {
@@ -37,11 +39,13 @@ describe('износ шины в процентах', () => {
 
   beforeEach(() => {
     posted.length = 0;
+    refuse = '';
     try { localStorage.clear(); } catch { /* нет хранилища — и так умолчание */ }
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/api/wheels/sets')) {
         posted.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        if (refuse) return json({ message: refuse }, 400);
         return json({ setNo: null, title: 'Шина 225/55 R18', partIds: [8] }, 201);
       }
       if (url.includes('/api/organization/warehouses')) {
@@ -76,6 +80,24 @@ describe('износ шины в процентах', () => {
     const body = posted[0] ?? {};
     expect(body.wearPercent, 'износ уехал не тем числом').toBe('30');
     expect('wearMm' in body, 'в запросе осталось поле миллиметров').toBe(false);
+  });
+
+  it('отказ сервера по износу стоит у поля «Износ, %», а не только над формой', async () => {
+    const words = 'Износ шины — целое число процентов от 0 до 100';
+    refuse = words;
+    render(<WheelsScreen canIntake role="OWNER" />);
+    const form = (await screen.findByText('Завести')).closest('.card') as HTMLElement;
+
+    fireEvent.change(within(form).getByLabelText('Склад'), { target: { value: '1' } });
+    fireEvent.change(within(form).getByLabelText('Износ, %'), { target: { value: '30,5' } });
+    fireEvent.click(within(form).getByText('Завести'));
+
+    const alert = await within(form).findByRole('alert');
+    expect(alert.textContent).toBe(words);
+    expect(alert.closest('label')?.textContent, 'слова не у поля износа').toContain('Износ, %');
+    // Правка поля снимает отказ: он про прежнее значение.
+    fireEvent.change(within(form).getByPlaceholderText('30'), { target: { value: '30' } });
+    expect(within(form).queryByRole('alert')).toBeNull();
   });
 
   it('в таблице и в карточке износ — «30%», а не миллиметры', async () => {

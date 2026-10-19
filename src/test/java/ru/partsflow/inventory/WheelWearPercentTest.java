@@ -111,7 +111,7 @@ class WheelWearPercentTest extends PostgresTestBase {
 
         assertThatThrownBy(() -> inTenant(() -> wheels.createSet(worn, 1, warehouse, null)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Износ — процент от 0 до 100, а не 150");
+                .hasMessage("Износ шины — целое число процентов от 0 до 100");
     }
 
     private Long tyre(BigDecimal wearMm) {
