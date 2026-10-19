@@ -164,7 +164,7 @@ class PartChangeLogTest extends PostgresTestBase {
                 "SELECT id FROM catalog.brand ORDER BY id LIMIT 1", Long.class));
         drain();
 
-        inTenant(() -> catalog.addApplicability(partId, brand, null));
+        inTenant(() -> catalog.addApplicability(partId, brand, null, null));
 
         // Марка и модель уезжают в прайс отдельными тегами, и у контрактной
         // детали берутся именно отсюда. Триггера на part_applicability

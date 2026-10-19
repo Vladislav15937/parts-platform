@@ -138,6 +138,10 @@ public class PartHistoryService {
         }
 
         List<Change> changes = new ArrayList<>(byAudit.values());
+        changes.addAll(applicabilityChanges(partId));
+        // Правки идут от свежих к старым; сортировка устойчивая, и при равном
+        // моменте остаётся порядок запроса.
+        changes.sort(java.util.Comparator.comparing(Change::at).reversed());
         created(partId).ifPresent(changes::add);
         return changes;
     }
@@ -207,6 +211,34 @@ public class PartHistoryService {
     private static String labelOf(String column) {
         String label = AuditedColumns.PART.get(column);
         return label != null ? label : AuditedColumns.PART_DROM_CARD.get(column);
+    }
+
+    /**
+     * «Применимость: → Nissan Teana 2003—2008» (задача 0363, как у Bazon): заведение и
+     * снятие машины в применимости позиции. Берётся из журнала строк применимости
+     * ({@code AuditJournal.created/deleted}), где машина названа словами на момент записи:
+     * строки уже может не быть. Отбор по {@code part_id} из снимка, а не по номеру строки —
+     * снятая строка по номеру уже не найти.
+     */
+    private List<Change> applicabilityChanges(long partId) {
+        return jdbc.query("""
+                        SELECT a.changed_at, m.display_name AS author, a.operation,
+                               coalesce(a.new_value, a.old_value) ->> 'vehicle' AS vehicle
+                          FROM audit_log a
+                          LEFT JOIN tenant_member m ON m.id = a.changed_by
+                         WHERE a.table_name = 'part_applicability'
+                           AND a.operation IN ('INSERT', 'DELETE')
+                           AND coalesce(a.new_value, a.old_value) ->> 'part_id' = ?
+                         ORDER BY a.changed_at DESC, a.id DESC""",
+                (rs, i) -> {
+                    boolean added = "INSERT".equals(rs.getString("operation"));
+                    String vehicle = rs.getString("vehicle");
+                    return new Change(rs.getTimestamp("changed_at").toInstant(),
+                            rs.getString("author"), null,
+                            List.of(new Field("Применимость",
+                                    added ? null : vehicle, added ? vehicle : null, null)));
+                },
+                String.valueOf(partId));
     }
 
     /**
