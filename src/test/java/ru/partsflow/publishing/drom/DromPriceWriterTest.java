@@ -173,7 +173,7 @@ class DromPriceWriterTest {
                     null, null, null, null, null, true, null, null, null, null);
 
             assertThat(write(noPhotos))
-                    .contains("<analogsNumbers></analogsNumbers>\n<photoUrls>\n</photoUrls>\n<description>");
+                    .contains("<analogsNumbers></analogsNumbers>\n<photoUrls>\n</photoUrls>\n<description/>");
         }
 
         @Test
@@ -205,9 +205,8 @@ class DromPriceWriterTest {
             // Так у Bazon в drom-new-parts.xml (2 позиции из 1 724). У нас
             // пустым описание бывает только у перенесённой с Дрома позиции
             // без текста клиента (задача 0275).
-            assertThat(write(transferred("Расширитель крыла", null)))
-                    .contains("</photoUrls>\n<description/></part>\n</parts>")
-                    .doesNotContain("Состояние:");
+            assertThat(write(vehicle(PartCondition.USED, null, null, null, null, null, null)))
+                    .contains("</photoUrls>\n<description/></part>\n</parts>");
         }
     }
 
@@ -276,8 +275,8 @@ class DromPriceWriterTest {
             String both = write(sided(LateralSide.BOTH, LongitudinalSide.BOTH));
             assertThat(value(both, "leftRight")).isEqualTo("left,right");
             assertThat(value(both, "frontRear")).isEqualTo("front,rear");
-            // Описание по-прежнему называет сторону словами (его состав — 0337).
-            assertThat(value(both, "description")).contains("левая и правая", "передняя и задняя");
+            // Расположения словами в описании больше нет (0337).
+            assertThat(value(both, "description")).doesNotContain("левая");
         }
 
         @Test
@@ -295,7 +294,7 @@ class DromPriceWriterTest {
             assertThat(xml)
                     .contains("<title>Кронштейн &lt;передний&gt; &amp; правый</title>")
                     .contains("<description><![CDATA[");
-            assertThat(value(xml, "description")).isEqualTo("Размер ]]> & <б/у>");
+            assertThat(value(xml, "description")).isEqualTo("\nРазмер ]]> & <б/у>");
         }
 
         @Test
@@ -328,57 +327,94 @@ class DromPriceWriterTest {
      * доезжает в новый элемент без потерь.
      */
     @Nested
-    @DisplayName("Описание")
+    @DisplayName("Описание — устройство Bazon (0337)")
     class Description {
 
         @Test
-        @DisplayName("Собранное описание называет машину, сторону и номер")
-        void assemblesDescriptionFromWhatWeKnow() throws Exception {
-            DromOffer bare = new DromOffer("P-10", "Амортизатор", "Амортизатор", null,
-                    new BigDecimal("8500"), BigDecimal.ONE, PartCondition.USED,
-                    "KYB", "334388", List.of(),
-                    LateralSide.LEFT, LongitudinalSide.FRONT, VerticalSide.LOWER,
-                    null, null, null, List.of(),
-                    "Honda", "Airwave", "GJ1", "L15A", 2007, true, null, null, null, null);
-
-            assertThat(value(write(bare), "description"))
-                    .contains("Снято с: Honda Airwave GJ1 L15A 2007.")
-                    .contains("Расположение: передняя, левая, нижняя.")
-                    .contains("Номер производителя: 334388.")
-                    .contains("Состояние: б/у.");
-
-            DromOffer contract = new DromOffer("P-11", "Стартер", "Стартер", null,
-                    new BigDecimal("100"), BigDecimal.ONE, PartCondition.USED,
-                    null, null, List.of(), null, null, null, null, null, null, List.of(),
-                    "Toyota,Lexus", "Camry,Windom", null, null, null, false, null, null, null, null);
-            assertThat(value(write(contract), "description"))
-                    .contains("Подходит на: Toyota,Lexus Camry,Windom.")
-                    .doesNotContain("Снято с:");
-
-            assertThat(value(write(offer()), "description")).isEqualTo("Снят с Honda Airwave, пробег 80 000");
+        @DisplayName("Четыре блока: перевод строки в начале, пустая строка между, конца нет")
+        void blocksInTheOrderOfTheSample() throws Exception {
+            assertThat(value(write(withText("С накладкой. Контракт.", "ОПЛАТА НАЛИЧНЫМИ")), "description"))
+                    .isEqualTo("\nС накладкой. Контракт.\n\n"
+                            + "Запчасть снята с: Nissan Teana 2008 J32 VQ25DE\n\n"
+                            + "ОПЛАТА НАЛИЧНЫМИ");
         }
 
         @Test
-        @DisplayName("«Ожидается поступление» стоит первой строкой описания")
-        void expectedNoteComesFirst() throws Exception {
+        @DisplayName("Без комментария и текстового блока — только «снята с», без лишней пустой строки")
+        void emptyBlocksTakeTheirSeparatorsWithThem() throws Exception {
+            assertThat(value(write(withText(null, null)), "description"))
+                    .isEqualTo("\nЗапчасть снята с: Nissan Teana 2008 J32 VQ25DE");
+            assertThat(value(write(withText("  ", "")), "description"))
+                    .isEqualTo("\nЗапчасть снята с: Nissan Teana 2008 J32 VQ25DE");
+        }
+
+        @Test
+        @DisplayName("Комментарий и текстовый блок — как набраны, переводы строк внутри целы")
+        void textsAreVerbatim() throws Exception {
+            // Разбор XML сам сводит CRLF к LF, поэтому «как набран» проверяется по байтам.
+            String xml = write(withText("Первая.\r\nВторая.", "Блок\nв две строки"));
+            assertThat(xml).contains("<![CDATA[\nПервая.\r\nВторая.\n\n")
+                    .contains("\n\nБлок\nв две строки]]>");
+        }
+
+        @Test
+        @DisplayName("Нет в описании ни номера, ни состояния, ни расположения, ни видео")
+        void nothingWeInvented() throws Exception {
+            assertThat(value(write(withText(null, "Блок")), "description"))
+                    .doesNotContain("Номер производителя")
+                    .doesNotContain("Состояние")
+                    .doesNotContain("Расположение")
+                    .doesNotContain("Видео")
+                    .doesNotContain("Подходит на");
+        }
+
+        @Test
+        @DisplayName("Нет блока «снята с» у новой детали, у позиции без марки или модели")
+        void noVehicleBlock() throws Exception {
+            DromOffer fresh = vehicle(PartCondition.NEW, "Nissan", "Teana", 2008, null, null, null);
+            assertThat(value(write(fresh), "description")).isEmpty();
+
+            assertThat(value(write(vehicle(PartCondition.USED, null, "Teana", null, null, null, null)),
+                    "description")).isEmpty();
+            assertThat(value(write(vehicle(PartCondition.USED, "Nissan", null, null, null, null, null)),
+                    "description")).isEmpty();
+        }
+
+        @Test
+        @DisplayName("«Снята с»: первые значения списков, год текстом, без года и кузова — без слов")
+        void vehicleWords() throws Exception {
+            DromOffer lists = vehicle(PartCondition.CONTRACT, "Lincoln,Ford", "Town Car,F150",
+                    null, "03-08", "J32, J33", "VQ25DE,VQ35DE");
+            assertThat(value(write(lists), "description"))
+                    .isEqualTo("\nЗапчасть снята с: Lincoln Town Car 03-08 J32 VQ25DE");
+
+            assertThat(value(write(vehicle(PartCondition.USED, "Nissan", "Teana", null, null, null, null)),
+                    "description")).isEqualTo("\nЗапчасть снята с: Nissan Teana");
+        }
+
+        @Test
+        @DisplayName("Приписки про ожидание и установку — только когда выгрузка их включила")
+        void switchedNotesOnly() throws Exception {
             DromOffer awaited = new DromOffer("P-13", "Бампер", "Бампер",
                     "Оригинал, без сколов.", new BigDecimal("12000"), BigDecimal.ONE,
                     PartCondition.USED, null, null, List.of(),
                     null, null, null, null, null, null, List.of(),
                     null, null, null, null, null, true,
-                    "Отправляем транспортной компанией.",
-                    "https://example.org/v/1",
+                    "Блок", "https://example.org/v/1",
                     "Стоимость установки: 1000 р.",
                     "Ожидается поступление");
 
             assertThat(value(write(awaited), "description"))
-                    .as("приписка про ожидание встала не первой строкой описания")
-                    .isEqualTo("""
-                            Ожидается поступление
-                            Оригинал, без сколов.
-                            Отправляем транспортной компанией.
-                            Стоимость установки: 1000 р.
-                            Видео: https://example.org/v/1""");
+                    .isEqualTo("\nОжидается поступление\n\nОригинал, без сколов.\n\n"
+                            + "Блок\n\nСтоимость установки: 1000 р.");
+            assertThat(value(write(withText("К", null)), "description")).doesNotContain("Ожидается");
+        }
+
+        @Test
+        @DisplayName("Позиция без единого блока — пустой элемент")
+        void emptyDescription() throws Exception {
+            DromOffer bare = vehicle(PartCondition.USED, null, null, null, null, null, null);
+            assertThat(write(bare)).contains("<description/>");
         }
     }
 
@@ -404,13 +440,15 @@ class DromPriceWriterTest {
         }
 
         @Test
-        @DisplayName("Описание клиента уходит как есть, с переводами строк и без приписок")
+        @DisplayName("Описание клиента — «Комментарий»: как есть, с переводами строк, без чужих строк")
         void descriptionIsVerbatim() throws Exception {
             String text = "Подходит на автомобиль с левым и правым рулем.\nХорошее состоянии.";
 
             assertThat(value(write(transferred("Дверь", text)), "description"))
-                    .as("описание клиента дописано или поправлено")
-                    .isEqualTo(text);
+                    .as("комментарий клиента поправлен или разбавлен чужими строками")
+                    .isEqualTo("\n" + text + "\n\n"
+                            + "Запчасть снята с: Toyota Land Cruiser Prado 2008\n\n"
+                            + "Текстовый блок");
         }
 
         @Test
@@ -418,11 +456,12 @@ class DromPriceWriterTest {
         void longDescriptionIsNotCut() throws Exception {
             String text = "Ж".repeat(4_999) + "\n" + "к".repeat(1_000);
 
-            assertThat(value(write(transferred("Двигатель", text)), "description")).isEqualTo(text);
+            assertThat(value(write(transferred("Двигатель", text)), "description"))
+                    .startsWith("\n" + text + "\n\n");
         }
 
         @Test
-        @DisplayName("Прочим позициям чистка заголовка и сборка описания остаются")
+        @DisplayName("Позиция без комментария: текстовый блок, и никакого «Состояния»")
         void ownPositionsAreUnchanged() throws Exception {
             DromOffer ours = new DromOffer("P-1", "Фара (б/у) перед. лев. Toyota Camry",
                     "Фара", null, new BigDecimal("100"), BigDecimal.ONE, PartCondition.USED,
@@ -432,7 +471,7 @@ class DromPriceWriterTest {
             String xml = write(ours);
             // Полей названия нет — уходит вид справочника; хранимое название не течёт.
             assertThat(value(xml, "title")).isEqualTo("Фара");
-            assertThat(value(xml, "description")).isEqualTo("Состояние: б/у.\nТекстовый блок");
+            assertThat(value(xml, "description")).isEqualTo("\nТекстовый блок");
         }
     }
 
@@ -487,7 +526,7 @@ class DromPriceWriterTest {
         return new DromOffer("P-" + photos, title, kind, null, new BigDecimal("500.00"),
                 BigDecimal.ONE, condition, manufacturer, oem, analogs, lr, fr, null,
                 color, marking, new DromOffer.Placement("Ткацкая", null, null, null), links,
-                "Toyota", "Harrier", null, null, null, true, null, null, null, null);
+                "Toyota", "Harrier", null, null, null, true, "ОПЛАТА НАЛИЧНЫМИ", null, null, null);
     }
 
     /**
@@ -584,8 +623,25 @@ class DromPriceWriterTest {
                 null, null, null, null, List.of(),
                 "Toyota", "Land Cruiser Prado", null, null, 2008, true,
                 "Текстовый блок", "https://video.example/1",
-                "Стоимость установки: 500 р.", "Ожидается поступление", null, true,
+                null, null, null, true,
                 "фара", null, "Toyota", "Land Cruiser Prado");
+    }
+
+    private static DromOffer vehicle(PartCondition condition, String brand, String model,
+                                     Integer year, String yearText, String body, String engine) {
+        return new DromOffer("P-1", "Фара", "Фара", null,
+                new BigDecimal("100"), BigDecimal.ONE, condition,
+                null, null, List.of(), null, null, null, null, null, null, List.of(),
+                brand, model, body, engine, year, true, null, null, null, null,
+                null, false, "Фара", yearText, brand, model);
+    }
+
+    private static DromOffer withText(String comment, String textBlock) {
+        return new DromOffer("P-2", "Фара", "Фара", comment,
+                new BigDecimal("100"), BigDecimal.ONE, PartCondition.CONTRACT,
+                null, null, List.of(), null, null, null, null, null, null, List.of(),
+                "Nissan", "Teana", "J32", "VQ25DE", 2008, true, textBlock, null, null, null,
+                null, false, "Фара", null, "Nissan", "Teana");
     }
 
     /** Текст единственного элемента с этим именем — как его прочтёт площадка. */

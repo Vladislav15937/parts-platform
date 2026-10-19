@@ -368,7 +368,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 // Вертикальной оси у Bazon нет тегом — она остаётся
                 // словом в собранном описании.
                 .doesNotContain("<ud>")
-                .contains("Расположение: передняя, левая, нижняя.")
+                .doesNotContain("Расположение:")
                 .contains("<manufacturer>KYB</manufacturer>");
     }
 
@@ -690,8 +690,9 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 // Владелец пишет их «для объявления» — значит покупатель
                 // обязан их видеть.
                 new Field("text_block", "Снята с целой машины, следов удара нет", true),
-                new Field("video_url", "https://example.org/video", true),
-                // Внутреннее: на площадку не идёт.
+                // Внутреннее: на площадку не идёт. Ссылка на видео — тоже: у Bazon
+                // её в описании нет (0337).
+                new Field("video_url", "https://example.org/video", false),
                 new Field("min_price", new BigDecimal("100"), false),
                 new Field("cost_price", new BigDecimal("200"), false),
                 // Цена установки сама по себе внутренняя и остаётся ею:
@@ -753,8 +754,8 @@ class DromPriceGeneratorTest extends PostgresTestBase {
      * вовсе: заметить это можно было лишь сверив файл с карточкой руками.
      */
     @Test
-    @DisplayName("Текстовый блок и видео дописываются к описанию")
-    void textBlockAndVideoReachTheDescription() {
+    @DisplayName("Текстовый блок уходит в описание, ссылка на видео — нет (0337)")
+    void textBlockReachesTheDescriptionVideoDoesNot() {
         String name = "Прайс: текст и видео";
         Long partId = part(name, new BigDecimal("4000"), true);
         intake(partId, warehouse, 1);
@@ -771,10 +772,10 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 .contains("Снято с целой машины.")
                 .as("текстовый блок не доехал до покупателя")
                 .contains("Резьба целая, крепления без трещин.")
-                // Подпись обязательна: голый адрес посреди текста читается
-                // как мусор, и по нему не понять, что там ролик о детали.
-                .as("ссылка на видео ушла без подписи или не ушла вовсе")
-                .contains("Видео: https://example.org/v/17");
+                // У Bazon в описании ссылки на видео нет (решение 0337).
+                .as("ссылка на видео уехала в описание")
+                .doesNotContain("example.org/v/17")
+                .doesNotContain("Видео:");
     }
 
     /**
@@ -793,7 +794,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 "UPDATE part SET description = 'Только описание.' WHERE id = ?", partId));
 
         assertThat(offerOf(name))
-                .contains("<description><![CDATA[Только описание.]]></description>")
+                .contains("<description><![CDATA[\nТолько описание.]]></description>")
                 .doesNotContain("Видео:");
     }
 
@@ -842,7 +843,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
                 .contains("<state>В наличии</state>");
         assertThat(descriptionIn(offer))
                 .as("приписка обязана стоять в начале описания, а не после него")
-                .startsWith("Ожидается поступление, срок — три недели");
+                .startsWith("\nОжидается поступление, срок — три недели");
 
         long counted = inTenant(() -> accounts.countMatching(
                 null, null, null, null, null, false, null, false, "PART",
@@ -855,7 +856,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         // в прайс-листе объявление, которого владелец не заводил.
         assertThat(descriptionIn(offerIn(deltaWith(expects("Ожидается поступление")), awaited)))
                 .as("дельта уносит товар в пути без приписки")
-                .startsWith("Ожидается поступление");
+                .startsWith("\nОжидается поступление");
     }
 
     /**
@@ -871,7 +872,7 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         Long partId = expectedPart(name, new BigDecimal("7000"), "EXPECTED");
 
         assertThat(descriptionIn(offerIn(priceWith(expects("Ожидается поступление")), name)))
-                .startsWith("Ожидается поступление");
+                .startsWith("\nОжидается поступление");
 
         inTenant(() -> jdbc.update(
                 "UPDATE supply SET status = 'ARRIVED', arrived_on = current_date"
@@ -1147,6 +1148,9 @@ class DromPriceGeneratorTest extends PostgresTestBase {
     private static String descriptionIn(String offer) {
         String open = "<description><![CDATA[";
         int at = offer.indexOf(open);
+        if (at < 0 && offer.contains("<description/>")) {
+            return "";
+        }
         assertThat(at).as("описания в предложении нет вовсе").isNotNegative();
         return offer.substring(at + open.length(), offer.indexOf("]]></description>", at));
     }
