@@ -144,6 +144,45 @@ class DromFeedCompositionTest extends PostgresTestBase {
         assertThat(inStock).isNotNull();
     }
 
+    /**
+     * Отбор по складу — тем же условием в файле и в счётчике (найдено на живом
+     * клиенте 20.10.2026: «склад = Склад А, состояние = б/у» — «Посчитать» 14,
+     * а в файле 2 658 строк, из них 2 644 — б/у других складов недоступными).
+     * Фильтр склада стоял только внутри подзапроса остатка, и позиция чужого
+     * склада проходила в файл с пустым остатком; счётчик её не считал.
+     */
+    @Test
+    @DisplayName("Отбор «склад и состояние»: позиций других складов в файле нет, и файл равен «Посчитать»")
+    void warehouseFilterKeepsFileEqualToCounter() {
+        Long own = stocked("Фара б/у со своего склада", "4000", warehouse);
+        Long alien = stocked("Фара б/у с чужого склада", "4000", otherWarehouse);
+        stocked("Капот б/у с чужого склада", "4000", otherWarehouse);
+        DromPriceGenerator.FeedFilter filter = new DromPriceGenerator.FeedFilter(
+                null, null, List.of("USED"), List.of(warehouse), List.of(), false, List.of(), false);
+        String delta = inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeDelta(out, List.of(own, alien), filter);
+            return out.toString(StandardCharsets.UTF_8);
+        });
+        assertThat(delta).contains("Фара б/у со своего склада")
+                .as("дельта филиала несёт позицию другого склада")
+                .doesNotContain("с чужого склада");
+        inTenant(() -> jdbc.update("""
+                INSERT INTO marketplace_account (marketplace, title, settings, feed_token,
+                                                 warehouse_ids, conditions)
+                VALUES ('DROM', 'Дром', '{}'::jsonb, ?, ?::bigint[], '{USED}')""",
+                TOKEN, "{" + warehouse + "}"));
+
+        String xml = priceFile();
+
+        assertThat(xml).contains("Фара б/у со своего склада")
+                .as("в прайс филиала ушли позиции другого склада")
+                .doesNotContain("с чужого склада");
+        assertThat(count("{\"warehouseIds\":[" + warehouse + "],\"conditions\":[\"USED\"]}"))
+                .as("файл по отбору склада разошёлся с «Посчитать»")
+                .isEqualTo("{\"parts\":" + parts(xml) + ",\"zeroPrice\":0}");
+    }
+
     @Test
     @DisplayName("Дельта проданной позиции не несёт: «недоступна» в формате Bazon сказать нечем")
     void deltaLeavesTheSoldPartOut() {

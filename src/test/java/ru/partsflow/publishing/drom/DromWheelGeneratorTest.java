@@ -338,6 +338,42 @@ class DromWheelGeneratorTest extends PostgresTestBase {
     }
 
     /**
+     * Отбор по складу у колёс — тем же условием в файле и в счётчике (найдено
+     * на живом клиенте 20.10.2026 у прайса запчастей: фильтр склада стоял только
+     * в подзапросе остатка, и колесо чужого склада уходило в файл, а счётчик
+     * его не считал).
+     */
+    @Test
+    @DisplayName("Отбор по складу: колеса другого склада в файле нет, и файл равен счётчику")
+    void warehouseFilterKeepsWheelFileEqualToCounter() {
+        BigDecimal from = new BigDecimal("986000");
+        BigDecimal to = new BigDecimal("987000");
+        Long own = tyre("Склад: шина своя", "986100", "SUMMER", 205, 55, "16", 91, "V", 25);
+        Long alien = tyre("Склад: шина чужая", "986200", "SUMMER", 205, 55, "16", 91, "V", 25);
+        Long other = inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO warehouse (branch_id, name) SELECT branch_id, 'Дальний' FROM warehouse"
+                        + " WHERE id = ? RETURNING id", Long.class, warehouse));
+        inTenant(() -> ledger.record(StockMovement.move(alien, BigDecimal.ONE, warehouse, other, null)));
+
+        byte[] file = inTenant(() -> {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            generator.writeTo(out, new DromPriceGenerator.FeedFilter(
+                    from, to, List.of(), List.of(warehouse), List.of(), false, List.of(), false), null);
+            return out.toByteArray();
+        });
+        WheelCsv csv = WheelCsv.parse(file);
+        long counted = inTenant(() -> accounts.countMatching(
+                from, to, null, List.of(warehouse), null, false, null, false, "WHEEL",
+                Map.of(), Map.of(), false));
+
+        assertThat(csv.byArticle("К" + numberOf(own))).isNotNull();
+        assertThat(csv.byArticle("К" + numberOf(alien)))
+                .as("в колёсный прайс филиала ушло колесо другого склада").isNull();
+        assertThat(counted).as("файл колёс по отбору склада разошёлся со счётчиком")
+                .isEqualTo(csv.rows().size());
+    }
+
+    /**
      * Счётчик обязан считать тем же условием, что и генератор.
      *
      * <p>Сравнение идёт с числом строк в собранном файле, а не с ожидаемым
