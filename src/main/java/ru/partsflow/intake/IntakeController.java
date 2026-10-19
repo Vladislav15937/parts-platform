@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -283,7 +284,9 @@ public class IntakeController {
     public record ExpectedPartRequest(@NotBlank String rawName,
                                       Long donorId,
                                       @NotNull @Positive BigDecimal quantity,
-                                      @NotNull @Positive BigDecimal price,
+                                      /* Необязательна, пусто — 0 (задача 0362, ответ владельца
+                                         19.10.2026 «как у Bazon»: цену ставят позже). */
+                                      @PositiveOrZero BigDecimal price,
                                       String condition,
                                       String requestId) {
     }
@@ -333,7 +336,10 @@ public class IntakeController {
      */
     public record ItemRequest(@NotBlank String rawName,
                               BigDecimal quantity,
-                              @Positive BigDecimal price,
+                              /* Необязательна, пусто — 0 (задача 0362): разборщики сначала
+                                 размечают, что снимать, а цену ставят позже. Отрицательная —
+                                 отказ словами, а не «items[0].price: должно быть больше 0». */
+                              @PositiveOrZero BigDecimal price,
                               BigDecimal costPrice,
                               Long cellId,
                               LateralSide sideLr,
@@ -351,6 +357,11 @@ public class IntakeController {
                               String oemNumber,
                               String marking,
                               String note,
+                              /* «Комментарий (для клиентов)» — выводится в объявлении (0362). */
+                              String description,
+                              String color,
+                              /* Кросс-номера через запятую; основной номер — в oemNumber (0362). */
+                              String crossNumbers,
                               /* Принять заведённую заранее (ожидаемую) позицию, а не
                                  создавать новую. Пусто — обычная приёмка. */
                               Long partId) {
@@ -361,7 +372,7 @@ public class IntakeController {
                     quantity == null ? BigDecimal.ONE : quantity,
                     price, costPrice, cellId,
                     sideLr, sideFr, sideUd, IntakeService.conditionOf(condition), qualityGrade,
-                    manufacturer, oemNumber, marking, note, partId);
+                    manufacturer, oemNumber, marking, note, description, color, crossNumbers, partId);
         }
     }
 
