@@ -259,7 +259,11 @@ class DonorPhotoFeedTest extends PostgresTestBase {
             return out.toString(StandardCharsets.UTF_8);
         });
 
-        int nameAt = xml.indexOf("<title>" + name + "</title>");
+        // С 0335 название в файле собирается по формуле, а не равно хранимому:
+        // позицию ищем по ключу <id> — её номеру.
+        String number = inTenant(() -> jdbc.queryForObject(
+                "SELECT number::text FROM part WHERE title = ?", String.class, name));
+        int nameAt = xml.indexOf("<id>" + number + "</id>");
         assertThat(nameAt).as("позиции «%s» нет в прайсе вовсе", name).isNotNegative();
         return xml.substring(xml.lastIndexOf("<part>", nameAt), xml.indexOf("</part>", nameAt));
     }

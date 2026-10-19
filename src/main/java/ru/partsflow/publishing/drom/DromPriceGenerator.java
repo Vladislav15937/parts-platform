@@ -149,6 +149,14 @@ public class DromPriceGenerator {
                    ${carBody}    AS body_code,
                    ${carEngine}  AS engine_code,
                    ${carYear}    AS year,
+                   -- Для названия в файле (задача 0335): вид как ввёл клиент,
+                   -- год текстом как в Bazon и ПЕРВОЕ значение марки и модели.
+                   -- Первое у применимости — по порядку строк, а не по алфавиту
+                   -- (решение владельца 19.10.2026, «как в базон»).
+                   pn.name       AS part_name_text,
+                   p.year_text,
+                   ${titleBrand} AS title_brand,
+                   ${titleModel} AS title_model,
                    -- Снята с машины или пришла контейнером: у контрактной
                    -- марка берётся из применимости, и «снято с» про неё
                    -- было бы неправдой.
@@ -233,6 +241,7 @@ public class DromPriceGenerator {
                    GROUP BY donor_id
               ) donor_photos ON donor_photos.donor_id = p.donor_id
               LEFT JOIN catalog.part_kind kind ON kind.id = p.part_kind_id
+              LEFT JOIN part_name pn ON pn.id = p.part_name_id
               LEFT JOIN catalog.brand db ON db.id = d.brand_id
               LEFT JOIN catalog.model dm ON dm.id = d.model_id
               LEFT JOIN catalog.generation dg ON dg.id = d.generation_id
@@ -243,7 +252,10 @@ public class DromPriceGenerator {
               LEFT JOIN (
                   SELECT a.part_id,
                          string_agg(DISTINCT ab.name, ',') AS brands,
-                         string_agg(DISTINCT am.name, ',') AS models
+                         string_agg(DISTINCT am.name, ',') AS models,
+                         (array_agg(ab.name ORDER BY a.id))[1] AS first_brand,
+                         (array_agg(am.name ORDER BY a.id)
+                             FILTER (WHERE am.name IS NOT NULL))[1] AS first_model
                     FROM part_applicability a
                     JOIN catalog.brand ab ON ab.id = a.brand_id
                     LEFT JOIN catalog.model am ON am.id = a.model_id
@@ -367,6 +379,11 @@ public class DromPriceGenerator {
             ru.partsflow.inventory.PartVehicle.brand("db.name, fit.brands");
     private static final String CAR_MODEL =
             ru.partsflow.inventory.PartVehicle.model("dm.name, fit.models");
+    /** Первая марка и модель для названия в файле: у применимости — по порядку строк. */
+    private static final String TITLE_BRAND =
+            ru.partsflow.inventory.PartVehicle.brand("db.name, fit.first_brand");
+    private static final String TITLE_MODEL =
+            ru.partsflow.inventory.PartVehicle.model("dm.name, fit.first_model");
     private static final String CAR_BODY =
             ru.partsflow.inventory.PartVehicle.body("d.body_code, dg.code");
     private static final String CAR_ENGINE =
@@ -729,6 +746,8 @@ public class DromPriceGenerator {
                 .replace("${nearest}", NEAREST_WAREHOUSE)
                 .replace("${carBrand}", CAR_BRAND)
                 .replace("${carModel}", CAR_MODEL)
+                .replace("${titleBrand}", TITLE_BRAND)
+                .replace("${titleModel}", TITLE_MODEL)
                 .replace("${carBody}", CAR_BODY)
                 .replace("${carEngine}", CAR_ENGINE)
                 .replace("${carYear}", CAR_YEAR)
@@ -970,7 +989,11 @@ public class DromPriceGenerator {
                     // и без него товар в пути в файл не попадает вовсе.
                     settings.expectedNoteFor(rs.getBoolean("in_transit")),
                     rs.getString("authenticity"),
-                    rs.getBoolean("client_text"));
+                    rs.getBoolean("client_text"),
+                    rs.getString("part_name_text"),
+                    rs.getString("year_text"),
+                    rs.getString("title_brand"),
+                    rs.getString("title_model"));
         }
 
         /**

@@ -250,6 +250,52 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         }
     }
 
+    /**
+     * Название в файле — формула Bazon из полей позиции, а не хранимое название
+     * (задача 0335): вид как ввёл клиент, текст года из переноса сильнее своего
+     * числа, номер без знаков, первая марка применимости — по порядку строк,
+     * положение словами. Дельта пишет то же.
+     */
+    @Test
+    @DisplayName("Название в файле собрано по формуле Bazon: и в полном прайсе, и в дельте")
+    void titleFollowsTheBazonFormula() {
+        Long partId = part("Хранимое название склада, в файл не идёт", new BigDecimal("2500"), true);
+        intake(partId, warehouse, 1);
+        inTenant(() -> {
+            Long nameId = jdbc.queryForObject(
+                    "INSERT INTO part_name (name) VALUES ('воздухозаборник  боковой') RETURNING id",
+                    Long.class);
+            Long toyota = jdbc.queryForObject(
+                    "SELECT id FROM catalog.brand WHERE name = 'Toyota'", Long.class);
+            Long lexus = jdbc.queryForObject(
+                    "SELECT id FROM catalog.brand WHERE name = 'Lexus'", Long.class);
+            jdbc.update("""
+                    UPDATE part SET part_name_id = ?, year_text = '03-08', manual_year = 2005,
+                                    side_lr = 'LEFT', side_fr = 'FRONT'
+                     WHERE id = ?""", nameId, partId);
+            jdbc.update("INSERT INTO part_oem (part_id, raw_number, normalized, is_primary) "
+                    + "VALUES (?, '12345-6a100', '123456A100', true)", partId);
+            // Toyota заведена раньше Lexus: «первая» — по порядку строк, а по алфавиту
+            // первой была бы Lexus.
+            jdbc.update("INSERT INTO part_applicability (part_id, brand_id) VALUES (?, ?)", partId, toyota);
+            jdbc.update("INSERT INTO part_applicability (part_id, brand_id) VALUES (?, ?)", partId, lexus);
+            return null;
+        });
+        String expected = "Воздухозаборник боковой Toyota 03-08 123456A100, передний левый";
+
+        assertThat(price())
+                .as("название в полном прайсе не по формуле Bazon")
+                .contains("<title>" + expected + "</title>")
+                .doesNotContain("Хранимое название склада");
+        assertThat(delta(partId))
+                .as("дельта назвала позицию иначе, чем полный прайс")
+                .contains("<title>" + expected + "</title>");
+
+        // Текст года пуст — в название идёт свой год.
+        inTenant(() -> jdbc.update("UPDATE part SET year_text = NULL WHERE id = ?", partId));
+        assertThat(price()).contains("<title>Воздухозаборник боковой Toyota 2005 123456A100, передний левый</title>");
+    }
+
     @Test
     @DisplayName("Невыгружаемая позиция в прайс не попадает")
     void unpublishedIsExcluded() {

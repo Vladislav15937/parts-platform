@@ -123,7 +123,7 @@ class DromClientTextTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Файл из трёх объявлений → прайс: заголовок и описание клиента дословно")
+    @DisplayName("Файл из трёх объявлений → прайс: описание клиента дословно, название — по формуле Bazon")
     void clientTextReachesThePriceVerbatim() throws Exception {
         // Три строки критерия 4: описание с переводом строки; описания нет
         // (рулевая рейка № 131811260 — поля на странице нет вовсе); в заголовке
@@ -186,16 +186,21 @@ class DromClientTextTest extends PostgresTestBase {
 
         Element engine = offerOf(offers, "107112187");
         assertThat(text(engine, "title"))
-                .as("из заголовка клиента вычищено «(б/у)» или сокращения")
-                .isEqualTo(rows.get(2).get("Наименование"));
+                // 0335: название собирает формула Bazon из полей позиции, а не
+                // «заголовок клиента как есть». «Вид» перенесённой с Дрома позиции —
+                // то, что перенос записал в наименование (весь заголовок объявления),
+                // поэтому формула отдаёт его с схлопнутыми пробелами и без собственных
+                // слов (марки, номера нет). Откуда брать вид у таких позиций — 0336.
+                .as("пробелы в заголовке схлопнуты формулой, остальное — слова наименования")
+                .isEqualTo("Двигатель (б/у) перед. лев. 4M41 Mitsubishi Pajero 4");
         assertThat(text(engine, "description")).isEqualTo(LONG);
 
         Element ours = offers.get(inTenant(() -> jdbc.queryForObject(
                 "SELECT number::text FROM part WHERE drom_ad_number IS NULL", String.class)));
         assertThat(ours).as("контрольной позиции нет в прайсе").isNotNull();
         assertThat(text(ours, "title"))
-                .as("позиция не с Дрома перестала чиститься")
-                .isEqualTo("Фара Toyota Camry");
+                .as("позиция без номера объявления тоже называется формулой (вид — наименование переноса)")
+                .isEqualTo("Фара (б/у) перед. лев. Toyota Camry");
         assertThat(text(ours, "description"))
                 .as("позиции не с Дрома перестало собираться описание")
                 .isEqualTo("Состояние: б/у.");
