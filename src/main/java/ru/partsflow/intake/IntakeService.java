@@ -190,6 +190,14 @@ public class IntakeService {
             // По каждому номеру поля (задача 0323): лишние уйдут кросс-номерами,
             // и предел у каждого свой.
             String tooLong = ru.partsflow.catalog.OemNumbers.primaryTooLong(item.oemNumber());
+            if (tooLong == null) {
+                for (String cross : ru.partsflow.catalog.OemNumbers.list(item.crossNumbers())) {
+                    tooLong = ru.partsflow.catalog.OemNumbers.tooLong(cross, true);
+                    if (tooLong != null) {
+                        break;
+                    }
+                }
+            }
             if (tooLong != null) {
                 throw new IllegalArgumentException(item.rawName() == null || item.rawName().isBlank()
                         ? tooLong : "«" + item.rawName().strip() + "»: " + tooLong);
@@ -229,9 +237,7 @@ public class IntakeService {
 
             Part savedPart = parts.saveAndFlush(part);
             fitFromDonor(savedPart, donor, authorId);
-            if (item.oemNumber() != null && !item.oemNumber().isBlank()) {
-                primaryOem(savedPart.getId(), item.oemNumber());
-            }
+            primaryOem(savedPart.getId(), item.oemNumber(), item.crossNumbers());
             document.addLine(savedPart.getId(), item.quantity(), item.cellId());
             created.add(savedPart);
             fresh.add(savedPart);
@@ -391,12 +397,11 @@ public class IntakeService {
         if (quantity == null || quantity.signum() <= 0) {
             throw new IllegalArgumentException("Количество должно быть больше нуля");
         }
-        // Ноль в прайс не уезжает: «0 ₽» в объявлении — публичное обещание
-        // отдать деталь даром. Лучше отказать здесь, чем завести позицию,
-        // которая молча не попадёт в выгрузку.
-        if (price == null || price.signum() <= 0) {
-            throw new IllegalArgumentException(
-                    "Цена должна быть больше нуля: с нулевой ценой объявление не уйдёт на площадку");
+        // Цена необязательна, пусто — 0 (задача 0362, ответ владельца 19.10.2026
+        // «как у Bazon»; прежнее «больше нуля» 0170/0322 отменено). Что с нулевой
+        // ценой делает прайс, решает 0339, а не заведение.
+        if (price != null && price.signum() < 0) {
+            throw new IllegalArgumentException("Цена не может быть отрицательной");
         }
         PartCondition chosen = conditionOf(condition);
         // Машина необязательна: контрактные агрегаты приезжают партиями без
@@ -406,7 +411,8 @@ public class IntakeService {
         // Состояние пишется всегда, и пустое тоже: у сущности умолчание «б/у» (его
         // держат приёмка и перенос, задача 0322 их не меняет), и Hibernate отправил
         // бы его в INSERT, не спросив человека.
-        Part part = buildPart(ItemRequest.of(rawName, quantity, price, null), partName,
+        Part part = buildPart(ItemRequest.of(rawName, quantity,
+                        price == null ? BigDecimal.ZERO : price, null), partName,
                 vehicles.resolve(donorId), donor, supplyId, authorId, chosen);
         part.setQuantity(quantity);
         part.setExpectedOrigin(true);
@@ -559,14 +565,19 @@ public class IntakeService {
                 condition,
                 item.oemNumber());
 
-        Part part = new Part(partName.getCategoryId(), title, item.price());
+        // Цена необязательна (0362): пусто — 0, «внесём позже». Колонка допускает ноль
+        // (part_price_ck), а нулевая в прайс уходит по правилам 0339.
+        Part part = new Part(partName.getCategoryId(), title,
+                item.price() == null ? BigDecimal.ZERO : item.price());
         part.setPartNameId(partName.getId());
         part.setPartKindId(partName.getPartKindId());
         part.setCostPrice(item.costPrice());
         part.setSides(item.sideLr(), item.sideFr(), item.sideUd());
-        part.setManufacturer(item.manufacturer());
-        part.setMarking(item.marking());
-        part.setNote(item.note());
+        part.setManufacturer(blankToNull(item.manufacturer()));
+        part.setMarking(blankToNull(item.marking()));
+        part.setNote(blankToNull(item.note()));
+        part.setDescription(blankToNull(item.description()));
+        part.setColor(blankToNull(item.color()));
         part.setCondition(condition);
         if (item.qualityGrade() != null) {
             part.setQualityGrade(item.qualityGrade());
@@ -601,16 +612,28 @@ public class IntakeService {
      * у карточки и обоих переносов. Своих кросс-номеров приёмка не принимает,
      * поэтому лишние номера — единственные.
      */
-    private void primaryOem(Long partId, String rawNumber) {
+    private void primaryOem(Long partId, String rawNumber, String crossNumbers) {
         ru.partsflow.catalog.OemNumbers.Primary numbers =
                 ru.partsflow.catalog.OemNumbers.primary(rawNumber);
-        if (numbers.primary() == null) {
-            return;
+        if (numbers.primary() != null) {
+            insertOem(partId, numbers.primary(), true);
         }
-        insertOem(partId, numbers.primary(), true);
+        // Поле «Кросс-номера» (задача 0362) идёт после лишних номеров основного поля —
+        // тот же порядок, что у карточки (0323). Повтор номера не заводится:
+        // part_oem_uk, ON CONFLICT DO NOTHING. Без основного номера кросс-номера
+        // пишутся всё равно — основным ни один из них не становится.
         for (String cross : numbers.crosses()) {
             insertOem(partId, cross, false);
         }
+        for (String cross : ru.partsflow.catalog.OemNumbers.list(crossNumbers)) {
+            if (ru.partsflow.catalog.OemNumbers.normalize(cross) != null) {
+                insertOem(partId, cross, false);
+            }
+        }
+    }
+
+    private static String blankToNull(String text) {
+        return text == null || text.isBlank() ? null : text.strip();
     }
 
     /**
@@ -745,7 +768,20 @@ public class IntakeService {
                               String oemNumber,
                               String marking,
                               String note,
+                              String description,
+                              String color,
+                              String crossNumbers,
                               Long partId) {
+
+        /** Прежняя форма без комментария, цвета и кросс-номеров (до задачи 0362). */
+        public ItemRequest(String rawName, BigDecimal quantity, BigDecimal price,
+                           BigDecimal costPrice, Long cellId, LateralSide sideLr,
+                           LongitudinalSide sideFr, VerticalSide sideUd, PartCondition condition,
+                           QualityGrade qualityGrade, String manufacturer, String oemNumber,
+                           String marking, String note, Long partId) {
+            this(rawName, quantity, price, costPrice, cellId, sideLr, sideFr, sideUd, condition,
+                    qualityGrade, manufacturer, oemNumber, marking, note, null, null, null, partId);
+        }
 
         /** Прежняя форма без {@code partId}: новая карточка. */
         public ItemRequest(String rawName, BigDecimal quantity, BigDecimal price,
@@ -754,7 +790,7 @@ public class IntakeService {
                            QualityGrade qualityGrade, String manufacturer, String oemNumber,
                            String marking, String note) {
             this(rawName, quantity, price, costPrice, cellId, sideLr, sideFr, sideUd, condition,
-                    qualityGrade, manufacturer, oemNumber, marking, note, null);
+                    qualityGrade, manufacturer, oemNumber, marking, note, null, null, null, null);
         }
 
         /** Минимальный случай: вид детали, количество и цена. */

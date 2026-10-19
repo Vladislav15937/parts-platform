@@ -47,6 +47,13 @@ interface Item {
   sideFr: 'FRONT' | 'REAR' | null;
   /** Номер производителя (задача 0302): вписывают сразу, не открывая потом карточку. */
   oemNumber: string;
+  /** Поля формы «Б/У товары» как у Bazon (задача 0362); у заведённой заранее не нужны. */
+  crossNumbers: string;
+  manufacturer: string;
+  marking: string;
+  color: string;
+  description: string;
+  note: string;
   photos: ResizedPhoto[];
 }
 
@@ -67,6 +74,12 @@ interface Payload {
     oemNumber: string | null;
     /** Состояние кодом; пусто — у новой умолчание сервера, у заведённой «не трогать». */
     condition: string | null;
+    crossNumbers: string | null;
+    manufacturer: string | null;
+    marking: string | null;
+    color: string | null;
+    description: string | null;
+    note: string | null;
   }[];
 }
 
@@ -116,6 +129,11 @@ export function IntakeScreen({ reference, onSend }: Props) {
    * в партию» за край экрана — и так на каждой детали из тридцати.
    */
   const [pickedName, setPickedName] = useState(false);
+  /**
+   * Производитель подставляется маркой машины, как у Bazon, пока приёмщик
+   * его не вписал сам (задача 0362): поле остаётся правимым.
+   */
+  const [manufacturerTouched, setManufacturerTouched] = useState(false);
 
   // Сколько пришло по ожидаемой позиции — по умолчанию всё, что оставалось.
   const [arrived, setArrived] = useState<Record<number, string>>({});
@@ -136,9 +154,14 @@ export function IntakeScreen({ reference, onSend }: Props) {
   // Номер, который нельзя сохранить (задача 0312), останавливает здесь же:
   // ушедший в очередь, он вернулся бы отказом сервера уже из «требует внимания».
   // Причина стоит под полем (`LongNumberNote`).
+  // Цена необязательна, пусто — 0 (задача 0362): разборщики сначала размечают,
+  // что снимать, а цену ставят позже. Отрицательную не пускаем.
   const canAdd = warehouseId !== null
-    && draft.rawName.trim().length > 0 && Number(draft.price) > 0
-    && numberTooLong('oem', draft.oemNumber) === null;
+    && draft.rawName.trim().length > 0 && !(Number(draft.price) < 0)
+    && numberTooLong('oem', draft.oemNumber) === null
+    && numberTooLong('crosses', draft.crossNumbers) === null;
+  const donorBrand = reference.donors.find((d) => d.id === donorId)?.brand ?? '';
+  const manufacturerShown = manufacturerTouched ? draft.manufacturer : (draft.manufacturer || donorBrand);
 
   return (
     <section className="card">
@@ -331,6 +354,18 @@ export function IntakeScreen({ reference, onSend }: Props) {
       </div>
 
       <label>
+        Состояние
+        <select
+          value={draft.condition ?? DEFAULT_CONDITION}
+          onChange={(e) => setDraft({ ...draft, condition: e.target.value })}
+        >
+          {INTAKE_CONDITIONS.map((c) => (
+            <option key={c.key} value={c.key}>{c.title}</option>
+          ))}
+        </select>
+      </label>
+
+      <label>
         Номер производителя
         <input
           value={draft.oemNumber}
@@ -341,7 +376,47 @@ export function IntakeScreen({ reference, onSend }: Props) {
       {/* У детали один номер производителя (задача 0323): лишние уходят в кросс-номера. */}
       <span className="muted">{OEM_FIELD_NOTE}</span>
       {/* Необычно длинный номер — предупреждение, а не запрет (задача 0310). */}
+      <Hint text={HINT_OEM} />
       <LongNumberNote field="oem" value={draft.oemNumber} />
+
+      <label>
+        Кросс-номера
+        <input
+          value={draft.crossNumbers}
+          autoCapitalize="characters"
+          onChange={(e) => setDraft({ ...draft, crossNumbers: e.target.value })}
+        />
+      </label>
+      <Hint text={HINT_CROSS} />
+      <LongNumberNote field="crosses" value={draft.crossNumbers} />
+
+      <label>
+        Производитель
+        <input
+          value={manufacturerShown}
+          onChange={(e) => {
+            setManufacturerTouched(true);
+            setDraft({ ...draft, manufacturer: e.target.value });
+          }}
+        />
+      </label>
+
+      <label>
+        Маркировка
+        <input
+          value={draft.marking}
+          onChange={(e) => setDraft({ ...draft, marking: e.target.value })}
+        />
+      </label>
+      <Hint text={HINT_MARKING} />
+
+      <label>
+        Цвет
+        <input
+          value={draft.color}
+          onChange={(e) => setDraft({ ...draft, color: e.target.value })}
+        />
+      </label>
 
       <div className="row">
         <label>
@@ -371,6 +446,23 @@ export function IntakeScreen({ reference, onSend }: Props) {
           </select>
         </label>
       </div>
+
+      <label>
+        Заметка (для вас)
+        <input
+          value={draft.note}
+          onChange={(e) => setDraft({ ...draft, note: e.target.value })}
+        />
+      </label>
+
+      <label>
+        Комментарий (для клиентов)
+        <textarea
+          rows={2}
+          value={draft.description}
+          onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+        />
+      </label>
 
       <button type="button" className="button--ghost" onClick={() => setScanning(true)}>
         Сканировать
@@ -486,7 +578,11 @@ export function IntakeScreen({ reference, onSend }: Props) {
   }
 
   function addItem() {
-    setItems([...items, { ...draft, key: crypto.randomUUID(), photos }]);
+    setItems([...items, {
+      ...draft, key: crypto.randomUUID(), photos, manufacturer: manufacturerShown,
+      condition: draft.condition ?? DEFAULT_CONDITION,
+    }]);
+    setManufacturerTouched(false);
     // Склад, поставка и машина остаются: с одного донора снимают подряд.
     setDraft(emptyItem());
     // Позиция ушла в партию — следующую набирают с чистого листа,
@@ -512,7 +608,13 @@ export function IntakeScreen({ reference, onSend }: Props) {
         quantity: item.quantity,
         partId: item.partId,
         oemNumber: item.oemNumber.trim() === '' ? null : item.oemNumber.trim(),
-        condition: item.condition,
+        condition: item.condition ?? (item.partId === null ? DEFAULT_CONDITION : null),
+        crossNumbers: orNull(item.crossNumbers),
+        manufacturer: orNull(item.manufacturer),
+        marking: orNull(item.marking),
+        color: orNull(item.color),
+        description: orNull(item.description),
+        note: orNull(item.note),
       })),
     };
     // Снимки привязываются к позиции по номеру, а не по идентификатору:
@@ -552,6 +654,48 @@ function emptyItem(): Item {
     sideLr: null,
     sideFr: null,
     oemNumber: '',
+    crossNumbers: '',
+    manufacturer: '',
+    marking: '',
+    color: '',
+    description: '',
+    note: '',
     photos: [],
   };
+}
+
+function orNull(text: string): string | null {
+  return text.trim() === '' ? null : text.trim();
+}
+
+/**
+ * Состояние новой позиции (задача 0362): «БУ», «Контракт», «Новый» — три значения,
+ * как у Bazon. «Восстановленная» — наше дополнение, в форму заведения не выносим
+ * (решение по ней — за владельцем), оно правится в карточке.
+ */
+const INTAKE_CONDITIONS = CONDITIONS.filter((c) => c.key !== 'REFURBISHED');
+const DEFAULT_CONDITION = 'USED';
+
+/** Подсказки полей — слова Bazon; значок «?» показывает их по наведению. */
+const HINT_OEM = 'Номер по каталогу производителя автомобиля/запчасти. Для оригинальных запчастей '
+  + '(Toyota, Kia, BMW и т. д.) — это будет оригинальный номер запчасти. А для аналогов '
+  + '(Febi, SAT, Lemforder и т. д.) — это будет номер по каталогу соответствующего производителя. '
+  + 'Допустимо указывать только один номер, в котором вы максимально уверены. '
+  + 'Все остальные указывать в поле «Кросс-номера»';
+const HINT_CROSS = 'Связанные между собой номера автозапчастей различных производителей. '
+  + 'В это поле можно указать несколько кросс-номеров, разделив их запятой';
+const HINT_MARKING = 'Любая дополнительная информация, нанесенная на поверхность запчасти при её '
+  + 'изготовлении. Следует использовать только ту информацию, которая может помочь '
+  + 'идентифицировать запчасть или её модификацию. Исключением являются номер производителя '
+  + 'и оригинальный номер запчасти — их следует заносить только в соответствующие поля. '
+  + 'К маркировке относятся: номер, наносимый на оптику, модель КПП, информация на электронных '
+  + 'блоках и т. д. Также сюда следует заносить название изготовителя запчасти, если оно '
+  + 'отличается от оригинального производителя (например Siemens, Bosch, Denso и другие)';
+
+/**
+ * Значок «?» рядом с полем. Стоит соседом подписи, а не внутри неё: текст подписи —
+ * то, по чему поле находят читалки экрана и тесты.
+ */
+function Hint({ text }: { text: string }) {
+  return <span className="muted" title={text} aria-label={text} role="note">? Подсказка</span>;
 }

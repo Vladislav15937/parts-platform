@@ -79,7 +79,7 @@ describe('состояние ожидаемой позиции на приёмк
     expect(screen.getByText('Фара левая Toyota Camry')).toBeTruthy();
   });
 
-  it('новая карточка состояния не шлёт — у неё умолчание сервера', () => {
+  it('новая карточка шлёт предложенное «б/у» (0362: поле стоит и у новой)', () => {
     const onSend = vi.fn();
     render(<IntakeScreen reference={reference('USED')} onSend={onSend} />);
     selectByOption('— выберите склад —', '2');
@@ -89,7 +89,7 @@ describe('состояние ожидаемой позиции на приёмк
     fireEvent.click(screen.getByRole('button', { name: 'Добавить в партию' }));
     fireEvent.click(screen.getByRole('button', { name: 'Отправить партию' }));
 
-    expect(sentItems(onSend)).toEqual([expect.objectContaining({ partId: null, condition: null })]);
+    expect(sentItems(onSend)).toEqual([expect.objectContaining({ partId: null, condition: 'USED' })]);
   });
 });
 
@@ -99,7 +99,8 @@ function open(): void {
 }
 
 function conditionSelect(): HTMLSelectElement {
-  return screen.getByLabelText('Состояние') as HTMLSelectElement;
+  // Поле «Состояние» есть и у новой карточки (0362); здесь нужно то, что у ожидаемой позиции.
+  return document.querySelector('ul.suggestions li select') as HTMLSelectElement;
 }
 
 function selectedTitle(select: HTMLSelectElement): string | null {

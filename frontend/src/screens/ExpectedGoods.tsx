@@ -263,8 +263,9 @@ function addObstacle(rawName: string, quantity: string, price: string): string |
   if (!(Number(quantity) > 0)) {
     return 'Количество должно быть больше нуля.';
   }
-  if (!(Number(price) > 0)) {
-    return 'Впишите цену: с нулевой ценой объявление не уйдёт на площадку.';
+  // Цена необязательна, пусто — 0 (задача 0362, ответ владельца 19.10.2026 «как у Bazon»).
+  if (price.trim() !== '' && !(Number(price) >= 0)) {
+    return 'Цена не может быть отрицательной.';
   }
   return null;
 }
