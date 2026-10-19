@@ -118,7 +118,7 @@ final class DromTitle {
         return null;
     }
 
-    private static String year(DromOffer offer) {
+    static String year(DromOffer offer) {
         String text = collapse(offer.yearText());
         if (text != null) {
             return text;

@@ -3,7 +3,6 @@ package ru.partsflow.publishing.drom;
 import ru.partsflow.inventory.LateralSide;
 import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.LongitudinalSide;
-import ru.partsflow.inventory.VerticalSide;
 
 import javax.xml.stream.XMLOutputFactory;
 import javax.xml.stream.XMLStreamException;
@@ -245,24 +244,79 @@ public class DromPriceWriter {
     }
 
     /**
-     * Описание позиции.
+     * Описание позиции — по устройству Bazon (задача 0337).
      *
-     * <p>Их «минимальный формат» XML — наименование, описание и цена, а у детали
-     * с разборки описания обычно нет вовсе: приёмщик его не пишет, ему некогда.
-     * Поэтому, когда своего описания нет, оно собирается из того, что мы и так
-     * знаем: с какой машины снято, какая сторона, какой номер. Ничего сверх
-     * этого — «отличное качество» и «гарантия» тут были бы обещанием,
-     * которого никто не давал.
+     * <p>Начинается переводом строки; дальше блоки через пустую строку, пустой
+     * блок не пишется вместе со своим разделителем, конца строки после
+     * последнего нет:
+     * <ol>
+     *   <li>«Комментарий (для клиентов)» карточки — как набран, переводы строк
+     *       внутри не трогаем;</li>
+     *   <li>{@code Запчасть снята с: Марка Модель [Год] Кузов Двигатель} —
+     *       первые значения полей, те же, что в названии (0335); без номера
+     *       и положения;</li>
+     *   <li>«Текстовый блок» — дословно.</li>
+     * </ol>
+     * Четвёртого блока, «&lt;Вид&gt; подходит:», пока нет: его текст у Bazon —
+     * из справочника поколений, которого у нас нет (0341), а перенесённый текст
+     * ждёт ответа на вопрос, где его хранить (названо в PR задачи 0337).
      *
-     * <p>Позиция, перенесённая с объявления клиента на Дроме, — исключение:
-     * её описание уходит как лежит в базе, без сборки и приписок; почему —
-     * в {@link #nameOf} (с 0335 заголовок клиента в файл не идёт, описание — дословно).
+     * <p>Чего здесь нет намеренно, хотя раньше собиралось: номера производителя,
+     * состояния, расположения, ссылки на ролик. Человек, переехавший с Bazon,
+     * не писал их и не видел у себя в объявлении; решение владельца
+     * 19.10.2026 — «как в базон». Приписки «ожидается поступление» и про
+     * установку остались только там, где выгрузка их включила сама
+     * (переключатели, по умолчанию выключены): первая — первым блоком, вторая —
+     * после текстового блока. Где им место у Bazon, не снято — решает 0339.
+     *
+     * <p>Позиция, перенесённая с объявления клиента на Дроме, идёт тем же
+     * путём: её собственный текст — это «Комментарий» (вывод из «как в базон»,
+     * решение 3 задачи 0337).
      */
     static String descriptionOf(DromOffer offer) {
-        if (offer.clientText()) {
-            return offer.description();
+        List<String> blocks = new java.util.ArrayList<>();
+        addBlock(blocks, offer.expectedNote());
+        addBlock(blocks, offer.description());
+        addBlock(blocks, vehicleBlock(offer));
+        addBlock(blocks, offer.textBlock());
+        addBlock(blocks, offer.installationNote());
+        return blocks.isEmpty() ? "" : "\n" + String.join("\n\n", blocks);
+    }
+
+    private static void addBlock(List<String> blocks, String block) {
+        if (block != null && !block.isBlank()) {
+            blocks.add(block);
         }
-        return append(own(offer), offer);
+    }
+
+    /**
+     * «Запчасть снята с: …». Блока нет у новых деталей (снимать не с чего)
+     * и у позиций без машины — нужны марка и модель. Берётся из полей
+     * позиции, а не из донора: у «Донор не задан» блок тоже есть.
+     */
+    static String vehicleBlock(DromOffer offer) {
+        if (offer.condition() == PartCondition.NEW) {
+            return null;
+        }
+        String brand = DromTitle.first(offer.titleBrand());
+        String model = DromTitle.first(offer.titleModel());
+        if (brand == null || model == null) {
+            return null;
+        }
+        List<String> words = new java.util.ArrayList<>(List.of(brand, model));
+        String year = DromTitle.year(offer);
+        if (year != null) {
+            words.add(year);
+        }
+        String body = DromTitle.first(offer.bodyCode());
+        if (body != null) {
+            words.add(body);
+        }
+        String engine = DromTitle.first(offer.engineCode());
+        if (engine != null) {
+            words.add(engine);
+        }
+        return "Запчасть снята с: " + String.join(" ", words);
     }
 
     /**
@@ -283,124 +337,6 @@ public class DromPriceWriter {
     static String nameOf(DromOffer offer) {
         String built = DromTitle.of(offer);
         return built != null ? built : plainName(offer.name());
-    }
-
-    /**
-     * Дописывает к описанию то, что владелец ввёл отдельными полями.
-     *
-     * <p><b>Зачем.</b> «Текстовый блок» и «Видео» приезжают из прежней системы
-     * и правятся в карточке — владелец их пишет, а покупатель не видел вовсе:
-     * в прайс уходило только `description`. Написанное «для объявления»
-     * оставалось внутри системы, и заметить это можно было лишь сверив файл
-     * с карточкой руками.
-     *
-     * <p>Дописываем, а не заменяем: своё описание остаётся первым, потому что
-     * с него покупатель начинает читать. Ссылка на ролик идёт последней
-     * и с подписью — голый адрес посреди текста читается как мусор.
-     *
-     * <p>Ничего не выдумываем: в описание попадает только то, что владелец
-     * ввёл сам. Пустые поля не дают ни строки, ни подписи.
-     *
-     * <p><b>Стоимость установки идёт перед ссылкой на ролик, а не после.</b>
-     * Ссылка обязана оставаться последней — за ней текста уже не читают, —
-     * а приписка про установку это утверждение о товаре, того же рода,
-     * что и текстовый блок. Решает про неё выгрузка: строка приезжает
-     * готовой (см. {@code FeedSettings.installationNoteFor}), потому что
-     * включена приписка или нет — свойство прайс-листа, а не позиции.
-     *
-     * <p><b>А «ожидается поступление» идёт первой строкой, перед описанием.</b>
-     * Все остальные приписки рассказывают про деталь и потому дописываются
-     * в конец; эта рассказывает про то, когда деталь можно забрать, и ниже
-     * описания её прочитают последней или не прочитают вовсе — а объявление
-     * о товаре, которого на складе нет, без этой строки просто неправда.
-     * Решение владельца продукта от 5 сентября 2026
-     * ({@code tasks/0007-tovar-v-peremeshchenii-v-obyavlenii.md}): «выгружаем
-     * с припиской», и приписка стоит в начале.
-     */
-    private static String append(String description, DromOffer offer) {
-        List<String> parts = new java.util.ArrayList<>();
-        if (offer.expectedNote() != null && !offer.expectedNote().isBlank()) {
-            parts.add(offer.expectedNote().strip());
-        }
-        if (description != null && !description.isBlank()) {
-            parts.add(description.strip());
-        }
-        if (offer.textBlock() != null && !offer.textBlock().isBlank()) {
-            parts.add(offer.textBlock().strip());
-        }
-        if (offer.installationNote() != null && !offer.installationNote().isBlank()) {
-            parts.add(offer.installationNote().strip());
-        }
-        if (offer.videoUrl() != null && !offer.videoUrl().isBlank()) {
-            parts.add("Видео: " + offer.videoUrl().strip());
-        }
-        return String.join("\n", parts);
-    }
-
-    /** Описание владельца, а если его нет — собранное из того, что знаем. */
-    private static String own(DromOffer offer) {
-        if (offer.description() != null && !offer.description().isBlank()) {
-            return offer.description();
-        }
-
-        List<String> lines = new java.util.ArrayList<>();
-        String vehicle = java.util.stream.Stream.of(
-                        offer.carBrand(), offer.carModel(), offer.bodyCode(),
-                        offer.engineCode(), offer.year() == null ? null : String.valueOf(offer.year()))
-                .filter(part -> part != null && !part.isBlank())
-                .collect(java.util.stream.Collectors.joining(" "));
-        if (!vehicle.isBlank()) {
-            // Контрактную деталь никто ни с чего не снимал: она приехала
-            // контейнером, а марка у неё из применимости. «Снято с Toyota
-            // Camry» про неё — неправда, и заметит её покупатель, а не мы.
-            lines.add((offer.fromDonor() ? "Снято с: " : "Подходит на: ") + vehicle + ".");
-        }
-
-        String sides = java.util.stream.Stream.of(
-                        longitudinalWord(offer.longitudinalSide()),
-                        lateralWord(offer.lateralSide()),
-                        verticalWord(offer.verticalSide()))
-                .filter(java.util.Objects::nonNull)
-                .collect(java.util.stream.Collectors.joining(", "));
-        if (!sides.isBlank()) {
-            lines.add("Расположение: " + sides + ".");
-        }
-
-        if (offer.oemNumber() != null && !offer.oemNumber().isBlank()) {
-            lines.add("Номер производителя: " + offer.oemNumber() + ".");
-        }
-        // Своим словом, а не «б/у» на всё, что не новое: контрактную деталь
-        // покупатель ищет именно этим словом, и собранное описание —
-        // единственное место, где оно до него доходит (поле condition
-        // у площадки двузначное, см. выше).
-        if (offer.condition() != null) {
-            lines.add("Состояние: " + offer.condition().title() + ".");
-        }
-        return String.join(" ", lines);
-    }
-
-    private static String lateralWord(LateralSide side) {
-        return side == null ? null : switch (side) {
-            case LEFT -> "левая";
-            case RIGHT -> "правая";
-            case BOTH -> "левая и правая";
-        };
-    }
-
-    private static String longitudinalWord(LongitudinalSide side) {
-        return side == null ? null : switch (side) {
-            case FRONT -> "передняя";
-            case REAR -> "задняя";
-            case BOTH -> "передняя и задняя";
-        };
-    }
-
-    private static String verticalWord(VerticalSide side) {
-        return side == null ? null : switch (side) {
-            case UPPER -> "верхняя";
-            case LOWER -> "нижняя";
-            case BOTH -> "верхняя и нижняя";
-        };
     }
 
     /**
