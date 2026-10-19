@@ -1,3 +1,4 @@
+import { StockCount, hasHeld } from '../inventory/StockCount';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
@@ -693,9 +694,11 @@ export function CatalogScreen({ role }: { role: string }) {
               {page.rows.map((row) => (
                 <Fragment key={row.id}>
                 <tr
-                  className={
-                    chosen.includes(row.id) ? 'row--clickable is-chosen' : 'row--clickable'
-                  }
+                  className={[
+                    'row--clickable',
+                    chosen.includes(row.id) ? 'is-chosen' : '',
+                    hasHeld(row) ? 'row--held' : '',
+                  ].filter(Boolean).join(' ')}
                   onClick={() => (selecting
                     ? setChosen(chosen.includes(row.id)
                         ? chosen.filter((id) => id !== row.id)
@@ -739,7 +742,7 @@ export function CatalogScreen({ role }: { role: string }) {
                       {/* Прочерк, а не ноль: «на этом складе её нет»
                           и «есть ноль штук» читаются одинаково, но первое
                           понятнее. */}
-                      {row.stock[String(warehouse.id)] ?? '—'}
+                      <StockCount stock={row.stock} reserved={row.reserved} warehouseId={warehouse.id} />
                     </td>
                   ))}
                 </tr>

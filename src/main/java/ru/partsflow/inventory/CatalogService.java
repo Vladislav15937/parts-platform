@@ -1453,7 +1453,7 @@ public class CatalogService {
                         bodyNumbers(rs.getString("vehicle_block_bodies")),
                         rs.getString("generation_by_body"),
                         rs.getBoolean("vehicle_generation_merged"),
-                        Map.of()),
+                        Map.of(), Map.of()),
                 pageArgs.toArray());
 
         return new Page(total == null ? 0 : total, withStock(rows));
@@ -1527,17 +1527,24 @@ public class CatalogService {
         }
         Long[] ids = rows.stream().map(Row::id).toArray(Long[]::new);
         Map<Long, Map<Long, BigDecimal>> byPart = new java.util.HashMap<>();
+        // Отложенное (задача 0367) берётся в том же проходе: отдельный запрос
+        // на страницу удвоил бы обращения к базе ради одной колонки.
+        Map<Long, Map<Long, BigDecimal>> reservedByPart = new java.util.HashMap<>();
         jdbc.query("""
-                SELECT part_id, warehouse_id, sum(qty) AS qty FROM part_stock
+                SELECT part_id, warehouse_id, sum(qty) AS qty,
+                       sum(qty_reserved) AS reserved FROM part_stock
                  WHERE part_id = ANY (?) GROUP BY part_id, warehouse_id""",
                 rs -> {
                     byPart.computeIfAbsent(rs.getLong("part_id"), key -> new java.util.HashMap<>())
                             .put(rs.getLong("warehouse_id"), rs.getBigDecimal("qty"));
+                    reservedByPart.computeIfAbsent(rs.getLong("part_id"), key -> new java.util.HashMap<>())
+                            .put(rs.getLong("warehouse_id"), rs.getBigDecimal("reserved"));
                 },
                 (Object) ids);
 
         return rows.stream()
-                .map(row -> row.withStock(byPart.getOrDefault(row.id(), Map.of())))
+                .map(row -> row.withStock(byPart.getOrDefault(row.id(), Map.of()),
+                        reservedByPart.getOrDefault(row.id(), Map.of())))
                 .toList();
     }
 
@@ -1865,9 +1872,16 @@ public class CatalogService {
                        * годы от первой строки до последней.
                        */
                       boolean vehicleGenerationMerged,
-                      Map<Long, BigDecimal> stock) {
+                      Map<Long, BigDecimal> stock,
+                      /**
+                       * Отложенное под клиента по складам (задача 0367): та часть
+                       * {@code stock}, которую продать нельзя. Свободно —
+                       * {@code stock - reserved}; склад без записи в остатке
+                       * ключа не имеет ни там, ни там.
+                       */
+                      Map<Long, BigDecimal> reserved) {
 
-        Row withStock(Map<Long, BigDecimal> found) {
+        Row withStock(Map<Long, BigDecimal> found, Map<Long, BigDecimal> held) {
             return new Row(id, number, code, title, qualityGrade, condition, brand, model,
                     generation,
                     yearFrom, yearTo, body, engine, year, donorCode, price, installationPrice,
@@ -1880,7 +1894,7 @@ public class CatalogService {
                     priceChangedAt, priceChangedByName, photoCount, vehicleSource,
                     vehicleSpans, vehicleTitleBody, vehicleBlockBodies, vehicleGenerationBodies,
                     vehicleGenerationMerged,
-                    found);
+                    found, held);
         }
     }
 }

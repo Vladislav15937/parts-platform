@@ -73,7 +73,19 @@ public class PartHistoryService {
             "RETURN", "Возврат", "INVENTORY", "Пересчёт");
 
     private static final Map<String, String> DOC_STATUSES =
-            Map.of("DRAFT", "Черновик", "DONE", "Проведён", "CANCELLED", "Отменён");
+            Map.of("DRAFT", "Черновик", "DONE", "Выполнен", "CANCELLED", "Отменён");
+
+    /**
+     * Позиции сделок, которые держат товар или ждут (задача 0367): остаток они
+     * не двигают, движения в журнале у них нет, поэтому лента строит строку
+     * из самой позиции. Выданное и возвращённое уже есть движениями.
+     */
+    private static final Map<String, String> HELD_ITEMS =
+            Map.of("DRAFT", "Черновик", "RESERVED", "Резерв", "PREORDER", "Предзаказ");
+
+    private static final Map<String, String> HELD_TYPES = Map.of(
+            "DRAFT", "В сделке", "RESERVED", "Отложено под клиента",
+            "PREORDER", "Предзаказ");
 
     private final JdbcTemplate jdbc;
 
@@ -87,7 +99,11 @@ public class PartHistoryService {
      */
     @Transactional(readOnly = true)
     public History of(long partId, boolean money) {
-        return new History(changes(partId, money), movements(partId));
+        List<Movement> all = new ArrayList<>(movements(partId));
+        all.addAll(heldByDeals(partId));
+        // Свежее сверху: строки двух источников встают в одну ленту по времени.
+        all.sort(java.util.Comparator.comparing(Movement::at).reversed());
+        return new History(changes(partId, money), all);
     }
 
     // ------------------------------------------------------------------ правки
@@ -353,13 +369,60 @@ public class PartHistoryService {
                         documentOf(rs.getObject("doc_number"), rs.getString("doc_type"),
                                 rs.getObject("deal_number"), rs.getObject("return_number"),
                                 rs.getObject("inventory_id")),
-                        label(DOC_STATUSES, rs.getString("doc_status")),
+                        statusOf(rs.getString("doc_status"), rs.getObject("deal_number"),
+                                rs.getObject("return_number")),
                         placeOf(rs.getString("from_warehouse"), rs.getString("to_warehouse"),
                                 (Long) rs.getObject("from_warehouse_id"),
                                 (Long) rs.getObject("to_warehouse_id"),
                                 rs.getString("from_cell"), rs.getString("to_cell")),
                         rs.getString("reason"),
-                        rs.getString("author")),
+                        rs.getString("author"),
+                        false),
+                partId);
+    }
+
+    /**
+     * Статус строки: у документа склада он свой, у выдачи и возврата документа
+     * нет, и слово даёт сама операция («Выдан», «Выполнен»), как в кабинете,
+     * с которого снят паритет.
+     */
+    private static String statusOf(String docStatus, Object dealNumber, Object returnNumber) {
+        if (docStatus != null) {
+            return label(DOC_STATUSES, docStatus);
+        }
+        if (dealNumber != null) {
+            return "Выдан";
+        }
+        return returnNumber != null ? "Выполнен" : null;
+    }
+
+    /**
+     * Позиции сделок, которые держат товар, — строками ленты движений.
+     *
+     * <p>Время — создание сделки: у позиции своей отметки нет, а схему в этой
+     * задаче не меняем. Продавец видит «когда сделка заведена», что для вопроса
+     * «кому отложено и с каких пор» ближе всего.
+     */
+    private List<Movement> heldByDeals(long partId) {
+        return jdbc.query("""
+                        SELECT d.created_at, d.number AS deal_number, i.status, i.quantity,
+                               w.name AS warehouse, who.display_name AS author
+                          FROM deal_item i
+                          JOIN deal d ON d.id = i.deal_id
+                          LEFT JOIN warehouse w ON w.id = i.warehouse_id
+                          LEFT JOIN tenant_member who ON who.id = d.manager_id
+                         WHERE i.part_id = ? AND i.status IN ('DRAFT', 'RESERVED', 'PREORDER')
+                         ORDER BY d.created_at DESC, i.id DESC""",
+                (rs, i) -> new Movement(
+                        rs.getTimestamp("created_at").toInstant(),
+                        label(HELD_TYPES, rs.getString("status")),
+                        rs.getBigDecimal("quantity"),
+                        "Сделка №" + rs.getObject("deal_number"),
+                        label(HELD_ITEMS, rs.getString("status")),
+                        rs.getString("warehouse"),
+                        null,
+                        rs.getString("author"),
+                        true),
                 partId);
     }
 
@@ -444,8 +507,13 @@ public class PartHistoryService {
     public record Field(String label, String before, String after, String delta) {
     }
 
+    /**
+     * @param held строка не двигала остаток, а держит его или ждёт (задача 0367):
+     *             количество у такой строки без знака, а экран не рисует «+»
+     */
     public record Movement(Instant at, String type, BigDecimal qty, String document,
-                           String status, String warehouse, String reason, String author) {
+                           String status, String warehouse, String reason, String author,
+                           boolean held) {
     }
 
     private record Diff(long auditId, Instant at, String author,

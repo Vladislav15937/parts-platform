@@ -539,9 +539,16 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
               partId={row.id}
               warehouses={warehouses}
               stock={row.stock}
+              reserved={row.reserved}
               role={role}
               onChanged={onChanged}
             />
+
+            {/* Остатка нет нигде: красная плашка вместо числа «0», как в кабинете,
+                к которому клиент привык (задача 0367). Цена и номер под ней как были. */}
+            {Number(row.qty) === 0 && (
+              <p className="stock-missing">Товар отсутствует</p>
+            )}
 
             <div className="card-view__price">
               {row.price === null ? '—' : row.price.toLocaleString('ru-RU')}

@@ -129,6 +129,45 @@ class PartHistoryHttpTest extends PostgresTestBase {
     }
 
     /**
+     * Позиции сделок, которые держат товар, видны в движении (задача 0367).
+     *
+     * <p>Резерв и черновик остаток не двигают и движения в журнале не пишут,
+     * поэтому лента строит строку из самой позиции сделки. Выданное уже есть
+     * движением — второй строкой оно не дублируется.
+     */
+    @Test
+    @DisplayName("Движение товара показывает сделку в резерве и в черновике со статусом")
+    void dealsHoldingTheItemAreListed() throws Exception {
+        inTenant(() -> {
+            Long reserved = jdbc.queryForObject(
+                    "INSERT INTO deal (status) VALUES ('RESERVED') RETURNING number", Long.class);
+            Long draft = jdbc.queryForObject(
+                    "INSERT INTO deal (status) VALUES ('DRAFT') RETURNING number", Long.class);
+            jdbc.update("""
+                    INSERT INTO deal_item (deal_id, part_id, quantity, price, status, warehouse_id)
+                    SELECT id, ?, 1, 4500, 'RESERVED', ? FROM deal WHERE number = ?""",
+                    partId, warehouseId, reserved);
+            jdbc.update("""
+                    INSERT INTO deal_item (deal_id, part_id, quantity, price, status, warehouse_id)
+                    SELECT id, ?, 1, 4500, 'DRAFT', ? FROM deal WHERE number = ?""",
+                    partId, warehouseId, draft);
+            return null;
+        });
+
+        mvc.perform(get("/api/parts/%d/history".formatted(partId)).session(login("vladelec")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.movements.length()").value(3))
+                .andExpect(jsonPath("$.movements[?(@.status == 'Резерв')].held").value(true))
+                .andExpect(jsonPath("$.movements[?(@.status == 'Резерв')].qty").value(1.0))
+                .andExpect(jsonPath("$.movements[?(@.status == 'Черновик')].held").value(true))
+                .andExpect(jsonPath("$.movements[?(@.status == 'Резерв')].warehouse")
+                        .value("Ткацкая"))
+                // Приход остался собой: статус документа у него «Выполнен»
+                // не выдумывается — документа нет вовсе.
+                .andExpect(jsonPath("$.movements[?(@.type == 'Поступление')].held").value(false));
+    }
+
+    /**
      * Причина списания видна в истории.
      *
      * <p>Списание оформляется документом, и «почему» пишется туда —

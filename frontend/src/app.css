@@ -2095,6 +2095,30 @@ hr {
 
 /* Остаток по складам первым: продавец по телефону отвечает «есть, лежит
    на Ткацкой», а не «сейчас посмотрю». */
+/* Отложенное под клиента (задача 0367): один цвет на скобки в клетке склада
+   и на подсветку строки — это один знак «отложено». */
+:root {
+  --held: #7c3aed;
+  --held-soft: #f3efff;
+}
+
+.stock-held {
+  color: var(--held);
+}
+
+.row--held {
+  background: var(--held-soft);
+}
+
+.stock-missing {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--danger);
+  color: #ffffff;
+  font-weight: 600;
+}
+
 .card-view__stock {
   display: flex;
   flex-direction: column;

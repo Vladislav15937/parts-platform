@@ -121,6 +121,12 @@ export interface CatalogRow {
   vehicleGenerationMerged?: boolean | null;
   /** Остаток по складам: ключ — идентификатор склада, число колонок = число складов. */
   stock: Record<string, number>;
+  /**
+   * Отложенное под клиента по складам (задача 0367): часть `stock`, которую
+   * продать нельзя. Свободно — `stock - reserved`. Необязательное в типе:
+   * строку собирают и фикстуры; сервер присылает поле всегда.
+   */
+  reserved?: Record<string, number>;
 }
 
 export interface CatalogPage {
@@ -394,6 +400,11 @@ export interface HistoryMovement {
   warehouse: string | null;
   reason: string | null;
   author: string | null;
+  /**
+   * Строка не двигала остаток, а держит его или ждёт (резерв, черновик
+   * сделки, задача 0367): количество без знака. Необязательное — фикстуры.
+   */
+  held?: boolean;
 }
 
 export interface PartHistory {

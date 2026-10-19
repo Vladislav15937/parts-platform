@@ -1,3 +1,4 @@
+import { StockCount } from '../inventory/StockCount';
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { useMounted } from '../ui/useMounted';
@@ -26,11 +27,13 @@ import { listCells, type Cell } from '../organization/warehouses';
  * из нескольких задач подряд, и блок, который можно тронуть целиком, дешевле
  * блока, размазанного по чужому файлу.
  */
-export function PartCellBlock({ partId, warehouses, stock, role, onChanged }: {
+export function PartCellBlock({ partId, warehouses, stock, reserved, role, onChanged }: {
   partId: number;
   warehouses: Warehouse[];
   /** Остаток по складам из строки витрины: ключ — идентификатор склада. */
   stock: Record<string, number>;
+  /** Отложенное по складам из той же строки (задача 0367); без него склад показан целым числом. */
+  reserved?: Record<string, number> | undefined;
   role: string;
   /** Адрес изменился — витрину надо перечитать: в ней есть колонка «Ячейка». */
   onChanged: () => void;
@@ -110,7 +113,7 @@ export function PartCellBlock({ partId, warehouses, stock, role, onChanged }: {
       {warehouses.map((warehouse) => (
         <div key={warehouse.id}>
           <span>{warehouse.name}{addressOf(cells, warehouse.id)}</span>
-          <b>{stock[String(warehouse.id)] ?? '—'}</b>
+          <b><StockCount stock={stock} reserved={reserved} warehouseId={warehouse.id} /></b>
         </div>
       ))}
 
