@@ -68,13 +68,13 @@ class DromWheelTransferTest extends PostgresTestBase {
     private static final String COMPANY = "dromwheels";
 
     private static final List<Map<String, String>> ROWS = List.of(
-            Map.of("Номер объявления Дрома", "127641183",
+            Map.of("Номер объявления Дрома", "100000101",
                     "Наименование", "Автошина Dunlop Grandtrek PT5 235/55 R19",
                     "Вид детали", "Dunlop Grandtrek PT3, 265/65 R19",
                     "Раздел", DromWheelCardTest.SECTION_TYRES,
                     "Цена", "45000", "Прочие поля", DromWheelCardTest.TYRE_349,
                     "Фото", "https://s.auto.drom.ru/i24/a_full.jpg\nhttps://s.auto.drom.ru/i24/b_full.jpg"),
-            Map.of("Номер объявления Дрома", "121359555",
+            Map.of("Номер объявления Дрома", "100000103",
                     "Наименование", "Колеса Bridgestone Blizzak DM-Z3 265/65 R17",
                     "Вид детали", "Колёса", "Раздел", "Шины и диски",
                     "Цена", "50000", "Прочие поля", DromWheelCardTest.ASSEMBLY_466,
@@ -82,23 +82,23 @@ class DromWheelTransferTest extends PostgresTestBase {
                     // у колеса нет намеренно (inventory/CLAUDE.md). Машина — из справочника,
                     // чтобы разбор 0289 её разложил, если его позовут.
                     "Применимость", "Toyota Land Cruiser Prado | 4 поколение (2009–2013) | GRJ150"),
-            Map.of("Номер объявления Дрома", "135757856",
+            Map.of("Номер объявления Дрома", "100000106",
                     "Наименование", "Автошина Maxxis Bravo HT-770 265/60R18 114H",
                     "Раздел", "Шины и диски → Шины → Шины Maxxis Bravo → Maxxis Bravo HT-770",
                     "Цена", "38000", "Прочие поля", DromWheelCardTest.TYRE_576),
-            Map.of("Номер объявления Дрома", "127641914",
+            Map.of("Номер объявления Дрома", "100000107",
                     "Наименование", "Диски Toyota Land Cruiser Prado 150",
                     "Вид детали", "Диски Toyota", "Раздел", "Шины и диски → Диски",
                     "Цена", "38000", "Прочие поля", DromWheelCardTest.DISC_946),
-            Map.of("Номер объявления Дрома", "118479106",
+            Map.of("Номер объявления Дрома", "100000102",
                     "Наименование", "Автошина Bridgestone Dueler H/L 265/65 R17",
                     "Раздел", "Шины и диски → Шины → Шины Bridgestone Dueler → Bridgestone Dueler H/L",
                     "Цена", "10000", "Прочие поля", DromWheelCardTest.TYRE_993),
-            Map.of("Номер объявления Дрома", "124849678",
+            Map.of("Номер объявления Дрома", "100000104",
                     "Наименование", "Гайка на колесо (Секретки) Subaru",
                     "Вид детали", "Секретки", "Раздел", "Шины и диски → Аксессуары для колес",
                     "Цена", "2000"),
-            Map.of("Номер объявления Дрома", "130113810",
+            Map.of("Номер объявления Дрома", "100000105",
                     "Наименование", "Колесо запасное Lexus RX350",
                     "Раздел", "Автозапчасти → Расходники и комплектующие",
                     "Цена", "10000", "Номер", "4261148740"),
@@ -108,8 +108,8 @@ class DromWheelTransferTest extends PostgresTestBase {
                     "Цена", "3000"));
 
     private static final List<String> WHEEL_ADS =
-            List.of("127641183", "121359555", "135757856", "127641914", "118479106");
-    private static final List<String> PART_ADS = List.of("124849678", "130113810", "126000001");
+            List.of("100000101", "100000103", "100000106", "100000107", "100000102");
+    private static final List<String> PART_ADS = List.of("100000104", "100000105", "126000001");
 
     @Autowired
     private MockMvc mvc;
@@ -172,9 +172,9 @@ class DromWheelTransferTest extends PostgresTestBase {
         List<String> notes = new ArrayList<>();
         report.path("wheels").path("notes").forEach(n -> notes.add(n.path("adNumber").asText()
                 + " " + n.path("row").asInt() + " " + n.path("text").asText()));
-        assertThat(notes).containsExactly("127641183 2 Размер: в наименовании 235/55 R19, "
+        assertThat(notes).containsExactly("100000101 2 Размер: в наименовании 235/55 R19, "
                         + "в «Прочих полях» 265/65 R19 — взят из «Прочих полей»",
-                "127641914 5 Вылет: 37.5 мм записан как 38 — у нас вылет целый, "
+                "100000107 5 Вылет: 37.5 мм записан как 38 — у нас вылет целый, "
                         + "точное значение в «Характеристиках»");
         assertThat(report.path("quantityDefaulted").asInt())
                 .as("число комплектов из «Прочих полей» засчитано догадкой «по одной штуке»")
@@ -191,8 +191,8 @@ class DromWheelTransferTest extends PostgresTestBase {
                     .as("№ %s — запчасть, а заведена колесом", ad).isEqualTo("PART");
         }
 
-        Map<String, String> kinds = Map.of("127641183", "TYRE", "121359555", "ASSEMBLY",
-                "135757856", "TYRE", "127641914", "DISC", "118479106", "TYRE");
+        Map<String, String> kinds = Map.of("100000101", "TYRE", "100000103", "ASSEMBLY",
+                "100000106", "TYRE", "100000107", "DISC", "100000102", "TYRE");
         for (Map<String, String> row : ROWS.subList(0, 5)) {
             String ad = row.get("Номер объявления Дрома");
             assertThat(column("SELECT kind FROM part_wheel w JOIN part p ON p.id = w.part_id "
@@ -226,7 +226,7 @@ class DromWheelTransferTest extends PostgresTestBase {
         // Свойства строки 349 доехали до базы — каждое поле таблицы критерия 3.
         Map<String, Object> tyre = inTenant(() -> jdbc.queryForMap("""
                 SELECT w.* FROM part_wheel w JOIN part p ON p.id = w.part_id
-                 WHERE p.drom_ad_number = '127641183'"""));
+                 WHERE p.drom_ad_number = '100000101'"""));
         assertThat(tyre.get("tyre_width")).isEqualTo(265);
         assertThat(tyre.get("tyre_height")).isEqualTo(65);
         assertThat((BigDecimal) tyre.get("diameter")).isEqualByComparingTo("19");
@@ -239,13 +239,13 @@ class DromWheelTransferTest extends PostgresTestBase {
         assertThat(tyre.get("tyre_type")).isEqualTo("Обычная");
         Map<String, Object> disc = inTenant(() -> jdbc.queryForMap("""
                 SELECT w.* FROM part_wheel w JOIN part p ON p.id = w.part_id
-                 WHERE p.drom_ad_number = '127641914'"""));
+                 WHERE p.drom_ad_number = '100000107'"""));
         assertThat((BigDecimal) disc.get("disc_width")).isEqualByComparingTo("7.5");
         assertThat(disc.get("offset_mm")).isEqualTo(38);
         assertThat(disc.get("bolt_pattern")).isEqualTo("6x139.7");
         assertThat(disc.get("disc_brand")).isEqualTo("Toyota");
         assertThat(column("SELECT url FROM part_photo_import i JOIN part p ON p.id = i.part_id "
-                + "WHERE p.drom_ad_number = ? AND sort_order = 0", "127641183"))
+                + "WHERE p.drom_ad_number = ? AND sort_order = 0", "100000101"))
                 .as("снимки колеса не встали в очередь").isEqualTo("https://s.auto.drom.ru/i24/a_full.jpg");
 
         // Поиск по размеру, как звонит покупатель: две шины 265/65 R17 — сборка и Dueler.
@@ -268,8 +268,8 @@ class DromWheelTransferTest extends PostgresTestBase {
 
         WheelCsv wheelFeed = WheelCsv.parse(priceBytes("WHEEL"));
         assertThat(wheelFeed.rows()).as("в колёсном файле не все пять").hasSize(5);
-        Map<String, String> set = wheelFeed.byArticle(articleOf("127641183"));
-        assertThat(set).as("шины № 127641183 нет в колёсном файле").isNotNull();
+        Map<String, String> set = wheelFeed.byArticle(articleOf("100000101"));
+        assertThat(set).as("шины № 100000101 нет в колёсном файле").isNotNull();
         assertThat(set.get("Количество в комплекте"))
                 .as("цена комплекта ушла ценой одной шины — вчетверо выше рынка").isEqualTo("4");
         assertThat(new BigDecimal(set.get("Цена"))).isEqualByComparingTo("45000");
@@ -380,13 +380,13 @@ class DromWheelTransferTest extends PostgresTestBase {
         assertThat(report.path("imported").asInt()).isEqualTo(1);
         assertThat(report.path("quantityDefaulted").asInt())
                 .as("число комплектов из «Прочих полей» засчитано догадкой «по одной штуке»").isZero();
-        assertThat(decimal("SELECT qty_on_hand FROM part WHERE drom_ad_number = ?", "118479106"))
+        assertThat(decimal("SELECT qty_on_hand FROM part WHERE drom_ad_number = ?", "100000102"))
                 .as("остаток не равен числу комплектов из «Прочих полей»").isEqualByComparingTo("2");
         assertThat(decimal("SELECT sum(m.qty_delta) FROM stock_movement m JOIN part p ON p.id = m.part_id "
-                + "WHERE p.drom_ad_number = ?", "118479106")).isEqualByComparingTo("2");
+                + "WHERE p.drom_ad_number = ?", "100000102")).isEqualByComparingTo("2");
         assertThat(count("SELECT count(*) FROM v_stock_discrepancy")).isZero();
 
-        Map<String, String> set = WheelCsv.parse(priceBytes("WHEEL")).byArticle(articleOf("118479106"));
+        Map<String, String> set = WheelCsv.parse(priceBytes("WHEEL")).byArticle(articleOf("100000102"));
         assertThat(set.get("Количество в комплекте")).isEqualTo("4");
         // Остатка в файле Bazon нет: два комплекта на складе — «В наличии».
         assertThat(set.get("Статус")).isEqualTo("В наличии");
@@ -409,7 +409,7 @@ class DromWheelTransferTest extends PostgresTestBase {
         JsonNode again = load(file(), UUID.randomUUID().toString());
         assertThat(again.path("repeat").path("refilled").asInt()).as("%s", again.path("repeat")).isEqualTo(1);
         assertThat(column("SELECT applicability FROM part_drom_card d JOIN part p ON p.id = d.part_id "
-                + "WHERE p.drom_ad_number = ?", "121359555"))
+                + "WHERE p.drom_ad_number = ?", "100000103"))
                 .isEqualTo(ROWS.get(1).get("Применимость"));
         assertThat(count("SELECT count(*) FROM part_applicability"))
                 .as("повтор разложил колесу применимость").isZero();
@@ -484,9 +484,16 @@ class DromWheelTransferTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8))
                 .path("path").asText();
-        return mvc.perform(get(path))
+        var response = mvc.perform(get(path))
                 .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsByteArray();
+                .andReturn().getResponse();
+        // Кодировка в заголовке обязана совпасть с байтами: иначе кириллицу
+        // прочтут как UTF-8 (0340).
+        if ("WHEEL".equals(productLine)) {
+            assertThat(response.getContentType()).as("тип ответа файла колёс")
+                    .containsIgnoringCase("text/csv").containsIgnoringCase("windows-1251");
+        }
+        return response.getContentAsByteArray();
     }
 
     /** Ключ позиции в файле колёс: русская «К» и номер позиции с этим номером объявления. */

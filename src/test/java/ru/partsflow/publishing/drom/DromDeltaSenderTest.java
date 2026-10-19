@@ -280,6 +280,55 @@ class DromDeltaSenderTest extends PostgresTestBase {
     }
 
     /**
+     * То же для файла шин и дисков (0340): пустая колонка «Фото» значит
+     * «снимков нет», и дельта колёс без ссылок снимала бы фотографии
+     * с объявления. Откат — {@code null} вместо адреса в вызове генератора
+     * колёс — валит эту проверку.
+     */
+    @Test
+    @DisplayName("Дельта колёс уходит со снимками по адресу выдачи своей выгрузки")
+    void wheelDeltaCarriesPhotosAtTheFeedAddress() {
+        Long accountId = account("12345", "ключ-кабинета");
+        Long partId = inTenant(() -> {
+            jdbc.update("UPDATE marketplace_account SET product_line = 'WHEEL' WHERE id = ?", accountId);
+            Long id = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, cost_price, is_published,
+                                      product_line, condition)
+                    VALUES (1, 'Шина со снимком', 5000, 2000, true, 'WHEEL', 'USED') RETURNING id""",
+                    Long.class);
+            jdbc.update("""
+                    INSERT INTO part_wheel (part_id, kind, diameter, tyre_width, tyre_height)
+                    VALUES (?, 'TYRE', 16, 205, 55)""", id);
+            ledger.record(StockMovement.intake(id, java.math.BigDecimal.ONE, warehouse, null));
+            return id;
+        });
+        Long photoId = inTenant(() -> {
+            jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 48");
+            jdbc.update("""
+                    INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
+                    VALUES (48, ?, 'Разборка', 'delta-wheel')""", TENANT);
+            jdbc.update("UPDATE marketplace_account SET feed_token = 'tok-delta-wheel-feed-token-of-32-chars' WHERE id = ?",
+                    accountId);
+            return jdbc.queryForObject("""
+                    INSERT INTO part_photo (part_id, s3_key, is_main, sort_order, status)
+                    VALUES (?, ?, true, 1, 'PROCESSED') RETURNING id""",
+                    Long.class, partId, TENANT + "/parts/" + partId + "/1.jpg");
+        });
+        long dealId = issuedDeal(partId);
+
+        try {
+            assertThat(inTenant(() -> sender.onDealIssued(dealId))).isTrue();
+
+            assertThat(capturedDelta())
+                    .as("дельта колёс ушла без снимков")
+                    .contains(PUBLIC_URL + "/feeds/drom/delta-wheel/tok-delta-wheel-feed-token-of-32-chars/photo/"
+                            + photoId + ".jpg");
+        } finally {
+            inTenant(() -> jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 48"));
+        }
+    }
+
+    /**
      * Дельта собирается настройками своей выгрузки — теми же, что и прайс.
      *
      * <p><b>Зачем.</b> Дельта несёт текущее состояние позиции и перебивает
