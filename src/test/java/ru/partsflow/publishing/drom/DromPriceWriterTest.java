@@ -315,11 +315,109 @@ class DromPriceWriterTest {
             assertThat(value(xml, "id")).isEqualTo("P-8");
         }
 
+    }
+
+    /**
+     * Номера, производитель, маркировка и цвет — как у Bazon (задача 0338).
+     * Значения обезличены: вид тот же, что в файлах обхода 19.10.2026,
+     * цифры не клиента.
+     */
+    @Nested
+    @DisplayName("Номера и производитель — как у Bazon (0338)")
+    class Numbers {
+
         @Test
-        @DisplayName("Кросс-номера — одной строкой через запятую")
-        void joinsAnalogNumbers() throws Exception {
-            assertThat(value(write(offer()), "analogsNumbers")).isEqualTo("4853033281,DS2130GS");
+        @DisplayName("Кросс-номера — через запятую с пробелом, в порядке карточки, варианты написания не склеены")
+        void analogsAreJoinedWithCommaAndSpace() throws Exception {
+            DromOffer numbered = numbered("12345-6h789",
+                    List.of("555000", "555000B", "12345AB000", "12345-AB000"));
+
+            assertThat(value(write(numbered), "analogsNumbers"))
+                    .isEqualTo("555000, 555000B, 12345AB000, 12345-AB000");
+            assertThat(value(write(numbered), "manufactureNumber"))
+                    .as("номер производителя ушёл не так, как вписан")
+                    .isEqualTo("12345-6h789");
         }
+
+        /**
+         * Решение владельца 19.10.2026 («Всё как у bazon», второй раздел
+         * «Ответ владельца» задачи 0338): ввод не ограничен, файл режет
+         * по знакам ровно до 1 024 — как Bazon, вместе с обрывом посреди номера.
+         *
+         * <p>Сто тридцать номеров дают 1 168 знаков — столько же, сколько
+         * черновик обхода, — и знак 1 024 приходится на середину номера:
+         * «резать по целой записи» дало бы 1 018 знаков и тоже краснит.
+         */
+        @Test
+        @DisplayName("Список длиннее 1 024 знаков режется по знакам ровно до 1 024, посреди номера")
+        void longAnalogsAreCutAtExactly1024Chars() throws Exception {
+            List<String> many = longAnalogs();
+            String joined = String.join(", ", many);
+            assertThat(joined).as("контроль: длина набора").hasSize(1168);
+            assertThat(joined.substring(1018, 1030))
+                    .as("контроль: знак 1 024 — посреди номера, а не на границе записи")
+                    .isEqualTo(", 0000113, 0");
+
+            String written = value(write(numbered("A-1", many)), "analogsNumbers");
+
+            assertThat(written)
+                    .as("строка кросс-номеров ушла не ровно 1 024 знаками")
+                    .hasSize(DromPriceWriter.ANALOGS_LIMIT)
+                    .isEqualTo(joined.substring(0, 1024))
+                    .endsWith(", 0000112, 0000");
+        }
+
+        @Test
+        @DisplayName("Список короче предела и ровно в предел уходит целиком")
+        void shortAnalogsAreKept() throws Exception {
+            List<String> exactly = new ArrayList<>(longAnalogs().subList(0, 113));
+            String head = String.join(", ", exactly);
+            // Добиваем до ровно 1 024 знаков последним номером.
+            exactly.add("X".repeat(1024 - head.length() - 2));
+            assertThat(String.join(", ", exactly)).hasSize(1024);
+
+            assertThat(value(write(numbered("A-1", exactly)), "analogsNumbers"))
+                    .isEqualTo(String.join(", ", exactly));
+            assertThat(value(write(numbered("A-1", List.of("555000"))), "analogsNumbers"))
+                    .isEqualTo("555000");
+        }
+
+        @Test
+        @DisplayName("Производитель, маркировка и цвет — своими тегами, как вписаны")
+        void manufacturerMarkingAndColorAsTyped() throws Exception {
+            DromOffer porsche = new DromOffer("P-9", "Воздухозаборник", "Воздухозаборник", null,
+                    new BigDecimal("100"), BigDecimal.ONE, PartCondition.CONTRACT,
+                    "VAG", "GE4T-00-000A 92", List.of("12345AB000"), null, null, null,
+                    "Серебро (199)", "12345-AB000", null, List.of(),
+                    "Porsche", "Cayenne", null, null, null, true, null, null, null, null);
+
+            assertThat(write(porsche)).contains("""
+                    <frontRear></frontRear>
+                    <color>Серебро (199)</color>
+                    <marking>12345-AB000</marking>
+                    <manufacturer>VAG</manufacturer>
+                    <manufactureNumber>GE4T-00-000A 92</manufactureNumber>
+                    <analogsNumbers>12345AB000</analogsNumbers>
+                    <photoUrls>
+                    """);
+        }
+    }
+
+    /** 1 168 знаков через «, »: первый номер длиннее, три последних короче. */
+    private static List<String> longAnalogs() {
+        List<String> many = new ArrayList<>();
+        many.add("HEAD-00000");
+        for (int i = 1; i < 130; i++) {
+            many.add(String.format(i >= 127 ? "%06d" : "%07d", i));
+        }
+        return many;
+    }
+
+    private static DromOffer numbered(String oem, List<String> analogs) {
+        return new DromOffer("P-30", "Ремень", "Ремень", null, new BigDecimal("100"),
+                BigDecimal.ONE, PartCondition.USED, null, oem, analogs,
+                null, null, null, null, null, null, List.of(),
+                null, null, null, null, null, true, null, null, null, null);
     }
 
     /**

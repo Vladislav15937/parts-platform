@@ -1015,6 +1015,11 @@ public class DromPriceGenerator {
             return rs.wasNull() ? null : value;
         }
 
+        /**
+         * Запятая внутри номера не встречается: кросс-номера делит при записи
+         * {@code OemNumbers.list} и тем же знаком, поэтому разбор обратно
+         * без потерь.
+         */
         private static List<String> splitAnalogs(String joined) {
             return joined == null || joined.isBlank()
                     ? List.of()
