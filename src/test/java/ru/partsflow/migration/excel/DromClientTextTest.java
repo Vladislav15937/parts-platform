@@ -174,7 +174,7 @@ class DromClientTextTest extends PostgresTestBase {
         assertThat(text(shaft, "title")).isEqualTo(rows.get(0).get("Наименование"));
         assertThat(text(shaft, "description"))
                 .as("описание клиента дописано или потеряло перевод строки")
-                .isEqualTo(TWO_LINES);
+                .isEqualTo("\n" + TWO_LINES);
 
         Element rack = offerOf(offers, "131811260");
         assertThat(text(rack, "title"))
@@ -193,7 +193,7 @@ class DromClientTextTest extends PostgresTestBase {
                 // слов (марки, номера нет). Откуда брать вид у таких позиций — 0336.
                 .as("пробелы в заголовке схлопнуты формулой, остальное — слова наименования")
                 .isEqualTo("Двигатель (б/у) перед. лев. 4M41 Mitsubishi Pajero 4");
-        assertThat(text(engine, "description")).isEqualTo(LONG);
+        assertThat(text(engine, "description")).isEqualTo("\n" + LONG);
 
         Element ours = offers.get(inTenant(() -> jdbc.queryForObject(
                 "SELECT number::text FROM part WHERE drom_ad_number IS NULL", String.class)));
@@ -202,8 +202,8 @@ class DromClientTextTest extends PostgresTestBase {
                 .as("позиция без номера объявления тоже называется формулой (вид — наименование переноса)")
                 .isEqualTo("Фара (б/у) перед. лев. Toyota Camry");
         assertThat(text(ours, "description"))
-                .as("позиции не с Дрома перестало собираться описание")
-                .isEqualTo("Состояние: б/у.");
+                .as("в описание попало то, чего у Bazon нет (состояние, номер, расположение)")
+                .isEmpty();
     }
 
     // --- файл ---
