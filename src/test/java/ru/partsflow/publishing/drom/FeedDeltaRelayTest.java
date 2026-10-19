@@ -386,11 +386,14 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         relay.relayFor(TENANT);
 
         // Формат тот же, что у полного прайса колёс: площадка разбирает
-        // дельту той же настройкой, и «marking» ей нужен не меньше, чем цена.
+        // дельту той же настройкой (0340: CSV Bazon, windows-1251), и заголовок
+        // колонок ей нужен не меньше, чем цена.
         assertThat(syncClient.calls()).singleElement()
                 .satisfies(call -> {
                     assertThat(call.packetId()).isEqualTo("77777");
-                    assertThat(call.delta()).contains("<marking>");
+                    assertThat(call.fileName()).endsWith(".csv");
+                    assertThat(call.delta()).startsWith("\"Артикул\";\"Тип (диск, шина, колесо)\"")
+                            .contains("\"Посадочный диаметр шины\"");
                 });
     }
 

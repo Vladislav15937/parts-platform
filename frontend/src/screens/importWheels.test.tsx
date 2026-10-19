@@ -18,7 +18,7 @@ describe('шины и диски в отчёте загрузки', () => {
         return json({
           header: ['Номер объявления Дрома', 'Наименование', 'Прочие поля'],
           detected: { DROM_AD_NUMBER: 0, NAME: 1, CHARACTERISTICS: 2 },
-          missingRequired: [], rows: [['127641183', 'Автошина Dunlop', 'marking [marking]: 265/65 R19']],
+          missingRequired: [], rows: [['100000101', 'Автошина Dunlop', 'marking [marking]: 265/65 R19']],
           format: 'DROM_TRANSFER',
         });
       }
@@ -38,14 +38,14 @@ describe('шины и диски в отчёте загрузки', () => {
     answer = {
       imported: 8, skipped: [], quantityDefaulted: 3,
       wheels: { created: 5, converted: 0, notes: [
-        { row: 349, adNumber: '127641183',
+        { row: 349, adNumber: '100000101',
           text: 'Размер: в наименовании 235/55 R19, в «Прочих полях» 265/65 R19 — взят из «Прочих полей»' },
       ] },
     };
     await upload();
 
     await waitFor(() => expect(text()).toContain('Шины и диски: 5 позиций'));
-    expect(text()).toContain('Строка 349, № 127641183: Размер: в наименовании 235/55 R19');
+    expect(text()).toContain('Строка 349, № 100000101: Размер: в наименовании 235/55 R19');
     expect(text()).not.toContain('переложено');
   });
 

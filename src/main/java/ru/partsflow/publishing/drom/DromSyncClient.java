@@ -180,7 +180,10 @@ public class DromSyncClient {
         out.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
         out.write(("Content-Disposition: form-data; name=\"data\"; filename=\"" + fileName + "\"\r\n")
                 .getBytes(StandardCharsets.UTF_8));
-        out.write("Content-Type: application/xml\r\n\r\n".getBytes(StandardCharsets.UTF_8));
+        // Файл шин и дисков — CSV в windows-1251 (0340); остальное — XML.
+        String type = fileName.endsWith(".csv")
+                ? "text/csv; charset=windows-1251" : "application/xml";
+        out.write(("Content-Type: " + type + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
         out.write(file);
         out.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
         return out.toByteArray();

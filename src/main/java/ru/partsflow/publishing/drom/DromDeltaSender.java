@@ -269,7 +269,8 @@ public class DromDeltaSender {
         // несколько секунд после того, как прайс поставил цену с наценкой.
         int offers = target.account().isWheelFeed()
                 ? wheelGenerator.writeDelta(delta, partIds, target.account().filter(),
-                        target.account().settings())
+                        target.account().settings(),
+                        photoBase(origin, target.account(), "photo"))
                 // Со снимками, как полный прайс: в формате Bazon пустой
                 // <photoUrls> значит «снимков нет», а не «не трогать» (0333).
                 // Адреса те же, что у выдачи прайса этой выгрузки, — по её токену.
@@ -304,7 +305,7 @@ public class DromDeltaSender {
                 target.account().packetId(),
                 DromSyncClient.authHash(target.cabinetKey()),
                 body,
-                "delta-%s.xml".formatted(label));
+                "delta-%s.%s".formatted(label, target.account().isWheelFeed() ? "csv" : "xml"));
 
         logPublication(target.account().id(), result.httpStatus(), offers, result.success(),
                 result.success() ? null : result.body());
