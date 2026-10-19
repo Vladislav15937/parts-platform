@@ -474,10 +474,10 @@ class PartUpdateTest extends PostgresTestBase {
         // Сервис зовут не только из контроллера, и проверка «есть что править»
         // должна стоять там, где операция.
         assertThatThrownBy(() -> inTenant(() ->
-                parts.updateAll(List.of(), Map.of("price", 1), Map.of(), ownerId)))
+                parts.updateAll(List.of(), Map.of("price", 1), Map.of(), ownerId, ru.partsflow.platform.audit.AuditBatch.Scope.SELECTED)))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> inTenant(() ->
-                parts.updateAll(List.of(partId), Map.of(), Map.of(), ownerId)))
+                parts.updateAll(List.of(partId), Map.of(), Map.of(), ownerId, ru.partsflow.platform.audit.AuditBatch.Scope.SELECTED)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

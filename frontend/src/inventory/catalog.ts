@@ -1,5 +1,5 @@
 import { request } from '../api/client';
-import { count, plural } from '../ui/plural';
+import { count, goods, plural } from '../ui/plural';
 import type { NotSavedField } from './notSaved';
 
 /**
@@ -388,6 +388,30 @@ export interface HistoryChange {
   /** Заполнено у событий без полей: «Товар создан». */
   action: string | null;
   fields: HistoryField[];
+  /**
+   * Правка была частью массовой (задача 0373): сколько позиций она изменила
+   * и чем они выбраны — отбором витрины или отметкой строк. `null` — правка
+   * одной карточки либо сделанная до того, как массовая начала себя помечать.
+   * Необязательное — фикстуры и ответ сборки старше этой задачи.
+   */
+  bulk?: HistoryBulk | null;
+}
+
+/** Объём массовой правки. Слова ставит `bulkCaption`, а не сервер. */
+export interface HistoryBulk {
+  size: number;
+  scope: 'FILTER' | 'SELECTED';
+}
+
+/**
+ * Подпись массовой правки под её полями: «всего были отредактированы
+ * 40 товаров по фильтру» — слова Bazon, откуда приходят клиенты. У правки
+ * отмеченных строк подписи у Bazon не видели; «по отмеченным» — слово
+ * исполнителя, названное в PR 0373.
+ */
+export function bulkCaption(bulk: HistoryBulk): string {
+  const how = bulk.scope === 'FILTER' ? 'по фильтру' : 'по отмеченным';
+  return `всего были отредактированы ${goods(bulk.size)} ${how}`;
 }
 
 /** Движение остатка. `document` пустой у перенесённого склада: документа не было. */

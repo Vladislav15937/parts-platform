@@ -2737,6 +2737,14 @@ hr {
   color: var(--muted);
 }
 
+/* «всего были отредактированы 40 товаров по фильтру» — мелко и приглушённо,
+   как у Bazon: это пояснение к правке, а не сама правка. */
+.history__bulk {
+  margin-top: 0.15rem;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
 .history__moves {
   width: 100%;
   border-collapse: collapse;

@@ -1,4 +1,4 @@
-import type { PartHistory } from '../inventory/catalog';
+import { bulkCaption, type PartHistory } from '../inventory/catalog';
 
 /**
  * История позиции: две ленты, между которыми переключаются.
@@ -71,6 +71,12 @@ export function PartHistoryView({ history, tab, onTab }: {
                       </li>
                     ))}
                   </ul>
+                )}
+                {/* Массовая правка называет себя (задача 0373): без этого
+                    «Заметка: → Наличные» читается как правка руками по одной,
+                    и разбор «почему у детали вдруг другое» уходит в журнал. */}
+                {change.bulk != null && (
+                  <div className="history__bulk">{bulkCaption(change.bulk)}</div>
                 )}
               </li>
             ))}

@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import ru.partsflow.platform.audit.AuditBatch;
 import ru.partsflow.shared.AuditedColumns;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -113,10 +114,14 @@ public class PartHistoryService {
 
         String was = AuditedColumns.normalized("a.old_value ->> f.key");
         String now = AuditedColumns.normalized("a.new_value ->> f.key");
+        // Пометка массовой правки лежит в «стало» рядом с колонками (0373).
+        // Разделители — явной строкой: текстовый блок срезает пробелы по краям.
+        String bulk = "a.new_value ->> '" + AuditBatch.SIZE_KEY + "' AS bulk_size, "
+                + "a.new_value ->> '" + AuditBatch.SCOPE_KEY + "' AS bulk_scope, ";
 
         List<Diff> diffs = jdbc.query("""
                         SELECT a.id, a.changed_at, m.display_name AS author, f.key,
-                        """ + was + """
+                        """ + bulk + was + """
                             AS was,
                         """ + now + """
                             AS now
@@ -137,7 +142,8 @@ public class PartHistoryService {
                         rs.getString("author"),
                         rs.getString("key"),
                         rs.getString("was"),
-                        rs.getString("now")),
+                        rs.getString("now"),
+                        bulkOf(rs.getString("bulk_size"), rs.getString("bulk_scope"))),
                 columns, partId, columns);
 
         Map<String, Map<Long, String>> titles = resolveReferences(diffs);
@@ -145,7 +151,8 @@ public class PartHistoryService {
         Map<Long, Change> byAudit = new LinkedHashMap<>();
         for (Diff diff : diffs) {
             Change change = byAudit.computeIfAbsent(diff.auditId(),
-                    id -> new Change(diff.at(), diff.author(), null, new ArrayList<>()));
+                    id -> new Change(diff.at(), diff.author(), null, new ArrayList<>(),
+                            diff.bulk()));
             Map<Long, String> lookup = titles.getOrDefault(diff.column(), Map.of());
             change.fields().add(new Field(labelOf(diff.column()),
                     AuditedColumns.display(diff.column(), diff.was(), lookup),
@@ -252,7 +259,8 @@ public class PartHistoryService {
                     return new Change(rs.getTimestamp("changed_at").toInstant(),
                             rs.getString("author"), null,
                             List.of(new Field("Применимость",
-                                    added ? null : vehicle, added ? vehicle : null, null)));
+                                    added ? null : vehicle, added ? vehicle : null, null)),
+                            null);
                 },
                 String.valueOf(partId));
     }
@@ -270,7 +278,7 @@ public class PartHistoryService {
                            AND a.operation = 'INSERT'
                          ORDER BY a.changed_at LIMIT 1""",
                 (rs, i) -> new Change(rs.getTimestamp("changed_at").toInstant(),
-                        rs.getString("author"), "Товар создан", List.of()),
+                        rs.getString("author"), "Товар создан", List.of(), null),
                 partId).stream().findFirst();
     }
 
@@ -495,8 +503,39 @@ public class PartHistoryService {
      *                начало сообщать базе вошедшего, и у всего, что приехало
      *                переносом. Врать тут нельзя — экран показывает прочерк
      * @param action  заполнен у событий без полей («Товар создан»)
+     * @param bulk    правка была частью массовой (задача 0373); {@code null} —
+     *                правка одной карточки, либо сделана до того, как массовая
+     *                правка начала себя помечать, — отличить их нечем, и прочерк
+     *                здесь честнее догадки
      */
-    public record Change(Instant at, String author, String action, List<Field> fields) {
+    public record Change(Instant at, String author, String action, List<Field> fields,
+                         Bulk bulk) {
+    }
+
+    /**
+     * Объём массовой правки: «всего были отредактированы 40 товаров по фильтру».
+     *
+     * @param size  сколько позиций изменила правка
+     * @param scope {@code FILTER} — всё, что попало в отбор витрины;
+     *              {@code SELECTED} — отмеченные строки. Слова ставит экран
+     */
+    public record Bulk(int size, String scope) {
+    }
+
+    /**
+     * Пометка массовой правки из снимка, терпимая к пустоте и к мусору:
+     * снимок пишет слушатель журнала, а прочесть его обязан и старый,
+     * и чужой — запись, которую не разобрать, остаётся обычной правкой.
+     */
+    private static Bulk bulkOf(String size, String scope) {
+        if (size == null || scope == null) {
+            return null;
+        }
+        try {
+            return new Bulk(Integer.parseInt(size), scope);
+        } catch (NumberFormatException notANumber) {
+            return null;
+        }
     }
 
     /**
@@ -517,6 +556,6 @@ public class PartHistoryService {
     }
 
     private record Diff(long auditId, Instant at, String author,
-                        String column, String was, String now) {
+                        String column, String was, String now, Bulk bulk) {
     }
 }
