@@ -966,8 +966,12 @@ public class MarketplaceAccountService {
         boolean inTransit = expectedGoods && "PART".equals(line(productLine));
 
         List<Object> args = new java.util.ArrayList<>(List.of());
+        // Строка файла колёс — комплект (карточки с общим set_no, обход 19.10.2026),
+        // а не карточка: счётчик считает строки, а не штуки. У запчасти
+        // part_wheel нет, и каждая — своя строка.
         Long found = jdbc.queryForObject("""
-                SELECT count(*) FROM part p
+                SELECT count(DISTINCT COALESCE(cw.set_no::text, 'p' || p.id)) FROM part p
+                  LEFT JOIN part_wheel cw ON cw.part_id = p.id
                   LEFT JOIN donor d ON d.id = p.donor_id
                   LEFT JOIN supply in_transit
                          ON in_transit.id = p.supply_id
