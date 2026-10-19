@@ -351,6 +351,53 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         assertThat(offer).containsPattern("<analogsNumbers>[^<]*DS2130GS[^<]*</analogsNumbers>");
     }
 
+    /**
+     * Задача 0338: номера, производитель, маркировка и цвет доходят от карточки
+     * до файла тем видом, что у Bazon, — и в полном прайсе, и в дельте.
+     * Значения обезличены (вид тот же, что у позиций обхода: номер с дефисами
+     * и строчной, производитель не марка машины, кросс-номер рядом
+     * с маркировкой), список кросс-номеров длиннее предела.
+     */
+    @Test
+    @DisplayName("Номера, производитель, маркировка и цвет — как у Bazon, в прайсе и в дельте")
+    void numbersAndManufacturerAsBazonInPriceAndDelta() {
+        String name = "Прайс: воздухозаборник с номерами Bazon";
+        Long partId = part(name, new BigDecimal("1500"), true);
+        intake(partId, warehouse, 1);
+        java.util.List<String> crosses = new java.util.ArrayList<>(
+                java.util.List.of("555000", "555000B", "12345AB000"));
+        for (int i = 1; crosses.size() < 130; i++) {
+            crosses.add(String.format("%07d", i));
+        }
+        inTenant(() -> {
+            jdbc.update("""
+                    UPDATE part SET manufacturer = 'VAG', marking = '12345-AB000',
+                                    color = 'Серебро (199)'
+                     WHERE id = ?""", partId);
+            jdbc.update("INSERT INTO part_oem (part_id, raw_number, normalized, is_primary) "
+                    + "VALUES (?, '12345-6h789', '123456H789', true)", partId);
+            for (String cross : crosses) {
+                jdbc.update("INSERT INTO part_oem (part_id, raw_number, normalized) VALUES (?, ?, ?)",
+                        partId, cross, ru.partsflow.catalog.OemNumbers.normalize(cross));
+            }
+            return null;
+        });
+        String joined = String.join(", ", crosses);
+        assertThat(joined.length()).as("контроль: список длиннее предела").isGreaterThan(1024);
+
+        String expected = "<color>Серебро (199)</color>\n"
+                + "<marking>12345-AB000</marking>\n"
+                + "<manufacturer>VAG</manufacturer>\n"
+                + "<manufactureNumber>12345-6h789</manufactureNumber>\n"
+                + "<analogsNumbers>" + joined.substring(0, 1024) + "</analogsNumbers>\n";
+        assertThat(offerOf(name))
+                .as("полный прайс отдал номера не так, как Bazon")
+                .contains("<frontRear></frontRear>\n" + expected + "<photoUrls>");
+        assertThat(offerIn(delta(partId), name))
+                .as("дельта отдала номера не так, как полный прайс")
+                .contains("<frontRear></frontRear>\n" + expected + "<photoUrls>");
+    }
+
     @Test
     @DisplayName("Три оси стороны доходят до прайса")
     void writesThreeSideAxes() {

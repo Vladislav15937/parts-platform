@@ -75,6 +75,13 @@ public class DromPriceWriter {
     static final String OUT_OF_STOCK = "Нет в наличии";
 
     /**
+     * Предел строки кросс-номеров в файле, знаков: в файлах Bazon 19.10.2026
+     * {@code analogsNumbers} ни разу не длиннее, и у 55 позиций он ровно
+     * такой и оборван посреди номера (задача 0338, «Обход 19.10.2026»).
+     */
+    static final int ANALOGS_LIMIT = 1024;
+
+    /**
      * @return сколько позиций записано — попадает в {@code publication_log},
      *         чтобы было с чем сверить «Замечания к товарам» в кабинете Дрома
      */
@@ -340,14 +347,27 @@ public class DromPriceWriter {
     }
 
     /**
-     * Кросс-номера одной строкой через запятую. Разделитель Bazon — запятая
-     * с пробелом и предел в 1 024 знака; это задача 0338.
+     * Кросс-номера одной строкой, как у Bazon (задача 0338): через запятую
+     * с пробелом, в порядке карточки, повторы и варианты написания не
+     * склеиваются, строка режется <b>по знакам ровно до {@value #ANALOGS_LIMIT}</b> —
+     * номер может оборваться посередине.
+     *
+     * <p>Обрыв посреди номера — не недосмотр, а решение владельца 19.10.2026
+     * («Всё как у bazon», {@code tasks/0338}, второй раздел «Ответ владельца»):
+     * файлы Bazon режут ровно так («…, 11950-9»), а ввод не ограничивают.
+     * Рекомендация «резать на последней целой записи» отклонена. Режется
+     * по кодовым точкам, а не по {@code char}: половина суррогатной пары
+     * сломала бы XML посреди потока, то есть 200 с обрывком файла.
      */
     private String joinAnalogs(List<String> analogs) {
         if (analogs == null || analogs.isEmpty()) {
             return null;
         }
-        return String.join(",", analogs);
+        String joined = String.join(", ", analogs);
+        if (joined.codePointCount(0, joined.length()) <= ANALOGS_LIMIT) {
+            return joined;
+        }
+        return joined.substring(0, joined.offsetByCodePoints(0, ANALOGS_LIMIT));
     }
 
     /**

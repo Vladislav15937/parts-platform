@@ -282,8 +282,8 @@ class DromCardFieldsTest extends PostgresTestBase {
         assertThat(offer).contains("<manufacturer>Toyota</manufacturer>");
         assertThat(offer)
                 .as("номера замен в прайсе не все или не в порядке страницы клиента")
-                .contains("<analogsNumbers>HLKA0017,NWNTY011,ST3714060380,3950TO0380,"
-                        + "ZVPV236,DSZ1140PQ,AFR3714060380</analogsNumbers>");
+                .contains("<analogsNumbers>HLKA0017, NWNTY011, ST3714060380, 3950TO0380, "
+                        + "ZVPV236, DSZ1140PQ, AFR3714060380</analogsNumbers>");
         assertThat(offer).contains("<frontRear>front</frontRear>");
 
         // Карточка позиции читает строку витрины — её и спрашиваем, как экран.
