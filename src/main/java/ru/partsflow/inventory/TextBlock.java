@@ -16,6 +16,15 @@ import jakarta.persistence.Table;
 @Table(name = "text_block")
 public class TextBlock {
 
+    /**
+     * Текст блока позиции в запросе — одно выражение на склад, выгрузку таблицы и файл
+     * Дрома (алиас позиции {@code p}): выбранный именованный блок, иначе копия текста.
+     * Три копии условия разошлись бы, и правка блока была бы видна в одном месте
+     * из трёх.
+     */
+    public static final String EFFECTIVE_SQL =
+            "COALESCE((SELECT tb.body FROM text_block tb WHERE tb.id = p.text_block_id), p.text_block)";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

@@ -384,7 +384,11 @@ function shownValue(
   if (field.kind === 'block') {
     // Имя блока, а не его номер; пока список не пришёл, номер не показываем вовсе.
     const chosen = blocks.find((b) => String(b.id) === form.textBlockId);
-    if (form.textBlockId === '') return <span className="muted">не выбран</span>;
+    if (form.textBlockId === '') {
+      // Свободный текст без выбранного блока (перенос, старая вкладка) — это не «не выбран»:
+      // он уходит в объявление, и его надо видеть.
+      return form.textBlock.trim() === '' ? <span className="muted">не выбран</span> : form.textBlock;
+    }
     return chosen === undefined ? <span className="muted">…</span> : chosen.name;
   }
   const value = draftText(field, form, row);

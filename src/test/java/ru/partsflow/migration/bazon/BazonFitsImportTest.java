@@ -280,11 +280,132 @@ class BazonFitsImportTest extends PostgresTestBase {
                         .session((MockHttpSession) seller.getRequest().getSession(false)))
                 .andExpect(status().isForbidden());
 
+        // Справочник блоков: читать может любой вошедший, писать — владелец и менеджер.
+        MockHttpSession sellerSession = (MockHttpSession) seller.getRequest().getSession(false);
+        mvc.perform(post("/api/text-blocks").with(csrf()).session(login(code))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Блок\",\"body\":\"Текст\"}")).andExpect(status().isCreated());
+        long blockId = jdbc.queryForObject("SELECT id FROM " + tenant.schemaName() + ".text_block", Long.class);
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/text-blocks")
+                .session(sellerSession)).andExpect(status().isOk());
+        mvc.perform(post("/api/text-blocks").with(csrf()).session(sellerSession)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Чужой\",\"body\":\"Текст\"}")).andExpect(status().isForbidden());
+        mvc.perform(put("/api/text-blocks/" + blockId).with(csrf()).session(sellerSession)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Блок\",\"body\":\"Подмена\"}")).andExpect(status().isForbidden());
+        mvc.perform(delete("/api/text-blocks/" + blockId).with(csrf()).session(sellerSession))
+                .andExpect(status().isForbidden());
+        assertThat(jdbc.queryForObject("SELECT body FROM " + tenant.schemaName() + ".text_block", String.class))
+                .isEqualTo("Текст");
+
+        jdbc.update("INSERT INTO " + tenant.schemaName() + ".tenant_member"
+                + " (display_name, role, login, password_hash) VALUES ('Менеджер', 'MANAGER', 'menedzher', ?)",
+                new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder()
+                        .encode("пароль-8симв"));
+        var manager = mvc.perform(post("/api/auth/login").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"company\":\"%s\",\"login\":\"menedzher\",\"password\":\"пароль-8симв\"}"
+                                .formatted(code)))
+                .andExpect(status().isOk()).andReturn();
+        MockHttpSession managerSession = (MockHttpSession) manager.getRequest().getSession(false);
+        mvc.perform(post("/api/text-blocks").with(csrf()).session(managerSession)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Блок менеджера\",\"body\":\"Текст\"}")).andExpect(status().isCreated());
+
         mvc.perform(multipart("/api/import/bazon/fits").file(xml("это не xml")).with(csrf())
                         .session(login(code)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value(
                         org.hamcrest.Matchers.containsString("XML")));
+    }
+
+    @Test
+    @DisplayName("Файл с DOCTYPE и ENTITY не раскрывается: ни внутренняя, ни внешняя сущность в позицию не попадает")
+    void doctypeIsNotExpanded() throws Exception {
+        String code = "fit" + UUID.randomUUID().toString().substring(0, 8);
+        TenantProvisioning.Result tenant = provisioning.provision(new TenantProvisioning.Request(
+                code, "Разборка", "vladelec", "пароль-8симв", null));
+        String schema = tenant.schemaName();
+        new BazonImporter(dataSource, schema).importAll(donors(), catalog(row("401", "Фара левая")));
+        Path secret = files.resolve("secret.txt");
+        Files.writeString(secret, "ТАЙНОЕ-СОДЕРЖИМОЕ");
+        String xml = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <!DOCTYPE parts [
+                  <!ENTITY inner "РАСКРЫТО-ВНУТРЕННЯЯ">
+                  <!ENTITY outer SYSTEM "%s">
+                ]>
+                <parts>
+                <part><id>401</id><description>
+                Фара подходит:
+                &inner; &outer;</description></part>
+                </parts>
+                """.formatted(secret.toUri());
+        var result = mvc.perform(multipart("/api/import/bazon/fits").file(xml(xml)).with(csrf())
+                .session(login(code))).andReturn();
+        // Либо отказ словами, либо игнорирование сущностей, — но ни следа содержимого в базе.
+        assertThat(result.getResponse().getStatus()).isIn(200, 400);
+        String stored = String.join("|", jdbc.queryForList("SELECT coalesce(bazon_fits, '') || coalesce(text_block, '')"
+                + " FROM " + schema + ".part p LEFT JOIN " + schema + ".part_drom_card c ON c.part_id = p.id", String.class));
+        assertThat(stored).doesNotContain("РАСКРЫТО-ВНУТРЕННЯЯ").doesNotContain("ТАЙНОЕ-СОДЕРЖИМОЕ");
+        assertThat(new String(result.getResponse().getContentAsByteArray(), StandardCharsets.UTF_8))
+                .doesNotContain("ТАЙНОЕ-СОДЕРЖИМОЕ");
+    }
+
+    @Test
+    @DisplayName("У позиции свой свободный текст без выбранного блока — перенос его не трогает и называет")
+    void ownFreeTextIsNotTouched() throws Exception {
+        String code = "fit" + UUID.randomUUID().toString().substring(0, 8);
+        TenantProvisioning.Result tenant = provisioning.provision(new TenantProvisioning.Request(
+                code, "Разборка", "vladelec", "пароль-8симв", null));
+        String schema = tenant.schemaName();
+        new BazonImporter(dataSource, schema).importAll(donors(), catalog(row("501", "Фара левая")));
+        jdbc.update("UPDATE " + schema + ".part SET text_block = 'Свой текст клиента' WHERE number = 501");
+        String xml = "<parts><part><id>501</id><description><![CDATA[\n" + FITS_A + "\n\n" + PAYMENT
+                + "]]></description></part></parts>";
+
+        mvc.perform(multipart("/api/import/bazon/fits").file(xml(xml)).with(csrf()).session(login(code)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.textBlocksSet").value(0))
+                .andExpect(jsonPath("$.textBlockBusy").value(1))
+                .andExpect(jsonPath("$.fitsFilled").value(1));
+        assertThat(jdbc.queryForObject("SELECT text_block FROM " + schema + ".part WHERE number = 501",
+                String.class)).isEqualTo("Свой текст клиента");
+        assertThat(jdbc.queryForObject("SELECT text_block_id FROM " + schema + ".part WHERE number = 501",
+                Long.class)).isNull();
+    }
+
+    @Test
+    @DisplayName("Правка блока видна одним и тем же текстом в файле Дрома, списке склада и выгрузке склада")
+    void blockEditIsSeenEverywhere() throws Exception {
+        String code = "fit" + UUID.randomUUID().toString().substring(0, 8);
+        TenantProvisioning.Result tenant = provisioning.provision(new TenantProvisioning.Request(
+                code, "Разборка", "vladelec", "пароль-8симв", null));
+        String schema = tenant.schemaName();
+        new BazonImporter(dataSource, schema).importAll(donors(), catalog(row("301", "Фара левая")));
+        MockHttpSession session = login(code);
+        mvc.perform(post("/api/text-blocks").with(csrf()).session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Наличные\",\"body\":\"СТАРЫЙ-ТЕКСТ-БЛОКА\"}")).andExpect(status().isCreated());
+        long blockId = jdbc.queryForObject("SELECT id FROM " + schema + ".text_block", Long.class);
+        long partId = jdbc.queryForObject("SELECT id FROM " + schema + ".part WHERE number = 301", Long.class);
+        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(session)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"textBlockId\":" + blockId + "}"))
+                .andExpect(status().isOk());
+        mvc.perform(put("/api/text-blocks/" + blockId).with(csrf()).session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Наличные\",\"body\":\"НОВЫЙ-ТЕКСТ-БЛОКА\"}")).andExpect(status().isOk());
+
+        String list = new String(mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/parts/catalog").session(session)).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsByteArray(), StandardCharsets.UTF_8);
+        String export = new String(mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/parts/catalog/export").session(session)).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsByteArray(), StandardCharsets.UTF_8);
+        for (String surface : new String[] {list, export, feed(schema)}) {
+            assertThat(surface).contains("НОВЫЙ-ТЕКСТ-БЛОКА").doesNotContain("СТАРЫЙ-ТЕКСТ-БЛОКА");
+        }
     }
 
     // ---------- фикстуры ----------

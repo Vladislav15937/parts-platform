@@ -1352,7 +1352,7 @@ public class CatalogService {
                        p.manufacturer, p.marking, p.section, p.side_lr, p.side_fr,
                        p.qty_on_hand, p.is_published, p.barcode, p.legacy_code,
                        p.drom_ad_number, p.authenticity,
-                       p.video_url, p.text_block,
+                       p.video_url,""" + TextBlock.EFFECTIVE_SQL + " AS text_block," + """
                        p.weight_kg, p.length_mm, p.width_mm, p.height_mm,
                        p.package_weight_kg, p.package_length_mm,
                        p.package_width_mm, p.package_height_mm,
@@ -1602,7 +1602,7 @@ public class CatalogService {
                        (SELECT string_agg(o.raw_number, ', ' ORDER BY o.id) FROM part_oem o
                          WHERE o.part_id = p.id AND NOT o.is_primary) AS crosses,
                        pn.name AS part_name, p.is_published, p.barcode,
-                       p.legacy_code, p.video_url, p.text_block,
+                       p.legacy_code, p.video_url,""" + TextBlock.EFFECTIVE_SQL + " AS text_block," + """
                        p.weight_kg, p.length_mm, p.width_mm, p.height_mm,
                        p.package_weight_kg, p.package_length_mm,
                        p.package_width_mm, p.package_height_mm,

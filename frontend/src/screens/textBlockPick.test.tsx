@@ -13,10 +13,12 @@ describe('текстовый блок в карточке позиции', () =>
   let sent: Array<{ method: string; url: string; body: Record<string, unknown> }>;
   let blocks: Array<{ id: number; name: string; body: string }>;
   let chosen: number | null;
+  let free: string | null;
 
   beforeEach(() => {
     sent = [];
     chosen = 3;
+    free = null;
     blocks = [
       { id: 3, name: 'Наличные', body: 'ОПЛАТА В МАГАЗИНЕ ТОЛЬКО НАЛИЧНЫМИ!' },
       { id: 4, name: 'Предоплата', body: 'Предоплата 100%' },
@@ -32,7 +34,7 @@ describe('текстовый блок в карточке позиции', () =>
         }
         return json({});
       }
-      if (url.includes('/editable')) return json(card(chosen));
+      if (url.includes('/editable')) return json(card(chosen, free));
       if (url.endsWith('/api/text-blocks')) return json(blocks);
       return json([]);
     }));
@@ -48,6 +50,14 @@ describe('текстовый блок в карточке позиции', () =>
     fireEvent.click(screen.getByRole('button', { name: 'Изменить' }));
     await waitFor(() => expect(formLine('Текстовый блок')).toBe('Наличные'));
     expect(formLine('Текстовый блок')).not.toContain('3');
+  });
+
+  it('свободный текст без выбранного блока показан текстом, а не «не выбран»', async () => {
+    chosen = null;
+    free = 'Свой текст клиента';
+    render(<PartCard {...props()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Изменить' }));
+    await waitFor(() => expect(formLine('Текстовый блок')).toBe('Свой текст клиента'));
   });
 
   it('выбор другого блока уходит ключом textBlockId, снятие — null', async () => {
@@ -147,11 +157,11 @@ function row(): CatalogRow {
   };
 }
 
-function card(textBlockId: number | null): Record<string, unknown> {
+function card(textBlockId: number | null, free: string | null = null): Record<string, unknown> {
   return {
     price: 7500, minPrice: null, costPrice: null, installationPrice: null,
     condition: 'USED', qualityGrade: null, description: null, note: null,
-    textBlock: textBlockId === null ? null : 'ОПЛАТА В МАГАЗИНЕ ТОЛЬКО НАЛИЧНЫМИ!',
+    textBlock: textBlockId === null ? free : 'ОПЛАТА В МАГАЗИНЕ ТОЛЬКО НАЛИЧНЫМИ!',
     textBlockId, videoUrl: null, marking: null, manufacturer: null,
     color: null, section: null, barcode: null, weightKg: null, lengthMm: null,
     widthMm: null, heightMm: null, packageLengthMm: null, packageWidthMm: null,

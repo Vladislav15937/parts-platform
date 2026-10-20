@@ -69,7 +69,7 @@ public class DromPriceGenerator {
                    -- Выбранный именованный блок (задача 0337) сильнее копии текста:
                    -- правка блока доходит до объявлений без правки позиций. Копии
                    -- (part.text_block) остаются у позиций без выбора.
-                   COALESCE(tb.body, p.text_block) AS text_block,
+                   ${textBlock} AS text_block,
                    -- Готовый блок «<Вид> подходит:» из файлов Bazon, дословно.
                    dc.bazon_fits,
                    p.video_url,
@@ -211,7 +211,6 @@ public class DromPriceGenerator {
                    GROUP BY ps.part_id
               ) s ON s.part_id = p.id
               LEFT JOIN donor d ON d.id = p.donor_id
-              LEFT JOIN text_block tb ON tb.id = p.text_block_id
               LEFT JOIN part_drom_card dc ON dc.part_id = p.id
               -- Поставка, которая ещё не приехала. Джойн узкий намеренно:
               -- «в пути» — это не любая позиция без остатка, а только та,
@@ -774,6 +773,7 @@ public class DromPriceGenerator {
                 .replace("${carModel}", CAR_MODEL)
                 .replace("${titleBrand}", TITLE_BRAND)
                 .replace("${titleModel}", TITLE_MODEL)
+                .replace("${textBlock}", ru.partsflow.inventory.TextBlock.EFFECTIVE_SQL)
                 .replace("${carBody}", CAR_BODY)
                 .replace("${carEngine}", CAR_ENGINE)
                 .replace("${carYear}", CAR_YEAR)
