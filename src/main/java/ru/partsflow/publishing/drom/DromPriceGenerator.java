@@ -42,6 +42,13 @@ import java.util.NoSuchElementException;
 @Service
 public class DromPriceGenerator {
 
+    private static final org.slf4j.Logger LOG =
+            org.slf4j.LoggerFactory.getLogger(DromPriceGenerator.class);
+
+    /** Строки применимости позиции из запроса — для сборщика блока «подходит». */
+    private static final com.fasterxml.jackson.databind.ObjectMapper FIT_ROWS =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
     /** Компромисс между числом round-trip'ов и памятью на пакет строк. */
     private static final int FETCH_SIZE = 500;
 
@@ -173,6 +180,12 @@ public class DromPriceGenerator {
                    -- марка берётся из применимости, и «снято с» про неё
                    -- было бы неправдой.
                    d.id IS NOT NULL AS from_donor,
+                   -- Для блока «<Вид> подходит:», который собирается из справочника
+                   -- Bazon у позиций, заведённых у нас (задача 0342): «двигатель важен»
+                   -- и строки применимости с моделью. Без параметров — номера ниже
+                   -- не сдвигаются.
+                   p.engine_matters,
+                   fit.fit_rows,
                    -- Перенесена с объявления клиента на Дроме: заголовок
                    -- и описание тогда его, и уходят дословно (задача 0275).
                    p.drom_ad_number IS NOT NULL AS client_text
@@ -270,7 +283,14 @@ public class DromPriceGenerator {
                          string_agg(DISTINCT am.name, ',') AS models,
                          (array_agg(ab.name ORDER BY a.id))[1] AS first_brand,
                          (array_agg(am.name ORDER BY a.id)
-                             FILTER (WHERE am.name IS NOT NULL))[1] AS first_model
+                             FILTER (WHERE am.name IS NOT NULL))[1] AS first_model,
+                         -- Строки с моделью, в порядке ввода: из них сборщик
+                         -- строит «подходит» по справочнику Bazon (задача 0342).
+                         (json_agg(json_build_object(
+                                 'modelId', a.model_id, 'generationId', a.generation_id,
+                                 'label', a.generation_label,
+                                 'yearFrom', a.year_from, 'yearTo', a.year_to)
+                                 ORDER BY a.id) FILTER (WHERE a.model_id IS NOT NULL))::text AS fit_rows
                     FROM part_applicability a
                     JOIN catalog.brand ab ON ab.id = a.brand_id
                     LEFT JOIN catalog.model am ON am.id = a.model_id
@@ -834,7 +854,8 @@ public class DromPriceGenerator {
                 }
                 try (ResultSet rs = statement.executeQuery()) {
                     return writer.write(out,
-                            new OfferCursor(rs, photoBase, donorPhotoBase, settings));
+                            new OfferCursor(rs, photoBase, donorPhotoBase, settings,
+                                    new ru.partsflow.catalog.BazonFitsResolver(connection)));
                 }
             } catch (XMLStreamException e) {
                 // doReturningWork пропускает только SQLException; заворачиваем,
@@ -872,14 +893,24 @@ public class DromPriceGenerator {
          */
         private final FeedSettings settings;
 
+        /**
+         * Сборщик блока «подходит» по справочнику Bazon (задача 0342): ходит по
+         * соединению сборки и помнит ответы на всё время прайса.
+         */
+        private final ru.partsflow.catalog.BazonFitsResolver fits;
+
+        /** О чём уже сказано в журнале: пропуск справочника повторяется на тысячах позиций. */
+        private final java.util.Set<String> reportedGaps = new java.util.HashSet<>();
+
         private Boolean hasNext;
 
         private OfferCursor(ResultSet resultSet, String photoBase, String donorPhotoBase,
-                            FeedSettings settings) {
+                            FeedSettings settings, ru.partsflow.catalog.BazonFitsResolver fits) {
             this.resultSet = resultSet;
             this.photoBase = photoBase;
             this.donorPhotoBase = donorPhotoBase;
             this.settings = settings;
+            this.fits = fits;
         }
 
         @Override
@@ -901,7 +932,7 @@ public class DromPriceGenerator {
             }
             hasNext = null;
             try {
-                return map(resultSet, photoBase, donorPhotoBase, settings);
+                return map(resultSet, photoBase, donorPhotoBase, settings, bazonFits());
             } catch (SQLException e) {
                 throw new IllegalStateException("Не удалось прочитать позицию прайса", e);
             }
@@ -966,8 +997,42 @@ public class DromPriceGenerator {
             return links.stream().limit(settings.photosPerOffer()).toList();
         }
 
+        /**
+         * Блок «&lt;Вид&gt; подходит:» позиции: перенесённый из файла Bazon берётся
+         * дословно, а у заведённой у нас собирается по справочнику (задача 0342).
+         * Перенесённый сильнее: это текст, который клиент уже видит на Дроме, и
+         * «идентично Bazon» — решение владельца; собранный по нашим годам может
+         * разойтись с ним на стыке поколений.
+         */
+        private String bazonFits() throws SQLException {
+            String carried = resultSet.getString("bazon_fits");
+            if (carried != null) {
+                return carried;
+            }
+            String json = resultSet.getString("fit_rows");
+            String kind = DromTitle.kind(resultSet.getString("part_name_text"),
+                    resultSet.getString("part_kind"));
+            if (json == null || kind == null) {
+                return null;
+            }
+            List<ru.partsflow.catalog.BazonFitsResolver.Row> rows;
+            try {
+                rows = FIT_ROWS.readValue(json, new com.fasterxml.jackson.core.type.TypeReference<>() {
+                });
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw new IllegalStateException("Применимость позиции не прочитана", e);
+            }
+            var result = fits.resolve(rows, resultSet.getBoolean("engine_matters"));
+            for (String gap : result.gaps()) {
+                if (reportedGaps.add(gap)) {
+                    LOG.warn("Блок «подходит» не собран: {}", gap);
+                }
+            }
+            return ru.partsflow.catalog.BazonFits.block(kind, result.lines());
+        }
+
         private static DromOffer map(ResultSet rs, String photoBase, String donorPhotoBase,
-                                     FeedSettings settings)
+                                     FeedSettings settings, String bazonFits)
                 throws SQLException {
             return new DromOffer(
                     Long.toString(rs.getLong("number")),
@@ -1022,7 +1087,7 @@ public class DromPriceGenerator {
                     rs.getString("year_text"),
                     rs.getString("title_brand"),
                     rs.getString("title_model"),
-                    rs.getString("bazon_fits"));
+                    bazonFits);
         }
 
         /** Приставка первой строкой описания: товар в пути или в резерве. */

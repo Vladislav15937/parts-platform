@@ -74,11 +74,10 @@ final class DromTitle {
 
     /** Название позиции в файле; {@code null}, если собрать нечего (нет вида). */
     static String of(DromOffer offer) {
-        String kind = collapse(firstNonBlank(offer.partName(), offer.partKind()));
+        String kind = kind(offer.partName(), offer.partKind());
         if (kind == null) {
             return null;
         }
-        kind = Character.toUpperCase(kind.charAt(0)) + kind.substring(1);
 
         List<String> words = new ArrayList<>();
         words.add(kind);
@@ -92,6 +91,15 @@ final class DromTitle {
 
         String position = position(kind, offer.longitudinalSide(), offer.lateralSide());
         return position.isEmpty() ? title : title + ", " + position;
+    }
+
+    /**
+     * Вид детали с заглавной буквы: наименование, как его ввёл клиент, иначе вид из справочника.
+     * Тот же «Вид», что открывает название и заголовок «&lt;Вид&gt; подходит:» (задача 0342).
+     */
+    static String kind(String partName, String partKind) {
+        String kind = collapse(firstNonBlank(partName, partKind));
+        return kind == null ? null : Character.toUpperCase(kind.charAt(0)) + kind.substring(1);
     }
 
     /** Номер без всех знаков, кроме букв и цифр, заглавными. */
