@@ -9,6 +9,7 @@ import {
   applicabilityFromDrom,
   applicabilityFromTitles,
   importBazon,
+  importBazonFits,
   importFile,
   importWheels,
   migratePhotos,
@@ -23,6 +24,7 @@ import type {
   BazonResult,
   DromApplicabilityReport,
   FieldKey,
+  FitsImportResult,
   ParsedApplicability,
   WheelImportResult,
   PhotoProgress,
@@ -298,6 +300,7 @@ export function ImportScreen({ reference, canImport }: Props) {
       <BazonImport onImported={() => setImported((n) => n + 1)} />
 
       <WheelImport reference={reference} />
+      <BazonFitsImport />
       <AfterImport reload={imported} />
     </section>
   );
@@ -828,6 +831,66 @@ function BazonImport({ onImported }: { onImported: () => void }) {
       }
     } catch (cause) {
       if (mounted.current) setError(describe(cause, 'Перенос не прошёл'));
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }
+}
+
+/**
+ * Блок «подходит» и текстовые блоки из файла Bazon на Дром (задача 0337).
+ * Отдельным действием: в выгрузке склада (CSV) этих текстов нет, они лежат
+ * в описаниях прайса, который Bazon отдавал Дрому.
+ */
+function BazonFitsImport() {
+  const [file, setFile] = useState<File | null>(null);
+  const [result, setResult] = useState<FitsImportResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useMounted();
+
+  return (
+    <>
+      <hr />
+      <h3>Описания объявлений из файла Bazon</h3>
+      <p className="note">
+        Файл, который Bazon отдавал Дрому (XML прайса). Из описаний переедут
+        блок «подходит» и текстовые блоки — по номеру позиции. Уже заполненное
+        не меняется, повторить безопасно.
+      </p>
+      <label>
+        Файл прайса Bazon для Дрома
+        <input type="file" accept=".xml"
+               onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      </label>
+      {error !== null && <p className="note note--error">{error}</p>}
+      <button type="button" disabled={busy || file === null} onClick={() => void run()}>
+        {busy ? 'Переносим…' : 'Перенести описания'}
+      </button>
+      {result !== null && (
+        <ul className="suggestions">
+          <li>Позиций в файле: {result.items}, нет на складе: {result.notFound}</li>
+          <li>Блок «подходит»: перенесён {result.fitsFilled}, уже был такой {result.fitsSame}
+            {result.fitsDiffers > 0 && `, у позиции другой — не тронут: ${result.fitsDiffers}`}</li>
+          <li>Текстовый блок: выбран у {result.textBlocksSet}, заведено блоков {result.textBlocksNew}
+            {result.textBlockBusy > 0 && `, у позиции уже есть свой — не тронут: ${result.textBlockBusy}`}</li>
+          {result.tailUnclear > 0 && (
+            <li>Единственный блок описания не отличить от комментария — не тронут: {result.tailUnclear}</li>
+          )}
+        </ul>
+      )}
+    </>
+  );
+
+  async function run(): Promise<void> {
+    if (file === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const done = await importBazonFits(file);
+      if (mounted.current) setResult(done);
+    } catch (cause) {
+      if (mounted.current) setError(describe(cause, 'Перенос описаний не прошёл'));
     } finally {
       if (mounted.current) setBusy(false);
     }

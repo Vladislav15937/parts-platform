@@ -1191,6 +1191,8 @@ export interface PartEdit {
   description: string | null;
   note: string | null;
   textBlock: string | null;
+  /** Выбранный именованный текстовый блок описания (задача 0337); null — не выбран. */
+  textBlockId?: number | null;
   videoUrl: string | null;
   marking: string | null;
   manufacturer: string | null;

@@ -66,7 +66,12 @@ public class DromPriceGenerator {
                    p.description,
                    -- Дополнительный текст и ссылка на ролик: владелец их пишет,
                    -- а покупатель до правки не видел вовсе.
-                   p.text_block,
+                   -- Выбранный именованный блок (задача 0337) сильнее копии текста:
+                   -- правка блока доходит до объявлений без правки позиций. Копии
+                   -- (part.text_block) остаются у позиций без выбора.
+                   COALESCE(tb.body, p.text_block) AS text_block,
+                   -- Готовый блок «<Вид> подходит:» из файлов Bazon, дословно.
+                   dc.bazon_fits,
                    p.video_url,
                    -- Цена установки сама по себе внутренняя и в объявление
                    -- не идёт: наружу уходит только строка приписки, и только
@@ -206,6 +211,8 @@ public class DromPriceGenerator {
                    GROUP BY ps.part_id
               ) s ON s.part_id = p.id
               LEFT JOIN donor d ON d.id = p.donor_id
+              LEFT JOIN text_block tb ON tb.id = p.text_block_id
+              LEFT JOIN part_drom_card dc ON dc.part_id = p.id
               -- Поставка, которая ещё не приехала. Джойн узкий намеренно:
               -- «в пути» — это не любая позиция без остатка, а только та,
               -- которую ждут контейнером. Позиция, заведённая черновиком
@@ -1014,7 +1021,8 @@ public class DromPriceGenerator {
                     rs.getString("part_name_text"),
                     rs.getString("year_text"),
                     rs.getString("title_brand"),
-                    rs.getString("title_model"));
+                    rs.getString("title_model"),
+                    rs.getString("bazon_fits"));
         }
 
         /** Приставка первой строкой описания: товар в пути или в резерве. */

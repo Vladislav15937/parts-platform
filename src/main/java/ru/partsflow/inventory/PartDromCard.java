@@ -81,6 +81,15 @@ public class PartDromCard {
     @Column(name = "ad_date")
     private String adDate;
 
+    /**
+     * Блок «&lt;Вид&gt; подходит:» описания объявления дословно, как он стоит в файле выгрузки
+     * предыдущей системы (задача 0337, схема — {@code tenant/095}). Не {@link #applicability}:
+     * там текст карточки Дрома другого формата. Формой не правится — переносится из файлов
+     * Bazon, уходит в описание как есть.
+     */
+    @Column(name = "bazon_fits")
+    private String bazonFits;
+
     protected PartDromCard() {
     }
 
@@ -135,6 +144,14 @@ public class PartDromCard {
 
     public String getAdDate() {
         return adDate;
+    }
+
+    public String getBazonFits() {
+        return bazonFits;
+    }
+
+    public void setBazonFits(String bazonFits) {
+        this.bazonFits = clean(bazonFits);
     }
 
     public void set(String warranty, String pickup, String deliveryPayment,

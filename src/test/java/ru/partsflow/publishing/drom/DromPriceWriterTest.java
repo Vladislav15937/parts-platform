@@ -452,6 +452,28 @@ class DromPriceWriterTest {
         }
 
         @Test
+        @DisplayName("Блок «подходит» из файла Bazon стоит после «снята с» и до текстового блока, дословно")
+        void bazonFitsBetweenVehicleAndTextBlock() throws Exception {
+            String fits = "Фара подходит:\nNissan Teana 2 поколение 2008–2014 J32 двигатель VQ25DE (2.5 Б)";
+            assertThat(value(write(withFits("Комментарий", fits, "ОПЛАТА НАЛИЧНЫМИ")), "description"))
+                    .isEqualTo("\nКомментарий\n\n"
+                            + "Запчасть снята с: Nissan Teana 2008 J32 VQ25DE\n\n"
+                            + fits + "\n\n"
+                            + "ОПЛАТА НАЛИЧНЫМИ");
+            // Нет «подходит» — блока и его разделителя нет.
+            assertThat(value(write(withFits(null, null, "ОПЛАТА НАЛИЧНЫМИ")), "description"))
+                    .isEqualTo("\nЗапчасть снята с: Nissan Teana 2008 J32 VQ25DE\n\nОПЛАТА НАЛИЧНЫМИ");
+            // Позиция без машины (ремень без марки) тоже получает «подходит».
+            DromOffer noVehicle = new DromOffer("P-3", "Ремень", "Ремень", null,
+                    new BigDecimal("100"), BigDecimal.ONE, PartCondition.NEW,
+                    null, null, List.of(), null, null, null, null, null, null, List.of(),
+                    null, null, null, null, null, false, null, null, null, null,
+                    null, false, "Ремень", null, null, null, "Ремень подходит:\nToyota Camry");
+            assertThat(value(write(noVehicle), "description"))
+                    .isEqualTo("\nРемень подходит:\nToyota Camry");
+        }
+
+        @Test
         @DisplayName("Комментарий и текстовый блок — как набраны, переводы строк внутри целы")
         void textsAreVerbatim() throws Exception {
             // Разбор XML сам сводит CRLF к LF, поэтому «как набран» проверяется по байтам.
@@ -745,6 +767,14 @@ class DromPriceWriterTest {
                 null, null, List.of(), null, null, null, null, null, null, List.of(),
                 "Nissan", "Teana", "J32", "VQ25DE", 2008, true, textBlock, null, null, null,
                 null, false, "Фара", null, "Nissan", "Teana");
+    }
+
+    private static DromOffer withFits(String comment, String fits, String textBlock) {
+        return new DromOffer("P-2", "Фара", "Фара", comment,
+                new BigDecimal("100"), BigDecimal.ONE, PartCondition.CONTRACT,
+                null, null, List.of(), null, null, null, null, null, null, List.of(),
+                "Nissan", "Teana", "J32", "VQ25DE", 2008, true, textBlock, null, null, null,
+                null, false, "Фара", null, "Nissan", "Teana", fits);
     }
 
     /** Текст единственного элемента с этим именем — как его прочтёт площадка. */

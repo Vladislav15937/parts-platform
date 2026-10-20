@@ -391,6 +391,9 @@ public class PartController {
                                 String description,
                                 String note,
                                 String textBlock,
+                                // Выбранный именованный блок описания (задача 0337); null вместе
+                                // с ключом — выбор снят, нет ключа — не трогать.
+                                Long textBlockId,
                                 String videoUrl,
                                 String marking,
                                 String manufacturer,
@@ -471,7 +474,8 @@ public class PartController {
             return new UpdateRequest(part.getPrice(), part.getMinPrice(), part.getCostPrice(),
                     part.getInstallationPrice(), part.getCondition(),
                     part.getQualityGrade(), part.getDescription(),
-                    part.getNote(), part.getTextBlock(), part.getVideoUrl(), part.getMarking(),
+                    part.getNote(), part.getTextBlock(), part.getTextBlockId(),
+                    part.getVideoUrl(), part.getMarking(),
                     part.getManufacturer(), part.getColor(), part.getSection(), part.getBarcode(),
                     part.getWeightKg(), part.getLengthMm(), part.getWidthMm(), part.getHeightMm(),
                     part.getPackageLengthMm(), part.getPackageWidthMm(), part.getPackageHeightMm(),
@@ -507,7 +511,7 @@ public class PartController {
 
         PartService.PartUpdate toUpdate(java.util.Set<String> sent, PartService.EditBase base) {
             return new PartService.PartUpdate(price, minPrice, costPrice, installationPrice,
-                    condition, qualityGrade, description, note, textBlock, videoUrl,
+                    condition, qualityGrade, description, note, textBlock, textBlockId, videoUrl,
                     marking, manufacturer,
                     color, section, barcode, weightKg, lengthMm, widthMm, heightMm,
                     packageLengthMm, packageWidthMm, packageHeightMm, packageWeightKg,

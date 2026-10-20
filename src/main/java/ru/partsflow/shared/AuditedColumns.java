@@ -139,6 +139,8 @@ public final class AuditedColumns {
         PART_DROM_CARD.put("may_fit", "Может подойти");
         // Задача 0298: «Дата» объявления Дрома; не «Создан» позиции.
         PART_DROM_CARD.put("ad_date", "Дата (Дром)");
+        // Задача 0337: готовый блок «<Вид> подходит:» из файлов Bazon; не «Подходит» Дрома.
+        PART_DROM_CARD.put("bazon_fits", "Подходит (из файла Bazon)");
     }
 
     /**

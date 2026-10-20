@@ -22,6 +22,8 @@ public interface PartRepository extends JpaRepository<Part, Long> {
     @org.springframework.data.jpa.repository.Query("SELECT p FROM Part p WHERE p.id = :id")
     Optional<Part> findByIdForUpdate(Long id);
 
+    long countByTextBlockId(Long textBlockId);
+
     Optional<Part> findByClientRequestId(String clientRequestId);
 
     Page<Part> findByStatus(PartStatus status, Pageable pageable);

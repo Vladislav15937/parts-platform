@@ -37,6 +37,9 @@ import java.util.List;
  *                     это список марок применимости через запятую
  * @param carModel     модель — так же, списком у контрактной
  * @param year         год машины-донора; у контрактной его нет и быть не может
+ * @param bazonFits    готовый блок «&lt;Вид&gt; подходит:» из файла выгрузки Bazon,
+ *                     дословно (задача 0337); {@code null} — блока нет. Идёт в описание
+ *                     после «Запчасть снята с:», до текстового блока
  * @param textBlock    дополнительный текст объявления, введённый владельцем.
  *                     Приезжает из прежней системы колонкой «Текстовый блок»
  *                     и до правки не доходил до покупателя вовсе: владелец
@@ -109,7 +112,28 @@ public record DromOffer(
         String partName,
         String yearText,
         String titleBrand,
-        String titleModel) {
+        String titleModel,
+        String bazonFits) {
+
+    /** Состав до задачи 0337: без готового блока «подходит» из файлов Bazon. */
+    public DromOffer(String orderCode, String name, String partKind, String description,
+                     BigDecimal price, BigDecimal availableQty, PartCondition condition,
+                     String manufacturer, String oemNumber, List<String> analogNumbers,
+                     LateralSide lateralSide, LongitudinalSide longitudinalSide,
+                     VerticalSide verticalSide, String color, String marking,
+                     Placement placement, List<String> photos, String carBrand,
+                     String carModel, String bodyCode, String engineCode, Integer year,
+                     boolean fromDonor, String textBlock, String videoUrl,
+                     String installationNote, String expectedNote, String authenticity,
+                     boolean clientText, String partName, String yearText,
+                     String titleBrand, String titleModel) {
+        this(orderCode, name, partKind, description, price, availableQty, condition,
+                manufacturer, oemNumber, analogNumbers, lateralSide, longitudinalSide,
+                verticalSide, color, marking, placement, photos, carBrand, carModel,
+                bodyCode, engineCode, year, fromDonor, textBlock, videoUrl,
+                installationNote, expectedNote, authenticity, clientText,
+                partName, yearText, titleBrand, titleModel, null);
+    }
 
     /** Прежний состав до задачи 0335: без полей названия в файле. */
     public DromOffer(String orderCode, String name, String partKind, String description,
@@ -127,7 +151,7 @@ public record DromOffer(
                 verticalSide, color, marking, placement, photos, carBrand, carModel,
                 bodyCode, engineCode, year, fromDonor, textBlock, videoUrl,
                 installationNote, expectedNote, authenticity, clientText,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     /**
@@ -154,7 +178,7 @@ public record DromOffer(
                 manufacturer, oemNumber, analogNumbers, lateralSide, longitudinalSide,
                 verticalSide, color, marking, placement, photos, carBrand, carModel,
                 bodyCode, engineCode, year, fromDonor, textBlock, videoUrl,
-                installationNote, expectedNote, null, false, null, null, null, null);
+                installationNote, expectedNote, null, false, null, null, null, null, null);
     }
 
     /**

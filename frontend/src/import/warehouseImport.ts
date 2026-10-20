@@ -329,6 +329,32 @@ export function importWheels(file: File, warehouseId: number): Promise<WheelImpo
   return upload<WheelImportResult>('/api/import/bazon/wheels', form);
 }
 
+/**
+ * Итог переноса блока «подходит» и текстового блока из файла Bazon на Дром
+ * (задача 0337). Числа — позиции файла.
+ */
+export interface FitsImportResult {
+  items: number;
+  notFound: number;
+  fitsFilled: number;
+  fitsSame: number;
+  fitsDiffers: number;
+  textBlocksSet: number;
+  textBlockBusy: number;
+  textBlocksNew: number;
+  tailUnclear: number;
+}
+
+/**
+ * Файл выгрузки Bazon на Дром (XML прайса): из его описаний берётся блок
+ * «<Вид> подходит:» и текстовый блок. Позиция узнаётся по номеру в файле.
+ */
+export function importBazonFits(file: File): Promise<FitsImportResult> {
+  const form = new FormData();
+  form.append('file', file);
+  return upload<FitsImportResult>('/api/import/bazon/fits', form);
+}
+
 /** Сколько фотографий перенесено, сколько не вышло и сколько ждёт. */
 export interface PhotoProgress {
   done: number;

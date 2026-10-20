@@ -7,7 +7,7 @@ function card(overrides: Partial<PartEdit> = {}): PartEdit {
     price: 4500, minPrice: 4000, costPrice: 1200, installationPrice: null,
     condition: 'USED',
     qualityGrade: 'NO_DEFECTS', description: null, note: 'скол на креплении',
-    textBlock: null, videoUrl: null, marking: null, manufacturer: 'Toyota',
+    textBlock: null, textBlockId: null, videoUrl: null, marking: null, manufacturer: 'Toyota',
     color: null, section: null, barcode: null,
     weightKg: 3.5, lengthMm: 120, widthMm: 80, heightMm: 45,
     packageLengthMm: null, packageWidthMm: null, packageHeightMm: null,

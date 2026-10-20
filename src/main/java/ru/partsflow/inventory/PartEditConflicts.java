@@ -87,6 +87,7 @@ final class PartEditConflicts {
             Map.entry("equipment", "Комплектация"),
             Map.entry("generation", "Поколение"),
             Map.entry("textBlock", "Текстовый блок"),
+            Map.entry("textBlockId", "Текстовый блок"),
             Map.entry("videoUrl", "Видео"),
             Map.entry("published", "Выгружать"),
             Map.entry("legacyCode", "Старые данные"),

@@ -286,6 +286,7 @@ public class DromPriceWriter {
         addBlock(blocks, offer.expectedNote());
         addBlock(blocks, offer.description());
         addBlock(blocks, vehicleBlock(offer));
+        addBlock(blocks, offer.bazonFits());
         addBlock(blocks, offer.textBlock());
         addBlock(blocks, offer.installationNote());
         return blocks.isEmpty() ? "" : "\n" + String.join("\n\n", blocks);

@@ -62,18 +62,41 @@ public class BazonImportController {
     private final PhotoMigration photoMigration;
     private final ru.partsflow.intake.DonorVehicleResolver vehicles;
     private final BazonWheelImporter wheelImporter;
+    private final BazonFitsImporter fitsImporter;
 
     public BazonImportController(DataSource dataSource, PartNameService partNames,
                                  PartService parts, PhotoMigration photoMigration,
                                  ru.partsflow.intake.DonorVehicleResolver vehicles,
                                  ru.partsflow.inventory.StockLedger stock,
-                                 BazonWheelImporter wheelImporter) {
+                                 BazonWheelImporter wheelImporter,
+                                 BazonFitsImporter fitsImporter) {
+        this.fitsImporter = fitsImporter;
         this.dataSource = dataSource;
         this.partNames = partNames;
         this.parts = parts;
         this.photoMigration = photoMigration;
         this.vehicles = vehicles;
         this.wheelImporter = wheelImporter;
+    }
+
+    /**
+     * Блок «&lt;Вид&gt; подходит:» и текстовый блок из файла выгрузки Bazon на Дром
+     * (задача 0337). Файл — XML прайса {@code drom-*.xml}; позиция узнаётся
+     * по {@code <id>}, то есть по её номеру (задача 0334). Повтор безопасен:
+     * заполненное не трогается.
+     */
+    @PostMapping("/fits")
+    @PreAuthorize("hasRole('OWNER')")
+    public BazonFitsImporter.Report loadFits(@RequestParam("file") MultipartFile file)
+            throws Exception {
+        requireFile(file, "файл выгрузки на Дром");
+        try (InputStream in = file.getInputStream()) {
+            return fitsImporter.load(in);
+        } catch (javax.xml.stream.XMLStreamException e) {
+            // Не XML или обрыв: перенесённое до обрыва остаётся перенесённым (пачки по 500).
+            throw new IllegalArgumentException("Файл не похож на выгрузку Bazon на Дром (XML): "
+                    + "проверьте, что это прайс drom-….xml, а не таблица склада");
+        }
     }
 
     /**

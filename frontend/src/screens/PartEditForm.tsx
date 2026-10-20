@@ -14,6 +14,8 @@ import { useMounted } from '../ui/useMounted';
 import { ApplicabilityView } from './ApplicabilityView';
 import { CharacteristicsView } from './CharacteristicsView';
 import { VehicleNameInput, useVehicleCatalog } from './VehicleNameInput';
+import { TextBlockInput } from './TextBlockInput';
+import { listTextBlocks, type TextBlock } from '../inventory/textBlocks';
 
 /**
  * Правка карточки товара — списком «подпись — значение», а не формой
@@ -94,6 +96,8 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
    * закрывается молча.
    */
   const [notSaved, setNotSaved] = useState<NotSavedField[]>([]);
+  /** Именованные текстовые блоки описания (задача 0337): список для выбора и показа имени. */
+  const [blocks, setBlocks] = useState<TextBlock[]>([]);
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
   // Подсказки марки и модели (задача 0308): справочник — по первому раскрытию.
@@ -112,6 +116,16 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
       .catch(() => { if (alive) setError('Не удалось прочитать карточку'); });
     return () => { alive = false; };
   }, [partId]);
+
+  useEffect(() => {
+    let alive = true;
+    // Список блоков нужен и закрытой строке (имя вместо номера); отказ не мешает правке.
+    // Ответ — обещание, а не гарантия: не список читается как «блоков нет».
+    void listTextBlocks()
+      .then((all) => { if (alive) setBlocks(Array.isArray(all) ? all : []); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]): void {
     setForm((f) => (f === null ? f : { ...f, [key]: value }));
@@ -272,9 +286,15 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
                                         brand={form.brand.trim() !== '' ? form.brand : plainText(row.brand)}
                                         onChange={(v) => set(field.key as 'brand' | 'model', v)} />
                     )
+                    : opened && field.kind === 'block'
+                    ? (
+                      <TextBlockInput blocks={blocks} value={form.textBlockId}
+                                      label={field.label} onBlocks={setBlocks}
+                                      onPick={(id) => set('textBlockId', id)} />
+                    )
                     : opened
                     ? input(field, form, set, priceOp, changeOp, loaded?.condition === '')
-                    : shownValue(field, form, row)}
+                    : shownValue(field, form, row, blocks)}
                   {opened && 'note' in field && field.note !== undefined
                     && <span className="muted"> {field.note}</span>}
                   {/* И у раскрытой строки — пока набирают, — и у закрытой:
@@ -358,7 +378,15 @@ export function dromDateShown(text: string): string {
 }
 
 /** Значение строки текстом — то, что видно, пока строку не раскрыли. */
-function shownValue(field: Field, form: Draft, row: CatalogRow): JSX.Element | string {
+function shownValue(
+  field: Field, form: Draft, row: CatalogRow, blocks: readonly TextBlock[],
+): JSX.Element | string {
+  if (field.kind === 'block') {
+    // Имя блока, а не его номер; пока список не пришёл, номер не показываем вовсе.
+    const chosen = blocks.find((b) => String(b.id) === form.textBlockId);
+    if (form.textBlockId === '') return <span className="muted">не выбран</span>;
+    return chosen === undefined ? <span className="muted">…</span> : chosen.name;
+  }
   const value = draftText(field, form, row);
   if (field.kind === 'fits' && value.trim() !== '') {
     return <ApplicabilityView text={value} />;
@@ -507,6 +535,7 @@ type Field =
   | { kind: 'condition'; key: 'condition'; label: string }
   | { kind: 'grade'; key: 'qualityGrade'; label: string }
   | { kind: 'check'; key: 'published'; label: string }
+  | { kind: 'block'; key: 'textBlockId'; label: string }
   | { kind: 'text' | 'area' | 'fits' | 'specs' | 'date'; key: StringKey; label: string;
       /** Последствие правки — словами у раскрытого поля, а не замком. */
       note?: string }
@@ -615,7 +644,8 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
   {
     title: 'Размещение на площадках',
     fields: [
-      { kind: 'area', key: 'textBlock', label: 'Текстовый блок' },
+      // Именованный блок описания (задача 0337): выбор по имени, как у Bazon.
+      { kind: 'block', key: 'textBlockId', label: 'Текстовый блок' },
       { kind: 'text', key: 'videoUrl', label: 'Видео' },
       { kind: 'check', key: 'published', label: 'Выгружать' },
     ],
@@ -712,6 +742,8 @@ export interface Draft {
   description: string;
   note: string;
   textBlock: string;
+  /** Номер выбранного именованного блока строкой; пусто — не выбран (задача 0337). */
+  textBlockId: string;
   videoUrl: string;
   marking: string;
   manufacturer: string;
@@ -767,6 +799,7 @@ export function draftOf(card: PartEdit): Draft {
     description: card.description ?? '',
     note: card.note ?? '',
     textBlock: card.textBlock ?? '',
+    textBlockId: card.textBlockId == null ? '' : String(card.textBlockId),
     videoUrl: card.videoUrl ?? '',
     marking: card.marking ?? '',
     manufacturer: card.manufacturer ?? '',
@@ -852,6 +885,7 @@ export function toEdit(form: Draft, open: readonly string[] = []): PartEdit {
     description: blank(form.description),
     note: blank(form.note),
     textBlock: blank(form.textBlock),
+    textBlockId: form.textBlockId.trim() === '' ? null : Number(form.textBlockId),
     videoUrl: blank(form.videoUrl),
     marking: blank(form.marking),
     manufacturer: blank(form.manufacturer),

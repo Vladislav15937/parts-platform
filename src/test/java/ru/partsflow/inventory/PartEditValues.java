@@ -25,17 +25,24 @@ final class PartEditValues {
     /**
      * Не поля правки: указание, что сделать с ценой, и наименование — оно
      * в записи формы есть (его отдаёт {@code GET /editable}), но производное
-     * и руками не правится (задача 0336): присланное другое — отказ.
+     * и руками не правится (задача 0336): присланное другое — отказ. «Текстовый блок»
+     * (текст) — след выбора блока {@code textBlockId} (задача 0337): выбор копирует
+     * в него текст, и «одно поле — меняется одно» к паре неприменимо.
      */
-    static final Set<String> NOT_A_FIELD = Set.of("priceOp", "title");
+    static final Set<String> NOT_A_FIELD = Set.of("priceOp", "title", "textBlock");
 
     private final ObjectMapper json;
     private final String suffix;
     private final long number;
     private final Long cellA;
     private final Long cellB;
+    private final Long blockA;
+    private final Long blockB;
 
-    PartEditValues(ObjectMapper json, String suffix, long number, Long cellA, Long cellB) {
+    PartEditValues(ObjectMapper json, String suffix, long number, Long cellA, Long cellB,
+                   Long blockA, Long blockB) {
+        this.blockA = blockA;
+        this.blockB = blockB;
         this.json = json;
         this.suffix = suffix;
         this.number = number;
@@ -54,7 +61,7 @@ final class PartEditValues {
         v.put("qualityGrade", "AS_NEW");
         v.put("description", "Комментарий исходный");
         v.put("note", "Заметка исходная");
-        v.put("textBlock", "Блок исходный");
+        v.put("textBlockId", blockA);
         v.put("videoUrl", "https://video.example/1");
         v.put("marking", "МАРК-1");
         v.put("manufacturer", "Koito");
@@ -112,7 +119,7 @@ final class PartEditValues {
         v.put("qualityGrade", "WITH_DEFECTS");
         v.put("description", "Комментарий новый");
         v.put("note", "Заметка новая");
-        v.put("textBlock", "Блок новый");
+        v.put("textBlockId", blockB);
         v.put("videoUrl", "https://video.example/2");
         v.put("marking", "МАРК-2");
         v.put("manufacturer", "Depo");

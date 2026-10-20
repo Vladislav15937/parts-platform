@@ -97,6 +97,8 @@ class PartPartialEditTest extends PostgresTestBase {
     private Long partId;
     private Long cellA;
     private Long cellB;
+    private Long blockA;
+    private Long blockB;
     private String suffix;
     private long number;
 
@@ -125,6 +127,10 @@ class PartPartialEditTest extends PostgresTestBase {
                     + " VALUES (?, ?) RETURNING id", Long.class, warehouse, "А-" + suffix);
             cellB = jdbc.queryForObject("INSERT INTO storage_cell (warehouse_id, code)"
                     + " VALUES (?, ?) RETURNING id", Long.class, warehouse, "Б-" + suffix);
+            blockA = jdbc.queryForObject("INSERT INTO text_block (name, body)"
+                    + " VALUES (?, ?) RETURNING id", Long.class, "Блок А " + suffix, "Блок исходный");
+            blockB = jdbc.queryForObject("INSERT INTO text_block (name, body)"
+                    + " VALUES (?, ?) RETURNING id", Long.class, "Блок Б " + suffix, "Блок новый");
             partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price, is_published)
                     VALUES (1, 'Фара', 100, true) RETURNING id""", Long.class);
@@ -388,7 +394,7 @@ class PartPartialEditTest extends PostgresTestBase {
     // ------------------------------------------------------------------ значения
 
     private PartEditValues values() {
-        return new PartEditValues(json, suffix, number, cellA, cellB);
+        return new PartEditValues(json, suffix, number, cellA, cellB, blockA, blockB);
     }
 
     private Map<String, JsonNode> initial() {

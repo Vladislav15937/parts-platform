@@ -64,12 +64,17 @@ public class PartService {
     /** Пересборка названия из полей формулы (задача 0336). */
     private final PartTitles titles;
 
+    /** Выбор именованного текстового блока в карточке (задача 0337). */
+    private final TextBlockService textBlocks;
+
     public PartService(PartRepository partRepository, DomainEventPublisher eventPublisher,
                        PartNameService partNames, PartChangeLog partChanges, JdbcTemplate jdbc,
                        VehicleWords vehicleWords, StockNaming naming, StockLedger ledger,
                        jakarta.persistence.EntityManager entityManager,
                        PartIdentity identity, com.fasterxml.jackson.databind.ObjectMapper json,
-                       ru.partsflow.platform.audit.AuditJournal journal, PartTitles titles) {
+                       ru.partsflow.platform.audit.AuditJournal journal, PartTitles titles,
+                       TextBlockService textBlocks) {
+        this.textBlocks = textBlocks;
         this.titles = titles;
         this.json = json;
         this.journal = journal;
@@ -452,7 +457,18 @@ public class PartService {
         if (update.has("qualityGrade")) part.setQualityGrade(update.qualityGrade());
         if (update.has("description")) part.setDescription(update.description());
         if (update.has("note")) part.setNote(update.note());
-        if (update.has("textBlock")) part.setTextBlock(update.textBlock());
+        // Выбор именованного блока (0337) и свободный текст (старая вкладка, список,
+        // перенос) — два способа сказать одно. Пришёл выбор — он решает: копия текста
+        // (part.text_block) ставится из блока, чтобы откат приложения читал тот же текст.
+        // Пришёл только текст — выбор снимается: иначе он перебил бы набранное.
+        if (update.has("textBlockId")) {
+            TextBlock chosen = textBlocks.require(update.textBlockId());
+            part.setTextBlockId(chosen == null ? null : chosen.getId());
+            part.setTextBlock(chosen == null ? null : chosen.getBody());
+        } else if (update.has("textBlock")) {
+            part.setTextBlock(update.textBlock());
+            part.setTextBlockId(null);
+        }
         if (update.has("videoUrl")) part.setVideoUrl(update.videoUrl());
         if (update.has("marking")) part.setMarking(update.marking());
         if (update.has("manufacturer")) part.setManufacturer(update.manufacturer());
@@ -1058,7 +1074,11 @@ public class PartService {
                     value == null ? null : QualityGrade.valueOf(String.valueOf(value)));
             case "description" -> part.setDescription(text(value));
             case "note" -> part.setNote(text(value));
-            case "textBlock" -> part.setTextBlock(text(value));
+            case "textBlock" -> {
+                part.setTextBlock(text(value));
+                // Набранный текст вытесняет выбранный блок, как в карточке.
+                part.setTextBlockId(null);
+            }
             case "marking" -> part.setMarking(text(value));
             case "manufacturer" -> part.setManufacturer(text(value));
             case "color" -> part.setColor(text(value));
@@ -1186,6 +1206,9 @@ public class PartService {
                              String description,
                              String note,
                              String textBlock,
+                             // Выбранный именованный блок (задача 0337): ключ пришёл с null —
+                             // выбор снят; ключа нет — не трогать.
+                             Long textBlockId,
                              String videoUrl,
                              String marking,
                              String manufacturer,

@@ -205,6 +205,14 @@ public class Part {
     @Column(name = "text_block")
     private String textBlock;
 
+    /**
+     * Выбранный именованный блок ({@code text_block}, задача 0337). В описание
+     * идёт его текст; {@link #textBlock} остаётся копией — ради отката
+     * приложения и позиций, заведённых прежним путём (tenant/095).
+     */
+    @Column(name = "text_block_id")
+    private Long textBlockId;
+
     /** Код позиции в прежней системе клиента: нужен на время переезда. */
     @Column(name = "legacy_code")
     private String legacyCode;
@@ -485,6 +493,14 @@ public class Part {
 
     public void setTextBlock(String textBlock) {
         this.textBlock = textBlock;
+    }
+
+    public Long getTextBlockId() {
+        return textBlockId;
+    }
+
+    public void setTextBlockId(Long textBlockId) {
+        this.textBlockId = textBlockId;
     }
 
     /** Автор последней правки карточки. Ставится на каждое изменение полей. */

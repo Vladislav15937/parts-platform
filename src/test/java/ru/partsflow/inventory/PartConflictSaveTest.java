@@ -92,6 +92,7 @@ class PartConflictSaveTest extends PostgresTestBase {
         String suffix = String.valueOf(SEQ.incrementAndGet());
 
         Long[] cells = new Long[2];
+        Long[] blocks = new Long[2];
         long[] number = new long[1];
         inTenant(() -> {
             member("vladelec0313", "Пётр Владельцев", "OWNER");
@@ -106,13 +107,17 @@ class PartConflictSaveTest extends PostgresTestBase {
                     + " VALUES (?, ?) RETURNING id", Long.class, warehouse, "А-" + suffix);
             cells[1] = jdbc.queryForObject("INSERT INTO storage_cell (warehouse_id, code)"
                     + " VALUES (?, ?) RETURNING id", Long.class, warehouse, "Б-" + suffix);
+            blocks[0] = jdbc.queryForObject("INSERT INTO text_block (name, body)"
+                    + " VALUES (?, ?) RETURNING id", Long.class, "Блок А " + suffix, "Блок исходный");
+            blocks[1] = jdbc.queryForObject("INSERT INTO text_block (name, body)"
+                    + " VALUES (?, ?) RETURNING id", Long.class, "Блок Б " + suffix, "Блок новый");
             partId = jdbc.queryForObject("""
                     INSERT INTO part (category_id, title, price, is_published)
                     VALUES (1, 'Фара', 100, true) RETURNING id""", Long.class);
             number[0] = jdbc.queryForObject("SELECT max(number) + 1000 FROM part", Long.class);
             return null;
         });
-        values = new PartEditValues(json, suffix, number[0], cells[0], cells[1]);
+        values = new PartEditValues(json, suffix, number[0], cells[0], cells[1], blocks[0], blocks[1]);
 
         // Заполнено всё — иначе «не стёрлось» нечем отличить от «и не было».
         ObjectNode full = json.createObjectNode();
