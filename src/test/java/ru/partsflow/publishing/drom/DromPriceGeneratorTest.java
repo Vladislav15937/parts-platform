@@ -295,6 +295,82 @@ class DromPriceGeneratorTest extends PostgresTestBase {
         assertThat(price()).contains("<title>Воздухозаборник боковой Toyota 2005 123456A100, передний левый</title>");
     }
 
+    /**
+     * Машина из общего справочника (задача 0377) доезжает до {@code <title>} файла.
+     *
+     * <p>Обе позиции одинаковы во всём, кроме ссылки: вид, своя машина, вписанная
+     * руками ({@code manual_*}), остаток. У позиции со ссылкой слова — справочника
+     * (первое значение списка, формула 0335); у контрольной без ссылки — вписанные,
+     * байт в байт как до 0377. Разбор PR 497: откат ссылки в {@code PartVehicle}
+     * оставлял весь прайс зелёным.
+     */
+    @Test
+    @DisplayName("Ссылка на справочник машин даёт в названии файла его слова, позиция без ссылки"
+            + " называется как раньше: в полном прайсе и в дельте")
+    void bazonVehicleWordsReachTheTitle() {
+        Long linked = part("Прайс 0377: со ссылкой", new BigDecimal("3100"), true);
+        Long plain = part("Прайс 0377: без ссылки", new BigDecimal("3100"), true);
+        intake(linked, warehouse, 1);
+        intake(plain, warehouse, 1);
+
+        long mark = jdbc.queryForObject("SELECT id FROM catalog.bazon_mark WHERE name = 'Toyota'", Long.class);
+        long model = jdbc.queryForObject("SELECT id FROM catalog.bazon_model WHERE bazon_mark_id = ?"
+                + " AND name = 'Camry'", Long.class, mark);
+        long body = jdbc.queryForObject("""
+                SELECT b.id FROM catalog.bazon_body b
+                  JOIN catalog.bazon_generation g ON g.id = b.bazon_generation_id
+                 WHERE g.bazon_model_id = ? AND b.name IS NOT NULL ORDER BY b.id LIMIT 1""",
+                Long.class, model);
+        long motor = jdbc.queryForObject("SELECT id FROM catalog.bazon_motor WHERE bazon_mark_id = ?"
+                + " ORDER BY id LIMIT 1", Long.class, mark);
+        String words = String.join(" ", firstOf("bazon_mark", mark), firstOf("bazon_model", model),
+                firstOf("bazon_body", body), firstOf("bazon_motor", motor));
+
+        inTenant(() -> {
+            Long nameId = jdbc.queryForObject("""
+                    INSERT INTO part_name (name) VALUES ('бампер 0377')
+                    ON CONFLICT (lower(btrim(name))) DO UPDATE SET name = excluded.name
+                    RETURNING id""", Long.class);
+            jdbc.update("""
+                    UPDATE part SET part_name_id = ?, manual_brand = 'Nissan', manual_model = 'Primera',
+                                    manual_body = 'P12', manual_engine = 'QG18DE'
+                     WHERE id IN (?, ?)""", nameId, linked, plain);
+            jdbc.update("""
+                    UPDATE part SET bazon_mark_id = ?, bazon_model_id = ?, bazon_body_id = ?,
+                                    bazon_motor_id = ?
+                     WHERE id = ?""", mark, model, body, motor, linked);
+            return null;
+        });
+
+        String linkedTitle = "<title>Бампер 0377 " + words + "</title>";
+        String plainTitle = "<title>Бампер 0377 Nissan Primera P12 QG18DE</title>";
+        String xml = price();
+        assertThat(offerById(xml, linked))
+                .as("слова справочника не дошли до названия в файле")
+                .contains(linkedTitle);
+        assertThat(offerById(xml, plain))
+                .as("позиция без ссылки поменяла название в файле")
+                .contains(plainTitle);
+        assertThat(offerById(delta(linked, plain), linked)).contains(linkedTitle);
+        assertThat(offerById(delta(linked, plain), plain)).contains(plainTitle);
+    }
+
+    /** Первое значение списка из записи справочника — как его берёт формула файла. */
+    private String firstOf(String table, long id) {
+        String list = jdbc.queryForObject("SELECT name FROM catalog." + table + " WHERE id = ?",
+                String.class, id);
+        return list.split(",")[0].strip();
+    }
+
+    /** Вырезает {@code <part>} позиции: в {@code <id>} файла — её номер ({@code part.number}). */
+    private String offerById(String xml, Long partId) {
+        Long number = inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, partId));
+        int at = xml.indexOf("<id>" + number + "</id>");
+        assertThat(at).as("позиции №%s нет в файле", number).isNotNegative();
+        return xml.substring(xml.lastIndexOf("<part>", at), xml.indexOf("</part>", at));
+    }
+
     @Test
     @DisplayName("Невыгружаемая позиция в прайс не попадает")
     void unpublishedIsExcluded() {

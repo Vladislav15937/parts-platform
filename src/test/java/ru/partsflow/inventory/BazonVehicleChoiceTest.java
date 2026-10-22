@@ -56,6 +56,12 @@ class BazonVehicleChoiceTest extends PostgresTestBase {
     @Autowired
     private ObjectMapper json;
 
+    @Autowired
+    private TitleRecount recount;
+
+    @Autowired
+    private StockLedger ledger;
+
     /** Запись справочника, выбранная в тестах: Toyota Camry с кузовом и двигателем. */
     private long mark;
     private long model;
@@ -249,16 +255,92 @@ class BazonVehicleChoiceTest extends PostgresTestBase {
                 .isNull();
     }
 
+    /**
+     * Критерий 4: перенесённая без машины позиция не меняется ни этой задачей
+     * (правка карточки без выбора машины), ни пересчётом названий 0336
+     * ({@code TitleRecount --apply}) — машины у неё лежат только в названии,
+     * и формула без них их стёрла бы.
+     */
     @Test
-    @DisplayName("Позиции без выбранной машины правка цены не трогает: название то, с каким пришла")
+    @DisplayName("Перенесённую без машины позицию не трогают ни правка карточки, ни пересчёт названий 0336:"
+            + " название то, с каким пришла")
     void untouchedPositionKeepsItsTitle() throws Exception {
         MockHttpSession owner = login("bazonveh");
+        String came = "Фара 0377 Старая Модель Старый Кузов (б/у)";
 
         edit(owner, partId, "{\"price\":4700}");
+        assertThat(titleOf(partId)).as("правка цены пересобрала название").isEqualTo(came);
 
-        assertThat(inTenant(TENANT, () -> jdbc.queryForObject(
-                "SELECT title FROM part WHERE id = ?", String.class, partId)))
-                .isEqualTo("Фара 0377 Старая Модель Старый Кузов (б/у)");
+        var outcomes = recount.run(new TitleRecount.Options(true, TENANT, false));
+        assertThat(outcomes).singleElement().satisfies(o -> assertThat(o.problem()).isNull());
+        assertThat(outcomes.get(0).result().skipped)
+                .as("пересчёт не назвал позицию пропущенной с причиной")
+                .anyMatch(line -> line.contains(came) && line.contains("только в названии"));
+        assertThat(titleOf(partId)).as("пересчёт 0336 переписал название").isEqualTo(came);
+    }
+
+    /**
+     * Марка справочника без связи с нашим ({@code bazon_mark.brand_id IS NULL}; в снимке 19.10.2026
+     * таких 4 из 149, моделей без {@code model_id} — 343 из 2257). Подбор по машине и отбор выгрузки
+     * сравнивают номер марки, а номера у такой ссылки нет: позицию не находит ни марка, которую она
+     * носила до выбора (вписанная руками), ни какая-либо другая. Продавец отбирает по словам, и его
+     * отбор позицию находит словом справочника.
+     *
+     * <p>Это нынешнее правило «своё сильнее донора, даже незнакомое справочнику» (как у вписанной
+     * марки, 0303), а не исправление: вернуть прежний источник номера при отсутствии связи значит
+     * числить позицию со словами «LiXiang» под маркой донора — решение владельца, названо в PR
+     * и в памятке inventory. Тест держит поведение, чтобы смена правила была видна.
+     */
+    @Test
+    @DisplayName("Марка справочника без связи с нашим: подбор по номеру марки позицию не находит,"
+            + " отбор продавца по словам — находит")
+    void markWithoutLinkIsLostByBrandIdButFoundByWords() throws Exception {
+        MockHttpSession owner = login("bazonveh");
+        var unlinked = jdbc.queryForMap(
+                "SELECT id, name FROM catalog.bazon_mark WHERE brand_id IS NULL ORDER BY id LIMIT 1");
+        long unlinkedMark = ((Number) unlinked.get("id")).longValue();
+        String unlinkedWord = (String) unlinked.get("name");
+        long toyota = jdbc.queryForObject("SELECT id FROM catalog.brand WHERE name = 'Toyota'", Long.class);
+
+        // Своя позиция, а не перенесённая из фикстуры: та пересоздаётся удалением,
+        // а движение склада неизменяемо и удалить её после прихода не дало бы.
+        long picked = inTenant(TENANT, () -> jdbc.queryForObject("""
+                INSERT INTO part (category_id, title, price, is_published, manual_brand, manual_model)
+                VALUES (1, 'Бампер подбора 0377', 2000, true, 'Toyota', 'Camry') RETURNING id""",
+                Long.class));
+        String code = inTenant(TENANT, () -> {
+            Long branch = jdbc.queryForObject(
+                    "INSERT INTO branch (name) VALUES ('Филиал подбора 0377') RETURNING id", Long.class);
+            Long warehouse = jdbc.queryForObject(
+                    "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Склад подбора 0377') RETURNING id",
+                    Long.class, branch);
+            ledger.record(StockMovement.intake(picked, java.math.BigDecimal.ONE, warehouse, null));
+            return jdbc.queryForObject("SELECT public_code FROM part WHERE id = ?", String.class, picked);
+        });
+
+        assertThat(pickedBy(owner, code, toyota)).as("до выбора: вписанная Toyota находится подбором")
+                .isEqualTo(1);
+
+        edit(owner, picked, """
+                {"bazonVehicle":{"markId":%d,"modelId":null,"bodyId":null,"motorId":null}}"""
+                .formatted(unlinkedMark));
+
+        assertThat(pickedBy(owner, code, toyota))
+                .as("ссылка без связи: прежняя марка позицию больше не находит")
+                .isZero();
+        JsonNode seller = read(owner, "/api/parts/stock?q=" + code + "&brand=" + unlinkedWord);
+        assertThat(seller.path("total").asLong())
+                .as("продавец отбирает по словам справочника и находит")
+                .isEqualTo(1);
+    }
+
+    private long pickedBy(MockHttpSession session, String code, long brandId) throws Exception {
+        return read(session, "/api/parts/catalog?q=" + code + "&brandId=" + brandId).path("total").asLong();
+    }
+
+    private String titleOf(long part) {
+        return inTenant(TENANT, () -> jdbc.queryForObject(
+                "SELECT title FROM part WHERE id = ?", String.class, part));
     }
 
     @Test
