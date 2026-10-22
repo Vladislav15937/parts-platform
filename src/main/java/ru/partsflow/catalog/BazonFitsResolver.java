@@ -103,15 +103,18 @@ public final class BazonFitsResolver {
             int[] wanted = wantedYears(row);
             List<Candidate> candidates = candidates(row.modelId());
             if (candidates.isEmpty()) {
-                return new Outcome(null, "В справочнике поколений Bazon нет модели «" + modelName(row.modelId())
+                String model = modelName(row.modelId());
+                return new Outcome(null, "В справочнике поколений Bazon нет модели «" + model
                         + "»: данных поколения нет");
             }
             Candidate chosen = wanted != null ? byYears(candidates, wanted) : byLabel(candidates, row.label());
             if (chosen == null) {
-                return wanted == null
-                        ? new Outcome(null, null) // поколение не выбрано — нечего собирать
-                        : new Outcome(null, "У модели «" + modelName(row.modelId())
-                                + "» нет поколения Bazon за эти годы: данных поколения нет");
+                if (wanted == null) {
+                    return new Outcome(null, null); // поколение не выбрано — нечего собирать
+                }
+                String model = modelName(row.modelId());
+                return new Outcome(null, "У модели «" + model
+                        + "» нет поколения Bazon за эти годы: данных поколения нет");
             }
             BazonFits.Generation generation = load(chosen);
             if (generation.motors().isEmpty()) {
