@@ -85,6 +85,7 @@ final class PartEditConflicts {
             Map.entry("engine", "Модель двигателя"),
             Map.entry("year", "Год выпуска"),
             Map.entry("equipment", "Комплектация"),
+            Map.entry("bazonVehicle", "Машина из справочника"),
             Map.entry("generation", "Поколение"),
             Map.entry("textBlock", "Текстовый блок"),
             Map.entry("textBlockId", "Текстовый блок"),

@@ -63,7 +63,10 @@ class PartPartialEditTest extends PostgresTestBase {
      * пустой № позиции экран не отправляет вовсе, а сервер его не трогает.
      */
     private static final Set<String> EMPTY_KEEPS = Set.of("condition", "title", "published",
-            "price", "number");
+            "price", "number",
+            // Машина из справочника: сбросить её можно только объектом с пустыми ссылками,
+            // голый null — как у любого ключа без значения (задача 0377).
+            "bazonVehicle");
 
     /** Пустое здесь — отказ словами: без номера товара позицию не найти ни сканером, ни глазами. */
     private static final Set<String> EMPTY_REFUSED = Set.of("code");
@@ -394,7 +397,8 @@ class PartPartialEditTest extends PostgresTestBase {
     // ------------------------------------------------------------------ значения
 
     private PartEditValues values() {
-        return new PartEditValues(json, suffix, number, cellA, cellB, blockA, blockB);
+        return new PartEditValues(json, suffix, number, cellA, cellB, blockA, blockB,
+                PartEditValues.twoMarks(jdbc));
     }
 
     private Map<String, JsonNode> initial() {

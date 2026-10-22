@@ -117,7 +117,8 @@ class PartConflictSaveTest extends PostgresTestBase {
             number[0] = jdbc.queryForObject("SELECT max(number) + 1000 FROM part", Long.class);
             return null;
         });
-        values = new PartEditValues(json, suffix, number[0], cells[0], cells[1], blocks[0], blocks[1]);
+        values = new PartEditValues(json, suffix, number[0], cells[0], cells[1], blocks[0], blocks[1],
+                PartEditValues.twoMarks(jdbc));
 
         // Заполнено всё — иначе «не стёрлось» нечем отличить от «и не было».
         ObjectNode full = json.createObjectNode();

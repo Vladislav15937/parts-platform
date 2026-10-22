@@ -252,8 +252,8 @@ public class PartIdentity {
     }
 
     /**
-     * Записывает машину из справочника новой позиции (приёмка): без журнала —
-     * позиция только что заведена, и «было» у неё нет. Согласованность
+     * Записывает машину из справочника новой позиции (приёмка): «было» у только
+     * что заведённой нет, в журнал идут слова выбранного. Согласованность
      * проверяет вызывающий до заведения позиции.
      */
     @Transactional
@@ -265,6 +265,17 @@ public class PartIdentity {
                         + " bazon_motor_id = ? WHERE id = ?",
                 selection.markId(), selection.modelId(), selection.bodyId(), selection.motorId(),
                 partId);
+        // Слушатель Hibernate видит заведение позиции без этих колонок (их нет в сущности):
+        // кто и какую машину выбрал при приёмке, говорит эта строка журнала.
+        BazonVehicles.Words words = bazon.words(selection);
+        Map<String, Object> now = new LinkedHashMap<>();
+        if (words.brand() != null) now.put("bazon_mark", words.brand());
+        if (words.model() != null) now.put("bazon_model", words.model());
+        if (words.body() != null) now.put("bazon_body", words.body());
+        if (words.engine() != null) now.put("bazon_motor", words.engine());
+        if (!now.isEmpty()) {
+            journal.changed("part", partId, Map.of(), now);
+        }
     }
 
     /**

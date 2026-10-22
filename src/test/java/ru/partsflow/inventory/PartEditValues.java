@@ -38,9 +38,20 @@ final class PartEditValues {
     private final Long cellB;
     private final Long blockA;
     private final Long blockB;
+    /** Две разные марки общего справочника (задача 0377): исходная и новая машина позиции. */
+    private final long markA;
+    private final long markB;
+
+    /** Номера двух разных марок справочника для {@link #PartEditValues}. */
+    static long[] twoMarks(org.springframework.jdbc.core.JdbcTemplate jdbc) {
+        var ids = jdbc.queryForList("SELECT id FROM catalog.bazon_mark ORDER BY id LIMIT 2", Long.class);
+        return new long[] {ids.get(0), ids.get(1)};
+    }
 
     PartEditValues(ObjectMapper json, String suffix, long number, Long cellA, Long cellB,
-                   Long blockA, Long blockB) {
+                   Long blockA, Long blockB, long[] marks) {
+        this.markA = marks[0];
+        this.markB = marks[1];
         this.blockA = blockA;
         this.blockB = blockB;
         this.json = json;
@@ -105,6 +116,7 @@ final class PartEditValues {
         v.put("engine", "2AZ-FE");
         v.put("year", "2006");
         v.put("equipment", "полный привод");
+        v.put("bazonVehicle", java.util.Map.of("markId", markA));
         return nodes(v);
     }
 
@@ -162,6 +174,7 @@ final class PartEditValues {
         v.put("engine", "2GR-FE");
         v.put("year", "2008");
         v.put("equipment", "передний привод");
+        v.put("bazonVehicle", java.util.Map.of("markId", markB));
         return nodes(v);
     }
 

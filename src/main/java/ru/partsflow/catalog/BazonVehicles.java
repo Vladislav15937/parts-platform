@@ -1,10 +1,9 @@
 package ru.partsflow.catalog;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.shared.NotFound;
 
 import java.util.List;
 
@@ -24,8 +23,6 @@ import java.util.List;
  */
 @Service
 public class BazonVehicles {
-
-    private static final Logger log = LoggerFactory.getLogger(BazonVehicles.class);
 
     private final JdbcTemplate jdbc;
 
@@ -53,6 +50,7 @@ public class BazonVehicles {
     /** Выбранная машина позиции — ссылки на справочник; пусто — не выбрано. */
     public record Selection(Long markId, Long modelId, Long bodyId, Long motorId) {
 
+        @com.fasterxml.jackson.annotation.JsonIgnore
         public boolean isEmpty() {
             return markId == null && modelId == null && bodyId == null && motorId == null;
         }
@@ -193,8 +191,6 @@ public class BazonVehicles {
     }
 
     private IllegalArgumentException unknown(long id) {
-        log.warn("Машина из справочника не найдена: запись {}", id);
-        return new IllegalArgumentException("Такой записи в справочнике машин нет"
-                + " — обновите страницу, список устарел");
+        return NotFound.VEHICLE_RECORD.error(id);
     }
 }
