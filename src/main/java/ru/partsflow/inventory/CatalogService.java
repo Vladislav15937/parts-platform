@@ -355,7 +355,8 @@ public class CatalogService {
      * не должен читаться как подтверждённый факт.
      */
     static final String VEHICLE_SOURCE = "CASE WHEN p.manual_brand IS NOT NULL"
-            + " OR p.manual_model IS NOT NULL OR p.manual_generation IS NOT NULL THEN 'MANUAL'"
+            + " OR p.manual_model IS NOT NULL OR p.manual_generation IS NOT NULL"
+            + " OR p.bazon_mark_id IS NOT NULL OR p.bazon_model_id IS NOT NULL THEN 'MANUAL'"
             + " WHEN p.donor_id IS NOT NULL THEN 'DONOR'"
             + " WHEN own.brand IS NULL THEN NULL"
             + " WHEN own.verified THEN 'VERIFIED' ELSE 'PARSED' END";
@@ -947,7 +948,7 @@ public class CatalogService {
                       LEFT JOIN donor d ON d.id = p.donor_id
                      WHERE p.product_line = 'PART'
                        -- Машина позиции: донора или вписанная в карточке (0303).
-                       AND (p.donor_id IS NOT NULL OR p.manual_brand IS NOT NULL)
+                       AND (p.donor_id IS NOT NULL OR p.manual_brand IS NOT NULL OR p.bazon_mark_id IS NOT NULL)
                     UNION
                     SELECT a.part_id, a.brand_id, a.model_id, NULL, NULL
                       FROM part_applicability a

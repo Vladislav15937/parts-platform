@@ -1,6 +1,7 @@
 import { request } from '../api/client';
 import { count, goods, plural } from '../ui/plural';
 import type { NotSavedField } from './notSaved';
+import type { BazonSelection } from '../catalog/bazonVehicles';
 
 /**
  * Витрина склада: таблица товаров для владельца.
@@ -1275,6 +1276,8 @@ export interface PartEdit {
   engine?: string | null | undefined;
   year?: string | null | undefined;
   equipment?: string | null | undefined;
+  /** Машина из общего справочника (задача 0377): ссылки на записи; нет ключа — не трогать. */
+  bazonVehicle?: BazonSelection | null | undefined;
 }
 
 /**

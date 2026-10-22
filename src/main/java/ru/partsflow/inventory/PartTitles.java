@@ -16,8 +16,9 @@ import java.util.List;
  * пересобирает название тем же {@link PartTitleGenerator}, что собирал его
  * при приёмке, — двух формул нет.
  *
- * <p><b>Машина — по правилу {@link PartVehicle}:</b> вписанное у позиции
- * руками, иначе донор (кузов и двигатель — как у приёмки: введённое у донора,
+ * <p><b>Машина — по правилу {@link PartVehicle}:</b> выбранное у позиции
+ * из общего справочника машин (слова записей {@code catalog.bazon_*}, задача
+ * 0377), иначе вписанное руками, иначе донор (кузов и двигатель — как у приёмки: введённое у донора,
  * иначе поколение и модификация справочника). Применимость в название
  * не идёт: у позиции без донора и без своей машины машины в полях нет.
  *
@@ -27,7 +28,9 @@ import java.util.List;
  *       из размеров, {@code WheelService.titleOf}) и позиции, заведённые
  *       мимо справочника наименований. Собрать название не из чего.</li>
  *   <li>Позиция перенесена из Bazon ({@code legacy_code}), у неё нет донора
- *       и своей машины. Её машины — списки марок, моделей, кузовов
+ *       и своей машины (в том числе выбранной из справочника — выбрав её
+ *       в карточке, человек пересобирает название по формуле, и это
+ *       единственный путь для уже перенесённых). Её машины — списки марок, моделей, кузовов
  *       и двигателей — лежат только в названии: полей под них перенос
  *       не завёл. Пересборка стёрла бы их правкой цены соседнего поля.
  *       Разовый пересчёт ({@link TitleRecount}) их тоже не трогает
@@ -82,7 +85,9 @@ public class PartTitles {
                          ORDER BY o.id LIMIT 1) AS oem,
                        (p.manual_brand IS NOT NULL OR p.manual_model IS NOT NULL
                         OR p.manual_body IS NOT NULL OR p.manual_engine IS NOT NULL
-                        OR p.manual_year IS NOT NULL) AS own_vehicle
+                        OR p.manual_year IS NOT NULL
+                        OR p.bazon_mark_id IS NOT NULL OR p.bazon_model_id IS NOT NULL
+                        OR p.bazon_body_id IS NOT NULL OR p.bazon_motor_id IS NOT NULL) AS own_vehicle
                   FROM part p
                   LEFT JOIN part_name pn ON """ + " " + kindJoin + "\n"
                 + "  LEFT JOIN donor d ON " + donorJoin + "\n"

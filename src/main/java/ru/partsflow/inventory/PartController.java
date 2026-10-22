@@ -468,7 +468,12 @@ public class PartController {
                                 String body,
                                 String engine,
                                 String year,
-                                String equipment) {
+                                String equipment,
+                                // Машина из общего справочника (задача 0377): ссылки на
+                                // марку, модель, кузов и двигатель. Ключ есть — выбор
+                                // заменяется целиком (пустая четвёрка — «не выбрана»),
+                                // ключа нет — не трогать.
+                                ru.partsflow.catalog.BazonVehicles.Selection bazonVehicle) {
 
         static UpdateRequest of(Part part, PartDromCard card, PartIdentity.Values own) {
             return new UpdateRequest(part.getPrice(), part.getMinPrice(), part.getCostPrice(),
@@ -501,12 +506,13 @@ public class PartController {
                     own.donorCode(), own.brand(), own.model(), own.generation(),
                     own.body(), own.engine(),
                     own.year() == null ? null : String.valueOf(own.year()),
-                    own.equipment());
+                    own.equipment(), own.bazonVehicle());
         }
 
         PartIdentity.Edit identity() {
             return new PartIdentity.Edit(number, code, authenticity, dromAdNumber, oem, crosses,
-                    donorCode, brand, model, generation, body, engine, year, equipment);
+                    donorCode, brand, model, generation, body, engine, year, equipment,
+                    bazonVehicle);
         }
 
         PartService.PartUpdate toUpdate(java.util.Set<String> sent, PartService.EditBase base) {

@@ -15,6 +15,8 @@ import { ApplicabilityView } from './ApplicabilityView';
 import { CharacteristicsView } from './CharacteristicsView';
 import { VehicleNameInput, useVehicleCatalog } from './VehicleNameInput';
 import { TextBlockInput } from './TextBlockInput';
+import { BazonVehicleSelect } from './BazonVehicleSelect';
+import { NO_BAZON_VEHICLE, isBazonEmpty, type BazonSelection } from '../catalog/bazonVehicles';
 import { listTextBlocks, type TextBlock } from '../inventory/textBlocks';
 
 /**
@@ -279,7 +281,12 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
               >
                 <span className="card-edit__label">{field.label}</span>
                 <span className="card-edit__value">
-                  {opened && (field.key === 'brand' || field.key === 'model')
+                  {opened && field.kind === 'bazon'
+                    ? (
+                      <BazonVehicleSelect value={form.bazonVehicle}
+                                          onChange={(v) => set('bazonVehicle', v)} />
+                    )
+                    : opened && (field.key === 'brand' || field.key === 'model')
                     ? (
                       <VehicleNameInput kind={field.key} label={field.label}
                                         value={form[field.key]} catalog={vehicles}
@@ -428,6 +435,11 @@ function draftText(field: Field, form: Draft, row: CatalogRow): string {
     }
     case 'date':
       return dromDateShown(form.adDate);
+    case 'bazon':
+      // Слова на витрине уже из справочника (PartVehicle) — они и показываются.
+      return isBazonEmpty(form.bazonVehicle) ? ''
+        : `${[row.brand, row.model, row.body, row.engine]
+          .map(plainText).filter((w) => w !== '').join(' ')} (из справочника)`;
     default:
       return form[field.key];
   }
@@ -514,6 +526,9 @@ function input(
         <input type="checkbox" aria-label={field.label} autoFocus checked={form.published}
                onChange={(e) => set('published', e.target.checked)} />
       );
+    case 'bazon':
+      // Раскрытую строку рисует сама форма (BazonVehicleSelect).
+      return null;
     default:
       return (
         <input aria-label={field.label} autoFocus value={form[field.key]}
@@ -533,6 +548,7 @@ type VehicleKey = 'donorCode' | 'brand' | 'model' | 'generation' | 'body' | 'eng
   | 'equipment';
 
 type Field =
+  | { kind: 'bazon'; key: 'bazonVehicle'; label: string }
   | { kind: 'vehicle'; key: VehicleKey; label: string; fallback: (row: CatalogRow) => string }
   | { kind: 'side'; key: 'sideLr' | 'sideFr'; label: string; options: Record<string, string> }
   | { kind: 'price'; key: 'price'; label: string; unit?: string }
@@ -629,6 +645,10 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
     // значит «как у донора или применимости».
     title: 'Автомобиль-донор',
     fields: [
+      // Машина из общего справочника (задача 0377): у позиции хранится только
+      // ссылка, слова — общие для всех клиентов. Из неё собирается название;
+      // строки ниже — своё, вписанное руками, и слабее выбранного здесь.
+      { kind: 'bazon', key: 'bazonVehicle', label: 'Машина из справочника' },
       { kind: 'vehicle', key: 'donorCode', label: 'Номер донора',
         fallback: (r) => plainText(r.donorCode) },
       { kind: 'vehicle', key: 'brand', label: 'Марка', fallback: (r) => plainText(r.brand) },
@@ -673,7 +693,7 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
  */
 const SENT_WHEN_OPEN = ['code', 'sideLr', 'sideFr', 'authenticity', 'oem',
   'crosses', 'legacyCode', 'dromAdNumber', 'donorCode', 'brand', 'model', 'generation',
-  'body', 'engine', 'year', 'equipment'] as const;
+  'body', 'engine', 'year', 'equipment', 'bazonVehicle'] as const;
 
 /**
  * Черновик таким, каким его видел человек: у машины позиции без своего
@@ -790,6 +810,8 @@ export interface Draft {
   engine: string;
   year: string;
   equipment: string;
+  /** Машина из общего справочника (задача 0377): ссылки на записи, не слова. */
+  bazonVehicle: BazonSelection;
 }
 
 export function draftOf(card: PartEdit): Draft {
@@ -849,11 +871,12 @@ export function draftOf(card: PartEdit): Draft {
     engine: card.engine ?? '',
     year: card.year ?? '',
     equipment: card.equipment ?? '',
+    bazonVehicle: card.bazonVehicle ?? NO_BAZON_VEHICLE,
   };
 }
 
 export function toEdit(form: Draft, open: readonly string[] = []): PartEdit {
-  const sent = (key: typeof SENT_WHEN_OPEN[number]): string | undefined =>
+  const sent = (key: Exclude<typeof SENT_WHEN_OPEN[number], 'bazonVehicle'>): string | undefined =>
     (open.includes(key) ? form[key] : undefined);
   return {
     // Поля задачи 0302 — только раскрытые; очистка — пустая строка.
@@ -876,6 +899,8 @@ export function toEdit(form: Draft, open: readonly string[] = []): PartEdit {
     engine: sent('engine'),
     year: sent('year'),
     equipment: sent('equipment'),
+    // Раскрытая строка уезжает целой четвёркой: пустая — «машина не выбрана».
+    bazonVehicle: open.includes('bazonVehicle') ? form.bazonVehicle : undefined,
     price: number(form.price),
     minPrice: number(form.minPrice),
     costPrice: number(form.costPrice),

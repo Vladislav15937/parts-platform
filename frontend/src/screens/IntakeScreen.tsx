@@ -1,3 +1,5 @@
+import { BazonVehicleSelect } from './BazonVehicleSelect';
+import { NO_BAZON_VEHICLE, isBazonEmpty, type BazonSelection } from '../catalog/bazonVehicles';
 import { useState } from 'react';
 import { CONDITIONS, CONDITION_UNSET } from '../inventory/catalog';
 import { ConditionWord } from '../inventory/ConditionWord';
@@ -80,6 +82,8 @@ interface Payload {
     color: string | null;
     description: string | null;
     note: string | null;
+    /** Машина из общего справочника (задача 0377); пусто — не выбрана. */
+    bazonVehicle: BazonSelection | null;
   }[];
 }
 
@@ -115,6 +119,8 @@ export function IntakeScreen({ reference, onSend }: Props) {
   const [supplyId, setSupplyId] = useState<number | null>(null);
   const [donorId, setDonorId] = useState<number | null>(null);
   const [items, setItems] = useState<Item[]>([]);
+  /** Машина партии из общего справочника (задача 0377): необязательна, уходит новым позициям. */
+  const [bazonVehicle, setBazonVehicle] = useState<BazonSelection>(NO_BAZON_VEHICLE);
   const [draft, setDraft] = useState<Item>(emptyItem());
   const [photos, setPhotos] = useState<ResizedPhoto[]>([]);
   const [scanning, setScanning] = useState(false);
@@ -217,6 +223,14 @@ export function IntakeScreen({ reference, onSend }: Props) {
           ))}
         </select>
       </label>
+
+      {/* Машина из общего справочника (задача 0377): слова названия берутся из него,
+          у позиции хранится ссылка. Необязательна; без связи справочник не загрузится —
+          тогда машину выберут позже, в карточке. */}
+      <fieldset className="bazon-pick">
+        <legend>Машина из справочника (необязательно)</legend>
+        <BazonVehicleSelect value={bazonVehicle} onChange={setBazonVehicle} />
+      </fieldset>
 
       {/* Заведённое владельцем заранее принимается ЭТОЙ ЖЕ позицией. Завести
           такую деталь заново руками — вторая карточка, и предзаказы покупателей
@@ -615,6 +629,9 @@ export function IntakeScreen({ reference, onSend }: Props) {
         color: orNull(item.color),
         description: orNull(item.description),
         note: orNull(item.note),
+        // Заведённая заранее позиция машину не получает: у неё она уже есть или
+        // её выберут в карточке; приёмка трогает только новые.
+        bazonVehicle: item.partId === null && !isBazonEmpty(bazonVehicle) ? bazonVehicle : null,
       })),
     };
     // Снимки привязываются к позиции по номеру, а не по идентификатору:
@@ -631,6 +648,7 @@ export function IntakeScreen({ reference, onSend }: Props) {
 
     onSend(payload, `Партия из ${items.length} поз. · ${describeDonor()}`, pending);
     setItems([]);
+    setBazonVehicle(NO_BAZON_VEHICLE);
   }
 
   function describeDonor(): string {

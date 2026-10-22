@@ -58,6 +58,8 @@ public class IntakeService {
     private final ru.partsflow.inventory.PartNaming partNaming;
     private final JdbcTemplate jdbc;
     private final ru.partsflow.inventory.CatalogService catalog;
+    private final ru.partsflow.catalog.BazonVehicles bazonVehicles;
+    private final ru.partsflow.inventory.PartIdentity identity;
 
     public IntakeService(SupplyRepository supplies,
                          DonorRepository donors,
@@ -71,7 +73,11 @@ public class IntakeService {
                          PreorderService preorders,
                          ru.partsflow.inventory.PartNaming partNaming,
                          JdbcTemplate jdbc,
-                         ru.partsflow.inventory.CatalogService catalog) {
+                         ru.partsflow.inventory.CatalogService catalog,
+                         ru.partsflow.catalog.BazonVehicles bazonVehicles,
+                         ru.partsflow.inventory.PartIdentity identity) {
+        this.bazonVehicles = bazonVehicles;
+        this.identity = identity;
         this.catalog = catalog;
         this.partNaming = partNaming;
         this.preorders = preorders;
@@ -204,6 +210,12 @@ public class IntakeService {
             }
         }
 
+        // Машина из общего справочника (задача 0377) проверяется до любой записи:
+        // несогласованная четвёрка (модель чужой марки) — отказ словами, а не
+        // позиция с машиной, которой не бывает. Повтор одной и той же четвёрки
+        // партии не дороже одной проверки.
+        checkChosenVehicles(items);
+
         // Заведённые заранее (ожидаемые по поставке) принимаются той же
         // позицией, а не новой: вторая карточка той же детали ломает
         // окупаемость машины и историю, а объявление уводит покупателя на
@@ -232,10 +244,12 @@ public class IntakeService {
             PartName partName = partNames.resolve(item.rawName(), authorId);
             // Без состояния в строке — «б/у», прежнее умолчание приёмки (задача 0322
             // его не меняла); пишется явно, потому что входит в название (0336).
-            Part part = buildPart(item, partName, vehicle, donor, supplyId, authorId,
+            Part part = buildPart(item, partName, withChosenVehicle(vehicle, item.bazonVehicle()),
+                    donor, supplyId, authorId,
                     item.condition() == null ? PartCondition.USED : item.condition());
 
             Part savedPart = parts.saveAndFlush(part);
+            identity.setBazonVehicle(savedPart.getId(), item.bazonVehicle());
             fitFromDonor(savedPart, donor, authorId);
             primaryOem(savedPart.getId(), item.oemNumber(), item.crossNumbers());
             document.addLine(savedPart.getId(), item.quantity(), item.cellId());
@@ -547,6 +561,38 @@ public class IntakeService {
                                BigDecimal price, BigDecimal received, BigDecimal preordered) {
     }
 
+    private void checkChosenVehicles(List<ItemRequest> items) {
+        java.util.Set<ru.partsflow.catalog.BazonVehicles.Selection> seen = new java.util.HashSet<>();
+        for (ItemRequest item : items) {
+            if (item.bazonVehicle() != null && seen.add(item.bazonVehicle())) {
+                bazonVehicles.check(item.bazonVehicle());
+            }
+        }
+    }
+
+    /**
+     * Слова машины для названия: выбранная из общего справочника сильнее донора
+     * по полю — то же правило, что у карточки ({@code PartVehicle}); год остаётся
+     * донора, справочник его не несёт. Кузов без кода слова не даёт.
+     */
+    private PartTitleGenerator.VehicleTitlePart withChosenVehicle(
+            PartTitleGenerator.VehicleTitlePart donorVehicle,
+            ru.partsflow.catalog.BazonVehicles.Selection chosen) {
+        if (chosen == null || chosen.isEmpty()) {
+            return donorVehicle;
+        }
+        ru.partsflow.catalog.BazonVehicles.Words w = bazonVehicles.words(chosen);
+        PartTitleGenerator.VehicleTitlePart base = donorVehicle == null
+                ? new PartTitleGenerator.VehicleTitlePart(null, null, null, null, null)
+                : donorVehicle;
+        return new PartTitleGenerator.VehicleTitlePart(
+                w.brand() != null ? w.brand() : base.brand(),
+                w.model() != null ? w.model() : base.model(),
+                w.body() != null ? w.body() : base.bodyCode(),
+                w.engine() != null ? w.engine() : base.engineCode(),
+                base.year());
+    }
+
     private Part buildPart(ItemRequest item, PartName partName,
                            PartTitleGenerator.VehicleTitlePart vehicle,
                            Donor donor, Long supplyId, Long authorId,
@@ -771,7 +817,21 @@ public class IntakeService {
                               String description,
                               String color,
                               String crossNumbers,
-                              Long partId) {
+                              Long partId,
+                              /* Машина из общего справочника (задача 0377); пусто — не выбрана. */
+                              ru.partsflow.catalog.BazonVehicles.Selection bazonVehicle) {
+
+        /** Форма до задачи 0377: без машины из справочника. */
+        public ItemRequest(String rawName, BigDecimal quantity, BigDecimal price,
+                           BigDecimal costPrice, Long cellId, LateralSide sideLr,
+                           LongitudinalSide sideFr, VerticalSide sideUd, PartCondition condition,
+                           QualityGrade qualityGrade, String manufacturer, String oemNumber,
+                           String marking, String note, String description, String color,
+                           String crossNumbers, Long partId) {
+            this(rawName, quantity, price, costPrice, cellId, sideLr, sideFr, sideUd, condition,
+                    qualityGrade, manufacturer, oemNumber, marking, note, description, color,
+                    crossNumbers, partId, null);
+        }
 
         /** Прежняя форма без комментария, цвета и кросс-номеров (до задачи 0362). */
         public ItemRequest(String rawName, BigDecimal quantity, BigDecimal price,

@@ -340,7 +340,7 @@ public class PartService {
      * сверяются у сущности.
      */
     private static final List<String> TITLE_KEYS =
-            List.of("oem", "brand", "model", "body", "engine", "year");
+            List.of("oem", "brand", "model", "body", "engine", "year", "bazonVehicle");
 
     /** Отказ на присланное наименование (задача 0336) — его же видит форма правки. */
     static final String TITLE_IS_DERIVED = "Наименование собирается само — из вида детали, "

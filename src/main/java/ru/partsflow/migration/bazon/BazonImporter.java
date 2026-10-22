@@ -1,5 +1,6 @@
 package ru.partsflow.migration.bazon;
 
+import ru.partsflow.catalog.BazonVehicles;
 import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.PartIdentity;
 import ru.partsflow.inventory.PartTitleGenerator;
@@ -791,6 +792,12 @@ public final class BazonImporter {
                      ON CONFLICT DO NOTHING""")) {
 
                 int[] pending = {0};
+                // Машина из общего справочника (задача 0377): ссылки пишутся только
+                // новым позициям, отдельной инструкцией — повтор файла их не дозаполняет.
+                BazonVehicleMatcher matcher = new BazonVehicleMatcher(c);
+                PreparedStatement setVehicle = c.prepareStatement("UPDATE " + schema + """
+                        .part SET bazon_mark_id = ?, bazon_model_id = ?, bazon_body_id = ?,
+                                  bazon_motor_id = ? WHERE id = ?""");
 
                 forEachRow(catalogCsv, report, row -> {
                     // Точка сохранения на каждый товар. Без неё первая же
@@ -803,10 +810,12 @@ public final class BazonImporter {
 
                         Object[] values = partValues(row, donorSupplies, donors, partNames);
                         ItemNumber wanted = itemNumber(c, row);
+                        BazonVehicleMatcher.Result vehicle = matcher.match(row.get("Марка"),
+                                row.get("Модель"), row.get("Кузов"), row.get("Двигатель"));
                         Inserted inserted;
                         try {
                             inserted = insertPart(insertPart, values, row, unknownPublishValues,
-                                    categoryId, wanted.free());
+                                    categoryId, wanted.free(), vehicle.words());
                         } catch (SQLException e) {
                             if (wanted.free() == null || !violates(e, "part_number_uk")) {
                                 throw e;
@@ -818,7 +827,7 @@ public final class BazonImporter {
                             wanted = new ItemNumber(wanted.raw(), wanted.parsed(), null,
                                     occupant(c, wanted.parsed(), row.get("Номер товара")));
                             inserted = insertPart(insertPart, values, row, unknownPublishValues,
-                                    categoryId, null);
+                                    categoryId, null, vehicle.words());
                         }
                         Long partId = inserted == null ? null : inserted.id();
                         if (partId == null) {
@@ -841,6 +850,7 @@ public final class BazonImporter {
                         }
 
                         wanted.reportIfLost(report, row.lineNumber(), inserted.number());
+                        linkVehicle(setVehicle, partId, vehicle, row.lineNumber(), report);
                         insertStock(insertMovement, setReserved, row, partId, warehouseColumns, warehouses);
                         insertNumbers(insertOem, row, partId, report);
                         queuePhotos(insertPhoto, row, partId, report);
@@ -1007,16 +1017,43 @@ public final class BazonImporter {
         return value == null ? null : value.name();
     }
 
+    /**
+     * Ссылки новой позиции на машину общего справочника (задача 0377). Не
+     * сопоставилась — позиция ввезена без машины, название остаётся из файла,
+     * а строка попадает в отчёт («Машина не сопоставлена»): список для ручного
+     * выбора в карточке (решение владельца 22.10.2026, вариант «а»).
+     */
+    private static void linkVehicle(PreparedStatement setVehicle, long partId,
+                                    BazonVehicleMatcher.Result vehicle, long line,
+                                    ImportReport report) throws SQLException {
+        if (vehicle.matched()) {
+            var s = vehicle.selection();
+            setVehicle.setLong(1, s.markId());
+            setLong(setVehicle, 2, s.modelId());
+            setLong(setVehicle, 3, s.bodyId());
+            setLong(setVehicle, 4, s.motorId());
+            setVehicle.setLong(5, partId);
+            setVehicle.executeUpdate();
+            report.count("машин сопоставлено со справочником");
+        } else if (!vehicle.unmatched().isEmpty()) {
+            report.count("машин не сопоставлено со справочником");
+            report.problem(line, "машина не сопоставлена со справочником (" + String.join(", ",
+                    vehicle.unmatched()) + "): позиция ввезена без машины, название осталось"
+                    + " из файла — выберите машину в карточке позиции");
+        }
+    }
+
     private Inserted insertPart(PreparedStatement ps, Object[] values, BazonCsvReader.Row row,
                                 java.util.Set<String> unknownPublish,
-                                long categoryId, Long number) throws SQLException {
+                                long categoryId, Long number,
+                                BazonVehicles.Words chosen) throws SQLException {
 
         int at = 1;
         for (int i = 0; i < PART_FIELDS.size(); i++) {
             bind(ps, at++, PART_FIELDS.get(i), values[i]);
         }
         ps.setLong(at++, categoryId);
-        ps.setString(at++, buildTitle(row, row.get("Запчасть")));
+        ps.setString(at++, buildTitle(row, row.get("Запчасть"), chosen));
         // Номер в прежней системе — естественный ключ импорта: по нему повторный
         // запуск узнаёт уже загруженное.
         ps.setString(at++, row.get("Номер товара"));
@@ -1191,7 +1228,12 @@ public final class BazonImporter {
         return parsed == null ? PartCondition.USED : parsed;
     }
 
-    private String buildTitle(BazonCsvReader.Row row, String partName) {
+    /**
+     * @param chosen слова записей справочника, если машина строки сопоставилась
+     *               (задача 0377): тогда название берёт их, а не текст файла —
+     *               слова общие для всех клиентов; не сопоставилась — текст файла
+     */
+    private String buildTitle(BazonCsvReader.Row row, String partName, BazonVehicles.Words chosen) {
         if (partName == null) {
             return "Без наименования";
         }
@@ -1199,9 +1241,16 @@ public final class BazonImporter {
         // («03-08» → «03»), а не разобранное «от» — у того ведущий ноль
         // и двузначность уже потеряны. Марка, модель, кузов и двигатель —
         // списки, генератор берёт первое значение каждого (задача 0336).
-        var vehicle = new PartTitleGenerator.VehicleTitlePart(
-                row.get("Марка"), row.get("Модель"), row.get("Кузов"),
-                row.get("Двигатель"), row.get("Год выпуска"));
+        var vehicle = chosen == null
+                ? new PartTitleGenerator.VehicleTitlePart(
+                        row.get("Марка"), row.get("Модель"), row.get("Кузов"),
+                        row.get("Двигатель"), row.get("Год выпуска"))
+                : new PartTitleGenerator.VehicleTitlePart(
+                        chosen.brand(),
+                        chosen.model() != null ? chosen.model() : row.get("Модель"),
+                        chosen.body() != null ? chosen.body() : row.get("Кузов"),
+                        chosen.engine() != null ? chosen.engine() : row.get("Двигатель"),
+                        row.get("Год выпуска"));
         var sides = new PartTitleGenerator.Sides(
                 BazonValueParser.parseLongitudinalSide(row.get("Передний / Задний")),
                 BazonValueParser.parseLateralSide(row.get("Левый / Правый")),

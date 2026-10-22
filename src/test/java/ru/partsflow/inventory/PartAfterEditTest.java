@@ -223,7 +223,7 @@ class PartAfterEditTest extends PostgresTestBase {
                 join(racer[0], 700);
             }
         });
-        PartIdentity identity = new PartIdentity(hooked, journal);
+        PartIdentity identity = new PartIdentity(hooked, journal, new ru.partsflow.catalog.BazonVehicles(hooked));
 
         Throwable edit = null;
         try {

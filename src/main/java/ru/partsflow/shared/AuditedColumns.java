@@ -106,6 +106,12 @@ public final class AuditedColumns {
         PART.put("manual_engine", "Модель двигателя");
         PART.put("manual_year", "Год выпуска");
         PART.put("manual_equipment", "Комплектация");
+        // Задача 0377: машина из общего справочника. Это не колонки part (там номера
+        // записей справочника), а слова, названные так в снимке правки PartIdentity.
+        PART.put("bazon_mark", "Марка (справочник)");
+        PART.put("bazon_model", "Модель (справочник)");
+        PART.put("bazon_body", "Кузов (справочник)");
+        PART.put("bazon_motor", "Двигатель (справочник)");
     }
 
     /**

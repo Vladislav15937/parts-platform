@@ -4,6 +4,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.catalog.BazonVehicles;
 import ru.partsflow.catalog.OemNumbers;
 import ru.partsflow.platform.audit.AuditJournal;
 
@@ -43,10 +44,12 @@ public class PartIdentity {
 
     private final JdbcTemplate jdbc;
     private final AuditJournal journal;
+    private final BazonVehicles bazon;
 
-    public PartIdentity(JdbcTemplate jdbc, AuditJournal journal) {
+    public PartIdentity(JdbcTemplate jdbc, AuditJournal journal, BazonVehicles bazon) {
         this.jdbc = jdbc;
         this.journal = journal;
+        this.bazon = bazon;
     }
 
     /**
@@ -58,22 +61,37 @@ public class PartIdentity {
     public record Values(Long number, String code, String authenticity, String dromAdNumber,
                          String oem, String crosses,
                          String donorCode, String brand, String model, String generation,
-                         String body, String engine, Integer year, String equipment) {
+                         String body, String engine, Integer year, String equipment,
+                         BazonVehicles.Selection bazonVehicle) {
     }
 
     /**
      * Правка: {@code null} — поле не трогать (вкладка, открытая до выкладки,
      * этих ключей не шлёт, и стереть написанное ей нельзя), пустой текст —
      * очистить.
+     *
+     * @param bazonVehicle машина из общего справочника (задача 0377): выбор
+     *                     заменяется целиком четвёркой марка–модель–кузов–двигатель,
+     *                     пустая четвёрка — «не выбрана»; {@code null} — не трогать
      */
     public record Edit(java.math.BigInteger number, String code, String authenticity, String dromAdNumber,
                        String oem, String crosses,
                        String donorCode, String brand, String model, String generation,
-                       String body, String engine, String year, String equipment) {
+                       String body, String engine, String year, String equipment,
+                       BazonVehicles.Selection bazonVehicle) {
+
+        /** Правка без выбора из справочника — прежняя форма. */
+        public Edit(java.math.BigInteger number, String code, String authenticity, String dromAdNumber,
+                    String oem, String crosses,
+                    String donorCode, String brand, String model, String generation,
+                    String body, String engine, String year, String equipment) {
+            this(number, code, authenticity, dromAdNumber, oem, crosses, donorCode, brand, model,
+                    generation, body, engine, year, equipment, null);
+        }
 
         static Edit none() {
             return new Edit(null, null, null, null, null, null,
-                    null, null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null, null, null);
         }
     }
 
@@ -87,7 +105,8 @@ public class PartIdentity {
                          WHERE o.part_id = p.id AND NOT o.is_primary) AS crosses,
                        p.manual_donor_code, p.manual_brand, p.manual_model,
                        p.manual_generation, p.manual_body, p.manual_engine,
-                       p.manual_year, p.manual_equipment
+                       p.manual_year, p.manual_equipment,
+                       p.bazon_mark_id, p.bazon_model_id, p.bazon_body_id, p.bazon_motor_id
                   FROM part p WHERE p.id = ?""",
                 (rs, i) -> new Values(rs.getLong("number"), rs.getString("public_code"),
                         rs.getString("authenticity"), rs.getString("drom_ad_number"),
@@ -95,7 +114,11 @@ public class PartIdentity {
                         rs.getString("manual_donor_code"), rs.getString("manual_brand"),
                         rs.getString("manual_model"), rs.getString("manual_generation"),
                         rs.getString("manual_body"), rs.getString("manual_engine"),
-                        (Integer) rs.getObject("manual_year"), rs.getString("manual_equipment")),
+                        (Integer) rs.getObject("manual_year"), rs.getString("manual_equipment"),
+                        new BazonVehicles.Selection((Long) rs.getObject("bazon_mark_id"),
+                                (Long) rs.getObject("bazon_model_id"),
+                                (Long) rs.getObject("bazon_body_id"),
+                                (Long) rs.getObject("bazon_motor_id"))),
                 partId);
     }
 
@@ -164,6 +187,7 @@ public class PartIdentity {
             }
         }
         text("manual_equipment", was.equipment(), edit.equipment(), before, after, sets, args);
+        applyBazonVehicle(was.bazonVehicle(), edit.bazonVehicle(), before, after, sets, args);
 
         if (!sets.isEmpty()) {
             args.add(authorId);
@@ -184,6 +208,63 @@ public class PartIdentity {
         }
         journal.changed("part", partId, before, after);
         return applied;
+    }
+
+    /**
+     * Машина из общего справочника (задача 0377): четвёрка заменяется целиком,
+     * согласованность проверяет {@link BazonVehicles#check} до записи.
+     *
+     * <p>В журнал идут слова, а не номера записей справочника: историю читает
+     * человек, и «Марка из справочника: Toyota» понятно ему, а номер — нет.
+     * Колонки в снимке названы {@code bazon_mark} и так далее.
+     */
+    private void applyBazonVehicle(BazonVehicles.Selection was, BazonVehicles.Selection want,
+                                   Map<String, Object> before, Map<String, Object> after,
+                                   List<String> sets, List<Object> args) {
+        if (want == null || Objects.equals(was, want)) {
+            return;
+        }
+        bazon.check(want);
+        BazonVehicles.Words wasWords = bazon.words(was);
+        BazonVehicles.Words wantWords = bazon.words(want);
+        recordWord("bazon_mark", wasWords.brand(), wantWords.brand(), before, after);
+        recordWord("bazon_model", wasWords.model(), wantWords.model(), before, after);
+        recordWord("bazon_body", wasWords.body(), wantWords.body(), before, after);
+        recordWord("bazon_motor", wasWords.engine(), wantWords.engine(), before, after);
+        // Выбор, у которого слова те же (запись заменили равной), в историю
+        // не попадает, но колонки обновляются: ссылка важнее слова.
+        sets.add("bazon_mark_id = ?");
+        args.add(want.markId());
+        sets.add("bazon_model_id = ?");
+        args.add(want.modelId());
+        sets.add("bazon_body_id = ?");
+        args.add(want.bodyId());
+        sets.add("bazon_motor_id = ?");
+        args.add(want.motorId());
+    }
+
+    private static void recordWord(String key, String was, String now,
+                                   Map<String, Object> before, Map<String, Object> after) {
+        if (!Objects.equals(was, now)) {
+            before.put(key, was);
+            after.put(key, now);
+        }
+    }
+
+    /**
+     * Записывает машину из справочника новой позиции (приёмка): без журнала —
+     * позиция только что заведена, и «было» у неё нет. Согласованность
+     * проверяет вызывающий до заведения позиции.
+     */
+    @Transactional
+    public void setBazonVehicle(Long partId, BazonVehicles.Selection selection) {
+        if (selection == null || selection.isEmpty()) {
+            return;
+        }
+        jdbc.update("UPDATE part SET bazon_mark_id = ?, bazon_model_id = ?, bazon_body_id = ?,"
+                        + " bazon_motor_id = ? WHERE id = ?",
+                selection.markId(), selection.modelId(), selection.bodyId(), selection.motorId(),
+                partId);
     }
 
     /**

@@ -364,7 +364,11 @@ public class IntakeController {
                               String crossNumbers,
                               /* Принять заведённую заранее (ожидаемую) позицию, а не
                                  создавать новую. Пусто — обычная приёмка. */
-                              Long partId) {
+                              Long partId,
+                              /* Машина из общего справочника (задача 0377): ссылки на марку,
+                                 модель, кузов, двигатель. Необязательна; согласованность
+                                 проверяет сервис до записи. */
+                              ru.partsflow.catalog.BazonVehicles.Selection bazonVehicle) {
 
         IntakeService.ItemRequest toService() {
             return new IntakeService.ItemRequest(
@@ -372,7 +376,7 @@ public class IntakeController {
                     quantity == null ? BigDecimal.ONE : quantity,
                     price, costPrice, cellId,
                     sideLr, sideFr, sideUd, IntakeService.conditionOf(condition), qualityGrade,
-                    manufacturer, oemNumber, marking, note, description, color, crossNumbers, partId);
+                    manufacturer, oemNumber, marking, note, description, color, crossNumbers, partId, bazonVehicle);
         }
     }
 

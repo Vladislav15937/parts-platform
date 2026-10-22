@@ -2,9 +2,18 @@ package ru.partsflow.inventory;
 
 /**
  * Машина позиции — одно правило на все поверхности, которые её читают
- * (задача 0303): <b>вписанное у позиции руками ({@code part.manual_*},
- * задача 0302), иначе то, что поверхность читала до этого</b> — донора,
- * а без него применимость.
+ * (задача 0303): <b>выбранное у позиции из общего справочника
+ * ({@code part.bazon_*_id}, задача 0377), иначе вписанное руками
+ * ({@code part.manual_*}, задача 0302), иначе то, что поверхность читала
+ * до этого</b> — донора, а без него применимость.
+ *
+ * <p><b>Слова справочника — подзапросом по ссылке позиции</b>, а не
+ * присоединением: правило обязано работать в любом запросе, где позиция
+ * названа {@code p}, не требуя нового {@code JOIN} от каждого из них.
+ * Ссылка пуста — подзапрос не выполняется. Кузов без кода
+ * ({@code bazon_body.name} пуст) слова не даёт, и поле берётся по
+ * прежнему правилу. Выбор «по полю», как и у вписанного руками: выбрав
+ * только марку, человек получает слова марки и остальное — как раньше.
  *
  * <p><b>Зачем одно место.</b> После 0302 марку, исправленную в карточке,
  * видела витрина, а прайс Дрома, отбор продавца, подбор «что подходит»
@@ -32,35 +41,35 @@ public final class PartVehicle {
     }
 
     public static String brand(String otherwise) {
-        return own("p.manual_brand", otherwise);
+        return own(ref("bazon_mark", "p.bazon_mark_id"), "p.manual_brand", otherwise);
     }
 
     public static String model(String otherwise) {
-        return own("p.manual_model", otherwise);
+        return own(ref("bazon_model", "p.bazon_model_id"), "p.manual_model", otherwise);
     }
 
     public static String generation(String otherwise) {
-        return own("p.manual_generation", otherwise);
+        return own(null, "p.manual_generation", otherwise);
     }
 
     public static String body(String otherwise) {
-        return own("p.manual_body", otherwise);
+        return own(ref("bazon_body", "p.bazon_body_id"), "p.manual_body", otherwise);
     }
 
     public static String engine(String otherwise) {
-        return own("p.manual_engine", otherwise);
+        return own(ref("bazon_motor", "p.bazon_motor_id"), "p.manual_engine", otherwise);
     }
 
     public static String year(String otherwise) {
-        return own("p.manual_year", otherwise);
+        return own(null, "p.manual_year", otherwise);
     }
 
     public static String equipment(String otherwise) {
-        return own("p.manual_equipment", otherwise);
+        return own(null, "p.manual_equipment", otherwise);
     }
 
     public static String donorCode(String otherwise) {
-        return own("p.manual_donor_code", otherwise);
+        return own(null, "p.manual_donor_code", otherwise);
     }
 
     /**
@@ -81,7 +90,9 @@ public final class PartVehicle {
      * @param donorBrandId номер марки донора в запросе вызывающего
      */
     public static String brandId(String donorBrandId) {
-        return "CASE WHEN p.manual_brand IS NULL THEN " + donorBrandId
+        return "CASE WHEN p.bazon_mark_id IS NOT NULL THEN (SELECT bm.brand_id"
+                + " FROM catalog.bazon_mark bm WHERE bm.id = p.bazon_mark_id)"
+                + " WHEN p.manual_brand IS NULL THEN " + donorBrandId
                 + " ELSE (SELECT cb.id FROM catalog.brand cb"
                 + " WHERE lower(cb.name) = lower(btrim(p.manual_brand))"
                 + " ORDER BY cb.id LIMIT 1) END";
@@ -96,15 +107,24 @@ public final class PartVehicle {
      *                     у марки позиции
      */
     public static String modelId(String donorModelId, String donorBrandId) {
-        return "CASE WHEN p.manual_model IS NULL THEN " + donorModelId
+        return "CASE WHEN p.bazon_model_id IS NOT NULL THEN (SELECT bmo.model_id"
+                + " FROM catalog.bazon_model bmo WHERE bmo.id = p.bazon_model_id)"
+                + " WHEN p.manual_model IS NULL THEN " + donorModelId
                 + " ELSE (SELECT cm.id FROM catalog.model cm"
                 + " WHERE cm.brand_id = " + brandId(donorBrandId)
                 + " AND lower(cm.name) = lower(btrim(p.manual_model))"
                 + " ORDER BY cm.id LIMIT 1) END";
     }
 
-    private static String own(String column, String otherwise) {
+    /** Слово записи справочника по ссылке позиции; кузов без кода — пусто. */
+    private static String ref(String table, String column) {
+        return "(SELECT r.name FROM catalog." + table + " r WHERE r.id = " + column + ")";
+    }
+
+    private static String own(String ref, String column, String otherwise) {
+        String head = ref == null ? column : ref + ", " + column;
         return otherwise == null || otherwise.isBlank()
-                ? column : "coalesce(" + column + ", " + otherwise + ")";
+                ? (ref == null ? column : "coalesce(" + head + ")")
+                : "coalesce(" + head + ", " + otherwise + ")";
     }
 }

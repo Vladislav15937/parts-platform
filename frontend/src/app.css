@@ -2865,3 +2865,24 @@ hr {
   margin: 0.25rem 0 0;
   color: var(--muted);
 }
+
+/* Машина из общего справочника (задача 0377): четыре списка шагами. Длинная подпись
+   кузова не должна растягивать страницу — список сжимается и переносится рядом. */
+.bazon-vehicle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.bazon-vehicle select {
+  flex: 1 1 14rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.bazon-pick {
+  border: 0;
+  padding: 0;
+  margin: 0 0 1rem;
+  min-inline-size: 0;
+}
