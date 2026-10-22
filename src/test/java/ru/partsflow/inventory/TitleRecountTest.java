@@ -211,12 +211,20 @@ class TitleRecountTest extends PostgresTestBase {
                 .anyMatch(l -> l.contains(IN_TITLE) && l.contains("машины лежат только в названии"))
                 .anyMatch(l -> l.contains(NO_KIND) && l.contains("нет вида"));
 
+        assertThat(dry.restore).as("проверка печатает возврат того, чего не записала").isEmpty();
+        assertThat(dry.feedMarks).as("с --feed-marks проверка называет, сколько отметок поставит")
+                .isEqualTo(3);
+        assertThat(one(recount.run(new Options(false, TENANT, false))).feedMarks)
+                .as("без --feed-marks отметок нет — и число их ноль, а не «для площадки 3»")
+                .isZero();
+
         Tally applied = one(recount.run(new Options(true, TENANT, false)));
         assertThat(applied.changed).isEqualTo(dry.changed);
         assertThat(applied.unchanged).isEqualTo(dry.unchanged);
         assertThat(applied.notes).isEqualTo(dry.notes);
         assertThat(applied.lines).isEqualTo(dry.lines);
-        assertThat(applied.restore).isEqualTo(dry.restore);
+        assertThat(applied.restore).as("возврат — по строке на записанное").hasSize(3);
+        assertThat(applied.feedMarks).as("без --feed-marks").isZero();
         assertThat(inTenant(() -> jdbc.queryForObject(
                 "SELECT string_agg(id || ':' || updated_at, ',' ORDER BY id) FROM part", String.class)))
                 .as("«дата правки» не сдвинута: названия правил не человек")
@@ -244,6 +252,42 @@ class TitleRecountTest extends PostgresTestBase {
         assertThat(dryAfter.changed).isZero();
         assertThat(dryAfter.noted(Note.VEHICLE_ONLY_IN_TITLE)).as("не тронутое называется и после")
                 .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Перенесённые из Bazon без донора и своей машины — название из файла, пересчёт его не меняет")
+    void transferredWithoutVehicleKeepTheirTitle() {
+        // Решение владельца 22.10.2026 (tasks/0336, «Ответ владельца — 22 октября 2026», п. 2):
+        // название таких позиций — то, что в их файле. Разные формы, как они лежат после
+        // переноса: списки машин, без пометки, с годом числом, новая с номером.
+        Map<String, String> transferred = new java.util.LinkedHashMap<>();
+        transferred.put("Блок управления", "Блок управления Toyota,Lexus Harrier,RX300 MCU15 1MZFE 1999 12345-00000");
+        transferred.put("Насос гидроусилителя", "Насос гидроусилителя Nissan Teana J31 VQ23DE (б/у)");
+        transferred.put("Крышка багажника", "Крышка багажника Mazda Atenza GG3S 2004");
+        Map<Long, String> made = new java.util.LinkedHashMap<>();
+        inTenant(() -> {
+            int i = 0;
+            for (Map.Entry<String, String> e : transferred.entrySet()) {
+                long id = part(e.getKey(), e.getValue(), i == 2 ? "NEW" : "CONTRACT");
+                jdbc.update("UPDATE part SET legacy_code = ?, year_text = '03-08' WHERE id = ?",
+                        "B-0336-T" + i++, id);
+                made.put(id, e.getValue());
+            }
+            return null;
+        });
+
+        Tally applied = one(recount.run(new Options(true, TENANT, false)));
+
+        Map<Long, String> after = titles();
+        made.forEach((id, title) -> assertThat(after.get(id)).as("название из файла переписано").isEqualTo(title));
+        assertThat(applied.noted(Note.VEHICLE_ONLY_IN_TITLE)).as("названы в отчёте все четыре, с прежней")
+                .isEqualTo(4);
+        assertThat(applied.skipped).allMatch(l -> !l.contains(NO_CAR),
+                "уже по формуле — не «не тронута», а «без изменений»");
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM audit_log WHERE table_name = 'part' AND record_id = ANY (?)",
+                Long.class, (Object) made.keySet().toArray(Long[]::new))))
+                .as("в журнал правка, которой не было").isZero();
     }
 
     @Test

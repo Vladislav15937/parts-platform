@@ -156,27 +156,52 @@ pr: 478
 
 **Остановка перед `--apply` — «да» владельца на числа и образцы проверки** (решение 4 выше).
 
-### Команды для ПРОМ (по одной строке; в каталоге ячейки)
+### Ответ владельца 22.10.2026, п. 1 — не сделан: написания Bazon у нас не хранится (coder, 22.10.2026)
 
-Профиль и сервис — текущей сборки (`ops/switch-build.sh --current`); ниже — для `app-green`,
-у `app-blue` заменить оба слова.
+«Марка, модель, кузов, двигатель — как в Bazon» требует текста, которого в базе нет.
+Перенос (`BazonImporter`) кладёт марку и модель **только ссылкой на справочник**:
+`donorValues` ищет «Марка»/«Модель» файла машин в `catalog.brand/model` и пишет `brand_id`,
+`model_id`; не нашлось — пусто, сам текст отбрасывается. У позиции (`PART_FIELDS`) ни марки,
+ни модели, ни кузова, ни двигателя нет вовсе — строка товаров Bazon несёт их, а лежат они
+только внутри собранного при переносе названия. Кузов и двигатель донора — текстом файла
+машин (`donor.body_code`, `engine_code`), это уже как у Bazon. «ё» здесь ни при чём: вид
+берётся `part_name.name` как ввёл клиент, без замены; «Кнопка стеклоподъёмника» из примера
+в таблице — эталон справочника в старом названии, пересчёт его и заменяет написанием клиента.
 
-1. Проверка, ничего не пишет:
-   `docker compose -f docker-compose.prod.yml --env-file .env --profile green run --rm --no-deps -T app-green --one-shot=title-recount > ~/title-recount-dry.log 2>&1; echo готово`
-2. Числа по арендаторам и итог:
-   `grep -E "будет пересчитано|ERROR" ~/title-recount-dry.log | grep -v title-row`
-3. Сколько изменится и 30 образцов «было → стало»:
-   `grep -c "title-row:" ~/title-recount-dry.log; grep "title-row:" ~/title-recount-dry.log | shuf -n 30 | sed 's/.*title-row: //'`
-4. Сколько не тронуто и 30 образцов:
-   `grep -c "title-skip:" ~/title-recount-dry.log; grep "title-skip:" ~/title-recount-dry.log | shuf -n 30 | sed 's/.*title-skip: //'`
-5. Только после «да» владельца — пересчёт:
-   `docker compose -f docker-compose.prod.yml --env-file .env --profile green run --rm --no-deps -T app-green --one-shot=title-recount --apply > ~/title-recount-apply.log 2>&1; echo готово`
-6. Файл возврата (сохранить):
-   `sed -n 's/.*restore-sql: //p' ~/title-recount-apply.log > ~/title-recount-restore.sql; wc -l ~/title-recount-restore.sql`
-7. Повтор — обязан дать 0:
-   `docker compose -f docker-compose.prod.yml --env-file .env --profile green run --rm --no-deps -T app-green --one-shot=title-recount > ~/title-recount-after.log 2>&1; grep "Итого" ~/title-recount-after.log`
-8. Возврат, если понадобится:
-   `docker exec -i partsflow-cell01-postgres-1 psql -1 -v ON_ERROR_STOP=1 -U partsflow -d "$(ops/switch-build.sh --current-db)" < ~/title-recount-restore.sql`
+Чтобы пересчёт (и правка карточки — формула одна) брал написание Bazon, его надо хранить:
+**колонки позиции** под текст строки товаров (марка, модель, кузов, двигатель — как
+`year_text`, задача 0335) — работа `migrator`; запись их переносом в `PART_FIELDS`
+(повтор переноса дозаполняет уже перенесённых, как текст года); `PartTitles.fieldsSql` —
+`coalesce(своя машина, текст Bazon, донор/справочник)`. Пересчёт на ПРОМ до этого запускать
+нельзя (решение владельца: «правка до запуска»). Порядок — migrator, затем код, затем
+повторная загрузка выгрузки товаров клиента, затем проверка пересчёта.
+
+### Команды для ПРОМ (короткие строки по одной; в каталоге ячейки, одна сессия терминала)
+
+Каждая строка — отдельная вставка: длинная рвётся. Сборка и время берутся один раз
+и дальше читаются из переменных `B`, `T`, `L` и функции `r` той же сессии.
+
+1. Текущая сборка и метка времени:
+   `B=$(ops/switch-build.sh --current); T=$(date -u +%Y%m%dT%H%M%SZ); echo $B $T`
+2. Короткое имя запуска (функцией, а не строкой в переменной — та не делится на слова в zsh):
+   `r() { docker compose -f docker-compose.prod.yml --env-file .env --profile ${B#app-} run --rm --no-deps -T $B "$@"; }`
+3. Проверка, ничего не пишет:
+   `L=~/title-recount-dry-$T.log; r --one-shot=title-recount > $L 2>&1; echo $L`
+4. Числа по арендаторам и итог:
+   `grep -E "будет пересчитано|ERROR" $L | grep -v title-row`
+5. Сколько изменится и 30 образцов:
+   `grep -c "title-row:" $L; grep "title-row:" $L | shuf -n 30 | sed 's/.*title-row: //'`
+6. Сколько не тронуто и 30 образцов:
+   `grep -c "title-skip:" $L; grep "title-skip:" $L | shuf -n 30 | sed 's/.*title-skip: //'`
+7. Только после «да» владельца — пересчёт (новая метка времени):
+   `T=$(date -u +%Y%m%dT%H%M%SZ); L=~/title-recount-apply-$T.log; r --one-shot=title-recount --apply > $L 2>&1; echo $L`
+8. Файл возврата (сохранить):
+   `sed -n 's/.*restore-sql: //p' $L > ${L%.log}.restore.sql; wc -l ${L%.log}.restore.sql`
+9. Повтор — обязан дать 0:
+   `r --one-shot=title-recount > ~/title-recount-after-$T.log 2>&1; grep "Итого" ~/title-recount-after-$T.log`
+10. Возврат, если понадобится (журнал изменений при этом не откатывается — записи «Наименование» остаются):
+   `D=$(ops/switch-build.sh --current-db); echo $D`
+   `docker exec -i partsflow-cell01-postgres-1 psql -1 -v ON_ERROR_STOP=1 -U partsflow -d "$D" < ${L%.log}.restore.sql`
 
 ### Замер на ПРОМ (заполняется после шага 1–4)
 

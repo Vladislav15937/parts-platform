@@ -50,11 +50,15 @@ import java.util.Objects;
  * {@code FOR NO KEY UPDATE SKIP LOCKED} — той же силы, что у правки карточки:
  * занятая не ждётся, а пропускается и считается «правлена во время запуска».
  *
- * <p><b>Восстановимо построчно.</b> Каждое изменение печатается в отчёт
- * готовой инструкцией возврата ({@code restore-sql:}) — прежнее название
+ * <p><b>Восстановимо построчно.</b> Каждое записанное изменение печатается
+ * в отчёт {@code --apply} готовой инструкцией возврата ({@code restore-sql:};
+ * проверка их не печатает — возвращать нечего) — прежнее название
  * по номеру строки, с условием «название всё ещё пересчитанное», — и пишется
  * в журнал изменений позиции той же записью, что правка карточки
  * («Наименование: … → …»), без автора: так журнал называет фоновую работу.
+ * <b>Возврат журнала не откатывает:</b> запись «Наименование: … → …» остаётся,
+ * а возврат прямым SQL своей записи не оставляет — история позиции после него
+ * показывает пересчитанное название, хотя лежит прежнее.
  * {@code updated_at} не трогается: «дата правки» у 36 тысяч позиций в один
  * день сказала бы, что их правили люди.
  *
@@ -213,11 +217,18 @@ public class TitleRecount {
             tally.changed++;
             Position position = change.position();
             tally.lines.add(name(position) + ": «" + position.title() + "» → «" + change.now() + "»");
-            tally.restore.add("UPDATE " + schema + ".part SET title = " + OemRecount.literal(position.title())
-                    + " WHERE id = " + position.id() + " AND title = " + OemRecount.literal(change.now()) + ";");
+            // Возврат печатается только тем, что записано: у проверки возвращать нечего,
+            // и файл возврата, собранный из её лога, выглядел бы готовым к делу.
+            if (options.apply()) {
+                tally.restore.add("UPDATE " + schema + ".part SET title = "
+                        + OemRecount.literal(position.title()) + " WHERE id = " + position.id()
+                        + " AND title = " + OemRecount.literal(change.now()) + ";");
+            }
             marked.add(position.id());
         }
-        tally.feedMarks = marked.size();
+        // Число отметок — только когда их ставят: без --feed-marks «для площадки N»
+        // читалось бы как «N дельт уйдёт на Дром».
+        tally.feedMarks = options.feedMarks() ? marked.size() : 0;
         if (options.apply() && options.feedMarks()) {
             PartChangeLog marks = new PartChangeLog(jdbc);
             for (int from = 0; from < marked.size(); from += CHUNK) {
@@ -306,10 +317,13 @@ public class TitleRecount {
             }
             log.info("{}: позиций {} (колёс, у них название не по формуле, {}); {} {}; уже по формуле {};"
                             + " не тронуто: нет вида {}, машина только в названии {};"
-                            + " правлены во время запуска {}; для площадки {}",
+                            + " правлены во время запуска {}; {}",
                     outcome.schema(), t.parts, t.wheels,
                     options.apply() ? "пересчитано" : "будет пересчитано", t.changed, t.unchanged,
-                    t.noted(Note.NO_KIND), t.noted(Note.VEHICLE_ONLY_IN_TITLE), t.busy, t.feedMarks);
+                    t.noted(Note.NO_KIND), t.noted(Note.VEHICLE_ONLY_IN_TITLE), t.busy,
+                    !options.feedMarks() ? "отметки для площадки не ставятся"
+                            : (options.apply() ? "отметок для площадки поставлено " : "отметок для площадки будет поставлено ")
+                            + t.feedMarks);
         }
         log.info("Итого: названий {} {}; не тронуто {} — {}", changed,
                 options.apply() ? "пересчитано" : "будет пересчитано", skipped,
