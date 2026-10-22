@@ -6,6 +6,7 @@ import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Import;
 import ru.partsflow.inventory.OemRecount;
+import ru.partsflow.inventory.TitleRecount;
 import ru.partsflow.platform.tenant.SchemaOwnerDataSource;
 import ru.partsflow.platform.tenant.TenantSweep;
 
@@ -20,6 +21,6 @@ import ru.partsflow.platform.tenant.TenantSweep;
  */
 @EnableConfigurationProperties(DataSourceProperties.class)
 @ImportAutoConfiguration(PropertyPlaceholderAutoConfiguration.class)
-@Import({SchemaOwnerDataSource.class, TenantSweep.class, OemRecount.class})
+@Import({SchemaOwnerDataSource.class, TenantSweep.class, OemRecount.class, TitleRecount.class})
 public class OneShotConfig {
 }

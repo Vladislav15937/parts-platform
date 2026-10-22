@@ -7,6 +7,7 @@ import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import ru.partsflow.inventory.OemRecount;
+import ru.partsflow.inventory.TitleRecount;
 import ru.partsflow.platform.tenant.TenantMigrations;
 import ru.partsflow.platform.tenant.TenantSweep;
 
@@ -22,6 +23,7 @@ import java.util.function.BiFunction;
  *   java -jar app.jar --one-shot=oem-recount --apply             # пересчитать
  *   java -jar app.jar --one-shot=oem-recount --tenant=t_000042   # одна схема
  *   java -jar app.jar --one-shot=oem-recount --apply --feed-marks   # и отметки для площадки
+ *   java -jar app.jar --one-shot=title-recount                   # названия по формуле Bazon (0336)
  * </pre>
  *
  * <p><b>Проверка — умолчание, правка — явным {@code --apply}</b> (задача 0317).
@@ -54,7 +56,9 @@ public final class OneShotCommand {
     /** Работа → как её выполнить в поднятом контексте; ответ — код возврата. */
     private static final Map<String, BiFunction<ConfigurableApplicationContext, Plan, Integer>> JOBS = Map.of(
             OemRecount.JOB, (context, plan) -> exitCode(context.getBean(OemRecount.class)
-                    .run(new OemRecount.Options(plan.apply(), plan.tenant(), plan.feedMarks()))));
+                    .run(new OemRecount.Options(plan.apply(), plan.tenant(), plan.feedMarks()))),
+            TitleRecount.JOB, (context, plan) -> titleExitCode(context.getBean(TitleRecount.class)
+                    .run(new TitleRecount.Options(plan.apply(), plan.tenant(), plan.feedMarks()))));
 
     private OneShotCommand() {
     }
@@ -132,6 +136,12 @@ public final class OneShotCommand {
     static int exitCode(List<TenantSweep.Outcome<OemRecount.Tally>> outcomes) {
         boolean failed = outcomes.stream().anyMatch(o -> o.problem() != null
                 || o.result().busy > 0 || o.result().cycles > 0);
+        return failed ? 1 : 0;
+    }
+
+    /** То же для пересчёта названий: занятая во время запуска позиция — не сделано. */
+    static int titleExitCode(List<TenantSweep.Outcome<TitleRecount.Tally>> outcomes) {
+        boolean failed = outcomes.stream().anyMatch(o -> o.problem() != null || o.result().busy > 0);
         return failed ? 1 : 0;
     }
 }

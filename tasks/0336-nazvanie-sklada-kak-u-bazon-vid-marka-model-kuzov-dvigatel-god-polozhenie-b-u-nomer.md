@@ -2,7 +2,7 @@
 id: 0336
 title: Название позиции на складе — формула Bazon: «Вид Марка Модель Кузов Двигатель Год положение (б/у) Номер», вид как ввёл клиент, пометка у всех, кроме новых
 status: в работе
-assignee: coder (ветка feature/0336)
+assignee: coder (ветки feature/0336, feature/0336-recount)
 source: разведка 19.10.2026, решение владельца «на 100% соответствовать логике формирования склада … в базон»
 pr: 478
 ---
@@ -134,3 +134,43 @@ pr: 478
 * Пометка в названии подтверждена живыми названиями: **«(б/у)» стоит и у «БУ», и у «Контракт»; у «Новый» её нет** — `Двигатель Toyota Auris NZE151 1NZFE 2007 (б/у) 1900021C41` (Контракт), `Маслоотражатель Toyota Gaia SXM10 3SFE 1998 (б/у) 1122334455` (БУ), `Диск тормозной Ford Focus DFW ALDA перед. 2468013` (Новый, без года и без пометки). Решение 1 («у всех, кроме новых») совпадает с Bazon.
 
 **Что меняется в задаче.** Копировать нечего: у Bazon «Восстановленного» нет, у переходящего клиента таких позиций нет. Решение 5 остаётся как записано (для «Восстановленного» пометки в названии нет, как у «Не указано»; держится в одном месте, `PartCondition`). Хочет ли владелец «(б/у)» и у восстановленных — продуктовое решение, не «как у Bazon». Задачи-поправки не нужно.
+
+## Пункт 4 — разовый пересчёт (coder, ветка `feature/0336-recount`, 22.10.2026)
+
+Владелец 20.10.2026 ответил «Всё да» на разовый пересчёт. Сделано разовым запуском
+`--one-shot=title-recount` (`inventory/TitleRecount`, по образцу `OemRecount`): по умолчанию
+проверка (транзакция только на чтение), `--apply` пишет, `--tenant=t_…` — одна схема,
+`--feed-marks` — отметки площадке (по умолчанию нет: хранимое название в файл Дрома
+не идёт). Формула — та же, что у правки карточки (`PartTitles.fieldsSql` / `compose`):
+повтор после `--apply` — 0 изменений, следующая правка карточки название не сдвигает.
+Не трогается и называется строкой `title-skip:` — нет вида; перенесена из Bazon без донора
+и своей машины (машины лежат только в названии). Колёса не читаются, только числом.
+
+**Остановка перед `--apply` — «да» владельца на числа и образцы проверки** (решение 4 выше).
+
+### Команды для ПРОМ (по одной строке; в каталоге ячейки)
+
+Профиль и сервис — текущей сборки (`ops/switch-build.sh --current`); ниже — для `app-green`,
+у `app-blue` заменить оба слова.
+
+1. Проверка, ничего не пишет:
+   `docker compose -f docker-compose.prod.yml --env-file .env --profile green run --rm --no-deps -T app-green --one-shot=title-recount > ~/title-recount-dry.log 2>&1; echo готово`
+2. Числа по арендаторам и итог:
+   `grep -E "будет пересчитано|ERROR" ~/title-recount-dry.log | grep -v title-row`
+3. Сколько изменится и 30 образцов «было → стало»:
+   `grep -c "title-row:" ~/title-recount-dry.log; grep "title-row:" ~/title-recount-dry.log | shuf -n 30 | sed 's/.*title-row: //'`
+4. Сколько не тронуто и 30 образцов:
+   `grep -c "title-skip:" ~/title-recount-dry.log; grep "title-skip:" ~/title-recount-dry.log | shuf -n 30 | sed 's/.*title-skip: //'`
+5. Только после «да» владельца — пересчёт:
+   `docker compose -f docker-compose.prod.yml --env-file .env --profile green run --rm --no-deps -T app-green --one-shot=title-recount --apply > ~/title-recount-apply.log 2>&1; echo готово`
+6. Файл возврата (сохранить):
+   `sed -n 's/.*restore-sql: //p' ~/title-recount-apply.log > ~/title-recount-restore.sql; wc -l ~/title-recount-restore.sql`
+7. Повтор — обязан дать 0:
+   `docker compose -f docker-compose.prod.yml --env-file .env --profile green run --rm --no-deps -T app-green --one-shot=title-recount > ~/title-recount-after.log 2>&1; grep "Итого" ~/title-recount-after.log`
+8. Возврат, если понадобится:
+   `docker exec -i partsflow-cell01-postgres-1 psql -1 -v ON_ERROR_STOP=1 -U partsflow -d "$(ops/switch-build.sh --current-db)" < ~/title-recount-restore.sql`
+
+### Замер на ПРОМ (заполняется после шага 1–4)
+
+До: — (не снято)
+После: — (не снято)

@@ -23,6 +23,15 @@ class OneShotCommandTest {
     }
 
     @Test
+    @DisplayName("Пересчёт названий (0336) — своя работа, тоже проверкой по умолчанию")
+    void titleRecountIsKnown() {
+        OneShotCommand.Plan plan = OneShotCommand.planOf(new String[]{"--one-shot=title-recount"});
+        assertThat(plan.job()).isEqualTo("title-recount");
+        assertThat(plan.apply()).isFalse();
+        assertThat(plan.feedMarks()).isFalse();
+    }
+
+    @Test
     @DisplayName("--apply, одна схема и отметки для площадки по ключу")
     void keysAreRead() {
         OneShotCommand.Plan plan = OneShotCommand.planOf(new String[]{
