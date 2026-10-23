@@ -520,8 +520,14 @@ public class PartService {
         if (formulaChanged && titles.retitle(part)) {
             partChanged = true;
         }
-        part.touchedBy(authorId);
         boolean termsChanged = applyDromCard(partId, update);
+        // Автор — только у правки, которая что-то поменяла: «Кто изменил» отвечает
+        // на вопрос «кто это поменял», и сохранивший без перемен (пустое тело,
+        // значение, равное хранимому) ответом быть не может. Подписывался он
+        // безусловно с 2 августа 2026 — PartNoopEditTest.
+        if (partChanged || termsChanged) {
+            part.touchedBy(authorId);
+        }
 
         // Отметка на любой правке, а не только на смене цены: в прайс уезжают
         // и наименование, и цвет, и «Выгружать». Событие о цене — другой
