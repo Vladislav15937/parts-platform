@@ -75,12 +75,19 @@ function stub(): void {
 }
 
 /** Экран догрузился: раскрытые права с галочками на месте. */
+/**
+ * Запас ожидания: файл гоняется в полном наборе рядом с другими, поднимающими
+ * Chrome, и секунды по умолчанию там не хватает (замерено: падал на первом
+ * ожидании только внутри полного прогона).
+ */
+const SETTLE = { timeout: 10_000 };
+
 async function opened(): Promise<string> {
   render(<MembersScreen />);
-  await waitFor(() => screen.getByRole('button', { name: 'Права: mgr1' }));
-  await waitFor(() => screen.getByRole('button', { name: 'Удалить роль: Временная' }));
+  await waitFor(() => screen.getByRole('button', { name: 'Права: mgr1' }), SETTLE);
+  await waitFor(() => screen.getByRole('button', { name: 'Удалить роль: Временная' }), SETTLE);
   fireEvent.click(screen.getByRole('button', { name: 'Права: mgr1' }));
-  await waitFor(() => screen.getByLabelText(/Продавать/));
+  await waitFor(() => screen.getByLabelText(/Продавать/), SETTLE);
   return document.body.innerHTML;
 }
 
