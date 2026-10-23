@@ -198,7 +198,10 @@ export function HomeScreen() {
           <div className="topbar__title">{sectionName(tab)}</div>
           <div>
             <strong>{state.me.displayName}</strong>
-            <span className="muted"> · {roleName(state.me.role)}</span>
+            {/* Роль клиента названием, как её написал владелец (задача 0044);
+                прежняя колонка у своей роли — «Просмотр», и назвала бы не то. */}
+            <span className="muted"> · {state.me.role !== 'ADMIN' && state.me.roleName
+              ? state.me.roleName : roleName(state.me.role)}</span>
           </div>
           <span className={connected ? 'badge badge--online' : 'badge badge--offline'}>
             {connected ? 'на связи' : 'без связи'}
@@ -289,7 +292,7 @@ export function HomeScreen() {
         />
       )}
 
-      {/* Касса компании — владельцу и менеджеру: в реестре видно всё,
+      {/* Касса компании — по праву «Реестр платежей»: в реестре видно всё,
           включая возвраты покупателям и выдачи с лицевых счетов. */}
       {!locked && tab === 'payments' && (
         <PaymentsScreen
@@ -329,16 +332,16 @@ export function HomeScreen() {
 
       {/* Журнал пересчётов — над обходом полок и сведением расхождений:
           список документов это то, с чего теперь начинают вкладку, а не
-          поиск открытой сессии по складу. Владельцу, менеджеру и «Просмотру» —
-          сведение расхождений компонент сам показывает только первым двум. */}
+          поиск открытой сессии по складу. По праву на журнал пересчётов или
+          на сведение; сведение компонент показывает только при своём праве. */}
       {!locked && tab === 'inventory' && status.kind === 'ready'
         && rights.any('inventory.journal.view', 'inventory.reconcile') && (
           <InventoryReconcile reference={status.reference}
                               canReconcile={rights.has('inventory.reconcile')} />
         )}
 
-      {/* Обход полок сканером — не «Просмотру»: экран называет действие,
-          которое сервер эту роль отобьёт. */}
+      {/* Обход полок сканером — только с правом считать: экран называет
+          действие, которое сервер без права отобьёт. */}
       {!locked && tab === 'inventory' && rights.has('inventory.count') &&
         (status.kind === 'ready' ? (
           <InventoryScreen
@@ -430,9 +433,8 @@ export function HomeScreen() {
           </p>
         ))}
 
-      {/* Журнал действий — владельцу и «Ревизору»: роль проверяется здесь
-          так же явно, как у остальных разделов, а `visibleTo` управляет
-          только кнопкой на рельсе. */}
+      {/* Журнал действий — по праву «Журнал действий и входов»; без него
+          раздел погашен выше (`locked`). */}
       {!locked && tab === 'journal' && <AuditJournalScreen />}
 
       {/* Кто входит в кабинет — сотрудники, их пароли и доступ администратора

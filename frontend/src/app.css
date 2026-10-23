@@ -93,6 +93,27 @@ body {
   color: var(--accent-ink);
 }
 
+/* Раздел без права (задача 0044): виден, но погашен — открывается причиной,
+   а не работой. Не скрыт: «погашен с причиной» — решение владельца. */
+.rail__item--locked {
+  opacity: 0.55;
+}
+
+/* Погашенное действие и его причина: причина видимым текстом, а не только
+   подсказкой — на телефоне наводить нечем. Переносится, а не растягивает ряд. */
+.locked-action {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  min-width: 0;
+}
+
+.locked-action__reason {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .app__main {
   flex: 1;
   display: flex;
