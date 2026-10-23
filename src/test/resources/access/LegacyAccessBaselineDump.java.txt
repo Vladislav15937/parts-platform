@@ -1,0 +1,63 @@
+package ru.partsflow.platform.security;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.ApplicationContext;
+import org.springframework.security.core.Authentication;
+import org.springframework.web.method.HandlerMethod;
+import ru.partsflow.support.PostgresTestBase;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Снимает эталон прежних проходимостей: для каждого пути кабинета — какие из
+ * семи прежних ролей его проходили. Запускается на коммите до PR 506
+ * (см. src/test/resources/access/README.md в нынешнем коде), в репозиторий
+ * не входит — входит его вывод и этот текст рядом с ним.
+ */
+@SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
+class LegacyAccessBaselineDump extends PostgresTestBase {
+
+    static final List<String> ROLES =
+            List.of("OWNER", "MANAGER", "STOREKEEPER", "SELLER", "VIEWER", "AUDITOR", "ADMIN");
+
+    @Autowired
+    private ApplicationContext context;
+
+    @Test
+    void dump() throws Exception {
+        AccessMatrix matrix = new AccessMatrix(context);
+        Map<String, Authentication> who = new LinkedHashMap<>();
+        for (String role : ROLES) {
+            // Номер сотрудника, которого заведомо нет: «своё» (#id == principal.memberId)
+            // при пустом аргументе не срабатывает ни у кого — так же, как в проверке.
+            TenantPrincipal principal = new TenantPrincipal("t_000441", 441L, -1L,
+                    "perebor", "Перебор", role, true);
+            who.put(role, new TenantAuthenticationToken(principal, principal.getAuthorities()));
+        }
+        List<String> lines = new ArrayList<>();
+        for (Map.Entry<String, HandlerMethod> route : matrix.routes().entrySet()) {
+            List<String> allowed = new ArrayList<>();
+            List<String> errors = new ArrayList<>();
+            for (Map.Entry<String, Authentication> member : who.entrySet()) {
+                String decision = matrix.decide(route.getKey(), route.getValue(), member.getValue());
+                if (decision.equals("allow")) {
+                    allowed.add(member.getKey());
+                } else if (decision.equals("error")) {
+                    errors.add(member.getKey());
+                }
+            }
+            lines.add(route.getKey() + "\t" + (allowed.isEmpty() ? "-" : String.join(",", allowed))
+                    + (errors.isEmpty() ? "" : "\terror:" + String.join(",", errors)));
+        }
+        Files.write(Path.of(System.getProperty("baseline.out", "target/legacy-access.tsv")),
+                lines, StandardCharsets.UTF_8);
+    }
+}
