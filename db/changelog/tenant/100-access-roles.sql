@@ -37,7 +37,8 @@
 -- Что её нельзя переименовать, удалить, дать ей набор и что последнего
 -- владельца нельзя снять — держит код (это запреты вида «эту строку нельзя
 -- менять», им в схеме не место); схема держит только то, что владелец-роль
--- одна (частичный уникальный индекс) и что она и есть заведённая из OWNER.
+-- одна и что она и есть заведённая из OWNER (access_role_owner_ck вместе
+-- с уникальностью seeded_from).
 --
 -- ЭТО EXPAND. Прежний образ новых таблиц не знает, колонку access_role_id
 -- не пишет (она допускает NULL) и решает права по tenant_member.role, как
@@ -70,10 +71,12 @@ CREATE TABLE ${tenant.schema}.access_role (
 -- и text_block (tenant/095).
 CREATE UNIQUE INDEX access_role_name_uk
     ON ${tenant.schema}.access_role (lower(btrim(name)));
+-- Одна роль на прежнюю жёсткую. Вместе с access_role_owner_ck это же даёт
+-- «владелец-роль одна»: is_owner бывает только у seeded_from = 'OWNER',
+-- а такая строка одна. Отдельный индекс по is_owner повторял бы это вторым
+-- объектом (снят по разбору PR 502).
 CREATE UNIQUE INDEX access_role_seeded_from_uk
     ON ${tenant.schema}.access_role (seeded_from) WHERE seeded_from IS NOT NULL;
-CREATE UNIQUE INDEX access_role_owner_uk
-    ON ${tenant.schema}.access_role (is_owner) WHERE is_owner;
 
 COMMENT ON TABLE ${tenant.schema}.access_role IS
     'Роль сотрудника: название и набор прав (access_role_permission). Встроенная одна — «Владелец» (is_owner), у неё набора нет: все права всегда. Остальные заводит клиент. Задача 0044';
