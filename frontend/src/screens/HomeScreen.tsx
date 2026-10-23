@@ -35,7 +35,7 @@ import { AdminVisitBanner } from '../admin/AdminVisitBanner';
 import { ordersAwaitingReply } from '../sales/sales';
 import { unmatchedNames } from '../catalog/partNames';
 import { deadLetters } from '../events/deadLetters';
-import { lockedReason, rightsOf, useCatalogTitles, type Rights } from '../access/rights';
+import { lockedReasonAny, rightsOf, useCatalogTitles, type Rights } from '../access/rights';
 import { TABS, allowed, neededFor, sectionName, type Tab, type TabSpec } from './tabs';
 
 /**
@@ -465,8 +465,8 @@ export function HomeScreen() {
 
 /** Причина погашенного раздела: какого права нет и где его дают. */
 function reasonOf(spec: TabSpec, titles: ReadonlyMap<string, string>): string {
-  const key = neededFor(spec);
-  return key === null ? '' : lockedReason(key, titles);
+  const keys = neededFor(spec);
+  return keys.length === 0 ? '' : lockedReasonAny(keys, titles);
 }
 
 function roleName(role: string): string {

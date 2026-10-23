@@ -188,6 +188,16 @@ describe('источник платежа в операциях по лицев�
     await waitFor(() => expect(sent.withdraw).toEqual({ amount: '400', paymentSourceId: 1 }));
   });
 
+  it('без права «Исправлять остаток» кнопка погашена и называет причину (задача 0044)', async () => {
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
+    await openAccount();
+
+    const locked = findButton('Поправить остаток');
+    expect(locked, 'кнопка спрятана, а не погашена').toBeTruthy();
+    expect(locked!.disabled).toBe(true);
+    expect(locked!.parentElement?.textContent).toContain('Нет права');
+  });
+
   it('правка остатка источник не запоминает: платежа при ней нет', async () => {
     render(<SellerScreen canSell rights={rightsAs('OWNER')} company="t_1" memberId={7} />);
     await openAccount();

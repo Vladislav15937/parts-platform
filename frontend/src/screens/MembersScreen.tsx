@@ -52,9 +52,16 @@ export function MembersScreen({
 }: { managesAccess?: boolean; ownerActs?: boolean }) {
   const [members, setMembers] = useState<Member[] | null>(null);
   const [access, setAccess] = useState<Map<number, MemberAccess>>(new Map());
-  const [roles, setRoles] = useState<AccessRole[]>([]);
+  // Роли: null — ещё грузим либо не смогли узнать (причина в rolesError).
+  const [rolesLoaded, setRolesLoaded] = useState<AccessRole[] | null>(null);
+  const roles = rolesLoaded ?? [];
   const [sections, setSections] = useState<Section[]>([]);
+  // Три причины отказа — три строки, а не одна общая: успех одного запроса
+  // стирал бы отказ соседнего, и «Роли не загрузились» пропадало бы, как только
+  // приехал список сотрудников.
   const [error, setError] = useState('');
+  const [accessError, setAccessError] = useState('');
+  const [rolesError, setRolesError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const [login, setLogin] = useState('');
@@ -87,15 +94,23 @@ export function MembersScreen({
     // нужен (сменить пароль, выключить), и падать вместе ему незачем.
     loadMemberAccess()
       .then((found) => {
-        if (mounted.current) setAccess(new Map(normalized(found).map((a) => [a.memberId, a])));
+        if (mounted.current) {
+          setAccess(new Map(normalized(found).map((a) => [a.memberId, a])));
+          setAccessError('');
+        }
       })
       .catch((cause) => {
-        if (mounted.current) setError(describe(cause, 'Права сотрудников не загрузились'));
+        if (mounted.current) setAccessError(describe(cause, 'Права сотрудников не загрузились'));
       });
     loadRoles()
-      .then((found) => { if (mounted.current) setRoles(Array.isArray(found) ? found : []); })
+      .then((found) => {
+        if (mounted.current) {
+          setRolesLoaded(Array.isArray(found) ? found : []);
+          setRolesError('');
+        }
+      })
       .catch((cause) => {
-        if (mounted.current) setError(describe(cause, 'Роли не загрузились'));
+        if (mounted.current) setRolesError(describe(cause, 'Роли не загрузились'));
       });
     loadCatalog()
       .then((found) => { if (mounted.current) setSections(Array.isArray(found) ? found : []); })
@@ -124,6 +139,7 @@ export function MembersScreen({
       <h2>Сотрудники</h2>
 
       {error !== '' && <p className="note note--error">{error}</p>}
+      {accessError !== '' && <p className="note note--error">{accessError}</p>}
 
       {members === null ? (
         // «Загружаем…» — пока грузим, а не пока пусто: при ошибке состояние
@@ -218,7 +234,8 @@ export function MembersScreen({
         </div>
       )}
 
-      <RolesPanel roles={roles} sections={sections} canChange={managesAccess}
+      <RolesPanel roles={rolesLoaded} error={rolesError} sections={sections}
+                  canChange={managesAccess}
                   onChanged={reload} />
 
       <AdminAccessPanel canChange={managesAccess} />

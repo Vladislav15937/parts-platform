@@ -44,6 +44,10 @@ describe('погашенные разделы рельса', () => {
             { key: 'intake.receive', title: 'Принимать товар', hint: null }] },
           { title: 'Продажи', permissions: [
             { key: 'deal.sell', title: 'Продавать', hint: null }] },
+          { title: 'Пересчёт', permissions: [
+            { key: 'inventory.count', title: 'Считать товар на пересчёте', hint: null },
+            { key: 'inventory.journal.view', title: 'Смотреть журнал пересчётов', hint: null },
+            { key: 'inventory.reconcile', title: 'Сводить расхождения пересчёта', hint: null }] },
         ]);
       }
       if (url.endsWith('/api/intake/reference')) {
@@ -97,6 +101,15 @@ describe('погашенные разделы рельса', () => {
     expect(screen.getByRole('button', { name: 'Приёмка' }).className)
       .not.toContain('rail__item--locked');
     expect(screen.getByRole('button', { name: /^Сделки — Нет права/ })).toBeTruthy();
+  });
+
+  it('раздел, открытый любым из нескольких прав, называет их все', async () => {
+    me = { ...me, permissions: [] };
+    render(<SessionProvider><HomeScreen /></SessionProvider>);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Пересчёт — Нет ни одного из прав: '
+      + '«Считать товар на пересчёте», «Смотреть журнал пересчётов» или «Сводить расхождения '
+      + 'пересчёта» — их даёт владелец на экране «Сотрудники»' })).toBeTruthy());
   });
 
   it('у владельца погашенного нет', async () => {

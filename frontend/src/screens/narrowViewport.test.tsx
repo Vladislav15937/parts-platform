@@ -189,6 +189,29 @@ const MEMBERS = [
   },
 ];
 
+// Роли и права (задача 0044): длинное название роли и полный справочник —
+// так раздел «Роли» и галочки прав растягивают экран у клиента.
+const ACCESS_ROLES = [
+  { id: 1, name: 'Владелец', owner: true, permissions: [], members: 1 },
+  { id: 2, name: 'Кладовщик второй смены на Ткацкой (склад и приёмка)', owner: false,
+    permissions: ['intake.receive', 'photos.manage', 'stock.move', 'part.cell'], members: 12 },
+];
+
+const ACCESS_MEMBERS = [
+  { memberId: 1, roleId: 1, roleName: 'Владелец', owner: true, added: [], removed: [], effective: [] },
+];
+
+const ACCESS_CATALOG = [
+  { title: 'Приёмка', permissions: [
+    { key: 'intake.receive', title: 'Принимать товар',
+      hint: 'заводить позиции и машины, отмечать приход поставки, ставить машину в разбор и на место' },
+    { key: 'supply.expected', title: 'Заводить товар, который ещё в пути',
+      hint: 'позиции ожидаемой поставки и дата её прихода' }] },
+  { title: 'Компания', permissions: [
+    { key: 'members.manage', title: 'Управлять сотрудниками и ролями',
+      hint: 'заводить, менять пароль, выключать, назначать роли и права' }] },
+];
+
 const FEEDS = [
   {
     id: 1, marketplace: 'DROM', title: 'Дром · низкая цена размещения',
@@ -594,6 +617,9 @@ const RESPONSES: Array<[string, unknown]> = [
   ['/api/reports/sold-items', SOLD_ITEMS],
   ['/api/reports/', REPORT],
   ['/api/members', MEMBERS],
+  ['/api/access/roles', ACCESS_ROLES],
+  ['/api/access/members', ACCESS_MEMBERS],
+  ['/api/access/catalog', ACCESS_CATALOG],
   ['/api/marketplace-accounts', FEEDS],
   ['/api/deals/registry', DEALS],
   ['/api/deals/sources', []],

@@ -196,8 +196,26 @@ export function useCatalogTitles(): ReadonlyMap<string, string> {
  * недоступное показывается погашенным и называет причину, а не скрывается.
  */
 export function lockedReason(key: PermissionKey, titles: ReadonlyMap<string, string>): string {
-  const title = titles.get(key);
-  return title === undefined
-    ? 'Нет права на это действие — его даёт владелец на экране «Сотрудники»'
-    : `Нет права «${title}» — его даёт владелец на экране «Сотрудники»`;
+  return lockedReasonAny([key], titles);
+}
+
+/**
+ * Причина, когда открывает любое из нескольких прав (раздел «Пересчёт»:
+ * журнал, обход, сведение). Называются все: первое из них одно сказало бы
+ * человеку, что только оно и нужно, и он попросил бы не то.
+ */
+export function lockedReasonAny(
+  keys: readonly PermissionKey[], titles: ReadonlyMap<string, string>,
+): string {
+  const named = keys.map((key) => titles.get(key));
+  if (named.length === 0 || named.some((title) => title === undefined)) {
+    return 'Нет права на это действие — его даёт владелец на экране «Сотрудники»';
+  }
+  if (named.length === 1) {
+    return `Нет права «${named[0]}» — его даёт владелец на экране «Сотрудники»`;
+  }
+  const quoted = named.map((title) => `«${title}»`);
+  const last = quoted.pop();
+  return `Нет ни одного из прав: ${quoted.join(', ')} или ${last} — их даёт владелец `
+    + 'на экране «Сотрудники»';
 }

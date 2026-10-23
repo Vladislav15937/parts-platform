@@ -15,10 +15,14 @@ import { MembersScreen } from './MembersScreen';
  */
 describe('роли и права на экране сотрудников', () => {
   let sent: Array<{ url: string; method: string; body: unknown }>;
+  let rolesAnswer: () => Response;
+  let membersAnswer: () => Response;
 
   beforeEach(() => {
     forgetCatalog();
     sent = [];
+    rolesAnswer = () => json(ROLES);
+    membersAnswer = () => json(MEMBERS);
     vi.stubGlobal('confirm', () => true);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -28,10 +32,7 @@ describe('роли и права на экране сотрудников', () =
         return json({ id: 30, name: 'x', owner: false, permissions: [], members: 0 });
       }
       if (url.endsWith('/api/members')) {
-        return json([
-          { id: 1, number: 1, login: 'vladelec', displayName: 'Пётр', role: 'OWNER', active: true, lastLoginAt: null },
-          { id: 2, number: 2, login: 'ivan', displayName: 'Иван', role: 'VIEWER', active: true, lastLoginAt: null },
-        ]);
+        return membersAnswer();
       }
       if (url.endsWith('/api/access/members')) {
         return json([
@@ -41,10 +42,7 @@ describe('роли и права на экране сотрудников', () =
         ]);
       }
       if (url.endsWith('/api/access/roles')) {
-        return json([
-          { id: 10, name: 'Владелец', owner: true, permissions: [], members: 1 },
-          { id: 11, name: 'Приёмщик', owner: false, permissions: ['intake.receive'], members: 3 },
-        ]);
+        return rolesAnswer();
       }
       if (url.endsWith('/api/access/catalog')) {
         return json([
@@ -137,6 +135,72 @@ describe('роли и права на экране сотрудников', () =
     expect(option.disabled).toBe(true);
   });
 
+  it('правка роли уходит PUT с новым названием и набором ключей', async () => {
+    render(<MembersScreen />);
+    await waitFor(() => screen.getByRole('button', { name: 'Изменить роль: Приёмщик' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Изменить роль: Приёмщик' }));
+    fireEvent.change(screen.getByLabelText('Название роли'), { target: { value: 'Приёмщик-2' } });
+    const editor = screen.getByRole('button', { name: 'Сохранить роль' }).closest('.card') as HTMLElement;
+    fireEvent.click(within(editor).getByLabelText(/Продавать/));
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить роль' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toEqual({ url: '/api/access/roles/11', method: 'PUT',
+      body: { name: 'Приёмщик-2', permissions: ['deal.sell', 'intake.receive'] } });
+  });
+
+  it('свободная роль удаляется DELETE по своему номеру', async () => {
+    render(<MembersScreen />);
+    await waitFor(() => screen.getByRole('button', { name: 'Удалить роль: Пустая' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить роль: Пустая' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toEqual({ url: '/api/access/roles/12', method: 'DELETE', body: null });
+  });
+
+  it('право роли, оставленное отмеченным, поверх роли не пишется', async () => {
+    render(<MembersScreen />);
+    await waitFor(() => screen.getByRole('button', { name: 'Права: ivan' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Права: ivan' }));
+    const editor = screen.getByRole('button', { name: 'Сохранить права' }).closest('.card') as HTMLElement;
+    // «Принимать товар» — право роли, оно остаётся отмеченным; добавляется возврат.
+    expect((within(editor).getByLabelText(/Принимать товар/) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(within(editor).getByLabelText(/Оформлять возврат/));
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить права' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.body).toEqual({ roleId: 11, overrides: { 'deal.sell': true, 'deal.return': true } });
+  });
+
+  it('отказ ролей не стирается успехом списка сотрудников', async () => {
+    rolesAnswer = () => new Response(JSON.stringify({ message: 'Роли не загрузились: сервер занят' }),
+      { status: 409, headers: { 'Content-Type': 'application/json' } });
+    // Список сотрудников приходит позже отказа ролей: так его успех и стирал
+    // общую строку ошибки, пока она была одна на три запроса.
+    membersAnswer = () => new Promise<Response>((resolve) => {
+      setTimeout(() => resolve(json(MEMBERS)), 80);
+    }) as unknown as Response;
+    render(<MembersScreen />);
+    await waitFor(() => expect(screen.getByText('ivan')).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText(/Роли не загрузились/).length).toBeGreaterThan(0));
+    expect(screen.queryByText('Ролей нет — заведите первую.'),
+      'отказ выдан за пустой список').toBeNull();
+  });
+
+  it('пустой список ролей так и назван, а пока грузим — «Загружаем…»', async () => {
+    let release: (r: Response) => void = () => {};
+    rolesAnswer = () => json([]);
+    membersAnswer = () => json(MEMBERS);
+    const pending = new Promise<Response>((resolve) => { release = resolve; });
+    const original = rolesAnswer;
+    rolesAnswer = () => pending as unknown as Response;
+    render(<MembersScreen />);
+    const roles = await waitFor(() => screen.getByText('Роли').closest('section') as HTMLElement);
+    expect(within(roles).getByText('Загружаем…')).toBeTruthy();
+    release(original());
+    await waitFor(() => expect(within(roles).getByText('Ролей нет — заведите первую.')).toBeTruthy());
+  });
+
   it('нового сотрудника не завести без выбранной роли; роль уходит ссылкой', async () => {
     render(<MembersScreen />);
     await waitFor(() => screen.getByRole('button', { name: 'Завести' }));
@@ -153,6 +217,17 @@ describe('роли и права на экране сотрудников', () =
     expect(sent[0]?.body).toEqual({ login: 'novyy', password: 'восемь-знаков', displayName: '', roleId: 11 });
   });
 });
+
+const MEMBERS = [
+  { id: 1, number: 1, login: 'vladelec', displayName: 'Пётр', role: 'OWNER', active: true, lastLoginAt: null },
+  { id: 2, number: 2, login: 'ivan', displayName: 'Иван', role: 'VIEWER', active: true, lastLoginAt: null },
+];
+
+const ROLES = [
+  { id: 10, name: 'Владелец', owner: true, permissions: [], members: 1 },
+  { id: 11, name: 'Приёмщик', owner: false, permissions: ['intake.receive'], members: 3 },
+  { id: 12, name: 'Пустая', owner: false, permissions: ['deal.return'], members: 0 },
+];
 
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), {

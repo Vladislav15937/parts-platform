@@ -205,6 +205,15 @@ describe('источник платежа в карточке клиента', (
     await waitFor(() => expect(paymentSelect().value).toBe('1'));
   });
 
+  it('без права «Исправлять остаток» кнопка погашена и называет причину (задача 0044)', async () => {
+    await openAccountCard(sent, { balance: 1000, role: 'SELLER' });
+
+    const locked = button('Поправить остаток');
+    expect(locked, 'кнопка спрятана, а не погашена').toBeTruthy();
+    expect((locked as HTMLButtonElement).disabled).toBe(true);
+    expect(locked!.parentElement?.textContent).toContain('Нет права');
+  });
+
   it('правка остатка источник не запоминает: платежа при ней нет', async () => {
     await openAccountCard(sent, { balance: 1000 });
     await waitFor(() => expect(paymentSelect()).toBeTruthy());
@@ -227,7 +236,9 @@ interface Sent {
 }
 
 /** Доходит до карточки клиента и раскрывает ввод суммы «Пополнить / Списать». */
-async function openAccountCard(sent: Sent, { balance }: { balance: number }): Promise<void> {
+async function openAccountCard(
+  sent: Sent, { balance, role = 'OWNER' }: { balance: number; role?: string },
+): Promise<void> {
   stubApi({
     customers: { items: [customer({ id: 1, name: 'Автосервис' })], total: 1 },
     detail: customer({ id: 1, name: 'Автосервис' }),
@@ -239,7 +250,7 @@ async function openAccountCard(sent: Sent, { balance }: { balance: number }): Pr
     sent,
   });
 
-  render(<CustomersScreen rights={rightsAs('OWNER')} company="t_1" memberId={7} onOpenDeal={() => {}} />);
+  render(<CustomersScreen rights={rightsAs(role)} company="t_1" memberId={7} onOpenDeal={() => {}} />);
   await waitFor(() => expect(screen.getByText('Автосервис')).toBeTruthy());
   fireEvent.click(screen.getByText('Автосервис'));
 

@@ -297,7 +297,7 @@ class AccessRoleHttpTest extends PostgresTestBase {
 
         String page = text(mvc.perform(get("/api/organization/audit").session(owner))
                 .andExpect(status().isOk()));
-        assertThat(page).contains("Ячейка позиции").contains("Сборщик").contains("Продавать");
+        assertThat(page).contains("Раскладывать по полкам").contains("Сборщик").contains("Продавать");
     }
 
     // ------------------------------------------------------------ вспомогательное

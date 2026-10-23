@@ -21,9 +21,12 @@ import { AccessPermissions } from './AccessPermissions';
  * то же правило, что у погашенного: не прятать, а называть причину.
  */
 export function RolesPanel({
-  roles, sections, canChange, onChanged,
+  roles, error: loadError = '', sections, canChange, onChanged,
 }: {
-  roles: readonly AccessRole[];
+  /** `null` — ещё не приехали (грузим либо не смогли узнать — см. `error`). */
+  roles: readonly AccessRole[] | null;
+  /** Почему роли не загрузились; пусто — отказа не было. */
+  error?: string;
   sections: readonly Section[];
   canChange: boolean;
   onChanged: () => void;
@@ -90,6 +93,14 @@ export function RolesPanel({
         каждому можно добавить или снять отдельное право.
       </p>
       {error !== '' && <p className="note note--error">{error}</p>}
+      {/* Три состояния различимы: грузим, не смогли узнать, пусто. */}
+      {roles === null ? (
+        loadError !== ''
+          ? <p className="note note--error">{loadError}</p>
+          : <p className="note">Загружаем…</p>
+      ) : roles.length === 0 ? (
+        <p className="note">Ролей нет — заведите первую.</p>
+      ) : (
       <div className="table-scroll">
         <table>
           <thead>
@@ -140,9 +151,10 @@ export function RolesPanel({
           </tbody>
         </table>
       </div>
-      {typeof editing === 'number' && editor(roles.find((r) => r.id === editing) ?? null)}
+      )}
+      {typeof editing === 'number' && editor(roles?.find((r) => r.id === editing) ?? null)}
       {editing === 'new' && editor(null)}
-      {canChange && editing === null && (
+      {canChange && editing === null && roles !== null && (
         <button type="button" disabled={busy} onClick={() => open(null)}>
           Новая роль
         </button>
