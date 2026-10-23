@@ -539,8 +539,13 @@ export function loadCatalog(query: CatalogQuery): Promise<CatalogPage> {
 /**
  * Колонки витрины — в том же составе и порядке, что у прежней системы клиента.
  *
- * <p>`sort` пусто там, где сортировать нечем: по кросс-номерам и фотографии
- * не сортируют, и стрелка на такой колонке обманывала бы.
+ * <p>`sort` — имя сортировки на сервере, и стоит оно у каждой колонки
+ * (задача 0367, решение владельца продукта 23.10.2026: «сортировка
+ * по колонкам должна быть на каждую колонку»). Пусто только у «Рестайлинга»:
+ * в ней прочерк у всех строк, сортировать нечего, и стрелка обещала бы
+ * действие, которого нет. Незнакомое имя сервер молча заменяет умолчанием —
+ * поэтому каждое имя отсюда сверяет с белым списком сервера
+ * `CatalogSortTest.everyScreenSortIsKnownToTheServer`.
  */
 export interface Column {
   key: string;
@@ -672,17 +677,17 @@ export const COLUMNS: Column[] = [
   { key: 'code', title: 'Номер товара', sort: 'code', value: (r) => text(r.code) },
   // Вторым столбцом, как в кабинете: по снимку деталь узнают быстрее,
   // чем по наименованию, — особенно когда наименований на складе тысяча.
-  { key: 'photo', title: 'Превью', value: () => '', image: (r) => r.photoUrl, fixed: true },
+  { key: 'photo', title: 'Превью', sort: 'photo', value: () => '', image: (r) => r.photoUrl, fixed: true },
   { key: 'title', title: 'Запчасть', sort: 'title', value: (r) => r.title },
   // Сразу за «Запчастью» (задача 0314): состояние до неё читали из пометки
   // в хвосте наименования, и стоять оно обязано там же, где его искали, —
   // в той же строке и рядом, без прокрутки вбок. Раньше колонка стояла
   // в хвосте таблицы, за «Наименованием».
-  { key: 'condition', title: 'Состояние', value: (r) => conditionTitle(r.condition) ?? '' },
+  { key: 'condition', title: 'Состояние', sort: 'condition', value: (r) => conditionTitle(r.condition) ?? '' },
   // Оценка, а не состояние: «б/у» здесь стояло у всего склада — оценка
   // не совпадала с сервером ни одним значением, и колонка молча показывала
   // соседнее поле (задача 0033).
-  { key: 'quality', title: 'Оценка состояния', value: (r) => qualityTitle(r.qualityGrade) },
+  { key: 'quality', title: 'Оценка состояния', sort: 'quality', value: (r) => qualityTitle(r.qualityGrade) },
   // У позиции без донора — её своя машина из применимости (задача 0290),
   // откуда значение — в подсказке клетки.
   { key: 'brand', title: 'Марка', sort: 'brand', value: (r) => text(r.brand), hint: vehicleHint },
@@ -692,7 +697,7 @@ export const COLUMNS: Column[] = [
   // читалось бы как «машина, с которой снято». Решение владельца продукта
   // 14.10.2026 («да, переименовать»; tasks/0290, раздел «Вопрос владельцу —
   // как подписать колонки, которые про донора»).
-  { key: 'generation', title: 'Поколение', value: (r) => text(r.generation), hint: vehicleHint },
+  { key: 'generation', title: 'Поколение', sort: 'generation', value: (r) => text(r.generation), hint: vehicleHint },
   {
     key: 'restyling',
     title: 'Рестайлинг',
@@ -716,30 +721,30 @@ export const COLUMNS: Column[] = [
      */
     value: () => '—',
   },
-  { key: 'body', title: 'Кузов', value: (r) => text(r.body) },
-  { key: 'engine', title: 'Двигатель', value: (r) => text(r.engine) },
+  { key: 'body', title: 'Кузов', sort: 'body', value: (r) => text(r.body) },
+  { key: 'engine', title: 'Двигатель', sort: 'engine', value: (r) => text(r.engine) },
   { key: 'year', title: 'Год выпуска', sort: 'year', numeric: true, value: (r) => text(r.year) },
-  { key: 'sideFr', title: 'Передний / Задний', value: (r) => SIDE_FR[r.sideFr ?? ''] ?? '' },
-  { key: 'sideLr', title: 'Левый / Правый', value: (r) => SIDE_LR[r.sideLr ?? ''] ?? '' },
-  { key: 'donor', title: 'Номер донора', value: (r) => text(r.donorCode) },
+  { key: 'sideFr', title: 'Передний / Задний', sort: 'sideFr', value: (r) => SIDE_FR[r.sideFr ?? ''] ?? '' },
+  { key: 'sideLr', title: 'Левый / Правый', sort: 'sideLr', value: (r) => SIDE_LR[r.sideLr ?? ''] ?? '' },
+  { key: 'donor', title: 'Номер донора', sort: 'donor', value: (r) => text(r.donorCode) },
   { key: 'price', title: 'Цена', sort: 'price', numeric: true, value: (r) => money(r.price) },
-  { key: 'installation', title: 'Установка', numeric: true,
+  { key: 'installation', title: 'Установка', sort: 'installation', numeric: true,
     value: (r) => money(r.installationPrice) },
-  { key: 'color', title: 'Цвет', value: (r) => text(r.color) },
-  { key: 'description', title: 'Комментарий', value: (r) => text(r.description) },
+  { key: 'color', title: 'Цвет', sort: 'color', value: (r) => text(r.color) },
+  { key: 'description', title: 'Комментарий', sort: 'description', value: (r) => text(r.description) },
   { key: 'manufacturer', title: 'Производитель', sort: 'manufacturer',
     value: (r) => text(r.manufacturer) },
-  { key: 'oem', title: 'Номер производителя', value: (r) => text(r.oem) },
-  { key: 'crosses', title: 'Кросс-номера', value: (r) => text(r.crosses) },
-  { key: 'note', title: 'Заметка', value: (r) => text(r.note) },
-  { key: 'marking', title: 'Маркировка', value: (r) => text(r.marking) },
+  { key: 'oem', title: 'Номер производителя', sort: 'oem', value: (r) => text(r.oem) },
+  { key: 'crosses', title: 'Кросс-номера', sort: 'crosses', value: (r) => text(r.crosses) },
+  { key: 'note', title: 'Заметка', sort: 'note', value: (r) => text(r.note) },
+  { key: 'marking', title: 'Маркировка', sort: 'marking', value: (r) => text(r.marking) },
   { key: 'section', title: 'Секция', sort: 'section', value: (r) => text(r.section) },
   // Рядом с «Секцией», а не вместо неё: это разные поля. «Секция» — адрес
   // в нумерации клиента, набранный руками, и у переехавшего заполнен именно
   // он; «Ячейка» заводится складом, печатается на этикетке и сканируется.
   // До этого код ячейки не показывался нигде, кроме ленты правок: узнать,
   // где деталь лежит сейчас, можно было только если её когда-то переставляли.
-  { key: 'cell', title: 'Ячейка', value: (r) => text(r.cellCode) },
+  { key: 'cell', title: 'Ячейка', sort: 'cell', value: (r) => text(r.cellCode) },
   // Дальше — то, чего не хватало до паритета с прежней системой. Сверено
   // с живым каталогом клиента: сорок две колонки против наших двадцати
   // четырёх.
@@ -747,39 +752,60 @@ export const COLUMNS: Column[] = [
   // «Наименование» и «Запчасть» — разные вещи, и в кабинете это две колонки:
   // первое собранный заголовок, второе написание вида детали, по которому
   // разбирают нераспознанные.
-  { key: 'partName', title: 'Наименование', value: (r) => text(r.partName) },
-  { key: 'supply', title: 'Поставка', value: (r) => text(r.supply) },
-  { key: 'equipment', title: 'Комплектация', value: (r) => text(r.equipment) },
+  { key: 'partName', title: 'Наименование', sort: 'partName', value: (r) => text(r.partName) },
+  { key: 'supply', title: 'Поставка', sort: 'supply', value: (r) => text(r.supply) },
+  { key: 'equipment', title: 'Комплектация', sort: 'equipment', value: (r) => text(r.equipment) },
   // «Выгружать» — то, из-за чего у переехавшего клиента прайс уезжал пустым:
   // в чужой выгрузке колонку не включили, и все позиции приехали
   // без разрешения на публикацию.
-  { key: 'published', title: 'Выгружать',
+  { key: 'published', title: 'Выгружать', sort: 'published',
     value: (r) => (r.published === null ? '' : r.published ? 'Везде' : 'Нет') },
-  { key: 'photoCount', title: 'Количество фото', numeric: true,
+  { key: 'photoCount', title: 'Количество фото', sort: 'photoCount', numeric: true,
     value: (r) => (r.photoCount === 0 ? '' : String(r.photoCount)) },
-  { key: 'textBlock', title: 'Текстовый блок', value: (r) => text(r.textBlock) },
-  { key: 'video', title: 'Видео', value: (r) => text(r.videoUrl) },
-  { key: 'weight', title: 'Вес товара', numeric: true,
+  { key: 'textBlock', title: 'Текстовый блок', sort: 'textBlock', value: (r) => text(r.textBlock) },
+  { key: 'video', title: 'Видео', sort: 'video', value: (r) => text(r.videoUrl) },
+  { key: 'weight', title: 'Вес товара', sort: 'weight', numeric: true,
     value: (r) => (r.weightKg === null ? '' : `${r.weightKg} кг`) },
   // Габариты одной колонкой: по отдельности «длина 120» не отвечает
   // ни на один вопрос, а вместе отвечают на единственный — влезет ли.
-  { key: 'dimensions', title: 'Габариты товара', value: (r) => text(r.dimensions) },
-  { key: 'packageDimensions', title: 'Габариты товара в упаковке',
+  { key: 'dimensions', title: 'Габариты товара', sort: 'dimensions', value: (r) => text(r.dimensions) },
+  { key: 'packageDimensions', title: 'Габариты товара в упаковке', sort: 'packageDimensions',
     value: (r) => text(r.packageDimensions) },
-  { key: 'packageWeight', title: 'Вес в упаковке', numeric: true,
+  { key: 'packageWeight', title: 'Вес в упаковке', sort: 'packageWeight', numeric: true,
     value: (r) => (r.packageWeightKg === null ? '' : `${r.packageWeightKg} кг`) },
-  { key: 'barcode', title: 'Ст. баркод', value: (r) => text(r.barcode) },
+  { key: 'barcode', title: 'Ст. баркод', sort: 'barcode', value: (r) => text(r.barcode) },
   // «Старые данные» — номер товара в прежней системе. Переехавший клиент
   // помнит деталь по нему, а не по нашему коду. Сырые данные переезда
   // наружу не идут: это внутреннее представление.
-  { key: 'legacy', title: 'Старые данные', value: (r) => text(r.legacyCode) },
-  { key: 'createdAt', title: 'Создан', value: (r) => day(r.createdAt) },
-  { key: 'updatedAt', title: 'Изменён', value: (r) => day(r.updatedAt) },
-  { key: 'updatedBy', title: 'Кто изменил', value: (r) => text(r.updatedByName) },
-  { key: 'priceChangedAt', title: 'Цена изменена в', value: (r) => day(r.priceChangedAt) },
-  { key: 'priceChangedBy', title: 'Кто изменил цену',
+  { key: 'legacy', title: 'Старые данные', sort: 'legacy', value: (r) => text(r.legacyCode) },
+  { key: 'createdAt', title: 'Создан', sort: 'created', value: (r) => day(r.createdAt) },
+  { key: 'updatedAt', title: 'Изменён', sort: 'updated', value: (r) => day(r.updatedAt) },
+  { key: 'updatedBy', title: 'Кто изменил', sort: 'updatedBy', value: (r) => text(r.updatedByName) },
+  { key: 'priceChangedAt', title: 'Цена изменена в', sort: 'priceChanged', value: (r) => day(r.priceChangedAt) },
+  { key: 'priceChangedBy', title: 'Кто изменил цену', sort: 'priceChangedBy',
     value: (r) => text(r.priceChangedByName) },
 ];
+
+/**
+ * Имя сортировки по колонке склада (задача 0367).
+ *
+ * <p>Колонки складов не фиксированы — у одного клиента два склада, у другого
+ * пять, — поэтому имя собирается из номера склада. Сервер сортирует такую
+ * колонку по свободному остатку (`qty - qty_reserved`), то есть по крупному
+ * числу клетки «0 (1)», а не по полному.
+ */
+export function warehouseSort(warehouseId: number): string {
+  return `warehouse:${warehouseId}`;
+}
+
+/**
+ * Имя сортировки по ключу колонки — обычной или колонки склада; у колонки
+ * без сортировки — `undefined`.
+ */
+export function sortOfColumn(key: string): string | undefined {
+  if (key.startsWith('warehouse:')) return key;
+  return COLUMNS.find((c) => c.key === key)?.sort;
+}
 
 /**
  * Колонки, видимые по умолчанию.

@@ -66,10 +66,19 @@ describe('меню колонки', () => {
     await waitFor(() => expect(asked.length).toBe(1));
     expect(document.querySelector('.value-picker')).toBeTruthy();
 
-    // По превью отбора нет: ни стрелки, ни запроса значений.
+    // По превью отбора нет. Стрелка у неё с задачи 0367 есть — сортировка
+    // стоит у каждой колонки, — но меню предлагает только порядок: ни списка
+    // значений, ни запроса за ним, ни «— все —».
+    fireEvent.click(brand.querySelector('.th__menu')!);
     const photo = head('Превью');
-    expect(photo.querySelector('.th__menu'),
-      'меню предлагает отбор по колонке, которую сервер отобьёт').toBeNull();
+    expect(photo.querySelector('.th__menu'), 'у превью нет сортировки').toBeTruthy();
+    fireEvent.click(photo.querySelector('.th__menu')!);
+    const picker = document.querySelector('.value-picker') as HTMLElement;
+    expect(picker, 'меню превью не открылось').toBeTruthy();
+    expect(picker.textContent).toContain('по возрастанию');
+    expect(picker.textContent,
+      'меню предлагает отбор по колонке, которую сервер отобьёт').not.toContain('— все —');
+    expect(picker.querySelector('input'), 'поиск значений у колонки без отбора').toBeNull();
     expect(asked.length, 'значения спрошены у колонки без отбора').toBe(1);
   });
 });
