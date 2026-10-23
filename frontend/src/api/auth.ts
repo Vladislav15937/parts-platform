@@ -42,6 +42,18 @@ export function logout(): Promise<void> {
   return request<void>('/api/auth/logout', { method: 'POST' });
 }
 
+/**
+ * Почему закрыт вход этого браузера (задача 0044): сервер отвечает только
+ * о сессии из cookie запроса, и только если её отозвали (смена прав, пароля,
+ * выключение). Пусто — не отзывали либо не узнать.
+ *
+ * @param company схема компании запомненной личности
+ */
+export function ended(company: string): Promise<{ message: string } | undefined> {
+  return request<{ message: string } | undefined>(
+    `/api/auth/ended?company=${encodeURIComponent(company)}`);
+}
+
 /** Кто я. Нужно при старте: сессия могла остаться живой с прошлого раза. */
 export function me(): Promise<Me> {
   return request<Me>('/api/auth/me');

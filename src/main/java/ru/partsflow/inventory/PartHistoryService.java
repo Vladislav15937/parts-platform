@@ -440,8 +440,9 @@ public class PartHistoryService {
                     // Кнопку «Удалить» экран рисует по этому признаку, а не по
                     // своему списку ролей: право одно — PostedDocumentDeletion,
                     // правило «что удаляется» одно — StockDocument.isDeletable.
-                    boolean deletable = mayDelete && StockDocument.isDeletable(
+                    boolean removable = StockDocument.isDeletable(
                             rs.getString("doc_type"), rs.getString("doc_status"), deleted);
+                    boolean deletable = mayDelete && removable;
                     return new Movement(
                             rs.getTimestamp("created_at").toInstant(),
                             type,
@@ -463,7 +464,8 @@ public class PartHistoryService {
                             false,
                             rs.getBigDecimal("price"),
                             deleted,
-                            deletable ? (Long) rs.getObject("doc_id") : null);
+                            deletable ? (Long) rs.getObject("doc_id") : null,
+                            removable && !mayDelete ? PostedDocumentDeletion.NEEDS : null);
                 },
                 partId);
     }
@@ -521,6 +523,7 @@ public class PartHistoryService {
                         true,
                         rs.getBigDecimal("price"),
                         false,
+                        null,
                         null),
                 partId);
     }
@@ -659,11 +662,16 @@ public class PartHistoryService {
      * @param deletableDocumentId документ строки, который вошедший может удалить;
      *                 {@code null} — удалить нельзя или нечем (нет права, нет
      *                 документа, не тот вид, уже удалён)
+     * @param deleteNeeds право, которого не хватает, чтобы удалить документ строки,
+     *                 который удалить можно в принципе: экран рисует «Удалить»
+     *                 погашенной с причиной, а не прячет (решение владельца
+     *                 23.10.2026, задача 0044, вопрос 3); {@code null} — либо
+     *                 удалить можно ({@code deletableDocumentId}), либо нечего
      */
     public record Movement(Instant at, String type, BigDecimal qty, String document,
                            String status, String warehouse, String reason, String author,
                            boolean held, BigDecimal price, boolean deleted,
-                           Long deletableDocumentId) {
+                           Long deletableDocumentId, String deleteNeeds) {
     }
 
     private record Diff(long auditId, Instant at, String author,

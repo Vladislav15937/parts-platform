@@ -78,6 +78,14 @@ public class SecurityConfig {
                         .ignoringRequestMatchers("/api/provisioning/**", "/api/mail/events/**",
                                 "/api/registration/**"))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
+                // Запомненного запроса здесь не читает никто: вход — JSON, на исходный
+                // адрес после него не возвращаем (задача 0265). А сохранял его кэш
+                // в новую сессию на каждом 401 — то есть подменял cookie браузера
+                // свежей пустой сессией, и «почему закрыт вход» (/api/auth/ended)
+                // спрашивал уже не о той сессии (задача 0044). Заодно 401 перестал
+                // заводить строку в общем хранилище сессий на каждый стук без входа.
+                .requestCache(c -> c.requestCache(
+                        new org.springframework.security.web.savedrequest.NullRequestCache()))
                 .authenticationManager(authenticationManager)
                 // Программе — 401, человеку на странице — перенаправление на вход
                 // (задача 0265). Почему граница проходит по /api — SignInRedirect.
@@ -89,6 +97,10 @@ public class SecurityConfig {
                                 AnyRequestMatcher.INSTANCE))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/login", "/api/auth/csrf").permitAll()
+                        // Почему закрыт вход этого браузера (задача 0044): спрашивают,
+                        // когда сессии уже нет; отвечает только держателю её cookie.
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/auth/ended")
+                        .permitAll()
                         // Вход в систему администрирования сервиса (задача 0042) —
                         // за ним тоже ещё нет никого. CSRF при этом действует,
                         // как у входа в кабинет: подделка входа реальна и здесь.

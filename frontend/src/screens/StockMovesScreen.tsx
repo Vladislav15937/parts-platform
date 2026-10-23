@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
-import type { Rights } from '../access/rights';
+import type { PermissionKey, Rights } from '../access/rights';
+import { LockedAction } from '../ui/LockedAction';
 import { ApiError } from '../api/client';
 import { loadMoveJournal, loadMoveLines, type MoveDocument, type MoveLine } from '../inventory/moves';
 import { deleteStockDocument, deletionNotice } from '../inventory/stockDocuments';
@@ -141,7 +142,9 @@ export function StockMovesScreen({ rights }: { rights: Rights }) {
   const live = (documents ?? []).filter((d) => d.deletedAt == null);
   const totalLines = live.reduce((sum, d) => sum + d.lines, 0);
   const removed = (documents ?? []).length - live.length;
-  const anyDeletable = (documents ?? []).some((d) => d.deletable === true);
+  // Колонка действия — и там, где «Удалить» погашена: без права она называет
+  // причину, а не пропадает (задача 0044, вопрос 3).
+  const anyDeletable = (documents ?? []).some((d) => d.deletable === true || d.deleteNeeds != null);
 
   return (
     <section className="screen screen--wide">
@@ -208,6 +211,9 @@ export function StockMovesScreen({ rights }: { rights: Rights }) {
                       <td>{doc.author ?? '—'}</td>
                       {anyDeletable && (
                         <td onClick={(e) => e.stopPropagation()}>
+                          {doc.deletable !== true && doc.deleteNeeds != null && (
+                            <LockedAction permission={doc.deleteNeeds as PermissionKey} label="Удалить" />
+                          )}
                           {doc.deletable === true && (
                             asked === doc.id ? (
                               <span className="history__confirm">

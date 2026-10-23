@@ -26,6 +26,8 @@ export interface MoveDocument {
   deletedBy?: string | null;
   /** Может ли вошедший удалить документ: признак ставит сервер по своему праву. */
   deletable?: boolean;
+  /** Право, которого не хватает на удаление: «Удалить» погашена с причиной (0044). */
+  deleteNeeds?: string | null;
 }
 
 export interface MoveLine {

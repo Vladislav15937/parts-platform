@@ -112,6 +112,37 @@ public class AuthController {
                 principal.role(), key, ip, userAgent);
     }
 
+    /**
+     * Почему закрыт вход, с которым пришёл этот браузер (задача 0044, живой
+     * прогон 24.10.2026): «Сессия кончилась — войдите заново» без причины
+     * у сотрудника, которому владелец сменил права, читается как поломка.
+     *
+     * <p><b>Отвечает только о своей сессии.</b> Сессия ищется по идентификатору
+     * из cookie запроса (его знает лишь держатель) в журнале входов той
+     * компании, которую браузер помнит. Компания, которой нет, сессия, которой
+     * нет, и сессия, закрытая не отзывом, неразличимы — 204. Учётной записи
+     * путь не требует по построению: спрашивают ровно тогда, когда её уже нет.
+     *
+     * @param company схема компании из запомненной личности ({@code companySchema})
+     */
+    @GetMapping("/ended")
+    public ResponseEntity<EndedView> ended(
+            @org.springframework.web.bind.annotation.RequestParam String company,
+            HttpServletRequest httpRequest) {
+        String sessionId = httpRequest.getRequestedSessionId();
+        if (sessionId == null || !company.matches("t_\\d{6,}")) {
+            return ResponseEntity.noContent().build();
+        }
+        return sessions.revokedDetail(company, LoginSessions.key(sessionId))
+                .map(detail -> ResponseEntity.ok(
+                        new EndedView("Вход закрыт: " + detail + ". Войдите заново.")))
+                .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    /** @param message почему закрыт вход — словами журнала входов */
+    public record EndedView(String message) {
+    }
+
     /** Кто я. Нужно приложению после перезапуска: сессия могла остаться живой. */
     @GetMapping("/me")
     public MeView me() {

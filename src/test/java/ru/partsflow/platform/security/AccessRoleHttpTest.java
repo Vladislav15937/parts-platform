@@ -480,6 +480,41 @@ class AccessRoleHttpTest extends PostgresTestBase {
                  WHERE m.login = 'otchet2' ORDER BY s.id LIMIT 1""", String.class));
         assertThat(reason).as("во «Входах» сказано, почему закрыли")
                 .isEqualTo("REVOKED: права роли изменены");
+
+        // И самому выведенному — тем же браузером (живой прогон 24.10.2026:
+        // «Сессия кончилась» без причины, причина была только у владельца).
+        String ended = text(mvc.perform(get("/api/auth/ended").param("company", TENANT).session(two))
+                .andExpect(status().isOk()));
+        assertThat(json.readTree(ended).path("message").asText())
+                .isEqualTo("Вход закрыт: права роли изменены. Войдите заново.");
+        // Живой сессии, чужой компании и браузеру без cookie сказать нечего —
+        // и ответ у них один, чтобы по нему ничего не узнать.
+        mvc.perform(get("/api/auth/ended").param("company", TENANT).session(owner))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/auth/ended").param("company", "t_000441").session(two))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/auth/ended").param("company", TENANT))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/auth/ended").param("company", "public; drop").session(two))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    @DisplayName("Заведённый сразу с ролью — одна запись журнала «заведён с ролью», а не «Просмотр → Владелец»")
+    void createdWithRoleIsOneJournalRecord() throws Exception {
+        MockHttpSession owner = login("vladelec");
+        createMember(owner, "srazu", "\"roleId\":" + ownerRole).andExpect(status().isCreated());
+        long id = id("srazu");
+        List<String> rows = inTenant(() -> jdbc.queryForList("""
+                SELECT operation || ' ' || coalesce(old_value::text, '-') || ' ' || new_value::text
+                  FROM audit_log WHERE table_name = 'tenant_member' AND record_id = ?
+                 ORDER BY id""", String.class, id));
+        assertThat(rows).as("журнал заведения").hasSize(1);
+        assertThat(rows.get(0)).startsWith("INSERT").contains("Владелец").doesNotContain("VIEWER");
+        assertThat(legacyRole(id)).isEqualTo("OWNER");
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT access_role_id FROM tenant_member WHERE id = ?", Long.class, id)))
+                .isEqualTo(ownerRole);
     }
 
     @Test

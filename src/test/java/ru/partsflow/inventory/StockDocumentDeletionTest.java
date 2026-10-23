@@ -280,14 +280,21 @@ class StockDocumentDeletionTest extends PostgresTestBase {
         for (String login : List.of("menedzher", "kladovshchik")) {
             mvc.perform(delete("/api/stock/documents/" + doc).with(csrf()).session(login(login)))
                     .andExpect(status().isForbidden());
-            JsonNode row = movementRows(part, login("menedzher")).get(0);
+            JsonNode row = movementRows(part, login(login)).get(0);
             assertThat(row.path("deletableDocumentId").isNull())
                     .as("без права сервер не отметил строку удаляемой").isTrue();
+            // А кнопку не прячет: строка называет право, которого нет, и экран
+            // гасит «Удалить» с причиной (задача 0044, вопрос 3; живой прогон
+            // 24.10.2026 — у менеджера и кладовщика кнопки не было вовсе).
+            assertThat(row.path("deleteNeeds").asText())
+                    .as(login + ": строка не говорит, какого права нет")
+                    .isEqualTo("stock_document.delete_done");
         }
         assertThat(docState(doc)).isEqualTo("DONE");
 
         JsonNode row = movementRows(part, login("vladelec")).get(0);
         assertThat(row.path("deletableDocumentId").asLong()).isEqualTo(doc);
+        assertThat(row.path("deleteNeeds").isNull()).as("владельцу право называют").isTrue();
     }
 
     @Test
@@ -391,13 +398,20 @@ class StockDocumentDeletionTest extends PostgresTestBase {
         MockHttpSession owner = login("vladelec");
 
         assertThat(journalRow(doc, owner).path("deletable").asBoolean()).isTrue();
+        assertThat(journalRow(doc, owner).path("deleteNeeds").isNull()).isTrue();
         assertThat(journalRow(doc, login("menedzher")).path("deletable").asBoolean()).isFalse();
+        assertThat(journalRow(doc, login("menedzher")).path("deleteNeeds").asText())
+                .as("менеджеру «Удалить» погашена с правом, а не спрятана")
+                .isEqualTo("stock_document.delete_done");
 
         deleteOk(doc, owner);
         JsonNode row = journalRow(doc, owner);
         assertThat(row.path("deletedAt").isNull()).as("удалённое показано обычным").isFalse();
         assertThat(row.path("deletedBy").asText()).isEqualTo("Владелец Удаляющий");
         assertThat(row.path("deletable").asBoolean()).isFalse();
+        assertThat(row.path("deleteNeeds").isNull()).as("у удалённого удалять нечего").isTrue();
+        assertThat(journalRow(doc, login("menedzher")).path("deleteNeeds").isNull())
+                .as("удалённое и без права — нечего гасить").isTrue();
     }
 
     @Test

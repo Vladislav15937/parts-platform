@@ -281,8 +281,7 @@ public class AccessRoleService {
         }
         Map<String, Boolean> wasOverrides = overrides().getOrDefault(memberId, Map.of());
 
-        String legacy = role.owner() ? "OWNER"
-                : role.seededFrom() != null ? role.seededFrom() : "VIEWER";
+        String legacy = legacyOf(role);
         jdbc.update("UPDATE tenant_member SET access_role_id = ?, role = ? WHERE id = ?",
                 roleId, legacy, memberId);
         jdbc.update("DELETE FROM member_permission_override WHERE member_id = ?", memberId);
@@ -313,12 +312,18 @@ public class AccessRoleService {
     @Transactional
     public MemberService.Member createMember(String login, String password, String displayName,
                                              Long branchId, long roleId) {
-        // Прежняя колонка получит своё значение назначением (assign); здесь —
-        // «Просмотр», вниз, как у всякой роли клиента.
-        MemberService.Member created = members.create(login, password, displayName, "VIEWER",
-                branchId);
-        assign(created.id(), roleId, Map.of());
-        return members.byId(created.id());
+        // Проверки назначения — до вставки, а не правкой после неё: правка
+        // писала в журнал «Роль: Просмотр → Владелец», то есть повышение
+        // у сотрудника, которого завели владельцем (живой прогон 24.10.2026).
+        Stored role = lockRole(roleId);
+        if (role.owner() && !CurrentUser.require().actsAsOwner()) {
+            throw new AccessDeniedException("Назначить и снять роль «Владелец» может только владелец");
+        }
+        if (!role.owner()) {
+            requireOwnRights(role.permissions(), "Выдать можно только свои права: у вас нет ");
+        }
+        return members.createWithAccessRole(login, password, displayName, branchId, roleId,
+                legacyOf(role), role.name());
     }
 
     /**
@@ -385,6 +390,11 @@ public class AccessRoleService {
                     .map(key -> "«" + Permission.byKey(key).map(Permission::title).orElse(key) + "»")
                     .collect(Collectors.joining(", ")));
         }
+    }
+
+    /** Прежняя колонка для роли клиента: вниз, как во всех откатах ролей. */
+    private static String legacyOf(Stored role) {
+        return role.owner() ? "OWNER" : role.seededFrom() != null ? role.seededFrom() : "VIEWER";
     }
 
     private Stored lockRole(long roleId) {

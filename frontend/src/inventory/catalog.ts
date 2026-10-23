@@ -440,6 +440,12 @@ export interface HistoryMovement {
    * сервер по своему праву, своего списка ролей у экрана нет.
    */
   deletableDocumentId?: number | null;
+  /**
+   * Право, которого не хватает, чтобы удалить документ строки (задача 0044):
+   * «Удалить» погашена с причиной, а не спрятана. Пусто — удалить можно
+   * либо нечего.
+   */
+  deleteNeeds?: string | null;
 }
 
 export interface PartHistory {

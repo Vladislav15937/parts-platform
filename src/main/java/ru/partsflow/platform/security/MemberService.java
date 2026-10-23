@@ -73,6 +73,31 @@ public class MemberService {
     @Transactional
     public Member create(String login, String password, String displayName, String role,
                          Long branchId) {
+        return insert(login, password, displayName, role, branchId, null, null);
+    }
+
+    /**
+     * Завести сотрудника сразу с ролью клиента — одной вставкой, одной записью
+     * журнала «заведён с ролью «…»».
+     *
+     * <p>Прежде заведение шло вставкой с «Просмотром» и правкой роли следом,
+     * и журнал читался как повышение: «Роль: Просмотр → Владелец» у сотрудника,
+     * которого с первой секунды завели владельцем (живой прогон 24.10.2026).
+     * Проверки «кому эту роль можно» — у вызывающего ({@code AccessRoleService
+     * .createMember}): здесь роль только записывается.
+     *
+     * @param legacyRole прежняя колонка для этой роли — {@code OWNER}, роль
+     *                   переноса — её {@code seeded_from}, своя роль — {@code VIEWER}
+     */
+    @Transactional
+    public Member createWithAccessRole(String login, String password, String displayName,
+                                       Long branchId, long accessRoleId, String legacyRole,
+                                       String roleName) {
+        return insert(login, password, displayName, legacyRole, branchId, accessRoleId, roleName);
+    }
+
+    private Member insert(String login, String password, String displayName, String role,
+                          Long branchId, Long accessRoleId, String roleName) {
         validate(login, password, role);
         // Филиал обязан существовать, и сказать об этом надо словами: роль
         // проверяется белым списком и отбивается внятно, а чужой филиал
@@ -89,26 +114,36 @@ public class MemberService {
 
         try {
             Long id = jdbc.queryForObject("""
-                    INSERT INTO tenant_member (display_name, role, login, password_hash, branch_id)
-                    VALUES (?, ?, ?, ?, ?) RETURNING id""",
+                    INSERT INTO tenant_member (display_name, role, login, password_hash, branch_id,
+                                               access_role_id)
+                    VALUES (?, ?, ?, ?, ?, ?) RETURNING id""",
                     Long.class,
                     displayName == null || displayName.isBlank() ? login.strip() : displayName.strip(),
-                    role, login.strip(), passwordEncoder.encode(password), branchId);
+                    role, login.strip(), passwordEncoder.encode(password), branchId, accessRoleId);
 
             java.util.Map<String, Object> now = new java.util.LinkedHashMap<>();
             now.put("display_name", displayName == null || displayName.isBlank()
                     ? login.strip() : displayName.strip());
             now.put("login", login.strip());
-            now.put("role", role);
+            if (roleName != null) {
+                // Роль клиента названием — снимком, как у назначения; прежней
+                // колонки в записи нет: «Роль: Просмотр» рядом с «Роль: Кладовщик-2»
+                // назвало бы одного сотрудника двумя ролями.
+                now.put("access_role", roleName);
+            } else {
+                now.put("role", role);
+            }
             journal.created("tenant_member", id, now);
-            // Ссылка на роль переноса той же прежней роли (задача 0044): иначе
-            // заведённый здесь сотрудник жил бы на паре role → seeded_from,
-            // и удаление клиентом этой роли молча оставило бы его без прав.
-            // Роли нет (клиент её удалил) — ссылки нет, как у прежнего образа.
-            jdbc.update("""
-                    UPDATE tenant_member SET access_role_id =
-                           (SELECT r.id FROM access_role r WHERE r.seeded_from = ?)
-                     WHERE id = ?""", role, id);
+            if (accessRoleId == null) {
+                // Ссылка на роль переноса той же прежней роли (задача 0044): иначе
+                // заведённый здесь сотрудник жил бы на паре role → seeded_from,
+                // и удаление клиентом этой роли молча оставило бы его без прав.
+                // Роли нет (клиент её удалил) — ссылки нет, как у прежнего образа.
+                jdbc.update("""
+                        UPDATE tenant_member SET access_role_id =
+                               (SELECT r.id FROM access_role r WHERE r.seeded_from = ?)
+                         WHERE id = ?""", role, id);
+            }
             return byId(id);
         } catch (DuplicateKeyException e) {
             // Уникальность по нормализованному логину стоит в БД: «Ivan» и «ivan »
