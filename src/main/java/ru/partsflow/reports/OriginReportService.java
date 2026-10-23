@@ -157,9 +157,14 @@ public class OriginReportService {
      * по нему — «Поступило» показало бы «3 шт.» там, где на «Остатках» лежит
      * четыре, и объяснить эту разницу было бы нечем. Поймано живым прогоном:
      * принял две двери, а вкладка написала одну.
+     *
+     * <p><b>Сумма со знаком, а не модулей (задача 0367).</b> Удалённое поступление
+     * снимается встречным {@code INTAKE} с минусом, и модуль посчитал бы его
+     * вторым приходом. Приход сам по себе всегда с плюсом — у лежащих данных
+     * сумма та же.
      */
     private static final String INTAKE_JOIN = """
-            LEFT JOIN (SELECT part_id, sum(abs(qty_delta)) AS qty
+            LEFT JOIN (SELECT part_id, sum(qty_delta) AS qty
                          FROM stock_movement
                         WHERE movement_type = 'INTAKE'
                         GROUP BY part_id) got ON got.part_id = p.id""";
@@ -188,7 +193,7 @@ public class OriginReportService {
      * количество посчиталось бы дважды — на «Продано» и на «Списано».
      */
     private static final String WRITE_OFF_JOIN = """
-            LEFT JOIN (SELECT part_id, sum(abs(qty_delta)) AS qty
+            LEFT JOIN (SELECT part_id, -sum(qty_delta) AS qty
                          FROM stock_movement
                         WHERE movement_type = 'WRITE_OFF'
                         GROUP BY part_id) off ON off.part_id = p.id""";
@@ -285,7 +290,7 @@ public class OriginReportService {
         List<Object> args = supplyId == null ? List.of() : List.of(supplyId);
         return chart(scope, args, """
                 SELECT to_char(date_trunc('month', m.created_at), 'YYYY-MM') AS ym,
-                       sum(abs(m.qty_delta) * COALESCE(p.cost_price, 0)) AS amount
+                       sum(m.qty_delta * COALESCE(p.cost_price, 0)) AS amount
                   FROM stock_movement m
                   JOIN part p ON p.id = m.part_id
                  WHERE m.movement_type = 'INTAKE'""" + " AND " + scope + "\n"
@@ -312,7 +317,7 @@ public class OriginReportService {
         // системы — единицей у всех 35 841.
         Map<YearMonth, BigDecimal> planned = byMonth("""
                 SELECT to_char(date_trunc('month', m.created_at), 'YYYY-MM') AS ym,
-                       sum(abs(m.qty_delta) * COALESCE(p.price, 0)) AS amount
+                       sum(m.qty_delta * COALESCE(p.price, 0)) AS amount
                   FROM stock_movement m
                   JOIN part p ON p.id = m.part_id
                  WHERE m.movement_type = 'INTAKE'""" + " AND " + scope + "\n"

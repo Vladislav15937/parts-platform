@@ -74,10 +74,11 @@ describe('резерв и отсутствие на складе', () => {
       ],
     };
     render(<PartHistoryView history={history} tab="movements" onTab={() => {}} />);
-    expect(screen.getByText('Сделка №50001')).toBeTruthy();
+    expect(screen.getByText(/Сделка №50001/)).toBeTruthy();
     expect(screen.getByText('Резерв')).toBeTruthy();
     expect(screen.getByText('Выдан')).toBeTruthy();
-    const qtys = [...document.querySelectorAll('td.num')].map((td) => td.textContent);
+    // Колонка «Кол-во» — четвёртая (Дата/Время · Документ/Склад · Статус · Кол-во).
+    const qtys = [...document.querySelectorAll('tbody tr')].map((tr) => tr.children[3]?.textContent);
     expect(qtys).toEqual(['1', '-1']);
   });
 });

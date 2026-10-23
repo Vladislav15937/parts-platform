@@ -29,6 +29,7 @@ import { PartLabelPrint } from './PartLabelPrint';
 import { LABEL_ROLES } from './tabs';
 import { PartDonorView } from './PartDonorView';
 import { PartHistoryView } from './PartHistoryView';
+import { deleteStockDocument, deletionNotice } from '../inventory/stockDocuments';
 import { loadCached, modelsOf, type VehicleCatalog } from '../catalog/vehicles';
 import { listCells, type Cell } from '../organization/warehouses';
 import { useMounted } from '../ui/useMounted';
@@ -130,8 +131,15 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
    * и исчезнувшее окно вместо плашки читалось бы как «не сохранилось».
    */
   const [grade, setGrade] = useState<string | null>(row.qualityGrade);
-  /** Оценку трогали — витрину за карточкой надо перечитать при закрытии. */
+  /**
+   * Оценку трогали или удалили документ движения — витрину за карточкой
+   * надо перечитать при закрытии. Удаление тоже не закрывает окно: итог
+   * («что не снято со склада») человек читает здесь же, в «Движении товара».
+   */
   const [regraded, setRegraded] = useState(false);
+  const [deletingDocument, setDeletingDocument] = useState(false);
+  const [documentNotice, setDocumentNotice] =
+    useState<{ text: string; error: boolean } | null>(null);
   const [fits, setFits] = useState<Applicability[] | null>(null);
   // «Двигатель важен» и пояснение, почему применимость не поставилась сама (0363).
   const [fitState, setFitState] = useState<FitState | null>(null);
@@ -197,6 +205,33 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
    * поэтому колонка «Оценка состояния» за карточкой остаётся старой —
    * и обновляется ровно тогда, когда карточку закрывают.
    */
+  /**
+   * Удаление выполненного документа из «Движения товара» (задача 0367).
+   * Лента перечитывается — встречное движение и «(Удалён)» видны сразу, —
+   * а итог остаётся над ней словами.
+   */
+  async function removeDocument(documentId: number): Promise<void> {
+    setDeletingDocument(true);
+    setDocumentNotice(null);
+    try {
+      const outcome = await deleteStockDocument(documentId);
+      if (!mounted.current) return;
+      setDocumentNotice({ text: deletionNotice(outcome), error: false });
+      setRegraded(true);
+      const fresh = await loadHistory(row.id);
+      if (mounted.current) setHistory(fresh);
+    } catch (cause) {
+      if (mounted.current) {
+        setDocumentNotice({
+          text: cause instanceof ApiError && cause.message ? cause.message : 'Документ не удалён',
+          error: true,
+        });
+      }
+    } finally {
+      if (mounted.current) setDeletingDocument(false);
+    }
+  }
+
   const close = useCallback(() => {
     if (regraded) {
       onChanged();
@@ -776,7 +811,14 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
               на деталь. Поймано живым прогоном. */}
           {tab === 'history' ? (
             <div className="card-view__history">
-              <PartHistoryView history={history} tab={historyTab} onTab={setHistoryTab} />
+              <PartHistoryView
+                history={history}
+                tab={historyTab}
+                onTab={setHistoryTab}
+                onDelete={removeDocument}
+                busy={deletingDocument}
+                notice={documentNotice}
+              />
             </div>
           ) : (
           <div className="card-view__photos">

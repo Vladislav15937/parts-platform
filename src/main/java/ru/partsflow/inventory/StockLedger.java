@@ -73,6 +73,69 @@ public class StockLedger {
         return saved;
     }
 
+    /**
+     * Встречное движение удаления выполненного документа (задача 0367):
+     * снимает со склада {@code fromWarehouseId} не больше свободного
+     * и пишет движение ровно на снятое.
+     *
+     * <p><b>Снимается только свободное, и это одна инструкция.</b> Решение
+     * владельца 23.10.2026 (tasks/0367, п. 2): проданное или отложенное
+     * остаётся на складе, а сколько не снято, называется человеку. «Прочитать
+     * свободное, вычесть, записать» отдало бы отложенную деталь второй раз —
+     * между чтением и записью встанет продавец с резервом. Поэтому сколько
+     * снять, считает сама инструкция под блокировкой строки раскладки
+     * ({@code FOR UPDATE} во вложенном запросе перечитывает строку после
+     * чужой фиксации), и условие «есть что снять» стоит в её {@code WHERE};
+     * снятое возвращается {@code RETURNING}. Движение пишется после —
+     * на то количество, которое инструкция сняла, а не на запрошенное.
+     *
+     * @param fromWarehouseId откуда снять; {@code null} — снимать нечего,
+     *                        движение только приходное (удалённое списание
+     *                        возвращает списанное целиком)
+     * @param toWarehouseId   куда положить снятое; {@code null} — никуда
+     *                        (удалённое поступление)
+     * @return сколько снято (или возвращено); ноль — движение не записано
+     */
+    public BigDecimal reverse(Long partId, MovementType type, BigDecimal wanted,
+                              Long fromWarehouseId, Long toWarehouseId, Long documentId) {
+        BigDecimal taken = wanted;
+        if (fromWarehouseId != null) {
+            @SuppressWarnings("unchecked")
+            List<Object> rows = entityManager.createNativeQuery("""
+                            UPDATE part_stock s
+                               SET qty = s.qty - t.take, updated_at = now()
+                              FROM (SELECT part_id, warehouse_id,
+                                           least(CAST(:wanted AS numeric), qty - qty_reserved) AS take
+                                      FROM part_stock
+                                     WHERE part_id = :part AND warehouse_id = :warehouse
+                                       FOR UPDATE) t
+                             WHERE s.part_id = t.part_id AND s.warehouse_id = t.warehouse_id
+                               AND t.take > 0
+                            RETURNING t.take""")
+                    .setParameter("wanted", wanted)
+                    .setParameter("part", partId)
+                    .setParameter("warehouse", fromWarehouseId)
+                    .getResultList();
+            taken = rows.isEmpty() ? BigDecimal.ZERO : (BigDecimal) rows.get(0);
+            if (taken.signum() <= 0) {
+                return BigDecimal.ZERO;
+            }
+        }
+
+        StockMovement movement = StockMovement.reversal(
+                partId, type, taken, fromWarehouseId, toWarehouseId, documentId);
+        if (movement.getCreatedBy() == null) {
+            movement.setCreatedBy(ru.partsflow.platform.security.CurrentUser.memberId());
+        }
+        StockMovement saved = movements.saveAndFlush(movement);
+        if (toWarehouseId != null) {
+            putTo(saved);
+        }
+        applyToPartAfterReversal(saved);
+        partChanges.changed(saved.getPartId());
+        return taken;
+    }
+
     /** Пачка движений одной транзакцией: приёмка и проведение документа. */
     public List<StockMovement> record(List<StockMovement> batch) {
         return batch.stream().map(this::record).toList();
@@ -121,21 +184,71 @@ public class StockLedger {
         }
 
         if (movement.getToWarehouseId() != null) {
-            entityManager.createNativeQuery("""
-                            INSERT INTO part_stock (part_id, warehouse_id, qty, cell_id)
-                            VALUES (:part, :warehouse, abs(:delta), :cell)
-                            ON CONFLICT (part_id, warehouse_id) DO UPDATE
-                                SET qty = part_stock.qty + abs(:delta),
-                                    cell_id = COALESCE(EXCLUDED.cell_id, part_stock.cell_id),
-                                    updated_at = now()""")
-                    .setParameter("part", movement.getPartId())
-                    .setParameter("warehouse", movement.getToWarehouseId())
-                    .setParameter("delta", movement.getQtyDelta())
-                    .setParameter("cell", movement.getToCellId())
-                    .executeUpdate();
+            putTo(movement);
         }
 
         applyToPart(movement);
+    }
+
+    /** Приход на склад-приёмник: общий шаг обычного движения и встречного. */
+    private void putTo(StockMovement movement) {
+        entityManager.createNativeQuery("""
+                        INSERT INTO part_stock (part_id, warehouse_id, qty, cell_id)
+                        VALUES (:part, :warehouse, abs(:delta), :cell)
+                        ON CONFLICT (part_id, warehouse_id) DO UPDATE
+                            SET qty = part_stock.qty + abs(:delta),
+                                cell_id = COALESCE(EXCLUDED.cell_id, part_stock.cell_id),
+                                updated_at = now()""")
+                .setParameter("part", movement.getPartId())
+                .setParameter("warehouse", movement.getToWarehouseId())
+                .setParameter("delta", movement.getQtyDelta())
+                .setParameter("cell", movement.getToCellId())
+                .executeUpdate();
+    }
+
+    /**
+     * Карточка после встречного движения удаления документа (задача 0367).
+     *
+     * <p>Остаток — та же сумма по складам. Статус, когда остаток есть, —
+     * «в наличии», как всегда. <b>Когда встречное движение обнулило остаток,
+     * статус — тот, каким он был бы без удалённого документа</b>: по последнему
+     * уходу товара со склада мимо удалённых документов (продажа — «продано»,
+     * списание или недостача — «списано»), а ухода не было — «черновик»,
+     * то есть «на склад не приходовалась». Общее правило {@link #applyToPart}
+     * тут неверно в обе стороны: по виду {@code INTAKE} оно оставило бы
+     * «в наличии» при нуле (позиция в прайсе при пустой полке), а по
+     * {@code WRITE_OFF} — «списано» деталь, которой просто не было. Какой
+     * статус хочет здесь владелец, — вопрос ему, названный в PR задачи 0367;
+     * это наименее удивляющее из того, что можно вывести из журнала.
+     */
+    private void applyToPartAfterReversal(StockMovement movement) {
+        entityManager.createNativeQuery("""
+                        UPDATE part p
+                           SET qty_on_hand = stock.qty,
+                               updated_at = now(),
+                               status = CASE
+                                   WHEN stock.qty > 0 THEN 'IN_STOCK'
+                                   ELSE coalesce(
+                                       (SELECT CASE WHEN m.movement_type = 'SALE'
+                                                    THEN 'SOLD' ELSE 'WRITTEN_OFF' END
+                                          FROM stock_movement m
+                                          LEFT JOIN stock_document d ON d.id = m.document_id
+                                         WHERE m.part_id = p.id
+                                           AND (m.movement_type IN ('SALE', 'WRITE_OFF')
+                                                OR (m.movement_type = 'INVENTORY_ADJUST'
+                                                    AND m.qty_delta < 0))
+                                           AND (m.document_id IS NULL
+                                                OR (d.deleted_at IS NULL AND d.id <> :document))
+                                         ORDER BY m.created_at DESC, m.id DESC
+                                         LIMIT 1),
+                                       'DRAFT')
+                               END
+                          FROM (SELECT COALESCE(sum(qty), 0) AS qty
+                                  FROM part_stock WHERE part_id = :part) stock
+                         WHERE p.id = :part""")
+                .setParameter("document", movement.getDocumentId())
+                .setParameter("part", movement.getPartId())
+                .executeUpdate();
     }
 
     /**

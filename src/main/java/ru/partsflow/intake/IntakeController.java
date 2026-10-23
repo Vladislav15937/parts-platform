@@ -401,13 +401,20 @@ public class IntakeController {
         }
     }
 
-    public record ReceiptView(Long documentId, Long documentNumber, List<PartView> parts) {
+    /**
+     * @param deleted поступление этой партии с тех пор удалено (задача 0367):
+     *                повтор офлайн-очереди получает ответ первого раза и не
+     *                заводит партию заново, но и не делает вид, что она на складе
+     */
+    public record ReceiptView(Long documentId, Long documentNumber, List<PartView> parts,
+                              boolean deleted) {
 
         static ReceiptView of(IntakeService.Receipt receipt) {
             return new ReceiptView(
                     receipt.document().getId(),
                     receipt.document().getNumber(),
-                    receipt.parts().stream().map(PartView::of).toList());
+                    receipt.parts().stream().map(PartView::of).toList(),
+                    receipt.document().isDeleted());
         }
     }
 

@@ -1,6 +1,7 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { loadMoveJournal, loadMoveLines, type MoveDocument, type MoveLine } from '../inventory/moves';
+import { deleteStockDocument, deletionNotice } from '../inventory/stockDocuments';
 import {
   conditionTitle, loadCatalog, NO_VEHICLE, type CatalogRow, type Warehouse,
 } from '../inventory/catalog';
@@ -33,7 +34,12 @@ export function StockMovesScreen({ role }: { role: string }) {
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
 
-  useEffect(() => {
+  // Удаление перевозки (задача 0367): документ, который спросили, и итог.
+  const [asked, setAsked] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
+
+  const reload = useCallback(() => {
     loadMoveJournal()
       .then((found) => {
         if (mounted.current) {
@@ -45,6 +51,30 @@ export function StockMovesScreen({ role }: { role: string }) {
         if (mounted.current) setError(describe(cause, 'Журнал перевозок не загрузился'));
       });
   }, [mounted]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  /**
+   * Удаляет перевозку встречным движением: со склада-получателя снимается
+   * только свободное, и что осталось там, называется словами над журналом.
+   */
+  async function remove(id: number): Promise<void> {
+    setAsked(null);
+    setDeleting(true);
+    setNotice(null);
+    try {
+      const outcome = await deleteStockDocument(id);
+      if (!mounted.current) return;
+      setNotice({ text: deletionNotice(outcome), error: false });
+      reload();
+    } catch (cause) {
+      if (mounted.current) setNotice({ text: describe(cause, 'Перевозка не удалена'), error: true });
+    } finally {
+      if (mounted.current) setDeleting(false);
+    }
+  }
 
   function toggle(id: number): void {
     if (expanded === id) {
@@ -106,7 +136,11 @@ export function StockMovesScreen({ role }: { role: string }) {
     }
   }
 
-  const totalLines = (documents ?? []).reduce((sum, d) => sum + d.lines, 0);
+  // Удалённые в счёт не идут: «Перевозок: 5» обязано значить пять увёзших.
+  const live = (documents ?? []).filter((d) => d.deletedAt == null);
+  const totalLines = live.reduce((sum, d) => sum + d.lines, 0);
+  const removed = (documents ?? []).length - live.length;
+  const anyDeletable = (documents ?? []).some((d) => d.deletable === true);
 
   return (
     <section className="screen screen--wide">
@@ -114,6 +148,9 @@ export function StockMovesScreen({ role }: { role: string }) {
 
       {error !== '' && <p className="note note--error">{error}</p>}
       {openError !== '' && <p className="note note--error">{openError}</p>}
+      {notice !== null && (
+        <p className={notice.error ? 'note note--error' : 'note'} role="status">{notice.text}</p>
+      )}
 
       {card !== null && (
         <PartCard
@@ -142,6 +179,7 @@ export function StockMovesScreen({ role }: { role: string }) {
                   <th className="num">Позиций</th>
                   <th>Примечание</th>
                   <th>Кто</th>
+                  {anyDeletable && <th aria-label="Действия" />}
                 </tr>
               </thead>
               <tbody>
@@ -152,16 +190,53 @@ export function StockMovesScreen({ role }: { role: string }) {
                       onClick={() => toggle(doc.id)}
                     >
                       <td>{new Date(doc.createdAt).toLocaleString('ru-RU')}</td>
-                      <td>№{doc.number}</td>
+                      <td>
+                        №{doc.number}
+                        {/* Удалённая перевозка остаётся в журнале: её движения
+                            в журнале склада никуда не делись (задача 0367). */}
+                        {doc.deletedAt != null && (
+                          <div className="moves__deleted">
+                            Удалён{doc.deletedBy != null ? ` · ${doc.deletedBy}` : ''}
+                          </div>
+                        )}
+                      </td>
                       <td>{doc.fromWarehouse}</td>
                       <td>{doc.toWarehouse}</td>
                       <td className="num">{doc.lines}</td>
                       <td>{doc.note ?? '—'}</td>
                       <td>{doc.author ?? '—'}</td>
+                      {anyDeletable && (
+                        <td onClick={(e) => e.stopPropagation()}>
+                          {doc.deletable === true && (
+                            asked === doc.id ? (
+                              <span className="history__confirm">
+                                <span className="muted">
+                                  Удалить перемещение №{doc.number} целиком? Обратно уедет только
+                                  свободное на складе «{doc.toWarehouse}».
+                                </span>
+                                <button type="button" disabled={deleting}
+                                  onClick={() => void remove(doc.id)}>
+                                  Удалить документ
+                                </button>
+                                <button type="button" className="button--ghost"
+                                  onClick={() => setAsked(null)}>
+                                  Отмена
+                                </button>
+                              </span>
+                            ) : (
+                              <button type="button" className="button--ghost" disabled={deleting}
+                                aria-label={`Удалить: перемещение №${doc.number}`}
+                                onClick={() => setAsked(doc.id)}>
+                                Удалить
+                              </button>
+                            )
+                          )}
+                        </td>
+                      )}
                     </tr>
                     {expanded === doc.id && (
                       <tr>
-                        <td colSpan={7}>
+                        <td colSpan={anyDeletable ? 8 : 7}>
                           {linesLoading ? (
                             <p className="note">Загружаем состав…</p>
                           ) : linesError !== '' ? (
@@ -213,7 +288,8 @@ export function StockMovesScreen({ role }: { role: string }) {
             </table>
           </div>
           <p className="note">
-            Перевозок: {count(documents.length)} на {positions(totalLines)}
+            Перевозок: {count(live.length)} на {positions(totalLines)}
+            {removed > 0 && ` · удалённых: ${count(removed)}`}
           </p>
         </>
       )}

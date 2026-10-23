@@ -18,6 +18,14 @@ export interface MoveDocument {
   note: string | null;
   /** Пусто у переноса из прежней системы — там вошедшего нет и быть не может. */
   author: string | null;
+  /**
+   * Удалённый документ остаётся в журнале с отметкой (задача 0367).
+   * Необязательные — ответ прежней версии их не несёт.
+   */
+  deletedAt?: string | null;
+  deletedBy?: string | null;
+  /** Может ли вошедший удалить документ: признак ставит сервер по своему праву. */
+  deletable?: boolean;
 }
 
 export interface MoveLine {

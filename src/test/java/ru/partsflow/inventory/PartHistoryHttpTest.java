@@ -124,8 +124,9 @@ class PartHistoryHttpTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.movements[0].qty").value(2))
                 .andExpect(jsonPath("$.movements[0].warehouse").value("Ткацкая"))
                 // Документа у движения нет — так приезжает перенесённый склад,
-                // и придумывать номер нельзя.
-                .andExpect(jsonPath("$.movements[0].document").doesNotExist());
+                // и придумывать номер нельзя. С задачи 0367 колонки «Что» нет,
+                // и на месте документа стоит вид — словом, без номера.
+                .andExpect(jsonPath("$.movements[0].document").value("Поступление"));
     }
 
     /**

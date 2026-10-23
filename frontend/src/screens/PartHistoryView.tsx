@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { bulkCaption, type PartHistory } from '../inventory/catalog';
 
 /**
@@ -10,11 +11,22 @@ import { bulkCaption, type PartHistory } from '../inventory/catalog';
  *
  * <p>Свежее сверху: историю открывают, чтобы понять, что произошло только что.
  */
-export function PartHistoryView({ history, tab, onTab }: {
+export function PartHistoryView({ history, tab, onTab, onDelete, busy = false, notice }: {
   history: PartHistory | null;
   tab: 'changes' | 'movements';
   onTab: (tab: 'changes' | 'movements') => void;
+  /**
+   * Удаление выполненного документа строки (задача 0367). Не передано —
+   * колонки действия нет вовсе; передано — кнопка стоит только у строк,
+   * которые сервер отметил удаляемыми.
+   */
+  onDelete?: (documentId: number) => Promise<void>;
+  busy?: boolean;
+  /** Итог удаления словами — что удалено и что не снято со склада. */
+  notice?: { text: string; error: boolean } | null;
 }) {
+  const [asked, setAsked] = useState<number | null>(null);
+
   if (history === null) {
     return <p className="muted">Загружаем…</p>;
   }
@@ -85,40 +97,100 @@ export function PartHistoryView({ history, tab, onTab }: {
       ) : history.movements.length === 0 ? (
         <p className="muted">Движений не было.</p>
       ) : (
-        <table className="history__moves">
-          <thead>
-            <tr>
-              <th>Когда</th>
-              <th>Что</th>
-              <th className="num">Кол-во</th>
-              <th>Документ</th>
-              <th>Склад</th>
-            </tr>
-          </thead>
-          <tbody>
-            {history.movements.map((move, i) => (
-              <tr key={`${move.at}-${i}`}>
-                <td>{moment(move.at)}</td>
-                <td>
-                  {move.type}
-                  {move.reason !== null && <div className="muted">{move.reason}</div>}
-                  {move.author !== null && <div className="muted">{move.author}</div>}
-                </td>
-                {/* Знак не убираем: минус — ушло со склада, плюс — пришло.
-                    Без него продажа и возврат выглядят одинаково. */}
-                <td className="num">{move.held === true ? String(Number(move.qty)) : qty(move.qty)}</td>
-                <td>
-                  {move.document ?? '—'}
-                  {move.status !== null && <div className="muted">{move.status}</div>}
-                </td>
-                <td>{move.warehouse ?? '—'}</td>
+        <>
+          {notice !== null && notice !== undefined && (
+            <p className={notice.error ? 'note note--error' : 'note'} role="status">{notice.text}</p>
+          )}
+          {/* Колонки — как «Движение товара» у Bazon (решение 7 владельца,
+              23.10.2026): статус своей колонкой, а не мелко под документом,
+              и колонки «Что» нет. Автор и причина остались строкой под
+              документом: без них «кто списал и почему» не узнать ничем. */}
+          <table className="history__moves">
+            <thead>
+              <tr>
+                <th>Дата/Время</th>
+                <th>Документ/Склад</th>
+                <th>Статус</th>
+                <th className="num">Кол-во</th>
+                <th className="num">Цена</th>
+                <th>Поступление</th>
+                <th>Поставка</th>
+                {onDelete !== undefined && <th aria-label="Действия" />}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {history.movements.map((move, i) => (
+                <tr key={`${move.at}-${i}`}>
+                  <td>{moment(move.at)}</td>
+                  <td>
+                    {move.document ?? '—'}
+                    {move.warehouse !== null && ` / ${move.warehouse}`}
+                    {move.reason !== null && <div className="muted">{move.reason}</div>}
+                    {move.author !== null && <div className="muted">{move.author}</div>}
+                  </td>
+                  <td className={move.deleted === true ? 'history__status--deleted' : undefined}>
+                    {move.status ?? '—'}
+                  </td>
+                  {/* Знак не убираем: минус — ушло со склада, плюс — пришло.
+                      Без него продажа и возврат выглядят одинаково. */}
+                  <td className="num">{move.held === true ? String(Number(move.qty)) : qty(move.qty)}</td>
+                  <td className="num">{move.price != null ? rub(move.price) : ''}</td>
+                  <td>{history.intake ?? ''}</td>
+                  <td>{history.supply ?? ''}</td>
+                  {onDelete !== undefined && (
+                    <td>
+                      {move.deletableDocumentId != null && (
+                        asked === move.deletableDocumentId ? (
+                          <span className="history__confirm">
+                            {/* Документ удаляется целиком, а не одна строка:
+                                у поступления их бывает тридцать. Сказать
+                                об этом надо до нажатия. */}
+                            <span className="muted">
+                              Удалить {move.document} целиком? Со склада снимется только
+                              свободное.
+                            </span>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => {
+                                const id = move.deletableDocumentId;
+                                if (id == null) return;
+                                setAsked(null);
+                                void onDelete(id);
+                              }}
+                            >
+                              Удалить документ
+                            </button>
+                            <button type="button" className="button--ghost" onClick={() => setAsked(null)}>
+                              Отмена
+                            </button>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="button--ghost"
+                            disabled={busy}
+                            aria-label={`Удалить: ${move.document ?? 'документ'}`}
+                            onClick={() => setAsked(move.deletableDocumentId ?? null)}
+                          >
+                            Удалить
+                          </button>
+                        )
+                      )}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
       )}
     </div>
   );
+}
+
+function rub(value: number): string {
+  return `${Number(value).toLocaleString('ru-RU')} ₽`;
 }
 
 /** Дата и время: без времени две правки одного дня сливаются в одну. */
