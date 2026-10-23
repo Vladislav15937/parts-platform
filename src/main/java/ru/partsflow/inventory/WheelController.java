@@ -55,8 +55,7 @@ public class WheelController {
     public View list(@RequestParam(required = false) String q,
                      @RequestParam(required = false) String kind,
                      @RequestParam(defaultValue = "false") boolean missing,
-                     @RequestParam(required = false) List<String> filter,
-                     @RequestParam(required = false) List<String> find,
+                     jakarta.servlet.http.HttpServletRequest request,
                      // Умолчание то же, что у витрины склада: номер позиции
                      // по возрастанию. Экран присылает его явно, но запрос
                      // без параметров обязан отвечать тем же порядком.
@@ -66,7 +65,7 @@ public class WheelController {
                      @RequestParam(defaultValue = "50") int size) {
 
         WheelService.Page found = wheels.list(q, kind, missing,
-                columnsOf(filter), columnsOf(find), sort, desc,
+                columnsOf(request, "filter"), columnsOf(request, "find"), sort, desc,
                 Math.max(page, 0), Math.min(Math.max(size, 1), MAX_SIZE));
 
         return new View(found.total(), catalog.warehouses(), WheelService.filterableColumns(),
@@ -92,8 +91,7 @@ public class WheelController {
     public void export(@RequestParam(required = false) String q,
                        @RequestParam(required = false) String kind,
                        @RequestParam(defaultValue = "false") boolean missing,
-                       @RequestParam(required = false) List<String> filter,
-                       @RequestParam(required = false) List<String> find,
+                       jakarta.servlet.http.HttpServletRequest request,
                        @RequestParam(defaultValue = "number") String sort,
                        @RequestParam(defaultValue = "false") boolean desc,
                        jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
@@ -112,7 +110,8 @@ public class WheelController {
         out.write('\uFEFF');
         writeRow(out, WheelService.exportHeader(found));
 
-        wheels.export(q, kind, missing, columnsOf(filter), columnsOf(find), sort, desc, found,
+        wheels.export(q, kind, missing, columnsOf(request, "filter"), columnsOf(request, "find"),
+                sort, desc, found,
                 cells -> writeRow(out, cells));
         out.flush();
     }
@@ -151,6 +150,26 @@ public class WheelController {
     @GetMapping("/values")
     public List<String> values(@RequestParam String column) {
         return wheels.values(column);
+    }
+
+    /**
+     * Пары отбора — сырыми значениями параметра, а не {@code List<String>}
+     * от Spring (задача 0373).
+     *
+     * <p><b>Почему не параметром метода.</b> Один параметр Spring приводит
+     * к списку, <b>разрезая по запятой</b>: «updatedBy:Пётр Массов (vladelec,
+     * ID 4207)» приезжал двумя половинами, вторая — без двоеточия, и отбор
+     * отвечал 400 «задаётся как колонка:значение». С подписью сотрудника
+     * «Имя (логин, ID N)» запятая стоит в каждом значении «Кто изменил»;
+     * раньше так же ломалось любое одиночное значение с запятой (заметка,
+     * описание). Два и больше параметров Spring не режет — потому и
+     * не замечали. {@code getParameterValues} отдаёт ровно то, что прислал
+     * экран.
+     */
+    private static java.util.Map<String, String> columnsOf(
+            jakarta.servlet.http.HttpServletRequest request, String name) {
+        String[] values = request.getParameterValues(name);
+        return columnsOf(values == null ? null : List.of(values));
     }
 
     /**

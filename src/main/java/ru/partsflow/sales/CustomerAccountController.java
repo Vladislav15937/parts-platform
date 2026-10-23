@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import ru.partsflow.platform.security.CurrentUser;
-import ru.partsflow.platform.security.MemberService;
+import ru.partsflow.platform.security.MemberSignatures;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -34,10 +34,10 @@ public class CustomerAccountController {
 
     private final SalesService sales;
     private final DealRepository deals;
-    private final MemberService members;
+    private final MemberSignatures members;
 
     public CustomerAccountController(SalesService sales, DealRepository deals,
-                                     MemberService members) {
+                                     MemberSignatures members) {
         this.sales = sales;
         this.deals = deals;
         this.members = members;
@@ -58,7 +58,7 @@ public class CustomerAccountController {
     @PreAuthorize("hasAuthority('customer.view')")
     public AccountView account(@PathVariable Long customerId) {
         List<CustomerAccountEntry> entries = sales.accountEntries(customerId);
-        Map<Long, String> authorNames = members.namesOf(
+        Map<Long, String> authorNames = members.of(
                 entries.stream().map(CustomerAccountEntry::getCreatedBy).toList());
         Map<Long, Long> dealNumbers = deals.findAllById(
                         entries.stream().map(CustomerAccountEntry::getDealId)

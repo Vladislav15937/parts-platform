@@ -1,5 +1,6 @@
 package ru.partsflow.sales;
 
+import ru.partsflow.platform.security.MemberSignature;
 import ru.partsflow.shared.NotFound;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -1047,7 +1048,9 @@ public class SalesService {
         List<DealListRow> rows = jdbc.query(
                 "SELECT d.id, d.number, d.created_at, d.customer_id, c.name AS customer_name,"
                         + " d.total_amount, d.paid_amount, d.status, d.reserved_until,"
-                        + " d.manager_id, m.display_name AS manager_name,"
+                        // Ответственный — подписью «Имя (логин, ID N)» (задача 0373,
+                        // решение владельца 23.10.2026, пункт 5а).
+                        + " d.manager_id, " + MemberSignature.sql("m") + " AS manager_name,"
                         + PREORDER_EXISTS + " AS preorder,"
                 + " (" + PREORDER_ONLY + ") AS preorder_only,"
                         + " d.preorder_shift_from, d.preorder_shift_to"
@@ -1447,7 +1450,7 @@ public class SalesService {
                         + " JOIN deal d ON d.id = i.deal_id"),
                 boardOptions("SELECT DISTINCT s.id, s.name AS name FROM deal_source s"
                         + " JOIN deal d ON d.deal_source_id = s.id"),
-                boardOptions("SELECT DISTINCT m.id, m.display_name AS name"
+                boardOptions("SELECT DISTINCT m.id, " + MemberSignature.sql("m") + " AS name"
                         + " FROM tenant_member m"
                         + " JOIN deal d ON d.manager_id = m.id"));
     }

@@ -11,7 +11,6 @@ import ru.partsflow.platform.session.SessionRevocations;
 import ru.partsflow.platform.tenant.TenantContext;
 
 import java.time.Instant;
-import java.util.Collection;
 import java.util.Map;
 import java.util.List;
 import java.util.Optional;
@@ -334,29 +333,6 @@ public class MemberService {
                 login.strip(), passwordEncoder.encode(password));
 
         return created.isEmpty() ? Optional.empty() : Optional.of(byId(created.get(0)));
-    }
-
-    /**
-     * Имена сотрудников по идентификаторам — одним запросом на всю выдачу.
-     *
-     * <p>История документа — это десятки строк, и запрос на каждую превратил
-     * бы её открытие в столько же обращений к базе. Без имени же строка
-     * читается как «автор 3»: разбирают историю через недели, когда
-     * по номеру никто никого не вспомнит.
-     */
-    @Transactional(readOnly = true)
-    public Map<Long, String> namesOf(Collection<Long> memberIds) {
-        List<Long> ids = memberIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
-        if (ids.isEmpty()) {
-            return Map.of();
-        }
-        Map<Long, String> names = new java.util.HashMap<>();
-        jdbc.query("SELECT id, display_name FROM tenant_member WHERE id = ANY (?)",
-                rs -> {
-                    names.put(rs.getLong("id"), rs.getString("display_name"));
-                },
-                (Object) ids.toArray(Long[]::new));
-        return names;
     }
 
     public Member byId(Long memberId) {

@@ -148,7 +148,7 @@ class SoldItemsReportTest extends PostgresTestBase {
                 .isEqualTo(number);
         assertThat(door.path("condition").asText()).isEqualTo("б/у");
         assertThat(door.path("warehouse").asText()).isEqualTo("Ткацкая");
-        assertThat(door.path("manager").asText()).isEqualTo("Иван Продавцов");
+        assertThat(door.path("manager").asText()).startsWith("Иван Продавцов (");
         assertThat(door.path("donorCode").asText()).isEqualTo("350");
         assertThat(door.path("dealNumber").asLong()).isPositive();
     }
@@ -248,7 +248,7 @@ class SoldItemsReportTest extends PostgresTestBase {
         JsonNode byManager = page("managerId=" + secondSellerId);
         assertThat(byManager.path("rows").size()).isEqualTo(1);
         assertThat(row(byManager, "Стекло").path("manager").asText())
-                .isEqualTo("Пётр Сменщиков");
+                .startsWith("Пётр Сменщиков (");
 
         JsonNode byDonor = page("donorId=" + lampDonor);
         assertThat(byDonor.path("totals").path("items").asInt()).isEqualTo(2);
@@ -307,9 +307,13 @@ class SoldItemsReportTest extends PostgresTestBase {
     @DisplayName("Список ответственных считается по продажам")
     void managersComeFromSalesAndNotFromTheStaffList() throws Exception {
         JsonNode managers = page("").path("managers");
-        assertThat(managers.findValuesAsText("name"))
+        // Подписью «Имя (логин, ID N)» (задача 0373): сверяется имя — её начало.
+        java.util.List<String> names = managers.findValuesAsText("name").stream()
+                .map(name -> name.substring(0, name.indexOf(" (")))
+                .toList();
+        assertThat(names)
                 .containsExactlyInAnyOrder("Иван Продавцов", "Пётр Сменщиков");
-        assertThat(managers.findValuesAsText("name"))
+        assertThat(names)
                 .as("в отборе предложен владелец, который ничего не продавал")
                 .doesNotContain("Владелец");
     }

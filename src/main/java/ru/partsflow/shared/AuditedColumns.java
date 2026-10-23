@@ -5,6 +5,7 @@ import org.springframework.jdbc.core.RowCallbackHandler;
 
 import ru.partsflow.inventory.PartCondition;
 import ru.partsflow.inventory.QualityGrade;
+import ru.partsflow.platform.security.MemberSignature;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -600,8 +601,10 @@ public final class AuditedColumns {
                     "SELECT id, " + SupplyKinds.sqlLabel("supply")
                             + " AS title FROM supply WHERE id IN (%s)";
             case "customer_id" -> "SELECT id, name AS title FROM customer WHERE id IN (%s)";
-            case "manager_id" ->
-                    "SELECT id, display_name AS title FROM tenant_member WHERE id IN (%s)";
+            // Ответственный — подписью «Имя (логин, ID N)», как автор строки
+            // рядом (задача 0373, решение владельца 23.10.2026, пункт 5а).
+            case "manager_id" -> "SELECT m.id, " + MemberSignature.sql("m")
+                    + " AS title FROM tenant_member m WHERE m.id IN (%s)";
             case "payment_source_id" ->
                     "SELECT id, name AS title FROM payment_source WHERE id IN (%s)";
             default -> null;

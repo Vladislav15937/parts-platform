@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import ru.partsflow.platform.security.MemberSignature;
 import ru.partsflow.shared.NotFound;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -281,8 +282,10 @@ public class StockDocumentService {
                 .stream()
                 .filter(row -> row.taken().compareTo(row.wanted()) < 0)
                 .toList();
+        // Кто удалил — подписью (задача 0373): «уже удалено (Сергей)» на разборке
+        // с двумя Сергеями не говорит, к кому идти.
         String deletedBy = jdbc.query(
-                "SELECT display_name FROM tenant_member WHERE id = ?",
+                "SELECT " + MemberSignature.sql("m") + " FROM tenant_member m WHERE m.id = ?",
                 (rs, i) -> rs.getString(1), document.getDeletedBy()).stream().findFirst().orElse(null);
         return new DeletionOutcome(document.getId(), document.getNumber(),
                 document.getDocType().name(), document.getDeletedAt(), deletedBy,

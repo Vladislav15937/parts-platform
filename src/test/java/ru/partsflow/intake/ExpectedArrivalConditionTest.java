@@ -135,7 +135,7 @@ class ExpectedArrivalConditionTest extends PostgresTestBase {
 
         String history = get(session, "/api/parts/%d/history".formatted(part)).getBody();
         assertThat(history).as("в ленте правок нет смены состояния")
-                .contains("\"author\":\"Владелец\"")
+                .contains("\"author\":\"Владелец (")
                 .contains("{\"label\":\"Состояние\",\"before\":\"Б/у\",\"after\":\"Контрактная\"");
         assertThat(inTenant(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM part_change WHERE part_id = ?", Integer.class, part)))

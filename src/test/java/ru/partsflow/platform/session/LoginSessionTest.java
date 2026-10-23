@@ -119,7 +119,7 @@ class LoginSessionTest extends PostgresTestBase {
         mvc.perform(get("/api/organization/sessions").session(login("vladelec")))
                 .andExpect(status().isOk())
                 // Свежее сверху: владелец только что вошёл сам.
-                .andExpect(jsonPath("$.items[1].who").value("Сидоров"))
+                .andExpect(jsonPath("$.items[1].who").value(signed("prodavec")))
                 .andExpect(jsonPath("$.items[1].role").value("SELLER"))
                 .andExpect(jsonPath("$.items[1].success").value(true))
                 .andExpect(jsonPath("$.items[1].device").value("Chrome · Windows"))
@@ -143,7 +143,7 @@ class LoginSessionTest extends PostgresTestBase {
         mvc.perform(post("/api/auth/logout").with(csrf()).session(seller))
                 .andExpect(status().isNoContent());
 
-        mvc.perform(get("/api/organization/sessions").param("member", "Сидоров")
+        mvc.perform(get("/api/organization/sessions").param("member", signed("prodavec"))
                         .session(login("vladelec")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].endReason").value("LOGOUT"))
@@ -173,7 +173,7 @@ class LoginSessionTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.items[0].unknown").value(true))
                 .andExpect(jsonPath("$.items[0].success").value(false))
                 .andExpect(jsonPath("$.items[0].failureReason").value("BAD_CREDENTIALS"))
-                .andExpect(jsonPath("$.items[1].who").value("Сидоров"))
+                .andExpect(jsonPath("$.items[1].who").value(signed("prodavec")))
                 .andExpect(jsonPath("$.items[1].unknown").value(false));
     }
 
@@ -239,7 +239,7 @@ class LoginSessionTest extends PostgresTestBase {
         // Тот же запрос той же сессией — и он больше не проходит.
         mvc.perform(get("/api/auth/me").session(seller)).andExpect(status().isUnauthorized());
 
-        mvc.perform(get("/api/organization/sessions").param("member", "Сидоров")
+        mvc.perform(get("/api/organization/sessions").param("member", signed("prodavec"))
                         .session(login("vladelec")))
                 .andExpect(jsonPath("$.items[0].endReason").value("REVOKED"))
                 .andExpect(jsonPath("$.items[0].endDetail").value("смена пароля"));
@@ -421,7 +421,7 @@ class LoginSessionTest extends PostgresTestBase {
                         + "подбиравший пароль, а не владелец")
                 .hasSize(101)
                 .as("свой человек из списка не выпадает, сколько бы ни было чужих")
-                .contains("Пётр Владельцев");
+                .contains(signed("vladelec"));
     }
 
     // ------------------------------------------------------------- служебное
@@ -431,6 +431,17 @@ class LoginSessionTest extends PostgresTestBase {
                 SELECT last_seen_at FROM login_session
                  WHERE outcome = 'SUCCESS' AND login_attempted = 'prodavec'""",
                 Timestamp.class));
+    }
+
+    /**
+     * Подпись сотрудника «Имя (логин, ID N)» — так его называют клетка «Кто»,
+     * меню и отбор журнала входов (задача 0373). Номер — видимый, из базы.
+     */
+    private String signed(String login) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT display_name, login, number FROM tenant_member WHERE login = ?",
+                (rs, i) -> ru.partsflow.platform.security.MemberSignature.of(
+                        rs.getString(1), rs.getString(2), (Long) rs.getObject(3)), login));
     }
 
     private Long member(String login, String displayName, String role) {

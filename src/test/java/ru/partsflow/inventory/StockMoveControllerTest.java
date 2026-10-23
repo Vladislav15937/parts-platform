@@ -250,7 +250,7 @@ class StockMoveControllerTest extends PostgresTestBase {
                 .andExpect(jsonPath("$[0].toWarehouse").value("Ангар"))
                 .andExpect(jsonPath("$[0].lines").value(1))
                 .andExpect(jsonPath("$[0].note").value("пробный завоз"))
-                .andExpect(jsonPath("$[0].author").value("Владелец"));
+                .andExpect(jsonPath("$[0].author").value(org.hamcrest.Matchers.startsWith("Владелец (")));
 
         // Продавец перевозку не видит вовсе — та же роль, что и на POST.
         mvc.perform(get("/api/stock/moves").session(login("prodavets")))

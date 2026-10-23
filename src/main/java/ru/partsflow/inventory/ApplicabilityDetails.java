@@ -3,6 +3,7 @@ package ru.partsflow.inventory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.platform.security.MemberSignature;
 import ru.partsflow.shared.NotFound;
 
 import java.time.Instant;
@@ -87,7 +88,10 @@ public class ApplicabilityDetails {
         List<Row> rows = jdbc.query("""
                 SELECT p.id, p.number, p.title, p.engine_matters,
                        b.name AS brand, m.name AS model, g.name AS generation,
-                       a.year_from, a.year_to, tm.display_name AS set_by, a.set_at
+                       a.year_from, a.year_to,
+                """
+                // Кто задал применимость — подписью (задача 0373, пункт 5а).
+                + "       " + MemberSignature.sql("tm") + " AS set_by, a.set_at\n" + """
                   FROM part p
                   LEFT JOIN part_applicability a ON a.part_id = p.id
                   LEFT JOIN catalog.brand b ON b.id = a.brand_id

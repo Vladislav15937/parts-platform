@@ -314,7 +314,10 @@ class DealBoardTest extends PostgresTestBase {
         JsonNode narrowed = board("?warehouseId=" + farWarehouse);
         assertThat(names(narrowed, "warehouses")).contains("Ткацкая", "Дальний");
         assertThat(names(narrowed, "sources")).contains("Сайт", "Дром");
-        assertThat(names(narrowed, "managers")).contains("Продавец", "Менеджер");
+        // Подписью «Имя (логин, ID N)» (задача 0373): имя — её начало.
+        assertThat(names(narrowed, "managers"))
+                .anySatisfy(name -> assertThat(name).startsWith("Продавец ("))
+                .anySatisfy(name -> assertThat(name).startsWith("Менеджер ("));
     }
 
     /** Роли те же, что у списка сделок: выборка чужих документов пачкой. */

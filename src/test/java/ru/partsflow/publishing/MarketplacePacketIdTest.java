@@ -184,7 +184,7 @@ class MarketplacePacketIdTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.items[0].kind").value("Выгрузка"))
                 .andExpect(jsonPath("$.items[0].subject").value("Новые"))
                 .andExpect(jsonPath("$.items[0].subjectCode").doesNotExist())
-                .andExpect(jsonPath("$.items[0].author").value("owner"))
+                .andExpect(jsonPath("$.items[0].author").value(org.hamcrest.Matchers.startsWith("owner (ID ")))
                 .andExpect(jsonPath("$.items[0].authorRole").value("OWNER"))
                 .andExpect(jsonPath("$.items[0].changes[0].label").value("Номер прайс-листа"))
                 .andExpect(jsonPath("$.items[0].changes[0].before").value("222"))

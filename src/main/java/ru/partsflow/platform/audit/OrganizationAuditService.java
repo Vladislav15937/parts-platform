@@ -3,6 +3,7 @@ package ru.partsflow.platform.audit;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.platform.security.MemberSignature;
 import ru.partsflow.shared.AuditedColumns;
 import ru.partsflow.shared.PartNumberQuery;
 
@@ -183,8 +184,10 @@ public class OrganizationAuditService {
             + " WHEN 'warehouse' THEN (SELECT x.name FROM warehouse x WHERE x.id = a.record_id)"
             + " WHEN 'storage_cell' THEN (SELECT concat_ws(' · ', w.name, x.code) FROM storage_cell x"
             + " JOIN warehouse w ON w.id = x.warehouse_id WHERE x.id = a.record_id)"
-            + " WHEN 'tenant_member' THEN (SELECT coalesce(x.display_name, x.login) FROM tenant_member x"
-            + " WHERE x.id = a.record_id)"
+            // Сотрудник — подписью, как автор рядом (задача 0373): «Сергей» на
+            // разборке с двумя Сергеями не говорит, кому сменили пароль.
+            + " WHEN 'tenant_member' THEN (SELECT " + MemberSignature.sql("x")
+            + " FROM tenant_member x WHERE x.id = a.record_id)"
             + " END";
 
     /**
@@ -339,15 +342,17 @@ public class OrganizationAuditService {
         List<Object> args = new ArrayList<>();
 
         // Автор отбирается по номеру, а не по имени: под именем стоит индекс
-        // audit_log_user_ix, а под join'ом с tenant_member — нет. Имён-тёзок
-        // в компании бывает несколько, поэтому берутся все совпавшие номера.
+        // audit_log_user_ix, а под join'ом с tenant_member — нет. Значение
+        // меню — подпись «Имя (логин, ID N)» (задача 0373), тем же выражением,
+        // что у клетки: тёзки в ней различимы, и совпадает ровно один.
         if (FILTER_EMPTY.equals(author)) {
             where.append(" AND a.changed_by IS NULL");
         } else if (FILTER_PRESENT.equals(author)) {
             where.append(" AND a.changed_by IS NOT NULL");
         } else if (author != null && !author.isBlank()) {
             List<Long> ids = jdbc.queryForList(
-                    "SELECT id FROM tenant_member WHERE display_name = ?", Long.class, author);
+                    "SELECT m.id FROM tenant_member m WHERE " + MemberSignature.sql("m") + " = ?",
+                    Long.class, author);
             if (ids.isEmpty()) {
                 // Такого сотрудника нет — пустая выдача честнее, чем отбор,
                 // молча снятый за ненадобностью.
@@ -448,7 +453,10 @@ public class OrganizationAuditService {
 
         List<Entry> entries = jdbc.query(watched()
                         + " SELECT a.id, a.changed_at, a.table_name, a.record_id, a.operation,"
-                        + " a.changed_by_role AS author_role, m.display_name AS author,"
+                        + " a.changed_by_role AS author_role,"
+                        // Подпись «Имя (логин, ID N)» — решение владельца 23.10.2026
+                        // (задача 0373, пункт 5а): автор подписан везде, где назван.
+                        + " " + MemberSignature.sql("m") + " AS author,"
                         + " p.title AS part_title, p.public_code AS part_code,"
                         + " p.number AS part_number, dip.number AS item_number,"
                         + " d.number AS deal_number, cust.name AS deal_customer,"
@@ -796,9 +804,10 @@ public class OrganizationAuditService {
     @Transactional(readOnly = true)
     public List<String> values(String column) {
         return switch (column) {
-            case "author" -> jdbc.queryForList("""
-                    SELECT DISTINCT display_name FROM tenant_member
-                     WHERE display_name IS NOT NULL ORDER BY 1""", String.class);
+            // Подписью, как клетка (задача 0373): тёзки в меню различимы.
+            case "author" -> jdbc.queryForList("SELECT DISTINCT " + MemberSignature.sql("m")
+                    + " AS author FROM tenant_member m WHERE m.number IS NOT NULL ORDER BY 1",
+                    String.class);
             case "kind" -> List.copyOf(KINDS.values());
             case "field" -> {
                 Set<String> labels = new TreeSet<>(Comparator.naturalOrder());
