@@ -247,7 +247,12 @@ public class StockDocumentService {
             }
         }
 
-        document.markDeleted(Instant.now(), ru.partsflow.platform.security.CurrentUser.memberId());
+        // До микросекунд, как хранит timestamptz: иначе первый ответ несёт
+        // наносекунды часов JVM (на Linux они есть), а повтор — момент из базы,
+        // и «тот же итог» разошёлся бы в последних знаках. Поймано CI, на macOS
+        // часы микросекундные и разницы не видно.
+        document.markDeleted(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS),
+                ru.partsflow.platform.security.CurrentUser.memberId());
         documents.saveAndFlush(document);
         return outcomeOf(document, false);
     }
