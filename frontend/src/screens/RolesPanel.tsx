@@ -126,7 +126,7 @@ export function RolesPanel({
         <p className="note">Ролей нет — заведите первую.</p>
       ) : (
       <div className="table-scroll">
-        <table>
+        <table className="stack-table">
           <thead>
             <tr>
               <th>Роль</th>
@@ -138,10 +138,10 @@ export function RolesPanel({
           <tbody>
             {roles.map((role) => (
               <tr key={role.id}>
-                <td>{role.name}</td>
-                <td>{role.owner ? 'все, всегда' : role.permissions.length}</td>
-                <td>{employees(role.members)}</td>
-                <td className="filter-row">
+                <td data-label="Роль">{role.name}</td>
+                <td data-label="Прав">{role.owner ? 'все, всегда' : role.permissions.length}</td>
+                <td data-label="Назначена">{employees(role.members)}</td>
+                <td className="filter-row stack-table__actions">
                   {role.owner ? (
                     <span className="note">встроенная: не правится и не удаляется</span>
                   ) : canChange ? (
@@ -160,13 +160,14 @@ export function RolesPanel({
                         className="button--ghost"
                         aria-label={`Удалить роль: ${role.name}`}
                         disabled={busy || role.members > 0}
-                        title={role.members > 0
-                          ? 'Роль назначена — сначала назначьте сотрудникам другую'
-                          : undefined}
+                        title={role.members > 0 ? ASSIGNED : undefined}
                         onClick={() => void remove(role)}
                       >
                         Удалить
                       </button>
+                      {/* Причина — видимым текстом: на телефоне наводить нечем
+                          (решение владельца 23.10.2026, вопрос 3). */}
+                      {role.members > 0 && <span className="note">{ASSIGNED}</span>}
                     </>
                   ) : null}
                 </td>
@@ -221,6 +222,8 @@ export function RolesPanel({
 }
 
 const OWNER = rightsFrom(true, []);
+
+const ASSIGNED = 'Роль назначена — удалить можно, назначив сотрудникам другую';
 
 function employees(value: number): string {
   return `${count(value)} ${plural(value, 'сотрудник', 'сотрудника', 'сотрудников')}`;

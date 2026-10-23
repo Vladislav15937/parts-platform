@@ -32,7 +32,10 @@ export function AccessPermissions({
         <fieldset key={section.title} className="choices">
           <legend>{section.title}</legend>
           {section.permissions.map((action) => {
-            const mark = marked?.(action.key) ?? null;
+            // У погашенного набора (владелец) пометок «поверх роли» нет: их
+            // и не бывает, а подпись у каждого из сорока прав врала бы о данных
+            // (живой прогон 24.10.2026: API отвечает added: [], removed: []).
+            const mark = locked !== undefined ? null : marked?.(action.key) ?? null;
             const notMine = locked === undefined && foreign?.(action.key) === true;
             return (
               <label key={action.key} className="field--check">

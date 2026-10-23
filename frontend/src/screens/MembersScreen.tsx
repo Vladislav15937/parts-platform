@@ -7,6 +7,7 @@ import {
   assignAccess,
   beyondOwn,
   foreignReason,
+  rightTitles,
   loadMemberAccess,
   loadRoles,
   overridesFor,
@@ -153,7 +154,7 @@ export function MembersScreen({
   const ownerLocked = (member: Member) => !ownerActs && access.get(member.id)?.owner === true;
 
   return (
-    <section className="screen">
+    <section className="screen screen--members">
       <h2>Сотрудники</h2>
 
       {error !== '' && <p className="note note--error">{error}</p>}
@@ -170,7 +171,11 @@ export function MembersScreen({
         // шесть колонок с датой последнего входа и кнопками в телефон
         // не помещаются, а без обёртки вбок уезжал весь экран.
         <div className="table-scroll">
-          <table>
+          {/* На телефоне строка таблицы — карточка (`.stack-table`): шесть колонок
+              с тремя кнопками в 390 не помещаются, и «Права» уезжали за край
+              прокрутки, а раскрытые права — на 605 px внутри неё (живой
+              прогон 24.10.2026). Подпись клетки — `data-label`. */}
+          <table className="stack-table">
             <thead>
               <tr>
                 {/* Видимый номер сотрудника, а не номер строки базы: его
@@ -190,11 +195,11 @@ export function MembersScreen({
                 <tr className={member.active ? undefined : 'muted'}>
                   {/* У администратора сервиса логина в кабинете нет: вход
                       у него свой, вне всех разборок (задача 0042). */}
-                  <td>{member.number}</td>
-                  <td>{member.login ?? '—'}</td>
-                  <td>{member.displayName ?? '—'}</td>
-                  <td>{roleCell(member, access.get(member.id))}</td>
-                  <td>
+                  <td data-label="Номер">{member.number}</td>
+                  <td data-label="Логин">{member.login ?? '—'}</td>
+                  <td data-label="Имя">{member.displayName ?? '—'}</td>
+                  <td data-label="Роль">{roleCell(member, access.get(member.id))}</td>
+                  <td data-label="Последний вход">
                     {member.lastLoginAt === null
                       ? 'не входил'
                       : new Date(member.lastLoginAt).toLocaleString('ru-RU')}
@@ -209,7 +214,7 @@ export function MembersScreen({
                     // Кнопки, которые сервер отобьёт, администратору не рисуем.
                     <td />
                   ) : (
-                  <td className="filter-row">
+                  <td className="filter-row stack-table__actions">
                     <button
                       type="button"
                       className="button--ghost"
@@ -248,7 +253,7 @@ export function MembersScreen({
                 </tr>
                 {editing === member.id && (
                   <tr>
-                    <td colSpan={6}>{rightsEditor(member)}</td>
+                    <td colSpan={6} className="stack-table__wide">{rightsEditor(member)}</td>
                   </tr>
                 )}
                 </Fragment>
@@ -338,6 +343,7 @@ export function MembersScreen({
     const wasOwner = current?.owner === true;
     const ownerLocked = (ownerChosen || wasOwner) && !ownerActs;
     const grant = grantObstacle(role, editChosen);
+    const lost = resetLoss(current, editRole);
     return (
       <div className="card">
         <label className="field">
@@ -376,6 +382,7 @@ export function MembersScreen({
               : editChosen.has(key) ? 'добавлено поверх роли' : 'снято поверх роли')}
           />
         )}
+        {lost !== null && <p className="note note--error">{lost}</p>}
         <p className="note">
           Сохранение закроет открытые входы сотрудника — новые права он получит,
           войдя заново.
@@ -400,6 +407,24 @@ export function MembersScreen({
         {ownerRole === undefined && <p className="note">Роли не загрузились.</p>}
       </div>
     );
+  }
+
+  /**
+   * Что сотрудник потеряет, если сменить ему роль: права поверх прежней роли
+   * не переносятся (решение исполнителя PR 508, не оспорено), — и сказать это
+   * надо до «Сохранить», а не молча (живой прогон 24.10.2026).
+   */
+  function resetLoss(current: MemberAccess | undefined, chosenRole: string): string | null {
+    if (current === undefined || String(current.roleId ?? '') === chosenRole) return null;
+    const parts: string[] = [];
+    for (const [word, keys] of [['добавленные', current.added], ['снятые', current.removed]] as const) {
+      if (keys.length === 0) continue;
+      const titles = rightTitles(keys, sections);
+      parts.push(`${word} ${titles === '' ? `(${keys.length})` : titles}`);
+    }
+    return parts.length === 0 ? null
+      : `Смена роли сбросит отдельные права сотрудника: ${parts.join('; ')}. `
+        + 'Отмечен набор новой роли — нужное отметьте заново.';
   }
 
   /**

@@ -194,6 +194,10 @@ export function useCatalogTitles(): ReadonlyMap<string, string> {
 /**
  * Причина погашенного: решение владельца 23.10.2026 (задача 0044, вопрос 3) —
  * недоступное показывается погашенным и называет причину, а не скрывается.
+ *
+ * <p>«Попросите владельца», а не «его даёт владелец на экране «Сотрудники»»:
+ * сотруднику без права этот экран закрыт, и отсылка вела туда, куда ему
+ * не войти (живой прогон 24.10.2026, у раздела «Сотрудники» — буквально).
  */
 export function lockedReason(key: PermissionKey, titles: ReadonlyMap<string, string>): string {
   return lockedReasonAny([key], titles);
@@ -209,13 +213,12 @@ export function lockedReasonAny(
 ): string {
   const named = keys.map((key) => titles.get(key));
   if (named.length === 0 || named.some((title) => title === undefined)) {
-    return 'Нет права на это действие — его даёт владелец на экране «Сотрудники»';
+    return 'Нет права на это действие — попросите владельца';
   }
   if (named.length === 1) {
-    return `Нет права «${named[0]}» — его даёт владелец на экране «Сотрудники»`;
+    return `Нет права «${named[0]}» — попросите владельца`;
   }
   const quoted = named.map((title) => `«${title}»`);
   const last = quoted.pop();
-  return `Нет ни одного из прав: ${quoted.join(', ')} или ${last} — их даёт владелец `
-    + 'на экране «Сотрудники»';
+  return `Нет ни одного из прав: ${quoted.join(', ')} или ${last} — попросите владельца`;
 }

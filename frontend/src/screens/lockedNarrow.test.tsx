@@ -77,7 +77,7 @@ describe('погашенное на телефоне не уводит стра�
       `${name}: погашенных с причиной на экране меньше, чем ждали — мерить нечего`,
     ).toBe(count));
     // Слово права — из справочника: без него причина короче настоящей.
-    await waitFor(() => expect(document.body.textContent).toContain('его даёт владелец'));
+    await waitFor(() => expect(document.body.textContent).toContain('попросите владельца'));
     await waitFor(() => expect(document.body.textContent).not.toContain('нет права на это действие'));
 
     const html = await settled(document.body);

@@ -77,6 +77,30 @@ describe('роли и права на экране сотрудников', () =
     expect(screen.getByRole('button', { name: 'Изменить роль: Приёмщик' })).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Удалить роль: Приёмщик' }) as HTMLButtonElement)
       .disabled, 'назначенную роль предлагают удалить').toBe(true);
+    // Причина погашенного — видимым текстом рядом, а не только подсказкой:
+    // на телефоне наводить нечем (решение владельца 23.10.2026, вопрос 3).
+    const row = screen.getByRole('button', { name: 'Удалить роль: Приёмщик' }).closest('tr') as HTMLElement;
+    expect(within(row).getByText(/Роль назначена — удалить можно, назначив сотрудникам другую/))
+      .toBeTruthy();
+    const free = screen.getByRole('button', { name: 'Удалить роль: Пустая' }).closest('tr') as HTMLElement;
+    expect(within(free).queryByText(/Роль назначена/)).toBeNull();
+  });
+
+  it('смена роли говорит до «Сохранить», какие отдельные права сбросятся', async () => {
+    render(<MembersScreen />);
+    await waitFor(() => screen.getByRole('button', { name: 'Права: ivan' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Права: ivan' }));
+    const editor = screen.getByRole('button', { name: 'Сохранить права' }).closest('.card') as HTMLElement;
+    expect(within(editor).queryByText(/Смена роли сбросит/), 'предупреждение без смены роли').toBeNull();
+
+    fireEvent.change(within(editor).getByLabelText('Роль'), { target: { value: '12' } });
+    expect(within(editor).getByText(
+      /Смена роли сбросит отдельные права сотрудника: добавленные «Продавать»/)).toBeTruthy();
+    expect(sent, 'предупреждение пришло после сохранения, а не до').toEqual([]);
+
+    // Вернул прежнюю роль — терять нечего, предупреждение ушло.
+    fireEvent.change(within(editor).getByLabelText('Роль'), { target: { value: '11' } });
+    expect(within(editor).queryByText(/Смена роли сбросит/)).toBeNull();
   });
 
   it('новая роль уходит названием и набором ключей', async () => {
@@ -125,6 +149,11 @@ describe('роли и права на экране сотрудников', () =
     fireEvent.click(screen.getByRole('button', { name: 'Права: vladelec' }));
 
     expect(screen.getByText(/У владельца все права всегда/)).toBeTruthy();
+    // У владельца прав поверх роли не бывает — и подписи «поверх роли» у сорока
+    // прав врали бы о данных (живой прогон 24.10.2026: API отвечает added: []).
+    const owners = screen.getByRole('button', { name: 'Сохранить права' }).closest('.card') as HTMLElement;
+    expect(within(owners).queryByText(/поверх роли/), 'у владельца права подписаны «поверх роли»')
+      .toBeNull();
     const box = screen.getByLabelText(/Продавать/) as HTMLInputElement;
     expect(box.disabled && box.checked, 'у владельца право снимается галочкой').toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить права' }));

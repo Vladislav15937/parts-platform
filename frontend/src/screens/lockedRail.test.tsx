@@ -68,12 +68,15 @@ describe('погашенные разделы рельса', () => {
     render(<SessionProvider><HomeScreen /></SessionProvider>);
 
     const deals = await waitFor(() => screen.getByRole('button',
-      { name: 'Сделки — Нет права «Продавать» — его даёт владелец на экране «Сотрудники»' }));
+      { name: 'Сделки — Нет права «Продавать» — попросите владельца' }));
     expect(deals.className, 'раздел без права не погашен').toContain('rail__item--locked');
 
     fireEvent.click(deals);
     await waitFor(() => expect(screen.getByText(
-      'Нет права «Продавать» — его даёт владелец на экране «Сотрудники».')).toBeTruthy());
+      'Нет права «Продавать» — попросите владельца.')).toBeTruthy());
+    // Отсылка «на экране «Сотрудники»» вела сотрудника на экран, который ему
+    // закрыт (живой прогон 24.10.2026).
+    expect(document.body.textContent).not.toContain('на экране «Сотрудники»');
     expect(requested.some((url) => url.includes('/api/deals/')),
       'погашенный раздел пошёл за данными, которые сервер отобьёт').toBe(false);
 
@@ -109,7 +112,7 @@ describe('погашенные разделы рельса', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Пересчёт — Нет ни одного из прав: '
       + '«Считать товар на пересчёте», «Смотреть журнал пересчётов» или «Сводить расхождения '
-      + 'пересчёта» — их даёт владелец на экране «Сотрудники»' })).toBeTruthy());
+      + 'пересчёта» — попросите владельца' })).toBeTruthy());
   });
 
   it('у владельца погашенного нет', async () => {
