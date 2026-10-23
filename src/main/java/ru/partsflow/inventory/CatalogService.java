@@ -377,29 +377,183 @@ public class CatalogService {
             + " AND strpos(a.note, '; " + BodyGeneration.MARK + "') > 0"
             + " ORDER BY a.id LIMIT 1)";
 
+    /** Стороны словом — как в клетке; одно выражение на отбор и сортировку. */
+    private static final String SIDE_FR_WORD = "CASE p.side_fr WHEN 'FRONT' THEN 'Перед.'"
+            + " WHEN 'REAR' THEN 'Задн.' WHEN 'BOTH' THEN 'Перед., задн.' END";
+    private static final String SIDE_LR_WORD = "CASE p.side_lr WHEN 'LEFT' THEN 'Лев.'"
+            + " WHEN 'RIGHT' THEN 'Прав.' WHEN 'BOTH' THEN 'Лев., прав.' END";
+
+    /**
+     * Комплектация, как её показывает клетка: вписанная руками, иначе собранная
+     * из машины донора. Одно выражение на страницу и сортировку.
+     */
+    private static final String EQUIPMENT = """
+            coalesce(p.manual_equipment, nullif(concat_ws(', ',
+                CASE d.steering WHEN 'RIGHT' THEN 'правый руль'
+                                WHEN 'LEFT' THEN 'левый руль' END,
+                CASE d.transmission_type WHEN 'AT' THEN 'АКПП'
+                                         WHEN 'MT' THEN 'МКПП'
+                                         WHEN 'CVT' THEN 'вариатор'
+                                         WHEN 'AMT' THEN 'робот' END,
+                CASE d.drive_type WHEN 'FWD' THEN 'передний'
+                                  WHEN 'RWD' THEN 'задний'
+                                  WHEN 'AWD' THEN 'полный' END,
+                d.transmission_model,
+                d.equipment_code), ''))""";
+
+    /*
+     * Клетки страницы, которые читаются подзапросом, — одним выражением
+     * на показ и сортировку (задача 0367): сортировка по копии разошлась бы
+     * с клеткой на первой правке. Алиасы свои, чтобы не встретиться
+     * с соединениями страницы и файла (`s` — поставка у страницы).
+     */
+    private static final String OEM_PRIMARY = "(SELECT so.raw_number FROM part_oem so"
+            + " WHERE so.part_id = p.id AND so.is_primary LIMIT 1)";
+    private static final String OEM_CROSSES = "(SELECT string_agg(so.raw_number, ', ' ORDER BY so.id)"
+            + " FROM part_oem so WHERE so.part_id = p.id AND NOT so.is_primary)";
+    private static final String CELL_CODE =
+            "(SELECT sc.code FROM storage_cell sc WHERE sc.id = p.storage_cell_id)";
+    private static final String PHOTO_COUNT = "(SELECT count(*) FROM part_photo sph"
+            + " WHERE sph.part_id = p.id AND sph.status = 'PROCESSED')";
+    private static final String UPDATED_BY_NAME =
+            "(SELECT tm.display_name FROM tenant_member tm WHERE tm.id = p.updated_by)";
+    private static final String PRICE_CHANGED_BY_NAME =
+            "(SELECT tm.display_name FROM tenant_member tm WHERE tm.id = p.price_changed_by)";
+
     /**
      * Разрешённые сортировки: имя из запроса → выражение SQL.
      *
      * <p>Белый список, а не экранирование: {@code ORDER BY} не принимает
      * параметр, и любая подстановка пришедшего текста — дыра.
      */
-    private static final Map<String, String> SORTS = Map.ofEntries(
+    private static final Map<String, List<String>> SORTS = Map.ofEntries(
             // Порядок по умолчанию, и он же единственный осмысленный при
             // открытии склада: номер позиции растёт вместе с заведением,
             // то есть «что принято раньше, то выше». До задачи 0060 умолчанием
             // был `code` — шесть случайных байт, — и владелец видел случайную
             // полусотню из тридцати пяти тысяч, новую при каждом заходе.
-            Map.entry("number", "p.number"),
-            Map.entry("code", "p.public_code"),
-            Map.entry("title", "p.title"),
-            Map.entry("price", "p.price"),
-            Map.entry("brand", VEHICLE_BRAND),
-            Map.entry("model", VEHICLE_MODEL),
-            Map.entry("year", VEHICLE_YEAR),
-            Map.entry("qty", "p.qty_on_hand"),
-            Map.entry("created", "p.created_at"),
-            Map.entry("manufacturer", "p.manufacturer"),
-            Map.entry("section", "p.section"));
+            sort("number", "p.number"),
+            sort("code", "p.public_code"),
+            sort("title", "p.title"),
+            sort("price", "p.price"),
+            sort("brand", VEHICLE_BRAND),
+            sort("model", VEHICLE_MODEL),
+            sort("year", VEHICLE_YEAR),
+            sort("qty", "p.qty_on_hand"),
+            sort("created", "p.created_at"),
+            sort("manufacturer", "p.manufacturer"),
+            sort("section", "p.section"),
+            // Дальше — задача 0367, решение владельца продукта 23.10.2026:
+            // «сортировка по колонкам должна быть на каждую колонку». Каждая
+            // колонка сортируется тем, что в ней видно: словом — по слову,
+            // числом — по числу. Выражения — те же, что у отбора и показа
+            // (FILTERS и выборка страницы), где они уже есть: копия разошлась
+            // бы на букву, и порядок перестал бы совпадать с клетками.
+            //
+            // Выражения обязаны работать и в странице, и в скачанном файле:
+            // у файла свои соединения (поставка там — `sp`, модификации нет),
+            // поэтому всё, что не из `p`, `d`, `b`, `m`, `g`, `pn` и `own`,
+            // берётся подзапросом. Стережёт CatalogSortTest: каждая сортировка
+            // прогоняется и страницей, и файлом.
+            sort("photo", "EXISTS (SELECT 1 FROM part_photo sph"
+                    + " WHERE sph.part_id = p.id AND sph.status = 'PROCESSED')"),
+            // Словари состояния и оценки — те же функции, что у CONDITION
+            // и QUALITY_GRADE ниже: на них здесь не сослаться, они объявлены
+            // позже и при сборке этого списка ещё пусты.
+            sort("condition", PartCondition.sqlLabel("p")),
+            sort("quality", QualityGrade.sqlLabel("p")),
+            sort("generation", VEHICLE_GENERATION),
+            sort("body", VEHICLE_BODY),
+            sort("engine", VEHICLE_ENGINE),
+            sort("sideFr", SIDE_FR_WORD),
+            sort("sideLr", SIDE_LR_WORD),
+            sort("donor", DONOR_CODE),
+            sort("installation", "p.installation_price"),
+            sort("color", "p.color"),
+            sort("description", "p.description"),
+            sort("oem", OEM_PRIMARY),
+            sort("crosses", OEM_CROSSES),
+            sort("note", "p.note"),
+            sort("marking", "p.marking"),
+            sort("cell", CELL_CODE),
+            sort("partName", "pn.name"),
+            sort("supply", "(SELECT " + SupplyKinds.sqlLabelWithArrival("ssp")
+                    + " FROM supply ssp WHERE ssp.id = d.supply_id)"),
+            sort("equipment", EQUIPMENT),
+            sort("published", "CASE WHEN p.is_published THEN 'Везде' ELSE 'Нет' END"),
+            sort("photoCount", PHOTO_COUNT),
+            sort("textBlock", TextBlock.EFFECTIVE_SQL),
+            sort("video", "p.video_url"),
+            sort("weight", "p.weight_kg"),
+            // Габариты одной клеткой «120×80×45» — и порядок по ним тот же,
+            // что глазами: длина, при равной — ширина, потом высота. Текстом
+            // клетки сортировать нельзя: «1200×…» встало бы перед «130×…».
+            Map.entry("dimensions", List.of("p.length_mm", "p.width_mm", "p.height_mm")),
+            Map.entry("packageDimensions",
+                    List.of("p.package_length_mm", "p.package_width_mm", "p.package_height_mm")),
+            sort("packageWeight", "p.package_weight_kg"),
+            sort("barcode", "p.barcode"),
+            sort("legacy", "p.legacy_code"),
+            sort("updated", "p.updated_at"),
+            sort("updatedBy", UPDATED_BY_NAME),
+            sort("priceChanged", "p.price_changed_at"),
+            sort("priceChangedBy", PRICE_CHANGED_BY_NAME));
+
+    private static Map.Entry<String, List<String>> sort(String name, String expression) {
+        return Map.entry(name, List.of(expression));
+    }
+
+    /**
+     * Сортировка по колонке склада: {@code warehouse:<номер склада>}.
+     *
+     * <p>Колонки складов не фиксированы (у одного клиента два склада, у другого
+     * пять), поэтому имени в белом списке у них нет — номер склада разбирается
+     * числом и подставляется в SQL уже числом: текст из запроса туда не попадает.
+     */
+    static final String WAREHOUSE_SORT = "warehouse:";
+
+    private static final java.util.regex.Pattern WAREHOUSE_SORT_NAME =
+            java.util.regex.Pattern.compile(WAREHOUSE_SORT + "([0-9]{1,18})");
+
+    /**
+     * Колонка склада сортируется по <b>свободному</b> остатку
+     * ({@code qty - qty_reserved}), а не по полному (задача 0367, пункт 5 «Как
+     * сделать»; решение владельца 20.10.2026 «как у Bazon», каким значением
+     * сортирует Bazon — под обходом, умолчание на время сборки — свободное).
+     * Клетка «0 (1)» показывает свободное крупно, и порядок идёт по нему же:
+     * отложенная под клиента деталь — не то, что можно продать.
+     *
+     * <p>Прочерк («на этом складе её нет») встаёт вместе с нулём: продать
+     * нечего ни там, ни там. Без {@code coalesce} пустые ушли бы при убывании
+     * наверх — Postgres ставит NULL выше любого числа.
+     */
+    private static String freeOnWarehouse(long warehouseId) {
+        return "coalesce((SELECT sum(ws.qty - ws.qty_reserved) FROM part_stock ws"
+                + " WHERE ws.part_id = p.id AND ws.warehouse_id = " + warehouseId + "), 0)";
+    }
+
+    /** Порядок по умолчанию — номер позиции, он же для незнакомого имени. */
+    private static final List<String> DEFAULT_SORT = List.of("p.number");
+
+    /** Выражения сортировки по её имени; незнакомое — умолчание, а не отказ. */
+    private static List<String> sortKeys(String sort) {
+        // Сортировка не названа — умолчание, а не отказ: {@code Map.ofEntries}
+        // не принимает null даже на чтение и отвечает на него
+        // NullPointerException, то есть пятисоткой на витрине.
+        if (sort == null) {
+            return DEFAULT_SORT;
+        }
+        var warehouse = WAREHOUSE_SORT_NAME.matcher(sort);
+        if (warehouse.matches()) {
+            return List.of(freeOnWarehouse(Long.parseLong(warehouse.group(1))));
+        }
+        return SORTS.getOrDefault(sort, DEFAULT_SORT);
+    }
+
+    /** Имена сортировок из белого списка — для сверки с экраном в тестах. */
+    static Set<String> sortNames() {
+        return SORTS.keySet();
+    }
 
     /**
      * Порядок строк с вторичным ключом.
@@ -419,17 +573,15 @@ public class CatalogService {
      * <p>У вкладки колёс это сделано с самого начала: там {@code ORDER BY}
      * заканчивается на {@code p.id DESC}.
      */
-    private static String orderBy(String sort, boolean descending) {
-        // Сортировка не названа — умолчание, а не отказ: {@code Map.ofEntries}
-        // не принимает null даже на чтение и отвечает на него
-        // NullPointerException, то есть пятисоткой на витрине.
-        String column = sort == null ? "p.number" : SORTS.getOrDefault(sort, "p.number");
+    static String orderBy(String sort, boolean descending) {
+        List<String> keys = sortKeys(sort);
         String direction = descending ? " DESC" : " ASC";
+        String order = String.join(direction + ", ", keys) + direction;
         // Вторичный ключ не нужен только тем колонкам, что и так уникальны:
         // внутреннему номеру и номеру позиции. Остальным он обязателен.
-        return column.equals("p.id") || column.equals("p.number")
-                ? column + direction
-                : column + direction + ", p.id" + direction;
+        return keys.equals(List.of("p.id")) || keys.equals(DEFAULT_SORT)
+                ? order
+                : order + ", p.id" + direction;
     }
 
     private static final Map<String, String> SIDE_FR =
@@ -877,10 +1029,8 @@ public class CatalogService {
             Map.entry("body", VEHICLE_BODY),
             Map.entry("engine", VEHICLE_ENGINE),
             Map.entry("year", VEHICLE_YEAR + "::text"),
-            Map.entry("sideFr", "CASE p.side_fr WHEN 'FRONT' THEN 'Перед.'"
-                    + " WHEN 'REAR' THEN 'Задн.' WHEN 'BOTH' THEN 'Перед., задн.' END"),
-            Map.entry("sideLr", "CASE p.side_lr WHEN 'LEFT' THEN 'Лев.'"
-                    + " WHEN 'RIGHT' THEN 'Прав.' WHEN 'BOTH' THEN 'Лев., прав.' END"),
+            Map.entry("sideFr", SIDE_FR_WORD),
+            Map.entry("sideLr", SIDE_LR_WORD),
             Map.entry("donor", DONOR_CODE),
             Map.entry("price", "trim_scale(p.price)::text"),
             Map.entry("installation", "trim_scale(p.installation_price)::text"),
@@ -897,10 +1047,8 @@ public class CatalogService {
             Map.entry("barcode", "p.barcode"),
             Map.entry("legacy", "p.legacy_code"),
             Map.entry("weight", "trim_scale(p.weight_kg)::text"),
-            Map.entry("updatedBy", "(SELECT tm.display_name FROM tenant_member tm"
-                    + " WHERE tm.id = p.updated_by)"),
-            Map.entry("priceChangedBy", "(SELECT tm.display_name FROM tenant_member tm"
-                    + " WHERE tm.id = p.price_changed_by)"));
+            Map.entry("updatedBy", UPDATED_BY_NAME),
+            Map.entry("priceChangedBy", PRICE_CHANGED_BY_NAME));
 
     private record Filter(StringBuilder where, List<Object> args) {
     }
@@ -1359,16 +1507,11 @@ public class CatalogService {
                        p.package_width_mm, p.package_height_mm,
                        p.created_at, p.updated_at, p.price_changed_at,
                        pn.name AS part_name,
-                       (SELECT tm.display_name FROM tenant_member tm
-                         WHERE tm.id = p.updated_by)      AS updated_by_name,
-                       (SELECT tm.display_name FROM tenant_member tm
-                         WHERE tm.id = p.price_changed_by) AS price_changed_by_name,
-                       (SELECT count(*) FROM part_photo ph2
-                         WHERE ph2.part_id = p.id AND ph2.status = 'PROCESSED')         AS photo_count,
-                       (SELECT o.raw_number FROM part_oem o
-                         WHERE o.part_id = p.id AND o.is_primary LIMIT 1) AS oem,
-                       (SELECT string_agg(o.raw_number, ', ' ORDER BY o.id) FROM part_oem o
-                         WHERE o.part_id = p.id AND NOT o.is_primary) AS crosses,
+                       """ + UPDATED_BY_NAME + " AS updated_by_name, "
+                       + PRICE_CHANGED_BY_NAME + " AS price_changed_by_name, "
+                       + PHOTO_COUNT + " AS photo_count, "
+                       + OEM_PRIMARY + " AS oem, "
+                       + OEM_CROSSES + " AS crosses," + """
                        -- Адрес полки. Код ячейки не доезжал до витрины вовсе:
                        -- на экране был виден только `section` — текстовое поле,
                        -- которое человек пишет руками, — а `storage_cell`,
@@ -1378,26 +1521,13 @@ public class CatalogService {
                        -- переставляли. Колонки две и обе нужны: у переехавшего
                        -- клиента заполнена «Секция», у заведённого у нас —
                        -- «Ячейка».
-                       (SELECT c.code FROM storage_cell c
-                         WHERE c.id = p.storage_cell_id) AS cell_code,
-                       """ + GENERATION_BY_BODY + " AS generation_by_body," + """
+                       """ + CELL_CODE + " AS cell_code, " + GENERATION_BY_BODY + " AS generation_by_body," + """
                        -- Поставка и комплектация — для карточки позиции.
                        -- Читаются вместе со строкой: карточка открывается
                        -- по нажатию и второй запрос ради двух полей не делает.
                        """
-                       + SupplyKinds.sqlLabelWithArrival("s") + " AS supply," + """
-                       coalesce(p.manual_equipment, nullif(concat_ws(', ',
-                           CASE d.steering WHEN 'RIGHT' THEN 'правый руль'
-                                           WHEN 'LEFT' THEN 'левый руль' END,
-                           CASE d.transmission_type WHEN 'AT' THEN 'АКПП'
-                                                    WHEN 'MT' THEN 'МКПП'
-                                                    WHEN 'CVT' THEN 'вариатор'
-                                                    WHEN 'AMT' THEN 'робот' END,
-                           CASE d.drive_type WHEN 'FWD' THEN 'передний'
-                                             WHEN 'RWD' THEN 'задний'
-                                             WHEN 'AWD' THEN 'полный' END,
-                           d.transmission_model,
-                           d.equipment_code), '')) AS equipment,
+                       + SupplyKinds.sqlLabelWithArrival("s") + " AS supply, "
+                       + EQUIPMENT + " AS equipment," + """
                        -- Только подтверждённый снимок: у оборванной загрузки
                        -- и у неподтверждённой записи файла в хранилище нет,
                        -- и в колонке «Превью» висит битая картинка. Прайс

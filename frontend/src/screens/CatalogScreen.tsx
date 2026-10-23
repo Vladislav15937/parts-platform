@@ -17,6 +17,8 @@ import {
   saveView,
   withoutFilters,
   withDefaultSort,
+  sortOfColumn,
+  warehouseSort,
   hasFilters,
   isSorted,
   viewKey,
@@ -443,12 +445,12 @@ export function CatalogScreen({ role }: { role: string }) {
           at={menuAt}
           chosen={query.columns[menuFor]}
           filterable={canFilter(menuFor)}
-          sortable={COLUMNS.find((c) => c.key === menuFor)?.sort}
+          sortable={sortOfColumn(menuFor)}
           sort={query.sort}
           desc={query.desc}
           onSort={(desc) => {
-            const column = COLUMNS.find((c) => c.key === menuFor);
-            if (column?.sort !== undefined) change({ sort: column.sort, desc, page: 0 });
+            const sort = sortOfColumn(menuFor);
+            if (sort !== undefined) change({ sort, desc, page: 0 });
             setMenuFor(null);
           }}
           onPick={(value) => {
@@ -685,9 +687,29 @@ export function CatalogScreen({ role }: { role: string }) {
                     )}
                   </th>
                 ))}
-                {warehouses.map((warehouse) => (
-                  <th key={warehouse.id} className="num">{warehouse.name}</th>
-                ))}
+                {/* Колонка склада сортируется, как и остальные (задача 0367),
+                    по свободному остатку — крупному числу клетки «0 (1)».
+                    Отбора у неё нет: склады отбираются флажками «Показывать». */}
+                {warehouses.map((warehouse) => {
+                  const sort = warehouseSort(warehouse.id);
+                  return (
+                    <th key={warehouse.id} className="num">
+                      <span className="th__title">{warehouse.name}</span>
+                      <button
+                        type="button"
+                        className="th__menu"
+                        aria-label={`Сортировка: ${warehouse.name}`}
+                        onClick={(e) => {
+                          const box = e.currentTarget.getBoundingClientRect();
+                          setMenuAt({ left: box.left, top: box.bottom });
+                          setMenuFor(menuFor === sort ? null : sort);
+                        }}
+                      >
+                        {sort === query.sort ? (query.desc ? '↓' : '↑') : '▾'}
+                      </button>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
