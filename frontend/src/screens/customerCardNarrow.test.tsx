@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
+import { rightsAs } from '../test/rights';
 import { CustomersScreen } from './CustomersScreen';
 import {
   PHONE_WIDTH, closeBrowser, measureLayout, openBrowser,
@@ -46,7 +47,7 @@ describe('карточка клиента на телефоне', () => {
 
   it.each(STATES)('%s — не уводит страницу вбок', async (_name, acting) => {
     stubApi();
-    render(<CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />);
+    render(<CustomersScreen rights={rightsAs('OWNER')} company="t_1" memberId={7} onOpenDeal={() => {}} />);
     await waitFor(() => expect(screen.getByText(CUSTOMER.name)).toBeTruthy());
     fireEvent.click(screen.getByText(CUSTOMER.name));
     const topUp = await screen.findByRole('button', { name: 'Пополнить / Списать' });
