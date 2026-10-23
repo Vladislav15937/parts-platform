@@ -169,12 +169,7 @@ describe('погашенное на телефоне не уводит стра�
  * и меряются наоборот (как `KNOWN_WIDE` у сторожа ширины): починка валит тест
  * требованием убрать строку.
  */
-const KNOWN_WIDE: Record<string, string> = {
-  // Ряд вкладок карточки клиента («Сделки», «Возвраты», «Платежи»,
-  // «Движения по счёту») выходит до 403 при 390 — у владельца так же.
-  // Не 0044: найдено этим замером, названо в PR 508 отдельной находкой.
-  'лицевой счёт в карточке клиента': 'вкладки карточки клиента, 403 при 390',
-};
+const KNOWN_WIDE: Record<string, string> = {};
 
 async function openAccount(rights: Rights): Promise<void> {
   render(<CustomersScreen rights={rights} company="t_1" memberId={7} onOpenDeal={() => {}} />);
