@@ -33,21 +33,43 @@ import java.util.List;
 public class MemberController {
 
     private final MemberService members;
+    private final AccessRoleService roles;
 
-    public MemberController(MemberService members) {
+    public MemberController(MemberService members, AccessRoleService roles) {
         this.members = members;
+        this.roles = roles;
     }
 
+    /**
+     * Заведение сотрудника.
+     *
+     * <p>С задачи 0044 роль приходит ссылкой на роль клиента ({@code roleId}):
+     * заведение и назначение — одна транзакция ({@link AccessRoleService#createMember}),
+     * иначе отказ назначения оставил бы заведённого сотрудника без роли.
+     * Прежняя строка {@code role} принимается по-прежнему — её шлёт вкладка,
+     * открытая до выкладки, — но роль «Владелец» ею выдаёт только владелец:
+     * иначе сотрудник с правом «Сотрудники и роли» завёл бы себе владельца.
+     */
     @PostMapping
     @PreAuthorize("hasAuthority('members.manage')")
     public ResponseEntity<MemberService.Member> create(@Valid @RequestBody CreateRequest request) {
+        if (request.roleId() != null) {
+            return ResponseEntity.status(HttpStatus.CREATED).body(roles.createMember(
+                    request.login(), request.password(), request.displayName(),
+                    request.branchId(), request.roleId()));
+        }
+        if (request.role() == null || request.role().isBlank()) {
+            throw new IllegalArgumentException("Роль сотрудника обязательна");
+        }
         // Владельца заводит только владелец (задача 0044): иначе сотрудник
         // с правом «Управлять сотрудниками и ролями» завёл бы себе владельца
         // и получил бы через него права на всё.
         if ("OWNER".equals(request.role()) && !CurrentUser.require().actsAsOwner()) {
             throw new AccessDeniedException("Владельца заводит только владелец");
         }
-        MemberService.Member created = members.create(
+        // Через роли клиента, а не MemberService напрямую: права заведённого
+        // не шире прав заводящего (задача 0044, ответ владельца 24.10.2026, 2б).
+        MemberService.Member created = roles.createMemberWithLegacyRole(
                 request.login(), request.password(), request.displayName(),
                 request.role(), request.branchId());
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
@@ -124,11 +146,16 @@ public class MemberController {
         }
     }
 
+    /**
+     * @param role   прежняя жёсткая роль строкой — от вкладки, открытой до 0044
+     * @param roleId роль клиента; если указана, {@code role} не читается
+     */
     public record CreateRequest(@NotBlank String login,
                                 @NotBlank String password,
                                 String displayName,
-                                @NotBlank String role,
-                                Long branchId) {
+                                String role,
+                                Long branchId,
+                                Long roleId) {
     }
 
     public record PasswordRequest(@NotBlank String password) {

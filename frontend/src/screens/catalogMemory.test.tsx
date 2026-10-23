@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, waitFor } from '@testing-library/react';
 
@@ -65,7 +66,7 @@ describe('память витрины и сброс', () => {
   });
 
   it('открывается порядком заведения, а не случайным кодом', async () => {
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
 
     await waitFor(() => expect(asked.length).toBeGreaterThan(0));
     // До задачи 0060 здесь стояло sort=code&desc=true, то есть порядок
@@ -85,7 +86,7 @@ describe('память витрины и сброс', () => {
       },
     };
 
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
 
     await waitFor(() => expect(asked.length).toBeGreaterThan(0));
     // Никакого запроса умолчанием до восстановленного: иначе владелец
@@ -97,7 +98,7 @@ describe('память витрины и сброс', () => {
   });
 
   it('запоминает выбранное на сервере, а не в браузере', async () => {
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(asked.length).toBeGreaterThan(0));
 
     click('Показывать: отсутствующие');
@@ -118,7 +119,7 @@ describe('память витрины и сброс', () => {
         },
       };
 
-      render(<CatalogScreen role="OWNER" />);
+      render(<CatalogScreen rights={rightsAs('OWNER')} />);
       await waitFor(() => expect(asked.length).toBeGreaterThan(0));
       // Таблицы на экране нет — отбор действует, а снять его было нечем:
       // до задачи 0060 он снимался только в шапке таблицы.
@@ -139,7 +140,7 @@ describe('память витрины и сброс', () => {
 
   it('сброс сортировки появляется только когда порядок не по умолчанию',
     async () => {
-      render(<CatalogScreen role="OWNER" />);
+      render(<CatalogScreen rights={rightsAs('OWNER')} />);
       await waitFor(() => expect(asked.length).toBeGreaterThan(0));
 
       // Кнопка, которая ничего не меняет, хуже отсутствующей.
@@ -158,7 +159,7 @@ describe('память витрины и сброс', () => {
           brandId: null, brandName: '', modelId: null, modelName: '', body: '', engine: '',
         },
       };
-      render(<CatalogScreen role="OWNER" />);
+      render(<CatalogScreen rights={rightsAs('OWNER')} />);
       await waitFor(() => expect(asked.length).toBeGreaterThan(0));
 
       const reset = button('Сбросить сортировку');

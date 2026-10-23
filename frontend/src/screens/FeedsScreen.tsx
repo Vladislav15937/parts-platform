@@ -1,3 +1,5 @@
+import type { Rights } from '../access/rights';
+import { LockedAction } from '../ui/LockedAction';
 import type { FeedLink } from '../publishing/feeds';
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
@@ -67,10 +69,14 @@ import {
  * клиента, а это не минуты.
  */
 /**
- * @param role кабинет заводит только владелец: ссылка на прайс открывает
- *             склад целиком, и раздавать это право управляющему рано
+ * @param rights права вошедшего (задача 0044): заводит кабинеты и правит
+ *             ключи, ссылку и состояние право «Заводить и удалять выгрузки»,
+ *             отбор и цену прайса — «Настраивать отбор выгрузки». Недоступное
+ *             погашено и названо, а не спрятано
  */
-export function FeedsScreen({ role }: { role: string }) {
+export function FeedsScreen({ rights }: { rights: Rights }) {
+  const manage = rights.has('marketplace.manage');
+  const configure = rights.has('marketplace.configure');
   const [feeds, setFeeds] = useState<Feed[] | null>(null);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   // Справочники берутся целиком: видов сто семьдесят восемь, марок триста
@@ -139,20 +145,22 @@ export function FeedsScreen({ role }: { role: string }) {
 
       {feeds.length === 0 && (
         <p className="note">
-          {role === 'OWNER'
+          {manage
             ? 'Выгрузок пока нет. Заведите кабинет — и появится постоянная ссылка на прайс.'
-            : 'Выгрузок пока нет. Кабинет площадки заводит владелец.'}
+            : 'Выгрузок пока нет. Кабинет площадки заводит тот, у кого есть право на это.'}
         </p>
       )}
 
-      {role === 'OWNER' && <NewFeed onCreated={load} />}
+      {manage ? <NewFeed onCreated={load} />
+        : <LockedAction permission="marketplace.manage" label="Новая выгрузка" />}
 
       <ul className="cards">
         {feeds.map((feed) => (
           <FeedCard
             key={feed.id}
             feed={feed}
-            role={role}
+            manage={manage}
+            configure={configure}
             warehouses={warehouses}
             kinds={kinds}
             brands={brands}
@@ -226,7 +234,8 @@ function DeletedFeeds() {
 
 function FeedCard({
   feed,
-  role,
+  manage,
+  configure,
   warehouses,
   kinds,
   brands,
@@ -234,8 +243,10 @@ function FeedCard({
   onError,
 }: {
   feed: Feed;
-  /** Выключает и удаляет выгрузку только владелец: это остановка канала продаж. */
-  role: string;
+  /** Выключает и удаляет выгрузку, правит ключ, ссылку и номер — право «Заводить и удалять выгрузки». */
+  manage: boolean;
+  /** Отбор и настройки прайса — право «Настраивать отбор выгрузки». */
+  configure: boolean;
   warehouses: Warehouse[];
   kinds: PartKind[];
   brands: Brand[];
@@ -572,6 +583,12 @@ function FeedCard({
           вообще: до этой строки ответ жил только в логах приложения. */}
       <p className="muted">{downloadMark(feed)}</p>
 
+      {/* Без права кнопки сохранения погашены, а причина сказана один раз
+          над карточкой, а не у каждой кнопки: восемь одинаковых упрёков
+          читаются как поломка (то же правило, что у продавца, задача 0011). */}
+      {!configure && <LockedAction permission="marketplace.configure" label="Сохранить отбор" />}
+      {!manage && <LockedAction permission="marketplace.manage" label="Ключ, ссылка и состояние" />}
+
       {/* Выключенная выгрузка выглядела бы работающей: отбор на месте, ссылка
           на месте, отметка о заборе на месте — а прайс площадка не забирает
           вовсе. Поэтому состояние сказано словами и рядом сказано, что оно
@@ -823,7 +840,7 @@ function FeedCard({
             </select>
           </label>
 
-          <button type="button" disabled={busy}
+          <button type="button" disabled={busy || !configure}
                   onClick={() => void saveSettings('Цена прайса не сохранена')}>
             Сохранить цену прайса
           </button>
@@ -852,7 +869,7 @@ function FeedCard({
             />
           </label>
 
-          <button type="button" disabled={busy}
+          <button type="button" disabled={busy || !configure}
                   onClick={() => void saveSettings('Число снимков не сохранено')}>
             Сохранить число снимков
           </button>
@@ -899,7 +916,7 @@ function FeedCard({
         </label>
 
         <div className="filter-row">
-          <button type="button" disabled={busy}
+          <button type="button" disabled={busy || !configure}
                   onClick={() => void saveSettings('Приписка не сохранена')}>
             Сохранить приписку
           </button>
@@ -936,7 +953,7 @@ function FeedCard({
             в начало объявления
           </p>
           <div className="filter-row">
-            <button type="button" disabled={busy}
+            <button type="button" disabled={busy || !configure}
                     onClick={() => void saveSettings('Товар в резерве не сохранён')}>
               Сохранить товар в резерве
             </button>
@@ -989,7 +1006,7 @@ function FeedCard({
           </p>
 
           <div className="filter-row">
-            <button type="button" disabled={busy}
+            <button type="button" disabled={busy || !configure}
                     onClick={() => void saveSettings('Товар в пути не сохранён')}>
               Сохранить товар в пути
             </button>
@@ -1029,7 +1046,7 @@ function FeedCard({
           />
 
           <div className="filter-row">
-            <button type="button" disabled={busy}
+            <button type="button" disabled={busy || !configure}
                     onClick={() => void saveSettings('Снимки донора не сохранены')}>
               Сохранить снимки донора
             </button>
@@ -1042,7 +1059,7 @@ function FeedCard({
                 onClick={() => void count()}>
           Посчитать
         </button>
-        <button type="button" disabled={busy} onClick={() => void save()}>
+        <button type="button" disabled={busy || !configure} onClick={() => void save()}>
           Сохранить отбор
         </button>
       </div>
@@ -1114,11 +1131,11 @@ function FeedCard({
           Латинские буквы, цифры и дефис — это часть адреса. Пусто — ссылка
           кончается секретом, как раньше.
         </p>
-        <button type="button" className="button--ghost" disabled={busy}
+        <button type="button" className="button--ghost" disabled={busy || !manage}
                 onClick={() => void saveFileName()}>
           {feed.feedFileName ? 'Сохранить имя файла' : 'Задать имя файла'}
         </button>
-        <button type="button" className="button--ghost" disabled={busy}
+        <button type="button" className="button--ghost" disabled={busy || !manage}
                 onClick={() => void rotate()}>
           {feed.hasFeed ? 'Сменить ссылку' : 'Выдать ссылку'}
         </button>
@@ -1165,7 +1182,7 @@ function FeedCard({
         </label>
         <button
           type="button"
-          disabled={busy || secret.trim() === ''}
+          disabled={busy || !manage || secret.trim() === ''}
           onClick={() => void saveSecret()}
         >
           {feed.hasCredentials ? 'Заменить ключ' : 'Сохранить ключ'}
@@ -1181,7 +1198,7 @@ function FeedCard({
         * не уходили, сколько бы раз ни сохранили ключ. Только владелец, как
         * и сервер. Пустое поле снимает номер.
         */}
-      {role === 'OWNER' && (
+      {manage && (
         <details>
           <summary>Номер прайс-листа {feed.packetId ? '· задан' : '· не задан'}</summary>
           <label>
@@ -1220,7 +1237,7 @@ function FeedCard({
         * Только владельцу: это остановка канала продаж, а отбор и цену
         * прайса правит и управляющий.
         */}
-      {role === 'OWNER' && (
+      {manage && (
         <fieldset className="choices">
           <legend>Название и состояние</legend>
 

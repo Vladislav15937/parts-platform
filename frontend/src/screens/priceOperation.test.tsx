@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -209,7 +210,7 @@ describe('правка списком говорит о непрошедших',
   });
 
   it('называет их числом, поимённо и с причиной', async () => {
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(document.querySelector('tbody tr')).toBeTruthy());
 
     fireEvent.click(byText('button', 'Правка списком')!);

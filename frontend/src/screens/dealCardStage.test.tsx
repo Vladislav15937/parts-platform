@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, waitFor, render } from '@testing-library/react';
 
@@ -39,7 +40,7 @@ describe('оплаченная сделка не подписана отложе
 
   it('заголовок карточки называет готовность, и срока резерва под ним нет', async () => {
     stubApi();
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal('№20');
 
     // Оплачена целиком и не выдана — документ при этом `RESERVED`
@@ -50,7 +51,7 @@ describe('оплаченная сделка не подписана отложе
   /** Прежнее поведение обязано остаться: чинилась поправка, а не срок. */
   it('неоплаченная по-прежнему отложена и с числом', async () => {
     stubApi();
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal('№11');
 
     expect(cardStates()).toEqual(['Сделка №11 · отложена', `Отложено до ${DAY}`]);
@@ -63,7 +64,7 @@ describe('оплаченная сделка не подписана отложе
    */
   it('у готовой к выдаче резерв всё ещё продлевается', async () => {
     stubApi();
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal('№20');
 
     expect(document.querySelector('input[type="date"]')).toBeTruthy();
@@ -78,7 +79,7 @@ describe('оплаченная сделка не подписана отложе
   it('строки поиска сделок клиента подписаны стадией, а закрытая — статусом',
     async () => {
       stubApi();
-      render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+      render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
       await openCustomer();
 
       await waitFor(() => expect(finderLines().length).toBe(4));

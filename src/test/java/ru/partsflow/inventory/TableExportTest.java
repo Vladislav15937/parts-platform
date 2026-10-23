@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -55,7 +56,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class TableExportTest {
 
-    private static final Path TABS = Path.of("frontend/src/screens/tabs.ts");
 
     /**
      * Потоковые точки, которые выгрузкой таблицы не являются. Ключ — класс
@@ -70,8 +70,8 @@ class TableExportTest {
                     + "намеренно (inventory/CLAUDE.md, «Роль у архива не проверяется»)",
             "ReportController#soldItemsExport",
             "файл того же отчёта, что на экране, под правом отчётов (класс ReportController), "
-                    + "и кнопка на экране — по праву отчётов, а не по EXPORT_ROLES; станет ли он "
-                    + "полномочием «скачивать таблицу» — вопрос задачи 0044 и владельца продукта");
+                    + "и кнопка на экране — по праву отчётов (reports.view), а не по export.table; "
+                    + "отдать ли его праву «скачивать таблицу» — вопрос владельцу продукта (задача 0044, PR)");
 
     @Test
     @DisplayName("Каждая выгрузка таблицей стоит под одним правом")
@@ -118,47 +118,31 @@ class TableExportTest {
     }
 
     /**
-     * Экран и сервер решают одно и то же. {@code EXPORT_ROLES} прячет кнопку,
-     * {@code @PreAuthorize} закрывает адрес, и разъехавшись, они дают либо
-     * видимую кнопку с отказом в ответ, либо закрытую кнопку у того, кому
-     * файл положен. Тест на стороне сервера, а не фронтенда, по той же
-     * причине, что {@code WordingConsistencyTest}: чтение файла в vitest
-     * требует типов Node, которых в сборке нет.
+     * Экран и сервер решают одно и то же. Кнопка «Скачать таблицу» стоит
+     * на праве, а {@code @PreAuthorize} закрывает адрес; разъехавшись, они
+     * дают либо живую кнопку с отказом в ответ, либо погашенную у того, кому
+     * файл положен. С задачи 0044 списка ролей у экрана нет — он спрашивает
+     * право ({@code rights.has('…')}), и ключ обязан быть тем же, что
+     * в {@code ALLOWED}, на обоих экранах. Тест на стороне сервера, а не
+     * фронтенда: чтение файла в vitest требует типов Node, которых в сборке нет.
      */
     @Test
-    @DisplayName("EXPORT_ROLES на экране — те же роли, что в праве сервера")
+    @DisplayName("«Скачать таблицу» на складе и на колёсах — то же право, что у сервера")
     void screenAndServerAgree() throws IOException {
-        Matcher screen = Pattern.compile("export const EXPORT_ROLES = \\[([^\\]]*)\\]")
-                .matcher(Files.readString(TABS));
-        assertThat(screen.find())
-                .as("в %s нет объявления EXPORT_ROLES — экрану нечем прятать кнопку", TABS)
-                .isTrue();
-
-        assertThat(quoted(screen.group(1)))
-                .as("кнопку «Скачать таблицу» экран показывает не тем, кому сервер отдаёт файл "
-                        + "(EXPORT_ROLES против TableExport.ALLOWED)")
-                .isEqualTo(rolesHolding(TableExport.ALLOWED));
-    }
-
-    /**
-     * Кому сервер отдаёт файл, словами прежних ролей: владелец (все права
-     * всегда) и те роли переноса {@code tenant/101}, чей набор несёт право
-     * из {@code ALLOWED}. Экран до задачи 0044 знает только роли, а сервер
-     * решает правом — сверять приходится через раздачу, иначе две половины
-     * говорили бы на разных языках и сверка не значила бы ничего.
-     */
-    private static Set<String> rolesHolding(String expression) throws IOException {
-        Matcher key = Pattern.compile("hasAuthority\\('([a-z_.]+)'\\)").matcher(expression);
-        assertThat(key.find()).as("ALLOWED — право, а не роль: %s", expression).isTrue();
-        Set<String> roles = new TreeSet<>(Set.of("OWNER"));
-        Matcher pair = Pattern.compile("\\('([A-Z]+)',\\s*'([a-z_.]+)'\\)").matcher(
-                Files.readString(Path.of("db/changelog/tenant/101-access-roles-seed.sql")));
-        while (pair.find()) {
-            if (pair.group(2).equals(key.group(1))) {
-                roles.add(pair.group(1));
-            }
+        Matcher key = Pattern.compile("hasAuthority\\('([a-z_.]+)'\\)").matcher(TableExport.ALLOWED);
+        assertThat(key.find()).as("ALLOWED — право, а не роль: %s", TableExport.ALLOWED).isTrue();
+        for (String screen : List.of("CatalogScreen.tsx", "WheelsScreen.tsx")) {
+            String text = Files.readString(Path.of("frontend/src/screens", screen));
+            Matcher gate = Pattern.compile("rights\\.has\\('([a-z_.]+)'\\) \\? \\(\\s*<a [^>]*xportUrl[^>]*>")
+                    .matcher(text);
+            assertThat(gate.find())
+                    .as("%s: ссылка на файл не стоит под правом — экрану нечем погасить кнопку", screen)
+                    .isTrue();
+            assertThat(gate.group(1))
+                    .as("%s: кнопку «Скачать таблицу» экран даёт не тем, кому сервер отдаёт файл",
+                            screen)
+                    .isEqualTo(key.group(1));
         }
-        return roles;
     }
 
     /** Ключ {@code Класс#метод} → выражение {@code @PreAuthorize} (метод, иначе класс; пусто — нет). */
@@ -196,15 +180,5 @@ class TableExportTest {
     private static boolean isExcepted(String key) {
         return NOT_A_TABLE_EXPORT.containsKey(key)
                 || NOT_A_TABLE_EXPORT.containsKey(key.substring(0, key.indexOf('#')));
-    }
-
-    /** Роли в кавычках, без порядка: {@code ['OWNER', 'MANAGER']} и {@code hasAnyRole('OWNER','MANAGER')}. */
-    private static Set<String> quoted(String text) {
-        Set<String> roles = new TreeSet<>();
-        Matcher role = Pattern.compile("'([A-Z_]+)'").matcher(text);
-        while (role.find()) {
-            roles.add(role.group(1));
-        }
-        return roles;
     }
 }

@@ -28,6 +28,12 @@ public final class PostedDocumentDeletion {
     private PostedDocumentDeletion() {
     }
 
+    /**
+     * Ключ права — признаком строки тому, у кого его нет: «Удалить» на экране
+     * погашена и называет право, а не пропадает (задача 0044, вопрос 3).
+     */
+    public static final String NEEDS = Permission.STOCK_DOCUMENT_DELETE_DONE.key();
+
     /** Может ли вошедший удалить выполненный документ. */
     public static boolean allowed() {
         return CurrentUser.get()

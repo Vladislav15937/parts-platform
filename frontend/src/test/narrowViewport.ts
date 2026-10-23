@@ -186,6 +186,43 @@ export async function measurePage(screenHtml: string, width = PHONE_WIDTH): Prom
   }
 }
 
+/**
+ * Элементы, чей текст шире их собственной коробки: `scrollWidth` больше
+ * `clientWidth`.
+ *
+ * <p>Ни ширина страницы, ни прямоугольник элемента этого не видят: flex-элемент
+ * с `min-width: 0` сжимается по месту, а неразрывный текст из него вылезает —
+ * внутри окна с `overflow: hidden` его просто не видно, и страница не уезжает
+ * (задача 0044, причина погашенной кнопки в карточке позиции).
+ */
+export async function measureOverflow(
+  screenHtml: string,
+  selector: string,
+  width = PHONE_WIDTH,
+): Promise<Array<{ text: string; scrollWidth: number; clientWidth: number }>> {
+  if (browser === null) throw new Error('openBrowser() не вызван');
+  const page = await browser.newPage();
+  try {
+    await page.setViewport({ width, height: 800 });
+    await page.setContent(
+      `<!doctype html><meta charset="utf-8"><style>${CSS}</style>${shell(screenHtml)}`,
+      { waitUntil: 'load' },
+    );
+    return await page.evaluate(
+      (css: string) => [...document.querySelectorAll(css)]
+        .filter((element) => element.scrollWidth > element.clientWidth + 1)
+        .map((element) => ({
+          text: (element.textContent ?? '').slice(0, 40),
+          scrollWidth: element.scrollWidth,
+          clientWidth: element.clientWidth,
+        })),
+      selector,
+    );
+  } finally {
+    await page.close();
+  }
+}
+
 export interface Box {
   left: number;
   right: number;

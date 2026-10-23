@@ -95,7 +95,14 @@ public class MemberAccess {
             granted.addAll(jdbc.queryForList(
                     "SELECT permission FROM %s.access_role_permission WHERE role_id = ?"
                             .formatted(schema), String.class, role.id()));
-        } else if ("AUDITOR".equals(role.legacyRole())) {
+        } else if ("AUDITOR".equals(role.legacyRole()) && !seededHere(schema, role.legacyRole())) {
+            // Роли переноса нет. Метки нет — роль у клиента не заводили, и
+            // ревизор прежнего образа получает журнал: «доступ при переносе
+            // никто не теряет». Метка есть — роль клиент удалил сам, и это
+            // отказ (ответ владельца 24.10.2026, пункт 1б): вернуть её набор
+            // задним числом значило бы решить за него. Остальные прежние роли
+            // без роли переноса не дают ничего и так — правило одно, а особая
+            // ветка нужна только той, чей набор без роли что-то давал.
             granted.add(Permission.JOURNAL_VIEW.key());
         }
         jdbc.query("""
@@ -113,6 +120,27 @@ public class MemberAccess {
         // и наружу не уезжает: экран назвать его не сможет.
         granted.removeIf(key -> Permission.byKey(key).isEmpty());
         return new Access(role.id(), role.name(), false, Set.copyOf(granted));
+    }
+
+    /**
+     * Заводилась ли у клиента роль переноса этой прежней роли ({@code tenant/102},
+     * {@code access_role_seeded}): метка переживает удаление роли и только этим
+     * отличает «клиент удалил» от «не заводили». Правило чтения — одно с тем,
+     * что записано у самой метки (константа {@code RULE} в {@code AccessRoleSeededMarkTest}).
+     *
+     * <p>Схема, не докатанная до {@code 102}, метки не знает — и тогда «не заводили»,
+     * как было до неё: вход у такого клиента не ломается из-за таблицы, которую
+     * спрашивает одна редкая ветка.
+     */
+    private boolean seededHere(String schema, String legacyRole) {
+        Boolean known = jdbc.queryForObject("SELECT to_regclass(?) IS NOT NULL", Boolean.class,
+                schema + ".access_role_seeded");
+        if (!Boolean.TRUE.equals(known)) {
+            return false;
+        }
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM %s.access_role_seeded WHERE seeded_from = ?)"
+                        .formatted(schema), Boolean.class, legacyRole));
     }
 
     /**

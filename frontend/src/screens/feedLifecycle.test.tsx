@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -71,7 +72,7 @@ describe('выключение и удаление выгрузки', () => {
   }
 
   it('переименование уходит на сервер и ссылку не трогает', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
 
     const field = await waitFor(() => screen.getByDisplayValue('Дром: основной'));
     fireEvent.change(field, { target: { value: 'Дром: низкая цена' } });
@@ -89,7 +90,7 @@ describe('выключение и удаление выгрузки', () => {
   });
 
   it('выключение уходит состоянием, а экран говорит, что это значит', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
 
     fireEvent.click(await waitFor(() => screen.getByText('Выключить выгрузку')));
 
@@ -104,7 +105,7 @@ describe('выключение и удаление выгрузки', () => {
   });
 
   it('удаление спрашивает подтверждение и называет, что удаляется', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
 
     fireEvent.click(await waitFor(() => screen.getByText('Удалить выгрузку')));
 
@@ -123,7 +124,7 @@ describe('выключение и удаление выгрузки', () => {
   });
 
   it('отмена подтверждения не удаляет ничего', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
 
     fireEvent.click(await waitFor(() => screen.getByText('Удалить выгрузку')));
     fireEvent.click(screen.getByText('Отмена'));
@@ -133,7 +134,7 @@ describe('выключение и удаление выгрузки', () => {
   });
 
   it('удалённые видны отдельно и помнят, когда у них забирали прайс', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
 
     const section = await waitFor(() => {
       const found = Array.from(document.querySelectorAll('details'))
@@ -152,7 +153,7 @@ describe('выключение и удаление выгрузки', () => {
   });
 
   it('управляющему выключение и удаление не показываются', async () => {
-    render(<FeedsScreen role="MANAGER" />);
+    render(<FeedsScreen rights={rightsAs('MANAGER')} />);
 
     // Ждём саму карточку: отрицание, проверенное до загрузки, проходит само
     // собой — на экране в этот момент нет ничего вообще.

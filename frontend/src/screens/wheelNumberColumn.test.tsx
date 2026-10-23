@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 
@@ -69,7 +70,7 @@ describe('номер позиции на вкладке «Шины и диски
   });
 
   it('колонка «№ позиции» есть, и в ней стоит номер этой позиции', async () => {
-    render(<WheelsScreen canIntake={false} role="OWNER" />);
+    render(<WheelsScreen canIntake={false} rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText(/Goodyear/)).toBeTruthy());
 
     const headers = Array.from(document.querySelectorAll('thead th'))
@@ -94,7 +95,7 @@ describe('номер позиции на вкладке «Шины и диски
 
   it('вкладка открывается порядком по номеру позиции, как витрина склада',
     async () => {
-      render(<WheelsScreen canIntake={false} role="OWNER" />);
+      render(<WheelsScreen canIntake={false} rights={rightsAs('OWNER')} />);
       await waitFor(() => expect(screen.getByText(/Goodyear/)).toBeTruthy());
 
       // Прежним умолчанием был номер комплекта по убыванию: колесо,

@@ -371,6 +371,20 @@ public final class AuditedColumns {
         TENANT_MEMBER.put("role", "Роль");
         TENANT_MEMBER.put("is_active", "Работает");
         TENANT_MEMBER.put("password", "Пароль");
+        // Задача 0044: роль клиента названием, права поверх роли — словами
+        // справочника. Снимком, а не ссылкой: роль переименуют и удалят,
+        // а строка журнала обязана остаться правдой о том дне.
+        TENANT_MEMBER.put("access_role", "Роль");
+        TENANT_MEMBER.put("permissions_added", "Добавленные права");
+        TENANT_MEMBER.put("permissions_removed", "Снятые права");
+    }
+
+    /** Роль клиента: название и набор прав словами (задача 0044). */
+    public static final Map<String, String> ACCESS_ROLE = new LinkedHashMap<>();
+
+    static {
+        ACCESS_ROLE.put("name", "Название");
+        ACCESS_ROLE.put("permissions", "Права");
     }
 
     /** Настройки компании: срок резерва и печатные формы. */
@@ -445,6 +459,7 @@ public final class AuditedColumns {
             case "storage_cell" -> STORAGE_CELL;
             case "tenant_member" -> TENANT_MEMBER;
             case "company_setting" -> COMPANY_SETTING;
+            case "access_role" -> ACCESS_ROLE;
             default -> Map.of();
         };
     }

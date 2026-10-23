@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -48,7 +49,7 @@ describe('состав сделки у продавца', () => {
   beforeEach(() => stubDeal());
 
   it('каждая строка состава называет своё состояние, без состояния — ничего', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     CONDITIONS.forEach(([, word], at) => {
@@ -202,7 +203,7 @@ describe('состав перевозки', () => {
       }
       return json([]);
     }));
-    render(<StockMovesScreen role="OWNER" />);
+    render(<StockMovesScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Ангар')).toBeTruthy());
     fireEvent.click(screen.getByText('Ангар').closest('tr')!);
     await waitFor(() => expect(screen.getByText('Фара левая')).toBeTruthy());

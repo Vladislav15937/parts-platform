@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -55,7 +56,7 @@ describe('сортировка у каждой колонки склада', () 
   });
 
   it('стрелка меню стоит у каждой колонки таблицы, включая склады', async () => {
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(document.querySelectorAll('tbody tr').length).toBe(2));
 
     const headers = [...document.querySelectorAll('thead th')];
@@ -68,7 +69,7 @@ describe('сортировка у каждой колонки склада', () 
   });
 
   it('колонка склада сортирует по своему имени, в обе стороны', async () => {
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(document.querySelectorAll('tbody tr').length).toBe(2));
 
     fireEvent.click(screen.getByRole('button', { name: 'Сортировка: Ткацкая' }));
@@ -88,7 +89,7 @@ describe('сортировка у каждой колонки склада', () 
   });
 
   it('колонка, не сортировавшаяся до 0367, сортирует своим именем', async () => {
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(document.querySelectorAll('tbody tr').length).toBe(2));
 
     const th = [...document.querySelectorAll('thead th')]

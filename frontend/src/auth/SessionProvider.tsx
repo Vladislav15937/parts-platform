@@ -25,6 +25,9 @@ import { useMounted } from '../ui/useMounted';
  */
 const ME_KEY = 'partsflow.me';
 
+/** Общая фраза, пока сервер не назвал причину (или не знает её). */
+const SESSION_ENDED = 'Сессия кончилась — войдите заново.';
+
 type SessionState =
   | { status: 'checking' }
   | { status: 'anonymous'; reason?: string }
@@ -133,14 +136,31 @@ export function SessionProvider({ children }: { children: ReactNode }) {
    */
   useEffect(() => {
     const onLost = () => {
+      // Компанию берём до того, как личность стёрта: по ней сервер ищет,
+      // почему закрыт вход (задача 0044, живой прогон 24.10.2026 — выведенный
+      // сменой прав сотрудник видел «Сессия кончилась» без причины).
+      const company = recallMe()?.companySchema;
       forgetMe();
       setState((was) => (was.status === 'authenticated'
-        ? { status: 'anonymous', reason: 'Сессия кончилась — войдите заново.' }
+        ? { status: 'anonymous', reason: SESSION_ENDED }
         : was));
+      if (!company) return;
+      auth.ended(company)
+        .then((found) => {
+          if (!mounted.current || !found?.message) return;
+          // Только поверх общей фразы: если человек уже ушёл дальше (вошёл,
+          // увидел другую причину), чужой ответ его не догоняет.
+          setState((was) => (was.status === 'anonymous' && was.reason === SESSION_ENDED
+            ? { status: 'anonymous', reason: found.message }
+            : was));
+        })
+        .catch(() => {
+          // Причина — подсказка, а не условие входа: не узнали — остаётся общая фраза.
+        });
     };
     window.addEventListener(SESSION_LOST, onLost);
     return () => window.removeEventListener(SESSION_LOST, onLost);
-  }, []);
+  }, [mounted]);
 
   const signIn = useCallback(async (credentials: Credentials) => {
     /*

@@ -1,3 +1,5 @@
+import type { Rights } from '../access/rights';
+import { LockedAction } from '../ui/LockedAction';
 import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
 import { count, plural } from '../ui/plural';
@@ -84,8 +86,8 @@ import type { CustomerAccount,
  */
 interface Props {
   canSell: boolean;
-  /** Роль вошедшего: правку остатка делает не продавец. */
-  role: string;
+  /** Права вошедшего (задача 0044): правку остатка делает тот, у кого право «Исправлять лицевой счёт». */
+  rights: Rights;
   /** Схема арендатора — часть ключа, которым запоминается источник платежа. */
   company: string;
   /** Сотрудник в сессии — вторая часть того же ключа: за кассой стоят разные
@@ -102,7 +104,7 @@ interface Props {
 }
 
 export function SellerScreen({
-  canSell, role, company, memberId, openDealId = null, onDealOpened,
+  canSell, rights, company, memberId, openDealId = null, onDealOpened,
 }: Props) {
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState<StockRow[]>([]);
@@ -304,7 +306,7 @@ export function SellerScreen({
 
       {finding && (
         <DealFinder
-          role={role}
+          canCorrect={rights.has('customer.account.correct')}
           company={company}
           memberId={memberId}
           paymentSourceList={paymentSourceList}
@@ -1127,14 +1129,14 @@ function CustomerPicker({
 function DealFinder({
   onPick,
   onError,
-  role,
+  canCorrect,
   company,
   memberId,
   paymentSourceList,
 }: {
   onPick: (deal: Deal) => void;
   onError: (message: string) => void;
-  role: string;
+  canCorrect: boolean;
   company: string;
   memberId: number;
   paymentSourceList: PaymentSourceEntry[];
@@ -1241,10 +1243,13 @@ function DealFinder({
             <p className="note">{accountObstacle(cash, account.balance)}</p>
           )}
 
-          {/* Правка остатка — владельцу и менеджеру. Продавец делает
-              операции, опирающиеся на факт: принял, выдал, зачёл. Правка
-              не опирается ни на что, кроме решения. */}
-          {['OWNER', 'MANAGER'].includes(role) && (
+          {/* Правка остатка — по праву «Исправлять лицевой счёт». Продавец
+              делает операции, опирающиеся на факт: принял, выдал, зачёл.
+              Правка не опирается ни на что, кроме решения. */}
+          {!canCorrect && (
+            <LockedAction permission="customer.account.correct" label="Поправить остаток" />
+          )}
+          {canCorrect && (
             fixing ? (
               <div className="row">
                 <input

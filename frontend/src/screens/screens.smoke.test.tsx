@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, waitFor } from '@testing-library/react';
 
@@ -87,10 +88,10 @@ describe('экраны открываются', () => {
   });
 
   const screens: Array<[string, () => JSX.Element]> = [
-    ['Склад', () => <CatalogScreen role="OWNER" />],
-    ['Шины и диски', () => <WheelsScreen canIntake role="OWNER" />],
+    ['Склад', () => <CatalogScreen rights={rightsAs('OWNER')} />],
+    ['Шины и диски', () => <WheelsScreen canIntake rights={rightsAs('OWNER')} />],
     ['Отчёты', () => <ReportsScreen canRead />],
-    ['Выгрузки', () => <FeedsScreen role="OWNER" />],
+    ['Выгрузки', () => <FeedsScreen rights={rightsAs('OWNER')} />],
     ['Сотрудники', () => <MembersScreen />],
     ['Склады', () => <OrganizationScreen />],
     ['Наименования', () => <UnmatchedScreen canManage onTotalChanged={() => {}} />],

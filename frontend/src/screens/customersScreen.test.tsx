@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -21,7 +22,7 @@ describe('раздел «Клиенты»', () => {
   it('пустой поиск говорит ровно то, что называет задача', async () => {
     stubApi({ customers: { items: [], total: 0 } });
 
-    render(<CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />);
+    render(<CustomersScreen rights={rightsAs('OWNER')} company="t_1" memberId={7} onOpenDeal={() => {}} />);
 
     fireEvent.change(screen.getByPlaceholderText('Поиск клиента'), {
       target: { value: 'Иванов' },
@@ -43,7 +44,7 @@ describe('раздел «Клиенты»', () => {
       },
     });
 
-    render(<CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />);
+    render(<CustomersScreen rights={rightsAs('OWNER')} company="t_1" memberId={7} onOpenDeal={() => {}} />);
 
     await waitFor(() => expect(screen.getByText('Клиентов: 2')).toBeTruthy());
 
@@ -61,7 +62,7 @@ describe('раздел «Клиенты»', () => {
       account: { customerId: 1, balance: 0, entries: [] },
     });
 
-    render(<CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />);
+    render(<CustomersScreen rights={rightsAs('OWNER')} company="t_1" memberId={7} onOpenDeal={() => {}} />);
 
     await waitFor(() => expect(screen.getByText('Автосервис')).toBeTruthy());
     fireEvent.click(screen.getByText('Автосервис'));
@@ -102,7 +103,7 @@ describe('раздел «Клиенты»', () => {
       account: { customerId: 1, balance: 1000, entries },
     });
 
-    render(<CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />);
+    render(<CustomersScreen rights={rightsAs('OWNER')} company="t_1" memberId={7} onOpenDeal={() => {}} />);
     await waitFor(() => expect(screen.getByText('Клиент с историей')).toBeTruthy());
     fireEvent.click(screen.getByText('Клиент с историей'));
 
@@ -126,7 +127,7 @@ describe('раздел «Клиенты»', () => {
       account: { customerId: 1, balance: 0, entries: [] },
     });
 
-    render(<CustomersScreen role="SELLER" company="t_1" memberId={7} onOpenDeal={() => {}} />);
+    render(<CustomersScreen rights={rightsAs('SELLER')} company="t_1" memberId={7} onOpenDeal={() => {}} />);
     await waitFor(() => expect(screen.getByText('Клиент продавца')).toBeTruthy());
     fireEvent.click(screen.getByText('Клиент продавца'));
 
@@ -204,6 +205,15 @@ describe('источник платежа в карточке клиента', (
     await waitFor(() => expect(paymentSelect().value).toBe('1'));
   });
 
+  it('без права «Исправлять остаток» кнопка погашена и называет причину (задача 0044)', async () => {
+    await openAccountCard(sent, { balance: 1000, role: 'SELLER' });
+
+    const locked = button('Поправить остаток');
+    expect(locked, 'кнопка спрятана, а не погашена').toBeTruthy();
+    expect((locked as HTMLButtonElement).disabled).toBe(true);
+    expect(locked!.parentElement?.textContent).toContain('Нет права');
+  });
+
   it('правка остатка источник не запоминает: платежа при ней нет', async () => {
     await openAccountCard(sent, { balance: 1000 });
     await waitFor(() => expect(paymentSelect()).toBeTruthy());
@@ -226,7 +236,9 @@ interface Sent {
 }
 
 /** Доходит до карточки клиента и раскрывает ввод суммы «Пополнить / Списать». */
-async function openAccountCard(sent: Sent, { balance }: { balance: number }): Promise<void> {
+async function openAccountCard(
+  sent: Sent, { balance, role = 'OWNER' }: { balance: number; role?: string },
+): Promise<void> {
   stubApi({
     customers: { items: [customer({ id: 1, name: 'Автосервис' })], total: 1 },
     detail: customer({ id: 1, name: 'Автосервис' }),
@@ -238,7 +250,7 @@ async function openAccountCard(sent: Sent, { balance }: { balance: number }): Pr
     sent,
   });
 
-  render(<CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />);
+  render(<CustomersScreen rights={rightsAs(role)} company="t_1" memberId={7} onOpenDeal={() => {}} />);
   await waitFor(() => expect(screen.getByText('Автосервис')).toBeTruthy());
   fireEvent.click(screen.getByText('Автосервис'));
 

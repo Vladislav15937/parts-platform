@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
@@ -34,7 +35,7 @@ describe('сумма оплаты подставлена долгом', () => {
 
   it('в поле стоит долг, кнопка активна, одно нажатие его закрывает', async () => {
     sent = stubApi({ total: '5200', paid: '0' });
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     await waitFor(() => expect(amountInput().value).toBe('5200'));
@@ -46,7 +47,7 @@ describe('сумма оплаты подставлена долгом', () => {
 
   it('после частичной оплаты в поле встаёт остаток долга, а не сумма сделки', async () => {
     sent = stubApi({ total: '5200', paid: '0' });
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     await waitFor(() => expect(amountInput().value).toBe('5200'));
@@ -61,7 +62,7 @@ describe('сумма оплаты подставлена долгом', () => {
 
   it('у полностью оплаченной поле пусто, кнопка серая и сказано почему', async () => {
     sent = stubApi({ total: '5200', paid: '5200' });
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     await waitFor(() => expect(amountInput().value).toBe(''));
@@ -71,7 +72,7 @@ describe('сумма оплаты подставлена долгом', () => {
 
   it('стёртое поле гасит кнопку и объясняет это словами', async () => {
     sent = stubApi({ total: '5200', paid: '0' });
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     await waitFor(() => expect(amountInput().value).toBe('5200'));
@@ -83,7 +84,7 @@ describe('сумма оплаты подставлена долгом', () => {
 
   it('сумма больше долга предупреждает про лицевой счёт до нажатия', async () => {
     sent = stubApi({ total: '5200', paid: '0' });
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     await waitFor(() => expect(amountInput().value).toBe('5200'));
@@ -99,7 +100,7 @@ describe('сумма оплаты подставлена долгом', () => {
 
   it('ноль в поле — отказ словами, а не оплата на ноль', async () => {
     sent = stubApi({ total: '5200', paid: '0' });
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     await waitFor(() => expect(amountInput().value).toBe('5200'));
@@ -121,7 +122,7 @@ describe('сумма оплаты подставлена долгом', () => {
 
     for (const [status, word] of closed) {
       sent = stubApi({ total: '5200', paid: '0', status });
-      render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+      render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
       await openDeal();
 
       expect(amountInput().value).toBe('');

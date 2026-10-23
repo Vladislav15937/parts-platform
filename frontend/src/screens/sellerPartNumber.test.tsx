@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -50,7 +51,7 @@ describe('номер позиции в выдаче продавца', () => {
 
   it('строка выдачи называет номер позиции, а не только публичный код',
     async () => {
-      render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+      render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
       await search();
 
       const info = screen.getByText('Фара Toyota Camry 2007 лев.').closest('.stock-info')!;
@@ -78,7 +79,7 @@ describe('номер позиции в выдаче продавца', () => {
    * «Фара Toyota Camry 2007» это сотня одинаковых строк.
    */
   it('в корзине строка тоже названа номером позиции', async () => {
-    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
     await search();
 
     fireEvent.click([...document.querySelectorAll('button')]

@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 
@@ -58,7 +59,7 @@ describe('скачивание всех снимков из карточки п�
   });
 
   it('видно «Просмотру»: это те же снимки, что он и так смотрит', async () => {
-    render(<PartCard {...props()} role="VIEWER" />);
+    render(<PartCard {...props()} rights={rightsAs('VIEWER')} />);
 
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Фара левая Toyota Camry' })).toBeTruthy());
     expect(screen.queryByRole('link', { name: 'Скачать все фото' }),
@@ -77,7 +78,7 @@ function props(role = 'SELLER') {
   return {
     row: row(),
     warehouses: WAREHOUSES,
-    role,
+    rights: rightsAs(role),
     onClose: () => {},
     onChanged: () => {},
   };

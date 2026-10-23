@@ -26,7 +26,8 @@ import { PartCellBlock } from './PartCellBlock';
 import { PartQualityBlock } from './PartQualityBlock';
 import { PartEditForm } from './PartEditForm';
 import { PartLabelPrint } from './PartLabelPrint';
-import { LABEL_ROLES } from './tabs';
+import type { Rights } from '../access/rights';
+import { LockedAction } from '../ui/LockedAction';
 import { PartDonorView } from './PartDonorView';
 import { PartHistoryView } from './PartHistoryView';
 import { deleteStockDocument, deletionNotice } from '../inventory/stockDocuments';
@@ -49,11 +50,12 @@ import { useMounted } from '../ui/useMounted';
  */
 /** Дата без времени: в карточке время правки — шум. */
 
-export function PartCard({ row, warehouses, role, extraFields, applicability = true,
+export function PartCard({ row, warehouses, rights, extraFields, applicability = true,
                           quality = true, onClose, onChanged, onDonorParts }: {
   row: CatalogRow;
   warehouses: Warehouse[];
-  role: string;
+  /** Права вошедшего (задача 0044): недоступное погашено и названо. */
+  rights: Rights;
   /**
    * Поля, которых нет у запчасти: свойства колеса — размер, сезон, износ,
    * вылет, сверловка. Карточка одна на оба вида товара, потому что действия
@@ -445,7 +447,7 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
                 {fitState !== null && typeof fitState.engineMatters === 'boolean' && (
                   <p>
                     <strong>{fitState.engineMatters ? 'Двигатель важен' : 'Двигатель не важен'}</strong>
-                    {(role === 'OWNER' || role === 'MANAGER') && (
+                    {rights.has('part.edit') && (
                       <button type="button" className="mark__link"
                               onClick={() => void toggleEngine(!fitState.engineMatters)}>
                         {fitState.engineMatters ? 'сделать «не важен»' : 'сделать «важен»'}
@@ -575,7 +577,7 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
               warehouses={warehouses}
               stock={row.stock}
               reserved={row.reserved}
-              role={role}
+              canPlace={rights.has('part.cell')}
               onChanged={onChanged}
             />
 
@@ -590,7 +592,7 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
               <span> ₽</span>
             </div>
 
-            {(role === 'OWNER' || role === 'MANAGER') && !editing && (
+            {!editing && (rights.has('part.edit') ? (
               <button
                 type="button"
                 className="button--ghost"
@@ -598,7 +600,9 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
               >
                 Изменить
               </button>
-            )}
+            ) : (
+              <LockedAction permission="part.edit" label="Изменить" />
+            ))}
 
             {editing && (
               <PartEditForm
@@ -616,7 +620,10 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
             {/* Перевозит и кладовщик: деталь у него в руках, а перестановка
                 между складами — работа, а не расход. Списывает только тот,
                 кто отвечает за деньги. */}
-            {!editing && ['OWNER', 'MANAGER', 'STOREKEEPER'].includes(role) && (
+            {!editing && !rights.has('stock.move') && (
+              <LockedAction permission="stock.move" label="Перевезти" />
+            )}
+            {!editing && rights.has('stock.move') && (
               moving ? (
                 <div className="card-view__writeoff">
                   <label className="field">
@@ -703,7 +710,10 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
               )
             )}
 
-            {!editing && (role === 'OWNER' || role === 'MANAGER') && (
+            {!editing && !rights.has('stock.write_off') && (
+              <LockedAction permission="stock.write_off" label="Списать" />
+            )}
+            {!editing && rights.has('stock.write_off') && (
               writingOff ? (
                 <div className="card-view__writeoff">
                   <label className="field">
@@ -771,11 +781,11 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
             )}
 
             {/* Этикетка печатается отсюда: деталь уже открыта, искать её
-                на другом экране незачем. Роли те же, что у экрана «Этикетки»
-                (`LABEL_ROLES`) — второй список разошёлся бы с первым. Ключ
+                на другом экране незачем. Право то же, что у экрана «Этикетки»
+                (`TABS` в `tabs.ts`) — второе разошлось бы с первым. Ключ
                 по позиции: открыв следующую карточку, человек обязан увидеть
                 её наклейку, а не оставшуюся от предыдущей. */}
-            {!editing && LABEL_ROLES.includes(role) && (
+            {!editing && rights.has('part.cell') && (
               <PartLabelPrint
                 key={row.id}
                 code={row.code}
@@ -829,7 +839,7 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
               <PartQualityBlock
                 partId={row.id}
                 grade={grade}
-                role={role}
+                canGrade={rights.has('part.edit')}
                 onGraded={(next) => { setGrade(next); setRegraded(true); }}
               />
             )}
@@ -902,7 +912,10 @@ export function PartCard({ row, warehouses, role, extraFields, applicability = t
             {/* Досъёмка: снимок делают телефоном при приёмке, но деталь,
                 приехавшую переносом без картинок, доснять было негде вовсе —
                 а на разборке продаёт фотография. */}
-            {(role === 'OWNER' || role === 'MANAGER' || role === 'SELLER') && (
+            {!rights.has('photos.manage') && (
+              <LockedAction permission="photos.manage" label="Добавить снимок" />
+            )}
+            {rights.has('photos.manage') && (
               <div className="card-view__upload">
                 {main !== undefined && (
                   <div className="filter-row">

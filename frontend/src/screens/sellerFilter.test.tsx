@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -47,7 +48,7 @@ describe('отбор в поиске продавца', () => {
   });
 
   it('находит марку, которой нет в показанных строках', async () => {
-    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
     await search();
 
     // До отбора видно только тойотовские: список обрезан, ниссановская
@@ -68,7 +69,7 @@ describe('отбор в поиске продавца', () => {
   });
 
   it('снимает отбор одним действием', async () => {
-    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
     await search();
 
     fireEvent.change(screen.getByLabelText('Марка'), { target: { value: 'Nissan' } });
@@ -88,7 +89,7 @@ describe('отбор в поиске продавца', () => {
    * на витрине склада, где отборы снимались только в шапке таблицы.
    */
   it('пустую выдачу объясняет словами и оставляет отбор снимаемым', async () => {
-    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
     await search();
 
     fireEvent.change(screen.getByLabelText('Сторона'), { target: { value: 'RIGHT' } });

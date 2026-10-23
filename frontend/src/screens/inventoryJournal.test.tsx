@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -216,7 +217,7 @@ describe('журнал пересчётов', () => {
   it('«Просмотр» читает комментарий текстом и не сводит расхождения', async () => {
     stubApi({ sessions: [row({ id: 3, status: 'OPEN', note: 'Катушки не считали' })] });
 
-    render(<InventoryReconcile reference={reference()} role="VIEWER" />);
+    render(<InventoryReconcile reference={reference()} canReconcile={rightsAs('VIEWER').has('inventory.reconcile')} />);
 
     fireEvent.click(await screen.findByText('Идёт подсчёт'));
 

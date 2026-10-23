@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -91,7 +92,7 @@ describe('«Движение товара» и удаление документ
       return json([]);
     }));
 
-    render(<PartCard row={cardRow()} warehouses={[{ id: 2, name: 'Основной' }]} role="OWNER"
+    render(<PartCard row={cardRow()} warehouses={[{ id: 2, name: 'Основной' }]} rights={rightsAs('OWNER')}
       onClose={() => {}} onChanged={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: 'История' }));
     fireEvent.click(await screen.findByRole('button', { name: /^Движения/ }));
@@ -125,7 +126,7 @@ describe('«Движение товара» и удаление документ
       ]);
     }));
 
-    render(<StockMovesScreen role="OWNER" />);
+    render(<StockMovesScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Ангар')).toBeTruthy());
     expect(screen.getByText('Удалён · Владелец')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: /^Удалить:/ })).toHaveLength(1);
@@ -135,6 +136,35 @@ describe('«Движение товара» и удаление документ
     fireEvent.click(screen.getByRole('button', { name: 'Удалить документ' }));
     await waitFor(() => expect(screen.getByText('Перемещение №4 удалено.')).toBeTruthy());
     expect(calls).toContain('DELETE /api/stock/documents/4');
+  });
+
+  // Без права «Удалять выполненные складские документы» кнопка не пропадает,
+  // а погашена и называет право (решение владельца 23.10.2026, задача 0044,
+  // вопрос 3; живой прогон 24.10.2026 — у менеджера и кладовщика её не было).
+  it('без права «Удалить» в «Движении товара» погашена и называет причину', () => {
+    const locked = history();
+    locked.movements[1] = { ...locked.movements[1]!, deletableDocumentId: null,
+      deleteNeeds: 'stock_document.delete_done' };
+    render(<PartHistoryView history={locked} tab="movements" onTab={() => {}} onDelete={vi.fn()} />);
+    const button = screen.getByRole('button', { name: 'Удалить' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText(/^Нет права/)).toBeTruthy();
+    // У сделки и у удалённого документа удалять нечего — там ни кнопки, ни причины.
+    expect(screen.getAllByRole('button', { name: 'Удалить' })).toHaveLength(1);
+  });
+
+  it('без права «Удалить» в «Перевозках» погашена и называет причину', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json([
+      { id: 4, number: 4, createdAt: '2026-09-05T20:01:00Z', fromWarehouse: 'Ткацкая',
+        toWarehouse: 'Ангар', lines: 1, note: null, author: 'Иванов',
+        deletedAt: null, deletedBy: null, deletable: false,
+        deleteNeeds: 'stock_document.delete_done' },
+    ])));
+    render(<StockMovesScreen rights={rightsAs('MANAGER')} />);
+    await waitFor(() => expect(screen.getByText('Ангар')).toBeTruthy());
+    const button = screen.getByRole('button', { name: 'Удалить' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText(/^Нет права/)).toBeTruthy();
   });
 });
 

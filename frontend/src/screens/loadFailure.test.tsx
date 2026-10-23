@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 
@@ -38,7 +39,7 @@ describe('экран при неудачной загрузке', () => {
 
   it('«Выгрузки» показывают причину, а не вечное «Загружаем»', async () => {
     refuse();
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
 
     await waitFor(() => expect(screen.getByText(/Сессия кончилась/)).toBeTruthy());
     expect(screen.queryByText(/Загружаем выгрузки/),
@@ -66,16 +67,18 @@ describe('экран при неудачной загрузке', () => {
     refuse();
     render(<MembersScreen />);
 
-    // Причин две, и обе обязаны показаться: у списка сотрудников и у раздела
-    // «Доступ администратора сервиса» (задача 0042) загрузка своя.
-    await waitFor(() => expect(screen.getAllByText(/Сессия кончилась/)).toHaveLength(2));
+    // Причин четыре, и все обязаны показаться: у списка сотрудников,
+    // у раздела «Доступ администратора сервиса» (задача 0042), у прав
+    // сотрудников и у ролей (задача 0044) загрузка своя — общая строка
+    // ошибки стиралась бы успехом соседнего запроса.
+    await waitFor(() => expect(screen.getAllByText(/Сессия кончилась/)).toHaveLength(4));
     expect(screen.queryByText(/Загружаем/),
       'экран ждёт загрузку, которая уже провалилась').toBeNull();
   });
 
   it('витрина склада — тоже', async () => {
     refuse();
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
 
     await waitFor(() => expect(screen.getByText(/Сессия кончилась/)).toBeTruthy());
     expect(screen.queryByText(/Загружаем/)).toBeNull();

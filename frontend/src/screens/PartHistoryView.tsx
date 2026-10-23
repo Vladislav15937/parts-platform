@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import type { PermissionKey } from '../access/rights';
 import { bulkCaption, type PartHistory } from '../inventory/catalog';
+import { LockedAction } from '../ui/LockedAction';
 
 /**
  * История позиции: две ленты, между которыми переключаются.
@@ -139,6 +141,12 @@ export function PartHistoryView({ history, tab, onTab, onDelete, busy = false, n
                   <td>{history.supply ?? ''}</td>
                   {onDelete !== undefined && (
                     <td>
+                      {/* Без права документ, который удалить можно, — «Удалить»
+                          погашена и называет право, а не пропадает (решение
+                          владельца 23.10.2026, задача 0044, вопрос 3). */}
+                      {move.deletableDocumentId == null && move.deleteNeeds != null && (
+                        <LockedAction permission={move.deleteNeeds as PermissionKey} label="Удалить" />
+                      )}
                       {move.deletableDocumentId != null && (
                         asked === move.deletableDocumentId ? (
                           <span className="history__confirm">

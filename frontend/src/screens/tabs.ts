@@ -42,167 +42,93 @@ export type Tab =
   | 'settings'
   | 'reference';
 
+import type { PermissionKey, Rights } from '../access/rights';
+
 export interface TabSpec {
   id: Tab;
   /** Слово на рельсе — короткое: «Очередь», а не «Очередь отправки». */
   label: string;
   /** Название раздела в верхней полосе и в заголовке вкладки браузера. */
   section: string;
-  /** Кому раздел виден. Те же списки, что в `@PreAuthorize` на сервере. */
-  roles: readonly string[] | typeof ANYONE;
+  /**
+   * Какое право открывает раздел — хоть одно из названных (у «Пересчёта»
+   * есть и чтение журнала, и обход, и сведение). Те же ключи, что
+   * в `@PreAuthorize` на сервере; списков ролей у экрана нет (задача 0044):
+   * какие права у какой роли, решает владелец.
+   */
+  needs: readonly PermissionKey[] | typeof ANYONE;
 }
 
 /**
  * Раздел, открытый любому вошедшему.
  *
- * <p>Именно так, а не перечислением пяти сегодняшних ролей: перечень
- * замолчал бы на шестой — новая роль на сервере убрала бы у себя склад
- * и продажу, и убрала бы молча. «Всем» — это утверждение, а список ролей
- * был бы догадкой о том, какие роли бывают.
+ * <p>Именно так, а не перечислением прав: «всем» — это утверждение,
+ * а список был бы догадкой о том, какие права бывают.
  */
 const ANYONE = 'ANYONE';
-
-/** Кто имеет право продавать. Тот же список стоит на сервере в @PreAuthorize. */
-export const SELLING_ROLES = ['OWNER', 'MANAGER', 'SELLER'];
-
-/**
- * Кто правит справочник наименований и смотрит отчёты. Тот же список
- * в @PreAuthorize: в отчётах лежат зарплатная база смены и себестоимость.
- */
-export const NAMING_ROLES = ['OWNER', 'MANAGER'];
-
-/**
- * Кто скачивает таблицу файлом — со «Склада» и с «Шин и дисков».
- *
- * <p>Экраны эти открыты всем вошедшим, и остаются открытыми: цену и наличие
- * смотрят все. А файл — другое дело: в нём вся номенклатура разом, с ценами,
- * поставками, заметками и остатками по каждому складу, то есть опись
- * имущества. Список тот же, что у отчётов, и тот же на сервере —
- * `TableExport.ALLOWED`, одно место на обе выгрузки. Расхождение этих двух
- * списков валит `TableExportTest` на сервере.
- *
- * <p>Отдельной константой, а не `NAMING_ROLES`: списки сегодня совпадают,
- * но означают разное — уехав в полномочия (задача 0044), скачивание станет
- * своим правом, а справочник наименований останется своим.
- */
-export const EXPORT_ROLES = ['OWNER', 'MANAGER'];
-
-/**
- * Кто печатает этикетки. Кладовщик здесь есть: подписывать стеллажи —
- * его работа, и гонять за этим владельца значит не подписать их вовсе.
- */
-export const LABEL_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
-
-/**
- * Кто перевозит между складами и смотрит журнал перевозок. Тот же список
- * в @PreAuthorize у POST /api/stock/moves: перевозит кладовщик наравне
- * с владельцем — деталь у него в руках, и перестановка между складами —
- * работа, а не расход.
- */
-export const MOVE_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
-
-/**
- * Кто заводит данные: приёмка, машины, пересчёт, очередь отправки.
- *
- * <p>Здесь все, кроме «Просмотра». Роль эта названа владельцу «только
- * смотреть», и заводят её тому, кому дают посмотреть; форма приёмки,
- * открытая ей, — это работа, которую сервер отобьёт, а очередь пометит
- * «требует внимания». Экран, называющий действие и не дающий его сделать,
- * хуже отсутствующего экрана.
- */
-export const WRITING_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER', 'SELLER'];
-
-/**
- * Кто пишет комментарий ходившего на экране обхода (задача 0169): те же роли,
- * что на сервере (`InventoryController.COUNTER_NOTES`). Продавец считать
- * может, а поле ему не показывается — сервер его отобьёт.
- */
-export const COUNTER_NOTE_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
-
-/**
- * Кто видит вкладку «Пересчёт»: все, кто заводит данные, и «Просмотр».
- *
- * <p>Журнал пересчётов раньше был недоступен «Просмотру» вовсе — вкладки
- * не было. А журнал склада ссылается на пересчёт («Пересчёт №4»), и
- * посмотреть, что тогда считали, — не то же самое, что провести или
- * отменить: то же разделение, что и на сервере (`InventoryController.READS`
- * против `RECONCILES`).
- */
-export const INVENTORY_ROLES = [...WRITING_ROLES, 'VIEWER'];
-
-/**
- * Под какой ролью экраны решают, что показать.
- *
- * <p>Администратор сервиса в кабинете разборки может то же, что владелец:
- * решение владельца продукта от 8 сентября 2026 (задача 0042) — «делать
- * абсолютно всё в личном кабинете владельца разборки». Подменяется роль
- * одним местом, а не дописыванием `'ADMIN'` в два десятка перечней: забытый
- * перечень молча спрятал бы от него раздел. Сервер решает так же —
- * `TenantPrincipal.getAuthorities()`. Своя роль при этом остаётся для показа:
- * в шапке, в журнале и в списке сотрудников он назван администратором.
- */
-export function rightsOf(role: string): string {
-  return role === 'ADMIN' ? 'OWNER' : role;
-}
-
-/** Только владелец: сотрудники, склады, настройки. */
-const OWNER_ONLY = ['OWNER'];
-
-/**
- * Кто читает журнал действий. Тот же список в `@PreAuthorize`
- * у `OrganizationAuditController`.
- *
- * <p>Владелец и «Ревизор» — роль, заведённая ровно для этого решением
- * владельца продукта от 8 сентября 2026 (задача 0043): «все действия внутри
- * одной организации должны быть видны владельцу и тем, кому владелец
- * разрешил это». Менеджера здесь нет намеренно: журнал заводят в том числе
- * затем, чтобы проверять распоряжающихся складом и деньгами, и раздать его
- * вместе с полномочиями значит не раздать вовсе.
- */
-export const JOURNAL_ROLES = ['OWNER', 'AUDITOR'];
 
 /**
  * Порядок здесь — порядок кнопок на рельсе. Приёмка первой: с неё начинают
  * смену, и открывается приложение на ней.
+ *
+ * <p><b>Этикетки — по праву «Раскладывать по полкам и печатать этикетки»</b>
+ * (`part.cell`): своего права у печати нет (на сервере она ничего не меняет),
+ * а до 0044 этикетки печатали ровно владелец, менеджер и кладовщик — те же,
+ * у кого право на ячейку. Поэтому право и названо обоими действиями.
+ * Решение исполнителя, названо в PR.
  */
 export const TABS: readonly TabSpec[] = [
-  { id: 'intake', label: 'Приёмка', section: 'Приёмка', roles: WRITING_ROLES },
-  { id: 'donor', label: 'Машина', section: 'Машины', roles: WRITING_ROLES },
-  { id: 'sales', label: 'Продажа', section: 'Продажа', roles: ANYONE },
+  { id: 'intake', label: 'Приёмка', section: 'Приёмка', needs: ['intake.receive'] },
+  { id: 'donor', label: 'Машина', section: 'Машины', needs: ['intake.receive'] },
+  { id: 'sales', label: 'Продажа', section: 'Продажа', needs: ANYONE },
   // Сразу за «Продажей»: это её оборотная сторона — то, что уже отложено
-  // и ждёт действия. Роли те же, что у эндпоинта (`SalesController.SELLS`):
+  // и ждёт действия. Право то же, что у эндпоинта (`SalesController.SELLS`):
   // список несёт клиента, суммы и долг по всему складу.
-  { id: 'deals', label: 'Сделки', section: 'Сделки', roles: SELLING_ROLES },
-  { id: 'orders', label: 'Заказы', section: 'Заказы с площадок', roles: SELLING_ROLES },
-  { id: 'returns', label: 'Возвраты', section: 'Возвраты', roles: SELLING_ROLES },
-  { id: 'customers', label: 'Клиенты', section: 'Клиенты', roles: SELLING_ROLES },
+  { id: 'deals', label: 'Сделки', section: 'Сделки', needs: ['deal.sell'] },
+  { id: 'orders', label: 'Заказы', section: 'Заказы с площадок', needs: ['deal.sell'] },
+  { id: 'returns', label: 'Возвраты', section: 'Возвраты', needs: ['deal.return'] },
+  { id: 'customers', label: 'Клиенты', section: 'Клиенты', needs: ['customer.view'] },
   // Реестр кассы (задача 0045) — рядом с клиентами и сделками, потому что
-  // деньги приходят оттуда, но роли у него отчётные: в списке видно всё,
+  // деньги приходят оттуда, но право у него своё: в списке видно всё,
   // чем живёт компания, включая возвраты и выдачи с лицевых счетов.
-  { id: 'payments', label: 'Платежи', section: 'Платежи', roles: NAMING_ROLES },
-  { id: 'catalog', label: 'Склад', section: 'Склад', roles: ANYONE },
-  { id: 'wheels', label: 'Шины и диски', section: 'Шины и диски', roles: ANYONE },
-  { id: 'inventory', label: 'Пересчёт', section: 'Пересчёт склада', roles: INVENTORY_ROLES },
-  { id: 'moves', label: 'Перевозки', section: 'Перевозки', roles: MOVE_ROLES },
-  { id: 'outbox', label: 'Очередь', section: 'Очередь отправки', roles: WRITING_ROLES },
-  { id: 'import', label: 'Загрузка', section: 'Загрузка склада', roles: WRITING_ROLES },
-  { id: 'names', label: 'Наименования', section: 'Нераспознанные наименования', roles: ANYONE },
-  { id: 'reports', label: 'Отчёты', section: 'Отчёты', roles: NAMING_ROLES },
-  { id: 'feeds', label: 'Выгрузки', section: 'Выгрузки на площадки', roles: NAMING_ROLES },
-  { id: 'delivery', label: 'Доставка', section: 'Доставка событий', roles: NAMING_ROLES },
-  { id: 'labels', label: 'Этикетки', section: 'Этикетки', roles: LABEL_ROLES },
+  { id: 'payments', label: 'Платежи', section: 'Платежи', needs: ['payments.registry.view'] },
+  { id: 'catalog', label: 'Склад', section: 'Склад', needs: ANYONE },
+  { id: 'wheels', label: 'Шины и диски', section: 'Шины и диски', needs: ANYONE },
+  {
+    id: 'inventory', label: 'Пересчёт', section: 'Пересчёт склада',
+    needs: ['inventory.count', 'inventory.journal.view', 'inventory.reconcile'],
+  },
+  { id: 'moves', label: 'Перевозки', section: 'Перевозки', needs: ['stock.move'] },
+  {
+    id: 'outbox', label: 'Очередь', section: 'Очередь отправки',
+    needs: ['intake.receive', 'inventory.count', 'inventory.counter_note'],
+  },
+  { id: 'import', label: 'Загрузка', section: 'Загрузка склада', needs: ['import.manage'] },
+  { id: 'names', label: 'Наименования', section: 'Нераспознанные наименования', needs: ANYONE },
+  { id: 'reports', label: 'Отчёты', section: 'Отчёты', needs: ['reports.view'] },
+  { id: 'feeds', label: 'Выгрузки', section: 'Выгрузки на площадки', needs: ['marketplace.view'] },
+  { id: 'delivery', label: 'Доставка', section: 'Доставка событий', needs: ['delivery.manage'] },
+  { id: 'labels', label: 'Этикетки', section: 'Этикетки', needs: ['part.cell'] },
   // Перед разделами владельца: журнал — про людей компании, и открывают его
   // оттуда же, откуда смотрят на сотрудников.
-  { id: 'journal', label: 'Журнал', section: 'Журнал действий', roles: JOURNAL_ROLES },
-  { id: 'members', label: 'Сотрудники', section: 'Сотрудники', roles: OWNER_ONLY },
-  { id: 'organization', label: 'Склады', section: 'Филиалы и склады', roles: OWNER_ONLY },
-  { id: 'settings', label: 'Настройки', section: 'Настройки', roles: OWNER_ONLY },
-  { id: 'reference', label: 'Справочники', section: 'Справочники', roles: ANYONE },
+  { id: 'journal', label: 'Журнал', section: 'Журнал действий', needs: ['journal.view'] },
+  { id: 'members', label: 'Сотрудники', section: 'Сотрудники', needs: ['members.manage'] },
+  {
+    id: 'organization', label: 'Склады', section: 'Филиалы и склады',
+    needs: ['org.warehouses', 'org.branches', 'org.availability'],
+  },
+  { id: 'settings', label: 'Настройки', section: 'Настройки', needs: ['settings.company'] },
+  { id: 'reference', label: 'Справочники', section: 'Справочники', needs: ANYONE },
 ];
 
-/** Виден ли раздел этой роли. */
-export function visibleTo(spec: TabSpec, role: string): boolean {
-  return spec.roles === ANYONE || spec.roles.includes(role);
+/** Открыт ли раздел этим правам. */
+export function allowed(spec: TabSpec, rights: Rights): boolean {
+  return spec.needs === ANYONE || rights.any(...spec.needs);
+}
+
+/** Права, которые назовёт причина погашенного раздела; у открытого всем — нет. */
+export function neededFor(spec: TabSpec): readonly PermissionKey[] {
+  return spec.needs === ANYONE ? [] : spec.needs;
 }
 
 /** Название раздела в верхней полосе: видно, где ты, не считая вкладки. */

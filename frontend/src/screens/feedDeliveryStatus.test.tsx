@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 
@@ -46,7 +47,7 @@ describe('итог последней отправки на карточке в�
 
   async function show(extra: Record<string, unknown>) {
     feeds = [feed(extra)];
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
   }
 

@@ -1,6 +1,6 @@
 import { request } from './client';
 
-/** Вошедший сотрудник. Роль определяет, что показывать на экранах. */
+/** Вошедший сотрудник. Права определяют, что на экранах доступно. */
 export interface Me {
   memberId: number;
   login: string;
@@ -8,6 +8,19 @@ export interface Me {
   /** `ADMIN` — администратор сервиса в кабинете разборки (задача 0042). */
   role: 'OWNER' | 'MANAGER' | 'STOREKEEPER' | 'SELLER' | 'VIEWER' | 'AUDITOR' | 'ADMIN';
   companySchema: string;
+  /**
+   * Роль «Владелец» или администратор сервиса: все права всегда (задача 0044).
+   * Нет у личности, запомненной телефоном до выкладки 0044.
+   */
+  owner?: boolean;
+  /** Роль клиента названием; `null` — роли нет. Нет у личности до 0044. */
+  roleName?: string | null;
+  /**
+   * Права вошедшего ключами (`access/rights.ts`). Решают, что на экранах
+   * доступно, а что погашено; прежняя роль `role` остаётся для показа.
+   * Нет у личности, запомненной до выкладки 0044, — см. `rightsOf`.
+   */
+  permissions?: string[];
 }
 
 /**
@@ -27,6 +40,18 @@ export function login(credentials: Credentials): Promise<Me> {
 
 export function logout(): Promise<void> {
   return request<void>('/api/auth/logout', { method: 'POST' });
+}
+
+/**
+ * Почему закрыт вход этого браузера (задача 0044): сервер отвечает только
+ * о сессии из cookie запроса, и только если её отозвали (смена прав, пароля,
+ * выключение). Пусто — не отзывали либо не узнать.
+ *
+ * @param company схема компании запомненной личности
+ */
+export function ended(company: string): Promise<{ message: string } | undefined> {
+  return request<{ message: string } | undefined>(
+    `/api/auth/ended?company=${encodeURIComponent(company)}`);
 }
 
 /** Кто я. Нужно при старте: сессия могла остаться живой с прошлого раза. */

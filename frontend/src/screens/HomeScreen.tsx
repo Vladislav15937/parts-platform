@@ -35,20 +35,8 @@ import { AdminVisitBanner } from '../admin/AdminVisitBanner';
 import { ordersAwaitingReply } from '../sales/sales';
 import { unmatchedNames } from '../catalog/partNames';
 import { deadLetters } from '../events/deadLetters';
-import {
-  COUNTER_NOTE_ROLES,
-  JOURNAL_ROLES,
-  LABEL_ROLES,
-  MOVE_ROLES,
-  NAMING_ROLES,
-  SELLING_ROLES,
-  TABS,
-  WRITING_ROLES,
-  rightsOf,
-  sectionName,
-  visibleTo,
-  type Tab,
-} from './tabs';
+import { lockedReasonAny, rightsOf, useCatalogTitles, type Rights } from '../access/rights';
+import { TABS, allowed, neededFor, sectionName, type Tab, type TabSpec } from './tabs';
 
 /**
  * Оболочка после входа.
@@ -69,10 +57,11 @@ export function HomeScreen() {
   // видел бы её лист обхода и справочники.
   const company = state.status === 'authenticated' ? state.me.companySchema : undefined;
   const outbox = useOutbox(company);
-  // «Просмотр» открывается на складе: приёмки у него в рельсе нет,
-  // и начать с экрана, которого не видно, значит открыться пустым местом.
+  // Без права принимать товар открываемся на складе: приёмка у него погашена,
+  // и начать с экрана, который ничего не даёт сделать, значит открыться
+  // упрёком вместо работы.
   const [tab, setTab] = useState<Tab>(
-    state.status === 'authenticated' && !WRITING_ROLES.includes(rightsOf(state.me.role))
+    state.status === 'authenticated' && !rightsOf(state.me).has('intake.receive')
       ? 'catalog'
       : 'intake',
   );
@@ -105,34 +94,43 @@ export function HomeScreen() {
     document.title = `${sectionName(tab)} — PartsFlow`;
   }, [tab]);
 
-  const role = state.status === 'authenticated' ? rightsOf(state.me.role) : null;
+  // Слова причины погашенного — справочником с сервера, своей копии нет.
+  const titles = useCatalogTitles();
+  const signed = state.status === 'authenticated' ? rightsOf(state.me) : null;
+  const names = signed?.has('names.match') === true;
+  const delivery = signed?.has('delivery.manage') === true;
+  const sells = signed?.has('deal.sell') === true;
 
   useEffect(() => {
     // Один запрос за вход, и только тем, кто может разбирать: приёмщику
     // это число ничего не даёт, а без связи оно и не приедет.
-    if (role === null || !NAMING_ROLES.includes(role) || !online) {
+    if (!online || (!names && !delivery)) {
       return;
     }
-    void unmatchedNames(0, 1)
-      .then((page) => { if (mounted.current) setUnmatched(page.total); })
-      // Молча: справочник — не то, ради чего стоит показывать ошибку
-      // на весь экран сразу после входа.
-      .catch(() => { if (mounted.current) setUnmatched(0); });
-    void deadLetters()
-      .then((page) => { if (mounted.current) setUndelivered(page.total); })
-      .catch(() => { if (mounted.current) setUndelivered(0); });
-  }, [role, online, mounted]);
+    if (names) {
+      void unmatchedNames(0, 1)
+        .then((page) => { if (mounted.current) setUnmatched(page.total); })
+        // Молча: справочник — не то, ради чего стоит показывать ошибку
+        // на весь экран сразу после входа.
+        .catch(() => { if (mounted.current) setUnmatched(0); });
+    }
+    if (delivery) {
+      void deadLetters()
+        .then((page) => { if (mounted.current) setUndelivered(page.total); })
+        .catch(() => { if (mounted.current) setUndelivered(0); });
+    }
+  }, [names, delivery, online, mounted]);
 
   useEffect(() => {
     // Заказы — продавцу, а не разбирающему справочник: у ролей разный список
     // вкладок, и число на чужой вкладке только мешает.
-    if (role === null || !SELLING_ROLES.includes(role) || !online) {
+    if (!sells || !online) {
       return;
     }
     void ordersAwaitingReply()
       .then((found) => { if (mounted.current) setAwaitingOrders(found.length); })
       .catch(() => { if (mounted.current) setAwaitingOrders(0); });
-  }, [role, online, mounted]);
+  }, [sells, online, mounted]);
 
   if (state.status !== 'authenticated') {
     return null;
@@ -145,9 +143,14 @@ export function HomeScreen() {
   // нет. Значок «на связи» при лежащем сервере — это обещание, которого
   // никто не давал: приёмщик видит его и решает, что работа ушла.
   // Пока проход не состоялся, показываем то, что знает браузер.
-  // Права экранов — по `rightsOf`: администратор сервиса видит всё, что
-  // владелец. Своя роль остаётся в шапке.
-  const rights = rightsOf(state.me.role);
+  // Права экранов — с сервера (`rightsOf`): администратор сервиса может всё,
+  // что владелец. Своя роль остаётся в шапке.
+  const rights: Rights = rightsOf(state.me);
+  const spec = TABS.find((t) => t.id === tab);
+  // Раздел без права не прячется, а гаснет и называет причину (решение
+  // владельца 23.10.2026, задача 0044, вопрос 3): открыв его, человек видит,
+  // какого права не хватает и у кого его просить.
+  const locked = spec !== undefined && !allowed(spec, rights);
   const connected = (outbox.reachedServer ?? online) && !state.offline;
   const unsent = outbox.records.length;
 
@@ -168,16 +171,23 @@ export function HomeScreen() {
           же новом экране, и разошёлся бы молча. */}
       <nav className="rail">
         <div className="rail__brand">PartsFlow</div>
-        {TABS.filter((spec) => visibleTo(spec, rights)).map((spec) => {
-          const count = badges[spec.id] ?? 0;
+        {TABS.map((item) => {
+          const count = badges[item.id] ?? 0;
+          const open = allowed(item, rights);
           return (
             <button
-              key={spec.id}
+              key={item.id}
               type="button"
-              className={tab === spec.id ? 'rail__item rail__item--active' : 'rail__item'}
-              onClick={() => setTab(spec.id)}
+              className={[
+                'rail__item',
+                tab === item.id ? 'rail__item--active' : '',
+                open ? '' : 'rail__item--locked',
+              ].filter((c) => c !== '').join(' ')}
+              title={open ? undefined : reasonOf(item, titles)}
+              aria-label={open ? undefined : `${item.label} — ${reasonOf(item, titles)}`}
+              onClick={() => setTab(item.id)}
             >
-              {spec.label}{count > 0 && ` · ${count}`}
+              {item.label}{open && count > 0 && ` · ${count}`}
             </button>
           );
         })}
@@ -188,7 +198,10 @@ export function HomeScreen() {
           <div className="topbar__title">{sectionName(tab)}</div>
           <div>
             <strong>{state.me.displayName}</strong>
-            <span className="muted"> · {roleName(state.me.role)}</span>
+            {/* Роль клиента названием, как её написал владелец (задача 0044);
+                прежняя колонка у своей роли — «Просмотр», и назвала бы не то. */}
+            <span className="muted"> · {state.me.role !== 'ADMIN' && state.me.roleName
+              ? state.me.roleName : roleName(state.me.role)}</span>
           </div>
           <span className={connected ? 'badge badge--online' : 'badge badge--offline'}>
             {connected ? 'на связи' : 'без связи'}
@@ -208,7 +221,14 @@ export function HomeScreen() {
 
         <main className="app__content">
 
-      {tab === 'intake' &&
+      {locked && spec !== undefined && (
+        <section className="card locked-section">
+          <h2>{spec.section}</h2>
+          <p className="note">{reasonOf(spec, titles)}.</p>
+        </section>
+      )}
+
+      {!locked && tab === 'intake' &&
         (status.kind === 'ready' ? (
           <IntakeScreen
             reference={status.reference}
@@ -221,12 +241,12 @@ export function HomeScreen() {
           </p>
         ))}
 
-      {tab === 'donor' &&
+      {!locked && tab === 'donor' &&
         (status.kind === 'ready' ? (
           <DonorScreen
             reference={status.reference}
             online={connected}
-            canExpect={rights === 'OWNER'}
+            canExpect={rights.has('supply.expected')}
             onChanged={() => {
               // Справочники приёмки перечитаются сами: машина попадает
               // в список на экране деталей, когда её ставят в разбор.
@@ -237,11 +257,11 @@ export function HomeScreen() {
           <p className="note">Справочники не загружены. Откройте вкладку «Справочники».</p>
         ))}
 
-      {tab === 'sales' &&
+      {!locked && tab === 'sales' &&
         (connected ? (
           <SellerScreen
-            canSell={SELLING_ROLES.includes(rights)}
-            role={rights}
+            canSell={rights.has('deal.sell')}
+            rights={rights}
             company={state.me.companySchema}
             memberId={state.me.memberId}
             openDealId={openDealId}
@@ -254,7 +274,7 @@ export function HomeScreen() {
           </p>
         ))}
 
-      {tab === 'deals' && SELLING_ROLES.includes(rights) && (
+      {!locked && tab === 'deals' && (
         <DealsScreen
           onOpenDeal={(dealId) => {
             setOpenDealId(dealId);
@@ -263,7 +283,7 @@ export function HomeScreen() {
         />
       )}
 
-      {tab === 'returns' && (
+      {!locked && tab === 'returns' && (
         <ReturnsScreen
           onOpenDeal={(dealId) => {
             setOpenDealId(dealId);
@@ -272,9 +292,9 @@ export function HomeScreen() {
         />
       )}
 
-      {/* Касса компании — владельцу и менеджеру: в реестре видно всё,
+      {/* Касса компании — по праву «Реестр платежей»: в реестре видно всё,
           включая возвраты покупателям и выдачи с лицевых счетов. */}
-      {tab === 'payments' && NAMING_ROLES.includes(rights) && (
+      {!locked && tab === 'payments' && (
         <PaymentsScreen
           onOpenDeal={(dealId) => {
             setOpenDealId(dealId);
@@ -283,9 +303,9 @@ export function HomeScreen() {
         />
       )}
 
-      {tab === 'customers' && SELLING_ROLES.includes(rights) && (
+      {!locked && tab === 'customers' && (
         <CustomersScreen
-          role={rights}
+          rights={rights}
           company={state.me.companySchema}
           memberId={state.me.memberId}
           onOpenDeal={(dealId) => {
@@ -295,35 +315,34 @@ export function HomeScreen() {
         />
       )}
 
-      {tab === 'catalog' && <CatalogScreen role={rights} />}
+      {!locked && tab === 'catalog' && <CatalogScreen rights={rights} />}
 
-      {tab === 'wheels' && (
-        <WheelsScreen canIntake={LABEL_ROLES.includes(rights)}
-                      role={rights} />
+      {!locked && tab === 'wheels' && (
+        <WheelsScreen canIntake={rights.has('wheels.set')}
+                      rights={rights} />
       )}
 
-      {tab === 'feeds' && NAMING_ROLES.includes(rights)
-        && <FeedsScreen role={rights} />}
+      {!locked && tab === 'feeds' && <FeedsScreen rights={rights} />}
 
-      {tab === 'moves' && MOVE_ROLES.includes(rights)
-        && <StockMovesScreen role={rights} />}
+      {!locked && tab === 'moves' && <StockMovesScreen rights={rights} />}
 
-      {tab === 'orders' && (
-        <OrdersScreen canSell={SELLING_ROLES.includes(rights)} />
+      {!locked && tab === 'orders' && (
+        <OrdersScreen canSell={rights.has('deal.sell')} />
       )}
 
       {/* Журнал пересчётов — над обходом полок и сведением расхождений:
           список документов это то, с чего теперь начинают вкладку, а не
-          поиск открытой сессии по складу. Владельцу, менеджеру и «Просмотру» —
-          сведение расхождений компонент сам показывает только первым двум. */}
-      {tab === 'inventory' && status.kind === 'ready'
-        && ['OWNER', 'MANAGER', 'VIEWER'].includes(rights) && (
-          <InventoryReconcile reference={status.reference} role={rights} />
+          поиск открытой сессии по складу. По праву на журнал пересчётов или
+          на сведение; сведение компонент показывает только при своём праве. */}
+      {!locked && tab === 'inventory' && status.kind === 'ready'
+        && rights.any('inventory.journal.view', 'inventory.reconcile') && (
+          <InventoryReconcile reference={status.reference}
+                              canReconcile={rights.has('inventory.reconcile')} />
         )}
 
-      {/* Обход полок сканером — не «Просмотру»: экран называет действие,
-          которое сервер эту роль отобьёт. */}
-      {tab === 'inventory' && WRITING_ROLES.includes(rights) &&
+      {/* Обход полок сканером — только с правом считать: экран называет
+          действие, которое сервер без права отобьёт. */}
+      {!locked && tab === 'inventory' && rights.has('inventory.count') &&
         (status.kind === 'ready' ? (
           <InventoryScreen
             reference={status.reference}
@@ -334,7 +353,7 @@ export function HomeScreen() {
                 countLabel(line, qty),
               )
             }
-            onNote={COUNTER_NOTE_ROLES.includes(rights)
+            onNote={rights.has('inventory.counter_note')
               ? (sessionId, text) => void outbox.add(
                 'inventoryNote',
                 { sessionId, note: text },
@@ -350,7 +369,7 @@ export function HomeScreen() {
           </p>
         ))}
 
-      {tab === 'outbox' && (
+      {!locked && tab === 'outbox' && (
         <OutboxScreen
           records={outbox.records}
           needsSignIn={outbox.needsSignIn}
@@ -359,20 +378,20 @@ export function HomeScreen() {
         />
       )}
 
-      {tab === 'import' &&
+      {!locked && tab === 'import' &&
         (status.kind === 'ready' ? (
           <ImportScreen
             reference={status.reference}
-            canImport={rights === 'OWNER'}
+            canImport={rights.has('import.manage')}
           />
         ) : (
           <p className="note">Справочники не загружены — некуда класть склад.</p>
         ))}
 
-      {tab === 'names' &&
+      {!locked && tab === 'names' &&
         (connected ? (
           <UnmatchedScreen
-            canManage={NAMING_ROLES.includes(rights)}
+            canManage={rights.has('names.match')}
             onTotalChanged={setUnmatched}
           />
         ) : (
@@ -382,9 +401,9 @@ export function HomeScreen() {
           </p>
         ))}
 
-      {tab === 'reports' &&
+      {!locked && tab === 'reports' &&
         (connected ? (
-          <ReportsScreen canRead={NAMING_ROLES.includes(rights)} />
+          <ReportsScreen canRead={rights.has('reports.view')} />
         ) : (
           <p className="note note--error">
             Нет связи. Отчёты считает база — закэшированная зарплата хуже
@@ -392,10 +411,10 @@ export function HomeScreen() {
           </p>
         ))}
 
-      {tab === 'delivery' &&
+      {!locked && tab === 'delivery' &&
         (connected ? (
           <DeliveryScreen
-            canManage={NAMING_ROLES.includes(rights)}
+            canManage={rights.has('delivery.manage')}
             onTotalChanged={setUndelivered}
           />
         ) : (
@@ -405,31 +424,36 @@ export function HomeScreen() {
           </p>
         ))}
 
-      {tab === 'labels' &&
+      {!locked && tab === 'labels' &&
         (connected ? (
-          <LabelsScreen canPrint={LABEL_ROLES.includes(rights)} />
+          <LabelsScreen canPrint={rights.has('part.cell')} />
         ) : (
           <p className="note note--error">
             Нет связи. Коды ячеек и деталей берутся из базы — печатать нечего.
           </p>
         ))}
 
-      {/* Журнал действий — владельцу и «Ревизору»: роль проверяется здесь
-          так же явно, как у остальных разделов, а `visibleTo` управляет
-          только кнопкой на рельсе. */}
-      {tab === 'journal' && JOURNAL_ROLES.includes(rights) && <AuditJournalScreen />}
+      {/* Журнал действий — по праву «Журнал действий и входов»; без него
+          раздел погашен выше (`locked`). */}
+      {!locked && tab === 'journal' && <AuditJournalScreen />}
 
       {/* Кто входит в кабинет — сотрудники, их пароли и доступ администратора
           сервиса — решает только сам владелец, а не администратор, у которого
           права владельца в кабинете. Сервер держит то же правилом в
           SecurityConfig (ACCESS_CONTROL). */}
-      {tab === 'members' && <MembersScreen managesAccess={state.me.role === 'OWNER'} />}
+      {!locked && tab === 'members' && (
+        <MembersScreen
+          managesAccess={state.me.role !== 'ADMIN' && rights.has('members.manage')}
+          ownerActs={state.me.role !== 'ADMIN' && rights.owner}
+          mine={rights}
+        />
+      )}
 
-      {tab === 'organization' && <OrganizationScreen />}
+      {!locked && tab === 'organization' && <OrganizationScreen />}
 
-      {tab === 'settings' && rights === 'OWNER' && <SettingsScreen />}
+      {!locked && tab === 'settings' && <SettingsScreen />}
 
-      {tab === 'reference' && <ReferencePanel />}
+      {!locked && tab === 'reference' && <ReferencePanel />}
 
           <button type="button" className="button--ghost" onClick={signOut}>
             Выйти
@@ -438,6 +462,12 @@ export function HomeScreen() {
       </div>
     </div>
   );
+}
+
+/** Причина погашенного раздела: какого права нет и где его дают. */
+function reasonOf(spec: TabSpec, titles: ReadonlyMap<string, string>): string {
+  const keys = neededFor(spec);
+  return keys.length === 0 ? '' : lockedReasonAny(keys, titles);
 }
 
 function roleName(role: string): string {

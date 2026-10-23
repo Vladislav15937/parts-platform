@@ -27,17 +27,20 @@ export interface Member {
 export type Role = 'OWNER' | 'MANAGER' | 'STOREKEEPER' | 'SELLER' | 'VIEWER' | 'AUDITOR';
 
 /**
- * Что делает роль. Показывается рядом с выбором: «менеджер» и «продавец»
- * звучат похоже, а видят разное — у менеджера отчёты с зарплатной базой
- * смены и себестоимостью.
+ * Прежние жёсткие роли словом — для показа, а не для прав (задача 0044).
+ *
+ * <p>Права с задачи 0044 решает роль клиента (`organization/access.ts`),
+ * а прежняя колонка роли осталась снимком: ей подписан автор в журнале
+ * действий и во «Входах» (запись сделана до 0044 либо прежним образом).
+ * Назвать её словом нужно и там.
  */
-export const ROLES: Array<{ role: Role; title: string; can: string }> = [
-  { role: 'OWNER', title: 'Владелец', can: 'всё, включая сотрудников и выгрузки' },
-  { role: 'MANAGER', title: 'Менеджер', can: 'склад, продажи, отчёты, выгрузки' },
-  { role: 'SELLER', title: 'Продавец', can: 'поиск, продажа, возврат — без отчётов' },
-  { role: 'STOREKEEPER', title: 'Кладовщик', can: 'приёмка, пересчёт, этикетки' },
-  { role: 'VIEWER', title: 'Просмотр', can: 'только смотреть' },
-  { role: 'AUDITOR', title: 'Ревизор', can: 'журнал действий — кто что менял' },
+const ROLES: Array<{ role: Role; title: string }> = [
+  { role: 'OWNER', title: 'Владелец' },
+  { role: 'MANAGER', title: 'Менеджер' },
+  { role: 'SELLER', title: 'Продавец' },
+  { role: 'STOREKEEPER', title: 'Кладовщик' },
+  { role: 'VIEWER', title: 'Просмотр' },
+  { role: 'AUDITOR', title: 'Ревизор' },
 ];
 
 /**
@@ -62,12 +65,16 @@ export function loadMembers(): Promise<Member[]> {
   return request<Member[]>('/api/members');
 }
 
+/**
+ * Сотрудник заводится сразу с ролью клиента (задача 0044): заведение
+ * и назначение — одна транзакция на сервере.
+ */
 export function createMember(
-  login: string, password: string, displayName: string, role: Role,
+  login: string, password: string, displayName: string, roleId: number,
 ): Promise<Member> {
   return request<Member>('/api/members', {
     method: 'POST',
-    body: { login, password, displayName, role },
+    body: { login, password, displayName, roleId },
   });
 }
 

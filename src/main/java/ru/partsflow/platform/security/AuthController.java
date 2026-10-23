@@ -37,7 +37,11 @@ public class AuthController {
     private final SecurityContextRepository contextRepository =
             new HttpSessionSecurityContextRepository();
 
-    public AuthController(AuthenticationManager authenticationManager, LoginSessions sessions) {
+    private final MemberAccess access;
+
+    public AuthController(AuthenticationManager authenticationManager, LoginSessions sessions,
+                          MemberAccess access) {
+        this.access = access;
         this.authenticationManager = authenticationManager;
         this.sessions = sessions;
     }
@@ -72,7 +76,7 @@ public class AuthController {
             TenantPrincipal principal = (TenantPrincipal) authenticated.getPrincipal();
             recordLogin(session, principal, ip, userAgent);
 
-            return ResponseEntity.ok(MeView.of(principal));
+            return ResponseEntity.ok(MeView.of(principal, roleName(principal)));
 
         } catch (AuthenticationException e) {
             // Неудачная попытка пишется в журнал той компании, куда стучались:
@@ -108,10 +112,55 @@ public class AuthController {
                 principal.role(), key, ip, userAgent);
     }
 
+    /**
+     * Почему закрыт вход, с которым пришёл этот браузер (задача 0044, живой
+     * прогон 24.10.2026): «Сессия кончилась — войдите заново» без причины
+     * у сотрудника, которому владелец сменил права, читается как поломка.
+     *
+     * <p><b>Отвечает только о своей сессии.</b> Сессия ищется по идентификатору
+     * из cookie запроса (его знает лишь держатель) в журнале входов той
+     * компании, которую браузер помнит. Компания, которой нет, сессия, которой
+     * нет, и сессия, закрытая не отзывом, неразличимы — 204. Учётной записи
+     * путь не требует по построению: спрашивают ровно тогда, когда её уже нет.
+     *
+     * @param company схема компании из запомненной личности ({@code companySchema})
+     */
+    @GetMapping("/ended")
+    public ResponseEntity<EndedView> ended(
+            @org.springframework.web.bind.annotation.RequestParam String company,
+            HttpServletRequest httpRequest) {
+        String sessionId = httpRequest.getRequestedSessionId();
+        if (sessionId == null || !company.matches("t_\\d{6,}")) {
+            return ResponseEntity.noContent().build();
+        }
+        return sessions.revokedDetail(company, LoginSessions.key(sessionId))
+                .map(detail -> ResponseEntity.ok(
+                        new EndedView("Вход закрыт: " + detail + ". Войдите заново.")))
+                .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    /** @param message почему закрыт вход — словами журнала входов */
+    public record EndedView(String message) {
+    }
+
     /** Кто я. Нужно приложению после перезапуска: сессия могла остаться живой. */
     @GetMapping("/me")
     public MeView me() {
-        return MeView.of(CurrentUser.require());
+        TenantPrincipal principal = CurrentUser.require();
+        return MeView.of(principal, roleName(principal));
+    }
+
+    /**
+     * Название роли клиента для шапки (задача 0044): своя роль «Кладовщик-2»
+     * в прежней колонке значится «Просмотром», и шапка называла бы человека
+     * не той ролью. Спрашивается при входе и при «кто я» — не на каждый запрос.
+     */
+    private String roleName(TenantPrincipal principal) {
+        if (principal.isServiceAdmin()) {
+            return null;
+        }
+        MemberAccess.Access rights = access.resolve(principal.tenantSchema(), principal.memberId());
+        return rights == null ? null : rights.roleName();
     }
 
     /**
@@ -140,6 +189,7 @@ public class AuthController {
     }
 
     /**
+     * @param roleName    роль клиента названием; {@code null} — роли нет либо администратор
      * @param owner       роль «Владелец» или администратор сервиса: все права всегда
      * @param permissions ключи прав вошедшего ({@link Permission}); у владельца —
      *                    весь справочник. Экран решает по ним, что показать
@@ -147,11 +197,12 @@ public class AuthController {
      *                    нет (задача 0044: «полномочия приезжают с сервера»)
      */
     public record MeView(Long memberId, String login, String displayName, String role,
-                         String companySchema, boolean owner, List<String> permissions) {
+                         String companySchema, String roleName, boolean owner,
+                         List<String> permissions) {
 
-        static MeView of(TenantPrincipal principal) {
+        static MeView of(TenantPrincipal principal, String roleName) {
             return new MeView(principal.memberId(), principal.login(), principal.displayName(),
-                    principal.role(), principal.tenantSchema(), principal.actsAsOwner(),
+                    principal.role(), principal.tenantSchema(), roleName, principal.actsAsOwner(),
                     principal.getAuthorities().stream()
                             .map(org.springframework.security.core.GrantedAuthority::getAuthority)
                             .filter(key -> Permission.byKey(key).isPresent())

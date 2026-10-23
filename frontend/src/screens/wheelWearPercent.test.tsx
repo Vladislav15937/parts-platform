@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
@@ -69,7 +70,7 @@ describe('износ шины в процентах', () => {
   });
 
   it('«30%» из поля «Износ, %» уходит числом 30, без миллиметров', async () => {
-    render(<WheelsScreen canIntake role="OWNER" />);
+    render(<WheelsScreen canIntake rights={rightsAs('OWNER')} />);
     const form = (await screen.findByText('Завести')).closest('.card') as HTMLElement;
 
     fireEvent.change(within(form).getByLabelText('Склад'), { target: { value: '1' } });
@@ -85,7 +86,7 @@ describe('износ шины в процентах', () => {
   it('отказ сервера по износу стоит у поля «Износ, %», а не только над формой', async () => {
     const words = 'Износ шины — целое число процентов от 0 до 100';
     refuse = words;
-    render(<WheelsScreen canIntake role="OWNER" />);
+    render(<WheelsScreen canIntake rights={rightsAs('OWNER')} />);
     const form = (await screen.findByText('Завести')).closest('.card') as HTMLElement;
 
     fireEvent.change(within(form).getByLabelText('Склад'), { target: { value: '1' } });
@@ -101,7 +102,7 @@ describe('износ шины в процентах', () => {
   });
 
   it('в таблице и в карточке износ — «30%», а не миллиметры', async () => {
-    render(<WheelsScreen canIntake={false} role="OWNER" />);
+    render(<WheelsScreen canIntake={false} rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('W1A2B3C4D5E6')).toBeTruthy());
 
     const headers = Array.from(document.querySelectorAll('thead th'))

@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -51,7 +52,7 @@ describe('приписка про стоимость установки', () => 
   });
 
   it('включается флажком и уезжает вместе с наценкой, а не вместо неё', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText('Дописывать стоимость установки к описанию'));
@@ -79,7 +80,7 @@ describe('приписка про стоимость установки', () => 
     // Включённая приписка с пустым текстом ничего не допишет, и владелец
     // решит, что переключатель не работает. Заодно формулировка — та же,
     // что у системы, с которой клиенты переходят.
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     const field = screen.getByLabelText('Текст приписки') as HTMLInputElement;
@@ -87,7 +88,7 @@ describe('приписка про стоимость установки', () => 
   });
 
   it('свой текст владельца уезжает как набран', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText('Дописывать стоимость установки к описанию'));
@@ -114,7 +115,7 @@ describe('приписка про стоимость установки', () => 
       },
     };
 
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: с установкой')).toBeTruthy());
 
     const box = screen.getByLabelText(

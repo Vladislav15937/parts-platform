@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 
@@ -39,7 +40,7 @@ describe('открытие сделки из реестра возвратов',
     }));
 
     render(
-      <SellerScreen canSell role="SELLER" company="test" memberId={1}
+      <SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1}
                     openDealId={77} onDealOpened={onDealOpened} />,
     );
 

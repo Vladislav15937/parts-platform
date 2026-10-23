@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -136,7 +137,7 @@ function formLine(label: string): string | null | undefined {
 const WAREHOUSES: Warehouse[] = [{ id: 2, name: 'Ткацкая' }];
 
 function props() {
-  return { row: row(), warehouses: WAREHOUSES, role: 'OWNER', onClose: () => {}, onChanged: () => {} };
+  return { row: row(), warehouses: WAREHOUSES, rights: rightsAs('OWNER'), onClose: () => {}, onChanged: () => {} };
 }
 
 function row(): CatalogRow {

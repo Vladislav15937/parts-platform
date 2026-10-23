@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
@@ -26,7 +27,7 @@ describe('печать документов сделки', () => {
 
   it('под кнопкой печати — четыре формы, ровно этими словами и в этом порядке', async () => {
     stubApi();
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     fireEvent.click(button('Печатать')!);
@@ -43,7 +44,7 @@ describe('печать документов сделки', () => {
 
   it('товарный чек печатается с продавцом, покупателем, позициями и деньгами', async () => {
     stubApi();
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     fireEvent.click(button('Печатать')!);
@@ -83,7 +84,7 @@ describe('печать документов сделки', () => {
         { title: 'Доставка', quantity: '1', price: '0.00', amount: '0.00' },
       ],
     });
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     fireEvent.click(button('Печатать')!);
@@ -107,7 +108,7 @@ describe('печать документов сделки', () => {
    */
   it('незаданная пометка об НДС не печатает строку вовсе', async () => {
     stubApi({ vatNote: null });
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     fireEvent.click(button('Печатать')!);
@@ -119,7 +120,7 @@ describe('печать документов сделки', () => {
 
   it('заданная пометка об НДС печатается', async () => {
     stubApi();
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     fireEvent.click(button('Печатать')!);
@@ -136,7 +137,7 @@ describe('печать документов сделки', () => {
    */
   it('счёт на юр. лицо берёт реквизиты организации, а не блок склада', async () => {
     stubApi();
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     fireEvent.click(button('Печатать')!);
@@ -160,7 +161,7 @@ describe('печать документов сделки', () => {
    */
   it('«Товарный чек и накладная» печатает два документа', async () => {
     stubApi();
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     fireEvent.click(button('Печатать')!);
@@ -187,7 +188,7 @@ describe('печать документов сделки', () => {
         problem: 'Позиции сделки с разных складов — реквизиты продавца подставить нельзя.',
       },
     });
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     fireEvent.click(button('Печатать')!);
@@ -207,7 +208,7 @@ describe('печать документов сделки', () => {
    */
   it('отказ сервера назван его словами, а лист не открывается', async () => {
     stubApi({ failPrint: 'Сделка не найдена — обновите страницу, список устарел' });
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     fireEvent.click(button('Печатать')!);

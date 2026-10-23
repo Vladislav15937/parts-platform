@@ -160,6 +160,38 @@ public class LoginSessions {
     }
 
     /**
+     * Почему отозвана сессия с этим ключом — для того, кто держит её cookie
+     * (задача 0044, живой прогон 24.10.2026): сотрудник, которого вывели
+     * сменой прав, видел «Сессия кончилась» без причины, а причина лежала
+     * только во «Входах» у владельца.
+     *
+     * <p>Ключ — хеш идентификатора сессии ({@link #key}), а идентификатор знает
+     * только держатель cookie: ответ о чужой сессии получить нечем. Сессии
+     * в хранилище уже нет (отзыв — удаление, а не отметка), поэтому спрашивается
+     * журнал входов, где отзыв записан словами.
+     *
+     * @return слова отзыва; пусто — сессия не отозвана или не найдена
+     */
+    public java.util.Optional<String> revokedDetail(String schema, String sessionKey) {
+        // Схема — из запроса, поэтому до склейки и проверка формы (requireSchema),
+        // и то, что это действующая компания ячейки: несуществующая отвечает
+        // тем же «пусто», что и сессия, которую не отзывали.
+        Integer active = jdbc.queryForObject("""
+                SELECT count(*) FROM public.tenant_registry
+                 WHERE schema_name = ? AND status = 'ACTIVE'""", Integer.class, requireSchema(schema));
+        if (active == null || active == 0) {
+            return java.util.Optional.empty();
+        }
+        return jdbc.query("""
+                        SELECT end_detail FROM %s.login_session
+                         WHERE session_key = ? AND end_reason = 'REVOKED'
+                         ORDER BY id DESC LIMIT 1""".formatted(requireSchema(schema)),
+                rs -> rs.next() ? java.util.Optional.ofNullable(rs.getString(1))
+                        : java.util.Optional.<String>empty(),
+                sessionKey);
+    }
+
+    /**
      * Уборка зависших: человек бросил вкладку, запись осталась открытой.
      * Перезапуск сюда больше ничего не добавляет — с задачи 0080 сессии живут
      * в общей схеме ячейки и его переживают.

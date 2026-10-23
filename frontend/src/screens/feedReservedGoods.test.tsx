@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -50,7 +51,7 @@ describe('состав файла Дрома на экране «Выгрузк�
   });
 
   it('подписи переключателей — дословно Bazon', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     expect(screen.getByLabelText('Выгружать товары в резерве')).toBeTruthy();
@@ -65,7 +66,7 @@ describe('состав файла Дрома на экране «Выгрузк�
   });
 
   it('резерв выключен, пока не включат, и поле приставки погашено', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     const box = screen.getByLabelText('Выгружать товары в резерве') as HTMLInputElement;
@@ -76,7 +77,7 @@ describe('состав файла Дрома на экране «Выгрузк�
   });
 
   it('включённый резерв и приставка уезжают вместе с соседними настройками', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText('Выгружать товары в резерве'));
@@ -101,7 +102,7 @@ describe('состав файла Дрома на экране «Выгрузк�
 
   it('сохранённый резерв видно в полях', async () => {
     stored = { settings: { ...settings(), reservedGoods: true, reservedGoodsNote: 'Под заказ' } };
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     expect((screen.getByLabelText('Выгружать товары в резерве') as HTMLInputElement).checked)
@@ -111,7 +112,7 @@ describe('состав файла Дрома на экране «Выгрузк�
   });
 
   it('счётчик спрошен с резервом, а не без него', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText('Выгружать товары в резерве'));
@@ -124,7 +125,7 @@ describe('состав файла Дрома на экране «Выгрузк�
 
   it('цена 0 в файле — красной строкой «с нулевой ценой: N» рядом со счётчиком', async () => {
     answer = { parts: 1240, zeroPrice: 4 };
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: 'Посчитать' }));
@@ -137,7 +138,7 @@ describe('состав файла Дрома на экране «Выгрузк�
   });
 
   it('без нулевых цен красной строки нет', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: 'Посчитать' }));
@@ -148,7 +149,7 @@ describe('состав файла Дрома на экране «Выгрузк�
 
   it('колёсной выгрузке переключателя резерва не показывают', async () => {
     stored = { title: 'Дром: шины', productLine: 'WHEEL' };
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: шины')).toBeTruthy());
 
     expect(screen.queryByLabelText('Выгружать товары в резерве')).toBeNull();

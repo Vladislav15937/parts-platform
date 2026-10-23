@@ -93,6 +93,27 @@ body {
   color: var(--accent-ink);
 }
 
+/* Раздел без права (задача 0044): виден, но погашен — открывается причиной,
+   а не работой. Не скрыт: «погашен с причиной» — решение владельца. */
+.rail__item--locked {
+  opacity: 0.55;
+}
+
+/* Погашенное действие и его причина: причина видимым текстом, а не только
+   подсказкой — на телефоне наводить нечем. Переносится, а не растягивает ряд. */
+.locked-action {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  min-width: 0;
+}
+
+.locked-action__reason {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .app__main {
   flex: 1;
   display: flex;
@@ -482,6 +503,62 @@ details > .muted {
      и весь экран прыгал к середине. Отбор на складе сужают постоянно,
      то есть прыгало постоянно. Замерено в браузере, а не выведено. */
   width: 100%;
+}
+
+/* «Сотрудники» (задача 0044, живой прогон 24.10.2026). На мониторе шесть
+   колонок с кнопками не помещались в 40rem экрана: таблица уходила в свою
+   прокрутку, и край обрезал «Выключить» до «Выключи». Экрану таблицы — шире;
+   формы под ней по-прежнему в карточках и шире 40rem не становятся. */
+@media (min-width: 900px) {
+  .screen--members {
+    max-width: min(64rem, 100%);
+  }
+
+  .screen--members > .card {
+    max-width: 40rem;
+  }
+}
+
+.stack-table__actions button {
+  white-space: nowrap;
+}
+
+/* На телефоне строка таблицы — карточка: клетки друг под другом, подпись
+   клетки слева (`data-label`), кнопки рядом с переносом. Иначе кнопки строки
+   уезжают за край прокрутки, и до «Права» надо листать вбок, а раскрытые
+   под строкой права (одна клетка на всю ширину) растягивают таблицу
+   до 605 px внутри прокрутки. */
+@media (max-width: 899px) {
+  .stack-table,
+  .stack-table tbody,
+  .stack-table tr,
+  .stack-table td {
+    display: block;
+  }
+
+  .stack-table thead {
+    display: none;
+  }
+
+  .stack-table tr {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .stack-table td {
+    padding: 0.15rem 0;
+    border: none;
+    overflow-wrap: anywhere;
+  }
+
+  .stack-table td[data-label]::before {
+    content: attr(data-label) ": ";
+    color: var(--muted);
+  }
+
+  .stack-table__actions {
+    padding-top: 0.5rem;
+  }
 }
 
 .table-scroll {

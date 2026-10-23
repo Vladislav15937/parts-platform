@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
@@ -51,7 +52,7 @@ describe('срок резерва у продавца', () => {
   });
 
   it('показывает срок в списке сделок клиента и в карточке', async () => {
-    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
     await pickCustomer();
 
     const lines = () => [...document.querySelectorAll('.suggestions button')]
@@ -69,7 +70,7 @@ describe('срок резерва у продавца', () => {
   });
 
   it('просроченный срок в карточке говорит словами и красным', async () => {
-    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
     await pickCustomer();
     await waitFor(() => expect(document.querySelectorAll('.suggestions button').length).toBe(2));
 
@@ -85,7 +86,7 @@ describe('срок резерва у продавца', () => {
   });
 
   it('продлевает срок из карточки', async () => {
-    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
     await pickCustomer();
     await waitFor(() => expect(document.querySelectorAll('.suggestions button').length).toBe(2));
     fireEvent.click(document.querySelectorAll('.suggestions button')[0] as HTMLElement);

@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
@@ -52,7 +53,7 @@ describe('меню колонки', () => {
   });
 
   it('не открывается там, где сервер отбор не делает', async () => {
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(document.querySelectorAll('tbody tr').length).toBe(1));
 
     const head = (title: string): HTMLElement =>

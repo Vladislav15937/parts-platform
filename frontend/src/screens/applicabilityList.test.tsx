@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApplicabilityList } from './ApplicabilityList';
@@ -41,7 +42,7 @@ describe('ApplicabilityList', () => {
   });
 
   it('показывает автора и время, у неизвестного — прочерк, а не выдуманное', async () => {
-    render(<ApplicabilityList role="OWNER" onClose={() => {}} />);
+    render(<ApplicabilityList canEdit={rightsAs('OWNER').has('part.edit')} onClose={() => {}} />);
     expect(await screen.findByText('Приёмщик')).toBeTruthy();
     expect(screen.getByText('важен')).toBeTruthy();
     expect(screen.getByText('неважен')).toBeTruthy();
@@ -51,7 +52,7 @@ describe('ApplicabilityList', () => {
   });
 
   it('владелец меняет признак — уходит PUT с новым значением', async () => {
-    render(<ApplicabilityList role="OWNER" onClose={() => {}} />);
+    render(<ApplicabilityList canEdit={rightsAs('OWNER').has('part.edit')} onClose={() => {}} />);
     await screen.findByText('Приёмщик');
     fireEvent.click(screen.getAllByText('изменить')[0]!);
     await screen.findByText('Приёмщик');
@@ -61,14 +62,14 @@ describe('ApplicabilityList', () => {
   });
 
   it('кладовщику правки признака не показывается', async () => {
-    render(<ApplicabilityList role="STOREKEEPER" onClose={() => {}} />);
+    render(<ApplicabilityList canEdit={rightsAs('STOREKEEPER').has('part.edit')} onClose={() => {}} />);
     await screen.findByText('Приёмщик');
     expect(screen.queryByText('изменить')).toBeNull();
   });
 
   it('отказ сервера не выдаётся за пустой список', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'x' }, 500)));
-    render(<ApplicabilityList role="OWNER" onClose={() => {}} />);
+    render(<ApplicabilityList canEdit={rightsAs('OWNER').has('part.edit')} onClose={() => {}} />);
     expect(await screen.findByText(/Не удалось получить список/)).toBeTruthy();
     expect(screen.queryByText('Позиций нет.')).toBeNull();
   });

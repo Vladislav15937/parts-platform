@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -47,7 +48,7 @@ describe('число снимков в объявлении', () => {
   });
 
   it('уезжает на сервер вместе с наценкой, а не вместо неё', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     fireEvent.change(screen.getByLabelText('Число фотографий в объявлении'),
@@ -80,7 +81,7 @@ describe('число снимков в объявлении', () => {
     // Ноль и пусто на сервере значат разное: ноль — «без ограничения»,
     // пусто — «не задано», то есть прежние десять. Превратив одно
     // в другое здесь, экран отдал бы владельцу не то, что тот выбрал.
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     fireEvent.change(screen.getByLabelText('Число фотографий в объявлении'),
@@ -94,7 +95,7 @@ describe('число снимков в объявлении', () => {
   it('заданное число видно в поле, а не только в базе', async () => {
     // Иначе владелец с пятью прайс-листами не знает, у какого из них
     // снимки уже ограничены, — и решает это заново каждый раз.
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     const field = screen.getByLabelText('Число фотографий в объявлении') as HTMLInputElement;

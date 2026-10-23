@@ -85,6 +85,49 @@ describe('потеря сессии', () => {
 
     expect(screen.getByTestId('status').textContent).toBe('authenticated');
   });
+
+  // Задача 0044, живой прогон 24.10.2026: сотрудник, которому владелец сменил
+  // права, видел «Сессия кончилась» без причины.
+  it('вход закрыт отзывом — причина названа словами сервера, спрошена о своей компании', async () => {
+    const asked: string[] = [];
+    const base = vi.mocked(fetch);
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/auth/ended')) {
+        asked.push(url);
+        return json({ message: 'Вход закрыт: права роли изменены. Войдите заново.' });
+      }
+      return base(input, init);
+    }));
+    render(
+      <SessionProvider>
+        <Probe />
+      </SessionProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('authenticated'));
+    await act(async () => {
+      await request('/api/organization/warehouses').catch(() => {});
+    });
+
+    await waitFor(() => expect(screen.getByTestId('reason').textContent)
+      .toBe('Вход закрыт: права роли изменены. Войдите заново.'));
+    expect(asked).toEqual(['/api/auth/ended?company=t_1000011']);
+  });
+
+  it('причину сервер не знает — остаётся общая фраза', async () => {
+    render(
+      <SessionProvider>
+        <Probe />
+      </SessionProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('authenticated'));
+    await act(async () => {
+      await request('/api/organization/warehouses').catch(() => {});
+    });
+    await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('anonymous'));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByTestId('reason').textContent).toBe('Сессия кончилась — войдите заново.');
+  });
 });
 
 function Probe() {

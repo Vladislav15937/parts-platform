@@ -449,7 +449,8 @@ class ServiceAdminTest extends PostgresTestBase {
         for (var entry : handlerMapping.getHandlerMethods().entrySet()) {
             var info = entry.getKey();
             for (String pattern : info.getPatternValues()) {
-                if (!pattern.startsWith("/api/members") && !pattern.startsWith("/api/organization/admin-access")) {
+                if (!pattern.startsWith("/api/members") && !pattern.startsWith("/api/organization/admin-access")
+                        && !pattern.startsWith("/api/access")) {
                     continue;
                 }
                 for (var method : info.getMethodsCondition().getMethods()) {
@@ -462,7 +463,7 @@ class ServiceAdminTest extends PostgresTestBase {
                                     .with(csrf()).session(admin)
                                     .contentType(MediaType.APPLICATION_JSON)
                                     .content("""
-                                            {"login":"perebor","password":"%s","role":"OWNER","hours":null}"""
+                                            {"login":"perebor","password":"%s","role":"OWNER","hours":null,"name":"Перебор","permissions":[],"roleId":1}"""
                                             .formatted(PASSWORD)))
                             .andExpect(result -> assertThat(result.getResponse().getStatus())
                                     .as("%s %s из сессии администратора", method, path)
@@ -471,9 +472,10 @@ class ServiceAdminTest extends PostgresTestBase {
                 }
             }
         }
-        // Семь известных сегодня: заведение, пароль, включение, выключение,
-        // выдача, отзыв, отклонение. Меньше — значит перебор ослеп.
-        assertThat(checked).as("перебор нашёл пути").hasSizeGreaterThanOrEqualTo(7);
+        // Одиннадцать известных сегодня: заведение, пароль, включение, выключение,
+        // выдача, отзыв, отклонение — и роли (завести, править, удалить) и права
+        // сотрудника (задача 0044). Меньше — значит перебор ослеп.
+        assertThat(checked).as("перебор нашёл пути").hasSizeGreaterThanOrEqualTo(11);
     }
 
     // --- Пробы разбора: вход только в ту разборку и только пока разрешение действует

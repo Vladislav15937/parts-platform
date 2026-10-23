@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
@@ -186,6 +187,29 @@ const MEMBERS = [
     id: 1, number: 1024, login: 'vladimir.petrov', displayName: 'Владимир Петров',
     role: 'OWNER', active: true, lastLoginAt: '2026-09-05T20:01:00Z',
   },
+];
+
+// Роли и права (задача 0044): длинное название роли и полный справочник —
+// так раздел «Роли» и галочки прав растягивают экран у клиента.
+const ACCESS_ROLES = [
+  { id: 1, name: 'Владелец', owner: true, permissions: [], members: 1 },
+  { id: 2, name: 'Кладовщик второй смены на Ткацкой (склад и приёмка)', owner: false,
+    permissions: ['intake.receive', 'photos.manage', 'stock.move', 'part.cell'], members: 12 },
+];
+
+const ACCESS_MEMBERS = [
+  { memberId: 1, roleId: 1, roleName: 'Владелец', owner: true, added: [], removed: [], effective: [] },
+];
+
+const ACCESS_CATALOG = [
+  { title: 'Приёмка', permissions: [
+    { key: 'intake.receive', title: 'Принимать товар',
+      hint: 'заводить позиции и машины, отмечать приход поставки, ставить машину в разбор и на место' },
+    { key: 'supply.expected', title: 'Заводить товар, который ещё в пути',
+      hint: 'позиции ожидаемой поставки и дата её прихода' }] },
+  { title: 'Компания', permissions: [
+    { key: 'members.manage', title: 'Управлять сотрудниками и ролями',
+      hint: 'заводить, менять пароль, выключать, назначать роли и права' }] },
 ];
 
 const FEEDS = [
@@ -593,6 +617,9 @@ const RESPONSES: Array<[string, unknown]> = [
   ['/api/reports/sold-items', SOLD_ITEMS],
   ['/api/reports/', REPORT],
   ['/api/members', MEMBERS],
+  ['/api/access/roles', ACCESS_ROLES],
+  ['/api/access/members', ACCESS_MEMBERS],
+  ['/api/access/catalog', ACCESS_CATALOG],
   ['/api/marketplace-accounts', FEEDS],
   ['/api/deals/registry', DEALS],
   ['/api/deals/sources', []],
@@ -642,26 +669,26 @@ describe('на телефоне ни один раздел не уезжает �
     intake: () => <IntakeScreen reference={reference()} onSend={() => {}} />,
     donor: () => <DonorScreen reference={reference()} online onChanged={() => {}} />,
     sales: () => (
-      <SellerScreen canSell role="OWNER" company="t_1" memberId={7} openDealId={null} />
+      <SellerScreen canSell rights={rightsAs('OWNER')} company="t_1" memberId={7} openDealId={null} />
     ),
     deals: () => <DealsScreen onOpenDeal={() => {}} />,
     orders: () => <OrdersScreen canSell />,
     returns: () => <ReturnsScreen onOpenDeal={() => {}} />,
     payments: () => <PaymentsScreen onOpenDeal={() => {}} />,
     customers: () => (
-      <CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />
+      <CustomersScreen rights={rightsAs('OWNER')} company="t_1" memberId={7} onOpenDeal={() => {}} />
     ),
-    catalog: () => <CatalogScreen role="OWNER" />,
-    wheels: () => <WheelsScreen canIntake role="OWNER" />,
+    catalog: () => <CatalogScreen rights={rightsAs('OWNER')} />,
+    wheels: () => <WheelsScreen canIntake rights={rightsAs('OWNER')} />,
     // Владелец видит на этой вкладке оба блока сразу — журнал пересчётов
     // со сведением расхождений и обход полок сканером.
     inventory: () => (
       <>
-        <InventoryReconcile reference={reference()} role="OWNER" />
+        <InventoryReconcile reference={reference()} canReconcile={rightsAs('OWNER').has('inventory.reconcile')} />
         <InventoryScreen reference={reference()} onCount={() => {}} />
       </>
     ),
-    moves: () => <StockMovesScreen role="OWNER" />,
+    moves: () => <StockMovesScreen rights={rightsAs('OWNER')} />,
     journal: () => <AuditJournalScreen />,
     outbox: () => (
       <OutboxScreen
@@ -677,7 +704,7 @@ describe('на телефоне ни один раздел не уезжает �
     import: () => <ImportScreen reference={reference()} canImport />,
     names: () => <UnmatchedScreen canManage onTotalChanged={() => {}} />,
     reports: () => <ReportsScreen canRead />,
-    feeds: () => <FeedsScreen role="OWNER" />,
+    feeds: () => <FeedsScreen rights={rightsAs('OWNER')} />,
     delivery: () => <DeliveryScreen canManage onTotalChanged={() => {}} />,
     labels: () => <LabelsScreen canPrint />,
     members: () => <MembersScreen />,
@@ -748,7 +775,7 @@ describe('на телефоне ни один раздел не уезжает �
    * поломка, которую тест обязан замечать.
    */
   it('поля формы колеса переносятся, а не сжимаются', async () => {
-    const { container } = render(<WheelsScreen canIntake role="OWNER" />);
+    const { container } = render(<WheelsScreen canIntake rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(container.textContent).not.toBe(''));
 
     const widths = await measureWidths(
@@ -787,7 +814,7 @@ describe('на телефоне ни один раздел не уезжает �
    */
   it('отбор продавца переносится, а не уводит страницу вбок', async () => {
     const { container } = render(
-      <SellerScreen canSell role="OWNER" company="t_1" memberId={7} openDealId={null} />,
+      <SellerScreen canSell rights={rightsAs('OWNER')} company="t_1" memberId={7} openDealId={null} />,
     );
     await waitFor(() => expect(container.textContent).not.toBe(''));
 

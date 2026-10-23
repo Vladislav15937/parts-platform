@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -59,7 +60,7 @@ describe('правка всего отбора', () => {
   });
 
   it('включает «Выгружать» всему отбору, а не отмеченной странице', async () => {
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(document.querySelector('tbody tr')).toBeTruthy());
 
     fireEvent.click(button('Правка списком')!);
@@ -103,7 +104,7 @@ describe('правка всего отбора', () => {
    * и пострадал бы первым.
    */
   it('нетронутый список «Выгружать» уезжает тем, чем показан', async () => {
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(document.querySelector('tbody tr')).toBeTruthy());
 
     fireEvent.click(button('Правка списком')!);

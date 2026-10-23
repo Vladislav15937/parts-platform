@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -104,7 +105,7 @@ describe('адрес полки в карточке позиции', () => {
     });
 
   it('продавцу перестановка не показывается', async () => {
-    render(<PartCard {...props(row())} role="SELLER" />);
+    render(<PartCard {...props(row())} rights={rightsAs('SELLER')} />);
 
     await waitFor(() => expect(screen.getByText('Основной · А-01-1')).toBeTruthy());
     expect(screen.queryByRole('button', { name: 'Переставить на полку' }),
@@ -118,7 +119,7 @@ function props(row: CatalogRow) {
   return {
     row,
     warehouses: WAREHOUSES,
-    role: 'STOREKEEPER',
+    rights: rightsAs('STOREKEEPER'),
     onClose: () => {},
     onChanged: () => {},
   };

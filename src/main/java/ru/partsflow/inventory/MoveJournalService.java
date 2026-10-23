@@ -71,16 +71,18 @@ public class MoveJournalService {
                          ORDER BY d.created_at DESC, d.id DESC""",
                 (rs, i) -> {
                     java.sql.Timestamp deletedAt = rs.getTimestamp("deleted_at");
+                    // Правило «что удаляется» одно — StockDocument.isDeletable;
+                    // фильтр запроса (MOVE, DONE) его не заменяет.
+                    boolean removable = StockDocument.isDeletable(rs.getString("doc_type"),
+                            rs.getString("status"), deletedAt != null);
                     return new MoveDocument(rs.getLong("id"), rs.getLong("number"),
                             rs.getTimestamp("created_at").toInstant(),
                             rs.getString("from_warehouse"), rs.getString("to_warehouse"),
                             rs.getInt("lines"), rs.getString("note"), rs.getString("author"),
                             deletedAt == null ? null : deletedAt.toInstant(),
                             rs.getString("deleted_by"),
-                            // Правило «что удаляется» одно — StockDocument.isDeletable;
-                            // фильтр запроса (MOVE, DONE) его не заменяет.
-                            mayDelete && StockDocument.isDeletable(rs.getString("doc_type"),
-                                    rs.getString("status"), deletedAt != null));
+                            mayDelete && removable,
+                            removable && !mayDelete ? PostedDocumentDeletion.NEEDS : null);
                 });
     }
 
@@ -122,11 +124,15 @@ public class MoveJournalService {
      * @param deletable может ли вошедший его удалить: не удалён и право есть
      *                  ({@link PostedDocumentDeletion}). Экран рисует кнопку
      *                  по этому признаку, а не по своему списку ролей
+     * @param deleteNeeds право, которого не хватает, чтобы удалить документ,
+     *                  который удалить можно в принципе: «Удалить» погашена
+     *                  с причиной, а не спрятана (задача 0044, вопрос 3)
      */
     public record MoveDocument(Long id, Long number, Instant createdAt,
                                String fromWarehouse, String toWarehouse,
                                int lines, String note, String author,
-                               Instant deletedAt, String deletedBy, boolean deletable) {
+                               Instant deletedAt, String deletedBy, boolean deletable,
+                               String deleteNeeds) {
     }
 
     /**

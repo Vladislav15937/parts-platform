@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
@@ -50,7 +51,7 @@ describe('номер прайс-листа у заведённой выгруз�
   }
 
   it('сохраняется, из адреса берётся номер, а кнопка гаснет с причиной', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText(/Номер прайс-листа · не задан/)).toBeTruthy());
 
     const button = screen.getByRole('button', { name: 'Сохранить номер' }) as HTMLButtonElement;
@@ -79,7 +80,7 @@ describe('номер прайс-листа у заведённой выгруз�
 
   it('показывает текущий номер, а пустое поле снимает его', async () => {
     packetId = '12345';
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText(/Номер прайс-листа · задан/)).toBeTruthy());
 
     const field = screen.getByPlaceholderText('12345') as HTMLInputElement;
@@ -94,7 +95,7 @@ describe('номер прайс-листа у заведённой выгруз�
   });
 
   it('форма заведения приводит номер тем же правилом, что и карточка', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText(/Номер прайс-листа · не задан/)).toBeTruthy());
 
     const form = within(screen.getByRole('heading', { name: 'Завести выгрузку' })
@@ -121,7 +122,7 @@ describe('номер прайс-листа у заведённой выгруз�
   });
 
   it('управляющему блок номера не показывается', async () => {
-    render(<FeedsScreen role="MANAGER" />);
+    render(<FeedsScreen rights={rightsAs('MANAGER')} />);
     await waitFor(() => expect(screen.getByText(/Ключ синхронизации/)).toBeTruthy());
     expect(screen.queryByText(/Номер прайс-листа ·/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Сохранить номер' })).toBeNull();

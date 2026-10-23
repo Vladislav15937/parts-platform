@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -61,7 +62,7 @@ describe('товар в пути в прайсе', () => {
     // правленым полем записал бы соседним null, и сохранив товар в пути,
     // владелец потерял бы наценку прайс-листа — узнал бы об этом с чужого
     // сайта, по цене без комиссии площадки.
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText(
@@ -92,7 +93,7 @@ describe('товар в пути в прайсе', () => {
     // Умолчания здесь нет намеренно. Подставленный нами текст уехал бы
     // к покупателю от имени разборки, которая его не писала; пустой текст
     // законен — товар уходит без приставки, как у Bazon (задача 0339).
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     const field = screen.getByLabelText(
@@ -104,7 +105,7 @@ describe('товар в пути в прайсе', () => {
     // Счётчик, не знающий условия, обещает не то число, которое уедет
     // площадке. Переключатель живёт в настройках сборки, то есть в отборе
     // его нет, — и приехать в счёт он обязан отдельно.
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText(
@@ -133,7 +134,7 @@ describe('товар в пути в прайсе', () => {
       },
     };
 
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: с контейнером')).toBeTruthy());
 
     const box = screen.getByLabelText(
@@ -150,7 +151,7 @@ describe('товар в пути в прайсе', () => {
     // на складе. Показанный переключатель был бы обещанием, которого нет.
     stored = { title: 'Дром: шины', productLine: 'WHEEL' };
 
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: шины')).toBeTruthy());
 
     expect(screen.queryByLabelText(
