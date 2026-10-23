@@ -223,6 +223,54 @@ public class StockMovement {
         return movement;
     }
 
+    /**
+     * Ссылка встречного движения удаления документа (задача 0367): по ней
+     * лента позиции отличает «пришло поступлением» от «снято удалением того же
+     * поступления», а ответ на повтор удаления пересчитывает, сколько снято.
+     */
+    public static final String DOCUMENT_DELETED = "DOCUMENT_DELETED";
+
+    /**
+     * Встречное движение удаления проведённого документа.
+     *
+     * <p><b>Тот же вид, что у исходного, обратного направления.</b> Поступление
+     * снимается движением {@code INTAKE} с минусом со своего склада, списание
+     * возвращается {@code WRITE_OFF} с плюсом на свой, перемещение едет
+     * {@code MOVE} обратно. Так сумма журнала по виду — то, что читают
+     * «Поступило» и «Списано» в отчётах и «сколько осталось принять»
+     * у ожидаемой позиции, — означает «сколько поступило и не удалено».
+     * Отдельного вида схема не знает ({@code stock_movement_type_ck}),
+     * а корректировка пересчёта сказала бы «недостача», которой не было.
+     *
+     * <p>Исходное движение не трогается: журнал неизменяем, и «пришло, потом
+     * документ удалили» остаётся видно обоими движениями.
+     *
+     * @param quantity сколько реально снято или возвращено, больше нуля
+     */
+    public static StockMovement reversal(Long partId, MovementType type, BigDecimal quantity,
+                                         Long fromWarehouseId, Long toWarehouseId,
+                                         Long documentId) {
+        BigDecimal delta = switch (type) {
+            case INTAKE -> quantity.abs().negate();
+            case WRITE_OFF, MOVE -> quantity.abs();
+            default -> throw new IllegalArgumentException(
+                    "Встречное движение удаления бывает у поступления, списания и перемещения");
+        };
+        StockMovement movement = new StockMovement(partId, type, delta);
+        movement.fromWarehouseId = fromWarehouseId;
+        movement.toWarehouseId = toWarehouseId;
+        movement.documentId = documentId;
+        movement.refType = DOCUMENT_DELETED;
+        movement.refId = documentId;
+        movement.reason = "Удаление документа";
+        return movement;
+    }
+
+    /** Встречное движение удаления документа, а не обычное. */
+    public boolean isReversal() {
+        return DOCUMENT_DELETED.equals(refType);
+    }
+
     /** Перестановка на полку того же склада — движение без остатка. */
     public boolean isReshelve() {
         return movementType == MovementType.MOVE

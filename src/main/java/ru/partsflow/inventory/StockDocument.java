@@ -82,6 +82,17 @@ public class StockDocument {
     @Column(name = "completed_at")
     private Instant completedAt;
 
+    /**
+     * Удалён ли проведённый документ (задача 0367, {@code tenant/098}): статус
+     * при этом остаётся {@code DONE} — «Выполнен (Удалён)» это два факта,
+     * а не третий статус. Ставит только {@link #markDeleted}.
+     */
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+
+    @Column(name = "deleted_by")
+    private Long deletedBy;
+
     /** {@code nullable = false} — иначе Hibernate вставит строку без ссылки на документ. */
     @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
     @JoinColumn(name = "document_id", nullable = false)
@@ -160,6 +171,74 @@ public class StockDocument {
 
     public boolean isDraft() {
         return status == DocumentStatus.DRAFT;
+    }
+
+    /**
+     * Можно ли удалить: проведённое поступление, списание или перемещение,
+     * ещё не удалённое (решение владельца 23.10.2026, задача 0367, п. 3).
+     *
+     * <p>Возврат и пересчёт не удаляются: возврат ведёт деньги и состав
+     * сделки, пересчёт — свои корректировки, и встречное движение остатка
+     * их не отменяет. Черновик не удаляют, а отменяют — остатка он не двигал.
+     */
+    public boolean isDeletable() {
+        return deletedAt == null && status == DocumentStatus.DONE
+                && (docType == DocumentType.INTAKE || docType == DocumentType.WRITE_OFF
+                    || docType == DocumentType.MOVE);
+    }
+
+    /**
+     * Почему удалить нельзя — словами, а не кодом статуса: отказ уходит
+     * человеку 409, и по нему он должен понять, что делать вместо.
+     * Удалённый сюда не попадает: повтор удаления — не отказ (см. сервис).
+     */
+    public void requireDeletable() {
+        if (docType != DocumentType.INTAKE && docType != DocumentType.WRITE_OFF
+                && docType != DocumentType.MOVE) {
+            throw new IllegalStateException(
+                    "Удалить можно поступление, списание или перемещение — этот документ не из них");
+        }
+        if (status == DocumentStatus.DRAFT) {
+            throw new IllegalStateException(
+                    "Документ не проведён: остатка он не двигал, его отменяют, а не удаляют");
+        }
+        if (status == DocumentStatus.CANCELLED) {
+            throw new IllegalStateException("Документ отменён: удалять нечего");
+        }
+    }
+
+    /**
+     * Отметка «Удалён». Встречные движения пишет сервис через
+     * {@code StockLedger} той же транзакцией — сущность про журнал не знает.
+     *
+     * <p>«Удалённым бывает только выполненный» схема не держит (сторож
+     * совместимости отбил бы CHECK на старую колонку, {@code tenant/098}) —
+     * держит эта проверка.
+     */
+    public void markDeleted(Instant when, Long by) {
+        requireDeletable();
+        if (deletedAt != null) {
+            throw new IllegalStateException("Документ уже удалён");
+        }
+        if (by == null) {
+            // Автор обязателен вместе с моментом (stock_document_deleted_ck):
+            // «кто удалил» — ровно тот вопрос, ради которого отметку читают.
+            throw new IllegalStateException("Удаление без вошедшего сотрудника не записать");
+        }
+        this.deletedAt = when;
+        this.deletedBy = by;
+    }
+
+    public boolean isDeleted() {
+        return deletedAt != null;
+    }
+
+    public Instant getDeletedAt() {
+        return deletedAt;
+    }
+
+    public Long getDeletedBy() {
+        return deletedBy;
     }
 
     private void requireDraft(String action) {

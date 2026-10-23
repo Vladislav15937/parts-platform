@@ -38,27 +38,43 @@ public class MoveJournalService {
      *
      * <p>Только {@code DONE}: черновика у перевозки не бывает — она создаётся
      * и проводится одним запросом, — а отменённый документ ничего не увёз.
+     *
+     * <p><b>Удалённый (задача 0367) остаётся в журнале с отметкой, а не
+     * пропадает.</b> Журнал отвечает на «что мы увозили в августе», и документ,
+     * который увезли, а потом удалили, — часть ответа: его движения в журнале
+     * склада остаются, и спрятанный здесь, он был бы следом, которому нечем
+     * объясниться. Удалить его второй раз нельзя ({@code deletable}).
      */
     @Transactional(readOnly = true)
     public List<MoveDocument> list() {
+        boolean mayDelete = PostedDocumentDeletion.allowed();
         return jdbc.query("""
                         SELECT d.id, d.number, d.created_at, d.note,
                                wf.name AS from_warehouse, wt.name AS to_warehouse,
                                who.display_name AS author,
+                               d.deleted_at, del.display_name AS deleted_by,
                                count(l.id) AS lines
                           FROM stock_document d
                           JOIN warehouse wf ON wf.id = d.warehouse_id
                           JOIN warehouse wt ON wt.id = d.to_warehouse_id
                           LEFT JOIN tenant_member who ON who.id = d.created_by
+                          LEFT JOIN tenant_member del ON del.id = d.deleted_by
                           LEFT JOIN stock_document_line l ON l.document_id = d.id
                          WHERE d.doc_type = 'MOVE' AND d.status = 'DONE'
                          GROUP BY d.id, d.number, d.created_at, d.note,
-                                  wf.name, wt.name, who.display_name
+                                  wf.name, wt.name, who.display_name, d.deleted_at,
+                                  del.display_name
                          ORDER BY d.created_at DESC, d.id DESC""",
-                (rs, i) -> new MoveDocument(rs.getLong("id"), rs.getLong("number"),
-                        rs.getTimestamp("created_at").toInstant(),
-                        rs.getString("from_warehouse"), rs.getString("to_warehouse"),
-                        rs.getInt("lines"), rs.getString("note"), rs.getString("author")));
+                (rs, i) -> {
+                    java.sql.Timestamp deletedAt = rs.getTimestamp("deleted_at");
+                    return new MoveDocument(rs.getLong("id"), rs.getLong("number"),
+                            rs.getTimestamp("created_at").toInstant(),
+                            rs.getString("from_warehouse"), rs.getString("to_warehouse"),
+                            rs.getInt("lines"), rs.getString("note"), rs.getString("author"),
+                            deletedAt == null ? null : deletedAt.toInstant(),
+                            rs.getString("deleted_by"),
+                            deletedAt == null && mayDelete);
+                });
     }
 
     /**
@@ -93,9 +109,17 @@ public class MoveJournalService {
                 documentId);
     }
 
+    /**
+     * @param deletedAt когда документ удалили (задача 0367); {@code null} — не удалён
+     * @param deletedBy кто удалил
+     * @param deletable может ли вошедший его удалить: не удалён и право есть
+     *                  ({@link PostedDocumentDeletion}). Экран рисует кнопку
+     *                  по этому признаку, а не по своему списку ролей
+     */
     public record MoveDocument(Long id, Long number, Instant createdAt,
                                String fromWarehouse, String toWarehouse,
-                               int lines, String note, String author) {
+                               int lines, String note, String author,
+                               Instant deletedAt, String deletedBy, boolean deletable) {
     }
 
     /**

@@ -202,6 +202,112 @@ public class StockDocumentService {
     }
 
     /**
+     * Удаляет проведённое поступление, списание или перемещение (задача 0367).
+     *
+     * <p>Решение владельца 23.10.2026 (tasks/0367, «Ответ владельца — 23 октября
+     * 2026», пп. 1–5): удаление пишет встречное движение — остаток возвращается
+     * как до документа, — исходное движение остаётся в журнале, документ
+     * помечается «Удалён» (статус остаётся «Выполнен»). Снимается только
+     * свободное: проданное и отложенное остаётся на складе, и сколько не снято,
+     * называет ответ ({@link DeletionOutcome#notTaken}). «Отменить проводку»
+     * (задача 0360) — другая операция, и здесь её нет.
+     *
+     * <p><b>Повтор — не второе удаление и не отказ.</b> Строка документа берётся
+     * под блокировкой ({@code FOR UPDATE}): два одновременных нажатия встают
+     * в очередь, второе видит отметку первого и получает тот же ответ, что
+     * и последовательный повтор, — итог первого удаления с {@code alreadyDeleted}.
+     * Встречное движение при этом одно. Ответ ошибкой на сделанное означал бы
+     * красное у человека, чей документ как раз удалён.
+     *
+     * <p>Право проверяется в одном месте — {@link PostedDocumentDeletion}.
+     */
+    @Transactional
+    public DeletionOutcome delete(Long documentId) {
+        PostedDocumentDeletion.require();
+        StockDocument document = documents.findByIdForUpdate(documentId).orElseThrow(
+                () -> NotFound.STOCK_DOCUMENT.error(documentId));
+        if (document.isDeleted()) {
+            return outcomeOf(document, true);
+        }
+        document.requireDeletable();
+
+        for (StockDocumentLine line : document.getLines()) {
+            switch (document.getDocType()) {
+                // Пришедшее снимается с того склада, куда пришло.
+                case INTAKE -> ledger.reverse(line.getPartId(), MovementType.INTAKE, line.getQty(),
+                        document.getWarehouseId(), null, document.getId());
+                // Списанное возвращается целиком: оно ушло со склада, и
+                // вернуть его на полку ничто не мешает.
+                case WRITE_OFF -> ledger.reverse(line.getPartId(), MovementType.WRITE_OFF,
+                        line.getQty(), null, document.getWarehouseId(), document.getId());
+                // Увезённое едет обратно, сколько свободно на складе-получателе.
+                case MOVE -> ledger.reverse(line.getPartId(), MovementType.MOVE, line.getQty(),
+                        document.getToWarehouseId(), document.getWarehouseId(), document.getId());
+                default -> throw new IllegalStateException("Этот документ не удаляется");
+            }
+        }
+
+        document.markDeleted(Instant.now(), ru.partsflow.platform.security.CurrentUser.memberId());
+        documents.saveAndFlush(document);
+        return outcomeOf(document, false);
+    }
+
+    /**
+     * Итог удаления, собранный по журналу, а не по памяти этого вызова: так
+     * повтор (и одновременный, дождавшийся блокировки) отвечает тем же, что
+     * первое удаление, — снятое считается суммой встречных движений документа.
+     */
+    private DeletionOutcome outcomeOf(StockDocument document, boolean alreadyDeleted) {
+        List<NotTaken> notTaken = jdbc.query("""
+                        SELECT p.id, p.number, p.public_code, p.title,
+                               l.wanted,
+                               coalesce((SELECT sum(abs(m.qty_delta)) FROM stock_movement m
+                                          WHERE m.document_id = ? AND m.ref_type = ?
+                                            AND m.part_id = p.id), 0) AS taken
+                          FROM (SELECT part_id, sum(qty) AS wanted, min(id) AS first_line
+                                  FROM stock_document_line WHERE document_id = ?
+                                 GROUP BY part_id) l
+                          JOIN part p ON p.id = l.part_id
+                         ORDER BY l.first_line""",
+                        (rs, i) -> new NotTaken(rs.getLong("id"), rs.getLong("number"),
+                                rs.getString("public_code"), rs.getString("title"),
+                                rs.getBigDecimal("wanted"), rs.getBigDecimal("taken")),
+                        document.getId(), StockMovement.DOCUMENT_DELETED, document.getId())
+                .stream()
+                .filter(row -> row.taken().compareTo(row.wanted()) < 0)
+                .toList();
+        String deletedBy = jdbc.query(
+                "SELECT display_name FROM tenant_member WHERE id = ?",
+                (rs, i) -> rs.getString(1), document.getDeletedBy()).stream().findFirst().orElse(null);
+        return new DeletionOutcome(document.getId(), document.getNumber(),
+                document.getDocType().name(), document.getDeletedAt(), deletedBy,
+                alreadyDeleted, notTaken);
+    }
+
+    /**
+     * @param alreadyDeleted документ был удалён раньше (повтор нажатия
+     *                       или второй сотрудник): встречных движений этот
+     *                       вызов не писал, итог — первого удаления
+     * @param notTaken       что осталось на складе, потому что продано
+     *                       или отложено; пусто — снято всё
+     */
+    public record DeletionOutcome(Long documentId, Long number, String docType,
+                                  Instant deletedAt, String deletedBy,
+                                  boolean alreadyDeleted, List<NotTaken> notTaken) {
+    }
+
+    /**
+     * Позиция, снятая не полностью.
+     *
+     * @param number порядковый номер позиции — им её называют вслух
+     * @param wanted сколько было в документе
+     * @param taken  сколько снято встречным движением
+     */
+    public record NotTaken(Long partId, Long number, String publicCode, String title,
+                           BigDecimal wanted, BigDecimal taken) {
+    }
+
+    /**
      * Проверяет, что уносимое со склада там есть и не обещано другому.
      *
      * <p>Сторожем остаётся база: между этой проверкой и записью движения
