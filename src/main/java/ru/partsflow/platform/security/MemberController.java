@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -60,9 +61,11 @@ public class MemberController {
         if (request.role() == null || request.role().isBlank()) {
             throw new IllegalArgumentException("Роль сотрудника обязательна");
         }
+        // Владельца заводит только владелец (задача 0044): иначе сотрудник
+        // с правом «Управлять сотрудниками и ролями» завёл бы себе владельца
+        // и получил бы через него права на всё.
         if ("OWNER".equals(request.role()) && !CurrentUser.require().actsAsOwner()) {
-            throw new org.springframework.security.access.AccessDeniedException(
-                    "Назначить роль «Владелец» может только владелец");
+            throw new AccessDeniedException("Владельца заводит только владелец");
         }
         MemberService.Member created = members.create(
                 request.login(), request.password(), request.displayName(),
@@ -87,6 +90,7 @@ public class MemberController {
     public ResponseEntity<Void> changePassword(@PathVariable Long id,
                                                @Valid @RequestBody PasswordRequest request,
                                                HttpServletRequest httpRequest) {
+        requireOwnerTouchesOwner(id);
         // Своя сессия называется явно: смена пароля закрывает все остальные,
         // а того, кто её меняет, оставляет работать.
         members.changePassword(id, request.password(),
@@ -113,6 +117,7 @@ public class MemberController {
                     "Себя выключить нельзя: выйти из компании было бы некому "
                             + "вернуть. Попросите другого владельца");
         }
+        requireOwnerTouchesOwner(id);
         members.setActive(id, false);
         return ResponseEntity.noContent().build();
     }
@@ -120,10 +125,24 @@ public class MemberController {
     @PostMapping("/{id}/enable")
     @PreAuthorize("hasAuthority('members.manage')")
     public ResponseEntity<Void> enable(@PathVariable Long id) {
+        requireOwnerTouchesOwner(id);
         members.setActive(id, true);
         return ResponseEntity.noContent().build();
     }
 
+
+    /**
+     * Учётную запись владельца — пароль, выключение, включение — меняет
+     * только владелец (задача 0044). Право «Управлять сотрудниками и ролями»
+     * сотрудника иначе давало бы ему пароль владельца, то есть права на всё.
+     * Свой пароль меняет каждый.
+     */
+    private void requireOwnerTouchesOwner(Long id) {
+        TenantPrincipal actor = CurrentUser.require();
+        if (!actor.actsAsOwner() && !id.equals(actor.memberId()) && members.isOwner(id)) {
+            throw new AccessDeniedException("Учётную запись владельца меняет только владелец");
+        }
+    }
 
     /**
      * @param role   прежняя жёсткая роль строкой — от вкладки, открытой до 0044

@@ -201,6 +201,20 @@ describe('роли и права на экране сотрудников', () =
     await waitFor(() => expect(within(roles).getByText('Ролей нет — заведите первую.')).toBeTruthy());
   });
 
+  it('не владельцу пароль и выключение владельца погашены и названы', async () => {
+    render(<MembersScreen ownerActs={false} />);
+    await waitFor(() => screen.getByRole('button', { name: 'Права: vladelec' }));
+    const row = screen.getByRole('button', { name: 'Права: vladelec' }).closest('tr') as HTMLElement;
+    expect((within(row).getByRole('button', { name: 'Сменить пароль' }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect((within(row).getByRole('button', { name: 'Выключить' }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(within(row).getByText('Учётную запись владельца меняет только владелец')).toBeTruthy();
+    const other = screen.getByRole('button', { name: 'Права: ivan' }).closest('tr') as HTMLElement;
+    expect((within(other).getByRole('button', { name: 'Сменить пароль' }) as HTMLButtonElement).disabled)
+      .toBe(false);
+  });
+
   it('нового сотрудника не завести без выбранной роли; роль уходит ссылкой', async () => {
     render(<MembersScreen />);
     await waitFor(() => screen.getByRole('button', { name: 'Завести' }));

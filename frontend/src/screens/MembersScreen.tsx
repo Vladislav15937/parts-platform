@@ -133,6 +133,9 @@ export function MembersScreen({
   };
 
   const roleOf = (id: string) => roles.find((r) => String(r.id) === id);
+  // Чужого владельца не владелец не трогает; свой пароль меняет каждый —
+  // но выключать себя нельзя всё равно, и это отбивает сервер словами.
+  const ownerLocked = (member: Member) => !ownerActs && access.get(member.id)?.owner === true;
 
   return (
     <section className="screen">
@@ -201,10 +204,14 @@ export function MembersScreen({
                     >
                       Права
                     </button>
+                    {/* Учётную запись владельца меняет только владелец — так стоит
+                        и на сервере (MemberController.requireOwnerTouchesOwner):
+                        кнопки погашены и названы, а не спрятаны. */}
                     <button
                       type="button"
                       className="button--ghost"
-                      disabled={busy}
+                      disabled={busy || ownerLocked(member)}
+                      title={ownerLocked(member) ? OWNER_ONLY : undefined}
                       onClick={() => void resetPassword(member)}
                     >
                       Сменить пароль
@@ -214,11 +221,13 @@ export function MembersScreen({
                     <button
                       type="button"
                       className="button--ghost"
-                      disabled={busy}
+                      disabled={busy || ownerLocked(member)}
+                      title={ownerLocked(member) ? OWNER_ONLY : undefined}
                       onClick={() => void toggle(member)}
                     >
                       {member.active ? 'Выключить' : 'Включить'}
                     </button>
+                    {ownerLocked(member) && <span className="note">{OWNER_ONLY}</span>}
                   </td>
                   )}
                 </tr>
@@ -470,6 +479,8 @@ function roleSummary(role: AccessRole, sections: readonly Section[]): string {
     .map((a) => a.title);
   return titles.length === 0 ? 'Прав нет — только смотреть то, что открыто всем.' : titles.join(', ');
 }
+
+const OWNER_ONLY = 'Учётную запись владельца меняет только владелец';
 
 /** Ответ разбирается как обещание, а не как гарантия: пустой — не падение. */
 function normalized(found: unknown): MemberAccess[] {

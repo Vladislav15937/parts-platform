@@ -320,11 +320,12 @@ public class AccessRoleService {
     }
 
     private void requireAnotherOwner(long memberId) {
+        // Владелец — тем же выражением, что у входа и у MemberService
+        // (роль «Владелец», а без роли вовсе — колонка OWNER).
         Integer others = jdbc.queryForObject("""
                 SELECT count(*) FROM tenant_member m
-                  LEFT JOIN access_role r ON r.id = m.access_role_id
-                 WHERE m.id <> ? AND m.is_active AND m.login IS NOT NULL
-                   AND (r.is_owner OR (m.access_role_id IS NULL AND m.role = 'OWNER'))""",
+                 WHERE m.id <> ? AND m.is_active AND m.login IS NOT NULL""" + " AND "
+                        + MemberService.OWNER_SQL,
                 Integer.class, memberId);
         if (others == null || others == 0) {
             throw new IllegalStateException(
