@@ -391,7 +391,9 @@ class PartConflictSaveTest extends PostgresTestBase {
         for (JsonNode change : history.path("changes")) {
             for (JsonNode field : change.path("fields")) {
                 if (field.path("label").asText().equals(label)) {
-                    out.add(change.path("author").asText());
+                    // Подпись автора — «Имя (логин, ID N)» (задача 0373); здесь
+                    // сверяется, кто правил, поэтому берётся имя до скобки.
+                    out.add(change.path("author").asText().replaceFirst(" \\(.*\\)$", ""));
                 }
             }
         }

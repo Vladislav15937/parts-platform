@@ -113,7 +113,8 @@ class PartHistoryHttpTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.changes[0].fields[0].after").value("5200"))
                 // Автор подписан: до этой правки app.user_id не выставлял никто,
                 // и в audit_log.changed_by у всех записей стоял null.
-                .andExpect(jsonPath("$.changes[0].author").value("Владелец"))
+                .andExpect(jsonPath("$.changes[0].author").value(
+                        org.hamcrest.Matchers.startsWith("Владелец (vladelec, ID ")))
                 // Приход не должен появиться в ленте правок: он во второй ленте.
                 // Записи от триггеров остатка отличаются тем, что ни одно поле
                 // из списка в них не изменилось.

@@ -294,14 +294,15 @@ class PartPartialEditTest extends PostgresTestBase {
         for (JsonNode change : history.path("changes")) {
             for (JsonNode field : change.path("fields")) {
                 if (field.path("label").asText().equals("Цена")) {
-                    priceAuthors.add(change.path("author").asText());
+                    priceAuthors.add(change.path("author").asText().replaceFirst(" \\(.*\\)$", ""));
                 }
                 if (field.path("label").asText().equals("Заметка")) {
-                    noteAuthors.add(change.path("author").asText());
+                    noteAuthors.add(change.path("author").asText().replaceFirst(" \\(.*\\)$", ""));
                 }
             }
         }
         // Первая правка — заполнение в fixtures() владельцем; дальше две цены A и заметка B.
+        // Автор сверяется именем до скобки: подпись — «Имя (логин, ID N)» (задача 0373).
         assertThat(priceAuthors).as("автор правок цены").containsOnly("Пётр Владельцев");
         assertThat(priceAuthors).hasSize(3);
         assertThat(noteAuthors).as("автор правок заметки")

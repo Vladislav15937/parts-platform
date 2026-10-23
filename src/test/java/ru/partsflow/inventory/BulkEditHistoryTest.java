@@ -48,6 +48,8 @@ class BulkEditHistoryTest extends PostgresTestBase {
 
     private static final int IN_FILTER = 40;
 
+    private static final long OWNER_NUMBER = 4207;
+
     @Autowired
     private MockMvc mvc;
 
@@ -80,10 +82,12 @@ class BulkEditHistoryTest extends PostgresTestBase {
             jdbc.update("DELETE FROM part_change");
             jdbc.update("DELETE FROM part");
             jdbc.update("DELETE FROM tenant_member WHERE login = 'vladelec'");
+            // Видимый номер задан явно и далеко от id строки: подпись,
+            // собранная по id, на этой фикстуре проверку не прошла бы.
             jdbc.update("""
-                    INSERT INTO tenant_member (login, display_name, password_hash, role)
-                    VALUES ('vladelec', 'Пётр Массов', ?, 'OWNER')""",
-                    passwordEncoder.encode("пароль-подлиннее"));
+                    INSERT INTO tenant_member (login, display_name, password_hash, role, number)
+                    VALUES ('vladelec', 'Пётр Массов', ?, 'OWNER', ?)""",
+                    passwordEncoder.encode("пароль-подлиннее"), OWNER_NUMBER);
             // Остаток прямо в кэше: отбор витрины по умолчанию показывает
             // только то, что лежит, и без него отбор не нашёл бы ни строки.
             for (int i = 0; i < IN_FILTER; i++) {
@@ -179,16 +183,17 @@ class BulkEditHistoryTest extends PostgresTestBase {
 
     /**
      * Оценку состояния из карточки ставит правка списком на одну позицию
-     * ({@code PartQualityBlock}). Для человека это правка карточки.
+     * ({@code PartQualityBlock}) и называет себя источником {@code CARD}.
+     * Для человека это правка карточки — подписи нет.
      */
     @Test
-    @DisplayName("Правка списком одной позиции (оценка из карточки) — без подписи")
-    void bulkOfOneIsNotBulk() throws Exception {
+    @DisplayName("Правка из карточки (оценка состояния) — без подписи")
+    void cardEditIsNotBulk() throws Exception {
         MockHttpSession owner = login();
         mvc.perform(post("/api/parts/bulk").with(csrf()).session(owner)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"partIds":[%d],"changes":{"qualityGrade":"NO_DEFECTS"}}"""
+                                {"partIds":[%d],"changes":{"qualityGrade":"NO_DEFECTS"},"source":"CARD"}"""
                                 .formatted(outside)))
                 .andExpect(status().isOk());
 
@@ -196,6 +201,60 @@ class BulkEditHistoryTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.changes[0].fields[0].label").value("Оценка состояния"))
                 .andExpect(jsonPath("$.changes[0].bulk").doesNotExist());
+    }
+
+    /**
+     * Решение владельца 23.10.2026 (задача 0373, пункт 12): «клиент должен
+     * явно понимать что правит не одну позицию а выбранные». Одна отмеченная
+     * строка «Правки списком» подписывается так же, как три; правило PR 491
+     * «массовая — от двух позиций» отменено.
+     */
+    @Test
+    @DisplayName("Правка списком одной отмеченной строки — подписана «1 … по отмеченным»")
+    void listEditOfOneIsSigned() throws Exception {
+        MockHttpSession owner = login();
+        for (String source : List.of(",\"source\":\"LIST\"", "")) {
+            mvc.perform(post("/api/parts/bulk").with(csrf()).session(owner)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"partIds":[%d],"changes":{"note":"Одна%s"}%s}"""
+                                    .formatted(outside, source.length(), source)))
+                    .andExpect(status().isOk());
+
+            mvc.perform(get("/api/parts/%d/history".formatted(outside)).session(owner))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.changes[0].fields[0].after")
+                            .value("Одна" + source.length()))
+                    .andExpect(jsonPath("$.changes[0].bulk.size").value(1))
+                    .andExpect(jsonPath("$.changes[0].bulk.scope").value("SELECTED"));
+        }
+    }
+
+    /**
+     * Решение владельца 23.10.2026 (пункт 10): «Показывать логин имя и номер
+     * сотрудника, мы должны идентифицировать сотрудника на 100%». Номер —
+     * видимый {@code tenant_member.number}, а не {@code id} строки; у этого
+     * сотрудника они нарочно разные.
+     */
+    @Test
+    @DisplayName("Автор правки подписан именем, логином и видимым номером, а не id строки")
+    void authorIsSignedWithLoginNameAndNumber() throws Exception {
+        long id = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM tenant_member WHERE login = 'vladelec'", Long.class));
+        org.assertj.core.api.Assertions.assertThat(id)
+                .as("фикстура: видимый номер совпал с id строки").isNotEqualTo(OWNER_NUMBER);
+
+        MockHttpSession owner = login();
+        mvc.perform(put("/api/parts/%d".formatted(outside)).with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"Своя заметка\"}"))
+                .andExpect(status().isOk());
+
+        String signed = "Пётр Массов (vladelec, ID 4207)";
+        mvc.perform(get("/api/parts/%d/history".formatted(outside)).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changes[0].fields[0].after").value("Своя заметка"))
+                .andExpect(jsonPath("$.changes[0].author").value(signed));
     }
 
     private MockHttpSession login() throws Exception {

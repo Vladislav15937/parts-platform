@@ -164,10 +164,31 @@ public class PartController {
     @PostMapping("/bulk")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public BulkResult updateAll(@Valid @RequestBody BulkRequest request) {
+        // Правка из карточки пометки массовой не получает, правка списком —
+        // всегда, и при одной отмеченной строке (задача 0373, решение
+        // владельца 23.10.2026). Различает их источник, а не число позиций.
+        var scope = request.source() == BulkSource.CARD
+                ? null : ru.partsflow.platform.audit.AuditBatch.Scope.SELECTED;
         PartService.BulkOutcome outcome = partService.updateAll(request.partIds(),
-                request.changes(), request.operations(), CurrentUser.memberId(),
-                ru.partsflow.platform.audit.AuditBatch.Scope.SELECTED);
+                request.changes(), request.operations(), CurrentUser.memberId(), scope);
         return BulkResult.of(outcome);
+    }
+
+    /**
+     * Откуда пришла правка (задача 0373).
+     *
+     * <p>Оценку состояния из карточки ({@code PartQualityBlock}) ставит этот
+     * же путь на одну позицию, и для человека это правка карточки. Одна
+     * отмеченная строка в «Правке списком» — тоже одна позиция, но владелец
+     * решил 23.10.2026: «клиент должен явно понимать что правит не одну
+     * позицию а выбранные». По числу позиций их не различить, поэтому
+     * экран говорит, откуда правит.
+     */
+    public enum BulkSource {
+        /** «Правка списком» по отмеченным строкам. */
+        LIST,
+        /** Правка из карточки одной позиции — без подписи в истории. */
+        CARD
     }
 
     /**
@@ -175,10 +196,13 @@ public class PartController {
      * @param operations что сделать с денежным полем — процент, сумма,
      *                   округление; непереданное означает «заменить»,
      *                   то есть прежнее поведение
+     * @param source     откуда правка; непереданное — «Правка списком»:
+     *                   это её путь, а карточка называет себя явно
      */
     public record BulkRequest(@NotEmpty List<Long> partIds,
                               @NotEmpty java.util.Map<String, Object> changes,
-                              java.util.Map<String, PriceOperation> operations) {
+                              java.util.Map<String, PriceOperation> operations,
+                              BulkSource source) {
     }
 
     /**
