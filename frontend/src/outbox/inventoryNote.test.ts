@@ -69,13 +69,13 @@ describe('комментарий ходившего в очереди', () => {
     await enqueue('inventoryNote', { sessionId: 7, note: 'уже поздно' }, 'Комментарий к пересчёту');
 
     server(() => json(
-      { message: 'Комментарий пишут, пока пересчёт не проведён и не отменён' }, 409));
+      { message: 'Комментарий пишут, пока пересчёт не выполнен и не отменён' }, 409));
     const first = await processOutbox();
     expect(first.failed).toBe(1);
 
     const [failed] = await listOutbox();
     expect(failed?.state).toBe('failed');
-    expect(failed?.lastError).toBe('Комментарий пишут, пока пересчёт не проведён и не отменён');
+    expect(failed?.lastError).toBe('Комментарий пишут, пока пересчёт не выполнен и не отменён');
 
     // Следующие проходы её не трогают: 409 — не «нет связи».
     await processOutbox(undefined, Date.now() + 10 * 60_000);

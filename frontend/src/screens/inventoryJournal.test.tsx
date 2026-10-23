@@ -87,11 +87,11 @@ describe('журнал пересчётов', () => {
 
     // «В работе» — только открытый, проведённого тут быть не должно.
     await waitFor(() => expect(screen.getByText('Идёт подсчёт')).toBeTruthy());
-    expect(screen.queryByText('Проведён')).toBeNull();
+    expect(screen.queryByText('Выполнен')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Выполненные' }));
 
-    await waitFor(() => expect(screen.getByText('Проведён')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Выполнен')).toBeTruthy());
     expect(screen.getByText('Подсчёт завершён')).toBeTruthy();
     expect(screen.queryByText('Идёт подсчёт')).toBeNull();
     expect(screen.getByText('Пересчётов: 2')).toBeTruthy();
@@ -101,7 +101,7 @@ describe('журнал пересчётов', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Все пересчёты' }));
     await waitFor(() => expect(screen.getByText('Пересчётов: 3')).toBeTruthy());
-    expect(screen.getByText('Проведён')).toBeTruthy();
+    expect(screen.getByText('Выполнен')).toBeTruthy();
   });
 
   it('«Все пересчёты» шлёт запрос без фильтра', async () => {
@@ -197,7 +197,7 @@ describe('журнал пересчётов', () => {
     render(<InventoryReconcile reference={reference()} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Все пересчёты' }));
-    fireEvent.click(await screen.findByText('Проведён'));
+    fireEvent.click(await screen.findByText('Выполнен'));
     await waitFor(() => expect(screen.getByText(/Сессия 8/)).toBeTruthy());
 
     expect(screen.getByText('Комментарий сводившего: Все на месте')).toBeTruthy();

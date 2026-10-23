@@ -161,7 +161,7 @@ public class InventorySession {
     public void cancel() {
         if (status == SessionStatus.APPLIED) {
             throw new IllegalStateException(
-                    "Проведённую инвентаризацию не отменяют: корректировки уже в журнале. "
+                    "Выполненную инвентаризацию не отменяют: корректировки уже в журнале. "
                             + "Оформи встречную");
         }
         this.status = SessionStatus.CANCELLED;
@@ -200,7 +200,7 @@ public class InventorySession {
     private void requireCommentable() {
         if (status == SessionStatus.APPLIED || status == SessionStatus.CANCELLED) {
             throw new IllegalStateException(
-                    "Комментарий пишут, пока пересчёт не проведён и не отменён");
+                    "Комментарий пишут, пока пересчёт не выполнен и не отменён");
         }
     }
 
