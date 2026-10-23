@@ -39,7 +39,9 @@ describe('роли и права на экране сотрудников', () =
       }
       if (url.endsWith('/api/access/members')) {
         return json([
-          { memberId: 1, roleId: 10, roleName: 'Владелец', owner: true, added: [], removed: [], effective: [] },
+          // Владельцу сервер отдаёт итогом весь справочник (AccessRoleService.members).
+          { memberId: 1, roleId: 10, roleName: 'Владелец', owner: true, added: [], removed: [],
+            effective: ['deal.return', 'deal.sell', 'intake.receive'] },
           { memberId: 2, roleId: 11, roleName: 'Приёмщик', owner: false, added: ['deal.sell'],
             removed: [], effective: ['intake.receive', 'deal.sell'] },
         ]);
