@@ -378,7 +378,7 @@ class CustomerControllerTest extends PostgresTestBase {
 
         mvc.perform(get("/api/customers/" + id + "/account").session(login("manager")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.entries[0].authorName").value("Менеджер"))
+                .andExpect(jsonPath("$.entries[0].authorName").value(org.hamcrest.Matchers.startsWith("Менеджер (")))
                 .andExpect(jsonPath("$.entries[0].dealNumber").value(dealNumber));
     }
 

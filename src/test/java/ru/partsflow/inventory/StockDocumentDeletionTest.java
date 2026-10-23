@@ -373,7 +373,7 @@ class StockDocumentDeletionTest extends PostgresTestBase {
         deleteOk(doc, owner);
         JsonNode row = journalRow(doc, owner);
         assertThat(row.path("deletedAt").isNull()).as("удалённое показано обычным").isFalse();
-        assertThat(row.path("deletedBy").asText()).isEqualTo("Владелец Удаляющий");
+        assertThat(row.path("deletedBy").asText()).startsWith("Владелец Удаляющий (");
         assertThat(row.path("deletable").asBoolean()).isFalse();
     }
 

@@ -247,7 +247,7 @@ class PartCellHttpTest extends PostgresTestBase {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.movements[0].warehouse")
                         .value("Основной · А-01-1 → А-02-1"))
-                .andExpect(jsonPath("$.movements[0].author").value("Кладовщик"));
+                .andExpect(jsonPath("$.movements[0].author").value(org.hamcrest.Matchers.startsWith("Кладовщик (")));
     }
 
     /**

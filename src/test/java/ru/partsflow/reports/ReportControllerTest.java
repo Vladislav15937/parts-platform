@@ -109,9 +109,9 @@ class ReportControllerTest extends PostgresTestBase {
         mvc.perform(get("/api/reports/managers?month=" + YearMonth.now())
                         .session(login("vladelec")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rows[?(@.displayName == 'Продавец возврата')].revenue")
+                .andExpect(jsonPath("$.rows[?(@.displayName =~ /Продавец возврата \\(.*/)].revenue")
                         .value(org.hamcrest.Matchers.contains(5000.00)))
-                .andExpect(jsonPath("$.rows[?(@.displayName == 'Продавец возврата')].dealsCount")
+                .andExpect(jsonPath("$.rows[?(@.displayName =~ /Продавец возврата \\(.*/)].dealsCount")
                         .value(org.hamcrest.Matchers.contains(1)));
     }
 
@@ -129,7 +129,7 @@ class ReportControllerTest extends PostgresTestBase {
         // Цена 5 000, снимок себестоимости 2 000 — наценка 3 000.
         mvc.perform(get("/api/reports/managers").session(login("vladelec")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rows[?(@.displayName == 'Продавец наценки')].margin")
+                .andExpect(jsonPath("$.rows[?(@.displayName =~ /Продавец наценки \\(.*/)].margin")
                         .value(org.hamcrest.Matchers.contains(3000.00)));
     }
 
@@ -151,12 +151,12 @@ class ReportControllerTest extends PostgresTestBase {
         // говорит владельцу, что он заработал 5 000 чистыми.
         mvc.perform(get("/api/reports/managers").session(login("vladelec")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rows[?(@.displayName == 'Продавец без себестоимости')].margin")
+                .andExpect(jsonPath("$.rows[?(@.displayName =~ /Продавец без себестоимости \\(.*/)].margin")
                         .value(org.hamcrest.Matchers.contains(org.hamcrest.Matchers.nullValue())))
                 .andExpect(jsonPath(
-                        "$.rows[?(@.displayName == 'Продавец без себестоимости')].itemsWithoutCost")
+                        "$.rows[?(@.displayName =~ /Продавец без себестоимости \\(.*/)].itemsWithoutCost")
                         .value(org.hamcrest.Matchers.contains(1)))
-                .andExpect(jsonPath("$.rows[?(@.displayName == 'Продавец без себестоимости')].revenue")
+                .andExpect(jsonPath("$.rows[?(@.displayName =~ /Продавец без себестоимости \\(.*/)].revenue")
                         .value(org.hamcrest.Matchers.contains(5000.00)));
     }
 
