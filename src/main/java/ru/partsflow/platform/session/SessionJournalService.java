@@ -3,6 +3,7 @@ package ru.partsflow.platform.session;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.platform.security.MemberSignature;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -48,6 +49,13 @@ public class SessionJournalService {
      */
     private static final int ATTEMPTED_CAP = 100;
 
+    /**
+     * «Кто» строки журнала: подпись сотрудника «Имя (логин, ID N)» (задача 0373),
+     * а у неудачной попытки с неизвестным логином — то, что ввели. Одно
+     * выражение на клетку и отбор: значение меню обязано найти свою строку.
+     */
+    private static final String WHO = "coalesce(" + MemberSignature.sql("m") + ", s.login_attempted)";
+
     private final JdbcTemplate jdbc;
 
     public SessionJournalService(JdbcTemplate jdbc) {
@@ -73,7 +81,9 @@ public class SessionJournalService {
         StringBuilder where = new StringBuilder(" WHERE true");
 
         if (member != null && !member.isBlank()) {
-            where.append(" AND coalesce(m.display_name, s.login_attempted) = ?");
+            // Тем же выражением, что клетка «Кто»: значение меню — подпись
+            // сотрудника (задача 0373) либо введённый при отказе логин.
+            where.append(" AND " + WHO + " = ?");
             args.add(member.strip());
         }
         if ("SUCCESS".equals(outcome) || "FAILED".equals(outcome)) {
@@ -106,7 +116,7 @@ public class SessionJournalService {
                         SELECT s.id, s.started_at, s.last_seen_at, s.ended_at, s.end_reason,
                                s.end_detail, s.outcome, s.failure_reason, s.login_attempted,
                                s.member_role, s.ip, s.user_agent,
-                               m.display_name"""
+                        """ + "       " + MemberSignature.sql("m") + " AS member_signature"
                         + source + where
                         + " ORDER BY s.started_at DESC, s.id DESC LIMIT ?",
                 (rs, i) -> new Entry(
@@ -115,10 +125,12 @@ public class SessionJournalService {
                         // логином — то, что ввели: это и есть ответ на «кто
                         // ломился». Показывать вместо него прочерк значит
                         // прятать единственное, что о попытке известно.
-                        rs.getString("display_name") != null
-                                ? rs.getString("display_name")
+                        // Сотрудник — подписью «Имя (логин, ID N)» (задача 0373,
+                        // решение владельца 23.10.2026, пункт 5а).
+                        rs.getString("member_signature") != null
+                                ? rs.getString("member_signature")
                                 : rs.getString("login_attempted"),
-                        rs.getString("display_name") == null,
+                        rs.getString("member_signature") == null,
                         rs.getString("member_role"),
                         rs.getTimestamp("started_at").toInstant(),
                         instantOrNull(rs.getTimestamp("last_seen_at")),
@@ -158,11 +170,11 @@ public class SessionJournalService {
         return switch (column) {
             // Один список на сотрудников и на введённые при отказе логины:
             // спрашивают «кто заходил», а не «кто из заведённых заходил».
-            case "member" -> jdbc.queryForList("""
-                    SELECT DISTINCT m.display_name
+            case "member" -> jdbc.queryForList("SELECT DISTINCT " + MemberSignature.sql("m")
+                    + """
                       FROM login_session s
                       JOIN tenant_member m ON m.id = s.member_id
-                     WHERE m.display_name IS NOT NULL
+                     WHERE m.number IS NOT NULL
                      UNION
                     SELECT login_attempted FROM (
                         SELECT login_attempted, max(started_at) AS last_at

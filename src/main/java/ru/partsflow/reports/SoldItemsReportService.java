@@ -3,6 +3,7 @@ package ru.partsflow.reports;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.platform.security.MemberSignature;
 import ru.partsflow.inventory.CatalogService;
 import ru.partsflow.inventory.PartNaming;
 
@@ -148,7 +149,7 @@ public class SoldItemsReportService {
                         + "       di.price AS list_price, di.quantity,\n"
                         + "       di.cost_price_snapshot AS cost_price,\n"
                         + "       " + UNIT_PROFIT + " AS unit_profit,\n"
-                        + "       w.name AS warehouse, tm.display_name AS manager,\n"
+                        + "       w.name AS warehouse, " + MemberSignature.sql("tm") + " AS manager,\n"
                         + "       s.number AS supply_number,\n"
                         + "       COALESCE(d.legacy_code, d.public_code) AS donor_code\n"
                         + FROM + "\n"
@@ -248,7 +249,7 @@ public class SoldItemsReportService {
                 + "       " + UNIT_PRICE + " AS unit_price, di.price AS list_price,\n"
                 + "       di.quantity, di.cost_price_snapshot AS cost_price,\n"
                 + "       " + UNIT_PROFIT + " AS unit_profit,\n"
-                + "       w.name AS warehouse, tm.display_name AS manager,\n"
+                + "       w.name AS warehouse, " + MemberSignature.sql("tm") + " AS manager,\n"
                 + "       s.number AS supply_number,\n"
                 + "       COALESCE(d.legacy_code, d.public_code) AS donor_code\n"
                 + FROM + "\n"
@@ -309,7 +310,9 @@ public class SoldItemsReportService {
      * ещё и менеджер.
      */
     private List<Named> managers() {
-        return jdbc.query("SELECT DISTINCT dl.manager_id AS id, tm.display_name AS name\n"
+        // Подписью, как клетка «Ответственный» (задача 0373).
+        return jdbc.query("SELECT DISTINCT dl.manager_id AS id, " + MemberSignature.sql("tm")
+                        + " AS name\n"
                         + FROM + "\n" + SOLD + " AND dl.manager_id IS NOT NULL\n"
                         + " ORDER BY name",
                 (rs, i) -> new Named(rs.getLong("id"), rs.getString("name")));

@@ -3,6 +3,7 @@ package ru.partsflow.inventory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.platform.security.MemberSignature;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -51,8 +52,12 @@ public class MoveJournalService {
         return jdbc.query("""
                         SELECT d.id, d.number, d.created_at, d.note, d.doc_type, d.status,
                                wf.name AS from_warehouse, wt.name AS to_warehouse,
-                               who.display_name AS author,
-                               d.deleted_at, del.display_name AS deleted_by,
+                        """
+                        // Кто перевёз и кто удалил — подписью «Имя (логин, ID N)»
+                        // (задача 0373, решение владельца 23.10.2026, пункт 5а).
+                        + "       " + MemberSignature.sql("who") + " AS author,\n"
+                        + "       d.deleted_at, " + MemberSignature.sql("del") + " AS deleted_by,\n"
+                        + """
                                count(l.id) AS lines
                           FROM stock_document d
                           JOIN warehouse wf ON wf.id = d.warehouse_id
@@ -62,8 +67,7 @@ public class MoveJournalService {
                           LEFT JOIN stock_document_line l ON l.document_id = d.id
                          WHERE d.doc_type = 'MOVE' AND d.status = 'DONE'
                          GROUP BY d.id, d.number, d.created_at, d.note, d.doc_type, d.status,
-                                  wf.name, wt.name, who.display_name, d.deleted_at,
-                                  del.display_name
+                                  wf.name, wt.name, who.id, d.deleted_at, del.id
                          ORDER BY d.created_at DESC, d.id DESC""",
                 (rs, i) -> {
                     java.sql.Timestamp deletedAt = rs.getTimestamp("deleted_at");

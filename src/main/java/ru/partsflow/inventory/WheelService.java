@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import ru.partsflow.platform.security.MemberSignature;
 import ru.partsflow.shared.PartNumberQuery;
 import ru.partsflow.shared.SupplyKinds;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -341,11 +342,11 @@ public class WheelService {
                        w.marking_type, w.tread_type, w.run_flat, w.light_truck,
                        w.speed_index, w.load_index,
                        pn.name AS part_name,
-                       """ + CatalogService.DONOR_CODE + " AS donor_code," + """
-                       (SELECT tm.display_name FROM tenant_member tm
-                         WHERE tm.id = p.updated_by)       AS updated_by_name,
-                       (SELECT tm.display_name FROM tenant_member tm
-                         WHERE tm.id = p.price_changed_by) AS price_changed_by_name,
+                       """ + CatalogService.DONOR_CODE + " AS donor_code,"
+                       // Подписью (задача 0373, пункт 5а) — тем же выражением, что отбор.
+                       + MemberSignature.sqlOf("p.updated_by") + " AS updated_by_name, "
+                       + MemberSignature.sqlOf("p.price_changed_by") + " AS price_changed_by_name,\n"
+                       + """
                        (SELECT count(*) FROM part_photo ph2
                          WHERE ph2.part_id = p.id AND ph2.status = 'PROCESSED')         AS photo_count,
                        (SELECT o.raw_number FROM part_oem o
@@ -717,10 +718,9 @@ public class WheelService {
             Map.entry("published", "CASE WHEN p.is_published THEN 'Везде' ELSE 'Нет' END"),
             Map.entry("legacy", "p.legacy_code"),
             Map.entry("barcode", "p.barcode"),
-            Map.entry("updatedBy", "(SELECT tm.display_name FROM tenant_member tm"
-                    + " WHERE tm.id = p.updated_by)"),
-            Map.entry("priceChangedBy", "(SELECT tm.display_name FROM tenant_member tm"
-                    + " WHERE tm.id = p.price_changed_by)"));
+            // Подписью «Имя (логин, ID N)», как клетка (задача 0373).
+            Map.entry("updatedBy", MemberSignature.sqlOf("p.updated_by")),
+            Map.entry("priceChangedBy", MemberSignature.sqlOf("p.price_changed_by")));
 
     /**
      * Пишет вкладку колёс в поток — всю, что прошла отбор.
@@ -769,11 +769,11 @@ public class WheelService {
                        w.marking_type, w.tread_type, w.run_flat,
                        w.light_truck, w.speed_index, w.load_index,
                        pn.name AS part_name,
-                       """ + CatalogService.DONOR_CODE + " AS donor_code," + """
-                       (SELECT tm.display_name FROM tenant_member tm
-                         WHERE tm.id = p.updated_by)       AS updated_by_name,
-                       (SELECT tm.display_name FROM tenant_member tm
-                         WHERE tm.id = p.price_changed_by) AS price_changed_by_name,
+                       """ + CatalogService.DONOR_CODE + " AS donor_code,"
+                       // Подписью (задача 0373, пункт 5а) — тем же выражением, что отбор.
+                       + MemberSignature.sqlOf("p.updated_by") + " AS updated_by_name, "
+                       + MemberSignature.sqlOf("p.price_changed_by") + " AS price_changed_by_name,\n"
+                       + """
                        (SELECT count(*) FROM part_photo ph
                          WHERE ph.part_id = p.id AND ph.status = 'PROCESSED') AS photo_count,
                        (SELECT o.raw_number FROM part_oem o
