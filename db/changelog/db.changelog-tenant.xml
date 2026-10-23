@@ -116,6 +116,8 @@
     <include file="tenant/097-member-number.sql" relativeToChangelogFile="true"/>
     <include file="tenant/098-stock-document-deleted.sql" relativeToChangelogFile="true"/>
     <include file="tenant/099-deal-item-added-at.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/100-access-roles.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/101-access-roles-seed.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>
