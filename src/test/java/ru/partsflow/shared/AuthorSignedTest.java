@@ -123,7 +123,7 @@ class AuthorSignedTest {
         found.forEach((file, count) -> {
             Allowed allowed = ALLOWED.get(file);
             if (allowed == null) {
-                problems.add(file + ": имя сотрудника одним именем (" + count + " мест)."
+                problems.add(file + ": имя сотрудника одним именем (упоминаний: " + count + ")."
                         + " Подпишите — MemberSignature.sql(псевдоним) в запросе"
                         + " или MemberSignatures.of(номера строк) — либо разберите место"
                         + " и внесите файл в ALLOWED с причиной");
