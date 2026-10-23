@@ -2,9 +2,9 @@
 id: 0044
 title: Владелец раздаёт полномочия сам, а не выбирает из пяти готовых ролей
 status: в работе
-assignee: migrator (ветка feature/0044-schema); код не раздан
+assignee: coder (ветки feature/0044-permissions, feature/0044-roles-screen)
 source: решение владельца продукта, 8 сентября 2026
-pr: 502
+pr: 502, 506, 508
 ---
 
 ## Решение владельца — 8 сентября 2026
