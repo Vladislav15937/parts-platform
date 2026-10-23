@@ -113,6 +113,7 @@
     <include file="tenant/094-part-applicability-author-engine-matters.sql" relativeToChangelogFile="true"/>
     <include file="tenant/095-bazon-fits-and-named-text-blocks.sql" relativeToChangelogFile="true"/>
     <include file="tenant/096-part-bazon-vehicle-refs.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/097-member-number.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

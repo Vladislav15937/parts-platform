@@ -38,8 +38,8 @@ describe('администратор сервиса в кабинете', () => 
       }
       if (url.endsWith('/api/members')) {
         return json([
-          { id: 1, login: 'vladelec', displayName: 'Пётр', role: 'OWNER', active: true, lastLoginAt: null },
-          { id: 9, login: null, displayName: 'Владислав', role: 'ADMIN', active: true, lastLoginAt: null },
+          { id: 1, number: 1, login: 'vladelec', displayName: 'Пётр', role: 'OWNER', active: true, lastLoginAt: null },
+          { id: 9, number: 4, login: null, displayName: 'Владислав', role: 'ADMIN', active: true, lastLoginAt: null },
         ]);
       }
       if (url.endsWith('/api/organization/admin-access')) {

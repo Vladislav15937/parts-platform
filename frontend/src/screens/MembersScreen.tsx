@@ -74,12 +74,16 @@ export function MembersScreen({ managesAccess = true }: { managesAccess?: boolea
         error !== '' ? null : <p className="note">Загружаем…</p>
       ) : (
         // Прокручивается таблица внутри своей обёртки, а не страница:
-        // пять колонок с датой последнего входа и двумя кнопками в телефон
+        // шесть колонок с датой последнего входа и двумя кнопками в телефон
         // не помещаются, а без обёртки вбок уезжал весь экран.
         <div className="table-scroll">
           <table>
             <thead>
               <tr>
+                {/* Видимый номер сотрудника, а не номер строки базы: его
+                    называют вслух и им подписан автор в истории карточки
+                    (задача 0373). */}
+                <th>Номер</th>
                 <th>Логин</th>
                 <th>Имя</th>
                 <th>Роль</th>
@@ -92,6 +96,7 @@ export function MembersScreen({ managesAccess = true }: { managesAccess?: boolea
                 <tr key={member.id} className={member.active ? undefined : 'muted'}>
                   {/* У администратора сервиса логина в кабинете нет: вход
                       у него свой, вне всех разборок (задача 0042). */}
+                  <td>{member.number}</td>
                   <td>{member.login ?? '—'}</td>
                   <td>{member.displayName ?? '—'}</td>
                   <td>{roleTitle(member.role)}</td>
