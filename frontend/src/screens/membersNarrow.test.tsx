@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { forgetCatalog } from '../access/rights';
+import { rightsWith } from '../test/rights';
 import { MembersScreen } from './MembersScreen';
 import {
   closeBrowser, measureLayout, measureOverflow, openBrowser,
@@ -131,5 +132,22 @@ describe('«Сотрудники» на телефоне и на монитор�
     expect(editor.length, 'раскрытые права не нашлись').toBe(1);
     expect(editor[0]!.right, `раскрытые права за краем — ${editor[0]!.right}`)
       .toBeLessThanOrEqual(layout.clientWidth);
+  }, 60_000);
+
+  // Погашенный блок доступа администратора (повторный живой прогон 24.10.2026):
+  // причина видимым текстом не уводит страницу и не вылезает из своей коробки.
+  it('390 px: погашенный блок доступа администратора на месте и не за краем', async () => {
+    stub();
+    render(<MembersScreen ownerActs={false} mine={rightsWith('members.manage', 'intake.receive')} />);
+    await waitFor(() => screen.getByRole('button', { name: 'Дать доступ администратору' }), SETTLE);
+    await waitFor(() => screen.getByRole('button', { name: 'Удалить роль: Временная' }), SETTLE);
+    const html = document.body.innerHTML;
+    const layout = await measureLayout(html, ['.locked-action', '.locked-action__reason'], 390);
+    const hidden = await measureOverflow(html, '.locked-action, .locked-action__reason', 390);
+    expect(layout.scrollWidth, `страница уехала вбок — ${layout.scrollWidth} при ${layout.clientWidth}`)
+      .toBeLessThanOrEqual(layout.clientWidth);
+    expect(layout.boxes['.locked-action__reason']?.length, 'причины нет').toBeGreaterThan(0);
+    expect(hidden.map((h) => `${h.text.trim().slice(0, 20)}: ${h.scrollWidth} при ${h.clientWidth}`),
+      'причина спрятана за краем').toEqual([]);
   }, 60_000);
 });

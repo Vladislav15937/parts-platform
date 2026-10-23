@@ -360,18 +360,28 @@ class AccessRoleHttpTest extends PostgresTestBase {
         long target = member("prodavec", "SELLER");
         MockHttpSession session = login("kadrovik");
 
-        assign(session, target, ownerRole, "{}").andExpect(status().isForbidden());
-        assign(session, kadrovik, ownerRole, "{}").andExpect(status().isForbidden());
-        mvc.perform(post("/api/members").with(csrf()).session(session)
+        // Отказ — словами, а не голым «Недостаточно прав» (повторный живой прогон
+        // 24.10.2026): на каждом пути, где не-владелец дал бы роль «Владелец».
+        List<String> refusals = new ArrayList<>();
+        refusals.add(text(assign(session, target, ownerRole, "{}").andExpect(status().isForbidden())));
+        refusals.add(text(assign(session, kadrovik, ownerRole, "{}").andExpect(status().isForbidden())));
+        refusals.add(text(mvc.perform(post("/api/members").with(csrf()).session(session)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"login\":\"novyy\",\"password\":\"%s\",\"role\":\"OWNER\"}"
                                 .formatted(PASSWORD)))
-                .andExpect(status().isForbidden());
-        mvc.perform(post("/api/members").with(csrf()).session(session)
+                .andExpect(status().isForbidden())));
+        refusals.add(text(mvc.perform(post("/api/members").with(csrf()).session(session)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"login\":\"novyy\",\"password\":\"%s\",\"roleId\":%d}"
                                 .formatted(PASSWORD, ownerRole)))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isForbidden())));
+        // Снять «Владельца» со второго владельца — тоже только владелец.
+        long second = member("vtoroy", "OWNER");
+        refusals.add(text(assign(session, second, seeded("VIEWER"), "{}").andExpect(status().isForbidden())));
+        assertThat(refusals).as("каждый отказ называет причину")
+                .allSatisfy(body -> assertThat(body).contains("только владелец")
+                        .doesNotContain("Недостаточно прав"));
+        assertThat(legacyRole(second)).as("второй владелец остался владельцем").isEqualTo("OWNER");
         assertThat(inTenant(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM tenant_member WHERE login = 'novyy'", Integer.class)))
                 .as("отказ назначения откатил и заведение").isZero();

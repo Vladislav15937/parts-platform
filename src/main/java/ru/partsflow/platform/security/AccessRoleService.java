@@ -255,7 +255,7 @@ public class AccessRoleService {
         boolean wasOwner = before != null && before.owner();
         if ((role.owner() || wasOwner) && wasOwner != role.owner()
                 && !CurrentUser.require().actsAsOwner()) {
-            throw new AccessDeniedException(
+            throw new RightsRefusal(
                     "Назначить и снять роль «Владелец» может только владелец");
         }
         if (!role.owner()) {
@@ -317,7 +317,7 @@ public class AccessRoleService {
         // у сотрудника, которого завели владельцем (живой прогон 24.10.2026).
         Stored role = lockRole(roleId);
         if (role.owner() && !CurrentUser.require().actsAsOwner()) {
-            throw new AccessDeniedException("Назначить и снять роль «Владелец» может только владелец");
+            throw new RightsRefusal(MemberController.OWNER_GRANT);
         }
         if (!role.owner()) {
             requireOwnRights(role.permissions(), "Выдать можно только свои права: у вас нет ");

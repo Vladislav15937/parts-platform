@@ -298,6 +298,21 @@ describe('роли и права на экране сотрудников', () =
     expect(screen.getByText(/журнал действий у сотрудника — от прежней роли «Ревизор»/)).toBeTruthy();
   });
 
+  // Повторный живой прогон 24.10.2026: у сотрудника без права блок показывал
+  // голое «Недостаточно прав» вместо погашенного с причиной (решение 3).
+  it('без права на доступ администратора блок погашен с причиной и за состоянием не ходит', async () => {
+    render(<MembersScreen ownerActs={false} mine={rightsWith('members.manage', 'intake.receive')} />);
+    await waitFor(() => screen.getByRole('button', { name: 'Завести' }));
+    const card = screen.getByText('Доступ администратора сервиса').closest('.card') as HTMLElement;
+    const button = within(card).getByRole('button', { name: 'Дать доступ администратору' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(within(card).getByText(/^Нет права/)).toBeTruthy();
+    expect(card.textContent).not.toContain('Недостаточно прав');
+    const asked = vi.mocked(fetch).mock.calls.map((call) => String(call[0]));
+    expect(asked.some((url) => url.includes('/api/organization/admin-access')),
+      'погашенный блок пошёл за состоянием, которое сервер отобьёт').toBe(false);
+  });
+
   // Ответ владельца 24.10.2026 (2б): выдавать можно только свои права. Решает
   // сервер; экран гасит заранее и называет причину.
   describe('выдавать можно только свои права', () => {

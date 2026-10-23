@@ -8,6 +8,7 @@ import {
   revokeAdminAccess,
   type AdminAccessState,
 } from '../organization/adminAccess';
+import { LockedAction } from '../ui/LockedAction';
 import { useMounted } from '../ui/useMounted';
 
 /** Верхняя граница числа часов — та же, что у сервера (`AdminAccess.MAX_HOURS`). */
@@ -33,7 +34,16 @@ const MAX_HOURS = 24 * 365;
  * доступ — только владелец, иначе «только с разрешения владельца» перестало
  * бы быть правдой. Сервер отбивает его так же (`AdminAccessController`).
  */
-export function AdminAccessPanel({ canChange }: { canChange: boolean }) {
+export function AdminAccessPanel({ canChange, mayView = true }: {
+  canChange: boolean;
+  /**
+   * Есть ли у вошедшего право «доступ администратора сервиса»
+   * (`admin_access.manage`). Нет — состояние не грузится вовсе (сервер ответил бы
+   * голым 403 «Недостаточно прав»), а раздел погашен с причиной видимым текстом
+   * (решение владельца 23.10.2026, задача 0044, вопрос 3; живой прогон 24.10.2026).
+   */
+  mayView?: boolean;
+}) {
   const [state, setState] = useState<AdminAccessState | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -54,7 +64,9 @@ export function AdminAccessPanel({ canChange }: { canChange: boolean }) {
       });
   }, [mounted]);
 
-  useEffect(reload, [reload]);
+  useEffect(() => {
+    if (mayView) reload();
+  }, [reload, mayView]);
 
   const hoursValue = Number(hours);
   const hoursValid = Number.isInteger(hoursValue) && hoursValue >= 1 && hoursValue <= MAX_HOURS;
@@ -68,6 +80,10 @@ export function AdminAccessPanel({ canChange }: { canChange: boolean }) {
         видны в журнале на вкладке «Входы».
       </p>
 
+      {!mayView ? (
+        <LockedAction permission="admin_access.manage" label="Дать доступ администратору" className="" />
+      ) : (
+      <>
       {error !== '' && <p className="note note--error">{error}</p>}
 
       {state === null ? (
@@ -151,6 +167,8 @@ export function AdminAccessPanel({ canChange }: { canChange: boolean }) {
             </>
           )}
         </>
+      )}
+      </>
       )}
     </div>
   );

@@ -268,7 +268,7 @@ export function MembersScreen({
                   mine={mine}
                   onChanged={reload} />
 
-      <AdminAccessPanel canChange={managesAccess} />
+      <AdminAccessPanel canChange={managesAccess} mayView={mine.has('admin_access.manage')} />
 
       {!managesAccess ? (
         <p className="note">

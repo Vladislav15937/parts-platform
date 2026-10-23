@@ -32,6 +32,14 @@ import java.util.List;
 @RequestMapping("/api/members")
 public class MemberController {
 
+    /**
+     * Отказ не-владельцу, который заводит или назначает владельца, — словами
+     * и одними на все пути: заведение прежней строкой, заведение ролью клиента,
+     * назначение и снятие роли «Владелец» (AccessRoleService).
+     */
+    static final String OWNER_GRANT = "Владельца назначает только владелец: роль «Владелец» "
+            + "даёт все права, и выдать её может только тот, у кого они есть";
+
     private final MemberService members;
     private final AccessRoleService roles;
 
@@ -65,7 +73,9 @@ public class MemberController {
         // с правом «Управлять сотрудниками и ролями» завёл бы себе владельца
         // и получил бы через него права на всё.
         if ("OWNER".equals(request.role()) && !CurrentUser.require().actsAsOwner()) {
-            throw new AccessDeniedException("Владельца заводит только владелец");
+            // Словами, а не «Недостаточно прав» (повторный живой прогон 24.10.2026):
+            // отказ в выдаче называет причину, как остальные (RightsRefusal).
+            throw new RightsRefusal(OWNER_GRANT);
         }
         // Через роли клиента, а не MemberService напрямую: права заведённого
         // не шире прав заводящего (задача 0044, ответ владельца 24.10.2026, 2б).
