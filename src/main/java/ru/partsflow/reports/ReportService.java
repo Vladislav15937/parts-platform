@@ -3,6 +3,7 @@ package ru.partsflow.reports;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.platform.security.MemberSignature;
 import ru.partsflow.sales.DealStatus;
 
 import java.math.BigDecimal;
@@ -60,15 +61,20 @@ public class ReportService {
     @Transactional(readOnly = true)
     public List<ManagerRow> managerSales(YearMonth month) {
         LocalDate first = month.atDay(1);
-        return jdbc.query("""
-                SELECT manager_id, display_name, deals_count, revenue, margin,
-                       items_without_cost
-                  FROM v_manager_sales
-                 WHERE period = ?::date
-                 ORDER BY revenue DESC NULLS LAST, display_name""",
+        // Менеджер — подписью «Имя (логин, ID N)» (задача 0373, решение владельца
+        // 23.10.2026, пункт 5а): по отчёту считают премию, и два Сергея одной
+        // строкой имени неразличимы. Вьюха несёт только имя, поэтому подпись
+        // берётся соединением с сотрудником, а не из неё.
+        return jdbc.query("SELECT v.manager_id, " + MemberSignature.sql("tm") + " AS manager,"
+                        + """
+                       v.deals_count, v.revenue, v.margin, v.items_without_cost
+                  FROM v_manager_sales v
+                  LEFT JOIN tenant_member tm ON tm.id = v.manager_id
+                 WHERE v.period = ?::date
+                 ORDER BY v.revenue DESC NULLS LAST, manager""",
                 (rs, i) -> new ManagerRow(
                         rs.getObject("manager_id", Long.class),
-                        rs.getString("display_name"),
+                        rs.getString("manager"),
                         rs.getInt("deals_count"),
                         rs.getBigDecimal("revenue"),
                         rs.getBigDecimal("margin"),

@@ -114,7 +114,7 @@ class ScreenEditsJournalTest extends PostgresTestBase {
         journal("Товар").andExpect(jsonPath("$.items[?(@.subject=='Фара журнала первая')]"
                         + ".changes[0].label").value("Вид детали"))
                 .andExpect(jsonPath("$.items[?(@.subject=='Фара журнала первая')].author")
-                        .value("Владелец Журналов"))
+                        .value(org.hamcrest.Matchers.hasItem(org.hamcrest.Matchers.startsWith("Владелец Журналов ("))))
                 .andExpect(jsonPath("$.items[?(@.subject=='Фара журнала первая')].authorRole")
                         .value("OWNER"));
         // Само написание — сущность, и его сопоставление видно своей строкой.
@@ -182,7 +182,7 @@ class ScreenEditsJournalTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.items[0].action").value("Затрата удалена"))
                 .andExpect(jsonPath("$.items[0].context").value(containsString("Машина")))
                 .andExpect(jsonPath("$.items[1].action").value("Затрата записана"))
-                .andExpect(jsonPath("$.items[1].author").value("Владелец Журналов"));
+                .andExpect(jsonPath("$.items[1].author").value(org.hamcrest.Matchers.startsWith("Владелец Журналов (")));
     }
 
     @Test
@@ -340,7 +340,7 @@ class ScreenEditsJournalTest extends PostgresTestBase {
                 .andExpect(status().isNoContent());
 
         journal("Сотрудник").andExpect(jsonPath("$.items.length()").value(3))
-                .andExpect(jsonPath("$.items[0].subject").value("Кладовщик Журнала"))
+                .andExpect(jsonPath("$.items[0].subject").value(org.hamcrest.Matchers.startsWith("Кладовщик Журнала (")))
                 .andExpect(jsonPath("$.items[0].changes[0].label").value("Работает"))
                 .andExpect(jsonPath("$.items[0].changes[0].after").value("нет"))
                 .andExpect(jsonPath("$.items[1].changes[0].label").value("Пароль"))

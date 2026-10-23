@@ -61,8 +61,7 @@ public class CatalogController {
                      @RequestParam(required = false) Long modelId,
                      @RequestParam(required = false) String body,
                      @RequestParam(required = false) String engine,
-                     @RequestParam(required = false) List<String> filter,
-                     @RequestParam(required = false) List<String> find,
+                     jakarta.servlet.http.HttpServletRequest request,
                      /* Порядок по умолчанию — номер позиции по возрастанию:
                         что заведено раньше, то выше. До задачи 0060 здесь
                         стоял `code` — публичный код, шесть случайных байт, —
@@ -78,7 +77,7 @@ public class CatalogController {
 
         CatalogService.Page found = catalog.list(q, reserved, missing, warehouses,
                 new CatalogService.Vehicle(brandId, modelId, body, engine),
-                columnsOf(filter), columnsOf(find),
+                columnsOf(request, "filter"), columnsOf(request, "find"),
                 sort, desc, Math.max(page, 0), Math.min(Math.max(size, 1), MAX_SIZE), after);
 
         return new View(found.total(), catalog.warehouses(),
@@ -144,7 +143,7 @@ public class CatalogController {
      * не перезаписывается.
      */
     @PostMapping("/applicability/from-titles")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('applicability.bulk')")
     public CatalogService.Parsed applicabilityFromTitles() {
         return catalog.applyFromTitles();
     }
@@ -159,14 +158,14 @@ public class CatalogController {
      * текст клиента не меняется.
      */
     @PostMapping("/applicability/from-drom")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('applicability.bulk')")
     public DromApplicabilityService.Report applicabilityFromDrom() {
         return dromApplicability.applyAll();
     }
 
     /** Добавляет машину в применимость позиции — из карточки. */
     @PostMapping("/{id}/applicability")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('part.edit')")
     public List<CatalogService.Applicability> addApplicability(
             @PathVariable Long id, @RequestBody VehicleRequest request) {
         catalog.addApplicability(id, request.brandId(), request.modelId(), CurrentUser.memberId());
@@ -174,7 +173,7 @@ public class CatalogController {
     }
 
     @DeleteMapping("/{id}/applicability/{applicabilityId}")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('part.edit')")
     public List<CatalogService.Applicability> removeApplicability(
             @PathVariable Long id, @PathVariable Long applicabilityId) {
         catalog.removeApplicability(id, applicabilityId);
@@ -196,7 +195,7 @@ public class CatalogController {
 
     /** Ставит «Двигатель важен / не важен». Правит владелец и менеджер, как остальную применимость. */
     @PutMapping("/{id}/engine-matters")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('part.edit')")
     public ApplicabilityDetails.State setEngineMatters(
             @PathVariable Long id, @RequestBody EngineMattersRequest request) {
         return details.setEngineMatters(id, request.matters());
@@ -267,7 +266,7 @@ public class CatalogController {
      * 0» владелец прочитает как «сделано», и ошибку в отборе он не заметит.
      */
     @PostMapping("/bulk")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('part.edit')")
     public PartController.BulkResult bulk(@RequestParam(required = false) String q,
                            @RequestParam(defaultValue = "true") boolean reserved,
                            @RequestParam(defaultValue = "false") boolean missing,
@@ -276,13 +275,12 @@ public class CatalogController {
                            @RequestParam(required = false) Long modelId,
                            @RequestParam(required = false) String body,
                            @RequestParam(required = false) String engine,
-                           @RequestParam(required = false) List<String> filter,
-                           @RequestParam(required = false) List<String> find,
+                           jakarta.servlet.http.HttpServletRequest http,
                            @Valid @RequestBody BulkByFilter request) {
 
         List<Long> ids = catalog.idsMatching(q, reserved, missing, warehouses,
                 new CatalogService.Vehicle(brandId, modelId, body, engine),
-                columnsOf(filter), columnsOf(find));
+                columnsOf(http, "filter"), columnsOf(http, "find"));
         if (ids.isEmpty()) {
             throw new IllegalArgumentException("Отбор не нашёл ни одной позиции");
         }
@@ -305,6 +303,26 @@ public class CatalogController {
      */
     public record BulkByFilter(@NotEmpty Map<String, Object> changes,
                                Map<String, PriceOperation> operations) {
+    }
+
+    /**
+     * Пары отбора — сырыми значениями параметра, а не {@code List<String>}
+     * от Spring (задача 0373).
+     *
+     * <p><b>Почему не параметром метода.</b> Один параметр Spring приводит
+     * к списку, <b>разрезая по запятой</b>: «updatedBy:Пётр Массов (vladelec,
+     * ID 4207)» приезжал двумя половинами, вторая — без двоеточия, и отбор
+     * отвечал 400 «задаётся как колонка:значение». С подписью сотрудника
+     * «Имя (логин, ID N)» запятая стоит в каждом значении «Кто изменил»;
+     * раньше так же ломалось любое одиночное значение с запятой (заметка,
+     * описание). Два и больше параметров Spring не режет — потому и
+     * не замечали. {@code getParameterValues} отдаёт ровно то, что прислал
+     * экран.
+     */
+    private static java.util.Map<String, String> columnsOf(
+            jakarta.servlet.http.HttpServletRequest request, String name) {
+        String[] values = request.getParameterValues(name);
+        return columnsOf(values == null ? null : List.of(values));
     }
 
     /**
@@ -347,7 +365,7 @@ public class CatalogController {
      * байт, статус ответа уже не сменить, и отказ уехал бы двухсотым с телом
      * склада внутри.
      */
-    @PreAuthorize(TableExport.ALLOWED)
+    @PreAuthorize("hasAuthority('export.table')")
     @GetMapping("/export")
     public void export(@RequestParam(required = false) String q,
                        @RequestParam(defaultValue = "true") boolean reserved,
@@ -357,8 +375,7 @@ public class CatalogController {
                        @RequestParam(required = false) Long modelId,
                        @RequestParam(required = false) String body,
                        @RequestParam(required = false) String engine,
-                       @RequestParam(required = false) List<String> filter,
-                       @RequestParam(required = false) List<String> find,
+                       jakarta.servlet.http.HttpServletRequest request,
                        // Тот же порядок по умолчанию, что и у страницы:
                        // скачанный файл обязан совпасть с экраном.
                        @RequestParam(defaultValue = "number") String sort,
@@ -381,7 +398,7 @@ public class CatalogController {
 
         catalog.export(q, reserved, missing, warehouses,
                 new CatalogService.Vehicle(brandId, modelId, body, engine),
-                columnsOf(filter), columnsOf(find), sort, desc, found,
+                columnsOf(request, "filter"), columnsOf(request, "find"), sort, desc, found,
                 cells -> writeRow(out, cells));
         out.flush();
     }

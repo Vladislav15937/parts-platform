@@ -1,6 +1,7 @@
 package ru.partsflow.inventory;
 
 import jakarta.validation.Valid;
+import org.springframework.security.access.prepost.PreAuthorize;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -35,6 +36,7 @@ public class PhotoController {
 
     /** Шаг 1: получить ссылку на загрузку. */
     @PostMapping("/upload-url")
+    @PreAuthorize("hasAuthority('photos.manage')")
     public ResponseEntity<PhotoService.Upload> requestUpload(
             @PathVariable Long partId,
             @Valid @RequestBody UploadRequest request) {
@@ -67,6 +69,7 @@ public class PhotoController {
      * Классификация при этом та же: 409 остаётся 409, меняется только тело.
      */
     @PostMapping("/{photoId}/confirm")
+    @PreAuthorize("hasAuthority('photos.manage')")
     public ResponseEntity<Void> confirm(@PathVariable Long partId,
                                         @PathVariable Long photoId,
                                         @RequestBody(required = false) ConfirmRequest request) {
@@ -124,12 +127,14 @@ public class PhotoController {
     }
 
     @PostMapping("/{photoId}/main")
+    @PreAuthorize("hasAuthority('photos.manage')")
     public ResponseEntity<Void> makeMain(@PathVariable Long partId, @PathVariable Long photoId) {
         photos.makeMain(photoId);
         return ResponseEntity.noContent().build();
     }
 
     @DeleteMapping("/{photoId}")
+    @PreAuthorize("hasAuthority('photos.manage')")
     public ResponseEntity<Void> delete(@PathVariable Long partId, @PathVariable Long photoId) {
         photos.delete(photoId);
         return ResponseEntity.noContent().build();

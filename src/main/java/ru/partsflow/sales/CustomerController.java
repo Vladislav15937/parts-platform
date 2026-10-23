@@ -35,7 +35,7 @@ public class CustomerController {
      * и «Просмотр» видят клиента только через чужую сделку — отдельного
      * экрана истории и лицевого счёта у них нет.
      */
-    private static final String READS = "hasAnyRole('OWNER','MANAGER','SELLER')";
+    private static final String READS = "hasAuthority('customer.view')";
 
     private final CustomerService customers;
 
@@ -104,7 +104,7 @@ public class CustomerController {
      * сделке поправить продавец не должен.
      */
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('customer.edit')")
     public CustomerService.CustomerDetail update(@PathVariable Long id,
                                                  @Valid @RequestBody UpdateRequest request) {
         return customers.update(id, request.name(), request.phone(), request.email(),
@@ -113,7 +113,7 @@ public class CustomerController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER','SELLER')")
+    @PreAuthorize("hasAuthority('customer.create')")
     public ResponseEntity<CustomerService.Customer> create(
             @Valid @RequestBody CreateRequest request) {
 

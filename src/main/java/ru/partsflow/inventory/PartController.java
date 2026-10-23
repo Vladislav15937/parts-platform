@@ -18,6 +18,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import ru.partsflow.intake.DonorDirectory;
 import ru.partsflow.platform.security.CurrentUser;
+import ru.partsflow.platform.security.Permission;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -51,12 +52,13 @@ public class PartController {
      * ответ через сутки. Деньги при этом отделены: себестоимость
      * и минимальная цена в ленту правок попадают только владельцу
      * и менеджеру, и не «скрываются на экране», а не уезжают с сервера.
+     * С задачи 0044 это право «Видеть закупку и себестоимость»
+     * ({@link Permission#PART_MONEY_VIEW}), у владельца — всегда.
      * Стережёт {@code PartHistoryHttpTest}.
      */
     @GetMapping("/{id}/history")
     public PartHistoryService.History history(@PathVariable long id) {
-        var principal = CurrentUser.require();
-        boolean money = principal.actsAsOwner() || "MANAGER".equals(principal.role());
+        boolean money = CurrentUser.require().can(Permission.PART_MONEY_VIEW);
         return history.of(id, money);
     }
 
@@ -145,7 +147,7 @@ public class PartController {
     // не мог тронуть ни одной позиции. Снятое объявление уносит с собой
     // накопленные просмотры, и заметно это через дни по пустому прайсу.
     @PostMapping("/publication")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('part.publish')")
     public PublicationResult setPublication(@Valid @RequestBody PublicationRequest request) {
         return new PublicationResult(
                 partService.setPublished(request.partIds(), request.published()));
@@ -162,7 +164,7 @@ public class PartController {
      * <p>Роль та же, что у правки одной: здесь цена и себестоимость.
      */
     @PostMapping("/bulk")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('part.edit')")
     public BulkResult updateAll(@Valid @RequestBody BulkRequest request) {
         // Правка из карточки пометки массовой не получает, правка списком —
         // всегда, и при одной отмеченной строке (задача 0373, решение
@@ -237,7 +239,7 @@ public class PartController {
      * и в отчёт окупаемости, то есть терялась бы навсегда.
      */
     @GetMapping("/{id}/editable")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('part.edit')")
     public UpdateRequest editable(@PathVariable Long id) {
         return UpdateRequest.of(partService.require(id), partService.dromCardOf(id),
                 identity.of(id));
@@ -283,7 +285,7 @@ public class PartController {
      * отбивает уникальный индекс, и ответ перечитывается новой транзакцией.
      */
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('part.edit')")
     public EditResult update(@PathVariable Long id, @Valid @RequestBody EditRequest request) {
         UpdateRequest fields = request.fields();
         try {
@@ -375,7 +377,7 @@ public class PartController {
      * куда никто не подходил.
      */
     @PutMapping("/{id}/cell")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER','STOREKEEPER')")
+    @PreAuthorize("hasAuthority('part.cell')")
     public PartService.PartCell changeCell(@PathVariable Long id,
                                            @Valid @RequestBody CellRequest request) {
         return partService.changeCell(id, request.warehouseId(), request.cellId(),

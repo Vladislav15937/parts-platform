@@ -62,7 +62,7 @@ public class MarketplaceAccountController {
      *                и когда её последний раз забирали»
      */
     @GetMapping
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('marketplace.view')")
     public List<MarketplaceAccountService.Account> list(
             @RequestParam(name = "deleted", defaultValue = "false") boolean deleted) {
         return deleted ? accounts.deleted() : accounts.list();
@@ -80,7 +80,7 @@ public class MarketplaceAccountController {
      * уникальный индекс — тогда ответ собирается по тому, что набрали.
      */
     @PutMapping("/{id}/title")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('marketplace.manage')")
     public MarketplaceAccountService.Account rename(@PathVariable Long id,
                                                     @RequestBody TitleRequest request) {
         try {
@@ -103,7 +103,7 @@ public class MarketplaceAccountController {
      * которые владелец платит.
      */
     @PutMapping("/{id}/status")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('marketplace.manage')")
     public MarketplaceAccountService.Account setStatus(@PathVariable Long id,
                                                        @RequestBody StatusRequest request) {
         return accounts.setStatus(id, request.status());
@@ -123,7 +123,7 @@ public class MarketplaceAccountController {
      * {@code GET /api/marketplace-accounts?deleted=true}.
      */
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('marketplace.manage')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         accounts.delete(id);
         return ResponseEntity.noContent().build();
@@ -137,7 +137,7 @@ public class MarketplaceAccountController {
      * что ключ и ссылка на прайс давно заводились через API.
      */
     @PostMapping
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('marketplace.manage')")
     public ResponseEntity<MarketplaceAccountService.Account> create(
             @Valid @RequestBody CreateRequest request) {
 
@@ -152,7 +152,7 @@ public class MarketplaceAccountController {
      * Только владелец, как и ключ: вместе они решают, куда уходят цены.
      */
     @PutMapping("/{id}/packet-id")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('marketplace.manage')")
     public MarketplaceAccountService.Account setPacketId(@PathVariable Long id,
                                                          @RequestBody PacketIdRequest request) {
         return accounts.setPacketId(id, request == null ? null : request.packetId());
@@ -163,7 +163,7 @@ public class MarketplaceAccountController {
     }
 
     @PutMapping("/{id}/credentials")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('marketplace.manage')")
     public ResponseEntity<Void> setCredentials(@PathVariable Long id,
                                                @Valid @RequestBody CredentialsRequest request) {
         accounts.setCredentials(id, request.secret());
@@ -185,7 +185,7 @@ public class MarketplaceAccountController {
      * у каждого своя цена размещения в кабинете площадки.
      */
     @PutMapping("/{id}/filter")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('marketplace.configure')")
     public MarketplaceAccountService.Account setFilter(@PathVariable Long id,
                                                        @RequestBody FilterRequest request) {
         return accounts.setFilter(id, request.priceFrom(), request.priceTo(),
@@ -209,7 +209,7 @@ public class MarketplaceAccountController {
      * к кабинету это не даёт.
      */
     @PutMapping("/{id}/settings")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('marketplace.configure')")
     public MarketplaceAccountService.Account setSettings(@PathVariable Long id,
                                                          @RequestBody FeedSettings settings) {
         return accounts.setSettings(id, settings);
@@ -223,7 +223,7 @@ public class MarketplaceAccountController {
      * с просмотрами, и узнают об этом через сутки.
      */
     @PostMapping("/filter/count")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('marketplace.view')")
     public CountView count(@RequestBody FilterRequest request) {
         MarketplaceAccountService.Counted counted = accounts.count(
                 request.priceFrom(), request.priceTo(),
@@ -261,7 +261,7 @@ public class MarketplaceAccountController {
      * и та же причина: индекс защищает данные, а не человека.
      */
     @PutMapping("/{id}/feed-file")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('marketplace.manage')")
     public MarketplaceAccountService.Account setFeedFileName(
             @PathVariable Long id, @RequestBody FeedFileRequest request) {
         try {
@@ -277,7 +277,7 @@ public class MarketplaceAccountController {
     }
 
     @PostMapping("/{id}/feed-url")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('marketplace.manage')")
     public FeedUrlView rotateFeedUrl(@PathVariable Long id, HttpServletRequest request) {
         accounts.rotateFeedToken(id);
         return view(feedPathOf(id), request);
@@ -285,7 +285,7 @@ public class MarketplaceAccountController {
 
     /** Текущая ссылка на прайс. Пусто — ещё не заводили. */
     @GetMapping("/{id}/feed-url")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('marketplace.view')")
     public FeedUrlView feedUrl(@PathVariable Long id, HttpServletRequest request) {
         return view(feedPathOf(id), request);
     }

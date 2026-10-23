@@ -22,7 +22,7 @@ import java.util.List;
  */
 @RestController
 @RequestMapping("/api/reports")
-@PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+@PreAuthorize("hasAuthority('reports.view')")
 public class ReportController {
 
     /** Полсотни машин — это уже год работы разборки, дальше листают. */

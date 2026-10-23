@@ -59,19 +59,19 @@ import java.util.Map;
 @RequestMapping("/api/deals")
 public class SalesController {
 
-    private static final String SELLS = "hasAnyRole('OWNER','MANAGER','SELLER')";
-    private static final String ISSUES = "hasAnyRole('OWNER','MANAGER','SELLER','STOREKEEPER')";
+    private static final String SELLS = "hasAuthority('deal.sell')";
+    private static final String ISSUES = "hasAuthority('deal.issue')";
 
     private final SalesService sales;
     private final PartService parts;
-    private final ru.partsflow.platform.security.MemberService members;
+    private final ru.partsflow.platform.security.MemberSignatures members;
     private final ru.partsflow.platform.settings.CompanySettingsService companySettings;
     private final DealPrintService dealPrint;
     private final PreorderService preorders;
     private final ru.partsflow.inventory.PartNaming partNaming;
 
     public SalesController(SalesService sales, PartService parts,
-                           ru.partsflow.platform.security.MemberService members,
+                           ru.partsflow.platform.security.MemberSignatures members,
                            ru.partsflow.platform.settings.CompanySettingsService companySettings,
                            DealPrintService dealPrint, PreorderService preorders,
                            ru.partsflow.inventory.PartNaming partNaming) {
@@ -459,7 +459,7 @@ public class SalesController {
      * совпадать со складом выдачи.
      */
     @PostMapping("/{id}/returns")
-    @PreAuthorize(SELLS)
+    @PreAuthorize("hasAuthority('deal.return')")
     public ResponseEntity<ReturnView> registerReturn(@PathVariable Long id,
                                                      @Valid @RequestBody ReturnDocRequest request) {
         DealReturn dealReturn = sales.registerReturn(
@@ -509,7 +509,7 @@ public class SalesController {
      *                   «Возвраты» карточки клиента (задача 0022)
      */
     @GetMapping("/returns")
-    @PreAuthorize(SELLS)
+    @PreAuthorize("hasAuthority('deal.return')")
     public SalesService.ReturnsPage returns(
             @RequestParam(value = "q", required = false) String q,
             @RequestParam(value = "from", required = false) String from,
@@ -557,7 +557,7 @@ public class SalesController {
      * обратно с ним.
      */
     @PostMapping("/{dealId}/returns/{returnId}/cancel")
-    @PreAuthorize(SELLS)
+    @PreAuthorize("hasAuthority('deal.return')")
     public ReturnView cancelReturn(@PathVariable Long dealId, @PathVariable Long returnId) {
         return ReturnView.of(sales.cancelReturn(returnId, CurrentUser.memberId()));
     }
@@ -604,7 +604,9 @@ public class SalesController {
      * <p>Имена сотрудников идут одним запросом на всю выдачу — как
      * и наименования в строках. Без имени строка читается «автор 3»,
      * а разбирают историю через недели, когда по номеру никто никого
-     * не вспомнит.
+     * не вспомнит. С задачи 0373 это подпись «Имя (логин, ID N)»
+     * ({@code MemberSignatures}): одно имя на разборке с двумя Сергеями
+     * сотрудника не называет.
      *
      * <p><b>Роли те же, что у самой сделки ({@link #get}).</b> Журнал —
      * это та же карточка, только с другой стороны: он несёт {@code message}
@@ -616,7 +618,7 @@ public class SalesController {
     @PreAuthorize(ISSUES)
     public List<HistoryView> history(@PathVariable Long id) {
         List<DocumentEvent> events = sales.history(id);
-        Map<Long, String> names = members.namesOf(
+        Map<Long, String> names = members.of(
                 events.stream().map(DocumentEvent::getAuthorId).toList());
         return events.stream().map(event -> HistoryView.of(event, names)).toList();
     }
@@ -735,7 +737,7 @@ public class SalesController {
         // выдачу: вкладка «Сделки» карточки клиента (задача 0022) показывает
         // «Ответственный» по имени, а /api/members, откуда его можно было бы
         // взять на клиенте, доступен только владельцу.
-        Map<Long, String> managerNames = members.namesOf(deals.stream()
+        Map<Long, String> managerNames = members.of(deals.stream()
                 .map(Deal::getManagerId)
                 .toList());
         // Стадия — тем же выражением, что раскладывает доску сделок, и тоже

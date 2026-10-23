@@ -113,7 +113,7 @@ class OrganizationAuditTest extends PostgresTestBase {
 
         mvc.perform(get("/api/organization/audit").session(login("vladelec")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[0].author").value("Иванов"))
+                .andExpect(jsonPath("$.items[0].author").value(signed("ivanov")))
                 .andExpect(jsonPath("$.items[0].kind").value("Товар"))
                 .andExpect(jsonPath("$.items[0].subject")
                         .value("Фара Toyota Camry 2006 перед. лев. (б/у)"))
@@ -140,7 +140,7 @@ class OrganizationAuditTest extends PostgresTestBase {
 
         mvc.perform(get("/api/organization/audit").session(login("vladelec")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[0].author").value("Иванов"))
+                .andExpect(jsonPath("$.items[0].author").value(signed("ivanov")))
                 .andExpect(jsonPath("$.items[0].authorRole").value("MANAGER"));
     }
 
@@ -219,7 +219,7 @@ class OrganizationAuditTest extends PostgresTestBase {
         mvc.perform(get("/api/organization/audit/values").param("column", "author")
                         .session(session))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$", org.hamcrest.Matchers.hasItem("Иванов")));
+                .andExpect(jsonPath("$", org.hamcrest.Matchers.hasItem(signed("ivanov"))));
     }
 
     /** Отбор по человеку и по вещи — то, что владелец назвал дословно. */
@@ -229,9 +229,9 @@ class OrganizationAuditTest extends PostgresTestBase {
         changePrice("ivanov", "4500");
         MockHttpSession session = login("vladelec");
 
-        mvc.perform(get("/api/organization/audit").param("author", "Иванов").session(session))
+        mvc.perform(get("/api/organization/audit").param("author", signed("ivanov")).session(session))
                 .andExpect(jsonPath("$.total").value(1));
-        mvc.perform(get("/api/organization/audit").param("author", "Сидоров").session(session))
+        mvc.perform(get("/api/organization/audit").param("author", signed("prodavec")).session(session))
                 .andExpect(jsonPath("$.total").value(0));
         mvc.perform(get("/api/organization/audit").param("q", "Camry").session(session))
                 .andExpect(jsonPath("$.total").value(1));
@@ -387,6 +387,17 @@ class OrganizationAuditTest extends PostgresTestBase {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"price\":%s,\"published\":false}".formatted(price)))
                 .andExpect(status().isOk());
+    }
+
+    /**
+     * Подпись сотрудника «Имя (логин, ID N)» — так его называют клетка «Кто»,
+     * меню и отбор журнала (задача 0373). Номер — видимый, из базы.
+     */
+    private String signed(String login) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT display_name, login, number FROM tenant_member WHERE login = ?",
+                (rs, i) -> ru.partsflow.platform.security.MemberSignature.of(
+                        rs.getString(1), rs.getString(2), (Long) rs.getObject(3)), login));
     }
 
     private Long member(String login, String displayName, String role) {

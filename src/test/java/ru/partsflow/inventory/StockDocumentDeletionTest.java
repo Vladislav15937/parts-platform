@@ -91,6 +91,8 @@ class StockDocumentDeletionTest extends PostgresTestBase {
                 VALUES (367, ?, 'Удаление документов', 'docdelete')""", TENANT);
 
         inTenant(() -> {
+            // Право поверх роли, выданное одним методом, другому не достаётся.
+            jdbc.update("DELETE FROM member_permission_override");
             member("vladelec", "Владелец Удаляющий", "OWNER");
             member("menedzher", "Менеджер", "MANAGER");
             member("kladovshchik", "Кладовщик", "STOREKEEPER");
@@ -289,6 +291,27 @@ class StockDocumentDeletionTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Право «Удалять выполненные складские документы» поверх роли: удаляет и видит кнопку в ленте и в перевозках")
+    void permissionHolderDeletes() throws Exception {
+        long part = part("Брызговик");
+        intake(part, "1");
+        long doc = move(part, "1");
+        inTenant(() -> jdbc.update("""
+                INSERT INTO member_permission_override (member_id, permission, granted)
+                SELECT id, 'stock_document.delete_done', true FROM tenant_member
+                 WHERE login = 'kladovshchik'"""));
+        MockHttpSession kladovshchik = login("kladovshchik");
+
+        assertThat(journalRow(doc, kladovshchik).path("deletable").asBoolean())
+                .as("в «Перевозках» кнопка у того, кому право дано").isTrue();
+        assertThat(movementRows(part, kladovshchik).findValuesAsText("deletableDocumentId"))
+                .as("в ленте карточки — тоже").contains(String.valueOf(doc));
+
+        deleteOk(doc, kladovshchik);
+        assertThat(docState(doc)).isEqualTo("DONE deleted by Кладовщик");
+    }
+
+    @Test
     @DisplayName("Черновик не удаляется, а отменяется: 409 словами")
     void draftIsRefusedWithWords() throws Exception {
         long part = part("Молдинг");
@@ -373,7 +396,7 @@ class StockDocumentDeletionTest extends PostgresTestBase {
         deleteOk(doc, owner);
         JsonNode row = journalRow(doc, owner);
         assertThat(row.path("deletedAt").isNull()).as("удалённое показано обычным").isFalse();
-        assertThat(row.path("deletedBy").asText()).isEqualTo("Владелец Удаляющий");
+        assertThat(row.path("deletedBy").asText()).startsWith("Владелец Удаляющий (");
         assertThat(row.path("deletable").asBoolean()).isFalse();
     }
 

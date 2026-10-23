@@ -11,7 +11,6 @@ import ru.partsflow.platform.session.SessionRevocations;
 import ru.partsflow.platform.tenant.TenantContext;
 
 import java.time.Instant;
-import java.util.Collection;
 import java.util.Map;
 import java.util.List;
 import java.util.Optional;
@@ -101,6 +100,14 @@ public class MemberService {
             now.put("login", login.strip());
             now.put("role", role);
             journal.created("tenant_member", id, now);
+            // Ссылка на роль переноса той же прежней роли (задача 0044): иначе
+            // заведённый здесь сотрудник жил бы на паре role → seeded_from,
+            // и удаление клиентом этой роли молча оставило бы его без прав.
+            // Роли нет (клиент её удалил) — ссылки нет, как у прежнего образа.
+            jdbc.update("""
+                    UPDATE tenant_member SET access_role_id =
+                           (SELECT r.id FROM access_role r WHERE r.seeded_from = ?)
+                     WHERE id = ?""", role, id);
             return byId(id);
         } catch (DuplicateKeyException e) {
             // Уникальность по нормализованному логину стоит в БД: «Ivan» и «ivan »
@@ -238,18 +245,40 @@ public class MemberService {
      */
     private void requireNotLastOwner(Long memberId) {
         Integer others = jdbc.queryForObject("""
-                SELECT count(*) FROM tenant_member
-                 WHERE role = 'OWNER' AND is_active AND login IS NOT NULL AND id <> ?""",
+                SELECT count(*) FROM tenant_member m
+                 WHERE m.is_active AND m.login IS NOT NULL AND m.id <> ?""" + " AND " + OWNER_SQL,
                 Integer.class, memberId);
-        String role = jdbc.query("SELECT role FROM tenant_member WHERE id = ?",
-                rs -> rs.next() ? rs.getString(1) : null, memberId);
 
-        if ("OWNER".equals(role) && (others == null || others == 0)) {
+        if (isOwner(memberId) && (others == null || others == 0)) {
             throw new IllegalStateException(
                     "Это единственный владелец: выключив его, в компанию нельзя будет войти "
                             + "как владелец. Сначала заведите второго");
         }
     }
+
+    /**
+     * Владелец ли сотрудник — по роли клиента (задача 0044), как его видит
+     * вход ({@link MemberAccess}): назначенная роль «Владелец» (ссылкой или
+     * парой {@code role → seeded_from}), а если роли нет вовсе — прежняя
+     * колонка {@code OWNER}. Одно выражение на «последнего владельца»
+     * и на запрет менять владельца не владельцем: прежде оно смотрело только
+     * на колонку и не видело владельца, назначенного ссылкой.
+     */
+    @Transactional(readOnly = true)
+    public boolean isOwner(Long memberId) {
+        List<Boolean> found = jdbc.queryForList(
+                "SELECT " + OWNER_SQL + " FROM tenant_member m WHERE m.id = ?",
+                Boolean.class, memberId);
+        return !found.isEmpty() && Boolean.TRUE.equals(found.get(0));
+    }
+
+    /** Владелец ли строка {@code m} — то же правило, что у входа ({@link MemberAccess}). */
+    static final String OWNER_SQL = """
+            coalesce((SELECT r.is_owner FROM access_role r
+                       WHERE r.id = coalesce(m.access_role_id,
+                             (SELECT s.id FROM access_role s
+                               WHERE s.seeded_from = m.role AND m.role <> 'ADMIN'))),
+                     m.role = 'OWNER')""";
 
     /**
      * Участника «администратор сервиса» владелец не меняет.
@@ -304,29 +333,6 @@ public class MemberService {
                 login.strip(), passwordEncoder.encode(password));
 
         return created.isEmpty() ? Optional.empty() : Optional.of(byId(created.get(0)));
-    }
-
-    /**
-     * Имена сотрудников по идентификаторам — одним запросом на всю выдачу.
-     *
-     * <p>История документа — это десятки строк, и запрос на каждую превратил
-     * бы её открытие в столько же обращений к базе. Без имени же строка
-     * читается как «автор 3»: разбирают историю через недели, когда
-     * по номеру никто никого не вспомнит.
-     */
-    @Transactional(readOnly = true)
-    public Map<Long, String> namesOf(Collection<Long> memberIds) {
-        List<Long> ids = memberIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
-        if (ids.isEmpty()) {
-            return Map.of();
-        }
-        Map<Long, String> names = new java.util.HashMap<>();
-        jdbc.query("SELECT id, display_name FROM tenant_member WHERE id = ANY (?)",
-                rs -> {
-                    names.put(rs.getLong("id"), rs.getString("display_name"));
-                },
-                (Object) ids.toArray(Long[]::new));
-        return names;
     }
 
     public Member byId(Long memberId) {

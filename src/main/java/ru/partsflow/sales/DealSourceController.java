@@ -39,7 +39,7 @@ public class DealSourceController {
     }
 
     @PostMapping
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('deal_sources.manage')")
     public ResponseEntity<DealSourceService.DealSourceEntryView> create(
             @Valid @RequestBody CreateRequest request) {
         try {
@@ -51,13 +51,13 @@ public class DealSourceController {
     }
 
     @PostMapping("/{id}/archive")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('deal_sources.manage')")
     public DealSourceService.DealSourceEntryView archive(@PathVariable Long id) {
         return sources.archive(id);
     }
 
     @PostMapping("/{id}/unarchive")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('deal_sources.manage')")
     public DealSourceService.DealSourceEntryView unarchive(@PathVariable Long id) {
         return sources.unarchive(id);
     }

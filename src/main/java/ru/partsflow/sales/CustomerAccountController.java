@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import ru.partsflow.platform.security.CurrentUser;
-import ru.partsflow.platform.security.MemberService;
+import ru.partsflow.platform.security.MemberSignatures;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -32,15 +32,12 @@ import java.util.Map;
 @RequestMapping("/api/customers/{customerId}/account")
 public class CustomerAccountController {
 
-    /** Счётом распоряжается тот, кто продаёт: это деньги в сделке. */
-    private static final String SELLS = "hasAnyRole('OWNER','MANAGER','SELLER')";
-
     private final SalesService sales;
     private final DealRepository deals;
-    private final MemberService members;
+    private final MemberSignatures members;
 
     public CustomerAccountController(SalesService sales, DealRepository deals,
-                                     MemberService members) {
+                                     MemberSignatures members) {
         this.sales = sales;
         this.deals = deals;
         this.members = members;
@@ -58,10 +55,10 @@ public class CustomerAccountController {
      * имени и номера документа ничего не говорят тому, кто их разбирает.
      */
     @GetMapping
-    @PreAuthorize(SELLS)
+    @PreAuthorize("hasAuthority('customer.view')")
     public AccountView account(@PathVariable Long customerId) {
         List<CustomerAccountEntry> entries = sales.accountEntries(customerId);
-        Map<Long, String> authorNames = members.namesOf(
+        Map<Long, String> authorNames = members.of(
                 entries.stream().map(CustomerAccountEntry::getCreatedBy).toList());
         Map<Long, Long> dealNumbers = deals.findAllById(
                         entries.stream().map(CustomerAccountEntry::getDealId)
@@ -74,7 +71,7 @@ public class CustomerAccountController {
     }
 
     @PostMapping("/top-up")
-    @PreAuthorize(SELLS)
+    @PreAuthorize("hasAuthority('customer.account')")
     public ResponseEntity<EntryView> topUp(@PathVariable Long customerId,
                                            @Valid @RequestBody TopUpRequest request) {
         CustomerAccountEntry entry = sales.topUpAccount(
@@ -96,7 +93,7 @@ public class CustomerAccountController {
      * здесь уходят из кассы — и платёж создаётся, иначе касса не сойдётся.
      */
     @PostMapping("/withdraw")
-    @PreAuthorize(SELLS)
+    @PreAuthorize("hasAuthority('customer.account')")
     public ResponseEntity<EntryView> withdraw(@PathVariable Long customerId,
                                               @Valid @RequestBody TopUpRequest request) {
         CustomerAccountEntry entry = sales.withdrawFromAccount(
@@ -113,7 +110,7 @@ public class CustomerAccountController {
      * за деньги.
      */
     @PostMapping("/correct")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('customer.account.correct')")
     public ResponseEntity<EntryView> correct(@PathVariable Long customerId,
                                              @Valid @RequestBody CorrectionRequest request) {
         CustomerAccountEntry entry = sales.correctAccount(

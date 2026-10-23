@@ -253,10 +253,10 @@ class ServiceAdminTest extends PostgresTestBase {
         mvc.perform(get("/api/organization/audit").session(ownerLogin()))
                 .andExpect(status().isOk())
                 // Свежее сверху: последней была правка администратора.
-                .andExpect(jsonPath("$.items[0].author").value(ADMIN_NAME))
+                .andExpect(jsonPath("$.items[0].author").value(org.hamcrest.Matchers.startsWith(ADMIN_NAME + " (ID ")))
                 .andExpect(jsonPath("$.items[0].authorRole").value("ADMIN"))
                 .andExpect(jsonPath("$.items[0].changes[0].after").value("4500"))
-                .andExpect(jsonPath("$.items[1].author").value("Пётр Владельцев"))
+                .andExpect(jsonPath("$.items[1].author").value(org.hamcrest.Matchers.startsWith("Пётр Владельцев (")))
                 .andExpect(jsonPath("$.items[1].authorRole").value("OWNER"));
     }
 
@@ -268,7 +268,7 @@ class ServiceAdminTest extends PostgresTestBase {
 
         mvc.perform(get("/api/organization/sessions").session(ownerLogin()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[?(@.role == 'ADMIN')].who").value(hasItem(ADMIN_NAME)))
+                .andExpect(jsonPath("$.items[?(@.role == 'ADMIN')].who").value(hasItem(org.hamcrest.Matchers.startsWith(ADMIN_NAME + " (ID "))))
                 .andExpect(jsonPath("$.items[?(@.role == 'ADMIN')].success").value(hasItem(true)));
     }
 

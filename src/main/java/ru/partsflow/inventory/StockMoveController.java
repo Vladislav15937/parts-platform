@@ -45,7 +45,7 @@ public class StockMoveController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER','STOREKEEPER')")
+    @PreAuthorize("hasAuthority('stock.move')")
     public ResponseEntity<MoveView> move(@Valid @RequestBody MoveRequest request) {
         StockDocumentService.MoveOutcome outcome = documents.moveBatch(
                 request.fromWarehouseId(), request.toWarehouseId(),
@@ -55,13 +55,13 @@ public class StockMoveController {
 
     /** Журнал перевозок: документы, свежие сверху. Состав — по нажатию на строку. */
     @GetMapping
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER','STOREKEEPER')")
+    @PreAuthorize("hasAuthority('stock.move')")
     public List<MoveJournalService.MoveDocument> journal() {
         return journal.list();
     }
 
     @GetMapping("/{id}/lines")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER','STOREKEEPER')")
+    @PreAuthorize("hasAuthority('stock.move')")
     public List<MoveJournalService.MoveLine> journalLines(@PathVariable Long id) {
         return journal.lines(id);
     }

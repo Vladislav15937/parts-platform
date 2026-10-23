@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import ru.partsflow.platform.security.MemberSignature;
 import ru.partsflow.shared.PartNumberQuery;
 import ru.partsflow.shared.SupplyKinds;
 import org.slf4j.Logger;
@@ -415,10 +416,15 @@ public class CatalogService {
             "(SELECT sc.code FROM storage_cell sc WHERE sc.id = p.storage_cell_id)";
     private static final String PHOTO_COUNT = "(SELECT count(*) FROM part_photo sph"
             + " WHERE sph.part_id = p.id AND sph.status = 'PROCESSED')";
-    private static final String UPDATED_BY_NAME =
-            "(SELECT tm.display_name FROM tenant_member tm WHERE tm.id = p.updated_by)";
-    private static final String PRICE_CHANGED_BY_NAME =
-            "(SELECT tm.display_name FROM tenant_member tm WHERE tm.id = p.price_changed_by)";
+    /**
+     * «Кто изменил» и «Кто изменил цену» — подписью «Имя (логин, ID N)» (задача
+     * 0373, решение владельца 23.10.2026, пункт 5а). Выражение одно на клетку,
+     * отбор и сортировку, поэтому подпись собирает SQL-запись
+     * {@code MemberSignature.sql}, а не Java после запроса: значение из меню
+     * обязано совпасть с клеткой буква в букву.
+     */
+    private static final String UPDATED_BY_NAME = MemberSignature.sqlOf("p.updated_by");
+    private static final String PRICE_CHANGED_BY_NAME = MemberSignature.sqlOf("p.price_changed_by");
 
     /**
      * Разрешённые сортировки: имя из запроса → выражение SQL.
@@ -1316,7 +1322,9 @@ public class CatalogService {
         return jdbc.query("""
                 SELECT a.id, a.is_verified, b.name AS brand, m.name AS model,
                        g.name AS generation, a.year_from, a.year_to,
-                       tm.display_name AS set_by, a.set_at
+                """
+                // Кто задал — подписью (задача 0373, пункт 5а).
+                + "       " + MemberSignature.sql("tm") + " AS set_by, a.set_at\n" + """
                   FROM part_applicability a
                   LEFT JOIN tenant_member tm ON tm.id = a.set_by
                   JOIN catalog.brand b ON b.id = a.brand_id
@@ -1738,10 +1746,8 @@ public class CatalogService {
                        p.package_weight_kg, p.package_length_mm,
                        p.package_width_mm, p.package_height_mm,
                        p.created_at, p.updated_at, p.price_changed_at,
-                       (SELECT tm.display_name FROM tenant_member tm
-                         WHERE tm.id = p.updated_by) AS updated_by_name,
-                       (SELECT tm.display_name FROM tenant_member tm
-                         WHERE tm.id = p.price_changed_by) AS price_changed_by_name,
+                       """ + UPDATED_BY_NAME + " AS updated_by_name, "
+                       + PRICE_CHANGED_BY_NAME + " AS price_changed_by_name," + """
                        (SELECT count(*) FROM part_photo ph
                          WHERE ph.part_id = p.id AND ph.status = 'PROCESSED') AS photo_count,
                        """

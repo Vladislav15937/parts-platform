@@ -212,8 +212,9 @@ public class PartHistoryService {
      * владельца 23.10.2026: «мы должны идентифицировать сотрудника на 100%»).
      * Подпись собирает {@code MemberSignature}, одна на проект.
      *
-     * <p>Лента движений подписана по-прежнему именем: решение касалось
-     * «Истории изменений», а не движений склада.
+     * <p>Лента движений подписана так же, выражением {@code MemberSignature.sql}:
+     * решение владельца 23.10.2026 (пункт 5а) распространило подпись на всё,
+     * где назван автор, — включая «Движение товара».
      */
     private static String authorOf(java.sql.ResultSet rs) throws java.sql.SQLException {
         return MemberSignature.of(rs.getString("author"), rs.getString("author_login"),
@@ -415,7 +416,10 @@ public class PartHistoryService {
                                    AND di.part_id = m.part_id
                                  ORDER BY di.id LIMIT 1) AS price,
                                inv.id AS inventory_id,
-                               who.display_name AS author
+                        """
+                        // Автор движения — подписью «Имя (логин, ID N)», как в «Изменениях»
+                        // (задача 0373, решение владельца 23.10.2026, пункт 5а).
+                        + "       " + MemberSignature.sql("who") + " AS author\n" + """
                           FROM stock_movement m
                           LEFT JOIN stock_document d  ON d.id = m.document_id
                           LEFT JOIN warehouse wf      ON wf.id = m.from_warehouse_id
@@ -502,7 +506,8 @@ public class PartHistoryService {
     private List<Movement> heldByDeals(long partId) {
         return jdbc.query("""
                         SELECT i.added_at, d.number AS deal_number, i.status, i.quantity, i.price,
-                               w.name AS warehouse, who.display_name AS author
+                               w.name AS warehouse,
+                        """ + "       " + MemberSignature.sql("who") + " AS author\n" + """
                           FROM deal_item i
                           JOIN deal d ON d.id = i.deal_id
                           LEFT JOIN warehouse w ON w.id = i.warehouse_id

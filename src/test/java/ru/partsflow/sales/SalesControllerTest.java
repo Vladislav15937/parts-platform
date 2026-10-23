@@ -632,7 +632,7 @@ class SalesControllerTest extends PostgresTestBase {
                 .contains("Срок резерва продлён до " + java.time.format.DateTimeFormatter
                         .ofPattern("d MMMM", java.util.Locale.of("ru"))
                         .withZone(java.time.ZoneOffset.UTC).format(until))
-                .contains("\"authorName\":\"Продавец\"");
+                .contains("\"authorName\":\"Продавец (");
     }
 
     /**
@@ -1166,7 +1166,7 @@ class SalesControllerTest extends PostgresTestBase {
         mvc.perform(get("/api/deals?customerId=" + customer).session(login("seller")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].managerId").value(sellerId))
-                .andExpect(jsonPath("$[0].managerName").value("Продавец"));
+                .andExpect(jsonPath("$[0].managerName").value(org.hamcrest.Matchers.startsWith("Продавец (")));
     }
 
     /**
@@ -1463,7 +1463,8 @@ class SalesControllerTest extends PostgresTestBase {
         mvc.perform(get("/api/deals/registry?q=" + publicCodeOf(alien)).session(session))
                 .andExpect(jsonPath("$.items[?(@.id == %d)]".formatted(dealAlien)).isNotEmpty())
                 .andExpect(jsonPath("$.items[?(@.id == %d)].managerName".formatted(dealAlien))
-                        .value("Второй продавец"));
+                        .value(org.hamcrest.Matchers.hasItem(
+                                org.hamcrest.Matchers.startsWith("Второй продавец ("))));
     }
 
     /**

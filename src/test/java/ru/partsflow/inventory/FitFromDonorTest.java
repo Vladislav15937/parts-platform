@@ -122,7 +122,7 @@ class FitFromDonorTest extends PostgresTestBase {
         assertThat(fit.get("generation").isNull()).as("поколение донора не записано").isFalse();
         assertThat(fit.get("verified").asBoolean())
                 .as("поставила машина, а не человек").isFalse();
-        assertThat(fit.get("setBy").asText()).as("автор приёмки").isEqualTo("Приёмщик");
+        assertThat(fit.get("setBy").asText()).as("автор приёмки").startsWith("Приёмщик (");
         assertThat(fit.get("setAt").isNull()).as("момент записи").isFalse();
 
         // Как у Bazon: «Применимость» установлена тем же моментом, что «Товар создан».
@@ -185,7 +185,7 @@ class FitFromDonorTest extends PostgresTestBase {
 
         JsonNode fits = json(get("/api/parts/catalog/" + part + "/applicability"), "vladelec");
         assertThat(fits).hasSize(1);
-        assertThat(fits.get(0).get("setBy").asText()).isEqualTo("Владелец");
+        assertThat(fits.get(0).get("setBy").asText()).startsWith("Владелец (");
     }
 
     @Test
@@ -225,7 +225,7 @@ class FitFromDonorTest extends PostgresTestBase {
         }
         assertThat(mine).as("позиции нет в списке «Применимость подробно»").isNotNull();
         assertThat(mine.get("engineMatters").asBoolean()).isTrue();
-        assertThat(mine.get("setBy").asText()).isEqualTo("Приёмщик");
+        assertThat(mine.get("setBy").asText()).startsWith("Приёмщик (");
         assertThat(mine.get("setAt").isNull()).isFalse();
         assertThat(page.get("total").asLong()).isPositive();
     }

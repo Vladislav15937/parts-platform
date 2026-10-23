@@ -38,11 +38,27 @@ class NotFoundMappingTest extends PostgresTestBase {
     @Autowired
     private MockMvc mvc;
 
+    /**
+     * Вошедший сотрудник кабинета, а не голый пользователь Spring: пути
+     * кабинета пускают только его (с задачи 0044 изменяющие — тоже, права
+     * решают методы). Права — приёмщика до переноса: проверка про коды
+     * ответа, а не про права, и путь обязан дойти до диспетчера.
+     */
+    private static org.springframework.test.web.servlet.request.RequestPostProcessor priyomshchik() {
+        var principal = new ru.partsflow.platform.security.TenantPrincipal(
+                "t_000001", 1L, 1L, "priyomshchik", "Приёмщик", "STOREKEEPER", true, false,
+                java.util.Set.of("intake.receive", "part.publish", "import.manage"));
+        return org.springframework.security.test.web.servlet.request
+                .SecurityMockMvcRequestPostProcessors.authentication(
+                        new ru.partsflow.platform.security.TenantAuthenticationToken(
+                                principal, principal.getAuthorities()));
+    }
+
     @Test
     @DisplayName("Неизвестный путь под /api — 404")
     void unknownApiPathIsNotFound() throws Exception {
         mvc.perform(post("/api/parts/opechatka/net-takoy-operacii").with(csrf())
-                        .with(user("priyomshchik").roles("STOREKEEPER"))
+                        .with(priyomshchik())
                         .contentType("application/json").content("{}"))
                 .andExpect(status().isNotFound());
     }
@@ -56,7 +72,7 @@ class NotFoundMappingTest extends PostgresTestBase {
     @Test
     @DisplayName("Верный адрес неверным методом — 405, а не пятисотка")
     void wrongMethodIsNotAServerError() throws Exception {
-        mvc.perform(post("/api/parts/42").with(csrf()).with(user("priyomshchik").roles("STOREKEEPER"))
+        mvc.perform(post("/api/parts/42").with(csrf()).with(priyomshchik())
                         .contentType("application/json").content("{}"))
                 .andExpect(status().isMethodNotAllowed());
     }
@@ -69,7 +85,7 @@ class NotFoundMappingTest extends PostgresTestBase {
     @Test
     @DisplayName("Неразбираемое тело — 400, а не пятисотка")
     void unreadableBodyIsClientError() throws Exception {
-        mvc.perform(post("/api/parts/publication").with(csrf()).with(user("priyomshchik").roles("STOREKEEPER"))
+        mvc.perform(post("/api/parts/publication").with(csrf()).with(priyomshchik())
                         .contentType("application/json")
                         .content("{\"partIds\": \"не список\"}"))
                 .andExpect(status().isBadRequest());
@@ -81,7 +97,7 @@ class NotFoundMappingTest extends PostgresTestBase {
         // Перенос принимает два файла формой. Запрос телом в JSON отвечал
         // «внутренней ошибкой», и владелец, подавший файлы не тем способом,
         // шёл искать поломку сервера — при том что ошибка его.
-        mvc.perform(post("/api/import/bazon").with(csrf()).with(user("priyomshchik").roles("STOREKEEPER"))
+        mvc.perform(post("/api/import/bazon").with(csrf()).with(priyomshchik())
                         .contentType("application/json")
                         .content("{}"))
                 .andExpect(status().isBadRequest());

@@ -101,7 +101,7 @@ class MarketplaceFeedJournalTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.items.length()").value(1))
                 .andExpect(jsonPath("$.items[0].kind").value("Выгрузка"))
                 .andExpect(jsonPath("$.items[0].subject").value("Новые"))
-                .andExpect(jsonPath("$.items[0].author").value("owner"))
+                .andExpect(jsonPath("$.items[0].author").value(org.hamcrest.Matchers.startsWith("owner (ID ")))
                 .andExpect(jsonPath("$.items[0].authorRole").value("OWNER"))
                 .andExpect(jsonPath("$.items[0].changes.length()").value(1))
                 .andExpect(jsonPath("$.items[0].changes[0].label").value("Состояние выгрузки"))
@@ -260,7 +260,7 @@ class MarketplaceFeedJournalTest extends PostgresTestBase {
         journal().andExpect(jsonPath("$.items.length()").value(1))
                 .andExpect(jsonPath("$.items[0].action").value("Выгрузка удалена"))
                 .andExpect(jsonPath("$.items[0].subject").value("Новые"))
-                .andExpect(jsonPath("$.items[0].author").value("owner"));
+                .andExpect(jsonPath("$.items[0].author").value(org.hamcrest.Matchers.startsWith("owner (ID ")));
         assertThat(inTenant(() -> jdbc.queryForObject(
                 "SELECT deleted_at IS NOT NULL FROM marketplace_account WHERE id = ?",
                 Boolean.class, accountId))).isTrue();

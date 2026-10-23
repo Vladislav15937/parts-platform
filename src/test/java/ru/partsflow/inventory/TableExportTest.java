@@ -137,7 +137,28 @@ class TableExportTest {
         assertThat(quoted(screen.group(1)))
                 .as("кнопку «Скачать таблицу» экран показывает не тем, кому сервер отдаёт файл "
                         + "(EXPORT_ROLES против TableExport.ALLOWED)")
-                .isEqualTo(quoted(TableExport.ALLOWED));
+                .isEqualTo(rolesHolding(TableExport.ALLOWED));
+    }
+
+    /**
+     * Кому сервер отдаёт файл, словами прежних ролей: владелец (все права
+     * всегда) и те роли переноса {@code tenant/101}, чей набор несёт право
+     * из {@code ALLOWED}. Экран до задачи 0044 знает только роли, а сервер
+     * решает правом — сверять приходится через раздачу, иначе две половины
+     * говорили бы на разных языках и сверка не значила бы ничего.
+     */
+    private static Set<String> rolesHolding(String expression) throws IOException {
+        Matcher key = Pattern.compile("hasAuthority\\('([a-z_.]+)'\\)").matcher(expression);
+        assertThat(key.find()).as("ALLOWED — право, а не роль: %s", expression).isTrue();
+        Set<String> roles = new TreeSet<>(Set.of("OWNER"));
+        Matcher pair = Pattern.compile("\\('([A-Z]+)',\\s*'([a-z_.]+)'\\)").matcher(
+                Files.readString(Path.of("db/changelog/tenant/101-access-roles-seed.sql")));
+        while (pair.find()) {
+            if (pair.group(2).equals(key.group(1))) {
+                roles.add(pair.group(1));
+            }
+        }
+        return roles;
     }
 
     /** Ключ {@code Класс#метод} → выражение {@code @PreAuthorize} (метод, иначе класс; пусто — нет). */

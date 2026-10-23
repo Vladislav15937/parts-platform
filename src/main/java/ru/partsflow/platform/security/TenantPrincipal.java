@@ -4,8 +4,10 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Вошедший сотрудник.
@@ -15,7 +17,25 @@ import java.util.List;
  * номер мог кто угодно. Теперь схема берётся отсюда, то есть из сессии, а сессия
  * выдана после проверки пароля в этой самой схеме — подменить её запросом нельзя.
  *
- * @param memberId идентификатор сотрудника внутри арендатора
+ * <p><b>Права лежат здесь снимком — набором ключей {@link Permission}, — и это
+ * то же решение, что у роли до задачи 0044.</b> Читаются они при входе
+ * ({@link MemberAccess}), а всё, что их меняет (роль, её набор, право поверх
+ * роли), закрывает сессии затронутых сотрудников: «отозвали право — сессия
+ * обязана узнать сразу» (docs/sessions.md, §6). Спрашивать базу на каждом
+ * запросе значило бы ещё один запрос к схеме арендатора на каждый клик ради
+ * события, которое случается раз в месяц.
+ *
+ * @param memberId    идентификатор сотрудника внутри арендатора
+ * @param role        прежняя жёсткая роль из {@code tenant_member.role}. Прав она
+ *                    больше не решает: ей подписан снимок роли автора в журнале
+ *                    ({@code audit_log.changed_by_role}), и по ней узнаётся
+ *                    администратор сервиса
+ * @param owner       назначена роль «Владелец»: все права всегда, набор
+ *                    не спрашивается вовсе (ответ владельца 23.10.2026, пункт 7)
+ * @param permissions права не-владельца: права роли плюс добавленные поверх
+ *                    роли минус снятые. {@code null} — сессия заведена сборкой
+ *                    до задачи 0044 и прав ещё не прочла; её дочитывает
+ *                    {@link LegacySessionUpgrade} до первой проверки
  */
 public record TenantPrincipal(String tenantSchema,
                               long tenantId,
@@ -23,7 +43,9 @@ public record TenantPrincipal(String tenantSchema,
                               String login,
                               String displayName,
                               String role,
-                              boolean active) implements UserDetails {
+                              boolean active,
+                              boolean owner,
+                              Set<String> permissions) implements UserDetails {
 
     /**
      * Роль администратора сервиса, вошедшего в кабинет по разрешению
@@ -31,29 +53,42 @@ public record TenantPrincipal(String tenantSchema,
      */
     public static final String SERVICE_ADMIN_ROLE = "ADMIN";
 
+    public TenantPrincipal {
+        permissions = permissions == null ? null : Set.copyOf(permissions);
+    }
+
+    /**
+     * Ключи прав — как полномочия Spring Security: на них отвечает
+     * {@code hasAuthority('deal.sell')} в {@code @PreAuthorize}.
+     *
+     * <p>Владельцу и администратору сервиса — <b>весь справочник</b>,
+     * собранный в момент вопроса, а не при входе: право, появившееся
+     * в следующей сборке, у них есть сразу, сколько бы ни жила сессия.
+     * Набора роли «Владелец» и прав поверх неё код не читает вовсе — их
+     * и не бывает, а если бы кто-то записал их в базу прямым SQL, сузить
+     * владельца они всё равно не смогли бы.
+     *
+     * <p>Администратор сервиса (задача 0042) получает права владельца одним
+     * этим местом, как и раньше, плюс {@code ROLE_ADMIN}: по нему
+     * {@code SecurityConfig} закрывает от него то, что владелец оставляет
+     * себе, — кто входит в кабинет.
+     */
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
-        // Роли живут в tenant_member: у одного человека одна роль в одном
-        // арендаторе, поэтому список из одного элемента.
-        //
-        // Кроме администратора сервиса. Решение владельца продукта
-        // от 8 сентября 2026 (tasks/0042): администратор «должен иметь
-        // возможность делать абсолютно всё в личном кабинете владельца
-        // разборки» — значит права у него ровно владельца, и выдаются они
-        // одним местом, а не дописыванием ADMIN в полторы сотни
-        // @PreAuthorize: забытое место молча отняло бы у него возможность,
-        // а новое — заводилось бы без него. Своя роль при этом остаётся
-        // первой: по ней журнал отличает его правку от правки владельца,
-        // а то, что владелец оставляет себе, — кто входит в кабинет:
-        // сотрудники, их пароли и разрешение самому администратору, —
-        // закрыто от него правилом на эти пути в SecurityConfig
-        // (ACCESS_CONTROL). Иначе после первого визита у него оставался бы
-        // вход, который отзыв разрешения не закрывает (разбор PR 393).
+        List<GrantedAuthority> authorities = new ArrayList<>();
         if (isServiceAdmin()) {
-            return List.of(new SimpleGrantedAuthority("ROLE_" + role),
-                    new SimpleGrantedAuthority("ROLE_OWNER"));
+            authorities.add(new SimpleGrantedAuthority("ROLE_" + SERVICE_ADMIN_ROLE));
         }
-        return List.of(new SimpleGrantedAuthority("ROLE_" + role));
+        if (actsAsOwner()) {
+            for (Permission permission : Permission.values()) {
+                authorities.add(new SimpleGrantedAuthority(permission.key()));
+            }
+        } else if (permissions != null) {
+            for (String key : permissions) {
+                authorities.add(new SimpleGrantedAuthority(key));
+            }
+        }
+        return authorities;
     }
 
     /** Администратор сервиса в кабинете разборки, а не её сотрудник. */
@@ -62,14 +97,25 @@ public record TenantPrincipal(String tenantSchema,
     }
 
     /**
-     * Права владельца: сам владелец либо администратор сервиса.
-     *
-     * <p>Для тех немногих мест, где роль сравнивается в коде, а не в
-     * {@code @PreAuthorize}: там полномочие владельца проверяется строкой,
-     * и администратор, не названный в ней, получил бы меньше, чем ему дано.
+     * Права владельца: роль «Владелец» либо администратор сервиса.
      */
     public boolean actsAsOwner() {
-        return "OWNER".equals(role) || isServiceAdmin();
+        return owner || isServiceAdmin();
+    }
+
+    /**
+     * Есть ли право — для тех мест, где оно решает не путь, а содержимое
+     * ответа или признак кнопки (деньги в истории позиции, удаление
+     * выполненного документа). Тот же ответ, что у {@code hasAuthority}.
+     */
+    public boolean can(Permission permission) {
+        return actsAsOwner() || (permissions != null && permissions.contains(permission.key()));
+    }
+
+    /** Те же права с прочитанным набором — для дочитывания прежней сессии. */
+    public TenantPrincipal withAccess(boolean owner, Set<String> permissions) {
+        return new TenantPrincipal(tenantSchema, tenantId, memberId, login, displayName, role,
+                active, owner, permissions);
     }
 
     /**
