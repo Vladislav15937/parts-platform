@@ -93,6 +93,12 @@ class AuthorSignedTest {
                     "заведение учётной записи администратора сервиса — запись")),
             Map.entry("platform/admin/ServiceAdminAuthenticationProvider.java", new Allowed(2,
                     "вход администратора сервиса: имя о себе")),
+            Map.entry("platform/security/AccessRoleService.java", new Allowed(2,
+                    "снимок журнала назначения роли: имя кладётся одинаковым в «было» и «стало»"
+                            + " (данные для поиска по вещи, OTHER_SEARCHABLE), а экран журнала печатает"
+                            + " только изменившиеся поля; вещь строки сотрудника подписывает"
+                            + " OrganizationAuditService — MemberSignature.sql, как в «Сотрудниках»."
+                            + " Стережёт AccessRoleHttpTest.journalSubjectIsRoleNameAndMemberSignature")),
             Map.entry("platform/audit/OrganizationAuditService.java", new Allowed(1,
                     "ключ снимка журнала в поиске по вещи — по нему ищут, не показывают")),
             Map.entry("shared/AuditedColumns.java", new Allowed(1,

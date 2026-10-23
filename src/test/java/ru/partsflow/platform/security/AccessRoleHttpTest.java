@@ -534,6 +534,51 @@ class AccessRoleHttpTest extends PostgresTestBase {
         assertThat(page).contains("Раскладывать по полкам").contains("Сборщик").contains("Продавать");
     }
 
+    /**
+     * Колонка «вещь» журнала правок у роли и у сотрудника (OrganizationAuditService, ветки CASE):
+     * роль — названием, сотрудник — подписью «Имя (логин, ID N)», той же, какой его называет
+     * экран «Сотрудники» (решение владельца 23.10.2026, задача 0373, п. 5а и 10). Сверяется
+     * с ответом самого `GET /api/members`, а не с текстом, собранным тестом заново.
+     */
+    @Test
+    @DisplayName("Журнал правок: у строки роли — её название, у строки сотрудника — «Имя (логин, ID N)», как в «Сотрудниках»")
+    void journalSubjectIsRoleNameAndMemberSignature() throws Exception {
+        MockHttpSession owner = login("vladelec");
+        String role = "Подписная " + System.nanoTime();
+        long roleId = json.readTree(text(mvc.perform(post("/api/access/roles").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"%s\",\"permissions\":[\"deal.sell\"]}".formatted(role)))
+                .andExpect(status().isCreated()))).path("id").asLong();
+        long ivan = inTenant(() -> {
+            jdbc.update("DELETE FROM tenant_member WHERE login = 'ivanpodp'");
+            return jdbc.queryForObject("""
+                    INSERT INTO tenant_member (display_name, role, login, password_hash)
+                    VALUES ('Иван Подписной', 'VIEWER', 'ivanpodp', 'x') RETURNING id""", Long.class);
+        });
+        assign(owner, ivan, roleId, "{}").andExpect(status().isOk());
+
+        JsonNode shown = null;
+        for (JsonNode m : json.readTree(text(mvc.perform(get("/api/members").session(owner))
+                .andExpect(status().isOk())))) {
+            if (m.path("id").asLong() == ivan) {
+                shown = m;
+            }
+        }
+        assertThat(shown).as("сотрудник есть в «Сотрудниках»").isNotNull();
+        String signature = MemberSignature.of(shown.path("displayName").asText(),
+                shown.path("login").asText(), shown.path("number").asLong());
+        assertThat(signature).startsWith("Иван Подписной (ivanpodp, ID ");
+
+        List<String> subjects = new ArrayList<>();
+        json.readTree(text(mvc.perform(get("/api/organization/audit").session(owner))
+                        .andExpect(status().isOk())))
+                .findParents("kind").forEach(e -> subjects.add(e.path("kind").asText() + ": "
+                        + (e.path("subject").isNull() ? "—" : e.path("subject").asText())));
+        assertThat(subjects).as("вещь в журнале правок")
+                .contains("Роль: " + role)
+                .contains("Сотрудник: " + signature);
+    }
+
     // ------------------------------------------------------------ вспомогательное
 
     /**

@@ -272,15 +272,16 @@ class LegacyAccessAfterDeployTest extends PostgresTestBase {
     }
 
     /**
-     * Ответ владельца 24.10.2026, пункт 1(б): удалённая клиентом роль «Ревизор» — отказ,
-     * журнал ревизору прежнего образа после удаления не открыт. Метки, различающей «не заводили»
-     * и «удалили», в схеме пока нет (её заводит migrator), и {@code MemberAccess} оба случая
-     * решает одинаково — журналом. Поэтому здесь сверка с прежним кодом, как у соседнего
-     * случая: появится метка — этот тест обязан стать проверкой отказа, а не уйти молча.
+     * Ответ владельца 24.10.2026, пункт 1(б): удалённая клиентом роль «Ревизор» — отказ.
+     * Метка «роль переноса заводилась» пришла (`tenant/102`, PR 509), и `MemberAccess`
+     * отличает «удалили» от «не заводили» (соседний случай выше — журнал). Значит тест
+     * стал тем, чем обещал стать: проверкой отказа. От прежнего кода ревизор теперь
+     * отличается ровно журналом — четыре пути журнала правок и входов, и больше ничем;
+     * сверка требует именно этот перечень, а не «что-нибудь закрылось».
      */
     @Test
-    @DisplayName("Ревизор после удаления «Ревизора»: сегодня проходит то же, что прежним кодом (пункт 1б ждёт метки)")
-    void auditorAddedAfterAuditorRoleDeleted() throws Exception {
+    @DisplayName("Ревизор после удаления клиентом «Ревизора» — отказ в журнале правок и входов (ответ владельца 24.10.2026, 1б), остальное как прежним кодом")
+    void auditorAddedAfterAuditorRoleDeletedIsDenied() throws Exception {
         registry(DELETED_ID, DELETED, DELETED_CODE);
         assertThat(jdbc.queryForObject("SELECT seeded_from FROM " + DELETED
                 + ".access_role r JOIN " + DELETED + ".tenant_member m ON m.access_role_id = r.id"
@@ -295,7 +296,18 @@ class LegacyAccessAfterDeployTest extends PostgresTestBase {
         Map<String, String> mismatches = new TreeMap<>();
         compare(baseline(), "AUDITOR", "ревизор после удаления роли", login(DELETED_CODE, "auditor2"),
                 mismatches);
-        assertThat(mismatches).isEmpty();
+        String who = " · ревизор после удаления роли";
+        assertThat(mismatches).as("от прежнего кода отличается ровно журналом — пропускал, теперь отказ")
+                .containsExactlyInAnyOrderEntriesOf(Map.of(
+                        "GET /api/organization/audit" + who, "пропускал → deny",
+                        "GET /api/organization/audit/values" + who, "пропускал → deny",
+                        "GET /api/organization/sessions" + who, "пропускал → deny",
+                        "GET /api/organization/sessions/values" + who, "пропускал → deny"));
+
+        // И настоящими запросами, а не только решением права.
+        MockHttpSession auditor = login(DELETED_CODE, "auditor2");
+        mvc.perform(get("/api/organization/audit").session(auditor)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/organization/sessions").session(auditor)).andExpect(status().isForbidden());
     }
 
     // ----------------------------------------------------- настоящие запросы
