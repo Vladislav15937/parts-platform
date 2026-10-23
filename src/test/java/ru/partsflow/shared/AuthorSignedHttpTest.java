@@ -168,6 +168,49 @@ class AuthorSignedHttpTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.total").value(1));
     }
 
+    /**
+     * Колёса — та же клетка «Кто изменил» своим выражением ({@code WheelService.FILTERS}),
+     * свой контроллер с тем же разбором отбора и своя выгрузка файлом.
+     */
+    @Test
+    @DisplayName("Колёса: «Кто изменил» подписан в списке, меню, отборе и файле")
+    void wheelColumns() throws Exception {
+        inTenant(() -> {
+            Long wheel = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, product_line, qty_on_hand,
+                                      updated_by, price_changed_by)
+                    VALUES (1, 'Шина подписи', 3000, 'WHEEL', 1, ?, ?) RETURNING id""",
+                    Long.class, owner, owner);
+            jdbc.update("INSERT INTO part_wheel (part_id, kind) VALUES (?, 'TYRE')", wheel);
+            return null;
+        });
+        MockHttpSession session = login();
+
+        mvc.perform(get("/api/wheels").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rows[0].wheel.updatedByName").value(OWNER))
+                .andExpect(jsonPath("$.rows[0].wheel.priceChangedByName").value(OWNER));
+        mvc.perform(get("/api/wheels/values").param("column", "updatedBy").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasItem(OWNER)));
+        mvc.perform(get("/api/wheels").param("filter", "updatedBy:" + OWNER).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1));
+        mvc.perform(get("/api/wheels").param("filter", "updatedBy:" + NAMESAKE).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0));
+
+        String file = mvc.perform(get("/api/wheels/export").param("filter", "updatedBy:" + OWNER)
+                        .session(session))
+                .andExpect(status().isOk())
+                .andReturn().getResponse()
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        // Заголовок и одна строка: отбор с запятой в значении дошёл до файла целиком.
+        org.assertj.core.api.Assertions.assertThat(file.strip().split("\n"))
+                .as("файл колёс по отбору «Кто изменил»").hasSize(2);
+        org.assertj.core.api.Assertions.assertThat(file).contains("\"" + OWNER + "\"");
+    }
+
     @Test
     @DisplayName("Перевозки: кто перевёз и кто удалил — подписью")
     void moveJournal() throws Exception {
@@ -253,16 +296,22 @@ class AuthorSignedHttpTest extends PostgresTestBase {
     @Test
     @DisplayName("Отчёт по менеджерам: менеджер подписан — по нему считают премию")
     void managerReport() throws Exception {
+        // Месяц и момент выдачи — от одних часов, JVM: задача CI «Часы вперёд»
+        // сдвигает только их, и now() базы рядом с YearMonth.now() теста
+        // разъезжался на месяц — отчёт честно отвечал пустым (PR 507).
+        // Середина месяца — чтобы часовой пояс базы не увёл выдачу в соседний.
+        YearMonth month = YearMonth.now();
+        java.sql.Timestamp closed = java.sql.Timestamp.valueOf(month.atDay(15).atTime(12, 0));
         inTenant(() -> {
             jdbc.update("""
                     INSERT INTO deal_item (deal_id, part_id, quantity, price, status, warehouse_id)
                     VALUES (?, ?, 1, 1000, 'ISSUED', ?)""", deal, part, from);
-            jdbc.update("UPDATE deal SET status = 'ISSUED', closed_at = now(), issued_at = now()"
-                    + " WHERE id = ?", deal);
+            jdbc.update("UPDATE deal SET status = 'ISSUED', closed_at = ?, issued_at = ?"
+                    + " WHERE id = ?", closed, closed, deal);
             return null;
         });
 
-        mvc.perform(get("/api/reports/managers").param("month", YearMonth.now().toString())
+        mvc.perform(get("/api/reports/managers").param("month", month.toString())
                         .session(login()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.rows[0].displayName").value(OWNER));

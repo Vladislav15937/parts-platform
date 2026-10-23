@@ -41,9 +41,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p><b>Чего перебор не ловит — и это сказано вслух.</b> Имя, взятое мимо
  * колонки: {@code TenantPrincipal.displayName()} (вошедший о себе — шапка
  * экрана) и имя администратора сервиса из {@code public.service_admin}.
- * Он считает упоминания в файле, а не их смысл: внутри разобранного файла
- * с незакреплённым числом (`ANY`) новое место пройдёт молча, поэтому таких
- * файлов два, и оба — про самого сотрудника, а не про автора записи.
+ * Он считает упоминания в файле, а не их смысл: новое место в разобранном
+ * файле краснеет числом, но заменённое одно на другое (убрали одно чтение,
+ * добавили другое) пройдёт молча. Число закреплено у всех файлов, и правка
+ * реестра сотрудников (задача 0044) тоже обязана пройти этот разбор.
  */
 class AuthorSignedTest {
 
@@ -51,9 +52,6 @@ class AuthorSignedTest {
 
     /** Колонка имени сотрудника и прежний поиск имён по номерам. */
     private static final Pattern NAME = Pattern.compile("display_name|\\bnamesOf\\(");
-
-    /** Число не закреплено: файл про самого сотрудника, а не про автора. */
-    private static final int ANY = -1;
 
     private record Allowed(int count, String reason) {
     }
@@ -71,11 +69,11 @@ class AuthorSignedTest {
             Map.entry("inventory/PartHistoryService.java", new Allowed(3,
                     "«Изменения» карточки (PR 499): имя читается парой с логином"
                             + " и номером и собирается MemberSignature.of в authorOf")),
-            Map.entry("platform/security/MemberService.java", new Allowed(ANY,
+            Map.entry("platform/security/MemberService.java", new Allowed(11,
                     "реестр сотрудников: заведение, экран «Сотрудники» (номер, логин"
-                            + " и имя там отдельными колонками) и снимок журнала «Имя»;"
-                            + " namesOf больше не зовёт никто (задача 0373)")),
-            Map.entry("platform/security/MemberAuthenticationProvider.java", new Allowed(ANY,
+                            + " и имя там отдельными колонками) и снимок журнала «Имя»."
+                            + " namesOf снят вместе с последним вызывающим (задача 0373)")),
+            Map.entry("platform/security/MemberAuthenticationProvider.java", new Allowed(2,
                     "вход: имя вошедшего о себе, для шапки экрана, а не автор записи")),
             Map.entry("platform/tenant/TenantProvisioning.java", new Allowed(1,
                     "заведение владельца при провижининге — запись, не показ")),
@@ -127,7 +125,7 @@ class AuthorSignedTest {
                         + " Подпишите — MemberSignature.sql(псевдоним) в запросе"
                         + " или MemberSignatures.of(номера строк) — либо разберите место"
                         + " и внесите файл в ALLOWED с причиной");
-            } else if (allowed.count() != ANY && allowed.count() != count) {
+            } else if (allowed.count() != count) {
                 problems.add(file + ": упоминаний " + count + ", разобрано " + allowed.count()
                         + " — новое место показывает сотрудника одним именем? Разберите заново");
             }
