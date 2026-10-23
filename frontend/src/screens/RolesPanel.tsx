@@ -39,6 +39,7 @@ export function RolesPanel({
   const [error, setError] = useState('');
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
+  const noCatalog = sections.length === 0;
 
   const open = (role: AccessRole | null) => {
     setError('');
@@ -53,15 +54,23 @@ export function RolesPanel({
         Название роли
         <input value={name} onChange={(e) => setName(e.target.value)} />
       </label>
-      <AccessPermissions
-        sections={sections}
-        chosen={chosen}
-        onToggle={(key, on) => setChosen((was) => {
-          const next = new Set(was);
-          if (on) next.add(key); else next.delete(key);
-          return next;
-        })}
-      />
+      {/* Без справочника редактор пуст, и «Сохранить» записало бы роли набор,
+          которого человек не видел, — у прежней роли это снятые молча права.
+          Поэтому сохранение гаснет, а причина сказана (то же, что у прав
+          сотрудника в MembersScreen). */}
+      {noCatalog ? (
+        <p className="note">Список прав не загрузился — обновите страницу.</p>
+      ) : (
+        <AccessPermissions
+          sections={sections}
+          chosen={chosen}
+          onToggle={(key, on) => setChosen((was) => {
+            const next = new Set(was);
+            if (on) next.add(key); else next.delete(key);
+            return next;
+          })}
+        />
+      )}
       {role !== null && role.members > 0 && (
         <p className="note">
           Роль назначена: {employees(role.members)}.
@@ -72,7 +81,7 @@ export function RolesPanel({
       <div className="row">
         <button
           type="button"
-          disabled={busy || name.trim() === ''}
+          disabled={busy || noCatalog || name.trim() === ''}
           onClick={() => void save(role)}
         >
           {busy ? 'Сохраняем…' : 'Сохранить роль'}

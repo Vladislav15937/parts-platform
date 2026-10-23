@@ -17,10 +17,12 @@ describe('роли и права на экране сотрудников', () =
   let sent: Array<{ url: string; method: string; body: unknown }>;
   let rolesAnswer: () => Response;
   let membersAnswer: () => Response;
+  let catalogFails: boolean;
 
   beforeEach(() => {
     forgetCatalog();
     sent = [];
+    catalogFails = false;
     rolesAnswer = () => json(ROLES);
     membersAnswer = () => json(MEMBERS);
     vi.stubGlobal('confirm', () => true);
@@ -45,6 +47,7 @@ describe('роли и права на экране сотрудников', () =
         return rolesAnswer();
       }
       if (url.endsWith('/api/access/catalog')) {
+        if (catalogFails) return new Response('{"message":"нет"}', { status: 500 });
         return json([
           { title: 'Приёмка', permissions: [
             { key: 'intake.receive', title: 'Принимать товар', hint: null }] },
@@ -147,6 +150,20 @@ describe('роли и права на экране сотрудников', () =
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toEqual({ url: '/api/access/roles/11', method: 'PUT',
       body: { name: 'Приёмщик-2', permissions: ['deal.sell', 'intake.receive'] } });
+  });
+
+  it('без справочника прав роль не сохранить: сказано почему, набор не затирается', async () => {
+    catalogFails = true;
+    render(<MembersScreen />);
+    await waitFor(() => screen.getByRole('button', { name: 'Изменить роль: Приёмщик' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Изменить роль: Приёмщик' }));
+
+    const save = screen.getByRole('button', { name: 'Сохранить роль' }) as HTMLButtonElement;
+    const editor = save.closest('.card') as HTMLElement;
+    expect(within(editor).getByText('Список прав не загрузился — обновите страницу.')).toBeTruthy();
+    expect(save.disabled, 'роль без справочника сохраняется пустым набором').toBe(true);
+    fireEvent.click(save);
+    expect(sent).toEqual([]);
   });
 
   it('свободная роль удаляется DELETE по своему номеру', async () => {
