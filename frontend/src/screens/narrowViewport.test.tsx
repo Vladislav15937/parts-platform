@@ -183,7 +183,7 @@ const SUPPLIES = [
 
 const MEMBERS = [
   {
-    id: 1, login: 'vladimir.petrov', displayName: 'Владимир Петров',
+    id: 1, number: 1024, login: 'vladimir.petrov', displayName: 'Владимир Петров',
     role: 'OWNER', active: true, lastLoginAt: '2026-09-05T20:01:00Z',
   },
 ];

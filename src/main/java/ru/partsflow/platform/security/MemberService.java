@@ -121,7 +121,7 @@ public class MemberService {
     @Transactional(readOnly = true)
     public List<Member> all() {
         return jdbc.query("""
-                SELECT id, login, display_name, role, is_active, last_login_at
+                SELECT id, number, login, display_name, role, is_active, last_login_at
                   FROM tenant_member
                  WHERE login IS NOT NULL OR role = 'ADMIN'
                  ORDER BY id""", MemberService::map);
@@ -331,7 +331,7 @@ public class MemberService {
 
     public Member byId(Long memberId) {
         List<Member> found = jdbc.query("""
-                SELECT id, login, display_name, role, is_active, last_login_at
+                SELECT id, number, login, display_name, role, is_active, last_login_at
                   FROM tenant_member WHERE id = ?""", MemberService::map, memberId);
 
         if (found.isEmpty()) {
@@ -369,6 +369,7 @@ public class MemberService {
     private static Member map(java.sql.ResultSet rs, int row) throws java.sql.SQLException {
         return new Member(
                 rs.getLong("id"),
+                rs.getLong("number"),
                 rs.getString("login"),
                 rs.getString("display_name"),
                 rs.getString("role"),
@@ -377,8 +378,16 @@ public class MemberService {
                         ? null : rs.getTimestamp("last_login_at").toInstant());
     }
 
-    /** Сотрудник без пароля: наружу хеш не отдаётся никогда. */
-    public record Member(Long id, String login, String displayName, String role,
+    /**
+     * Сотрудник без пароля: наружу хеш не отдаётся никогда.
+     *
+     * @param number видимый номер сотрудника (задача 0373, {@code tenant/097}):
+     *               порядковый внутри компании и неизменный, его показывают
+     *               человеку рядом с логином и именем — в отличие от {@code id},
+     *               который остаётся внутренним. Присваивает его умолчание
+     *               колонки при заведении, код его не пишет и не правит
+     */
+    public record Member(Long id, long number, String login, String displayName, String role,
                          boolean active, Instant lastLoginAt) {
     }
 
