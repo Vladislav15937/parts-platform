@@ -46,7 +46,7 @@ public class PaymentSourceController {
      * целостность данных».
      */
     @PostMapping
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('payment_sources.manage')")
     public ResponseEntity<PaymentSourceService.PaymentSourceView> create(
             @Valid @RequestBody CreateRequest request) {
         try {
@@ -60,13 +60,13 @@ public class PaymentSourceController {
     }
 
     @PostMapping("/{id}/archive")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('payment_sources.manage')")
     public PaymentSourceService.PaymentSourceView archive(@PathVariable Long id) {
         return sources.archive(id);
     }
 
     @PostMapping("/{id}/unarchive")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('payment_sources.manage')")
     public PaymentSourceService.PaymentSourceView unarchive(@PathVariable Long id) {
         return sources.unarchive(id);
     }

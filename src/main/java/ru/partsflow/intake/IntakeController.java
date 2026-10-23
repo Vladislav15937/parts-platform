@@ -45,11 +45,13 @@ public class IntakeController {
      * Заводит ожидаемый товар и двигает ожидаемую дату только владелец
      * (решение владельца продукта 30.09.2026): предзаказ по контейнеру в
      * пути — кабинетная работа и обещание покупателю, а не приёмка стоя у
-     * стеллажа. Остальным путям {@code /api/intake/**} достаётся общее
-     * правило {@code SecurityConfig}; здесь оно сужено явно, одной
-     * константой, а не литералом в каждом месте.
+     * стеллажа. С задачи 0044 это своё право «Ожидаемые позиции поставки»:
+     * при переносе его не получила ни одна роль, раздаёт его владелец.
+     * Остальные пути приёмки — право «Принимать товар» ({@code intake.receive}),
+     * до 0044 их закрывал от «Просмотра» общий запрет по методам
+     * в {@code SecurityConfig}.
      */
-    private static final String OWNER_ONLY = "hasRole('OWNER')";
+    private static final String EXPECTS = "hasAuthority('supply.expected')";
 
     private final IntakeService intake;
     private final IntakeReferenceService reference;
@@ -81,6 +83,7 @@ public class IntakeController {
     // ---------- поставки ----------
 
     @PostMapping("/supplies")
+    @PreAuthorize("hasAuthority('intake.receive')")
     public ResponseEntity<SupplyView> registerSupply(@Valid @RequestBody SupplyRequest request) {
         Supply supply = intake.registerSupply(
                 request.kind(), request.number(), request.supplierName(), CurrentUser.memberId());
@@ -92,7 +95,7 @@ public class IntakeController {
      * принято и сколько отложено под клиентов.
      */
     @GetMapping("/supplies/{id}/expected-parts")
-    @PreAuthorize(OWNER_ONLY)
+    @PreAuthorize(EXPECTS)
     public List<IntakeService.ExpectedPart> expectedParts(@PathVariable Long id) {
         return intake.expectedPartsOf(id);
     }
@@ -102,7 +105,7 @@ public class IntakeController {
      * количество. Остальное — после прихода, приёмкой.
      */
     @PostMapping("/supplies/{id}/expected-parts")
-    @PreAuthorize(OWNER_ONLY)
+    @PreAuthorize(EXPECTS)
     public ResponseEntity<List<IntakeService.ExpectedPart>> addExpectedPart(
             @PathVariable Long id, @Valid @RequestBody ExpectedPartRequest request) {
         try {
@@ -128,13 +131,14 @@ public class IntakeController {
      * продавцам пометку на сделках.
      */
     @PutMapping("/supplies/{id}/expected-on")
-    @PreAuthorize(OWNER_ONLY)
+    @PreAuthorize(EXPECTS)
     public SupplyView setExpectedOn(@PathVariable Long id,
                                     @Valid @RequestBody ExpectedOnRequest request) {
         return SupplyView.of(intake.setExpectedOn(id, request.expectedOn(), CurrentUser.memberId()));
     }
 
     @PostMapping("/supplies/{id}/arrived")
+    @PreAuthorize("hasAuthority('intake.receive')")
     public SupplyView markArrived(@PathVariable Long id,
                                   @RequestParam(required = false) LocalDate on) {
         return SupplyView.of(intake.markSupplyArrived(id, on));
@@ -143,6 +147,7 @@ public class IntakeController {
     // ---------- доноры ----------
 
     @PostMapping("/donors")
+    @PreAuthorize("hasAuthority('intake.receive')")
     public ResponseEntity<DonorView> registerDonor(@Valid @RequestBody DonorRequest request) {
         Donor donor = new Donor(request.brandId());
         donor.setModelId(request.modelId());
@@ -190,7 +195,7 @@ public class IntakeController {
     }
 
     @PostMapping("/donors/{id}/costs")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('donor.costs')")
     public List<DonorCostService.Cost> addCost(@PathVariable Long id,
                                                @Valid @RequestBody CostRequest request) {
         return costs.add(id, request.type(), request.amount(), request.incurredOn(),
@@ -198,7 +203,7 @@ public class IntakeController {
     }
 
     @DeleteMapping("/donors/{id}/costs/{costId}")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('donor.costs')")
     public List<DonorCostService.Cost> removeCost(@PathVariable Long id,
                                                   @PathVariable Long costId) {
         return costs.remove(id, costId);
@@ -213,11 +218,13 @@ public class IntakeController {
 
     /** Локация в логистической цепочке. Стадию разбора не двигает. */
     @PostMapping("/donors/{id}/location")
+    @PreAuthorize("hasAuthority('intake.receive')")
     public DonorView moveDonor(@PathVariable Long id, @RequestParam String location) {
         return DonorView.of(intake.moveDonor(id, location));
     }
 
     @PostMapping("/donors/{id}/dismantling")
+    @PreAuthorize("hasAuthority('intake.receive')")
     public DonorView startDismantling(@PathVariable Long id) {
         return DonorView.of(intake.startDismantling(id));
     }
@@ -225,6 +232,7 @@ public class IntakeController {
     // ---------- приёмка деталей ----------
 
     @PostMapping("/receipts")
+    @PreAuthorize("hasAuthority('intake.receive')")
     public ResponseEntity<ReceiptView> receive(@Valid @RequestBody ReceiptRequest request) {
         List<IntakeService.ItemRequest> items = request.items().stream()
                 .map(ItemRequest::toService)

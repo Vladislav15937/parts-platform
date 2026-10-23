@@ -28,7 +28,7 @@ import java.util.List;
 @RequestMapping("/api/company/print-settings")
 public class PrintSettingsController {
 
-    private static final String OWNER = "hasRole('OWNER')";
+    private static final String SETTINGS = "hasAuthority('settings.company')";
 
     private final PrintSettingsService settings;
 
@@ -37,13 +37,13 @@ public class PrintSettingsController {
     }
 
     @GetMapping
-    @PreAuthorize(OWNER)
+    @PreAuthorize(SETTINGS)
     public PrintSettingsService.PrintSettings read() {
         return settings.read();
     }
 
     @PutMapping
-    @PreAuthorize(OWNER)
+    @PreAuthorize(SETTINGS)
     public PrintSettingsService.PrintSettings write(@Valid @RequestBody UpdateRequest request) {
         return settings.update(request.extraText(), request.vatNote(),
                 request.clientSignature(), request.issuerSignature(),

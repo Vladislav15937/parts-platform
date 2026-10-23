@@ -43,10 +43,13 @@ public class MemberAuthenticationProvider implements AuthenticationProvider {
 
     private final JdbcTemplate jdbc;
     private final PasswordEncoder passwordEncoder;
+    private final MemberAccess access;
 
-    public MemberAuthenticationProvider(JdbcTemplate jdbc, PasswordEncoder passwordEncoder) {
+    public MemberAuthenticationProvider(JdbcTemplate jdbc, PasswordEncoder passwordEncoder,
+                                        MemberAccess access) {
         this.jdbc = jdbc;
         this.passwordEncoder = passwordEncoder;
+        this.access = access;
     }
 
     @Override
@@ -95,9 +98,13 @@ public class MemberAuthenticationProvider implements AuthenticationProvider {
 
         touchLastLogin(tenant.schemaName(), member.id());
 
+        // Права читаются здесь и лежат в сессии снимком (задача 0044): всё,
+        // что их меняет, закрывает сессии сотрудника — см. TenantPrincipal.
+        MemberAccess.Access rights = access.resolve(tenant.schemaName(), member.id());
         TenantPrincipal principal = new TenantPrincipal(
                 tenant.schemaName(), tenant.tenantId(), member.id(),
-                member.login(), member.displayName(), member.role(), member.active());
+                member.login(), member.displayName(), member.role(), member.active(),
+                rights.owner(), rights.permissions());
 
         return new TenantAuthenticationToken(principal, principal.getAuthorities());
     }

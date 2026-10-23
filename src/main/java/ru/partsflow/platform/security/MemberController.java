@@ -38,7 +38,7 @@ public class MemberController {
     }
 
     @PostMapping
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('members.manage')")
     public ResponseEntity<MemberService.Member> create(@Valid @RequestBody CreateRequest request) {
         MemberService.Member created = members.create(
                 request.login(), request.password(), request.displayName(),
@@ -47,7 +47,7 @@ public class MemberController {
     }
 
     @GetMapping
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('members.manage')")
     public List<MemberService.Member> all() {
         return members.all();
     }
@@ -59,7 +59,7 @@ public class MemberController {
      * любой вошедший менял бы пароль владельцу и забирал компанию.
      */
     @PostMapping("/{id}/password")
-    @PreAuthorize("hasRole('OWNER') or #id == authentication.principal.memberId")
+    @PreAuthorize("hasAuthority('members.manage') or #id == authentication.principal.memberId")
     public ResponseEntity<Void> changePassword(@PathVariable Long id,
                                                @Valid @RequestBody PasswordRequest request,
                                                HttpServletRequest httpRequest) {
@@ -77,7 +77,7 @@ public class MemberController {
      * и починить это можно было бы только руками в БД.
      */
     @PostMapping("/{id}/disable")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('members.manage')")
     public ResponseEntity<Void> disable(@PathVariable Long id) {
         if (id.equals(CurrentUser.require().memberId())) {
             // Словами, а не пустым 409. Экран показывает эту кнопку всем,
@@ -94,7 +94,7 @@ public class MemberController {
     }
 
     @PostMapping("/{id}/enable")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('members.manage')")
     public ResponseEntity<Void> enable(@PathVariable Long id) {
         members.setActive(id, true);
         return ResponseEntity.noContent().build();

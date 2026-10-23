@@ -133,7 +133,7 @@ class TenantFilterTest {
 
     private void login(String schema) {
         TenantPrincipal principal = new TenantPrincipal(
-                schema, 42L, 1L, "ivan", "Иван", "STOREKEEPER", true);
+                schema, 42L, 1L, "ivan", "Иван", "STOREKEEPER", true, false, java.util.Set.of());
         SecurityContext context = SecurityContextHolder.createEmptyContext();
         context.setAuthentication(
                 new TenantAuthenticationToken(principal, principal.getAuthorities()));

@@ -20,6 +20,8 @@ import org.springframework.web.bind.annotation.RestController;
 import ru.partsflow.platform.session.LoginSessions;
 import ru.partsflow.platform.session.SessionTrackingFilter;
 
+import java.util.List;
+
 /**
  * Вход и выход.
  *
@@ -137,12 +139,24 @@ public class AuthController {
                                @NotBlank String password) {
     }
 
+    /**
+     * @param owner       роль «Владелец» или администратор сервиса: все права всегда
+     * @param permissions ключи прав вошедшего ({@link Permission}); у владельца —
+     *                    весь справочник. Экран решает по ним, что показать
+     *                    доступным, а что погашенным, — своего списка ролей у него
+     *                    нет (задача 0044: «полномочия приезжают с сервера»)
+     */
     public record MeView(Long memberId, String login, String displayName, String role,
-                         String companySchema) {
+                         String companySchema, boolean owner, List<String> permissions) {
 
         static MeView of(TenantPrincipal principal) {
             return new MeView(principal.memberId(), principal.login(), principal.displayName(),
-                    principal.role(), principal.tenantSchema());
+                    principal.role(), principal.tenantSchema(), principal.actsAsOwner(),
+                    principal.getAuthorities().stream()
+                            .map(org.springframework.security.core.GrantedAuthority::getAuthority)
+                            .filter(key -> Permission.byKey(key).isPresent())
+                            .sorted()
+                            .toList());
         }
     }
 }

@@ -32,7 +32,7 @@ import java.time.Instant;
 @RequestMapping("/api/payments")
 public class PaymentRegistryController {
 
-    private static final String READS = "hasAnyRole('OWNER','MANAGER')";
+    private static final String READS = "hasAuthority('payments.registry.view')";
 
     private final SalesService sales;
 

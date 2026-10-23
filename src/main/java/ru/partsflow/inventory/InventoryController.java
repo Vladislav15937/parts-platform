@@ -46,10 +46,10 @@ import java.util.List;
 public class InventoryController {
 
     /** Обход полок: считает тот, кто работает руками. */
-    private static final String COUNTS = "hasAnyRole('OWNER','MANAGER','STOREKEEPER','SELLER')";
+    private static final String COUNTS = "hasAuthority('inventory.count')";
 
     /** Сведение расхождений: недостача превращается в убыток. */
-    private static final String RECONCILES = "hasAnyRole('OWNER','MANAGER')";
+    private static final String RECONCILES = "hasAuthority('inventory.reconcile')";
 
     /**
      * Список и карточка пересчёта — только смотреть. «Просмотру» это доступно
@@ -57,7 +57,7 @@ public class InventoryController {
      * («Пересчёт №4»), и посмотреть, что тогда считали, — не то же самое,
      * что провести или отменить.
      */
-    private static final String READS = "hasAnyRole('OWNER','MANAGER','VIEWER')";
+    private static final String READS = "hasAuthority('inventory.journal.view')";
 
     /**
      * Комментарий сводящего расхождения. «Просмотра» тут нет — роль
@@ -69,7 +69,7 @@ public class InventoryController {
      * а отказ кладовщику на этом пути проверяется тестом
      * ({@code InventoryHttpTest}).
      */
-    private static final String COMMENTS = "hasAnyRole('OWNER','MANAGER')";
+    private static final String COMMENTS = "hasAuthority('inventory.reconcile')";
 
     /**
      * Комментарий того, кто ходил по полкам, — с экрана обхода на телефоне.
@@ -78,7 +78,7 @@ public class InventoryController {
      * Продавца нет, хотя считать он может ({@link #COUNTS}): экран обхода
      * поле ему не показывает.
      */
-    private static final String COUNTER_NOTES = "hasAnyRole('OWNER','MANAGER','STOREKEEPER')";
+    private static final String COUNTER_NOTES = "hasAuthority('inventory.counter_note')";
 
     private final InventoryService inventory;
 

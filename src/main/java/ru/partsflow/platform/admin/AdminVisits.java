@@ -71,7 +71,10 @@ public class AdminVisits {
         }
         long memberId = ensureMember(tenant.schema(), admin);
         return new TenantPrincipal(tenant.schema(), tenant.id(), memberId, admin.login(),
-                admin.displayName(), TenantPrincipal.SERVICE_ADMIN_ROLE, true);
+                admin.displayName(), TenantPrincipal.SERVICE_ADMIN_ROLE, true,
+                // Права владельца ему даёт роль ADMIN (TenantPrincipal.actsAsOwner),
+                // а не назначение: роли клиента у него нет и быть не должно.
+                false, java.util.Set.of());
     }
 
     /**

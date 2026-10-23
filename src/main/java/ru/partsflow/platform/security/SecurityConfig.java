@@ -25,7 +25,6 @@ import ru.partsflow.platform.admin.ServiceAdminAuthenticationProvider;
 import ru.partsflow.platform.admin.ServiceAdminPrincipal;
 import ru.partsflow.platform.session.LogoutRecorder;
 
-import java.util.List;
 
 /**
  * Аутентификация: сессия в cookie.
@@ -41,9 +40,10 @@ import java.util.List;
  */
 @Configuration
 @EnableWebSecurity
-// Проверки роли стоят на методах (@PreAuthorize), а не путями в этом файле:
-// правило «создавать сотрудников может владелец» читается там, где создают
-// сотрудника, а не в настройках, куда никто не смотрит.
+// Проверки прав стоят на методах (@PreAuthorize("hasAuthority('…')")), а не
+// путями в этом файле: правило «заводить сотрудников может тот, у кого есть
+// право „Сотрудники и роли“» читается там, где заводят сотрудника, а не
+// в настройках, куда никто не смотрит. Ключи — Permission.
 @EnableMethodSecurity
 public class SecurityConfig {
 
@@ -154,19 +154,19 @@ public class SecurityConfig {
                         .requestMatchers("/", "/index.html", "/assets/**",
                                 "/sw.js", "/manifest.webmanifest", "/favicon.ico")
                         .permitAll()
-                        // Выйти может кто угодно вошедший, включая «Просмотр»:
-                        // запрет ниже смотрит на метод, а выход — это POST.
+                        // Выйти может кто угодно вошедший, включая того, у кого
+                        // нет ни одного права, и администратора в системе
+                        // администрирования: правило /api/** ниже его не пустило бы.
                         .requestMatchers("/api/auth/logout").authenticated()
-                        // Настройки своего экрана — тоже: запрет ниже про то,
-                        // что «Просмотр» не меняет данные предприятия, а здесь
-                        // он меняет только то, как склад разложен у него самого
-                        // на экране. Без этого исключения сортировка, отборы
-                        // и состав колонок не сохранялись бы ровно у тех двух
-                        // ролей, которые на витрину и смотрят («Просмотр»
-                        // и «Ревизор»), — причём молча, отказом на каждое
-                        // нажатие. Адрес назван точно, а не шаблоном на /api/**:
-                        // исключение из правила должно оставаться размером
-                        // в одно место.
+                        // Настройки своего экрана — любому сотруднику кабинета, без
+                        // права: он меняет не данные предприятия, а то, как склад
+                        // разложен у него самого на экране. До задачи 0044 это было
+                        // исключением из запрета «Просмотр не меняет ничего»; запрета
+                        // нет, а исключение осталось названным — в переборе изменяющих
+                        // путей без права (PermissionGuardTest) этот адрес стоит
+                        // с той же причиной. Без него сортировка, отборы и состав
+                        // колонок не сохранялись бы ровно у тех, кто на витрину
+                        // и смотрит, — молча, отказом на каждое нажатие.
                         .requestMatchers(HttpMethod.PUT, "/api/me/settings/**").access(TENANT_MEMBER)
                         // Граница между системой администрирования и кабинетами
                         // (задача 0042, решение владельца продукта от 8 сентября
@@ -212,25 +212,19 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.PUT, ACCESS_CONTROL).access(CHANGES_ACCESS)
                         .requestMatchers(HttpMethod.PATCH, ACCESS_CONTROL).access(CHANGES_ACCESS)
                         .requestMatchers(HttpMethod.DELETE, ACCESS_CONTROL).access(CHANGES_ACCESS)
-                        // «Просмотр» не меняет ничего — это свойство роли,
-                        // а не отдельных операций, и потому стоит здесь,
-                        // а не на методах, как остальные проверки.
+                        // Запрета «Просмотр не меняет ничего» по методам здесь больше
+                        // нет (задача 0044): ролей с таким свойством не стало — роль
+                        // клиента это набор прав, и «Просмотр» теперь одна из них.
+                        // Его место заняли права на методах: каждый изменяющий путь
+                        // кабинета несёт @PreAuthorize с правом, и сотрудник без права
+                        // получает 403 там же, где раньше «Просмотр».
                         //
-                        // Расставленная по методам, она обязана быть повторена
-                        // в каждом новом эндпоинте, и забыть её можно в любом:
-                        // роль, названная «только смотреть», заводила детали
-                        // на склад, машины, инвентаризации и удаляла
-                        // фотографии — четыре пути, у каждого из которых
-                        // просто не было своей проверки. Правило же одно
-                        // на все, и здесь оно не забудется.
-                        .requestMatchers(HttpMethod.POST, "/api/**").hasAnyRole(
-                                "OWNER", "MANAGER", "STOREKEEPER", "SELLER")
-                        .requestMatchers(HttpMethod.PUT, "/api/**").hasAnyRole(
-                                "OWNER", "MANAGER", "STOREKEEPER", "SELLER")
-                        .requestMatchers(HttpMethod.PATCH, "/api/**").hasAnyRole(
-                                "OWNER", "MANAGER", "STOREKEEPER", "SELLER")
-                        .requestMatchers(HttpMethod.DELETE, "/api/**").hasAnyRole(
-                                "OWNER", "MANAGER", "STOREKEEPER", "SELLER")
+                        // То, ради чего запрет стоял здесь, — «забыть проверку можно
+                        // в любом новом эндпоинте», — держит теперь перебор, а не этот
+                        // файл: PermissionGuardTest берёт пути у самого приложения
+                        // и валит прогон на изменяющем пути без права. Без перебора
+                        // забытая аннотация открыла бы путь всем вошедшим, то есть
+                        // направление отказа стало бы обратным.
                         // Чтение кабинета — только вошедшему в кабинет. До задачи
                         // 0042 вошедший был один вид, сотрудник разборки, и
                         // «вошёл» означало «есть схема». Администратор в системе
@@ -273,23 +267,19 @@ public class SecurityConfig {
     static final String[] ACCESS_CONTROL = {
             "/api/members", "/api/members/**", "/api/organization/admin-access/**"};
 
-    /** Роли, которым правило по методам ниже разрешает менять данные. */
-    private static final List<String> WRITING_ROLES =
-            List.of("OWNER", "MANAGER", "STOREKEEPER", "SELLER");
-
     /**
-     * Менять вход: сотрудник кабинета с пишущей ролью, но не администратор
-     * сервиса. Проверка по его собственной роли ({@link TenantPrincipal#isServiceAdmin()}),
-     * а не по отсутствию {@code ROLE_OWNER}: полномочия владельца у него есть,
-     * и именно они здесь не действуют.
+     * Менять вход: сотрудник кабинета, но не администратор сервиса. Проверка
+     * по его собственной роли ({@link TenantPrincipal#isServiceAdmin()}),
+     * а не по отсутствию права: права владельца у него есть, и именно они
+     * здесь не действуют. Что именно сотрудник может менять (чужих — по праву
+     * «Сотрудники и роли», свой пароль — всякий), решают методы.
      */
     private static final AuthorizationManager<RequestAuthorizationContext> CHANGES_ACCESS =
             (authentication, context) -> {
                 Authentication current = authentication.get();
                 return new AuthorizationDecision(current != null && current.isAuthenticated()
                         && current.getPrincipal() instanceof TenantPrincipal member
-                        && !member.isServiceAdmin()
-                        && WRITING_ROLES.contains(member.role()));
+                        && !member.isServiceAdmin());
             };
 
     private static final AuthorizationManager<RequestAuthorizationContext> TENANT_MEMBER =

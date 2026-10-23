@@ -86,7 +86,7 @@ public class BazonImportController {
      * заполненное не трогается.
      */
     @PostMapping("/fits")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('import.manage')")
     public BazonFitsImporter.Report loadFits(@RequestParam("file") MultipartFile file)
             throws Exception {
         requireFile(file, "файл выгрузки на Дром");
@@ -108,7 +108,7 @@ public class BazonImportController {
      * в любой момент: перенесённое остаётся перенесённым.
      */
     @PostMapping("/photos")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('import.manage')")
     public PhotoMigration.Progress photos(
             @RequestParam(defaultValue = "200") int limit) {
         return photoMigration.migrateBatch(Math.min(Math.max(limit, 1), MAX_PHOTO_BATCH));
@@ -116,7 +116,7 @@ public class BazonImportController {
 
     /** Сколько осталось и сколько не вышло — для экрана переноса. */
     @GetMapping("/photos")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('import.manage')")
     public PhotoMigration.Progress photoStatus() {
         return photoMigration.status();
     }
@@ -128,7 +128,7 @@ public class BazonImportController {
      * а удалённый файл — нет, и вечный повтор скрывал бы второе за первым.
      */
     @PostMapping("/photos/retry")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('import.manage')")
     public PhotoMigration.Progress retryPhotos() {
         photoMigration.retryFailed();
         return photoMigration.status();
@@ -147,7 +147,7 @@ public class BazonImportController {
      * знает только владелец, а тихо уехавший не туда товар ищут глазами.
      */
     @PostMapping("/wheels")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('import.manage')")
     public WheelResult loadWheels(@RequestParam("wheels") MultipartFile wheels,
                                   @RequestParam("warehouseId") Long warehouseId)
             throws IOException {
@@ -173,7 +173,7 @@ public class BazonImportController {
     }
 
     @PostMapping
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('import.manage')")
     public Result load(@RequestParam("donors") MultipartFile donors,
                        @RequestParam("catalog") MultipartFile catalog) throws Exception {
 

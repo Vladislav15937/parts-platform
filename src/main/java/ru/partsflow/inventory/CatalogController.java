@@ -144,7 +144,7 @@ public class CatalogController {
      * не перезаписывается.
      */
     @PostMapping("/applicability/from-titles")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('applicability.bulk')")
     public CatalogService.Parsed applicabilityFromTitles() {
         return catalog.applyFromTitles();
     }
@@ -159,14 +159,14 @@ public class CatalogController {
      * текст клиента не меняется.
      */
     @PostMapping("/applicability/from-drom")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('applicability.bulk')")
     public DromApplicabilityService.Report applicabilityFromDrom() {
         return dromApplicability.applyAll();
     }
 
     /** Добавляет машину в применимость позиции — из карточки. */
     @PostMapping("/{id}/applicability")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('part.edit')")
     public List<CatalogService.Applicability> addApplicability(
             @PathVariable Long id, @RequestBody VehicleRequest request) {
         catalog.addApplicability(id, request.brandId(), request.modelId(), CurrentUser.memberId());
@@ -174,7 +174,7 @@ public class CatalogController {
     }
 
     @DeleteMapping("/{id}/applicability/{applicabilityId}")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('part.edit')")
     public List<CatalogService.Applicability> removeApplicability(
             @PathVariable Long id, @PathVariable Long applicabilityId) {
         catalog.removeApplicability(id, applicabilityId);
@@ -196,7 +196,7 @@ public class CatalogController {
 
     /** Ставит «Двигатель важен / не важен». Правит владелец и менеджер, как остальную применимость. */
     @PutMapping("/{id}/engine-matters")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('part.edit')")
     public ApplicabilityDetails.State setEngineMatters(
             @PathVariable Long id, @RequestBody EngineMattersRequest request) {
         return details.setEngineMatters(id, request.matters());
@@ -267,7 +267,7 @@ public class CatalogController {
      * 0» владелец прочитает как «сделано», и ошибку в отборе он не заметит.
      */
     @PostMapping("/bulk")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('part.edit')")
     public PartController.BulkResult bulk(@RequestParam(required = false) String q,
                            @RequestParam(defaultValue = "true") boolean reserved,
                            @RequestParam(defaultValue = "false") boolean missing,
@@ -347,7 +347,7 @@ public class CatalogController {
      * байт, статус ответа уже не сменить, и отказ уехал бы двухсотым с телом
      * склада внутри.
      */
-    @PreAuthorize(TableExport.ALLOWED)
+    @PreAuthorize("hasAuthority('export.table')")
     @GetMapping("/export")
     public void export(@RequestParam(required = false) String q,
                        @RequestParam(defaultValue = "true") boolean reserved,

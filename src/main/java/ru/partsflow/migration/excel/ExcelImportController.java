@@ -39,7 +39,7 @@ public class ExcelImportController {
     }
 
     @PostMapping("/preview")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('import.manage')")
     public ExcelWarehouseImporter.Preview preview(@RequestParam("file") MultipartFile file)
             throws Exception {
 
@@ -58,7 +58,7 @@ public class ExcelImportController {
      *                непонятно, что человек подтвердил, а что не заметил
      */
     @PostMapping
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('import.manage')")
     public ExcelWarehouseImporter.Report load(@RequestParam("file") MultipartFile file,
                                               @RequestParam("warehouseId") long warehouseId,
                                               @RequestParam("requestId") String requestId,

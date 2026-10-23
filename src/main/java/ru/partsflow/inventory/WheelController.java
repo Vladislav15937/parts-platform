@@ -31,7 +31,7 @@ public class WheelController {
     /** Страница крупнее полутысячи — это не просмотр, а выгрузка; для неё есть /export. */
     private static final int MAX_SIZE = 500;
 
-    private static final String INTAKES = "hasAnyRole('OWNER','MANAGER','STOREKEEPER')";
+    private static final String INTAKES = "hasAuthority('wheels.set')";
 
     private final WheelService wheels;
     private final CatalogService catalog;

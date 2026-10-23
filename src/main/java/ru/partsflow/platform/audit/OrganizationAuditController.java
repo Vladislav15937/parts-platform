@@ -29,7 +29,7 @@ import java.util.List;
 @RequestMapping("/api/organization/audit")
 public class OrganizationAuditController {
 
-    private static final String READS_JOURNAL = "hasAnyRole('OWNER','AUDITOR')";
+    private static final String READS_JOURNAL = "hasAuthority('journal.view')";
 
     private final OrganizationAuditService audit;
 
