@@ -1,8 +1,12 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
-import { loadCatalog, type PermissionKey, type Section } from '../access/rights';
+import {
+  loadCatalog, rightsFrom, type PermissionKey, type Rights, type Section,
+} from '../access/rights';
 import {
   assignAccess,
+  beyondOwn,
+  foreignReason,
   loadMemberAccess,
   loadRoles,
   overridesFor,
@@ -46,10 +50,13 @@ import { RolesPanel } from './RolesPanel';
  *        сотрудников, роли и раздел доступа, но ничего не меняет: всё это
  *        пережило бы отзыв его доступа (разбор PR 393). Сервер отбивает то же 403.
  * @param ownerActs вошёл владелец: назначить и снять роль «Владелец» может только он
+ * @param mine права вошедшего: выдавать можно только свои (ответ владельца
+ *        24.10.2026, задача 0044, 2б) — роль шире них и чужое право поверх роли
+ *        погашены с причиной. Решает сервер, он отбивает то же 403 словами.
  */
 export function MembersScreen({
-  managesAccess = true, ownerActs = true,
-}: { managesAccess?: boolean; ownerActs?: boolean }) {
+  managesAccess = true, ownerActs = true, mine = OWNER,
+}: { managesAccess?: boolean; ownerActs?: boolean; mine?: Rights }) {
   const [members, setMembers] = useState<Member[] | null>(null);
   const [access, setAccess] = useState<Map<number, MemberAccess>>(new Map());
   // Роли: null — ещё грузим либо не смогли узнать (причина в rolesError).
@@ -133,6 +140,14 @@ export function MembersScreen({
   };
 
   const roleOf = (id: string) => roles.find((r) => String(r.id) === id);
+  // Роль шире прав вошедшего: назначить её он не может (сервер отбивает 403).
+  const wider = (r: AccessRole) => !r.owner && beyondOwn(r.permissions, mine).length > 0;
+  const roleOption = (r: AccessRole) => (
+    <option key={r.id} value={String(r.id)} disabled={(r.owner && !ownerActs) || wider(r)}>
+      {r.owner && !ownerActs ? `${r.name} — назначает только владелец`
+        : wider(r) ? `${r.name} — ${WIDER}` : r.name}
+    </option>
+  );
   // Чужого владельца не владелец не трогает; свой пароль меняет каждый —
   // но выключать себя нельзя всё равно, и это отбивает сервер словами.
   const ownerLocked = (member: Member) => !ownerActs && access.get(member.id)?.owner === true;
@@ -245,6 +260,7 @@ export function MembersScreen({
 
       <RolesPanel roles={rolesLoaded} error={rolesError} sections={sections}
                   canChange={managesAccess}
+                  mine={mine}
                   onChanged={reload} />
 
       <AdminAccessPanel canChange={managesAccess} />
@@ -287,14 +303,11 @@ export function MembersScreen({
                 владелец — пункт погашен и назван, а не спрятан. */}
             <select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
               <option value="">— выберите роль —</option>
-              {roles.map((r) => (
-                <option key={r.id} value={String(r.id)} disabled={r.owner && !ownerActs}>
-                  {r.owner && !ownerActs ? `${r.name} — назначает только владелец` : r.name}
-                </option>
-              ))}
+              {roles.map(roleOption)}
             </select>
           </label>
         </div>
+        {roles.some(wider) && <p className="note">{WIDER_NOTE}</p>}
 
         {/* Что умеет роль — рядом с выбором, а не в справке. */}
         {roleOf(roleId) !== undefined && (
@@ -324,6 +337,7 @@ export function MembersScreen({
     const roleKeys = new Set(role?.permissions ?? []);
     const wasOwner = current?.owner === true;
     const ownerLocked = (ownerChosen || wasOwner) && !ownerActs;
+    const grant = grantObstacle(role, editChosen);
     return (
       <div className="card">
         <label className="field">
@@ -339,11 +353,7 @@ export function MembersScreen({
             }}
           >
             <option value="">— без роли —</option>
-            {roles.map((r) => (
-              <option key={r.id} value={String(r.id)} disabled={r.owner && !ownerActs}>
-                {r.owner && !ownerActs ? `${r.name} — назначает только владелец` : r.name}
-              </option>
-            ))}
+            {roles.map(roleOption)}
           </select>
         </label>
         {sections.length === 0 ? (
@@ -355,6 +365,7 @@ export function MembersScreen({
             locked={ownerChosen
               ? 'У владельца все права всегда: отдельные права ему не добавляют и не снимают'
               : undefined}
+            foreign={(key) => !mine.has(key)}
             onToggle={(key, on) => setEditChosen((was) => {
               const next = new Set(was);
               if (on) next.add(key); else next.delete(key);
@@ -372,7 +383,7 @@ export function MembersScreen({
         <div className="row">
           <button
             type="button"
-            disabled={busy || role === undefined || ownerLocked}
+            disabled={busy || role === undefined || ownerLocked || grant !== null}
             onClick={() => void saveRights(member, role as AccessRole)}
           >
             {busy ? 'Сохраняем…' : 'Сохранить права'}
@@ -385,9 +396,29 @@ export function MembersScreen({
         {ownerLocked && (
           <p className="note">Назначить и снять роль «Владелец» может только владелец.</p>
         )}
+        {grant !== null && <p className="note">{grant}</p>}
         {ownerRole === undefined && <p className="note">Роли не загрузились.</p>}
       </div>
     );
+  }
+
+  /**
+   * Почему права не сохранить: роль шире своих либо отмечено поверх роли чужое
+   * право. Одно выражение на кнопку и на подпись — разойдись они, кнопка снова
+   * начала бы молчать (тот же приём, что `paymentObstacle` у оплаты).
+   */
+  function grantObstacle(role: AccessRole | undefined, chosen: ReadonlySet<PermissionKey>):
+    string | null {
+    if (role === undefined || role.owner) return null;
+    const inRole = beyondOwn(role.permissions, mine);
+    if (inRole.length > 0) {
+      return `${foreignReason(`В роли «${role.name}» есть права, которых у вас нет`, inRole, sections)}`
+        + ' — её назначает владелец.';
+    }
+    const roleKeys = new Set(role.permissions);
+    const added = beyondOwn([...chosen].filter((key) => !roleKeys.has(key)), mine);
+    return added.length === 0 ? null
+      : `${foreignReason('Отмечены права, которых у вас нет', added, sections)} — снимите их.`;
   }
 
   async function saveRights(member: Member, role: AccessRole): Promise<void> {
@@ -481,6 +512,12 @@ function roleSummary(role: AccessRole, sections: readonly Section[]): string {
 }
 
 const OWNER_ONLY = 'Учётную запись владельца меняет только владелец';
+
+const OWNER = rightsFrom(true, []);
+
+/** Подпись у роли шире прав вошедшего — пункт погашен и назван, а не спрятан. */
+const WIDER = 'шире ваших прав';
+const WIDER_NOTE = 'Роли шире ваших прав погашены: выдавать можно только свои права.';
 
 /** Ответ разбирается как обещание, а не как гарантия: пустой — не падение. */
 function normalized(found: unknown): MemberAccess[] {

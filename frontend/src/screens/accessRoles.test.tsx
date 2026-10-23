@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import { forgetCatalog } from '../access/rights';
+import { rightsWith } from '../test/rights';
 import { MembersScreen } from './MembersScreen';
 
 /**
@@ -246,6 +247,69 @@ describe('роли и права на экране сотрудников', () =
     fireEvent.click(add);
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]?.body).toEqual({ login: 'novyy', password: 'восемь-знаков', displayName: '', roleId: 11 });
+  });
+
+  // Ответ владельца 24.10.2026 (2б): выдавать можно только свои права. Решает
+  // сервер; экран гасит заранее и называет причину.
+  describe('выдавать можно только свои права', () => {
+    it('роль шире своих в выборе нового сотрудника погашена и названа', async () => {
+      render(<MembersScreen ownerActs={false} mine={rightsWith('members.manage', 'intake.receive')} />);
+      await waitFor(() => screen.getByRole('button', { name: 'Завести' }));
+      const card = screen.getByRole('button', { name: 'Завести' }).closest('.card') as HTMLElement;
+      const wide = within(card).getByRole('option', { name: 'Пустая — шире ваших прав' }) as HTMLOptionElement;
+      expect(wide.disabled, 'роль шире своих предлагают назначить').toBe(true);
+      expect((within(card).getByRole('option', { name: 'Приёмщик' }) as HTMLOptionElement).disabled)
+        .toBe(false);
+      expect(within(card).getByText(/Роли шире ваших прав погашены/)).toBeTruthy();
+    });
+
+    it('чужое право поверх роли: сохранить нельзя, сказано какое; снял — уходит', async () => {
+      // У ivan поверх «Приёмщика» добавлено «Продавать», а у вошедшего его нет.
+      render(<MembersScreen ownerActs={false} mine={rightsWith('members.manage', 'intake.receive')} />);
+      await waitFor(() => screen.getByRole('button', { name: 'Права: ivan' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Права: ivan' }));
+      const save = screen.getByRole('button', { name: 'Сохранить права' }) as HTMLButtonElement;
+      const editor = save.closest('.card') as HTMLElement;
+
+      expect(save.disabled, 'чужое право поверх роли уходит на сервер').toBe(true);
+      expect(within(editor).getByText(/Отмечены права, которых у вас нет: «Продавать»/)).toBeTruthy();
+      const notMine = within(editor).getByLabelText(/Оформлять возврат/) as HTMLInputElement;
+      expect(notMine.disabled, 'чужое право можно отметить').toBe(true);
+      expect(within(editor).getAllByText(/этого права у вас нет/).length).toBeGreaterThan(0);
+
+      // Снять отмеченное чужое можно — иначе набор было бы не сузить.
+      fireEvent.click(within(editor).getByLabelText(/Продавать/));
+      expect(save.disabled).toBe(false);
+      fireEvent.click(save);
+      await waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0]?.body).toEqual({ roleId: 11, overrides: {} });
+    });
+
+    it('роль с набором шире своих: новой не отметить чужое, старую не сохранить, пока не снято', async () => {
+      render(<MembersScreen ownerActs={false} mine={rightsWith('members.manage', 'intake.receive')} />);
+      await waitFor(() => screen.getByRole('button', { name: 'Изменить роль: Пустая' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Изменить роль: Пустая' }));
+      const save = screen.getByRole('button', { name: 'Сохранить роль' }) as HTMLButtonElement;
+      const editor = save.closest('.card') as HTMLElement;
+      expect(save.disabled, 'набор шире своих уходит на сервер').toBe(true);
+      expect(within(editor).getByText(/В наборе есть права, которых у вас нет: «Оформлять возврат»/))
+        .toBeTruthy();
+      fireEvent.click(within(editor).getByLabelText(/Оформлять возврат/));
+      expect(save.disabled).toBe(false);
+      fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Новая роль' }));
+      const fresh = screen.getByRole('button', { name: 'Сохранить роль' }).closest('.card') as HTMLElement;
+      expect((within(fresh).getByLabelText(/Продавать/) as HTMLInputElement).disabled).toBe(true);
+      expect((within(fresh).getByLabelText(/Принимать товар/) as HTMLInputElement).disabled).toBe(false);
+    });
+
+    it('владельцу не погашено ничего', async () => {
+      render(<MembersScreen />);
+      await waitFor(() => screen.getByRole('button', { name: 'Завести' }));
+      expect(screen.queryByText(/шире ваших прав/)).toBeNull();
+      expect(screen.queryByText(/этого права у вас нет/)).toBeNull();
+    });
   });
 });
 

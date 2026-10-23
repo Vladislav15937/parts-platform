@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { ApiError } from '../api/client';
-import type { PermissionKey, Section } from '../access/rights';
-import { createRole, deleteRole, updateRole, type AccessRole } from '../organization/access';
+import { rightsFrom, type PermissionKey, type Rights, type Section } from '../access/rights';
+import {
+  beyondOwn, createRole, deleteRole, foreignReason, updateRole, type AccessRole,
+} from '../organization/access';
 import { count, plural } from '../ui/plural';
 import { useMounted } from '../ui/useMounted';
 import { AccessPermissions } from './AccessPermissions';
@@ -21,7 +23,7 @@ import { AccessPermissions } from './AccessPermissions';
  * то же правило, что у погашенного: не прятать, а называть причину.
  */
 export function RolesPanel({
-  roles, error: loadError = '', sections, canChange, onChanged,
+  roles, error: loadError = '', sections, canChange, onChanged, mine = OWNER,
 }: {
   /** `null` — ещё не приехали (грузим либо не смогли узнать — см. `error`). */
   roles: readonly AccessRole[] | null;
@@ -30,6 +32,11 @@ export function RolesPanel({
   sections: readonly Section[];
   canChange: boolean;
   onChanged: () => void;
+  /**
+   * Права того, кто правит: набор роли не шире их (ответ владельца 24.10.2026,
+   * задача 0044, 2б). Сервер отбивает то же 403 словами.
+   */
+  mine?: Rights;
 }) {
   // Какая роль раскрыта на правку; 'new' — заводится новая.
   const [editing, setEditing] = useState<number | 'new' | null>(null);
@@ -48,7 +55,12 @@ export function RolesPanel({
     setChosen(new Set(role === null ? [] : role.permissions));
   };
 
-  const editor = (role: AccessRole | null) => (
+  const editor = (role: AccessRole | null) => {
+    const extra = beyondOwn(chosen, mine);
+    const foreign = extra.length === 0 ? null
+      : foreignReason('В наборе есть права, которых у вас нет', extra, sections)
+        + ' — снимите их или попросите владельца.';
+    return (
     <div className="card">
       <label className="field">
         Название роли
@@ -64,6 +76,7 @@ export function RolesPanel({
         <AccessPermissions
           sections={sections}
           chosen={chosen}
+          foreign={(key) => !mine.has(key)}
           onToggle={(key, on) => setChosen((was) => {
             const next = new Set(was);
             if (on) next.add(key); else next.delete(key);
@@ -81,7 +94,7 @@ export function RolesPanel({
       <div className="row">
         <button
           type="button"
-          disabled={busy || noCatalog || name.trim() === ''}
+          disabled={busy || noCatalog || name.trim() === '' || foreign !== null}
           onClick={() => void save(role)}
         >
           {busy ? 'Сохраняем…' : 'Сохранить роль'}
@@ -91,8 +104,10 @@ export function RolesPanel({
         </button>
       </div>
       {name.trim() === '' && <p className="note">Напишите название роли.</p>}
+      {foreign !== null && <p className="note">{foreign}</p>}
     </div>
-  );
+    );
+  };
 
   return (
     <section className="card">
@@ -204,6 +219,8 @@ export function RolesPanel({
     }
   }
 }
+
+const OWNER = rightsFrom(true, []);
 
 function employees(value: number): string {
   return `${count(value)} ${plural(value, 'сотрудник', 'сотрудника', 'сотрудников')}`;

@@ -1,5 +1,5 @@
 import { request } from '../api/client';
-import type { PermissionKey } from '../access/rights';
+import type { PermissionKey, Rights, Section } from '../access/rights';
 
 /**
  * Роли клиента и права сотрудников (задача 0044).
@@ -89,4 +89,35 @@ export function overridesFor(
     if (!chosen.has(key) && inRole.has(key)) overrides[key] = false;
   }
   return overrides;
+}
+
+/**
+ * Права из набора, которых у выдающего нет.
+ *
+ * <p>Ответ владельца 24.10.2026 (задача 0044, 2б): «выдавать можно только те
+ * права, что есть у выдающего; владелец может всё». Решает сервер — он и
+ * отказывает словами (403); экран гасит заранее и называет причину, чтобы
+ * человек не собирал набор, который не сохранится.
+ */
+export function beyondOwn(keys: Iterable<PermissionKey>, mine: Rights): PermissionKey[] {
+  if (mine.owner) return [];
+  return [...new Set(keys)].filter((key) => !mine.has(key)).sort();
+}
+
+/**
+ * Названия прав в кавычках через запятую — словами справочника сервера;
+ * без справочника пусто (тогда причина говорится без перечня).
+ */
+export function rightTitles(keys: readonly PermissionKey[], sections: readonly Section[]): string {
+  const titles = new Map(sections.flatMap((s) => s.permissions.map((a) => [a.key, a.title] as const)));
+  const named = keys.map((key) => titles.get(key));
+  return named.some((title) => title === undefined) ? '' : named.map((t) => `«${t}»`).join(', ');
+}
+
+/** Причина, по которой набор не сохранить: в нём права, которых у выдающего нет. */
+export function foreignReason(
+  lead: string, keys: readonly PermissionKey[], sections: readonly Section[],
+): string {
+  const titles = rightTitles(keys, sections);
+  return `${lead}${titles === '' ? '' : `: ${titles}`}. Выдавать можно только свои права`;
 }

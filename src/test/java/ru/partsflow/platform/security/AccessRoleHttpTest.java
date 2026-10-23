@@ -305,20 +305,27 @@ class AccessRoleHttpTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Свои права: роль с набором шире своих не завести и не поправить; в пределах — можно")
-    void grantLimitOnRoleSet() throws Exception {
+    @DisplayName("Свои права: роль с набором шире своих не завести; в пределах — можно")
+    void grantLimitOnRoleCreate() throws Exception {
         MockHttpSession session = kadrovik();
-        mvc.perform(post("/api/access/roles").with(csrf()).session(session)
+        String message = text(mvc.perform(post("/api/access/roles").with(csrf()).session(session)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"Широкая\",\"permissions\":[\"deal.sell\",\"settings.company\"]}"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isForbidden()));
+        assertThat(message).contains("В наборе роли есть права, которых у вас нет");
         assertThat(inTenant(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM access_role WHERE name = 'Широкая'", Integer.class))).isZero();
-        String created = text(mvc.perform(post("/api/access/roles").with(csrf()).session(session)
+        mvc.perform(post("/api/access/roles").with(csrf()).session(session)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"Узкая\",\"permissions\":[\"deal.sell\"]}"))
-                .andExpect(status().isCreated()));
-        long id = json.readTree(created).path("id").asLong();
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    @DisplayName("Свои права: набор роли не поправить шире своих; в пределах — можно")
+    void grantLimitOnRoleUpdate() throws Exception {
+        MockHttpSession session = kadrovik();
+        long id = role("Узкая", "deal.sell");
 
         mvc.perform(put("/api/access/roles/" + id).with(csrf()).session(session)
                         .contentType(MediaType.APPLICATION_JSON)

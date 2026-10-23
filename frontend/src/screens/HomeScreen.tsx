@@ -445,6 +445,7 @@ export function HomeScreen() {
         <MembersScreen
           managesAccess={state.me.role !== 'ADMIN' && rights.has('members.manage')}
           ownerActs={state.me.role !== 'ADMIN' && rights.owner}
+          mine={rights}
         />
       )}
 
