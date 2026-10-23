@@ -80,6 +80,13 @@ class DealItemAddedAtTest extends PostgresTestBase {
     @Test
     @DisplayName("Новая строка без колонки получает момент вставки, пустой отметки не бывает")
     void newRowGetsInsertMomentAndNullIsRejected() {
+        // Момент берётся у часов базы, а не JVM: умолчание now() ставит
+        // Postgres, и сверять его с Instant.now() значит сверять двое часов.
+        // Задача CI «Часы вперёд» сдвигает часы JVM на 31 день, а база в
+        // контейнере живёт по настоящим, — сравнение с Instant.now() там
+        // краснело на исправной схеме.
+        Instant before = inTenant(() -> jdbc.queryForObject(
+                "SELECT now()", java.sql.Timestamp.class).toInstant());
         long item = inTenant(() -> {
             long deal = jdbc.queryForObject("""
                     INSERT INTO deal (status, created_at) VALUES ('RESERVED', ?::timestamptz)
@@ -88,8 +95,9 @@ class DealItemAddedAtTest extends PostgresTestBase {
             // момент даёт умолчание.
             return item(deal, part(), warehouse());
         });
-        Instant before = Instant.now().minusSeconds(60);
-        assertThat(addedAt(item)).as("момент вставки, а не заведение сделки").isAfter(before);
+        assertThat(addedAt(item)).as("момент вставки по часам базы, а не заведение сделки")
+                .isAfterOrEqualTo(before)
+                .isAfter(DEAL_CREATED);
 
         assertThatThrownBy(() -> inTenant(() -> jdbc.update(
                 "UPDATE deal_item SET added_at = NULL WHERE id = ?", item)))
