@@ -59,8 +59,8 @@ import java.util.Map;
 @RequestMapping("/api/deals")
 public class SalesController {
 
-    private static final String SELLS = "hasAnyRole('OWNER','MANAGER','SELLER')";
-    private static final String ISSUES = "hasAnyRole('OWNER','MANAGER','SELLER','STOREKEEPER')";
+    private static final String SELLS = "hasAuthority('deal.sell')";
+    private static final String ISSUES = "hasAuthority('deal.issue')";
 
     private final SalesService sales;
     private final PartService parts;
@@ -459,7 +459,7 @@ public class SalesController {
      * совпадать со складом выдачи.
      */
     @PostMapping("/{id}/returns")
-    @PreAuthorize(SELLS)
+    @PreAuthorize("hasAuthority('deal.return')")
     public ResponseEntity<ReturnView> registerReturn(@PathVariable Long id,
                                                      @Valid @RequestBody ReturnDocRequest request) {
         DealReturn dealReturn = sales.registerReturn(
@@ -509,7 +509,7 @@ public class SalesController {
      *                   «Возвраты» карточки клиента (задача 0022)
      */
     @GetMapping("/returns")
-    @PreAuthorize(SELLS)
+    @PreAuthorize("hasAuthority('deal.return')")
     public SalesService.ReturnsPage returns(
             @RequestParam(value = "q", required = false) String q,
             @RequestParam(value = "from", required = false) String from,
@@ -557,7 +557,7 @@ public class SalesController {
      * обратно с ним.
      */
     @PostMapping("/{dealId}/returns/{returnId}/cancel")
-    @PreAuthorize(SELLS)
+    @PreAuthorize("hasAuthority('deal.return')")
     public ReturnView cancelReturn(@PathVariable Long dealId, @PathVariable Long returnId) {
         return ReturnView.of(sales.cancelReturn(returnId, CurrentUser.memberId()));
     }

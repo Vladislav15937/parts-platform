@@ -164,7 +164,7 @@ class TenantIsolationTest extends PostgresTestBase {
     /** Вошедший сотрудник на время действия — так его видит провайдер соединений. */
     private void asMember(Long memberId, Runnable action) {
         var principal = new ru.partsflow.platform.security.TenantPrincipal(
-                TENANT_A, 42L, memberId, "leak-probe", "Автор утечки", "OWNER", true);
+                TENANT_A, 42L, memberId, "leak-probe", "Автор утечки", "OWNER", true, true, java.util.Set.of());
         var context = org.springframework.security.core.context.SecurityContextHolder
                 .createEmptyContext();
         context.setAuthentication(

@@ -28,7 +28,7 @@ import java.util.List;
  */
 @RestController
 @RequestMapping("/api/events/dead-letters")
-@PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+@PreAuthorize("hasAuthority('delivery.manage')")
 public class DeadLetterController {
 
     /** Больше полусотни строк разбора — это уже не разбор, а авария. */

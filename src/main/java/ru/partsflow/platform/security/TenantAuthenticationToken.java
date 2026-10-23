@@ -56,6 +56,23 @@ public class TenantAuthenticationToken extends AbstractAuthenticationToken {
     }
 
     /**
+     * Полномочия вошедшего — у самого принципала, в момент вопроса.
+     *
+     * <p>Не те, что отдали конструктору при входе: тогда владелец, вошедший
+     * до выкладки, где появилось новое право (задача 0044), не имел бы его
+     * до следующего входа — а у владельца права на всё и всегда. Список
+     * в токене, сохранённый при входе, остаётся только для чужих типов
+     * принципала.
+     */
+    @Override
+    public Collection<GrantedAuthority> getAuthorities() {
+        if (principal instanceof TenantPrincipal member) {
+            return java.util.List.copyOf(member.getAuthorities());
+        }
+        return super.getAuthorities();
+    }
+
+    /**
      * Пароль стирается сразу после проверки: сессия живёт часами, и держать
      * в ней пароль в открытом виде незачем.
      */

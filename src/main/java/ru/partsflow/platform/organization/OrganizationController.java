@@ -27,7 +27,7 @@ import java.util.List;
 @RequestMapping("/api/organization")
 public class OrganizationController {
 
-    private static final String MANAGES = "hasAnyRole('OWNER','MANAGER')";
+    private static final String MANAGES = "hasAuthority('org.warehouses')";
 
     private final OrganizationService organization;
 
@@ -41,7 +41,7 @@ public class OrganizationController {
     }
 
     @PostMapping("/branches")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('org.branches')")
     public ResponseEntity<OrganizationService.Branch> createBranch(
             @Valid @RequestBody NameRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -76,7 +76,7 @@ public class OrganizationController {
      * перезаписывается целиком — пустой текст снимает приписку.
      */
     @PutMapping("/warehouses/{id}/availability")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('org.availability')")
     public OrganizationService.Warehouse setAvailability(
             @PathVariable long id, @Valid @RequestBody AvailabilityRequest request) {
         return organization.setAvailability(id, request.availabilityNote(),

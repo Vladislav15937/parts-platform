@@ -39,7 +39,7 @@ import java.util.Objects;
 @RequestMapping("/api/part-names")
 public class PartNameController {
 
-    private static final String MANAGES = "hasAnyRole('OWNER','MANAGER')";
+    private static final String MANAGES = "hasAuthority('names.match')";
 
     /**
      * Сколько написаний пересопоставляем за раз.

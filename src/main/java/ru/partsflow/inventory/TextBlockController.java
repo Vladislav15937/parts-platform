@@ -23,7 +23,7 @@ import java.util.List;
 @RequestMapping("/api/text-blocks")
 public class TextBlockController {
 
-    private static final String MANAGES = "hasAnyRole('OWNER','MANAGER')";
+    private static final String MANAGES = "hasAuthority('text_blocks.manage')";
 
     private final TextBlockService blocks;
 

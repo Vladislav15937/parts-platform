@@ -54,7 +54,7 @@ public class WriteOffController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAuthority('stock.write_off')")
     public ResponseEntity<WriteOffView> writeOff(@Valid @RequestBody WriteOffRequest request) {
         StockDocument document = StockDocument.writeOff(request.warehouseId());
         document.setCreatedBy(CurrentUser.memberId());

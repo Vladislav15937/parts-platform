@@ -2,6 +2,7 @@ package ru.partsflow.inventory;
 
 import org.springframework.security.access.AccessDeniedException;
 import ru.partsflow.platform.security.CurrentUser;
+import ru.partsflow.platform.security.Permission;
 import ru.partsflow.platform.security.TenantPrincipal;
 
 /**
@@ -10,14 +11,13 @@ import ru.partsflow.platform.security.TenantPrincipal;
  * <p><b>Одно место, и это главное в классе.</b> Решение владельца продукта
  * 23.10.2026 (tasks/0367, «Кто удаляет»): удаляет тот, у кого есть право
  * на это действие, а владелец — всегда; права выдаются на каждого сотрудника
- * по каждому действию. Выдавать права по действиям система пока не умеет —
- * это задача 0044, — поэтому сегодня набор прав у всех пуст, и удаляет
- * только владелец (и администратор сервиса, у которого права владельца,
- * {@link TenantPrincipal#actsAsOwner}). Это не другое правило, а то же самое
- * при пустом наборе прав.
+ * по каждому действию. С задачи 0044 это право
+ * {@link Permission#STOCK_DOCUMENT_DELETE_DONE}: при переносе его не получила
+ * ни одна роль (до 0044 удалял только владелец), раздаёт его владелец сам —
+ * ролью или поверх роли. Владелец и администратор сервиса могут всегда
+ * ({@link TenantPrincipal#can}).
  *
- * <p>Исполнитель 0044 меняет тело {@link #allowed()} — и больше ничего:
- * отказ сервиса ({@link #require()}), кнопка в «Движении товара» карточки
+ * <p>Отказ сервиса ({@link #require()}), кнопка в «Движении товара» карточки
  * и в «Перевозках» (сервер отдаёт её признаком строки, своего списка ролей
  * у экрана нет) читают этот метод. Вторая копия проверки — {@code @PreAuthorize}
  * на контроллере или перечень ролей на экране — переехала бы при замене ролей
@@ -30,14 +30,17 @@ public final class PostedDocumentDeletion {
 
     /** Может ли вошедший удалить выполненный документ. */
     public static boolean allowed() {
-        return CurrentUser.get().map(TenantPrincipal::actsAsOwner).orElse(false);
+        return CurrentUser.get()
+                .map(principal -> principal.can(Permission.STOCK_DOCUMENT_DELETE_DONE))
+                .orElse(false);
     }
 
     /** Отказ 403 тому, у кого права нет. */
     public static void require() {
         if (!allowed()) {
             throw new AccessDeniedException(
-                    "Удалять выполненные складские документы может только владелец");
+                    "Нет права «%s»: его даёт владелец на экране «Сотрудники»"
+                            .formatted(Permission.STOCK_DOCUMENT_DELETE_DONE.title()));
         }
     }
 }

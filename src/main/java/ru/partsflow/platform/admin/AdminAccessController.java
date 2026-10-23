@@ -33,7 +33,7 @@ import ru.partsflow.platform.security.TenantPrincipal;
 @RequestMapping("/api/organization/admin-access")
 public class AdminAccessController {
 
-    private static final String OWNER_ONLY = "hasRole('OWNER') and !hasRole('ADMIN')";
+    private static final String OWNER_ONLY = "hasAuthority('admin_access.manage') and !hasRole('ADMIN')";
 
     private final AdminAccess access;
 
@@ -42,7 +42,7 @@ public class AdminAccessController {
     }
 
     @GetMapping
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAuthority('admin_access.manage')")
     public AdminAccess.State state() {
         return access.state(CurrentUser.require().tenantId());
     }

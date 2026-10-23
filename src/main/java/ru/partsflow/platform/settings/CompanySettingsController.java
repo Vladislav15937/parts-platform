@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/company/settings")
 public class CompanySettingsController {
 
-    private static final String OWNER = "hasRole('OWNER')";
+    private static final String SETTINGS = "hasAuthority('settings.company')";
 
     private final CompanySettingsService settings;
 
@@ -34,13 +34,13 @@ public class CompanySettingsController {
     }
 
     @GetMapping
-    @PreAuthorize(OWNER)
+    @PreAuthorize(SETTINGS)
     public CompanySettingsService.CompanySettings read() {
         return settings.read();
     }
 
     @PutMapping
-    @PreAuthorize(OWNER)
+    @PreAuthorize(SETTINGS)
     public CompanySettingsService.CompanySettings write(@Valid @RequestBody UpdateRequest request) {
         return settings.update(request.reservationDays());
     }
