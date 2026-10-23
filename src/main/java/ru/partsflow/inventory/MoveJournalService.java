@@ -49,7 +49,7 @@ public class MoveJournalService {
     public List<MoveDocument> list() {
         boolean mayDelete = PostedDocumentDeletion.allowed();
         return jdbc.query("""
-                        SELECT d.id, d.number, d.created_at, d.note,
+                        SELECT d.id, d.number, d.created_at, d.note, d.doc_type, d.status,
                                wf.name AS from_warehouse, wt.name AS to_warehouse,
                                who.display_name AS author,
                                d.deleted_at, del.display_name AS deleted_by,
@@ -61,7 +61,7 @@ public class MoveJournalService {
                           LEFT JOIN tenant_member del ON del.id = d.deleted_by
                           LEFT JOIN stock_document_line l ON l.document_id = d.id
                          WHERE d.doc_type = 'MOVE' AND d.status = 'DONE'
-                         GROUP BY d.id, d.number, d.created_at, d.note,
+                         GROUP BY d.id, d.number, d.created_at, d.note, d.doc_type, d.status,
                                   wf.name, wt.name, who.display_name, d.deleted_at,
                                   del.display_name
                          ORDER BY d.created_at DESC, d.id DESC""",
@@ -73,7 +73,10 @@ public class MoveJournalService {
                             rs.getInt("lines"), rs.getString("note"), rs.getString("author"),
                             deletedAt == null ? null : deletedAt.toInstant(),
                             rs.getString("deleted_by"),
-                            deletedAt == null && mayDelete);
+                            // Правило «что удаляется» одно — StockDocument.isDeletable;
+                            // фильтр запроса (MOVE, DONE) его не заменяет.
+                            mayDelete && StockDocument.isDeletable(rs.getString("doc_type"),
+                                    rs.getString("status"), deletedAt != null));
                 });
     }
 

@@ -5,7 +5,7 @@ import ru.partsflow.platform.security.CurrentUser;
 import ru.partsflow.platform.security.TenantPrincipal;
 
 /**
- * Право «удалять проведённые складские документы» (задача 0367).
+ * Право «удалять выполненные складские документы» (задача 0367).
  *
  * <p><b>Одно место, и это главное в классе.</b> Решение владельца продукта
  * 23.10.2026 (tasks/0367, «Кто удаляет»): удаляет тот, у кого есть право
@@ -28,7 +28,7 @@ public final class PostedDocumentDeletion {
     private PostedDocumentDeletion() {
     }
 
-    /** Может ли вошедший удалить проведённый документ. */
+    /** Может ли вошедший удалить выполненный документ. */
     public static boolean allowed() {
         return CurrentUser.get().map(TenantPrincipal::actsAsOwner).orElse(false);
     }

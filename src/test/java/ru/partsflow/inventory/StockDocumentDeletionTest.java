@@ -38,7 +38,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Удаление проведённого поступления, списания и перемещения (задача 0367,
+ * Удаление выполненного поступления, списания и перемещения (задача 0367,
  * «Ответ владельца — 23 октября 2026», пп. 1–5).
  *
  * <p>Через HTTP: право проверяется в сервисе ({@code PostedDocumentDeletion}),
@@ -327,6 +327,36 @@ class StockDocumentDeletionTest extends PostgresTestBase {
         assertThat(rows.get(0).path("qty").decimalValue()).isEqualByComparingTo("-1");
         assertThat(history(part, owner).path("intake").isNull())
                 .as("удалённое поступление не называется тем, которым позиция пришла").isTrue();
+    }
+
+    /**
+     * Правило «что удаляется» одно (`StockDocument.refusalOf`), и его читают три
+     * поверхности. Мягкие утверждения — чтобы подделка правила показала, что
+     * краснеют все три, а не только первая.
+     */
+    @Test
+    @DisplayName("Одно правило удаляемости: лента карточки, журнал перевозок и сервис отвечают одинаково")
+    void oneRuleForLaneJournalAndService() throws Exception {
+        long part = part("Рулевая тяга");
+        intake(part, "1");
+        long doc = move(part, "1");
+        MockHttpSession owner = login("vladelec");
+
+        org.assertj.core.api.SoftAssertions soft = new org.assertj.core.api.SoftAssertions();
+        JsonNode moveRow = null;
+        for (JsonNode row : movementRows(part, owner)) {
+            if (row.path("document").asText().startsWith("Перемещение")) {
+                moveRow = row;
+            }
+        }
+        soft.assertThat(moveRow == null ? null : moveRow.path("deletableDocumentId").asLong())
+                .as("лента: перемещение не отмечено удаляемым").isEqualTo(doc);
+        soft.assertThat(journalRow(doc, owner).path("deletable").asBoolean())
+                .as("журнал перевозок: перемещение не отмечено удаляемым").isTrue();
+        soft.assertThat(mvc.perform(delete("/api/stock/documents/" + doc).with(csrf()).session(owner))
+                        .andReturn().getResponse().getStatus())
+                .as("сервис отказал удалить перемещение").isEqualTo(200);
+        soft.assertAll();
     }
 
     @Test
