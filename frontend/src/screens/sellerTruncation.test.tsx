@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -35,7 +36,7 @@ describe('обрезанная выдача продавца', () => {
   });
 
   it('называет, сколько осталось за списком', async () => {
-    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
 
     const input = document.querySelector('input') as HTMLInputElement;
     setNative(input, 'фара');

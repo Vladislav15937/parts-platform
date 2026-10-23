@@ -1,3 +1,5 @@
+import type { Rights } from '../access/rights';
+import { LockedAction } from '../ui/LockedAction';
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { count } from '../ui/plural';
@@ -47,25 +49,27 @@ import type {
  * другой задачи — разобраться, сколько клиент должен.
  */
 export function CustomersScreen({
-  role,
+  rights,
   company,
   memberId,
   onOpenDeal,
 }: {
-  role: string;
+  /** Права вошедшего (задача 0044). */
+  rights: Rights;
   /** Схема арендатора и сотрудник — ключ, которым помнится источник платежа. */
   company: string;
   memberId: number;
   onOpenDeal: (dealId: number) => void;
 }) {
-  const canManage = role === 'OWNER' || role === 'MANAGER';
+  const canManage = rights.has('customer.edit');
+  const canCorrect = rights.has('customer.account.correct');
   const [selected, setSelected] = useState<number | null>(null);
 
   if (selected !== null) {
     return (
       <CustomerCard
         customerId={selected}
-        role={role}
+        canCorrect={canCorrect}
         company={company}
         memberId={memberId}
         canManage={canManage}
@@ -259,7 +263,7 @@ type CardTab = 'client' | 'deals' | 'returns' | 'payments';
 
 function CustomerCard({
   customerId,
-  role,
+  canCorrect,
   company,
   memberId,
   canManage,
@@ -267,7 +271,7 @@ function CustomerCard({
   onOpenDeal,
 }: {
   customerId: number;
-  role: string;
+  canCorrect: boolean;
   company: string;
   memberId: number;
   canManage: boolean;
@@ -336,7 +340,7 @@ function CustomerCard({
             <ClientTab
               customer={customer}
               canManage={canManage}
-              role={role}
+              canCorrect={canCorrect}
               company={company}
               memberId={memberId}
               onSaved={setCustomer}
@@ -375,14 +379,14 @@ function CustomerCard({
 function ClientTab({
   customer,
   canManage,
-  role,
+  canCorrect,
   company,
   memberId,
   onSaved,
 }: {
   customer: CustomerDetail;
   canManage: boolean;
-  role: string;
+  canCorrect: boolean;
   company: string;
   memberId: number;
   onSaved: (customer: CustomerDetail) => void;
@@ -465,7 +469,7 @@ function ClientTab({
       <div className="customer-account">
         <AccountPanel
           customerId={customer.id}
-          role={role}
+          canCorrect={canCorrect}
           company={company}
           memberId={memberId}
         />
@@ -564,12 +568,12 @@ function Field({
  */
 function AccountPanel({
   customerId,
-  role,
+  canCorrect,
   company,
   memberId,
 }: {
   customerId: number;
-  role: string;
+  canCorrect: boolean;
   company: string;
   memberId: number;
 }) {
@@ -671,7 +675,10 @@ function AccountPanel({
         </div>
       )}
 
-      {['OWNER', 'MANAGER'].includes(role) && (
+      {!canCorrect && (
+        <LockedAction permission="customer.account.correct" label="Поправить остаток" />
+      )}
+      {canCorrect && (
         fixing ? (
           <div className="row">
             <input

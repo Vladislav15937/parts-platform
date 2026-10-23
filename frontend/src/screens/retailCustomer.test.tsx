@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
@@ -48,7 +49,7 @@ describe('розничная продажа', () => {
 
   it('клиент подставлен, и сделка оформляется без единого слова о нём', async () => {
     const { container } = render(
-      <SellerScreen canSell role="OWNER" company="test" memberId={1} />,
+      <SellerScreen canSell rights={rightsAs('OWNER')} company="test" memberId={1} />,
     );
 
     const search = container.querySelector('input')!;
@@ -72,7 +73,7 @@ describe('розничная продажа', () => {
 
   it('очищенное руками поле клиента объясняет серую кнопку словами', async () => {
     const { container } = render(
-      <SellerScreen canSell role="OWNER" company="test" memberId={1} />,
+      <SellerScreen canSell rights={rightsAs('OWNER')} company="test" memberId={1} />,
     );
 
     const search = container.querySelector('input')!;

@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 
@@ -38,7 +39,7 @@ describe('экран при неудачной загрузке', () => {
 
   it('«Выгрузки» показывают причину, а не вечное «Загружаем»', async () => {
     refuse();
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
 
     await waitFor(() => expect(screen.getByText(/Сессия кончилась/)).toBeTruthy());
     expect(screen.queryByText(/Загружаем выгрузки/),
@@ -75,7 +76,7 @@ describe('экран при неудачной загрузке', () => {
 
   it('витрина склада — тоже', async () => {
     refuse();
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
 
     await waitFor(() => expect(screen.getByText(/Сессия кончилась/)).toBeTruthy());
     expect(screen.queryByText(/Загружаем/)).toBeNull();

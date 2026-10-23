@@ -27,14 +27,15 @@ import { listCells, type Cell } from '../organization/warehouses';
  * из нескольких задач подряд, и блок, который можно тронуть целиком, дешевле
  * блока, размазанного по чужому файлу.
  */
-export function PartCellBlock({ partId, warehouses, stock, reserved, role, onChanged }: {
+export function PartCellBlock({ partId, warehouses, stock, reserved, canPlace, onChanged }: {
   partId: number;
   warehouses: Warehouse[];
   /** Остаток по складам из строки витрины: ключ — идентификатор склада. */
   stock: Record<string, number>;
   /** Отложенное по складам из той же строки (задача 0367); без него склад показан целым числом. */
   reserved?: Record<string, number> | undefined;
-  role: string;
+  /** Право «Ячейка позиции» (задача 0044). */
+  canPlace: boolean;
   /** Адрес изменился — витрину надо перечитать: в ней есть колонка «Ячейка». */
   onChanged: () => void;
 }) {
@@ -119,7 +120,7 @@ export function PartCellBlock({ partId, warehouses, stock, reserved, role, onCha
 
       {unread && <p className="note note--error">Адрес полки прочитать не удалось</p>}
 
-      {PLACES.includes(role) && placeable.length > 0 && (placing ? (
+      {canPlace && placeable.length > 0 && (placing ? (
         <>
           {placeable.length > 1 && (
             <label className="field">
@@ -185,12 +186,6 @@ export function PartCellBlock({ partId, warehouses, stock, reserved, role, onCha
     </div>
   );
 }
-
-/**
- * Роли те же, что у «Перевезти»: деталь у кладовщика в руках, и перестановка
- * на полку — работа, а не расход. Списание — другое дело, там убыток.
- */
-const PLACES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
 
 /**
  * «· А-01-1» или «· без адреса».

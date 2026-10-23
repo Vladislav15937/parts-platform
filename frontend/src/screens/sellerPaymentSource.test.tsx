@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
@@ -39,7 +40,7 @@ describe('источник платежа в карточке сделки', () 
   });
 
   it('выбранный источник уходит в оплату и запоминается', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     // Источники приходят по алфавиту («Карта Сбер» раньше «ККМ»), и первая
@@ -57,7 +58,7 @@ describe('источник платежа в карточке сделки', () 
   it('следующая оплата этого продавца подставляет прошлый выбор', async () => {
     localStorage.setItem('partsflow.lastPaymentSource.t_1.7', '1');
 
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     // Без единого нажатия по списку — умолчание уже «ККМ» (id 1), а не
@@ -68,14 +69,14 @@ describe('источник платежа в карточке сделки', () 
   it('другой продавец на том же устройстве не видит чужого умолчания', async () => {
     localStorage.setItem('partsflow.lastPaymentSource.t_1.7', '1');
 
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={9} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={9} />);
     await openDeal();
 
     await waitFor(() => expect(paymentSelect().value).toBe('2'));
   });
 
   it('кнопка «Оплата» не гаснет из-за источника: он не обязателен', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     fireEvent.change(paymentSelect(), { target: { value: '' } });
@@ -110,7 +111,7 @@ describe('источник платежа в возврате денег из к
   });
 
   it('выбранный источник уходит в возврат и запоминается', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openIssuedDeal();
 
     fireEvent.change(returnSourceSelect(), { target: { value: '1' } });
@@ -127,7 +128,7 @@ describe('источник платежа в возврате денег из к
   });
 
   it('деньги на лицевой счёт — источника нет вовсе', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openIssuedDeal();
 
     fireEvent.click(checkbox('Деньги на лицевой счёт, а не из кассы'));
@@ -165,7 +166,7 @@ describe('источник платежа в операциях по лицев�
   });
 
   it('пополнение уходит с выбранным источником', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openAccount();
 
     fireEvent.change(paymentSelect(), { target: { value: '1' } });
@@ -177,7 +178,7 @@ describe('источник платежа в операциях по лицев�
   });
 
   it('выдача уходит с выбранным источником', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openAccount();
 
     fireEvent.change(paymentSelect(), { target: { value: '1' } });
@@ -188,7 +189,7 @@ describe('источник платежа в операциях по лицев�
   });
 
   it('правка остатка источник не запоминает: платежа при ней нет', async () => {
-    render(<SellerScreen canSell role="OWNER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('OWNER')} company="t_1" memberId={7} />);
     await openAccount();
 
     fireEvent.change(paymentSelect(), { target: { value: '1' } });

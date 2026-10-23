@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, waitFor } from '@testing-library/react';
 
@@ -30,6 +31,11 @@ import { WheelsScreen } from './WheelsScreen';
  * <p>Вторая сторона обязательна и тут: правка, спрятавшая ссылку от всех,
  * тоже «чинит» дыру — и делает это молча, потому что жалуется на пропавшую
  * выгрузку только владелец и не сразу.
+ *
+ * <p><b>С задачи 0044 без права кнопка не прячется, а гаснет и называет
+ * причину</b> (решение владельца 23.10.2026, «погашен с причиной»). Ссылки
+ * на файл у такой кнопки нет вовсе — погашенная `<a>` уносила бы файл
+ * так же, как живая.
  */
 describe('«Скачать таблицу» и роли', () => {
   beforeEach(() => {
@@ -51,15 +57,20 @@ describe('«Скачать таблицу» и роли', () => {
   it('на складе её нет у кладовщика и «Просмотра», но есть у владельца и менеджера',
     async () => {
       for (const role of ['STOREKEEPER', 'VIEWER']) {
-        render(<CatalogScreen role={role} />);
+        render(<CatalogScreen rights={rightsAs(role)} />);
         await waitFor(() => expect(link('Настроить таблицу')).toBeTruthy());
-        expect(link('Скачать таблицу'),
+        expect(download('Скачать таблицу'),
           `«${role}» уносит весь склад одним файлом`).toBeUndefined();
+        const locked = link('Скачать таблицу');
+        expect(locked?.tagName, `«${role}»: кнопка спрятана, а не погашена`).toBe('BUTTON');
+        expect((locked as HTMLButtonElement).disabled).toBe(true);
+        expect(document.body.textContent, 'причина не названа')
+          .toContain('Нет права');
         cleanup();
       }
 
       for (const role of ['OWNER', 'MANAGER']) {
-        render(<CatalogScreen role={role} />);
+        render(<CatalogScreen rights={rightsAs(role)} />);
         await waitFor(() => expect(link('Настроить таблицу')).toBeTruthy());
         const download = link('Скачать таблицу');
         expect(download, `«${role}» остался без выгрузки склада`).toBeTruthy();
@@ -71,15 +82,20 @@ describe('«Скачать таблицу» и роли', () => {
 
   it('на колёсах — то же самое', async () => {
     for (const role of ['STOREKEEPER', 'VIEWER']) {
-      render(<WheelsScreen canIntake role={role} />);
+      render(<WheelsScreen canIntake rights={rightsAs(role)} />);
       await waitFor(() => expect(link('Настроить таблицу')).toBeTruthy());
-      expect(link('Скачать таблицу'),
+      expect(download('Скачать таблицу'),
         `«${role}» уносит колёсный склад одним файлом`).toBeUndefined();
+      const locked = link('Скачать таблицу');
+      expect(locked?.tagName, `«${role}»: кнопка спрятана, а не погашена`).toBe('BUTTON');
+      expect((locked as HTMLButtonElement).disabled).toBe(true);
+      expect(document.body.textContent, 'причина не названа')
+        .toContain('Нет права');
       cleanup();
     }
 
     for (const role of ['OWNER', 'MANAGER']) {
-      render(<WheelsScreen canIntake role={role} />);
+      render(<WheelsScreen canIntake rights={rightsAs(role)} />);
       await waitFor(() => expect(link('Настроить таблицу')).toBeTruthy());
       const download = link('Скачать таблицу');
       expect(download, `«${role}» остался без выгрузки колёс`).toBeTruthy();
@@ -97,6 +113,12 @@ describe('«Скачать таблицу» и роли', () => {
  */
 function link(text: string): HTMLElement | undefined {
   return [...document.querySelectorAll('a, button')]
+    .find((el) => el.textContent?.trim() === text) as HTMLElement | undefined;
+}
+
+/** Ссылка, уносящая файл: есть только у того, кому файл положен. */
+function download(text: string): HTMLElement | undefined {
+  return [...document.querySelectorAll('a[href]')]
     .find((el) => el.textContent?.trim() === text) as HTMLElement | undefined;
 }
 

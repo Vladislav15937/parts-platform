@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
@@ -60,7 +61,7 @@ describe('снимки машины-донора в объявлении', () =>
   });
 
   it('отмеченное наименование уезжает вместе с остальными настройками', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     // Выбор наименований есть и у отбора выгрузки, и здесь, а поле поиска
@@ -93,7 +94,7 @@ describe('снимки машины-донора в объявлении', () =>
     // Иначе владелец с пятью прайс-листами не знает, у какого из них снимки
     // машины уже дописываются, — и решает это заново каждый раз.
     stored = { settings: settings({ donorPhotoKinds: [9] }) };
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     // Названия эталонов приезжают отдельным запросом, поэтому ждём их.
@@ -101,7 +102,7 @@ describe('снимки машины-донора в объявлении', () =>
   });
 
   it('пустой выбор уезжает пустым списком: «никому» — это состояние, а не пропуск', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить снимки донора' }));
@@ -116,7 +117,7 @@ describe('снимки машины-донора в объявлении', () =>
     // здесь — нет: «дописать всем, кроме фары» это снимки машины
     // у девятисот наименований.
     stored = { settings: settings({ donorPhotoKinds: [5] }) };
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     const block = donorBlock();
@@ -131,7 +132,7 @@ describe('снимки машины-донора в объявлении', () =>
     // Прайс шин донора не отбирает, и показанная настройка была бы
     // обещанием, которого нет.
     stored = { productLine: 'WHEEL' };
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     expect(screen.queryByRole('button', { name: 'Сохранить снимки донора' })).toBeNull();

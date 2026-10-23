@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
@@ -642,26 +643,26 @@ describe('на телефоне ни один раздел не уезжает �
     intake: () => <IntakeScreen reference={reference()} onSend={() => {}} />,
     donor: () => <DonorScreen reference={reference()} online onChanged={() => {}} />,
     sales: () => (
-      <SellerScreen canSell role="OWNER" company="t_1" memberId={7} openDealId={null} />
+      <SellerScreen canSell rights={rightsAs('OWNER')} company="t_1" memberId={7} openDealId={null} />
     ),
     deals: () => <DealsScreen onOpenDeal={() => {}} />,
     orders: () => <OrdersScreen canSell />,
     returns: () => <ReturnsScreen onOpenDeal={() => {}} />,
     payments: () => <PaymentsScreen onOpenDeal={() => {}} />,
     customers: () => (
-      <CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />
+      <CustomersScreen rights={rightsAs('OWNER')} company="t_1" memberId={7} onOpenDeal={() => {}} />
     ),
-    catalog: () => <CatalogScreen role="OWNER" />,
-    wheels: () => <WheelsScreen canIntake role="OWNER" />,
+    catalog: () => <CatalogScreen rights={rightsAs('OWNER')} />,
+    wheels: () => <WheelsScreen canIntake rights={rightsAs('OWNER')} />,
     // Владелец видит на этой вкладке оба блока сразу — журнал пересчётов
     // со сведением расхождений и обход полок сканером.
     inventory: () => (
       <>
-        <InventoryReconcile reference={reference()} role="OWNER" />
+        <InventoryReconcile reference={reference()} canReconcile={rightsAs('OWNER').has('inventory.reconcile')} />
         <InventoryScreen reference={reference()} onCount={() => {}} />
       </>
     ),
-    moves: () => <StockMovesScreen role="OWNER" />,
+    moves: () => <StockMovesScreen rights={rightsAs('OWNER')} />,
     journal: () => <AuditJournalScreen />,
     outbox: () => (
       <OutboxScreen
@@ -677,7 +678,7 @@ describe('на телефоне ни один раздел не уезжает �
     import: () => <ImportScreen reference={reference()} canImport />,
     names: () => <UnmatchedScreen canManage onTotalChanged={() => {}} />,
     reports: () => <ReportsScreen canRead />,
-    feeds: () => <FeedsScreen role="OWNER" />,
+    feeds: () => <FeedsScreen rights={rightsAs('OWNER')} />,
     delivery: () => <DeliveryScreen canManage onTotalChanged={() => {}} />,
     labels: () => <LabelsScreen canPrint />,
     members: () => <MembersScreen />,
@@ -748,7 +749,7 @@ describe('на телефоне ни один раздел не уезжает �
    * поломка, которую тест обязан замечать.
    */
   it('поля формы колеса переносятся, а не сжимаются', async () => {
-    const { container } = render(<WheelsScreen canIntake role="OWNER" />);
+    const { container } = render(<WheelsScreen canIntake rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(container.textContent).not.toBe(''));
 
     const widths = await measureWidths(
@@ -787,7 +788,7 @@ describe('на телефоне ни один раздел не уезжает �
    */
   it('отбор продавца переносится, а не уводит страницу вбок', async () => {
     const { container } = render(
-      <SellerScreen canSell role="OWNER" company="t_1" memberId={7} openDealId={null} />,
+      <SellerScreen canSell rights={rightsAs('OWNER')} company="t_1" memberId={7} openDealId={null} />,
     );
     await waitFor(() => expect(container.textContent).not.toBe(''));
 

@@ -265,7 +265,10 @@ public class SecurityConfig {
      * письмом нет вовсе, а первый владелец заводится провижинингом по секрету.
      */
     static final String[] ACCESS_CONTROL = {
-            "/api/members", "/api/members/**", "/api/organization/admin-access/**"};
+            "/api/members", "/api/members/**", "/api/organization/admin-access/**",
+            // Роли и права (задача 0044): право «Сотрудники и роли», выданное
+            // администратором, — тот же вход, переживающий отзыв.
+            "/api/access/**"};
 
     /**
      * Менять вход: сотрудник кабинета, но не администратор сервиса. Проверка

@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -21,7 +22,7 @@ describe('раздел «Клиенты»', () => {
   it('пустой поиск говорит ровно то, что называет задача', async () => {
     stubApi({ customers: { items: [], total: 0 } });
 
-    render(<CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />);
+    render(<CustomersScreen rights={rightsAs('OWNER')} company="t_1" memberId={7} onOpenDeal={() => {}} />);
 
     fireEvent.change(screen.getByPlaceholderText('Поиск клиента'), {
       target: { value: 'Иванов' },
@@ -43,7 +44,7 @@ describe('раздел «Клиенты»', () => {
       },
     });
 
-    render(<CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />);
+    render(<CustomersScreen rights={rightsAs('OWNER')} company="t_1" memberId={7} onOpenDeal={() => {}} />);
 
     await waitFor(() => expect(screen.getByText('Клиентов: 2')).toBeTruthy());
 
@@ -61,7 +62,7 @@ describe('раздел «Клиенты»', () => {
       account: { customerId: 1, balance: 0, entries: [] },
     });
 
-    render(<CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />);
+    render(<CustomersScreen rights={rightsAs('OWNER')} company="t_1" memberId={7} onOpenDeal={() => {}} />);
 
     await waitFor(() => expect(screen.getByText('Автосервис')).toBeTruthy());
     fireEvent.click(screen.getByText('Автосервис'));
@@ -102,7 +103,7 @@ describe('раздел «Клиенты»', () => {
       account: { customerId: 1, balance: 1000, entries },
     });
 
-    render(<CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />);
+    render(<CustomersScreen rights={rightsAs('OWNER')} company="t_1" memberId={7} onOpenDeal={() => {}} />);
     await waitFor(() => expect(screen.getByText('Клиент с историей')).toBeTruthy());
     fireEvent.click(screen.getByText('Клиент с историей'));
 
@@ -126,7 +127,7 @@ describe('раздел «Клиенты»', () => {
       account: { customerId: 1, balance: 0, entries: [] },
     });
 
-    render(<CustomersScreen role="SELLER" company="t_1" memberId={7} onOpenDeal={() => {}} />);
+    render(<CustomersScreen rights={rightsAs('SELLER')} company="t_1" memberId={7} onOpenDeal={() => {}} />);
     await waitFor(() => expect(screen.getByText('Клиент продавца')).toBeTruthy());
     fireEvent.click(screen.getByText('Клиент продавца'));
 
@@ -238,7 +239,7 @@ async function openAccountCard(sent: Sent, { balance }: { balance: number }): Pr
     sent,
   });
 
-  render(<CustomersScreen role="OWNER" company="t_1" memberId={7} onOpenDeal={() => {}} />);
+  render(<CustomersScreen rights={rightsAs('OWNER')} company="t_1" memberId={7} onOpenDeal={() => {}} />);
   await waitFor(() => expect(screen.getByText('Автосервис')).toBeTruthy());
   fireEvent.click(screen.getByText('Автосервис'));
 

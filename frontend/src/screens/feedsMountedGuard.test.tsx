@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -99,7 +100,7 @@ describe('сторож размонтирования на выгрузках', 
   });
 
   it('в StrictMode список выгрузок доезжает, а не висит на «Загружаем выгрузки…»', async () => {
-    render(<StrictMode><FeedsScreen role="OWNER" /></StrictMode>);
+    render(<StrictMode><FeedsScreen rights={rightsAs('OWNER')} /></StrictMode>);
 
     await waitFor(() => expect(screen.getByDisplayValue('Дром: основной')).toBeTruthy(), ЖДАТЬ);
     expect(screen.queryByText('Загружаем выгрузки…')).toBeNull();
@@ -109,7 +110,7 @@ describe('сторож размонтирования на выгрузках', 
     // Склады грузятся вторым эффектом и попадают в форму отбора. Замолчавший
     // сторож оставил бы её пустой при исправном сервере — владелец решил бы,
     // что складов у него нет, и выгрузил бы весь склад вместо одного.
-    render(<StrictMode><FeedsScreen role="OWNER" /></StrictMode>);
+    render(<StrictMode><FeedsScreen rights={rightsAs('OWNER')} /></StrictMode>);
 
     await waitFor(() => expect(screen.getByLabelText('Ткацкая')).toBeTruthy(), ЖДАТЬ);
     expect(screen.getByLabelText('Щёлковская')).toBeTruthy();
@@ -120,7 +121,7 @@ describe('сторож размонтирования на выгрузках', 
     // IndexedDB → запрос справочника → setBrands. Отбор марок ищет по уже
     // загруженному списку, поэтому найденная «Тойота» и есть доказательство,
     // что запись состояния дошла.
-    render(<StrictMode><FeedsScreen role="OWNER" /></StrictMode>);
+    render(<StrictMode><FeedsScreen rights={rightsAs('OWNER')} /></StrictMode>);
 
     const brandSearch = await waitFor(() => brandQueryField(), ЖДАТЬ);
     fireEvent.change(brandSearch, { target: { value: 'той' } });
@@ -136,7 +137,7 @@ describe('сторож размонтирования на выгрузках', 
     try {
       // Отрисовали и в тот же тик ушли с вкладки: ни один из четырёх
       // запросов эффекта ещё не вернулся.
-      render(<FeedsScreen role="OWNER" />);
+      render(<FeedsScreen rights={rightsAs('OWNER')} />);
       cleanup();
 
       // Так vitest убирает среду между файлами — а колбэки ещё в пути.

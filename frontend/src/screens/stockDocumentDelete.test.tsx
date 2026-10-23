@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -91,7 +92,7 @@ describe('«Движение товара» и удаление документ
       return json([]);
     }));
 
-    render(<PartCard row={cardRow()} warehouses={[{ id: 2, name: 'Основной' }]} role="OWNER"
+    render(<PartCard row={cardRow()} warehouses={[{ id: 2, name: 'Основной' }]} rights={rightsAs('OWNER')}
       onClose={() => {}} onChanged={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: 'История' }));
     fireEvent.click(await screen.findByRole('button', { name: /^Движения/ }));
@@ -125,7 +126,7 @@ describe('«Движение товара» и удаление документ
       ]);
     }));
 
-    render(<StockMovesScreen role="OWNER" />);
+    render(<StockMovesScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Ангар')).toBeTruthy());
     expect(screen.getByText('Удалён · Владелец')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: /^Удалить:/ })).toHaveLength(1);

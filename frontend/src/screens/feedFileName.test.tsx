@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -54,7 +55,7 @@ describe('имя файла прайса', () => {
   });
 
   it('сохраняется и попадает в ссылку', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     const details = await waitFor(() => {
       const found = document.querySelector('details');
       expect(found).toBeTruthy();
@@ -77,7 +78,7 @@ describe('имя файла прайса', () => {
   });
 
   it('пустое поле снимает имя, а не сохраняет пустую строку в ссылке', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     const details = await waitFor(() => {
       const found = document.querySelector('details');
       expect(found).toBeTruthy();

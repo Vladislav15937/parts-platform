@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 
@@ -84,7 +85,7 @@ describe('сделка без покупателя всюду зовётся «�
     stub((url) => (url.includes('/api/deals/77') ? orderDeal() : []));
 
     render(
-      <SellerScreen canSell role="SELLER" company="t_1" memberId={1}
+      <SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={1}
                     openDealId={77} onDealOpened={() => {}} />,
     );
     await waitFor(() => expect(screen.getByText(/Сделка №77/)).toBeTruthy());

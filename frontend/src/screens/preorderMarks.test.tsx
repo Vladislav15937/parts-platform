@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
@@ -39,7 +40,7 @@ describe('пометка о сдвиге ожидаемой даты и пред
 
   it('карточка: ожидается поставка, сдвиг назван и гаснет по «Клиенту сообщил»', async () => {
     const fetch = stubSeller();
-    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await openDeal('№30');
 
     const text = plain(document.body.textContent);
@@ -59,14 +60,14 @@ describe('пометка о сдвиге ожидаемой даты и пред
 
   it('оплата больше суммы после снятия предзаказа: карточка называет переплату, без неё слов нет', async () => {
     stubSeller();
-    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await openDeal('№31');
     expect(plain(document.body.textContent)).not.toContain('Оплата больше суммы');
     cleanup();
 
     overpaid = true;
     stubSeller();
-    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await openDeal('№31');
     const text = plain(document.body.textContent);
     expect(text).toContain('Оплата больше суммы сделки');
@@ -75,7 +76,7 @@ describe('пометка о сдвиге ожидаемой даты и пред
 
   it('список сделок клиента: тот же предзаказ и тот же сдвиг, без «срока истёк»', async () => {
     stubSeller();
-    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await openCustomer();
 
     const lines = finderLines();

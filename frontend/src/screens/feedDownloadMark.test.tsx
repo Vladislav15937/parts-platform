@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 
@@ -42,7 +43,7 @@ describe('отметка забора прайса', () => {
   });
 
   it('называет день и время последнего забора', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
 
     await waitFor(() => expect(
       screen.getByText('Скачан 04 сен, 22:30'),
@@ -51,7 +52,7 @@ describe('отметка забора прайса', () => {
   });
 
   it('у незабранной выгрузки говорит об этом словами', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
 
     // Сначала дожидаемся загрузки: отрицание на пустом экране проходит
     // само собой, и тест зеленел бы на вырезанной отметке.

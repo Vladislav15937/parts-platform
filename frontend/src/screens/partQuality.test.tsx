@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -101,7 +102,7 @@ describe('оценка состояния в карточке позиции', (
   });
 
   it('продавцу оценка показана, но менять её нечем', async () => {
-    render(<PartCard {...props(row({ qualityGrade: 'NO_DEFECTS' }))} role="SELLER" />);
+    render(<PartCard {...props(row({ qualityGrade: 'NO_DEFECTS' }))} rights={rightsAs('SELLER')} />);
 
     // Оценка уходит в объявление, и правят её те же, кто правит карточку.
     // Кнопка, отвечающая отказом, хуже отсутствующей.
@@ -133,7 +134,7 @@ function props(row: CatalogRow) {
   return {
     row,
     warehouses: WAREHOUSES,
-    role: 'OWNER',
+    rights: rightsAs('OWNER'),
     onClose: () => {},
     onChanged: () => {},
   };

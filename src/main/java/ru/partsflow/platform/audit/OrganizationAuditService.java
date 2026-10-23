@@ -96,6 +96,8 @@ public class OrganizationAuditService {
         KINDS.put("storage_cell", "Ячейка");
         KINDS.put("tenant_member", "Сотрудник");
         KINDS.put("company_setting", "Настройки компании");
+        // Задача 0044: роли клиента правит экран сотрудников через AuditJournal.
+        KINDS.put("access_role", "Роль");
     }
 
     /**
@@ -127,7 +129,8 @@ public class OrganizationAuditService {
             Map.entry("warehouse", "Склад заведён"),
             Map.entry("storage_cell", "Ячейка заведена"),
             Map.entry("tenant_member", "Сотрудник заведён"),
-            Map.entry("company_setting", "Настройки заведены"));
+            Map.entry("company_setting", "Настройки заведены"),
+            Map.entry("access_role", "Роль заведена"));
 
     private static final Map<String, String> REMOVED = Map.ofEntries(
             Map.entry("part", "Товар удалён"),
@@ -149,7 +152,8 @@ public class OrganizationAuditService {
             Map.entry("warehouse", "Склад удалён"),
             Map.entry("storage_cell", "Ячейка удалена"),
             Map.entry("tenant_member", "Сотрудник удалён"),
-            Map.entry("company_setting", "Настройки удалены"));
+            Map.entry("company_setting", "Настройки удалены"),
+            Map.entry("access_role", "Роль удалена"));
 
     /**
      * Название вещи у видов задачи 0325 — из её строки, а у позиции снимка
@@ -185,6 +189,8 @@ public class OrganizationAuditService {
             + " JOIN warehouse w ON w.id = x.warehouse_id WHERE x.id = a.record_id)"
             + " WHEN 'tenant_member' THEN (SELECT coalesce(x.display_name, x.login) FROM tenant_member x"
             + " WHERE x.id = a.record_id)"
+            + " WHEN 'access_role' THEN coalesce((SELECT x.name FROM access_role x WHERE x.id = a.record_id),"
+            + " coalesce(a.new_value, a.old_value) ->> 'name')"
             + " END";
 
     /**

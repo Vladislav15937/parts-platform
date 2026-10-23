@@ -37,7 +37,8 @@ import { BulkMoveForm } from './BulkMoveForm';
 import { count, goods } from '../ui/plural';
 import { ColumnMenu } from './ColumnMenu';
 import { VehiclePicker } from './VehiclePicker';
-import { EXPORT_ROLES } from './tabs';
+import type { Rights } from '../access/rights';
+import { LockedAction } from '../ui/LockedAction';
 
 /**
  * Витрина склада: таблица товаров, как её видит владелец.
@@ -56,15 +57,12 @@ import { EXPORT_ROLES } from './tabs';
  */
 const SIZE = 50;
 
-/** Кто перевозит между складами. Тот же список в @PreAuthorize у POST /api/stock/moves. */
-const MOVE_ROLES = ['OWNER', 'MANAGER', 'STOREKEEPER'];
-
 /** Название колонки для чипа отбора: ключ ничего не говорит владельцу. */
 function columnTitle(key: string): string {
   return COLUMNS.find((c) => c.key === key)?.title ?? key;
 }
 
-export function CatalogScreen({ role }: { role: string }) {
+export function CatalogScreen({ rights }: { rights: Rights }) {
   const [page, setPage] = useState<CatalogPage | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -378,7 +376,7 @@ export function CatalogScreen({ role }: { role: string }) {
         <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
           Настроить таблицу
         </button>
-        {(role === 'OWNER' || role === 'MANAGER') && (
+        {rights.has('part.edit') ? (
           <button
             type="button"
             className="button--ghost"
@@ -392,17 +390,21 @@ export function CatalogScreen({ role }: { role: string }) {
           >
             {selecting ? 'Выйти из правки' : 'Правка списком'}
           </button>
+        ) : !rights.has('stock.move') && (
+          <LockedAction permission="part.edit" label="Правка списком" />
         )}
-        {(role === 'OWNER' || role === 'MANAGER') && (
+        {rights.has('part.edit') ? (
           <button type="button" className="button--ghost" onClick={() => setFitList(!fitList)}>
             {fitList ? 'Скрыть применимость' : 'Применимость подробно'}
           </button>
+        ) : (
+          <LockedAction permission="part.edit" label="Применимость подробно" />
         )}
-        {fitList && <ApplicabilityList role={role} onClose={() => setFitList(false)} />}
-        {/* Кладовщик правку ценой и секцией не делает — «Правка списком»
-            ему не показана вовсе, — но перевозит наравне с владельцем:
-            деталь у него в руках. Свой вход в тот же режим отметки строк. */}
-        {role === 'STOREKEEPER' && (
+        {fitList && <ApplicabilityList canEdit={rights.has('part.edit')}
+                                       onClose={() => setFitList(false)} />}
+        {/* Без правки карточек, но с перевозкой (кладовщик до 0044) — свой
+            вход в тот же режим отметки строк: деталь у него в руках. */}
+        {!rights.has('part.edit') && rights.has('stock.move') && (
           <button
             type="button"
             className="button--ghost"
@@ -422,10 +424,12 @@ export function CatalogScreen({ role }: { role: string }) {
             Прячется здесь и отбивается на сервере — спрятанная кнопка
             при открытом адресе это не защита, а закрытый адрес при видимой
             кнопке — обещание, которое не выполняется. */}
-        {EXPORT_ROLES.includes(role) && (
+        {rights.has('export.table') ? (
           <a className="button--ghost" href={exportUrl(query)} download>
             Скачать таблицу
           </a>
+        ) : (
+          <LockedAction permission="export.table" label="Скачать таблицу" />
         )}
       </div>
 
@@ -471,7 +475,7 @@ export function CatalogScreen({ role }: { role: string }) {
         <PartCard
           row={card}
           warehouses={warehouses}
-          role={role}
+          rights={rights}
           onClose={() => setCard(null)}
           onChanged={() => {
             setCard(null);
@@ -516,7 +520,7 @@ export function CatalogScreen({ role }: { role: string }) {
               : chosen.length === 0 ? 'Отметьте позиции'
               : `Выбрано ${chosen.length}`}
           </span>
-          {(role === 'OWNER' || role === 'MANAGER') && (
+          {rights.has('part.edit') && (
             <button type="button" disabled={!whole && chosen.length === 0}
                     onClick={() => setEditing(true)}>
               Изменить
@@ -525,7 +529,7 @@ export function CatalogScreen({ role }: { role: string }) {
           {/* Перевозка не берёт «весь отбор»: пачка в тридцать пять тысяч
               позиций через два склада — это уже не то, что отмечают
               на витрине руками, а отдельная задача. Отмечают до пары сотен. */}
-          {!whole && MOVE_ROLES.includes(role) && (
+          {!whole && rights.has('stock.move') && (
             <button type="button" className="button--ghost"
                     disabled={chosen.length === 0}
                     onClick={() => setMovingBulk(true)}>
@@ -536,7 +540,7 @@ export function CatalogScreen({ role }: { role: string }) {
               Кнопка стоит рядом с отметками, а не в настройках: нужна она
               ровно тогда, когда владелец уже понял, что отмечать придётся
               семьсот страниц. Перевозке она не служит — только правке. */}
-          {(role === 'OWNER' || role === 'MANAGER') && !whole
+          {rights.has('part.edit') && !whole
             && page !== null && page.total > page.rows.length && (
             <button type="button" className="button--ghost"
                     onClick={() => { setWhole(true); setChosen([]); }}>

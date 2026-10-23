@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -27,7 +28,7 @@ describe('состояние позиции отдельно от наимено
   describe('склад', () => {
     it('новая раскладка: «Состояние» стоит колонкой сразу за «Запчастью»', async () => {
       stubCatalog(null);
-      render(<CatalogScreen role="OWNER" />);
+      render(<CatalogScreen rights={rightsAs('OWNER')} />);
       await waitFor(() => expect(document.querySelectorAll('tbody tr').length).toBe(2));
 
       const headers = [...document.querySelectorAll('thead th')]
@@ -45,7 +46,7 @@ describe('состояние позиции отдельно от наимено
 
     it('сохранённая раскладка без колонки: состояние рядом с наименованием', async () => {
       stubCatalog(['number', 'title', 'price']);
-      render(<CatalogScreen role="OWNER" />);
+      render(<CatalogScreen rights={rightsAs('OWNER')} />);
       await waitFor(() => expect(document.querySelectorAll('tbody tr').length).toBe(2));
 
       const headers = [...document.querySelectorAll('thead th')].map((th) => th.textContent ?? '');
@@ -64,7 +65,7 @@ describe('состояние позиции отдельно от наимено
 
     it('сохранённая раскладка с колонкой: рядом с наименованием не дублируется', async () => {
       stubCatalog(['number', 'title', 'condition', 'price']);
-      render(<CatalogScreen role="OWNER" />);
+      render(<CatalogScreen rights={rightsAs('OWNER')} />);
       await waitFor(() => expect(document.querySelectorAll('tbody tr').length).toBe(2));
 
       expect(document.querySelectorAll('.title-aside').length).toBe(0);
@@ -82,7 +83,7 @@ describe('состояние позиции отдельно от наимено
   describe('продавец', () => {
     it('«контрактная» и «новая» различимы в строке выдачи и в корзине', async () => {
       stubSeller();
-      render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+      render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
 
       const input = document.querySelector('input') as HTMLInputElement;
       fireEvent.change(input, { target: { value: 'генератор' } });
@@ -124,7 +125,7 @@ describe('состояние позиции отдельно от наимено
       vi.stubGlobal('fetch', vi.fn(async () => json([])));
       vi.stubGlobal('print', vi.fn());
       render(<PartCard row={catalogRow(1, 'REFURBISHED')} warehouses={[{ id: 2, name: 'Ткацкая' }]}
-        role="STOREKEEPER" onClose={() => {}} onChanged={() => {}} />);
+        rights={rightsAs('STOREKEEPER')} onClose={() => {}} onChanged={() => {}} />);
 
       fireEvent.click(await screen.findByRole('button', { name: 'Печать штрих-кода' }));
       const label = (await screen.findByRole('img', { name: /Штрихкод/ }))

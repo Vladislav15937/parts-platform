@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -47,7 +48,7 @@ describe('наценка на прайс-лист', () => {
   });
 
   it('уезжает на сервер тем же, что владелец набрал', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     fireEvent.change(screen.getByLabelText('Наценка или скидка, %'),
@@ -82,7 +83,7 @@ describe('наценка на прайс-лист', () => {
     // Пустое значение — «без ограничения», а не «ничего»: то же правило,
     // что у границ цены в отборе. Ноль и пусто на сервере различаются,
     // и превращать одно в другое здесь нельзя.
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     fireEvent.change(screen.getByLabelText('Наценка или скидка, %'),
@@ -107,7 +108,7 @@ describe('наценка на прайс-лист', () => {
   it('заданная наценка видна в полях, а не только в базе', async () => {
     // Иначе владелец с пятью прайс-листами не знает, у какого из них
     // комиссия уже заложена, — а поставив её второй раз, уедет с +21 %.
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Дром: основной')).toBeTruthy());
 
     const percent = screen.getByLabelText('Наценка или скидка, %') as HTMLInputElement;

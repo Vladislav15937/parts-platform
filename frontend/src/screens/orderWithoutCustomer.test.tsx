@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
@@ -43,7 +44,7 @@ describe('заказ с площадки', () => {
 
   it('кнопка оживает от номера заказа, а не от клиента', async () => {
     const { container } = render(
-      <SellerScreen canSell role="OWNER" company="test" memberId={1} />,
+      <SellerScreen canSell rights={rightsAs('OWNER')} company="test" memberId={1} />,
     );
 
     const search = container.querySelector('input')!;

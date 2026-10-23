@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, waitFor } from '@testing-library/react';
 
@@ -41,7 +42,7 @@ describe('подсказка источника машины на складе',
   });
 
   it('применимость и донор подписаны по-разному', async () => {
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(document.querySelectorAll('tbody tr').length).toBe(2));
 
     const cell = (text: string) => [...document.querySelectorAll('tbody td')]

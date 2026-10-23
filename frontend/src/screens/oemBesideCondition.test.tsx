@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -69,7 +70,7 @@ describe('выдача продавца и корзина', () => {
 describe('состав сделки и выбор на возврат', () => {
   it('каждая строка состава называет основной номер', async () => {
     stubDeal();
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     expect(lineOf('Фара с номером')).toMatch(
@@ -128,7 +129,7 @@ describe('на телефоне номер не выталкивает цену'
       { ...stock(1, 'REFURBISHED', number), title: 'Фара левая Toyota Camry 2007 ксенон' },
       { ...stock(2, 'USED', null), title: 'Фара левая Toyota Camry 2007' },
     ]);
-    const { container } = render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    const { container } = render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await search();
     const html = await settled(container);
 
@@ -170,7 +171,7 @@ function stubSeller(rows: ReturnType<typeof stock>[]): void {
 
 async function search(): Promise<void> {
   if (document.querySelector('input') === null) {
-    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
   }
   const input = document.querySelector('input') as HTMLInputElement;
   fireEvent.change(input, { target: { value: 'фара' } });

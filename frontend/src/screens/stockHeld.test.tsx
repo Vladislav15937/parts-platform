@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 
@@ -27,7 +28,7 @@ describe('резерв и отсутствие на складе', () => {
       row(2, { qty: 3, stock: { '2': 3 }, reserved: { '2': 1 } }),
       row(3, { qty: 2, stock: { '2': 2 }, reserved: { '2': 0 } }),
     ]);
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(document.querySelectorAll('tbody tr').length).toBe(3));
 
     const cells = [...document.querySelectorAll('tbody tr')]
@@ -46,7 +47,7 @@ describe('резерв и отсутствие на складе', () => {
 
   it('склад без записи об остатке — прочерк', async () => {
     stubCatalog([row(1, { qty: 0, stock: {}, reserved: {} })]);
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(document.querySelectorAll('tbody tr').length).toBe(1));
     expect(document.querySelector('tbody tr')?.lastElementChild?.textContent).toBe('—');
   });
@@ -91,7 +92,7 @@ function move(over: Partial<PartHistory['movements'][number]>): PartHistory['mov
 }
 
 function props(r: CatalogRow) {
-  return { row: r, warehouses: WAREHOUSES, role: 'OWNER', onClose: () => {}, onChanged: () => {} };
+  return { row: r, warehouses: WAREHOUSES, rights: rightsAs('OWNER'), onClose: () => {}, onChanged: () => {} };
 }
 
 function row(id: number, over: Partial<CatalogRow>): CatalogRow {

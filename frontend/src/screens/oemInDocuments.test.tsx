@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -156,7 +157,7 @@ describe('состав перевозки', () => {
       }
       return json([]);
     }));
-    render(<StockMovesScreen role="OWNER" />);
+    render(<StockMovesScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Ангар')).toBeTruthy());
     fireEvent.click(screen.getByText('Ангар').closest('tr')!);
     await waitFor(() => expect(rowOf('Фара левая')).toBeTruthy());

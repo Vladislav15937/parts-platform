@@ -28,7 +28,8 @@ import { PartCard } from './PartCard';
 import { useMounted } from '../ui/useMounted';
 import { ColumnMenu } from './ColumnMenu';
 import { BulkEditForm } from './BulkEditForm';
-import { EXPORT_ROLES } from './tabs';
+import type { Rights } from '../access/rights';
+import { LockedAction } from '../ui/LockedAction';
 
 /**
  * Шины и диски: своя вкладка, как в кабинете Bazon.
@@ -46,7 +47,7 @@ function wheelColumnTitle(key: string): string {
   return WHEEL_COLUMNS.find((c) => c.key === key)?.title ?? key;
 }
 
-export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: string }) {
+export function WheelsScreen({ canIntake, rights }: { canIntake: boolean; rights: Rights }) {
   const [page, setPage] = useState<WheelPage | null>(null);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [error, setError] = useState('');
@@ -244,7 +245,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         <button type="button" className="button--ghost" onClick={() => setSettings(!settings)}>
           Настроить таблицу
         </button>
-        {(role === 'OWNER' || role === 'MANAGER') && (
+        {rights.has('part.edit') ? (
           <button
             type="button"
             className="button--ghost"
@@ -256,16 +257,20 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
           >
             {selecting ? 'Выйти из правки' : 'Правка списком'}
           </button>
+        ) : (
+          <LockedAction permission="part.edit" label="Правка списком" />
         )}
         {/* Ссылкой, а не кнопкой с запросом: файл качает браузер, показывая
             ход, и вкладка при этом жива.
 
             Не всем, кому открыта вкладка: в файле весь колёсный склад
             с ценами и остатками. Та же проверка стоит на сервере. */}
-        {EXPORT_ROLES.includes(role) && (
+        {rights.has('export.table') ? (
           <a className="button--ghost" href={wheelExportUrl(query)} download>
             Скачать таблицу
           </a>
+        ) : (
+          <LockedAction permission="export.table" label="Скачать таблицу" />
         )}
       </div>
 
@@ -516,7 +521,7 @@ export function WheelsScreen({ canIntake, role }: { canIntake: boolean; role: st
         <PartCard
           row={rowOfWheel(card)}
           warehouses={page?.warehouses ?? []}
-          role={role}
+          rights={rights}
           extraFields={wheelFields(card.wheel)}
           applicability={false}
           quality={false}

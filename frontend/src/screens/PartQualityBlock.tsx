@@ -24,11 +24,12 @@ import { useMounted } from '../ui/useMounted';
  * что именно выбрано, — иначе нажатие отвечает исчезновением окна. Витрину
  * за карточкой перечитает её закрытие: `PartCard` знает, что оценку трогали.
  */
-export function PartQualityBlock({ partId, grade, role, onGraded }: {
+export function PartQualityBlock({ partId, grade, canGrade, onGraded }: {
   partId: number;
   /** Оценка, какой её знает строка витрины; `null` — «не оценена». */
   grade: string | null;
-  role: string;
+  /** Право «Править позиции и цены» (задача 0044). */
+  canGrade: boolean;
   /** Оценка записана: карточке это нужно, чтобы обновить плашку и витрину. */
   onGraded: (grade: string | null) => void;
 }) {
@@ -48,7 +49,6 @@ export function PartQualityBlock({ partId, grade, role, onGraded }: {
   // Оценку ставит тот же, кто правит карточку: она уходит в объявление.
   // Остальным плашка показывается как есть, а кнопки нет вовсе — кнопка,
   // отвечающая отказом, хуже отсутствующей.
-  const canGrade = role === 'OWNER' || role === 'MANAGER';
   const title = qualityTitle(grade);
 
   async function choose(next: string | null): Promise<void> {

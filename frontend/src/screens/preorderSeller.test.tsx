@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -82,7 +83,7 @@ describe('предзаказ в выдаче и в оформлении прод
   });
 
   it('ожидаемая строка называет дату и сколько можно отложить, а не склад', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await search();
 
     const info = screen.getByText('Фара Toyota Camry 2007 лев.').closest('.stock-info')!;
@@ -100,14 +101,14 @@ describe('предзаказ в выдаче и в оформлении прод
 
   it('когда всё отложено, строка остаётся и говорит об этом', async () => {
     expected = expectedRow({ qtyAvailable: '0' });
-    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await search();
 
     expect(buttonOf('Фара Toyota Camry 2007 лев.')).toBe('всё отложено');
   });
 
   it('срок подставлен: ожидаемая дата и неделя на забор, и уходит на сервер', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await search();
     fireEvent.click(addButton('Фара Toyota Camry 2007 лев.'));
 
@@ -124,7 +125,7 @@ describe('предзаказ в выдаче и в оформлении прод
   });
 
   it('срок задаётся днями или датой, второе поле считается из первого', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await search();
     fireEvent.click(addButton('Фара Toyota Camry 2007 лев.'));
 
@@ -160,7 +161,7 @@ describe('предзаказ в выдаче и в оформлении прод
   });
 
   it('срок раньше ожидаемой даты — предупреждение до нажатия, кнопка не гаснет', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await search();
     fireEvent.click(addButton('Фара Toyota Camry 2007 лев.'));
 
@@ -181,7 +182,7 @@ describe('предзаказ в выдаче и в оформлении прод
 
   it('дата поставки не названа: подставлять нечего, кнопка называет причину', async () => {
     expected = expectedRow({ expectedOn: null });
-    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await search();
     fireEvent.click(addButton('Фара Toyota Camry 2007 лев.'));
 
@@ -196,7 +197,7 @@ describe('предзаказ в выдаче и в оформлении прод
   });
 
   it('у обычной продажи поля срока нет и срок на сервер не уходит', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await search();
     fireEvent.click(addButton('Бампер Toyota Camry'));
 
@@ -208,7 +209,7 @@ describe('предзаказ в выдаче и в оформлении прод
   });
 
   it('заказ с площадки на ожидаемый товар не оформляется — и причина названа', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await search();
     fireEvent.click(addButton('Фара Toyota Camry 2007 лев.'));
     await termField();

@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -47,7 +48,7 @@ describe('ссылка на прайс', () => {
   });
 
   it('показывается при раскрытии, а не только после смены', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     const details = await waitFor(() => {
       const found = document.querySelector('details');
       expect(found).toBeTruthy();
@@ -65,7 +66,7 @@ describe('ссылка на прайс', () => {
   });
 
   it('показывает полный адрес и даёт скачать файл', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     const details = await waitFor(() => {
       const found = document.querySelector('details');
       expect(found).toBeTruthy();

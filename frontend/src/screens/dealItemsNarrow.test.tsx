@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
@@ -110,7 +111,7 @@ describe('состав открытой сделки на телефоне', () 
   it.each([360, 390])('%i px: без прокрутки вбок, каждый кусок строки в экране', async (width) => {
     stubDeal();
     const { container } = render(
-      <SellerScreen canSell role="SELLER" company="t" memberId={1} />);
+      <SellerScreen canSell rights={rightsAs('SELLER')} company="t" memberId={1} />);
     await openDeal();
     const html = await settled(container);
 

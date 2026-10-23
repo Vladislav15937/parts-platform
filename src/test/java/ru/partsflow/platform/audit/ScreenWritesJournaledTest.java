@@ -70,7 +70,11 @@ class ScreenWritesJournaledTest {
             Map.entry("public.service_admin", "управляющий контур, не арендатор"),
             Map.entry("public.mail_message", "почта, не правка"),
             Map.entry("public.mail_event_pending", "почта, не правка"),
-            Map.entry("public.shedlock", "блокировка расписания"));
+            Map.entry("public.shedlock", "блокировка расписания"),
+            Map.entry("access_role_permission", "набор роли — в снимке записи access_role"
+                    + " (поле «Права» словами), AccessRoleService"),
+            Map.entry("member_permission_override", "права поверх роли — в снимке записи"
+                    + " tenant_member («Добавленные права», «Снятые права»), AccessRoleService"));
 
     /**
      * Методы, пишущие таблицы журнала мимо него, — и почему это не правка

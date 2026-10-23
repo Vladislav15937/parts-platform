@@ -12,12 +12,11 @@ import { count } from '../ui/plural';
  * подвал называет, сколько показано из скольких. Неизвестный автор и время (строка
  * лежала до задачи 0363, перенос, разбор) — прочерк, а не выдуманное значение.
  */
-export function ApplicabilityList({ role, onClose }: { role: string; onClose: () => void }) {
+export function ApplicabilityList({ canEdit, onClose }: { canEdit: boolean; onClose: () => void }) {
   const [page, setPage] = useState(0);
   const [data, setData] = useState<FitListPage | null>(null);
   const [failed, setFailed] = useState(false);
   const mounted = useMounted();
-  const canEdit = role === 'OWNER' || role === 'MANAGER';
   useLockedScroll();
 
   const load = useCallback((n: number) => {

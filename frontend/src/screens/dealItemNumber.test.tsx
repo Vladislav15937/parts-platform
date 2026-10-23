@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
@@ -30,7 +31,7 @@ describe('состав сделки называет позицию номеро
   });
 
   it('строка состава сделки несёт номер позиции', async () => {
-    render(<SellerScreen canSell role="SELLER" company="t_1" memberId={7} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="t_1" memberId={7} />);
     await openDeal();
 
     const row = [...document.querySelectorAll('.stock-info')]

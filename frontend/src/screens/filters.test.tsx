@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -50,7 +51,7 @@ describe('отбор колонки при пустой выдаче', () => {
   });
 
   it('чип отбора остаётся, когда таблица исчезла, и снимается', async () => {
-    render(<CatalogScreen role="OWNER" />);
+    render(<CatalogScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(document.querySelector('tbody tr')).toBeTruthy());
 
     // Ставим отбор через меню колонки — так его ставит владелец.

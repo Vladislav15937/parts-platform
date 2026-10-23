@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
+import type { Rights } from '../access/rights';
 import { ApiError } from '../api/client';
 import { loadMoveJournal, loadMoveLines, type MoveDocument, type MoveLine } from '../inventory/moves';
 import { deleteStockDocument, deletionNotice } from '../inventory/stockDocuments';
@@ -19,7 +20,7 @@ import { useMounted } from '../ui/useMounted';
  * в августе» было нельзя. Список — по документам, а не по строкам: тот же
  * ответ на «что уехало», но восемнадцать строк вместо тысячи с лишним.
  */
-export function StockMovesScreen({ role }: { role: string }) {
+export function StockMovesScreen({ rights }: { rights: Rights }) {
   const [documents, setDocuments] = useState<MoveDocument[] | null>(null);
   const [error, setError] = useState('');
 
@@ -156,7 +157,7 @@ export function StockMovesScreen({ role }: { role: string }) {
         <PartCard
           row={card}
           warehouses={cardWarehouses}
-          role={role}
+          rights={rights}
           onClose={() => setCard(null)}
           onChanged={() => setCard(null)}
         />

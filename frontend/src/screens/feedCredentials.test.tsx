@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -55,7 +56,7 @@ describe('ключ синхронизации кабинета', () => {
   });
 
   it('сохраняется и говорит, чем грозит его отсутствие', async () => {
-    render(<FeedsScreen role="OWNER" />);
+    render(<FeedsScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText(/Ключ синхронизации/)).toBeTruthy());
 
     // Пока ключа нет, экран объясняет последствие, а не молчит.

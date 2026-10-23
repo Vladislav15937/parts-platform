@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
@@ -44,7 +45,7 @@ describe('счётчик корзины в шапке продажи', () => {
   });
 
   it('пустая корзина говорит, что она пуста, и что делать', () => {
-    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
 
     const head = text('.seller-head');
     expect(head, 'продавец не видит состояния корзины до первой находки')
@@ -54,7 +55,7 @@ describe('счётчик корзины в шапке продажи', () => {
   });
 
   it('счётчик показывает число и сумму сразу, не дожидаясь прокрутки', async () => {
-    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
     await search();
 
     add();
@@ -74,7 +75,7 @@ describe('счётчик корзины в шапке продажи', () => {
   });
 
   it('счётчик стоит выше списка находок, а не под ним', async () => {
-    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
     await search();
     add();
 
@@ -89,7 +90,7 @@ describe('счётчик корзины в шапке продажи', () => {
   });
 
   it('нажатие на счётчик уводит к оформлению', async () => {
-    render(<SellerScreen canSell role="SELLER" company="test" memberId={1} />);
+    render(<SellerScreen canSell rights={rightsAs('SELLER')} company="test" memberId={1} />);
     await search();
     add();
 

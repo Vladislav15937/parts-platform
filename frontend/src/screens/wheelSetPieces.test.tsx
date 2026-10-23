@@ -1,3 +1,4 @@
+import { rightsAs } from '../test/rights';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -58,7 +59,7 @@ describe('штук в комплекте на вкладке «Шины и ди�
   });
 
   it('колонка «Штук в комплекте» видна по умолчанию, и под ней число штук этой позиции', async () => {
-    render(<WheelsScreen canIntake={false} role="OWNER" />);
+    render(<WheelsScreen canIntake={false} rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('W1A2B3C4D5E6')).toBeTruthy());
 
     const headers = Array.from(document.querySelectorAll('thead th'))
@@ -73,7 +74,7 @@ describe('штук в комплекте на вкладке «Шины и ди�
   });
 
   it('в карточке строка «Штук в комплекте» — «3 шт»', async () => {
-    render(<WheelsScreen canIntake={false} role="OWNER" />);
+    render(<WheelsScreen canIntake={false} rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('W1A2B3C4D5E6')).toBeTruthy());
 
     fireEvent.click(screen.getByText('W1A2B3C4D5E6').closest('tr') as HTMLElement);
