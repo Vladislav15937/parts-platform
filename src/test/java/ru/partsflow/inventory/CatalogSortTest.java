@@ -67,6 +67,18 @@ class CatalogSortTest extends PostgresTestBase {
     private static long dalniy;
     private static final Map<String, Long> PARTS = new LinkedHashMap<>();
 
+    /**
+     * Две позиции, равные друг другу во всём, что сортируется, кроме уникального:
+     * номера позиции и публичного кода. Заведены одной транзакцией (одно
+     * {@code now()} у дат), на одну ячейку, без штрихкода, с одним наименованием.
+     * Порядок между ними задаёт только последний ключ {@code p.id}.
+     */
+    private static final String TIE_TITLE = "Сорт равная";
+    /** Сортировки, у которых равные позиции различаются своим значением. */
+    private static final Set<String> TIE_DIFFERS = Set.of("number", "code");
+    private static long tieFirst;
+    private static long tieSecond;
+
     @Autowired
     private MockMvc mvc;
     @Autowired
@@ -127,6 +139,7 @@ class CatalogSortTest extends PostgresTestBase {
         part("B", "a", 100, 130, 5, 4, tkatskaya);
         part("C", "d", 400, 900, 2, 0, dalniy);
         part("D", "b", 200, 1100, 1, 1, tkatskaya);
+        tiePair();
     }
 
     @Test
@@ -210,6 +223,19 @@ class CatalogSortTest extends PostgresTestBase {
                 assertThat(exportNumbers(sort, desc))
                         .as("сортировка %s%s: файл другим порядком, чем экран", sort, desc ? " ↓" : "")
                         .isEqualTo(paged);
+                if (!TIE_DIFFERS.contains(sort)) {
+                    // Равные по значению идут по p.id в ту же сторону. Без
+                    // последнего ключа база оставляет их в порядке чтения
+                    // таблицы — то есть по возрастанию и при убывании, — и
+                    // соседние страницы вправе разойтись (744 строки при 721).
+                    long earlier = desc ? tieSecond : tieFirst;
+                    long later = desc ? tieFirst : tieSecond;
+                    assertThat(paged.indexOf(earlier))
+                            .as("сортировка %s%s: равные позиции не по p.id%s — последний ключ снят",
+                                    sort, desc ? " ↓" : "", desc ? " наоборот" : "")
+                            .isNotNegative()
+                            .isLessThan(paged.indexOf(later));
+                }
             }
         }
     }
@@ -269,11 +295,51 @@ class CatalogSortTest extends PostgresTestBase {
         PARTS.put(letter, id);
     }
 
-    /** Буквы позиций в порядке выдачи — одной страницей. */
+    /**
+     * Пара равных: всё, что сортируется, у них одно, кроме номера позиции
+     * и публичного кода (их раздаёт база). Одна транзакция — одна отметка
+     * времени у дат заведения и правки; одна ячейка; штрихкода нет (NULL
+     * с NULL в уникальном индексе не сталкиваются).
+     */
+    private void tiePair() {
+        List<Long> ids = inTenant(() -> {
+            Long cell = jdbc.queryForObject(
+                    "INSERT INTO storage_cell (warehouse_id, code) VALUES (?, 'cell-tie') RETURNING id",
+                    Long.class, tkatskaya);
+            List<Long> made = new ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                Long partId = jdbc.queryForObject("""
+                        INSERT INTO part (category_id, title, price, installation_price, color,
+                                          description, length_mm, width_mm, height_mm,
+                                          storage_cell_id)
+                        VALUES (1, ?, 1000, 250, 'tie', 'tie', 1000, 10, 10, ?) RETURNING id""",
+                        Long.class, TIE_TITLE, cell);
+                jdbc.update("INSERT INTO part_oem (part_id, raw_number, normalized, is_primary)"
+                        + " VALUES (?, 'oem-tie', 'OEMTIE', true)", partId);
+                ledger.record(StockMovement.intake(partId, BigDecimal.valueOf(2), tkatskaya, null));
+                made.add(partId);
+            }
+            return made;
+        });
+        assertThat(ids.get(0)).as("равные заведены не по возрастанию id").isLessThan(ids.get(1));
+        tieFirst = numberOf(ids.get(0));
+        tieSecond = numberOf(ids.get(1));
+    }
+
+    private long numberOf(long partId) {
+        return inTenant(() -> jdbc.queryForObject("SELECT number FROM part WHERE id = ?",
+                Long.class, partId));
+    }
+
+    /** Буквы позиций A–D в порядке выдачи — одной страницей; пара равных пропускается. */
     private List<String> order(String sort, boolean desc) throws Exception {
         List<String> letters = new ArrayList<>();
-        page(sort, desc, 0, 50).path("rows")
-                .forEach(row -> letters.add(row.path("title").asText().substring("Сорт ".length())));
+        page(sort, desc, 0, 50).path("rows").forEach(row -> {
+            String title = row.path("title").asText();
+            if (!title.equals(TIE_TITLE)) {
+                letters.add(title.substring("Сорт ".length()));
+            }
+        });
         return letters;
     }
 

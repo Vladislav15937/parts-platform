@@ -123,7 +123,7 @@ echo "4. Возврат"
 gc "/api/deals/${DEAL}" >/dev/null; ITEM=$(num "['items'][0]['id']")
 pc "/api/deals/${DEAL}/returns" "{\"warehouseId\":${WH},\"refundToAccount\":true,
   \"items\":[{\"dealItemId\":${ITEM},\"quantity\":1,\"restocked\":true}]}" >/dev/null
-same "возврат проведён" "$(num "['status']")" "DONE"
+same "возврат выполнен" "$(num "['status']")" "DONE"
 gc "/api/customers/${CUST}/account" >/dev/null
 samenum "деньги вернулись на счёт" "$(num "['balance']")" "6000.00"
 # По закрытой сделке долга нет, и платить по ней не за что: иначе продавец

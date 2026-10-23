@@ -386,7 +386,8 @@ public class CatalogService {
 
     /**
      * Комплектация, как её показывает клетка: вписанная руками, иначе собранная
-     * из машины донора. Одно выражение на страницу и сортировку.
+     * из машины донора. Одно выражение на страницу, сортировку и скачанный
+     * файл (стережёт CatalogEquipmentFileTest перебором значений донора).
      */
     private static final String EQUIPMENT = """
             coalesce(p.manual_equipment, nullif(concat_ws(', ',
@@ -1757,18 +1758,11 @@ public class CatalogService {
                        // Выражение одно с колонкой на экране: второй копии
                        // тут взяться неоткуда.
                        + QUALITY_GRADE + " AS quality_grade,"
-                       + SupplyKinds.sqlLabelWithArrival("sp") + " AS supply_label," + """
-                       coalesce(p.manual_equipment, nullif(concat_ws(', ',
-                           CASE d.steering WHEN 'RIGHT' THEN 'правый руль'
-                                           WHEN 'LEFT' THEN 'левый руль' END,
-                           CASE d.transmission_type WHEN 'AT' THEN 'АКПП'
-                                                    WHEN 'MT' THEN 'МКПП'
-                                                    WHEN 'CVT' THEN 'вариатор' END,
-                           CASE d.drive_type WHEN 'FWD' THEN 'передний'
-                                             WHEN 'RWD' THEN 'задний'
-                                             WHEN 'AWD' THEN 'полный' END,
-                           d.transmission_model,
-                           d.equipment_code), '')) AS equipment"""
+                       + SupplyKinds.sqlLabelWithArrival("sp") + " AS supply_label, "
+                       // Комплектация — то же выражение, что у клетки экрана:
+                       // своя копия здесь потеряла «робот» (AMT), и файл,
+                       // который качают ради сверки, расходился с экраном.
+                       + EQUIPMENT + " AS equipment"
                 + stock + """
 
                   FROM part p
