@@ -115,7 +115,7 @@ describe('комментарий ходившего на экране обход
     render(<InventoryScreen reference={reference()} onCount={vi.fn()} onNote={vi.fn()}
                             noteQueue={[queued('failed')]} />);
     expect(await screen.findByText(
-      /Не принят: Комментарий пишут, пока пересчёт не проведён и не отменён/)).toBeTruthy();
+      /Не принят: Комментарий пишут, пока пересчёт не выполнен и не отменён/)).toBeTruthy();
   });
 
   it('роль, которой писать нельзя, поля не видит', async () => {
@@ -132,7 +132,7 @@ function queued(state: 'pending' | 'failed'): OutboxRecord {
     payload: { sessionId: 1, note: 'Катушки не считали' },
     title: 'Комментарий к пересчёту', state, attempts: 1, nextAttemptAt: 0, createdAt: 1,
     ...(state === 'failed'
-      ? { lastError: 'Комментарий пишут, пока пересчёт не проведён и не отменён' }
+      ? { lastError: 'Комментарий пишут, пока пересчёт не выполнен и не отменён' }
       : {}),
   };
 }

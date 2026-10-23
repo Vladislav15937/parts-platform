@@ -366,7 +366,7 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
                       проведения остаётся в таблице: без отметки экран
                       показывал бы «скорректировано» рядом с той же
                       минусовой строкой. */}
-                  <td>{r.applied ? 'проведено' : ''}</td>
+                  <td>{r.applied ? 'выполнено' : ''}</td>
                 </tr>
               ))}
             </tbody>
@@ -380,7 +380,7 @@ export function InventoryReconcile({ reference, role }: { reference: Reference; 
           {applied.blocked.length > 0 && (
             <div className="note note--error">
               <p>
-                Не проведено — деталь обещана покупателю, и списать её нельзя.
+                Не выполнено — деталь обещана покупателю, и списать её нельзя.
                 Снимите резерв (отмените или перенесите позицию в сделке)
                 и нажмите «Провести» ещё раз: допишется только это.
               </p>

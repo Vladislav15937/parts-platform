@@ -163,7 +163,7 @@ public class StockDocument {
     public void cancel() {
         if (status == DocumentStatus.DONE) {
             throw new IllegalStateException(
-                    "Проведённый документ не отменяют: журнал движений неизменяем. "
+                    "Выполненный документ не отменяют: журнал движений неизменяем. "
                             + "Оформи встречный документ");
         }
         this.status = DocumentStatus.CANCELLED;

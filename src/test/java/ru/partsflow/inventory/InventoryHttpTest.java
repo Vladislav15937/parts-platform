@@ -552,7 +552,7 @@ class InventoryHttpTest extends PostgresTestBase {
                         .content("{\"note\":\"уже поздно\",\"requestId\":\"r-5\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value(
-                        "Комментарий пишут, пока пересчёт не проведён и не отменён"));
+                        "Комментарий пишут, пока пересчёт не выполнен и не отменён"));
         // А повтор записи, принятой до закрытия, — по-прежнему успех:
         // она уже сделана, и очереди нужен ответ, чтобы её убрать.
         mvc.perform(post(counterUrl).with(csrf()).session(keeper)
