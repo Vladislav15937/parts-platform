@@ -50,6 +50,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * не трогаются: «проведение записало корректировки в журнал» объясняет
  * код, а не говорит с человеком.
  *
+ * <p>И в скриптах {@code tools/*.sh} — строки вне комментариев {@code #}:
+ * их печатает оператору сквозной прогон («возврат выполнен»), и проверка,
+ * подписанная другим словом, чем экран, учит оператора двум словам для
+ * одного статуса (мелочь из ответа владельца по 0044, 24.10.2026).
+ *
  * <p><b>Чего перебор не видит.</b> Слово, собранное из частей
  * ({@code "прове" + "дён"}), и слово, приехавшее из базы или из файла
  * переноса. Ни того, ни другого сегодня нет.
@@ -58,6 +63,7 @@ class DoneStatusWordTest {
 
     private static final Path FRONTEND = Path.of("frontend/src");
     private static final Path SERVER = Path.of("src/main/java");
+    private static final Path TOOLS = Path.of("tools");
 
     /**
      * Причастие «провести» в любой форме, с «не» и без; существительное
@@ -119,6 +125,22 @@ class DoneStatusWordTest {
             }
         }
 
+        int scripts = 0;
+        try (Stream<Path> files = Files.walk(TOOLS)) {
+            for (Path file : files.filter(p -> p.toString().endsWith(".sh")).toList()) {
+                scripts++;
+                List<String> lines = Files.readAllLines(file);
+                for (int at = 0; at < lines.size(); at++) {
+                    String line = withoutShellComment(lines.get(at));
+                    Matcher word = PARTICIPLE.matcher(line);
+                    while (word.find()) {
+                        found.add(file + ":" + (at + 1) + " — «" + word.group() + "»");
+                    }
+                }
+            }
+        }
+        assertThat(scripts).as("перебор не нашёл скриптов в %s", TOOLS).isGreaterThan(5);
+
         // Перебор без файлов — зелёный тест ни о чём: ошибись путь, и он
         // молчал бы при любом коде. Исходников экрана и сервера — сотни.
         assertThat(scanned)
@@ -137,6 +159,15 @@ class DoneStatusWordTest {
         while (word.find()) {
             found.add(file + ":" + lineOf(code, word.start()) + " — «" + word.group() + "»");
         }
+    }
+
+    /** Строка скрипта без комментария: целиком {@code # …} или хвост после « #». */
+    static String withoutShellComment(String line) {
+        if (line.strip().startsWith("#")) {
+            return "";
+        }
+        int tail = line.indexOf(" #");
+        return tail < 0 ? line : line.substring(0, tail);
     }
 
     /** Комментарии заменяются пустыми строками той же высоты: номер строки в отчёте верен. */
