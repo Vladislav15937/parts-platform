@@ -182,9 +182,20 @@ public class StockDocument {
      * их не отменяет. Черновик не удаляют, а отменяют — остатка он не двигал.
      */
     public boolean isDeletable() {
-        return deletedAt == null && status == DocumentStatus.DONE
-                && (docType == DocumentType.INTAKE || docType == DocumentType.WRITE_OFF
-                    || docType == DocumentType.MOVE);
+        return isDeletable(docType.name(), status.name(), deletedAt != null);
+    }
+
+    /**
+     * То же правило по полям строки — для лент, которые читают документ
+     * запросом, а не сущностью (`PartHistoryService.movements`). Одно место:
+     * лента, решающая «можно ли удалить» своими словами, разошлась бы с отказом
+     * сервиса на первом новом виде документа.
+     */
+    public static boolean isDeletable(String docType, String status, boolean deleted) {
+        return !deleted && DocumentStatus.DONE.name().equals(status)
+                && (DocumentType.INTAKE.name().equals(docType)
+                    || DocumentType.WRITE_OFF.name().equals(docType)
+                    || DocumentType.MOVE.name().equals(docType));
     }
 
     /**
@@ -200,7 +211,7 @@ public class StockDocument {
         }
         if (status == DocumentStatus.DRAFT) {
             throw new IllegalStateException(
-                    "Документ не проведён: остатка он не двигал, его отменяют, а не удаляют");
+                    "Документ ещё не выполнен: остатка он не двигал, его отменяют, а не удаляют");
         }
         if (status == DocumentStatus.CANCELLED) {
             throw new IllegalStateException("Документ отменён: удалять нечего");

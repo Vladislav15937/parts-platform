@@ -230,8 +230,11 @@ class StockDocumentDeletionTest extends PostgresTestBase {
      * блокировки строки документа два одновременных удаления оба вернули бы
      * товар на склад, и остаток удвоился бы. У поступления второе встречное
      * движение отбило бы условие «есть свободное», и гонка спряталась бы.
+     *
+     * <p>Повторяется направленно (разбор PR 505): гонка ловится повтором рядом
+     * с ней, а не объёмом полного прогона.
      */
-    @Test
+    @org.junit.jupiter.api.RepeatedTest(10)
     @DisplayName("Два одновременных удаления: одно встречное движение, оба ответа — успех")
     void concurrentDeletesWriteOneCounterMovement() throws Exception {
         MockHttpSession first = login("vladelec");
@@ -299,7 +302,7 @@ class StockDocumentDeletionTest extends PostgresTestBase {
                         .session(login("vladelec")))
                 .andExpect(status().isConflict())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-        assertThat(message).contains("не проведён");
+        assertThat(message).contains("ещё не выполнен");
     }
 
     // ---------------------------------------------------- кто показывал удалённое
@@ -395,6 +398,51 @@ class StockDocumentDeletionTest extends PostgresTestBase {
                 .getContentAsString(StandardCharsets.UTF_8));
         assertThat(page.path("rows").get(0).path("quantity").decimalValue())
                 .as("удалённое поступление посчитано приходом").isEqualByComparingTo("1");
+    }
+
+    /**
+     * Остальные три суммы отчёта (разбор PR 505): «Списано» и оба графика прихода.
+     * Модуль вместо суммы со знаком посчитал бы встречные движения вторым
+     * приходом и вторым списанием.
+     */
+    @Test
+    @DisplayName("«Списано» и графики по поставке не считают удалённые списание и поступление")
+    void originReportWriteOffAndChartsSkipDeleted() throws Exception {
+        long part = part("Тяга");
+        long supply = inTenant(() -> jdbc.queryForObject("""
+                INSERT INTO supply (kind, number, status) VALUES ('CONTAINER', 'Р-367-2', 'ARRIVED')
+                RETURNING id""", Long.class));
+        inTenant(() -> jdbc.update(
+                "UPDATE part SET supply_id = ?, cost_price = 300 WHERE id = ?", supply, part));
+        intake(part, "2");
+        long extra = intake(part, "3");
+        MockHttpSession owner = login("vladelec");
+        deleteOk(extra, owner);
+        long firstOff = writeOff(part, "1");
+        deleteOk(firstOff, owner);
+        writeOff(part, "2");
+        assertThat(partStatus(part)).isEqualTo("WRITTEN_OFF");
+
+        JsonNode off = json.readTree(mvc.perform(get("/api/reports/supplies/items")
+                        .param("supplyId", String.valueOf(supply)).param("tab", "written-off")
+                        .session(owner))
+                .andExpect(status().isOk()).andReturn().getResponse()
+                .getContentAsString(StandardCharsets.UTF_8));
+        assertThat(off.path("rows").get(0).path("quantity").decimalValue())
+                .as("удалённое списание посчитано списанием").isEqualByComparingTo("2");
+
+        JsonNode chart = json.readTree(mvc.perform(get("/api/reports/supplies/chart")
+                        .param("supplyId", String.valueOf(supply)).session(owner))
+                .andExpect(status().isOk()).andReturn().getResponse()
+                .getContentAsString(StandardCharsets.UTF_8));
+        JsonNode points = chart.path("points");
+        JsonNode last = points.get(points.size() - 1);
+        assertThat(last.path("planned").decimalValue())
+                .as("планируемая сумма считает удалённое поступление (цена 1000 × 2)")
+                .isEqualByComparingTo("2000");
+        assertThat(last.path("totalCost").decimalValue())
+                .as("себестоимость всех считает удалённое поступление (300 × 2)")
+                .isEqualByComparingTo("600");
     }
 
     @Test

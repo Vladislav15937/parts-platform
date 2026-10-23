@@ -420,13 +420,11 @@ public class PartHistoryService {
                             rs.getObject("deal_number"), rs.getObject("return_number"),
                             rs.getObject("inventory_id"));
                     boolean deleted = rs.getTimestamp("doc_deleted_at") != null;
-                    String docType = rs.getString("doc_type");
                     // Кнопку «Удалить» экран рисует по этому признаку, а не по
-                    // своему списку ролей: право одно — PostedDocumentDeletion.
-                    boolean deletable = mayDelete && !deleted
-                            && "DONE".equals(rs.getString("doc_status"))
-                            && ("INTAKE".equals(docType) || "WRITE_OFF".equals(docType)
-                                || "MOVE".equals(docType));
+                    // своему списку ролей: право одно — PostedDocumentDeletion,
+                    // правило «что удаляется» одно — StockDocument.isDeletable.
+                    boolean deletable = mayDelete && StockDocument.isDeletable(
+                            rs.getString("doc_type"), rs.getString("doc_status"), deleted);
                     return new Movement(
                             rs.getTimestamp("created_at").toInstant(),
                             type,

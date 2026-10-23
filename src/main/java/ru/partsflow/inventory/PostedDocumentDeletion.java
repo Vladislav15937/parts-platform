@@ -37,7 +37,7 @@ public final class PostedDocumentDeletion {
     public static void require() {
         if (!allowed()) {
             throw new AccessDeniedException(
-                    "Удалять проведённые складские документы может только владелец");
+                    "Удалять выполненные складские документы может только владелец");
         }
     }
 }
