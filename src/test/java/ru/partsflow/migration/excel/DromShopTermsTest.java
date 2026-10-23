@@ -357,7 +357,9 @@ class DromShopTermsTest extends PostgresTestBase {
         List<String> seen = new ArrayList<>();
         history.path("changes").forEach(c -> c.path("fields").forEach(f -> {
             if ("Гарантия и условия возврата".equals(f.path("label").asText())) {
-                seen.add(c.path("author").asText() + ": " + f.path("before").asText("—")
+                // Автор — имя до скобки: подпись «Имя (логин, ID N)» (задача 0373).
+                seen.add(c.path("author").asText().replaceFirst(" \\(.*\\)$", "")
+                        + ": " + f.path("before").asText("—")
                         + " -> " + f.path("after").asText());
             }
         }));
