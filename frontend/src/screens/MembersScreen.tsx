@@ -383,6 +383,12 @@ export function MembersScreen({
           />
         )}
         {lost !== null && <p className="note note--error">{lost}</p>}
+        {legacyAuditor(member, current) && editRole === '' && (
+          <p className="note">
+            Роль не назначена: журнал действий у сотрудника — от прежней роли «Ревизор».
+            {' '}Назначьте роль, чтобы управлять его правами.
+          </p>
+        )}
         <p className="note">
           Сохранение закроет открытые входы сотрудника — новые права он получит,
           войдя заново.
@@ -520,11 +526,22 @@ function roleCell(member: Member, access: MemberAccess | undefined): string {
     return roleTitle(member.role);
   }
   if (access.roleName === null) {
-    return 'без роли';
+    // Ревизор, которому роль «Ревизор» не заводили (задача 0044): журнал у него
+    // есть — от прежней роли, — и «без роли» при рабочем праве было бы неправдой.
+    // Удалил клиент «Ревизора» — журнала нет, и это честное «без роли».
+    return legacyAuditor(member, access) ? LEGACY_AUDITOR : 'без роли';
   }
   const extra = access.added.length + access.removed.length;
   return extra === 0 ? access.roleName : `${access.roleName} · отдельно: ${extra}`;
 }
+
+/** Ревизор без роли клиента, чей журнал держится прежней ролью (`MemberAccess`). */
+function legacyAuditor(member: Member, access: MemberAccess | undefined): boolean {
+  return access !== undefined && access.roleId === null && member.role === 'AUDITOR'
+    && access.effective.includes('journal.view');
+}
+
+const LEGACY_AUDITOR = 'Ревизор: журнал действий';
 
 function roleSummary(role: AccessRole, sections: readonly Section[]): string {
   if (role.owner) {

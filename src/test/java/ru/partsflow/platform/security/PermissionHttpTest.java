@@ -341,6 +341,8 @@ class PermissionHttpTest extends PostgresTestBase {
     void noRoleCases() throws Exception {
         inTenant(() -> {
             jdbc.update("DELETE FROM access_role WHERE seeded_from = 'AUDITOR'");
+            // «Не заводили» — это и роли нет, и метки нет (tenant/102).
+            jdbc.update("DELETE FROM access_role_seeded WHERE seeded_from = 'AUDITOR'");
             return null;
         });
         member("revizor", "AUDITOR");
@@ -369,6 +371,49 @@ class PermissionHttpTest extends PostgresTestBase {
                     INSERT INTO access_role (name, seeded_from) VALUES ('Менеджер', 'MANAGER')""");
             return null;
         });
+    }
+
+    @Test
+    @DisplayName("Ревизор прежнего образа: роль есть — её набор; не заводили — журнал; клиент удалил — отказ")
+    void auditorThreeStates() throws Exception {
+        try {
+            // 1. Не заводили: ни роли «Ревизор», ни метки.
+            inTenant(() -> {
+                jdbc.update("DELETE FROM access_role WHERE seeded_from = 'AUDITOR'");
+                jdbc.update("DELETE FROM access_role_seeded WHERE seeded_from = 'AUDITOR'");
+                return null;
+            });
+            member("revizor", "AUDITOR");
+            MockHttpSession notSeeded = login("revizor");
+            mvc.perform(get("/api/organization/audit").session(notSeeded)).andExpect(status().isOk());
+            assertThat(keys(me(notSeeded))).as("не заводили").containsExactly("journal.view");
+
+            // 2. Роль есть (её завёл перенос и пометил): действует её набор.
+            inTenant(() -> {
+                long role = jdbc.queryForObject(
+                        "INSERT INTO access_role (name, seeded_from) VALUES ('Ревизор', 'AUDITOR') RETURNING id",
+                        Long.class);
+                jdbc.update("INSERT INTO access_role_permission (role_id, permission) VALUES (?, 'reports.view')",
+                        role);
+                jdbc.update("INSERT INTO access_role_seeded (seeded_from) VALUES ('AUDITOR')");
+                return null;
+            });
+            MockHttpSession seeded = login("revizor");
+            mvc.perform(get("/api/organization/audit").session(seeded)).andExpect(status().isForbidden());
+            assertThat(keys(me(seeded))).as("роль есть").containsExactly("reports.view");
+
+            // 3. Клиент удалил «Ревизора»: метка осталась — это отказ (ответ владельца 24.10.2026, 1б).
+            inTenant(() -> jdbc.update("DELETE FROM access_role WHERE seeded_from = 'AUDITOR'"));
+            MockHttpSession deleted = login("revizor");
+            mvc.perform(get("/api/organization/audit").session(deleted)).andExpect(status().isForbidden());
+            assertThat(keys(me(deleted))).as("роль удалена клиентом — журнала нет").isEmpty();
+        } finally {
+            inTenant(() -> {
+                jdbc.update("DELETE FROM access_role WHERE seeded_from = 'AUDITOR'");
+                jdbc.update("DELETE FROM access_role_seeded WHERE seeded_from = 'AUDITOR'");
+                return null;
+            });
+        }
     }
 
     // ------------------------------------------------------- сессия до задачи 0044

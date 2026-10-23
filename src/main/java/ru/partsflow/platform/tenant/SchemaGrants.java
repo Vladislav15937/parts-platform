@@ -129,6 +129,18 @@ public class SchemaGrants {
         for (String journal : JournalProtection.JOURNALS) {
             owner.execute("REVOKE UPDATE, DELETE ON %s.%s FROM %s".formatted(schema, journal, role));
         }
+        // Метка «роль переноса заводилась» (tenant/102, задача 0044) обязана
+        // пережить удаление роли — только этим «клиент удалил „Ревизора“»
+        // и отличается от «не заводили». Приложение её не правит и не стирает
+        // нигде, а стёртая метка вернула бы ревизору журнал, который клиент
+        // закрыл: поэтому рабочей роли — только чтение и добавление (разбор
+        // PR 509). В JournalProtection она не входит: готовность про неё
+        // не спрашивает, это не журнал, а одна строка на прежнюю роль.
+        if (owner.queryForObject("SELECT to_regclass(?) IS NOT NULL", Boolean.class,
+                schema + ".access_role_seeded")) {
+            owner.execute("REVOKE UPDATE, DELETE ON %s.access_role_seeded FROM %s"
+                    .formatted(schema, role));
+        }
         log.debug("Схема {}: права выданы роли {}, журналы заперты", schema, runtimeRole);
     }
 

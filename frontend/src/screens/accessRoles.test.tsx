@@ -44,6 +44,10 @@ describe('роли и права на экране сотрудников', () =
             effective: ['deal.return', 'deal.sell', 'intake.receive'] },
           { memberId: 2, roleId: 11, roleName: 'Приёмщик', owner: false, added: ['deal.sell'],
             removed: [], effective: ['intake.receive', 'deal.sell'] },
+          { memberId: 3, roleId: null, roleName: null, owner: false, added: [], removed: [],
+            effective: ['journal.view'] },
+          { memberId: 4, roleId: null, roleName: null, owner: false, added: [], removed: [],
+            effective: [] },
         ]);
       }
       if (url.endsWith('/api/access/roles')) {
@@ -280,6 +284,20 @@ describe('роли и права на экране сотрудников', () =
     expect(sent[0]?.body).toEqual({ login: 'novyy', password: 'восемь-знаков', displayName: '', roleId: 11 });
   });
 
+  // Находка (б) живого прогона 24.10.2026: ревизор без роли клиента стоял
+  // «без роли» при открытом журнале.
+  it('ревизор без роли с журналом назван словами, без журнала — «без роли»', async () => {
+    render(<MembersScreen />);
+    await waitFor(() => screen.getByRole('button', { name: 'Права: revizor' }));
+    const row = screen.getByRole('button', { name: 'Права: revizor' }).closest('tr') as HTMLElement;
+    expect(within(row).getByText('Ревизор: журнал действий')).toBeTruthy();
+    const other = screen.getByRole('button', { name: 'Права: revizor2' }).closest('tr') as HTMLElement;
+    expect(within(other).getByText('без роли')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Права: revizor' }));
+    expect(screen.getByText(/журнал действий у сотрудника — от прежней роли «Ревизор»/)).toBeTruthy();
+  });
+
   // Ответ владельца 24.10.2026 (2б): выдавать можно только свои права. Решает
   // сервер; экран гасит заранее и называет причину.
   describe('выдавать можно только свои права', () => {
@@ -347,6 +365,10 @@ describe('роли и права на экране сотрудников', () =
 const MEMBERS = [
   { id: 1, number: 1, login: 'vladelec', displayName: 'Пётр', role: 'OWNER', active: true, lastLoginAt: null },
   { id: 2, number: 2, login: 'ivan', displayName: 'Иван', role: 'VIEWER', active: true, lastLoginAt: null },
+  // Ревизоры без роли клиента (задача 0044): одному «Ревизора» не заводили —
+  // журнал у него есть; у другого клиент роль удалил — журнала нет.
+  { id: 3, number: 3, login: 'revizor', displayName: 'Ревизор', role: 'AUDITOR', active: true, lastLoginAt: null },
+  { id: 4, number: 4, login: 'revizor2', displayName: 'Ревизор 2', role: 'AUDITOR', active: true, lastLoginAt: null },
 ];
 
 const ROLES = [

@@ -200,6 +200,30 @@ class RuntimeRoleTest extends PostgresTestBase {
                 .formatted(TENANT));
     }
 
+    @Test
+    @DisplayName("Метку «роль переноса заводилась» рабочая роль читает и добавляет, но не правит и не стирает")
+    void seededMarkIsAppendOnlyForRuntimeRole() {
+        createRole();
+        grants.apply(TENANT);
+        JdbcTemplate runtime = new JdbcTemplate(runtimeDataSource());
+        jdbc.update("DELETE FROM %s.access_role_seeded WHERE seeded_from = 'AUDITOR'".formatted(TENANT));
+
+        runtime.update("INSERT INTO %s.access_role_seeded (seeded_from) VALUES ('AUDITOR')"
+                .formatted(TENANT));
+        assertThat(runtime.queryForObject(
+                "SELECT count(*) FROM %s.access_role_seeded WHERE seeded_from = 'AUDITOR'".formatted(TENANT),
+                Integer.class)).isEqualTo(1);
+        // Стёртая метка вернула бы ревизору журнал, который клиент закрыл,
+        // удалив «Ревизора» (задача 0044, ответ владельца 24.10.2026, 1б).
+        assertThatThrownBy(() -> runtime.update(
+                "DELETE FROM %s.access_role_seeded".formatted(TENANT)))
+                .as("метка стирается прямым SQL").hasStackTraceContaining("permission denied");
+        assertThatThrownBy(() -> runtime.update(
+                "UPDATE %s.access_role_seeded SET seeded_at = seeded_at".formatted(TENANT)))
+                .as("метка правится прямым SQL").hasStackTraceContaining("permission denied");
+        jdbc.update("DELETE FROM %s.access_role_seeded WHERE seeded_from = 'AUDITOR'".formatted(TENANT));
+    }
+
     private void createRole() {
         Integer exists = jdbc.queryForObject(
                 "SELECT count(*) FROM pg_roles WHERE rolname = ?", Integer.class, ROLE);
