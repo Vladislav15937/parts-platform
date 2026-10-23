@@ -1,6 +1,7 @@
 package ru.partsflow.inventory;
 
 import ru.partsflow.platform.audit.AuditBatch;
+import ru.partsflow.platform.security.MemberSignature;
 import ru.partsflow.shared.AuditedColumns;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -120,7 +121,8 @@ public class PartHistoryService {
                 + "a.new_value ->> '" + AuditBatch.SCOPE_KEY + "' AS bulk_scope, ";
 
         List<Diff> diffs = jdbc.query("""
-                        SELECT a.id, a.changed_at, m.display_name AS author, f.key,
+                        SELECT a.id, a.changed_at, f.key, m.display_name AS author,
+                               m.login AS author_login, m.number AS author_number,
                         """ + bulk + was + """
                             AS was,
                         """ + now + """
@@ -139,7 +141,7 @@ public class PartHistoryService {
                                   array_position(string_to_array(?, ','), f.key)""",
                 (rs, i) -> new Diff(rs.getLong("id"),
                         rs.getTimestamp("changed_at").toInstant(),
-                        rs.getString("author"),
+                        authorOf(rs),
                         rs.getString("key"),
                         rs.getString("was"),
                         rs.getString("now"),
@@ -167,6 +169,19 @@ public class PartHistoryService {
         changes.sort(java.util.Comparator.comparing(Change::at).reversed());
         created(partId).ifPresent(changes::add);
         return changes;
+    }
+
+    /**
+     * Автор правки — логином, именем и видимым номером (задача 0373, решение
+     * владельца 23.10.2026: «мы должны идентифицировать сотрудника на 100%»).
+     * Подпись собирает {@code MemberSignature}, одна на проект.
+     *
+     * <p>Лента движений подписана по-прежнему именем: решение касалось
+     * «Истории изменений», а не движений склада.
+     */
+    private static String authorOf(java.sql.ResultSet rs) throws java.sql.SQLException {
+        return MemberSignature.of(rs.getString("author"), rs.getString("author_login"),
+                (Long) rs.getObject("author_number"));
     }
 
     /**
@@ -245,7 +260,8 @@ public class PartHistoryService {
      */
     private List<Change> applicabilityChanges(long partId) {
         return jdbc.query("""
-                        SELECT a.changed_at, m.display_name AS author, a.operation,
+                        SELECT a.changed_at, a.operation, m.display_name AS author,
+                               m.login AS author_login, m.number AS author_number,
                                coalesce(a.new_value, a.old_value) ->> 'vehicle' AS vehicle
                           FROM audit_log a
                           LEFT JOIN tenant_member m ON m.id = a.changed_by
@@ -257,7 +273,7 @@ public class PartHistoryService {
                     boolean added = "INSERT".equals(rs.getString("operation"));
                     String vehicle = rs.getString("vehicle");
                     return new Change(rs.getTimestamp("changed_at").toInstant(),
-                            rs.getString("author"), null,
+                            authorOf(rs), null,
                             List.of(new Field("Применимость",
                                     added ? null : vehicle, added ? vehicle : null, null)),
                             null);
@@ -271,14 +287,15 @@ public class PartHistoryService {
      */
     private java.util.Optional<Change> created(long partId) {
         return jdbc.query("""
-                        SELECT a.changed_at, m.display_name AS author
+                        SELECT a.changed_at, m.display_name AS author,
+                               m.login AS author_login, m.number AS author_number
                           FROM audit_log a
                           LEFT JOIN tenant_member m ON m.id = a.changed_by
                          WHERE a.table_name = 'part' AND a.record_id = ?
                            AND a.operation = 'INSERT'
                          ORDER BY a.changed_at LIMIT 1""",
                 (rs, i) -> new Change(rs.getTimestamp("changed_at").toInstant(),
-                        rs.getString("author"), "Товар создан", List.of(), null),
+                        authorOf(rs), "Товар создан", List.of(), null),
                 partId).stream().findFirst();
     }
 
@@ -499,7 +516,9 @@ public class PartHistoryService {
     }
 
     /**
-     * @param author  {@code null} у правок, сделанных до того, как приложение
+     * @param author  подпись сотрудника: имя, логин и видимый номер —
+     *                «Пётр Массов (vladelec, ID 3)» (задача 0373).
+     *                {@code null} у правок, сделанных до того, как приложение
      *                начало сообщать базе вошедшего, и у всего, что приехало
      *                переносом. Врать тут нельзя — экран показывает прочерк
      * @param action  заполнен у событий без полей («Товар создан»)

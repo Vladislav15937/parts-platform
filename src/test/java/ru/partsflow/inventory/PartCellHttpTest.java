@@ -149,7 +149,8 @@ class PartCellHttpTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.changes[0].fields[0].label").value("Ячейка"))
                 .andExpect(jsonPath("$.changes[0].fields[0].before").value("А-01-1"))
                 .andExpect(jsonPath("$.changes[0].fields[0].after").value("А-02-1"))
-                .andExpect(jsonPath("$.changes[0].author").value("Кладовщик"));
+                .andExpect(jsonPath("$.changes[0].author").value(
+                        org.hamcrest.Matchers.startsWith("Кладовщик (kladovshchik, ID ")));
     }
 
     /**

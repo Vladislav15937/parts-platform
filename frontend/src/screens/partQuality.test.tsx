@@ -59,7 +59,9 @@ describe('оценка состояния в карточке позиции', (
       const post = sent.find((r) => r.method === 'POST');
       expect(post, 'оценка на сервер не уехала').toBeTruthy();
       expect(post?.body).toEqual({
-        partIds: [42], changes: { qualityGrade: 'NO_DEFECTS' }, operations: {},
+        // CARD: правка из карточки, в истории позиции без подписи
+        // «по отмеченным» (задача 0373, решение владельца 23.10.2026).
+        partIds: [42], changes: { qualityGrade: 'NO_DEFECTS' }, operations: {}, source: 'CARD',
       });
     });
 
@@ -90,7 +92,7 @@ describe('оценка состояния в карточке позиции', (
       // Пустая строка нарушила бы CHECK схемы и означала бы значение,
       // а пусто здесь — «не оценена».
       expect(post?.body).toEqual({
-        partIds: [42], changes: { qualityGrade: null }, operations: {},
+        partIds: [42], changes: { qualityGrade: null }, operations: {}, source: 'CARD',
       });
     });
 

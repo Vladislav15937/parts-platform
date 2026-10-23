@@ -149,7 +149,8 @@ class FitFromDonorTest extends PostgresTestBase {
             }
         }
         assertThat(line).as("в истории позиции нет строки «Применимость: → …»").isNotNull();
-        assertThat(line.get("author").asText()).isEqualTo("Приёмщик");
+        // Подпись автора — «Имя (логин, ID N)» (задача 0373).
+        assertThat(line.get("author").asText()).startsWith("Приёмщик (");
     }
 
     @Test

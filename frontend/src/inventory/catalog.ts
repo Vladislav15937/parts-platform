@@ -408,7 +408,8 @@ export interface HistoryBulk {
  * Подпись массовой правки под её полями: «всего были отредактированы
  * 40 товаров по фильтру» — слова Bazon, откуда приходят клиенты. У правки
  * отмеченных строк подписи у Bazon не видели; «по отмеченным» — слово
- * исполнителя, названное в PR 0373.
+ * исполнителя из PR 491, подтверждённое владельцем 23.10.2026 (задача 0373,
+ * пункт 11).
  */
 export function bulkCaption(bulk: HistoryBulk): string {
   const how = bulk.scope === 'FILTER' ? 'по фильтру' : 'по отмеченным';
@@ -1387,12 +1388,22 @@ export function savePartsBulk(
   partIds: number[],
   changes: Record<string, string | number | boolean | null>,
   operations: Record<string, PriceOperation> = {},
+  source: BulkSource = 'LIST',
 ): Promise<BulkResult> {
   return request<BulkResult>('/api/parts/bulk', {
     method: 'POST',
-    body: { partIds, changes, operations },
+    body: { partIds, changes, operations, source },
   });
 }
+
+/**
+ * Откуда правка (задача 0373). «Правка списком» подписывается в истории
+ * позиции всегда, и при одной отмеченной строке: «клиент должен явно
+ * понимать что правит не одну позицию а выбранные» (решение владельца
+ * 23.10.2026). `CARD` — правка из карточки тем же путём (оценка состояния),
+ * она подписи не получает. По числу позиций эти два не различить.
+ */
+export type BulkSource = 'LIST' | 'CARD';
 
 /**
  * Итог правки списком.

@@ -107,7 +107,7 @@ export function BulkEditForm({ partIds, whole, count, onSaved, onCancel }: {
         }
       }
       const result = whole === undefined
-        ? await savePartsBulk(partIds, changes, operations)
+        ? await savePartsBulk(partIds, changes, operations, 'LIST')
         : await savePartsBulkByFilter(whole, changes, operations);
       if (mounted.current) onSaved(result);
     } catch (e) {

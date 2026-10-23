@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
+import { BulkEditForm } from './BulkEditForm';
 import { PartHistoryView } from './PartHistoryView';
 import type { HistoryChange, PartHistory } from '../inventory/catalog';
 
@@ -33,6 +34,42 @@ describe('массовая правка в истории позиции', () =>
     show(change({ bulk: null }), change({}));
     expect(screen.getAllByText('Наличные')).toHaveLength(2);
     expect(screen.queryByText(/всего были отредактированы/)).toBeNull();
+  });
+});
+
+/**
+ * «Правка списком» называет себя источником `LIST` и при одной отмеченной
+ * строке: «клиент должен явно понимать что правит не одну позицию а
+ * выбранные» (решение владельца 23.10.2026, задача 0373). Без подписи
+ * остаётся только правка из карточки (`CARD`, `partQuality.test.tsx`).
+ */
+describe('источник правки списком', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('одна отмеченная строка уходит правкой списком, а не карточкой', async () => {
+    const sent: unknown[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') !== 'GET') {
+        sent.push(JSON.parse(String(init?.body)));
+      }
+      return new Response(JSON.stringify(
+        { changed: 1, skipped: 0, rejected: 0, rejectedCodes: [], rejectedReason: null }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    render(<BulkEditForm partIds={[5]} count={1} onSaved={() => {}} onCancel={() => {}} />);
+
+    const field = [...document.querySelectorAll('.bulk-field')]
+      .find((f) => f.textContent?.includes('Заметка'))!;
+    fireEvent.click(field.querySelector('input[type=checkbox]')!);
+    fireEvent.change(field.querySelector('input:not([type=checkbox]), textarea')!,
+      { target: { value: 'Наличные' } });
+    fireEvent.click(screen.getByText('Изменить 1 позицию'));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ partIds: [5], source: 'LIST' });
   });
 });
 

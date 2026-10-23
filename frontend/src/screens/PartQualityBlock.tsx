@@ -59,7 +59,9 @@ export function PartQualityBlock({ partId, grade, role, onGraded }: {
       // есть и запись в журнал изменений, и отметка для площадки,
       // и та же проверка роли. Второй путь к тому же полю разошёлся бы
       // с этим на первой правке.
-      await savePartsBulk([partId], { qualityGrade: next });
+      // `CARD`: для человека это правка карточки, и подписи «по отмеченным»
+      // в истории у неё быть не должно (задача 0373).
+      await savePartsBulk([partId], { qualityGrade: next }, {}, 'CARD');
       if (mounted.current) {
         setOpen(false);
         onGraded(next);
