@@ -67,7 +67,9 @@ public class MemberController {
         if ("OWNER".equals(request.role()) && !CurrentUser.require().actsAsOwner()) {
             throw new AccessDeniedException("Владельца заводит только владелец");
         }
-        MemberService.Member created = members.create(
+        // Через роли клиента, а не MemberService напрямую: права заведённого
+        // не шире прав заводящего (задача 0044, ответ владельца 24.10.2026, 2б).
+        MemberService.Member created = roles.createMemberWithLegacyRole(
                 request.login(), request.password(), request.displayName(),
                 request.role(), request.branchId());
         return ResponseEntity.status(HttpStatus.CREATED).body(created);

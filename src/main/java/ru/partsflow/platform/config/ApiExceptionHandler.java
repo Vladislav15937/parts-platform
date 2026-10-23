@@ -43,7 +43,11 @@ public class ApiExceptionHandler {
     @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
     public ResponseEntity<ApiError> forbidden(
             org.springframework.security.access.AccessDeniedException e) {
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError("Недостаточно прав"));
+        // Отказ-правило называет причину сам (задача 0044: «выдать можно только
+        // свои права» — какие именно права лишние); отказ по пути — нет.
+        String message = e instanceof ru.partsflow.platform.security.RightsRefusal
+                ? e.getMessage() : "Недостаточно прав";
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError(message));
     }
 
     /** Неверные данные в запросе: количество, роль, пустое наименование. */

@@ -187,7 +187,11 @@ public class MemberService {
     public void setActive(Long memberId, boolean active) {
         requireNotServiceAdmin(memberId);
         if (!active) {
-            requireNotLastOwner(memberId);
+            // Первой блокировкой в транзакции: строки владельцев берутся раньше
+            // строки сотрудника — тем же порядком, что у назначения роли
+            // (AccessRoleService.assign), иначе два встречных запроса взяли бы
+            // одни строки в обратном порядке и упёрлись бы друг в друга.
+            requireOwnerRemains(memberId);
         }
         java.util.List<Boolean> was = jdbc.queryForList(
                 "SELECT is_active FROM tenant_member WHERE id = ? FOR UPDATE", Boolean.class, memberId);
@@ -231,29 +235,53 @@ public class MemberService {
         revocations.revoke(schema, memberId, actingSessionKey);
     }
 
+    /** Отказ «последнего владельца» — одними словами на все пути. */
+    static final String LAST_OWNER =
+            "Это последний владелец, а в компании должен остаться хотя бы один владелец. "
+                    + "Сначала назначьте владельцем другого сотрудника";
+
     /**
-     * Последнего владельца выключить нельзя.
+     * Владельцев всегда не меньше одного — <b>одна проверка на все пути</b>,
+     * которые могут отнять у сотрудника владельца: выключение
+     * ({@link #setActive}) и смена роли, то есть и снятие роли «Владелец»
+     * ({@code AccessRoleService.assign}). Удаления сотрудника в системе нет
+     * вовсе. Решение владельца продукта 24.10.2026 (tasks/0044): «владелец
+     * есть всегда, как минимум 1».
      *
      * <p>Иначе компания запирается снаружи: сотрудников, выгрузки, ключи
-     * кабинетов и списание видит только владелец, а включить его обратно
-     * может тоже только владелец. Выход остаётся один — провижининг, то есть
-     * разработчик с секретом управляющего контура.
+     * кабинетов видит только владелец, а вернуть владельца может тоже только
+     * владелец — остаётся провижининг, то есть разработчик.
      *
-     * <p>Правило стоит здесь, а не на экране: экран прячет кнопку у строки
-     * с ролью «владелец», но это одна из двух дверей — запрос к API открыт
-     * так же. Пока проверки не было, компания могла запереть себя одним
-     * нажатием, и обнаружилось бы это при следующем входе.
+     * <p><b>Проверка и изменение не разъезжаются — строки владельцев
+     * блокируются до счёта.</b> «Прочитали — проверили — записали» пропускает
+     * два встречных запроса двух последних владельцев («выключить другого»):
+     * каждый видит второго действующим, оба проходят, владельцев ноль.
+     * Поэтому сначала {@code FOR UPDATE} по <b>всем</b> строкам владельцев
+     * (действующим и нет — набор не зависит от того, что меняет сосед),
+     * в одном порядке у всех вызывающих, и только потом — счёт отдельной
+     * инструкцией: в READ COMMITTED она видит то, что успел записать тот,
+     * кого мы ждали на блокировке. Проигравший получает 409 словами.
+     * Пока строки заперты, ни один из оставшихся владельцев не может
+     * перестать им быть — даже если сотрудник, которого мы меняем, сам
+     * владельцем станет в эту же секунду.
+     *
+     * <p>Зовётся <b>первой блокировкой</b> транзакции и только внутри неё
+     * ({@code MANDATORY}): замок в своей короткой транзакции снимался бы
+     * раньше записи и ничего бы не держал.
      */
-    private void requireNotLastOwner(Long memberId) {
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void requireOwnerRemains(long memberId) {
+        jdbc.queryForList("SELECT m.id FROM tenant_member m WHERE " + OWNER_SQL
+                + " ORDER BY m.id FOR UPDATE OF m", Long.class);
+        if (!isOwner(memberId)) {
+            return;
+        }
         Integer others = jdbc.queryForObject("""
                 SELECT count(*) FROM tenant_member m
                  WHERE m.is_active AND m.login IS NOT NULL AND m.id <> ?""" + " AND " + OWNER_SQL,
                 Integer.class, memberId);
-
-        if (isOwner(memberId) && (others == null || others == 0)) {
-            throw new IllegalStateException(
-                    "Это единственный владелец: выключив его, в компанию нельзя будет войти "
-                            + "как владелец. Сначала заведите второго");
+        if (others == null || others == 0) {
+            throw new IllegalStateException(LAST_OWNER);
         }
     }
 

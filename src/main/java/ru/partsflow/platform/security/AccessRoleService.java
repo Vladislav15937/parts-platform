@@ -121,6 +121,7 @@ public class AccessRoleService {
     public RoleView create(String name, Collection<String> permissions) {
         String title = requireName(name);
         Set<String> keys = requireKnown(permissions);
+        requireOwnRights(keys, "В наборе роли есть права, которых у вас нет: ");
         long id;
         try {
             id = jdbc.queryForObject("""
@@ -148,6 +149,7 @@ public class AccessRoleService {
         }
         String title = requireName(name);
         Set<String> keys = requireKnown(permissions);
+        requireOwnRights(keys, "В наборе роли есть права, которых у вас нет: ");
         try {
             jdbc.update("UPDATE access_role SET name = ? WHERE id = ?", title, roleId);
         } catch (DuplicateKeyException e) {
@@ -225,6 +227,16 @@ public class AccessRoleService {
     @Transactional
     public MemberAccessView assign(long memberId, long roleId, Map<String, Boolean> overrides) {
         String schema = TenantContext.require();
+        // Роль не «Владелец» — значит, назначение может снять с сотрудника
+        // владельца, и проверка «владельцев не меньше одного» идёт первой
+        // блокировкой транзакции (MemberService.requireOwnerRemains — одна на все
+        // пути). Признак роли читается без замка: у роли «Владелец» он не
+        // меняется никогда, а несуществующую роль ниже назовёт lockRole.
+        List<Boolean> toOwner = jdbc.queryForList(
+                "SELECT is_owner FROM access_role WHERE id = ?", Boolean.class, roleId);
+        if (toOwner.isEmpty() || !Boolean.TRUE.equals(toOwner.get(0))) {
+            members.requireOwnerRemains(memberId);
+        }
         Member member = lockMember(memberId);
         if (TenantPrincipal.SERVICE_ADMIN_ROLE.equals(member.legacyRole())) {
             throw new IllegalStateException(
@@ -246,8 +258,18 @@ public class AccessRoleService {
             throw new AccessDeniedException(
                     "Назначить и снять роль «Владелец» может только владелец");
         }
-        if (wasOwner && !role.owner()) {
-            requireAnotherOwner(memberId);
+        if (!role.owner()) {
+            // Выдавать можно только свои права (ответ владельца 24.10.2026, 2б):
+            // и роль целиком, и добавленное поверх неё. Снятое поверх роли —
+            // не выдача, и его не проверяем; роль «Владелец» шире любого
+            // не-владельца, и её выдачу держит проверка строкой выше.
+            Set<String> granted = new TreeSet<>(role.permissions());
+            requested.forEach((key, on) -> {
+                if (Boolean.TRUE.equals(on)) {
+                    granted.add(key);
+                }
+            });
+            requireOwnRights(granted, "Выдать можно только свои права: у вас нет ");
         }
 
         Map<String, Boolean> kept = new LinkedHashMap<>();
@@ -299,6 +321,24 @@ public class AccessRoleService {
         return members.byId(created.id());
     }
 
+    /**
+     * Завести сотрудника прежней строкой роли ({@code role}) — от вкладки,
+     * открытой до 0044. Одной транзакцией: права заведённого считаются тем же
+     * чтением, что у входа ({@link MemberAccess}), и если они шире прав
+     * заводящего — отказ откатывает и заведение.
+     */
+    @Transactional
+    public MemberService.Member createMemberWithLegacyRole(String login, String password,
+                                                           String displayName, String role,
+                                                           Long branchId) {
+        MemberService.Member created = members.create(login, password, displayName, role, branchId);
+        MemberAccess.Access rights = access.resolve(TenantContext.require(), created.id());
+        if (rights != null && !rights.owner()) {
+            requireOwnRights(rights.permissions(), "Выдать можно только свои права: у вас нет ");
+        }
+        return created;
+    }
+
     // -------------------------------------------------------------- вспомогательное
 
     private void revoke(long memberId, String detail) {
@@ -319,18 +359,31 @@ public class AccessRoleService {
                 Long.class, roleId, seededFrom, seededFrom);
     }
 
-    private void requireAnotherOwner(long memberId) {
-        // Владелец — тем же выражением, что у входа и у MemberService
-        // (роль «Владелец», а без роли вовсе — колонка OWNER).
-        Integer others = jdbc.queryForObject("""
-                SELECT count(*) FROM tenant_member m
-                 WHERE m.id <> ? AND m.is_active AND m.login IS NOT NULL""" + " AND "
-                        + MemberService.OWNER_SQL,
-                Integer.class, memberId);
-        if (others == null || others == 0) {
-            throw new IllegalStateException(
-                    "Это единственный владелец: сняв с него роль «Владелец», в компанию "
-                            + "нельзя будет войти как владелец. Сначала назначьте владельцем другого");
+    /**
+     * Выдавать можно только те права, что есть у выдающего (ответ владельца
+     * 24.10.2026, пункт 2б): сотрудник с «Сотрудники и роли» не заводит
+     * сотрудника, не назначает роль, не добавляет право поверх роли и не
+     * собирает роль шире своих прав. Владелец может всё.
+     *
+     * <p>Права выдающего читаются из базы, а не из снимка в сессии: снимок
+     * закрывается при каждой смене прав, но проверка, которая решает, кому
+     * что достанется, не должна зависеть от того, успел ли отзыв.
+     */
+    private void requireOwnRights(Collection<String> keys, String prefix) {
+        TenantPrincipal actor = CurrentUser.require();
+        if (actor.actsAsOwner()) {
+            return;
+        }
+        MemberAccess.Access mine = access.resolve(TenantContext.require(), actor.memberId());
+        if (mine != null && mine.owner()) {
+            return;
+        }
+        Set<String> own = mine == null ? Set.of() : mine.permissions();
+        List<String> beyond = keys.stream().filter(key -> !own.contains(key)).sorted().toList();
+        if (!beyond.isEmpty()) {
+            throw new RightsRefusal(prefix + beyond.stream()
+                    .map(key -> "«" + Permission.byKey(key).map(Permission::title).orElse(key) + "»")
+                    .collect(Collectors.joining(", ")));
         }
     }
 

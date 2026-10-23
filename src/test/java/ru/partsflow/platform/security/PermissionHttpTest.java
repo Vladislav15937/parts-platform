@@ -148,7 +148,14 @@ class PermissionHttpTest extends PostgresTestBase {
         long vladelec = member("vladelec", "OWNER");
         long kadrovik = member("kadrovik", "VIEWER");
         long prodavec = member("prodavec", "SELLER");
-        assign(kadrovik, role("Кадровик", "members.manage"));
+        // Набор «Продавца» сверху: заводить продавца можно только тому, у кого
+        // его права есть (задача 0044, ответ владельца 24.10.2026, 2б).
+        List<String> keys = new ArrayList<>(inTenant(() -> jdbc.queryForList("""
+                SELECT permission FROM access_role_permission
+                 WHERE role_id = (SELECT id FROM access_role WHERE seeded_from = 'SELLER')""",
+                String.class)));
+        keys.add("members.manage");
+        assign(kadrovik, role("Кадровик", keys.toArray(String[]::new)));
         MockHttpSession session = login("kadrovik");
 
         mvc.perform(post("/api/members").with(csrf()).session(session)
@@ -161,6 +168,18 @@ class PermissionHttpTest extends PostgresTestBase {
         mvc.perform(post("/api/members/" + vladelec + "/disable").with(csrf()).session(session))
                 .andExpect(status().isForbidden());
         login("vladelec");
+
+        // Включить выключенного владельца — тоже только владелец (мелочь из
+        // разбора PR 506): иначе держатель права вернул бы владельца, которого
+        // настоящий владелец выключил, и вошёл бы его паролем, если знает.
+        long vyklyuchen = member("vyklyuchen", "OWNER");
+        inTenant(() -> jdbc.update("UPDATE tenant_member SET is_active = false WHERE id = ?", vyklyuchen));
+        mvc.perform(post("/api/members/" + vyklyuchen + "/enable").with(csrf()).session(session))
+                .andExpect(status().isForbidden());
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT is_active FROM tenant_member WHERE id = ?", Boolean.class, vyklyuchen)))
+                .as("выключенный владелец остался выключенным").isFalse();
+        inTenant(() -> jdbc.update("UPDATE tenant_member SET role = 'VIEWER' WHERE id = ?", vyklyuchen));
 
         // Остальное право по-прежнему открывает: продавца заводит, пароль ему меняет.
         mvc.perform(post("/api/members").with(csrf()).session(session)
@@ -218,26 +237,39 @@ class PermissionHttpTest extends PostgresTestBase {
         long here = member("tezka", "SELLER");
         override(here, "journal.view", true);
         // Номер строки у тёзки в соседней схеме — тот же, что здесь: так чтение
-        // не из своей схемы нашло бы именно здешнего, с журналом.
+        // не из своей схемы нашло бы именно здешнего, с журналом. А роль у
+        // соседа другая («Менеджер» против здешнего «Продавца»): иначе первый
+        // запрос MemberAccess — кто сотрудник и какая у него роль, — прочитанный
+        // не из своей схемы, нашёл бы ту же роль с тем же набором, и подмену
+        // схемы в нём проба не видела бы вовсе (разбор PR 506).
         inTenant(OTHER, () -> {
             jdbc.update("DELETE FROM member_permission_override");
             jdbc.update("DELETE FROM tenant_member WHERE login = 'tezka'");
             jdbc.update("""
                     INSERT INTO tenant_member (id, display_name, role, login, password_hash)
-                    OVERRIDING SYSTEM VALUE VALUES (?, 'tezka', 'SELLER', 'tezka', ?)
-                    ON CONFLICT (id) DO UPDATE SET login = 'tezka', role = 'SELLER',
+                    OVERRIDING SYSTEM VALUE VALUES (?, 'tezka', 'MANAGER', 'tezka', ?)
+                    ON CONFLICT (id) DO UPDATE SET login = 'tezka', role = 'MANAGER',
                         password_hash = excluded.password_hash, access_role_id = NULL""",
                     here, passwordEncoder.encode("пароль-длинный"));
             return null;
         });
+        List<String> managerThere = inTenant(OTHER, () -> jdbc.queryForList("""
+                SELECT permission FROM access_role_permission
+                 WHERE role_id = (SELECT id FROM access_role WHERE seeded_from = 'MANAGER')""",
+                String.class));
+        assertThat(managerThere).as("«Менеджер» соседа отличим от «Продавца»")
+                .contains("reports.view").doesNotContain("journal.view");
 
-        mvc.perform(get("/api/organization/audit").session(login("tezka"))).andExpect(status().isOk());
+        MockHttpSession mine = login("tezka");
+        mvc.perform(get("/api/organization/audit").session(mine)).andExpect(status().isOk());
+        assertThat(me(mine).path("roleName").asText()).isEqualTo("Продавец");
         var other = loginTo("prava443", "tezka");
         mvc.perform(get("/api/organization/audit").session(other)).andExpect(status().isForbidden());
-        assertThat(keys(me(other))).as("у тёзки соседа — ровно набор его «Продавца»")
-                .containsExactlyInAnyOrder("intake.receive", "photos.manage", "inventory.count",
-                        "deal.sell", "deal.issue", "deal.return", "customer.view",
-                        "customer.create", "customer.account");
+        JsonNode there = me(other);
+        assertThat(there.path("roleName").asText()).as("роль тёзки соседа — из его схемы")
+                .isEqualTo("Менеджер");
+        assertThat(keys(there)).as("у тёзки соседа — ровно набор его «Менеджера»")
+                .containsExactlyInAnyOrderElementsOf(managerThere);
     }
 
     // ------------------------------------------------------- роль клиента и поверх

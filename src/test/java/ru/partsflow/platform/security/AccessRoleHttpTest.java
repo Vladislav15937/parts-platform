@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -15,6 +16,7 @@ import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
@@ -22,9 +24,15 @@ import ru.partsflow.support.PostgresTestBase;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -46,6 +54,16 @@ class AccessRoleHttpTest extends PostgresTestBase {
     private static final String TENANT = "t_000442";
     private static final String PASSWORD = "пароль-длинный";
 
+    /** Слова отказа «последнего владельца» — решение владельца 24.10.2026, дословно. */
+    private static final String LAST_OWNER_WORDS = "в компании должен остаться хотя бы один владелец";
+
+    /**
+     * Повторов гонки. Окно между счётом и записью — миллисекунды, и попадает
+     * в него не каждый заход: число взято замером подделки «прочитали —
+     * проверили — записали» (сколько красных из скольких — в PR и памятке).
+     */
+    private static final int RACE_ROUNDS = 20;
+
     @Autowired
     private MockMvc mvc;
 
@@ -60,6 +78,9 @@ class AccessRoleHttpTest extends PostgresTestBase {
 
     @Autowired
     private ObjectMapper json;
+
+    @Autowired
+    private MemberService members;
 
     private long ownerRole;
 
@@ -145,11 +166,182 @@ class AccessRoleHttpTest extends PostgresTestBase {
 
         String message = text(assign(owner, vladelec, viewerRole, "{}")
                 .andExpect(status().isConflict()));
-        assertThat(message).contains("единственный владелец");
+        assertThat(message).contains(LAST_OWNER_WORDS);
 
         long second = member("vtoroy", "OWNER");
         assign(owner, second, viewerRole, "{}").andExpect(status().isOk());
         assertThat(legacyRole(second)).isEqualTo("VIEWER");
+    }
+
+    // ------------------------------------------- владельцев не меньше одного
+
+    @Test
+    @DisplayName("Последнему владельцу не сменить роль на другую — и владельцу ссылкой, и владельцу по колонке")
+    void lastOwnerKeepsOwnerRole() throws Exception {
+        long vladelec = id("vladelec");
+        MockHttpSession owner = login("vladelec");
+        // Владелец прежней колонкой (без ссылки) — роль переноса «Продавец».
+        String message = text(assign(owner, vladelec, seeded("SELLER"), "{}")
+                .andExpect(status().isConflict()));
+        assertThat(message).contains(LAST_OWNER_WORDS);
+
+        // Владелец ссылкой на роль «Владелец» — своя роль клиента.
+        inTenant(() -> jdbc.update("UPDATE tenant_member SET access_role_id = ? WHERE id = ?",
+                ownerRole, vladelec));
+        long custom = role("Своя", "deal.sell");
+        message = text(assign(login("vladelec"), vladelec, custom, "{}")
+                .andExpect(status().isConflict()));
+        assertThat(message).contains(LAST_OWNER_WORDS);
+        assertThat(ownersLeft()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Последнего владельца не выключить: через HTTP до этого не дойти (себя — нельзя, чужого владельца — только владелец), и потому проверка стоит в самой операции")
+    void lastOwnerCannotBeDisabled() {
+        long vladelec = id("vladelec");
+        assertThatThrownBy(() -> inTenant(() -> {
+            members.setActive(vladelec, false);
+            return null;
+        })).isInstanceOf(IllegalStateException.class).hasMessageContaining(LAST_OWNER_WORDS);
+        assertThat(ownersLeft()).isEqualTo(1);
+    }
+
+    /**
+     * Два последних владельца одновременно выключают друг друга: выжить
+     * обязан один, а не ноль. Проверка чтением пропустила бы обоих.
+     */
+    @RepeatedTest(RACE_ROUNDS)
+    @DisplayName("Гонка: два последних владельца выключают друг друга одновременно — остаётся один")
+    void twoOwnersDisableEachOther() throws Exception {
+        long first = id("vladelec");
+        long second = member("vtoroy", "OWNER");
+        MockHttpSession one = login("vladelec");
+        MockHttpSession two = login("vtoroy");
+
+        List<Integer> statuses = race(
+                () -> post("/api/members/" + second + "/disable").with(csrf()).session(one),
+                () -> post("/api/members/" + first + "/disable").with(csrf()).session(two));
+
+        assertThat(ownersLeft()).as("действующих владельцев после гонки, ответы %s", statuses)
+                .isEqualTo(1);
+        assertThat(statuses).as("ровно один прошёл").containsOnlyOnce(204);
+    }
+
+    @RepeatedTest(RACE_ROUNDS)
+    @DisplayName("Гонка: два последних владельца снимают друг с друга «Владельца» одновременно — остаётся один")
+    void twoOwnersUnownEachOther() throws Exception {
+        long first = id("vladelec");
+        long second = member("vtoroy", "OWNER");
+        MockHttpSession one = login("vladelec");
+        MockHttpSession two = login("vtoroy");
+        // Разные роли — чтобы два запроса не встали в очередь на замке одной
+        // строки роли (lockRole) и гонку решала проверка владельцев, а не он.
+        long viewer = seeded("VIEWER");
+        long seller = seeded("SELLER");
+
+        List<Integer> statuses = race(
+                () -> put("/api/access/members/" + second).with(csrf()).session(one)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"roleId\":%d,\"overrides\":{}}".formatted(viewer)),
+                () -> put("/api/access/members/" + first).with(csrf()).session(two)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"roleId\":%d,\"overrides\":{}}".formatted(seller)));
+
+        assertThat(ownersLeft()).as("действующих владельцев после гонки, ответы %s", statuses)
+                .isEqualTo(1);
+        assertThat(statuses).as("ровно один прошёл").containsOnlyOnce(200);
+    }
+
+    // ----------------------------------------- выдавать можно только своё
+
+    @Test
+    @DisplayName("Свои права: сотрудника с ролью шире своих не завести, с ролью в пределах своих — можно")
+    void grantLimitOnCreateWithRole() throws Exception {
+        MockHttpSession session = kadrovik();
+        long wider = role("Отчётник-продавец", "deal.sell", "reports.view");
+        long within = role("Продавец-узкий", "deal.sell");
+
+        String message = text(createMember(session, "novyy1", "\"roleId\":" + wider)
+                .andExpect(status().isForbidden()));
+        assertThat(message).contains("Смотреть отчёты").doesNotContain("Продавать");
+        assertThat(memberExists("novyy1")).as("отказ откатил заведение").isFalse();
+
+        createMember(session, "novyy2", "\"roleId\":" + within).andExpect(status().isCreated());
+    }
+
+    @Test
+    @DisplayName("Свои права: прежней строкой роли — та же проверка (роль переноса шире своих — отказ)")
+    void grantLimitOnCreateWithLegacyRole() throws Exception {
+        MockHttpSession session = kadrovik();
+        String message = text(createMember(session, "novyy3", "\"role\":\"MANAGER\"")
+                .andExpect(status().isForbidden()));
+        assertThat(message).contains("Выдать можно только свои права");
+        assertThat(memberExists("novyy3")).as("отказ откатил заведение").isFalse();
+
+        createMember(session, "novyy4", "\"role\":\"SELLER\"").andExpect(status().isCreated());
+    }
+
+    @Test
+    @DisplayName("Свои права: роль шире своих не назначить; в пределах своих — можно")
+    void grantLimitOnAssign() throws Exception {
+        MockHttpSession session = kadrovik();
+        long target = member("prodavec", "SELLER");
+        assign(session, target, seeded("MANAGER"), "{}").andExpect(status().isForbidden());
+        assign(session, target, role("Продавец-узкий", "deal.sell"), "{}")
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Свои права: поверх роли не добавить чужое право; своё — можно; снять — можно")
+    void grantLimitOnOverride() throws Exception {
+        MockHttpSession session = kadrovik();
+        long target = member("prodavec", "SELLER");
+        long narrow = role("Продавец-узкий", "deal.sell");
+        String message = text(assign(session, target, narrow, "{\"reports.view\":true}")
+                .andExpect(status().isForbidden()));
+        assertThat(message).contains("Смотреть отчёты");
+        assign(session, target, narrow, "{\"deal.return\":true,\"deal.sell\":false}")
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Свои права: роль с набором шире своих не завести и не поправить; в пределах — можно")
+    void grantLimitOnRoleSet() throws Exception {
+        MockHttpSession session = kadrovik();
+        mvc.perform(post("/api/access/roles").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Широкая\",\"permissions\":[\"deal.sell\",\"settings.company\"]}"))
+                .andExpect(status().isForbidden());
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM access_role WHERE name = 'Широкая'", Integer.class))).isZero();
+        String created = text(mvc.perform(post("/api/access/roles").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Узкая\",\"permissions\":[\"deal.sell\"]}"))
+                .andExpect(status().isCreated()));
+        long id = json.readTree(created).path("id").asLong();
+
+        mvc.perform(put("/api/access/roles/" + id).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Узкая\",\"permissions\":[\"deal.sell\",\"journal.view\"]}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/api/access/roles/" + id).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Узкая\",\"permissions\":[\"deal.sell\",\"deal.return\"]}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Свои права: владелец выдаёт любое — роль на весь справочник и сотрудника с ней")
+    void ownerGrantsAnything() throws Exception {
+        MockHttpSession owner = login("vladelec");
+        String all = java.util.Arrays.stream(Permission.values())
+                .map(p -> "\"" + p.key() + "\"").collect(java.util.stream.Collectors.joining(","));
+        long id = json.readTree(text(mvc.perform(post("/api/access/roles").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Почти владелец\",\"permissions\":[" + all + "]}"))
+                .andExpect(status().isCreated()))).path("id").asLong();
+        createMember(owner, "pochti", "\"roleId\":" + id).andExpect(status().isCreated());
+        createMember(owner, "menedzher", "\"role\":\"MANAGER\"").andExpect(status().isCreated());
     }
 
     @Test
@@ -177,8 +369,8 @@ class AccessRoleHttpTest extends PostgresTestBase {
                 "SELECT count(*) FROM tenant_member WHERE login = 'novyy'", Integer.class)))
                 .as("отказ назначения откатил и заведение").isZero();
 
-        // Обычную роль он назначает.
-        assign(session, target, seeded("STOREKEEPER"), "{}").andExpect(status().isOk());
+        // Обычную роль — в пределах своих прав (задача 0044, 2б) — он назначает.
+        assign(session, target, role("Без прав"), "{}").andExpect(status().isOk());
     }
 
     // --------------------------------------------------------- роли и назначение
@@ -301,6 +493,66 @@ class AccessRoleHttpTest extends PostgresTestBase {
     }
 
     // ------------------------------------------------------------ вспомогательное
+
+    /**
+     * Держатель «Сотрудники и роли» с набором прежнего «Продавца» сверху:
+     * ему есть что выдать своего и чего не выдать чужого.
+     */
+    private MockHttpSession kadrovik() throws Exception {
+        long kadrovik = member("kadrovik", "VIEWER");
+        List<String> keys = new ArrayList<>(inTenant(() -> jdbc.queryForList("""
+                SELECT permission FROM access_role_permission
+                 WHERE role_id = (SELECT id FROM access_role WHERE seeded_from = 'SELLER')""",
+                String.class)));
+        keys.add("members.manage");
+        assignSql(kadrovik, role("Кадровик", keys.toArray(String[]::new)));
+        return login("kadrovik");
+    }
+
+    private ResultActions createMember(MockHttpSession session, String login, String role)
+            throws Exception {
+        inTenant(() -> jdbc.update("DELETE FROM tenant_member WHERE login = ?", login));
+        return mvc.perform(post("/api/members").with(csrf()).session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"login\":\"%s\",\"password\":\"%s\",%s}".formatted(login, PASSWORD, role)));
+    }
+
+    private boolean memberExists(String login) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM tenant_member WHERE login = ?", Integer.class, login)) > 0;
+    }
+
+    private int ownersLeft() {
+        return inTenant(() -> jdbc.queryForObject("""
+                SELECT count(*) FROM tenant_member m
+                 WHERE m.is_active AND m.login IS NOT NULL""" + " AND " + MemberService.OWNER_SQL,
+                Integer.class));
+    }
+
+    /** Два запроса разом, от общей черты; ответы — кодами. */
+    @SafeVarargs
+    private List<Integer> race(Supplier<MockHttpServletRequestBuilder>... requests)
+            throws Exception {
+        CyclicBarrier start = new CyclicBarrier(requests.length);
+        ExecutorService pool = Executors.newFixedThreadPool(requests.length);
+        try {
+            List<Future<Integer>> answers = new ArrayList<>();
+            for (Supplier<MockHttpServletRequestBuilder> request : requests) {
+                MockHttpServletRequestBuilder built = request.get();
+                answers.add(pool.submit(() -> {
+                    start.await(10, TimeUnit.SECONDS);
+                    return mvc.perform(built).andReturn().getResponse().getStatus();
+                }));
+            }
+            List<Integer> statuses = new ArrayList<>();
+            for (Future<Integer> answer : answers) {
+                statuses.add(answer.get(60, TimeUnit.SECONDS));
+            }
+            return statuses;
+        } finally {
+            pool.shutdownNow();
+        }
+    }
 
     private ResultActions assign(MockHttpSession session, long member, long role, String overrides)
             throws Exception {
