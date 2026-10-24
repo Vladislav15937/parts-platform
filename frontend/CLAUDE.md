@@ -3149,3 +3149,5 @@ flex-ряд** (`.stock-info.pick { display: block }`, флажок `inline-block
 без `members.grant_overrides` — галочки; без `members.roles` — «Изменить» роли и «Новая роль». Длинная
 причина (перечень лишних прав) мерена настоящим Chrome на 390 и 1280 (`membersNarrow.test.tsx`): подделка
 `white-space: nowrap` у причины краснит оба замера. Стережёт `membersAccountLocked.test.tsx`.
+Тот же признак гасит «Права» у сотрудника шире вошедшего (сужать нельзя — ответ владельца 24.10,
+вопрос 2), а `editLocked` у роли — её «Изменить» с причиной сервера у строки роли.
