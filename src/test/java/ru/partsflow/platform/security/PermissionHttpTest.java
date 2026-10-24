@@ -154,7 +154,8 @@ class PermissionHttpTest extends PostgresTestBase {
                 SELECT permission FROM access_role_permission
                  WHERE role_id = (SELECT id FROM access_role WHERE seeded_from = 'SELLER')""",
                 String.class)));
-        keys.add("members.manage");
+        keys.addAll(List.of("members.accounts", "members.assign_roles", "members.roles",
+                "members.grant_overrides"));
         assign(kadrovik, role("Кадровик", keys.toArray(String[]::new)));
         MockHttpSession session = login("kadrovik");
 

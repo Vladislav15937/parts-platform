@@ -41,13 +41,13 @@ function value(key: string, source: CatalogRow): string {
 describe('колонки витрины', () => {
   it('стороны показаны словами, а не кодом', () => {
     // «LEFT» в таблице — это утечка внутреннего представления: кладовщик
-    // читает «лев.» и «перед.», а не английские константы.
-    expect(value('sideLr', row({ sideLr: 'LEFT' }))).toBe('лев.');
-    expect(value('sideFr', row({ sideFr: 'REAR' }))).toBe('задн.');
+    // читает «Лев.» и «Перед.», а не английские константы.
+    expect(value('sideLr', row({ sideLr: 'LEFT' }))).toBe('Лев.');
+    expect(value('sideFr', row({ sideFr: 'REAR' }))).toBe('Задн.');
   });
 
   it('«Переднее, Заднее» в колонке — парой слов, а не пустотой (задача 0283)', () => {
-    expect(value('sideFr', row({ sideFr: 'BOTH' }))).toBe('перед., задн.');
+    expect(value('sideFr', row({ sideFr: 'BOTH' }))).toBe('Перед., Задн.');
   });
 
   it('пустая сторона даёт пустоту, а не «undefined»', () => {

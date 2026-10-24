@@ -594,8 +594,20 @@ export interface Column {
   hint?: (row: CatalogRow) => string | undefined;
 }
 
-const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.', BOTH: 'лев., прав.' };
-const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.', BOTH: 'перед., задн.' };
+/**
+ * Стороны установки словом — словарь один на весь фронтенд: клетка витрины,
+ * карточка и форма правки.
+ *
+ * <p>Слова — сервера (`shared/ValueWords`), с заглавной: решение владельца
+ * продукта 24.10.2026 (`tasks/0044`, пункт 4) — «Перед.», «Задн.», «Лев.»,
+ * «Прав.» в карточке, в названии позиции и в файле склада одинаково. До этого
+ * клетка писала «перед.», а файл того же склада — «Перед.», и копий было три
+ * (здесь, `partCard.ts`, `PartEditForm.tsx`). Сверяет с сервером
+ * `ValueWordsTest`: он же требует, чтобы своей копии больше нигде
+ * не было.
+ */
+export const SIDE_LR: Record<string, string> = { LEFT: 'Лев.', RIGHT: 'Прав.', BOTH: 'Лев., Прав.' };
+export const SIDE_FR: Record<string, string> = { FRONT: 'Перед.', REAR: 'Задн.', BOTH: 'Перед., Задн.' };
 /**
  * Состояние детали — словарь один на весь фронтенд.
  *

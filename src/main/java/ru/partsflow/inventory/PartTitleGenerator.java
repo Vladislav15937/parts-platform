@@ -2,6 +2,7 @@ package ru.partsflow.inventory;
 
 import org.springframework.stereotype.Component;
 import ru.partsflow.catalog.OemNumbers;
+import ru.partsflow.shared.ValueWords;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -24,7 +25,8 @@ import java.util.regex.Pattern;
  *   <li><b>Марка, модель, кузов, двигатель</b> — первое значение каждого поля:
  *       {@code Lincoln,Ford} → Lincoln ({@link #firstOf}).</li>
  *   <li><b>Год</b> — первое число поля: {@code 03-08} → 03 ({@link #yearOf}).</li>
- *   <li><b>Положение</b> — сокращениями, «перед./задн.», потом «лев./прав.».</li>
+ *   <li><b>Положение</b> — сокращениями с заглавной, «Перед./Задн.», потом «Лев./Прав.»
+ *       ({@link ValueWords}, решение владельца 24.10.2026).</li>
  *   <li><b>Пометка состояния</b> — {@link PartCondition#stockMark}: «(б/у)»
  *       у б/у и контрактной, нет у новой и у позиции без состояния.</li>
  *   <li><b>Номер</b> — основной, как вписан, последним ({@link #titleNumber}).</li>
@@ -162,38 +164,30 @@ public class PartTitleGenerator {
 
     /**
      * Стороны установки в порядке, принятом у разборщиков: сначала продольная
-     * («перед.»), затем поперечная («лев.»), затем вертикальная («ниж.»).
+     * («Перед.»), затем поперечная («Лев.»), затем вертикальная («Ниж.»).
      * Именно так деталь называют вслух, и менять порядок нельзя — иначе
      * одинаковые детали получат разные заголовки.
+     *
+     * <p>Слова — общим словарём {@link ValueWords}, с заглавной (решение
+     * владельца 24.10.2026: «в названии позиции» так же, как в карточке
+     * и в файле склада). Здесь у Bazon «задн. лев.» строчными — расхождение
+     * с ориентиром осознанное и названо владельцем. «Обе» — двумя словами
+     * через пробел, а не своим сокращением.
      */
     public record Sides(LongitudinalSide fr, LateralSide lr, VerticalSide ud) {
 
         String asText() {
             List<String> words = new ArrayList<>();
-            if (fr != null) {
-                words.add(switch (fr) {
-                    case FRONT -> "перед.";
-                    case REAR -> "задн.";
-                    case BOTH -> "перед. задн.";
-                });
-            }
-            if (lr != null) {
-                // «Обе» — двумя словами, а не своим сокращением: каждое
-                // из них прайс уже умеет снимать с заголовка (plainName).
-                words.add(switch (lr) {
-                    case LEFT -> "лев.";
-                    case RIGHT -> "прав.";
-                    case BOTH -> "лев. прав.";
-                });
-            }
-            if (ud != null) {
-                words.add(switch (ud) {
-                    case UPPER -> "верх.";
-                    case LOWER -> "ниж.";
-                    case BOTH -> "верх. ниж.";
-                });
-            }
+            add(words, ValueWords.Axis.FRONT_REAR, fr);
+            add(words, ValueWords.Axis.LEFT_RIGHT, lr);
+            add(words, ValueWords.Axis.UPPER_LOWER, ud);
             return String.join(" ", words);
+        }
+
+        private static void add(List<String> words, ValueWords.Axis axis, Enum<?> side) {
+            if (side != null) {
+                words.add(ValueWords.side(axis, side.name(), ValueWords.TITLE_SEPARATOR));
+            }
         }
     }
 }

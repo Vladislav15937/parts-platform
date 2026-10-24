@@ -4,7 +4,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,6 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 import ru.partsflow.platform.session.SessionTrackingFilter;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Сотрудники арендатора.
@@ -59,7 +59,7 @@ public class MemberController {
      * иначе сотрудник с правом «Сотрудники и роли» завёл бы себе владельца.
      */
     @PostMapping
-    @PreAuthorize("hasAuthority('members.manage')")
+    @PreAuthorize("hasAuthority('members.accounts')")
     public ResponseEntity<MemberService.Member> create(@Valid @RequestBody CreateRequest request) {
         if (request.roleId() != null) {
             return ResponseEntity.status(HttpStatus.CREATED).body(roles.createMember(
@@ -85,24 +85,36 @@ public class MemberController {
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
+    /**
+     * Сотрудники — и у каждого, почему вошедшему нельзя менять ему пароль,
+     * выключать и включать ({@code accountLocked}; пусто — можно). Признак
+     * считает сервер тем же правилом, что отказ
+     * ({@link AccessRoleService#requireMayChangeAccount}): экран гасит кнопки
+     * по нему и своих правил не держит.
+     */
     @GetMapping
-    @PreAuthorize("hasAuthority('members.manage')")
-    public List<MemberService.Member> all() {
-        return members.all();
+    @PreAuthorize(AccessRoleController.ANY_MEMBERS)
+    public List<Listed> all() {
+        List<MemberService.Member> found = members.all();
+        Map<Long, String> limits = roles.accountLimits(
+                found.stream().map(MemberService.Member::id).toList());
+        return found.stream().map(m -> new Listed(m.id(), m.number(), m.login(), m.displayName(),
+                m.role(), m.active(), m.lastLoginAt(), limits.get(m.id()))).toList();
     }
 
     /**
-     * Смена пароля: владельцем — любому, сотрудником — только себе.
+     * Смена пароля: себе — каждому; другому — держателю «Сотрудники и роли»,
+     * если права того не шире его собственных (владелец — любому).
      *
      * <p>Проверка «себе» через сравнение с {@code memberId} принципала: без неё
      * любой вошедший менял бы пароль владельцу и забирал компанию.
      */
     @PostMapping("/{id}/password")
-    @PreAuthorize("hasAuthority('members.manage') or #id == authentication.principal.memberId")
+    @PreAuthorize("hasAuthority('members.accounts') or #id == authentication.principal.memberId")
     public ResponseEntity<Void> changePassword(@PathVariable Long id,
                                                @Valid @RequestBody PasswordRequest request,
                                                HttpServletRequest httpRequest) {
-        requireOwnerTouchesOwner(id);
+        roles.requireMayChangeAccount(id, AccessRoleService.AccountChange.PASSWORD);
         // Своя сессия называется явно: смена пароля закрывает все остальные,
         // а того, кто её меняет, оставляет работать.
         members.changePassword(id, request.password(),
@@ -117,7 +129,7 @@ public class MemberController {
      * и починить это можно было бы только руками в БД.
      */
     @PostMapping("/{id}/disable")
-    @PreAuthorize("hasAuthority('members.manage')")
+    @PreAuthorize("hasAuthority('members.accounts')")
     public ResponseEntity<Void> disable(@PathVariable Long id) {
         if (id.equals(CurrentUser.require().memberId())) {
             // Словами, а не пустым 409. Экран показывает эту кнопку всем,
@@ -129,32 +141,19 @@ public class MemberController {
                     "Себя выключить нельзя: выйти из компании было бы некому "
                             + "вернуть. Попросите другого владельца");
         }
-        requireOwnerTouchesOwner(id);
+        roles.requireMayChangeAccount(id, AccessRoleService.AccountChange.DISABLE);
         members.setActive(id, false);
         return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/{id}/enable")
-    @PreAuthorize("hasAuthority('members.manage')")
+    @PreAuthorize("hasAuthority('members.accounts')")
     public ResponseEntity<Void> enable(@PathVariable Long id) {
-        requireOwnerTouchesOwner(id);
+        roles.requireMayChangeAccount(id, AccessRoleService.AccountChange.ENABLE);
         members.setActive(id, true);
         return ResponseEntity.noContent().build();
     }
 
-
-    /**
-     * Учётную запись владельца — пароль, выключение, включение — меняет
-     * только владелец (задача 0044). Право «Управлять сотрудниками и ролями»
-     * сотрудника иначе давало бы ему пароль владельца, то есть права на всё.
-     * Свой пароль меняет каждый.
-     */
-    private void requireOwnerTouchesOwner(Long id) {
-        TenantPrincipal actor = CurrentUser.require();
-        if (!actor.actsAsOwner() && !id.equals(actor.memberId()) && members.isOwner(id)) {
-            throw new AccessDeniedException("Учётную запись владельца меняет только владелец");
-        }
-    }
 
     /**
      * @param role   прежняя жёсткая роль строкой — от вкладки, открытой до 0044
@@ -169,6 +168,16 @@ public class MemberController {
     }
 
     public record PasswordRequest(@NotBlank String password) {
+    }
+
+    /**
+     * Сотрудник в списке.
+     *
+     * @param accountLocked почему вошедшему нельзя менять пароль, выключать
+     *                      и включать этого сотрудника; {@code null} — можно
+     */
+    public record Listed(Long id, long number, String login, String displayName, String role,
+                         boolean active, java.time.Instant lastLoginAt, String accountLocked) {
     }
 
 }

@@ -3,6 +3,7 @@ package ru.partsflow.inventory;
 import ru.partsflow.platform.security.MemberSignature;
 import ru.partsflow.shared.PartNumberQuery;
 import ru.partsflow.shared.SupplyKinds;
+import ru.partsflow.shared.ValueWords;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -378,11 +379,29 @@ public class CatalogService {
             + " AND strpos(a.note, '; " + BodyGeneration.MARK + "') > 0"
             + " ORDER BY a.id LIMIT 1)";
 
-    /** Стороны словом — как в клетке; одно выражение на отбор и сортировку. */
-    private static final String SIDE_FR_WORD = "CASE p.side_fr WHEN 'FRONT' THEN 'Перед.'"
-            + " WHEN 'REAR' THEN 'Задн.' WHEN 'BOTH' THEN 'Перед., задн.' END";
-    private static final String SIDE_LR_WORD = "CASE p.side_lr WHEN 'LEFT' THEN 'Лев.'"
-            + " WHEN 'RIGHT' THEN 'Прав.' WHEN 'BOTH' THEN 'Лев., прав.' END";
+    /**
+     * Стороны словом — как в клетке; одно выражение на отбор и сортировку.
+     * Слова — общим словарём {@link ValueWords} (решение владельца 24.10.2026:
+     * с заглавной везде, и «обе» тоже — «Перед., Задн.»).
+     */
+    private static final String SIDE_FR_WORD =
+            ValueWords.sqlSide(ValueWords.Axis.FRONT_REAR, "p.side_fr", ValueWords.CELL_SEPARATOR);
+    private static final String SIDE_LR_WORD =
+            ValueWords.sqlSide(ValueWords.Axis.LEFT_RIGHT, "p.side_lr", ValueWords.CELL_SEPARATOR);
+
+    /**
+     * Колонки, у которых выбранное из списка сравнивается без регистра.
+     *
+     * <p>Слова сторон сменили регистр решением владельца 24.10.2026
+     * ({@link ValueWords}): «обе» было «Перед., задн.» и «Лев., прав.», стало
+     * «Перед., Задн.» и «Лев., Прав.». Отбор, сохранённый до этого, —
+     * настройка экрана человека ({@code member_setting}) и отбор выгрузки
+     * ({@code marketplace_account.filter_columns}) — точным равенством
+     * не нашёл бы ничего, а у выгрузки это объявления, тихо выпавшие из прайса.
+     * Значений, различающихся у этих колонок только регистром, нет: слова
+     * собирает сервер. «Комплектации» здесь нет — отбора по ней нет вовсе.
+     */
+    private static final java.util.Set<String> CASE_FREE_VALUES = java.util.Set.of("sideFr", "sideLr");
 
     /**
      * Комплектация, как её показывает клетка: вписанная руками, иначе собранная
@@ -392,11 +411,11 @@ public class CatalogService {
     private static final String EQUIPMENT = """
             coalesce(p.manual_equipment, nullif(concat_ws(', ',
                 CASE d.steering WHEN 'RIGHT' THEN 'правый руль'
-                                WHEN 'LEFT' THEN 'левый руль' END,
-                CASE d.transmission_type WHEN 'AT' THEN 'АКПП'
-                                         WHEN 'MT' THEN 'МКПП'
-                                         WHEN 'CVT' THEN 'вариатор'
-                                         WHEN 'AMT' THEN 'робот' END,
+                                WHEN 'LEFT' THEN 'левый руль' END,"""
+            // Коробка — общим словарём, тем же, что у карточки донора
+            // (решение владельца 24.10.2026: «Вариатор», «Робот DSG»).
+            // Разделитель явной строкой: текстовый блок срезает края.
+            + " " + ValueWords.sqlTransmission("d.transmission_type") + "," + """
                 CASE d.drive_type WHEN 'FWD' THEN 'передний'
                                   WHEN 'RWD' THEN 'задний'
                                   WHEN 'AWD' THEN 'полный' END,
@@ -590,12 +609,6 @@ public class CatalogService {
                 ? order
                 : order + ", p.id" + direction;
     }
-
-    private static final Map<String, String> SIDE_FR =
-            Map.of("FRONT", "Перед.", "REAR", "Задн.", "BOTH", "Перед., задн.");
-
-    private static final Map<String, String> SIDE_LR =
-            Map.of("LEFT", "Лев.", "RIGHT", "Прав.", "BOTH", "Лев., прав.");
 
     private final JdbcTemplate jdbc;
 
@@ -835,6 +848,9 @@ public class CatalogService {
                     where.append(" AND coalesce(").append(expression).append(", '') = ''");
                 } else if (PRESENT.equals(value)) {
                     where.append(" AND coalesce(").append(expression).append(", '') <> ''");
+                } else if (CASE_FREE_VALUES.contains(entry.getKey())) {
+                    where.append(" AND lower(").append(expression).append(") = lower(?)");
+                    args.add(value);
                 } else {
                     where.append(" AND ").append(expression).append(" = ?");
                     args.add(value);
@@ -1809,8 +1825,8 @@ public class CatalogService {
             // Словами, а не кодами: файл открывают в Excel и читают глазами,
             // и «REAR» там означает утечку внутреннего представления.
             // В выгрузке прежней системы стоит ровно «Задн.» и «Лев.».
-            cells.add(SIDE_FR.getOrDefault(text(rs, "side_fr"), ""));
-            cells.add(SIDE_LR.getOrDefault(text(rs, "side_lr"), ""));
+            cells.add(sideCell(ValueWords.Axis.FRONT_REAR, text(rs, "side_fr")));
+            cells.add(sideCell(ValueWords.Axis.LEFT_RIGHT, text(rs, "side_lr")));
             cells.add(text(rs, "donor_code"));
             cells.add(number(rs, "price"));
             cells.add(number(rs, "installation_price"));
@@ -1886,6 +1902,11 @@ public class CatalogService {
         String value = dimensions(rs.getObject(a, Integer.class),
                 rs.getObject(b, Integer.class), rs.getObject(c, Integer.class));
         return value == null ? "" : value;
+    }
+
+    /** Сторона в файле — тем же словом, что в клетке экрана; пусто — пустая клетка. */
+    private static String sideCell(ValueWords.Axis axis, String code) {
+        return code == null ? "" : ValueWords.side(axis, code, ValueWords.CELL_SEPARATOR);
     }
 
     private static String text(java.sql.ResultSet rs, String column) throws java.sql.SQLException {

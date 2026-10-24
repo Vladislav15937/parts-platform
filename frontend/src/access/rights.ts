@@ -57,7 +57,10 @@ export type PermissionKey =
   | 'org.warehouses'
   | 'org.branches'
   | 'org.availability'
-  | 'members.manage'
+  | 'members.accounts'
+  | 'members.assign_roles'
+  | 'members.roles'
+  | 'members.grant_overrides'
   | 'admin_access.manage'
   | 'settings.company'
   | 'journal.view';

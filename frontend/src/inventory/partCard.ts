@@ -1,7 +1,4 @@
-import { CONDITION, qualityTitle, type Applicability, type CatalogRow } from './catalog';
-
-const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.', BOTH: 'лев., прав.' };
-const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.', BOTH: 'перед., задн.' };
+import { CONDITION, SIDE_FR, SIDE_LR, qualityTitle, type Applicability, type CatalogRow } from './catalog';
 
 /**
  * Поля карточки товара — списком, а не разметкой.

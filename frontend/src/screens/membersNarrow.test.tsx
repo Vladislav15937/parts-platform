@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { forgetCatalog } from '../access/rights';
 import { rightsWith } from '../test/rights';
 import { MembersScreen } from './MembersScreen';
+import { MEMBERS_RIGHTS } from './tabs';
 import {
   closeBrowser, measureLayout, measureOverflow, openBrowser,
 } from '../test/narrowViewport';
@@ -62,11 +63,11 @@ function json(body: unknown): Response {
   });
 }
 
-function stub(): void {
+function stub(members: unknown = MEMBERS): void {
   forgetCatalog();
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.endsWith('/api/members')) return json(MEMBERS);
+    if (url.endsWith('/api/members')) return json(members);
     if (url.endsWith('/api/access/members')) return json(ACCESS);
     if (url.endsWith('/api/access/roles')) return json(ROLES);
     if (url.endsWith('/api/access/catalog')) return json(CATALOG);
@@ -134,11 +135,41 @@ describe('«Сотрудники» на телефоне и на монитор�
       .toBeLessThanOrEqual(layout.clientWidth);
   }, 60_000);
 
+  // Пароль, выключение и включение у сотрудника шире вошедшего погашены, причина —
+  // видимым текстом сервера у строки (задача 0044, ответ 24.10, 1а). Причина длинная
+  // (лишние права перечислены), а стоит в ряду кнопок, который уже уводил страницу.
+  it.each([390, 1280])('%i px: погашенные пароль и выключение с причиной не уводят страницу и не за краем',
+    async (width) => {
+      const wider = 'У сотрудника прав больше, чем у вас: «Смотреть отчёты», «Править цены и карточку '
+        + 'товара», «Списывать товар», «Перевозить товар между складами». Менять ему пароль, '
+        + 'выключать и включать может тот, у кого прав не меньше';
+      stub(MEMBERS.map((m) => ({ ...m,
+        accountLocked: m.id === 1 ? 'Учётную запись владельца меняет только владелец'
+          : m.id === 2 ? wider : null })));
+      render(<MembersScreen ownerActs={false} mine={rightsWith(...MEMBERS_RIGHTS, 'intake.receive')} />);
+      await waitFor(() => screen.getByText(wider), SETTLE);
+      await waitFor(() => screen.getByRole('button', { name: 'Удалить роль: Временная' }), SETTLE);
+      const html = document.body.innerHTML;
+      const layout = await measureLayout(html, ['.stack-table__actions .locked-action__reason',
+        '.stack-table__actions button'], width);
+      const hidden = await measureOverflow(html,
+        '.table-scroll, .stack-table__actions, .stack-table__actions .locked-action__reason', width);
+      expect(layout.scrollWidth, `страница уехала вбок — ${layout.scrollWidth} при ${layout.clientWidth}`)
+        .toBeLessThanOrEqual(layout.clientWidth);
+      expect(layout.boxes['.stack-table__actions .locked-action__reason']?.length, 'причин нет').toBe(2);
+      expect(hidden.map((h) => `${h.text.trim().slice(0, 20)}: ${h.scrollWidth} при ${h.clientWidth}`),
+        'причина спрятана за краем').toEqual([]);
+      (layout.boxes['.stack-table__actions button'] ?? []).forEach((box, i) => {
+        expect(box.right, `кнопка №${i + 1} за краем экрана — ${box.left}–${box.right}`)
+          .toBeLessThanOrEqual(layout.clientWidth);
+      });
+    }, 60_000);
+
   // Погашенный блок доступа администратора (повторный живой прогон 24.10.2026):
   // причина видимым текстом не уводит страницу и не вылезает из своей коробки.
   it('390 px: погашенный блок доступа администратора на месте и не за краем', async () => {
     stub();
-    render(<MembersScreen ownerActs={false} mine={rightsWith('members.manage', 'intake.receive')} />);
+    render(<MembersScreen ownerActs={false} mine={rightsWith(...MEMBERS_RIGHTS, 'intake.receive')} />);
     await waitFor(() => screen.getByRole('button', { name: 'Дать доступ администратору' }), SETTLE);
     await waitFor(() => screen.getByRole('button', { name: 'Удалить роль: Временная' }), SETTLE);
     const html = document.body.innerHTML;

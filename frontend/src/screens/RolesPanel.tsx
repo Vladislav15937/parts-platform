@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { ApiError } from '../api/client';
-import { rightsFrom, type PermissionKey, type Rights, type Section } from '../access/rights';
+import {
+  lockedReason, rightsFrom, type PermissionKey, type Rights, type Section,
+} from '../access/rights';
+import { LockedAction } from '../ui/LockedAction';
 import {
   beyondOwn, createRole, deleteRole, foreignReason, updateRole, type AccessRole,
 } from '../organization/access';
@@ -23,7 +26,7 @@ import { AccessPermissions } from './AccessPermissions';
  * то же правило, что у погашенного: не прятать, а называть причину.
  */
 export function RolesPanel({
-  roles, error: loadError = '', sections, canChange, onChanged, mine = OWNER,
+  roles, error: loadError = '', sections, canChange, lockedBy, onChanged, mine = OWNER,
 }: {
   /** `null` — ещё не приехали (грузим либо не смогли узнать — см. `error`). */
   roles: readonly AccessRole[] | null;
@@ -31,6 +34,13 @@ export function RolesPanel({
   error?: string;
   sections: readonly Section[];
   canChange: boolean;
+  /**
+   * Право, которого нет у вошедшего, чтобы править роли (`members.roles`,
+   * задача 0044, 2а), — тогда «Изменить» и «Новая роль» погашены с причиной,
+   * а не спрятаны. Не задано и `canChange` ложно — администратор сервиса:
+   * у него кнопок нет вовсе (раздавать права ему нельзя).
+   */
+  lockedBy?: PermissionKey | undefined;
   onChanged: () => void;
   /**
    * Права того, кто правит: набор роли не шире их (ответ владельца 24.10.2026,
@@ -38,6 +48,7 @@ export function RolesPanel({
    */
   mine?: Rights;
 }) {
+  const titles = new Map(sections.flatMap((s) => s.permissions.map((a) => [a.key, a.title] as const)));
   // Какая роль раскрыта на правку; 'new' — заводится новая.
   const [editing, setEditing] = useState<number | 'new' | null>(null);
   const [name, setName] = useState('');
@@ -150,7 +161,8 @@ export function RolesPanel({
                         type="button"
                         className="button--ghost"
                         aria-label={`Изменить роль: ${role.name}`}
-                        disabled={busy}
+                        disabled={busy || (role.editLocked ?? null) !== null}
+                        title={role.editLocked ?? undefined}
                         onClick={() => open(role)}
                       >
                         Изменить
@@ -168,7 +180,23 @@ export function RolesPanel({
                       {/* Причина — видимым текстом: на телефоне наводить нечем
                           (решение владельца 23.10.2026, вопрос 3). */}
                       {role.members > 0 && <span className="note">{ASSIGNED}</span>}
+                      {/* Назначена тем, у кого прав больше: новый набор сузил бы их —
+                          погашено с причиной сервера, видимым текстом. */}
+                      {(role.editLocked ?? null) !== null && (
+                        <span className="note locked-action__reason">{role.editLocked}</span>
+                      )}
                     </>
+                  ) : lockedBy !== undefined ? (
+                    // Причина одна — у «Новой роли» ниже, видимым текстом.
+                    <button
+                      type="button"
+                      className="button--ghost"
+                      aria-label={`Изменить роль: ${role.name}`}
+                      disabled
+                      title={lockedReason(lockedBy, titles)}
+                    >
+                      Изменить
+                    </button>
                   ) : null}
                 </td>
               </tr>
@@ -183,6 +211,9 @@ export function RolesPanel({
         <button type="button" disabled={busy} onClick={() => open(null)}>
           Новая роль
         </button>
+      )}
+      {!canChange && lockedBy !== undefined && roles !== null && (
+        <LockedAction permission={lockedBy} label="Новая роль" className="" />
       )}
     </section>
   );
