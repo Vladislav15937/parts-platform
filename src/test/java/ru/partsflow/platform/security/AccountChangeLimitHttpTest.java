@@ -459,12 +459,15 @@ class AccountChangeLimitHttpTest extends PostgresTestBase {
                 // Отказ — за отсутствие своего права: путём («Недостаточно прав») либо, у общего
                 // пути «Права», сервисом с названием нужного права; не правилом «не шире своих».
                 // Второе право той же пары у пути «Права» пропускает аннотация, и отказ даёт
-                // сервис; права вне пары обязан отбить сам путь.
+                // сервис; права вне пары обязан отбить сам путь — и назвать нужное право
+                // словами (живой прогон волны 24.10c, находка «в»), а не «Недостаточно прав».
                 boolean pair = path.startsWith("PUT /api/access/members")
                         && (key.equals("members.assign_roles") || key.equals("members.grant_overrides"));
                 String title = Permission.byKey(own).orElseThrow().title();
-                assertThat(pair ? body.contains("«" + title + "»") : body.contains("Недостаточно прав"))
+                assertThat(pair ? body.contains("может тот, у кого есть право «" + title + "»")
+                        : body.contains("\"message\":\"Нет ") && body.contains("«" + title + "»"))
                         .as("%s с «%s»: отказ не за отсутствие «%s» — %s", path, key, own, body).isTrue();
+                assertWords(body);
                 assertThat(body).doesNotContain("прав больше");
             }
         }
@@ -506,6 +509,49 @@ class AccountChangeLimitHttpTest extends PostgresTestBase {
         };
         lastBody = text(result);
         return result;
+    }
+
+    // ---------------------------------------- находки живого прогона волны 24.10c
+
+    @Test
+    @DisplayName("Роль, назначенную тому, кто шире, можно переименовать с прежним набором — 200; изменить набор — 403 словами")
+    void renameOfLockedRoleIsAllowed() throws Exception {
+        MockHttpSession session = kadrovik("members.roles");
+        member("menedzher", "MANAGER");
+        long managerRole = seeded("MANAGER");
+        List<String> set = seededKeys("MANAGER");
+        String same = set.stream().map(k -> "\"" + k + "\"").collect(java.util.stream.Collectors.joining(","));
+
+        mvc.perform(put("/api/access/roles/" + managerRole).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Менеджер зала\",\"permissions\":[" + same + "]}"))
+                .andExpect(status().isOk());
+        assertThat(inTenant(() -> jdbc.queryForObject("SELECT name FROM access_role WHERE id = ?",
+                String.class, managerRole))).isEqualTo("Менеджер зала");
+
+        String body = text(mvc.perform(put("/api/access/roles/" + managerRole).with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Менеджер зала\",\"permissions\":[\"deal.sell\"]}"))
+                .andExpect(status().isForbidden()));
+        assertThat(body).contains("Набор роли «Менеджер зала» не поправить");
+        assertThat(seededKeys("MANAGER")).as("набор не тронут").containsExactlyInAnyOrderElementsOf(set);
+        inTenant(() -> jdbc.update("UPDATE access_role SET name = 'Менеджер' WHERE id = ?", managerRole));
+    }
+
+    @Test
+    @DisplayName("Не-владелец, меняющий роль единственному владельцу, слышит «только владелец», а не «последний владелец»; сам владелец, снимающий себя последним, — «последний владелец»")
+    void ownerWordsBeforeLastOwnerWords() throws Exception {
+        MockHttpSession session = kadrovik("members.assign_roles");
+        long owner = id("vladelec");
+        long narrow = role("Продавец-узкий", "deal.sell");
+
+        String body = text(assignAs(session, owner, "{\"roleId\":%d,\"overrides\":{}}".formatted(narrow))
+                .andExpect(status().isForbidden()));
+        assertThat(body).contains("только владелец").doesNotContain("последний владелец");
+
+        String self = text(assignAs(login("vladelec"), owner, "{\"roleId\":%d,\"overrides\":{}}".formatted(narrow))
+                .andExpect(status().isConflict()));
+        assertThat(self).contains("последний владелец");
     }
 
     // ------------------------------------------------------------ вспомогательное

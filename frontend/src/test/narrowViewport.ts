@@ -280,3 +280,85 @@ export async function measureLayout(
     await page.close();
   }
 }
+
+/** Прямоугольник элемента с вертикалью и началом текста — видно, что с чем на одной строке. */
+export interface Rect {
+  text: string;
+  top: number;
+  bottom: number;
+}
+
+/**
+ * Прямоугольники элементов с вертикалью (задача 0044, живой прогон волны 24.10c):
+ * две подписи под кнопками роли склеивались в одно слово — ширина этого не видит,
+ * видно только, что вторая начинается на той же строке, где кончилась первая.
+ */
+export async function measureRects(
+  screenHtml: string,
+  selector: string,
+  width = PHONE_WIDTH,
+): Promise<Rect[]> {
+  if (browser === null) throw new Error('openBrowser() не вызван');
+  const page = await browser.newPage();
+  try {
+    await page.setViewport({ width, height: 800 });
+    await page.setContent(
+      `<!doctype html><meta charset="utf-8"><style>${CSS}</style>${shell(screenHtml)}`,
+      { waitUntil: 'load' },
+    );
+    return await page.evaluate((css: string) => [...document.querySelectorAll(css)].map((element) => {
+      const rects = [...element.getClientRects()];
+      const first = rects[0];
+      const last = rects[rects.length - 1];
+      return {
+        text: (element.textContent ?? '').slice(0, 40),
+        top: Math.round(first?.top ?? 0),
+        bottom: Math.round(last?.bottom ?? 0),
+      };
+    }), selector);
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Слова, разорванные переносом посреди (задача 0044, живой прогон волны 24.10c:
+ * «недоставленно/е», «администратор/а» в «Правах» на 390). Каждое слово текста
+ * под селектором меряется своим диапазоном: слово, чьи куски легли на разные
+ * строки, — разорвано. Ширина страницы и выход за край этого не видят вовсе.
+ */
+export async function measureBrokenWords(
+  screenHtml: string,
+  selector: string,
+  width = PHONE_WIDTH,
+): Promise<string[]> {
+  if (browser === null) throw new Error('openBrowser() не вызван');
+  const page = await browser.newPage();
+  try {
+    await page.setViewport({ width, height: 800 });
+    await page.setContent(
+      `<!doctype html><meta charset="utf-8"><style>${CSS}</style>${shell(screenHtml)}`,
+      { waitUntil: 'load' },
+    );
+    return await page.evaluate((css: string) => {
+      const broken: string[] = [];
+      for (const root of document.querySelectorAll(css)) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+          const text = node.textContent ?? '';
+          for (const match of text.matchAll(/[\p{L}\p{N}]+/gu)) {
+            const range = document.createRange();
+            range.setStart(node, match.index ?? 0);
+            range.setEnd(node, (match.index ?? 0) + match[0].length);
+            const tops = new Set([...range.getClientRects()]
+              .filter((r) => r.width > 0).map((r) => Math.round(r.top)));
+            if (tops.size > 1) broken.push(match[0]);
+          }
+        }
+      }
+      return broken;
+    }, selector);
+  } finally {
+    await page.close();
+  }
+}
