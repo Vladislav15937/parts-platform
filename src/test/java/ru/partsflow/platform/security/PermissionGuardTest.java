@@ -146,6 +146,34 @@ class PermissionGuardTest extends PostgresTestBase {
                 .isEmpty();
     }
 
+    /**
+     * Отказ пути словами (`PathRightRefusal`) понимает только права через `or`, «себе»
+     * и хвост `and !hasRole('ADMIN')`. Путь с иной формой — `and` между правами,
+     * отрицание права — он назвал бы неверно («нет ни одного из прав» там, где нужны
+     * оба), поэтому новая форма заводится вместе с правкой разбора, а не молча
+     * (разбор PR 518). Разбор проверяется и сам: на заведомо чужих формах — «не понимаю».
+     */
+    @Test
+    @DisplayName("Каждое выражение пути с правом — той формы, которую отказ словами называет верно")
+    void everyExpressionIsUnderstoodByRefusalWords() {
+        List<String> foreign = new ArrayList<>();
+        for (HandlerMethod handler : handlerMapping.getHandlerMethods().values()) {
+            String expression = preAuthorize(handler);
+            if (expression != null && AUTHORITY.matcher(expression).find()
+                    && !PathRightRefusal.understood(expression)) {
+                foreign.add(handler.getShortLogMessage() + ": " + expression);
+            }
+        }
+        assertThat(foreign).as("форма, которую PathRightRefusal назовёт неверно: научите его или смените форму")
+                .isEmpty();
+        assertThat(PathRightRefusal.understood("hasAuthority('a.b') and hasAuthority('c.d')")).isFalse();
+        assertThat(PathRightRefusal.understood("!hasAuthority('a.b')")).isFalse();
+        assertThat(PathRightRefusal.understood("hasAuthority('a.b') or hasRole('OWNER')")).isFalse();
+        assertThat(PathRightRefusal.understood("hasAuthority('a.b') and !hasRole('ADMIN')")).isTrue();
+        assertThat(PathRightRefusal.understood(
+                "hasAuthority('a.b') or #id == authentication.principal.memberId")).isTrue();
+    }
+
     @Test
     @DisplayName("Каждое право справочника что-то открывает")
     void everyPermissionGuardsSomething() {

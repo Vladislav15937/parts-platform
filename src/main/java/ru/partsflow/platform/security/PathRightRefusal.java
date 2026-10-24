@@ -27,6 +27,19 @@ public final class PathRightRefusal {
 
     private static final Pattern AUTHORITY = Pattern.compile("hasAuthority\\('([^']+)'\\)");
 
+    /**
+     * Выражения, которые этот класс понимает: права через {@code or}, плюс «себе»
+     * ({@code #id == authentication.principal.memberId}) и запрет администратору
+     * сервиса ({@code and !hasRole('ADMIN')}) в хвосте. Вне этой формы — {@code and}
+     * между правами, отрицание права, {@code hasRole} — назвать «нет права «…»»
+     * значило бы соврать (у двух прав через {@code and} не хватает обоих, а не одного
+     * из них), и класс молчит. Держит форму на всех путях {@code PermissionGuardTest}.
+     */
+    private static final Pattern UNDERSTOOD = Pattern.compile(
+            "hasAuthority\\('[^']+'\\)( or hasAuthority\\('[^']+'\\))*"
+                    + "( or #id == authentication\\.principal\\.memberId)?"
+                    + "( and !hasRole\\('ADMIN'\\))?");
+
     private PathRightRefusal() {
     }
 
@@ -42,7 +55,7 @@ public final class PathRightRefusal {
         if (rule == null) {
             rule = AnnotatedElementUtils.findMergedAnnotation(method.getBeanType(), PreAuthorize.class);
         }
-        if (rule == null) {
+        if (rule == null || !understood(rule.value())) {
             return Optional.empty();
         }
         List<Permission> named = new ArrayList<>();
@@ -58,15 +71,26 @@ public final class PathRightRefusal {
             return Optional.empty();
         }
         Optional<TenantPrincipal> actor = CurrentUser.get();
-        if (actor.isPresent() && named.stream().anyMatch(actor.get()::can)) {
+        if (actor.isEmpty() || named.stream().anyMatch(actor.get()::can)) {
+            // Вошедший не сотрудник кабинета (администратор в своей системе) — права
+            // кабинета к нему не относятся, и «попросите владельца» было бы неправдой.
             // Право пути у вошедшего есть — отказ пришёл не за него.
             return Optional.empty();
         }
         return Optional.of(words(named));
     }
 
-    /** Те же слова, что у погашенной кнопки на экране (`access/rights.ts`, `lockedReasonAny`). */
-    static String words(List<Permission> named) {
+    /** Понимает ли класс выражение пути — форма {@link #UNDERSTOOD}. */
+    public static boolean understood(String expression) {
+        return UNDERSTOOD.matcher(expression.strip()).matches();
+    }
+
+    /**
+     * Те же слова, что у погашенной кнопки на экране (`access/rights.ts`, `lockedReasonAny`).
+     * Один источник слов отказа по праву: и для пути, и для проверки внутри операции
+     * ({@code PostedDocumentDeletion}).
+     */
+    public static String words(List<Permission> named) {
         if (named.size() == 1) {
             return "Нет права «" + named.get(0).title() + "» — попросите владельца";
         }

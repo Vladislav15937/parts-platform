@@ -1,9 +1,12 @@
 package ru.partsflow.inventory;
 
-import org.springframework.security.access.AccessDeniedException;
 import ru.partsflow.platform.security.CurrentUser;
+import ru.partsflow.platform.security.PathRightRefusal;
 import ru.partsflow.platform.security.Permission;
+import ru.partsflow.platform.security.RightsRefusal;
 import ru.partsflow.platform.security.TenantPrincipal;
+
+import java.util.List;
 
 /**
  * Право «удалять выполненные складские документы» (задача 0367).
@@ -41,12 +44,16 @@ public final class PostedDocumentDeletion {
                 .orElse(false);
     }
 
-    /** Отказ 403 тому, у кого права нет. */
+    /**
+     * Отказ 403 тому, у кого права нет — словами, тем же источником, что отказ пути
+     * ({@link PathRightRefusal#words}). Прежний {@code AccessDeniedException} уходил
+     * наружу голым «Недостаточно прав»: обработчик слова отдаёт только у
+     * {@link RightsRefusal}, а у пути удаления {@code @PreAuthorize} нет — право решает
+     * этот класс (живой прогон волны 24.10d).
+     */
     public static void require() {
         if (!allowed()) {
-            throw new AccessDeniedException(
-                    "Нет права «%s»: его даёт владелец на экране «Сотрудники»"
-                            .formatted(Permission.STOCK_DOCUMENT_DELETE_DONE.title()));
+            throw new RightsRefusal(PathRightRefusal.words(List.of(Permission.STOCK_DOCUMENT_DELETE_DONE)));
         }
     }
 }
