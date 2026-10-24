@@ -112,7 +112,7 @@ public class AccessRoleService {
                     long id = rs.getLong("id");
                     boolean owner = rs.getBoolean("is_owner");
                     return new RoleView(id, rs.getString("name"), owner,
-                            owner ? List.of() : known(MemberAccess.current(sets.getOrDefault(id, List.of()))),
+                            owner ? List.of() : known(sets.getOrDefault(id, List.of())),
                             rs.getInt("members"));
                 });
     }
@@ -547,7 +547,10 @@ public class AccessRoleService {
             throw NotFound.ACCESS_ROLE.error(roleId);
         }
         Stored role = found.get(0);
-        Set<String> keys = new TreeSet<>(MemberAccess.current(jdbc.queryForList(
+        // Ключ, которого код не знает (прежний members.manage рядом с четырьмя после
+        // tenant/103), — не право: требовать его у назначающего значило бы отказать
+        // внутренним ключом в тексте.
+        Set<String> keys = new TreeSet<>(known(jdbc.queryForList(
                 "SELECT permission FROM access_role_permission WHERE role_id = ?", String.class, roleId)));
         return new Stored(role.id(), role.name(), role.owner(), role.seededFrom(), keys);
     }
@@ -579,11 +582,8 @@ public class AccessRoleService {
         jdbc.query("SELECT member_id, permission, granted FROM member_permission_override "
                         + "ORDER BY permission",
                 rs -> {
-                    Map<String, Boolean> own = found.computeIfAbsent(rs.getLong("member_id"),
-                            id -> new LinkedHashMap<>());
-                    for (String key : MemberAccess.current(List.of(rs.getString("permission")))) {
-                        own.put(key, rs.getBoolean("granted"));
-                    }
+                    found.computeIfAbsent(rs.getLong("member_id"), id -> new LinkedHashMap<>())
+                            .put(rs.getString("permission"), rs.getBoolean("granted"));
                 });
         return found;
     }

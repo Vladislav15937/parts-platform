@@ -262,14 +262,15 @@ class AccountChangeLimitHttpTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Прежний ключ «Управлять сотрудниками и ролями» читается как все четыре права: отданный откатанным образом не пропадает")
-    void legacyMembersManageCountsAsFour() throws Exception {
-        MockHttpSession session = kadrovik(MemberAccess.LEGACY_MEMBERS_MANAGE);
+    @DisplayName("Прежний ключ «Управлять сотрудниками и ролями» не читается: снятое у роли одно из четырёх прав не воскресает через него")
+    void legacyMembersManageIsDead() throws Exception {
         long seller = member("prodavec", "SELLER");
-        long manager = member("menedzher", "MANAGER");
-        password(session, seller).andExpect(status().isNoContent());
-        password(session, manager).andExpect(status().isForbidden());
-        assertThat(keys(me(session))).containsAll(MemberAccess.MEMBERS_SPLIT);
+        // Роль после переноса tenant/103: прежний ключ лежит рядом с четырьмя, а одно
+        // из четырёх клиент снял. Раскрой код прежний ключ — снятое вернулось бы молча.
+        MockHttpSession session = kadrovik("members.manage", "members.assign_roles", "members.roles",
+                "members.grant_overrides");
+        password(session, seller).andExpect(status().isForbidden());
+        assertThat(keys(me(session))).doesNotContain("members.accounts", "members.manage");
     }
 
     // ----------------------------------------------------- список «Сотрудники»

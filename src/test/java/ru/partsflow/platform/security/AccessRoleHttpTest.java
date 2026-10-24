@@ -355,7 +355,8 @@ class AccessRoleHttpTest extends PostgresTestBase {
     @DisplayName("Роль «Владелец» назначает и снимает только владелец, а не тот, кому дали «Сотрудники и роли»")
     void onlyOwnerGrantsOwnership() throws Exception {
         long kadrovik = member("kadrovik", "VIEWER");
-        long role = role("Кадровик", "members.manage");
+        long role = role("Кадровик", "members.accounts", "members.assign_roles", "members.roles",
+                "members.grant_overrides");
         assignSql(kadrovik, role);
         long target = member("prodavec", "SELLER");
         MockHttpSession session = login("kadrovik");
@@ -601,7 +602,8 @@ class AccessRoleHttpTest extends PostgresTestBase {
                 SELECT permission FROM access_role_permission
                  WHERE role_id = (SELECT id FROM access_role WHERE seeded_from = 'SELLER')""",
                 String.class)));
-        keys.add("members.manage");
+        keys.addAll(List.of("members.accounts", "members.assign_roles", "members.roles",
+                "members.grant_overrides"));
         assignSql(kadrovik, role("Кадровик", keys.toArray(String[]::new)));
         return login("kadrovik");
     }

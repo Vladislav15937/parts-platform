@@ -92,9 +92,9 @@ public class MemberAccess {
 
         Set<String> granted = new LinkedHashSet<>();
         if (role.id() != null) {
-            granted.addAll(current(jdbc.queryForList(
+            granted.addAll(jdbc.queryForList(
                     "SELECT permission FROM %s.access_role_permission WHERE role_id = ?"
-                            .formatted(schema), String.class, role.id())));
+                            .formatted(schema), String.class, role.id()));
         } else if ("AUDITOR".equals(role.legacyRole()) && !seededHere(schema, role.legacyRole())) {
             // Роли переноса нет. Метки нет — роль у клиента не заводили, и
             // ревизор прежнего образа получает журнал: «доступ при переносе
@@ -109,16 +109,18 @@ public class MemberAccess {
                 SELECT permission, granted FROM %s.member_permission_override
                  WHERE member_id = ?""".formatted(schema),
                 rs -> {
-                    List<String> keys = current(List.of(rs.getString("permission")));
                     if (rs.getBoolean("granted")) {
-                        granted.addAll(keys);
+                        granted.add(rs.getString("permission"));
                     } else {
-                        granted.removeAll(keys);
+                        granted.remove(rs.getString("permission"));
                     }
                 },
                 memberId);
         // Ключ, которого код не знает (переименован, забыт), не открывает ничего
-        // и наружу не уезжает: экран назвать его не сможет.
+        // и наружу не уезжает: экран назвать его не сможет. Так же и прежний
+        // members.manage: tenant/103 выдал вместо него четыре права, и раскрывать
+        // его при чтении нельзя — снятое клиентом одно из четырёх воскресало бы
+        // (решение сессии 24.10.2026, задача 0044).
         granted.removeIf(key -> Permission.byKey(key).isEmpty());
         return new Access(role.id(), role.name(), false, Set.copyOf(granted));
     }
@@ -142,35 +144,6 @@ public class MemberAccess {
         return Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM %s.access_role_seeded WHERE seeded_from = ?)"
                         .formatted(schema), Boolean.class, legacyRole));
-    }
-
-    /** Прежний ключ «Управлять сотрудниками и ролями» до разделения на четыре. */
-    static final String LEGACY_MEMBERS_MANAGE = "members.manage";
-
-    /** Четыре права, на которые разделён {@link #LEGACY_MEMBERS_MANAGE}. */
-    static final List<String> MEMBERS_SPLIT = List.of(
-            Permission.MEMBERS_ACCOUNTS.key(), Permission.MEMBERS_ASSIGN_ROLES.key(),
-            Permission.MEMBERS_ROLES.key(), Permission.MEMBERS_GRANT_OVERRIDES.key());
-
-    /**
-     * Ключи в нынешнем виде: прежний {@code members.manage} — это все четыре
-     * права на раздачу (ответ владельца 24.10.2026, «развёрнутые вопросы», 2а:
-     * «у кого сейчас — тот получает все четыре»). Читается так, а не только
-     * переносится данными: его по-прежнему пишет образ, на который законно
-     * откатиться (задача 0112), и перенос его не стирает (expand/contract).
-     * Без этого выданное откатанным образом право пропало бы на следующей
-     * выкладке молча — ключ, которого код не знает, отбрасывается.
-     */
-    static List<String> current(java.util.Collection<String> keys) {
-        List<String> result = new java.util.ArrayList<>();
-        for (String key : keys) {
-            if (LEGACY_MEMBERS_MANAGE.equals(key)) {
-                result.addAll(MEMBERS_SPLIT);
-            } else {
-                result.add(key);
-            }
-        }
-        return result;
     }
 
     /**
