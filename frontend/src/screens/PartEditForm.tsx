@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
   CONDITION, CONDITIONS, CONDITION_UNSET, QUALITY, QUALITY_GRADES, loadEditable, savePart,
-  priceOperationHint, PRICE_OPERATIONS,
+  priceOperationHint, PRICE_OPERATIONS, SIDE_FR, SIDE_LR,
   type CatalogRow, type PartEdit, type PriceOperation,
 } from '../inventory/catalog';
 import { generationOf } from '../inventory/partCard';
@@ -561,8 +561,6 @@ type Field =
       note?: string }
   | { kind: 'num'; key: StringKey; label: string; unit?: string };
 
-const SIDE_LR: Record<string, string> = { LEFT: 'лев.', RIGHT: 'прав.', BOTH: 'лев., прав.' };
-const SIDE_FR: Record<string, string> = { FRONT: 'перед.', REAR: 'задн.', BOTH: 'перед., задн.' };
 
 /**
  * Разделы и порядок строк — от ориентира, из которого приходят клиенты:

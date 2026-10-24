@@ -1,6 +1,7 @@
 package ru.partsflow.intake;
 
 import ru.partsflow.shared.SupplyKinds;
+import ru.partsflow.shared.ValueWords;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
@@ -169,12 +170,15 @@ public class DonorDirectory {
         return SupplyKinds.label(kind, number);
     }
 
-    private static final Map<String, String> TRANSMISSIONS = Map.of(
-            "AT", "АКПП", "MT", "МКПП", "CVT", "Вариатор", "AMT", "Робот");
-
-    /** «АКПП, U340E-05A»: модель коробки без её типа человеку ничего не говорит. */
+    /**
+     * «АКПП, U340E-05A»: модель коробки без её типа человеку ничего не говорит.
+     *
+     * <p>Тип словом — общим словарём {@link ValueWords}, а не своим: своя копия
+     * здесь писала «Вариатор» с заглавной, «Комплектация» склада — «вариатор»,
+     * а {@code DCT} не знала ни одна (решение владельца 24.10.2026 — «Робот DSG»).
+     */
     private static String transmission(String type, String model) {
-        String kind = label(TRANSMISSIONS, type);
+        String kind = ValueWords.transmission(type);
         if (kind == null) {
             return model;
         }
