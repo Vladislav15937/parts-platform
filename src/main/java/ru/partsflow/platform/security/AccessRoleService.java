@@ -60,10 +60,12 @@ public class AccessRoleService {
     private final SessionRevocations revocations;
     private final MemberAccess access;
     private final MemberService members;
+    private final MemberSignatures signatures;
 
     public AccessRoleService(JdbcTemplate jdbc, AuditJournal journal, LoginSessions sessions,
                              SessionRevocations revocations, MemberAccess access,
-                             MemberService members) {
+                             MemberService members, MemberSignatures signatures) {
+        this.signatures = signatures;
         this.members = members;
         this.jdbc = jdbc;
         this.journal = journal;
@@ -99,9 +101,12 @@ public class AccessRoleService {
                     sets.computeIfAbsent(rs.getLong("role_id"), id -> new ArrayList<>())
                             .add(rs.getString("permission"));
                 });
+        TenantPrincipal actor = CurrentUser.require();
+        String schema = TenantContext.require();
+        MemberAccess.Access mine = actorAccess(schema, actor);
         // Владелец первым, дальше по названию: «кто есть кто» читают сверху вниз.
         return jdbc.query("""
-                SELECT r.id, r.name, r.is_owner,
+                SELECT r.id, r.name, r.is_owner, r.seeded_from,
                        (SELECT count(*) FROM tenant_member m
                          WHERE m.login IS NOT NULL
                            AND (m.access_role_id = r.id
@@ -111,9 +116,12 @@ public class AccessRoleService {
                 (rs, i) -> {
                     long id = rs.getLong("id");
                     boolean owner = rs.getBoolean("is_owner");
+                    List<String> wider = owner ? List.of()
+                            : widerAssigned(schema, actor, mine, id, rs.getString("seeded_from"));
                     return new RoleView(id, rs.getString("name"), owner,
                             owner ? List.of() : known(sets.getOrDefault(id, List.of())),
-                            rs.getInt("members"));
+                            rs.getInt("members"),
+                            wider.isEmpty() ? null : roleLocked(rs.getString("name"), wider));
                 });
     }
 
@@ -150,6 +158,20 @@ public class AccessRoleService {
         String title = requireName(name);
         Set<String> keys = requireKnown(permissions);
         requireOwnRights(keys, "В наборе роли есть права, которых у вас нет: ");
+        if (!was.permissions().equals(keys)) {
+            // Живая связь: новый набор получат все, кому роль назначена, — значит
+            // правка набора меняет права и тем из них, у кого прав больше, чем
+            // у правящего. Сужать их ему нельзя (ответ владельца 24.10.2026 после
+            // волны, вопрос 2: «нельзя»), расширить не даёт requireOwnRights выше.
+            // Переименовать роль — можно: права это не трогает.
+            TenantPrincipal actor = CurrentUser.require();
+            String schema = TenantContext.require();
+            List<String> wider = widerAssigned(schema, actor, actorAccess(schema, actor), roleId,
+                    was.seededFrom());
+            if (!wider.isEmpty()) {
+                throw new RightsRefusal(roleLocked(was.name(), wider));
+            }
+        }
         try {
             jdbc.update("UPDATE access_role SET name = ? WHERE id = ?", title, roleId);
         } catch (DuplicateKeyException e) {
@@ -243,6 +265,12 @@ public class AccessRoleService {
                     "Администратору сервиса роль не назначают: права владельца даёт ему "
                             + "разрешение на вход, а закрывается оно кнопкой «Отозвать доступ»");
         }
+        // Сужать того, у кого прав больше, чем у назначающего, нельзя (ответ владельца
+        // 24.10.2026 после волны, вопрос 2: «нельзя»): ни сменой роли, ни правами
+        // поверх неё — добавленными, снятыми или сброшенными. Правило то же, что
+        // у пароля и выключения (requireMayChangeAccount), и после замка строки
+        // сотрудника: его права не поменяются, пока мы решаем.
+        requireNotWider(schema, memberId, AccountChange.ASSIGN);
         Stored role = lockRole(roleId);
         Map<String, Boolean> requested = overrides == null ? Map.of() : overrides;
         requireKnown(requested.keySet());
@@ -280,6 +308,7 @@ public class AccessRoleService {
             }
         }
         Map<String, Boolean> wasOverrides = overrides().getOrDefault(memberId, Map.of());
+        requireSplitRight(before, roleId, kept, wasOverrides);
 
         String legacy = legacyOf(role);
         jdbc.update("UPDATE tenant_member SET access_role_id = ?, role = ? WHERE id = ?",
@@ -344,6 +373,152 @@ public class AccessRoleService {
         return created;
     }
 
+    // ------------------------------------------------- учётная запись сотрудника
+
+    /**
+     * Менять пароль, выключать и включать сотрудника может только тот, у кого
+     * есть все права этого сотрудника — права цели не шире его собственных
+     * (ответ владельца 24.10.2026 после волны, пункт 1а); владелец — всех.
+     * Иначе держатель «Сотрудники и роли» с правами продавца менял пароль
+     * менеджеру и входил под ним — то есть получал права, которых ему не дали
+     * (живой прогон 24.10.2026: 204 и 200).
+     *
+     * <p><b>Одно место на все три действия и на владельца.</b> Прежний запрет
+     * «учётную запись владельца меняет только владелец»
+     * ({@code MemberController.requireOwnerTouchesOwner}, голое «Недостаточно
+     * прав») — частный случай: у владельца все права, и шире него любой
+     * не-владелец. Свой пароль меняет каждый — себя правило не касается;
+     * выключить себя нельзя по-прежнему, это отказ контроллера до проверки.
+     *
+     * <p>Права обеих сторон — из базы ({@link MemberAccess}, то же чтение, что
+     * у входа и у {@link #requireOwnRights}), а не из снимка в сессии: роль
+     * «Владелец», прежняя колонка, роль переноса, права поверх роли и метка
+     * Ревизора решаются одинаково. Выключенный сотрудник читается со своими
+     * правами — иначе включение вернуло бы в работу того, кто шире.
+     */
+    @Transactional(readOnly = true)
+    public void requireMayChangeAccount(long memberId, AccountChange change) {
+        requireNotWider(TenantContext.require(), memberId, change);
+    }
+
+    private void requireNotWider(String schema, long memberId, AccountChange change) {
+        TenantPrincipal actor = CurrentUser.require();
+        Wider wider = wider(schema, actor, actorAccess(schema, actor), memberId);
+        if (wider != null) {
+            throw new RightsRefusal(change.refusal(wider));
+        }
+    }
+
+    /**
+     * Кому из назначенных роль сотрудникам шире правящего — подписями
+     * («Имя (логин, ID N)»), как сотрудник назван везде. Пусто — таких нет.
+     */
+    private List<String> widerAssigned(String schema, TenantPrincipal actor, MemberAccess.Access mine,
+                                       long roleId, String seededFrom) {
+        if (mine.owner()) {
+            return List.of();
+        }
+        List<Long> wider = new ArrayList<>();
+        for (long member : assignedTo(roleId, seededFrom)) {
+            if (wider(schema, actor, mine, member) != null) {
+                wider.add(member);
+            }
+        }
+        if (wider.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, String> names = signatures.of(wider);
+        return wider.stream().map(id -> names.getOrDefault(id, "сотрудник")).toList();
+    }
+
+    private static String roleLocked(String role, List<String> wider) {
+        return "Набор роли «%s» не поправить: она назначена сотрудникам, у которых прав больше, "
+                .formatted(role) + "чем у вас (" + String.join(", ", wider)
+                + "), — новый набор сузил бы их. Править его может тот, у кого прав не меньше";
+    }
+
+    /**
+     * Почему вошедшему нельзя менять пароль, выключать и включать каждого
+     * из сотрудников, — для списка «Сотрудники». Тем же правилом, что отказ
+     * ({@link #requireMayChangeAccount}): экран своих правил не держит, он
+     * гасит кнопки по этому признаку. Нет записи — можно.
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, String> accountLimits(Collection<Long> memberIds) {
+        TenantPrincipal actor = CurrentUser.require();
+        String schema = TenantContext.require();
+        MemberAccess.Access mine = actorAccess(schema, actor);
+        Map<Long, String> limits = new LinkedHashMap<>();
+        for (long id : memberIds) {
+            Wider wider = wider(schema, actor, mine, id);
+            if (wider != null) {
+                limits.put(id, wider.owner()
+                        ? "Учётную запись владельца меняет только владелец"
+                        : "У сотрудника прав больше, чем у вас: " + wider.titles()
+                                + ". Менять ему пароль, роль и права, выключать и включать "
+                                + "может тот, у кого прав не меньше");
+            }
+        }
+        return limits;
+    }
+
+    /** Права вошедшего: администратору сервиса — как владельцу (его правила не тронуты). */
+    private MemberAccess.Access actorAccess(String schema, TenantPrincipal actor) {
+        if (actor.isServiceAdmin()) {
+            return new MemberAccess.Access(null, null, true, Set.of());
+        }
+        MemberAccess.Access mine = access.resolve(schema, actor.memberId());
+        return mine == null ? new MemberAccess.Access(null, null, false, Set.of()) : mine;
+    }
+
+    /** Чем цель шире вошедшего; {@code null} — не шире. */
+    private Wider wider(String schema, TenantPrincipal actor, MemberAccess.Access mine,
+                        long memberId) {
+        if (mine.owner() || Long.valueOf(memberId).equals(actor.memberId())) {
+            return null;
+        }
+        MemberAccess.Access target = access.resolve(schema, memberId);
+        if (target == null) {
+            // Сотрудника нет — словами откажет сама операция (NotFound).
+            return null;
+        }
+        if (target.owner()) {
+            return new Wider(true, "");
+        }
+        List<String> beyond = target.permissions().stream()
+                .filter(key -> !mine.permissions().contains(key)).sorted().toList();
+        return beyond.isEmpty() ? null : new Wider(false, beyond.stream()
+                .map(key -> "«" + Permission.byKey(key).map(Permission::title).orElse(key) + "»")
+                .collect(Collectors.joining(", ")));
+    }
+
+    /** Что делают с учётной записью — для слов отказа. */
+    public enum AccountChange {
+        PASSWORD("менять пароль сотруднику", "менять пароль владельцу"),
+        DISABLE("выключить сотрудника", "выключить владельца"),
+        ENABLE("включить сотрудника", "включить владельца"),
+        ASSIGN("менять роль и права сотруднику", "менять роль и права владельцу");
+
+        private final String member;
+        private final String owner;
+
+        AccountChange(String member, String owner) {
+            this.member = member;
+            this.owner = owner;
+        }
+
+        String refusal(Wider wider) {
+            return wider.owner()
+                    ? "Нельзя " + owner + ": у владельца все права, и его учётную запись "
+                            + "меняет только владелец"
+                    : "Нельзя " + member + ", у которого прав больше, чем у вас: " + wider.titles();
+        }
+    }
+
+    /** @param titles лишние права названиями справочника, через запятую */
+    private record Wider(boolean owner, String titles) {
+    }
+
     // -------------------------------------------------------------- вспомогательное
 
     private void revoke(long memberId, String detail) {
@@ -392,6 +567,31 @@ public class AccessRoleService {
         }
     }
 
+    /**
+     * Назначение роли и права поверх роли — два разных права (ответ владельца
+     * 24.10.2026, «развёрнутые вопросы», 2а), а сохраняются одним запросом:
+     * экран «Права» шлёт роль и права поверх неё вместе. Поэтому проверяется
+     * то, что меняется: другая роль — «Назначать сотрудникам готовые роли»;
+     * другие права поверх роли — «Выдавать и снимать права поверх роли».
+     * Права поверх прежней роли, сброшенные сменой роли, — следствие
+     * назначения, а не выдача: экран говорит о сбросе до «Сохранить».
+     */
+    private static void requireSplitRight(MemberAccess.Access before, long roleId,
+                                          Map<String, Boolean> kept,
+                                          Map<String, Boolean> wasOverrides) {
+        TenantPrincipal actor = CurrentUser.require();
+        boolean roleChanged = before == null || !Long.valueOf(roleId).equals(before.roleId());
+        boolean overridesChanged = roleChanged ? !kept.isEmpty() : !kept.equals(wasOverrides);
+        if (roleChanged && !actor.can(Permission.MEMBERS_ASSIGN_ROLES)) {
+            throw new RightsRefusal("Назначать роли может тот, у кого есть право «"
+                    + Permission.MEMBERS_ASSIGN_ROLES.title() + "»");
+        }
+        if (overridesChanged && !actor.can(Permission.MEMBERS_GRANT_OVERRIDES)) {
+            throw new RightsRefusal("Менять права поверх роли может тот, у кого есть право «"
+                    + Permission.MEMBERS_GRANT_OVERRIDES.title() + "»");
+        }
+    }
+
     /** Прежняя колонка для роли клиента: вниз, как во всех откатах ролей. */
     private static String legacyOf(Stored role) {
         return role.owner() ? "OWNER" : role.seededFrom() != null ? role.seededFrom() : "VIEWER";
@@ -407,8 +607,11 @@ public class AccessRoleService {
             throw NotFound.ACCESS_ROLE.error(roleId);
         }
         Stored role = found.get(0);
-        Set<String> keys = new TreeSet<>(jdbc.queryForList(
-                "SELECT permission FROM access_role_permission WHERE role_id = ?", String.class, roleId));
+        // Ключ, которого код не знает (прежний members.manage рядом с четырьмя после
+        // tenant/103), — не право: требовать его у назначающего значило бы отказать
+        // внутренним ключом в тексте.
+        Set<String> keys = new TreeSet<>(known(jdbc.queryForList(
+                "SELECT permission FROM access_role_permission WHERE role_id = ?", String.class, roleId)));
         return new Stored(role.id(), role.name(), role.owner(), role.seededFrom(), keys);
     }
 
@@ -526,9 +729,11 @@ public class AccessRoleService {
     /**
      * @param permissions набор роли ключами; у владельца пусто — у него всё
      * @param members     скольким сотрудникам назначена (с входом)
+     * @param editLocked  почему вошедшему нельзя менять набор роли (она назначена
+     *                    сотрудникам шире его); {@code null} — можно
      */
     public record RoleView(long id, String name, boolean owner, List<String> permissions,
-                           int members) {
+                           int members, String editLocked) {
     }
 
     /**

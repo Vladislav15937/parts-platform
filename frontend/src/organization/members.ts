@@ -22,6 +22,14 @@ export interface Member {
   role: Role | typeof SERVICE_ADMIN;
   active: boolean;
   lastLoginAt: string | null;
+  /**
+   * Почему вошедшему нельзя менять пароль, выключать и включать этого
+   * сотрудника (задача 0044, ответ владельца 24.10.2026, 1а: у него прав
+   * больше, чем у вошедшего, или это владелец). Считает сервер тем же правилом,
+   * что отказ; экран гасит кнопки по нему и своих правил не держит.
+   * Нет поля (сервер прежней версии) или `null` — можно.
+   */
+  accountLocked?: string | null;
 }
 
 export type Role = 'OWNER' | 'MANAGER' | 'STOREKEEPER' | 'SELLER' | 'VIEWER' | 'AUDITOR';

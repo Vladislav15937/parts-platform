@@ -176,20 +176,28 @@ class PermissionGuardTest extends PostgresTestBase {
             if (expression == null) {
                 continue;
             }
+            // Путь может открываться любым из нескольких прав («hasAuthority(a) or
+            // hasAuthority(b)» — списки сотрудников и ролей при четырёх правах
+            // на раздачу): тогда без всех них — отказ, с каждым одним — пропуск.
             Matcher key = AUTHORITY.matcher(expression);
-            if (!key.find()) {
+            Set<String> named = new TreeSet<>();
+            while (key.find()) {
+                named.add(key.group(1));
+            }
+            if (named.isEmpty()) {
                 continue;
             }
-            String permission = key.group(1);
-            Set<String> allButThis = Arrays.stream(Permission.values()).map(Permission::key)
-                    .filter(k -> !k.equals(permission)).collect(Collectors.toSet());
+            Set<String> allButThese = Arrays.stream(Permission.values()).map(Permission::key)
+                    .filter(k -> !named.contains(k)).collect(Collectors.toSet());
             String where = handler.getShortLogMessage();
 
-            if (allows(handler, expression, member(false, allButThis))) {
-                wrong.put(where + " без «" + permission + "»", "пропустил");
+            if (allows(handler, expression, member(false, allButThese))) {
+                wrong.put(where + " без " + named, "пропустил");
             }
-            if (!allows(handler, expression, member(false, Set.of(permission)))) {
-                wrong.put(where + " с одним «" + permission + "»", "отказал");
+            for (String permission : named) {
+                if (!allows(handler, expression, member(false, Set.of(permission)))) {
+                    wrong.put(where + " с одним «" + permission + "»", "отказал");
+                }
             }
             if (!allows(handler, expression, member(true, Set.of()))) {
                 wrong.put(where + " владельцу", "отказал");

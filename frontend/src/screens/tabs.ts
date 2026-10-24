@@ -44,6 +44,16 @@ export type Tab =
 
 import type { PermissionKey, Rights } from '../access/rights';
 
+/**
+ * Четыре права на раздачу вместо одного «Управлять сотрудниками и ролями»
+ * (ответ владельца 24.10.2026, задача 0044, «развёрнутые вопросы», 2а):
+ * раздел «Сотрудники» открывает любое из них, а что внутри можно — решает
+ * каждое на своём действии.
+ */
+export const MEMBERS_RIGHTS = [
+  'members.accounts', 'members.assign_roles', 'members.roles', 'members.grant_overrides',
+] as const satisfies readonly PermissionKey[];
+
 export interface TabSpec {
   id: Tab;
   /** Слово на рельсе — короткое: «Очередь», а не «Очередь отправки». */
@@ -112,7 +122,7 @@ export const TABS: readonly TabSpec[] = [
   // Перед разделами владельца: журнал — про людей компании, и открывают его
   // оттуда же, откуда смотрят на сотрудников.
   { id: 'journal', label: 'Журнал', section: 'Журнал действий', needs: ['journal.view'] },
-  { id: 'members', label: 'Сотрудники', section: 'Сотрудники', needs: ['members.manage'] },
+  { id: 'members', label: 'Сотрудники', section: 'Сотрудники', needs: [...MEMBERS_RIGHTS] },
   {
     id: 'organization', label: 'Склады', section: 'Филиалы и склады',
     needs: ['org.warehouses', 'org.branches', 'org.availability'],

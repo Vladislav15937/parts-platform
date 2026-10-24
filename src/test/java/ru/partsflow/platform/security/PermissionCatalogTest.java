@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PermissionCatalogTest {
 
     private static final Path SEED = Path.of("db/changelog/tenant/101-access-roles-seed.sql");
+    private static final Path SPLIT = Path.of("db/changelog/tenant/103-members-manage-split.sql");
 
     /**
      * Двенадцать ключей, которые до задачи 0044 мог только владелец: при
@@ -36,8 +37,12 @@ class PermissionCatalogTest {
     private static final Set<String> OWNER_ONLY_BEFORE_0044 = Set.of(
             "stock_document.delete_done", "supply.expected", "applicability.bulk",
             "marketplace.manage", "deal_sources.manage", "payment_sources.manage",
-            "org.branches", "org.availability", "members.manage", "admin_access.manage",
-            "settings.company", "import.manage");
+            "org.branches", "org.availability", "admin_access.manage",
+            "settings.company", "import.manage",
+            // «Управлять сотрудниками и ролями» разделено на четыре (ответ владельца
+            // 24.10.2026, «развёрнутые вопросы», 2а): их выдаёт tenant/103 тем, у кого
+            // был прежний members.manage, а сам он кодом не читается.
+            "members.accounts", "members.assign_roles", "members.roles", "members.grant_overrides");
 
     @Test
     @DisplayName("Каждый ключ, розданный ролям при переносе, есть в справочнике")
@@ -50,13 +55,33 @@ class PermissionCatalogTest {
     }
 
     @Test
-    @DisplayName("Справочник — это раздача плюс двенадцать ключей владельца, и ничего сверх")
+    @DisplayName("Справочник — это раздача плюс ключи «только владельца», и ничего сверх")
     void catalogIsSeedPlusOwnerOnly() throws IOException {
         Set<String> expected = new TreeSet<>(seededKeys());
         expected.addAll(OWNER_ONLY_BEFORE_0044);
 
         assertThat(catalog()).as("новый ключ заводится вместе с решением, кому его раздать")
                 .containsExactlyInAnyOrderElementsOf(expected);
+    }
+
+    /**
+     * Перенос {@code tenant/103} выдаёт четыре права на раздачу вместо прежнего
+     * {@code members.manage}. Ключ, написанный там иначе, чем в коде, выдал бы
+     * право, которого код не знает, — то есть отнял бы раздачу у всех, кому она была.
+     */
+    @Test
+    @DisplayName("Ключи переноса tenant/103 — ровно четыре права на раздачу из справочника, а прежний ключ кодом не знается")
+    void membersSplitKeysAreKnown() throws IOException {
+        Matcher value = Pattern.compile("\\('([a-z_]+\\.[a-z_.]+)'\\)")
+                .matcher(Files.readString(SPLIT));
+        Set<String> written = new TreeSet<>();
+        while (value.find()) {
+            written.add(value.group(1));
+        }
+        assertThat(written).as("ключи, которые выдаёт перенос")
+                .containsExactlyInAnyOrder("members.accounts", "members.assign_roles",
+                        "members.roles", "members.grant_overrides");
+        assertThat(catalog()).containsAll(written).doesNotContain("members.manage");
     }
 
     @Test

@@ -36,7 +36,7 @@ import { ordersAwaitingReply } from '../sales/sales';
 import { unmatchedNames } from '../catalog/partNames';
 import { deadLetters } from '../events/deadLetters';
 import { lockedReasonAny, rightsOf, useCatalogTitles, type Rights } from '../access/rights';
-import { TABS, allowed, neededFor, sectionName, type Tab, type TabSpec } from './tabs';
+import { MEMBERS_RIGHTS, TABS, allowed, neededFor, sectionName, type Tab, type TabSpec } from './tabs';
 
 /**
  * Оболочка после входа.
@@ -443,7 +443,7 @@ export function HomeScreen() {
           SecurityConfig (ACCESS_CONTROL). */}
       {!locked && tab === 'members' && (
         <MembersScreen
-          managesAccess={state.me.role !== 'ADMIN' && rights.has('members.manage')}
+          managesAccess={state.me.role !== 'ADMIN' && rights.any(...MEMBERS_RIGHTS)}
           ownerActs={state.me.role !== 'ADMIN' && rights.owner}
           mine={rights}
         />
