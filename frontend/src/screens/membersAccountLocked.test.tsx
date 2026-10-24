@@ -168,6 +168,15 @@ describe('учётная запись шире своих — погашена �
     expect(within(create).queryByLabelText('Логин'), 'форма заведения без права').toBeNull();
   });
 
+  it('только «Заводить сотрудников…»: «Права» погашены с причиной — роль и права поверх менять нечем', async () => {
+    render(<MembersScreen ownerActs={false} mine={rightsWith('members.accounts', 'deal.sell')} />);
+    const seller = await row('prodavec');
+    expect(button(seller, 'Права: prodavec').disabled, '«Права» живые без обоих прав').toBe(true);
+    expect(button(seller, 'Сменить пароль').disabled).toBe(false);
+    await waitFor(() => expect(screen.getByText(/«Права»: Нет ни одного из прав: «Назначать сотрудникам готовые роли»/))
+      .toBeTruthy());
+  });
+
   it('без права на роли «Новая роль» погашена с причиной, а не спрятана', async () => {
     render(<MembersScreen ownerActs={false}
       mine={rightsWith('members.accounts', 'members.assign_roles', 'members.grant_overrides')} />);
@@ -179,13 +188,22 @@ describe('учётная запись шире своих — погашена �
       .disabled).toBe(true);
   });
 
-  it('без права назначать роли выбор роли погашен с причиной; без прав поверх роли — галочки', async () => {
-    render(<MembersScreen ownerActs={false} mine={rightsWith('members.accounts', 'deal.sell')} />);
+  it('без права назначать роли выбор роли погашен с причиной', async () => {
+    render(<MembersScreen ownerActs={false} mine={rightsWith('members.grant_overrides', 'deal.sell')} />);
     await row('prodavec');
     fireEvent.click(screen.getByRole('button', { name: 'Права: prodavec' }));
     const editor = screen.getByRole('button', { name: 'Сохранить права' }).closest('.card') as HTMLElement;
     expect((within(editor).getByLabelText('Роль') as HTMLSelectElement).disabled).toBe(true);
     expect(within(editor).getByText(/Нет права «Назначать сотрудникам готовые роли»/)).toBeTruthy();
+    expect((within(editor).getByLabelText(/Продавать/) as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it('без права на права поверх роли галочки погашены с причиной', async () => {
+    render(<MembersScreen ownerActs={false} mine={rightsWith('members.assign_roles', 'deal.sell')} />);
+    await row('prodavec');
+    fireEvent.click(screen.getByRole('button', { name: 'Права: prodavec' }));
+    const editor = screen.getByRole('button', { name: 'Сохранить права' }).closest('.card') as HTMLElement;
+    expect((within(editor).getByLabelText('Роль') as HTMLSelectElement).disabled).toBe(false);
     expect((within(editor).getByLabelText(/Продавать/) as HTMLInputElement).disabled).toBe(true);
     expect(within(editor).getByText(/Нет права «Выдавать и снимать права поверх роли»/)).toBeTruthy();
   });

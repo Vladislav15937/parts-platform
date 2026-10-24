@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
-  loadCatalog, lockedReason, rightsFrom, type PermissionKey, type Rights, type Section,
+  loadCatalog, lockedReason, lockedReasonAny, rightsFrom, type PermissionKey, type Rights, type Section,
 } from '../access/rights';
 import {
   assignAccess,
@@ -155,6 +155,9 @@ export function MembersScreen({
   const titles = new Map(sections.flatMap((s) => s.permissions.map((a) => [a.key, a.title] as const)));
   const mayAccounts = mine.has('members.accounts');
   const accountsReason = lockedReason('members.accounts', titles);
+  // «Права» раскрывают роль и права поверх роли: без обоих прав там менять нечего.
+  const mayRights = mine.has('members.assign_roles') || mine.has('members.grant_overrides');
+  const rightsReason = lockedReasonAny(['members.assign_roles', 'members.grant_overrides'], titles);
   // Пароль, выключение, включение: у кого прав больше, чем у вошедшего (и у владельца),
   // гасит сервер признаком в списке (ответ владельца 24.10.2026, 1а) — экран своих
   // правил не держит. Свой пароль меняет каждый; выключать себя нельзя всё равно,
@@ -173,6 +176,9 @@ export function MembersScreen({
           одна на экран, а не полсотни одинаковых у каждой строки. */}
       {managesAccess && !mayAccounts && members !== null && (
         <p className="note locked-action__reason">{accountsReason}</p>
+      )}
+      {managesAccess && !mayRights && members !== null && (
+        <p className="note locked-action__reason">«Права»: {rightsReason}</p>
       )}
 
       {members === null ? (
@@ -236,8 +242,8 @@ export function MembersScreen({
                       aria-label={`Права: ${member.login ?? member.displayName ?? ''}`}
                       // Роль и права того, у кого прав больше, не меняются (ответ владельца
                       // 24.10, вопрос 2: сужать нельзя) — признак тот же, что у пароля.
-                      disabled={busy || (member.accountLocked ?? null) !== null}
-                      title={member.accountLocked ?? undefined}
+                      disabled={busy || (member.accountLocked ?? null) !== null || !mayRights}
+                      title={member.accountLocked ?? (mayRights ? undefined : rightsReason)}
                       onClick={() => (editing === member.id ? setEditing(null) : openRights(member))}
                     >
                       Права

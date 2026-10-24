@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -384,6 +386,7 @@ class AccountChangeLimitHttpTest extends PostgresTestBase {
     @Test
     @DisplayName("Четыре права — каждое на своём действии: заводить и пароль, назначать роль, править роли, права поверх роли")
     void fourRightsEachOnItsAction() throws Exception {
+        inTenant(() -> jdbc.update("DELETE FROM tenant_member WHERE login = 'novyy'"));
         long target = member("prodavec", "SELLER");
         long narrow = role("Продавец-узкий", "deal.sell");
         String assign = "{\"roleId\":%d,\"overrides\":{}}".formatted(narrow);
@@ -420,6 +423,85 @@ class AccountChangeLimitHttpTest extends PostgresTestBase {
         roleCreate(editor).andExpect(status().isCreated());
         password(editor, target).andExpect(status().isForbidden());
         mvc.perform(get("/api/access/roles").session(editor)).andExpect(status().isOk());
+    }
+
+    /**
+     * Каждое из четырёх прав на раздачу — на своём пути, а не «любое из четырёх».
+     * Держатель ровно одного другого права получает 403 за отсутствие своего права
+     * (путь — «Недостаточно прав»; общий путь «Права» — сервис называет нужное право),
+     * а не за правило «не шире своих»: цель и роль здесь узкие, кадровик сверх них
+     * держит набор продавца. Держатель своего — проходит.
+     * Подмена аннотации на «любое из четырёх» (ANY_MEMBERS) краснит свой путь.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"POST /api/members", "POST /api/members/{id}/password",
+            "POST /api/members/{id}/disable", "POST /api/members/{id}/enable",
+            "POST /api/access/roles", "PUT /api/access/roles/{id}", "DELETE /api/access/roles/{id}",
+            "PUT /api/access/members/{id} (роль)", "PUT /api/access/members/{id} (права поверх)"})
+    @DisplayName("Каждое из четырёх прав на раздачу — на своём пути: с другим одним — 403 пути, со своим — пропуск")
+    void eachRightOnItsOwnPath(String path) throws Exception {
+        String own = switch (path) {
+            case "POST /api/members", "POST /api/members/{id}/password", "POST /api/members/{id}/disable",
+                 "POST /api/members/{id}/enable" -> "members.accounts";
+            case "POST /api/access/roles", "PUT /api/access/roles/{id}", "DELETE /api/access/roles/{id}" ->
+                    "members.roles";
+            case "PUT /api/access/members/{id} (роль)" -> "members.assign_roles";
+            default -> "members.grant_overrides";
+        };
+        for (String key : List.of("members.accounts", "members.assign_roles", "members.roles",
+                "members.grant_overrides")) {
+            int status = attempt(path, kadrovik(key)).andReturn().getResponse().getStatus();
+            String body = lastBody;
+            if (key.equals(own)) {
+                assertThat(status).as("%s со своим «%s»: %s", path, key, body).isBetween(200, 204);
+            } else {
+                assertThat(status).as("%s с одним чужим «%s»: %s", path, key, body).isEqualTo(403);
+                // Отказ — за отсутствие своего права: путём («Недостаточно прав») либо, у общего
+                // пути «Права», сервисом с названием нужного права; не правилом «не шире своих».
+                String title = Permission.byKey(own).orElseThrow().title();
+                assertThat(body.contains("Недостаточно прав") || body.contains("«" + title + "»"))
+                        .as("%s с «%s»: отказ не за отсутствие «%s» — %s", path, key, own, body).isTrue();
+                assertThat(body).doesNotContain("прав больше");
+            }
+        }
+    }
+
+    private String lastBody = "";
+
+    /** Одна попытка пути над свежей узкой целью — ничего у неё не шире кадровика. */
+    private ResultActions attempt(String path, MockHttpSession session) throws Exception {
+        inTenant(() -> jdbc.update("DELETE FROM tenant_member WHERE login = 'novyy'"));
+        long target = member("prodavec", "SELLER");
+        long narrow = role("Продавец-узкий", "deal.sell");
+        long otherNarrow = role("Продавец-узкий-2", "deal.sell");
+        inTenant(() -> jdbc.update("UPDATE tenant_member SET access_role_id = ? WHERE id = ?", narrow, target));
+        long freeRole = role("Свободная", "deal.sell");
+        ResultActions result = switch (path) {
+            case "POST /api/members" -> {
+                inTenant(() -> jdbc.update("DELETE FROM tenant_member WHERE login = 'novyy'"));
+                yield mvc.perform(post("/api/members").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"login\":\"novyy\",\"password\":\"%s\",\"roleId\":%d}"
+                                .formatted(PASSWORD, narrow)));
+            }
+            case "POST /api/members/{id}/password" -> password(session, target);
+            case "POST /api/members/{id}/disable" -> act(session, target, "disable");
+            case "POST /api/members/{id}/enable" -> {
+                setActive(target, false);
+                yield act(session, target, "enable");
+            }
+            case "POST /api/access/roles" -> roleCreate(session);
+            case "PUT /api/access/roles/{id}" -> roleUpdate(session, freeRole, "Свободная", "deal.return");
+            case "DELETE /api/access/roles/{id}" -> mvc.perform(
+                    org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                            .delete("/api/access/roles/" + freeRole).with(csrf()).session(session));
+            case "PUT /api/access/members/{id} (роль)" -> assignAs(session, target,
+                    "{\"roleId\":%d,\"overrides\":{}}".formatted(otherNarrow));
+            default -> assignAs(session, target,
+                    "{\"roleId\":%d,\"overrides\":{\"deal.sell\":false}}".formatted(narrow));
+        };
+        lastBody = text(result);
+        return result;
     }
 
     // ------------------------------------------------------------ вспомогательное
