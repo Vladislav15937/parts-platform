@@ -43,6 +43,11 @@ class ValueWordsTest {
     /** Слова владельца дословно — не из словаря, иначе код проверял бы сам себя. */
     private static final Map<String, String> OWNER_GEARBOX = Map.of(
             "AT", "АКПП", "MT", "МКПП", "CVT", "Вариатор", "AMT", "Робот", "DCT", "Робот DSG");
+    /** Руль и привод — ответ владельца после прогона волны 24.10c, пункт 1. */
+    private static final Map<String, String> OWNER_STEERING = Map.of(
+            "LEFT", "Левый руль", "RIGHT", "Правый руль");
+    private static final Map<String, String> OWNER_DRIVE = Map.of(
+            "FWD", "Передний", "RWD", "Задний", "AWD", "Полный");
     private static final Map<String, String> OWNER_FRONT_REAR = Map.of(
             "FRONT", "Перед.", "REAR", "Задн.", "BOTH", "Перед., Задн.");
     private static final Map<String, String> OWNER_LEFT_RIGHT = Map.of(
@@ -63,6 +68,23 @@ class ValueWordsTest {
                     .isEqualTo(OWNER_GEARBOX.get(value.name()));
         }
         assertThat(ValueWords.transmissions()).isEqualTo(OWNER_GEARBOX);
+    }
+
+    @Test
+    @DisplayName("Руль и привод названы словом владельца с заглавной")
+    void everySteeringAndDriveHasTheOwnersWord() {
+        for (Donor.Steering value : Donor.Steering.values()) {
+            assertThat(ValueWords.steering(value.name())).as("руль %s", value)
+                    .isEqualTo(OWNER_STEERING.get(value.name()));
+        }
+        for (Donor.DriveType value : Donor.DriveType.values()) {
+            assertThat(ValueWords.drive(value.name())).as("привод %s", value)
+                    .isEqualTo(OWNER_DRIVE.get(value.name()));
+        }
+        assertThat(ValueWords.steerings()).isEqualTo(OWNER_STEERING);
+        assertThat(ValueWords.drives()).isEqualTo(OWNER_DRIVE);
+        assertThat(ValueWords.sqlSteering("d.steering"))
+                .isEqualTo("CASE d.steering WHEN 'RIGHT' THEN 'Правый руль' WHEN 'LEFT' THEN 'Левый руль' END");
     }
 
     @Test
@@ -115,7 +137,9 @@ class ValueWordsTest {
     @Test
     @DisplayName("У экранов нет своих словарей сторон")
     void screensKeepNoOwnSideWords() throws IOException {
-        Pattern copy = Pattern.compile("(LEFT|FRONT|UPPER)\\s*:\\s*['\"]");
+        // Объектный литерал («LEFT: 'Лев.'») и ветка switch («case 'LEFT': return 'Лев.'»):
+        // копия, записанная вторым способом, первым шаблоном не находилась (разбор PR 516).
+        Pattern copy = Pattern.compile("(LEFT|FRONT|UPPER)['\"]?\\s*:\\s*(?:return\\s+)?['\"`]");
         List<String> found = new ArrayList<>();
         try (Stream<Path> files = Files.walk(CLIENT)) {
             for (Path file : files.filter(f -> f.toString().matches(".*\\.tsx?$"))
@@ -141,10 +165,13 @@ class ValueWordsTest {
     @DisplayName("На сервере слов-значений нет нигде, кроме общего словаря")
     void serverBuildsNoOwnValueWords() throws IOException {
         Pattern word = Pattern.compile(
-                "[\"'](?iu:перед|задн|лев|прав|верх|ниж)\\.|[\"'](?iu:акпп|мкпп|вариатор|робот)[\"' ]");
+                "[\"'](?iu:перед|задн|лев|прав|верх|ниж)\\.|[\"'](?iu:акпп|мкпп|вариатор|робот)[\"' ]"
+                + "|[\"'](?iu:левый руль|правый руль|передний|задний|полный)[\"']");
         Map<String, String> allowed = Map.of(
                 "BazonValueParser.java", "разбор слов файла Bazon, приведённых к нижнему регистру",
                 "DromCardWords.java", "разбор слов карточки Дрома, приведённых к нижнему регистру",
+                "DromTitle.java", "положение в названии файла Дрома — формы рода Bazon, а не наши слова-значения",
+                "AuditedColumns.java", "журнал изменений называет сторону полным словом («Передний»), это не сокращение",
                 "ValueWords.java", "сам словарь");
         List<String> found = new ArrayList<>();
         try (Stream<Path> files = Files.walk(SERVER)) {

@@ -247,7 +247,9 @@ public class DromPriceWriter {
                 .collect(java.util.stream.Collectors.joining("|"));
         String plain = title
                 .replaceAll("\\s*(?:" + marks + ")", "")
-                .replaceAll("\\s+(?:перед|задн|лев|прав|верх|ниж)\\.", "");
+                // Без регистра: с 24.10.2026 стороны в названии с заглавной
+                // («Перед. Лев.», ValueWords), а у собранных раньше — строчными.
+                .replaceAll("(?iu)\\s+(?:перед|задн|лев|прав|верх|ниж)\\.", "");
         return plain.replaceAll("\\s{2,}", " ").trim();
     }
 

@@ -127,10 +127,10 @@ public class DonorDirectory {
                         rs.getString("body_code"),
                         rs.getString("engine_code"),
                         rs.getObject("year") == null ? null : rs.getInt("year"),
-                        label(STEERING, rs.getString("steering")),
+                        ValueWords.steering(rs.getString("steering")),
                         transmission(rs.getString("transmission_type"),
                                 rs.getString("transmission_model")),
-                        label(DRIVE, rs.getString("drive_type")),
+                        ValueWords.drive(rs.getString("drive_type")),
                         color(rs.getString("color"), rs.getString("color_code")),
                         rs.getString("equipment_code"),
                         rs.getObject("mileage_km") == null ? null : rs.getInt("mileage_km"),
@@ -146,11 +146,6 @@ public class DonorDirectory {
             "PURCHASED", "Куплена", "DISMANTLING", "В разборе",
             "DISMANTLED", "Разобрана", "WRITTEN_OFF", "Списана");
 
-    private static final Map<String, String> STEERING =
-            Map.of("LEFT", "Левый руль", "RIGHT", "Правый руль");
-
-    private static final Map<String, String> DRIVE =
-            Map.of("FWD", "Передний", "RWD", "Задний", "AWD", "Полный");
 
     /**
      * Поставка словами, а не кодом.
