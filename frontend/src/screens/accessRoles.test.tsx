@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { forgetCatalog } from '../access/rights';
 import { rightsWith } from '../test/rights';
 import { MembersScreen } from './MembersScreen';
+import { MEMBERS_RIGHTS } from './tabs';
 
 /**
  * Роли клиента и права сотрудника на экране «Сотрудники» (задача 0044).
@@ -254,7 +255,12 @@ describe('роли и права на экране сотрудников', () =
     await waitFor(() => expect(within(roles).getByText('Ролей нет — заведите первую.')).toBeTruthy());
   });
 
-  it('не владельцу пароль и выключение владельца погашены и названы', async () => {
+  it('не владельцу пароль и выключение владельца погашены и названы — по признаку сервера', async () => {
+    // Признак и слова — сервера (accountLocked, задача 0044, 24.10, 1а): экран
+    // своих правил о владельце больше не держит.
+    membersAnswer = () => json(MEMBERS.map((m) => (m.login === 'vladelec'
+      ? { ...m, accountLocked: 'Учётную запись владельца меняет только владелец' }
+      : { ...m, accountLocked: null })));
     render(<MembersScreen ownerActs={false} />);
     await waitFor(() => screen.getByRole('button', { name: 'Права: vladelec' }));
     const row = screen.getByRole('button', { name: 'Права: vladelec' }).closest('tr') as HTMLElement;
@@ -301,7 +307,7 @@ describe('роли и права на экране сотрудников', () =
   // Повторный живой прогон 24.10.2026: у сотрудника без права блок показывал
   // голое «Недостаточно прав» вместо погашенного с причиной (решение 3).
   it('без права на доступ администратора блок погашен с причиной и за состоянием не ходит', async () => {
-    render(<MembersScreen ownerActs={false} mine={rightsWith('members.manage', 'intake.receive')} />);
+    render(<MembersScreen ownerActs={false} mine={rightsWith(...MEMBERS_RIGHTS, 'intake.receive')} />);
     await waitFor(() => screen.getByRole('button', { name: 'Завести' }));
     const card = screen.getByText('Доступ администратора сервиса').closest('.card') as HTMLElement;
     const button = within(card).getByRole('button', { name: 'Дать доступ администратору' }) as HTMLButtonElement;
@@ -317,7 +323,7 @@ describe('роли и права на экране сотрудников', () =
   // сервер; экран гасит заранее и называет причину.
   describe('выдавать можно только свои права', () => {
     it('роль шире своих в выборе нового сотрудника погашена и названа', async () => {
-      render(<MembersScreen ownerActs={false} mine={rightsWith('members.manage', 'intake.receive')} />);
+      render(<MembersScreen ownerActs={false} mine={rightsWith(...MEMBERS_RIGHTS, 'intake.receive')} />);
       await waitFor(() => screen.getByRole('button', { name: 'Завести' }));
       const card = screen.getByRole('button', { name: 'Завести' }).closest('.card') as HTMLElement;
       const wide = within(card).getByRole('option', { name: 'Пустая — шире ваших прав' }) as HTMLOptionElement;
@@ -329,7 +335,7 @@ describe('роли и права на экране сотрудников', () =
 
     it('чужое право поверх роли: сохранить нельзя, сказано какое; снял — уходит', async () => {
       // У ivan поверх «Приёмщика» добавлено «Продавать», а у вошедшего его нет.
-      render(<MembersScreen ownerActs={false} mine={rightsWith('members.manage', 'intake.receive')} />);
+      render(<MembersScreen ownerActs={false} mine={rightsWith(...MEMBERS_RIGHTS, 'intake.receive')} />);
       await waitFor(() => screen.getByRole('button', { name: 'Права: ivan' }));
       fireEvent.click(screen.getByRole('button', { name: 'Права: ivan' }));
       const save = screen.getByRole('button', { name: 'Сохранить права' }) as HTMLButtonElement;
@@ -350,7 +356,7 @@ describe('роли и права на экране сотрудников', () =
     });
 
     it('роль с набором шире своих: новой не отметить чужое, старую не сохранить, пока не снято', async () => {
-      render(<MembersScreen ownerActs={false} mine={rightsWith('members.manage', 'intake.receive')} />);
+      render(<MembersScreen ownerActs={false} mine={rightsWith(...MEMBERS_RIGHTS, 'intake.receive')} />);
       await waitFor(() => screen.getByRole('button', { name: 'Изменить роль: Пустая' }));
       fireEvent.click(screen.getByRole('button', { name: 'Изменить роль: Пустая' }));
       const save = screen.getByRole('button', { name: 'Сохранить роль' }) as HTMLButtonElement;

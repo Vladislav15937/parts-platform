@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
-  loadCatalog, rightsFrom, type PermissionKey, type Rights, type Section,
+  loadCatalog, lockedReason, rightsFrom, type PermissionKey, type Rights, type Section,
 } from '../access/rights';
 import {
   assignAccess,
@@ -24,6 +24,7 @@ import {
   SERVICE_ADMIN,
   type Member,
 } from '../organization/members';
+import { LockedAction } from '../ui/LockedAction';
 import { useMounted } from '../ui/useMounted';
 import { AccessPermissions } from './AccessPermissions';
 import { AdminAccessPanel } from './AdminAccessPanel';
@@ -149,9 +150,17 @@ export function MembersScreen({
         : wider(r) ? `${r.name} — ${WIDER}` : r.name}
     </option>
   );
-  // Чужого владельца не владелец не трогает; свой пароль меняет каждый —
-  // но выключать себя нельзя всё равно, и это отбивает сервер словами.
-  const ownerLocked = (member: Member) => !ownerActs && access.get(member.id)?.owner === true;
+  // Четыре права на раздачу (ответ владельца 24.10.2026, «развёрнутые вопросы», 2а):
+  // каждое гасит своё. Слово права — справочником сервера.
+  const titles = new Map(sections.flatMap((s) => s.permissions.map((a) => [a.key, a.title] as const)));
+  const mayAccounts = mine.has('members.accounts');
+  const accountsReason = lockedReason('members.accounts', titles);
+  // Пароль, выключение, включение: у кого прав больше, чем у вошедшего (и у владельца),
+  // гасит сервер признаком в списке (ответ владельца 24.10.2026, 1а) — экран своих
+  // правил не держит. Свой пароль меняет каждый; выключать себя нельзя всё равно,
+  // и это отбивает сервер словами.
+  const accountLock = (member: Member): string | null =>
+    !mayAccounts ? accountsReason : member.accountLocked ?? null;
 
   return (
     <section className="screen screen--members">
@@ -159,6 +168,12 @@ export function MembersScreen({
 
       {error !== '' && <p className="note note--error">{error}</p>}
       {accessError !== '' && <p className="note note--error">{accessError}</p>}
+
+      {/* Без права на учётные записи пароль и выключение погашены у всех: причина
+          одна на экран, а не полсотни одинаковых у каждой строки. */}
+      {managesAccess && !mayAccounts && members !== null && (
+        <p className="note locked-action__reason">{accountsReason}</p>
+      )}
 
       {members === null ? (
         // «Загружаем…» — пока грузим, а не пока пусто: при ошибке состояние
@@ -224,14 +239,14 @@ export function MembersScreen({
                     >
                       Права
                     </button>
-                    {/* Учётную запись владельца меняет только владелец — так стоит
-                        и на сервере (MemberController.requireOwnerTouchesOwner):
-                        кнопки погашены и названы, а не спрятаны. */}
+                    {/* Шире вошедшего (и владелец) — кнопки погашены и названы, а не
+                        спрятаны; признак и слова — сервера (accountLocked), тем же
+                        правилом он отбивает и сам запрос. */}
                     <button
                       type="button"
                       className="button--ghost"
-                      disabled={busy || ownerLocked(member)}
-                      title={ownerLocked(member) ? OWNER_ONLY : undefined}
+                      disabled={busy || accountLock(member) !== null}
+                      title={accountLock(member) ?? undefined}
                       onClick={() => void resetPassword(member)}
                     >
                       Сменить пароль
@@ -241,13 +256,15 @@ export function MembersScreen({
                     <button
                       type="button"
                       className="button--ghost"
-                      disabled={busy || ownerLocked(member)}
-                      title={ownerLocked(member) ? OWNER_ONLY : undefined}
+                      disabled={busy || accountLock(member) !== null}
+                      title={accountLock(member) ?? undefined}
                       onClick={() => void toggle(member)}
                     >
                       {member.active ? 'Выключить' : 'Включить'}
                     </button>
-                    {ownerLocked(member) && <span className="note">{OWNER_ONLY}</span>}
+                    {mayAccounts && accountLock(member) !== null && (
+                      <span className="note locked-action__reason">{accountLock(member)}</span>
+                    )}
                   </td>
                   )}
                 </tr>
@@ -264,7 +281,8 @@ export function MembersScreen({
       )}
 
       <RolesPanel roles={rolesLoaded} error={rolesError} sections={sections}
-                  canChange={managesAccess}
+                  canChange={managesAccess && mine.has('members.roles')}
+                  lockedBy={managesAccess && !mine.has('members.roles') ? 'members.roles' : undefined}
                   mine={mine}
                   onChanged={reload} />
 
@@ -275,6 +293,11 @@ export function MembersScreen({
           Сотрудников заводит и меняет владелец: вход, заданный администратором
           сервиса, остался бы и после того, как владелец закроет ему доступ.
         </p>
+      ) : !mayAccounts ? (
+        <div className="card">
+          <h3>Новый сотрудник</h3>
+          <LockedAction permission="members.accounts" label="Завести" className="" />
+        </div>
       ) : (
       <div className="card">
         <h3>Новый сотрудник</h3>
@@ -343,6 +366,9 @@ export function MembersScreen({
     const wasOwner = current?.owner === true;
     const ownerLocked = (ownerChosen || wasOwner) && !ownerActs;
     const grant = grantObstacle(role, editChosen);
+    // Роль и права поверх роли — разные права (2а): у кого одного нет, то погашено.
+    const mayAssign = mine.has('members.assign_roles');
+    const mayOverride = mine.has('members.grant_overrides');
     const lost = resetLoss(current, editRole);
     return (
       <div className="card">
@@ -350,7 +376,7 @@ export function MembersScreen({
           Роль
           <select
             value={editRole}
-            disabled={wasOwner && !ownerActs}
+            disabled={(wasOwner && !ownerActs) || !mayAssign}
             onChange={(e) => {
               setEditRole(e.target.value);
               // Права поверх прежней роли к новой не переносятся: сменив роль,
@@ -362,6 +388,9 @@ export function MembersScreen({
             {roles.map(roleOption)}
           </select>
         </label>
+        {!mayAssign && (
+          <p className="note locked-action__reason">{lockedReason('members.assign_roles', titles)}</p>
+        )}
         {sections.length === 0 ? (
           <p className="note">Список прав не загрузился — обновите страницу.</p>
         ) : (
@@ -370,7 +399,7 @@ export function MembersScreen({
             chosen={editChosen}
             locked={ownerChosen
               ? 'У владельца все права всегда: отдельные права ему не добавляют и не снимают'
-              : undefined}
+              : !mayOverride ? lockedReason('members.grant_overrides', titles) : undefined}
             foreign={(key) => !mine.has(key)}
             onToggle={(key, on) => setEditChosen((was) => {
               const next = new Set(was);
@@ -552,8 +581,6 @@ function roleSummary(role: AccessRole, sections: readonly Section[]): string {
     .map((a) => a.title);
   return titles.length === 0 ? 'Прав нет — только смотреть то, что открыто всем.' : titles.join(', ');
 }
-
-const OWNER_ONLY = 'Учётную запись владельца меняет только владелец';
 
 const OWNER = rightsFrom(true, []);
 

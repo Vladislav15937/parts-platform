@@ -129,8 +129,19 @@ public enum Permission {
             "Заводить филиалы", null),
     ORG_AVAILABILITY("org.availability", Section.COMPANY,
             "Править наличие склада в объявлениях", "текст наличия и срок доставки со склада"),
-    MEMBERS_MANAGE("members.manage", Section.COMPANY,
-            "Управлять сотрудниками и ролями", "заводить, менять пароль, выключать, назначать роли и права"),
+    // Четыре права на раздачу вместо одного «Управлять сотрудниками и ролями»
+    // (ответ владельца 24.10.2026, «развёрнутые вопросы», 2а). Прежний ключ
+    // members.manage кодом не знается, а читается как все четыре
+    // (MemberAccess.current): его пишет откатанный образ, и перенос не стирает.
+    MEMBERS_ACCOUNTS("members.accounts", Section.COMPANY,
+            "Заводить сотрудников, менять им пароль, выключать и включать",
+            "только тех, у кого нет прав сверх ваших"),
+    MEMBERS_ASSIGN_ROLES("members.assign_roles", Section.COMPANY,
+            "Назначать сотрудникам готовые роли", "роль не шире ваших прав"),
+    MEMBERS_ROLES("members.roles", Section.COMPANY,
+            "Заводить и править роли", "название и набор прав, удаление роли"),
+    MEMBERS_GRANT_OVERRIDES("members.grant_overrides", Section.COMPANY,
+            "Выдавать и снимать права поверх роли", "отдельному сотруднику, только свои права"),
     ADMIN_ACCESS_MANAGE("admin_access.manage", Section.COMPANY,
             "Пускать администратора сервиса", "дать, отозвать, отклонить запрос"),
     SETTINGS_COMPANY("settings.company", Section.COMPANY,

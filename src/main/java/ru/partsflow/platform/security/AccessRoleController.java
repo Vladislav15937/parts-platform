@@ -30,7 +30,19 @@ import java.util.Map;
 @RequestMapping("/api/access")
 public class AccessRoleController {
 
-    private static final String MANAGES = "hasAuthority('members.manage')";
+    /**
+     * Списки ролей и прав сотрудников видит держатель любого из четырёх прав
+     * на раздачу: назначить роль, выдать право поверх роли или поправить роль
+     * без них нельзя (ответ владельца 24.10.2026, «развёрнутые вопросы», 2а).
+     */
+    static final String ANY_MEMBERS = "hasAuthority('members.accounts') or hasAuthority('members.assign_roles')"
+            + " or hasAuthority('members.roles') or hasAuthority('members.grant_overrides')";
+
+    private static final String ROLES = "hasAuthority('members.roles')";
+
+    /** Роль и права поверх роли — одним сохранением; что именно меняется, проверяет сервис. */
+    private static final String ASSIGNS = "hasAuthority('members.assign_roles')"
+            + " or hasAuthority('members.grant_overrides')";
 
     private final AccessRoleService roles;
 
@@ -49,41 +61,41 @@ public class AccessRoleController {
     }
 
     @GetMapping("/roles")
-    @PreAuthorize(MANAGES)
+    @PreAuthorize(ANY_MEMBERS)
     public List<AccessRoleService.RoleView> roles() {
         return roles.roles();
     }
 
     @PostMapping("/roles")
-    @PreAuthorize(MANAGES)
+    @PreAuthorize(ROLES)
     public ResponseEntity<AccessRoleService.RoleView> create(@Valid @RequestBody RoleRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(roles.create(request.name(), request.permissions()));
     }
 
     @PutMapping("/roles/{id}")
-    @PreAuthorize(MANAGES)
+    @PreAuthorize(ROLES)
     public AccessRoleService.RoleView update(@PathVariable long id,
                                              @Valid @RequestBody RoleRequest request) {
         return roles.update(id, request.name(), request.permissions());
     }
 
     @DeleteMapping("/roles/{id}")
-    @PreAuthorize(MANAGES)
+    @PreAuthorize(ROLES)
     public ResponseEntity<Void> delete(@PathVariable long id) {
         roles.delete(id);
         return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/members")
-    @PreAuthorize(MANAGES)
+    @PreAuthorize(ANY_MEMBERS)
     public List<AccessRoleService.MemberAccessView> members() {
         return roles.members();
     }
 
     /** Роль сотрудника и права поверх неё — одним сохранением. */
     @PutMapping("/members/{id}")
-    @PreAuthorize(MANAGES)
+    @PreAuthorize(ASSIGNS)
     public AccessRoleService.MemberAccessView assign(@PathVariable long id,
                                                      @Valid @RequestBody AssignRequest request) {
         return roles.assign(id, request.roleId(), request.overrides());

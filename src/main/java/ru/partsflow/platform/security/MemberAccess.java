@@ -92,9 +92,9 @@ public class MemberAccess {
 
         Set<String> granted = new LinkedHashSet<>();
         if (role.id() != null) {
-            granted.addAll(jdbc.queryForList(
+            granted.addAll(current(jdbc.queryForList(
                     "SELECT permission FROM %s.access_role_permission WHERE role_id = ?"
-                            .formatted(schema), String.class, role.id()));
+                            .formatted(schema), String.class, role.id())));
         } else if ("AUDITOR".equals(role.legacyRole()) && !seededHere(schema, role.legacyRole())) {
             // Роли переноса нет. Метки нет — роль у клиента не заводили, и
             // ревизор прежнего образа получает журнал: «доступ при переносе
@@ -109,10 +109,11 @@ public class MemberAccess {
                 SELECT permission, granted FROM %s.member_permission_override
                  WHERE member_id = ?""".formatted(schema),
                 rs -> {
+                    List<String> keys = current(List.of(rs.getString("permission")));
                     if (rs.getBoolean("granted")) {
-                        granted.add(rs.getString("permission"));
+                        granted.addAll(keys);
                     } else {
-                        granted.remove(rs.getString("permission"));
+                        granted.removeAll(keys);
                     }
                 },
                 memberId);
@@ -141,6 +142,35 @@ public class MemberAccess {
         return Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM %s.access_role_seeded WHERE seeded_from = ?)"
                         .formatted(schema), Boolean.class, legacyRole));
+    }
+
+    /** Прежний ключ «Управлять сотрудниками и ролями» до разделения на четыре. */
+    static final String LEGACY_MEMBERS_MANAGE = "members.manage";
+
+    /** Четыре права, на которые разделён {@link #LEGACY_MEMBERS_MANAGE}. */
+    static final List<String> MEMBERS_SPLIT = List.of(
+            Permission.MEMBERS_ACCOUNTS.key(), Permission.MEMBERS_ASSIGN_ROLES.key(),
+            Permission.MEMBERS_ROLES.key(), Permission.MEMBERS_GRANT_OVERRIDES.key());
+
+    /**
+     * Ключи в нынешнем виде: прежний {@code members.manage} — это все четыре
+     * права на раздачу (ответ владельца 24.10.2026, «развёрнутые вопросы», 2а:
+     * «у кого сейчас — тот получает все четыре»). Читается так, а не только
+     * переносится данными: его по-прежнему пишет образ, на который законно
+     * откатиться (задача 0112), и перенос его не стирает (expand/contract).
+     * Без этого выданное откатанным образом право пропало бы на следующей
+     * выкладке молча — ключ, которого код не знает, отбрасывается.
+     */
+    static List<String> current(java.util.Collection<String> keys) {
+        List<String> result = new java.util.ArrayList<>();
+        for (String key : keys) {
+            if (LEGACY_MEMBERS_MANAGE.equals(key)) {
+                result.addAll(MEMBERS_SPLIT);
+            } else {
+                result.add(key);
+            }
+        }
+        return result;
     }
 
     /**

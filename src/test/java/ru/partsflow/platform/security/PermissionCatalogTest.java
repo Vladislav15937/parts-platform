@@ -36,8 +36,12 @@ class PermissionCatalogTest {
     private static final Set<String> OWNER_ONLY_BEFORE_0044 = Set.of(
             "stock_document.delete_done", "supply.expected", "applicability.bulk",
             "marketplace.manage", "deal_sources.manage", "payment_sources.manage",
-            "org.branches", "org.availability", "members.manage", "admin_access.manage",
-            "settings.company", "import.manage");
+            "org.branches", "org.availability", "admin_access.manage",
+            "settings.company", "import.manage",
+            // «Управлять сотрудниками и ролями» разделено на четыре (ответ владельца
+            // 24.10.2026, «развёрнутые вопросы», 2а); прежний ключ читается как все
+            // четыре (MemberAccess.current) и справочнику не нужен.
+            "members.accounts", "members.assign_roles", "members.roles", "members.grant_overrides");
 
     @Test
     @DisplayName("Каждый ключ, розданный ролям при переносе, есть в справочнике")
@@ -50,7 +54,7 @@ class PermissionCatalogTest {
     }
 
     @Test
-    @DisplayName("Справочник — это раздача плюс двенадцать ключей владельца, и ничего сверх")
+    @DisplayName("Справочник — это раздача плюс ключи «только владельца», и ничего сверх")
     void catalogIsSeedPlusOwnerOnly() throws IOException {
         Set<String> expected = new TreeSet<>(seededKeys());
         expected.addAll(OWNER_ONLY_BEFORE_0044);

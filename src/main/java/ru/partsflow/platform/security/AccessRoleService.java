@@ -112,7 +112,7 @@ public class AccessRoleService {
                     long id = rs.getLong("id");
                     boolean owner = rs.getBoolean("is_owner");
                     return new RoleView(id, rs.getString("name"), owner,
-                            owner ? List.of() : known(sets.getOrDefault(id, List.of())),
+                            owner ? List.of() : known(MemberAccess.current(sets.getOrDefault(id, List.of()))),
                             rs.getInt("members"));
                 });
     }
@@ -280,6 +280,7 @@ public class AccessRoleService {
             }
         }
         Map<String, Boolean> wasOverrides = overrides().getOrDefault(memberId, Map.of());
+        requireSplitRight(before, roleId, kept, wasOverrides);
 
         String legacy = legacyOf(role);
         jdbc.update("UPDATE tenant_member SET access_role_id = ?, role = ? WHERE id = ?",
@@ -344,6 +345,120 @@ public class AccessRoleService {
         return created;
     }
 
+    // ------------------------------------------------- учётная запись сотрудника
+
+    /**
+     * Менять пароль, выключать и включать сотрудника может только тот, у кого
+     * есть все права этого сотрудника — права цели не шире его собственных
+     * (ответ владельца 24.10.2026 после волны, пункт 1а); владелец — всех.
+     * Иначе держатель «Сотрудники и роли» с правами продавца менял пароль
+     * менеджеру и входил под ним — то есть получал права, которых ему не дали
+     * (живой прогон 24.10.2026: 204 и 200).
+     *
+     * <p><b>Одно место на все три действия и на владельца.</b> Прежний запрет
+     * «учётную запись владельца меняет только владелец»
+     * ({@code MemberController.requireOwnerTouchesOwner}, голое «Недостаточно
+     * прав») — частный случай: у владельца все права, и шире него любой
+     * не-владелец. Свой пароль меняет каждый — себя правило не касается;
+     * выключить себя нельзя по-прежнему, это отказ контроллера до проверки.
+     *
+     * <p>Права обеих сторон — из базы ({@link MemberAccess}, то же чтение, что
+     * у входа и у {@link #requireOwnRights}), а не из снимка в сессии: роль
+     * «Владелец», прежняя колонка, роль переноса, права поверх роли и метка
+     * Ревизора решаются одинаково. Выключенный сотрудник читается со своими
+     * правами — иначе включение вернуло бы в работу того, кто шире.
+     */
+    @Transactional(readOnly = true)
+    public void requireMayChangeAccount(long memberId, AccountChange change) {
+        TenantPrincipal actor = CurrentUser.require();
+        String schema = TenantContext.require();
+        Wider wider = wider(schema, actor, actorAccess(schema, actor), memberId);
+        if (wider != null) {
+            throw new RightsRefusal(change.refusal(wider));
+        }
+    }
+
+    /**
+     * Почему вошедшему нельзя менять пароль, выключать и включать каждого
+     * из сотрудников, — для списка «Сотрудники». Тем же правилом, что отказ
+     * ({@link #requireMayChangeAccount}): экран своих правил не держит, он
+     * гасит кнопки по этому признаку. Нет записи — можно.
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, String> accountLimits(Collection<Long> memberIds) {
+        TenantPrincipal actor = CurrentUser.require();
+        String schema = TenantContext.require();
+        MemberAccess.Access mine = actorAccess(schema, actor);
+        Map<Long, String> limits = new LinkedHashMap<>();
+        for (long id : memberIds) {
+            Wider wider = wider(schema, actor, mine, id);
+            if (wider != null) {
+                limits.put(id, wider.owner()
+                        ? "Учётную запись владельца меняет только владелец"
+                        : "У сотрудника прав больше, чем у вас: " + wider.titles()
+                                + ". Менять ему пароль, выключать и включать может тот, "
+                                + "у кого прав не меньше");
+            }
+        }
+        return limits;
+    }
+
+    /** Права вошедшего: администратору сервиса — как владельцу (его правила не тронуты). */
+    private MemberAccess.Access actorAccess(String schema, TenantPrincipal actor) {
+        if (actor.isServiceAdmin()) {
+            return new MemberAccess.Access(null, null, true, Set.of());
+        }
+        MemberAccess.Access mine = access.resolve(schema, actor.memberId());
+        return mine == null ? new MemberAccess.Access(null, null, false, Set.of()) : mine;
+    }
+
+    /** Чем цель шире вошедшего; {@code null} — не шире. */
+    private Wider wider(String schema, TenantPrincipal actor, MemberAccess.Access mine,
+                        long memberId) {
+        if (mine.owner() || Long.valueOf(memberId).equals(actor.memberId())) {
+            return null;
+        }
+        MemberAccess.Access target = access.resolve(schema, memberId);
+        if (target == null) {
+            // Сотрудника нет — словами откажет сама операция (NotFound).
+            return null;
+        }
+        if (target.owner()) {
+            return new Wider(true, "");
+        }
+        List<String> beyond = target.permissions().stream()
+                .filter(key -> !mine.permissions().contains(key)).sorted().toList();
+        return beyond.isEmpty() ? null : new Wider(false, beyond.stream()
+                .map(key -> "«" + Permission.byKey(key).map(Permission::title).orElse(key) + "»")
+                .collect(Collectors.joining(", ")));
+    }
+
+    /** Что делают с учётной записью — для слов отказа. */
+    public enum AccountChange {
+        PASSWORD("менять пароль сотруднику", "менять пароль владельцу"),
+        DISABLE("выключить сотрудника", "выключить владельца"),
+        ENABLE("включить сотрудника", "включить владельца");
+
+        private final String member;
+        private final String owner;
+
+        AccountChange(String member, String owner) {
+            this.member = member;
+            this.owner = owner;
+        }
+
+        String refusal(Wider wider) {
+            return wider.owner()
+                    ? "Нельзя " + owner + ": у владельца все права, и его учётную запись "
+                            + "меняет только владелец"
+                    : "Нельзя " + member + ", у которого прав больше, чем у вас: " + wider.titles();
+        }
+    }
+
+    /** @param titles лишние права названиями справочника, через запятую */
+    private record Wider(boolean owner, String titles) {
+    }
+
     // -------------------------------------------------------------- вспомогательное
 
     private void revoke(long memberId, String detail) {
@@ -392,6 +507,31 @@ public class AccessRoleService {
         }
     }
 
+    /**
+     * Назначение роли и права поверх роли — два разных права (ответ владельца
+     * 24.10.2026, «развёрнутые вопросы», 2а), а сохраняются одним запросом:
+     * экран «Права» шлёт роль и права поверх неё вместе. Поэтому проверяется
+     * то, что меняется: другая роль — «Назначать сотрудникам готовые роли»;
+     * другие права поверх роли — «Выдавать и снимать права поверх роли».
+     * Права поверх прежней роли, сброшенные сменой роли, — следствие
+     * назначения, а не выдача: экран говорит о сбросе до «Сохранить».
+     */
+    private static void requireSplitRight(MemberAccess.Access before, long roleId,
+                                          Map<String, Boolean> kept,
+                                          Map<String, Boolean> wasOverrides) {
+        TenantPrincipal actor = CurrentUser.require();
+        boolean roleChanged = before == null || !Long.valueOf(roleId).equals(before.roleId());
+        boolean overridesChanged = roleChanged ? !kept.isEmpty() : !kept.equals(wasOverrides);
+        if (roleChanged && !actor.can(Permission.MEMBERS_ASSIGN_ROLES)) {
+            throw new RightsRefusal("Назначать роли может тот, у кого есть право «"
+                    + Permission.MEMBERS_ASSIGN_ROLES.title() + "»");
+        }
+        if (overridesChanged && !actor.can(Permission.MEMBERS_GRANT_OVERRIDES)) {
+            throw new RightsRefusal("Менять права поверх роли может тот, у кого есть право «"
+                    + Permission.MEMBERS_GRANT_OVERRIDES.title() + "»");
+        }
+    }
+
     /** Прежняя колонка для роли клиента: вниз, как во всех откатах ролей. */
     private static String legacyOf(Stored role) {
         return role.owner() ? "OWNER" : role.seededFrom() != null ? role.seededFrom() : "VIEWER";
@@ -407,8 +547,8 @@ public class AccessRoleService {
             throw NotFound.ACCESS_ROLE.error(roleId);
         }
         Stored role = found.get(0);
-        Set<String> keys = new TreeSet<>(jdbc.queryForList(
-                "SELECT permission FROM access_role_permission WHERE role_id = ?", String.class, roleId));
+        Set<String> keys = new TreeSet<>(MemberAccess.current(jdbc.queryForList(
+                "SELECT permission FROM access_role_permission WHERE role_id = ?", String.class, roleId)));
         return new Stored(role.id(), role.name(), role.owner(), role.seededFrom(), keys);
     }
 
@@ -439,8 +579,11 @@ public class AccessRoleService {
         jdbc.query("SELECT member_id, permission, granted FROM member_permission_override "
                         + "ORDER BY permission",
                 rs -> {
-                    found.computeIfAbsent(rs.getLong("member_id"), id -> new LinkedHashMap<>())
-                            .put(rs.getString("permission"), rs.getBoolean("granted"));
+                    Map<String, Boolean> own = found.computeIfAbsent(rs.getLong("member_id"),
+                            id -> new LinkedHashMap<>());
+                    for (String key : MemberAccess.current(List.of(rs.getString("permission")))) {
+                        own.put(key, rs.getBoolean("granted"));
+                    }
                 });
         return found;
     }
