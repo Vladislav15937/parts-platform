@@ -458,8 +458,12 @@ class AccountChangeLimitHttpTest extends PostgresTestBase {
                 assertThat(status).as("%s с одним чужим «%s»: %s", path, key, body).isEqualTo(403);
                 // Отказ — за отсутствие своего права: путём («Недостаточно прав») либо, у общего
                 // пути «Права», сервисом с названием нужного права; не правилом «не шире своих».
+                // Второе право той же пары у пути «Права» пропускает аннотация, и отказ даёт
+                // сервис; права вне пары обязан отбить сам путь.
+                boolean pair = path.startsWith("PUT /api/access/members")
+                        && (key.equals("members.assign_roles") || key.equals("members.grant_overrides"));
                 String title = Permission.byKey(own).orElseThrow().title();
-                assertThat(body.contains("Недостаточно прав") || body.contains("«" + title + "»"))
+                assertThat(pair ? body.contains("«" + title + "»") : body.contains("Недостаточно прав"))
                         .as("%s с «%s»: отказ не за отсутствие «%s» — %s", path, key, own, body).isTrue();
                 assertThat(body).doesNotContain("прав больше");
             }
