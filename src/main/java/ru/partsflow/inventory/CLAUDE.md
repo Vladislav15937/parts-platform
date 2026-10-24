@@ -4861,7 +4861,7 @@ qty - qty_reserved) … FOR UPDATE) … WHERE t.take > 0 RETURNING t.take`: ск
 кнопки: лента карточки (`Movement.deletableDocumentId`) и журнал перевозок (`MoveDocument.deletable`) —
 признак ставит сервер, своего списка ролей у экрана нет, `@PreAuthorize` у контроллера нет намеренно
 (перебор изменяющих путей без права, `PermissionGuardTest`, называет этот путь с причиной). Сменилось
-только тело `allowed()`; три читателя не тронуты. Стережёт `StockDocumentDeletionTest`:
+только тело `allowed()`; три читателя не тронуты. **Отказ сервиса — словами** (волна 24.10d): `require()` бросает `RightsRefusal` со словами `PathRightRefusal.words` («Нет права «Удалять выполненные складские документы» — попросите владельца»); прежний `AccessDeniedException` уходил наружу голым «Недостаточно прав», потому что `@PreAuthorize` у пути нет и обработчик назвать право не мог. Держит `RefusalWordsSweepTest` (`platform/CLAUDE.md`). Стережёт `StockDocumentDeletionTest`:
 `onlyTheOwnerDeletes` (менеджер и кладовщик без права — 403 и нет кнопки) и
 `permissionHolderDeletes` (кладовщик с правом поверх роли — удаляет, и кнопка у него есть в обеих
 поверхностях). Откат на `return true` валит первый, откат на прежний `actsAsOwner` — второй.
