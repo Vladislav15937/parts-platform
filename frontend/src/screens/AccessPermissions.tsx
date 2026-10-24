@@ -11,23 +11,28 @@ import type { PermissionKey, Section } from '../access/rights';
  *               что это его отдельное право, а не роли
  * @param locked причина, по которой галочки не меняются (владелец), —
  *               погашены и названы, а не спрятаны
+ * @param frozen причина, по которой набор не меняется, хотя он свой у роли
+ *               (роль назначена тому, у кого прав больше, — живой прогон волны
+ *               24.10c): отмеченное остаётся отмеченным, но погашено
  * @param foreign права, которых нет у того, кто правит (задача 0044, 2б):
  *               отметить их нельзя — галочка погашена и подписана; снять
  *               уже отмеченное можно, иначе набор было бы не сузить
  */
 export function AccessPermissions({
-  sections, chosen, onToggle, marked, locked, foreign,
+  sections, chosen, onToggle, marked, locked, frozen, foreign,
 }: {
   sections: readonly Section[];
   chosen: ReadonlySet<PermissionKey>;
   onToggle: (key: PermissionKey, on: boolean) => void;
   marked?: (key: PermissionKey) => string | null;
   locked?: string | undefined;
+  frozen?: string | undefined;
   foreign?: (key: PermissionKey) => boolean;
 }) {
   return (
     <div className="access-permissions">
       {locked !== undefined && <p className="note">{locked}</p>}
+      {frozen !== undefined && <p className="note locked-action__reason">{frozen}</p>}
       {sections.map((section) => (
         <fieldset key={section.title} className="choices">
           <legend>{section.title}</legend>
@@ -42,13 +47,20 @@ export function AccessPermissions({
                 <input
                   type="checkbox"
                   checked={locked !== undefined || chosen.has(action.key)}
-                  disabled={locked !== undefined || (notMine && !chosen.has(action.key))}
+                  disabled={locked !== undefined || frozen !== undefined
+                    || (notMine && !chosen.has(action.key))}
                   onChange={(e) => onToggle(action.key, e.target.checked)}
                 />
-                {' '}{action.title}
-                {action.hint !== null && <span className="muted"> — {action.hint}</span>}
-                {mark !== null && <strong> · {mark}</strong>}
-                {notMine && <span className="muted"> · {NOT_MINE}</span>}
+                {/* Подпись одним текстом, а не столбиками рядом с флажком: во flex-ряду
+                    название и пояснение становились двумя колонками по полтора слова,
+                    и на 390 слова рвались посредине («недоставленно/е», живой прогон
+                    волны 24.10c). */}
+                <span className="access-permissions__text">
+                  {action.title}
+                  {action.hint !== null && <span className="muted"> — {action.hint}</span>}
+                  {mark !== null && <strong> · {mark}</strong>}
+                  {notMine && <span className="muted"> · {NOT_MINE}</span>}
+                </span>
               </label>
             );
           })}
