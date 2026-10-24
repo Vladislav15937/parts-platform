@@ -408,19 +408,16 @@ public class CatalogService {
      * из машины донора. Одно выражение на страницу, сортировку и скачанный
      * файл (стережёт CatalogEquipmentFileTest перебором значений донора).
      */
-    private static final String EQUIPMENT = """
-            coalesce(p.manual_equipment, nullif(concat_ws(', ',
-                CASE d.steering WHEN 'RIGHT' THEN 'правый руль'
-                                WHEN 'LEFT' THEN 'левый руль' END,"""
-            // Коробка — общим словарём, тем же, что у карточки донора
-            // (решение владельца 24.10.2026: «Вариатор», «Робот DSG»).
-            // Разделитель явной строкой: текстовый блок срезает края.
-            + " " + ValueWords.sqlTransmission("d.transmission_type") + "," + """
-                CASE d.drive_type WHEN 'FWD' THEN 'передний'
-                                  WHEN 'RWD' THEN 'задний'
-                                  WHEN 'AWD' THEN 'полный' END,
-                d.transmission_model,
-                d.equipment_code), ''))""";
+    private static final String EQUIPMENT =
+            // Слова — общим словарём, тем же, что у карточки донора: руль,
+            // коробка, привод с заглавной (решения владельца 24.10.2026 —
+            // «Левый руль, Робот DSG, Передний»). Разделители явными строками:
+            // текстовый блок срезает края.
+            "coalesce(p.manual_equipment, nullif(concat_ws(', ', "
+            + ValueWords.sqlSteering("d.steering") + ", "
+            + ValueWords.sqlTransmission("d.transmission_type") + ", "
+            + ValueWords.sqlDrive("d.drive_type") + ", "
+            + "d.transmission_model, d.equipment_code), ''))";
 
     /*
      * Клетки страницы, которые читаются подзапросом, — одним выражением

@@ -58,6 +58,11 @@ class CatalogEquipmentFileTest extends PostgresTestBase {
     private static final Map<Long, String> CASES = new LinkedHashMap<>();
     /** Коробка → номер и внутренний номер позиции на доноре с этой коробкой. */
     private static final Map<String, long[]> GEARBOX = new LinkedHashMap<>();
+    /** Руль и привод → номер и внутренний номер позиции на доноре с этим значением. */
+    private static final Map<String, long[]> STEERING = new LinkedHashMap<>();
+    private static final Map<String, long[]> DRIVE = new LinkedHashMap<>();
+    /** Донор с рулём, коробкой и приводом разом — пример владельца дословно. */
+    private static long[] combined;
     /** «колонка:код» → номер позиции без донора с этой стороной. */
     private static final Map<String, Long> SIDES = new LinkedHashMap<>();
 
@@ -68,6 +73,14 @@ class CatalogEquipmentFileTest extends PostgresTestBase {
      */
     private static final Map<String, String> OWNER_GEARBOX = Map.of(
             "AT", "АКПП", "MT", "МКПП", "CVT", "Вариатор", "AMT", "Робот", "DCT", "Робот DSG");
+    /**
+     * Руль и привод — с заглавной, как в карточке донора: «Левый руль, Робот DSG,
+     * Передний» (ответ владельца после живого прогона волны 24.10c, пункт 1).
+     */
+    private static final Map<String, String> OWNER_STEERING = Map.of(
+            "LEFT", "Левый руль", "RIGHT", "Правый руль");
+    private static final Map<String, String> OWNER_DRIVE = Map.of(
+            "FWD", "Передний", "RWD", "Задний", "AWD", "Полный");
     private static final Map<String, String> OWNER_FRONT_REAR = Map.of(
             "FRONT", "Перед.", "REAR", "Задн.", "BOTH", "Перед., Задн.");
     private static final Map<String, String> OWNER_LEFT_RIGHT = Map.of(
@@ -119,11 +132,12 @@ class CatalogEquipmentFileTest extends PostgresTestBase {
                 GEARBOX.put(value.name(), part(warehouse, "коробка " + value, null, value.name(), null));
             }
             for (Donor.Steering value : Donor.Steering.values()) {
-                part(warehouse, "руль " + value, value.name(), null, null);
+                STEERING.put(value.name(), part(warehouse, "руль " + value, value.name(), null, null));
             }
             for (Donor.DriveType value : Donor.DriveType.values()) {
-                part(warehouse, "привод " + value, null, null, value.name());
+                DRIVE.put(value.name(), part(warehouse, "привод " + value, null, null, value.name()));
             }
+            combined = part(warehouse, "руль, коробка и привод", "LEFT", "DCT", "FWD");
             for (LongitudinalSide value : LongitudinalSide.values()) {
                 SIDES.put("side_fr:" + value, sided(warehouse, "side_fr", value.name()));
             }
@@ -187,6 +201,50 @@ class CatalogEquipmentFileTest extends PostgresTestBase {
                     .as("карточка донора, коробка %s", entry.getKey())
                     .isEqualTo(word);
         }
+    }
+
+    /**
+     * Руль и привод — слово владельца с заглавной, одно и то же в «Комплектации»
+     * клетки, в файле склада и в карточке донора.
+     *
+     * <p>До этого «Комплектация» писала «правый руль, …, передний», а карточка
+     * того же донора — «Правый руль», «Передний». Перебором по перечислениям:
+     * новое значение без слова владельца краснит первую же проверку.
+     */
+    @Test
+    @DisplayName("Руль и привод — слово владельца с заглавной в клетке, в файле и в карточке донора")
+    void steeringAndDriveAreTheOwnersEverywhere() throws Exception {
+        assertThat(OWNER_STEERING.keySet()).as("у значения руля нет слова владельца")
+                .containsExactlyInAnyOrderElementsOf(java.util.Arrays.stream(Donor.Steering.values())
+                        .map(Enum::name).toList());
+        assertThat(OWNER_DRIVE.keySet()).as("у значения привода нет слова владельца")
+                .containsExactlyInAnyOrderElementsOf(java.util.Arrays.stream(Donor.DriveType.values())
+                        .map(Enum::name).toList());
+        Map<Long, String> screen = new LinkedHashMap<>();
+        page().path("rows").forEach(row ->
+                screen.put(row.path("number").asLong(), row.path("equipment").asText("")));
+        Map<Long, String> file = fileColumn("Комплектация");
+        for (var entry : STEERING.entrySet()) {
+            String word = OWNER_STEERING.get(entry.getKey());
+            long number = entry.getValue()[0];
+            assertThat(screen.get(number)).as("клетка «Комплектация», руль %s", entry.getKey()).isEqualTo(word);
+            assertThat(file.get(number)).as("файл склада, «Комплектация», руль %s", entry.getKey()).isEqualTo(word);
+            assertThat(donorCard(entry.getValue()[1]).path("steering").asText())
+                    .as("карточка донора, руль %s", entry.getKey()).isEqualTo(word);
+        }
+        for (var entry : DRIVE.entrySet()) {
+            String word = OWNER_DRIVE.get(entry.getKey());
+            long number = entry.getValue()[0];
+            assertThat(screen.get(number)).as("клетка «Комплектация», привод %s", entry.getKey()).isEqualTo(word);
+            assertThat(file.get(number)).as("файл склада, «Комплектация», привод %s", entry.getKey()).isEqualTo(word);
+            assertThat(donorCard(entry.getValue()[1]).path("driveType").asText())
+                    .as("карточка донора, привод %s", entry.getKey()).isEqualTo(word);
+        }
+        // Пример владельца дословно — с разделителями, как в клетке.
+        assertThat(screen.get(combined[0])).as("клетка «Комплектация» у донора с рулём, коробкой и приводом")
+                .isEqualTo("Левый руль, Робот DSG, Передний");
+        assertThat(file.get(combined[0])).as("файл склада у того же донора")
+                .isEqualTo("Левый руль, Робот DSG, Передний");
     }
 
     /**

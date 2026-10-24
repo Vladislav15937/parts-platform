@@ -12,6 +12,9 @@ import java.util.Map;
  * {@code DCT} — «Робот DSG», и слова-значения везде с заглавной — «Вариатор»,
  * «Робот», «Робот DSG», «АКПП», «МКПП», «Перед.», «Задн.», «Лев.», «Прав.» —
  * в карточке донора, в «Комплектации», в названии позиции и в файле склада.
+ * Руль и привод — тоже с заглавной, как в карточке донора: «Левый руль,
+ * Робот DSG, Передний» (ответ владельца после живого прогона волны 24.10c,
+ * {@code tasks/0044}, пункт 1).
  *
  * <p><b>Зачем он один.</b> До этого словарей было пять: карточка донора
  * писала «Вариатор/Робот» с заглавной, «Комплектация» склада — «вариатор/робот»
@@ -33,6 +36,8 @@ import java.util.Map;
 public final class ValueWords {
 
     private static final Map<String, String> TRANSMISSION = new LinkedHashMap<>();
+    private static final Map<String, String> STEERING = new LinkedHashMap<>();
+    private static final Map<String, String> DRIVE = new LinkedHashMap<>();
     private static final Map<String, String> FRONT_REAR = new LinkedHashMap<>();
     private static final Map<String, String> LEFT_RIGHT = new LinkedHashMap<>();
     private static final Map<String, String> UPPER_LOWER = new LinkedHashMap<>();
@@ -44,6 +49,12 @@ public final class ValueWords {
         TRANSMISSION.put("AMT", "Робот");
         // Робот с двумя сцеплениями: «Робот DSG» — слово владельца (24.10.2026).
         TRANSMISSION.put("DCT", "Робот DSG");
+
+        STEERING.put("RIGHT", "Правый руль");
+        STEERING.put("LEFT", "Левый руль");
+        DRIVE.put("FWD", "Передний");
+        DRIVE.put("RWD", "Задний");
+        DRIVE.put("AWD", "Полный");
 
         FRONT_REAR.put("FRONT", "Перед.");
         FRONT_REAR.put("REAR", "Задн.");
@@ -91,6 +102,36 @@ public final class ValueWords {
         return Map.copyOf(TRANSMISSION);
     }
 
+    /** Руль целиком: по нему сверяются слова. */
+    public static Map<String, String> steerings() {
+        return Map.copyOf(STEERING);
+    }
+
+    /** Привод целиком. */
+    public static Map<String, String> drives() {
+        return Map.copyOf(DRIVE);
+    }
+
+    /** Руль словом: «Левый руль»; правила те же, что у {@link #transmission}. */
+    public static String steering(String code) {
+        return code == null ? null : STEERING.getOrDefault(code, code);
+    }
+
+    /** Привод словом: «Передний»; правила те же, что у {@link #transmission}. */
+    public static String drive(String code) {
+        return code == null ? null : DRIVE.getOrDefault(code, code);
+    }
+
+    /** Руль выражением SQL; незнакомое значение — {@code NULL}. */
+    public static String sqlSteering(String column) {
+        return sqlCase(STEERING, column);
+    }
+
+    /** Привод выражением SQL; незнакомое значение — {@code NULL}. */
+    public static String sqlDrive(String column) {
+        return sqlCase(DRIVE, column);
+    }
+
     /**
      * Коробка словом; {@code null} — {@code null}, незнакомый код возвращается
      * как есть, а не теряется молча.
@@ -120,8 +161,12 @@ public final class ValueWords {
      * кода, и так было до словаря.
      */
     public static String sqlTransmission(String column) {
+        return sqlCase(TRANSMISSION, column);
+    }
+
+    private static String sqlCase(Map<String, String> words, String column) {
         StringBuilder sql = new StringBuilder("CASE ").append(column);
-        TRANSMISSION.forEach((code, word) -> sql.append(" WHEN '").append(code)
+        words.forEach((code, word) -> sql.append(" WHEN '").append(code)
                 .append("' THEN '").append(word).append("'"));
         return sql.append(" END").toString();
     }
