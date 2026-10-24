@@ -4,8 +4,10 @@ import { LabelSheet } from '../labels/LabelSheet';
 import {
   cellLabel,
   cellsOf,
+  copiesProblem,
   LABEL_SIZE_NOTE,
   partLabel,
+  repeated,
   scannable,
 } from '../labels/labels';
 import type { Cell, Label } from '../labels/labels';
@@ -32,6 +34,9 @@ interface Props {
 
 type Source = 'cells' | 'parts';
 
+/** Подпись поля копий — она же называет его в причине отказа. */
+const COPIES_FIELD = 'Копий каждой этикетки';
+
 export function LabelsScreen({ canPrint }: Props) {
   const [source, setSource] = useState<Source>('cells');
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
@@ -44,6 +49,10 @@ export function LabelsScreen({ canPrint }: Props) {
   // нельзя — печатают по нему.
   const [partsFound, setPartsFound] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // Сколько раз печатать каждую этикетку (задача 0371): число копий —
+  // общее и для листа склада, и здесь, иначе пять одинаковых деталей
+  // по-прежнему требовали бы пяти походов на этот экран.
+  const [copies, setCopies] = useState('1');
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
 
@@ -87,12 +96,15 @@ export function LabelsScreen({ canPrint }: Props) {
   }
 
   const warehouse = warehouses.find((w) => w.id === warehouseId);
-  const labels: Label[] =
+  const picks: Label[] =
     source === 'cells'
       ? cells
           .filter((cell) => picked.includes(cell.id))
           .map((cell) => cellLabel(cell, warehouse?.name ?? ''))
       : partLabels;
+  const copiesIssue = copiesProblem(copies, COPIES_FIELD);
+  const labels: Label[] = copiesIssue !== null ? []
+    : repeated(picks.map((label) => ({ label, copies: Number(copies.trim()) })));
 
   return (
     <>
@@ -263,6 +275,16 @@ export function LabelsScreen({ canPrint }: Props) {
         )}
 
         <hr />
+
+        <label className="field">
+          {COPIES_FIELD}
+          <input
+            value={copies}
+            inputMode="numeric"
+            onChange={(e) => setCopies(e.target.value)}
+          />
+        </label>
+        {copiesIssue !== null && <p className="note note--error">{copiesIssue}</p>}
 
         <p className="note">
           К печати: {labels.length}. {LABEL_SIZE_NOTE}

@@ -39,6 +39,10 @@ import { ColumnMenu } from './ColumnMenu';
 import { VehiclePicker } from './VehiclePicker';
 import type { Rights } from '../access/rights';
 import { LockedAction } from '../ui/LockedAction';
+import { CatalogLabelDialog } from './CatalogLabelDialog';
+import { LabelSheet } from '../labels/LabelSheet';
+import { LABEL_SIZE_NOTE, type Label } from '../labels/labels';
+import { plural } from '../ui/plural';
 
 /**
  * Витрина склада: таблица товаров, как её видит владелец.
@@ -56,6 +60,17 @@ import { LockedAction } from '../ui/LockedAction';
  * не может.
  */
 const SIZE = 50;
+
+/**
+ * Сколько позиций отбора печатается этикетками разом (задача 0371).
+ *
+ * <p>Весь отбор едет страницами по 200 (предел сервера), и на тридцать пять
+ * тысяч это сто восемьдесят запросов и лист в десятки тысяч наклеек, который
+ * браузер не нарисует. Приёмка контейнера — десятки и сотни позиций; тысяча
+ * — пять запросов. Больше — кнопка гаснет и просит сузить отбор.
+ */
+const WHOLE_PRINT_LIMIT = 1000;
+const WHOLE_PRINT_PAGE = 200;
 
 /** Название колонки для чипа отбора: ключ ничего не говорит владельцу. */
 function columnTitle(key: string): string {
@@ -117,6 +132,26 @@ export function CatalogScreen({ rights }: { rights: Rights }) {
   // больше одной быть не может — они перекрывают друг друга.
   const [typing, setTyping] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  // Печать этикеток выбранного (задача 0371): окно режимов, строки для него
+  // (весь отбор догружается) и лист, отданный в печать.
+  const [labelling, setLabelling] = useState(false);
+  const [labelRows, setLabelRows] = useState<CatalogRow[] | null>(null);
+  const [labelFailure, setLabelFailure] = useState<string | null>(null);
+  const [sheet, setSheet] = useState<Label[] | null>(null);
+  /*
+   * Строки, уже виденные на страницах, — по номеру.
+   *
+   * Отметка переживает переход по страницам (`chosen` хранит номера), а строки
+   * в `page` — только текущей: без этого отмеченное на соседней странице
+   * ушло бы из печати молча.
+   */
+  const seen = useRef(new Map<number, CatalogRow>());
+
+  // Печать после отрисовки листа, а не в обработчике: window.print()
+  // останавливает страницу, и вызванный раньше, он снял бы пустой лист.
+  useEffect(() => {
+    if (sheet !== null) window.print();
+  }, [sheet]);
 
   /*
    * Отбор предлагается только там, где он есть.
@@ -152,6 +187,7 @@ export function CatalogScreen({ rights }: { rights: Rights }) {
     loadCatalog(next)
       .then((found) => {
         if (mounted.current) {
+          for (const row of found.rows) seen.current.set(row.id, row);
           setPage(found);
           setError('');
         }
@@ -229,6 +265,64 @@ export function CatalogScreen({ rights }: { rights: Rights }) {
   const columns = COLUMNS.filter((c) => c.fixed === true || visible.includes(c.key));
   const warehouses = page?.warehouses ?? [];
   const pages = page === null ? 0 : Math.ceil(page.total / SIZE);
+  const canLabel = rights.has('part.cell');
+  const tooManyToLabel = whole && (page?.total ?? 0) > WHOLE_PRINT_LIMIT;
+
+  /** Окно печати: строки отмеченного сразу, весь отбор — догрузкой. */
+  function startLabels() {
+    setLabelling(true);
+    setLabelFailure(null);
+    if (!whole) {
+      setLabelRows(chosen
+        .map((id) => seen.current.get(id))
+        .filter((row): row is CatalogRow => row !== undefined));
+      return;
+    }
+    setLabelRows(null);
+    const total = page?.total ?? 0;
+    const requests = Array.from(
+      { length: Math.ceil(total / WHOLE_PRINT_PAGE) },
+      (_, at) => loadCatalog({ ...query, after: undefined, page: at, size: WHOLE_PRINT_PAGE }),
+    );
+    void Promise.all(requests)
+      .then((loaded) => {
+        if (mounted.current) setLabelRows(loaded.flatMap((one) => one.rows));
+      })
+      .catch((cause) => {
+        if (mounted.current) setLabelFailure(describe(cause, 'Позиции отбора не загрузились'));
+      });
+  }
+
+  /*
+   * Лист этикеток — вместо экрана, а не под таблицей.
+   *
+   * Печать прячет интерфейс видимостью, а не убирает его: таблица в пятьдесят
+   * строк оставалась бы в раскладке, и рулон получил бы за этикетками
+   * десяток пустых страниц — по наклейке на каждую. Выделение при этом
+   * живо: «Вернуться к складу» показывает ту же страницу с теми же отметками.
+   */
+  if (sheet !== null) {
+    return (
+      <section className="screen screen--wide">
+        <div className="no-print">
+          <h2>Печать этикеток</h2>
+          <p className="note">
+            К печати: {count(sheet.length)}{' '}
+            {plural(sheet.length, 'этикетка', 'этикетки', 'этикеток')}. {LABEL_SIZE_NOTE}
+          </p>
+          <div className="filter-row">
+            {/* Диалог печати закрывают и по ошибке, и чтобы поправить размер:
+                повторить надо отсюда, где лист перед глазами. */}
+            <button type="button" onClick={() => window.print()}>Печать</button>
+            <button type="button" className="button--ghost" onClick={() => setSheet(null)}>
+              Вернуться к складу
+            </button>
+          </div>
+        </div>
+        <LabelSheet labels={sheet} />
+      </section>
+    );
+  }
 
   return (
     <section className="screen screen--wide">
@@ -390,7 +484,7 @@ export function CatalogScreen({ rights }: { rights: Rights }) {
           >
             {selecting ? 'Выйти из правки' : 'Правка списком'}
           </button>
-        ) : !rights.has('stock.move') && (
+        ) : !rights.has('stock.move') && !canLabel && (
           <LockedAction permission="part.edit" label="Правка списком" />
         )}
         {rights.has('part.edit') ? (
@@ -402,15 +496,17 @@ export function CatalogScreen({ rights }: { rights: Rights }) {
         )}
         {fitList && <ApplicabilityList canEdit={rights.has('part.edit')}
                                        onClose={() => setFitList(false)} />}
-        {/* Без правки карточек, но с перевозкой (кладовщик до 0044) — свой
-            вход в тот же режим отметки строк: деталь у него в руках. */}
-        {!rights.has('part.edit') && rights.has('stock.move') && (
+        {/* Без правки карточек, но с перевозкой или печатью этикеток
+            (кладовщик до 0044) — свой вход в тот же режим отметки строк:
+            деталь у него в руках. */}
+        {!rights.has('part.edit') && (rights.has('stock.move') || canLabel) && (
           <button
             type="button"
             className="button--ghost"
             onClick={() => {
               setSelecting(!selecting);
               setChosen([]);
+              setWhole(false);
               setMovingBulk(false);
             }}
           >
@@ -536,23 +632,55 @@ export function CatalogScreen({ rights }: { rights: Rights }) {
               Перевезти
             </button>
           )}
+          {/* Печать этикеток отмеченного (задача 0371): приёмка контейнера —
+              десятки строк подряд, и искать их на «Этикетках» по одной значит
+              двадцать поисков на ряд из двадцати деталей. */}
+          {canLabel ? (
+            <button type="button"
+                    disabled={(!whole && chosen.length === 0) || tooManyToLabel}
+                    onClick={startLabels}>
+              Напечатать этикетки
+            </button>
+          ) : (
+            <LockedAction permission="part.cell" label="Напечатать этикетки" />
+          )}
+          {canLabel && tooManyToLabel && (
+            <span className="note">
+              Этикетки печатаются пачкой до {count(WHOLE_PRINT_LIMIT)} товаров — сузьте отбор.
+            </span>
+          )}
           {/* Весь отбор — единственный способ тронуть больше страницы.
               Кнопка стоит рядом с отметками, а не в настройках: нужна она
               ровно тогда, когда владелец уже понял, что отмечать придётся
-              семьсот страниц. Перевозке она не служит — только правке. */}
-          {rights.has('part.edit') && !whole
+              семьсот страниц. Перевозке она не служит — только правке
+              и печати этикеток. */}
+          {(rights.has('part.edit') || canLabel) && !whole
             && page !== null && page.total > page.rows.length && (
             <button type="button" className="button--ghost"
                     onClick={() => { setWhole(true); setChosen([]); }}>
               Выбрать весь отбор ({count(page.total)})
             </button>
           )}
+          {/* «Отменить выделение» — слово ориентира (задача 0371). */}
           <button type="button" className="button--ghost"
                   disabled={!whole && chosen.length === 0}
                   onClick={() => { setChosen([]); setWhole(false); }}>
-            Снять выделение
+            Отменить выделение
           </button>
         </div>
+      )}
+
+      {labelling && (
+        <CatalogLabelDialog
+          total={whole ? (page?.total ?? 0) : chosen.length}
+          rows={labelRows}
+          failure={labelFailure}
+          onSend={(labels) => {
+            setLabelling(false);
+            setSheet(labels);
+          }}
+          onCancel={() => setLabelling(false)}
+        />
       )}
 
       {editing && (

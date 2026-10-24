@@ -94,6 +94,63 @@ export function partLabel(
 export type Label = CellLabel | PartLabel;
 
 /**
+ * Сколько этикеток на позицию (задача 0371).
+ *
+ * <p>Три режима и их слова — с ориентира дословно: клиенты приходят оттуда
+ * и узнают окно по ним. «По количеству товара в остатке» — пришло пять
+ * одинаковых, и наклейка нужна на каждую штуку, а не на карточку.
+ */
+export type CopiesMode = 'one' | 'stock' | 'given';
+
+export const COPIES_MODES: { mode: CopiesMode; title: string }[] = [
+  { mode: 'one', title: 'По одной этикетке на товар' },
+  { mode: 'stock', title: 'По количеству товара в остатке' },
+  { mode: 'given', title: 'Указанное количество на товар' },
+];
+
+/**
+ * Предел числа копий, набранного руками: этикетка — страница рулона, и лишний
+ * ноль в поле («100» вместо «10») — это девяносто наклеек в корзину.
+ */
+export const COPIES_LIMIT = 100;
+
+/**
+ * Что не так с набранным числом копий; `null` — годится.
+ *
+ * <p>Одно выражение на кнопку и на подпись под полем: разойдясь, кнопка
+ * гасла бы молча или подпись называла бы не ту причину.
+ */
+export function copiesProblem(typed: string, field: string): string | null {
+  const text = typed.trim();
+  if (text === '') return `Заполните «${field}».`;
+  if (!/^\d+$/.test(text) || Number(text) < 1) {
+    return `«${field}» — целое число от 1.`;
+  }
+  if (Number(text) > COPIES_LIMIT) {
+    return `«${field}» — не больше ${COPIES_LIMIT}.`;
+  }
+  return null;
+}
+
+/**
+ * Сколько этикеток у позиции в выбранном режиме.
+ *
+ * <p>Остаток — физический, вместе с отложенным под клиента: отложенная деталь
+ * лежит на полке и подписана должна быть так же. Дробный остаток (метраж,
+ * литры) округляется вверх — неподписанная половина хуже лишней наклейки.
+ */
+export function copiesOf(mode: CopiesMode, stock: number, given: number): number {
+  if (mode === 'one') return 1;
+  if (mode === 'given') return given;
+  return Number.isFinite(stock) && stock > 0 ? Math.ceil(stock) : 0;
+}
+
+/** Каждая этикетка столько раз подряд, сколько копий ей назначено. */
+export function repeated(items: { label: Label; copies: number }[]): Label[] {
+  return items.flatMap(({ label, copies }) => Array.from({ length: copies }, () => label));
+}
+
+/**
  * Кодируется ли адрес штрихкодом.
  *
  * <p>Code128 не знает кириллицы вовсе. Часть букв это переживает: «А», «В»,
