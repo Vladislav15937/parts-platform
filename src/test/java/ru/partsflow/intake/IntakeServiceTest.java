@@ -128,7 +128,7 @@ class IntakeServiceTest extends PostgresTestBase {
                 .contains("фара левая")
                 .contains("Toyota")
                 // Пометка состояния — как у Bazon (задача 0336, отменяет 0315).
-                .contains("перед. лев. (б/у)");
+                .contains("Перед. Лев. (б/у)");
     }
 
     /**
@@ -154,8 +154,8 @@ class IntakeServiceTest extends PostgresTestBase {
         var canonical = receipt.parts().get(1);
         assertThat(local.getTitle())
                 .as("в название ушёл эталон вместо написания клиента")
-                .isEqualTo("запаска перед. лев. (б/у)");
-        assertThat(canonical.getTitle()).isEqualTo("Запасное колесо перед. лев. (б/у)");
+                .isEqualTo("запаска Перед. Лев. (б/у)");
+        assertThat(canonical.getTitle()).isEqualTo("Запасное колесо Перед. Лев. (б/у)");
         assertThat(local.getPartKindId())
                 .as("вид детали у двух написаний — один эталон")
                 .isNotNull()

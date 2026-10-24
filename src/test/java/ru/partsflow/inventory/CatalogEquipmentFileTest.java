@@ -56,6 +56,22 @@ class CatalogEquipmentFileTest extends PostgresTestBase {
     private static boolean seeded;
     /** Номер позиции → чем собрана её комплектация (для сообщения). */
     private static final Map<Long, String> CASES = new LinkedHashMap<>();
+    /** Коробка → номер и внутренний номер позиции на доноре с этой коробкой. */
+    private static final Map<String, long[]> GEARBOX = new LinkedHashMap<>();
+    /** «колонка:код» → номер позиции без донора с этой стороной. */
+    private static final Map<String, Long> SIDES = new LinkedHashMap<>();
+
+    /**
+     * Слова владельца продукта, 24.10.2026 (tasks/0044, «Ответ владельца —
+     * 24 октября 2026 (развёрнутые вопросы)», пункты 3 и 4), — дословно,
+     * а не из словаря сервера: иначе код проверял бы сам себя.
+     */
+    private static final Map<String, String> OWNER_GEARBOX = Map.of(
+            "AT", "АКПП", "MT", "МКПП", "CVT", "Вариатор", "AMT", "Робот", "DCT", "Робот DSG");
+    private static final Map<String, String> OWNER_FRONT_REAR = Map.of(
+            "FRONT", "Перед.", "REAR", "Задн.", "BOTH", "Перед., Задн.");
+    private static final Map<String, String> OWNER_LEFT_RIGHT = Map.of(
+            "LEFT", "Лев.", "RIGHT", "Прав.", "BOTH", "Лев., Прав.");
 
     @Autowired
     private MockMvc mvc;
@@ -100,13 +116,19 @@ class CatalogEquipmentFileTest extends PostgresTestBase {
                     "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Основной') RETURNING id",
                     Long.class, branch);
             for (Donor.TransmissionType value : Donor.TransmissionType.values()) {
-                part(warehouse, "коробка " + value, null, value.name(), null);
+                GEARBOX.put(value.name(), part(warehouse, "коробка " + value, null, value.name(), null));
             }
             for (Donor.Steering value : Donor.Steering.values()) {
                 part(warehouse, "руль " + value, value.name(), null, null);
             }
             for (Donor.DriveType value : Donor.DriveType.values()) {
                 part(warehouse, "привод " + value, null, null, value.name());
+            }
+            for (LongitudinalSide value : LongitudinalSide.values()) {
+                SIDES.put("side_fr:" + value, sided(warehouse, "side_fr", value.name()));
+            }
+            for (LateralSide value : LateralSide.values()) {
+                SIDES.put("side_lr:" + value, sided(warehouse, "side_lr", value.name()));
             }
             return null;
         });
@@ -130,13 +152,95 @@ class CatalogEquipmentFileTest extends PostgresTestBase {
         // клетках — поэтому сам случай из жалобы назван отдельно.
         long amt = CASES.entrySet().stream()
                 .filter(e -> e.getValue().equals("коробка AMT")).findFirst().orElseThrow().getKey();
-        assertThat(file.get(amt)).as("робот в скачанном файле").isEqualTo("робот");
+        assertThat(file.get(amt)).as("робот в скачанном файле").isEqualTo("Робот");
+    }
+
+    /**
+     * Коробка названа словом владельца — одним и тем же в «Комплектации»
+     * клетки, в скачанном файле и в карточке машины-донора.
+     *
+     * <p>До этого словарей было два: карточка донора — «Вариатор», «Робот»,
+     * «Комплектация» — «вариатор», «робот», и {@code DCT} не знал ни один
+     * (схема и перечисление его допускают — клетка и файл были пусты).
+     * Перебором по перечислению: новое значение без слова владельца краснит
+     * первую же проверку.
+     */
+    @Test
+    @DisplayName("Коробка — слово владельца в клетке, в файле и в карточке донора, «Робот DSG» тоже")
+    void gearboxWordIsTheOwnersEverywhere() throws Exception {
+        assertThat(OWNER_GEARBOX.keySet())
+                .as("у значения коробки нет слова владельца")
+                .containsExactlyInAnyOrderElementsOf(java.util.Arrays.stream(Donor.TransmissionType.values())
+                        .map(Enum::name).toList());
+        Map<Long, String> screen = new LinkedHashMap<>();
+        page().path("rows").forEach(row ->
+                screen.put(row.path("number").asLong(), row.path("equipment").asText("")));
+        Map<Long, String> file = fileColumn("Комплектация");
+        for (var entry : GEARBOX.entrySet()) {
+            String word = OWNER_GEARBOX.get(entry.getKey());
+            long number = entry.getValue()[0];
+            assertThat(screen.get(number)).as("клетка «Комплектация», коробка %s", entry.getKey())
+                    .isEqualTo(word);
+            assertThat(file.get(number)).as("файл склада, «Комплектация», коробка %s", entry.getKey())
+                    .isEqualTo(word);
+            assertThat(donorCard(entry.getValue()[1]).path("transmission").asText())
+                    .as("карточка донора, коробка %s", entry.getKey())
+                    .isEqualTo(word);
+        }
+    }
+
+    /**
+     * Стороны в файле склада — с заглавной, и «обе» тоже: «Перед., Задн.»,
+     * а не «Перед., задн.» (решение владельца 24.10.2026, пункт 4).
+     * Клетку экрана рисует фронтенд по коду — его копию словаря сверяет
+     * с сервером {@code ValueWordsTest}.
+     */
+    @Test
+    @DisplayName("Стороны в файле склада — слова владельца с заглавной, «обе» тоже")
+    void sideWordsInTheFileAreTheOwners() throws Exception {
+        Map<Long, String> frontRear = fileColumn("Передний / Задний");
+        Map<Long, String> leftRight = fileColumn("Левый / Правый");
+        assertThat(SIDES).as("заведены не все стороны").hasSize(
+                LongitudinalSide.values().length + LateralSide.values().length);
+        for (var entry : SIDES.entrySet()) {
+            String[] key = entry.getKey().split(":");
+            boolean fr = key[0].equals("side_fr");
+            String word = (fr ? OWNER_FRONT_REAR : OWNER_LEFT_RIGHT).get(key[1]);
+            assertThat(word).as("у стороны %s нет слова владельца", entry.getKey()).isNotNull();
+            assertThat((fr ? frontRear : leftRight).get(entry.getValue()))
+                    .as("файл склада, %s", entry.getKey())
+                    .isEqualTo(word);
+        }
+    }
+
+    /**
+     * Отбор, сохранённый до смены регистра, находит то же, что находил.
+     *
+     * <p>Выбранное из списка ищется точным равенством, а слова сменили
+     * регистр: сохранённое «Перед., задн.» (настройка экрана, отбор выгрузки)
+     * точным равенством не нашло бы ничего — у выгрузки это объявления, тихо
+     * выпавшие из прайса. Поэтому у колонок сторон равенство без регистра.
+     */
+    @Test
+    @DisplayName("Отбор, сохранённый прежними строчными словами, находит те же позиции")
+    void filterSavedWithOldWordsStillFinds() throws Exception {
+        assertThat(numbers("sideFr:Перед., задн."))
+                .as("отбор «Перед., задн.», сохранённый до 24.10.2026")
+                .containsExactly(SIDES.get("side_fr:BOTH"));
+        assertThat(numbers("sideLr:Лев., прав."))
+                .as("отбор «Лев., прав.», сохранённый до 24.10.2026")
+                .containsExactly(SIDES.get("side_lr:BOTH"));
+        // И точное слово по-прежнему находит своё — равенство не стало вхождением.
+        assertThat(numbers("sideFr:Перед."))
+                .as("«Перед.» нашло не только переднюю")
+                .containsExactly(SIDES.get("side_fr:FRONT"));
     }
 
     // --- помощники ---
 
-    private void part(long warehouse, String what, String steering, String transmission,
-                      String drive) {
+    /** Номер и внутренний номер заведённой позиции. */
+    private long[] part(long warehouse, String what, String steering, String transmission,
+                        String drive) {
         Long donor = jdbc.queryForObject("""
                 INSERT INTO donor (brand_id, steering, transmission_type, drive_type)
                 VALUES ((SELECT id FROM catalog.brand ORDER BY id LIMIT 1), ?, ?, ?)
@@ -147,6 +251,38 @@ class CatalogEquipmentFileTest extends PostgresTestBase {
         ledger.record(StockMovement.intake(partId, BigDecimal.ONE, warehouse, null));
         Long number = jdbc.queryForObject("SELECT number FROM part WHERE id = ?", Long.class, partId);
         CASES.put(number, what);
+        return new long[] {number, partId};
+    }
+
+    /** Позиция без донора с одной стороной установки; возвращает её номер. */
+    private long sided(long warehouse, String column, String code) {
+        Long partId = jdbc.queryForObject(
+                "INSERT INTO part (category_id, title, price, " + column + ")"
+                        + " VALUES (1, ?, 1000, ?) RETURNING id",
+                Long.class, "Деталь: " + column + " " + code, code);
+        ledger.record(StockMovement.intake(partId, BigDecimal.ONE, warehouse, null));
+        return jdbc.queryForObject("SELECT number FROM part WHERE id = ?", Long.class, partId);
+    }
+
+    private JsonNode donorCard(long partId) throws Exception {
+        String body = mvc.perform(get("/api/parts/{id}/donor", partId).session(session))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        return json.readTree(body);
+    }
+
+    /** Номера позиций, которые витрина отдаёт по выбранному из списка значению. */
+    private List<Long> numbers(String filter) throws Exception {
+        String body = mvc.perform(get("/api/parts/catalog")
+                        .param("missing", "true")
+                        .param("size", "50")
+                        .param("filter", filter)
+                        .session(session))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        List<Long> out = new ArrayList<>();
+        json.readTree(body).path("rows").forEach(row -> out.add(row.path("number").asLong()));
+        return out;
     }
 
     private JsonNode page() throws Exception {
@@ -159,8 +295,12 @@ class CatalogEquipmentFileTest extends PostgresTestBase {
         return json.readTree(body);
     }
 
-    /** Номер позиции → «Комплектация» из скачанного файла, колонка ищется по заголовку. */
     private Map<Long, String> fileEquipment() throws Exception {
+        return fileColumn("Комплектация");
+    }
+
+    /** Номер позиции → значение колонки скачанного файла, колонка ищется по заголовку. */
+    private Map<Long, String> fileColumn(String title) throws Exception {
         String body = mvc.perform(get("/api/parts/catalog/export")
                         .param("missing", "true")
                         .session(session))
@@ -168,8 +308,8 @@ class CatalogEquipmentFileTest extends PostgresTestBase {
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         String[] lines = body.replace("﻿", "").split("\r?\n");
         List<String> header = cells(lines[0]);
-        int column = header.indexOf("Комплектация");
-        assertThat(column).as("в файле нет колонки «Комплектация»: %s", header).isNotNegative();
+        int column = header.indexOf(title);
+        assertThat(column).as("в файле нет колонки «%s»: %s", title, header).isNotNegative();
         Map<Long, String> out = new LinkedHashMap<>();
         for (int at = 1; at < lines.length; at++) {
             if (lines[at].isBlank()) {

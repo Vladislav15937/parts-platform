@@ -101,7 +101,7 @@ class IntakeTitleLikeBazonTest extends PostgresTestBase {
     }
 
     private static final String BASE =
-            "Блок подрулевых переключателей Toyota ZNE10 1ZZFE 2006 перед. лев.";
+            "Блок подрулевых переключателей Toyota ZNE10 1ZZFE 2006 Перед. Лев.";
 
     @Test
     @DisplayName("Приёмка с каждым из четырёх состояний: «(б/у)» у б/у и контрактной, нет у новой и восстановленной")
@@ -164,13 +164,13 @@ class IntakeTitleLikeBazonTest extends PostgresTestBase {
                 .as("в название — основной номер как вписан")
                 .isEqualTo(BASE + " (б/у) 84140-12531");
         assertThat(edit(id, "{\"sideFr\":\"REAR\",\"sideLr\":\"\"}"))
-                .isEqualTo("Блок подрулевых переключателей Toyota ZNE10 1ZZFE 2006 задн. (б/у) 84140-12531");
+                .isEqualTo("Блок подрулевых переключателей Toyota ZNE10 1ZZFE 2006 Задн. (б/у) 84140-12531");
         assertThat(edit(id, "{\"brand\":\"Lexus, Toyota\",\"year\":\"2008\"}"))
                 .as("своя машина позиции сильнее донора, первое значение списка")
-                .isEqualTo("Блок подрулевых переключателей Lexus ZNE10 1ZZFE 2008 задн. (б/у) 84140-12531");
+                .isEqualTo("Блок подрулевых переключателей Lexus ZNE10 1ZZFE 2008 Задн. (б/у) 84140-12531");
         assertThat(edit(id, "{\"note\":\"скол\"}"))
                 .as("заметка не поле формулы")
-                .isEqualTo("Блок подрулевых переключателей Lexus ZNE10 1ZZFE 2008 задн. (б/у) 84140-12531");
+                .isEqualTo("Блок подрулевых переключателей Lexus ZNE10 1ZZFE 2008 Задн. (б/у) 84140-12531");
         // Обратно — то же, что собрала приёмка: формула одна.
         assertThat(edit(id, """
                 {"brand":"","year":"","sideFr":"FRONT","sideLr":"LEFT","oem":"8414012530",

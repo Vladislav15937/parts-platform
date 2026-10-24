@@ -62,7 +62,7 @@ class TitleRecountTest extends PostgresTestBase {
     private static final String DONOR_WAS =
             "Кнопка стеклоподъёмника Toyota Camry ACV30 2AZFE 2003 задн. лев. 12345-AB000";
     private static final String DONOR_NOW =
-            "Кнопка стеклоподъемника Toyota Camry ACV30 2AZFE 03 задн. лев. (б/у) 12345-AB000";
+            "Кнопка стеклоподъемника Toyota Camry ACV30 2AZFE 03 Задн. Лев. (б/у) 12345-AB000";
     /** Уже по формуле — новая, без пометки. */
     private static final String FORMULA = "Фара Toyota Camry ACV30 2AZFE 2004";
     /** Машины только в названии — не трогается. */
@@ -229,6 +229,36 @@ class TitleRecountTest extends PostgresTestBase {
                 "SELECT string_agg(id || ':' || updated_at, ',' ORDER BY id) FROM part", String.class)))
                 .as("«дата правки» не сдвинута: названия правил не человек")
                 .isEqualTo(updatedBefore);
+    }
+
+    /**
+     * Догон регистра сторон — тот же разовый пересчёт, второго пути нет.
+     *
+     * <p>Решение владельца 24.10.2026 (стороны с заглавной) меняет формулу,
+     * а хранимые названия сами не пересобираются: только правкой поля формулы
+     * или этим запуском. Позиция, собранная до решения, отличается от формулы
+     * ровно регистром «перед. лев.» — и пересчёт обязан её назвать, иначе
+     * склад остался бы наполовину со строчными сторонами без способа это
+     * увидеть.
+     */
+    @Test
+    @DisplayName("Название, отличающееся от формулы только регистром сторон, пересчёт называет (24.10.2026)")
+    void lowercaseSidesAreFoundByTheRecount() {
+        String was = "Фара Toyota Camry ACV30 2AZFE 2004 перед. лев.";
+        String now = "Фара Toyota Camry ACV30 2AZFE 2004 Перед. Лев.";
+        inTenant(() -> {
+            long sided = part("Фара", was, "NEW");
+            jdbc.update("""
+                    UPDATE part SET donor_id = (SELECT id FROM donor LIMIT 1),
+                                    side_fr = 'FRONT', side_lr = 'LEFT' WHERE id = ?""", sided);
+            return null;
+        });
+
+        Tally dry = one(recount.run(new Options(false, TENANT, false)));
+
+        assertThat(dry.lines).as("строчные стороны пересчёт не увидел")
+                .anyMatch(l -> l.contains("«" + was + "» → «" + now + "»"));
+        assertThat(dry.changed).as("три прежних и одна со строчными сторонами").isEqualTo(4);
     }
 
     @Test

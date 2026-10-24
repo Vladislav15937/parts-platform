@@ -31,7 +31,7 @@ class PartTitleGeneratorTest {
     }
 
     @Test
-    @DisplayName("Стороны идут в порядке «перед — лево — низ»")
+    @DisplayName("Стороны идут в порядке «перед — лево — низ», с заглавной (решение владельца 24.10.2026)")
     void putsSidesInSpokenOrder() {
         String title = generator.generate(
                 "Стойка",
@@ -39,7 +39,7 @@ class PartTitleGeneratorTest {
                 new Sides(LongitudinalSide.FRONT, LateralSide.LEFT, VerticalSide.LOWER), null,
                 null);
 
-        assertThat(title).isEqualTo("Стойка Honda Airwave GJ1 2002 перед. лев. ниж.");
+        assertThat(title).isEqualTo("Стойка Honda Airwave GJ1 2002 Перед. Лев. Ниж.");
     }
 
     @Test
@@ -52,7 +52,7 @@ class PartTitleGeneratorTest {
                 null);
 
         assertThat(title).isEqualTo(
-                "Стойка Honda Airwave GJ1 2002 перед. задн. лев. прав. верх. ниж.");
+                "Стойка Honda Airwave GJ1 2002 Перед. Задн. Лев. Прав. Верх. Ниж.");
     }
 
     @Test
@@ -64,7 +64,7 @@ class PartTitleGeneratorTest {
                 new Sides(LongitudinalSide.FRONT, LateralSide.RIGHT, null), null,
                 "89544-97401");
 
-        assertThat(title).isEqualTo("Датчик ABS Toyota Duet M100A EJDE перед. прав. 89544-97401");
+        assertThat(title).isEqualTo("Датчик ABS Toyota Duet M100A EJDE Перед. Прав. 89544-97401");
     }
 
     @Test
@@ -86,13 +86,13 @@ class PartTitleGeneratorTest {
     void conditionMarkLikeBazon() {
         Sides front = new Sides(LongitudinalSide.FRONT, LateralSide.LEFT, null);
         assertThat(generator.generate("Фара", null, front, PartCondition.USED, "8301A315XA"))
-                .isEqualTo("Фара перед. лев. (б/у) 8301A315XA");
+                .isEqualTo("Фара Перед. Лев. (б/у) 8301A315XA");
         assertThat(generator.generate("Фара", null, front, PartCondition.CONTRACT, "8301A315XA"))
-                .isEqualTo("Фара перед. лев. (б/у) 8301A315XA");
+                .isEqualTo("Фара Перед. Лев. (б/у) 8301A315XA");
         for (PartCondition none : new PartCondition[] {PartCondition.NEW, PartCondition.REFURBISHED, null}) {
             assertThat(generator.generate("Фара", null, front, none, "8301A315XA"))
                     .as("состояние %s", none)
-                    .isEqualTo("Фара перед. лев. 8301A315XA");
+                    .isEqualTo("Фара Перед. Лев. 8301A315XA");
         }
     }
 
@@ -106,6 +106,12 @@ class PartTitleGeneratorTest {
      * набран («стеклоподъемника» без «ё», «egr» строчными), марка, модель,
      * кузов и двигатель — первым значением списка, год — первым числом
      * («03-08» → «03»), номер как вписан и последним.
+     *
+     * <p>Одно отличие от Bazon — и оно решение владельца продукта 24.10.2026
+     * ({@code tasks/0044}, пункт 4): стороны с заглавной («Перед. Лев.»),
+     * у Bazon строчными («перед. лев.»). Карточки оставлены как у Bazon,
+     * а отличие наложено одним правилом {@link #ownersSides}: тогда тест
+     * по-прежнему говорит, что всё прочее совпадает до знака.
      */
     @Test
     @DisplayName("Название по полям карточки — до знака как у Bazon, тринадцать карточек")
@@ -170,8 +176,20 @@ class PartTitleGeneratorTest {
             assertThat(generator.generate(card.kind(), card.vehicle(), card.sides(),
                     card.condition(), card.oem()))
                     .as("позиция № %s", card.no())
-                    .isEqualTo(card.title());
+                    .isEqualTo(ownersSides(card.title()));
         }
+    }
+
+    /** Сокращения сторон с заглавной — единственное отличие от Bazon (24.10.2026). */
+    private static String ownersSides(String bazonTitle) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(?<=\\s)(перед|задн|лев|прав|верх|ниж)\\.").matcher(bazonTitle);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            String word = m.group(1);
+            m.appendReplacement(out, Character.toUpperCase(word.charAt(0)) + word.substring(1) + ".");
+        }
+        return m.appendTail(out).toString();
     }
 
     @Test
