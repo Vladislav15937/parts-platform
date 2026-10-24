@@ -155,6 +155,27 @@ export function donorsOfSupply(id: number): Promise<DonorEntry[]> {
   return request<DonorEntry[]>(`/api/intake/supplies/${id}/donors`);
 }
 
+/** Сколько документов и на какую закупочную сумму. */
+export interface ReceiptCount {
+  count: number;
+  amount: number;
+}
+
+/**
+ * Итоги поставки (задача 0375): как отработал контейнер — три блока окна
+ * поставки у ориентира. Штуки считаются по журналу движений, сумма
+ * поступлений — закупочная; удалённые поступления не входят ни в одну строку.
+ */
+export interface SupplySummary {
+  receipts: { drafts: ReceiptCount; done: ReceiptCount; cancelled: ReceiptCount; total: ReceiptCount };
+  goods: { remaining: number; sold: number; writtenOff: number; total: number };
+  donors: { count: number; cost: number };
+}
+
+export function supplySummary(id: number): Promise<SupplySummary> {
+  return request<SupplySummary>(`/api/intake/supplies/${id}/summary`);
+}
+
 /**
  * Позиция, заведённая владельцем заранее по ожидаемой поставке
  * (задача 0170): товар, которого ещё нет на складе, но по которому уже

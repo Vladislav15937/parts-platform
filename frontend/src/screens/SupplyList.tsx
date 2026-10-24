@@ -12,6 +12,7 @@ import type { SupplyRef } from '../reference/reference';
 import { plural } from '../ui/plural';
 import { useMounted } from '../ui/useMounted';
 import { ExpectedGoods } from './ExpectedGoods';
+import { SupplySummaryBlock } from './SupplySummaryBlock';
 
 /**
  * Поставки: что заведено, что уже приехало и какие машины пришли партией.
@@ -71,6 +72,8 @@ export function SupplyList({ supplies, online, onChanged, canExpect = false }: P
   const [openId, setOpenId] = useState<number | null>(null);
   // Ожидаемый товар — своя панель под строкой, независимая от списка машин.
   const [expectedId, setExpectedId] = useState<number | null>(null);
+  // Итоги — своя панель под строкой, как ожидаемый товар (задача 0375).
+  const [summaryId, setSummaryId] = useState<number | null>(null);
   const [cars, setCars] = useState<DonorEntry[] | null>(null);
   // Три состояния, а не два: «грузим», «не смогли» и «пусто» — разные вещи,
   // и экран, который их путает, обещает пустую партию при истёкшей сессии.
@@ -148,6 +151,13 @@ export function SupplyList({ supplies, online, onChanged, canExpect = false }: P
                     <button
                       type="button"
                       className="button--ghost"
+                      onClick={() => setSummaryId(summaryId === supply.id ? null : supply.id)}
+                    >
+                      {summaryId === supply.id ? 'Скрыть итоги' : 'Итоги'}
+                    </button>
+                    <button
+                      type="button"
+                      className="button--ghost"
                       onClick={() => void toggle(supply.id)}
                     >
                       {openId === supply.id ? 'Свернуть' : 'Машины'}
@@ -163,6 +173,13 @@ export function SupplyList({ supplies, online, onChanged, canExpect = false }: P
                     )}
                   </td>
                 </tr>
+                {summaryId === supply.id && (
+                  <tr>
+                    <td colSpan={5}>
+                      <SupplySummaryBlock supplyId={supply.id} />
+                    </td>
+                  </tr>
+                )}
                 {expectedId === supply.id && (
                   <tr>
                     <td colSpan={5}>

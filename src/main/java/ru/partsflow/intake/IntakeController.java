@@ -57,14 +57,17 @@ public class IntakeController {
     private final IntakeReferenceService reference;
     private final DonorCostService costs;
     private final DonorDirectory donorDirectory;
+    private final SupplySummaryService supplySummary;
 
     public IntakeController(IntakeService intake, IntakeReferenceService reference,
                             DonorCostService costs,
-                            DonorDirectory donorDirectory) {
+                            DonorDirectory donorDirectory,
+                            SupplySummaryService supplySummary) {
         this.intake = intake;
         this.reference = reference;
         this.costs = costs;
         this.donorDirectory = donorDirectory;
+        this.supplySummary = supplySummary;
     }
 
     /**
@@ -267,6 +270,16 @@ public class IntakeController {
     @GetMapping("/supplies/{id}/donors")
     public List<DonorDirectory.Entry> donorsOfSupply(@PathVariable Long id) {
         return donorDirectory.ofSupply(id);
+    }
+
+    /**
+     * Итоги поставки: поступления по статусам, товары штуками, машины
+     * и их затраты (задача 0375). Читает тот же круг, что видит список
+     * машин партии и их затраты, — общим правилом {@code /api/intake/**}.
+     */
+    @GetMapping("/supplies/{id}/summary")
+    public SupplySummaryService.Summary supplySummary(@PathVariable Long id) {
+        return supplySummary.of(id);
     }
 
     // ---------- запросы ----------
