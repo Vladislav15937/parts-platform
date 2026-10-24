@@ -18,6 +18,12 @@ export interface AccessRole {
   permissions: PermissionKey[];
   /** Скольким сотрудникам с входом назначена. */
   members: number;
+  /**
+   * Почему вошедшему нельзя менять набор роли: она назначена сотрудникам,
+   * у которых прав больше, чем у него (задача 0044, ответ 24.10, вопрос 2 —
+   * «сужать нельзя»). Считает сервер; нет поля или `null` — можно.
+   */
+  editLocked?: string | null;
 }
 
 export interface MemberAccess {

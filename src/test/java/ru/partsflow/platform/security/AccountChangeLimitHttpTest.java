@@ -273,6 +273,89 @@ class AccountChangeLimitHttpTest extends PostgresTestBase {
         assertThat(keys(me(session))).doesNotContain("members.accounts", "members.manage");
     }
 
+    // ------------------------- сужать того, кто шире, нельзя (ответ 24.10, вопрос 2)
+
+    private static final String WIDER_ASSIGN =
+            "Нельзя менять роль и права сотруднику, у которого прав больше, чем у вас: ";
+
+    @Test
+    @DisplayName("Сменить роль сотруднику шире своих нельзя — 403 словами, роль прежняя; продавцу — можно")
+    void assignRoleToWiderIsRefused() throws Exception {
+        MockHttpSession session = kadrovik("members.assign_roles", "members.grant_overrides");
+        long manager = member("menedzher", "MANAGER");
+        long seller = member("prodavec", "SELLER");
+        long narrow = role("Продавец-узкий", "deal.sell");
+
+        String body = text(assignAs(session, manager, "{\"roleId\":%d,\"overrides\":{}}".formatted(narrow))
+                .andExpect(status().isForbidden()));
+        assertThat(body).contains(WIDER_ASSIGN);
+        assertWords(body);
+        assertThat(roleOf(manager)).as("менеджер остался менеджером").isEqualTo("MANAGER");
+
+        assignAs(session, seller, "{\"roleId\":%d,\"overrides\":{}}".formatted(narrow))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Права поверх роли у сотрудника шире своих — ни снять, ни добавить: 403 словами; продавцу — можно")
+    void overridesOnWiderAreRefused() throws Exception {
+        MockHttpSession session = kadrovik("members.assign_roles", "members.grant_overrides");
+        long manager = member("menedzher", "MANAGER");
+        long seller = member("prodavec", "SELLER");
+        long managerRole = seeded("MANAGER");
+        long sellerRole = seeded("SELLER");
+
+        String removed = text(assignAs(session, manager,
+                "{\"roleId\":%d,\"overrides\":{\"deal.sell\":false}}".formatted(managerRole))
+                .andExpect(status().isForbidden()));
+        assertThat(removed).contains(WIDER_ASSIGN);
+        String added = text(assignAs(session, manager,
+                "{\"roleId\":%d,\"overrides\":{\"deal.sell\":true}}".formatted(managerRole))
+                .andExpect(status().isForbidden()));
+        assertThat(added).contains(WIDER_ASSIGN);
+        assertThat(inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM member_permission_override WHERE member_id = ?", Integer.class, manager)))
+                .as("менеджеру ничего не записали").isZero();
+
+        assignAs(session, seller, "{\"roleId\":%d,\"overrides\":{\"deal.sell\":false}}".formatted(sellerRole))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Набор роли, назначенной сотруднику шире правящего, не поправить — 403 словами с подписью; переименовать можно; роль только узких — правится")
+    void roleSetOfWiderIsLocked() throws Exception {
+        MockHttpSession session = kadrovik("members.roles");
+        long shared = role("Смешанная", "deal.sell");
+        long narrowOnly = role("Узкая", "deal.sell");
+        long wide = member("shirokiy", "VIEWER");
+        long narrowMember = member("uzkiy", "VIEWER");
+        inTenant(() -> {
+            jdbc.update("UPDATE tenant_member SET access_role_id = ? WHERE id = ?", shared, wide);
+            jdbc.update("UPDATE tenant_member SET access_role_id = ? WHERE id = ?", narrowOnly, narrowMember);
+            jdbc.update("""
+                    INSERT INTO member_permission_override (member_id, permission, granted)
+                    VALUES (?, 'settings.company', true)""", wide);
+            return null;
+        });
+
+        String body = text(roleUpdate(session, shared, "Смешанная", "deal.return")
+                .andExpect(status().isForbidden()));
+        assertThat(body).contains("Набор роли «Смешанная» не поправить")
+                .contains("shirokiy").doesNotContain("Недостаточно прав");
+        assertThat(inTenant(() -> jdbc.queryForList(
+                "SELECT permission FROM access_role_permission WHERE role_id = ?", String.class, shared)))
+                .as("набор не тронут").containsExactly("deal.sell");
+
+        roleUpdate(session, shared, "Смешанная-2", "deal.sell").andExpect(status().isOk());
+        roleUpdate(session, narrowOnly, "Узкая", "deal.return").andExpect(status().isOk());
+
+        Map<Long, JsonNode> roles = new HashMap<>();
+        json.readTree(text(mvc.perform(get("/api/access/roles").session(session))
+                .andExpect(status().isOk()))).forEach(r -> roles.put(r.path("id").asLong(), r));
+        assertThat(roles.get(shared).path("editLocked").asText()).contains("не поправить");
+        assertThat(roles.get(narrowOnly).path("editLocked").isNull()).isTrue();
+    }
+
     // ----------------------------------------------------- список «Сотрудники»
 
     @Test
@@ -392,6 +475,24 @@ class AccountChangeLimitHttpTest extends PostgresTestBase {
     private ResultActions assignAs(MockHttpSession session, long member, String body) throws Exception {
         return mvc.perform(put("/api/access/members/" + member).with(csrf()).session(session)
                 .contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
+    private ResultActions roleUpdate(MockHttpSession session, long role, String name, String permission)
+            throws Exception {
+        return mvc.perform(put("/api/access/roles/" + role).with(csrf()).session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"%s\",\"permissions\":[\"%s\"]}".formatted(name, permission)));
+    }
+
+    private long seeded(String from) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM access_role WHERE seeded_from = ?", Long.class, from));
+    }
+
+    private String roleOf(long member) {
+        return inTenant(() -> jdbc.queryForObject("""
+                SELECT coalesce(r.seeded_from, r.name, m.role) FROM tenant_member m
+                  LEFT JOIN access_role r ON r.id = m.access_role_id WHERE m.id = ?""", String.class, member));
     }
 
     private ResultActions roleCreate(MockHttpSession session) throws Exception {

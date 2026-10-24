@@ -161,7 +161,8 @@ export function RolesPanel({
                         type="button"
                         className="button--ghost"
                         aria-label={`Изменить роль: ${role.name}`}
-                        disabled={busy}
+                        disabled={busy || (role.editLocked ?? null) !== null}
+                        title={role.editLocked ?? undefined}
                         onClick={() => open(role)}
                       >
                         Изменить
@@ -179,6 +180,11 @@ export function RolesPanel({
                       {/* Причина — видимым текстом: на телефоне наводить нечем
                           (решение владельца 23.10.2026, вопрос 3). */}
                       {role.members > 0 && <span className="note">{ASSIGNED}</span>}
+                      {/* Назначена тем, у кого прав больше: новый набор сузил бы их —
+                          погашено с причиной сервера, видимым текстом. */}
+                      {(role.editLocked ?? null) !== null && (
+                        <span className="note locked-action__reason">{role.editLocked}</span>
+                      )}
                     </>
                   ) : lockedBy !== undefined ? (
                     // Причина одна — у «Новой роли» ниже, видимым текстом.

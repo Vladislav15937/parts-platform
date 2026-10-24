@@ -19,6 +19,9 @@ import { MEMBERS_RIGHTS } from './tabs';
 const WIDER = 'У сотрудника прав больше, чем у вас: «Смотреть отчёты». '
   + 'Менять ему пароль, выключать и включать может тот, у кого прав не меньше';
 const OWNER_ONLY = 'Учётную запись владельца меняет только владелец';
+const ROLE_LOCKED = 'Набор роли «Старший» не поправить: она назначена сотрудникам, у которых прав '
+  + 'больше, чем у вас (Мария (menedzher, ID 2)), — новый набор сузил бы их. Править его может тот, '
+  + 'у кого прав не меньше';
 
 const MEMBERS = [
   { id: 1, number: 1, login: 'vladelec', displayName: 'Владелец', role: 'OWNER', active: true,
@@ -70,6 +73,8 @@ describe('учётная запись шире своих — погашена �
         return json([
           { id: 10, name: 'Владелец', owner: true, permissions: [], members: 1 },
           { id: 11, name: 'Продавец', owner: false, permissions: ['deal.sell'], members: 3 },
+          { id: 12, name: 'Старший', owner: false, permissions: ['deal.sell'], members: 1,
+            editLocked: ROLE_LOCKED },
         ]);
       }
       if (url.endsWith('/api/access/catalog')) return json(CATALOG);
@@ -130,6 +135,25 @@ describe('учётная запись шире своих — погашена �
     expect(within(seller).queryByText(/прав больше/)).toBeNull();
     fireEvent.click(button(seller, 'Выключить'));
     await waitFor(() => expect(sent).toEqual(['/api/members/4/disable']));
+  });
+
+  it('роль и права сотрудника шире своих: «Права» погашены с той же причиной; продавцу — живые', async () => {
+    render(<MembersScreen ownerActs={false} mine={kadrovik} />);
+    const manager = await row('menedzher');
+    expect(button(manager, 'Права: menedzher').disabled, '«Права» у шире своих живые').toBe(true);
+    expect(button(manager, 'Права: menedzher').title).toBe(WIDER);
+    const seller = await row('prodavec');
+    expect(button(seller, 'Права: prodavec').disabled).toBe(false);
+  });
+
+  it('набор роли, назначенной тем, кто шире, — «Изменить» погашено, причина видимым текстом', async () => {
+    render(<MembersScreen ownerActs={false} mine={kadrovik} />);
+    await waitFor(() => screen.getByRole('button', { name: 'Изменить роль: Старший' }));
+    const locked = screen.getByRole('button', { name: 'Изменить роль: Старший' }) as HTMLButtonElement;
+    expect(locked.disabled, '«Изменить» у роли шире своих живое').toBe(true);
+    expect(within(locked.closest('tr') as HTMLElement).getByText(ROLE_LOCKED)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Изменить роль: Продавец' }) as HTMLButtonElement).disabled)
+      .toBe(false);
   });
 
   it('без права на учётные записи пароль и выключение погашены у всех, причина одна; «Завести» погашено', async () => {

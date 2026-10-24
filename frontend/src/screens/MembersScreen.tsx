@@ -234,7 +234,10 @@ export function MembersScreen({
                       type="button"
                       className="button--ghost"
                       aria-label={`Права: ${member.login ?? member.displayName ?? ''}`}
-                      disabled={busy}
+                      // Роль и права того, у кого прав больше, не меняются (ответ владельца
+                      // 24.10, вопрос 2: сужать нельзя) — признак тот же, что у пароля.
+                      disabled={busy || (member.accountLocked ?? null) !== null}
+                      title={member.accountLocked ?? undefined}
                       onClick={() => (editing === member.id ? setEditing(null) : openRights(member))}
                     >
                       Права
