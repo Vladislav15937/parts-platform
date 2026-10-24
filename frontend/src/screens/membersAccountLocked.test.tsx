@@ -146,14 +146,21 @@ describe('учётная запись шире своих — погашена �
     expect(button(seller, 'Права: prodavec').disabled).toBe(false);
   });
 
-  it('набор роли, назначенной тем, кто шире, — «Изменить» погашено, причина видимым текстом', async () => {
+  it('роль, назначенная тем, кто шире: «Изменить» живое — переименовать можно, набор погашен с причиной', async () => {
     render(<MembersScreen ownerActs={false} mine={kadrovik} />);
     await waitFor(() => screen.getByRole('button', { name: 'Изменить роль: Старший' }));
-    const locked = screen.getByRole('button', { name: 'Изменить роль: Старший' }) as HTMLButtonElement;
-    expect(locked.disabled, '«Изменить» у роли шире своих живое').toBe(true);
-    expect(within(locked.closest('tr') as HTMLElement).getByText(ROLE_LOCKED)).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Изменить роль: Продавец' }) as HTMLButtonElement).disabled)
-      .toBe(false);
+    const row = screen.getByRole('button', { name: 'Изменить роль: Старший' }).closest('tr') as HTMLElement;
+    expect(within(row).getByText(ROLE_LOCKED), 'причина у строки роли').toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Изменить роль: Старший' }));
+    const save = screen.getByRole('button', { name: 'Сохранить роль' }) as HTMLButtonElement;
+    const editor = save.closest('.card') as HTMLElement;
+    const title = within(editor).getByLabelText('Название роли') as HTMLInputElement;
+    expect(title.disabled, 'название роли погашено').toBe(false);
+    expect((within(editor).getByLabelText(/Продавать/) as HTMLInputElement).disabled, 'набор живой').toBe(true);
+    expect((within(editor).getByLabelText(/Продавать/) as HTMLInputElement).checked, 'набор показан не тем').toBe(true);
+    expect(within(editor).getByText(ROLE_LOCKED)).toBeTruthy();
+    fireEvent.change(title, { target: { value: 'Старший смены' } });
+    expect(save.disabled, 'переименование погашено').toBe(false);
   });
 
   it('без права на учётные записи пароль и выключение погашены у всех, причина одна; «Завести» погашено', async () => {

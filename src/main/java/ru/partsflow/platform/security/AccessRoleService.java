@@ -157,8 +157,12 @@ public class AccessRoleService {
         }
         String title = requireName(name);
         Set<String> keys = requireKnown(permissions);
-        requireOwnRights(keys, "В наборе роли есть права, которых у вас нет: ");
         if (!was.permissions().equals(keys)) {
+            // Только переименование прав не выдаёт и не сужает никого — его не
+            // проверяют ни «свои права», ни «назначена тем, кто шире» (живой
+            // прогон волны 24.10c: «Менеджер» с прежним набором и новым названием
+            // отвечал 403, хотя решено «переименовать можно»).
+            requireOwnRights(keys, "В наборе роли есть права, которых у вас нет: ");
             // Живая связь: новый набор получат все, кому роль назначена, — значит
             // правка набора меняет права и тем из них, у кого прав больше, чем
             // у правящего. Сужать их ему нельзя (ответ владельца 24.10.2026 после
@@ -256,6 +260,12 @@ public class AccessRoleService {
         // меняется никогда, а несуществующую роль ниже назовёт lockRole.
         List<Boolean> toOwner = jdbc.queryForList(
                 "SELECT is_owner FROM access_role WHERE id = ?", Boolean.class, roleId);
+        // Не-владелец, трогающий владельца, слышит про владельца, а не про
+        // «последнего владельца» (живой прогон волны 24.10c): ему отказ за то,
+        // что владельца меняет только владелец, сколько бы владельцев ни было.
+        // Проверка только читает — первой блокировкой остаётся requireOwnerRemains;
+        // после замка строки сотрудника она повторяется ниже.
+        requireNotWider(schema, memberId, AccountChange.ASSIGN);
         if (toOwner.isEmpty() || !Boolean.TRUE.equals(toOwner.get(0))) {
             members.requireOwnerRemains(memberId);
         }

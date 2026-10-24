@@ -42,11 +42,17 @@ public class ApiExceptionHandler {
      */
     @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
     public ResponseEntity<ApiError> forbidden(
-            org.springframework.security.access.AccessDeniedException e) {
+            org.springframework.security.access.AccessDeniedException e,
+            jakarta.servlet.http.HttpServletRequest request) {
         // Отказ-правило называет причину сам (задача 0044: «выдать можно только
-        // свои права» — какие именно права лишние); отказ по пути — нет.
+        // свои права» — какие именно права лишние). Отказ пути называет право,
+        // которого нет, по аннотации самого пути (PathRightRefusal); не вышло
+        // назвать — прежние общие слова.
         String message = e instanceof ru.partsflow.platform.security.RightsRefusal
-                ? e.getMessage() : "Недостаточно прав";
+                ? e.getMessage()
+                : ru.partsflow.platform.security.PathRightRefusal.of(request.getAttribute(
+                        org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_HANDLER_ATTRIBUTE))
+                        .orElse("Недостаточно прав");
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError(message));
     }
 

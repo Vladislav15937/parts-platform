@@ -6,7 +6,7 @@ import { rightsWith } from '../test/rights';
 import { MembersScreen } from './MembersScreen';
 import { MEMBERS_RIGHTS } from './tabs';
 import {
-  closeBrowser, measureLayout, measureOverflow, openBrowser,
+  closeBrowser, measureBrokenWords, measureLayout, measureOverflow, measureRects, openBrowser,
 } from '../test/narrowViewport';
 
 /**
@@ -63,14 +63,14 @@ function json(body: unknown): Response {
   });
 }
 
-function stub(members: unknown = MEMBERS): void {
+function stub(members: unknown = MEMBERS, roles: unknown = ROLES, catalog: unknown = CATALOG): void {
   forgetCatalog();
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.endsWith('/api/members')) return json(members);
     if (url.endsWith('/api/access/members')) return json(ACCESS);
-    if (url.endsWith('/api/access/roles')) return json(ROLES);
-    if (url.endsWith('/api/access/catalog')) return json(CATALOG);
+    if (url.endsWith('/api/access/roles')) return json(roles);
+    if (url.endsWith('/api/access/catalog')) return json(catalog);
     if (url.endsWith('/api/organization/admin-access')) return json({ grant: null, request: null });
     return json([]);
   }));
@@ -164,6 +164,47 @@ describe('«Сотрудники» на телефоне и на монитор�
           .toBeLessThanOrEqual(layout.clientWidth);
       });
     }, 60_000);
+
+  // Под кнопками роли две причины — «назначена» и «набор не поправить» — и на 390 они
+  // склеивались в одно слово без пробела (живой прогон волны 24.10c).
+  it('390 px: причины под кнопками роли — разными строками, не слитно', async () => {
+    const locked = 'Набор роли «Кладовщик» не поправить: она назначена сотрудникам, у которых прав '
+      + 'больше, чем у вас (Кирилл Кладовщиков (kl1, ID 3)), — новый набор сузил бы их. Править '
+      + 'его может тот, у кого прав не меньше';
+    stub(MEMBERS, ROLES.map((r) => (r.id === 12 ? { ...r, editLocked: locked } : r)));
+    render(<MembersScreen ownerActs={false} mine={rightsWith(...MEMBERS_RIGHTS, 'intake.receive')} />);
+    await waitFor(() => screen.getByText(locked), SETTLE);
+    const rects = await measureRects(document.body.innerHTML, '.stack-table__actions > .note', 390);
+    const assigned = rects.findIndex((r) => r.text.startsWith('Набор роли «Кладовщик»')) - 1;
+    expect(assigned, 'причины роли не нашлись').toBeGreaterThanOrEqual(0);
+    const [first, second] = [rects[assigned]!, rects[assigned + 1]!];
+    expect(first.text, 'перед причиной набора — причина «назначена»').toMatch(/^Роль назначена/);
+    expect(second.top, `вторая причина начинается на строке первой — ${first.bottom} / ${second.top}`)
+      .toBeGreaterThanOrEqual(first.bottom - 1);
+  }, 60_000);
+
+  // Подписи прав на 390 рвались посреди слова: «недоставленно/е», «администратор/а» — во
+  // flex-ряду название и пояснение были двумя узкими колонками (живой прогон волны 24.10c).
+  it('390 px: подписи прав в «Правах» не рвутся посреди слова', async () => {
+    const long = [
+      { title: 'Выгрузки', permissions: [
+        { key: 'delivery.manage', title: 'Повторять недоставленное на площадки',
+          hint: 'раздел «Доставка»: повторить или снять' }] },
+      { title: 'Компания', permissions: [
+        { key: 'admin_access.manage', title: 'Пускать администратора сервиса',
+          hint: 'дать, отозвать, отклонить запрос' },
+        { key: 'members.accounts', title: 'Заводить сотрудников, менять им пароль, выключать и включать',
+          hint: 'только тех, у кого нет прав сверх ваших' },
+        { key: 'deal.sell', title: 'Продавать', hint: null }] },
+    ];
+    stub(MEMBERS, ROLES, long);
+    render(<MembersScreen />);
+    await waitFor(() => screen.getByRole('button', { name: 'Права: mgr1' }), SETTLE);
+    fireEvent.click(screen.getByRole('button', { name: 'Права: mgr1' }));
+    await waitFor(() => screen.getByLabelText(/Повторять недоставленное/), SETTLE);
+    const broken = await measureBrokenWords(document.body.innerHTML, '.access-permissions label', 390);
+    expect(broken, 'слова, разорванные переносом').toEqual([]);
+  }, 60_000);
 
   // Погашенный блок доступа администратора (повторный живой прогон 24.10.2026):
   // причина видимым текстом не уводит страницу и не вылезает из своей коробки.

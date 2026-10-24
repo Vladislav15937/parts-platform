@@ -361,7 +361,12 @@ describe('роли и права на экране сотрудников', () =
       fireEvent.click(screen.getByRole('button', { name: 'Изменить роль: Пустая' }));
       const save = screen.getByRole('button', { name: 'Сохранить роль' }) as HTMLButtonElement;
       const editor = save.closest('.card') as HTMLElement;
-      expect(save.disabled, 'набор шире своих уходит на сервер').toBe(true);
+      // Набор не тронут — это переименование, и оно ничего не выдаёт (живой прогон
+      // волны 24.10c: «переименовать можно»; сервер «свои права» о прежнем наборе
+      // не спрашивает).
+      expect(save.disabled, 'переименование роли шире своих погашено').toBe(false);
+      fireEvent.click(within(editor).getByLabelText(/Принимать товар/));
+      expect(save.disabled, 'изменённый набор шире своих уходит на сервер').toBe(true);
       expect(within(editor).getByText(/В наборе есть права, которых у вас нет: «Оформлять возврат»/))
         .toBeTruthy();
       fireEvent.click(within(editor).getByLabelText(/Оформлять возврат/));

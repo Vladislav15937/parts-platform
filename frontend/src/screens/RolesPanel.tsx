@@ -67,7 +67,12 @@ export function RolesPanel({
   };
 
   const editor = (role: AccessRole | null) => {
-    const extra = beyondOwn(chosen, mine);
+    // Роль назначена тому, у кого прав больше: переименовать можно, набор — нет
+    // (сервер отвечает 403 только на изменённый набор; живой прогон волны 24.10c).
+    const frozen = role?.editLocked ?? null;
+    const unchanged = role !== null && sameSet(chosen, role.permissions);
+    // Набор, который не меняют, ничего не выдаёт: «свои права» о нём не спрашивают.
+    const extra = unchanged ? [] : beyondOwn(chosen, mine);
     const foreign = extra.length === 0 ? null
       : foreignReason('В наборе есть права, которых у вас нет', extra, sections)
         + ' — снимите их или попросите владельца.';
@@ -87,6 +92,7 @@ export function RolesPanel({
         <AccessPermissions
           sections={sections}
           chosen={chosen}
+          frozen={frozen ?? undefined}
           foreign={(key) => !mine.has(key)}
           onToggle={(key, on) => setChosen((was) => {
             const next = new Set(was);
@@ -161,8 +167,7 @@ export function RolesPanel({
                         type="button"
                         className="button--ghost"
                         aria-label={`Изменить роль: ${role.name}`}
-                        disabled={busy || (role.editLocked ?? null) !== null}
-                        title={role.editLocked ?? undefined}
+                        disabled={busy}
                         onClick={() => open(role)}
                       >
                         Изменить
@@ -262,4 +267,8 @@ function employees(value: number): string {
 
 function describe(cause: unknown, fallback: string): string {
   return cause instanceof ApiError && cause.message !== '' ? cause.message : fallback;
+}
+
+function sameSet(chosen: ReadonlySet<PermissionKey>, keys: readonly PermissionKey[]): boolean {
+  return chosen.size === keys.length && keys.every((key) => chosen.has(key));
 }

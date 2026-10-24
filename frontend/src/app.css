@@ -559,6 +559,30 @@ details > .muted {
   .stack-table__actions {
     padding-top: 0.5rem;
   }
+
+  /* Подписи под кнопками строки — каждая своим абзацем. В клетке-блоке две
+     причины рядом («…другую» и «Набор роли…») склеивались в одно слово без
+     пробела (живой прогон волны 24.10c, 390 px). */
+  .stack-table__actions > .note {
+    display: block;
+  }
+}
+
+/* Подпись права — одним текстом рядом с флажком и с переносом по словам.
+   Клетка карточки на телефоне режет слова где угодно (`overflow-wrap: anywhere`
+   у `.stack-table td`), а во flex-ряду название и пояснение были двумя узкими
+   колонками: «недоставленно/е», «администратор/а» (живой прогон волны 24.10c). */
+.access-permissions {
+  overflow-wrap: break-word;
+}
+
+.access-permissions .choices label:not(.field) {
+  align-items: flex-start;
+}
+
+.access-permissions__text {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .table-scroll {
