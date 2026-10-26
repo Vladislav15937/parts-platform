@@ -366,6 +366,18 @@ export function loadDonor(partId: number): Promise<PartDonor> {
   return request<PartDonor>(`/api/parts/${partId}/donor`);
 }
 
+/**
+ * Перевязывает позицию на другой номер донора (задача 0365): у позиции
+ * с машиной-донором поля машины под замком, и меняет их только это.
+ * Марку, модель, название и применимость сервер ставит с новой машины.
+ */
+export function changeDonor(partId: number, donorId: number): Promise<unknown> {
+  return request<unknown>(`/api/parts/${partId}/donor`, {
+    method: 'PUT',
+    body: { donorId },
+  });
+}
+
 /** Одно изменённое поле в правке. `null` — поле было или стало пустым. */
 export interface HistoryField {
   label: string;

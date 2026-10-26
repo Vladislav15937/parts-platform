@@ -38,6 +38,9 @@ import java.util.Set;
  * у себя абсолютно всё… Никаких замков и запретов». Отказ здесь только там,
  * где значение записать нельзя физически (пустой номер товара, буквы в номере
  * объявления, номер, занятый другой позицией), и всегда словами.
+ * <b>С 19.10.2026 (задача 0365, «Всё как у bazon») одно исключение:</b>
+ * у позиции с машиной-донором машина закрыта замком ({@link #DONOR_LOCKED}),
+ * и отбивает это {@code PartService.update} до записи.
  */
 @Component
 public class PartIdentity {
@@ -208,6 +211,76 @@ public class PartIdentity {
         }
         journal.changed("part", partId, before, after);
         return applied;
+    }
+
+    /**
+     * Ключи формы, которые у позиции с машиной-донором закрыты замком
+     * (задача 0365, решение владельца продукта 19.10.2026 «Всё как у bazon»):
+     * номер донора текстом, марка, модель, кузов, двигатель, год, комплектация,
+     * поколение и выбор машины из справочника. Они всегда равны машине;
+     * исправить её — значит выбрать другой номер донора
+     * ({@code PartService.changeDonor}).
+     */
+    static final List<String> DONOR_LOCKED = List.of("donorCode", "brand", "model", "body",
+            "engine", "year", "equipment", "generation", "bazonVehicle");
+
+    /**
+     * Какие из закрытых замком полей машины правка хотела бы поменять
+     * (задача 0365). Ключ без значения и значение, равное лежащему, правкой
+     * не считаются — так шлёт форму вкладка, открытая до выкладки, и отказывать
+     * ей не в чем. Сравнение тем же приведением, что у записи: края, пусто — нет.
+     *
+     * @return ключи формы в порядке {@link #DONOR_LOCKED}; пусто — менять нечего
+     */
+    static List<String> lockedChanges(Values was, Edit edit) {
+        List<String> out = new ArrayList<>();
+        if (edit == null) {
+            return out;
+        }
+        differs("donorCode", was.donorCode(), edit.donorCode(), out);
+        differs("brand", was.brand(), edit.brand(), out);
+        differs("model", was.model(), edit.model(), out);
+        differs("body", was.body(), edit.body(), out);
+        differs("engine", was.engine(), edit.engine(), out);
+        if (edit.year() != null && !Objects.equals(year(edit.year()), was.year())) {
+            out.add("year");
+        }
+        differs("equipment", was.equipment(), edit.equipment(), out);
+        differs("generation", was.generation(), edit.generation(), out);
+        if (edit.bazonVehicle() != null && !sameSelection(was.bazonVehicle(), edit.bazonVehicle())) {
+            out.add("bazonVehicle");
+        }
+        return out;
+    }
+
+    private static void differs(String key, String was, String sent, List<String> out) {
+        if (sent == null) {
+            return;
+        }
+        String now = sent.strip().isEmpty() ? null : sent.strip();
+        if (!Objects.equals(now, was)) {
+            out.add(key);
+        }
+    }
+
+    private static boolean sameSelection(BazonVehicles.Selection was, BazonVehicles.Selection now) {
+        boolean wasEmpty = was == null || was.isEmpty();
+        return wasEmpty ? now.isEmpty() : was.equals(now);
+    }
+
+    /**
+     * Снимает с позиции свою машину — вписанную руками и выбранную из справочника
+     * (задача 0365): позиция, перевязанная на другой номер донора, получает его
+     * машину по правилу заведения, а своё прежнее принадлежало прежней машине.
+     * Журнал — той же записью, что у правки: «было» видно в истории позиции.
+     *
+     * <p>Только внутри транзакции перевязки.
+     */
+    @Transactional
+    public Applied clearOwnVehicle(Long partId, Long authorId) {
+        return apply(partId, new Edit(null, null, null, null, null, null,
+                "", "", "", "", "", "", "", "",
+                new BazonVehicles.Selection(null, null, null, null)), authorId);
     }
 
     /**
