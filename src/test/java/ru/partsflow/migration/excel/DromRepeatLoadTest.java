@@ -90,7 +90,12 @@ class DromRepeatLoadTest extends PostgresTestBase {
             Map.entry(Field.DROM_KIND, new Facet("Вид детали", "drom_kind")),
             Map.entry(Field.DROM_SECTION, new Facet("Раздел", "drom_section")),
             // Применимость текстом (задача 0287) — туда же.
-            Map.entry(Field.APPLICABILITY, new Facet("Применимость", "applicability")),
+            // Из неё же разбор блока считает кузова своей машины (part.own_body_codes,
+            // задача 0296): дозаполненная применимость обязана их пересчитать, и это
+            // часть того же поля, а не «тронул соседнее». Совпадение с одной загрузкой
+            // проверяет сравнение с эталоном ниже.
+            Map.entry(Field.APPLICABILITY, new Facet("Применимость", "applicability",
+                    Set.of("own_body_codes"))),
             // «Прочие поля» — «Характеристики» дословно (задача 0292) — туда же.
             Map.entry(Field.CHARACTERISTICS, new Facet("Прочие поля", "characteristics")),
             // «Может подойти» дословно (задача 0293) — туда же.
@@ -106,7 +111,11 @@ class DromRepeatLoadTest extends PostgresTestBase {
             Map.entry(Field.OEM_SUBSTITUTES, new Facet("Номера замен", "oem_substitutes")),
             Map.entry(Field.PHOTOS, new Facet("Фото", "photos")));
 
-    private record Facet(String column, String key) {
+    /** {@code derived} — колонки, которые законно пересчитываются из поля вместе с ним. */
+    private record Facet(String column, String key, Set<String> derived) {
+        Facet(String column, String key) {
+            this(column, key, Set.of());
+        }
     }
 
     @Autowired
@@ -225,6 +234,8 @@ class DromRepeatLoadTest extends PostgresTestBase {
             Map<String, Object> restAfter = new TreeMap<>(after.get(ad));
             restBefore.remove(facet.key());
             restAfter.remove(facet.key());
+            restBefore.keySet().removeAll(facet.derived());
+            restAfter.keySet().removeAll(facet.derived());
             assertThat(restAfter).as("№ %s: повтор тронул не только «%s»", ad, facet.column())
                     .isEqualTo(restBefore);
             assertThat(content(after.get(ad)))

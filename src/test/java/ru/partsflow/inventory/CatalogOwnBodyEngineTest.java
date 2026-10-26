@@ -29,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -335,6 +336,38 @@ class CatalogOwnBodyEngineTest extends PostgresTestBase {
         press();
 
         assertThat(stored(rail)).isEqualTo(RAIL_BODIES);
+    }
+
+    @Test
+    @DisplayName("Смена «Номера донора» пересчитывает хранимые кузова: у позиции с донором их нет")
+    void donorChangeRefreshesTheStoredCodes() throws Exception {
+        long rail = part(RAIL_TITLE, RAIL_FITS);
+        press();
+        assertThat(stored(rail)).isEqualTo(RAIL_BODIES);
+        // Донора привязали после разбора мимо пересчёта (как в donorWins): хранимое
+        // осталось от своей машины, и в чтении его прячет только CASE по донору.
+        long[] donors = inTenant(() -> {
+            long first = donor();
+            long second = donor();
+            jdbc.update("UPDATE part SET donor_id = ? WHERE id = ?", first, rail);
+            return new long[] {first, second};
+        });
+
+        mvc.perform(put("/api/parts/" + rail + "/donor").with(csrf()).session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"donorId\":" + donors[1] + "}"))
+                .andExpect(status().isOk());
+
+        assertThat(stored(rail))
+                .as("смена донора оставила кузова прежней своей машины в part.own_body_codes")
+                .isNull();
+    }
+
+    private long donor() {
+        return jdbc.queryForObject("""
+                INSERT INTO donor (brand_id, body_code, engine_code)
+                VALUES ((SELECT id FROM catalog.brand WHERE name = 'Toyota'), 'GRJ120W', '1GR-FE')
+                RETURNING id""", Long.class);
     }
 
     private String stored(long part) {

@@ -44,10 +44,13 @@ public class PartDonorChange {
     private final CatalogService catalog;
     private final PartTitles titles;
     private final PartChangeLog partChanges;
+    private final OwnVehicleCodes ownCodes;
     private final JdbcTemplate jdbc;
 
     public PartDonorChange(PartRepository parts, PartIdentity identity, CatalogService catalog,
-                           PartTitles titles, PartChangeLog partChanges, JdbcTemplate jdbc) {
+                           PartTitles titles, PartChangeLog partChanges, OwnVehicleCodes ownCodes,
+                           JdbcTemplate jdbc) {
+        this.ownCodes = ownCodes;
         this.parts = parts;
         this.identity = identity;
         this.catalog = catalog;
@@ -89,6 +92,12 @@ public class PartDonorChange {
         catalog.applyFromDonor(partId, donorId, authorId);
         titles.retitle(part);
         part.touchedBy(authorId);
+        // Хранимые кузова своей машины (0296) зависят от донора: у позиции с донором
+        // их нет. Пересчёт читает строку, а не сущность, — сначала сбросить донора
+        // в базу. Пока чтение прячет их за CASE по донору, отставшие не видны,
+        // но и держать в колонке чужой машины нечего.
+        parts.flush();
+        ownCodes.refresh(partId);
         // Марка и модель уезжают в прайс: площадке нужна дельта.
         partChanges.changed(partId);
         return part;
