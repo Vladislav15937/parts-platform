@@ -114,7 +114,18 @@ public class DromDeltaSender {
          * Очередь не держит: изменения этой выгрузке не копятся (вариант «б»).
          */
         NEEDS_PERSON,
-        /** Временный сбой или дельта сверх лимита: позиции уедут следующим заходом. */
+        /**
+         * Выгрузка ждёт интервала после отказа «нужен человек»: не пробуем,
+         * изменения ей не достаются — это неотправка (задача 0271).
+         */
+        RESTING,
+        /**
+         * Дельта сверх лимита. Очередь не держит (задача 0271, по решению
+         * «б» из 0269): пачка и её размер на следующем заходе те же, и повтор
+         * не уйдёт никогда, а тащил бы её во все исправные выгрузки.
+         */
+        TOO_BIG,
+        /** Временный сбой: позиции уедут следующим заходом. */
         FAILED
     }
 
@@ -165,8 +176,10 @@ public class DromDeltaSender {
      * @return {@code false}, если хотя бы одна выгрузка не приняла дельту
      *         из-за сбоя, который может пройти сам; тогда отметки об изменении
      *         снимать нельзя — позиция должна уехать следующим заходом. Отказ,
-     *         которому нужен человек, и выгрузка, ждущая интервала после такого
-     *         отказа, результат не портят — как и выгрузка без ключа
+     *         которому нужен человек, выгрузка, ждущая интервала после такого
+     *         отказа, и дельта сверх лимита результат не портят — как и выгрузка
+     *         без ключа; каждая из трёх ставит выгрузке признак неотправки
+     *         (задача 0271)
      */
     @Transactional
     public boolean sendParts(List<Long> partIds, String label) {
@@ -185,14 +198,8 @@ public class DromDeltaSender {
         String origin = feedOrigin();
         boolean allSent = true;
         for (Ready target : targets) {
-            if (resting.contains(target.account().id())) {
-                // Отказ «нужен человек» был меньше интервала назад: не стучимся.
-                // Обработчик выдачи сделки идёт сюда же и мимо интервала не шлёт.
-                log.debug("Дром: выгрузка {} ждёт интервала после отказа — дельту не шлём",
-                        target.account().id());
-                continue;
-            }
-            allSent &= sendToAccount(target, partIds, label, origin) != Outcome.FAILED;
+            allSent &= sendToAccount(target, partIds, label, origin,
+                    resting.contains(target.account().id())) != Outcome.FAILED;
         }
         return allSent;
     }
@@ -258,7 +265,13 @@ public class DromDeltaSender {
         return origin + account.feedToken() + "/" + kind + "/";
     }
 
-    private Outcome sendToAccount(Ready target, List<Long> partIds, String label, String origin) {
+    /**
+     * @param resting выгрузка ждёт интервала после отказа «нужен человек»:
+     *                дельта собирается только затем, чтобы узнать, досталось ли
+     *                бы ей что-нибудь, — и не отправляется
+     */
+    private Outcome sendToAccount(Ready target, List<Long> partIds, String label, String origin,
+                                  boolean resting) {
         ByteArrayOutputStream delta = new ByteArrayOutputStream();
         // Выгрузка колёс собирается своим генератором: у шины свои поля,
         // и дельта обязана быть в том же формате, что и полный прайс —
@@ -286,6 +299,18 @@ public class DromDeltaSender {
             return Outcome.NOTHING_TO_SEND;
         }
 
+        if (resting) {
+            // Отказ «нужен человек» был меньше интервала назад: не стучимся.
+            // Обработчик выдачи сделки идёт сюда же и мимо интервала не шлёт.
+            // Отметки с этих позиций снимутся, как только примут остальные, —
+            // значит этой выгрузке они не достались, и карточка обязана это
+            // помнить (задача 0271). Причина — тот самый отказ.
+            log.debug("Дром: выгрузка {} ждёт интервала после отказа — дельту не шлём",
+                    target.account().id());
+            markUnsentByLastRefusal(target.account().id());
+            return Outcome.RESTING;
+        }
+
         byte[] body = delta.toByteArray();
         if (body.length > syncClient.maxPacketBytes()) {
             // Пачку режет релей, но отбор выгрузки может оказаться шире
@@ -298,7 +323,8 @@ public class DromDeltaSender {
             // Попытка была, и карточка должна её показать: без этого выгрузка
             // с дельтой-великаном выглядела бы «ещё не отправляли».
             updateAccountState(target.account().id(), false, tooBig);
-            return Outcome.FAILED;
+            markUnsent(target.account().id(), tooBig);
+            return Outcome.TOO_BIG;
         }
 
         DromSyncClient.Result result = syncClient.sync(
@@ -317,6 +343,8 @@ public class DromDeltaSender {
             return Outcome.ACCEPTED;
         }
         if (DromSyncRecord.needsPerson(failure)) {
+            // Отметки снимутся без отправки сюда (0269, «б») — неотправка.
+            markUnsent(target.account().id(), failure);
             log.warn("Дром: выгрузка {} отказала так, что без человека не пройдёт (HTTP {}) — "
                             + "следующая проба не раньше чем через {}",
                     target.account().id(), result.httpStatus(), refusedRetry);
@@ -405,6 +433,33 @@ public class DromDeltaSender {
                    SET last_sync_at = now(), last_error = ?
                  WHERE id = ?""",
                 success ? null : failure, accountId);
+    }
+
+    /**
+     * Изменения этой выгрузки сняты с очереди, не уйдя на Дром (задача 0271).
+     *
+     * <p>Хранится отдельно от {@code last_error}: тот говорит про последнюю
+     * попытку, и следующая принятая малая дельта честно пишет туда «принято»,
+     * хотя изменения неотправленной так и не уехали. Признак не копит
+     * изменения и ничего не шлёт повторно (решение «б» из 0269) — это только
+     * память карточки. Гаснет он на чтении, когда Дром скачал полный прайс
+     * позже {@code unsent_at} (ответ владельца 12.10.2026, вариант «а»);
+     * поэтому момент — последний, а не первый: изменения, не ушедшие после
+     * забора, им не покрыты.
+     */
+    private void markUnsent(long accountId, String reason) {
+        jdbc.update("""
+                UPDATE marketplace_account
+                   SET unsent_at = now(), unsent_error = ?
+                 WHERE id = ?""", reason, accountId);
+    }
+
+    /** То же при пропуске в интервале: причина — отказ, из-за которого ждём. */
+    private void markUnsentByLastRefusal(long accountId) {
+        jdbc.update("""
+                UPDATE marketplace_account
+                   SET unsent_at = now(), unsent_error = last_error
+                 WHERE id = ?""", accountId);
     }
 
     /** Выгрузка с уже расшифрованным ключом: расшифровка делается один раз. */
