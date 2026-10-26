@@ -728,6 +728,21 @@ public class CatalogService {
      *                     именно его — но по умолчанию склад это то, что лежит
      * @param warehouseIds пусто — все склады
      */
+    /**
+     * JIT выключен на транзакцию витрины (задача 0296): своя машина с кузовами
+     * и двигателями даёт оценку плана около 1,2 млн — выше порогов JIT, — и
+     * сортировка или отбор по кузову стоили 2,2 с в базе, из них 1,85 с —
+     * компиляция; без неё 0,33 с. Оценка — не время: запрос на 35 тысячах
+     * позиций идёт доли секунды, и компиляция его только тормозит.
+     * {@code SET LOCAL} живёт до конца транзакции и с ней же снимается, так
+     * что через PgBouncer к чужой транзакции не протекает.
+     */
+    static final String NO_JIT = "SET LOCAL jit = off";
+
+    private void withoutJit() {
+        jdbc.execute(NO_JIT);
+    }
+
     @Transactional(readOnly = true)
     public Page list(String query, boolean withReserved, boolean withMissing,
                      List<Long> warehouseIds, Vehicle vehicle,
@@ -753,6 +768,7 @@ public class CatalogService {
                      Map<String, String> columns, Map<String, String> words,
                      String sort, boolean descending, int page, int size, String after) {
 
+        withoutJit();
         Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
                 columns, words);
         StringBuilder where = filter.where();
@@ -1114,6 +1130,7 @@ public class CatalogService {
     @Transactional(readOnly = true)
     public List<String> values(String column) {
         String expression = columnExpression(column);
+        withoutJit();
         if (CODE_LIST_VALUES.contains(column)) {
             // Список кодов в клетке (0296) — значения по одному коду: «GRJ120»,
             // а не «GRJ120, GRJ120W, …» целиком; отбор ищет код в списке.
@@ -1542,6 +1559,7 @@ public class CatalogService {
     public List<Long> idsMatching(String query, boolean withReserved, boolean withMissing,
                                   List<Long> warehouseIds, Vehicle vehicle,
                                   Map<String, String> columns, Map<String, String> words) {
+        withoutJit();
         Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
                 columns, words);
         return jdbc.queryForList("SELECT p.id" + joins(filter.where()) + filter.where()
@@ -1846,6 +1864,7 @@ public class CatalogService {
                        String sort, boolean descending,
                        List<Warehouse> warehouses, RowWriter writer) {
 
+        withoutJit();
         Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
                 columns, words);
         String order = orderBy(sort, descending);

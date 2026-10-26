@@ -287,6 +287,32 @@ class CatalogOwnBodyEngineTest extends PostgresTestBase {
         assertThat(row.path("engine").isNull()).isTrue();
     }
 
+    @Test
+    @DisplayName("Чтение витрины идёт без JIT: страница, список значений, файл, отбор правки списком")
+    void showcaseReadsRunWithoutJit() {
+        // Время в тесте не мерится — на тестовом складе в десяток позиций оценка
+        // плана до порога JIT не доходит. Проверяется, что транзакция, в которой
+        // витрина читала, осталась с выключенным JIT: на складе в 35 тысяч
+        // позиций сортировка по кузову без этого стоит 2,2 с вместо 0,33 (PR 523).
+        Map<String, Supplier<Object>> reads = new java.util.LinkedHashMap<>();
+        reads.put("страница", () -> catalog.list(null, true, true, List.of(), null,
+                Map.of(), Map.of(), "body", false, 0, 50));
+        reads.put("список значений", () -> catalog.values("body"));
+        reads.put("отбор правки списком", () -> catalog.idsMatching(null, true, true, List.of(),
+                null, Map.of("body", "GRJ120"), Map.of()));
+        reads.put("файл", () -> {
+            catalog.export(null, true, true, List.of(), null, Map.of(), Map.of(), "body", false,
+                    catalog.warehouses(), cells -> { });
+            return null;
+        });
+        reads.forEach((name, read) -> assertThat(inTenant(() -> {
+            read.get();
+            return jdbc.queryForObject("SELECT current_setting('jit')", String.class);
+        })).as("%s: JIT в транзакции витрины", name).isEqualTo("off"));
+        assertThat(inTenant(() -> jdbc.queryForObject("SELECT current_setting('jit')", String.class)))
+                .as("SET LOCAL не протекает в следующую транзакцию").isEqualTo("on");
+    }
+
     private String updatedAt(long part) {
         return inTenant(() -> jdbc.queryForObject(
                 "SELECT updated_at::text FROM part WHERE id = ?", String.class, part));
