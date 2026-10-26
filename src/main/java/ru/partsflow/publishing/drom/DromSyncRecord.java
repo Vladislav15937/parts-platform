@@ -60,6 +60,23 @@ public final class DromSyncRecord {
         return "[TOO_BIG] дельта превысила лимит " + limitBytes + " байт";
     }
 
+    private static final Pattern TOO_BIG_LIMIT = Pattern.compile("лимит (\\d+) байт");
+
+    /**
+     * Предел, записанный {@link #tooBig}: тот, что действовал в момент
+     * неотправки (задача 0271). Экран берёт его отсюда, а не копией константы
+     * клиента — разойдись они, карточка назвала бы не тот предел.
+     *
+     * @return {@code null}, если это не запись о лимите
+     */
+    public static Integer tooBigLimitBytes(String lastError) {
+        if (lastError == null || read(lastError).kind() != Kind.TOO_BIG) {
+            return null;
+        }
+        Matcher m = TOO_BIG_LIMIT.matcher(lastError);
+        return m.find() ? Integer.valueOf(m.group(1)) : null;
+    }
+
     /**
      * Коды отказа, которые без действия человека не пройдут (задача 0269):
      * прайс-лист не подключён к API, ключ не принят, номера или ключа нет.

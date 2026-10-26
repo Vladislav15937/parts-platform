@@ -95,6 +95,7 @@ public class MarketplaceAccountService {
         return jdbc.query("""
                 SELECT id, marketplace, title, status, last_sync_at,
                        last_feed_download_at, deleted_at,
+                       unsent_at, unsent_error,
                        last_error, credentials IS NOT NULL AS has_credentials,
                        credentials, feed_token IS NOT NULL AS has_feed,
                        feed_file_name,
@@ -137,6 +138,13 @@ public class MarketplaceAccountService {
                                 instant(rs.getObject("last_sync_at",
                                         java.time.OffsetDateTime.class)),
                                 rs.getString("last_error")),
+                        // Гаснет от забора прайса позже неотправки — решает
+                        // сравнение на чтении, а не обнуление колонки (0271).
+                        UnsentChanges.of(rs.getString("marketplace"), rs.getString("status"),
+                                instant(rs.getObject("unsent_at", java.time.OffsetDateTime.class)),
+                                rs.getString("unsent_error"),
+                                instant(rs.getObject("last_feed_download_at",
+                                        java.time.OffsetDateTime.class))),
                         instant(rs.getObject("last_feed_download_at",
                                 java.time.OffsetDateTime.class)),
                         instant(rs.getObject("deleted_at",
@@ -887,6 +895,11 @@ public class MarketplaceAccountService {
      * @param deliveryStatus итог отправки дельт словом сервера (задача 0268);
      *                    {@code null} у выключенной и у не-Дрома. Сырой ответ
      *                    площадки остаётся в {@code lastError}
+     * @param unsent      часть изменений не ушла на Дром и ещё не покрыта полным
+     *                    прайсом (задача 0271); {@code null} — нечего сказать.
+     *                    Живёт рядом с итогом, а не внутри него: итог про
+     *                    последнюю попытку, а это — про то, что попытка после
+     *                    неё «принято» не исправила
      * @param deletedAt   когда выгрузку удалили; пусто — живая. Удалённая
      *                    не отдаётся по ссылке и не видна в списке, но время
      *                    удаления и есть ответ на вопрос про историю:
@@ -902,6 +915,7 @@ public class MarketplaceAccountService {
                           String packetId,
                           String lastError,
                           DeliveryStatus deliveryStatus,
+                          UnsentChanges unsent,
                           java.time.Instant lastDownloadAt,
                           java.time.Instant deletedAt,
                           java.math.BigDecimal priceFrom,
