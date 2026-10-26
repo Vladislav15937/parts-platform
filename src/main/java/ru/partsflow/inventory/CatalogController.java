@@ -34,6 +34,30 @@ public class CatalogController {
     /** Больше двухсот строк за раз не отдаём: экран столько всё равно не покажет. */
     private static final int MAX_SIZE = 200;
 
+    /**
+     * Порядок по умолчанию — номер позиции по убыванию, новые сверху.
+     *
+     * <p>Решение владельца продукта 19.10.2026 «всё как у bazon» (задача 0372):
+     * прежнее «по возрастанию» (0060, 11.09.2026) отменено. До 0060 здесь стоял
+     * {@code code} — шесть случайных байт, то есть склад открывался случайной
+     * полусотней. Умолчание одно у страницы, у выгрузки и у экрана
+     * ({@code DEFAULT_SORT}/{@code DEFAULT_DESC} в {@code inventory/catalog.ts}).
+     */
+    static final String DEFAULT_SORT = "number";
+
+    private static String sortOf(String sort) {
+        return sort == null ? DEFAULT_SORT : sort;
+    }
+
+    /**
+     * «По убыванию» — направление умолчания целиком, а не любой колонки:
+     * названная без направления сортировка идёт по возрастанию, как нажатие
+     * на заголовок. Иначе {@code sort=brand} без {@code desc} начинался бы с «Я».
+     */
+    private static boolean descOf(String sort, Boolean desc) {
+        return desc != null ? desc : sort == null;
+    }
+
     private final CatalogService catalog;
     private final PhotoStorage storage;
     private final PartService parts;
@@ -62,13 +86,9 @@ public class CatalogController {
                      @RequestParam(required = false) String body,
                      @RequestParam(required = false) String engine,
                      jakarta.servlet.http.HttpServletRequest request,
-                     /* Порядок по умолчанию — номер позиции по возрастанию:
-                        что заведено раньше, то выше. До задачи 0060 здесь
-                        стоял `code` — публичный код, шесть случайных байт, —
-                        то есть склад открывался случайной полусотней
-                        из тридцати пяти тысяч, новой при каждом заходе. */
-                     @RequestParam(defaultValue = "number") String sort,
-                     @RequestParam(defaultValue = "false") boolean desc,
+                     /* Порядок по умолчанию — см. DEFAULT_SORT. */
+                     @RequestParam(required = false) String sort,
+                     @RequestParam(required = false) Boolean desc,
                      @RequestParam(defaultValue = "0") int page,
                      @RequestParam(defaultValue = "50") int size,
                      /* Номер товара последней строки предыдущей страницы:
@@ -78,7 +98,8 @@ public class CatalogController {
         CatalogService.Page found = catalog.list(q, reserved, missing, warehouses,
                 new CatalogService.Vehicle(brandId, modelId, body, engine),
                 columnsOf(request, "filter"), columnsOf(request, "find"),
-                sort, desc, Math.max(page, 0), Math.min(Math.max(size, 1), MAX_SIZE), after);
+                sortOf(sort), descOf(sort, desc), Math.max(page, 0),
+                Math.min(Math.max(size, 1), MAX_SIZE), after);
 
         return new View(found.total(), catalog.warehouses(),
                 found.rows().stream().map(this::rowOf).toList(),
@@ -378,8 +399,8 @@ public class CatalogController {
                        jakarta.servlet.http.HttpServletRequest request,
                        // Тот же порядок по умолчанию, что и у страницы:
                        // скачанный файл обязан совпасть с экраном.
-                       @RequestParam(defaultValue = "number") String sort,
-                       @RequestParam(defaultValue = "false") boolean desc,
+                       @RequestParam(required = false) String sort,
+                       @RequestParam(required = false) Boolean desc,
                        jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
 
         List<CatalogService.Warehouse> found = catalog.warehouses();
@@ -398,7 +419,7 @@ public class CatalogController {
 
         catalog.export(q, reserved, missing, warehouses,
                 new CatalogService.Vehicle(brandId, modelId, body, engine),
-                columnsOf(request, "filter"), columnsOf(request, "find"), sort, desc, found,
+                columnsOf(request, "filter"), columnsOf(request, "find"), sortOf(sort), descOf(sort, desc), found,
                 cells -> writeRow(out, cells));
         out.flush();
     }
