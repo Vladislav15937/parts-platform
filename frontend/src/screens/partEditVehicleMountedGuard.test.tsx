@@ -31,6 +31,8 @@ describe('сторож размонтирования у подсказок ма
   beforeEach(async () => {
     await put(STORE_REFERENCE, null, 'vehicles');
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      // Позиция без донора (задача 0365): у неё машина правится строками формы.
+      if (String(input).endsWith('/donor')) return new Response('{}', { status: 404 });
       if (String(input).includes('/api/catalog/vehicles')) {
         // Справочник едет дольше, чем человек держит форму открытой.
         await sleep(100);

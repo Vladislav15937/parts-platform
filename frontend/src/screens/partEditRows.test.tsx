@@ -28,7 +28,8 @@ describe('правка карточки по одному полю', () => {
         sent.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
         return json({ price: 27000 });
       }
-      void input;
+      // Позиция без донора (задача 0365): у неё машина правится строками формы.
+      if (String(input).endsWith('/donor')) return new Response('{}', { status: 404 });
       return json(card());
     }));
   });
@@ -197,8 +198,10 @@ describe('правка карточки по одному полю', () => {
     expect(sent[0]!['note']).toBeNull();
   });
 
-  it('ни одно поле формы не стоит с замком: у каждой строки есть «Изменить»', async () => {
+  it('у позиции без донора ни одно поле не стоит с замком: у каждой строки есть «Изменить»', async () => {
     // Задача 0302, решение владельца 15.10.2026: «никаких замков и запретов».
+    // С 0365 — у позиции без донора: у позиции с донором машина под замком
+    // (partEditDonorLock.test.tsx).
     // Перебором по всем разделам, а не по списку полей: новое поле с замком
     // покраснит здесь само. Роли у формы больше нет вовсе — менеджер видит
     // ту же форму, что владелец, включая «Состояние».
@@ -244,7 +247,7 @@ describe('правка карточки по одному полю', () => {
     }
   });
 
-  it('марка правится от показанного донора и уезжает своей у позиции', async () => {
+  it('у позиции без донора марка правится от показанной и уезжает своей у позиции', async () => {
     render(<PartEditForm partId={7} row={row()}
                          onSaved={() => {}} onCancel={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Изменить: Марка')).toBeTruthy());
@@ -252,7 +255,7 @@ describe('правка карточки по одному полю', () => {
     expect(line('Марка').textContent).toContain('Toyota');
     fireEvent.click(screen.getByLabelText('Изменить: Марка'));
     const brand = screen.getByLabelText('Марка') as HTMLInputElement;
-    expect(brand.value, 'поле открылось пустым, а не с маркой донора').toBe('Toyota');
+    expect(brand.value, 'поле открылось пустым, а не с показанной маркой').toBe('Toyota');
     fireEvent.change(brand, { target: { value: 'Lexus' } });
     fireEvent.click(save());
 

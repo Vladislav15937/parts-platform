@@ -2550,6 +2550,26 @@ hr {
   width: auto;
 }
 
+/* Поле машины у позиции с донором (задача 0365): серым и с замком справа,
+   как у ориентира, — значение видно, «Изменить» нет. */
+.card-edit__row--locked .card-edit__value {
+  color: var(--muted);
+}
+
+.card-edit__lock {
+  display: inline-flex;
+  color: var(--muted);
+  padding: 0 6px;
+}
+
+/* Выбор номера донора: поиск над списком, подпись про обрезку — строкой ниже. */
+.donor-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
 /* Предупреждение о длинном номере (задача 0310) — своей строкой под полем,
    а не хвостом за ним: поле во всю ширину, и хвост ушёл бы за край. */
 .long-number-note {
