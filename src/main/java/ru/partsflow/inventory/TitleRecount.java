@@ -215,6 +215,11 @@ public class TitleRecount {
                         + " повторите запуск");
             }
         }
+        if (options.apply() && !written.isEmpty()) {
+            // Кузова своей машины хранятся (0296) и зависят от наименования.
+            OwnVehicleCodes codes = new OwnVehicleCodes(jdbc);
+            codes.refresh(written.stream().map(c -> c.position().id()).toList());
+        }
         List<Long> marked = new ArrayList<>();
         for (Change change : written) {
             tally.changed++;

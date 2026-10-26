@@ -288,6 +288,61 @@ class CatalogOwnBodyEngineTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Кузова своей машины хранятся в part.own_body_codes: разбор их пишет, витрина читает "
+            + "колонку, а не считает (ответ владельца 26.10.2026)")
+    void bodiesAreStoredAndReadFromTheColumn() throws Exception {
+        long rail = part(RAIL_TITLE, RAIL_FITS);
+        press();
+
+        assertThat(stored(rail)).as("разбор записал список").isEqualTo(RAIL_BODIES);
+        inTenant(() -> jdbc.update("UPDATE part SET own_body_codes = 'STORED1, STORED2' WHERE id = ?", rail));
+        JsonNode row = only(page(""));
+        assertThat(row.path("body").asText())
+                .as("колонка читает хранимое: подмена в базе видна на экране").isEqualTo("STORED1, STORED2");
+        assertThat(titles(page("&filter=body:STORED2"))).containsExactly(RAIL_TITLE);
+    }
+
+    @Test
+    @DisplayName("Снятие строки применимости пересчитывает хранимые кузова")
+    void removingTheRowRefreshesTheStoredCodes() throws Exception {
+        long rail = part(RAIL_TITLE, RAIL_FITS);
+        press();
+        assertThat(stored(rail)).isEqualTo(RAIL_BODIES);
+
+        List<Long> rows = inTenant(() -> jdbc.queryForList(
+                "SELECT id FROM part_applicability WHERE part_id = ?", Long.class, rail));
+        rows.forEach(id -> inTenant(() -> {
+            catalog.removeApplicability(rail, id);
+            return null;
+        }));
+
+        assertThat(stored(rail)).as("строк нет — кодов нет").isNull();
+        assertThat(only(page("")).path("body").isNull()).isTrue();
+    }
+
+    @Test
+    @DisplayName("«Разложить «Подходит»» пересчитывает кузова со всего склада — страховка от забытого места")
+    void thePassRecountsStaleCodes() throws Exception {
+        long rail = part(RAIL_TITLE, RAIL_FITS);
+        press();
+        // Блока «Подходит» у позиции больше нет, строки применимости остались (правили
+        // руками): пачки разбора её не видят, поправить хранимое может только пересчёт склада.
+        inTenant(() -> {
+            jdbc.update("DELETE FROM part_drom_card WHERE part_id = ?", rail);
+            return jdbc.update("UPDATE part SET own_body_codes = 'STALE' WHERE id = ?", rail);
+        });
+
+        press();
+
+        assertThat(stored(rail)).isEqualTo(RAIL_BODIES);
+    }
+
+    private String stored(long part) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT own_body_codes FROM part WHERE id = ?", String.class, part));
+    }
+
+    @Test
     @DisplayName("Чтение витрины идёт без JIT: страница, список значений, файл, отбор правки списком")
     void showcaseReadsRunWithoutJit() {
         // Время в тесте не мерится — на тестовом складе в десяток позиций оценка

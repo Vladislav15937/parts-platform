@@ -63,6 +63,7 @@ public class PartService {
 
     /** Пересборка названия из полей формулы (задача 0336). */
     private final PartTitles titles;
+    private final OwnVehicleCodes ownCodes;
 
     /** Выбор именованного текстового блока в карточке (задача 0337). */
     private final TextBlockService textBlocks;
@@ -73,7 +74,8 @@ public class PartService {
                        jakarta.persistence.EntityManager entityManager,
                        PartIdentity identity, com.fasterxml.jackson.databind.ObjectMapper json,
                        ru.partsflow.platform.audit.AuditJournal journal, PartTitles titles,
-                       TextBlockService textBlocks) {
+                       TextBlockService textBlocks, OwnVehicleCodes ownCodes) {
+        this.ownCodes = ownCodes;
         this.textBlocks = textBlocks;
         this.titles = titles;
         this.json = json;
@@ -519,6 +521,11 @@ public class PartService {
                 || lrWas != part.getSideLr() || frWas != part.getSideFr();
         if (formulaChanged && titles.retitle(part)) {
             partChanged = true;
+            // Своя машина позиции без донора читается из наименования, а кузова
+            // её хранятся (0296): новое наименование — пересчёт. Сбросить правку
+            // в базу надо до него, SQL читает строку, а не сущность.
+            entityManager.flush();
+            ownCodes.refresh(partId);
         }
         boolean termsChanged = applyDromCard(partId, update);
         // Автор — только у правки, которая что-то поменяла: «Кто изменил» отвечает

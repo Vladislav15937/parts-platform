@@ -65,7 +65,10 @@ public class DromApplicabilityService {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
 
-    public DromApplicabilityService(JdbcTemplate jdbc, TransactionTemplate tx) {
+    private final OwnVehicleCodes ownCodes;
+
+    public DromApplicabilityService(JdbcTemplate jdbc, TransactionTemplate tx, OwnVehicleCodes ownCodes) {
+        this.ownCodes = ownCodes;
         this.jdbc = jdbc;
         this.tx = tx;
     }
@@ -206,7 +209,10 @@ public class DromApplicabilityService {
             }
             after = last;
         }
+        // Страховка от забытого места: хранимые кузова пересчитываются со всего склада (0296).
+        int recounted = tx.execute(status -> ownCodes.refreshAll());
         Report report = tally.toReport();
+        log.info("Кузова своей машины пересчитаны у {} позиций", recounted);
         log.info("Применимость из карточек Дрома: позиций {}, заведено {}, дополнено {}, снято {}, "
                         + "не легло пунктов {}, поколение по коду кузова {} — за {} мс (по кузову {} мс)",
                 report.parts(), report.added(), report.refined(), report.removed(),
@@ -241,6 +247,7 @@ public class DromApplicabilityService {
                 parts.put(rs.getLong(1), new PartText(rs.getString(2), rs.getString(3)));
             }, (Object) chunk.toArray(Long[]::new));
             byBody(parts, dictionary, index, tally);
+            ownCodes.refresh(chunk);
         }
     }
 
@@ -276,6 +283,7 @@ public class DromApplicabilityService {
             return null;
         }
         byBody(parts, dictionary, index, tally);
+        ownCodes.refresh(parts.keySet());
         return parts.keySet().stream().reduce((a, b) -> b).orElseThrow();
     }
 
@@ -388,6 +396,7 @@ public class DromApplicabilityService {
             texts.put(((Number) row.get("part_id")).longValue(), (String) row.get("applicability"));
         }
         apply(texts, dictionary, tally);
+        ownCodes.refresh(texts.keySet());
         return texts.keySet().stream().reduce((a, b) -> b).orElseThrow();
     }
 
@@ -400,6 +409,7 @@ public class DromApplicabilityService {
                         Tally tally) {
         lock();
         apply(Map.of(partId, text), dictionary, tally);
+        ownCodes.refresh(partId);
     }
 
     /**

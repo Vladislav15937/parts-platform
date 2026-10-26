@@ -187,7 +187,11 @@ public class CatalogService {
                                                                   || '[0-9]([^0-9]|$)')), false)
                                     FROM unnest(n.bodies_each) e(b))
                        END AS body_confirmed,
-                       -- Коды кузова своей машины для колонки «Кузов» (0296): кузова
+                       -- Коды кузова своей машины для колонки «Кузов» (0296). ЧИТАЕТ ЭТО
+                       -- ВЫРАЖЕНИЕ ТОЛЬКО ПЕРЕСЧЁТ OwnVehicleCodes: результат хранится
+                       -- в part.own_body_codes, а колонка читает его (ответ владельца
+                       -- 26.10.2026); на витрине без ссылки на body_codes планировщик
+                       -- подзапрос не считает. Кузова
                        -- всех её строк и «Другие кузова», без повторов, в порядке
                        -- блока; номер кузова в наименовании сужает их до своего ряда
                        -- тем же правилом, что сверка выше. Над выбранной машиной,
@@ -328,7 +332,7 @@ public class CatalogService {
      * их выбрали. Проход по всей применимости ради пятидесяти строк стоил
      * бы страницы по умолчанию втрое (замер в PR задачи 0290).
      */
-    private static final String OWN_VEHICLE_OF_ROW =
+    static final String OWN_VEHICLE_OF_ROW =
             OWN_VEHICLE_OF.formatted("LATERAL ", " AND op.id = p.id");
 
     /*
@@ -346,13 +350,20 @@ public class CatalogService {
      * применимость: правка «Марки» в карточке меняет эту позицию, а не машину
      * и не соседние детали с неё. Пусто — как раньше, донор или своя машина.
      */
+    /**
+     * Хранимый список кодов кузова своей машины (0296, {@link OwnVehicleCodes}):
+     * читается колонкой, а не считается на каждом запросе. Донор побеждает и тут —
+     * отставшая запись у позиции, которой донора назначили позже, не видна.
+     */
+    static final String OWN_BODY = "(CASE WHEN p.donor_id IS NULL THEN p.own_body_codes END)";
+
     /*
      * Кузов и двигатель позиции без донора — своей машины из применимости
      * (задача 0296): коды кузова её строк и «Другие кузова», сужённые до ряда
      * из наименования, и двигатели блока, если машина в нём одна. Весь список
      * через запятую — ответ владельца 14.10.2026 «весь» (tasks/0296).
      */
-    static final String VEHICLE_BODY = PartVehicle.body("d.body_code, own.body_codes");
+    static final String VEHICLE_BODY = PartVehicle.body("d.body_code, " + OWN_BODY);
     static final String VEHICLE_ENGINE = PartVehicle.engine("d.engine_code, own.engines");
     /*
      * Кузов и двигатель для подбора по машине — как до 0296, без своей машины:
@@ -439,7 +450,7 @@ public class CatalogService {
     }
 
     private static final String VEHICLE_BODY_SOURCE =
-            codeSource("p.manual_body", "p.bazon_body_id", "own.body_codes");
+            codeSource("p.manual_body", "p.bazon_body_id", OWN_BODY);
     private static final String VEHICLE_ENGINE_SOURCE =
             codeSource("p.manual_engine", "p.bazon_motor_id", "own.engines");
 
@@ -710,8 +721,12 @@ public class CatalogService {
      */
     private final ru.partsflow.platform.audit.AuditJournal journal;
 
+    private final OwnVehicleCodes ownCodes;
+
     public CatalogService(JdbcTemplate jdbc, PartChangeLog partChanges,
-                          VehicleWords vehicleWords, ru.partsflow.platform.audit.AuditJournal journal) {
+                          VehicleWords vehicleWords, ru.partsflow.platform.audit.AuditJournal journal,
+                          OwnVehicleCodes ownCodes) {
+        this.ownCodes = ownCodes;
         this.journal = journal;
         this.partChanges = partChanges;
         this.jdbc = jdbc;
@@ -1328,6 +1343,7 @@ public class CatalogService {
                     VALUES (?, ?, ?, false)
                     ON CONFLICT DO NOTHING""", pair[0], pair[1], pair[2]);
         }
+        ownCodes.refresh(pairs.stream().map(pair -> pair[0]).toList());
         log.info("Применимость из заголовков: позиций {}, строк добавлено {}", parts[0], added);
         return new Parsed(parts[0], added);
     }
@@ -1406,6 +1422,8 @@ public class CatalogService {
                         + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, now()) " + conflict
                         + " RETURNING id, (xmax = 0) AS inserted",
                 partId, brandId, modelId, generationId, yearFrom, yearTo, verified, setBy);
+        // Кузова своей машины хранятся (0296): строка применимости их источник.
+        ownCodes.refresh(partId);
         boolean inserted = !rows.isEmpty() && Boolean.TRUE.equals(rows.get(0).get("inserted"));
         Long id = rows.isEmpty() ? null : ((Number) rows.get(0).get("id")).longValue();
         if (inserted) {
@@ -1432,6 +1450,7 @@ public class CatalogService {
             jdbc.update("DELETE FROM part_applicability WHERE id = ? AND part_id = ?",
                     applicabilityId, partId);
             journal.deleted("part_applicability", applicabilityId, snapshot);
+            ownCodes.refresh(partId);
         }
         partChanges.changed(partId);
     }
