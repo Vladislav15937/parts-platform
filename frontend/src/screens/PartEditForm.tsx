@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
-  CONDITION, CONDITIONS, CONDITION_UNSET, QUALITY, QUALITY_GRADES, loadEditable, savePart,
+  CONDITION, CONDITIONS, CONDITION_UNSET, QUALITY, QUALITY_GRADES, changeDonor, loadDonor,
+  loadEditable, savePart,
   priceOperationHint, PRICE_OPERATIONS, SIDE_FR, SIDE_LR,
   type CatalogRow, type PartEdit, type PriceOperation,
 } from '../inventory/catalog';
@@ -16,6 +17,7 @@ import { CharacteristicsView } from './CharacteristicsView';
 import { VehicleNameInput, useVehicleCatalog } from './VehicleNameInput';
 import { TextBlockInput } from './TextBlockInput';
 import { BazonVehicleSelect } from './BazonVehicleSelect';
+import { DonorPick } from './DonorPick';
 import { NO_BAZON_VEHICLE, isBazonEmpty, type BazonSelection } from '../catalog/bazonVehicles';
 import { listTextBlocks, type TextBlock } from '../inventory/textBlocks';
 
@@ -56,6 +58,15 @@ import { listTextBlocks, type TextBlock } from '../inventory/textBlocks';
  * Иначе каждое сохранение цены переписывало бы и номер производителя, и машину
  * позиции тем, что форма прочитала, — а машина, не вписанная у позиции руками,
  * показывается донорская, и записалась бы своей.
+ *
+ * <p><b>Машина позиции с донором — под замком</b> (задача 0365, решение
+ * владельца продукта 19.10.2026 «Всё как у bazon»): марка, модель, кузов,
+ * двигатель, год, комплектация, поколение и машина из справочника только
+ * показываются и всегда равны машине, а «Номер донора» выбирается из списка
+ * машин — сервер ставит с новой марку, модель, название и применимость.
+ * Позиция без донора правит эти поля, как раньше. Пока не узнали, есть ли
+ * у позиции донор (или не смогли узнать), замок стоит: отпереть по догадке
+ * значило бы предложить правку, которую сервер отобьёт.
  *
  * <p><b>Цена двигается операцией, а не только новым числом.</b> Торг
  * на разборке идёт словами «минус десять» и «скинь пятьсот», и считать это
@@ -100,6 +111,12 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
   const [notSaved, setNotSaved] = useState<NotSavedField[]>([]);
   /** Именованные текстовые блоки описания (задача 0337): список для выбора и показа имени. */
   const [blocks, setBlocks] = useState<TextBlock[]>([]);
+  /** С какой машины снята позиция (задача 0365): от этого зависит замок. */
+  const [donor, setDonor] = useState<DonorKnown>({ kind: 'loading' });
+  /** Выбранный в раскрытой строке «Номер донора». */
+  const [donorChoice, setDonorChoice] = useState<number | null>(null);
+  /** Донор уже сменён этим сохранением: закрытие обязано перечитать карточку. */
+  const [relinked, setRelinked] = useState(false);
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
   // Подсказки марки и модели (задача 0308): справочник — по первому раскрытию.
@@ -121,6 +138,18 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
 
   useEffect(() => {
     let alive = true;
+    // 404 — донора нет, это ответ; любой другой отказ — «не смогли узнать».
+    void loadDonor(partId)
+      .then((d) => { if (alive) setDonor({ kind: 'donor', id: d.id, code: d.code }); })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        setDonor(e instanceof ApiError && e.status === 404 ? { kind: 'none' } : { kind: 'failed' });
+      });
+    return () => { alive = false; };
+  }, [partId]);
+
+  useEffect(() => {
+    let alive = true;
     // Список блоков нужен и закрытой строке (имя вместо номера); отказ не мешает правке.
     // Ответ — обещание, а не гарантия: не список читается как «блоков нет».
     void listTextBlocks()
@@ -133,8 +162,19 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
     setForm((f) => (f === null ? f : { ...f, [key]: value }));
   }
 
+  /** Строка машины под замком: у позиции есть донор либо это ещё не известно. */
+  function locked(field: Field): boolean {
+    if (donor.kind === 'none' || !isDonorLocked(field)) return false;
+    return !(field.key === 'donorCode' && donor.kind === 'donor');
+  }
+
   function edit(field: Field): void {
-    if (open.includes(field.key)) return;
+    if (open.includes(field.key) || locked(field)) return;
+    if (field.key === 'donorCode' && donor.kind === 'donor') {
+      setDonorChoice(donor.id);
+      setOpen((keys) => [...keys, field.key]);
+      return;
+    }
     // Своей машины у позиции нет — в поле подставляется то, что видно
     // (донор или применимость): править начинают от него, а не с пустого.
     if (field.kind === 'vehicle' && form !== null && form[field.key].trim() === '') {
@@ -149,6 +189,7 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
    */
   function revert(field: Field): void {
     setOpen((keys) => keys.filter((k) => k !== field.key));
+    if (field.key === 'donorCode') setDonorChoice(null);
     if (loaded !== null) set(field.key, loaded[field.key]);
     // Цена возвращается вместе с операцией: «Уменьшить на %» при закрытой
     // строке означал бы арифметику, которую никто не заказывал.
@@ -187,14 +228,28 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
     setError('');
     setSaving(true);
     try {
+      // У позиции с донором поля машины в правку не уходят никогда (задача 0365):
+      // «Номер донора» — своя операция, она идёт первой, остальное — после неё.
+      const donorPart = donor.kind !== 'none';
+      const rest = donorPart ? open.filter((k) => !DONOR_LOCKED_KEYS.includes(k)) : open;
+      if (donor.kind === 'donor' && open.includes('donorCode')
+          && donorChoice !== null && donorChoice !== donor.id) {
+        await changeDonor(partId, donorChoice);
+        if (!mounted.current) return;
+        setRelinked(true);
+      }
+      if (rest.length === 0) {
+        onSaved();
+        return;
+      }
       // Цену трогаем, только если её строку раскрыли: иначе уезжает
       // прочитанное значение простой заменой, и арифметика к нему
       // не применяется.
       const touched = open.includes('price');
       const op = touched ? priceOp : 'SET';
       const { edit, seen } = changedEdit(
-        toEdit(touched ? form : { ...form, price: loaded.price }, open),
-        toEdit(shownDraft(loaded, row), open), card, op);
+        toEdit(touched ? form : { ...form, price: loaded.price }, rest),
+        toEdit(shownDraft(loaded, row), rest), card, op);
       // Раскрыли и ничего не поменяли — писать нечего: в базе то, что видно.
       const saved = Object.keys(edit).length > 0
         ? await savePart(partId, edit, op, seen) : null;
@@ -250,7 +305,7 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
    * Закрытие перечитывает карточку (`onSaved` — «закрыть и перечитать»), иначе
    * за формой осталась бы прежняя цена или заметка.
    */
-  const close = notSaved.length > 0 ? onSaved : onCancel;
+  const close = notSaved.length > 0 || relinked ? onSaved : onCancel;
 
   if (form === null) {
     return (
@@ -270,18 +325,27 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
       {SECTIONS.map((section) => (
         <Fragment key={section.title}>
           <h4>{section.title}</h4>
+          {section.title === DONOR_SECTION && donor.kind !== 'none' && (
+            <p className={donor.kind === 'failed' ? 'note note--error' : 'muted'}>
+              {donor.kind === 'failed' ? DONOR_UNKNOWN_NOTE
+                : donor.kind === 'loading' ? 'Узнаём машину позиции…' : DONOR_LOCK_NOTE}
+            </p>
+          )}
           {section.fields.map((field) => {
             const opened = open.includes(field.key);
             const lost = notSavedOf(notSaved, field.key);
+            const closed = locked(field);
             return (
               <div
                 key={field.key}
                 className={opened ? 'card-edit__row card-edit__row--changed'
-                                  : 'card-edit__row'}
+                  : closed ? 'card-edit__row card-edit__row--locked' : 'card-edit__row'}
               >
                 <span className="card-edit__label">{field.label}</span>
                 <span className="card-edit__value">
-                  {opened && field.kind === 'bazon'
+                  {opened && field.key === 'donorCode' && donor.kind === 'donor'
+                    ? <DonorPick value={donorChoice} onChange={setDonorChoice} />
+                    : opened && field.kind === 'bazon'
                     ? (
                       <BazonVehicleSelect value={form.bazonVehicle}
                                           onChange={(v) => set('bazonVehicle', v)} />
@@ -311,7 +375,9 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
                   {opened && lost !== null
                     && <span className="card-edit__not-saved">{notSavedNote(lost)}</span>}
                 </span>
-                {opened
+                {closed
+                    ? <LockMark label={field.label} />
+                    : opened
                     ? (
                       <button type="button" className="button--ghost"
                               aria-label={`Отменить: ${field.label}`}
@@ -354,6 +420,45 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
         </button>
       </div>
     </div>
+  );
+}
+
+/** Что форма знает о машине-доноре позиции (задача 0365). */
+type DonorKnown =
+  | { kind: 'loading' }
+  | { kind: 'none' }
+  | { kind: 'failed' }
+  | { kind: 'donor'; id: number; code: string };
+
+const DONOR_SECTION = 'Автомобиль-донор';
+
+/** Ключи строк машины, закрытых замком у позиции с донором; «Номер донора» — выбор машины. */
+const DONOR_LOCKED_KEYS: readonly string[] = ['bazonVehicle', 'donorCode', 'brand', 'model',
+  'body', 'engine', 'year', 'equipment', 'generation'];
+
+function isDonorLocked(field: Field): boolean {
+  return DONOR_LOCKED_KEYS.includes(field.key);
+}
+
+export const DONOR_LOCK_NOTE = 'Марка, модель и остальные поля машины берутся из машины-донора'
+  + ' и здесь не правятся. Если машина у детали не та — выберите другой «Номер донора».';
+
+export const DONOR_UNKNOWN_NOTE = 'Не удалось узнать, с какой машины снята позиция, — поля машины'
+  + ' пока не правятся. Обновите страницу.';
+
+/**
+ * Замок у строки вместо «Изменить», как у ориентира: значение видно, править
+ * нечем. Подпись — для чтения с экрана и по наведению: значок один на восемь строк.
+ */
+function LockMark({ label }: { label: string }) {
+  const text = `${label}: из машины-донора, не правится`;
+  return (
+    <span className="card-edit__lock" role="img" aria-label={text} title={text}>
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <path fill="currentColor"
+              d="M4 7V5a4 4 0 1 1 8 0v2h1v8H3V7h1zm2 0h4V5a2 2 0 1 0-4 0v2z" />
+      </svg>
+    </span>
   );
 }
 
@@ -638,10 +743,11 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
     ],
   },
   {
-    // Правка здесь меняет эту позицию, а не машину-донора и не соседние
-    // детали с неё (задача 0302): у позиции свои колонки, и пустое своё
-    // значит «как у донора или применимости».
-    title: 'Автомобиль-донор',
+    // У позиции без донора правка здесь меняет эту позицию, а не соседние
+    // детали (задача 0302): у позиции свои колонки, и пустое своё значит
+    // «как у применимости». У позиции с донором строки под замком, а
+    // «Номер донора» — выбор машины (задача 0365).
+    title: DONOR_SECTION,
     fields: [
       // Машина из общего справочника (задача 0377): у позиции хранится только
       // ссылка, слова — общие для всех клиентов. Из неё собирается название;

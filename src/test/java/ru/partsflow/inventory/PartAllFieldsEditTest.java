@@ -67,11 +67,21 @@ class PartAllFieldsEditTest extends PostgresTestBase {
     private Long donor;
     private Long partId;
     private Long neighbour;
+    /**
+     * Позиция без машины-донора: с задачи 0365 машинные поля правятся только
+     * у такой (у позиции с донором они под замком — {@code PartDonorLockTest}).
+     */
+    private Long loose;
+    /** Чью карточку правят помощники {@code save}, {@code editable}: по умолчанию — с донором. */
+    private Long target;
 
     @BeforeAll
     static void migrate() {
         provisionTenants(TENANT);
     }
+
+    @Autowired
+    private PartIdentity identity;
 
     @BeforeEach
     void fixtures() {
@@ -97,18 +107,24 @@ class PartAllFieldsEditTest extends PostgresTestBase {
                     INSERT INTO part (category_id, title, price, donor_id, is_published)
                     VALUES (1, 'Бампер Toyota Camry 2006 (б/у)', 9000, ?, true)
                     RETURNING id""", Long.class, donor);
+            loose = jdbc.queryForObject("""
+                    INSERT INTO part (category_id, title, price, is_published)
+                    VALUES (1, 'Фара перед. лев. (б/у)', 4500, true)
+                    RETURNING id""", Long.class);
             return null;
         });
+        target = partId;
     }
 
     @Test
-    @DisplayName("Каждое поле, стоявшее с замком, записывается и перечитывается")
+    @DisplayName("Каждое поле, стоявшее с замком, записывается и перечитывается (у позиции без донора)")
     void everyFormerlyLockedFieldIsSaved() throws Exception {
         MockHttpSession owner = login("vladelec0302");
+        target = loose;
         long freeNumber = inTenant(() -> jdbc.queryForObject(
                 "SELECT max(number) + 1 FROM part", Long.class));
 
-        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(owner)
+        mvc.perform(put("/api/parts/" + target).with(csrf()).session(owner)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"price":4500,"published":true,
@@ -145,7 +161,7 @@ class PartAllFieldsEditTest extends PostgresTestBase {
                 .as("поле «%s» не записалось: 200 при несохранённом значении", field)
                 .isEqualTo(value));
 
-        // Витрина показывает вписанное у позиции, а не донора.
+        // Витрина показывает вписанное у позиции.
         JsonNode row = catalogRow(owner, "FARA-0302");
         assertThat(row.path("brand").asText()).isEqualTo("Lexus");
         assertThat(row.path("model").asText()).isEqualTo("ES350");
@@ -189,6 +205,7 @@ class PartAllFieldsEditTest extends PostgresTestBase {
     @DisplayName("Форма без новых ключей (вкладка до выкладки) номер производителя не стирает")
     void absentKeysLeaveValuesAlone() throws Exception {
         MockHttpSession owner = login("vladelec0302");
+        target = loose;
         save(owner, "\"oem\":\"81170-33670\",\"brand\":\"Lexus\"");
 
         save(owner, "\"note\":\"старая вкладка\"");
@@ -199,12 +216,16 @@ class PartAllFieldsEditTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Поля донора правят эту позицию, а не машину и не соседнюю деталь с неё")
+    @DisplayName("Своя машина у позиции с донором — только у этой позиции, а не у машины и не у соседней детали")
     void donorFieldsChangeOnlyThisPart() throws Exception {
+        // С задачи 0365 карточка такую правку у позиции с донором не принимает,
+        // но вписанное до неё хранится, и читаться оно обязано только у своей.
+        // Пишется тем же PartIdentity.apply, которым его писала карточка.
         MockHttpSession owner = login("vladelec0302");
         String neighbourCode = codeOf(neighbour);
 
-        save(owner, "\"brand\":\"Lexus\",\"year\":\"2008\",\"body\":\"GSV40\"");
+        ownVehicle("Lexus", "2008", "GSV40");
+        assertThat(catalogRow(owner, codeOf(partId)).path("brand").asText()).isEqualTo("Lexus");
 
         JsonNode other = catalogRow(owner, neighbourCode);
         assertThat(other.path("brand").asText()).as("соседняя деталь той же машины")
@@ -217,7 +238,7 @@ class PartAllFieldsEditTest extends PostgresTestBase {
         assertThat(((Number) car.get("year")).intValue()).isEqualTo(2006);
 
         // Пустое своё возвращает значение донора.
-        save(owner, "\"brand\":\"\"");
+        ownVehicle("", null, null);
         assertThat(catalogRow(owner, codeOf(partId)).path("brand").asText()).isEqualTo("Toyota");
     }
 
@@ -273,10 +294,11 @@ class PartAllFieldsEditTest extends PostgresTestBase {
     @DisplayName("Правка пишется в историю позиции словами поля")
     void editIsInTheHistory() throws Exception {
         MockHttpSession owner = login("vladelec0302");
+        target = loose;
 
         save(owner, "\"oem\":\"81170-33670\",\"brand\":\"Lexus\"");
 
-        String history = mvc.perform(get("/api/parts/" + partId + "/history").session(owner))
+        String history = mvc.perform(get("/api/parts/" + target + "/history").session(owner))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(history).contains("Номер производителя", "81170-33670",
@@ -347,13 +369,14 @@ class PartAllFieldsEditTest extends PostgresTestBase {
         // как есть — сервер обязан так же его и записать, без замены
         // на «похожее» и без отказа.
         MockHttpSession owner = login("vladelec0302");
-        String code = codeOf(partId);
+        target = loose;
+        String code = codeOf(loose);
 
         save(owner, "\"brand\":\"Лексус\",\"model\":\"Эр-икс\"");
         assertThat(editable(owner).path("brand").asText()).isEqualTo("Лексус");
         assertThat(editable(owner).path("model").asText()).isEqualTo("Эр-икс");
         assertThat(catalogRow(owner, code).path("brand").asText())
-                .as("витрина показывает набранное, а не марку донора и не «похожую»")
+                .as("витрина показывает набранное, а не «похожую» марку")
                 .isEqualTo("Лексус");
 
         save(owner, "\"brand\":\"тойота\"");
@@ -411,18 +434,23 @@ class PartAllFieldsEditTest extends PostgresTestBase {
         return inTenant(() -> jdbc.queryForObject(
                 "SELECT count(*) FROM audit_log WHERE table_name = 'part' AND record_id = ?"
                         + " AND (jsonb_exists(new_value, 'oem') OR jsonb_exists(new_value, 'crosses'))",
-                Integer.class, partId));
+                Integer.class, target));
+    }
+
+    private void ownVehicle(String brand, String year, String body) {
+        inTenant(() -> identity.apply(partId, new PartIdentity.Edit(null, null, null, null, null, null,
+                null, brand, null, null, body, null, year, null), null));
     }
 
     private void save(MockHttpSession session, String fields) throws Exception {
-        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(session)
+        mvc.perform(put("/api/parts/" + target).with(csrf()).session(session)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"price\":4500,\"published\":true," + fields + "}"))
                 .andExpect(status().isOk());
     }
 
     private JsonNode editable(MockHttpSession session) throws Exception {
-        String body = mvc.perform(get("/api/parts/" + partId + "/editable").session(session))
+        String body = mvc.perform(get("/api/parts/" + target + "/editable").session(session))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         return json.readTree(body);

@@ -19,6 +19,8 @@ describe('машина из справочника', () => {
     sent = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      // Позиция без донора: машинные строки у неё правятся (задача 0365).
+      if (url.endsWith('/donor')) return new Response('{}', { status: 404 });
       if ((init?.method ?? 'GET') !== 'GET') {
         sent.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
         return json({ price: 27000 });

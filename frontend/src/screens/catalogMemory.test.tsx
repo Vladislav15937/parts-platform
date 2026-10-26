@@ -65,7 +65,7 @@ describe('память витрины и сброс', () => {
     vi.unstubAllGlobals();
   });
 
-  it('открывается порядком заведения, а не случайным кодом', async () => {
+  it('открывается номером по убыванию — новые сверху, как у Bazon', async () => {
     render(<CatalogScreen rights={rightsAs('OWNER')} />);
 
     await waitFor(() => expect(asked.length).toBeGreaterThan(0));
@@ -73,8 +73,40 @@ describe('память витрины и сброс', () => {
     // шести случайных байт: первые пятьдесят строк из тридцати пяти тысяч
     // выбирал жребий, и новый при каждом открытии.
     expect(asked[0], `витрина запросила «${asked[0]}»`).toContain('sort=number');
-    expect(asked[0]).toContain('desc=false');
+    // «Всё как у bazon» — решение владельца 19.10.2026 (задача 0372): новая
+    // учётная запись видит первой позицию с наибольшим номером, а не «1».
+    expect(asked[0], 'новая учётная запись открыла склад с позиции № 1, а не с последней заведённой')
+      .toContain('desc=true');
   });
+
+  it('запомненное «по возрастанию» у старого пользователя не меняется, а сброс ведёт к новым сверху',
+    async () => {
+      // Так лежит настройка у того, кто сохранял экран до 0372: прежнее
+      // умолчание записано в неё явным направлением.
+      stored = {
+        visible: ['number', 'title'],
+        sort: 'number', desc: false, q: '', reserved: true, missing: false,
+        warehouses: [], columns: {}, words: {},
+        vehicle: {
+          brandId: null, brandName: '', modelId: null, modelName: '', body: '', engine: '',
+        },
+      };
+      render(<CatalogScreen rights={rightsAs('OWNER')} />);
+      await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+
+      expect(asked[0], 'запомненная сортировка пользователя заменена новым умолчанием')
+        .toContain('desc=false');
+
+      const reset = button('Сбросить сортировку');
+      expect(reset, 'запомненное «по возрастанию» больше не умолчание, а вернуть умолчание нечем')
+        .toBeTruthy();
+      reset!.click();
+
+      await waitFor(() => expect(asked.length).toBeGreaterThan(1));
+      const last = asked[asked.length - 1];
+      expect(last).toContain('sort=number');
+      expect(last, '«Сбросить сортировку» вернуло прежнее «по возрастанию»').toContain('desc=true');
+    });
 
   it('восстанавливает сохранённое за сотрудником, а не умолчание', async () => {
     stored = {
