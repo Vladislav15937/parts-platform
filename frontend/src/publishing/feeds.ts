@@ -160,6 +160,12 @@ export interface Feed {
    */
   deliveryStatus: DeliveryStatus | null;
   /**
+   * Часть изменений не ушла на Дром и ещё не покрыта полным прайсом
+   * (задача 0271). `null` — сказать нечего. Ответ прежней версии сервера
+   * поля не несёт — отсюда необязательность. Слова — `unsentLine`.
+   */
+  unsent?: UnsentChanges | null;
+  /**
    * Когда площадка последний раз забрала прайс по постоянной ссылке.
    * `null` — не забирала ни разу.
    *
@@ -807,6 +813,71 @@ export function deliveryLine(feed: Feed): { text: string; error: boolean } | nul
       + 'Они уедут полным прайсом.',
   };
   return { text: (text[code] ?? text.UNRECOGNIZED)(), error: RED.includes(code) };
+}
+
+/**
+ * Что не ушло на Дром: момент, причина тем же кодом, что у итога отправки,
+ * предел пакета (если причина — лимит) и через сколько суток Дром самое
+ * позднее заберёт полный прайс. Предел и сутки — от сервера: копия константы
+ * на экране разошлась бы с ним молча.
+ */
+export interface UnsentChanges {
+  at: string;
+  code: DeliveryCode | null;
+  limitBytes: number | null;
+  fullPullDays: number;
+}
+
+/** Причина неотправки — теми же словами, что у итога отправки (0268). */
+function unsentReason(unsent: UnsentChanges): string {
+  switch (unsent.code) {
+    case 'TOO_BIG': {
+      if (unsent.limitBytes === null) return 'пакет больше лимита Дрома';
+      const mb = Math.round((unsent.limitBytes / (1024 * 1024)) * 10) / 10;
+      return `пакет больше лимита ${mb.toLocaleString('ru-RU')} МБ`;
+    }
+    case 'PACKET_NOT_FOUND':
+      return 'прайс-лист не подключён к API';
+    case 'AUTH_FAILED':
+      return 'Дром не принял ключ синхронизации';
+    case 'EMPTY_REQUEST':
+      return 'Дром получил запрос без данных или без ключа';
+    default:
+      // Сервер ставит признак только на лимит и на три знакомых отказа;
+      // сюда попадает лишь ответ, собранный не по договору.
+      return 'Дром их не принял';
+  }
+}
+
+/** «через трое суток»: у слова «сутки» счёт собирательный до четырёх. */
+function daysWord(days: number): string {
+  const collective: Record<number, string> = {
+    1: 'одни сутки', 2: 'двое суток', 3: 'трое суток', 4: 'четверо суток',
+  };
+  return collective[days] ?? `${days.toLocaleString('ru-RU')} суток`;
+}
+
+/**
+ * Плашка «часть изменений не ушла на Дром» (задача 0271) — единственное место
+ * её слов. Стоит рядом с итогом последней отправки и не гаснет от следующей
+ * принятой дельты: гасит её сервер, когда Дром скачал полный прайс позже.
+ *
+ * <p>Слова — предложение разведки 12.10.2026 (tasks/0271) с поправками
+ * исполнителя: причина называется так же, как в итоге отправки, а не одним
+ * «больше лимита», и сказано, когда предупреждение снимется — «прайс будет
+ * скачан Дромом», не «обновлено»: скачал не значит разобрал.
+ *
+ * @returns `null`, если неотправленного нет
+ */
+export function unsentLine(feed: Feed): string | null {
+  const unsent = feed.unsent;
+  if (!unsent) {
+    return null;
+  }
+  return `Часть изменений не ушла на Дром (${moment(unsent.at)}): ${unsentReason(unsent)}. `
+    + 'Эти цены и остатки обновятся при ближайшем полном заборе прайса — не позже чем '
+    + `через ${daysWord(unsent.fullPullDays)}. Предупреждение снимется само, когда прайс `
+    + 'будет скачан Дромом.';
 }
 
 /**
