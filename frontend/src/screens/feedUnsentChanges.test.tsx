@@ -94,6 +94,26 @@ describe('плашка «часть изменений не ушла» на ка
       .toContain(': Дром не принял ключ синхронизации.');
   });
 
+  // Ответ владельца 26.10.2026 (tasks/0271): признак ставится и на временный
+  // сбой, и плашка называет его причину словами, а не кодом.
+  it.each([
+    ['HTTP_ERROR', 502, ': Дром ответил ошибкой HTTP 502.'],
+    ['TIMEOUT', null, ': Дром не ответил вовремя.'],
+    ['NO_CONNECTION', null, ': не удалось соединиться с Дромом.'],
+    ['HOST_UNKNOWN', null, ': не удалось найти адрес Дрома.'],
+    ['CONNECTION_BROKEN', null, ': связь с Дромом оборвалась.'],
+  ])('временный сбой %s стоит рядом с принятым повтором и назван словами', async (code, httpStatus, words) => {
+    await show({ unsent: { at: '2026-10-12T07:05:00Z', code, httpStatus,
+                           limitBytes: null, fullPullDays: 3 } });
+
+    expect(screen.getByText(/Последняя дельта принята Дромом/)).toBeTruthy();
+    const line = screen.getByText(/Часть изменений не ушла на Дром/);
+    expect(line.textContent).toContain(words);
+    expect(line.textContent).not.toContain(code);
+    expect(line.textContent).not.toContain('Дром их не принял');
+    expect(line.className).toContain('note--warn');
+  });
+
   it('нет неотправленного — плашки нет; ответ прежнего сервера без поля — тоже', async () => {
     await show({ unsent: null });
     expect(screen.queryByText(/Часть изменений не ушла/)).toBeNull();

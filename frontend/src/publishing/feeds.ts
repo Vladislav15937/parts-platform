@@ -824,6 +824,8 @@ export function deliveryLine(feed: Feed): { text: string; error: boolean } | nul
 export interface UnsentChanges {
   at: string;
   code: DeliveryCode | null;
+  /** Статус ответа Дрома, если ответ был; у ответа прежнего сервера поля нет. */
+  httpStatus?: number | null;
   limitBytes: number | null;
   fullPullDays: number;
 }
@@ -842,9 +844,25 @@ function unsentReason(unsent: UnsentChanges): string {
       return 'Дром не принял ключ синхронизации';
     case 'EMPTY_REQUEST':
       return 'Дром получил запрос без данных или без ключа';
+    // Временный сбой — тоже неотправка (ответ владельца 26.10.2026, tasks/0271).
+    case 'HTTP_ERROR':
+      return unsent.httpStatus
+        ? `Дром ответил ошибкой HTTP ${unsent.httpStatus}`
+        : 'Дром ответил ошибкой';
+    case 'TIMEOUT':
+      return 'Дром не ответил вовремя';
+    case 'NO_CONNECTION':
+      return 'не удалось соединиться с Дромом';
+    case 'HOST_UNKNOWN':
+      return 'не удалось найти адрес Дрома';
+    case 'CONNECTION_BROKEN':
+      return 'связь с Дромом оборвалась';
+    case 'UNKNOWN_REASON':
+      return 'Дром отказал с кодом, которого мы не знаем';
+    case 'UNRECOGNIZED':
+      return 'Дром ответил незнакомым образом';
     default:
-      // Сервер ставит признак только на лимит и на три знакомых отказа;
-      // сюда попадает лишь ответ, собранный не по договору.
+      // Кода нет только в ответе, собранном не по договору.
       return 'Дром их не принял';
   }
 }

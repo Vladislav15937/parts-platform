@@ -255,25 +255,70 @@ class UnsentChangesTest extends PostgresTestBase {
     }
 
     /**
-     * Временный сбой (502, тишина, обрыв) отметок не снимает: позиции уедут
-     * следующим заходом, то есть «не ушло» тут неправда — признак не ставится.
-     * Причину последней попытки по-прежнему называет итог отправки (0268).
+     * Временный сбой (502, тишина, отказ соединения, обрыв) — тоже неотправка:
+     * ответ владельца 26.10.2026 (tasks/0271, «Вопрос владельцу — временный
+     * сбой и признак»), «признак обязан ставиться и на временный сбой». Очередь
+     * при этом держится, как держалась: повтор уходит следующим заходом
+     * и признак не гасит — гасит его только забор прайса позже неотправки.
+     * Ради признака Дрому не уходит ничего сверх обычного повтора.
      */
     @Test
-    @DisplayName("Временный сбой признака не ставит: изменения остаются в очереди и уедут сами")
-    void transientFailureIsNotUnsent() throws Exception {
-        account("Дром", "111", null);
+    @DisplayName("Временный сбой — 502, нет ответа, обрыв — ставит признак; принятый повтор его не гасит")
+    void transientFailureIsUnsent() throws Exception {
+        Long id = account("Дром", "111", null);
         Long partId = part("Дверь", "5000");
-        drainQueue();
-        syncClient.failFor("111", 502, "<html>Bad Gateway</html>");
+        record Failure(String name, Runnable inject, String code, Integer httpStatus) {
+        }
+        List<Failure> failures = List.of(
+                new Failure("502", () -> syncClient.failFor("111", 502, "<html>Bad Gateway</html>"),
+                        "HTTP_ERROR", 502),
+                new Failure("нет ответа", () -> syncClient.dropFor("111",
+                        DromSyncClient.Transport.TIMEOUT, "request timed out"), "TIMEOUT", null),
+                new Failure("не соединились", () -> syncClient.dropFor("111",
+                        DromSyncClient.Transport.CONNECT, "Connection refused"), "NO_CONNECTION", null),
+                new Failure("обрыв", () -> syncClient.dropFor("111",
+                        DromSyncClient.Transport.BROKEN, "Connection reset"), "CONNECTION_BROKEN", null));
 
-        change(partId);
-        relay.relayFor(TENANT);
+        for (Failure failure : failures) {
+            inTenant(() -> jdbc.update("""
+                    UPDATE marketplace_account SET unsent_at = NULL, unsent_error = NULL,
+                                                   last_sync_at = NULL, last_error = NULL
+                     WHERE id = ?""", id));
+            drainQueue();
+            failure.inject().run();
 
-        Map<String, Object> feed = feedJson("Дром");
-        assertThat(path(feed, "deliveryStatus.code")).isEqualTo("HTTP_ERROR");
-        assertThat(feed.get("unsent")).isNull();
-        assertThat(queueSize()).as("временный сбой обязан держать очередь, как раньше").isEqualTo(1);
+            change(partId);
+            relay.relayFor(TENANT);
+
+            Map<String, Object> failed = feedJson("Дром");
+            assertThat(path(failed, "deliveryStatus.code")).as(failure.name()).isEqualTo(failure.code());
+            assertThat(path(failed, "unsent.code"))
+                    .as("%s: временный сбой не поставил признак «часть изменений не ушла»", failure.name())
+                    .isEqualTo(failure.code());
+            assertThat(path(failed, "unsent.httpStatus")).as(failure.name()).isEqualTo(failure.httpStatus());
+            assertThat(path(failed, "unsent.at")).as(failure.name()).isNotNull();
+            assertThat(queueSize()).as("%s: временный сбой обязан держать очередь, как раньше",
+                    failure.name()).isEqualTo(1);
+            assertThat(callsTo("111")).as("%s: ради признака Дрому ушло лишнее", failure.name())
+                    .isEqualTo(1);
+
+            // Повтор следующим заходом принят — итог «принято», а признак стоит.
+            syncClient.reset();
+            relay.relayFor(TENANT);
+            Map<String, Object> retried = feedJson("Дром");
+            assertThat(callsTo("111")).as("%s: повтор после сбоя", failure.name()).isEqualTo(1);
+            assertThat(path(retried, "deliveryStatus.state")).as(failure.name()).isEqualTo("ACCEPTED");
+            assertThat(path(retried, "unsent.code"))
+                    .as("%s: принятый повтор погасил признак — гасит только забор прайса", failure.name())
+                    .isEqualTo(failure.code());
+            assertThat(path(retried, "unsent.at")).isEqualTo(path(failed, "unsent.at"));
+            assertThat(queueSize()).as(failure.name()).isZero();
+        }
+
+        downloadedRelativeToUnsent(id, "+ interval '1 second'");
+        assertThat(feedJson("Дром").get("unsent"))
+                .as("Дром скачал прайс позже сбоя, а признак висит")
+                .isNull();
     }
 
     @Test

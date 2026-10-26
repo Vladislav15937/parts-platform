@@ -12,7 +12,9 @@ import java.time.Instant;
  * попытку, и малая принятая дельта после неотправленной честно отвечает
  * «принято». Этот признак — отдельная память: изменения сняли с очереди,
  * а этой выгрузке они не достались (дельта сверх лимита, отказ «нужен
- * человек», пропуск в интервале после него). Гаснет он здесь, на чтении,
+ * человек», пропуск в интервале после него), либо попытка сорвалась временным
+ * сбоем — 5xx, тишина, обрыв (ответ владельца 26.10.2026: признак на любую
+ * неотправку; повтор при этом идёт, но гасит признак только забор прайса). Гаснет он здесь, на чтении,
  * когда Дром скачал полный прайс позже момента неотправки — ответ владельца
  * 12.10.2026, вариант «а» (tasks/0271, «Вопрос владельцу продукта — когда
  * признак гаснет»). Колонку при этом никто не обнуляет: решает сравнение двух
@@ -24,11 +26,12 @@ import java.time.Instant;
  *
  * @param at           когда изменения последний раз сняли с очереди без отправки
  * @param code         причина — тот же {@link DeliveryStatus.Code}, что у итога
+ * @param httpStatus   статус ответа Дрома, если он был (у 5xx его называет экран)
  * @param limitBytes   предел пакета, если причина — лимит
  * @param fullPullDays через сколько суток Дром самое позднее заберёт полный прайс
  */
-public record UnsentChanges(Instant at, DeliveryStatus.Code code, Integer limitBytes,
-                            int fullPullDays) {
+public record UnsentChanges(Instant at, DeliveryStatus.Code code, Integer httpStatus,
+                            Integer limitBytes, int fullPullDays) {
 
     /**
      * Дром забирает прайс по ссылке раз в трое суток на бесплатном размещении
@@ -53,8 +56,8 @@ public record UnsentChanges(Instant at, DeliveryStatus.Code code, Integer limitB
         if (lastDownloadAt != null && lastDownloadAt.isAfter(unsentAt)) {
             return null;
         }
-        DeliveryStatus.Code code = DeliveryStatus.refused(unsentAt, unsentError).code();
-        return new UnsentChanges(unsentAt, code, DromSyncRecord.tooBigLimitBytes(unsentError),
-                FULL_PULL_DAYS);
+        DeliveryStatus reason = DeliveryStatus.refused(unsentAt, unsentError);
+        return new UnsentChanges(unsentAt, reason.code(), reason.httpStatus(),
+                DromSyncRecord.tooBigLimitBytes(unsentError), FULL_PULL_DAYS);
     }
 }
