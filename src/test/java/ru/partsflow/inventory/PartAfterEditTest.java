@@ -45,7 +45,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *   <li>«№ позиции» на миллионы вперёд — без предела «похоже на опечатку»;
  *       граница только у типа, словами; гонка с приёмкой не отдаёт номер двоим.</li>
  *   <li>Машина, исправленная в карточке, — в прайсе Дрома, отборе выгрузки,
- *       её счётчике, отборе продавца и подборе «что подходит».</li>
+ *       её счётчике, отборе продавца и подборе «что подходит». С задачи 0365
+ *       у позиции с донором её не правят, но вписанная раньше хранится —
+ *       и читается так же.</li>
  *   <li>Собранный заголовок идёт за номером производителя, вписанный руками — нет.</li>
  * </ol>
  *
@@ -84,6 +86,9 @@ class PartAfterEditTest extends PostgresTestBase {
 
     @Autowired
     private AuditJournal journal;
+
+    @Autowired
+    private PartIdentity identity;
 
     /** Своё слово этого метода: поиск продавца и витрины находят только его позиции. */
     private String marking;
@@ -248,7 +253,7 @@ class PartAfterEditTest extends PostgresTestBase {
     @Test
     @DisplayName("Исправленная в карточке марка уходит в прайс Дрома, соседняя деталь — нет")
     void manualVehicleGoesToTheDromPrice() throws Exception {
-        save(login(), "\"brand\":\"Lexus\",\"model\":\"ES250\",\"body\":\"GSV40\",\"year\":\"2008\"");
+        storedOwnVehicle("Lexus", "ES250", "GSV40", "2008");
 
         String xml = price(DromPriceGenerator.FeedFilter.everything());
         String own = offer(xml, "Фара левая");
@@ -264,7 +269,7 @@ class PartAfterEditTest extends PostgresTestBase {
     @Test
     @DisplayName("Отбор выгрузки по марке берёт исправленную марку, и счётчик считает то же")
     void exportBrandFilterSeesTheManualBrand() throws Exception {
-        save(login(), "\"brand\":\"Lexus\"");
+        storedOwnVehicle("Lexus", null, null, null);
 
         String onlyLexus = price(filterOf(lexus, false));
         assertThat(onlyLexus).contains("Фара левая").doesNotContain("Фара правая");
@@ -286,7 +291,7 @@ class PartAfterEditTest extends PostgresTestBase {
     @DisplayName("Отбор продавца находит позицию по исправленной марке, а не по донору; список значений тот же")
     void sellerFiltersByTheManualBrand() throws Exception {
         MockHttpSession owner = login();
-        save(owner, "\"brand\":\"Lexus\",\"model\":\"ES250\",\"year\":\"2008\"");
+        storedOwnVehicle("Lexus", "ES250", null, "2008");
 
         JsonNode lexusFound = stock(owner, "brand", "Lexus");
         assertThat(ids(lexusFound)).containsExactly(partId);
@@ -304,7 +309,7 @@ class PartAfterEditTest extends PostgresTestBase {
     @DisplayName("Подбор «что подходит к машине» находит исправленную марку, и число в списке машин совпадает")
     void vehiclePickerSeesTheManualBrand() throws Exception {
         MockHttpSession owner = login();
-        save(owner, "\"brand\":\"lexus\",\"model\":\"ES250\"");
+        storedOwnVehicle("lexus", "ES250", null, null);
         Long es250 = jdbc.queryForObject(
                 "SELECT id FROM catalog.model WHERE brand_id = ? AND name = 'ES250'", Long.class, lexus);
 
@@ -371,6 +376,17 @@ class PartAfterEditTest extends PostgresTestBase {
         return mvc.perform(get("/api/parts/" + partId + "/history").session(owner))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Своя машина у позиции с донором, вписанная до задачи 0365: с ней правка
+     * карточки марку такой позиции больше не принимает (замок — {@code PartDonorLockTest}),
+     * а прежние значения не стёрты и читаются всеми отборами. Пишется тем же
+     * {@code PartIdentity.apply}, которым их писала карточка до замка.
+     */
+    private void storedOwnVehicle(String brand, String model, String body, String year) {
+        inTenant(() -> identity.apply(partId, new PartIdentity.Edit(null, null, null, null, null, null,
+                null, brand, model, null, body, null, year, null), null));
     }
 
     private void save(MockHttpSession session, String fields) throws Exception {

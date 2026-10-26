@@ -37,6 +37,8 @@ describe('подсказки марки и модели в правке карт
         sent.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
         return json({});
       }
+      // Позиция без донора (задача 0365): у неё машина правится строками формы.
+      if (url.endsWith('/donor')) return new Response('{}', { status: 404 });
       if (url.includes('/api/catalog/vehicles')) {
         catalogRequests += 1;
         if (catalogFails) return new Response('{}', { status: 503 });

@@ -35,9 +35,12 @@ public class PartController {
     private final PartHistoryService history;
     private final DonorDirectory donors;
     private final PartIdentity identity;
+    private final PartDonorChange donorChange;
 
     public PartController(PartService partService, PartHistoryService history,
-                          DonorDirectory donors, PartIdentity identity) {
+                          DonorDirectory donors, PartIdentity identity,
+                          PartDonorChange donorChange) {
+        this.donorChange = donorChange;
         this.partService = partService;
         this.history = history;
         this.donors = donors;
@@ -77,6 +80,22 @@ public class PartController {
     public DonorDirectory.Card donor(@PathVariable long id) {
         return donors.cardByPart(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+    }
+
+    /**
+     * Смена «Номера донора» у позиции с машиной-донором (задача 0365): машина
+     * позиции под замком и меняется только так — новая встаёт по правилу
+     * заведения, вместе с названием и применимостью ({@link PartDonorChange}).
+     * Право то же, что у правки карточки.
+     */
+    @PutMapping("/{id}/donor")
+    @PreAuthorize("hasAuthority('part.edit')")
+    public PartView changeDonor(@PathVariable Long id, @RequestBody DonorChoice choice) {
+        return PartView.of(donorChange.change(id, choice.donorId(), CurrentUser.memberId()));
+    }
+
+    /** @param donorId машина, на которую перевязать позицию */
+    public record DonorChoice(Long donorId) {
     }
 
     @GetMapping("/search")
