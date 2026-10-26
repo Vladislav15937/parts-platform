@@ -152,9 +152,13 @@ class IntakeTitleLikeBazonTest extends PostgresTestBase {
      * Название производное (решение 2): правка номера, состояния, положения
      * и машины позиции пересобирает его тем же генератором, что приёмка, —
      * и возврат прежних полей возвращает прежнее название до знака.
+     *
+     * <p>Позиция здесь с донором, и с задачи 0365 её машина правится только
+     * сменой донора: пересборку названия при этом стережёт
+     * {@code inventory.PartDonorLockTest.changingTheDonorRecomputesTheVehicle}.
      */
     @Test
-    @DisplayName("Правка номера, состояния, положения и машины пересобирает название; заметка — нет")
+    @DisplayName("Правка номера, состояния и положения пересобирает название; заметка — нет")
     void editRebuildsTitle() throws Exception {
         long id = idOf(receive("mark-edit-" + System.nanoTime(), PartCondition.USED));
 
@@ -165,15 +169,12 @@ class IntakeTitleLikeBazonTest extends PostgresTestBase {
                 .isEqualTo(BASE + " (б/у) 84140-12531");
         assertThat(edit(id, "{\"sideFr\":\"REAR\",\"sideLr\":\"\"}"))
                 .isEqualTo("Блок подрулевых переключателей Toyota ZNE10 1ZZFE 2006 Задн. (б/у) 84140-12531");
-        assertThat(edit(id, "{\"brand\":\"Lexus, Toyota\",\"year\":\"2008\"}"))
-                .as("своя машина позиции сильнее донора, первое значение списка")
-                .isEqualTo("Блок подрулевых переключателей Lexus ZNE10 1ZZFE 2008 Задн. (б/у) 84140-12531");
         assertThat(edit(id, "{\"note\":\"скол\"}"))
                 .as("заметка не поле формулы")
-                .isEqualTo("Блок подрулевых переключателей Lexus ZNE10 1ZZFE 2008 Задн. (б/у) 84140-12531");
+                .isEqualTo("Блок подрулевых переключателей Toyota ZNE10 1ZZFE 2006 Задн. (б/у) 84140-12531");
         // Обратно — то же, что собрала приёмка: формула одна.
         assertThat(edit(id, """
-                {"brand":"","year":"","sideFr":"FRONT","sideLr":"LEFT","oem":"8414012530",
+                {"sideFr":"FRONT","sideLr":"LEFT","oem":"8414012530",
                  "condition":"USED"}"""))
                 .isEqualTo(BASE + " (б/у) 8414012530");
     }
