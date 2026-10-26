@@ -347,6 +347,20 @@ public class PartService {
             + "машины, года, положения, состояния и номера производителя — и руками не правится. "
             + "Исправьте эти поля, и наименование поменяется вместе с ними.";
 
+    /**
+     * Отказ на правку машины у позиции с донором (задача 0365): поля названы
+     * словами строк формы — теми же, что у отказа на чужую правку.
+     */
+    static String donorLocked(List<String> keys) {
+        String names = keys.stream().map(k -> "«" + PartEditConflicts.label(k) + "»")
+                .collect(java.util.stream.Collectors.joining(", "));
+        return (keys.size() == 1
+                ? "Поле " + names + " у позиции с машиной-донором берётся из машины и здесь не правится."
+                : "Поля " + names + " у позиции с машиной-донором берутся из машины и здесь не правятся.")
+                + " Если машина у детали не та — выберите"
+                + " другой «Номер донора»: марка, модель и остальное встанут с него.";
+    }
+
     @Transactional
     public Edited update(Long partId, PartUpdate request, Long authorId) {
         // Под блокировкой строки (задача 0307): две правки одной карточки идут
@@ -368,6 +382,18 @@ public class PartService {
         // Номер, который нельзя сохранить (задача 0312), — отказ словами раньше
         // сверки чужой правки: он про сам запрос, а не про то, что успел другой.
         PartIdentity.requireStorable(request.identity());
+        // Машина позиции с донором — под замком (задача 0365, «Всё как у bazon»):
+        // она всегда равна машине, а правка одной детали «мимо» неё давала
+        // расхождение названия, прайса и подбора. Отказ до любой записи и до
+        // сверки чужой правки — он про сам запрос, как у номера выше.
+        if (part.getDonorId() != null) {
+            List<String> locked = PartIdentity.lockedChanges(identity.of(partId), request.identity());
+            if (!locked.isEmpty()) {
+                log.warn("Правка позиции {} отбита: машина у позиции с донором, поля {}",
+                        partId, locked);
+                throw new IllegalArgumentException(donorLocked(locked));
+            }
+        }
         PartUpdate update = request;
         List<NotSaved> notSaved = List.of();
         // Сверка — до всякой записи и под той же блокировкой (задача 0313):

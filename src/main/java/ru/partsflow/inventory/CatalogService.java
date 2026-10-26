@@ -1255,6 +1255,33 @@ public class CatalogService {
     }
 
     /**
+     * Снимает применимость, которую позиции поставила прежняя машина-донор
+     * (задача 0365, перевязка на другой номер донора): строку с маркой, моделью
+     * и поколением этой машины, <b>не подтверждённую человеком</b>. Подтверждённую
+     * оставляет — её подтвердили, значит деталь к той машине подходит и сама по себе.
+     * Журнал — как у снятия из карточки: машина словами в снимке.
+     *
+     * @return сколько строк снято
+     */
+    @Transactional
+    public int dropDonorFit(long partId, long donorId) {
+        List<Long> ids = jdbc.queryForList("""
+                SELECT a.id FROM part_applicability a
+                  JOIN donor d ON d.id = ?
+                 WHERE a.part_id = ? AND NOT a.is_verified
+                   AND a.brand_id = d.brand_id
+                   AND a.model_id IS NOT DISTINCT FROM d.model_id
+                   AND a.generation_id = d.generation_id
+                 FOR UPDATE OF a""", Long.class, donorId, partId);
+        for (Long id : ids) {
+            Map<String, Object> snapshot = applicabilitySnapshot(id);
+            jdbc.update("DELETE FROM part_applicability WHERE id = ?", id);
+            journal.deleted("part_applicability", id, snapshot);
+        }
+        return ids.size();
+    }
+
+    /**
      * Единственное место, где в {@code part_applicability} пишут из карточки и из приёмки.
      * Без собственной аннотации намеренно: журнал требует транзакцию вызывающего.
      *
