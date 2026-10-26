@@ -1,6 +1,6 @@
 --liquibase formatted sql
 
---changeset partsflow:tenant-104-feed-unsent-mark
+--changeset partsflow:tenant-105-feed-unsent-mark
 --comment Память карточки выгрузки «часть изменений не ушла на Дром» — две колонки, а не settings и не журнал
 
 -- Дельта, снятая с очереди и не ушедшая на Дром (сверх лимита пакета, отказ
