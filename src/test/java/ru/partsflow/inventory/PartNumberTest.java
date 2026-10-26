@@ -1,21 +1,33 @@
 package ru.partsflow.inventory;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpSession;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 import ru.partsflow.platform.tenant.TenantContext;
 import ru.partsflow.support.PostgresTestBase;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * Номер позиции: тот, который называют вслух (задача 0060).
@@ -35,11 +47,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * человеку номер менять уже нельзя. Проверяется это не на пустой схеме
  * (там раздавать нечего), а повторным накатом на схему с данными.
  *
- * <p><b>Порядок витрины по умолчанию.</b> Он обязан быть порядком заведения:
- * «сортировать витрину по порядковому номеру 1. 2. 3. и тд» — решение
- * владельца продукта от 11 сентября 2026.
+ * <p><b>Порядок витрины по умолчанию.</b> Номер по убыванию, новые сверху —
+ * решение владельца продукта 19.10.2026 «всё как у bazon» (задача 0372);
+ * прежнее «1. 2. 3. и тд» от 11 сентября 2026 (задача 0060) отменено.
  */
 @SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
+@AutoConfigureMockMvc
 class PartNumberTest extends PostgresTestBase {
 
     private static final String TENANT = "t_000148";
@@ -52,6 +65,15 @@ class PartNumberTest extends PostgresTestBase {
 
     @Autowired
     private TransactionTemplate transactionTemplate;
+
+    @Autowired
+    private MockMvc mvc;
+
+    @Autowired
+    private ObjectMapper json;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
 
     @BeforeAll
     static void migrate() {
@@ -127,40 +149,80 @@ class PartNumberTest extends PostgresTestBase {
     }
 
     /**
-     * Порядок витрины по умолчанию — порядок заведения.
+     * Порядок витрины по умолчанию — номер позиции по убыванию, новые сверху (задача 0372).
      *
-     * <p>Сортировка по коду валит этот тест словами о том, чем порядок
-     * отличается от ожидаемого: он был проверен откатом и до починки
-     * не проходит.
+     * <p>Решение владельца продукта 19.10.2026 «всё как у bazon»: у Bazon списки
+     * открываются «Номером товара» по убыванию, и прежнее «1. 2. 3. и тд» (0060,
+     * 11.09.2026) отменено. У клиента с 35 тысячами позиций первая страница — это всё,
+     * что человек видит, не трогая сортировку, и при возрастании там лежали бы позиции
+     * трёхлетней давности.
+     *
+     * <p>Через HTTP, а не вызовом сервиса: умолчание живёт в {@code @RequestParam}
+     * контроллера, и вызов сервиса с явным направлением его не видит. Страница
+     * и выгрузка проверяются обе — файл качают ради сверки с экраном.
+     *
+     * <p>Коды убывают вместе с ростом номера: сортировка по коду дала бы порядок
+     * заведения, и это видно по сообщению.
      */
     @Test
-    @DisplayName("Витрина по умолчанию открывается порядком заведения, а не случайным")
-    void defaultOrderIsCreationOrder() {
+    @DisplayName("Витрина и выгрузка по умолчанию открываются номером по убыванию — новые сверху, как у Bazon")
+    void defaultOrderIsNewestFirst() throws Exception {
         List<String> titles = List.of(
                 "Порядок первая", "Порядок вторая", "Порядок третья", "Порядок четвёртая");
-        // Коды убывают вместе с ростом id: сортировка по коду даст ровно
-        // обратный порядок, и её видно по сообщению.
         List<String> codes = List.of(
-                "FFFF00000001", "CCCC00000002", "888800000003", "111100000004");
+                "111100000001", "888800000002", "CCCC00000003", "FFFF00000004");
         for (int at = 0; at < titles.size(); at++) {
             part(titles.get(at), codes.get(at));
         }
+        List<String> newestFirst = new java.util.ArrayList<>(titles);
+        java.util.Collections.reverse(newestFirst);
+        MockHttpSession owner = login();
 
-        // Сортировка не названа вовсе — ровно так экран и открывается
-        // до первого нажатия на заголовок колонки.
-        List<CatalogService.Row> rows = inTenant(() -> catalog.list("Порядок", true, true,
-                List.of(), null, Map.of(), Map.of(), null, false, 0, 50)).rows();
+        // Сортировка не названа вовсе — так экран спрашивает до первого нажатия
+        // на заголовок колонки, если клиент умолчание не прислал.
+        JsonNode page = json.readTree(mvc.perform(get("/api/parts/catalog")
+                        .param("q", "Порядок").param("missing", "true").session(owner))
+                .andExpect(status().isOk()).andReturn().getResponse()
+                .getContentAsString(StandardCharsets.UTF_8));
+        List<String> shown = titlesOf(page);
+        assertThat(shown)
+                .as("витрина без названной сортировки открылась не новыми сверху: первой стоит "
+                        + "не последняя заведённая позиция (решение 19.10.2026, «как у Bazon»)")
+                .containsExactlyElementsOf(newestFirst);
+        List<Long> numbers = new java.util.ArrayList<>();
+        page.path("rows").forEach(row -> numbers.add(row.path("number").asLong()));
+        assertThat(numbers)
+                .as("номера позиций идут не по убыванию: %s", numbers)
+                .isSortedAccordingTo(java.util.Comparator.reverseOrder());
 
-        assertThat(rows.stream().map(CatalogService.Row::title).toList())
-                .as("витрина отдала порядок, отличный от порядка заведения: "
-                        + "первой стоит не первая принятая позиция")
+        // Прежний порядок остаётся выбираемым: запомненная настройка человека
+        // приходит с явным направлением и обязана исполниться как есть.
+        JsonNode ascending = json.readTree(mvc.perform(get("/api/parts/catalog")
+                        .param("q", "Порядок").param("missing", "true")
+                        .param("sort", "number").param("desc", "false").session(owner))
+                .andExpect(status().isOk()).andReturn().getResponse()
+                .getContentAsString(StandardCharsets.UTF_8));
+        assertThat(titlesOf(ascending))
+                .as("явное «по возрастанию» не исполнилось")
+                .containsExactlyElementsOf(titles);
+        // Названная без направления сортировка идёт по возрастанию, как нажатие
+        // на заголовок: «по убыванию» — направление умолчания, а не любой колонки.
+        assertThat(titlesOf(json.readTree(mvc.perform(get("/api/parts/catalog")
+                        .param("q", "Порядок").param("missing", "true")
+                        .param("sort", "number").session(owner))
+                .andExpect(status().isOk()).andReturn().getResponse()
+                .getContentAsString(StandardCharsets.UTF_8))))
+                .as("сортировка, названная без направления, перевернулась умолчанием")
                 .containsExactlyElementsOf(titles);
 
-        List<Long> numbers = rows.stream().map(CatalogService.Row::number).toList();
-        assertThat(numbers)
-                .as("номера позиций идут не по возрастанию: %s — "
-                        + "значит порядок на экране не тот, что обещает колонка «№ позиции»",
-                        numbers)
+        String file = mvc.perform(get("/api/parts/catalog/export")
+                        .param("q", "Порядок").param("missing", "true").session(owner))
+                .andExpect(status().isOk()).andReturn().getResponse()
+                .getContentAsString(StandardCharsets.UTF_8);
+        List<Integer> at = newestFirst.stream().map(file::indexOf).toList();
+        assertThat(at).as("в выгрузке нет позиций прогона").doesNotContain(-1);
+        assertThat(at)
+                .as("выгрузка без названной сортировки разошлась с экраном: строки не новыми сверху")
                 .isSorted();
     }
 
@@ -203,6 +265,34 @@ class PartNumberTest extends PostgresTestBase {
             jdbc.update("UPDATE part SET public_code = ? WHERE id = ?", code, id);
             return id;
         });
+    }
+
+    private static List<String> titlesOf(JsonNode page) {
+        List<String> titles = new java.util.ArrayList<>();
+        page.path("rows").forEach(row -> titles.add(row.path("title").asText()));
+        return titles;
+    }
+
+    /** Пишет то, что называет: найденного не принимает молча (корневой CLAUDE.md, «Тесты»). */
+    private MockHttpSession login() throws Exception {
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 148");
+        jdbc.update("""
+                INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
+                VALUES (148, ?, 'Разборка номеров', 'nomer148')""", TENANT);
+        inTenant(() -> {
+            jdbc.update("DELETE FROM tenant_member WHERE login = 'vladelec0372'");
+            jdbc.update("""
+                    INSERT INTO tenant_member (display_name, role, login, password_hash)
+                    VALUES ('Владелец 0372', 'OWNER', 'vladelec0372', ?)""",
+                    passwordEncoder.encode("пароль"));
+            return null;
+        });
+        return (MockHttpSession) mvc.perform(post("/api/auth/login").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"company":"nomer148","login":"vladelec0372","password":"пароль"}"""))
+                .andExpect(status().isOk())
+                .andReturn().getRequest().getSession(false);
     }
 
     private <T> T inTenant(Supplier<T> body) {
