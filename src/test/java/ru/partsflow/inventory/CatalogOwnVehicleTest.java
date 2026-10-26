@@ -127,8 +127,9 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
         assertThat(row.path("yearFrom").asInt()).isEqualTo(2002);
         assertThat(row.path("generation").isNull()).isFalse();
         assertThat(row.path("vehicleSource").asText()).isEqualTo("PARSED");
-        // Кузова и двигателя у применимости нет — пусто, как и было.
-        assertThat(row.path("body").isNull()).isTrue();
+        // С задачи 0296 кузова своей машины — из примечания строки применимости;
+        // двигателей у этой строки нет (их пишет разбор блока, а не фикстура).
+        assertThat(row.path("body").asText()).isEqualTo("GRJ120W, KDJ121W");
         assertThat(row.path("engine").isNull()).isTrue();
     }
 

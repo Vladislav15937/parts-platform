@@ -120,6 +120,19 @@ export interface CatalogRow {
    * держит отдельно (задача 0297). Годы клетки — от первого до последнего.
    */
   vehicleGenerationMerged?: boolean | null;
+  /**
+   * Откуда «Кузов» и «Двигатель» (задача 0296) — у каждой колонки своё: у позиции
+   * без донора это коды и двигатели её своей машины из блока «Подходит».
+   */
+  vehicleBodySource?: VehicleSource | null;
+  vehicleEngineSource?: VehicleSource | null;
+  /** Номер кузова из наименования («120»), до ряда которого сужены кузова своей машины. */
+  vehicleBodySeries?: string | null;
+  /**
+   * Двигателя у своей машины нет, а блок «Подходит» их называет: машин в блоке
+   * несколько, и строка «Для двигателей» — для всего блока.
+   */
+  vehicleEnginesForBlock?: boolean | null;
   /** Остаток по складам: ключ — идентификатор склада, число колонок = число складов. */
   stock: Record<string, number>;
   /**
@@ -185,6 +198,44 @@ export function vehicleHint(row: CatalogRow): string | undefined {
     return `${base}. Поколений у этой машины ${spans} — какое у детали, не указано; все — в карточке`;
   }
   return byBody ? `${base}. Поколение определено по ${byBody}` : base;
+}
+
+/**
+ * Подсказка клетки «Кузов» (задача 0296): откуда коды и весь их список — клетка
+ * обрезается по ширине, а кодов у своей машины бывает и тридцать.
+ */
+export function bodyHint(row: CatalogRow): string | undefined {
+  const base = codeSourceWords(row.vehicleBodySource ?? null);
+  if (base === undefined || !row.body) return undefined;
+  const series = row.vehicleBodySource !== 'DONOR' && row.vehicleBodySource !== 'MANUAL'
+    && row.vehicleBodySeries
+    ? `. Кузова ряда ${row.vehicleBodySeries} — по номеру в наименовании`
+    : '';
+  return `${base}${series}: ${row.body}`;
+}
+
+/**
+ * Подсказка клетки «Двигатель» (задача 0296). Пустая клетка у позиции, чей блок
+ * двигатели называет, — не «не заполнено»: строка «Для двигателей» одна на все
+ * машины блока, и чьи они, не сказано.
+ */
+export function engineHint(row: CatalogRow): string | undefined {
+  if (!row.engine) {
+    return row.vehicleEnginesForBlock
+      ? 'Двигатели названы для всего блока, а не для этой машины: в блоке «Подходит» машин несколько'
+      : undefined;
+  }
+  const base = codeSourceWords(row.vehicleEngineSource ?? null);
+  return base === undefined ? undefined : `${base}: ${row.engine}`;
+}
+
+function codeSourceWords(source: VehicleSource | null): string | undefined {
+  if (source === null) return undefined;
+  if (source === 'DONOR') return 'По донору';
+  if (source === 'MANUAL') return 'Вписано у позиции руками';
+  return source === 'VERIFIED'
+    ? 'По применимости, из блока «Подходит», подтверждена человеком'
+    : 'По применимости, из блока «Подходит», разобрана автоматически';
 }
 
 /**
@@ -753,8 +804,11 @@ export const COLUMNS: Column[] = [
      */
     value: () => '—',
   },
-  { key: 'body', title: 'Кузов', sort: 'body', value: (r) => text(r.body) },
-  { key: 'engine', title: 'Двигатель', sort: 'engine', value: (r) => text(r.engine) },
+  // У позиции без донора — коды и двигатели её своей машины из «Подходит»
+  // (задача 0296), весь список: ответ владельца 14.10.2026 «весь». Клетка
+  // обрезается по ширине, целиком список — в подсказке.
+  { key: 'body', title: 'Кузов', sort: 'body', value: (r) => text(r.body), hint: bodyHint },
+  { key: 'engine', title: 'Двигатель', sort: 'engine', value: (r) => text(r.engine), hint: engineHint },
   { key: 'year', title: 'Год выпуска', sort: 'year', numeric: true, value: (r) => text(r.year) },
   { key: 'sideFr', title: 'Передний / Задний', sort: 'sideFr', value: (r) => SIDE_FR[r.sideFr ?? ''] ?? '' },
   { key: 'sideLr', title: 'Левый / Правый', sort: 'sideLr', value: (r) => SIDE_LR[r.sideLr ?? ''] ?? '' },
