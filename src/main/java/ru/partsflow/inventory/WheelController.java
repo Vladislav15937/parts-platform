@@ -57,15 +57,20 @@ public class WheelController {
                      @RequestParam(defaultValue = "false") boolean missing,
                      jakarta.servlet.http.HttpServletRequest request,
                      // Умолчание то же, что у витрины склада: номер позиции
-                     // по возрастанию. Экран присылает его явно, но запрос
-                     // без параметров обязан отвечать тем же порядком.
-                     @RequestParam(defaultValue = "number") String sort,
-                     @RequestParam(defaultValue = "false") boolean desc,
+                     // по убыванию, новые сверху (задача 0379, решение владельца
+                     // 26.10.2026; до неё — по возрастанию). Экран присылает его
+                     // явно, но запрос без параметров обязан отвечать тем же
+                     // порядком. Направление — умолчания целиком: названная
+                     // без направления сортировка идёт по возрастанию
+                     // (CatalogController.descOf).
+                     @RequestParam(required = false) String sort,
+                     @RequestParam(required = false) Boolean desc,
                      @RequestParam(defaultValue = "0") int page,
                      @RequestParam(defaultValue = "50") int size) {
 
         WheelService.Page found = wheels.list(q, kind, missing,
-                columnsOf(request, "filter"), columnsOf(request, "find"), sort, desc,
+                columnsOf(request, "filter"), columnsOf(request, "find"),
+                CatalogController.sortOf(sort), CatalogController.descOf(sort, desc),
                 Math.max(page, 0), Math.min(Math.max(size, 1), MAX_SIZE));
 
         return new View(found.total(), catalog.warehouses(), WheelService.filterableColumns(),
@@ -92,8 +97,10 @@ public class WheelController {
                        @RequestParam(required = false) String kind,
                        @RequestParam(defaultValue = "false") boolean missing,
                        jakarta.servlet.http.HttpServletRequest request,
-                       @RequestParam(defaultValue = "number") String sort,
-                       @RequestParam(defaultValue = "false") boolean desc,
+                       // Тот же порядок по умолчанию, что у страницы: файл
+                       // качают ради сверки с вкладкой.
+                       @RequestParam(required = false) String sort,
+                       @RequestParam(required = false) Boolean desc,
                        jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
 
         List<CatalogService.Warehouse> found = catalog.warehouses();
@@ -111,7 +118,7 @@ public class WheelController {
         writeRow(out, WheelService.exportHeader(found));
 
         wheels.export(q, kind, missing, columnsOf(request, "filter"), columnsOf(request, "find"),
-                sort, desc, found,
+                CatalogController.sortOf(sort), CatalogController.descOf(sort, desc), found,
                 cells -> writeRow(out, cells));
         out.flush();
     }
