@@ -168,6 +168,11 @@ class DealIssuedHandlerTest extends PostgresTestBase {
         relay.relay();
 
         syncClient.reset();
+        // Временный сбой пробуется не раньше интервала (задача 0380): повтор
+        // доставки внутри него в Дром не стучится. Повтор — после интервала,
+        // как третья попытка робота разбора (минута, пять, пятнадцать).
+        inTenant(() -> jdbc.update(
+                "UPDATE marketplace_account SET last_sync_at = now() - interval '16 minutes'"));
         redeliver();
         relay.relay();
 
