@@ -302,7 +302,27 @@ class UnsentChangesTest extends PostgresTestBase {
             assertThat(callsTo("111")).as("%s: ради признака Дрому ушло лишнее", failure.name())
                     .isEqualTo(1);
 
-            // Повтор следующим заходом принят — итог «принято», а признак стоит.
+            // В интервале после сбоя выгрузку не пробуют (задача 0380), и карточка
+            // говорит, что неотправленное есть, а не «принято»: изменение ждёт
+            // в очереди, Дрому не уходит ничего.
+            relay.relayFor(TENANT);
+            relay.relayFor(TENANT);
+            Map<String, Object> resting = feedJson("Дром");
+            assertThat(callsTo("111")).as("%s: проба раньше интервала", failure.name()).isEqualTo(1);
+            assertThat(path(resting, "deliveryStatus.state"))
+                    .as("%s: в интервале после сбоя карточка говорит «принято»", failure.name())
+                    .isEqualTo("REFUSED");
+            assertThat(path(resting, "unsent.code"))
+                    .as("%s: в интервале после сбоя карточка молчит о неотправленном", failure.name())
+                    .isEqualTo(failure.code());
+            assertThat(queueSize()).as("%s: в интервале изменение выпало из очереди", failure.name())
+                    .isEqualTo(1);
+
+            // Проба после интервала принята — итог «принято», а признак стоит
+            // (ответ владельца 27.10.2026, tasks/0271: гасит только забор прайса).
+            inTenant(() -> jdbc.update("""
+                    UPDATE marketplace_account SET last_sync_at = now() - interval '16 minutes'
+                     WHERE id = ?""", id));
             syncClient.reset();
             relay.relayFor(TENANT);
             Map<String, Object> retried = feedJson("Дром");
@@ -311,7 +331,9 @@ class UnsentChangesTest extends PostgresTestBase {
             assertThat(path(retried, "unsent.code"))
                     .as("%s: принятый повтор погасил признак — гасит только забор прайса", failure.name())
                     .isEqualTo(failure.code());
-            assertThat(path(retried, "unsent.at")).isEqualTo(path(failed, "unsent.at"));
+            // Пропуск в интервале сдвигает момент неотправки (изменение ещё
+            // не ушло), а принятая проба его не трогает.
+            assertThat(path(retried, "unsent.at")).isEqualTo(path(resting, "unsent.at"));
             assertThat(queueSize()).as(failure.name()).isZero();
         }
 
