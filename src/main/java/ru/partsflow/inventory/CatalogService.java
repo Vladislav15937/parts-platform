@@ -186,7 +186,40 @@ public class CatalogService {
                                                                   || left(n.title_body, -1)
                                                                   || '[0-9]([^0-9]|$)')), false)
                                     FROM unnest(n.bodies_each) e(b))
-                       END AS body_confirmed
+                       END AS body_confirmed,
+                       -- Коды кузова своей машины для колонки «Кузов» (0296). ЧИТАЕТ ЭТО
+                       -- ВЫРАЖЕНИЕ ТОЛЬКО ПЕРЕСЧЁТ OwnVehicleCodes: результат хранится
+                       -- в part.own_body_codes, а колонка читает его (ответ владельца
+                       -- 26.10.2026); на витрине без ссылки на body_codes планировщик
+                       -- подзапрос не считает. Кузова
+                       -- всех её строк и «Другие кузова», без повторов, в порядке
+                       -- блока; номер кузова в наименовании сужает их до своего ряда
+                       -- тем же правилом, что сверка выше. Над выбранной машиной,
+                       -- один раз на позицию, — как шаги 2 и 3; тексты строк читаются
+                       -- здесь по номерам, а не тянутся через сортировку шага 1:
+                       -- там они расширяли сортировку 40 тысяч строк вшестеро.
+                       -- unnest(string_to_array), а не regexp_split_to_table: у того
+                       -- планировщик ждёт тысячу строк на вызов, два вложенных дают
+                       -- оценку плана за порог JIT, и компиляция стоила 4,3 с
+                       -- из 6,2 на списке кузовов (замер в PR задачи 0296).
+                       (SELECT string_agg(u.c, ', ' ORDER BY u.k)
+                          FROM (SELECT t.c, min(r.ord * 1000000 + s.i * 1000 + t.j) AS k
+                                  FROM unnest(n.own_rows) WITH ORDINALITY r(id, ord)
+                                  JOIN part_applicability a ON a.id = r.id
+                                 CROSS JOIN LATERAL unnest(string_to_array(
+                                           concat_ws('; ', a.note, 'Кузова: ' || a.other_bodies), '; '))
+                                           WITH ORDINALITY s(piece, i)
+                                 CROSS JOIN LATERAL unnest(string_to_array(substr(s.piece, 9), ', '))
+                                           WITH ORDINALITY t(c, j)
+                                 WHERE starts_with(s.piece, 'Кузова: ') AND t.c <> ''
+                                   AND (n.title_body IS NULL
+                                        OR t.c ~ ('^[^0-9]*' || left(n.title_body, -1)
+                                                  || '[0-9]([^0-9]|$)'))
+                                 GROUP BY t.c) u) AS body_codes,
+                       -- Двигатели блока: их ставит разбор только машине, одной
+                       -- в блоке (0296), у всех её строк одни и те же.
+                       (SELECT max(a.engines) FROM part_applicability a
+                         WHERE a.id = ANY (n.own_rows)) AS engines
                   FROM (
                 -- Шаг 2 (0294): номер кузова сразу после модели. «Prado 120» → 120;
                 -- «RX350», «Prado120», «Prado 120/150» → пусто. Проверка
@@ -249,8 +282,14 @@ public class CatalogService {
                          -- Наименование после своей модели — для шага 2.
                          substr(max(x.title), min(x.model_at) FILTER (WHERE x.model IS NOT NULL)
                                               + length(x.model)) AS after_model,
-                         bool_or(x.is_verified) AS verified
-                    FROM (SELECT a.part_id, ab.name AS brand, op.title,
+                         bool_or(x.is_verified) AS verified,
+                         -- Строки своей модели, с поколением и без (0296): по ним шаг 3
+                         -- читает кузова, «Другие кузова» и двигатели. Только при модели:
+                         -- у машины из одной марки группа держит чужие модели марки,
+                         -- и их кузова в клетке были бы чужими.
+                         array_agg(x.row_id ORDER BY x.row_id)
+                             FILTER (WHERE x.model IS NOT NULL) AS own_rows
+                    FROM (SELECT a.part_id, ab.name AS brand, op.title, a.id AS row_id,
                                  CASE WHEN strpos(lower(op.title), lower(am.name)) > 0
                                       THEN am.name END AS model,
                                  CASE WHEN starts_with(a.note, 'Кузова: ')
@@ -293,7 +332,7 @@ public class CatalogService {
      * их выбрали. Проход по всей применимости ради пятидесяти строк стоил
      * бы страницы по умолчанию втрое (замер в PR задачи 0290).
      */
-    private static final String OWN_VEHICLE_OF_ROW =
+    static final String OWN_VEHICLE_OF_ROW =
             OWN_VEHICLE_OF.formatted("LATERAL ", " AND op.id = p.id");
 
     /*
@@ -311,8 +350,42 @@ public class CatalogService {
      * применимость: правка «Марки» в карточке меняет эту позицию, а не машину
      * и не соседние детали с неё. Пусто — как раньше, донор или своя машина.
      */
-    static final String VEHICLE_BODY = PartVehicle.body("d.body_code");
-    static final String VEHICLE_ENGINE = PartVehicle.engine("d.engine_code");
+    /**
+     * Хранимый список кодов кузова своей машины (0296, {@link OwnVehicleCodes}):
+     * читается колонкой, а не считается на каждом запросе. Донор побеждает и тут —
+     * отставшая запись у позиции, которой донора назначили позже, не видна.
+     */
+    static final String OWN_BODY = "(CASE WHEN p.donor_id IS NULL THEN p.own_body_codes END)";
+
+    /*
+     * Кузов и двигатель позиции без донора — своей машины из применимости
+     * (задача 0296): коды кузова её строк и «Другие кузова», сужённые до ряда
+     * из наименования, и двигатели блока, если машина в нём одна. Весь список
+     * через запятую — ответ владельца 14.10.2026 «весь» (tasks/0296).
+     */
+    static final String VEHICLE_BODY = PartVehicle.body("d.body_code, " + OWN_BODY);
+    static final String VEHICLE_ENGINE = PartVehicle.engine("d.engine_code, own.engines");
+    /*
+     * Кузов и двигатель для подбора по машине — как до 0296, без своей машины:
+     * подбор отвечает «что подходит к этой машине» по любой строке применимости
+     * (0290), а его список строится по донору и машине позиции, где кузов один.
+     */
+    private static final String PICKER_BODY = PartVehicle.body("d.body_code");
+    private static final String PICKER_ENGINE = PartVehicle.engine("d.engine_code");
+    /**
+     * Колонки, в клетке которых бывает список кодов через запятую (0296). Выбранное
+     * из списка значений — один код, и находит оно клетку, где этот код есть,
+     * а не клетку, равную ему целиком. Сравнение — в едином виде: прописными,
+     * кириллические двойники латиницей ({@code КZJ95} из «Может подойти»,
+     * задача 0293, в хранимом не правится, а «KZJ95» его находит).
+     */
+    private static final java.util.Set<String> CODE_LIST_VALUES = java.util.Set.of("body", "engine");
+
+    /** Код в едином виде: прописными, кириллические двойники — латиницей. */
+    private static String codeKey(String expression) {
+        return "translate(upper(" + expression + "), '" + ru.partsflow.catalog.MixedAlphabet.SQL_CYRILLIC
+                + "', '" + ru.partsflow.catalog.MixedAlphabet.SQL_LATIN + "')";
+    }
     static final String VEHICLE_YEAR = PartVehicle.year("d.year");
     static final String DONOR_CODE = PartVehicle.donorCode("d.legacy_code, d.public_code");
     /**
@@ -362,6 +435,35 @@ public class CatalogService {
             + " WHEN p.donor_id IS NOT NULL THEN 'DONOR'"
             + " WHEN own.brand IS NULL THEN NULL"
             + " WHEN own.verified THEN 'VERIFIED' ELSE 'PARSED' END";
+
+    /**
+     * Откуда значение колонок «Кузов» и «Двигатель» (задача 0296) — своё у каждой:
+     * выбранное из справочника или вписанное руками, донор, своя машина
+     * из применимости; пусто — значения нет. Не {@link #VEHICLE_SOURCE}: вписанная
+     * марка при кузове из блока «Подходит» назвала бы кузов вписанным руками.
+     */
+    private static String codeSource(String manual, String bazon, String own) {
+        return "CASE WHEN " + manual + " IS NOT NULL OR " + bazon + " IS NOT NULL THEN 'MANUAL'"
+                + " WHEN p.donor_id IS NOT NULL THEN 'DONOR'"
+                + " WHEN " + own + " IS NULL THEN NULL"
+                + " WHEN own.verified THEN 'VERIFIED' ELSE 'PARSED' END";
+    }
+
+    private static final String VEHICLE_BODY_SOURCE =
+            codeSource("p.manual_body", "p.bazon_body_id", OWN_BODY);
+    private static final String VEHICLE_ENGINE_SOURCE =
+            codeSource("p.manual_engine", "p.bazon_motor_id", "own.engines");
+
+    /**
+     * Двигателя у своей машины нет, а блок «Подходит» их называет — значит машин
+     * в блоке несколько и строка «Для двигателей» не её одной (0296): клетка пуста,
+     * подсказка говорит почему. Подзапрос на строку страницы, а не шаг своей машины.
+     */
+    private static final String ENGINES_FOR_WHOLE_BLOCK = "(p.donor_id IS NULL"
+            + " AND p.manual_engine IS NULL AND p.bazon_motor_id IS NULL"
+            + " AND own.brand IS NOT NULL AND own.engines IS NULL"
+            + " AND coalesce((SELECT strpos(dc.applicability, 'Для двигател') > 0"
+            + " FROM part_drom_card dc WHERE dc.part_id = p.id), false))";
 
     /**
      * Коды кузова, по которым поколение своей машины выведено проходом
@@ -619,8 +721,12 @@ public class CatalogService {
      */
     private final ru.partsflow.platform.audit.AuditJournal journal;
 
+    private final OwnVehicleCodes ownCodes;
+
     public CatalogService(JdbcTemplate jdbc, PartChangeLog partChanges,
-                          VehicleWords vehicleWords, ru.partsflow.platform.audit.AuditJournal journal) {
+                          VehicleWords vehicleWords, ru.partsflow.platform.audit.AuditJournal journal,
+                          OwnVehicleCodes ownCodes) {
+        this.ownCodes = ownCodes;
         this.journal = journal;
         this.partChanges = partChanges;
         this.jdbc = jdbc;
@@ -637,6 +743,21 @@ public class CatalogService {
      *                     именно его — но по умолчанию склад это то, что лежит
      * @param warehouseIds пусто — все склады
      */
+    /**
+     * JIT выключен на транзакцию витрины (задача 0296): своя машина с кузовами
+     * и двигателями даёт оценку плана около 1,2 млн — выше порогов JIT, — и
+     * сортировка или отбор по кузову стоили 2,2 с в базе, из них 1,85 с —
+     * компиляция; без неё 0,33 с. Оценка — не время: запрос на 35 тысячах
+     * позиций идёт доли секунды, и компиляция его только тормозит.
+     * {@code SET LOCAL} живёт до конца транзакции и с ней же снимается, так
+     * что через PgBouncer к чужой транзакции не протекает.
+     */
+    static final String NO_JIT = "SET LOCAL jit = off";
+
+    private void withoutJit() {
+        jdbc.execute(NO_JIT);
+    }
+
     @Transactional(readOnly = true)
     public Page list(String query, boolean withReserved, boolean withMissing,
                      List<Long> warehouseIds, Vehicle vehicle,
@@ -662,6 +783,7 @@ public class CatalogService {
                      Map<String, String> columns, Map<String, String> words,
                      String sort, boolean descending, int page, int size, String after) {
 
+        withoutJit();
         Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
                 columns, words);
         StringBuilder where = filter.where();
@@ -804,11 +926,11 @@ public class CatalogService {
                 donorArgs.add(vehicle.modelId());
             }
             if (vehicle.body() != null && !vehicle.body().isBlank()) {
-                donor.append(" AND " + VEHICLE_BODY + " ILIKE ?");
+                donor.append(" AND " + PICKER_BODY + " ILIKE ?");
                 donorArgs.add("%" + vehicle.body().strip() + "%");
             }
             if (vehicle.engine() != null && !vehicle.engine().isBlank()) {
-                donor.append(" AND " + VEHICLE_ENGINE + " ILIKE ?");
+                donor.append(" AND " + PICKER_ENGINE + " ILIKE ?");
                 donorArgs.add("%" + vehicle.engine().strip() + "%");
             }
 
@@ -845,6 +967,11 @@ public class CatalogService {
                     where.append(" AND coalesce(").append(expression).append(", '') = ''");
                 } else if (PRESENT.equals(value)) {
                     where.append(" AND coalesce(").append(expression).append(", '') <> ''");
+                } else if (CODE_LIST_VALUES.contains(entry.getKey())) {
+                    where.append(" AND EXISTS (SELECT 1 FROM unnest(string_to_array(")
+                            .append(expression).append(", ', ')) lv(c) WHERE ")
+                            .append(codeKey("btrim(lv.c)")).append(" = ").append(codeKey("?")).append(")");
+                    args.add(value.strip());
                 } else if (CASE_FREE_VALUES.contains(entry.getKey())) {
                     where.append(" AND lower(").append(expression).append(") = lower(?)");
                     args.add(value);
@@ -862,7 +989,13 @@ public class CatalogService {
                 if (entry.getValue() == null || entry.getValue().isBlank()) {
                     continue;
                 }
-                where.append(" AND ").append(columnExpression(entry.getKey())).append(" ILIKE ?");
+                if (CODE_LIST_VALUES.contains(entry.getKey())) {
+                    String expression = columnExpression(entry.getKey());
+                    where.append(" AND ").append(codeKey(expression)).append(" LIKE ")
+                            .append(codeKey("?"));
+                } else {
+                    where.append(" AND ").append(columnExpression(entry.getKey())).append(" ILIKE ?");
+                }
                 args.add("%" + entry.getValue().strip() + "%");
             }
         }
@@ -1012,6 +1145,17 @@ public class CatalogService {
     @Transactional(readOnly = true)
     public List<String> values(String column) {
         String expression = columnExpression(column);
+        withoutJit();
+        if (CODE_LIST_VALUES.contains(column)) {
+            // Список кодов в клетке (0296) — значения по одному коду: «GRJ120»,
+            // а не «GRJ120, GRJ120W, …» целиком; отбор ищет код в списке.
+            return jdbc.queryForList("SELECT DISTINCT btrim(lv.c) AS value"
+                            + joins(expression)
+                            + " CROSS JOIN LATERAL unnest(string_to_array(" + expression + ", ', ')) lv(c)"
+                            + " WHERE p.product_line = 'PART' AND btrim(lv.c) <> ''"
+                            + " ORDER BY value LIMIT 1000",
+                    String.class);
+        }
         // Соединения те же, что у страницы (`JOINS`), а не своя копия: у копии
         // не было своей машины из применимости, и список марок молчал бы
         // о марках, которые колонка уже показывает (задача 0290).
@@ -1109,8 +1253,8 @@ public class CatalogService {
                     SELECT p.id AS part_id,
                            """ + VEHICLE_BRAND_ID + " AS brand_id, "
                            + VEHICLE_MODEL_ID + " AS model_id, "
-                           + VEHICLE_BODY + " AS body_code, "
-                           + VEHICLE_ENGINE + " AS engine_code" + """
+                           + PICKER_BODY + " AS body_code, "
+                           + PICKER_ENGINE + " AS engine_code" + """
 
                       FROM part p
                       LEFT JOIN donor d ON d.id = p.donor_id
@@ -1199,6 +1343,7 @@ public class CatalogService {
                     VALUES (?, ?, ?, false)
                     ON CONFLICT DO NOTHING""", pair[0], pair[1], pair[2]);
         }
+        ownCodes.refresh(pairs.stream().map(pair -> pair[0]).toList());
         log.info("Применимость из заголовков: позиций {}, строк добавлено {}", parts[0], added);
         return new Parsed(parts[0], added);
     }
@@ -1304,6 +1449,8 @@ public class CatalogService {
                         + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, now()) " + conflict
                         + " RETURNING id, (xmax = 0) AS inserted",
                 partId, brandId, modelId, generationId, yearFrom, yearTo, verified, setBy);
+        // Кузова своей машины хранятся (0296): строка применимости их источник.
+        ownCodes.refresh(partId);
         boolean inserted = !rows.isEmpty() && Boolean.TRUE.equals(rows.get(0).get("inserted"));
         Long id = rows.isEmpty() ? null : ((Number) rows.get(0).get("id")).longValue();
         if (inserted) {
@@ -1330,6 +1477,7 @@ public class CatalogService {
             jdbc.update("DELETE FROM part_applicability WHERE id = ? AND part_id = ?",
                     applicabilityId, partId);
             journal.deleted("part_applicability", applicabilityId, snapshot);
+            ownCodes.refresh(partId);
         }
         partChanges.changed(partId);
     }
@@ -1457,6 +1605,7 @@ public class CatalogService {
     public List<Long> idsMatching(String query, boolean withReserved, boolean withMissing,
                                   List<Long> warehouseIds, Vehicle vehicle,
                                   Map<String, String> columns, Map<String, String> words) {
+        withoutJit();
         Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
                 columns, words);
         return jdbc.queryForList("SELECT p.id" + joins(filter.where()) + filter.where()
@@ -1543,6 +1692,11 @@ public class CatalogService {
                        + " CASE WHEN " + OWN_GENERATION_UNCONFIRMED + " THEN own.bodies END"
                        + " AS vehicle_block_bodies,"
                        + " coalesce(" + OWN_GENERATION_MERGED + ", false) AS vehicle_generation_merged,"
+                       + VEHICLE_BODY_SOURCE + " AS vehicle_body_source, "
+                       + VEHICLE_ENGINE_SOURCE + " AS vehicle_engine_source, "
+                       + " CASE WHEN " + VEHICLE_BODY_SOURCE + " IN ('VERIFIED', 'PARSED')"
+                       + " THEN own.title_body END AS vehicle_body_series, "
+                       + ENGINES_FOR_WHOLE_BLOCK + " AS vehicle_engines_for_block,"
                        + """
                        """ + VEHICLE_BODY + " AS body_code, " + VEHICLE_ENGINE + " AS engine_code, "
                        + VEHICLE_YEAR + " AS year, " + DONOR_CODE + " AS donor_code," + """
@@ -1633,6 +1787,9 @@ public class CatalogService {
                         bodyNumbers(rs.getString("vehicle_block_bodies")),
                         rs.getString("generation_by_body"),
                         rs.getBoolean("vehicle_generation_merged"),
+                        rs.getString("vehicle_body_source"), rs.getString("vehicle_engine_source"),
+                        rs.getString("vehicle_body_series"),
+                        rs.getBoolean("vehicle_engines_for_block"),
                         Map.of(), Map.of()),
                 pageArgs.toArray());
 
@@ -1753,6 +1910,7 @@ public class CatalogService {
                        String sort, boolean descending,
                        List<Warehouse> warehouses, RowWriter writer) {
 
+        withoutJit();
         Filter filter = filterOf(query, withReserved, withMissing, warehouseIds, vehicle,
                 columns, words);
         String order = orderBy(sort, descending);
@@ -2048,6 +2206,16 @@ public class CatalogService {
                        * годы от первой строки до последней.
                        */
                       boolean vehicleGenerationMerged,
+                      /**
+                       * Откуда «Кузов» и «Двигатель» (задача 0296): {@code MANUAL},
+                       * {@code DONOR}, {@code VERIFIED} / {@code PARSED} — своя машина
+                       * из блока «Подходит»; пусто — значения нет.
+                       */
+                      String vehicleBodySource, String vehicleEngineSource,
+                      /** Номер кузова из наименования, до ряда которого сужены кузова своей машины. */
+                      String vehicleBodySeries,
+                      /** Двигатели в блоке есть, но названы для всего блока, а не для этой машины. */
+                      boolean vehicleEnginesForBlock,
                       Map<Long, BigDecimal> stock,
                       /**
                        * Отложенное под клиента по складам (задача 0367): та часть
@@ -2069,7 +2237,8 @@ public class CatalogService {
                     packageWeightKg, createdAt, updatedAt, updatedByName,
                     priceChangedAt, priceChangedByName, photoCount, vehicleSource,
                     vehicleSpans, vehicleTitleBody, vehicleBlockBodies, vehicleGenerationBodies,
-                    vehicleGenerationMerged,
+                    vehicleGenerationMerged, vehicleBodySource, vehicleEngineSource,
+                    vehicleBodySeries, vehicleEnginesForBlock,
                     found, held);
         }
     }

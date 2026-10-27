@@ -263,13 +263,16 @@ class SellerSearchTest extends PostgresTestBase {
     @Test
     @DisplayName("Марка, которой нет в показанных строках, находится отбором")
     void filtersInTheDatabaseAndNotInTheShownRows() {
-        // Ниссановская заводится последней: выдача идёт по совпадению,
-        // а при равном совпадении — по номеру позиции, и в две показанные
-        // строки попадают тойотовские. Это и есть живой случай — 50 из 181.
-        partOfVehicle("Фара Toyota Camry 2010 лев.",
-                "toyota", "Camry", 2010, "LEFT", "FRONT", 7000);
+        // Ниссановская заводится первой: выдача идёт по совпадению,
+        // а при равном совпадении — новые сверху (номер позиции по убыванию,
+        // задача 0379), и в две показанные строки попадают две тойотовские,
+        // заведённые после неё. Это и есть живой случай — 50 из 181.
         Long nissan = partOfVehicle("Фара Nissan Almera 2011 прав.",
                 "nissan", "Almera", 2011, "RIGHT", "FRONT", 5000);
+        partOfVehicle("Фара Toyota Camry 2010 лев.",
+                "toyota", "Camry", 2010, "LEFT", "FRONT", 7000);
+        partOfVehicle("Фара Toyota Camry 2010 лев.",
+                "toyota", "Camry", 2010, "LEFT", "FRONT", 7000);
 
         List<Long> shown = inTenant(() -> parts.searchAvailable("фара", 2)).rows().stream()
                 .map(PartService.StockRow::partId).toList();

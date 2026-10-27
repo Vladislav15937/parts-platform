@@ -42,10 +42,14 @@ public class CatalogController {
      * {@code code} — шесть случайных байт, то есть склад открывался случайной
      * полусотней. Умолчание одно у страницы, у выгрузки и у экрана
      * ({@code DEFAULT_SORT}/{@code DEFAULT_DESC} в {@code inventory/catalog.ts}).
+     *
+     * <p>С задачи 0379 то же правило читает и вкладка «Шины и диски»
+     * ({@code WheelController}): вторая копия разошлась бы с этой на первой
+     * правке, и соседние экраны снова открывались бы по-разному.
      */
     static final String DEFAULT_SORT = "number";
 
-    private static String sortOf(String sort) {
+    static String sortOf(String sort) {
         return sort == null ? DEFAULT_SORT : sort;
     }
 
@@ -54,7 +58,7 @@ public class CatalogController {
      * названная без направления сортировка идёт по возрастанию, как нажатие
      * на заголовок. Иначе {@code sort=brand} без {@code desc} начинался бы с «Я».
      */
-    private static boolean descOf(String sort, Boolean desc) {
+    static boolean descOf(String sort, Boolean desc) {
         return desc != null ? desc : sort == null;
     }
 
@@ -135,6 +139,8 @@ public class CatalogController {
                 row.vehicleTitleBody(), row.vehicleBlockBodies(),
                 row.vehicleGenerationBodies(),
                 row.vehicleGenerationMerged(),
+                row.vehicleBodySource(), row.vehicleEngineSource(), row.vehicleBodySeries(),
+                row.vehicleEnginesForBlock(),
                 row.stock());
     }
 
@@ -505,6 +511,12 @@ public class CatalogController {
                        * (рестайлинги, задача 0297) — подсказка клетки так и говорит.
                        */
                       boolean vehicleGenerationMerged,
+                      /** Откуда «Кузов» и «Двигатель» — для подсказки клетки (задача 0296). */
+                      String vehicleBodySource, String vehicleEngineSource,
+                      /** Номер кузова из наименования, до ряда которого сужены кузова своей машины. */
+                      String vehicleBodySeries,
+                      /** Двигатели названы для всего блока «Подходит», а не для этой машины. */
+                      boolean vehicleEnginesForBlock,
                       Map<Long, java.math.BigDecimal> stock) {
     }
 }

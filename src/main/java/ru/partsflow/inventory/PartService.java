@@ -63,6 +63,7 @@ public class PartService {
 
     /** Пересборка названия из полей формулы (задача 0336). */
     private final PartTitles titles;
+    private final OwnVehicleCodes ownCodes;
 
     /** Выбор именованного текстового блока в карточке (задача 0337). */
     private final TextBlockService textBlocks;
@@ -73,7 +74,8 @@ public class PartService {
                        jakarta.persistence.EntityManager entityManager,
                        PartIdentity identity, com.fasterxml.jackson.databind.ObjectMapper json,
                        ru.partsflow.platform.audit.AuditJournal journal, PartTitles titles,
-                       TextBlockService textBlocks) {
+                       TextBlockService textBlocks, OwnVehicleCodes ownCodes) {
+        this.ownCodes = ownCodes;
         this.textBlocks = textBlocks;
         this.titles = titles;
         this.json = json;
@@ -545,6 +547,11 @@ public class PartService {
                 || lrWas != part.getSideLr() || frWas != part.getSideFr();
         if (formulaChanged && titles.retitle(part)) {
             partChanged = true;
+            // Своя машина позиции без донора читается из наименования, а кузова
+            // её хранятся (0296): новое наименование — пересчёт. Сбросить правку
+            // в базу надо до него, SQL читает строку, а не сущность.
+            entityManager.flush();
+            ownCodes.refresh(partId);
         }
         boolean termsChanged = applyDromCard(partId, update);
         // Автор — только у правки, которая что-то поменяла: «Кто изменил» отвечает
@@ -1869,7 +1876,19 @@ public class PartService {
             "intake", "r.created_at");
 
     /**
-     * Порядок по умолчанию — по совпадению, свободное сначала.
+     * Порядок по умолчанию — по совпадению, свободное сначала, а среди
+     * одинаково подходящих новые сверху.
+     *
+     * <p>Последний ключ — номер позиции по убыванию (задача 0379, решение
+     * владельца 26.10.2026 «новые сверху», как склад после 0372); до неё
+     * здесь стоял {@code r.id} по возрастанию, то есть из двух одинаковых
+     * фар первой шла заведённая раньше. Главными ключами остаются наличие
+     * и ранжирование: «фара» обязана показывать лучшее совпадение выше,
+     * а не просто свежее, — номер поверх совпадения сделал бы поиск хуже.
+     * Номер, а не {@code id}: у переехавшего с Bazon номер — их «Номер
+     * товара» (задача 0334), и порядок заведения у нас с ним не совпадает.
+     * {@code r.id} — последним, на случай строк одной позиции по разным
+     * складам.
      *
      * <p>Без «ORDER BY» в начале: перед ним может встать ключ точного
      * совпадения по номеру позиции, и собирается строка в одном месте.
@@ -1880,7 +1899,7 @@ public class PartService {
                           || coalesce(r.description, '') || ' '
                           || coalesce(r.marking, '')),
                           plainto_tsquery('russian', ?)) DESC,
-                      r.id""";
+                      r.number DESC, r.id DESC""";
 
     /**
      * @return {@code null}, если порядок продавцом не задан, — тогда выдача

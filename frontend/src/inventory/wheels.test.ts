@@ -186,6 +186,21 @@ describe('карточка колеса', () => {
   });
 });
 
+describe('порядок вкладки колёс по умолчанию (задача 0379)', () => {
+  it('номер позиции по убыванию — новые сверху, как склад после 0372', () => {
+    // Решение владельца 26.10.2026: у Bazon списки открываются «Номером
+    // товара» по убыванию, и вкладка «1, 2, 3…» рядом со складом новыми
+    // сверху читается как недоделка.
+    expect(EMPTY_WHEEL_QUERY.sort).toBe('number');
+    expect(EMPTY_WHEEL_QUERY.desc,
+      'вкладка «Шины и диски» открывается с позиции № 1, а не с последней заведённой')
+      .toBe(true);
+    const params = wheelParams(EMPTY_WHEEL_QUERY);
+    expect(params.get('sort')).toBe('number');
+    expect(params.get('desc')).toBe('true');
+  });
+});
+
 describe('отбор вкладки колёс', () => {
   it('пустой отбор не шлёт лишних параметров', () => {
     const params = wheelParams(EMPTY_WHEEL_QUERY);

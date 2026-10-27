@@ -42,8 +42,15 @@ import java.util.regex.Pattern;
  * в {@code note} его строки: у {@code part_applicability} нет ни кузова, ни
  * двигателя, а {@code modification_id} — ссылка на справочник модификаций,
  * в котором нет ни одной записи. «Другие кузова» к поколению не привязаны,
- * «Для двигателей» — про объявление, а не про машину: обе строки остаются
- * только в тексте.
+ * «Для двигателей» — про объявление, а не про машину.
+ *
+ * <p><b>Реквизиты машины (задача 0296)</b> — {@link Details}: «Другие кузова»
+ * её строки блока и двигатели. Ни то ни другое к поколению не привязано, поэтому
+ * они не идут в {@code note} (его читает сверка номера кузова 0294 — «Другие
+ * кузова» 120-го ряда в строке 150-го поколения подтвердили бы чужое поколение),
+ * а пишутся своими колонками на каждую строку машины. Двигатели — только если
+ * машина в блоке <b>одна</b>: строка «Для двигателей» одна на весь блок,
+ * и у пяти машин двигатель каждой из неё не определить.
  */
 public final class DromApplicability {
 
@@ -127,7 +134,30 @@ public final class DromApplicability {
         }
     }
 
-    public record Parsed(List<Target> targets, List<Miss> misses) {
+    /**
+     * @param machines реквизиты каждой машины блока, легшей в справочник (марка
+     *                 и модель, модели может не быть): «Другие кузова» её строки
+     *                 и двигатели блока, если машина в нём одна (задача 0296)
+     */
+    public record Parsed(List<Target> targets, List<Miss> misses, Map<Machine, Details> machines) {
+
+        public Parsed(List<Target> targets, List<Miss> misses) {
+            this(targets, misses, Map.of());
+        }
+    }
+
+    /** Машина блока — марка и модель, как у строк применимости без поколения. */
+    public record Machine(long brandId, Long modelId) {
+    }
+
+    /**
+     * Реквизиты машины, не привязанные к поколению (задача 0296).
+     *
+     * @param otherBodies «Другие кузова» её строки через «, »; {@code null} — не названы
+     * @param engines     строка «Для двигателей» через «, », только если машина
+     *                    в блоке одна; иначе {@code null}
+     */
+    public record Details(String otherBodies, String engines) {
     }
 
     /** Справочник машин, подготовленный один раз на проход. */
@@ -208,17 +238,53 @@ public final class DromApplicability {
     private record Item(String heading, String generation, String bodies) {
     }
 
+    /**
+     * Блок целиком: пункты, «Другие кузова» по заголовку машины, двигатели
+     * и заголовки всех машин — по ним считается, одна ли машина в блоке.
+     */
+    private record Block(List<Item> items, Map<String, Set<String>> otherBodies,
+                         Set<String> engines, Set<String> headings) {
+    }
+
     /** Строки применимости, которые даёт текст, и пункты, не легшие целиком. */
     public static Parsed parse(String text, Dictionary dictionary) {
         if (text == null || text.isBlank()) {
             return new Parsed(List.of(), List.of());
         }
+        Block block = block(text);
         List<Target> found = new ArrayList<>();
         List<Miss> misses = new ArrayList<>();
-        for (Item item : items(text)) {
+        // Машина каждого пункта, легшего в справочник, — по её заголовку в блоке.
+        Map<Machine, String> headings = new LinkedHashMap<>();
+        for (Item item : block.items()) {
+            int before = found.size();
             resolve(item, dictionary, found, misses);
+            if (found.size() > before) {
+                Target target = found.get(found.size() - 1);
+                headings.putIfAbsent(new Machine(target.brandId(), target.modelId()), item.heading());
+            }
         }
-        return new Parsed(reduce(found), List.copyOf(misses));
+        // Двигатели — только при одной машине: строка «Для двигателей» одна
+        // на весь блок, и у нескольких машин чьи они, не сказано (0296).
+        String engines = block.headings().size() == 1 ? joined(block.engines()) : null;
+        Map<Machine, Details> machines = new LinkedHashMap<>();
+        headings.forEach((machine, heading) -> machines.put(machine, new Details(
+                joined(block.otherBodies().getOrDefault(heading, Set.of())), engines)));
+        return new Parsed(reduce(found), List.copyOf(misses), Map.copyOf(machines));
+    }
+
+    private static String joined(Set<String> codes) {
+        return codes.isEmpty() ? null : String.join(", ", codes);
+    }
+
+    /** Коды через запятую — по одному, без пустых и повторов, в порядке блока. */
+    private static void addCodes(String list, Set<String> into) {
+        for (String code : list.split(",")) {
+            String c = code.strip();
+            if (!c.isEmpty()) {
+                into.add(c);
+            }
+        }
     }
 
     private static void resolve(Item item, Dictionary dictionary, List<Target> found,
@@ -356,28 +422,43 @@ public final class DromApplicability {
 
     /** Пункты блока в обоих написаниях; двигатели, «Другие кузова» и пустые строки — мимо. */
     private static List<Item> items(String text) {
-        List<Item> items = new ArrayList<>();
+        return block(text).items();
+    }
+
+    private static Block block(String text) {
+        Block block = new Block(new ArrayList<>(), new HashMap<>(), new LinkedHashSet<>(),
+                new LinkedHashSet<>());
         for (String raw : text.split("\n")) {
             String line = raw.replace(WORD_JOINER, "").replace(' ', ' ').strip();
             if (line.isEmpty()) {
                 continue;
             }
             if (line.contains("|")) {
-                piped(line, items);
+                piped(line, block);
             } else {
-                dashed(line, items);
+                dashed(line, block);
             }
         }
-        return items;
+        return block;
     }
 
     /** {@code Toyota 4Runner | 5 поколение (2009–2013) | TRN285, GRN285}. */
-    private static void piped(String line, List<Item> items) {
+    private static void piped(String line, Block block) {
+        List<Item> items = block.items();
         String[] parts = line.split("\\|", -1);
         String heading = parts[0].strip();
         String item = parts.length > 1 ? parts[1].strip() : "";
         String small = parts.length > 2 ? parts[2].strip() : "";
-        if (heading.isEmpty() || heading.startsWith(ENGINES) || item.equals(OTHER_BODIES)) {
+        if (heading.startsWith(ENGINES)) {
+            addCodes(item.isEmpty() ? small : item, block.engines());
+            return;
+        }
+        if (heading.isEmpty()) {
+            return;
+        }
+        block.headings().add(heading);
+        if (item.equals(OTHER_BODIES)) {
+            addCodes(small, block.otherBodies().computeIfAbsent(heading, h -> new LinkedHashSet<>()));
             return;
         }
         if (item.contains(GENERATION_WORD)) {
@@ -390,7 +471,8 @@ public final class DromApplicability {
     }
 
     /** {@code Toyota 4Runner — 5 поколение (2009–2013): TRN285, GRN285; Другие кузова: …}. */
-    private static void dashed(String line, List<Item> items) {
+    private static void dashed(String line, Block block) {
+        List<Item> items = block.items();
         String heading;
         String rest;
         int dash = line.indexOf(" — ");
@@ -404,16 +486,29 @@ public final class DromApplicability {
             heading = line;
             rest = "";
         }
-        if (heading.isEmpty() || heading.equals("—") || heading.startsWith(ENGINES)) {
+        if (heading.startsWith(ENGINES)) {
+            addCodes(rest, block.engines());
             return;
         }
+        if (heading.isEmpty() || heading.equals("—")) {
+            return;
+        }
+        block.headings().add(heading);
         if (rest.isEmpty()) {
             items.add(new Item(heading, null, null));
             return;
         }
         for (String piece : rest.split(";")) {
             String item = piece.strip();
-            if (item.isEmpty() || item.startsWith(OTHER_BODIES)) {
+            if (item.isEmpty()) {
+                continue;
+            }
+            if (item.startsWith(OTHER_BODIES)) {
+                int colon = item.indexOf(':');
+                if (colon >= 0) {
+                    addCodes(item.substring(colon + 1), block.otherBodies()
+                            .computeIfAbsent(heading, h -> new LinkedHashSet<>()));
+                }
                 continue;
             }
             if (item.contains(GENERATION_WORD)) {

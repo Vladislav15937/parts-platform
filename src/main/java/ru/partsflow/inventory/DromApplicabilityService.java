@@ -65,7 +65,10 @@ public class DromApplicabilityService {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
 
-    public DromApplicabilityService(JdbcTemplate jdbc, TransactionTemplate tx) {
+    private final OwnVehicleCodes ownCodes;
+
+    public DromApplicabilityService(JdbcTemplate jdbc, TransactionTemplate tx, OwnVehicleCodes ownCodes) {
+        this.ownCodes = ownCodes;
         this.jdbc = jdbc;
         this.tx = tx;
     }
@@ -206,7 +209,10 @@ public class DromApplicabilityService {
             }
             after = last;
         }
+        // Страховка от забытого места: хранимые кузова пересчитываются со всего склада (0296).
+        int recounted = tx.execute(status -> ownCodes.refreshAll());
         Report report = tally.toReport();
+        log.info("Кузова своей машины пересчитаны у {} позиций", recounted);
         log.info("Применимость из карточек Дрома: позиций {}, заведено {}, дополнено {}, снято {}, "
                         + "не легло пунктов {}, поколение по коду кузова {} — за {} мс (по кузову {} мс)",
                 report.parts(), report.added(), report.refined(), report.removed(),
@@ -241,6 +247,7 @@ public class DromApplicabilityService {
                 parts.put(rs.getLong(1), new PartText(rs.getString(2), rs.getString(3)));
             }, (Object) chunk.toArray(Long[]::new));
             byBody(parts, dictionary, index, tally);
+            ownCodes.refresh(chunk);
         }
     }
 
@@ -276,6 +283,7 @@ public class DromApplicabilityService {
             return null;
         }
         byBody(parts, dictionary, index, tally);
+        ownCodes.refresh(parts.keySet());
         return parts.keySet().stream().reduce((a, b) -> b).orElseThrow();
     }
 
@@ -319,6 +327,9 @@ public class DromApplicabilityService {
             if (ownTargets.stream().anyMatch(t -> t.generationId() != null || t.hasYears())) {
                 continue;
             }
+            DromApplicability.Details details = DromApplicability.parse(
+                    entry.getValue().applicability(), dictionary).machines()
+                    .getOrDefault(new DromApplicability.Machine(own.brandId(), own.modelId()), NO_DETAILS);
             List<String> codes = ownTargets.stream()
                     .flatMap(t -> BodyGeneration.codesOf(t.note()).stream())
                     .distinct().toList();
@@ -346,13 +357,14 @@ public class DromApplicabilityService {
                 inserted += jdbc.update("""
                         INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id,
                                                         year_from, year_to, note, generation_label,
-                                                        is_verified)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, false)
+                                                        other_bodies, engines, is_verified)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, false)
                         ON CONFLICT (part_id, brand_id, model_id, generation_id, modification_id)
                         DO NOTHING""",
                         partId, own.brandId(), own.modelId(), span.generationId(),
                         span.yearFrom(), span.yearTo(),
-                        BodyGeneration.note(codes, outcome.decisive()), outcome.label());
+                        BodyGeneration.note(codes, outcome.decisive()), outcome.label(),
+                        details.otherBodies(), details.engines());
             }
             // Позиций, а не строк: рестайлинги одной позиции — одно поколение.
             tally.byBody += inserted > 0 ? 1 : 0;
@@ -384,6 +396,7 @@ public class DromApplicabilityService {
             texts.put(((Number) row.get("part_id")).longValue(), (String) row.get("applicability"));
         }
         apply(texts, dictionary, tally);
+        ownCodes.refresh(texts.keySet());
         return texts.keySet().stream().reduce((a, b) -> b).orElseThrow();
     }
 
@@ -396,6 +409,7 @@ public class DromApplicabilityService {
                         Tally tally) {
         lock();
         apply(Map.of(partId, text), dictionary, tally);
+        ownCodes.refresh(partId);
     }
 
     /**
@@ -411,7 +425,7 @@ public class DromApplicabilityService {
     }
 
     private record Row(long id, Key key, Integer yearFrom, Integer yearTo, String note,
-                       String generationLabel, boolean verified) {
+                       String generationLabel, String otherBodies, String engines, boolean verified) {
 
         boolean hasYears() {
             return yearFrom != null || yearTo != null;
@@ -427,15 +441,18 @@ public class DromApplicabilityService {
             parsed.misses().forEach(tally::miss);
             tally.parts++;
             tally.touched.add(partId);
-            applyPart(partId, parsed.targets(), existing.getOrDefault(partId, List.of()), tally);
+            applyPart(partId, parsed, existing.getOrDefault(partId, List.of()), tally);
         }
     }
+
+    private static final DromApplicability.Details NO_DETAILS = new DromApplicability.Details(null, null);
 
     private Map<Long, List<Row>> existing(Set<Long> parts) {
         Map<Long, List<Row>> byPart = new HashMap<>();
         jdbc.query("""
                 SELECT id, part_id, brand_id, model_id, generation_id, modification_id,
-                       year_from, year_to, note, generation_label, is_verified
+                       year_from, year_to, note, generation_label, other_bodies, engines,
+                       is_verified
                   FROM part_applicability
                  WHERE part_id = ANY (?)""", rs -> {
             Number modification = (Number) rs.getObject("modification_id");
@@ -455,15 +472,19 @@ public class DromApplicabilityService {
                             generation == null ? null : generation.longValue()),
                     from == null ? null : from.intValue(), to == null ? null : to.intValue(),
                     rs.getString("note"), rs.getString("generation_label"),
+                    rs.getString("other_bodies"), rs.getString("engines"),
                     rs.getBoolean("is_verified")));
         }, (Object) parts.toArray(Long[]::new));
         return byPart;
     }
 
-    private void applyPart(long partId, List<Target> targets, List<Row> rows, Tally tally) {
+    private void applyPart(long partId, DromApplicability.Parsed parsed, List<Row> rows, Tally tally) {
+        List<Target> targets = parsed.targets();
         Map<Key, Row> byKey = new HashMap<>();
         rows.forEach(r -> byKey.put(r.key(), r));
         Set<Key> present = new LinkedHashSet<>(byKey.keySet());
+        // Строки, уже посчитанные дополненными, — реквизиты машины ниже их не считают второй раз.
+        Set<Long> refined = new java.util.HashSet<>();
 
         for (Target target : targets) {
             Key key = target.key();
@@ -473,15 +494,17 @@ public class DromApplicabilityService {
                 if (!target.hasYears() && DromApplicability.dominated(key, present)) {
                     continue;
                 }
+                DromApplicability.Details details = detailsOf(parsed, key);
                 tally.added += jdbc.update("""
                         INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id,
                                                         year_from, year_to, note, generation_label,
-                                                        is_verified)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, false)
+                                                        other_bodies, engines, is_verified)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, false)
                         ON CONFLICT (part_id, brand_id, model_id, generation_id, modification_id)
                         DO NOTHING""",
                         partId, target.brandId(), target.modelId(), target.generationId(),
-                        target.yearFrom(), target.yearTo(), target.note(), target.generationLabel());
+                        target.yearFrom(), target.yearTo(), target.note(), target.generationLabel(),
+                        details.otherBodies(), details.engines());
                 present.add(key);
                 continue;
             }
@@ -498,12 +521,16 @@ public class DromApplicabilityService {
             }
             // Условие в WHERE, а не только проверка выше: человек мог подтвердить
             // строку в карточке между нашим чтением и записью.
-            tally.refined += jdbc.update("""
+            int changed = jdbc.update("""
                     UPDATE part_applicability
                        SET year_from = ?, year_to = ?, note = ?, generation_label = ?
                      WHERE id = ? AND NOT is_verified""",
                     target.yearFrom(), target.yearTo(), target.note(), target.generationLabel(),
                     row.id());
+            tally.refined += changed;
+            if (changed > 0) {
+                refined.add(row.id());
+            }
         }
 
         for (Row row : rows) {
@@ -515,5 +542,34 @@ public class DromApplicabilityService {
                      WHERE id = ? AND NOT is_verified AND year_from IS NULL AND year_to IS NULL""",
                     row.id());
         }
+
+        // Реквизиты машины (0296) — «Другие кузова» и двигатели — на каждую её
+        // строку, какой бы проход её ни завёл: блок, разбор наименования или
+        // поколение по коду кузова (0295, его строки блок ключом не называет).
+        // Повторный проход дополняет так уже разобранные позиции; заведённые
+        // этим проходом получили их вставкой и здесь не считаются.
+        for (Row row : rows) {
+            if (row.verified()) {
+                continue;
+            }
+            DromApplicability.Machine machine =
+                    new DromApplicability.Machine(row.key().brandId(), row.key().modelId());
+            DromApplicability.Details details = parsed.machines().get(machine);
+            if (details == null
+                    || Objects.equals(row.otherBodies(), details.otherBodies())
+                    && Objects.equals(row.engines(), details.engines())) {
+                continue;
+            }
+            int changed = jdbc.update("""
+                    UPDATE part_applicability SET other_bodies = ?, engines = ?
+                     WHERE id = ? AND NOT is_verified""",
+                    details.otherBodies(), details.engines(), row.id());
+            tally.refined += refined.contains(row.id()) ? 0 : changed;
+        }
+    }
+
+    private static DromApplicability.Details detailsOf(DromApplicability.Parsed parsed, Key key) {
+        return parsed.machines().getOrDefault(
+                new DromApplicability.Machine(key.brandId(), key.modelId()), NO_DETAILS);
     }
 }
