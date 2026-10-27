@@ -127,8 +127,9 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
         assertThat(row.path("yearFrom").asInt()).isEqualTo(2002);
         assertThat(row.path("generation").isNull()).isFalse();
         assertThat(row.path("vehicleSource").asText()).isEqualTo("PARSED");
-        // Кузова и двигателя у применимости нет — пусто, как и было.
-        assertThat(row.path("body").isNull()).isTrue();
+        // С задачи 0296 кузова своей машины — из примечания строки применимости;
+        // двигателей у этой строки нет (их пишет разбор блока, а не фикстура).
+        assertThat(row.path("body").asText()).isEqualTo("GRJ120W, KDJ121W");
         assertThat(row.path("engine").isNull()).isTrue();
     }
 
@@ -797,6 +798,15 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
                 INSERT INTO part_applicability (part_id, brand_id, model_id, generation_id,
                                                 is_verified, note)
                 VALUES (?, ?, ?, ?, ?, ?)""", part, toyota, model, generation, verified, note));
+        refreshCodes(part);
+    }
+
+    /** Кузова своей машины хранятся (0296): фикстура, пишущая строки мимо кода, пересчитывает их сама. */
+    private void refreshCodes(long part) {
+        inTenant(() -> {
+            new OwnVehicleCodes(jdbc).refresh(part);
+            return null;
+        });
     }
 
     /**
@@ -810,6 +820,7 @@ class CatalogOwnVehicleTest extends PostgresTestBase {
                                                 is_verified)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, false)""",
                 part, toyota, prado, generation(prado, from), from, to, note, label));
+        refreshCodes(part);
     }
 
     private MockHttpSession login() throws Exception {

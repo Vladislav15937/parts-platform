@@ -135,6 +135,8 @@ public class CatalogController {
                 row.vehicleTitleBody(), row.vehicleBlockBodies(),
                 row.vehicleGenerationBodies(),
                 row.vehicleGenerationMerged(),
+                row.vehicleBodySource(), row.vehicleEngineSource(), row.vehicleBodySeries(),
+                row.vehicleEnginesForBlock(),
                 row.stock());
     }
 
@@ -505,6 +507,12 @@ public class CatalogController {
                        * (рестайлинги, задача 0297) — подсказка клетки так и говорит.
                        */
                       boolean vehicleGenerationMerged,
+                      /** Откуда «Кузов» и «Двигатель» — для подсказки клетки (задача 0296). */
+                      String vehicleBodySource, String vehicleEngineSource,
+                      /** Номер кузова из наименования, до ряда которого сужены кузова своей машины. */
+                      String vehicleBodySeries,
+                      /** Двигатели названы для всего блока «Подходит», а не для этой машины. */
+                      boolean vehicleEnginesForBlock,
                       Map<Long, java.math.BigDecimal> stock) {
     }
 }

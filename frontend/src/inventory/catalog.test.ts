@@ -273,6 +273,34 @@ describe('подсказка клетки машины', () => {
  * позиция, стоявшая вчера второй сверху, сегодня не видна вовсе, и это
  * читается как «пропала».
  */
+describe('подсказка клеток «Кузов» и «Двигатель» (задача 0296)', () => {
+  const hint = (key: string, r: CatalogRow) => COLUMNS.find((c) => c.key === key)?.hint?.(r);
+
+  it('называет источник — блок «Подходит» — и весь список, сужение по ряду словами', () => {
+    const r = row({
+      body: 'GRJ120, GRJ120W, KDJ120', vehicleBodySource: 'PARSED', vehicleBodySeries: '120',
+      engine: '1GRFE, 1KDFTV', vehicleEngineSource: 'VERIFIED',
+    });
+    expect(hint('body', r)).toBe('По применимости, из блока «Подходит», разобрана автоматически. '
+      + 'Кузова ряда 120 — по номеру в наименовании: GRJ120, GRJ120W, KDJ120');
+    expect(hint('engine', r))
+      .toBe('По применимости, из блока «Подходит», подтверждена человеком: 1GRFE, 1KDFTV');
+  });
+
+  it('пустой двигатель при нескольких машинах в блоке объясняется словами', () => {
+    expect(hint('engine', row({ vehicleEnginesForBlock: true })))
+      .toBe('Двигатели названы для всего блока, а не для этой машины: '
+        + 'в блоке «Подходит» машин несколько');
+    expect(hint('engine', row())).toBeUndefined();
+  });
+
+  it('у донора — «По донору», без ряда; пустая клетка подсказки не получает', () => {
+    expect(hint('body', row({ body: 'GRJ120W', vehicleBodySource: 'DONOR', vehicleBodySeries: '120' })))
+      .toBe('По донору: GRJ120W');
+    expect(hint('body', row({ vehicleBodySource: 'PARSED' }))).toBeUndefined();
+  });
+});
+
 describe('порядок витрины по умолчанию', () => {
   it('открывается порядковым номером по убыванию, а не случайным кодом', () => {
     const open = defaultQuery(50);
