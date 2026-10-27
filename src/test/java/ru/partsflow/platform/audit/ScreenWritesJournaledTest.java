@@ -89,7 +89,7 @@ class ScreenWritesJournaledTest {
             Map.entry("OwnVehicleCodes#*", "пересчёт хранимого производного part.own_body_codes"
                     + " (0296) из строк применимости и наименования; колонки нет в AuditedColumns,"
                     + " правка человека — это правка источника, и журналируется она там"),
-            Map.entry("CatalogService#applyFromTitles","массовый разбор наименований кнопкой импорта;"
+            Map.entry("CatalogService#applyFromTitles", "массовый разбор наименований кнопкой импорта;"
                     + " решение 0325 — как DromApplicabilityService"),
             Map.entry("CustomerService#retail", "контрагент розничной продажи заводится сам, без человека"),
             Map.entry("MarketplaceAccountService#forgetLastOutcome", "служебные отметки отправки"),

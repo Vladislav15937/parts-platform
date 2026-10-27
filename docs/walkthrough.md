@@ -56,6 +56,10 @@ jar и едет с того же домена, поэтому там адрес 
 `proba` — не встроенная запись, а компания, которую заводят одной командой:
 
 ```bash
+# Сначала дождаться общей схемы: строка «Started» в логе её не означает,
+# накат идёт после неё, и в этом окне заведение компании отвечает 500.
+until curl -s http://localhost:8080/actuator/readiness | grep -q '"check":"catalog","ok":true'; do sleep 2; done
+
 curl -X POST http://localhost:8080/api/provisioning/tenants \
   -H 'Content-Type: application/json' \
   -d '{"token":"local-dev-token",

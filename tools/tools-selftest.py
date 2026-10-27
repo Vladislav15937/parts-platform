@@ -205,15 +205,42 @@ while [ $# -gt 0 ]; do
     http*) url="$1" ;;
   esac; shift
 done
-code=200; rc=0
+code=200; rc=0; body='{}'
+# Принята ли общая схема — одно состояние на готовность и на провижининг.
+# SB_READY: ok — принята; never — не принята никогда; late — не принята,
+# пока готовность не спросили трижды; journals — принята, но ready:false
+# из-за журналов (так в разработке всегда, когда компания уже есть:
+# приложение ходит в базу владельцем схем).
+n=$(cat "$S/ready" 2>/dev/null || echo 0)
+cat_ok=true
+case "${SB_READY:-ok}" in
+  never) cat_ok=false ;;
+  late) [ "$n" -lt 3 ] && cat_ok=false ;;
+esac
 case "$url" in
   *:8080/api/auth/csrf) [ -e "$S/app" ] || rc=7 ;;
   *:8080/api/auth/login) code=401 ;;
-  *:8080/api/provisioning/tenants) code="${SB_PROV:-201}" ;;
+  *:8080/api/provisioning/tenants)
+    # Вслух, в stderr: случай «схема не накатана» проверяет, что до заведения
+    # компании подъём не дошёл вовсе, а не только что он не напечатал «Готово».
+    echo "ПОДДЕЛКА-CURL: POST /api/provisioning/tenants" >&2
+    # Как настоящее приложение: в окне наката провижининг падает пятисоткой.
+    code="${SB_PROV:-201}"; [ "$cat_ok" = true ] || code=500 ;;
+  *:8080/actuator/readiness)
+    echo $((n+1)) > "$S/ready"
+    ready=true
+    [ "${SB_READY:-ok}" = journals ] && ready=false
+    [ "$cat_ok" = false ] && ready=false
+    [ "$ready" = true ] || code=503
+    body='{"ready":'$ready',"checks":[{"check":"database","ok":true,"detail":"База отвечает","known":true},{"check":"catalog","ok":'$cat_ok',"detail":"Общая схема catalog принята не целиком (подделка)","known":true}]}' ;;
   *:5173/*) [ -e "$S/pwa" ] || rc=7 ;;
 esac
 [ $rc -ne 0 ] && exit $rc
-[ -n "$out" ] && echo '{}' > "$out"
+if [ -n "$out" ]; then
+  printf '%s' "$body" > "$out"
+elif [ "$body" != '{}' ]; then
+  printf '%s' "$body"   # тело в stdout — только у адреса, который его отдаёт
+fi
 [ -n "$fmt" ] && printf '%s' "$code"
 exit 0
 """
@@ -329,6 +356,24 @@ CASES = [
     case("dev-up: в логе приложения нет «Started PartsPlatformApplication»",
          "dev-up", env={"SB_BANNER": "no"}, exit_ok=False,
          must=["не поднялось, смотрите"], must_not=["Готово."]),
+    # Окно «порт отвечает и «Started» в логе, а общая схема ещё накатывается»
+    # настоящее: CatalogMigrations — ApplicationRunner, он работает после
+    # строки «Started». На чистом томе провижининг в этом окне отвечал 500
+    # (tasks/0381). Ждать надо проверку catalog, а не ready: в разработке
+    # ready:false навсегда, как только компания есть (журналы правятся
+    # владельцем схем), — ожидание ready повесило бы каждый второй подъём.
+    case("dev-up: общая схема не накатана, приложение уже отвечает", "dev-up",
+         env={"SB_READY": "never"}, exit_ok=False,
+         must=["общая схема так и не накатилась"],
+         must_not=["Готово.", "провижининг ответил", "ПОДДЕЛКА-CURL: POST"]),
+    case("dev-up: общая схема накатилась с опозданием — подъём её дождался",
+         "dev-up", env={"SB_READY": "late"}, exit_ok=True,
+         must=["общая схема накатана", "провижининг ответил 201", "Готово."],
+         must_not=["так и не накатилась"]),
+    case("dev-up: схема накатана, ready:false из-за журналов — подъём не ждёт",
+         "dev-up", env={"SB_READY": "journals"}, exit_ok=True,
+         must=["общая схема накатана", "провижининг ответил 201", "Готово."],
+         must_not=["так и не накатилась"]),
     case("dev-up: провижининг ответил 500", "dev-up", env={"SB_PROV": "500"},
          exit_ok=False, must=["провижининг ответил 500"], must_not=["Готово."]),
     case("dev-up: порт PWA закрыт", "dev-up", env={"SB_PWA": "closed"},
