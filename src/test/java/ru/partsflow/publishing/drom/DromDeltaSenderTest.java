@@ -581,6 +581,11 @@ class DromDeltaSenderTest extends PostgresTestBase {
             perPacket.put(packetId, new Result(false, httpStatus, body));
         }
 
+        /** Сбой соединения для одного прайс-листа: HTTP-ответа нет вовсе. */
+        void dropFor(String packetId, Transport failure, String message) {
+            perPacket.put(packetId, new Result(false, 0, message, failure));
+        }
+
         void failWith(int httpStatus, String body) {
             answer = new Result(false, httpStatus, body);
         }
