@@ -181,6 +181,10 @@ class DromDeltaSenderTest extends PostgresTestBase {
         assertThat(statusOf("Дром").code()).isEqualTo(DeliveryStatus.Code.CONNECTION_BROKEN);
 
         syncClient.reset();
+        // Сбой пробуется не раньше интервала (задача 0380): следующая попытка —
+        // после него, иначе в Дром не уходит ничего и сменить исход нечему.
+        inTenant(() -> jdbc.update(
+                "UPDATE marketplace_account SET last_sync_at = now() - interval '16 minutes'"));
         inTenant(() -> sender.onDealIssued(issuedDeal(part("Дверь", true))));
         assertThat(statusOf("Дром").state()).isEqualTo(DeliveryStatus.State.ACCEPTED);
     }

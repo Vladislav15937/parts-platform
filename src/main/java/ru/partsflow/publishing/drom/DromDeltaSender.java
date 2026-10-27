@@ -12,9 +12,9 @@ import java.io.ByteArrayOutputStream;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 
 /**
  * Точечное обновление Дрома: изменилась позиция — уехала дельта.
@@ -56,6 +56,15 @@ import java.util.Set;
  * выгрузка без ключа: отметки снимаются, как только приняли остальные, а её
  * пробуют снова не раньше {@code app.feeds.refused-retry} — первой же пачкой
  * после интервала. Накопленное за это время она получит полным забором прайса.
+ *
+ * <p><b>Временный сбой и непонятный ответ тоже пробуются раз в интервал</b>
+ * (задача 0380). Пятисотка, тишина, обрыв, незнакомый код и ответ, который
+ * не узнан ни успехом, ни отказом (веб-страница при 200), — «может пройти
+ * само», но пока не прошло, каждый заход релея повторял пачку во <b>все</b>
+ * выгрузки, и конца у этого не было. Теперь такая выгрузка ждёт тот же
+ * {@code app.feeds.refused-retry}, а пачку держит в очереди, только если
+ * изменение не досталось <b>никому</b>: приняла хоть одна — отметки снимаются,
+ * как при отказе «нужен человек», а сбойной ставится признак неотправки.
  *
  * <p>Интервал не хранится отдельно: его отсчитывают от {@code last_sync_at}
  * и {@code last_error} самой выгрузки, которые и так пишутся на каждую
@@ -120,6 +129,13 @@ public class DromDeltaSender {
          */
         RESTING,
         /**
+         * Выгрузка ждёт интервала после временного сбоя или непонятного ответа
+         * (задача 0380): не пробуем. Как {@link #FAILED}, держит очередь, если
+         * изменение не досталось никому, — иначе прошедший сам сбой потерял бы
+         * его до полного забора.
+         */
+        RESTING_AFTER_FAILURE,
+        /**
          * Дельта сверх лимита. Очередь не держит (задача 0271, по решению
          * «б» из 0269): пачка и её размер на следующем заходе те же, и повтор
          * не уйдёт никогда, а тащил бы её во все исправные выгрузки.
@@ -127,7 +143,8 @@ public class DromDeltaSender {
         TOO_BIG,
         /**
          * Временный сбой (5xx, тишина, обрыв, незнакомый ответ): очередь
-         * держит, позиции уйдут следующим заходом. Признак неотправки ставится
+         * держит, только если изменение не приняла ни одна выгрузка, и
+         * пробуется не раньше интервала (задача 0380). Признак неотправки ставится
          * и здесь (ответ владельца 26.10.2026, tasks/0271, «Вопрос владельцу —
          * временный сбой и признак»): эта попытка не дошла, а гасит признак
          * только полный забор прайса позже неё.
@@ -179,14 +196,15 @@ public class DromDeltaSender {
      *
      * @param label чем помечен файл дельты — попадает в имя вложения и
      *              оттуда в «Замечания к товарам» кабинета площадки
-     * @return {@code false}, если хотя бы одна выгрузка не приняла дельту
-     *         из-за сбоя, который может пройти сам; тогда отметки об изменении
-     *         снимать нельзя — позиция должна уехать следующим заходом. Отказ,
-     *         которому нужен человек, выгрузка, ждущая интервала после такого
-     *         отказа, и дельта сверх лимита результат не портят — как и выгрузка
-     *         без ключа; каждая из трёх ставит выгрузке признак неотправки
-     *         (задача 0271). Временный сбой ставит его тоже, но результат
-     *         портит — отметки остаются в очереди
+     * @return {@code false}, если изменение не приняла ни одна выгрузка, а хоть
+     *         одной помешал сбой, который может пройти сам (сейчас или интервал
+     *         после него); тогда отметки снимать нельзя — позиция уйдёт пробой
+     *         после интервала (задача 0380). Приняла хоть одна — {@code true}:
+     *         держать очередь значило бы повторять пачку в принявшие каждым
+     *         заходом. Отказ, которому нужен человек, выгрузка, ждущая интервала
+     *         после такого отказа, и дельта сверх лимита результат не портят —
+     *         как и выгрузка без ключа. Каждая неотправка ставит выгрузке
+     *         признак (задача 0271)
      */
     @Transactional
     public boolean sendParts(List<Long> partIds, String label) {
@@ -201,33 +219,55 @@ public class DromDeltaSender {
             return true;
         }
 
-        Set<Long> resting = restingAfterRefusal();
+        Map<Long, Rest> resting = resting();
         String origin = feedOrigin();
-        boolean allSent = true;
+        boolean delivered = false;
+        boolean mayPassByItself = false;
         for (Ready target : targets) {
-            allSent &= sendToAccount(target, partIds, label, origin,
-                    resting.contains(target.account().id())) != Outcome.FAILED;
+            Outcome outcome = sendToAccount(target, partIds, label, origin,
+                    resting.get(target.account().id()));
+            delivered |= outcome == Outcome.ACCEPTED;
+            mayPassByItself |= outcome == Outcome.FAILED || outcome == Outcome.RESTING_AFTER_FAILURE;
         }
-        return allSent;
+        // Держать очередь ради сбойной выгрузки, когда исправная изменение
+        // приняла, значит слать его исправной заново каждым заходом (0380).
+        // Сбойной оно не достанется до полного забора — это помнит признак.
+        return delivered || !mayPassByItself;
+    }
+
+    /** Почему выгрузка ждёт интервала. */
+    private enum Rest {
+        /** Отказ, который без человека не пройдёт (0269). */
+        NEEDS_PERSON,
+        /** Временный сбой или ответ, не узнанный ни успехом, ни отказом (0380). */
+        AFTER_FAILURE
     }
 
     /**
-     * Выгрузки, отказавшие «нужен человек» меньше интервала назад.
+     * Выгрузки, чья последняя попытка не прошла меньше интервала назад.
      *
      * <p>Часы — базы ({@code now()}), как и у {@code last_sync_at}: сравнивать
      * время записи с часами приложения значило бы сдвинуть интервал на их
-     * расхождение. Решает {@link DromSyncRecord#needsPerson} по тексту отказа,
-     * то есть тем же разбором, что и карточка.
+     * расхождение. Род отказа решает {@link DromSyncRecord#needsPerson} по
+     * тексту, то есть тем же разбором, что и карточка.
+     *
+     * <p><b>Дельта сверх лимита выгрузку не усыпляет.</b> Запрос к Дрому тогда
+     * не уходил, и стучаться не во что: велика была пачка, а не выгрузка
+     * больна. Усни она на интервал — следующие малые дельты, которые Дром
+     * принял бы, ждали бы четверть часа ни за что.
      */
-    private Set<Long> restingAfterRefusal() {
-        Set<Long> resting = new HashSet<>();
+    private Map<Long, Rest> resting() {
+        Map<Long, Rest> resting = new HashMap<>();
         jdbc.query("""
                 SELECT id, last_error FROM marketplace_account
                  WHERE last_error IS NOT NULL
                    AND last_sync_at > now() - ?::interval""",
                 rs -> {
-                    if (DromSyncRecord.needsPerson(rs.getString("last_error"))) {
-                        resting.add(rs.getLong("id"));
+                    String lastError = rs.getString("last_error");
+                    if (DromSyncRecord.needsPerson(lastError)) {
+                        resting.put(rs.getLong("id"), Rest.NEEDS_PERSON);
+                    } else if (DromSyncRecord.read(lastError).kind() != DromSyncRecord.Kind.TOO_BIG) {
+                        resting.put(rs.getLong("id"), Rest.AFTER_FAILURE);
                     }
                 },
                 refusedRetry.toSeconds() + " seconds");
@@ -273,12 +313,12 @@ public class DromDeltaSender {
     }
 
     /**
-     * @param resting выгрузка ждёт интервала после отказа «нужен человек»:
-     *                дельта собирается только затем, чтобы узнать, досталось ли
-     *                бы ей что-нибудь, — и не отправляется
+     * @param resting почему выгрузка ждёт интервала, или {@code null}, если
+     *                не ждёт: дельта собирается только затем, чтобы узнать,
+     *                досталось ли бы ей что-нибудь, — и не отправляется
      */
     private Outcome sendToAccount(Ready target, List<Long> partIds, String label, String origin,
-                                  boolean resting) {
+                                  Rest resting) {
         ByteArrayOutputStream delta = new ByteArrayOutputStream();
         // Выгрузка колёс собирается своим генератором: у шины свои поля,
         // и дельта обязана быть в том же формате, что и полный прайс —
@@ -306,16 +346,16 @@ public class DromDeltaSender {
             return Outcome.NOTHING_TO_SEND;
         }
 
-        if (resting) {
-            // Отказ «нужен человек» был меньше интервала назад: не стучимся.
+        if (resting != null) {
+            // Последняя попытка не прошла меньше интервала назад: не стучимся.
             // Обработчик выдачи сделки идёт сюда же и мимо интервала не шлёт.
             // Отметки с этих позиций снимутся, как только примут остальные, —
             // значит этой выгрузке они не достались, и карточка обязана это
-            // помнить (задача 0271). Причина — тот самый отказ.
-            log.debug("Дром: выгрузка {} ждёт интервала после отказа — дельту не шлём",
+            // помнить (задача 0271). Причина — та самая неудача.
+            log.debug("Дром: выгрузка {} ждёт интервала после неудачной попытки — дельту не шлём",
                     target.account().id());
             markUnsentByLastRefusal(target.account().id());
-            return Outcome.RESTING;
+            return resting == Rest.NEEDS_PERSON ? Outcome.RESTING : Outcome.RESTING_AFTER_FAILURE;
         }
 
         byte[] body = delta.toByteArray();
@@ -357,13 +397,15 @@ public class DromDeltaSender {
                     target.account().id(), result.httpStatus(), refusedRetry);
             return Outcome.NEEDS_PERSON;
         }
-        // Временный сбой: очередь держит, повтор уйдёт следующим заходом.
+        // Временный сбой или непонятный ответ: следующая проба — не раньше
+        // интервала (0380), очередь держится, только если не принял никто.
         // Признак ставится и на него — «любая неотправка» (ответ владельца
         // 26.10.2026, tasks/0271): дошёл ли повтор, карточка не утверждает,
-        // а гасит признак только полный забор прайса позже этой попытки.
+        // а гасит признак только полный забор прайса позже этой попытки
+        // (ответ владельца 27.10.2026, там же).
         markUnsent(target.account().id(), failure);
-        log.warn("Дром: дельта {} в выгрузку {} не ушла, HTTP {}",
-                label, target.account().id(), result.httpStatus());
+        log.warn("Дром: дельта {} в выгрузку {} не ушла, HTTP {} — следующая проба не раньше чем через {}",
+                label, target.account().id(), result.httpStatus(), refusedRetry);
         return Outcome.FAILED;
     }
 

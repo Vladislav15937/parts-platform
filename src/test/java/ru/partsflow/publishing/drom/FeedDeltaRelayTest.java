@@ -206,17 +206,19 @@ class FeedDeltaRelayTest extends PostgresTestBase {
     }
 
     /**
-     * Временный сбой — повтор на следующем же заходе (задача 0269, п. 3 и 5).
+     * Временный сбой, который проходит сам, до выгрузки доезжает (задача 0380,
+     * п. 3): очередь держится, пока изменение не досталось никому, а повтор
+     * уходит пробой раз в интервал — не каждым заходом.
      *
-     * <p>До 0269 этот тест отказывал {@code ERROR_REASON_AUTH_FAILED} — отказом,
-     * который без человека не пройдёт. Теперь такой отказ очередь не держит
-     * (тесты ниже), и «уедет следующим заходом» верно только для сбоя, который
-     * может пройти сам: пятисотка прокси, обрыв, тишина.
+     * <p>До 0380 здесь стояло обратное — «временный сбой обязан повторяться
+     * на следующем заходе, а не ждать интервала» (0269): повтор каждые
+     * пятнадцать секунд и был тем, что 0380 убирает. Контроль здесь в том,
+     * что правка не превратила «может пройти само» в «никогда не повторяем».
      */
     @Test
-    @DisplayName("Временный сбой площадки оставляет позицию в очереди и повторяется следующим заходом")
-    void failureKeepsThePartQueued() {
-        account("12345", null, null);
+    @DisplayName("Временный сбой держит позицию в очереди, пробуется раз в интервал и доезжает, когда прошёл")
+    void transientFailureThatPassesIsDelivered() {
+        Long feed = account("12345", null, null);
         Long partId = part("Бампер", "5000");
         drainQueue();
         syncClient.failWith(502, "<html><title>502 Bad Gateway</title></html>");
@@ -228,20 +230,104 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         });
         relay.relayFor(TENANT);
 
-        // Не ушло — значит уедет следующим заходом. Заявка при этом снята,
+        // Не ушло никуда — значит позиция ждёт в очереди. Заявка при этом снята,
         // иначе позиция ждала бы истечения срока из-за мгновенного отказа.
         assertThat(queueSize()).isEqualTo(1);
         assertThat(claimedCount()).isZero();
 
         relay.relayFor(TENANT);
-        assertThat(syncClient.calls())
-                .as("временный сбой обязан повторяться на следующем заходе, а не ждать интервала")
-                .hasSize(2);
-
-        syncClient.failWith(0, null);
         relay.relayFor(TENANT);
-        assertThat(syncClient.calls()).as("обрыв связи — тоже временный сбой").hasSize(3);
-        assertThat(queueSize()).isEqualTo(1);
+        assertThat(syncClient.calls())
+                .as("временный сбой повторяется каждым заходом, а не раз в интервал")
+                .hasSize(1);
+        assertThat(queueSize()).as("ожидая интервала, позиция выпала из очереди").isEqualTo(1);
+
+        // Интервал прошёл, Дром снова отвечает — проба доставляет изменение.
+        intervalPassed(feed);
+        syncClient.reset();
+        relay.relayFor(TENANT);
+        assertThat(syncClient.calls()).as("по прошествии интервала пробы не было").singleElement()
+                .satisfies(call -> assertThat(call.delta()).contains("<price>9000"));
+        assertThat(queueSize()).as("принятая проба не сняла отметку").isZero();
+        assertThat(lastError(feed)).as("итог выгрузки после принятой пробы — не «принято»").isNull();
+    }
+
+    /**
+     * Неразобранный ответ и сбой одной выгрузки не тащат за собой исправные
+     * (задача 0380, п. 1). До правки любой исход, кроме трёх кодов «нужен
+     * человек» (0269) и лимита (0271), снимал заявку со всей пачки, и каждые
+     * пятнадцать секунд она уходила заново во все выгрузки — конца у этого
+     * не было, пока Дром не ответит иначе.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"страница при 200", "пятисотка", "незнакомый код", "нет ответа"})
+    @DisplayName("Сбой или непонятный ответ одной выгрузки: исправная получает изменение один раз, сбойная — одну пробу за интервал")
+    void unstableFeedDoesNotDragHealthyFeeds(String failure) {
+        account("11111", null, null);
+        Long unstable = account("22222", null, null);
+        Long first = part("Радиатор", "5000");
+        Long second = part("Капот", "5000");
+        drainQueue();
+        failFor("22222", failure);
+
+        change(first);
+        relay.relayFor(TENANT);
+        relay.relayFor(TENANT);
+        relay.relayFor(TENANT);
+
+        assertThat(callsTo("11111"))
+                .as("исправная получила %d вызовов на одно изменение, ждали 1", callsTo("11111"))
+                .isEqualTo(1);
+        assertThat(callsTo("22222")).as("сбойная пробуется чаще раза за интервал").isEqualTo(1);
+        assertThat(logRows(unstable)).as("журнал публикаций по сбойной растёт каждым заходом")
+                .isEqualTo(1);
+        assertThat(queueSize()).as("изменение досталось исправной, а очередь его держит").isZero();
+
+        // Новое изменение в пределах интервала: исправная получает его,
+        // сбойная — нет, и журнал по ней не растёт.
+        change(second);
+        relay.relayFor(TENANT);
+        relay.relayFor(TENANT);
+        assertThat(callsTo("11111")).isEqualTo(2);
+        assertThat(callsTo("22222")).as("проба раньше интервала").isEqualTo(1);
+        assertThat(logRows(unstable)).isEqualTo(1);
+    }
+
+    /**
+     * Проба после интервала — ровно одна, и ответившая так же выгрузка ждёт
+     * интервал заново (задача 0380, п. 2). Часы — базы: интервал отсчитывается
+     * от {@code last_sync_at}, поэтому сдвигается он, а не время приложения.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"страница при 200", "пятисотка"})
+    @DisplayName("После интервала сбойная выгрузка пробуется ровно один раз; ответила так же — интервал заново")
+    void unstableFeedIsProbedOncePerInterval(String failure) {
+        account("11111", null, null);
+        Long unstable = account("22222", null, null);
+        Long first = part("Радиатор", "5000");
+        Long second = part("Крыло", "5000");
+        Long third = part("Дверь", "5000");
+        drainQueue();
+        failFor("22222", failure);
+
+        change(first);
+        relay.relayFor(TENANT);
+        assertThat(callsTo("22222")).isEqualTo(1);
+
+        intervalPassed(unstable);
+        change(second);
+        relay.relayFor(TENANT);
+        relay.relayFor(TENANT);
+        relay.relayFor(TENANT);
+        assertThat(callsTo("22222")).as("после интервала — ровно одна проба").isEqualTo(2);
+        assertThat(callsTo("11111")).isEqualTo(2);
+        assertThat(logRows(unstable)).isEqualTo(2);
+
+        // Ответила так же — интервал заново: следующее изменение её не трогает.
+        change(third);
+        relay.relayFor(TENANT);
+        assertThat(callsTo("22222")).as("неудачная проба не начала интервал заново").isEqualTo(2);
+        assertThat(callsTo("11111")).isEqualTo(3);
     }
 
     /**
@@ -470,6 +556,35 @@ class FeedDeltaRelayTest extends PostgresTestBase {
             partChanges.changed(partId);
             return null;
         });
+    }
+
+    /**
+     * Ответ, который не «нужен человек»: Дром стабильно отвечает так на каждый
+     * запрос этой выгрузки. Страница при 200 — самое вероятное первое живое
+     * обличье (памятка publishing, «Ужесточение успеха»).
+     */
+    private void failFor(String packetId, String failure) {
+        switch (failure) {
+            case "страница при 200" -> syncClient.failFor(packetId, 200,
+                    "<!DOCTYPE html><html><head><title>Вход — Дром</title></head><body></body></html>");
+            case "пятисотка" -> syncClient.failFor(packetId, 500, "Internal Server Error");
+            case "незнакомый код" -> syncClient.failFor(packetId, 200, "ERROR_REASON_SOMETHING_NEW");
+            case "нет ответа" -> syncClient.dropFor(packetId,
+                    DromSyncClient.Transport.TIMEOUT, "request timed out");
+            default -> throw new IllegalArgumentException(failure);
+        }
+    }
+
+    /** Интервал после неудачной попытки истёк: сдвигаем её момент, часы — базы. */
+    private void intervalPassed(Long accountId) {
+        inTenant(() -> jdbc.update("""
+                UPDATE marketplace_account SET last_sync_at = now() - interval '16 minutes'
+                 WHERE id = ?""", accountId));
+    }
+
+    private String lastError(Long accountId) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT last_error FROM marketplace_account WHERE id = ?", String.class, accountId));
     }
 
     private long callsTo(String packetId) {
