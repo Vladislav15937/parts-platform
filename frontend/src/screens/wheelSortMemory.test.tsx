@@ -111,6 +111,38 @@ describe('память порядка вкладки «Шины и диски»'
         'кнопка осталась, хотя сбрасывать уже нечего').toBeNull();
     });
 
+  // Решение владельца 27.10.2026 (задача 0379): «Сбросить отбор» больше
+  // не сбрасывает сортировку — как на складе (`withoutFilters` в catalog.ts).
+  // До задачи 0382 это держалось одной памятью: разбор PR 527 вернул
+  // `withoutWheelFilters` к `{ ...EMPTY_WHEEL_QUERY }`, и все тесты прошли.
+  it('«Сбросить отбор» снимает отбор и оставляет запомненную сортировку, ничего не записывая',
+    async () => {
+      stored = { sort: 'price', desc: false };
+      render(<WheelsScreen canIntake={false} rights={rightsAs('OWNER')} />);
+      await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+      expect(asked[0]).toContain('sort=price');
+
+      fireEvent.change(screen.getByDisplayValue('все'), { target: { value: 'TYRE' } });
+      await waitFor(() => expect(asked[asked.length - 1]).toContain('kind=TYRE'));
+      const writtenBefore = written.length;
+
+      const reset = screen.getByRole('button', { name: 'Сбросить отбор' });
+      fireEvent.click(reset);
+      await waitFor(() => expect(asked[asked.length - 1],
+        '«Сбросить отбор» не снял отбор «только шины»').not.toContain('kind=TYRE'));
+
+      const last = asked[asked.length - 1];
+      expect(last, '«Сбросить отбор» сбросил и сортировку по цене').toContain('sort=price');
+      expect(last, '«Сбросить отбор» перевернул порядок «по возрастанию»').toContain('desc=false');
+      expect(screen.queryByRole('button', { name: 'Сбросить сортировку' }),
+        'после сброса отбора вкладка считает порядок умолчанием').toBeTruthy();
+      // Запись настройки уходит асинхронно: дать ей шанс уйти, прежде чем
+      // утверждать, что её нет.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(written.slice(writtenBefore),
+        '«Сбросить отбор» переписал запомненную сортировку на сервере').toEqual([]);
+    });
+
   it('у новой учётной записи кнопки сброса порядка нет, и в базу ничего не пишется',
     async () => {
       render(<WheelsScreen canIntake={false} rights={rightsAs('OWNER')} />);

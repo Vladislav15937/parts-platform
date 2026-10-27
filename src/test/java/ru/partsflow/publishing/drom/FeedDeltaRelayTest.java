@@ -232,8 +232,12 @@ class FeedDeltaRelayTest extends PostgresTestBase {
 
         // Не ушло никуда — значит позиция ждёт в очереди. Заявка при этом снята,
         // иначе позиция ждала бы истечения срока из-за мгновенного отказа.
-        assertThat(queueSize()).isEqualTo(1);
-        assertThat(claimedCount()).isZero();
+        assertThat(queueSize())
+                .as("временный сбой единственной выгрузки снял позицию с очереди — изменение потеряно")
+                .isEqualTo(1);
+        assertThat(claimedCount())
+                .as("после мгновенного отказа заявка осталась — позиция ждёт истечения её срока")
+                .isZero();
 
         relay.relayFor(TENANT);
         relay.relayFor(TENANT);
@@ -246,10 +250,18 @@ class FeedDeltaRelayTest extends PostgresTestBase {
         intervalPassed(feed);
         syncClient.reset();
         relay.relayFor(TENANT);
-        assertThat(syncClient.calls()).as("по прошествии интервала пробы не было").singleElement()
-                .satisfies(call -> assertThat(call.delta()).contains("<price>9000"));
+        assertThat(syncClient.calls())
+                .as("по прошествии интервала ушла не одна проба: её не было вовсе или их несколько")
+                .hasSize(1);
+        // Отдельной проверкой, а не внутри satisfies: там AssertJ ставит перед
+        // сообщением о цене сообщение о числе проб, и читается «не одна проба».
+        assertThat(syncClient.calls().get(0).delta())
+                .as("проба после интервала несёт не текущую цену позиции")
+                .contains("<price>9000");
         assertThat(queueSize()).as("принятая проба не сняла отметку").isZero();
-        assertThat(lastError(feed)).as("итог выгрузки после принятой пробы — не «принято»").isNull();
+        assertThat(lastError(feed))
+                .as("Дром принял пробу, а итог выгрузки остался отказом вместо «принято»")
+                .isNull();
     }
 
     /**

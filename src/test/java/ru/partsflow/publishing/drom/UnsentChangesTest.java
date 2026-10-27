@@ -331,8 +331,9 @@ class UnsentChangesTest extends PostgresTestBase {
             assertThat(path(retried, "unsent.code"))
                     .as("%s: принятый повтор погасил признак — гасит только забор прайса", failure.name())
                     .isEqualTo(failure.code());
-            // Пропуск в интервале сдвигает момент неотправки (изменение ещё
-            // не ушло), а принятая проба его не трогает.
+            // Принятая проба момент неотправки не трогает. Пропуск в интервале
+            // его тоже не двигает: изменение в очереди то же, что не ушло при
+            // сбое (задача 0382, fullDownloadBetweenRestingPassesCoversTheHeldChanges).
             assertThat(path(retried, "unsent.at")).isEqualTo(path(resting, "unsent.at"));
             assertThat(queueSize()).as(failure.name()).isZero();
         }
@@ -341,6 +342,58 @@ class UnsentChangesTest extends PostgresTestBase {
         assertThat(feedJson("Дром").get("unsent"))
                 .as("Дром скачал прайс позже сбоя, а признак висит")
                 .isNull();
+    }
+
+    /**
+     * Забор прайса между проходами релея гасит признак, хотя очередь держится
+     * (задача 0382). Проход в интервале после сбоя пробу не шлёт и прежде
+     * ставил момент неотправки на «сейчас» — то есть каждые 15 секунд уезжал
+     * вперёд любого забора, и плашка висела, хотя Дром уже скачал всё,
+     * что лежит в очереди. Момент теперь — самое позднее не ушедшее изменение:
+     * то, что лежало до забора, им покрыто, а правка после забора — нет.
+     */
+    @Test
+    @DisplayName("Забор прайса между проходами в интервале гасит признак; правка после забора ставит его снова")
+    void fullDownloadBetweenRestingPassesCoversTheHeldChanges() throws Exception {
+        Long id = account("Дром", "111", null);
+        Long partId = part("Дверь", "5000");
+        drainQueue();
+        syncClient.failFor("111", 502, "<html>Bad Gateway</html>");
+
+        change(partId);
+        relay.relayFor(TENANT);
+        assertThat(path(feedJson("Дром"), "unsent.code")).isEqualTo("HTTP_ERROR");
+
+        // Сбой и правка случились минуту назад, Дром скачал прайс после них;
+        // интервал сбоя (last_sync_at) при этом не прошёл — следующий проход
+        // пробы не шлёт, а изменение держится в очереди.
+        inTenant(() -> {
+            jdbc.update("UPDATE part_change SET marked_at = marked_at - interval '1 minute'");
+            jdbc.update("""
+                    UPDATE marketplace_account SET unsent_at = unsent_at - interval '1 minute'
+                     WHERE id = ?""", id);
+            return null;
+        });
+        downloadedRelativeToUnsent(id, "+ interval '1 second'");
+        assertThat(feedJson("Дром").get("unsent")).isNull();
+
+        relay.relayFor(TENANT);
+        assertThat(callsTo("111")).as("проба раньше интервала").isEqualTo(1);
+        assertThat(queueSize()).as("в интервале после сбоя изменение выпало из очереди").isEqualTo(1);
+        assertThat(feedJson("Дром").get("unsent"))
+                .as("проход в интервале передвинул момент неотправки за забор прайса: "
+                        + "Дром скачал всё, что лежит в очереди, а плашка висит")
+                .isNull();
+
+        // Правка после забора им не покрыта: проход в интервале её не отправил.
+        change(partId);
+        relay.relayFor(TENANT);
+        Map<String, Object> changedAfter = feedJson("Дром");
+        assertThat(callsTo("111")).as("проба раньше интервала").isEqualTo(1);
+        assertThat(path(changedAfter, "unsent.code"))
+                .as("правка после забора не ушла, а признак не поднялся: момент неотправки "
+                        + "не двигается вовсе, а не только когда изменение уже покрыто забором")
+                .isEqualTo("HTTP_ERROR");
     }
 
     @Test
