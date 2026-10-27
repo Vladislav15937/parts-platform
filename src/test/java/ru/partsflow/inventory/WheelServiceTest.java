@@ -323,15 +323,16 @@ class WheelServiceTest extends PostgresTestBase {
     }
 
     /**
-     * Порядок вкладки по умолчанию — тот же, что у витрины склада.
+     * Порядок вкладки по умолчанию — тот же, что у витрины склада: номер
+     * позиции по убыванию, новые сверху (задача 0379; до неё — по возрастанию).
      *
      * <p>Два соседних экрана, открывающиеся по-разному, различаются без
      * причины. Прежним умолчанием был номер комплекта по убыванию: колесо,
      * заведённое поштучно, номера комплекта не имеет вовсе и уезжало в конец.
      */
     @Test
-    @DisplayName("Вкладка колёс открывается порядком заведения, а не номером комплекта")
-    void defaultOrderIsCreationOrder() {
+    @DisplayName("Вкладка колёс открывается номером позиции новыми сверху, а не номером комплекта")
+    void defaultOrderIsNewestFirst() {
         List<Long> created = new java.util.ArrayList<>();
         for (int at = 0; at < 3; at++) {
             created.add(inTenant(() -> wheels.createSet(tyre(), 1, warehouseId, null))
@@ -343,8 +344,8 @@ class WheelServiceTest extends PostgresTestBase {
         List<Long> numbers = numbersOf(inTenant(() -> wheels.list(null, null, false,
                 Map.of(), Map.of(), "такой колонки нет", false, 0, 500).rows()), created);
         assertThat(numbers)
-                .as("вкладка отдала порядок, отличный от порядка заведения: %s", numbers)
-                .isSorted();
+                .as("вкладка отдала порядок, отличный от «новые сверху»: %s", numbers)
+                .isSortedAccordingTo(java.util.Comparator.reverseOrder());
 
         // По возрастанию номера — то, что присылает экран.
         assertThat(numbersOf(inTenant(() -> wheels.list(null, null, false,

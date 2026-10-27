@@ -33,7 +33,7 @@ class NullKeyLookupTest {
     @Test
     @DisplayName("Неназванная сортировка колёс — порядок по умолчанию, а не исключение")
     void wheelSortWithoutNameFallsBackToDefault() {
-        // Умолчание то же, что у витрины склада: номер позиции по возрастанию.
+        // Умолчание то же, что у витрины склада: номер позиции по убыванию (0379).
         assertThat(WheelService.orderOf(null, false))
                 .as("порядок по умолчанию при неназванной сортировке")
                 .isEqualTo(WheelService.orderOf("нет такой колонки", false));
@@ -41,6 +41,12 @@ class NullKeyLookupTest {
         // И направление неназванную сортировку не меняет: умолчание одно.
         assertThat(WheelService.orderOf(null, true))
                 .isEqualTo(WheelService.orderOf(null, false));
+
+        // И это номер по убыванию, новые сверху (задача 0379): запрос без имени
+        // сортировки — третье место умолчания рядом с контроллером и экраном.
+        assertThat(WheelService.orderOf(null, false))
+                .as("умолчание вкладки колёс — не номер по убыванию")
+                .isEqualTo(" ORDER BY p.number DESC");
     }
 
     @Test
