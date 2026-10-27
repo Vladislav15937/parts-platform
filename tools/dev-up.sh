@@ -68,6 +68,28 @@ else
   say "поднялось"
 fi
 
+# «Started» в логе и отвечающий порт не значат «общая схема накатана»:
+# CatalogMigrations — ApplicationRunner, Spring зовёт его после этой строки.
+# На чистом томе провижининг в этом окне отвечал 500 — реестра или его
+# колонок ещё нет (tasks/0381), а повтор проходил, и это принимали за флак.
+# Ждём проверку catalog в /actuator/readiness, а не "ready":true: в разработке
+# приложение ходит в базу владельцем схем, журналы изменяемы, и как только
+# компания есть, ready навсегда false — ожидание его повесило бы подъём.
+for _ in $(seq 1 90); do
+  curl -s --max-time 2 http://localhost:8080/actuator/readiness 2>/dev/null \
+    | grep -q '"check":"catalog","ok":true' && break
+  sleep 2
+done
+if curl -s --max-time 2 http://localhost:8080/actuator/readiness 2>/dev/null \
+    | grep -q '"check":"catalog","ok":true'; then
+  say "общая схема накатана"
+else
+  echo "  общая схема так и не накатилась за 180 с — компанию заводить рано."
+  echo "  Что не так: curl -s http://localhost:8080/actuator/readiness (проверка catalog);"
+  echo "  накат — CatalogMigrations в /tmp/partsflow-app.log"
+  exit 1
+fi
+
 echo "4. Компания «${COMPANY}»"
 # Провижининг сам отбивает повтор («код занят»), но отличить занятость
 # от настоящей ошибки по коду ответа нельзя — поэтому сначала спрашиваем вход.
