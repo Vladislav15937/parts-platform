@@ -120,6 +120,7 @@
     <include file="tenant/101-access-roles-seed.sql" relativeToChangelogFile="true"/>
     <include file="tenant/102-access-role-seeded-mark.sql" relativeToChangelogFile="true"/>
     <include file="tenant/103-members-manage-split.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/105-feed-unsent-mark.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

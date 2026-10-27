@@ -33,6 +33,7 @@ import {
   deletedMark,
   deliveryLine,
   downloadMark,
+  unsentLine,
   filterSummary,
   listDeletedFeeds,
   normalizePacketId,
@@ -566,6 +567,7 @@ function FeedCard({
   // Одно выражение на кнопку «Сохранить номер» и на подпись под ней.
   const packetObstacle = packetIdObstacle(packet, feed.packetId);
   const delivery = deliveryLine(feed);
+  const unsent = unsentLine(feed);
 
   return (
     <li className="card">
@@ -607,6 +609,10 @@ function FeedCard({
       {delivery && (
         <p className={delivery.error ? 'note note--error' : 'note'}>{delivery.text}</p>
       )}
+      {/* Рядом с итогом, а не вместо него: итог про последнюю попытку и после
+          малой дельты честно говорит «принято», а крупные изменения так и не
+          уехали (задача 0271). Жёлтая — это ожидание забора, не отказ. */}
+      {unsent && <p className="note note--warn">{unsent}</p>}
       {feed.lastError && feed.marketplace === 'AVITO' && (
         <p className="note note--error">{feed.lastError}</p>
       )}
