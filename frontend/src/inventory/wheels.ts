@@ -178,6 +178,69 @@ export const EMPTY_WHEEL_QUERY: WheelQuery = {
   q: '', kind: '', missing: false, columns: {}, words: {}, sort: 'number', desc: true, page: 0,
 };
 
+/** Отличается ли порядок от умолчания: по этому показывается «Сбросить сортировку». */
+export function isWheelSorted(query: WheelQuery): boolean {
+  return query.sort !== EMPTY_WHEEL_QUERY.sort || query.desc !== EMPTY_WHEEL_QUERY.desc;
+}
+
+/** Порядок вернулся к умолчанию, отборы остались как были. */
+export function withDefaultWheelSort(query: WheelQuery): WheelQuery {
+  return { ...query, sort: EMPTY_WHEEL_QUERY.sort, desc: EMPTY_WHEEL_QUERY.desc, page: 0 };
+}
+
+/** Отборы сняты, порядок остался: «сбросить отбор» и «сбросить порядок» — разные желания. */
+export function withoutWheelFilters(query: WheelQuery): WheelQuery {
+  return { ...EMPTY_WHEEL_QUERY, sort: query.sort, desc: query.desc };
+}
+
+/** Имя экрана в настройках сотрудника. */
+const WHEEL_SCREEN = 'wheels';
+
+/** Что вкладка помнит за сотрудником: только порядок. */
+export interface WheelSort {
+  sort: string;
+  desc: boolean;
+}
+
+/**
+ * Запомненный порядок вкладки — тем же механизмом, что витрина склада
+ * (`loadView` в `catalog.ts`, `member_setting`, задача 0060).
+ *
+ * <p>Решение владельца 27.10.2026 (задача 0379): «Шины и диски» запоминают
+ * выбранную сортировку, как склад, а «Сбросить сортировку» ведёт к умолчанию.
+ * Помнится только порядок: про отборы и колонки вкладки ответа не было, и
+ * колонки по-прежнему в `localStorage` (`wheel-columns`).
+ *
+ * <p>Сохранённое читается с недоверием: колонку с этой сортировкой могли
+ * убрать, и незнакомое имя берётся умолчанием, а не уходит на сервер.
+ */
+export function loadWheelSort(): Promise<WheelSort> {
+  const fallback = { sort: EMPTY_WHEEL_QUERY.sort, desc: EMPTY_WHEEL_QUERY.desc };
+  return request<{ value?: Record<string, unknown> | null }>(`/api/me/settings/${WHEEL_SCREEN}`)
+    .then((saved) => {
+      const value = saved?.value;
+      if (value === null || value === undefined || typeof value !== 'object') {
+        return fallback;
+      }
+      const known = typeof value.sort === 'string'
+        && WHEEL_COLUMNS.some((column) => column.sort === value.sort);
+      return {
+        sort: known ? value.sort as string : fallback.sort,
+        desc: known && typeof value.desc === 'boolean' ? value.desc : fallback.desc,
+      };
+    })
+    // Настройка не приехала — вкладка обязана открыться умолчанием.
+    .catch(() => fallback);
+}
+
+export function saveWheelSort(sort: WheelSort): Promise<unknown> {
+  return request<unknown>(`/api/me/settings/${WHEEL_SCREEN}`, {
+    method: 'PUT',
+    body: { sort: sort.sort, desc: sort.desc },
+  // Отказ сохранения не роняет вкладку: порядок не запомнился, список работает.
+  }).catch(() => null);
+}
+
 /** Задан ли хоть один отбор: по этому экран решает, показывать ли «Сбросить». */
 export function hasWheelFilters(query: WheelQuery): boolean {
   return query.q.trim() !== '' || query.kind !== '' || query.missing

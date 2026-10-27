@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { goods } from '../ui/plural';
 import { ApiError } from '../api/client';
 import { listWarehouses } from '../organization/warehouses';
@@ -8,6 +8,11 @@ import {
   EMPTY_WHEEL_QUERY,
   WHEEL_PAGE_SIZE,
   hasWheelFilters,
+  isWheelSorted,
+  loadWheelSort,
+  saveWheelSort,
+  withDefaultWheelSort,
+  withoutWheelFilters,
   listWheels,
   wheelExportUrl,
   wheelValues,
@@ -63,8 +68,25 @@ export function WheelsScreen({ canIntake, rights }: { canIntake: boolean; rights
    * пустую таблицу: страницы у нового отбора столько нет, а выглядит это
    * как «дисков на складе нет».
    */
+  // Запомненный порядок приезжает с сервера (решение владельца 27.10.2026,
+  // задача 0379: «Шины и диски» запоминают сортировку, как склад). До его
+  // приезда список не грузится: иначе вкладка мелькнула бы умолчанием, а
+  // нажатие, успевшее раньше ответа, записало бы умолчание поверх сохранённого.
+  const [restored, setRestored] = useState(false);
+  // Снимок последнего записанного: смена отбора или страницы порядок
+  // не меняет, и писать в базу на каждую стрелку незачем.
+  const savedSort = useRef('');
+
+  const apply = (next: WheelQuery) => {
+    setQuery(next);
+    if (!restored) return;
+    const key = JSON.stringify({ sort: next.sort, desc: next.desc });
+    if (key === savedSort.current) return;
+    savedSort.current = key;
+    void saveWheelSort({ sort: next.sort, desc: next.desc });
+  };
   const change = (patch: Partial<WheelQuery>) =>
-    setQuery({ ...query, ...patch, page: patch.page ?? 0 });
+    apply({ ...query, ...patch, page: patch.page ?? 0 });
   // Набранное в поле и отправленное на сервер — разные вещи: искать
   // на каждой букве значит слать запрос за запросом на весь склад.
   const [typed, setTyped] = useState('');
@@ -102,14 +124,25 @@ export function WheelsScreen({ canIntake, rights }: { canIntake: boolean; rights
   const mounted = useMounted();
 
   const load = useCallback(() => {
+    if (!restored) return;
     listWheels(query)
       .then((found) => { if (mounted.current) setPage(found); })
       .catch((cause) => {
         if (mounted.current) setError(describe(cause, 'Список не загрузился'));
       });
-  }, [query, mounted]);
+  }, [query, mounted, restored]);
 
   useEffect(load, [load]);
+
+  useEffect(() => {
+    void loadWheelSort().then((saved) => {
+      if (mounted.current) {
+        savedSort.current = JSON.stringify(saved);
+        setQuery((current) => ({ ...current, ...saved }));
+        setRestored(true);
+      }
+    });
+  }, [mounted]);
 
   useEffect(() => {
     void listWarehouses()
@@ -202,9 +235,18 @@ export function WheelsScreen({ canIntake, rights }: { canIntake: boolean; rights
           <button
             type="button"
             className="button--ghost"
-            onClick={() => { setQuery(EMPTY_WHEEL_QUERY); setTyped(''); setTyping(null); }}
+            onClick={() => { apply(withoutWheelFilters(query)); setTyped(''); setTyping(null); }}
           >
             Сбросить отбор
+          </button>
+        )}
+        {isWheelSorted(query) && (
+          <button
+            type="button"
+            className="button--ghost"
+            onClick={() => change(withDefaultWheelSort(query))}
+          >
+            Сбросить сортировку
           </button>
         )}
       </div>
