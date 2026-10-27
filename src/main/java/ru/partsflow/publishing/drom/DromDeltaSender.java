@@ -354,7 +354,7 @@ public class DromDeltaSender {
             // помнить (задача 0271). Причина — та самая неудача.
             log.debug("Дром: выгрузка {} ждёт интервала после неудачной попытки — дельту не шлём",
                     target.account().id());
-            markUnsentByLastRefusal(target.account().id());
+            markUnsentByLastRefusal(target.account().id(), partIds);
             return resting == Rest.NEEDS_PERSON ? Outcome.RESTING : Outcome.RESTING_AFTER_FAILURE;
         }
 
@@ -511,12 +511,31 @@ public class DromDeltaSender {
                  WHERE id = ?""", reason, accountId);
     }
 
-    /** То же при пропуске в интервале: причина — отказ, из-за которого ждём. */
-    private void markUnsentByLastRefusal(long accountId) {
-        jdbc.update("""
-                UPDATE marketplace_account
-                   SET unsent_at = now(), unsent_error = last_error
-                 WHERE id = ?""", accountId);
+    /**
+     * То же при пропуске в интервале: причина — отказ, из-за которого ждём.
+     *
+     * <p>Момент — самое позднее из не ушедших изменений ({@code marked_at}
+     * пачки), а не «сейчас», и назад он не двигается (задача 0382). Проход
+     * идёт каждые 15 секунд, а держащаяся после сбоя пачка — та же самая:
+     * с «сейчас» момент уезжал вперёд любого забора прайса, и признак
+     * не гас, хотя Дром уже скачал всё, что лежит в очереди. Изменение
+     * до забора им покрыто, правка после — нет и поднимает признак снова.
+     * Позиции без отметки в очереди (выдача сделки, отметка уже убрана) —
+     * «сейчас», как раньше.
+     */
+    private void markUnsentByLastRefusal(long accountId, List<Long> partIds) {
+        String places = String.join(",", java.util.Collections.nCopies(partIds.size(), "?"));
+        Object[] args = new Object[partIds.size() + 1];
+        for (int i = 0; i < partIds.size(); i++) {
+            args[i] = partIds.get(i);
+        }
+        args[partIds.size()] = accountId;
+        jdbc.update("UPDATE marketplace_account"
+                        + " SET unsent_at = changed.at, unsent_error = last_error"
+                        + " FROM (SELECT COALESCE(max(marked_at), now()) AS at"
+                        + " FROM part_change WHERE part_id IN (" + places + ")) changed"
+                        + " WHERE id = ? AND (unsent_at IS NULL OR unsent_at < changed.at)",
+                args);
     }
 
     /** Выгрузка с уже расшифрованным ключом: расшифровка делается один раз. */

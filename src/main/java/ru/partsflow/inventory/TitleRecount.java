@@ -217,6 +217,14 @@ public class TitleRecount {
         }
         if (options.apply() && !written.isEmpty()) {
             // Кузова своей машины хранятся (0296) и зависят от наименования.
+            // Экземпляр руками, а не бин, — намеренно (проверено задачей 0382).
+            // Пересчёт обязан идти этим jdbc: он привязан к транзакции обхода
+            // (TenantSweep, свой DataSourceTransactionManager) с SET LOCAL
+            // search_path. У бина @Transactional через менеджер приложения (JPA),
+            // и внедрённый бин падает на «Already value [ConnectionHolder] … bound
+            // to thread» — восемь из девяти TitleRecountTest; в контексте разового
+            // запуска (OneShotConfig) бина JdbcTemplate для него нет вовсе.
+            // Без прокси аннотации не срабатывают, а SQL остаётся одним текстом.
             OwnVehicleCodes codes = new OwnVehicleCodes(jdbc);
             codes.refresh(written.stream().map(c -> c.position().id()).toList());
         }
