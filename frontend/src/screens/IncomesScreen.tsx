@@ -19,8 +19,15 @@ import { useMounted } from '../ui/useMounted';
  * открывают документ, из формы — только что созданный черновик, и обратно
  * ведёт «К списку». Роутера в приложении нет намеренно.
  */
-export function IncomesScreen({ reference, onSupplyAdded }: {
+export function IncomesScreen({ reference, onSupplyAdded, seesMoney }: {
   reference: Reference;
+  /**
+   * Право «Смотреть закупочную цену и себестоимость» (`part.money.view`, решение
+   * владельца 30.10.2026). Без него сервер сумм и закупочных цен не присылает,
+   * а экран не рисует ни колонок, ни плиток, ни поля ввода закупочной цены:
+   * пустая колонка «Сумма» читалась бы как «закупили даром».
+   */
+  seesMoney: boolean;
   /** Новая поставка заведена — справочники приёмки перечитываются. */
   onSupplyAdded: () => void;
 }) {
@@ -32,6 +39,7 @@ export function IncomesScreen({ reference, onSupplyAdded }: {
     return (
       <NewIncomeForm
         reference={reference}
+        seesMoney={seesMoney}
         onSupplyAdded={onSupplyAdded}
         onCancel={() => setView({ kind: 'list' })}
         onCreated={(id) => setView({ kind: 'doc', id })}
@@ -39,17 +47,22 @@ export function IncomesScreen({ reference, onSupplyAdded }: {
     );
   }
   if (view.kind === 'doc') {
-    return <IncomeDocument id={view.id} onBack={() => setView({ kind: 'list' })} />;
+    return <IncomeDocument id={view.id} seesMoney={seesMoney} onBack={() => setView({ kind: 'list' })} />;
   }
   return (
     <IncomeList
+      seesMoney={seesMoney}
       onNew={() => setView({ kind: 'new' })}
       onOpen={(id) => setView({ kind: 'doc', id })}
     />
   );
 }
 
-function IncomeList({ onNew, onOpen }: { onNew: () => void; onOpen: (id: number) => void }) {
+function IncomeList({ onNew, onOpen, seesMoney }: {
+  onNew: () => void;
+  onOpen: (id: number) => void;
+  seesMoney: boolean;
+}) {
   const [tab, setTab] = useState<IncomeTab>('drafts');
   const [page, setPage] = useState<IncomePage | null>(null);
   const [error, setError] = useState('');
@@ -124,7 +137,7 @@ function IncomeList({ onNew, onOpen }: { onNew: () => void; onOpen: (id: number)
                         <th>Номер/дата</th>
                         <th>Поставка</th>
                         <th>Склад оприходования</th>
-                        <th className="num">Сумма</th>
+                        {seesMoney && <th className="num">Сумма</th>}
                         <th>Статус</th>
                         <th>Комментарий</th>
                       </tr>
@@ -138,7 +151,7 @@ function IncomeList({ onNew, onOpen }: { onNew: () => void; onOpen: (id: number)
                           </td>
                           <td>{row.supply ?? ''}</td>
                           <td>{row.warehouse}</td>
-                          <td className="num">{money(row.amount)}</td>
+                          {seesMoney && <td className="num">{row.amount === null ? '' : money(row.amount)}</td>}
                           <td>{incomeStatusWord(row.status, row.deleted)}</td>
                           <td>{row.note ?? ''}</td>
                         </tr>
@@ -167,8 +180,9 @@ function IncomeList({ onNew, onOpen }: { onNew: () => void; onOpen: (id: number)
   );
 }
 
-function NewIncomeForm({ reference, onSupplyAdded, onCancel, onCreated }: {
+function NewIncomeForm({ reference, onSupplyAdded, onCancel, onCreated, seesMoney }: {
   reference: Reference;
+  seesMoney: boolean;
   onSupplyAdded: () => void;
   onCancel: () => void;
   onCreated: (id: number) => void;
@@ -212,10 +226,12 @@ function NewIncomeForm({ reference, onSupplyAdded, onCancel, onCreated }: {
       <h2>Новое поступление</h2>
       <div className="income-layout">
         <div className="income-main">
-          <div className="income-tiles">
-            <div className="income-tile"><span className="muted">Сумма</span> 0</div>
-            <div className="income-tile"><span className="muted">Наклад. расх.</span> 0</div>
-          </div>
+          {seesMoney && (
+            <div className="income-tiles">
+              <div className="income-tile"><span className="muted">Сумма</span> 0</div>
+              <div className="income-tile"><span className="muted">Наклад. расх.</span> 0</div>
+            </div>
+          )}
 
           <label className="field">
             Поставка
@@ -326,7 +342,7 @@ function NewSupplyDialog({ onClose, onAdded }: {
   );
 }
 
-function IncomeDocument({ id, onBack }: { id: number; onBack: () => void }) {
+function IncomeDocument({ id, onBack, seesMoney }: { id: number; onBack: () => void; seesMoney: boolean }) {
   const [doc, setDoc] = useState<Income | null>(null);
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
@@ -423,10 +439,14 @@ function IncomeDocument({ id, onBack }: { id: number; onBack: () => void }) {
 
       <div className="income-layout">
         <div className="income-main">
-          <div className="income-tiles">
-            <div className="income-tile"><span className="muted">Сумма</span> {money(doc.amount)}</div>
-            <div className="income-tile"><span className="muted">Наклад. расх.</span> 0</div>
-          </div>
+          {seesMoney && (
+            <div className="income-tiles">
+              <div className="income-tile">
+                <span className="muted">Сумма</span> {doc.amount === null ? '' : money(doc.amount)}
+              </div>
+              <div className="income-tile"><span className="muted">Наклад. расх.</span> 0</div>
+            </div>
+          )}
           <dl className="income-fields">
             <dt>Поставка</dt><dd>{doc.supply ?? '- Не выбрана -'}</dd>
             <dt>Склад оприходования</dt><dd>{doc.warehouse}</dd>
@@ -441,6 +461,7 @@ function IncomeDocument({ id, onBack }: { id: number; onBack: () => void }) {
           {draft && adding && (
             <AddItemForm
               incomeId={doc.id}
+              seesMoney={seesMoney}
               onAdded={(next) => setDoc(next)}
               onClose={() => setAdding(false)}
             />
@@ -456,8 +477,8 @@ function IncomeDocument({ id, onBack }: { id: number; onBack: () => void }) {
                     <th className="num">Номер</th>
                     <th>Наименование</th>
                     <th className="num">Кол-во</th>
-                    <th className="num">Закупочная цена</th>
-                    <th className="num">Накладные расходы</th>
+                    {seesMoney && <th className="num">Закупочная цена</th>}
+                    {seesMoney && <th className="num">Накладные расходы</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -468,8 +489,8 @@ function IncomeDocument({ id, onBack }: { id: number; onBack: () => void }) {
                           задача 0336) — второе слово рядом было бы повтором. */}
                       <td>{line.title}</td>
                       <td className="num">{line.qty}</td>
-                      <td className="num">{line.cost === null ? '' : money(line.cost)}</td>
-                      <td className="num">0</td>
+                      {seesMoney && <td className="num">{line.cost === null ? '' : money(line.cost)}</td>}
+                      {seesMoney && <td className="num">0</td>}
                     </tr>
                   ))}
                 </tbody>
@@ -504,8 +525,10 @@ function History({ entries }: { entries: IncomeHistoryEntry[] }) {
  * Позиция черновика: то, без чего строки в документе нет. Поля формы «Б/У
  * товары» целиком — задача 0362; здесь наименование, количество, цены, заметка.
  */
-function AddItemForm({ incomeId, onAdded, onClose }: {
+function AddItemForm({ incomeId, onAdded, onClose, seesMoney }: {
   incomeId: number;
+  /** Без права закупочную цену не вводят: ввести и не увидеть потом — хуже, чем не ввести. */
+  seesMoney: boolean;
   onAdded: (next: Income) => void;
   onClose: () => void;
 }) {
@@ -566,9 +589,11 @@ function AddItemForm({ incomeId, onAdded, onClose }: {
         <label className="field">Цена
           <input inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} />
         </label>
-        <label className="field">Закупочная цена
-          <input inputMode="decimal" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} />
-        </label>
+        {seesMoney && (
+          <label className="field">Закупочная цена
+            <input inputMode="decimal" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} />
+          </label>
+        )}
         <label className="field">Заметка
           <input value={note} onChange={(e) => setNote(e.target.value)} />
         </label>

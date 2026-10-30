@@ -263,6 +263,7 @@ export function HomeScreen() {
           <IncomesScreen
             reference={status.reference}
             onSupplyAdded={() => void refreshReference()}
+            seesMoney={rights.has('part.money.view')}
           />
         ) : (
           <p className="note">Справочники не загружены. Откройте вкладку «Справочники».</p>

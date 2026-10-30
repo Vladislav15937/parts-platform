@@ -29,6 +29,12 @@ import java.util.Map;
  * себестоимость карточки на количество строки. Накладных расходов у нас нет —
  * у ориентира «0+0», у нас одно число и ноль в «Наклад. расх.».
  *
+ * <p><b>Сумма и закупочные цены — только тому, у кого право «Смотреть закупочную
+ * цену и себестоимость»</b> ({@code part.money.view}, решение владельца 30.10.2026).
+ * Это та же величина, что себестоимость в истории позиции: без права она
+ * не «скрывается на экране», а не уезжает с сервера — {@link Page#withoutMoney()}
+ * и {@link Income#withoutMoney()} зовёт контроллер.
+ *
  * <p>Удалённый документ (задача 0367) остаётся во вкладке «Выполненные»
  * с отметкой — его движения в журнале никуда не делись, а исчезнувший номер
  * человек искал бы.
@@ -166,6 +172,11 @@ public class IncomeService {
     public record Row(long id, long number, String status, boolean deleted, Instant createdAt,
                       Instant completedAt, String supply, String warehouse,
                       BigDecimal amount, String note, long lines) {
+
+        Row withoutMoney() {
+            return new Row(id, number, status, deleted, createdAt, completedAt, supply, warehouse,
+                    null, note, lines);
+        }
     }
 
     /** Счётчики вкладок — по всем документам, а не по странице. */
@@ -174,12 +185,27 @@ public class IncomeService {
 
     /** @param more есть ли следующая страница — экран говорит, что показано не всё */
     public record Page(List<Row> rows, Counts counts, boolean more) {
+
+        /** Страница без закупочных сумм — для того, у кого нет права их видеть. */
+        public Page withoutMoney() {
+            return new Page(rows.stream().map(Row::withoutMoney).toList(), counts, more);
+        }
     }
 
     public record Income(long id, long number, String status, boolean deleted, Instant createdAt,
                          Instant completedAt, Long supplyId, String supply,
                          long warehouseId, String warehouse, String note, BigDecimal amount,
                          List<Line> lines, List<StockDocumentHistory.Entry> history) {
+
+        /**
+         * Документ без закупочной суммы и закупочных цен строк. История денег
+         * не несёт (только «Добавлена позиция N» и события), поэтому остаётся.
+         */
+        public Income withoutMoney() {
+            return new Income(id, number, status, deleted, createdAt, completedAt, supplyId, supply,
+                    warehouseId, warehouse, note, null,
+                    lines.stream().map(Line::withoutMoney).toList(), history);
+        }
     }
 
     /**
@@ -191,5 +217,9 @@ public class IncomeService {
      */
     public record Line(long partId, long number, String publicCode, String title,
                        String condition, BigDecimal qty, BigDecimal cost) {
+
+        Line withoutMoney() {
+            return new Line(partId, number, publicCode, title, condition, qty, null);
+        }
     }
 }

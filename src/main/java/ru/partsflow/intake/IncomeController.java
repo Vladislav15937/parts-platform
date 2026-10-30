@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 import ru.partsflow.inventory.StockDocument;
 import ru.partsflow.inventory.StockDocumentService;
 import ru.partsflow.platform.security.CurrentUser;
+import ru.partsflow.platform.security.Permission;
 
 import java.math.BigDecimal;
 
@@ -55,12 +56,28 @@ public class IncomeController {
     @GetMapping
     public IncomeService.Page list(@RequestParam(defaultValue = "all") String tab,
                                    @RequestParam(required = false) Long before) {
-        return incomes.list(tab, before);
+        IncomeService.Page page = incomes.list(tab, before);
+        return seesMoney() ? page : page.withoutMoney();
     }
 
     @GetMapping("/{id}")
     public IncomeService.Income income(@PathVariable Long id) {
-        return incomes.of(id);
+        return shown(id);
+    }
+
+    /**
+     * Закупочная сумма и цены строк — право «Смотреть закупочную цену и себестоимость»
+     * (решение владельца 30.10.2026: «право отдельно, через список того, что разрешено»).
+     * У владельца — всегда. Проверяется на каждом ответе документом, а не только
+     * на чтении: «Провести» и «+ Добавить» тоже отвечают документом целиком.
+     */
+    private static boolean seesMoney() {
+        return CurrentUser.require().can(Permission.PART_MONEY_VIEW);
+    }
+
+    private IncomeService.Income shown(long id) {
+        IncomeService.Income income = incomes.of(id);
+        return seesMoney() ? income : income.withoutMoney();
     }
 
     /** «Создать поступление»: 201 с черновиком; повтор по ключу формы — тот же черновик. */
@@ -79,7 +96,7 @@ public class IncomeController {
                 throw conflict;
             }
         }
-        return ResponseEntity.status(HttpStatus.CREATED).body(incomes.of(draft.getId()));
+        return ResponseEntity.status(HttpStatus.CREATED).body(shown(draft.getId()));
     }
 
     /** «+ Добавить» → позиция в черновик: карточка без остатка и строка документа. */
@@ -95,7 +112,7 @@ public class IncomeController {
                 throw conflict;
             }
         }
-        return ResponseEntity.status(HttpStatus.CREATED).body(incomes.of(id));
+        return ResponseEntity.status(HttpStatus.CREATED).body(shown(id));
     }
 
     /** «Провести документ»: остаток растёт; повтор отдаёт выполненный. */
@@ -104,7 +121,7 @@ public class IncomeController {
     public IncomeService.Income post(@PathVariable Long id) {
         documents.requireIntake(id);
         documents.post(id);
-        return incomes.of(id);
+        return shown(id);
     }
 
     /** «Отменить проводку»: документ снова черновик, приход снят; проданное — отказ словами. */
@@ -113,7 +130,7 @@ public class IncomeController {
     public IncomeService.Income unpost(@PathVariable Long id) {
         documents.requireIntake(id);
         documents.unpost(id);
-        return incomes.of(id);
+        return shown(id);
     }
 
     /** «Отменить поступление»: черновик уходит во вкладку «Отменённые». */
@@ -122,7 +139,7 @@ public class IncomeController {
     public IncomeService.Income cancel(@PathVariable Long id) {
         documents.requireIntake(id);
         documents.cancel(id);
-        return incomes.of(id);
+        return shown(id);
     }
 
     /**

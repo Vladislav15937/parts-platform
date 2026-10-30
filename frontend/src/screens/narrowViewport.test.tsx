@@ -690,7 +690,7 @@ describe('на телефоне ни один раздел не уезжает �
   const RENDERERS: Record<Tab, () => JSX.Element> = {
     intake: () => <IntakeScreen reference={reference()} onSend={() => {}} />,
     donor: () => <DonorScreen reference={reference()} online onChanged={() => {}} />,
-    incomes: () => <IncomesScreen reference={reference()} onSupplyAdded={() => {}} />,
+    incomes: () => <IncomesScreen reference={reference()} onSupplyAdded={() => {}} seesMoney />,
     sales: () => (
       <SellerScreen canSell rights={rightsAs('OWNER')} company="t_1" memberId={7} openDealId={null} />
     ),

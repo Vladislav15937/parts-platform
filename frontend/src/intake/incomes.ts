@@ -25,7 +25,8 @@ export interface IncomeRow {
   completedAt: string | null;
   supply: string | null;
   warehouse: string;
-  amount: number;
+  /** Закупочная сумма; пусто — у вошедшего нет права «Смотреть закупочную цену» (part.money.view). */
+  amount: number | null;
   note: string | null;
   lines: number;
 }
@@ -74,7 +75,8 @@ export interface Income {
   warehouseId: number;
   warehouse: string;
   note: string | null;
-  amount: number;
+  /** Закупочная сумма; пусто — у вошедшего нет права «Смотреть закупочную цену» (part.money.view). */
+  amount: number | null;
   lines: IncomeLine[];
   history: IncomeHistoryEntry[];
 }

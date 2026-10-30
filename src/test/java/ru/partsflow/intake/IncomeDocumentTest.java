@@ -89,6 +89,8 @@ class IncomeDocumentTest extends PostgresTestBase {
         inTenant(() -> {
             member("vladelec", "Владелец Принимающий", "OWNER");
             member("prosmotr", "Просмотр", "VIEWER");
+            member("prodavec", "Продавец Поступлений", "SELLER");
+            member("menedzher", "Менеджер Поступлений", "MANAGER");
             Long branch = jdbc.queryForObject(
                     "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class);
             warehouse = jdbc.queryForObject(
@@ -278,6 +280,76 @@ class IncomeDocumentTest extends PostgresTestBase {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"warehouseId\":%d}".formatted(warehouse)))
                 .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Решение владельца 30.10.2026: закупочные суммы и цены поступлений — по праву
+     * «Смотреть закупочную цену и себестоимость», а не всем вошедшим. Проверяется
+     * через HTTP на всех ответах, несущих документ: список, документ, и ответы
+     * изменяющих действий (продавец с «Принимать товар» добавляет позицию сам).
+     */
+    @Test
+    @DisplayName("Суммы и закупочные цены поступлений видит только право part.money.view")
+    void moneyNeedsTheRight() throws Exception {
+        JsonNode draft = create(null, "Деньги поступления");
+        long doc = draft.path("id").asLong();
+        mvc.perform(post("/api/intake/incomes/" + doc + "/items").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rawName\":\"стартер\",\"quantity\":2,\"price\":3000,"
+                                + "\"costPrice\":700,\"requestId\":\"%s\"}".formatted(UUID.randomUUID())))
+                .andExpect(status().isCreated());
+
+        // Владелец (всегда) и менеджер (право в раздаче ролей) видят как раньше.
+        for (MockHttpSession who : List.of(owner, login("menedzher"))) {
+            JsonNode seen = income(doc, who);
+            assertThat(seen.path("amount").decimalValue()).as("сумма у имеющего право")
+                    .isEqualByComparingTo("1400");
+            assertThat(seen.path("lines").get(0).path("cost").decimalValue()).isEqualByComparingTo("700");
+            assertThat(rowOf(doc, who).path("amount").decimalValue()).isEqualByComparingTo("1400");
+        }
+
+        MockHttpSession seller = login("prodavec");
+        MockHttpSession viewer = login("prosmotr");
+        for (MockHttpSession who : List.of(seller, viewer)) {
+            JsonNode seen = income(doc, who);
+            assertThat(seen.path("lines")).as("позиции без права видны").hasSize(1);
+            assertThat(seen.path("amount").isNull()).as("сумма документа ушла без права: " + seen)
+                    .isTrue();
+            assertThat(seen.path("lines").get(0).path("cost").isNull())
+                    .as("закупочная цена строки ушла без права").isTrue();
+            assertThat(rowOf(doc, who).path("amount").isNull())
+                    .as("сумма в списке ушла без права").isTrue();
+        }
+
+        // Ответ изменяющего действия — тоже документ целиком, и тоже без денег.
+        JsonNode added = body(mvc.perform(post("/api/intake/incomes/" + doc + "/items").with(csrf())
+                        .session(seller).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rawName\":\"генератор\",\"quantity\":1,\"costPrice\":500,"
+                                + "\"requestId\":\"%s\"}".formatted(UUID.randomUUID())))
+                .andExpect(status().isCreated()).andReturn());
+        assertThat(added.path("amount").isNull()).as("ответ «+ Добавить» продавцу несёт сумму").isTrue();
+        added.path("lines").forEach(line ->
+                assertThat(line.path("cost").isNull()).as("ответ «+ Добавить» несёт цену").isTrue());
+        JsonNode posted = body(mvc.perform(post("/api/intake/incomes/" + doc + "/post").with(csrf())
+                        .session(seller)).andExpect(status().isOk()).andReturn());
+        assertThat(posted.path("amount").isNull()).as("ответ «Провести» продавцу несёт сумму").isTrue();
+        assertThat(income(doc, owner).path("amount").decimalValue()).isEqualByComparingTo("1900");
+    }
+
+    private JsonNode income(long doc, MockHttpSession who) throws Exception {
+        return body(mvc.perform(get("/api/intake/incomes/" + doc).session(who))
+                .andExpect(status().isOk()).andReturn());
+    }
+
+    private JsonNode rowOf(long doc, MockHttpSession who) throws Exception {
+        JsonNode page = body(mvc.perform(get("/api/intake/incomes").param("tab", "all").session(who))
+                .andExpect(status().isOk()).andReturn());
+        for (JsonNode row : page.path("rows")) {
+            if (row.path("id").asLong() == doc) {
+                return row;
+            }
+        }
+        throw new AssertionError("поступления нет в списке");
     }
 
     /**

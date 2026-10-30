@@ -86,7 +86,7 @@ describe('поступления', () => {
   });
 
   it('список: вкладки ориентира, счётчик черновиков, колонки и подвал', async () => {
-    render(<IncomesScreen reference={reference()} onSupplyAdded={() => {}} />);
+    render(<IncomesScreen reference={reference()} onSupplyAdded={() => {}} seesMoney />);
     await waitFor(() => expect(screen.getByText('№ 41')).toBeTruthy());
 
     expect(screen.getByRole('button', { name: 'Черновики 1' })).toBeTruthy();
@@ -105,8 +105,32 @@ describe('поступления', () => {
     await waitFor(() => expect(calls.some((c) => c.url.includes('tab=cancelled'))).toBe(true));
   });
 
+  it('без права part.money.view нет ни «Суммы», ни «Наклад. расх.», ни закупочной цены', async () => {
+    // Сервер такому вошедшему денег не присылает — заглушка отвечает так же.
+    render(<IncomesScreen reference={reference()} onSupplyAdded={() => {}} seesMoney={false} />);
+    await waitFor(() => expect(screen.getByText('№ 41')).toBeTruthy());
+    const listHeads = [...document.querySelectorAll('th')].map((th) => th.textContent);
+    expect(listHeads, 'колонка «Сумма» у вошедшего без права').toEqual(['Номер/дата', 'Поставка',
+      'Склад оприходования', 'Статус', 'Комментарий']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Новое поступление' }));
+    expect(screen.queryByText('Наклад. расх.'), 'плитки денег на новой форме').toBeNull();
+    fireEvent.change(screen.getByLabelText('Склад оприходования'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Создать поступление' }));
+    fireEvent.click(await screen.findByRole('button', { name: '+ Добавить' }));
+    expect(screen.queryByText('Наклад. расх.'), 'плитки денег в документе').toBeNull();
+    expect(screen.queryByLabelText('Закупочная цена'), 'поле закупочной цены без права').toBeNull();
+    fireEvent.change(screen.getByLabelText('Наименование'), { target: { value: 'фара левая' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить' }));
+    await waitFor(() => expect(screen.getByText('фара левая')).toBeTruthy());
+    const heads = [...document.querySelectorAll('th')].map((th) => th.textContent);
+    expect(heads, 'колонки цен в документе без права').toEqual(['Номер', 'Наименование', 'Кол-во']);
+    const sent = calls.find((c) => c.url.endsWith('/items'));
+    expect((sent?.body as { costPrice: unknown }).costPrice).toBeNull();
+  });
+
   it('«Отменить» на новой форме не заводит документа', async () => {
-    render(<IncomesScreen reference={reference()} onSupplyAdded={() => {}} />);
+    render(<IncomesScreen reference={reference()} onSupplyAdded={() => {}} seesMoney />);
     fireEvent.click(await screen.findByRole('button', { name: 'Новое поступление' }));
 
     expect(screen.getByText('Создайте поступление, чтобы добавить товары')).toBeTruthy();
@@ -118,7 +142,7 @@ describe('поступления', () => {
   });
 
   it('создать, добавить позицию, провести и отменить проводку', async () => {
-    render(<IncomesScreen reference={reference()} onSupplyAdded={() => {}} />);
+    render(<IncomesScreen reference={reference()} onSupplyAdded={() => {}} seesMoney />);
     fireEvent.click(await screen.findByRole('button', { name: 'Новое поступление' }));
 
     const create = screen.getByRole('button', { name: 'Создать поступление' }) as HTMLButtonElement;
@@ -162,7 +186,7 @@ describe('поступления', () => {
 
   it('отказ отмены проводки показан словами сервера, документ остаётся выполненным', async () => {
     unpostRefusal = '«фара левая»: позиция уже продана — отмена проводки невозможна';
-    render(<IncomesScreen reference={reference()} onSupplyAdded={() => {}} />);
+    render(<IncomesScreen reference={reference()} onSupplyAdded={() => {}} seesMoney />);
     fireEvent.click(await screen.findByRole('button', { name: 'Новое поступление' }));
     fireEvent.change(screen.getByLabelText('Склад оприходования'), { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Создать поступление' }));
@@ -174,7 +198,7 @@ describe('поступления', () => {
   });
 
   it('«Отменить поступление» спрашивает и уводит документ в «Отменён»', async () => {
-    render(<IncomesScreen reference={reference()} onSupplyAdded={() => {}} />);
+    render(<IncomesScreen reference={reference()} onSupplyAdded={() => {}} seesMoney />);
     fireEvent.click(await screen.findByRole('button', { name: 'Новое поступление' }));
     fireEvent.change(screen.getByLabelText('Склад оприходования'), { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Создать поступление' }));
@@ -188,7 +212,7 @@ describe('поступления', () => {
 
   it('«+ Новая поставка»: «Добавить» неактивна без названия, поставка выбирается', async () => {
     const added = vi.fn();
-    render(<IncomesScreen reference={reference()} onSupplyAdded={added} />);
+    render(<IncomesScreen reference={reference()} onSupplyAdded={added} seesMoney />);
     fireEvent.click(await screen.findByRole('button', { name: 'Новое поступление' }));
     fireEvent.click(screen.getByRole('button', { name: '+ Новая поставка' }));
 
