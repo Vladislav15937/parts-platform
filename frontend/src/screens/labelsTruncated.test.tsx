@@ -24,6 +24,7 @@ describe('этикетки деталей', () => {
           total: 745,
           rows: Array.from({ length: 50 }, (_, i) => ({
             partId: i + 1,
+            number: 300001 + i,
             publicCode: `КОД${i + 1}`,
             title: `Фара № ${i + 1}`,
             price: 1000,

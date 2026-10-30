@@ -152,7 +152,7 @@ class OemRecountSplitTest extends PostgresTestBase {
                 .isEqualTo(idsBefore.subList(0, 2));
         assertThat(idsAfter).as("порядок ORDER BY id — порядок кросс-номеров").isSorted();
         assertThat(tally.splitLines).anySatisfy(line -> assertThat(line)
-                .contains("№ позиции").contains("«8414012530, 8414012531» → «8414012530» | «8414012531»"));
+                .contains("номер товара").contains("«8414012530, 8414012531» → «8414012530» | «8414012531»"));
     }
 
     @Test

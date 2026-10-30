@@ -30,7 +30,7 @@ describe('журнал действий организации', () => {
     // а называет его общий словарь ролей.
     expect(screen.getByText('Менеджер')).toBeTruthy();
     expect(screen.getByText('Фара Toyota Camry 2006 перед. лев. (б/у)')).toBeTruthy();
-    expect(screen.getByText(/A7K3M2/)).toBeTruthy();
+    expect(screen.getByText(/Номер товара 347/)).toBeTruthy();
     expect(screen.getByText(/Цена: 5000 →/)).toBeTruthy();
     expect(screen.getByText('4500')).toBeTruthy();
   });
@@ -213,9 +213,9 @@ describe('журнал действий организации', () => {
 
     const row = screen.getByText('Фара Toyota Camry 2006 перед. лев. (б/у)').closest('tr')!;
     const text = row.textContent ?? '';
-    expect(text, `номера позиции в строке журнала нет: ${text}`).toContain('№ 347');
-    // Публичный код рядом остался: он про этикетку и сканер.
-    expect(text, 'публичный код пропал из строки').toContain('A7K3M2');
+    expect(text, `номера товара в строке журнала нет: ${text}`).toContain('Номер товара 347');
+    // Публичный код (случайные байты) человеку больше не показывается (задача 0366).
+    expect(text, 'публичный код остался в строке').not.toContain('A7K3M2');
   });
 
   /**

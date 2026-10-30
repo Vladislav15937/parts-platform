@@ -40,8 +40,8 @@ final class PartEditConflicts {
      * не так, как подписана строка, заставляет искать, о чём речь.
      */
     private static final Map<String, String> LABELS = Map.ofEntries(
-            Map.entry("number", "№ позиции"),
-            Map.entry("code", "Номер товара"),
+            Map.entry("number", "Номер товара"),
+            Map.entry("code", "Публичный код"),
             Map.entry("condition", "Состояние"),
             Map.entry("qualityGrade", "Оценка состояния"),
             Map.entry("price", "Цена"),

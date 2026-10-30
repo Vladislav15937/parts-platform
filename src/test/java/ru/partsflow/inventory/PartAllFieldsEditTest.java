@@ -121,27 +121,21 @@ class PartAllFieldsEditTest extends PostgresTestBase {
     void everyFormerlyLockedFieldIsSaved() throws Exception {
         MockHttpSession owner = login("vladelec0302");
         target = loose;
-        long freeNumber = inTenant(() -> jdbc.queryForObject(
-                "SELECT max(number) + 1 FROM part", Long.class));
 
         mvc.perform(put("/api/parts/" + target).with(csrf()).session(owner)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"price":4500,"published":true,
-                                 "number":%d,"code":"FARA-0302",
                                  "sideLr":"RIGHT","sideFr":"REAR","authenticity":"Оригинал",
                                  "oem":"81170-33670","crosses":"81170 33671, 8117033672",
                                  "legacyCode":"ST-0302","dromAdNumber":"№ 125696381",
                                  "donorCode":"261","brand":"Lexus","model":"ES350",
                                  "generation":"XV40","body":"GSV40","engine":"2GR-FE",
-                                 "year":"2008","equipment":"полный привод"}"""
-                                .formatted(freeNumber)))
+                                 "year":"2008","equipment":"полный привод"}"""))
                 .andExpect(status().isOk());
 
         JsonNode form = editable(owner);
         Map<String, String> expected = Map.ofEntries(
-                Map.entry("number", String.valueOf(freeNumber)),
-                Map.entry("code", "FARA-0302"),
                 Map.entry("sideLr", "RIGHT"),
                 Map.entry("sideFr", "REAR"),
                 Map.entry("authenticity", "Оригинал"),
@@ -162,7 +156,7 @@ class PartAllFieldsEditTest extends PostgresTestBase {
                 .isEqualTo(value));
 
         // Витрина показывает вписанное у позиции.
-        JsonNode row = catalogRow(owner, "FARA-0302");
+        JsonNode row = catalogRow(owner, codeOf(loose));
         assertThat(row.path("brand").asText()).isEqualTo("Lexus");
         assertThat(row.path("model").asText()).isEqualTo("ES350");
         assertThat(row.path("generation").asText()).isEqualTo("XV40");
@@ -243,7 +237,7 @@ class PartAllFieldsEditTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Занятые № позиции, номер товара и номер объявления называют позицию словами")
+    @DisplayName("Занятый номер объявления называет позицию номером товара, а не публичным кодом")
     void takenIdentifiersAreExplained() throws Exception {
         MockHttpSession owner = login("vladelec0302");
         String neighbourCode = codeOf(neighbour);
@@ -252,30 +246,58 @@ class PartAllFieldsEditTest extends PostgresTestBase {
         inTenant(() -> jdbc.update(
                 "UPDATE part SET drom_ad_number = '777' WHERE id = ?", neighbour));
 
-        for (String body : List.of("\"number\":" + neighbourNumber,
-                "\"code\":\"" + neighbourCode + "\"", "\"dromAdNumber\":\"777\"")) {
-            mvc.perform(put("/api/parts/" + partId).with(csrf()).session(owner)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content("{\"price\":4500,\"published\":true," + body + "}"))
-                    .andExpect(status().isConflict())
-                    .andExpect(jsonPath("$.message").value(
-                            org.hamcrest.Matchers.containsString(neighbourCode)));
-        }
+        // С задачи 0366 позицию называют номером товара: публичный код
+        // (случайные байты) человеку не показывается.
+        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"price\":4500,\"published\":true,\"dromAdNumber\":\"777\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString(
+                        "номером товара " + ru.partsflow.shared.PartNumberQuery.format(neighbourNumber))))
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString(neighbourCode))));
     }
 
+    /**
+     * Номер товара и публичный код не правятся (задача 0366, «Всё как у bazon»).
+     *
+     * <p>До неё форма слала оба, и сервер их переписывал (задачи 0302/0303):
+     * номер, названный покупателю и напечатанный на этикетке, менялся одним
+     * нажатием, а Дром заводил объявление заново. Теперь другое значение —
+     * отказ словами (400, а не 500: очередь не повторяет его вечно), равное —
+     * не правка вовсе: так шлёт форму вкладка, открытая до выкладки.
+     */
     @Test
-    @DisplayName("Номер позиции выше выданных двигает нумерацию: приёмка его второй раз не выдаст")
-    void numberAheadMovesTheSequence() throws Exception {
+    @DisplayName("Номер товара и публичный код: другое — отказ словами, равное — не правка")
+    void numberAndCodeAreNotEdited() throws Exception {
         MockHttpSession owner = login("vladelec0302");
-        long ahead = inTenant(() -> jdbc.queryForObject(
-                "SELECT max(number) + 5 FROM part", Long.class));
+        long number = inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, partId));
+        String code = codeOf(partId);
 
-        save(owner, "\"number\":" + ahead);
+        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"price\":4500,\"published\":true,\"number\":" + (number + 5) + "}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("«Номер товара» присваивает система")));
+        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"price\":4500,\"published\":true,\"code\":\"FARA-0366\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("Публичный код позиции не правится")));
+        assertThat(inTenant(() -> jdbc.queryForMap(
+                "SELECT number, public_code FROM part WHERE id = ?", partId)))
+                .as("отказ, а значения всё-таки переписаны")
+                .containsEntry("number", number).containsEntry("public_code", code);
 
-        Long next = inTenant(() -> jdbc.queryForObject("""
-                INSERT INTO part (category_id, title, price) VALUES (1, 'Следующая', 100)
-                RETURNING number""", Long.class));
-        assertThat(next).isGreaterThan(ahead);
+        // Прежняя вкладка шлёт форму целиком, с теми же номером и кодом: это не правка.
+        mvc.perform(put("/api/parts/" + partId).with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"price\":4600,\"published\":true,\"number\":" + number
+                                + ",\"code\":\"" + code + "\"}"))
+                .andExpect(status().isOk());
     }
 
     @Test

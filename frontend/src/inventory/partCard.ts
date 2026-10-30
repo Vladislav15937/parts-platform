@@ -1,3 +1,4 @@
+import { PART_NUMBER_TITLE, partNumber } from './partNumber';
 import { CONDITION, SIDE_FR, SIDE_LR, qualityTitle, type Applicability, type CatalogRow } from './catalog';
 
 /**
@@ -19,9 +20,9 @@ export function cardFields(row: CatalogRow): Array<[string, string]> {
   };
 
   // Первым: это тот номер, которым деталь называют в разговоре друг с другом
-  // («посмотри позицию 347»). Номер товара рядом — он про этикетку и сканер.
-  add('№ позиции', row.number);
-  add('Номер товара', row.code);
+  // («посмотри 300 001»), он же на этикетке и в штрихкоде (задача 0366, «Всё как
+  // у bazon»). Шестнадцатеричного кода в карточке нет: человеку он не говорит ничего.
+  add(PART_NUMBER_TITLE, partNumber(row.number));
   // Та же строка, что в шапке карточки и в поле «Наименование» формы правки
   // (задача 0311): здесь стояло написание вида детали, и одним словом
   // назывались две разные строки — «фара левая» в просмотре и «фара левая

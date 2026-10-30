@@ -7,6 +7,7 @@ import {
   loadJournal,
 } from '../organization/auditJournal';
 import type { AuditChange, AuditEntry, AuditPage, JournalQuery } from '../organization/auditJournal';
+import { PART_NUMBER_TITLE, partNumber } from '../inventory/partNumber';
 import { roleTitle } from '../organization/members';
 import { dealItemStatusName, dealStatusName } from '../sales/dealStatus';
 import { endOfDay, PAYMENT_SOURCE_TYPES, startOfDay } from '../sales/sales';
@@ -138,7 +139,7 @@ function ChangesJournal() {
           Что искали
           <input
             value={draft}
-            placeholder="Название детали, её код, № позиции или номер сделки"
+            placeholder="Название детали, номер товара или номер сделки"
             onChange={(e) => setDraft(e.target.value)}
           />
         </label>
@@ -297,8 +298,13 @@ function Row({ entry }: { entry: AuditEntry }) {
               а «A7K3M2» по телефону не диктуют. У платежа, сделки и затраты
               по машине своей позиции нет — там его просто не будет. */}
           {[entry.subject === null ? null : entry.kind,
-            entry.subjectNumber === null ? null : `№ ${entry.subjectNumber}`,
-            entry.subjectCode, entry.context]
+            // С задачи 0366 позицию называет номер товара, а публичный код
+            // (случайные байты) человеку не показывается; он остаётся
+            // только там, где номера нет.
+            entry.subjectNumber === null
+              ? entry.subjectCode
+              : `${PART_NUMBER_TITLE} ${partNumber(entry.subjectNumber)}`,
+            entry.context]
             .filter((part) => part !== null && part !== '')
             .join(' · ')}
         </div>

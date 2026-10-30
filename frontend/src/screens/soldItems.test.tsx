@@ -150,7 +150,7 @@ describe('проданные позиции на экране отчётов', (
    * байт и живёт на этикетке. Проверяется по колонке, а не по тексту
    * на странице: убранная колонка обязана валить тест словами про неё.
    */
-  it('колонка «№ позиции» стоит перед номером товара, и в ней номер строки',
+  it('колонка «Номер товара» стоит перед номером товара, и в ней номер строки',
     async () => {
       render(<ReportsScreen canRead />);
       await waitFor(() => expect(screen.getByText('Фара')).toBeTruthy());
@@ -159,23 +159,20 @@ describe('проданные позиции на экране отчётов', (
       const headers = [...table.querySelectorAll('thead th')]
         .map((cell) => (cell.textContent ?? '').trim());
 
-      const at = headers.indexOf('№ позиции');
+      const at = headers.indexOf('Номер товара');
       expect(
         at,
-        `колонки «№ позиции» в отчёте нет: ${headers.join(' · ')}`,
+        `колонки «Номер товара» в отчёте нет: ${headers.join(' · ')}`,
       ).toBeGreaterThanOrEqual(0);
-      // Перед «Номером товара»: тот же порядок, что на витрине и во вкладках
-      // разреза по машине — номер для разговора, код для этикетки.
-      expect(
-        at,
-        'номер позиции встал после номера товара',
-      ).toBeLessThan(headers.indexOf('Номер товара'));
+      // Колонка одна (задача 0366): публичного кода в отчёте нет.
+      expect(headers.filter((h) => h === 'Номер товара').length, 'колонок номера две').toBe(1);
+      expect(table.textContent, 'публичный код показан в отчёте').not.toContain('A1B2C3');
 
       const cells = [...screen.getByText('Фара').closest('tr')!.querySelectorAll('td')]
         .map((cell) => (cell.textContent ?? '').trim());
       expect(
         cells[at],
-        'в колонке «№ позиции» стоит не номер позиции',
+        'в колонке «Номер товара» стоит не номер товара',
       ).toBe('347');
     });
 });

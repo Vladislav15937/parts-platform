@@ -1,3 +1,4 @@
+import { partNumber } from '../inventory/partNumber';
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import {
@@ -334,10 +335,9 @@ export function InventoryReconcile({ reference, canReconcile = true }: {
           <table>
             <thead>
               <tr>
-                {/* Номер позиции (задача 0168): спорную полку называют
-                    кладовщику вслух, а публичного кода в расхождениях
-                    нет вовсе. */}
-                <th className="num">№ позиции</th>
+                {/* Номер товара (задачи 0168, 0366): спорную полку называют
+                    кладовщику вслух. */}
+                <th className="num">Номер товара</th>
                 <th>Деталь</th>
                 {/* Столбцом, как в соседних таблицах (отчёт «Проданные
                     позиции», печать сделки; задача 0318): разницу считают
@@ -356,7 +356,7 @@ export function InventoryReconcile({ reference, canReconcile = true }: {
                   {/* Прочерк, а не внутренний номер: тот человеку не говорит
                       ничего. Пусто бывает у позиции, карточку которой
                       удалили. */}
-                  <td className="num">{r.number ?? '—'}</td>
+                  <td className="num">{r.number == null ? '—' : partNumber(r.number)}</td>
                   {/* Номер производителя за наименованием (задача 0329),
                       как у продавца: разницу считают по конкретной детали. */}
                   <td>{r.title ?? 'удалённая позиция'}<OemWord number={r.primaryOem} /></td>

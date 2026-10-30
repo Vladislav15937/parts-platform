@@ -1,3 +1,4 @@
+import { partNumber } from '../inventory/partNumber';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConditionWord } from '../inventory/ConditionWord';
 import { OemWord } from '../inventory/OemWord';
@@ -578,7 +579,7 @@ function CountRow({
             называет деталь вслух тому, кто сводит расхождения, — а публичного
             кода в листе обхода нет вовсе, и «Фара Toyota Camry» на складе
             не одна. */}
-        <span className="muted"> · №&nbsp;{line.number}</span>
+        <span className="muted"> · №&nbsp;{partNumber(line.number)}</span>
         {status !== 'problem' && <span className="muted"> · учёт {line.qtyExpected}</span>}
         {count !== undefined && <span className="muted"> · посчитано {count.qty}</span>}
         {' '}
