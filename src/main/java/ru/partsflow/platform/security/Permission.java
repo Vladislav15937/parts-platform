@@ -60,7 +60,7 @@ public enum Permission {
     PART_CELL("part.cell", Section.STOCK,
             "Раскладывать по полкам и печатать этикетки", "ячейка хранения позиции, этикетки ячеек и товара"),
     PART_MONEY_VIEW("part.money.view", Section.STOCK,
-            "Смотреть закупочную цену и себестоимость", "в истории позиции"),
+            "Смотреть закупочную цену и себестоимость", "в истории позиции и в поступлениях"),
     APPLICABILITY_BULK("applicability.bulk", Section.STOCK,
             "Проставлять применимость по всему складу", "разбором наименований и объявлений Дрома"),
     NAMES_MATCH("names.match", Section.STOCK,

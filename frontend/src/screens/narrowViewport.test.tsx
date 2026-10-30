@@ -23,6 +23,7 @@ import { PaymentsScreen } from './PaymentsScreen';
 import { SellerScreen } from './SellerScreen';
 import { SettingsScreen } from './SettingsScreen';
 import { StockMovesScreen } from './StockMovesScreen';
+import { IncomesScreen } from './IncomesScreen';
 import { AuditJournalScreen } from './AuditJournalScreen';
 import { UnmatchedScreen } from './UnmatchedScreen';
 import { WheelsScreen } from './WheelsScreen';
@@ -273,6 +274,26 @@ const DEALS = {
 };
 
 /** Справочники приёмки — те же, что экран забирает одним запросом. */
+/**
+ * Поступления (задача 0360): длинные поставка, склад и комментарий — то,
+ * чем таблица растягивается у клиента.
+ */
+const INCOMES = {
+  rows: [{
+    id: 1, number: 4127, status: 'DONE', deleted: false,
+    createdAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+    supply: 'Контейнер №18 Мару Групп Владивосток',
+    warehouse: 'Основной склад на Ткацкой, бокс 3 (второй этаж)',
+    amount: 1284500, note: 'Двигатели и КПП с Toyota Land Cruiser Prado', lines: 37,
+  }, {
+    id: 2, number: 4128, status: 'DRAFT', deleted: false,
+    createdAt: new Date().toISOString(), completedAt: null,
+    supply: null, warehouse: 'Дальний', amount: 0, note: null, lines: 0,
+  }],
+  counts: { drafts: 1, done: 1, cancelled: 0, all: 2 },
+  more: false,
+};
+
 const REFERENCE = {
   // Свежесть считается от «сейчас»: с зашитым числом панель справочников
   // показывала бы «устарели» вместо «свежие» — другая подпись и другая ширина.
@@ -631,6 +652,7 @@ const RESPONSES: Array<[string, unknown]> = [
   ['/api/part-names/matched', MATCHED_NAMES],
   ['/api/part-names/kinds', []],
   ['/api/stock/moves', []],
+  ['/api/intake/incomes', INCOMES],
 ];
 
 describe('на телефоне ни один раздел не уезжает вбок', () => {
@@ -668,6 +690,7 @@ describe('на телефоне ни один раздел не уезжает �
   const RENDERERS: Record<Tab, () => JSX.Element> = {
     intake: () => <IntakeScreen reference={reference()} onSend={() => {}} />,
     donor: () => <DonorScreen reference={reference()} online onChanged={() => {}} />,
+    incomes: () => <IncomesScreen reference={reference()} onSupplyAdded={() => {}} seesMoney />,
     sales: () => (
       <SellerScreen canSell rights={rightsAs('OWNER')} company="t_1" memberId={7} openDealId={null} />
     ),

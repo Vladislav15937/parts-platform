@@ -123,6 +123,7 @@
     <include file="tenant/104-part-applicability-other-bodies-engines.sql" relativeToChangelogFile="true"/>
     <include file="tenant/105-feed-unsent-mark.sql" relativeToChangelogFile="true"/>
     <include file="tenant/106-part-own-body-codes.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/107-stock-document-event.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

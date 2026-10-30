@@ -19,6 +19,7 @@
 export type Tab =
   | 'intake'
   | 'donor'
+  | 'incomes'
   | 'sales'
   | 'deals'
   | 'orders'
@@ -90,6 +91,9 @@ const ANYONE = 'ANYONE';
 export const TABS: readonly TabSpec[] = [
   { id: 'intake', label: 'Приёмка', section: 'Приёмка', needs: ['intake.receive'] },
   { id: 'donor', label: 'Машина', section: 'Машины', needs: ['intake.receive'] },
+  // Документ поступления с черновиком (задача 0360) — кабинетная сторона
+  // той же приёмки, поэтому рядом с ней и под тем же правом.
+  { id: 'incomes', label: 'Поступления', section: 'Поступления', needs: ['intake.receive'] },
   { id: 'sales', label: 'Продажа', section: 'Продажа', needs: ANYONE },
   // Сразу за «Продажей»: это её оборотная сторона — то, что уже отложено
   // и ждёт действия. Право то же, что у эндпоинта (`SalesController.SELLS`):

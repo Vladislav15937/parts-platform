@@ -229,9 +229,7 @@ public class DromPriceGenerator {
               -- «в пути» — это не любая позиция без остатка, а только та,
               -- которую ждут контейнером. Позиция, заведённая черновиком
               -- и брошенная, ни в какой прайс попадать не должна.
-              LEFT JOIN supply in_transit
-                     ON in_transit.id = p.supply_id
-                    AND in_transit.status IN ('EXPECTED', 'IN_TRANSIT')
+              ${inTransitJoin}
               LEFT JOIN part_oem primary_oem
                      ON primary_oem.part_id = p.id AND primary_oem.is_primary
               LEFT JOIN (
@@ -374,6 +372,52 @@ public class DromPriceGenerator {
     public static final String PREORDERED_QTY = """
             (SELECT COALESCE(sum(pre.quantity), 0) FROM deal_item pre
               WHERE pre.part_id = p.id AND pre.status = 'PREORDER')""";
+
+    /**
+     * Поставка «в пути» позиции — псевдоним {@code in_transit}, пусто, если позиция
+     * товаром в пути не считается.
+     *
+     * <p><b>Карточка из документа поступления в пути не бывает никогда</b>
+     * (задача 0360, решение владельца 30.10.2026: черновик не попадает в прайс
+     * «ни при какой поставке»). Черновик поступления заводит карточку {@code DRAFT}
+     * строкой документа, и, приписанная к ожидаемой поставке (а «+ Новая поставка»
+     * заводит её {@code EXPECTED}), она уезжала в прайс «в пути» — до «Провести
+     * документ», после «Отменить проводку», после «Отменить», а после удаления
+     * проведённого поступления (задача 0367: статус остаётся {@code DONE}, ставится
+     * {@code deleted_at}, а {@code StockLedger} возвращает карточке {@code DRAFT})
+     * — тоже.
+     *
+     * <p>Различает <b>происхождение карточки</b> ({@code part.expected_origin}),
+     * а не статус и не {@code deleted_at}. Ожидаемый товар прежнего пути
+     * (задача 0170) — тоже {@code DRAFT} в поставке в пути, но заведён из карточки
+     * поставки; принимают его проведённым документом, и после удаления этого
+     * документа он обязан вернуться «в путь» (0367, «осталось принять»). Поэтому:
+     * <ul>
+     *   <li>строка непроведённого ({@code status <> 'DONE'}: черновик, отменённый)
+     *       документа {@code INTAKE} снимает «в пути» у любой позиции — и у ожидаемой,
+     *       пока её приход не проведён;</li>
+     *   <li>любая строка документа {@code INTAKE} — выполненного, удалённого,
+     *       какого угодно — снимает «в пути» у карточки, которую завели не ожидаемым
+     *       товаром: она пришла документом и к «ожидаемому» не вернётся.</li>
+     * </ul>
+     * Удалённый документ отдельно не назван: удаляют только выполненный, и он
+     * попадает во вторую ветку. Карточка без строк документа (перенос, прямой
+     * SQL) ведёт себя как до 0360.
+     *
+     * <p>Один текст на прайс, дельту и счётчик выгрузки
+     * {@code MarketplaceAccountService.countMatching}: признак «в пути» читают
+     * {@link #PREORDERED}, {@link #IN_FILE}, количество и примечание прайса.
+     * Параметров нет. Требует псевдоним {@code p}.
+     */
+    public static final String IN_TRANSIT_JOIN = """
+            LEFT JOIN supply in_transit
+                   ON in_transit.id = p.supply_id
+                  AND in_transit.status IN ('EXPECTED', 'IN_TRANSIT')
+                  AND NOT EXISTS (SELECT 1 FROM stock_document_line income_line
+                                    JOIN stock_document income ON income.id = income_line.document_id
+                                   WHERE income_line.part_id = p.id
+                                     AND income.doc_type = 'INTAKE'
+                                     AND (income.status <> 'DONE' OR NOT p.expected_origin))""";
 
     /**
      * Ожидаемая позиция полностью отложена под предзаказы (задачи 0170, 0262).
@@ -782,7 +826,8 @@ public class DromPriceGenerator {
 
         // Прайс и дельта отбирают одно и то же (задача 0339): у дельты
         // отличается только список позиций.
-        String sql = SQL.replace("${preordered}", PREORDERED)
+        String sql = SQL.replace("${inTransitJoin}", IN_TRANSIT_JOIN)
+                .replace("${preordered}", PREORDERED)
                 .replace("${preorderedQty}", PREORDERED_QTY)
                 .replace("${inFile}", inFile(settings.exportsReserved()))
                 .replace("${statuses}", statuses(PRICE_STATUSES, settings))

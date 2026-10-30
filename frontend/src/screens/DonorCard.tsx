@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import {
   donorCard,
   updateDonor,
+  donorSavedMessage,
   type DonorDetails,
   type DonorFields,
   type DonorOption,
@@ -312,7 +313,7 @@ export function DonorCard({ donorId, vocabulary, online, onParts, onSaved }: {
       if (!mounted.current) return;
       setDetails(saved);
       setEditing(false);
-      setMessage('Машина сохранена.');
+      setMessage(donorSavedMessage(saved));
       onSaved();
     } catch (cause) {
       if (mounted.current) setMessage(describe(cause, 'Машину сохранить не удалось'));

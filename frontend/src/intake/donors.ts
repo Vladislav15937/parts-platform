@@ -278,9 +278,30 @@ export function donorCard(id: number): Promise<DonorDetails> {
   return request<DonorDetails>(`/api/intake/donors/${id}`);
 }
 
+/**
+ * Ответ правки: карточка, форма и сколько позиций машины переименовано
+ * (задача 0383) — исправленный год или кузов доходит до названий её деталей.
+ */
+export interface DonorSaved extends DonorDetails {
+  renamed: number;
+}
+
 /** Правка «карандашом»: форма целиком, пустое поле — «очищено». */
-export function updateDonor(id: number, form: DonorFields): Promise<DonorDetails> {
-  return request<DonorDetails>(`/api/intake/donors/${id}`, { method: 'PUT', body: form });
+export function updateDonor(id: number, form: DonorFields): Promise<DonorSaved> {
+  return request<DonorSaved>(`/api/intake/donors/${id}`, { method: 'PUT', body: form });
+}
+
+/**
+ * Что сказать после правки машины. Число — затем, чтобы человек знал, что
+ * исправленный год потянул за собой названия деталей; ноль про позиции
+ * не говорит ничего. Слова — решение задачи 0383, а не ориентира.
+ * Ответ прежней сборки числа не несёт — тогда тоже без слов про позиции.
+ */
+export function donorSavedMessage(saved: { renamed?: number | null }): string {
+  const renamed = saved.renamed ?? 0;
+  return renamed > 0
+    ? `Машина исправлена; переименовано позиций: ${renamed}`
+    : 'Машина исправлена.';
 }
 
 export interface DonorOption {

@@ -71,6 +71,9 @@ class ScreenWritesJournaledTest {
             Map.entry("public.mail_message", "почта, не правка"),
             Map.entry("public.mail_event_pending", "почта, не правка"),
             Map.entry("public.shedlock", "блокировка расписания"),
+            Map.entry("stock_document_event", "сама лента «История документа» поступления"
+                    + " (задача 0360): кто и когда создал, провёл, отменил — только дописывается;"
+                    + " остаток при этом ведёт журнал движений"),
             Map.entry("access_role_permission", "набор роли — в снимке записи access_role"
                     + " (поле «Права» словами), AccessRoleService"),
             Map.entry("member_permission_override", "права поверх роли — в снимке записи"

@@ -778,8 +778,8 @@ class PartUpdateTest extends PostgresTestBase {
                         .get("/api/parts/" + part + "/history").session(session))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.changes[0].fields[0].label").value("Цена"))
-                .andExpect(jsonPath("$.changes[0].fields[0].before").value("27000"))
-                .andExpect(jsonPath("$.changes[0].fields[0].after").value("24300"))
+                .andExpect(jsonPath("$.changes[0].fields[0].before").value("27\u00A0000"))
+                .andExpect(jsonPath("$.changes[0].fields[0].after").value("24\u00A0300"))
                 .andExpect(jsonPath("$.changes[0].fields[0].delta").value("−10 %"));
     }
 

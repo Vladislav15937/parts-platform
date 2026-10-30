@@ -336,7 +336,7 @@ class IntakeServiceTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Проведённый документ не отменяют, а исправляют встречным")
+    @DisplayName("Выполненный документ сразу не отменяют: сначала «Отменить проводку» (задача 0360)")
     void completedDocumentCannotBeCancelled() {
         Supply supply = arrivedSupply("22");
         IntakeService.Receipt receipt = inTenant(() -> intake.receive(
@@ -344,7 +344,7 @@ class IntakeServiceTest extends PostgresTestBase {
                 List.of(item("капот", "9000")), null, uniqueRequestId()));
 
         assertThatThrownBy(() -> inTenant(() -> documents.cancel(receipt.document().getId())))
-                .hasMessageContaining("журнал движений неизменяем");
+                .hasMessageContaining("сначала «Отменить проводку»");
     }
 
     @Test
