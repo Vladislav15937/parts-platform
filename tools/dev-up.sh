@@ -4,9 +4,18 @@
 #   ./tools/dev-up.sh
 #   ./tools/dev-up.sh --selftest   # краснеют ли проверки подъёма на сломанном подъёме
 #
-# Идемпотентен: уже поднятое не трогает и ничего не пересоздаёт. База живёт
-# в томе Docker и переживает перезапуск; чтобы начать с чистого листа —
-# docker compose down -v, и тогда компания заведётся заново.
+# Повторяем: Docker, Postgres, приложение и Vite, уже поднятые, не трогает
+# и не пересоздаёт; компанию, уже заведённую с тем же паролем владельца,
+# только проверяет входом. База живёт в томе Docker и переживает перезапуск;
+# чтобы начать с чистого листа — docker compose down -v, и тогда компания
+# заведётся заново.
+#
+# Компания, заведённая с другим паролем, повтором не чинится: вход не подходит,
+# а заводить её второй раз провижининг отказывается (409). Скрипт говорит,
+# какой командой выйти, и завершается кодом 3 (tasks/0385).
+#
+# Коды выхода: 0 — поднято; 3 — компания есть, пароль к ней другой (подсказка
+# напечатана, подъём не завершён); 1 — всё остальное, причина напечатана.
 #
 # Порядок шагов не случаен: приложение не поднимется без Postgres, компанию
 # не завести без приложения, а PWA бесполезна без компании.
@@ -104,6 +113,26 @@ else
          \"ownerPassword\":\"$OWNER_PASSWORD\",\"ownerName\":\"Владислав\"}" \
     -o /tmp/last.json -w '%{http_code}')
   say "провижининг ответил $code: $(head -c 120 /tmp/last.json)"
+  if [ "$code" = "409" ]; then
+    # Вход не подошёл, а код занят — значит компания есть и пароль к ней
+    # другой: так бывает, когда её заводили руками под своим паролем.
+    # Отдельный код выхода, а не 1: «подсказали, как выйти» — не то же,
+    # что «провижининг упал», и вызывающему надо их различать.
+    # Следующий код компании: хвостовые цифры +1 (proba → proba2 → proba3).
+    base="${COMPANY%"${COMPANY##*[!0-9]}"}"; num="${COMPANY#"$base"}"
+    next="${base}$(( 10#${num:-1} + 1 ))"   # 10#: proba09 не восьмеричное
+    cat <<TXT
+
+  Компания «${COMPANY}» уже заведена, но вход ${OWNER_LOGIN} с этим паролем
+  к ней не подходит — её заводили с другим паролем. Выходов три:
+
+    свой пароль:      OWNER_LOGIN=${OWNER_LOGIN} OWNER_PASSWORD='…' ./tools/dev-up.sh
+    другая компания:  COMPANY=${next} ./tools/dev-up.sh
+    с чистого листа:  docker compose down -v && ./tools/dev-up.sh
+                      (сотрёт базу целиком: все компании и их данные)
+TXT
+    exit 3
+  fi
   [ "$code" = "201" ] || [ "$code" = "200" ] || exit 1
 fi
 
@@ -111,15 +140,41 @@ echo "5. PWA"
 if curl -s -o /dev/null --max-time 2 http://localhost:5173/; then
   say "уже отдаётся на :5173"
 else
+  # nvm подключается из ~/.zshrc или ~/.bashrc, а скрипт идёт в неинтерактивной
+  # bash: npm в PATH нет, nohup пишет «npm: No such file or directory» в лог,
+  # и подъём ждал тридцать секунд, чтобы отослать к этой строке (tasks/0385).
+  if ! command -v npm >/dev/null 2>&1; then
+    nvm_sh="${NVM_DIR:-$HOME/.nvm}/nvm.sh"
+    # shellcheck disable=SC1090
+    [ -s "$nvm_sh" ] && . "$nvm_sh" >/dev/null 2>&1
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "  npm не найден (node, судя по всему, поставлен через nvm?). Подключите node"
+    echo "  в этой оболочке или запустите Vite вручную: cd frontend && npm run dev"
+    exit 1
+  fi
   say "запускаю Vite, лог — /tmp/partsflow-vite.log"
-  ( cd frontend && nohup npm run dev > /tmp/partsflow-vite.log 2>&1 & )
-  for _ in $(seq 1 30); do curl -s -o /dev/null --max-time 1 http://localhost:5173/ && break; sleep 1; done
+  ( cd frontend && exec nohup npm run dev > /tmp/partsflow-vite.log 2>&1 ) &
+  vite_pid=$!
+  # Умерший процесс ждать незачем: порт уже не откроется, а причина в логе.
+  for _ in $(seq 1 30); do
+    curl -s -o /dev/null --max-time 1 http://localhost:5173/ && break
+    kill -0 "$vite_pid" 2>/dev/null || break
+    sleep 1
+  done
   # После цикла проверки не было: не поднявшийся Vite не отличался
   # от поднявшегося, а ниже безусловно печаталось «Готово» с адресом,
   # по которому ничего не отвечает. Открывать надо именно :5173 —
   # сессия и CSRF из cookie работают только на одном источнике.
-  curl -s -o /dev/null --max-time 2 http://localhost:5173/ \
-    || { echo "  Vite не поднялся за 30 с — смотрите /tmp/partsflow-vite.log"; exit 1; }
+  if ! curl -s -o /dev/null --max-time 2 http://localhost:5173/; then
+    if kill -0 "$vite_pid" 2>/dev/null; then
+      echo "  Vite не поднялся за 30 с. Последние строки /tmp/partsflow-vite.log:"
+    else
+      echo "  Vite не поднялся: процесс завершился сразу. Последние строки /tmp/partsflow-vite.log:"
+    fi
+    tail -n 15 /tmp/partsflow-vite.log 2>/dev/null | sed 's/^/    | /'
+    exit 1
+  fi
   say "поднялось"
 fi
 
