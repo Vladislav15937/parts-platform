@@ -30,6 +30,7 @@ import { FeedsScreen } from './FeedsScreen';
 import { WheelsScreen } from './WheelsScreen';
 import { CatalogScreen } from './CatalogScreen';
 import { StockMovesScreen } from './StockMovesScreen';
+import { IncomesScreen } from './IncomesScreen';
 import { AuditJournalScreen } from './AuditJournalScreen';
 import { AdminVisitBanner } from '../admin/AdminVisitBanner';
 import { ordersAwaitingReply } from '../sales/sales';
@@ -252,6 +253,16 @@ export function HomeScreen() {
               // в список на экране деталей, когда её ставят в разбор.
               void refreshReference();
             }}
+          />
+        ) : (
+          <p className="note">Справочники не загружены. Откройте вкладку «Справочники».</p>
+        ))}
+
+      {!locked && tab === 'incomes' &&
+        (status.kind === 'ready' ? (
+          <IncomesScreen
+            reference={status.reference}
+            onSupplyAdded={() => void refreshReference()}
           />
         ) : (
           <p className="note">Справочники не загружены. Откройте вкладку «Справочники».</p>

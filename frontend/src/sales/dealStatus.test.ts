@@ -84,6 +84,18 @@ describe('слово доезжает до экрана', () => {
  * перечисляет состояния подряд, и меньше двух их не бывает.
  */
 describe('копий словаря нет', () => {
+  /**
+   * Словари других перечислений, у которых коды совпали со сделочными
+   * (`DRAFT`, `CANCELLED`). Каждая строка — с причиной; файл без причины
+   * сюда не вносится, а сделочное слово, заведённое в таком файле, — уже
+   * копия, и место ему в `dealStatus.ts`.
+   */
+  const NOT_DEAL_STATUSES: Record<string, string> = {
+    'frontend/src/intake/incomes.ts':
+      'статус документа поступления (stock_document: DRAFT/DONE/CANCELLED, задача 0360),'
+      + ' а не сделки: «Черновик / Выполнен / Отменён» мужского рода, у сделки — женского',
+  };
+
   const NAMES = new Set([
     ...Object.keys(DEAL_STATUS_NAMES),
     ...Object.keys(DEAL_ITEM_STATUS_NAMES),
@@ -112,6 +124,7 @@ describe('копий словаря нет', () => {
         })
         .length > 1)
       .map(([path]) => path.replace('../', 'frontend/src/'))
+      .filter((path) => !(path in NOT_DEAL_STATUSES))
       .sort();
 
     expect(
