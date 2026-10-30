@@ -189,7 +189,25 @@ exit 0
 
 SLEEP = "#!/usr/bin/env bash\n/bin/sleep 0.02\n"
 
-NPM = '#!/usr/bin/env bash\n[ "${SB_PWA:-ok}" = ok ] && touch "$SB_STATE/pwa"\nexit 0\n'
+# SB_PWA: ok — Vite отдаёт порт; closed — процесс молча умер, порт закрыт;
+# crash — умер сразу с причиной в выводе (как «порт занят»); hang — жив,
+# но порт так и не открылся. Пишет stdout в лог — так, как его направил подъём.
+NPM = r"""#!/usr/bin/env bash
+case "${SB_PWA:-ok}" in
+  ok) touch "$SB_STATE/pwa" ;;
+  crash) echo "error when starting dev server:"
+         echo "Error: Port 5173 is already in use (подделка)"; exit 1 ;;
+  hang) echo "VITE-HANG: жду и не слушаю порт (подделка)"; exec /bin/sleep 8 ;;
+esac
+exit 0
+"""
+
+# nvm.sh из песочницы: как настоящий, дописывает каталог с npm в PATH.
+NVM_SH = 'export PATH="$SB_ROOT/nvmbin:$PATH"\n'
+
+# Без них песочница «без npm» не была бы такой: npm разработчика лежит
+# в одном из каталогов PATH рядом с утилитами, которые нужны подъёму.
+NODE_TOOLS = ("npm", "npx", "node")
 
 MVNW = ('#!/usr/bin/env bash\ntouch "$SB_STATE/app"\n'
         '[ "${SB_BANNER:-yes}" = yes ] && echo "Started PartsPlatformApplication in 3s"\n'
@@ -219,7 +237,7 @@ case "${SB_READY:-ok}" in
 esac
 case "$url" in
   *:8080/api/auth/csrf) [ -e "$S/app" ] || rc=7 ;;
-  *:8080/api/auth/login) code=401 ;;
+  *:8080/api/auth/login) code="${SB_LOGIN:-401}" ;;
   *:8080/api/provisioning/tenants)
     # Вслух, в stderr: случай «схема не накатана» проверяет, что до заведения
     # компании подъём не дошёл вовсе, а не только что он не напечатал «Готово».
@@ -252,7 +270,27 @@ def write_exe(path, text):
     os.chmod(path, 0o755)
 
 
-def build(tool):
+def no_node_path(root, path):
+    """PATH без npm/npx/node: каталог ссылок на всё остальное из PATH.
+
+    Убрать каталоги целиком нельзя — npm бывает и в /usr/bin, рядом с cat
+    и grep, без которых подъём не дойдёт до шага 5."""
+    sysbin = root + "/sysbin"
+    os.makedirs(sysbin)
+    for d in path.split(os.pathsep):
+        if not os.path.isdir(d):
+            continue
+        for name in os.listdir(d):
+            src, dst = os.path.join(d, name), os.path.join(sysbin, name)
+            if name in NODE_TOOLS or os.path.lexists(dst):
+                continue
+            if os.path.isfile(src) and os.access(src, os.X_OK):
+                os.symlink(src, dst)
+    return sysbin
+
+
+def build(tool, env_extra=None):
+    env_extra = env_extra or {}
     root = tempfile.mkdtemp(prefix="tools-selftest-")
     os.makedirs(root + "/tools")
     os.makedirs(root + "/tmp")
@@ -272,16 +310,33 @@ def build(tool):
     write_exe(root + "/bin/sleep", SLEEP)
     if tool == "dev-up":
         write_exe(root + "/bin/curl", CURL)
-        write_exe(root + "/bin/npm", NPM)
         write_exe(root + "/mvnw", MVNW)
+        # SB_NPM: path — npm в PATH; nvm — только через $NVM_DIR/nvm.sh;
+        # none — нет нигде (tasks/0385).
+        where = env_extra.get("SB_NPM", "path")
+        if where == "path":
+            write_exe(root + "/bin/npm", NPM)
+        elif where == "nvm":
+            os.makedirs(root + "/nvmbin")
+            write_exe(root + "/nvmbin/npm", NPM)
+            os.makedirs(root + "/nvm")
+            write_exe(root + "/nvm/nvm.sh", NVM_SH)
     return root
 
 
 def run(tool, env_extra, timeout=120):
-    root = build(tool)
+    root = build(tool, env_extra)
     env = dict(os.environ)
     env.update(env_extra)
-    env["PATH"] = root + "/bin:" + env["PATH"]
+    path = env["PATH"]
+    if tool == "dev-up":
+        # nvm разработчика песочницу не касается: свой каталог, пустой,
+        # пока случай не положит туда nvm.sh.
+        env["NVM_DIR"] = root + "/nvm"
+        env["SB_ROOT"] = root
+        if env_extra.get("SB_NPM", "path") != "path":
+            path = no_node_path(root, path)
+    env["PATH"] = root + "/bin:" + path
     env["SB_STATE"] = root + "/state"
     # Пароль провижининга и компания — как у настоящих запусков.
     env["API_JAR"] = root + "/tmp/jar.txt"
@@ -303,10 +358,10 @@ ABORT = "проверка оборвалась на строке"
 
 
 def case(name, tool, *, env=None, drop=(), empty=(), exit_ok, must=(), must_not=(),
-         section=None):
+         section=None, exit_code=None):
     return dict(name=name, tool=tool, env=env or {}, drop=list(drop),
                 empty=list(empty), exit_ok=exit_ok, must=list(must),
-                must_not=list(must_not), section=section)
+                must_not=list(must_not), section=section, exit_code=exit_code)
 
 
 SMOKE_OK = "Сквозной прогон прошёл."
@@ -378,6 +433,34 @@ CASES = [
          exit_ok=False, must=["провижининг ответил 500"], must_not=["Готово."]),
     case("dev-up: порт PWA закрыт", "dev-up", env={"SB_PWA": "closed"},
          exit_ok=False, must=["Vite не поднялся"], must_not=["Готово."]),
+    # tasks/0385. Компания заведена с другим паролем: вход 401, провижининг
+    # 409. Подъём не валится молча, а говорит три выхода и отдельный код 3 —
+    # «подсказали» не то же, что «провижининг упал» (выход 1).
+    case("dev-up: компания есть, пароль другой — подсказка и код 3", "dev-up",
+         env={"SB_PROV": "409"}, exit_ok=False, exit_code=3,
+         must=["провижининг ответил 409", "уже заведена, но вход",
+               "OWNER_PASSWORD=", "COMPANY=proba2 ./tools/dev-up.sh",
+               "docker compose down -v"],
+         must_not=["Готово.", "запускаю Vite"]),
+    case("dev-up: компания есть, вход подходит — провижининг не зовётся",
+         "dev-up", env={"SB_LOGIN": "200"}, exit_ok=True,
+         must=["уже заведена, вход работает", "Готово."],
+         must_not=["провижининг ответил", "ПОДДЕЛКА-CURL: POST"]),
+    case("dev-up: npm только через nvm — подъём его находит", "dev-up",
+         env={"SB_NPM": "nvm"}, exit_ok=True, must=["Готово."],
+         must_not=["npm не найден", "Vite не поднялся"]),
+    case("dev-up: npm нет нигде — сразу «npm не найден», Vite не запускается",
+         "dev-up", env={"SB_NPM": "none"}, exit_ok=False,
+         must=["npm не найден", "cd frontend && npm run dev"],
+         must_not=["Готово.", "запускаю Vite", "Vite не поднялся"]),
+    case("dev-up: Vite упал сразу — причина из лога в сообщении", "dev-up",
+         env={"SB_PWA": "crash"}, exit_ok=False,
+         must=["процесс завершился сразу", "Port 5173 is already in use"],
+         must_not=["Готово.", "за 30 с"]),
+    case("dev-up: Vite жив, порт не открылся — хвост лога в сообщении",
+         "dev-up", env={"SB_PWA": "hang"}, exit_ok=False,
+         must=["Vite не поднялся за 30 с", "VITE-HANG"],
+         must_not=["Готово.", "завершился сразу"]),
 ]
 
 
@@ -387,6 +470,8 @@ def check(c, code, out):
         why.append("ожидался выход 0, получен %d" % code)
     if not c["exit_ok"] and code == 0:
         why.append("ожидался ненулевой выход, получен 0 (ложное зелёное)")
+    if c["exit_code"] is not None and code != c["exit_code"]:
+        why.append("ожидался выход %d, получен %d" % (c["exit_code"], code))
     for s in c["must"]:
         if s not in out:
             why.append("нет сообщения «%s»" % s)
