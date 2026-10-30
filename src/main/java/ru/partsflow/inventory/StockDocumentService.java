@@ -351,7 +351,8 @@ public class StockDocumentService {
             return part + ": позиция отложена покупателю — отмена проводки невозможна, "
                     + "сначала снимите резерв";
         }
-        return part + ": позиции нет на складе " + naming.warehouse(document.getWarehouseId())
+        String warehouse = naming.warehouse(document.getWarehouseId());
+        return part + ": позиции нет на складе " + warehouse
                 + " в том количестве, что пришло, — её перевезли или списали; "
                 + "отмена проводки невозможна";
     }
