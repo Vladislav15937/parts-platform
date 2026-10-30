@@ -334,6 +334,36 @@ class DonorRetitleTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Проданная и списанная переименовываются, но не отмечаются: их нет ни в одном файле Дрома")
+    void soldAndWrittenOffAreRenamedButNotMarked() throws Exception {
+        long donor = donor();
+        long inStock = receive(donor, "Фара левая");
+        long sold = receive(donor, "Дверь");
+        long writtenOff = receive(donor, "Капот");
+        sell(sold);
+        mvc.perform(post("/api/stock/write-offs").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"reason":"разбит при разборе",
+                                 "items":[{"partId":%d,"quantity":1}]}""".formatted(warehouse, writtenOff)))
+                .andExpect(status().isCreated());
+        assertThat(statusOf(sold)).isEqualTo("SOLD");
+        assertThat(statusOf(writtenOff)).isEqualTo("WRITTEN_OFF");
+        clearMarks();
+
+        JsonNode saved = save(donor, form -> form.put("year", 2007)).andExpect(status().isOk())
+                .andReturnBody();
+
+        assertThat(title(sold)).as("название проданной после правки года").contains("2007")
+                .doesNotContain("2008");
+        assertThat(title(writtenOff)).as("название списанной после правки года").contains("2007")
+                .doesNotContain("2008");
+        assertThat(saved.path("renamed").asInt()).isEqualTo(3);
+        assertThat(marked()).as("отметки для дельты: проданной и списанной в файле нет")
+                .containsExactly(inStock);
+    }
+
+    @Test
     @DisplayName("Пересборка упала — машина осталась с прежним годом, названия и отметки не тронуты")
     void failedRetitleRollsTheDonorBack() throws Exception {
         long donor = donor();
@@ -382,6 +412,28 @@ class DonorRetitleTest extends PostgresTestBase {
                 .andExpect(status().isCreated());
         return inTenant(() -> jdbc.queryForObject(
                 "SELECT max(id) FROM part WHERE donor_id = ?", Long.class, donor));
+    }
+
+    /** Продажа тем путём, каким продаёт продавец: сделка с резервом и выдача. */
+    private void sell(long part) throws Exception {
+        Long customer = inTenant(() -> jdbc.queryForObject(
+                "INSERT INTO customer (name) VALUES ('Покупатель двери') RETURNING id", Long.class));
+        String body = mvc.perform(post("/api/deals").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customerId":%d,"items":[{"partId":%d,"quantity":1,"warehouseId":%d}]}"""
+                                .formatted(customer, part, warehouse)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        // Поиском, а не срезом всей строки: NEL из кириллицы обрывает `.` (корневой CLAUDE.md).
+        Matcher id = Pattern.compile("^\\{\"id\":(\\d+)").matcher(body);
+        assertThat(id.find()).as("ответ создания сделки: %s", body).isTrue();
+        mvc.perform(post("/api/deals/" + id.group(1) + "/issue").with(csrf()).session(owner))
+                .andExpect(status().isOk());
+    }
+
+    private String statusOf(long part) {
+        return inTenant(() -> jdbc.queryForObject("SELECT status FROM part WHERE id = ?", String.class, part));
     }
 
     /** Своя машина позиции, как её оставила карточка: поле записано, название пересобрано. */
