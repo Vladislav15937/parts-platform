@@ -2,11 +2,13 @@ package ru.partsflow.intake;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.partsflow.inventory.DonorRetitle;
 import ru.partsflow.shared.NotFound;
 import ru.partsflow.shared.ValueWords;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Function;
 
 /**
@@ -28,13 +30,16 @@ public class DonorEditService {
     private final SupplyRepository supplies;
     private final DonorDirectory directory;
     private final DonorVehicleResolver vehicles;
+    private final DonorRetitle retitles;
 
     public DonorEditService(DonorRepository donors, SupplyRepository supplies,
-                            DonorDirectory directory, DonorVehicleResolver vehicles) {
+                            DonorDirectory directory, DonorVehicleResolver vehicles,
+                            DonorRetitle retitles) {
         this.donors = donors;
         this.supplies = supplies;
         this.directory = directory;
         this.vehicles = vehicles;
+        this.retitles = retitles;
     }
 
     /**
@@ -63,18 +68,42 @@ public class DonorEditService {
      *
      * <p>Журнал действий пишет слушатель Hibernate ({@code donor} в
      * {@code AUDITED}), автор — вошедший: «Машина: Год выпуска 2003 → 2004».
+     *
+     * <p><b>Поменялось то, из чего собирается название и объявление, — машина
+     * тянет за собой свои позиции</b> (задача 0383): {@link DonorRetitle}
+     * пересобирает их названия и отмечает для дельты Дрома в этой же транзакции,
+     * и упавшая пересборка откатывает правку машины целиком — машина с новым
+     * годом при старых названиях и есть то состояние, которое задача закрывает.
+     * Что считать таким полем, решено сверкой с формулами: марка, модель,
+     * поколение, год, кузов, двигатель. Руль, коробку, привод, цвет,
+     * комплектацию, VIN, пробег, поставку и заметку не читает ни название
+     * ({@code PartTitleGenerator}), ни файл Дрома — их правка позиций не трогает,
+     * иначе каждая заметка отправляла бы в дельту все детали машины.
+     *
+     * @param authorId кто правит — он же автор правки названий в истории позиций
      */
     @Transactional
-    public DonorDetails update(long donorId, DonorFields change) {
+    public DonorSaved update(long donorId, DonorFields change, Long authorId) {
         Donor donor = require(donorId);
+        // Поколение — тем же правилом, что при заведении: по году, если его
+        // не выбрали, — год человек знает, поколение спрашивать не должен.
+        // Считается до записи: сравнить с прежним надо, пока прежнее лежит.
+        Long generation = change.generationId() != null
+                ? change.generationId()
+                : vehicles.generationFor(change.modelId(), change.year());
+        boolean vehicleChanged = !Objects.equals(donor.getBrandId(), change.brandId())
+                || !Objects.equals(donor.getModelId(), change.modelId())
+                || !Objects.equals(donor.getGenerationId(), generation)
+                || !Objects.equals(donor.getYear(), change.year())
+                || !Objects.equals(donor.getBodyCode(), text(change.bodyCode()))
+                || !Objects.equals(donor.getEngineCode(), text(change.engineCode()));
+        // Позиции — под блокировку до записи машины: их объявления запоминаются
+        // такими, какими были.
+        DonorRetitle.Snapshot before = vehicleChanged ? retitles.lock(donorId) : null;
         donor.changeBrand(change.brandId());
         donor.setModelId(change.modelId());
         donor.setYear(change.year());
-        donor.setGenerationId(change.generationId() != null
-                ? change.generationId()
-                // Тем же правилом, что при заведении: поколение по году, если
-                // его не выбрали, — год человек знает, поколение спрашивать не должен.
-                : vehicles.generationFor(change.modelId(), change.year()));
+        donor.setGenerationId(generation);
         donor.setBodyCode(text(change.bodyCode()));
         donor.setEngineCode(text(change.engineCode()));
         donor.setSteering(change.steering());
@@ -90,8 +119,11 @@ public class DonorEditService {
         }
         donor.arrivedWith(change.supplyId());
         donor.setNote(text(change.note()));
+        // Пересборка читает машину из базы, а не из сущности — сначала записать.
         donors.saveAndFlush(donor);
-        return detailsOf(donorId);
+        int renamed = before == null ? 0 : retitles.retitle(before, authorId);
+        DonorDetails details = detailsOf(donorId);
+        return new DonorSaved(details.card(), details.form(), renamed);
     }
 
     /**
@@ -150,6 +182,14 @@ public class DonorEditService {
 
     /** @param card машина словами; @param form значения для правки кодами */
     public record DonorDetails(DonorDirectory.Card card, DonorFields form) {
+    }
+
+    /**
+     * Ответ правки: карточка, значения формы и сколько позиций машины
+     * переименовано — без числа человек не знает, что правка года потянула
+     * за собой шестьдесят пять деталей.
+     */
+    public record DonorSaved(DonorDirectory.Card card, DonorFields form, int renamed) {
     }
 
     public record Option(String code, String title) {

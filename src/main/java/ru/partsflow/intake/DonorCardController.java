@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import ru.partsflow.platform.security.CurrentUser;
 
 /**
  * Карточка машины и её правка (задача 0364).
@@ -36,9 +37,9 @@ public class DonorCardController {
     /** Правка формой «карандаш»: те же поля, что при заведении. */
     @PutMapping("/donors/{id}")
     @PreAuthorize("hasAuthority('intake.receive')")
-    public DonorEditService.DonorDetails update(@PathVariable long id,
-                                                @Valid @RequestBody DonorEditService.DonorFields change) {
-        return edits.update(id, change);
+    public DonorEditService.DonorSaved update(@PathVariable long id,
+                                              @Valid @RequestBody DonorEditService.DonorFields change) {
+        return edits.update(id, change, CurrentUser.memberId());
     }
 
     /** Руль, КПП и привод словами для выбора на форме машины. */

@@ -18,8 +18,10 @@ describe('карточка машины', () => {
   let put: Record<string, unknown> | null;
   let puts: number;
   let vocabularyFails: boolean;
+  let renamed: number | undefined;
 
   beforeEach(() => {
+    renamed = 0;
     posted = null;
     put = null;
     puts = 0;
@@ -46,7 +48,7 @@ describe('карточка машины', () => {
       if (url.endsWith('/api/intake/donors/7') && method === 'PUT') {
         puts += 1;
         put = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        return json(details({ year: put.year as number }));
+        return json({ ...details({ year: put.year as number }), renamed });
       }
       if (url.endsWith('/api/intake/donors/7')) {
         return json(details({ year: 2003 }));
@@ -141,8 +143,35 @@ describe('карточка машины', () => {
       year: 2004, brandId: 1, supplyId: 5, steering: 'RIGHT', transmissionModel: 'U340E',
       mileageKm: 158000, equipmentCode: '500000',
     });
-    await waitFor(() => expect(screen.getByText('Машина сохранена.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Машина исправлена.')).toBeTruthy());
     expect(screen.getByText('2004')).toBeTruthy();
+  });
+
+  // Задача 0383: правка года тянет за собой названия деталей машины, и экран
+  // называет, сколько их; ноль про позиции не говорит ничего.
+  it('правка, переименовавшая позиции, называет их число', async () => {
+    renamed = 65;
+    render(<DonorScreen online reference={reference()} onChanged={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Карточка' }));
+    fireEvent.click(await screen.findByRole('button', { name: '✎ Изменить' }));
+    const card = screen.getByRole('button', { name: 'Сохранить' }).closest('.donor-view') as HTMLElement;
+    fireEvent.change(within(card).getByLabelText('Год'), { target: { value: '2004' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Сохранить' }));
+
+    await waitFor(() => expect(
+      screen.getByText('Машина исправлена; переименовано позиций: 65')).toBeTruthy());
+  });
+
+  it('ответ без числа переименованных (прежняя сборка) — без слов про позиции', async () => {
+    renamed = undefined;
+    render(<DonorScreen online reference={reference()} onChanged={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Карточка' }));
+    fireEvent.click(await screen.findByRole('button', { name: '✎ Изменить' }));
+    const card = screen.getByRole('button', { name: 'Сохранить' }).closest('.donor-view') as HTMLElement;
+    fireEvent.click(within(card).getByRole('button', { name: 'Сохранить' }));
+
+    await waitFor(() => expect(screen.getByText('Машина исправлена.')).toBeTruthy());
+    expect(screen.queryByText(/переименовано/)).toBeNull();
   });
 
   it('«Отменить» закрывает форму и ничего не отправляет', async () => {
