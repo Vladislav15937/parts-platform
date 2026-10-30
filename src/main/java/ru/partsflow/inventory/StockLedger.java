@@ -98,6 +98,19 @@ public class StockLedger {
      */
     public BigDecimal reverse(Long partId, MovementType type, BigDecimal wanted,
                               Long fromWarehouseId, Long toWarehouseId, Long documentId) {
+        return reverse(partId, type, wanted, fromWarehouseId, toWarehouseId, documentId,
+                StockMovement.DOCUMENT_DELETED, "Удаление документа");
+    }
+
+    /**
+     * То же встречное движение с заданной ссылкой — для «Отменить проводку»
+     * (задача 0360, {@link StockMovement#DOCUMENT_UNPOSTED}). Снимается так же
+     * только свободное и одной инструкцией; хватило ли, решает вызывающий
+     * по возвращённому числу — отмена проводки частичной не бывает.
+     */
+    public BigDecimal reverse(Long partId, MovementType type, BigDecimal wanted,
+                              Long fromWarehouseId, Long toWarehouseId, Long documentId,
+                              String refType, String reason) {
         BigDecimal taken = wanted;
         if (fromWarehouseId != null) {
             @SuppressWarnings("unchecked")
@@ -123,7 +136,7 @@ public class StockLedger {
         }
 
         StockMovement movement = StockMovement.reversal(
-                partId, type, taken, fromWarehouseId, toWarehouseId, documentId);
+                partId, type, taken, fromWarehouseId, toWarehouseId, documentId, refType, reason);
         if (movement.getCreatedBy() == null) {
             movement.setCreatedBy(ru.partsflow.platform.security.CurrentUser.memberId());
         }

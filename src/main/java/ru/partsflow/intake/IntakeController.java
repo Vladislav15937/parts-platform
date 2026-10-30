@@ -89,7 +89,8 @@ public class IntakeController {
     @PreAuthorize("hasAuthority('intake.receive')")
     public ResponseEntity<SupplyView> registerSupply(@Valid @RequestBody SupplyRequest request) {
         Supply supply = intake.registerSupply(
-                request.kind(), request.number(), request.supplierName(), CurrentUser.memberId());
+                request.kind(), request.number(), request.supplierName(), request.note(),
+                CurrentUser.memberId());
         return ResponseEntity.status(HttpStatus.CREATED).body(SupplyView.of(supply));
     }
 
@@ -284,9 +285,14 @@ public class IntakeController {
 
     // ---------- запросы ----------
 
+    /**
+     * @param note описание — окно «Новая поставка» документа поступления
+     *             (задача 0360: «Название» и «Описание»); необязательно
+     */
     public record SupplyRequest(Supply.SupplyKind kind,
                                 @NotBlank String number,
-                                String supplierName) {
+                                String supplierName,
+                                String note) {
     }
 
     /**

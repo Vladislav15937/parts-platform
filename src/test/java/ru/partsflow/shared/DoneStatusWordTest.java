@@ -73,6 +73,19 @@ class DoneStatusWordTest {
             "(?<![а-яё])(?:не)?провед[её]нн?(?:о|а|ы|ый|ая|ое|ые|ого|ой|ую|ым|ых|ыми|ом|ому)?(?![а-яё])",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
+    /**
+     * Литералы сервера, где причастие — не слово о состоянии, а запись
+     * о случившемся действии, перенесённая дословно. Каждый — с причиной;
+     * без причины сюда не вносят.
+     *
+     * <p>«Поступление проведено» — запись «Истории документа» поступления
+     * (задача 0360): событие «в этот момент провели», а не статус документа
+     * (статус в той же карточке — «Выполнен»). Текст назван дословно
+     * в критерии приёмки 0360, п. 2, и снят с ориентира (решение владельца
+     * 19.10.2026 «Всё как у bazon»).
+     */
+    static final java.util.Set<String> EVENT_LITERALS = java.util.Set.of("\"Поступление проведено\"");
+
     private static final Pattern BLOCK_COMMENT = Pattern.compile("/\\*.*?\\*/", Pattern.DOTALL);
     private static final Pattern LINE_COMMENT = Pattern.compile("(?<![:'\"`\\\\])//[^\\n]*");
     private static final Pattern JAVA_LITERAL = Pattern.compile("\"(?:[^\"\\\\\\n]|\\\\.)*\"");
@@ -117,7 +130,7 @@ class DoneStatusWordTest {
                 Matcher literal = JAVA_LITERAL.matcher(code);
                 while (literal.find()) {
                     Matcher word = PARTICIPLE.matcher(literal.group());
-                    if (word.find()) {
+                    if (word.find() && !EVENT_LITERALS.contains(literal.group())) {
                         found.add(file + ":" + lineOf(code, literal.start())
                                 + " — «" + word.group() + "» в " + literal.group());
                     }
