@@ -487,6 +487,68 @@ public final class AuditedColumns {
      */
     public static final Set<String> MONEY = Set.of("cost_price", "min_price");
 
+    /**
+     * Числа, которые журнал печатает разрядами, как карточка и списки
+     * (задача 0384): «Пробег, км: 210 000 → 215 000», «Цена: 27 000 → 24 300»,
+     * «Вес, кг: 12,5 → 13».
+     *
+     * <p><b>Зачем.</b> Пробег машины в журнале стоял «210000 → 215000», а на её
+     * карточке — «215 000»: одно число в двух написаниях, и шесть знаков без
+     * разрядов глазами не читаются. Печатает одна функция ({@link #display}),
+     * и её зовут обе поверхности — журнал организации и история позиции, —
+     * поэтому правило здесь, рядом с подписями, а не на экране.
+     *
+     * <p>Набор по имени колонки, как и прочие решения этого класса. Имя,
+     * которое у одной таблицы число, а у другой код, сюда не попадает
+     * никогда — его держит {@code AuditNumbersGroupedTest}. Синтетические
+     * имена выгрузки ({@code price_percent}, {@code filter_price_from} …)
+     * колонками схемы не являются, перебор их не видит, и внесены они руками.
+     */
+    public static final Set<String> GROUPED = Set.of(
+            // деньги
+            "price", "min_price", "cost_price", "installation_price",
+            "total_amount", "discount_amount", "discount", "amount",
+            "filter_price_from", "filter_price_to", "price_rounding",
+            // количества и меры
+            "quantity", "mileage_km", "weight_kg", "package_weight_kg",
+            "length_mm", "width_mm", "height_mm",
+            "package_length_mm", "package_width_mm", "package_height_mm",
+            "price_percent", "photo_limit", "reservation_days",
+            "order_days_from", "order_days_to");
+
+    /**
+     * Числа, у которых свой вид, и разряды его портят: год («2 003» вместо
+     * «2003» — ошибка хуже исходной) и номер товара (с задачи 0366 «Номер
+     * товара» под замком, а в старых записях истории под этим именем лежит
+     * шестнадцатеричный код). На показ этот набор не влияет — он для того,
+     * чтобы у каждой числовой колонки под журналом решение было записано,
+     * а не забыто (перебор {@code AuditNumbersGroupedTest}).
+     */
+    public static final Set<String> AS_IS = Set.of("year", "manual_year", "number");
+
+    /** Число так, как его отдаёт {@link #normalized}: знак, целая часть, дробная после точки. */
+    private static final java.util.regex.Pattern PLAIN_NUMBER =
+            java.util.regex.Pattern.compile("(-?)(\\d{1,18})(?:\\.(\\d+))?");
+
+    /**
+     * Число разрядами — как {@code toLocaleString('ru-RU')} на экране:
+     * неразрывный пробел между разрядами (тот же, что у номера товара,
+     * {@link PartNumberQuery#format}), запятая перед дробной частью.
+     *
+     * <p>Дробная часть не округляется: экран режет её до трёх знаков,
+     * а журнал отвечает на вопрос «с чего на что», и правка в четвёртом
+     * знаке, показанная как «12,5 → 12,5», была бы правкой, которой не видно.
+     * Не число (заметка «1 200», мусор снимка) возвращается как есть.
+     */
+    static String grouped(String raw) {
+        java.util.regex.Matcher number = PLAIN_NUMBER.matcher(raw);
+        if (!number.matches()) {
+            return raw;
+        }
+        String whole = number.group(1) + PartNumberQuery.format(Long.parseLong(number.group(2)));
+        return number.group(3) == null ? whole : whole + "," + number.group(3);
+    }
+
     /** В снимке лежит идентификатор, человеку нужно имя. */
     public static final Set<String> REFERENCES = Set.of(
             "storage_cell_id", "donor_id", "part_kind_id", "supply_id",
@@ -571,6 +633,9 @@ public final class AuditedColumns {
             } catch (NumberFormatException notAnId) {
                 return raw;
             }
+        }
+        if (GROUPED.contains(column)) {
+            return grouped(raw);
         }
         return switch (column) {
             case "condition" -> CONDITIONS.getOrDefault(raw, raw);

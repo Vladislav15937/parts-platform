@@ -119,8 +119,8 @@ class OrganizationAuditTest extends PostgresTestBase {
                         .value("Фара Toyota Camry 2006 перед. лев. (б/у)"))
                 .andExpect(jsonPath("$.items[0].subjectNumber").value(number))
                 .andExpect(jsonPath("$.items[0].changes[0].label").value("Цена"))
-                .andExpect(jsonPath("$.items[0].changes[0].before").value("5000"))
-                .andExpect(jsonPath("$.items[0].changes[0].after").value("4500"));
+                .andExpect(jsonPath("$.items[0].changes[0].before").value("5\u00A0000"))
+                .andExpect(jsonPath("$.items[0].changes[0].after").value("4\u00A0500"));
     }
 
     /**

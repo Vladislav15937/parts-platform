@@ -255,7 +255,7 @@ class ServiceAdminTest extends PostgresTestBase {
                 // Свежее сверху: последней была правка администратора.
                 .andExpect(jsonPath("$.items[0].author").value(org.hamcrest.Matchers.startsWith(ADMIN_NAME + " (ID ")))
                 .andExpect(jsonPath("$.items[0].authorRole").value("ADMIN"))
-                .andExpect(jsonPath("$.items[0].changes[0].after").value("4500"))
+                .andExpect(jsonPath("$.items[0].changes[0].after").value("4\u00A0500"))
                 .andExpect(jsonPath("$.items[1].author").value(org.hamcrest.Matchers.startsWith("Пётр Владельцев (")))
                 .andExpect(jsonPath("$.items[1].authorRole").value("OWNER"));
     }

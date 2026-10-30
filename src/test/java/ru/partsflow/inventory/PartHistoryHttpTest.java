@@ -109,8 +109,8 @@ class PartHistoryHttpTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.changes[0].fields[0].label").value("Цена"))
                 // Число приведено к общему виду: до этого стояло «4500.00 → 5200» —
                 // одна и та же величина в двух написаниях в одной строке.
-                .andExpect(jsonPath("$.changes[0].fields[0].before").value("4500"))
-                .andExpect(jsonPath("$.changes[0].fields[0].after").value("5200"))
+                .andExpect(jsonPath("$.changes[0].fields[0].before").value("4\u00A0500"))
+                .andExpect(jsonPath("$.changes[0].fields[0].after").value("5\u00A0200"))
                 // Автор подписан: до этой правки app.user_id не выставлял никто,
                 // и в audit_log.changed_by у всех записей стоял null.
                 .andExpect(jsonPath("$.changes[0].author").value(
