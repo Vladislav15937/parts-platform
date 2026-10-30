@@ -251,7 +251,13 @@ case "$url" in
     [ "$cat_ok" = false ] && ready=false
     [ "$ready" = true ] || code=503
     body='{"ready":'$ready',"checks":[{"check":"database","ok":true,"detail":"База отвечает","known":true},{"check":"catalog","ok":'$cat_ok',"detail":"Общая схема catalog принята не целиком (подделка)","known":true}]}' ;;
-  *:5173/*) [ -e "$S/pwa" ] || rc=7 ;;
+  *:5173/*)
+    # Счётчик обращений к порту PWA: текст отказа одинаков, ждал ли подъём
+    # умерший Vite до конца цикла или бросил сразу, — различает их только
+    # число попыток (tasks/0385). Сон здесь подделан, время не мерило.
+    v=$(cat "$S/vite" 2>/dev/null || echo 0); v=$((v+1)); echo $v > "$S/vite"
+    [ "$v" = 15 ] && echo "ПОДДЕЛКА-CURL: к :5173 уже 15 обращений" >&2
+    [ -e "$S/pwa" ] || rc=7 ;;
 esac
 [ $rc -ne 0 ] && exit $rc
 if [ -n "$out" ]; then
@@ -453,13 +459,23 @@ CASES = [
          "dev-up", env={"SB_NPM": "none"}, exit_ok=False,
          must=["npm не найден", "cd frontend && npm run dev"],
          must_not=["Готово.", "запускаю Vite", "Vite не поднялся"]),
-    case("dev-up: Vite упал сразу — причина из лога в сообщении", "dev-up",
-         env={"SB_PWA": "crash"}, exit_ok=False,
+    # Следующий код компании — формула, а не зашитая двойка: proba2 → proba3,
+    # proba09 → proba10 (не восьмеричное).
+    case("dev-up: 409 на proba2 — подсказка называет proba3", "dev-up",
+         env={"SB_PROV": "409", "COMPANY": "proba2"}, exit_ok=False, exit_code=3,
+         must=["COMPANY=proba3 ./tools/dev-up.sh"]),
+    case("dev-up: 409 на proba09 — подсказка называет proba10", "dev-up",
+         env={"SB_PROV": "409", "COMPANY": "proba09"}, exit_ok=False, exit_code=3,
+         must=["COMPANY=proba10 ./tools/dev-up.sh"]),
+    # Умерший Vite не ждётся: до правки цикл крутил все 30 попыток (31
+    # обращение к порту), теперь бросает после первых нескольких.
+    case("dev-up: Vite упал сразу — причина из лога, порт не опрашивается 30 раз",
+         "dev-up", env={"SB_PWA": "crash"}, exit_ok=False,
          must=["процесс завершился сразу", "Port 5173 is already in use"],
-         must_not=["Готово.", "за 30 с"]),
+         must_not=["Готово.", "за 30 с", "к :5173 уже 15 обращений"]),
     case("dev-up: Vite жив, порт не открылся — хвост лога в сообщении",
          "dev-up", env={"SB_PWA": "hang"}, exit_ok=False,
-         must=["Vite не поднялся за 30 с", "VITE-HANG"],
+         must=["Vite не поднялся за 30 с", "VITE-HANG", "к :5173 уже 15 обращений"],
          must_not=["Готово.", "завершился сразу"]),
 ]
 
