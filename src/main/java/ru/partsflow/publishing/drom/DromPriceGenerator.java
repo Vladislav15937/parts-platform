@@ -229,9 +229,7 @@ public class DromPriceGenerator {
               -- «в пути» — это не любая позиция без остатка, а только та,
               -- которую ждут контейнером. Позиция, заведённая черновиком
               -- и брошенная, ни в какой прайс попадать не должна.
-              LEFT JOIN supply in_transit
-                     ON in_transit.id = p.supply_id
-                    AND in_transit.status IN ('EXPECTED', 'IN_TRANSIT')
+              ${inTransitJoin}
               LEFT JOIN part_oem primary_oem
                      ON primary_oem.part_id = p.id AND primary_oem.is_primary
               LEFT JOIN (
@@ -386,6 +384,36 @@ public class DromPriceGenerator {
      * обычный резерв, и вычитать её здесь второй раз нельзя. Требует в запросе
      * псевдонимов {@code p} и {@code in_transit}.
      */
+    /**
+     * Поставка «в пути» позиции — псевдоним {@code in_transit}, пусто, если позиция
+     * товаром в пути не считается.
+     *
+     * <p><b>Позиция непроведённого документа поступления в пути не бывает никогда</b>
+     * (задача 0360, решение владельца 30.10.2026). Черновик поступления заводит
+     * карточку {@code DRAFT} строкой документа, и без этого условия она, приписанная
+     * к ожидаемой поставке (а «+ Новая поставка» заводит её {@code EXPECTED}), уезжала
+     * в прайс «в пути» — до «Провести документ» и снова после «Отменить проводку».
+     * Различается позиция <b>связью с документом</b>, а не статусом: ожидаемый товар
+     * прежнего пути (задача 0170) тоже {@code DRAFT}, но строки документа поступления
+     * у него нет, пока его не примут, а принимают его сразу проведённым документом.
+     * Документ «не проведён» — любой, кроме {@code DONE}: черновик и отменённый черновик,
+     * чьи карточки так и остаются {@code DRAFT}.
+     *
+     * <p>Один текст на прайс, дельту и счётчик выгрузки
+     * {@code MarketplaceAccountService.countMatching}: признак «в пути» читают
+     * {@link #PREORDERED}, {@link #IN_FILE}, количество и примечание прайса.
+     * Требует псевдоним {@code p}.
+     */
+    public static final String IN_TRANSIT_JOIN = """
+            LEFT JOIN supply in_transit
+                   ON in_transit.id = p.supply_id
+                  AND in_transit.status IN ('EXPECTED', 'IN_TRANSIT')
+                  AND NOT EXISTS (SELECT 1 FROM stock_document_line open_line
+                                    JOIN stock_document open_doc ON open_doc.id = open_line.document_id
+                                   WHERE open_line.part_id = p.id
+                                     AND open_doc.doc_type = 'INTAKE'
+                                     AND open_doc.status <> 'DONE')""";
+
     public static final String PREORDERED = """
             (p.status = 'DRAFT' AND in_transit.id IS NOT NULL
               AND p.quantity - """ + PREORDERED_QTY + " <= 0)";
@@ -782,7 +810,8 @@ public class DromPriceGenerator {
 
         // Прайс и дельта отбирают одно и то же (задача 0339): у дельты
         // отличается только список позиций.
-        String sql = SQL.replace("${preordered}", PREORDERED)
+        String sql = SQL.replace("${inTransitJoin}", IN_TRANSIT_JOIN)
+                .replace("${preordered}", PREORDERED)
                 .replace("${preorderedQty}", PREORDERED_QTY)
                 .replace("${inFile}", inFile(settings.exportsReserved()))
                 .replace("${statuses}", statuses(PRICE_STATUSES, settings))

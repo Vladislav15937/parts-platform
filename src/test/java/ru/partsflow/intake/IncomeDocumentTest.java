@@ -283,6 +283,86 @@ class IncomeDocumentTest extends PostgresTestBase {
     }
 
     /**
+     * Решение владельца 30.10.2026 («закрыть это в 0360»): позиция черновика поступления,
+     * приписанная к поставке, которая ещё не приехала, в прайс Дрома «в пути» не уходит —
+     * ни до «Провести документ», ни после «Отменить проводку». Ожидаемый товар прежнего
+     * пути (заведён в карточке поставки, строки документа у него нет) уходит, как раньше.
+     * Проверяется сгенерированным файлом по адресу, который забирает Дром, а не вызовом
+     * сервиса: условие живёт в тексте запроса генератора.
+     */
+    @Test
+    @DisplayName("Позиция черновика поступления не уходит в прайс Дрома «в пути»; проведённая — уходит")
+    void draftIncomeLineStaysOutOfDromFeed() throws Exception {
+        String token = "d".repeat(43);
+        inTenant(() -> {
+            jdbc.update("DELETE FROM marketplace_account");
+            return jdbc.update("""
+                    INSERT INTO marketplace_account (marketplace, title, settings, feed_token)
+                    VALUES ('DROM', 'Поступления', '{"packetId":"1","expectedGoods":true}'::jsonb, ?)""",
+                    token);
+        });
+        long supply = supply("В пути " + UUID.randomUUID());
+        assertThat(inTenant(() -> jdbc.queryForObject("SELECT status FROM supply WHERE id = ?",
+                String.class, supply))).as("поставка из «+ Новая поставка» не в пути").isEqualTo("EXPECTED");
+
+        // Прежний путь: ожидаемый товар в карточке поставки и обычная позиция на складе.
+        mvc.perform(post("/api/intake/supplies/" + supply + "/expected-parts").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rawName\":\"капот ожидаемый прежним путём\",\"condition\":\"USED\","
+                                + "\"quantity\":2,\"price\":9000,\"requestId\":\"%s\"}".formatted(UUID.randomUUID())))
+                .andExpect(status().isCreated());
+        mvc.perform(post("/api/intake/receipts").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"warehouseId\":%d,\"requestId\":\"%s\",\"items\":[{\"rawName\":\"крыло на складе\",\"price\":4000}]}"
+                                .formatted(warehouse, UUID.randomUUID())))
+                .andExpect(status().isCreated());
+
+        String draftName = "бампер черновика поступления";
+        List<String> before = feedParts(token);
+        assertThat(String.join("", before)).as("прежний путь: ожидаемый товар уходит «в пути»")
+                .containsIgnoringCase("капот ожидаемый прежним путём").containsIgnoringCase("крыло на складе");
+
+        long doc = create(supply, "Черновик в пути").path("id").asLong();
+        addItem(doc, draftName, "7000", null);
+        List<String> drafted = feedParts(token);
+        assertThat(String.join("", drafted)).as("позиция непроведённого черновика ушла на Дром")
+                .doesNotContainIgnoringCase(draftName);
+        assertThat(drafted).as("строки позиций, не тронутых черновиком, изменились").isEqualTo(before);
+
+        act(doc, "post", status().isOk());
+        List<String> posted = feedParts(token);
+        assertThat(String.join("", posted)).as("проведённая позиция не ушла на Дром").containsIgnoringCase(draftName);
+        assertThat(posted.stream().filter(part -> !part.toLowerCase().contains(draftName)).toList())
+                .as("проведение изменило чужие строки прайса").isEqualTo(before);
+
+        act(doc, "unpost", status().isOk());
+        List<String> unposted = feedParts(token);
+        assertThat(String.join("", unposted)).as("после «Отменить проводку» позиция осталась на Дроме")
+                .doesNotContainIgnoringCase(draftName);
+        assertThat(unposted).isEqualTo(before);
+
+        // Счётчик выгрузки считает тем же условием, что и файл.
+        String count = mvc.perform(post("/api/marketplace-accounts/filter/count").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"expectedGoods\":true}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(count).as("счётчик выгрузки разошёлся с файлом")
+                .startsWith("{\"parts\":" + unposted.size() + ",");
+    }
+
+    /** Позиции файла Дрома, каждая строкой целиком — как их забирает площадка. */
+    private List<String> feedParts(String token) throws Exception {
+        String file = mvc.perform(get("/feeds/drom/incomes/" + token + ".xml"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        List<String> parts = new ArrayList<>();
+        java.util.regex.Matcher part = java.util.regex.Pattern.compile("<part>.*?</part>",
+                java.util.regex.Pattern.DOTALL).matcher(file);
+        while (part.find()) {
+            parts.add(part.group());
+        }
+        return parts;
+    }
+
+    /**
      * Решение владельца 30.10.2026: закупочные суммы и цены поступлений — по праву
      * «Смотреть закупочную цену и себестоимость», а не всем вошедшим. Проверяется
      * через HTTP на всех ответах, несущих документ: список, документ, и ответы
@@ -333,7 +413,38 @@ class IncomeDocumentTest extends PostgresTestBase {
         JsonNode posted = body(mvc.perform(post("/api/intake/incomes/" + doc + "/post").with(csrf())
                         .session(seller)).andExpect(status().isOk()).andReturn());
         assertThat(posted.path("amount").isNull()).as("ответ «Провести» продавцу несёт сумму").isTrue();
+        posted.path("lines").forEach(line ->
+                assertThat(line.path("cost").isNull()).as("ответ «Провести» несёт цену").isTrue());
         assertThat(income(doc, owner).path("amount").decimalValue()).isEqualByComparingTo("1900");
+
+        // Все шесть ответов, отдающих документ: «Отменить проводку», «Создать», «Отменить».
+        JsonNode unposted = body(mvc.perform(post("/api/intake/incomes/" + doc + "/unpost").with(csrf())
+                        .session(seller)).andExpect(status().isOk()).andReturn());
+        assertThat(unposted.path("amount").isNull()).as("ответ «Отменить проводку» продавцу несёт сумму")
+                .isTrue();
+        assertThat(unposted.path("lines")).isNotEmpty();
+        unposted.path("lines").forEach(line ->
+                assertThat(line.path("cost").isNull()).as("ответ «Отменить проводку» несёт цену").isTrue());
+
+        JsonNode created = body(mvc.perform(post("/api/intake/incomes").with(csrf()).session(seller)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"warehouseId\":%d,\"supplyId\":null,\"note\":null,\"requestId\":\"%s\"}"
+                                .formatted(warehouse, UUID.randomUUID())))
+                .andExpect(status().isCreated()).andReturn());
+        assertThat(created.path("amount").isNull()).as("ответ «Создать» продавцу несёт сумму").isTrue();
+        long second = created.path("id").asLong();
+        mvc.perform(post("/api/intake/incomes/" + second + "/items").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rawName\":\"радиатор\",\"quantity\":1,\"price\":2000,"
+                                + "\"costPrice\":900,\"requestId\":\"%s\"}".formatted(UUID.randomUUID())))
+                .andExpect(status().isCreated());
+        assertThat(income(second, owner).path("amount").decimalValue()).isEqualByComparingTo("900");
+        JsonNode cancelled = body(mvc.perform(post("/api/intake/incomes/" + second + "/cancel").with(csrf())
+                        .session(seller)).andExpect(status().isOk()).andReturn());
+        assertThat(cancelled.path("amount").isNull()).as("ответ «Отменить» продавцу несёт сумму").isTrue();
+        assertThat(cancelled.path("lines")).isNotEmpty();
+        cancelled.path("lines").forEach(line ->
+                assertThat(line.path("cost").isNull()).as("ответ «Отменить» несёт цену").isTrue());
     }
 
     private JsonNode income(long doc, MockHttpSession who) throws Exception {
