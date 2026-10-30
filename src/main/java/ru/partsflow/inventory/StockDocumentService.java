@@ -337,10 +337,19 @@ public class StockDocumentService {
      */
     private String unpostRefusal(StockDocument document, StockDocumentLine line) {
         String part = naming.part(line.getPartId());
-        Integer sold = jdbc.queryForObject("""
-                SELECT count(*) FROM stock_movement
-                 WHERE part_id = ? AND movement_type = 'SALE'""", Integer.class, line.getPartId());
-        if (sold != null && sold > 0) {
+        // «Продана» — только если продана после этой проводки и не вернулась:
+        // продажа, случившаяся до неё (продали, вернули, приняли заново), к нехватке
+        // отношения не имеет, и такой отказ назвал бы не ту причину. Граница —
+        // номер движения прихода этой проводки, а не время: время документа
+        // ставят часы приложения, время движений — часы базы.
+        BigDecimal soldSince = jdbc.queryForObject("""
+                SELECT coalesce(sum(m.qty_delta), 0) FROM stock_movement m
+                 WHERE m.part_id = ? AND m.movement_type IN ('SALE', 'RETURN')
+                   AND m.id > (SELECT coalesce(max(i.id), 0) FROM stock_movement i
+                                WHERE i.part_id = m.part_id AND i.document_id = ?
+                                  AND i.movement_type = 'INTAKE' AND i.qty_delta > 0)""",
+                BigDecimal.class, line.getPartId(), document.getId());
+        if (soldSince != null && soldSince.signum() < 0) {
             return part + ": позиция уже продана — отмена проводки невозможна";
         }
         BigDecimal reserved = jdbc.query("""

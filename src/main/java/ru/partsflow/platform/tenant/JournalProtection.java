@@ -38,9 +38,18 @@ import java.util.List;
 @Component
 public class JournalProtection {
 
-    /** Что должно быть неизменяемым: те же три таблицы, что и в {@link SchemaGrants}. */
+    /**
+     * Что должно быть неизменяемым — этим же списком их запирает {@link SchemaGrants}.
+     *
+     * <p>{@code stock_document_event} — история документа поступления (задача 0360,
+     * {@code tenant/107}): «кто провёл, кто отменил проводку» спрашивают, когда
+     * не сошёлся остаток, и правка её прямым SQL переписала бы ровно этот ответ.
+     * Приложение её только дописывает. На схеме, отставшей от {@code tenant/107},
+     * таблицы нет — {@link #canUpdate} отвечает «переписать нельзя», то есть
+     * проверка от этого не краснеет.
+     */
     public static final List<String> JOURNALS =
-            List.of("stock_movement", "audit_log", "customer_account_entry");
+            List.of("stock_movement", "audit_log", "customer_account_entry", "stock_document_event");
 
     /**
      * Обычная таблица, по которой видно, что защита — это защита, а не общее

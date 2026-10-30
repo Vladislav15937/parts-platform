@@ -280,6 +280,95 @@ class IncomeDocumentTest extends PostgresTestBase {
                 .andExpect(status().isForbidden());
     }
 
+    /**
+     * Блокировка документа — то, ради чего {@code complete} меняет состояние
+     * до движений: без неё два одновременных «Провести» оба видят черновик
+     * и пишут приход дважды. Последовательный повтор этого не ловит, поэтому
+     * шесть запросов разом и несколько кругов (образец — разбор PR 534).
+     */
+    @Test
+    @DisplayName("Шесть одновременных «Провести» и «Отменить проводку» дают один приход и одну отмену")
+    void concurrentPostAndUnpostTouchStockOnce() throws Exception {
+        for (int round = 0; round < 5; round++) {
+            long doc = create(null, null).path("id").asLong();
+            long part = addItem(doc, "капот " + round, "5000", null)
+                    .path("lines").get(0).path("partId").asLong();
+
+            assertThat(parallel(doc, "post", 6)).as("одновременное «Провести» получило отказ")
+                    .containsOnly(200);
+            assertThat(stock(part)).as("одновременное «Провести» записало приход дважды")
+                    .isEqualByComparingTo("1");
+            assertThat(movements(part)).as("движения после одновременного «Провести»").hasSize(1);
+
+            assertThat(parallel(doc, "unpost", 6)).as("одновременная «Отменить проводку» получила отказ")
+                    .containsOnly(200);
+            assertThat(stock(part)).as("одновременная «Отменить проводку» сняла приход дважды")
+                    .isEqualByComparingTo("0");
+            assertThat(movements(part)).as("движения после одновременной отмены").hasSize(2);
+            assertThat(discrepancies()).isZero();
+        }
+    }
+
+    @Test
+    @DisplayName("Отмена проводки целиком или никак: вторая строка продана — первая остаётся на складе")
+    void unpostRollsBackWholeDocument() throws Exception {
+        long doc = create(null, null).path("id").asLong();
+        addItem(doc, "дверь передняя", "100", null);
+        JsonNode two = addItem(doc, "дверь задняя", "100", null);
+        long first = two.path("lines").get(0).path("partId").asLong();
+        long second = two.path("lines").get(1).path("partId").asLong();
+        act(doc, "post", status().isOk());
+        inTenant(() -> ledger.record(StockMovement.sale(second, BigDecimal.ONE, warehouse, null)));
+
+        JsonNode refused = act(doc, "unpost", status().isConflict());
+        assertThat(refused.path("message").asText()).contains("дверь задняя").contains("продана");
+        assertThat(stock(first)).as("первая строка снята, хотя отмена отказана")
+                .isEqualByComparingTo("1");
+        assertThat(movements(first)).as("у первой строки осталось встречное движение")
+                .containsExactly("INTAKE 1.000 null");
+        assertThat(docStatus(doc)).isEqualTo("DONE");
+        assertThat(discrepancies()).isZero();
+    }
+
+    @Test
+    @DisplayName("Продали и вернули, потом списали — отказ называет списание, а не продажу")
+    void returnedSaleIsNotTheReason() throws Exception {
+        long doc = create(null, null).path("id").asLong();
+        long part = addItem(doc, "крышка багажника", "700", null)
+                .path("lines").get(0).path("partId").asLong();
+        act(doc, "post", status().isOk());
+        inTenant(() -> {
+            ledger.record(StockMovement.sale(part, BigDecimal.ONE, warehouse, null));
+            ledger.record(StockMovement.returned(part, BigDecimal.ONE, warehouse, null));
+            return ledger.record(StockMovement.writeOff(part, BigDecimal.ONE, warehouse));
+        });
+
+        String message = act(doc, "unpost", status().isConflict()).path("message").asText();
+        assertThat(message).as("вернувшаяся продажа названа причиной")
+                .doesNotContain("продана").contains("перевезли или списали");
+        assertThat(docStatus(doc)).isEqualTo("DONE");
+    }
+
+    private List<Integer> parallel(long doc, String action, int n) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(n);
+        CyclicBarrier start = new CyclicBarrier(n);
+        List<Future<Integer>> answers = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            answers.add(pool.submit(() -> {
+                start.await();
+                return mvc.perform(post("/api/intake/incomes/" + doc + "/" + action)
+                                .with(csrf()).session(owner))
+                        .andReturn().getResponse().getStatus();
+            }));
+        }
+        List<Integer> codes = new ArrayList<>();
+        for (Future<Integer> answer : answers) {
+            codes.add(answer.get());
+        }
+        pool.shutdown();
+        return codes;
+    }
+
     // ---------- вспомогательное ----------
 
     private long supply(String name) throws Exception {
