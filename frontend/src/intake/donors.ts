@@ -1,4 +1,5 @@
 import { request } from '../api/client';
+import type { PartDonor } from '../inventory/catalog';
 
 /**
  * Машины арендатора целиком — в отличие от справочника приёмки, который
@@ -239,4 +240,72 @@ export function setExpectedOn(supplyId: number, expectedOn: string): Promise<unk
     method: 'PUT',
     body: { expectedOn },
   });
+}
+
+/**
+ * Значения формы машины (задача 0364) — кодами, как их принимает сервер.
+ *
+ * <p>Один тип на ответ и на запрос: форма правки отправляет ровно то, что
+ * получила, с правками, — и то, чего человек не трогал (марка, поставка),
+ * уезжает тем, что лежало.
+ */
+export interface DonorFields {
+  brandId: number | null;
+  modelId: number | null;
+  generationId: number | null;
+  year: number | null;
+  bodyCode: string | null;
+  engineCode: string | null;
+  steering: string | null;
+  transmissionType: string | null;
+  transmissionModel: string | null;
+  driveType: string | null;
+  color: string | null;
+  equipmentCode: string | null;
+  vin: string | null;
+  mileageKm: number | null;
+  supplyId: number | null;
+  note: string | null;
+}
+
+/** Карточка машины: словами для показа и кодами для правки. */
+export interface DonorDetails {
+  card: PartDonor;
+  form: DonorFields;
+}
+
+export function donorCard(id: number): Promise<DonorDetails> {
+  return request<DonorDetails>(`/api/intake/donors/${id}`);
+}
+
+/** Правка «карандашом»: форма целиком, пустое поле — «очищено». */
+export function updateDonor(id: number, form: DonorFields): Promise<DonorDetails> {
+  return request<DonorDetails>(`/api/intake/donors/${id}`, { method: 'PUT', body: form });
+}
+
+export interface DonorOption {
+  code: string;
+  title: string;
+}
+
+/**
+ * Руль, КПП и привод словами — с сервера, а не копией на экране: слова
+ * значений живут одним словарём (`ValueWords`), и копии их уже расходились.
+ */
+export interface DonorVocabulary {
+  steering: DonorOption[];
+  transmission: DonorOption[];
+  drive: DonorOption[];
+}
+
+export async function donorVocabulary(): Promise<DonorVocabulary> {
+  // Ответ — обещание, а не гарантия: без списка форма машины не должна
+  // падать целиком, выбор просто останется пустым.
+  const words = await request<Partial<DonorVocabulary> | null>('/api/intake/donor-vocabulary');
+  const list = (value: unknown): DonorOption[] => (Array.isArray(value) ? value : []);
+  return {
+    steering: list(words?.steering),
+    transmission: list(words?.transmission),
+    drive: list(words?.drive),
+  };
 }

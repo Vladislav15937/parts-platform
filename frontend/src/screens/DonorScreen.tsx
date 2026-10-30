@@ -13,9 +13,19 @@ import {
 import type { Brand, Generation, Model, VehicleCatalog } from '../catalog/vehicles';
 import type { Reference } from '../reference/reference';
 import { DonorCosts } from './DonorCosts';
+import {
+  DonorCard,
+  DonorSpecFields,
+  EMPTY_SPEC,
+  mileageBad,
+  specToFields,
+  type DonorSpec,
+  type VocabularyState,
+} from './DonorCard';
 import { DonorPhotos } from './DonorPhotos';
 import {
   donorTitle,
+  donorVocabulary,
   moveDonor,
   listDonors,
   registerSupply,
@@ -48,9 +58,13 @@ interface Props {
   onChanged: () => void;
   /** Заводить ожидаемый товар по поставке может владелец (задача 0170). */
   canExpect?: boolean;
+  /** «N запчастей — Посмотреть»: открыть склад с отбором по машине (задача 0364). */
+  onDonorParts?: (donorCode: string) => void;
 }
 
-export function DonorScreen({ reference, online, onChanged, canExpect = false }: Props) {
+export function DonorScreen({
+  reference, online, onChanged, canExpect = false, onDonorParts,
+}: Props) {
   // Затраты вносятся по уже заведённой машине: до её появления вкладывать
   // не во что, а после — покупка, эвакуатор и разбор идут отдельными
   // платежами и в разные дни.
@@ -59,6 +73,9 @@ export function DonorScreen({ reference, online, onChanged, canExpect = false }:
   // фотографируют один раз, а в объявления её снимки уходят у тех
   // наименований, которые владелец отметил у выгрузки.
   const [photosOf, setPhotosOf] = useState<number | null>(null);
+  // Карточка машины — под своей строкой, как затраты и снимки (задача 0364).
+  const [cardOf, setCardOf] = useState<number | null>(null);
+  const [vocabulary, setVocabulary] = useState<VocabularyState>('loading');
   // Где стоит машина — правится прямо в строке: значение и поле ввода
   // в одной клетке, иначе владелец ищет, куда делась строка после нажатия.
   const [movingId, setMovingId] = useState<number | null>(null);
@@ -83,6 +100,7 @@ export function DonorScreen({ reference, online, onChanged, canExpect = false }:
   const [scanning, setScanning] = useState(false);
   const [supplyId, setSupplyId] = useState<number | null>(null);
   const [note, setNote] = useState('');
+  const [spec, setSpec] = useState<DonorSpec>(EMPTY_SPEC);
 
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -95,6 +113,12 @@ export function DonorScreen({ reference, online, onChanged, canExpect = false }:
   useEffect(() => {
     void reloadDonors();
   }, []);
+
+  useEffect(() => {
+    void donorVocabulary()
+      .then((words) => { if (mounted.current) setVocabulary(words); })
+      .catch(() => { if (mounted.current) setVocabulary('failed'); });
+  }, [mounted]);
 
   useEffect(() => {
     void (async () => {
@@ -261,6 +285,11 @@ export function DonorScreen({ reference, online, onChanged, canExpect = false }:
         </label>
       </div>
 
+      {/* Руль, КПП, привод, цвет, комплектация и пробег сервер принимал
+          с самого начала, а на форме их не было — и «Комплектация» каждой
+          снятой детали оставалась пустой (задача 0364). */}
+      <DonorSpecFields spec={spec} onChange={setSpec} vocabulary={vocabulary} />
+
       <label>
         VIN
         <input
@@ -362,7 +391,7 @@ export function DonorScreen({ reference, online, onChanged, canExpect = false }:
 
       <button
         type="button"
-        disabled={!online || sending || brand === null || vinBad}
+        disabled={!online || sending || brand === null || vinBad || mileageBad(spec.mileage)}
         onClick={() => void submit()}
       >
         {sending ? 'Заводим…' : 'Завести машину'}
@@ -489,6 +518,13 @@ export function DonorScreen({ reference, online, onChanged, canExpect = false }:
                     <button
                       type="button"
                       className="button--ghost"
+                      onClick={() => setCardOf(cardOf === donor.id ? null : donor.id)}
+                    >
+                      {cardOf === donor.id ? 'Свернуть' : 'Карточка'}
+                    </button>
+                    <button
+                      type="button"
+                      className="button--ghost"
                       onClick={() => setCostsOf(costsOf === donor.id ? null : donor.id)}
                     >
                       {costsOf === donor.id ? 'Свернуть' : 'Затраты'}
@@ -507,6 +543,15 @@ export function DonorScreen({ reference, online, onChanged, canExpect = false }:
                     за одиннадцать экранов вниз — замерено: строка на 17 995
                     пикселе, блок на 27 756. Владелец нажимал «Затраты»
                     и не видел ничего, кроме сменившейся надписи на кнопке. */}
+                {cardOf === donor.id && (
+                  <tr>
+                    <td colSpan={4}>
+                      <DonorCard donorId={donor.id} vocabulary={vocabulary} online={online}
+                                 onParts={onDonorParts}
+                                 onSaved={() => { void reloadDonors(); onChanged(); }} />
+                    </td>
+                  </tr>
+                )}
                 {costsOf === donor.id && (
                   <tr>
                     <td colSpan={4}>
@@ -684,6 +729,7 @@ export function DonorScreen({ reference, online, onChanged, canExpect = false }:
           bodyCode: bodyCode.trim() === '' ? null : bodyCode.trim(),
           engineCode: engineCode.trim() === '' ? null : engineCode.trim(),
           vin: vin.trim() === '' ? null : vin.trim(),
+          ...specToFields(spec),
           supplyId,
           note: note.trim() === '' ? null : note.trim(),
         },
@@ -701,6 +747,7 @@ export function DonorScreen({ reference, online, onChanged, canExpect = false }:
       setEngineCode('');
       setVin('');
       setNote('');
+      setSpec(EMPTY_SPEC);
     } catch (cause) {
       if (mounted.current) setMessage(describe(cause, 'Машина не заведена'));
     } finally {
