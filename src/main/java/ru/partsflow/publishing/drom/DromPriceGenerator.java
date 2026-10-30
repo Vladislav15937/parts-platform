@@ -374,6 +374,52 @@ public class DromPriceGenerator {
               WHERE pre.part_id = p.id AND pre.status = 'PREORDER')""";
 
     /**
+     * Поставка «в пути» позиции — псевдоним {@code in_transit}, пусто, если позиция
+     * товаром в пути не считается.
+     *
+     * <p><b>Карточка из документа поступления в пути не бывает никогда</b>
+     * (задача 0360, решение владельца 30.10.2026: черновик не попадает в прайс
+     * «ни при какой поставке»). Черновик поступления заводит карточку {@code DRAFT}
+     * строкой документа, и, приписанная к ожидаемой поставке (а «+ Новая поставка»
+     * заводит её {@code EXPECTED}), она уезжала в прайс «в пути» — до «Провести
+     * документ», после «Отменить проводку», после «Отменить», а после удаления
+     * проведённого поступления (задача 0367: статус остаётся {@code DONE}, ставится
+     * {@code deleted_at}, а {@code StockLedger} возвращает карточке {@code DRAFT})
+     * — тоже.
+     *
+     * <p>Различает <b>происхождение карточки</b> ({@code part.expected_origin}),
+     * а не статус и не {@code deleted_at}. Ожидаемый товар прежнего пути
+     * (задача 0170) — тоже {@code DRAFT} в поставке в пути, но заведён из карточки
+     * поставки; принимают его проведённым документом, и после удаления этого
+     * документа он обязан вернуться «в путь» (0367, «осталось принять»). Поэтому:
+     * <ul>
+     *   <li>строка непроведённого ({@code status <> 'DONE'}: черновик, отменённый)
+     *       документа {@code INTAKE} снимает «в пути» у любой позиции — и у ожидаемой,
+     *       пока её приход не проведён;</li>
+     *   <li>любая строка документа {@code INTAKE} — выполненного, удалённого,
+     *       какого угодно — снимает «в пути» у карточки, которую завели не ожидаемым
+     *       товаром: она пришла документом и к «ожидаемому» не вернётся.</li>
+     * </ul>
+     * Удалённый документ отдельно не назван: удаляют только выполненный, и он
+     * попадает во вторую ветку. Карточка без строк документа (перенос, прямой
+     * SQL) ведёт себя как до 0360.
+     *
+     * <p>Один текст на прайс, дельту и счётчик выгрузки
+     * {@code MarketplaceAccountService.countMatching}: признак «в пути» читают
+     * {@link #PREORDERED}, {@link #IN_FILE}, количество и примечание прайса.
+     * Параметров нет. Требует псевдоним {@code p}.
+     */
+    public static final String IN_TRANSIT_JOIN = """
+            LEFT JOIN supply in_transit
+                   ON in_transit.id = p.supply_id
+                  AND in_transit.status IN ('EXPECTED', 'IN_TRANSIT')
+                  AND NOT EXISTS (SELECT 1 FROM stock_document_line income_line
+                                    JOIN stock_document income ON income.id = income_line.document_id
+                                   WHERE income_line.part_id = p.id
+                                     AND income.doc_type = 'INTAKE'
+                                     AND (income.status <> 'DONE' OR NOT p.expected_origin))""";
+
+    /**
      * Ожидаемая позиция полностью отложена под предзаказы (задачи 0170, 0262).
      *
      * <p>Одна строка на все места, где это условие нужно: отбор прайса
@@ -384,36 +430,6 @@ public class DromPriceGenerator {
      * обычный резерв, и вычитать её здесь второй раз нельзя. Требует в запросе
      * псевдонимов {@code p} и {@code in_transit}.
      */
-    /**
-     * Поставка «в пути» позиции — псевдоним {@code in_transit}, пусто, если позиция
-     * товаром в пути не считается.
-     *
-     * <p><b>Позиция непроведённого документа поступления в пути не бывает никогда</b>
-     * (задача 0360, решение владельца 30.10.2026). Черновик поступления заводит
-     * карточку {@code DRAFT} строкой документа, и без этого условия она, приписанная
-     * к ожидаемой поставке (а «+ Новая поставка» заводит её {@code EXPECTED}), уезжала
-     * в прайс «в пути» — до «Провести документ» и снова после «Отменить проводку».
-     * Различается позиция <b>связью с документом</b>, а не статусом: ожидаемый товар
-     * прежнего пути (задача 0170) тоже {@code DRAFT}, но строки документа поступления
-     * у него нет, пока его не примут, а принимают его сразу проведённым документом.
-     * Документ «не проведён» — любой, кроме {@code DONE}: черновик и отменённый черновик,
-     * чьи карточки так и остаются {@code DRAFT}.
-     *
-     * <p>Один текст на прайс, дельту и счётчик выгрузки
-     * {@code MarketplaceAccountService.countMatching}: признак «в пути» читают
-     * {@link #PREORDERED}, {@link #IN_FILE}, количество и примечание прайса.
-     * Требует псевдоним {@code p}.
-     */
-    public static final String IN_TRANSIT_JOIN = """
-            LEFT JOIN supply in_transit
-                   ON in_transit.id = p.supply_id
-                  AND in_transit.status IN ('EXPECTED', 'IN_TRANSIT')
-                  AND NOT EXISTS (SELECT 1 FROM stock_document_line open_line
-                                    JOIN stock_document open_doc ON open_doc.id = open_line.document_id
-                                   WHERE open_line.part_id = p.id
-                                     AND open_doc.doc_type = 'INTAKE'
-                                     AND open_doc.status <> 'DONE')""";
-
     public static final String PREORDERED = """
             (p.status = 'DRAFT' AND in_transit.id IS NOT NULL
               AND p.quantity - """ + PREORDERED_QTY + " <= 0)";

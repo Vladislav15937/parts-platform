@@ -349,6 +349,101 @@ class IncomeDocumentTest extends PostgresTestBase {
                 .startsWith("{\"parts\":" + unposted.size() + ",");
     }
 
+    /**
+     * Разбор PR 534: «черновик не попадает в прайс ни при какой поставке» — и после
+     * удаления проведённого поступления (0367: статус остаётся {@code DONE}, ставится
+     * {@code deleted_at}, карточке возвращается {@code DRAFT}), и после «Отменить»,
+     * и в документе из нескольких строк. Ожидаемый товар 0170 при этом после удаления
+     * своего поступления возвращается «в путь», а строка непроведённого документа
+     * снимает его снова. Удаление — настоящим {@code DELETE /api/stock/documents/{id}},
+     * проверка — файлом по адресу, который забирает Дром, и счётчиком выгрузки.
+     */
+    @Test
+    @DisplayName("Карточка из удалённого или отменённого поступления в прайс «в пути» не уходит; ожидаемая — возвращается")
+    void deletedOrCancelledIncomeStaysOutOfDromFeed() throws Exception {
+        String token = "e".repeat(43);
+        inTenant(() -> {
+            jdbc.update("DELETE FROM marketplace_account");
+            return jdbc.update("""
+                    INSERT INTO marketplace_account (marketplace, title, settings, feed_token)
+                    VALUES ('DROM', 'Удалённые поступления', '{"packetId":"1","expectedGoods":true}'::jsonb, ?)""",
+                    token);
+        });
+        long supply = supply("Удаления в пути " + UUID.randomUUID());
+
+        // Ожидаемый товар 0170: заведён в карточке поставки, принят проведённым документом.
+        String expectedName = "капот ожидаемый с удалённым приходом";
+        mvc.perform(post("/api/intake/supplies/" + supply + "/expected-parts").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rawName\":\"%s\",\"condition\":\"USED\",\"quantity\":2,\"price\":9000,\"requestId\":\"%s\"}"
+                                .formatted(expectedName, UUID.randomUUID())))
+                .andExpect(status().isCreated());
+        long expected = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM part WHERE supply_id = ? AND expected_origin", Long.class, supply));
+        assertThat(String.join("", feedParts(token))).as("ожидаемый товар до прихода не «в пути»")
+                .containsIgnoringCase(expectedName);
+        long receipt = body(mvc.perform(post("/api/intake/receipts").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"supplyId":%d,"requestId":"%s","items":[
+                                  {"rawName":"принимаем","quantity":2,"price":9000,"partId":%d}]}"""
+                                .formatted(warehouse, supply, UUID.randomUUID(), expected)))
+                .andExpect(status().isCreated()).andReturn()).path("documentId").asLong();
+
+        // Документ из двух строк: проведён и удалён.
+        String doorName = "дверь удалённого поступления";
+        String mirrorName = "зеркало удалённого поступления";
+        long twoLines = create(supply, "Две строки в пути").path("id").asLong();
+        addItem(twoLines, doorName, "6000", null);
+        addItem(twoLines, mirrorName, "2500", null);
+        act(twoLines, "post", status().isOk());
+        assertThat(String.join("", feedParts(token))).as("проведённые позиции не ушли на Дром")
+                .containsIgnoringCase(doorName).containsIgnoringCase(mirrorName);
+
+        deleteDocument(twoLines);
+        deleteDocument(receipt);
+        assertThat(inTenant(() -> jdbc.queryForList("""
+                SELECT p.status FROM part p JOIN stock_document_line l ON l.part_id = p.id
+                 WHERE l.document_id = ?""", String.class, twoLines)))
+                .as("удаление вернуло карточкам черновик — условие проверяется на том, ради чего написано")
+                .containsOnly("DRAFT");
+        assertThat(docStatus(twoLines)).as("удалённый документ остаётся выполненным").isEqualTo("DONE");
+        String afterDelete = String.join("", feedParts(token));
+        assertThat(afterDelete).as("карточка удалённого поступления ушла на Дром «в пути»")
+                .doesNotContainIgnoringCase(doorName).doesNotContainIgnoringCase(mirrorName);
+        assertThat(afterDelete).as("ожидаемый товар после удаления прихода не вернулся «в путь» (0367)")
+                .containsIgnoringCase(expectedName);
+
+        // Отменённый черновик.
+        String lampName = "фонарь отменённого черновика";
+        long cancelled = create(supply, "Отменённый в пути").path("id").asLong();
+        addItem(cancelled, lampName, "3000", null);
+        act(cancelled, "cancel", status().isOk());
+        assertThat(docStatus(cancelled)).isEqualTo("CANCELLED");
+        assertThat(String.join("", feedParts(token))).as("позиция отменённого черновика ушла на Дром")
+                .doesNotContainIgnoringCase(lampName);
+
+        // У ожидаемой позиции — строка удалённого выполненного документа и строка черновика.
+        long draft = create(supply, "Черновик приёма ожидаемой").path("id").asLong();
+        inTenant(() -> jdbc.update(
+                "INSERT INTO stock_document_line (document_id, part_id, qty) VALUES (?, ?, 1)", draft, expected));
+        List<String> last = feedParts(token);
+        assertThat(String.join("", last)).as("ожидаемая позиция с непроведённой строкой ушла на Дром «в пути»")
+                .doesNotContainIgnoringCase(expectedName);
+
+        String count = mvc.perform(post("/api/marketplace-accounts/filter/count").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"expectedGoods\":true}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(count).as("счётчик выгрузки разошёлся с файлом")
+                .startsWith("{\"parts\":" + last.size() + ",");
+    }
+
+    private void deleteDocument(long doc) throws Exception {
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .delete("/api/stock/documents/" + doc).with(csrf()).session(owner))
+                .andExpect(status().is2xxSuccessful());
+    }
+
     /** Позиции файла Дрома, каждая строкой целиком — как их забирает площадка. */
     private List<String> feedParts(String token) throws Exception {
         String file = mvc.perform(get("/feeds/drom/incomes/" + token + ".xml"))
